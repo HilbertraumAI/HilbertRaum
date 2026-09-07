@@ -98,7 +98,15 @@ export interface SearchRewrite {
 }
 
 /** Tokens: letters/digits with inner hyphens (`CO2-Konzentration`), no trailing hyphen. */
-const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}-]*/gu
+export const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}-]*/gu
+
+/** True for a token the rewrite would KEEP — neither a function word nor a question-frame word.
+ *  Shared with the #340 L3-b expansion (`expand.ts`), which sanitises the model's words with the
+ *  same lists so an expansion can never re-introduce a word the plain pattern strips. */
+export function isContentWord(token: string): boolean {
+  const key = token.toLowerCase()
+  return !STOP_WORDS.has(key) && !FRAME_WORDS.has(key)
+}
 
 export function searchPattern(question: string): SearchRewrite {
   const raw = question.trim()

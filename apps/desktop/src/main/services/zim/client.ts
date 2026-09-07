@@ -337,6 +337,52 @@ export async function probeSearchable(
   return hasPattern ? 'yes' : 'no'
 }
 
+/**
+ * Title-index lookup (#340 L3-b, D-Z20): the `/suggest` entries whose title starts with `term`,
+ * as search-hit-shaped rows the arm can fetch. On the pinned kiwix-serve the route answers
+ * `[{ value, label, kind: "path", path }]` — `value` is the article title, `path` the SAME entry
+ * key a search hit's link carries, so `/raw/<name>/content/<path>` serves it directly (verified
+ * on the real server 2026-09-07); the synthetic `kind: "pattern"` entry (the capability probe's
+ * signal) is skipped. Prefix-only and case-/diacritic-sensitive by nature (residual R-6) — that is
+ * why the arm only ever calls it with a title the expansion synthesised, never with the question.
+ * Same failure contract as `searchPack`: throws on a non-200 status or a timeout; a body that is
+ * not a JSON array yields no rows.
+ */
+export async function suggestTitles(
+  port: number,
+  name: string,
+  term: string,
+  count: number,
+  signal?: AbortSignal,
+  opts: { timeoutMs?: number } = {}
+): Promise<KiwixSearchHit[]> {
+  const path =
+    `/suggest?content=${encodeURIComponent(name)}` +
+    `&term=${encodeURIComponent(term)}&count=${count}`
+  const res = await kiwixGet(port, path, { signal, timeoutMs: opts.timeoutMs })
+  if (res.status !== 200) {
+    throw new Error(`kiwix-serve suggest failed (HTTP ${res.status})`)
+  }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(res.body)
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const hits: KiwixSearchHit[] = []
+  for (const entry of parsed) {
+    if (typeof entry !== 'object' || entry === null) continue
+    const e = entry as { kind?: unknown; value?: unknown; path?: unknown }
+    if (e.kind !== 'path' || typeof e.value !== 'string' || typeof e.path !== 'string') continue
+    const title = decodeEntities(e.value).trim()
+    const articlePath = safeDecodeURIComponent(e.path)
+    if (title === '' || articlePath === '') continue
+    hits.push({ title, urlId: name, articlePath, wordCount: null })
+  }
+  return hits
+}
+
 // ---- /raw article fetch --------------------------------------------------------
 
 /** The documented length bound for an archive entry key (#301 P5, finding L5, plan §9.19 (b)):

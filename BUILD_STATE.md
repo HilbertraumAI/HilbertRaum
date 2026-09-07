@@ -700,8 +700,9 @@ open round's item stays the last block of §5.)
     (b) **Tier 2** (persistent import of selected articles) — #340; **ruled 2026-09-06: C3 (a) a "Save article to my
     documents" button in the article viewer first**, not built yet. Other #340 rulings of 2026-09-06: L2 keep 5, L1
     keep "not searched: no full-text index", C2 not until the upstream `/raw` fix, C4 later; (b) → `'path-unsupported'`
-    (PR #360), (c) → normalise (PR #361); L3-b measured (PR #362; 0/6 raw, 2/6 through the arm, 4/6 concept-expanded,
-    6/6 `/suggest` + a "Liste …" prefix) — the always / shape-trigger / never question is on #340.
+    (PR #360), (c) → normalise (PR #361); L3-b measured (PR #362; 0/6 raw, 2/6 through the arm) then **ruled (a) ALWAYS on 2026-09-07 and
+    built** (`feat/340-l3b-query-expansion`, record rag-design D-Z20): one local-model call per pack ask, the list
+    group 5/6 through the arm with the default 4B model on a CPU (2.4–5.3 s per call), the D-Z18 nine still 9/9.
     (c) **Evidence identity for archive citations — CLOSED.** Identity resolution: P2, record rag-design D-Z5; the "Open article from a review" residual: closed P6, record design-guidelines §11.15.
     (d) **Manual acceptance leg — CLOSED 2026-09-06:** the airplane-mode demo (the real K: drive, `wikipedia_de_*` packs + kiwix-tools 3.8.1, network off) passed as T19 (viii); record rag-design §17 "Real acceptance".
     (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620: GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg (11 vs 19.6) — on this iGPU

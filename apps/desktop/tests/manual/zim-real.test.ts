@@ -8,6 +8,10 @@ import { searchPackTotal } from '../../src/main/services/zim/client'
 import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
 import { kiwixServeBinaryName, kiwixToolsDir } from '../../src/main/services/zim/tools'
 import { zimSmokeEnv } from '../helpers/zim-smoke-env'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { createServer } from 'node:net'
+import { makeQueryExpander, type QueryExpander } from '../../src/main/services/zim/expand'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
 // REAL kiwix-tools + REAL ZIM end-to-end (manual smoke, the HILBERTRAUM_* convention):
 // registration via real kiwix-manage, the real kiwix-serve sidecar over a generated
@@ -20,6 +24,11 @@ import { zimSmokeEnv } from '../helpers/zim-smoke-env'
 //   HILBERTRAUM_ZIM_FILE=<path to a small .zim, e.g. wikipedia_de_climate-change_nopic>
 //   HILBERTRAUM_ZIM_QUERY=<a word the pack's index will hit, e.g. Treibhausgas>
 //   HILBERTRAUM_ZIM_EXPECT_ARTICLE=<optional — an entry key known to exist in that archive>
+//   HILBERTRAUM_ZIM_MODEL=<optional — a chat GGUF; with HILBERTRAUM_ZIM_LLAMA_SERVER=<llama-server
+//                          binary> the smoke starts it (CPU only, -ngl 0, unless
+//                          HILBERTRAUM_ZIM_MODEL_NGL says otherwise) and replays the quality
+//                          fixture THROUGH the #340 L3-b expansion (D-Z20), asserting the list
+//                          group too — the measurement of that lever on real tools + a real model>
 //
 // FAIL-CLOSED (#301 P5, finding L8, plan §9.19 (d)): CI never sets HILBERTRAUM_ZIM_SMOKE, so
 // `zimSmokeEnv` reports `{ requested: false }` and the suite below is a genuine skip — no test
@@ -30,11 +39,95 @@ import { zimSmokeEnv } from '../helpers/zim-smoke-env'
 
 const gate = zimSmokeEnv(process.env)
 
+/** The list group's hit@5 the #340 L3-b expansion reached on the real climate pack with a real
+ *  chat model at the ruling (D-Z20) — the smoke asserts it whenever a model is configured. */
+const LIST_GROUP_MIN_HITS = 4
+
 let svc: ZimService | null = null
+let llama: ChildProcess | null = null
 
 afterAll(async () => {
   await svc?.stop()
+  llama?.kill()
 })
+
+/** A free loopback port for the smoke's own llama-server. */
+async function freePort(): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const srv = createServer()
+    srv.listen(0, '127.0.0.1', () => {
+      const port = (srv.address() as { port: number }).port
+      srv.close(() => resolve(port))
+    })
+    srv.on('error', reject)
+  })
+}
+
+/**
+ * The optional real model behind the #340 L3-b expansion (D-Z20): a llama-server started by the
+ * smoke over the GGUF the operator named, and a minimal `ModelRuntime` over its OpenAI endpoint
+ * (non-streaming; the same request body `runtime/llama.ts` sends — thinking switch, temperature,
+ * max_tokens, the grammar-constrained `response_format`). Null when the operator set no model.
+ */
+async function startExpansionModel(): Promise<ModelRuntime | null> {
+  const model = process.env.HILBERTRAUM_ZIM_MODEL ?? ''
+  const exe = process.env.HILBERTRAUM_ZIM_LLAMA_SERVER ?? ''
+  if (model === '' || exe === '') return null
+  expect(existsSync(model), 'HILBERTRAUM_ZIM_MODEL must be a file').toBe(true)
+  expect(existsSync(exe), 'HILBERTRAUM_ZIM_LLAMA_SERVER must be a file').toBe(true)
+  const port = await freePort()
+  const ngl = process.env.HILBERTRAUM_ZIM_MODEL_NGL ?? '0'
+  llama = spawn(
+    exe,
+    ['-m', model, '--host', '127.0.0.1', '--port', String(port), '-c', '4096', '-ngl', ngl, '--jinja', '--reasoning-format', 'deepseek', '-np', '1'],
+    { stdio: ['ignore', 'ignore', 'ignore'] }
+  )
+  const deadline = Date.now() + 180_000
+  for (;;) {
+    try {
+      const r = await fetch(`http://127.0.0.1:${port}/health`)
+      if (r.status === 200) break
+    } catch {
+      /* not up yet */
+    }
+    if (Date.now() > deadline) throw new Error('llama-server did not become healthy within 180 s')
+    await new Promise((r) => setTimeout(r, 500))
+  }
+  const modelId = basename(model)
+  return {
+    modelId,
+    async start() {},
+    async stop() {},
+    async health() {
+      return { healthy: true, message: 'smoke llama-server', port }
+    },
+    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
+      const body = JSON.stringify({
+        model: modelId,
+        messages: messages.map((m) => ({ role: m.role, content: m.content })),
+        stream: false,
+        cache_prompt: true, // the app runtime sets it too: the system prefix is prefilled once per session
+        chat_template_kwargs: { enable_thinking: options?.mode === 'deep' },
+        ...(options?.maxTokens != null ? { max_tokens: options.maxTokens } : {}),
+        ...(options?.temperature != null ? { temperature: options.temperature } : {}),
+        ...(options?.responseSchema
+          ? { response_format: { type: 'json_schema', json_schema: { name: options.responseSchemaName ?? 'response', schema: options.responseSchema, strict: true } } }
+          : {})
+      })
+      const res = await fetch(`http://127.0.0.1:${port}/v1/chat/completions`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body,
+        signal: options?.signal
+      })
+      if (!res.ok) throw new Error(`llama-server ${res.status}`)
+      const json = (await res.json()) as { choices?: Array<{ message?: { content?: string } }> }
+      const content = json.choices?.[0]?.message?.content ?? ''
+      if (content) yield content
+      options?.onFinish?.('stop')
+    }
+  }
+}
 
 describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', () => {
   it('the requested smoke has valid inputs', () => {
@@ -84,8 +177,13 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
       expect(library).not.toBeNull()
       expect(library!.names.get(pack.id)).toBe(servingNameFor(zimFile, process.platform))
 
-      // The arm: real sidecar start + Xapian search + article fetch + chunking.
-      const arm = svc.makeArm(db, [pack.id])
+      // The arm: real sidecar start + Xapian search + article fetch + chunking — through the
+      // #340 L3-b expansion when the operator named a model (D-Z20), plain otherwise.
+      const expansionRuntime = await startExpansionModel()
+      const expand: QueryExpander | null = makeQueryExpander(expansionRuntime)
+      // eslint-disable-next-line no-console
+      console.info(`[zim-real] query expansion: ${expand ? `ON (${expansionRuntime!.modelId})` : 'off (no HILBERTRAUM_ZIM_MODEL)'}`)
+      const arm = svc.makeArm(db, [pack.id], { expand })
       expect(arm).not.toBeNull()
       const t0 = performance.now()
       const { candidates } = await arm!(query)
@@ -157,16 +255,27 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
         const measured = fixture.questions.filter((x) => x.answerable && x.measuredOnly)
         let hits = 0
         for (const q of measured) {
+          // With a model: the expansion the arm will use, logged once more here for the record
+          // (one extra call per question — a smoke, not the app path).
+          let note = ''
+          if (expand) {
+            const e0 = performance.now()
+            const ex = await expand(q.question)
+            note = ` [expansion ${(performance.now() - e0).toFixed(0)} ms: ${ex ? `concepts=${ex.concepts.join(' ')}; listTitle=${ex.listTitle ?? '—'}` : 'null'}]`
+          }
           const { candidates: found } = await arm!(q.question)
           const titles = [...new Set(found.map((c) => c.sourceTitle))].slice(0, 5)
           const hit = q.expectedTitles.some((t) => titles.includes(t))
           if (hit) hits++
           // eslint-disable-next-line no-console
-          console.info(`[zim-real] ${q.group ?? 'measured'} ${hit ? 'HIT ' : 'miss'} ${q.question} → ${titles.join(' | ')}`)
+          console.info(`[zim-real] ${q.group ?? 'measured'} ${hit ? 'HIT ' : 'miss'} ${q.question} → ${titles.join(' | ')}${note}`)
         }
         if (measured.length > 0) {
           // eslint-disable-next-line no-console
-          console.info(`[zim-real] ${measured[0]!.group ?? 'measured'} questions through the arm: ${hits}/${measured.length} hit@5 (logged, not asserted)`)
+          console.info(`[zim-real] ${measured[0]!.group ?? 'measured'} questions through the arm: ${hits}/${measured.length} hit@5${expand ? ' (with the L3-b expansion — asserted)' : ' (no model — logged, not asserted)'}`)
+          // D-Z20: with a real model the list group must reach the figure measured at the
+          // ruling (2026-09-07); without one the plain arm's 2/6 is the honest, logged state.
+          if (expand) expect(hits).toBeGreaterThanOrEqual(LIST_GROUP_MIN_HITS)
         }
       } else {
         // eslint-disable-next-line no-console
@@ -199,6 +308,7 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
       expect(after.candidates).toEqual([])
       expect(after.outcomes.map((o) => [o.packId, o.status, o.reason])).toEqual([[pack.id, 'skipped', 'disabled']])
     },
-    120_000
+    // A model-backed replay spends several seconds per question on a CPU (D-Z20).
+    process.env.HILBERTRAUM_ZIM_MODEL ? 600_000 : 120_000
   )
 })

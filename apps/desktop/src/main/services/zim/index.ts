@@ -14,6 +14,7 @@ import type { BinaryVerifyResult } from '../binary-verifier'
 import { combineSignals, type SpawnFn } from '../runtime/sidecar'
 import type { ExternalRetrievalArm, ExternalRetrievalOutput } from '../rag'
 import { EXTERNAL_RETRIEVAL_DEADLINE_MS, collectPackCandidates } from './arm'
+import type { QueryExpander } from './expand'
 import { fetchArticleHtml, probeSearchable } from './client'
 import { zimArticleToSegmentsAsync } from './html'
 import {
@@ -1383,7 +1384,9 @@ export class ZimService {
     db: Db,
     packIds: readonly string[] | null | undefined,
     question: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    /** #340 L3-b (D-Z20): the ask's query expander (one local-model call per ask), or none. */
+    expand?: QueryExpander
   ): Promise<ExternalRetrievalOutput> {
     const ids = [...new Set(packIds ?? [])]
     if (ids.length === 0) return { candidates: [], outcomes: [] }
@@ -1407,6 +1410,13 @@ export class ZimService {
       op.signal,
       this.deps.externalDeadlineMs ?? EXTERNAL_RETRIEVAL_DEADLINE_MS
     )
+    // #340 L3-b (D-Z20): ONE model call per ask, even across the guard's single admitted retry —
+    // the callback below is re-entered once when a discarded attempt is retried, and the
+    // expansion must not be paid for twice out of the same deadline. Memoised on first use.
+    let expansionOnce: ReturnType<QueryExpander> | null = null
+    const expandOnce: QueryExpander | undefined = expand
+      ? (q, s) => (expansionOnce ??= expand(q, s))
+      : undefined
     try {
       op.assert()
       // The search + fetch batch is ONE guard window (#301 P5, finding M1; plan §9.19 (a)3):
@@ -1445,7 +1455,7 @@ export class ZimService {
           question,
           deadline.signal,
           library.names,
-          { askSignal: op.signal, articleTimeoutMs: this.deps.articleTimeoutMs }
+          { askSignal: op.signal, articleTimeoutMs: this.deps.articleTimeoutMs, expand: expandOnce }
         )
         return { candidates: produced.candidates, outcomes: [...outcomes, ...produced.outcomes] }
       })
@@ -1501,9 +1511,13 @@ export class ZimService {
    * `file-missing` / `disabled` / … without waking a sidecar, so the honest arm costs no more than
    * the null did.
    */
-  makeArm(db: Db, packIds: readonly string[] | null | undefined): ExternalRetrievalArm | null {
+  makeArm(
+    db: Db,
+    packIds: readonly string[] | null | undefined,
+    opts: { expand?: QueryExpander | null } = {}
+  ): ExternalRetrievalArm | null {
     if (!packIds || packIds.length === 0) return null
-    return (question, signal) => this.runArm(db, packIds, question, signal)
+    return (question, signal) => this.runArm(db, packIds, question, signal, opts.expand ?? undefined)
   }
 
   /**

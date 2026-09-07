@@ -2847,6 +2847,65 @@ offline article viewer. Files are registered in place, never copied.
   `HILBERTRAUM_ZIM_SMOKE=1` against K:): `searchPackTotal(port, pack.id, "Treibhausgas")` → 301
   (17 ms), the invented word `"qzxvwtrkp"` → 0 (15 ms); the quality fixture still hit 9/9.
 
+- **D-Z20 — question → concept expansion (#340 L3-b, owner ruling 2026-09-07, option (a)
+  "always").** L3-b was left MEASURED-not-built at the open-issues wave close (see "Deliberately
+  not built" below, K: climate pack, 2026-09-06): raw question 0/6 of the list-shaped fixture
+  questions (`quality-questions-de.json` `group: list`), the shipped rewrite (D-Z18) 2/6, a
+  hand-written concept-expanded query 4/6, `/suggest` asked with a synthesised "Liste …" prefix
+  6/6. The owner's ruling: spend the call on EVERY pack-scoped ask, not a question-shape
+  trigger — quality wins over the ~1-3 s CPU cost, and a shape heuristic ("superlatives, `welche
+  … gibt es`") is guesswork the fixture never validated as complete. `services/zim/expand.ts`
+  `makeQueryExpander(runtime)` builds the call: ONE per ask (never per pack), `mode: 'fast'`
+  (thinking off), temperature 0, `EXPAND_MAX_TOKENS = 96`, the D55 `responseSchema` (the same
+  grammar-constrained-JSON machinery `classify.ts` uses), and its own `EXPAND_TIMEOUT_MS = 6_000`
+  bound INSIDE `arm.ts`'s 20 s `EXTERNAL_RETRIEVAL_DEADLINE_MS` — a stuck call leaves the packs
+  fourteen seconds, never nothing; and when the arm's DEADLINE itself elapses mid-expansion the
+  arm degrades exactly as before this stage — no expansion, every pack settles `deadline` — while
+  the ask's own cancellation is rethrown (the arm, not the expander, tells the two apart via
+  `askSignal`; measured 2026-09-07 with the default 4B model on an i9-14900K
+  at -ngl 0: 2.7–4.0 s per call with the system prompt prefilled from scratch; the app runtime
+  sets `cache_prompt`, so from the second ask on only the question is prefilled). When the title
+  index knows nothing under the model's title, one shorter prefix — the title minus its last word
+  — is tried once with twice the rows, RANKED by how much of the dropped word each carries (the
+  index is prefix-only; "… nach Pro-Kopf-Emissionen" matched nothing, "… nach" matched everything
+  and the "… pro Kopf" row is the one wanted). **Measured through the arm with the real tools and
+  the default 4B chat model on a CPU (2026-09-07, the manual smoke with HILBERTRAUM_ZIM_MODEL): the
+  list group 5/6 hit@5 (2/6 before), the D-Z18 nine still 9/9, 2.4–5.3 s per expansion call; the
+  smoke asserts the list group at LIST_GROUP_MIN_HITS = 4 whenever a model is configured.** `parseExpansion` then sanitises the reply against
+  the SAME lists `query-rewrite.ts` uses (`isContentWord`, `TOKEN_RE`): a concept survives only
+  when it is a content word (no function or frame word — "liste" itself is a German frame word
+  and never survives, even when the model offers it), not already in the plain pattern
+  case-insensitively, unique, and at most `EXPAND_MAX_TERM_CHARS = 40` chars (dropped whole, never
+  cut); at most `EXPAND_MAX_TERMS = 6` kept, in order; `listTitle` is whitespace-collapsed and
+  trimmed, null unless it holds a letter and fits `EXPAND_MAX_TITLE_CHARS = 80`. `arm.ts`
+  `collectPackCandidates` calls the expander once before any pack is searched, then per pack:
+  the title (`suggestTitles`, `/suggest`, `EXPANSION_TITLE_ROWS = 3`) and the concept query
+  (`searchPack`) together add at most `EXPANSION_ARTICLES_PER_PACK = 2` NEW articles, fetched BEFORE the
+  plain search's hits so the plain `ARTICLES_PER_PACK` cap can never starve them, and they may
+  hold at most HALF the pack's quota (`Math.ceil(quota / 2)`) so the plain hits are always read
+  after them — the plain pattern runs unchanged; on a one-pack ask (quota 24) every plain hit is
+  still fetched, on a multi-pack ask the quota was always the bound and the expansion's list
+  article now takes the slot one plain article used to have. The expansion is memoised per ask
+  in `runArm`, so the guard's single admitted retry never pays for a second model call. Note:
+  the call enters the runtime as an in-app generation like the answer itself, so a pack-scoped
+  ask pre-empts an external (local-API) generation a few seconds earlier than before. A fetched article whose title
+  matches `Liste …` / `List of …` keeps `LIST_ARTICLE_CHUNKS = 8` chunks instead of
+  `CHUNKS_PER_ARTICLE`: a list's name rows carry none of the question's words, so the overlap
+  picker would otherwise trim exactly the rows a "which … are the largest" question needs — the
+  reranker still scores every chunk against the ORIGINAL question. Fallback contract: no runtime,
+  a non-JSON reply, the 6 s bound, a runaway reply, or any other failure all resolve null and the
+  arm runs exactly as it did before this module existed; the ONE exception is the ask's own abort,
+  rethrown, never swallowed as a fallback. The MockRuntime ignores `responseSchema` and always
+  replies prose, so mock/dev mode always takes the degrade path — byte-identical to a build with
+  no expander (a tested invariant, mirroring `classify.ts`'s mock invariant). Unchanged: the
+  original question stays the reranker's and the prompt's query and the chunk picker's terms; no
+  D-Z4/D-Z13 constant (`ARTICLES_PER_PACK`, `CHUNKS_PER_ARTICLE`, …) changes value; no
+  `KnowledgePackOutcome`, IPC, or persisted shape changes (`docs/data-contracts.md` "Knowledge
+  packs"). Tests: `zim-expand.test.ts` (`parseExpansion`'s sanitiser rules, `buildExpansionMessages`,
+  and `makeQueryExpander`'s call shape, timeout, abort-vs-fallback split, and mock invariant) and
+  the L3-b legs of `zim-arm.test.ts` (the expansion-articles-first fetch order, the per-pack caps,
+  the `Liste …` / `List of …` chunk-keep switch, and the ask-abort-rethrown leg at this layer).
+
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
@@ -2868,7 +2927,8 @@ searchability columns + key, `classifyPackSelection` and `packTitles`, D-Z11/D-Z
 (the owned `zim-transient/` dir; containment-checked, link-refusing cleanup, D-Z11),
 `session.ts` (the post-unlock reconciliation kickoff, the `maybeStartLocalApi` shape,
 D-Z11), `arm.ts` (allocation, bounded concurrency, the per-ask deadline and per-pack
-outcomes — D-Z4, P4), `index.ts` (`ZimService` facade on
+outcomes — D-Z4, P4), `expand.ts` (question → concept expansion for the pack arm — D-Z20,
+#340 L3-b), `index.ts` (`ZimService` facade on
 `AppContext.zim` — the revision/generation allocator, the FIFO build/teardown/start chain
 and the published tuple, D-Z10; the operation registry and admission-epoch checks, the
 `packs:changed` notify hook, D-Z11; `withServer` — the alive/generation request guard with
@@ -2972,13 +3032,8 @@ the list shape were not helped by hits 6–10, and one selected pack already get
 *L1* — the title-index `/suggest` arm stays unbuilt and an index-less pack keeps "not searched:
 no full-text index": alone it is prefix-bound (no title match for "österreichische
 Wissenschaftler"); paired with a synthesised "Liste …" prefix it is part of L3-b. *L3-b* —
-concept expansion through a model call: MEASURED, not built (fixture `quality-questions-de.json`
-`group: list`, replayed by the smoke and logged, never asserted; K: climate pack, 2026-09-06:
-raw question 0/6, the shipped rewrite 2/6 through the arm — the failures return 13–40 wrong
-hits, so neither the zero-hit retry nor the #353 ladder fires — a hand-written concept-expanded
-query 4/6, `/suggest` with a synthesised "Liste …" prefix 6/6). The open owner question on #340:
-spend the model call on every pack-scoped ask, only on a question-SHAPE trigger (superlatives,
-"welche … gibt es"; "weak by hit count" cannot work), or not at all. *C2* — link expansion not
+concept expansion through a model call: ruled (a) "always" on 2026-09-07 and built as **D-Z20**
+(above). *C2* — link expansion not
 until the upstream `/raw` cut-short fix ships (it doubles traffic on the defect route). *C3* —
 Tier-2 import: ruled (a), a "Save article to my documents" button in the article viewer FIRST,
 the citation card later; not built in this wave. *C4* — acquisition from Kiwix catalogs: ruled

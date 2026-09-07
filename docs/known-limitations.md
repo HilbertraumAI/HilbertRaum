@@ -2527,9 +2527,13 @@ reports and phase plans were working papers; their full text lives in git histor
   searched: out of time for this question"). The pack server ANDs every word of the search pattern, so the app sends only the question's content words (function and question-frame words stripped, `rag-design.md` §17 D-Z18), retries once with fewer words when nothing is found, and — when even that finds nothing — checks how common each remaining word is in that archive, drops every word that is entirely absent from it (or, if none is, just the rarest one), and tries once more (§17 D-Z18 amendment, #353); a question whose remaining content words never co-occur in one article can still miss. None of this considers language: a German question against an
   English pack simply scores poorly; the reranker sorts it out when present, and without
   one, expect occasional off-language chunks. Aggregation or superlative questions ("which
-  scientists are famous Austrians") tend to surface list or enumeration articles rather than
-  a clean answer, because no single passage carries what the question asks for — a
-  retrieval-shape limit, not a defect. Every ticked pack gets one line in the
+  scientists are famous Austrians") get one extra step before the search: the app asks the
+  local model for the concepts and the likely list-article title (one short model call per
+  pack question, measured at two to five seconds on a processor-only machine), which finds the
+  list article in the cases we measured. A question whose answer is spread across an
+  article's individual rows, rather than named on the page itself, can still miss; and on a
+  machine where that model call takes longer than six seconds, the question falls back to
+  the plain search with no list-title step. Every ticked pack gets one line in the
   "Knowledge packs:" note under the answer — searched (and how much it contributed) or
   not searched/failed with a short reason — even on an answer that cites nothing at all;
   an older answer, from before this note existed, says "outcome not recorded" instead.
