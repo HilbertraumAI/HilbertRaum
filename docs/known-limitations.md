@@ -2327,6 +2327,22 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   reinstall reads as a new computer, not the same one.
 - **GPU, driver/backend, context size and USB port are not part of the key.** A stored result can
   be stale for any of these without the app treating the machine as new.
+- **`gpuAutoDisabled` travels with the workspace, not the machine.** The auto-disable flag (and
+  `gpuLastError`) is a plain workspace setting with no `machineKey` stamp, unlike `gpuProbe`: a
+  GPU failure persisted on one computer keeps the next computer on the CPU rung until "Try GPU
+  again". Seen as a risk in the #330 round trip (the flag was never set there).
+- **The unlock-time device probe can lose a race with the auto-start.** `prepareFirstBenchmark`
+  fires the session's one `--list-devices` probe in the same tick as the active model's
+  auto-start. Under the concurrent weight upload the probe took 7.7 s against its 10 s bound on
+  an RTX 3080 Ti (#330 round trip, `eval/results/hardware/330-round-trip-20260907/probe-race.txt`),
+  and a timed-out probe is cached as "no GPU" for the session: the graphics tile reads "None",
+  the recommendation falls to the RAM basis and the start is labelled `cpu` while the model
+  actually runs on the card. "Try GPU again" re-probes. Follow-up issue #380.
+- **A USB bus reset while unlocked drops the decrypted working copy's WAL.** exFAT reported a
+  lost delayed write on `workspace/hilbertraum.sqlite-wal` after a UASP device reset (#330 round
+  trip); the restore that session had written was gone, the next unlock restored again, and
+  the seal at lock carried the state into the `.enc`. Run `chkdsk /f` on the drive after such
+  an event.
 - **Unknown identity stays eligible as "this machine" (G3).** A legacy record with no identity, or
   one where hardware detection failed, is treated as compatible with whatever computer is running
   now — a compatibility policy, not proof the data actually describes it.

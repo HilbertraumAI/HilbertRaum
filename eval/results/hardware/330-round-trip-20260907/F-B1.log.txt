@@ -1,0 +1,54 @@
+# F-B1 — Settings → Diagnostics → log export on computer B, pasted by the machine owner 2026-09-07 (the workspace F log from its creation on A through the B session; UTC timestamps, local = +2 h). The drive was E: on B.
+
+2026-09-07T16:13:35.173Z [INFO] Workspace resolved {"root":"H:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-07T16:13:35.174Z [INFO] Workspace state {"state":"uninitialized","mode":null,"plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T16:13:35.175Z [INFO] Model manifests directory {"manifestsDir":"H:\\model-manifests"}
+2026-09-07T16:13:35.194Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T16:13:35.194Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T16:13:35.194Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T16:13:35.195Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T16:13:35.195Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T16:13:35.261Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T16:13:42.279Z [INFO] Workspace created {"mode":"encrypted"}
+2026-09-07T16:13:42.282Z [INFO] First run: benchmarking hardware in the background once the model start settles
+2026-09-07T16:13:42.299Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T16:13:42.299Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-07T16:13:42.665Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-9b-ud-q4kxl","ramGb":63.7}
+2026-09-07T16:13:53.399Z [INFO] Use model (select + start) {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T16:14:53.154Z [INFO] Model checksum hashed {"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":59736,"ok":true}
+2026-09-07T16:14:53.156Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-07T16:14:53.157Z [INFO] Model prefetch skipped {"modelId":"qwen3.5-9b-ud-q4kxl","detail":"weights just hashed — page-cache-warm"}
+2026-09-07T16:14:58.201Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-07T16:15:00.148Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T16:15:01.154Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056,"ms":21411,"ok":true}
+2026-09-07T16:15:01.239Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-9b-ud-q4kxl","ramGb":63.7}
+2026-09-07T16:15:12.314Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128,"ms":11159,"ok":true}
+2026-09-07T16:16:20.562Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T16:16:21.753Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T16:16:21.753Z [INFO] quit: ZIM transients cleaned
+2026-09-07T16:16:21.753Z [INFO] quit: locking workspace
+2026-09-07T16:23:41.938Z [INFO] Workspace resolved {"root":"E:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-07T16:23:41.943Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T16:23:41.943Z [INFO] Model manifests directory {"manifestsDir":"E:\\model-manifests"}
+2026-09-07T16:23:41.977Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T16:23:41.977Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T16:23:41.978Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T16:23:41.978Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T16:23:41.979Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T16:23:41.983Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T16:23:49.411Z [INFO] Workspace unlocked
+2026-09-07T16:23:49.417Z [INFO] Drive is on a new computer: benchmarking it in the background once the model start settles
+2026-09-07T16:23:49.417Z [INFO] Auto-starting the active model runtime in the background {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T16:23:49.439Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-07T16:23:49.441Z [INFO] Model prefetch started {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T16:23:49.444Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T16:23:49.445Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-07T16:25:49.449Z [INFO] First-run benchmark deferred: the model start has not settled within the wait bound {"waitedMs":120000}
+2026-09-07T16:25:50.063Z [INFO] Model prefetch done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T16:25:57.420Z [INFO] Benchmark complete {"profile":"BALANCED","recommendedModelId":"qwen3.6-27b-q5","ramGb":31.9}
+2026-09-07T16:26:10.143Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: cpu)"}
+2026-09-07T16:26:12.530Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T16:26:12.534Z [INFO] New-computer benchmark skipped: a result for this computer was saved meanwhile
+2026-09-07T16:28:02.464Z [INFO] Benchmark complete {"profile":"BALANCED","recommendedModelId":"qwen3.6-27b-q5","ramGb":31.9}
+
+# Reading: 16:23:49 unlock → "Drive is on a new computer: benchmarking it in the background once the model start settles" + the auto-start of the active 9B (persisted in F on A). The prefetch of the 5.97 GB weight on this ~42 MB/s path outlived the 120 s bound → "First-run benchmark deferred" at 16:25:49 (no run at the boundary). A "Benchmark complete" (BALANCED) at 16:25:57 — 8 s later, before the runtime came up — was not the scheduler (owner to confirm a manual "Check again"). The start settled at 16:26:12 and the retained continuation resolved "New-computer benchmark skipped: a result for this computer was saved meanwhile" — the skipped-already-current re-check working as designed. A second run at 16:28:02 gave the speed figure (22 tok/s, cpu backend).

@@ -1,0 +1,32 @@
+# F-B1 — pasted by the machine owner 2026-09-07 from HilbertRaum 0.1.59 (build 259e9d9a…, launched from the drive, mounted as E: there) on computer B (i7-8700, GTX 1070 Ti), Performance screen → Copy report. Two pastes: the FIRST was taken while the new-computer check was still owed (the headline was still A's result, so the report heads it "Anderer Computer" — the L6 heading), the SECOND after B's own result landed (18:28:02). Saved from the owner's results.txt on the drive root (raw copy: F-B1.results-raw.txt).
+
+Anderer Computer: Intel(R) Core(TM) i9-14900K, 63,7 GB RAM
+Geschwindigkeit: 98,4 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 63,7 GB RAM
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+Grafikspeicher: 11,8 GB VRAM (NVIDIA GeForce RTX 3080 Ti)
+Laufwerk: 119,9 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.6 27B Q5_K_M (Arbeitsspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 9B (UD-Q4_K_XL)
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 18:15:01
+
+
+Dieser Computer
+Geschwindigkeit: 22 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 31,9 GB RAM
+CPU: Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz (12 Kerne)
+Grafikspeicher: Keine
+Laufwerk: 42,4 MB/s lesen
+Zugewiesenes Profil: BALANCED
+Empfohlen für den nächsten Start: Qwen3.6 27B Q5_K_M (Arbeitsspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.6 27B Q5_K_M
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 18:28:02
+- Das Lesen von diesem Laufwerk lag bei etwa 42 MB/s. Beim Modellstart wird die ganze Modelldatei mit dieser Geschwindigkeit gelesen, Modellstarts dauern auf diesem Laufwerk daher lange.
+
+# Reading:
+# - Attribution: the i9 row carries exactly the F-A1 figures (98.4 tok/s, 119.9 MB/s, PRO, Last run 18:15:01); B's headline (i7-8700, 31.9 GB, BALANCED, 42.4 MB/s, 22 tok/s, Last run 18:28:02) carries none of them, and its slow-drive warning is its own (A had none).
+# - "Grafikspeicher: Keine" / backend cpu on B: the drive root holds a "Norton sandbox<SID>160HilbertRaum-0.1.59-p_{…}" folder created at 18:22, i.e. Norton ran the unknown portable exe in its sandbox on B; the same machine reported the GTX 1070 Ti (8.1 GB) from the source build this morning (#318 leg 2). Environmental, not part of the #330 checks; it also explains the 42 MB/s read against 305 MB/s this morning.
+# - Under the "Anderer Computer" heading the line "Empfohlen für den nächsten Start: Qwen3.6 27B Q5_K_M (Arbeitsspeicher)" is B's LIVE pick (RAM basis, no card seen), printed inside the i9 block (buildReport appends `live` regardless of `currentMachine`) — see the protocol's findings.

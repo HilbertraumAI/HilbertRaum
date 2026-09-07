@@ -1,0 +1,65 @@
+# U-B1 — the machine owner's results file from computer B (i7-8700, GTX 1070 Ti; the drive was E: there), 2026-09-07 20:12–22:24 local: Performance screen → Copy report (headline only; the on-screen "Andere Computer" list was not transcribed), then the Diagnostics log export of workspace U (from its creation by 0.1.57 on A at 18:11 through the B session). UTC timestamps in the log, local = +2 h; user path redacted.
+
+Dieser Computer
+Geschwindigkeit: 22,2 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 31,9 GB RAM
+CPU: Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz (12 Kerne)
+Grafikspeicher: 8,1 GB VRAM (NVIDIA GeForce GTX 1070 Ti)
+Laufwerk: 42,6 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.5 4B (UD-Q4_K_XL) (Grafikspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 4B (UD-Q4_K_XL)
+Kontextgröße: 4.096 Token
+Letzter Lauf: 7.9.2026, 22:24:35
+- Das Lesen von diesem Laufwerk lag bei etwa 42 MB/s. Beim Modellstart wird die ganze Modelldatei mit dieser Geschwindigkeit gelesen, Modellstarts dauern auf diesem Laufwerk daher lange.
+
+2026-09-07T16:11:24.547Z [INFO] Workspace resolved {"root":"H:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-07T16:11:24.549Z [INFO] Workspace state {"state":"uninitialized","mode":null,"plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T16:11:24.549Z [INFO] Model manifests directory {"manifestsDir":"H:\\model-manifests"}
+2026-09-07T16:11:24.572Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T16:11:24.572Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T16:11:24.573Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T16:11:24.573Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T16:11:24.573Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T16:11:24.576Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T16:11:33.333Z [INFO] Workspace created {"mode":"encrypted"}
+2026-09-07T16:11:33.335Z [INFO] First run: benchmarking hardware in the background
+2026-09-07T16:11:41.256Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.6-27b-q5","ramGb":63.7}
+2026-09-07T18:12:40.045Z [INFO] Workspace resolved {"root":"E:","preparedDrive":true,"detectedFromAppLocation":true}
+2026-09-07T18:12:40.059Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T18:12:40.060Z [INFO] Model manifests directory {"manifestsDir":"C:\\Users\\peter\\AppData\\Local\\Temp\\3J0TeivLcoo8Legcarp00Z1zYKv\\resources\\model-manifests"}
+2026-09-07T18:12:40.107Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T18:12:40.108Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T18:12:40.110Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T18:12:40.110Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T18:12:40.111Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T18:12:40.116Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T18:13:25.331Z [INFO] Workspace unlocked
+2026-09-07T18:13:25.335Z [INFO] Drive is on a new computer: benchmarking it in the background once the model start settles
+2026-09-07T18:13:25.378Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T18:13:25.378Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-07T18:13:27.279Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-4b-ud-q4kxl","ramGb":31.9}
+2026-09-07T18:15:49.355Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-4b-ud-q4kxl","ramGb":31.9}
+2026-09-07T18:18:24.348Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-4b-ud-q4kxl","ramGb":31.9}
+2026-09-07T18:19:33.880Z [INFO] Model checksum hashed {"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960,"ms":337200,"ok":true}
+2026-09-07T18:21:14.434Z [INFO] Model checksum hashed {"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256,"ms":100546,"ok":true}
+2026-09-07T18:25:13.306Z [INFO] Model checksum hashed {"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":237780,"ok":true}
+2026-09-07T18:36:01.399Z [INFO] Model checksum hashed {"modelId":"qwen3.6-27b-q4","file":"weight","bytes":16817244384,"ms":648095,"ok":true}
+2026-09-07T18:36:10.312Z [INFO] Model checksum hashed {"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728,"ms":8904,"ok":true}
+2026-09-07T18:36:58.406Z [INFO] Model checksum hashed {"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896,"ms":48092,"ok":true}
+2026-09-07T18:37:17.898Z [INFO] Model checksum hashed {"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967,"ms":19491,"ok":true}
+2026-09-07T18:38:34.486Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056,"ms":76579,"ok":true}
+2026-09-07T18:39:27.647Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128,"ms":53157,"ok":true}
+2026-09-07T19:16:33.710Z [INFO] Use model (select + start) {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T19:16:33.771Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-07T19:16:33.773Z [INFO] Model prefetch started {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T19:18:49.894Z [INFO] Model prefetch done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T19:18:53.734Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-07T19:18:54.718Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T20:24:35.896Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-4b-ud-q4kxl","ramGb":31.9}
+
+# Reading:
+# - The 0.1.57 head of the log (16:11Z): "First run: benchmarking hardware in the background" (the pre-P7 wording) and one "Benchmark complete" PRO for A — the workspace's only result, no history in that build.
+# - B unlock at 18:13:25Z → "Drive is on a new computer: benchmarking it in the background once the model start settles"; no model was active in U, so the measurement ran at once (18:13:27Z, drive leg only, PRO for the i7 with the 8 GB card seen — Norton allowed the exe this time). Two further manual checks (18:15:49Z, 18:18:24Z) and, after the 9B was started at 19:16Z ("backend: gpu"), the final check at 20:24:35Z = 22:24:35 local with the speed leg (22.2 tok/s).
+# - B's headline (31.9 GB, i7-8700, 42.6 MB/s, PRO, its own slow-drive warning) carries nothing of A's 0.1.57 result (63.7 GB, i9, 281.4 MB/s write, no read sample). The M4 backfill of A's outgoing result is proven by U-A2 (its restore on A can only come from the history entry this unlock filed).
+# - Observation (owner): "it took a long time until I could select a model, because they all got evaluated" — the log shows every weight on the drive being hashed 18:19–18:39Z at ~25–28 MB/s (the 27B: 648 s), i.e. ~20 min on this path before a model could be chosen. Not a #330 check; noted in the protocol.
