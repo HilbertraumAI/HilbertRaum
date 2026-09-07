@@ -1,0 +1,13 @@
+{
+  "sha256": "2de73110cb254cbf09b54b717578dadff12ef1194e7271527e68202f39ba4bfd",
+  "runtime_env": "Vulkan backend (b9849 Ubuntu build, GNU 11.4.0) · Ubuntu 22.04.5 LTS, kernel 6.8.0-138-generic",
+  "driver": "NVIDIA 595.84 (Vulkan API 1.4.329)",
+  "heaps": "RTX 3090 heap 0 device-local 24.00 GiB (budget 23,353 MiB idle), heap 1 host 94.11 GiB, heap 2 device-local **246 MiB BAR heap** (budget 221 MiB, 25 MiB in use idle)",
+  "argv_sources": "identical to the leg-7 Q5 baseline (sidecar.ts:511-538, models.ts:176-183, sidecar.ts:90-98, llama.ts:49,460 + sidecar.ts:516-524, llama.ts:39,461, factory.ts:95 + factory.ts:754-761 rung 1a) except `--ubatch-size` 2048 → **512** (`--batch-size` stays 2048; the app itself always emits both equal to min(ctx, 2048), sidecar.ts:516-524)",
+  "device_info_free_total": "Vulkan0 23,548 / 24,822 MiB (probe read immediately before the spawn; while loaded a second `--list-devices` read 2,581 free)",
+  "desktop": "**idle**: X desktop plus an idle ComfyUI server (256 MiB resident); `nvidia-smi` 771 MiB used before the spawn",
+  "fit": "offloaded **65/66** layers to GPU (baseline: 62/66): still not a full offload. Fit pass: `projected to use 20619 MiB of device memory vs. 21728 MiB of free device memory`, `cannot meet free memory target of 1186 MiB, need to reduce device memory by 77 MiB` (target = 1,024 + the MTP estimate, which shrank from 552 to 162 MiB at ubatch 512), target 20,542 MiB, back-to-front fill: **65 layers = 20,358 MiB, 1,370 MiB free** (2.98 s) · buffers: Vulkan0 model 17,913.46 MiB + CPU_Mapped 931.63 MiB · KV: Vulkan0 512.00 MiB (`n_parallel` auto → 4, `kv_unified = true`) · RS: Vulkan0 1,758.09 + CPU 37.41 MiB · SWA: none · compute: **Vulkan0 174.45 MiB** (baseline 625.22) + Vulkan_Host 79.42 MiB · MTP draft context: KV 32.00 + compute 130.02 MiB · rung 1a + the varied ubatch",
+  "varied": "`--ubatch-size` 2048 → 512 (one thing; `--batch-size` unchanged at 2048)",
+  "app_view": "pending: the app's Copy report follows as a separate comment after the six starts",
+  "predicted_vs_measured": "Question (d), ubatch leg: halving the micro-batch frees ~450 MiB of compute buffer plus ~390 MiB of MTP estimate, which buys three more layers (65/66) but NOT the full offload: the 77 MiB shortfall against the 1,186 MiB target still costs one layer. Decode 38.9 tok/s versus the baseline's 30.4 (one host layer instead of four; MTP acceptance fell to 0.675 from 0.779), prefill 774 versus 809 tok/s. Peak 21,433 MiB (+20,662 over pre-spawn), 2,691 MiB free at peak. The §6.6 Q5 verdict (not starred, does not fit) still holds under this variant. (e): BAR heap usage 24.9 → 233.6 (loaded) → 240.6 MiB (5.4 MiB of budget left)."
+}

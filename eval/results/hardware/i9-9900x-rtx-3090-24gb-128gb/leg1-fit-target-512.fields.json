@@ -1,0 +1,13 @@
+{
+  "sha256": "2de73110cb254cbf09b54b717578dadff12ef1194e7271527e68202f39ba4bfd",
+  "runtime_env": "Vulkan backend (b9849 Ubuntu build, GNU 11.4.0) · Ubuntu 22.04.5 LTS, kernel 6.8.0-138-generic",
+  "driver": "NVIDIA 595.84 (Vulkan API 1.4.329)",
+  "heaps": "RTX 3090 heap 0 device-local 24.00 GiB (budget 23,351 MiB idle), heap 1 host 94.11 GiB, heap 2 device-local **246 MiB BAR heap** (budget 221 MiB, 25 MiB in use idle)",
+  "argv_sources": "identical to the leg-7 Q5 baseline (sidecar.ts:511-538, models.ts:176-183, sidecar.ts:90-98, llama.ts:49,460 + sidecar.ts:516-524, llama.ts:39,461, factory.ts:95 + factory.ts:754-761 rung 1a) plus **`--fit-target 512`** appended (the app never passes it; the binary's default is 1024 MiB)",
+  "device_info_free_total": "Vulkan0 23,546 / 24,822 MiB (probe read immediately before the spawn; while loaded a second `--list-devices` read 2,364 free)",
+  "desktop": "**idle**: X desktop plus an idle ComfyUI server (256 MiB resident); `nvidia-smi` 773 MiB used before the spawn",
+  "fit": "offloaded **64/66** layers to GPU (baseline: 62/66): still not full. Fit pass: `projected to use 21039 MiB of device memory vs. 21726 MiB of free device memory`, `cannot meet free memory target of 1064 MiB, need to reduce device memory by 376 MiB` (target = 512 + the 552 MiB MTP estimate), target 20,662 MiB, back-to-front fill: 65 layers = 20,775 (over), **64 layers = 20,531 MiB, 1,194 MiB free** (3.78 s) · buffers: Vulkan0 model 17,680.46 MiB + CPU_Mapped 1,164.63 MiB · KV: Vulkan0 512.00 MiB (`n_parallel` auto → 4, `kv_unified = true`) · RS: Vulkan0 1,720.69 + CPU 74.81 MiB · SWA: none · compute: Vulkan0 618.44 + Vulkan_Host 313.47 MiB · MTP draft context: KV 32.00 + compute 520.06 MiB · rung 1a + the varied fit target",
+  "varied": "`--fit-target` 1024 → **512** (one thing)",
+  "app_view": "pending: the app's Copy report follows as a separate comment after the six starts",
+  "predicted_vs_measured": "Halving the fit margin buys two layers (64/66), not the full offload: the projection (21,039) still overshoots the 21,726 MiB the fit sees by 376 MiB against the reduced 1,064 target. Decode 34.7 tok/s (baseline 30.4, `-np 1` 51.0), prefill 825 tok/s. Peak 22,079 MiB (+21,306 over pre-spawn), the highest of the session, with 2,045 MiB free at peak: the margin the fit gives up is spent, not kept. §6.6's verdict for Q5 (not starred, does not fit under the app's launch) holds under this variant. (e): BAR heap usage 24.9 → 59.1 → 196.1 MiB (49.9 MiB of budget left)."
+}
