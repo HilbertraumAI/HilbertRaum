@@ -99,17 +99,28 @@ export function primaryUsefulDevice<T extends GpuDeviceLike>(devices: readonly T
 }
 
 /**
- * What a screen may SHOW: the primary useful device (`useful: true`), else the first listed
- * device with `useful: false` — an integrated or small device is named with its memory figure
- * so the copy can say "integrated, shared memory" honestly, never implying acceleration. Null
- * with no device at all. Since the #303/#308 merge the snapshot's `currentGpu` and the
- * benchmark record name the budget device only (`nextStartMemory`, null with no usable card or
- * the GPU switched off); this rule remains the shared definition of an honest fallback for a
- * reader that wants to name an unusable device.
+ * What a screen may SHOW — the device the graphics tile names (`PerformanceSnapshot.graphicsDevice`)
+ * and a GPU start is labelled with: the primary useful device (`useful: true`); else the LARGEST
+ * device that does not look integrated (`useful: false` — a discrete card under the gate, such as
+ * the common 6 GB laptop card the Vulkan backend reports at 5,9xx MiB, #321); else the first
+ * listed device (`useful: false` — an integrated-only machine). An unusable device is named with
+ * its OWN memory figure so the copy can say "small" or "integrated, shared memory" honestly, never
+ * implying acceleration — on a hybrid laptop the old `devices[0]` fallback named the iGPU's shared
+ * figure while the real card went unmentioned. Whether the card is USED is the budget device's
+ * question (`primaryUsefulDevice`), never this one's (owner decision 2026-09-07: the tile shows
+ * the real card and its memory regardless of the gate). Null with no device at all. The snapshot's
+ * `currentGpu`, the benchmark record, the placement budget and the Models ★ keep naming the
+ * budget device only (`nextStartMemory`, null with no usable card or the GPU switched off).
  */
 export function displayDevice<T extends GpuDeviceLike>(devices: readonly T[]): { device: T; useful: boolean } | null {
   const primary = primaryUsefulDevice(devices)
   if (primary) return { device: primary, useful: true }
+  let discrete: T | null = null
+  for (const device of devices) {
+    if (looksIntegrated(device.name)) continue
+    if (discrete == null || device.totalMb > discrete.totalMb) discrete = device
+  }
+  if (discrete) return { device: discrete, useful: false }
   return devices.length > 0 ? { device: devices[0], useful: false } : null
 }
 

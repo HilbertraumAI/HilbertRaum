@@ -87,6 +87,7 @@ function perfSnapshot(): PerformanceSnapshot {
     // check" label (PR #308: `PerformanceSnapshot.recommendation`).
     recommendation: { modelId: 'qwen', basis: 'discrete' },
     currentGpu: null,
+    graphicsDevice: null,
     otherMachines: [],
     running: false,
     placement: {

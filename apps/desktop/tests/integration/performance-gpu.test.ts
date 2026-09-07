@@ -76,6 +76,10 @@ afterEach(closePerformanceFixture)
 
 const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, freeMb: 15_000 }
 const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 22_000 }
+// A real hybrid laptop (2026-09-07): the iGPU listed first, the "6 GB" card at 5,994 MiB on Vulkan
+// — under the 6,144 gate (#321), so no budget device.
+const RADEON_IGPU: GpuDevice = { id: 'Vulkan0', name: 'AMD Radeon(TM) Graphics', totalMb: 8886, freeMb: 8441 }
+const RTX3060L: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 }
 const PROBED_AT = '2026-09-05T00:00:00Z'
 const FOREIGN_KEY = 'linux|x64|Some Other CPU|32|64'
 const CHAT = 'qwen3.5-9b-ud-q4kxl'
@@ -128,6 +132,8 @@ describe('one eligible source: the selected device (M8.2)', () => {
     const snap = buildPerformanceSnapshot(ctxWith(root, db))
 
     expect(snap.currentGpu).toEqual({ name: RTX.name, totalMb: RTX.totalMb, useful: true })
+    // With a usable card the display device IS the budget device.
+    expect(snap.graphicsDevice).toEqual({ name: RTX.name, totalMb: RTX.totalMb, useful: true })
     expect(snap.placement.vramMb).toBe(RTX.totalMb)
     expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [IRIS, RTX]))
     expect(snap.placement.memoryClass).not.toBe('cpu')
@@ -143,15 +149,47 @@ describe('one eligible source: the selected device (M8.2)', () => {
 
     const snap = buildPerformanceSnapshot(ctxWith(root, db))
 
-    // The #303 P5 rule named the iGPU with `useful: false`; merged with #308, the snapshot
-    // names the BUDGET device only, and an integrated device is not one for any consumer —
-    // the tile reads "No usable graphics card", the ★ is the RAM pick. A RECORDED integrated
-    // device (a legacy or foreign result) still reads "Integrated, shared memory" on screen.
+    // The #303 P5 rule named the iGPU with `useful: false`; merged with #308, the snapshot's
+    // `currentGpu` names the BUDGET device only, and an integrated device is not one for any
+    // consumer — the ★ is the RAM pick, nothing is folded in. The tile still NAMES the iGPU
+    // through `graphicsDevice` (rated "Integrated, shared memory", owner decision 2026-09-07).
     expect(snap.currentGpu).toBeNull()
+    expect(snap.graphicsDevice).toEqual({ name: IRIS.name, totalMb: IRIS.totalMb, useful: false })
     expect(snap.placement.vramMb).toBeNull()
     expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [IRIS]))
     expect(snap.current?.gpu).toBeNull()
     expect(snap.current?.gpuVramMb).toBeUndefined()
+  })
+
+  it('a hybrid [iGPU, small dGPU] probe: no budget device (cpu class, RAM pick, nothing folded in) — but the tile names THE card (owner decision 2026-09-07)', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: legacyResult(), gpuProbe: probe([RADEON_IGPU, RTX3060L]) })
+
+    const snap = buildPerformanceSnapshot(ctxWith(root, db))
+
+    // 5,994 MiB is under the 6,144 gate (#321): the card is no budget device for ANY consumer…
+    expect(snap.currentGpu).toBeNull()
+    expect(snap.placement.vramMb).toBeNull()
+    expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [RADEON_IGPU, RTX3060L]))
+    expect(snap.current?.gpu).toBeNull()
+    expect(snap.current?.gpuVramMb).toBeUndefined()
+    // …and the graphics tile still names it with its OWN memory — never the iGPU listed first,
+    // never "no usable graphics card". Whether it is used is the rating's (and the budget's) job.
+    expect(snap.graphicsDevice).toEqual({ name: RTX3060L.name, totalMb: 5994, useful: false })
+  })
+
+  it('with the GPU switched off or auto-disabled the tile names no device either, so its "acceleration is off" copy stands', () => {
+    for (const flags of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
+      const root = freshRoot()
+      const db = seededDb(root)
+      updateSettings(db, { lastBenchmark: legacyResult(), gpuProbe: probe([RADEON_IGPU, RTX3060L]), ...flags })
+
+      const snap = buildPerformanceSnapshot(ctxWith(root, db))
+
+      expect(snap.currentGpu).toBeNull()
+      expect(snap.graphicsDevice).toBeNull()
+    }
   })
 
   it('a result that already carries a figure is left alone; a foreign result is never folded', () => {

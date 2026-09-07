@@ -2536,11 +2536,23 @@ export interface PerformanceSnapshot {
    * audit M8). `useful` is the shared `isUsefulDevice` verdict on it (true for a discrete card
    * by construction; the Metal pool device on unified memory is rated by the same predicate).
    * `name` and `totalMb` always describe the SAME device. Null with no eligible probe, no
-   * usable device (an integrated-only machine: the tile reads "No usable graphics card"), or
-   * the GPU switched off / auto-disabled (the tile names the cause). The screen never falls
-   * back to the raw settings probe.
+   * usable device (an integrated-only machine, or a discrete card under the gate — the tile then
+   * names `graphicsDevice` below), or the GPU switched off / auto-disabled (the tile names the
+   * cause). The screen never falls back to the raw settings probe.
    */
   currentGpu: { name: string; totalMb: number; useful: boolean } | null
+  /**
+   * The device the graphics tile NAMES — `displayDevice` in `shared/gpu-rules.ts` over the same
+   * eligible probe: the budget device when there is one (then equal to `currentGpu`), else the
+   * LARGEST card that does not look integrated even when it is under the usable gate (the common
+   * 6 GB laptop card the Vulkan backend reports at 5,9xx MiB, #321), else the integrated device.
+   * `useful` is the shared verdict on it, so the tile can show the real card and its memory and
+   * still rate it "Small" / "Integrated" — whether the card is USED is `currentGpu`'s (and the
+   * budget's) question, never this field's (owner decision 2026-09-07). Null with no eligible
+   * probe, no device in it, or the GPU switched off / auto-disabled — the same cases as
+   * `currentGpu`, so the tile's "acceleration is off" copy stands.
+   */
+  graphicsDevice: { name: string; totalMb: number; useful: boolean } | null
   /**
    * True while the benchmark occupancy span is held on this machine — a run THIS window
    * started or any other (first-run, moved-drive, another window). Assigned verbatim by the

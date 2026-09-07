@@ -45,6 +45,8 @@ beforeEach(() => clearModelLoadLatches())
 const RTX: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 /** A hybrid laptop's FIRST enumerated device: integrated, reporting shared system memory. */
 const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16384, freeMb: 12000 }
+/** A discrete card UNDER the 6,144 MiB usable gate — the 6 GB laptop class of #321. */
+const GTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, freeMb: 3600 }
 
 interface LadderCall {
   binPath: string
@@ -269,9 +271,23 @@ describe('the GPU start ladder', () => {
     expect(h.calls[0].extraArgs).toEqual([])
   })
 
-  it('an integrated-only box is still named: the label falls back to the first listed device', async () => {
-    // `displayDevice` returns the first device with `useful: false` when none is useful, so the
-    // line never goes blank on a machine whose only GPU is integrated.
+  it('a hybrid [iGPU, SMALL dGPU] box is LABELLED with the card, not the iGPU (owner decision 2026-09-07)', async () => {
+    // The 6 GB laptop case (#321): the card is under the usable gate, so nothing is "useful" and
+    // `displayDevice`'s old fallback took `devices[0]` — the iGPU — while `--fit` offloaded to
+    // the card. The rule now prefers the largest device that does not look integrated, so the
+    // Chat hint and the Performance tile credit the card. SELECTION is untouched.
+    const h = ladderHarness({ probe: [IRIS, GTX] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.gpuName).toBe(GTX.name)
+    expect(runtime.backend).toBe('gpu')
+    expect(h.calls).toHaveLength(1)
+    expect(h.calls[0].extraArgs).toEqual([])
+  })
+
+  it('an integrated-only box is still named: the label falls back to the integrated device', async () => {
+    // With no discrete-looking device at all, `displayDevice` names the only one there is
+    // (`useful: false`), so the line never goes blank on a machine whose only GPU is integrated.
     const h = ladderHarness({ probe: [IRIS] })
     const runtime = h.factory(opts)
     await runtime.start()

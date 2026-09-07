@@ -27,6 +27,10 @@ const IRIS = dev('Vulkan0', 'Intel(R) Iris(R) Xe Graphics', 16_384)
 const RTX = dev('Vulkan1', 'NVIDIA GeForce RTX 3090', 24_576)
 const RX = dev('Vulkan0', 'AMD Radeon RX 6700 XT', 12_272)
 const GTX = dev('Vulkan0', 'NVIDIA GeForce GTX 1650', 4096)
+// A real hybrid laptop (Ryzen 7 5800H, 2026-09-07): the iGPU is listed first, and the "6 GB"
+// card reports 5,994 MiB on the Vulkan backend — under the 6,144 gate (#321).
+const RADEON_IGPU = dev('Vulkan0', 'AMD Radeon(TM) Graphics', 8886)
+const RTX3060L = dev('Vulkan1', 'NVIDIA GeForce RTX 3060 Laptop GPU', 5994)
 
 describe('looksIntegrated', () => {
   it.each([
@@ -117,8 +121,23 @@ describe('displayDevice — what a screen may show', () => {
   it('names an integrated or small device with useful: false, so the copy never implies acceleration', () => {
     expect(displayDevice([IRIS])).toEqual({ device: IRIS, useful: false })
     expect(displayDevice([GTX])).toEqual({ device: GTX, useful: false })
-    // The first listed one when none is useful — its name and memory stay one pair.
+    // Its name and memory stay one pair.
     expect(displayDevice([GTX, IRIS])).toEqual({ device: GTX, useful: false })
+  })
+
+  it('prefers a small DISCRETE card over an integrated one, whatever the driver order (owner decision 2026-09-07)', () => {
+    // A hybrid laptop lists the iGPU first; its 6 GB card reports 5,994 MiB on Vulkan — under
+    // the gate (#321), so it is no budget device — and the tile must still name THE card with
+    // its own memory, rated "Small", never the iGPU's shared figure the old `devices[0]`
+    // fallback handed it. Whether the card is USED is `primaryUsefulDevice`'s question.
+    expect(displayDevice([IRIS, GTX])).toEqual({ device: GTX, useful: false })
+    expect(displayDevice([RADEON_IGPU, RTX3060L])).toEqual({ device: RTX3060L, useful: false })
+    expect(displayDevice([RTX3060L, RADEON_IGPU])).toEqual({ device: RTX3060L, useful: false })
+    // Two small discrete cards: the larger one, like the budget rule.
+    expect(displayDevice([GTX, RTX3060L])).toEqual({ device: RTX3060L, useful: false })
+    // The verdict is untouched: 5,994 MiB is under the gate, so there is still no budget device.
+    expect(isUsefulDevice(RTX3060L)).toBe(false)
+    expect(primaryUsefulDevice([RADEON_IGPU, RTX3060L])).toBeNull()
   })
 
   it('is null with no device', () => {

@@ -96,9 +96,11 @@ function auditLabel(type: AuditEventType, t: I18n['t']): string {
  * tone — CPU is presented as normal, never degraded.
  *
  * ONE ELIGIBLE GPU SOURCE (issue #327). The device comes from the snapshot's `currentGpu`
- * (`performance:get`), which main computes as `displayDevice(eligibleGpuProbe(probe, hereKey))`
- * — the same device the ladder labels a GPU start with and the Performance screen shows: on a
- * hybrid [iGPU, dGPU] box the dGPU, where `devices[0]` named the iGPU (PR #303 audit M8.2 / P5
+ * (`performance:get`) — the BUDGET device main selects from `eligibleGpuProbe(probe, hereKey)`
+ * (`nextStartMemoryFor`: the largest usable card), so "available" here means a card the next
+ * start can actually use; a card under the gate is named by the Performance tile
+ * (`graphicsDevice`, owner decision 2026-09-07), not announced as acceleration here. On a hybrid
+ * [iGPU, dGPU] box that is the dGPU, where `devices[0]` named the iGPU (PR #303 audit M8.2 / P5
  * residual). It used to read `settings.gpuProbe.devices` RAW, which skipped the machine-stamp
  * check: a probe recorded on ANOTHER computer (the drive moved, settings restored) had this
  * line announcing "graphics acceleration available: <card>" while the Performance screen

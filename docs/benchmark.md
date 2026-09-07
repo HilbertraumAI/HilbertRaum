@@ -514,9 +514,14 @@ screen answers the user's question in plain words. Four cards:
    RECORDED integrated device (a legacy result written by the old `devices[0]` rule, or another
    computer's) — its figure shown as "GB shared" with the copy "integrated, shared memory: models
    run on the processor", never blamed on size — and "None" without a device. For the computer the
-   app is on, the ELIGIBLE probe's budget device (`PerformanceSnapshot.currentGpu`, with its
-   `useful` flag) is the freshest truth and wins; a result persisted before the field existed, or
-   whose probe came back empty, gets that device folded in by `buildPerformanceSnapshot` — name
+   app is on, the ELIGIBLE probe's DISPLAY device (`PerformanceSnapshot.graphicsDevice`, with its
+   `useful` flag: the budget device when there is one, else the LARGEST card that does not look
+   integrated even when it is under the gate — the common 6 GB laptop card Vulkan reports at
+   5,9xx MiB, #321 — else the integrated one; `displayDevice`, owner decision 2026-09-07: the tile
+   names the real card and its memory regardless of the gate, and the rating says whether it is
+   used; `currentGpu` stays the budget device) is the freshest truth and wins; a result persisted
+   before the field existed, or whose probe came back empty, gets the BUDGET device folded in by
+   `buildPerformanceSnapshot` — name
    AND memory together, never an old iGPU name with a dGPU's figure — for the current machine
    only, and an already-mixed older row (an iGPU name and figure recorded by the old `devices[0]`
    rule) is replaced by the next local check. The screen never reads the raw `settings.gpuProbe`
@@ -585,11 +590,17 @@ at all (its shared figure is not the card's own): null everywhere, the RAM pick.
 it), `pickerMemoryFor` (the `listModels` ★ and the live recommendation) and this row, so the
 Performance and Models screens can never mean different cards. `memoryClassOf` itself and the
 hardware-profile bump (`gpuUsefulForProfile`) are unchanged — as is the runtime, which still never
-passes `-ngl` and lets `--fit` decide. The same `displayDevice` rule (which prefers the budget device)
-also NAMES a GPU start (`RuntimeStatus.gpuName`, set in `runtime/factory.ts` — the Chat runtime
-hint) and the Diagnostics "Acceleration" line's "<name> (GPU available)" since PR #303 P6; both
-took `devices[0]`, so a hybrid box credited the iGPU for work the dGPU did. The Diagnostics line
-reads that device from the snapshot's `currentGpu` (`performance:get`), not from
+passes `-ngl` and lets `--fit` decide. The `displayDevice` rule (the budget device when there
+is one, else the largest discrete-looking card even under the gate, else the integrated one — since
+2026-09-07; before that, `devices[0]` whenever nothing was usable, i.e. the iGPU on a hybrid laptop)
+NAMES a GPU start (`RuntimeStatus.gpuName`, set in `runtime/factory.ts` — the Chat runtime hint)
+and feeds the graphics tile as `PerformanceSnapshot.graphicsDevice`; before P5 both took
+`devices[0]` unconditionally, so a hybrid box credited the iGPU for work the dGPU did. The Diagnostics **"Acceleration" line does NOT
+use it**: it reads the snapshot's `currentGpu` — the BUDGET device — so "\<name\> (GPU available)"
+only ever announces a card the next start can actually use (PR #303 P6, the source narrowed to
+`currentGpu` by issue #327 / PR #303 P10). On a hybrid laptop whose card is under the gate the two
+therefore differ ON PURPOSE: the tile names the card and rates it "Small", Diagnostics announces no
+acceleration, and both are true. That device comes from the snapshot (`performance:get`), not from
 `settings.gpuProbe` (issue #327, fixed by PR #303 P10): the renderer has no `hereKey`, so applying
 `eligibleGpuProbe` there was impossible and the line skipped the machine-stamp check — a probe
 stamped for another computer had Diagnostics announcing a card the Performance screen correctly

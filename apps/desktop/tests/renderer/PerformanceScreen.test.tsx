@@ -138,6 +138,7 @@ function snapshot(over: Partial<PerformanceSnapshot> = {}): PerformanceSnapshot 
     recommendation: { modelId: 'qwen3.5-9b-ud-q4kxl', basis: 'discrete' },
     currentMachine: true,
     currentGpu: null,
+    graphicsDevice: null,
     otherMachines: [office, oldLaptop],
     running: false,
     placement: placement(),
@@ -340,6 +341,27 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.queryByText('NVIDIA GeForce RTX 3090')).not.toBeInTheDocument()
     // The screen does read `getSettings` — for the two GPU flags behind the "acceleration is
     // off" sub-line (next test), never for the probe: the ARL device above stays unseen.
+  })
+
+  it('names a discrete card under the usable gate — the real card and its memory, rated "Small" (owner decision 2026-09-07)', async () => {
+    // A 6 GB laptop card the Vulkan backend reports at 5,994 MiB (#321): no budget device, so the
+    // next start is a RAM start (`currentGpu` null, class cpu) — and the tile still names THE
+    // card with its own memory, never the iGPU listed first and never "no usable graphics card".
+    // Whether the card is used is the rating's job, not the tile's silence.
+    install(
+      snapshot({
+        current: result({ gpu: null, gpuVramMb: null }),
+        currentGpu: null,
+        graphicsDevice: { name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, useful: false },
+        placement: placement({ memoryClass: 'cpu', vramMb: null })
+      })
+    )
+    renderScreen()
+    expect(await screen.findByText('5.9')).toBeInTheDocument()
+    expect(screen.getByText('Small')).toBeInTheDocument()
+    expect(screen.getByText(/NVIDIA GeForce RTX 3060 Laptop GPU · Under 6 GB: models run on the processor/)).toBeInTheDocument()
+    expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
+    expect(screen.queryByText('Usable')).not.toBeInTheDocument()
   })
 
   it('with the GPU switched off (or auto-disabled) and no card for the next start, the tile says so instead of "no card"', async () => {
