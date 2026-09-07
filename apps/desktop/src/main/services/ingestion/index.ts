@@ -239,7 +239,7 @@ function parseSummary(json: string | null | undefined): DocumentSummary | null {
 }
 
 /** The valid `GeneratedProvenance.kind` values (used to narrow a parsed string). */
-const GENERATED_KINDS = ['summary', 'translation', 'compare', 'transcript', 'other'] as const
+const GENERATED_KINDS = ['summary', 'translation', 'compare', 'transcript', 'other', 'article'] as const
 
 /** Parse a stored origin (generated-document provenance); malformed JSON reads as null. */
 function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
@@ -271,6 +271,18 @@ function parseOrigin(json: string | null | undefined): DocumentOrigin | null {
       }
       if (typeof v.modelId === 'string' && v.modelId.length > 0) out.modelId = v.modelId
       return out
+    }
+    // A saved knowledge-pack article (#340 Tier-2, D-Z21): the archive + entry it came from.
+    if (v.type === 'archive') {
+      if (typeof v.packId !== 'string' || v.packId.length === 0) return null
+      if (typeof v.articlePath !== 'string' || v.articlePath.length === 0) return null
+      return {
+        type: 'archive',
+        packId: v.packId,
+        articlePath: v.articlePath,
+        archiveTitle: typeof v.archiveTitle === 'string' && v.archiveTitle.length > 0 ? v.archiveTitle : null,
+        createdAt: typeof v.createdAt === 'string' ? v.createdAt : ''
+      }
     }
     // Comparison provenance: both source ids, A/B order.
     if (v.type === 'compare') {

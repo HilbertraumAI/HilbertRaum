@@ -1675,7 +1675,7 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (145 channels — the keys of its `IPC` constant (138 at the time of this
+`shared/ipc.ts` (147 channels since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
 sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
 (now 3, `packs:changed` added) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented
@@ -1792,7 +1792,13 @@ Phase 1, PR #294 review H1; the modal shows a hint line instead of presenting th
 text as complete; a refused entry key (empty, > 2048 chars, a control character, a `.`/`..`
 segment, a lone surrogate — validated inside the one encoder `client.ts`
 `encodeArticlePath`, #301 P5 finding L5) → null, no request issued; URL-shaped and
-empty-segment keys stay accepted).
+empty-segment keys stay accepted) · `packs:saveArticle` (`(packId, articlePath) →
+PackArticleSaveResult { documentId, title, alreadySaved, chunkCount }` — "Save to my
+documents" in the article viewer, #340 Tier-2, D-Z21; `requireUnlocked`; the same locked
+copy as every other pack-touching channel when a lock lands mid-save; two friendly
+failures, never a half-born document — `main.zim.articleUnavailable` when the entry can no
+longer be re-read main-side, `main.zim.saveFailed` when the import itself does not reach
+`indexed`).
 
 **Event `EVENTS.knowledgePacksChanged`** (`packs:changed`, #301 P3b, finding L7) — an
 EVENT, not an invoke (the `EVENTS.modelVerifyProgress` shape above, but broadcast to
@@ -1929,7 +1935,30 @@ matrix (the `zim-real` row) for the full input table.
 **Lock-channel inventory:** `ipc-lock-coverage.test.ts`'s `registerZimIpc` group gained
 `packs:refresh` as a DB-touching (non-exempt) channel; `packs:status` remains the sole
 exempt channel (in-memory service state only — its `excluded` field, #340, is the service's
-cached list, never a query). The IPC surface is unchanged by the follow-up wave: 145 channels.
+cached list, never a query). The IPC surface was unchanged by the follow-up wave, then gained
+one channel with #340 Tier-2 (`packs:saveArticle`): 147 channels. (The earlier "145" figure was one
+short of the constant by the time it was recorded; 147 is counted from the `IPC` keys on this branch.)
 
 **#340 L3-b (D-Z20):** no shape change — `makeArm` gains an optional `{ expand }` (main-side
 only), the outcome union, the per-answer note, IPC and preload are unchanged.
+
+**#340 Tier-2 (D-Z21) shapes:** `ArchiveOrigin` (`shared/types.ts`) is a new `DocumentOrigin`
+member — `{ type: 'archive', packId, articlePath, archiveTitle: string | null, createdAt }`,
+parsed by `parseOrigin`'s archive branch (`services/ingestion/index.ts`) alongside the legacy
+and `GeneratedProvenance` shapes. `GeneratedKind` gains `'article'`; `provenanceView` maps an
+`ArchiveOrigin` to `{ kind: 'article', sourceDocumentIds: [] }` — no source DOCUMENT, since the
+copy was derived from a ZIM entry, not another document (staleness never fires for it).
+`PackArticleSaveResult = { documentId, title, alreadySaved, chunkCount }` is `packs:saveArticle`'s
+return shape (above); `chunkCount` is 0 when `alreadySaved`. A second invoke for the same
+entry while the first is still importing joins that import (`alreadySaved: true`, the same
+`documentId`) — the duplicate check reads the DB before the import runs, so the in-flight map is
+what keeps two copies from being filed. The saved row is filed into the Library once indexed
+(a user-chosen import, unlike the D3/N1 work-products that carry an origin and never get a
+membership), so the default documents chat scope finds it. `ServiceContext.articleSaveActive`
+(`services/context.ts`) is the in-flight probe the docs IPC delete / re-index guards consult
+beside their own `processing` set and `skillRunActive`. New audit type
+`'knowledge_pack_article_saved'` carries `{ packId, documentId, status: 'indexed', chunkCount }`
+only — the entry path and both titles are content and never ride it. New plaintext op kind
+`'article-save'` (`services/ingestion/plaintext-ops.ts`) tracks the `.parse.md` transient the
+save writes before handing it to `createQueuedDocument` → `processDocument`, so a lock/quit
+mid-save sweeps it like any other in-flight plaintext.

@@ -2,6 +2,7 @@ import { BrowserWindow, dialog } from 'electron'
 import { guardedHandleFor } from './guarded-handle'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
+import type { PackArticleSaveResult } from '../../shared/types'
 import type {
   KnowledgePack,
   KnowledgePackAddFailureReason,
@@ -9,6 +10,8 @@ import type {
   KnowledgePackStatus
 } from '../../shared/types'
 import type { PackArticle } from '../services/zim'
+import { findSavedArticle, saveArticleAsDocument } from '../services/zim/save-article'
+import { documentsDir } from '../services/ingestion'
 import { ArticlePathError } from '../services/zim/client'
 import { KiwixManageError } from '../services/zim/tools'
 import { ZimHeaderError } from '../services/zim/identity'
@@ -218,4 +221,87 @@ export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platfo
       }
     }
   )
+
+  // #340 Tier-2 (D-Z21): save the article as a document. Only ids cross the bridge — the text
+  // is re-read main-side through the same `getArticle` the viewer used, so the renderer is
+  // never a content source. A duplicate (same pack + entry, already indexed) is answered with the
+  // existing document; an unreadable article is a friendly failure, never a half-born row.
+  // One save per pack entry at a time: `beginDocumentWork` is a refcount, not a mutex, and the
+  // duplicate check reads the DB before the import runs — two overlapping invokes for the same
+  // entry would both miss it and file two copies. A second invoke joins the first's promise.
+  const inFlight = new Map<string, Promise<PackArticleSaveResult>>()
+  // The rows being imported right now, exposed so the docs IPC delete / re-index guards hold
+  // them busy (the `skillRunActive` pattern; the precedent pushes its id on the task status).
+  const savingDocs = new Set<string>()
+  ctx.articleSaveActive = (documentId) => savingDocs.has(documentId)
+  ipcHandle(
+    IPC.savePackArticle,
+    async (_e, packId: string, articlePath: string): Promise<PackArticleSaveResult> => {
+      requireUnlocked()
+      if (typeof packId !== 'string' || typeof articlePath !== 'string') {
+        throw new Error(tMain('main.zim.articleUnavailable'))
+      }
+      const key = `${packId}\u0000${articlePath}`
+      const running = inFlight.get(key)
+      if (running) return { ...(await running), alreadySaved: true, chunkCount: 0 }
+      const existing = findSavedArticle(ctx.db, packId, articlePath)
+      if (existing) return { documentId: existing.id, title: existing.title, alreadySaved: true, chunkCount: 0 }
+      const run = saveOne(packId, articlePath)
+      inFlight.set(key, run)
+      try {
+        return await run
+      } finally {
+        inFlight.delete(key)
+      }
+    }
+  )
+
+  async function saveOne(packId: string, articlePath: string): Promise<PackArticleSaveResult> {
+    let article: PackArticle | null = null
+    try {
+      article = await zim().getArticle(ctx.db, packId, articlePath)
+    } catch (err) {
+      log.warn('Pack article read failed', {
+        error: err instanceof Error ? err.constructor.name : 'UnknownError',
+        reason: err instanceof ArticlePathError ? err.reason : undefined
+      })
+    }
+    if (!article) throw new Error(tMain('main.zim.articleUnavailable'))
+    const pack = zim().listPacks(ctx.db).find((p) => p.id === packId)
+    let queuedId: string | null = null
+    let result: PackArticleSaveResult
+    try {
+      result = await saveArticleAsDocument(
+        {
+          db: ctx.db,
+          storeDir: documentsDir(ctx.paths.workspacePath),
+          ingestion: {
+            embedder: ctx.embedder,
+            cipher: ctx.workspace.documentCipher(),
+            transcriber: ctx.transcriber,
+            ocrEngine: ctx.ocrEngine,
+            plaintextOps: ctx.plaintextOps
+          },
+          beginDocumentWork: () => ctx.workspace.beginDocumentWork(),
+          onQueued: (id) => {
+            queuedId = id
+            savingDocs.add(id)
+          }
+        },
+        article,
+        { packId, articlePath, archiveTitle: pack?.title ?? null }
+      )
+    } finally {
+      if (queuedId) savingDocs.delete(queuedId)
+    }
+    // Ids and counts only (S1): the pack id is already audited; the entry path and both
+    // titles are content and never ride the audit.
+    ctx.audit?.('knowledge_pack_article_saved', 'Knowledge-pack article saved as a document', {
+      packId,
+      documentId: result.documentId,
+      status: 'indexed',
+      chunkCount: result.chunkCount
+    })
+    return result
+  }
 }

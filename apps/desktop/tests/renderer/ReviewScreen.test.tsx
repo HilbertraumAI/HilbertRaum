@@ -979,6 +979,9 @@ describe('ReviewScreen — "Open article" from an archive evidence row (#301 P6,
     // EXACT call args — the frozen locator, not a live lookup.
     expect(getPackArticle).toHaveBeenCalledTimes(1)
     expect(getPackArticle).toHaveBeenCalledWith('uuid-climate', 'A/Treibhausgas')
+    // #340 Tier-2: the review's viewer is read-only — no "Save to my documents" here, so the
+    // evidence-only bridge rule above stays whole (`packs:saveArticle` is never reachable).
+    expect(within(dialog).queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
     // The attribution names the snapshot's archive title…
     expect(
       within(dialog).getByText(

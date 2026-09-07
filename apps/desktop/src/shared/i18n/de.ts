@@ -505,6 +505,9 @@ export const de: Record<keyof typeof en, string> = {
   // German provenance copy reviewed in the D-L7 pass (2026-06-14).
   'docs.provenance.summaryBefore': 'Zusammenfassung von ',
   'docs.provenance.generatedBefore': 'Erzeugt aus ',
+  // #340 Tier-2: ein aus einem Wissenspaket gespeicherter Artikel — die Quelle ist das Archiv.
+  'docs.provenance.articleBefore': 'Gespeichert aus dem Wissenspaket ',
+  'docs.provenance.articleUnknownArchive': 'einem Wissenspaket',
   'docs.import.busy': 'Wird importiert…',
   'docs.import.files': 'Dateien importieren',
   'docs.import.folder': 'Ordner importieren',
@@ -1775,6 +1778,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.audit.evidence_pack_exported': 'Nachweispaket exportiert',
   'diag.audit.knowledge_pack_added': 'Wissenspaket hinzugefügt',
   'diag.audit.knowledge_pack_removed': 'Wissenspaket entfernt',
+  'diag.audit.knowledge_pack_article_saved': 'Wissenspaket-Artikel als Dokument gespeichert',
   'diag.accel.gpuFallbackName': 'Grafikkarte',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Eingebauter Demo-Modus',
@@ -2553,6 +2557,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.dialog.filterDocuments': 'Dokumente',
   'main.dialog.filterAll': 'Alle Dateien',
   'main.zim.unavailable': 'Wissenspakete sind in dieser Sitzung nicht verfügbar.',
+  // #340 Tier-2: die beiden freundlichen Fehler des Speicherpfads.
+  'main.zim.articleUnavailable': 'Dieser Artikel ist gerade nicht verfügbar und konnte deshalb nicht gespeichert werden. Das Paket ist womöglich deaktiviert, entfernt oder sein Laufwerk abgezogen.',
+  'main.zim.saveFailed': 'Der Artikel konnte nicht zu deinen Dokumenten hinzugefügt werden. Bitte versuch es noch einmal.',
   'main.zim.dialogTitle': 'Wissenspakete hinzufügen',
   'main.zim.filterZim': 'ZIM-Archive',
   'main.dialog.chooseImage': 'Bild auswählen',
@@ -2734,6 +2741,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.article.loading': 'Artikel wird geladen…',
   'chat.article.unavailable': 'Dieser Artikel ist gerade nicht verfügbar. Das Paket ist möglicherweise deaktiviert, entfernt oder das Laufwerk nicht angeschlossen.',
   'chat.article.partial': 'Nur der erste Teil dieses Artikels konnte angezeigt werden.',
+  // #340 Tier-2 (D-Z21): die Aktion „In meine Dokumente speichern“ im Artikelfenster.
+  'chat.article.save': 'In meine Dokumente speichern',
+  'chat.article.saveAria': 'In meine Dokumente speichern: {title}',
+  'chat.article.saving': 'Wird in deine Dokumente gespeichert …',
+  'chat.article.saved': 'In deinen Dokumenten gespeichert als „{title}“. Er bleibt auch ohne das Paket durchsuchbar.',
+  'chat.article.alreadySaved': 'Dieser Artikel ist bereits in deinen Dokumenten als „{title}“.',
   // ---- #301 P6 (a11y pass; plan §9.23 (b)4/(b)6 and decision (c)5) — BEGIN -----------------
   'chat.scope.packMissing': 'Datei fehlt',
   'chat.scope.packMismatch': 'anderes Archiv an diesem Ort',

@@ -484,6 +484,9 @@ export const en = {
   'docs.provenance.translatedBefore': 'Translated from ',
   'docs.provenance.summaryBefore': 'Summary of ',
   'docs.provenance.generatedBefore': 'Generated from ',
+  // #340 Tier-2: a knowledge-pack article saved as a document — the archive is the source.
+  'docs.provenance.articleBefore': 'Saved from the knowledge pack ',
+  'docs.provenance.articleUnknownArchive': 'a knowledge pack',
   'docs.import.busy': 'Importing…',
   'docs.import.files': 'Import files',
   'docs.import.folder': 'Import folder',
@@ -1733,6 +1736,7 @@ export const en = {
   'diag.audit.evidence_pack_exported': 'Evidence pack exported',
   'diag.audit.knowledge_pack_added': 'Knowledge pack added',
   'diag.audit.knowledge_pack_removed': 'Knowledge pack removed',
+  'diag.audit.knowledge_pack_article_saved': 'Knowledge-pack article saved as a document',
   'diag.accel.gpuFallbackName': 'Graphics card',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Built-in demo mode',
@@ -2522,6 +2526,9 @@ export const en = {
   'main.dialog.filterDocuments': 'Documents',
   'main.dialog.filterAll': 'All files',
   'main.zim.unavailable': 'Knowledge packs are not available in this session.',
+  // #340 Tier-2: the save-as-document path's two friendly failures.
+  'main.zim.articleUnavailable': 'This article is not available right now, so it could not be saved. The pack may be disabled, removed, or its drive unplugged.',
+  'main.zim.saveFailed': 'The article could not be added to your documents. Please try again.',
   'main.zim.dialogTitle': 'Add knowledge packs',
   'main.zim.filterZim': 'ZIM archives',
   'main.dialog.chooseImage': 'Choose an image',
@@ -2703,6 +2710,12 @@ export const en = {
   'chat.article.loading': 'Loading the article…',
   'chat.article.unavailable': 'This article is not available right now. The pack may be disabled, removed, or its drive unplugged.',
   'chat.article.partial': 'Only the first part of this article could be shown.',
+  // #340 Tier-2 (D-Z21): the viewer's "Save to my documents" action and its states.
+  'chat.article.save': 'Save to my documents',
+  'chat.article.saveAria': 'Save to my documents: {title}',
+  'chat.article.saving': 'Saving to your documents…',
+  'chat.article.saved': 'Saved to your documents as “{title}”. It stays searchable even without the pack.',
+  'chat.article.alreadySaved': 'This article is already in your documents as “{title}”.',
   // ---- #301 P6 (a11y pass; plan §9.23 (b)4/(b)6 and decision (c)5) — BEGIN -----------------
   // Reason-specific popover hints. The picker greys an ineligible pack with the SAME reason the
   // arm's `classifyPackSelection` records, so the row and the per-answer outcome can never tell

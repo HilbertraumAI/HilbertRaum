@@ -72,7 +72,7 @@ import {
   restoreMessage,
   setScope
 } from '../../src/main/services/chat'
-import { resolveScope } from '../../src/main/services/collections'
+import { getBuiltinCollection, resolveScope } from '../../src/main/services/collections'
 import { MockEmbedder, encodeVector } from '../../src/main/services/embeddings'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { ModelRuntime } from '../../src/main/services/runtime'
@@ -100,6 +100,7 @@ import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { createPlaintextOps, type PlaintextOpsRegistry } from '../../src/main/services/ingestion/plaintext-ops'
+import { getDocument, listDocuments } from '../../src/main/services/ingestion'
 import { registeredSidecarPids, type SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { ZimService, type ServedLibrary, type ZimPacksChangedNotice } from '../../src/main/services/zim'
 import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
@@ -1240,6 +1241,15 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
       // packId + articlePath, and nothing else may cross the bridge.
       expect(
         bridge
+          .split(',')
+          .map((p) => p.trim())
+          .filter(Boolean)
+      ).toEqual(['packId: string', 'articlePath: string'])
+      // #340 Tier-2: the save bridge carries the identical invariant — the same two ids, no hint.
+      const saveBridge = /savePackArticle: \(([\s\S]*?)\):/.exec(src('src/preload/index.ts'))![1]!
+      expect(saveBridge).not.toMatch(/urlId/i)
+      expect(
+        saveBridge
           .split(',')
           .map((p) => p.trim())
           .filter(Boolean)
@@ -2472,4 +2482,88 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
       await h.close()
     }
   }, 60_000)
+})
+
+// ---- #340 Tier-2 (D-Z21): "Save article to my documents" -----------------------------------
+describe('#340 Tier-2 — packs:saveArticle files the article as a real document (D-Z21)', () => {
+  it('#340 Tier-2 a saved article is indexed with its sections and an archive origin, a second save returns the same document, the copy outlives the pack, and the audit carries ids and counts only', async () => {
+    const h = await sessionHarness()
+    try {
+      const alpha = await h.registerPack('alpha-save.zim')
+      // The harness's embedder stub answers no vectors; the import path needs real ones.
+      h.ctx.embedder = new MockEmbedder()
+      const before = listDocuments(h.db()).length
+      const packTitle = h.svc.listPacks(h.db()).find((p) => p.id === alpha)!.title
+
+      // Two overlapping saves of the same entry (a double-click that beat the button's disabled
+      // state, two windows): the second joins the first's import — ONE copy, the same id.
+      type Saved = { documentId: string; title: string; alreadySaved: boolean; chunkCount: number }
+      const [first, second] = (await Promise.all([
+        invoke(handlers, IPC.savePackArticle, alpha, 'A/Alpha'),
+        invoke(handlers, IPC.savePackArticle, alpha, 'A/Alpha')
+      ])).map((r) => r.result as Saved)
+      expect(first.alreadySaved).toBe(false)
+      expect(second).toMatchObject({ documentId: first.documentId, title: first.title, alreadySaved: true })
+      const saved = first
+      expect(saved.title).toBe(`Alpha and the climate (${packTitle}).md`)
+      expect(saved.chunkCount).toBeGreaterThan(0)
+      const doc = getDocument(h.db(), saved.documentId)
+      expect(doc).not.toBeNull()
+      expect(doc!.status).toBe('indexed')
+      expect(doc!.chunkCount).toBe(saved.chunkCount)
+      expect(doc!.mimeType).toBe('text/markdown')
+      // The provenance reads back as the ARCHIVE origin — pack id, entry path, the pack's title.
+      expect(doc!.origin).toMatchObject({ type: 'archive', packId: alpha, articlePath: 'A/Alpha', archiveTitle: packTitle })
+      expect(listDocuments(h.db()).length).toBe(before + 1)
+      // A user-chosen import, not a generated work-product: the copy is filed into the Library,
+      // so the default documents chat — whose scope IS the Library — can find it. (Generated
+      // rows with an origin are otherwise never filed, D3/N1.)
+      const library = getBuiltinCollection(h.db(), 'library')!
+      const listed = listDocuments(h.db()).find((d) => d.id === saved.documentId)!
+      expect((listed.collections ?? []).map((c) => c.id)).toContain(library.id)
+      // A conversation with no scope of its own resolves to the Library — the default that finds it.
+      expect(resolveScope(h.db(), 'conversation-without-a-scope').collectionIds).toContain(library.id)
+      // The stored copy is the converter's text, never HTML: a chunk carries the article body.
+      const chunk = h.db().prepare('SELECT text, section_label FROM chunks WHERE document_id = ? ORDER BY chunk_index LIMIT 1').get(saved.documentId) as { text: string; section_label: string | null }
+      expect(chunk.text).toContain('Alpha is a test archive article about the climate.')
+      expect(chunk.text).not.toMatch(/<[a-z][a-z0-9-]*[\s>]/i)
+
+      // A second save of the same entry: the existing document, no second copy.
+      const again = (await invoke(handlers, IPC.savePackArticle, alpha, 'A/Alpha')).result as typeof saved
+      expect(again).toMatchObject({ documentId: saved.documentId, title: saved.title, alreadySaved: true })
+      expect(listDocuments(h.db()).length).toBe(before + 1)
+
+      // A hazardous entry key in a LIVE pack is refused before any write (no half-born row).
+      await expect(invoke(handlers, IPC.savePackArticle, alpha, 'A/../Alpha')).rejects.toThrow(/could not be saved/)
+      expect(listDocuments(h.db()).length).toBe(before + 1)
+
+      // A crash-interrupted save (the startup reconciliation flips its row to `failed`, the
+      // transient is already shredded) must not block a fresh save of the same entry forever:
+      // the duplicate check only honours an INDEXED copy.
+      h.db().prepare("UPDATE documents SET status = 'failed' WHERE id = ?").run(saved.documentId)
+      const fresh = (await invoke(handlers, IPC.savePackArticle, alpha, 'A/Alpha')).result as Saved
+      expect(fresh.alreadySaved).toBe(false)
+      expect(fresh.documentId).not.toBe(saved.documentId)
+      expect(listDocuments(h.db()).length).toBe(before + 2)
+
+      // The copy outlives the pack: remove it, and the document is still indexed and intact.
+      await invoke(handlers, IPC.removeKnowledgePack, alpha)
+      expect(getDocument(h.db(), fresh.documentId)?.status).toBe('indexed')
+
+      // Audit: ids and counts only — never the entry path, the article title or the pack title.
+      const audit = h.auditCalls.find((c) => c.type === 'knowledge_pack_article_saved')
+      expect(audit).toBeDefined()
+      expect(audit!.metadata).toEqual({ packId: alpha, documentId: saved.documentId, status: 'indexed', chunkCount: saved.chunkCount })
+      const auditText = JSON.stringify(h.auditCalls)
+      expect(auditText).not.toContain('A/Alpha')
+      expect(auditText).not.toContain('Alpha and the climate')
+      expect(auditText).not.toContain(packTitle)
+
+      // An entry of a REMOVED pack is a friendly failure and leaves no half-born row.
+      await expect(invoke(handlers, IPC.savePackArticle, alpha, 'A/Missing')).rejects.toThrow(/could not be saved/)
+      expect(listDocuments(h.db()).length).toBe(before + 2)
+    } finally {
+      await h.close()
+    }
+  })
 })

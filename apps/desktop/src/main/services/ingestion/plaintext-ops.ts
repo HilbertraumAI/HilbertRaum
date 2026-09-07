@@ -22,6 +22,8 @@ export type PlaintextOpKind =
   | 'export'
   /** A doc-task's own transient (the OCR source PDF, a materialised output's `.parse.md`). */
   | 'doc-task'
+  /** A knowledge-pack article being saved as a document (#340 Tier-2): its `.parse.md`. */
+  | 'article-save'
   // Knowledge packs (#301, finding H4). These run on a SECOND instance of this registry
   // (`ctx.zimOps`), so the ZIM settle/sweep is its own bounded lock step and the paths it
   // tracks are only ZIM transients (`library.<n>.xml` / `meta-<n>/library.xml` under the

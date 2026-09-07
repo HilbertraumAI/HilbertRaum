@@ -2712,8 +2712,9 @@ offline article viewer. Files are registered in place, never copied.
   (authoritative), and reset to null by `suspend()` so a locked workspace's list never outlives
   it on the exempt channel. The panel shows a "Not served" badge plus a visible line naming the
   pack that keeps the name (or a generic line when the list no longer knows it) on the LOSER's
-  row only; the picker keeps relying on the per-answer `not-served` outcome. No new channel (the
-  145-channel count stands), no preload change. Tests: `zim-ipc-session` "#340 packs:status.excluded
+  row only; the picker keeps relying on the per-answer `not-served` outcome. No new channel here
+  (the recorded count was 145 at D-Z16; 147 since #340 Tier-2 added `packs:saveArticle`, D-Z21), no
+  preload change. Tests: `zim-ipc-session` "#340 packs:status.excluded
   …" (null → [] → the larger UUID after a same-leaf registration → cleared by disabling → the build
   agrees → null after a lock → recomputed by the next session), `KnowledgePacks.test.tsx` (badge +
   winner named; stale winner; null / absent status show nothing), `zim-ipc` (the fake reports
@@ -2906,6 +2907,61 @@ offline article viewer. Files are registered in place, never copied.
   the L3-b legs of `zim-arm.test.ts` (the expansion-articles-first fetch order, the per-pack caps,
   the `Liste …` / `List of …` chunk-keep switch, and the ask-abort-rethrown leg at this layer).
 
+- **D-Z21 — "Save article to my documents" (#340 Tier-2, owner ruling C3 (a) 2026-09-06: the
+  save button in the article viewer first, the citation-card shortcut later).** An article the
+  user is reading in `ArticleModal` becomes a REAL document in the corpus, not a link back to
+  the pack server. Why: an archive citation only ever resolves as an honest `unresolved` in
+  evidence review (D-Z5) and disappears with the pack; a save gives the same text a durable,
+  offline, citable identity. What: `packs:saveArticle(packId, articlePath)` re-reads the article
+  main-side through the same `getArticle` the viewer used — only the two ids cross the IPC
+  bridge, the renderer is never a content source — and hands the sectioned text to
+  `services/zim/save-article.ts`. Import-path reuse: the copy is written to a `.parse.md`
+  transient and run through the ONE import path, `createQueuedDocument` → `processDocument`,
+  exactly the `materializeDocument` precedent (`doctasks/handlers/shared.ts`) a translation or
+  comparison output already takes — so it is chunked, embedded, FTS-indexed and encrypted at
+  rest like any upload. Markdown shape: `# <article title>`, an attribution block-quote naming
+  the archive and the save date, an honest notice appended when the viewer's own `partial` flag
+  says the converter stopped short, then one `## <label>` per viewer section (the label-less
+  lead section stays plain) — `MarkdownParser` turns each heading into a chunk `section_label`,
+  so a citation into the saved copy names the section the viewer showed. Title rule: `<article>
+  (<archive>).md`, whitespace-collapsed, capped at `ARTICLE_TITLE_MAX_CHARS = 180` without ever
+  dropping the extension — the `.md` is what selects the Markdown parser. Provenance + dedup: an
+  `ArchiveOrigin` (`{ type: 'archive', packId, articlePath, archiveTitle, createdAt }`) is
+  stamped on `documents.origin_json` at QUEUE time (`createQueuedDocument` takes the origin, and
+  `setDocumentOrigin` re-asserts it after `indexed`, the DM-2 precedent), so a crash between `indexed` and a later
+  write can never let the Library backfill misfile the copy as an upload; `findSavedArticle`
+  reads the same three fields BEFORE any import runs, so saving the same pack+entry twice
+  returns the existing document (`alreadySaved: true`, `chunkCount: 0`) instead of a second copy
+  — the app's only import-time duplicate check. It honours an INDEXED copy only: `deleteDocument`
+  is a hard delete (a copy the user removed can be saved again), and a crash-interrupted save
+  that the startup reconciliation flipped to `failed` must not block a fresh one. Two overlapping
+  invokes for the same entry (`beginDocumentWork` is a refcount, not a mutex) are collapsed by an
+  in-flight map in the registrar: the second joins the first's import. Filing: unlike a
+  translation or comparison — a generated work-product that deliberately gets NO collection
+  membership (D3/N1) — the saved article is a user-chosen import and is filed into the Library
+  after `indexed`, because the default documents chat resolves its scope to exactly that
+  collection; without the filing the copy would be invisible to every default chat. While the
+  import runs, the row is held busy for the docs IPC delete / re-index guards
+  (`ctx.articleSaveActive`, the `skillRunActive` pattern) — the precedent's `documentIds` push. Fallback/rollback: an entry that can no longer
+  be read main-side (pack disabled, removed, drive unplugged) fails with
+  `main.zim.articleUnavailable` before any write; an import that does not reach `indexed` fails
+  with `main.zim.saveFailed` and `deleteDocument` rolls the row back in the `catch` — never a
+  half-born document — and the `.parse.md` transient is shredded in a `finally` regardless.
+  Evidence behaviour: the saved copy is a normal document from evidence review's point of view —
+  a real sha256, searchable without the pack server, alive after the pack is removed (the
+  `zim-ipc-session` leg proves this by removing the pack mid-test and re-reading the document).
+  Audit: `knowledge_pack_article_saved` carries `{ packId, documentId, status: 'indexed',
+  chunkCount }` only — ids and counts, never the entry path or either title (S1; both are
+  content). What stays unbuilt: the citation-card shortcut (save straight from a citation without
+  opening the viewer, the owner's "later"), full enumeration/import of a whole archive (D-Z1),
+  and an "Open in Documents" jump from the saved state — the Documents screen is the only way
+  back to it this wave. The evidence review's viewer (`ReviewScreen`) mounts the same modal with
+  `canSave={false}`: a review is read-only and its bridge is evidence-only. Tests: `zim-save-article.test.ts` (`articleDocumentTitle`,
+  `renderArticleMarkdown`, pure), the "#340 Tier-2 — packs:saveArticle files the article as a
+  real document (D-Z21)" describe in `zim-ipc-session.test.ts` (a real DB, the real handler, the
+  real import pipeline), and the "ArticleModal — save to my documents (#340 Tier-2)" describe in
+  `KnowledgePacks.test.tsx` (the four UI states).
+
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
@@ -2928,7 +2984,8 @@ searchability columns + key, `classifyPackSelection` and `packTitles`, D-Z11/D-Z
 `session.ts` (the post-unlock reconciliation kickoff, the `maybeStartLocalApi` shape,
 D-Z11), `arm.ts` (allocation, bounded concurrency, the per-ask deadline and per-pack
 outcomes — D-Z4, P4), `expand.ts` (question → concept expansion for the pack arm — D-Z20,
-#340 L3-b), `index.ts` (`ZimService` facade on
+#340 L3-b), `save-article.ts` ("Save article to my documents" — the title rule, the Markdown
+render, the import-path materialise, the duplicate lookup — D-Z21, #340 Tier-2), `index.ts` (`ZimService` facade on
 `AppContext.zim` — the revision/generation allocator, the FIFO build/teardown/start chain
 and the published tuple, D-Z10; the operation registry and admission-epoch checks, the
 `packs:changed` notify hook, D-Z11; `withServer` — the alive/generation request guard with
@@ -3013,7 +3070,8 @@ Provisioning of the `kiwix_tools` family: the family contract landed (#339 P8-1,
 reach the installer (P8-2), the drive scripts' `fetch-runtime`/`prepare-drive` support (P8-3),
 and the network-inventory prose in PRIVACY/README/user-guide/security-model (P8-5) have since
 landed too. Still open: the on-drive corresponding-source bundle (P8-4), in flight as a sibling
-PR. Also not built: persistent article import (Tier 2); an
+PR. Also not built: full enumeration / import of a whole archive (a saved article, D-Z21, is
+the built half of Tier-2); an
 in-app ZIM catalog/downloader; evidence review
 over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
 / compare paths (disclosed per answer as `mode`, not queried — P4); quality guarantees
@@ -3036,7 +3094,8 @@ concept expansion through a model call: ruled (a) "always" on 2026-09-07 and bui
 (above). *C2* — link expansion not
 until the upstream `/raw` cut-short fix ships (it doubles traffic on the defect route). *C3* —
 Tier-2 import: ruled (a), a "Save article to my documents" button in the article viewer FIRST,
-the citation card later; not built in this wave. *C4* — acquisition from Kiwix catalogs: ruled
+the citation card later; the button shipped as **D-Z21** (above, `feat/340-tier2-save-article`),
+the citation-card shortcut still the owner's "later". *C4* — acquisition from Kiwix catalogs: ruled
 later, after the consent surface (D-Z19) has settled. *#339 items 3–6* — readiness never depends
 on `kiwix_tools` and `kiwix-search` stays installed-but-unused, both as built (D-Z17); the
 upstream report is the owner's to file (a Linux stall probe was asked of humaniser first);
