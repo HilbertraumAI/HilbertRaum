@@ -167,8 +167,9 @@ fits, ties on `recommendation_rank`). The profile-based `recommendModelId(manife
 'chat')` is only the **fallback** when RAM can't be detected (`ramGb = 0`). With the committed
 manifests and RAM ample (32 GB), the live recommendations by card are 6 GB → `qwen3.5-4b-ud-q4kxl`,
 8 GB → `qwen3.5-4b-ud-q4kxl`, 12–20 GB → `qwen3.5-9b-ud-q4kxl`, 24 GB → `qwen3.8-27b-ud-q4km`, 32 GB
-and up → `qwen3.8-27b-ud-q5km` (§6.6's 30-point grid; the 8 GB point and the Gemma 12B / MoE
-bands between the measured legs are predicted, unverified on hardware — §6.6 "G3"); by RAM:
+and up → `qwen3.8-27b-ud-q5km` (§6.6's 30-point grid; the 6, 8, 12 and 24 GB points were verified
+on real starts 2026-09-07 — issue #318, §6.6 "Hardware verification" — while the 20 GB point and the
+Gemma 12B / MoE estimate bands remain predicted, no such card being available); by RAM:
 
 | Measured RAM | Chat model |
 |---|---|
