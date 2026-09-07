@@ -687,5 +687,5 @@
     "0.28.760.161 I spec common_specu: statistics        draft-mtp: #calls(b,g,a) =    1    217    217, #gen drafts =    217, #acc drafts =   169, #gen tokens =    434, #acc tokens =   293, #mean acc len = 2.35, #acc rate/pos = (0.779, 0.571), dur(b,g,a) = 0.003, 1119.274, 0.543 ms",
     "0.28.760.251 I srv  update_slots: all slots are idle"
   ],
-  "app_report": null
+  "app_report": "This computer\nSpeed: 48.3 tokens / s (Measured with Qwen3.8 27B UD-Q4_K_M on 9/6/2026, over 64 tokens)\nMemory: 125.5 GB RAM\nCPU: Intel(R) Core(TM) i9-9900X CPU @ 3.50GHz (20 cores)\nGraphics memory: 24.2 GB VRAM (NVIDIA GeForce RTX 3090)\nDrive: 2,044.3 MB/s read\nAssigned profile: PRO\nRecommended for the next start: Qwen3.8 27B UD-Q4_K_M (graphics memory)\nRecommended at the time of the check: Qwen3.8 27B UD-Q5_K_M\nContext size: 32,768 tokens\nLast run: 9/6/2026, 6:45:55 PM"
 }
