@@ -164,6 +164,12 @@ from its first public `1.0.0` release onward.
   you pressed "Try GPU again". It now checks whether the same model also fails on the processor:
   if it does, the model is the problem, nothing is disabled, and a note names the model while its
   replies are simulated. A real graphics-card fault still switches to compatibility mode as before.
+- **A model that cannot be loaded is not retried through every long timeout again.** The app now
+  remembers, until you close it, which model could not be loaded: choosing that model again shows
+  the note right away instead of waiting up to several minutes through another failed attempt.
+  The note also appears when graphics acceleration is off, where it used to stay silent. "Verify
+  checksum" on the model, downloading it again, installing the AI engine, or restarting the app
+  makes it try the file again (#372).
 - **Models made of several files are verified completely.** A model whose weight comes as a set of
   files can now declare every file with its own checksum, and the app treats the model as present
   only when every file is there and verifies; the drive check, the download planner and the

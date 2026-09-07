@@ -2740,7 +2740,11 @@ adds is the safety machinery:
   `gpuLastError`, so later starts pay no repeated GPU health timeout) once a forced-CPU rung
   **starts** — the control probe that proves the model loads here. If every rung fails the same
   way, the model is blamed instead and nothing is persisted (issue #312, §5.2); anything unknown
-  or ambiguous stays a device fault. The Diagnostics tab's "Try GPU again" clears the flags.
+  or ambiguous stays a device fault. With no GPU rung at all (acceleration off / auto-disabled)
+  every rung failing still names the model, and a blamed model is **latched for the session** —
+  its next start spawns no rung and lands on the mock at once (issue #372, §5.2; cleared by
+  "Verify checksum", a re-download, an engine install or a restart — not by "Try GPU again").
+  The Diagnostics tab's "Try GPU again" clears the flags.
   `RuntimeStatus` now carries `backend: 'gpu' | 'cpu' | 'mock'` + `gpuName`.
 - **Mid-generation crash auto-fallback** (§5.3): `LlamaServer` gained an `onUnexpectedExit` hook
   (fires only for a *healthy* server dying outside `stop()`). When the active backend was GPU,
@@ -2977,6 +2981,39 @@ succeeds, so the GPU is still blamed). It also survives a runtime-pin bump that 
 architecture. An unrecognised shape yields `null`, which the conservative fallback above reads as
 a device fault. Bind races (REL-1, §5.5) are still excluded before any of this.
 
+**The model verdict is remembered for the session, and reached without a GPU rung (issue #372,
+2026-09-07 — the #312 follow-up).** Two additions to the branch above, both in `factory.ts`:
+
+> **Naming without a control.** With `gpuMode: 'off'`, with `gpuAutoDisabled` already persisted,
+> or when the GPU rung's failure was a bind race (REL-1 drops it before it can be held), there is
+> no held rung-1 failure and so no comparison to make. When every rung still fails, the model is
+> **named anyway** (`onModelLoadFailure`, the same `main.runtime.modelCannotLoad` notice — "could
+> not be loaded on this computer" is accurate whatever the cause) and `onGpuFailure` never fires
+> on that path: nothing is persisted, `gpuAutoDisabled` is never written without a control.
+>
+> **The per-model session latch.** Every model the ladder blames — on the #312 comparison, or on
+> the no-control path above when the last failure has a `failureSignature` class (never a bind
+> race, never an unrecognised shape: unknown evidence is enough to tell the user, not enough to
+> skip every later attempt) — is latched **for the session** (`latchModelLoad`, a module-level
+> `Map<modelId, reason>` beside the #182 `speculativeSuppressed` set; never persisted). A later
+> start of a latched model spawns **no rung**: `LadderRuntime.start()` re-fires
+> `onModelLoadFailure` with the original reason (the user is told once more why the replies are
+> simulated) and commits the rung-4 mock at once — the outcome the first walk reached, minus up
+> to three 180 s health timeouts. No prefetch, no read sample, no warm-up (nothing loaded); a
+> CODE-2 cancel before the latched start still settles as cancelled, never as the mock.
+>
+> **Clearing rule.** "Try GPU again" is about the graphics card and does **not** touch this latch
+> (pinned in `gpu-ipc.test.ts`). What re-arms a model is evidence that the *file* or the
+> *runtime* changed: **"Verify checksum"** on that model (`models:verify` → `clearModelLoadLatch`;
+> a re-verified file is a new file — also the way to retry after a transient cause such as RAM
+> pressure), a **completed in-app download** of that model (`ctx.onModelInstalled` → the same,
+> before the translator rule's early return), a **chat-engine install** (`EngineDownloadManager.onInstalled`
+> for `llama_cpp` → `clearModelLoadLatches`; a new binary may load what the old one could not —
+> a kiwix-only install clears nothing), and an **app restart** (module state). A device verdict
+> never latches the model, so a persisted `gpuAutoDisabled` still re-walks from rung 2 as before.
+> Tests: `runtime-ladder.test.ts` "#372", `core-model-ipc.test.ts` (verify), `engine-consent-ipc.test.ts`
+> (engine install), the `ctx.onModelInstalled` source-text pin, `gpu-ipc.test.ts` (Try GPU again).
+
 *Interaction with #320* (excluding a hybrid laptop's iGPU with `--device` at launch): if that
 lands, a rung-1 failure could be caused by the app's own device selection — and it is still
 classified correctly, because the forced-CPU rung would come up and flush the failure as the
@@ -3132,6 +3169,7 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 |---|---|
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder once its CPU control probe confirms a *device* fault (§5.2, #312); cleared by "Try GPU again". A model no rung can load writes neither field |
+| Models blamed as unloadable this session (#372) | `factory.ts` module state (`Map<modelId, reason>`, the #182 `speculativeSuppressed` idiom) — never persisted; a latched model's next start spawns no rung. Cleared per model by "Verify checksum" / a completed download of it, for every model by a chat-engine install, and by an app restart — **not** by "Try GPU again" (§5.2) |
 | `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run |
 | Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` still names `devices[0]`, the first device the driver listed, display only; it is not the budget device the picker or the Performance tile use |
 
@@ -3217,7 +3255,7 @@ hint flips mid-session). Never "GPU failed" / "your hardware is bad".
 |---|---|
 | No Vulkan loader / 1.2 driver / RDP session | backend lib doesn't load or 0 devices → the default binary runs on its CPU backends; probe shows CPU |
 | Driver enumerates but crashes at model load | rung-1 exit → rung 2 (`--device none`); `gpuAutoDisabled` persisted once rung 2 (or 3) **starts** — the CPU control proving the model loads is what makes it a device fault (#312) |
-| A model no rung can load (unsupported architecture, corrupt GGUF, a quantization the pin rejects) | every rung exits the same way → **nothing persisted**, GPU stays enabled for every other model and for translation; the user gets the `main.runtime.modelCannotLoad` notice naming the model, and the rung-4 mock's disclosed simulated replies (#312) |
+| A model no rung can load (unsupported architecture, corrupt GGUF, a quantization the pin rejects) | every rung exits the same way → **nothing persisted**, GPU stays enabled for every other model and for translation; the user gets the `main.runtime.modelCannotLoad` notice naming the model, and the rung-4 mock's disclosed simulated replies (#312). The same with acceleration off or auto-disabled (no GPU rung to compare against). The model is then **latched for the session**: its next start pays no health timeout — notice + mock at once — until "Verify checksum", a re-download, an engine install or a restart re-arms it (#372) |
 | Driver hangs (never healthy) | 180 s (3 min) health timeout (`DEFAULT_HEALTH_TIMEOUT_MS`; the chat runtime never overrides it) → rung 2; cost = one slow first start, then never again (flag persisted) |
 | Driver crash mid-generation / VRAM stolen mid-run | §5.3 auto-restart at CPU + friendly notice; next message works |
 | VRAM too small at load | upstream `--fit` partial offload — no special casing |

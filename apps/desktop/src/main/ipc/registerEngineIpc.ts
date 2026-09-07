@@ -5,6 +5,7 @@ import type { AppContext } from '../services/context'
 import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
 import { EngineDownloadManager, engineStatus, parseEngineDownloadRequest } from '../services/runtime-download'
 import { registeredSidecarPids } from '../services/runtime/sidecar'
+import { clearModelLoadLatches } from '../services/runtime/factory'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
@@ -60,7 +61,12 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
   // that answer can change, so it re-runs the once-per-session probe refresh — the benchmark
   // itself is not re-run, and a probe that already lists a device is left alone.
   engine.onInstalled((families) => {
-    if (families.includes('llama_cpp')) void refreshGpuProbeAfterRuntimeInstall(ctx)
+    if (families.includes('llama_cpp')) {
+      // #372: a new runtime binary may load what the old one could not (a pin that adds an
+      // architecture) — every model the ladder latched as unloadable this session is re-armed.
+      clearModelLoadLatches()
+      void refreshGpuProbeAfterRuntimeInstall(ctx)
+    }
     // #339 P8-2: the knowledge-pack tools just arrived — the packs panel's status re-resolves
     // the binaries on its next read, and the searchability cache key carries the tools
     // fingerprint (rag-design §17 D-Z11/D-Z15), so one background reconcile re-probes every

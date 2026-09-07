@@ -2295,14 +2295,20 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   rung-1 failure is held until the forced-CPU rungs answer: one of them starting persists
   `gpuAutoDisabled` as before, while every rung dying the same way blames the model — nothing is
   persisted, and the user gets a notice naming the model plus the rung-4 mock's disclosed
-  simulated replies (architecture.md §5.2). Residuals: (a) **no per-model latch** — an unloadable
-  model re-walks the rungs on every start, so a repeat attempt can pay up to three 180 s health
-  timeouts; (b) the **health-timeout** path is classified conservatively — the tail of a child
-  that never became healthy is arbitrary, so those failures usually differ in class and stay a
-  device verdict; (c) **mixed-cause** failures still latch the GPU: a genuine device fault whose
-  CPU rungs fail for an unrelated reason (the Intel-Mac wrong-arch binary above) is blamed on the
-  device, which is the deliberate conservative default. Diagnostics → "Try GPU again" still
-  clears the flag in one click.
+  simulated replies (architecture.md §5.2). Since issue #372 (2026-09-07) the model is also named
+  when acceleration is off or auto-disabled (no GPU rung to compare against), and a blamed model
+  is **latched for the session**: its next start spawns no rung and lands on the notice + the
+  mock at once instead of paying up to three 180 s health timeouts again. Residuals: (a) the
+  latch is **session-scoped and cause-blind** — a transient cause on every rung (RAM pressure from
+  another program, a full temp disk) latches the model like a corrupt weight does; the retry
+  paths are "Verify checksum" on the model, a re-download of it, a chat-engine install, or an
+  app restart — "Try GPU again" is deliberately not one of them; (b) the **health-timeout** path
+  is classified conservatively — the tail of a child that never became healthy is arbitrary, so
+  with a GPU rung those failures usually differ in class and stay a device verdict (without one,
+  the timeout class still latches); (c) **mixed-cause** failures still latch the GPU: a genuine
+  device fault whose CPU rungs fail for an unrelated reason (the Intel-Mac wrong-arch binary
+  above) is blamed on the device, which is the deliberate conservative default. Diagnostics →
+  "Try GPU again" still clears the flag in one click.
 - **The probe labels; the ladder guarantees.** `--list-devices` proves enumeration, not stable
   inference — a driver can enumerate fine and crash on the first compute submit. That case is
   handled by the crash auto-fallback (one CPU restart + a friendly notice); the in-flight reply

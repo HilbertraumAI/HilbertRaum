@@ -225,7 +225,10 @@ words per second" and "faster than you can read". There is nothing to install or
   update, **Try GPU again** on the same Diagnostics tab re-enables the graphics card.
 - If a particular model cannot be loaded on your computer at all, you get a note naming that
   model and its replies are simulated until you pick another one — compatibility mode is *not*
-  switched on by it, so every other model keeps using your graphics card as usual.
+  switched on by it, so every other model keeps using your graphics card as usual. The app
+  remembers that verdict until you close it, so choosing the same model again shows the note
+  right away instead of waiting through another load attempt. To make it try the file again,
+  use **Verify checksum** on that model (or download it again, or restart the app).
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
   big speedups come from dedicated graphics cards.

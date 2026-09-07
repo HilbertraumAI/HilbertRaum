@@ -15,6 +15,7 @@ import type {
 import type { ModelManifest } from '../../shared/manifest'
 import { readRuntimeMarker } from '../services/assets'
 import { llamaServerDir } from '../services/runtime/sidecar'
+import { clearModelLoadLatch } from '../services/runtime/factory'
 import {
   buildModelList,
   checksumCacheStats,
@@ -540,6 +541,10 @@ export function registerModelIpc(ctx: AppContext): void {
     for (const f of manifestFiles(ctx.paths.rootPath, found.manifest)) {
       invalidateChecksum(f.path, store)
     }
+    // #372: a re-verified file is a new file — re-arm the ladder for this model, so a start
+    // after the user checked (or replaced) the weight walks the rungs again instead of going
+    // straight to the session's "cannot be loaded" verdict.
+    clearModelLoadLatch(modelId)
     const state = await computeInstallState(found.manifest, ctx.paths.rootPath, {
       developerMode: developerLeniency(ctx, getSettings(ctx.db)),
       hashStore: store
