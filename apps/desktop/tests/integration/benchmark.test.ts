@@ -128,7 +128,8 @@ describe('classifyProfile', () => {
   })
 
   // Phase 16 (architecture.md GPU record §8): the bump fires only on a PRE-QUALIFIED gpuUseful
-  // hint (≥ 6 GiB dedicated + not integrated-looking — computed by gpuUsefulForProfile),
+  // hint (at or above USABLE_VRAM_MB dedicated + not integrated-looking — computed by
+  // gpuUsefulForProfile; the floor is 5 GiB since #321),
   // never on a merely truthy GPU name.
   it('bumps one step toward PRO when the GPU is pre-qualified useful (capped at PRO)', () => {
     expect(classifyProfile(8, { gpuUseful: true })).toBe('LITE')
@@ -149,7 +150,7 @@ describe('classifyProfile', () => {
 describe('gpuUsefulForProfile', () => {
   const dev = (name: string, totalMb: number): GpuDevice => ({ id: 'Vulkan0', name, totalMb, freeMb: totalMb })
 
-  it('qualifies a discrete GPU with ≥ 6 GiB', () => {
+  it('qualifies a discrete GPU at or above the VRAM floor', () => {
     expect(gpuUsefulForProfile([dev('NVIDIA GeForce RTX 3080 Ti', 12300)])).toBe(true)
     expect(gpuUsefulForProfile([dev('AMD Radeon RX 6700 XT', 12272)])).toBe(true)
   })
@@ -159,8 +160,11 @@ describe('gpuUsefulForProfile', () => {
     expect(gpuUsefulForProfile([dev('AMD Radeon(TM) Graphics', 16000)])).toBe(false)
   })
 
-  it('a small discrete GPU (< 6 GiB) does not qualify', () => {
+  it('a small discrete GPU (under the floor) does not qualify', () => {
     expect(gpuUsefulForProfile([dev('NVIDIA GeForce GTX 1650', 4096)])).toBe(false)
+    // …but a 6 GB laptop card does since #321 lowered the floor to 5,120 (this is the profile
+    // bump moving such a laptop one step up — the accepted blast radius of that decision).
+    expect(gpuUsefulForProfile([dev('NVIDIA GeForce RTX 3060 Laptop GPU', 5994)])).toBe(true)
   })
 
   it('no devices → not useful', () => {
@@ -225,16 +229,18 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
     const manifests = realManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
     // RTX 3090 as the Windows rig reports it (24,822 total); a probe without a free figure →
-    // total − 1,024 = 23,798 MiB. Q5 needs 23,661 since the chat server took `-np 1` (issue #319,
-    // 2026-09-07: its cache term went 1.1 → 0.9 GiB), so the RAM pick now STANDS on this card
-    // instead of being demoted to Q4 — which is the outcome the ruling was after, and it matches
-    // the hardware: with `-np 1` this very card offloaded Q5 66/66 at 51.0 tok/s (#318 leg 1),
-    // where the four-slot launch managed 62/66 at 30.4. At 23,866 the old term missed by 68 MiB.
-    // NOTE the grid in §6.6 still reads Q4 on its 24 GB row: that row's nominal free figure is
-    // 24 × 1024 − 1024 = 23,552, 246 MiB under this real card's, and Q5 misses it by 109. #321's
-    // working-share fix is what carries the row itself.
+    // total − 1,024 = 23,798 MiB. Q5 needs 23,559: 23,866 before #319 (68 MiB short of this card),
+    // 23,661 once the chat server took `-np 1` and its cache term went 1.1 → 0.9 GiB, 23,559 once
+    // #321 put the 15 % working share on the OFFLOADABLE weights only. So the RAM pick now STANDS
+    // on this card instead of being demoted to Q4 — the outcome the #319 ruling was after, and it
+    // matches the hardware: with `-np 1` this very card offloaded Q5 66/66 at 51.0 tok/s (#318
+    // leg 1), where the four-slot launch managed 62/66 at 30.4.
+    // NOTE the grid in §6.6 still reads Q4 on its 24 GB row, after BOTH decisions: that row's
+    // nominal free figure is 24 × 1024 − 1024 = 23,552, 246 MiB stingier than this real card, and
+    // Q5 misses it by 7 MiB. The row describes a card that reports exactly 24 GiB; this one does
+    // not, and neither does any 24 GB card the project has seen.
     const big = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, budgetMb: 24_822 - 1024, memoryClass: 'discrete' } })
-    // An idle 8 GB card: 7,168 MiB free → the 9B's 7,912 still does not fit → the 4B.
+    // An idle 8 GB card: 7,168 MiB free → the 9B's 7,830 still does not fit → the 4B.
     const small = await runBenchmark({ ...base, gpu: { name: 'RTX 3050', useful: true, totalMb: 8192, budgetMb: 7168, memoryClass: 'discrete' } })
     const none = await runBenchmark({ ...base, gpu: null })
     expect(big.ramGb).toBe(32)

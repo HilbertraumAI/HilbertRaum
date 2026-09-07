@@ -301,7 +301,7 @@ describe('PerformanceScreen: the check as an answer', () => {
     renderScreen()
     expect(await screen.findByText('4.0')).toBeInTheDocument()
     expect(screen.getByText('Small')).toBeInTheDocument()
-    expect(screen.getByText(/NVIDIA GeForce GTX 1650 · Under 6 GB: models run on the processor/)).toBeInTheDocument()
+    expect(screen.getByText(/NVIDIA GeForce GTX 1650 · Under 5 GB: models run on the processor/)).toBeInTheDocument()
     cleanup()
     // …but never for a result from ANOTHER computer: that check never recorded the field, so
     // the tile claims nothing either way (N1) — not "no usable graphics card".
@@ -344,24 +344,46 @@ describe('PerformanceScreen: the check as an answer', () => {
   })
 
   it('names a discrete card under the usable gate — the real card and its memory, rated "Small" (owner decision 2026-09-07)', async () => {
-    // A 6 GB laptop card the Vulkan backend reports at 5,994 MiB (#321): no budget device, so the
-    // next start is a RAM start (`currentGpu` null, class cpu) — and the tile still names THE
+    // A 4 GB card, which is what "under the gate" means since #321 lowered it to 5,120 (the 6 GB
+    // laptop cards that used to sit here are now usable — see the next test). No budget device, so
+    // the next start is a RAM start (`currentGpu` null, class cpu) — and the tile still names THE
     // card with its own memory, never the iGPU listed first and never "no usable graphics card".
     // Whether the card is used is the rating's job, not the tile's silence.
     install(
       snapshot({
         current: result({ gpu: null, gpuVramMb: null }),
         currentGpu: null,
-        graphicsDevice: { name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, useful: false },
+        graphicsDevice: { name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, useful: false },
         placement: placement({ memoryClass: 'cpu', vramMb: null })
       })
     )
     renderScreen()
-    expect(await screen.findByText('5.9')).toBeInTheDocument()
+    expect(await screen.findByText('4.0')).toBeInTheDocument()
     expect(screen.getByText('Small')).toBeInTheDocument()
-    expect(screen.getByText(/NVIDIA GeForce RTX 3060 Laptop GPU · Under 6 GB: models run on the processor/)).toBeInTheDocument()
+    expect(screen.getByText(/NVIDIA GeForce GTX 1650 · Under 5 GB: models run on the processor/)).toBeInTheDocument()
     expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
     expect(screen.queryByText('Usable')).not.toBeInTheDocument()
+  })
+
+  it('a 6 GB laptop card (5,994 MiB) now reads "Usable" and is the card the next start uses (#321)', async () => {
+    // The visible half of lowering the gate to 5,120. The same tile that read
+    // "5.9 GB VRAM · Under 6 GB: models run on the processor" now rates the card usable, and the
+    // next start is a card start — measured on this very card at #318 leg 4, where llama.cpp's
+    // fit put the RAM pick fully on it (36/36 layers, 86 tok/s) even while the app said "cpu".
+    install(
+      snapshot({
+        current: result({ gpu: 'NVIDIA GeForce RTX 3060 Laptop GPU', gpuVramMb: 5994 }),
+        currentGpu: { name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, useful: true },
+        graphicsDevice: { name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, useful: true },
+        placement: placement({ memoryClass: 'discrete', vramMb: 5994 })
+      })
+    )
+    renderScreen()
+    expect(await screen.findByText('5.9')).toBeInTheDocument()
+    expect(screen.getByText('Usable')).toBeInTheDocument()
+    expect(screen.queryByText('Small')).not.toBeInTheDocument()
+    expect(screen.queryByText(/Under 5 GB/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/No usable graphics card/)).not.toBeInTheDocument()
   })
 
   it('with the GPU switched off (or auto-disabled) and no card for the next start, the tile says so instead of "no card"', async () => {
@@ -384,7 +406,7 @@ describe('PerformanceScreen: the check as an answer', () => {
   })
 
   it('T12: an integrated device reporting 16 GB of shared memory is "Integrated", never "Usable", beside "On processor" (M8.1)', async () => {
-    // The old tile rated `mb >= 6144` alone and printed "16.0 GB VRAM · Usable" while the row
+    // The old tile rated `mb >= USABLE_VRAM_MB` alone and printed "16.0 GB VRAM · Usable" while the row
     // below said the model runs on the processor.
     const iris = result({ gpu: 'Intel(R) Iris(R) Xe Graphics', gpuVramMb: 16_384 })
     install(
@@ -408,7 +430,7 @@ describe('PerformanceScreen: the check as an answer', () => {
     expect(screen.queryByText('Usable')).not.toBeInTheDocument()
     expect(screen.queryByText('GB VRAM')).not.toBeInTheDocument()
     // Not blamed on size: the memory is not the card's own.
-    expect(screen.queryByText(/Under 6 GB/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Under 5 GB/)).not.toBeInTheDocument()
     expect(screen.queryByText('Small')).not.toBeInTheDocument()
   })
 

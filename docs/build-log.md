@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-07 — BUILD_STATE §5 item 22 (k) retired verbatim (#321)
+
+Collapsed to a one-line pointer in `BUILD_STATE.md` §5 item 22 when the owner ruling of
+2026-09-07 on issue #321 landed (the usable-card gate comes down to 5,120 MiB, and the working
+share moves to the offloadable weights), to keep §5 inside its 500-line budget. Durable record:
+`docs/model-benchmarks.md` §6.6 — the rewritten N8 paragraph, rule 3, and the "2026-09-07
+amendment (#321, owner decision)". Letter (e) was NOT retired: its GGUF-header half is still
+open, and it now carries the measured `host_mapped_weights_mib` fallback as the interim.
+Full text of (k) as it stood before the collapse:
+
+(k) every 6 GB laptop card measured for the #308 audit reports below the runtime's 6,144 MiB `discrete` gate (N8) — should the gate be lowered — decided 2026-09-06: keep until #318 leg 4, issue #321 — MEASURED 2026-09-07 (RTX 3060 Laptop, 5,994 MiB): classed `cpu`, yet the fit puts the RAM pick fully on the card (E2B 36/36, 86 tok/s) and the 9B 18/33 at 5.2 tok/s; the gate changes the ★, the basis wording and the tile, not placement; the estimate is 2.4× high on the E2B (working share on host-mapped weights); decision open on #321;
+
+
 ## 2026-09-07 — BUILD_STATE §5 item 22 (f)/(i) retired verbatim (#319)
 
 Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 22 when the owner ruling of

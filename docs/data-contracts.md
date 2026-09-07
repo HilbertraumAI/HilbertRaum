@@ -445,6 +445,20 @@ the cache the runtime allocates at the model's recommended window under the app'
 four unified ones). Carried by exactly the seven decision models (Gemma 4 12B 2.4, 26B-A4B 1.5,
 E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**; pinned in
 `committed-catalog.test.ts`); the GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
+✅ **Host-mapped weight share (#321, owner decision 2026-09-07):** manifest
+`host_mapped_weights_mib` (optional; a number ≥ 0, validated exactly like the cache term above —
+wrong type or a negative value is an error, never a silent default) →
+`ModelManifest.hostMappedWeightsMib?: number` (ABSENT when omitted, and `estimateGraphicsNeedMib`
+then behaves as before). The weights that stay HOST-mapped even on a FULL offload — the
+embedding/output tables — which the estimate subtracts before applying its 15 % working share,
+because the runtime buffers that share stands for scale with what is actually ON the card. MEASURED
+per model, not derived: the app has no GGUF-header parser, so each figure is read off the
+`CPU_Mapped model buffer size` line of a full-offload start under `eval/results/hardware/` (a
+PARTIAL offload inflates that line with the layers that did not fit — the 9B logs 545.62 MiB at
+33/33 but 824.31 at 31/33). Carried by the five models started for #318 (E2B 2,152.50, 9B 545.62,
+Gemma 12B 787.50, 27B UD-Q4 682.03, UD-Q5 682.03; pinned in `committed-catalog.test.ts`); the two
+never started carry nothing. The GGUF-header derivation that would cover every model is the same
+open item, BUILD_STATE §5 item 22 (e).
 **How the slot count enters the term** (§6.6 point 4, measured on the pin): the KV cache — and
 Gemma's sliding-window cache — is sized in CELLS from `--ctx-size` and is counted **once** whatever
 the slot count is; only the **recurrent state** is per-sequence, so `-np 1` divides just that share
@@ -595,8 +609,9 @@ head's own weights + KV.
   input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
   `budgetMb` → **§6.6 rule C** (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal)`:
   the RAM pick stands where `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` =
-  unrounded weights MiB × 1.15 + (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024, the cache term
-  computed for the app's ONE server slot since #319 — AND
+  unrounded weights MiB + (unrounded weights MiB − `hostMappedWeightsMib` ?? 0) × 0.15 +
+  (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024, i.e. the working share on the OFFLOADABLE
+  weights since #321 and the cache term computed for the app's ONE server slot since #319 — AND
   `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
   ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
   confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,
@@ -608,7 +623,7 @@ head's own weights + KV.
   cache terms are pinned in `committed-catalog.test.ts` ("§6.6 rule C").
 - **`classifyProfile(ramGb, { tokensPerSecond?, gpuUseful? })`** — pure; spec §11.3
   thresholds + the conservative Phase-16 GPU bump (`gpuUseful` is precomputed by
-  `gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated) + low-tok/sec downgrade; invalid
+  `gpuUsefulForProfile`: ≥ `USABLE_VRAM_MB`, 5120 MiB since #321, AND not integrated) + low-tok/sec downgrade; invalid
   RAM → `UNKNOWN`.
 - **`measureDriveSpeed(workspacePath)`** → `{ readMbps, writeMbps, error? }`; 8 MB temp file
   written **inside the workspace**, timed write(`fsync`)+read, **always cleaned up**, failure

@@ -2784,7 +2784,7 @@ adds is the safety machinery:
   (`gpu:try-again`) that clears `gpuAutoDisabled`/`gpuLastError`, invalidates the session probe
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
   The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful, totalMb, budgetMb, memoryClass }`
-  (`gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated → the conservative `classifyProfile`
+  (`gpuUsefulForProfile`: ≥ `USABLE_VRAM_MB` — 5120 MiB since #321 — AND not integrated → the conservative `classifyProfile`
   bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
   `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name`,
   `totalMb` and `budgetMb` are one device's, the BUDGET device `nextStartMemory` selects, PR #308
@@ -3257,10 +3257,17 @@ codebase's permanent, tested forced-CPU spawn example.
 measured values before release notes claim anything.)
 
 **Profile bump rule:** `classifyProfile` takes a precomputed `gpuUseful: boolean` =
-`gpuUsefulForProfile(devices)`: some device has **≥ 6144 MiB** AND `!looksIntegrated(name)`.
+`gpuUsefulForProfile(devices)`: some device has **≥ `USABLE_VRAM_MB`** AND `!looksIntegrated(name)`.
 Conservative by design — an iGPU reporting 16 GB of *shared* RAM must never bump a laptop's
 profile; a false negative only costs a too-small model recommendation. The regex lives in
-`runtime/gpu.ts` (fixture-tested, covers Windows + RADV APU names and Meteor-Lake Arc).
+`shared/gpu-rules.ts` (re-exported by `runtime/gpu.ts`; fixture-tested, covers Windows + RADV APU
+names, Meteor-Lake Arc and, since #320, the bare `Intel(R) Graphics`). **The floor is 5,120 MiB
+since 2026-09-07** (issue #321, owner decision; 6,144 before): every 6 GB laptop card the project
+has measured reports below 6,144 on Vulkan — GTX 1660 SUPER 5,746, RTX 4050 Laptop 5,921, RTX 3060
+Laptop 5,994 — so the most common 6 GB configuration was classed `cpu` and starred a model it
+cannot accelerate (the 9B measured 18/33 layers at 5.2 tok/s on such a card). Lowering the floor
+moves the bump one step up on those laptops, which is the accepted cost; 4 GB cards stay out.
+Reasoning and evidence: `model-benchmarks.md` §6.6 N8.
 
 **UI:** Settings toggle ("Uses your graphics card to speed up responses when available…"),
 Diagnostics Acceleration + runtime-build lines, compatibility-mode notice + "Try GPU again",

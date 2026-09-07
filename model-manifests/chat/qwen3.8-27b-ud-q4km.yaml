@@ -42,6 +42,19 @@ recommended_context_tokens: 8192
 # every start. The picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit
 # decision 11, amended 2026-09-07 by #319).
 estimated_context_cache_gib: 0.9
+
+# The weights that stay HOST-mapped even on a full offload (embedding / output tables), MiB —
+# the picker subtracts them before applying its 15 % working share, because the runtime buffers
+# that share stands for scale with what is actually ON the card (issue #321, owner decision
+# 2026-09-07; model-benchmarks.md §6.6 point 3).
+# MEASURED, not derived — the app has no GGUF-header parser. Read off the
+# `CPU_Mapped model buffer size` line of a FULL-OFFLOAD start (66/66 layers):
+# eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg7-baseline-q4km.stderr.log
+# A PARTIAL offload inflates this line with the layers that did not fit, so only full-offload
+# starts count. Absent on any model never started on hardware, which then keeps the old
+# whole-file arithmetic; the GGUF-header derivation that would cover every model is
+# BUILD_STATE §5 item 22 (e), still open.
+host_mapped_weights_mib: 682.03
 supports_thinking_mode: true
 # MTP speculative decoding, OPT-IN (issue #182 record in architecture.md; §9.4 addendum).
 # Dynamic 3.0 publishes separate MTP module files for its small and legacy quants, so the §9.5

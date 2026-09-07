@@ -149,14 +149,31 @@ export interface ModelManifest {
   recommendationRank: number
   /**
    * The context cache (KV + recurrent state) the runtime allocates for this model at its
-   * `recommended_context_tokens` under the app's launch (llama-server b9849 defaults: four
-   * unified slots, ubatch 2048), in GiB — the per-model cache term of the graphics-memory fit
-   * estimate (`estimateGraphicsNeedMib` in services/models.ts; model-benchmarks.md §6.6,
-   * PR #308 audit decision 11). Optional in YAML (`estimated_context_cache_gib`, number ≥ 0);
-   * absent → the picker books its 0.5 GiB default. Config-derived (`tmp/PR-308-check-kv.json`
-   * at the time of writing); the GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
+   * `recommended_context_tokens` under the app's launch (ubatch 2048 and, since issue #319,
+   * ONE server slot), in GiB — the per-model cache term of the graphics-memory fit estimate
+   * (`estimateGraphicsNeedMib` in services/models.ts; model-benchmarks.md §6.6, PR #308 audit
+   * decision 11). Optional in YAML (`estimated_context_cache_gib`, number ≥ 0); absent → the
+   * picker books its 0.5 GiB default. Config-derived; the GGUF-header estimate (BUILD_STATE §5
+   * item 22 (e)) retires it.
    */
   estimatedContextCacheGib?: number
+  /**
+   * The share of this model's weights that stays HOST-mapped even on a full offload — the
+   * embedding / output tables llama.cpp leaves in `CPU_Mapped model buffer size` — in MiB.
+   * Optional in YAML (`host_mapped_weights_mib`, number ≥ 0); absent → `estimateGraphicsNeedMib`
+   * behaves exactly as before, applying its working share to the whole weight file.
+   *
+   * Why it exists (issue #321, owner decision 2026-09-07). The estimate's 15 % working share is
+   * meant to cover the runtime's buffers BESIDE the weights on the card, but it was applied to
+   * the whole file — including the part that never reaches the card. On the E2B that made the
+   * estimate 2.4× too high (4,746 MiB predicted against 1,997 projected and ≈ 1,998 used),
+   * because 2,152.50 of its 3,147 MiB file stays host-mapped. The app has no GGUF-header parser,
+   * so the figure is MEASURED: read off the `CPU_Mapped model buffer size` line of a
+   * FULL-OFFLOAD start under `eval/results/hardware/`. A partial offload inflates it (the 9B logs
+   * 545.62 at 33/33 but 824.31 at 31/33), so only full-offload starts count. Deriving it from the
+   * GGUF header instead stays open — BUILD_STATE §5 item 22 (e).
+   */
+  hostMappedWeightsMib?: number
   licenseReview: LicenseReview
   /** Optional download metadata. Absent on manifests with no upstream source. */
   download?: DownloadSpec
@@ -426,6 +443,18 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
+  // Optional measured host-mapped weight share for the same estimate (#321): validated exactly
+  // like the cache term above — a typo must fail the manifest, not silently widen the estimate.
+  let hostMappedWeightsMib: number | undefined
+  const hmw = raw['host_mapped_weights_mib']
+  if (hmw !== undefined) {
+    if (typeof hmw !== 'number' || !Number.isFinite(hmw) || hmw < 0) {
+      errors.push('"host_mapped_weights_mib" must be a non-negative number when present')
+    } else {
+      hostMappedWeightsMib = hmw
+    }
+  }
+
   // Required license-review gate (spec §7.4 / model-policy.md).
   const lr = raw['license_review']
   let licenseReview: LicenseReview = {
@@ -642,6 +671,7 @@ export function validateManifest(raw: unknown): ValidationResult {
       recommendedProfiles,
       recommendationRank,
       ...(estimatedContextCacheGib !== undefined ? { estimatedContextCacheGib } : {}),
+      ...(hostMappedWeightsMib !== undefined ? { hostMappedWeightsMib } : {}),
       licenseReview,
       ...(download ? { download } : {}),
       ...(inputModalities ? { inputModalities } : {}),

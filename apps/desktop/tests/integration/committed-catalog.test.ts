@@ -11,7 +11,8 @@ import {
   manifestFiles,
   resolveManifestsDir,
   recommendChatModelId,
-  recommendModelIdByRam
+  recommendModelIdByRam,
+  weightsMib
 } from '../../src/main/services/models'
 import { isRealSha256, type ModelManifest } from '../../src/shared/manifest'
 import type { ModelInfo } from '../../src/shared/types'
@@ -194,6 +195,52 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.5-9b-ud-q4kxl': 0.3, // was 0.4: KV 256 + 1 × 48 = 304 MiB
     'qwen3.5-4b-ud-q4kxl': 0.2 // was 0.3: KV 128 + 1 × 48 = 176 MiB (at its 4,096 window)
   }
+  // (j2) #321: the MEASURED host-mapped weight share `estimateGraphicsNeedMib` subtracts before
+  // applying its 15 % working share. Each figure is the `CPU_Mapped model buffer size` of a
+  // FULL-OFFLOAD start under `eval/results/hardware/` — a partial offload inflates that line with
+  // the layers that did not fit (the 9B logs 545.62 at 33/33 but 824.31 at 31/33), so only
+  // full-offload starts count. Exactly the five models #318 actually started carry the field; the
+  // 4B and the MoE 26B were never started and keep the old whole-file arithmetic rather than a
+  // guess. Deriving the split from the GGUF header would cover all of them — §5 item 22 (e).
+  const HOST_MAPPED_MIB: Record<string, number> = {
+    'gemma4-e2b-it-qat-q4': 2152.5, // leg 4, 36/36
+    'qwen3.5-9b-ud-q4kxl': 545.62, // leg 5, 33/33
+    'gemma4-12b-it-qat-q4': 787.5, // leg 3, 49/49
+    'qwen3.8-27b-ud-q4km': 682.03, // leg 7, 66/66
+    'qwen3.8-27b-ud-q5km': 682.03 // leg 1 `-np 1`, 66/66
+  }
+  it('pins the five measured host_mapped_weights_mib values, and that no other manifest carries the field (#321)', () => {
+    const all = committedManifests()
+    const byId = Object.fromEntries(all.map((m) => [m.id, m]))
+    for (const [id, mib] of Object.entries(HOST_MAPPED_MIB)) {
+      expect(byId[id], id).toBeDefined()
+      expect(byId[id].hostMappedWeightsMib, `${id} host-mapped MiB`).toBe(mib)
+      // A sanity bound the measurement itself must satisfy: the host-mapped share is a slice of
+      // the weights, never the whole file (if it ever reads as the whole file, the figure was
+      // taken from a partial-offload log).
+      expect(mib, `${id} < weights`).toBeLessThan(weightsMib(byId[id]))
+    }
+    const carriers = all.filter((m) => m.hostMappedWeightsMib !== undefined).map((m) => m.id).sort()
+    expect(carriers).toEqual(Object.keys(HOST_MAPPED_MIB).sort())
+  })
+
+  it('the working share applies to the OFFLOADABLE weights only, and a model without the field is unchanged (#321)', () => {
+    const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
+    // The E2B is the case the decision was made for: 2,152.50 of its 3,147 MiB never reaches the
+    // card, so the old whole-file share over-reserved 323 MiB on a model that a 6 GB laptop is
+    // exactly the machine for. Spelled out rather than asserted through the constant so the
+    // arithmetic is legible: weights + (weights − hostMapped) × 0.15 + cache + margin.
+    const e2b = byId['gemma4-e2b-it-qat-q4']
+    const w = weightsMib(e2b)
+    expect(estimateGraphicsNeedMib(e2b)).toBeCloseTo(w + (w - 2152.5) * 0.15 + 0.1 * 1024 + 1024, 6)
+    // Whole-file would have read 323 MiB higher — the retired arithmetic, pinned as the delta.
+    expect(w * 1.15 + 0.1 * 1024 + 1024 - estimateGraphicsNeedMib(e2b)).toBeCloseTo(2152.5 * 0.15, 6)
+    // A ranked model with no measured figure keeps exactly the old whole-file arithmetic.
+    const fourB = byId['qwen3.5-4b-ud-q4kxl']
+    expect(fourB.hostMappedWeightsMib).toBeUndefined()
+    expect(estimateGraphicsNeedMib(fourB)).toBeCloseTo(weightsMib(fourB) * 1.15 + 0.2 * 1024 + 1024, 6)
+  })
+
   it('pins the seven estimated_context_cache_gib values, and that no other manifest carries the field', () => {
     const all = committedManifests()
     const byId = Object.fromEntries(all.map((m) => [m.id, m]))
@@ -212,17 +259,17 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3-4b-instruct-2507-q4': 4278,
     'qwen3-4b-instruct-q4': 4278,
     'qwen3.5-4b-ud-q4kxl': 4410,
-    'gemma4-e2b-it-qat-q4': 4746,
+    'gemma4-e2b-it-qat-q4': 4423,
     'qwen3-8b-instruct-q4': 7020,
     'ministral3-8b-instruct-2512-q4': 7239,
-    'qwen3.5-9b-ud-q4kxl': 7912,
-    'gemma4-12b-it-qat-q4': 11159,
+    'qwen3.5-9b-ud-q4kxl': 7830,
+    'gemma4-12b-it-qat-q4': 11041,
     'qwen3-14b-instruct-q4': 11407,
     'gemma4-26b-a4b-it-qat-q4': 18353,
     'qwen3.6-27b-q4': 19961,
-    'qwen3.8-27b-ud-q4km': 20042,
+    'qwen3.8-27b-ud-q4km': 19940,
     'qwen3.6-27b-q5': 22923,
-    'qwen3.8-27b-ud-q5km': 23661,
+    'qwen3.8-27b-ud-q5km': 23559,
     'qwen3.5-35b-a3b-ud-q4kxl': 25884
   }
   it('pins every ranked chat model\'s graphics-memory threshold in raw MiB (boundary on both sides)', () => {
@@ -235,10 +282,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       expect(fitsGraphicsMemory(m, t), `${m.id} fits at ${t}`).toBe(true)
       expect(fitsGraphicsMemory(m, t - 1), `${m.id} does not fit at ${t - 1}`).toBe(false)
     }
-    // The two figures the decisions turn on, spelled out: the 9B needs 7,912 (0.3 GiB cache since
-    // #319) — under a nominal 8 GiB but STILL over what an idle 8 GB card has FREE (7,168), so
-    // `-np 1` does not move the 8 GB row; Gemma 12B 11,159 (2.4 GiB cache) = 10.9 GiB, where the
-    // PR's flat 0.5 GiB read 9.0 GiB.
+    // The two figures the decisions turn on, spelled out: the 9B needs 7,830 (0.3 GiB cache since
+    // #319, working share on the offloadable weights since #321) — under a nominal 8 GiB but STILL
+    // over what an idle 8 GB card has FREE (7,168), so neither decision moved the 8 GB row;
+    // Gemma 12B 11,041 (2.4 GiB cache) = 10.8 GiB, where the PR's flat 0.5 GiB read 9.0 GiB.
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeLessThan(8192)
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeGreaterThan(8192 - 1024)
     expect(THRESHOLD_MIB['gemma4-12b-it-qat-q4']).toBeGreaterThan(10 * 1024)
@@ -255,9 +302,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // UNCHANGED by the `-np 1` recomputation (issue #319, 2026-09-07), which is worth stating because
   // the ruling expected the 24 GB row to flip: every threshold moved DOWN (4B −102, 9B −102, Q4/Q5
   // −205 MiB), but none crossed a row's free figure. The two the decision watched: the 9B needs
-  // 7,912 against 7,168 free on the 8 GB row (744 short — it was 846 short), and Q5 needs 23,661
-  // against 23,552 on the 24 GB row (109 short — it was 314). Q5 takes the 24 GB star only once
-  // #321 computes the working share on the OFFLOADABLE weights, which is the PR after this one.
+  // 7,830 against 7,168 free on the 8 GB row (662 short; 846 before either decision), and Q5 needs
+  // 23,559 against 23,552 on the 24 GB row — 7 MiB short after BOTH decisions, so the nominal row
+  // keeps Q4. A real 24 GB card is not that stingy: the RTX 3090 reports 24,822 MiB, so its budget
+  // is 23,798 and it stars Q5 (pinned in `benchmark.test.ts`), which is what the hardware measured.
   const GRID: Array<[cardGb: number, picks: string]> = [
     [6, '4B / E2B / 4B / 4B / 4B'],
     [8, '4B / E2B / 4B / 4B / 4B'],
@@ -309,11 +357,11 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     const noFree = { totalMb: 8273 } as { totalMb: number; freeMb: number }
     expect(graphicsBudgetMib(noFree)).toBe(7249)
     expect(onCard(chat, graphicsBudgetMib(noFree)!, 16)).toBe('qwen3.5-4b-ud-q4kxl')
-    // By TOTAL the same card would have starred the 9B (8,014 ≤ 8,273) — the finding behind decision 10.
+    // By TOTAL the same card would have starred the 9B (7,830 ≤ 8,273) — the finding behind decision 10.
     expect(onCard(chat, 8273, 16)).toBe('qwen3.5-9b-ud-q4kxl')
     // Public lines: RTX 5060 8,151 / 7,573 free (Linux Vulkan) → 4B; RTX 3080 Ti 11,912 / 11,640
-    // (CUDA) → 9B (Gemma 12B's 11,159 fits too but ranks below); RTX 3090 24,575 / 23,332 (CUDA)
-    // → Q4 at RAM 32 (Q5's 23,866 does not fit); RTX 2060 6,144 / 5,136 → 4B.
+    // (CUDA) → 9B (Gemma 12B's 11,041 fits too but ranks below); RTX 3090 24,575 / 23,332 (CUDA)
+    // → Q4 at RAM 32 (Q5's 23,559 does not fit 23,332); RTX 2060 6,144 / 5,136 → 4B.
     expect(onCard(chat, 7573, 32)).toBe('qwen3.5-4b-ud-q4kxl')
     expect(onCard(chat, 11_640, 32)).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 23_332, 32)).toBe('qwen3.8-27b-ud-q4km')
@@ -321,7 +369,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   })
 
   // (a) R1: the speed step-down can no longer escape the RAM floor or the card. The audit's two
-  // counterexamples (both stepped MoE → Q4 at the PR head: min RAM 21 > 20; 20,247 MiB > 17 GiB).
+  // counterexamples (both stepped MoE → Q4 at the PR head: min RAM 21 > 20; Q4's need > 17 GiB).
   it('R1: a slow sample never steps to a model over the RAM floor or off the card', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     const q4 = 'qwen3.8-27b-ud-q4km'
@@ -347,8 +395,8 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // (c) R2: a crawl measured on a model the card cannot hold says nothing about the fitting pick.
   it('R2: a crawl on a card-oversized model leaves the fitting pick unchanged', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
-    // RAM 24 / 12 GiB budget: base = Q4 (20,247 MiB) does not fit → the 9B (rank 3; Gemma 12B fits
-    // at 11,159 but ranks 2). A 4 tok/s sample on the manually started Q4 is not in the eligible
+    // RAM 24 / 12 GiB budget: base = Q4 (19,940 MiB) does not fit → the 9B (rank 3; Gemma 12B fits
+    // at 11,041 but ranks 2). A 4 tok/s sample on the manually started Q4 is not in the eligible
     // pool → the 9B stays. (At the PR head the card pick here was Gemma 12B and the Q4 crawl
     // lowered it to the 9B — the audit's A2 reproduction; under rule C no oversized sample moves it.)
     expect(onCard(chat, 12 * 1024, 24)).toBe('qwen3.5-9b-ud-q4kxl')

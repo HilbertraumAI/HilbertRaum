@@ -76,8 +76,8 @@ afterEach(closePerformanceFixture)
 
 const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16_384, freeMb: 15_000 }
 const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3090', totalMb: 24_576, freeMb: 22_000 }
-// A real hybrid laptop (2026-09-07): the iGPU listed first, the "6 GB" card at 5,994 MiB on Vulkan
-// — under the 6,144 gate (#321), so no budget device.
+// A real hybrid laptop (2026-09-07): the iGPU listed first, the "6 GB" card at 5,994 MiB on Vulkan.
+// That was under the old 6,144 gate; since #321 lowered it to 5,120 the card IS the budget device.
 const RADEON_IGPU: GpuDevice = { id: 'Vulkan0', name: 'AMD Radeon(TM) Graphics', totalMb: 8886, freeMb: 8441 }
 const RTX3060L: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 }
 const PROBED_AT = '2026-09-05T00:00:00Z'
@@ -161,22 +161,44 @@ describe('one eligible source: the selected device (M8.2)', () => {
     expect(snap.current?.gpuVramMb).toBeUndefined()
   })
 
-  it('a hybrid [iGPU, small dGPU] probe: no budget device (cpu class, RAM pick, nothing folded in) — but the tile names THE card (owner decision 2026-09-07)', () => {
+  it('a hybrid [iGPU, 6 GB dGPU] probe: the CARD is the budget device since #321 — every consumer describes it, never the iGPU', () => {
+    for (const devices of [[RADEON_IGPU, RTX3060L], [RTX3060L, RADEON_IGPU]]) {
+      const root = freshRoot()
+      const db = seededDb(root)
+      updateSettings(db, { lastBenchmark: legacyResult(), gpuProbe: probe(devices) })
+
+      const snap = buildPerformanceSnapshot(ctxWith(root, db))
+
+      // 5,994 ≥ the 5,120 gate: discrete, and every figure is the CARD's — not the shared-memory
+      // iGPU's, whichever order the driver listed them in. Before #321 this machine had no budget
+      // device at all and fell back to the RAM pick.
+      expect(snap.currentGpu).toEqual({ name: RTX3060L.name, totalMb: 5994, useful: true })
+      expect(snap.placement.vramMb).toBe(5994)
+      expect(snap.placement.memoryClass).toBe('discrete')
+      expect(snap.current?.gpu).toBe(RTX3060L.name)
+      expect(snap.current?.gpuVramMb).toBe(5994)
+      // The tile names the same device, now rated usable.
+      expect(snap.graphicsDevice).toEqual({ name: RTX3060L.name, totalMb: 5994, useful: true })
+    }
+  })
+
+  it('a hybrid [iGPU, SUB-gate dGPU] probe: still no budget device, and the tile still names THE card (owner decision 2026-09-07)', () => {
+    const gtx1650 = { id: 'Vulkan1', name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, freeMb: 3900 }
     const root = freshRoot()
     const db = seededDb(root)
-    updateSettings(db, { lastBenchmark: legacyResult(), gpuProbe: probe([RADEON_IGPU, RTX3060L]) })
+    updateSettings(db, { lastBenchmark: legacyResult(), gpuProbe: probe([RADEON_IGPU, gtx1650]) })
 
     const snap = buildPerformanceSnapshot(ctxWith(root, db))
 
-    // 5,994 MiB is under the 6,144 gate (#321): the card is no budget device for ANY consumer…
+    // 4,096 MiB is under the gate even at 5,120: no budget device for ANY consumer…
     expect(snap.currentGpu).toBeNull()
     expect(snap.placement.vramMb).toBeNull()
-    expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [RADEON_IGPU, RTX3060L]))
+    expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, [RADEON_IGPU, gtx1650]))
     expect(snap.current?.gpu).toBeNull()
     expect(snap.current?.gpuVramMb).toBeUndefined()
     // …and the graphics tile still names it with its OWN memory — never the iGPU listed first,
     // never "no usable graphics card". Whether it is used is the rating's (and the budget's) job.
-    expect(snap.graphicsDevice).toEqual({ name: RTX3060L.name, totalMb: 5994, useful: false })
+    expect(snap.graphicsDevice).toEqual({ name: gtx1650.name, totalMb: 4096, useful: false })
   })
 
   it('with the GPU switched off or auto-disabled the tile names no device either, so its "acceleration is off" copy stands', () => {

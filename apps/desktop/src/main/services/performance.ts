@@ -98,11 +98,12 @@ export const ESTIMATE_HEADROOM = 0.92
 /**
  * The BUDGET device (PR #308 audit, decision 9): the one card whose memory the chat pick,
  * the placement verdict and the graphics tile are measured against. The LARGEST device that
- * passes the ONE usable-card rule (`isUsefulDevice` in `shared/gpu-rules.ts`: ≥ 6 GiB and
+ * passes the ONE usable-card rule (`isUsefulDevice` in `shared/gpu-rules.ts`: at or above
+ * `USABLE_VRAM_MB`, 5 GiB since #321, and
  * not integrated by name), never `devices[0]`: the pinned Vulkan build lists an integrated
  * GPU beside the discrete one in DRIVER order, so on a hybrid laptop the first device is as
  * often the iGPU reporting 11–36 GiB of shared RAM as it is the card. Null when no device
- * passes (an integrated-only laptop, a sub-6 GiB card, an empty probe). The implementation IS
+ * passes (an integrated-only laptop, a card under the floor, an empty probe). The implementation IS
  * `primaryUsefulDevice` (the #303 P5 name; the two rules were unified at the #303/#308 merge),
  * kept under this name because the #308 records cite it.
  */

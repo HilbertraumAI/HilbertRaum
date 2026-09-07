@@ -937,7 +937,10 @@ export function recommendModelIdByRam(
 /** llama.cpp's `--fit-target` default: the margin the fit keeps free on the card, MiB. */
 export const VRAM_FIT_MARGIN_MIB = 1024
 /** Working (compute) buffers the runtime reserves beside the weights, as a share of the weights
- *  (the rig's 27B measured 2.8 GiB on 18.4 GiB of weights at a 2048-token batch, ~15 %). */
+ *  ON THE CARD (the rig's 27B measured 2.8 GiB on 18.4 GiB of weights at a 2048-token batch,
+ *  ~15 %). Applied to the OFFLOADABLE weights since #321 — `estimateGraphicsNeedMib` subtracts a
+ *  manifest's measured `host_mapped_weights_mib` first, because buffers scale with what is
+ *  actually on the card, not with the embedding tables that stay host-mapped. */
 export const VRAM_WORKING_SHARE = 0.15
 /**
  * The context-cache term for a manifest that carries no `estimated_context_cache_gib`, GiB
@@ -964,15 +967,31 @@ export function weightsMib(m: ModelManifest): number {
 
 /**
  * What the runtime needs on the card to hold EVERY layer of this model, MiB: the weights, the
- * working buffers beside them (15 %), the context cache at the model's recommended window under
- * the app's launch (the manifest's `estimated_context_cache_gib`, else 0.5 GiB), and the fit's
- * own 1 GiB margin. The measured check behind the terms: Gemma 4 12B peaked at 9,720 MiB on the
- * rig (6,653 weights + 2,432 cache + ~635 compute); this reads 11,159 with the margin.
+ * working buffers beside them (15 % of the OFFLOADABLE weights), the context cache at the model's
+ * recommended window under the app's launch (the manifest's `estimated_context_cache_gib`, else
+ * 0.5 GiB), and the fit's own 1 GiB margin. The measured check behind the terms: Gemma 4 12B peaked
+ * at 9,720 MiB on the rig (6,653 weights + 2,432 cache + ~635 compute).
+ *
+ * The working share is computed on the OFFLOADABLE weights since 2026-09-07 (issue #321, owner
+ * decision). It is meant to cover the runtime's buffers BESIDE the weights on the card, and those
+ * scale with what is actually on the card — but it used to be applied to the whole file, including
+ * the embedding/output tables llama.cpp leaves host-mapped. On the E2B that made the estimate 2.4×
+ * too high (4,746 predicted against 1,997 projected and ≈ 1,998 used) because 2,152.50 of its
+ * 3,147 MiB stays `CPU_Mapped`; on the 9B it assumed 837 MiB against a 498 MiB compute buffer.
+ * That mattered little while sub-6 GiB cards never reached the card path at all; with the gate at
+ * 5,120 they do, and "Your model" would have called the E2B far tighter than it is.
+ *
+ * `hostMappedWeightsMib` is the measured host-mapped share (see the field's doc comment: read off a
+ * FULL-OFFLOAD start's `CPU_Mapped model buffer size`). It is optional and clamped to the weight
+ * total, so a manifest without it — anything never started on hardware — keeps exactly the old
+ * arithmetic rather than getting a guess. Deriving the split from the GGUF header instead would
+ * cover every model at once and stays open (BUILD_STATE §5 item 22 (e)).
  */
 export function estimateGraphicsNeedMib(m: ModelManifest): number {
   const w = weightsMib(m)
+  const hostMapped = Math.min(m.hostMappedWeightsMib ?? 0, w)
   const cacheGib = m.estimatedContextCacheGib ?? VRAM_DEFAULT_CONTEXT_CACHE_GIB
-  return w * (1 + VRAM_WORKING_SHARE) + cacheGib * 1024 + VRAM_FIT_MARGIN_MIB
+  return w + (w - hostMapped) * VRAM_WORKING_SHARE + cacheGib * 1024 + VRAM_FIT_MARGIN_MIB
 }
 
 /** Would every layer of this model land on a card offering `budgetMib` (see `graphicsBudgetMib`)? */

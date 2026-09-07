@@ -73,20 +73,25 @@ const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 // FREE figure is under the 9B's threshold does not hold it, so the card pick is the 4B — still
 // divergent from the RAM pick, which is what the mutation guards need.
 // The threshold itself is pinned in `committed-catalog.test.ts`, not here; it moved 8,014 → 7,912
-// when the chat server took `-np 1` (issue #319, 2026-09-07), so CARD8's free figure moved with it
-// to stay on the low side. The PAIR is the point: CARD8 below the threshold, CARD8_ROOMY above it.
+// (#319, `-np 1`) → 7,830 (#321, the working share on the offloadable weights). CARD8 therefore
+// carries the GTX 1070 Ti's own measured free figure from the #318 session (7,504) rather than a
+// number picked just above the threshold of the day. The PAIR is the point: CARD8 below the
+// threshold, CARD8_ROOMY above it.
 const RAM_PICK = 'qwen3.8-27b-ud-q5km'
 const CARD8_PICK = 'qwen3.5-4b-ud-q4kxl'
 const CARD8_ROOMY_PICK = 'qwen3.5-9b-ud-q4kxl'
 
-const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 7900 }
+const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 7504 }
 // The same card with 8,100 MiB free: holds the 9B — the witness that the seams feed the FREE
 // figure (by total − 1,024 it would read 7,168 and give the 4B).
 const CARD8_ROOMY: GpuDevice = { ...CARD8, freeMb: 8100 }
-// N8 / decision 3: the 6 GB laptop class reports under the 6,144 MiB gate on Vulkan (RTX 4050
-// Laptop, audit D1) and never reaches the card path; an RTX 2060 reports exactly 6,144 and does.
+// N8 / decision 3, as amended by #321 (2026-09-07): the 6 GB laptop class reports under 6,144 MiB
+// on Vulkan (RTX 4050 Laptop, audit D1) — which is exactly why the gate came down to 5,120, so this
+// card now DOES reach the card path. An RTX 2060 reports 6,144 and always did. The 4 GB GTX 1650 is
+// the sub-gate case that remains.
 const RTX4050_LAPTOP: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 4050 Laptop GPU', totalMb: 5921, freeMb: 5153 }
 const RTX2060: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 2060', totalMb: 6144, freeMb: 5136 }
+const GTX1650: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, freeMb: 3900 }
 // A hybrid laptop as the pinned b9849 Vulkan build lists it (audit R6): the iGPU first.
 const ARL: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Graphics (ARL)', totalMb: 11577, freeMb: 8251 }
 const RTX5060: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 5060', totalMb: 8151, freeMb: 7573 }
@@ -181,18 +186,32 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(pickerMemoryFor(getSettings(ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 8100 })
   })
 
-  it('N8 gate boundary: 5,921 MiB (RTX 4050 Laptop) stays a RAM machine; 6,144 (RTX 2060) reaches the card path', async () => {
+  it('N8 gate boundary (#321): 5,921 MiB (RTX 4050 Laptop) NOW reaches the card path; 4,096 (GTX 1650) stays a RAM machine', async () => {
+    // The change this issue was opened for. At the old 6,144 gate this laptop was classed `cpu`
+    // and got the RAM pick — the 27B Q5 at 32 GB RAM — which its 6 GB card cannot hold; #318 leg 4
+    // measured what that costs on the sibling RTX 3060 Laptop (the 9B at 18/33 layers, 5.2 tok/s).
+    // At 5,120 it reaches rule C and stars the 4B, which fully offloads at card speed.
     const laptop = fixture({ probeReturns: [RTX4050_LAPTOP] })
     const benchLaptop = await runAndPersistBenchmark(laptop.ctx)
-    expect(pickerMemoryFor(getSettings(laptop.ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
-    expect(benchLaptop.recommendedModelId).toBe(RAM_PICK)
-    expect(benchLaptop.gpu).toBeNull()
-    expect(await liveStar(laptop.ctx)).toBe(RAM_PICK)
+    expect(pickerMemoryFor(getSettings(laptop.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 5153 })
+    expect(benchLaptop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 4,410 MiB fits 5,153
+    expect(benchLaptop.gpu).toBe(RTX4050_LAPTOP.name)
+    expect(benchLaptop.gpuVramMb).toBe(5921)
+    expect(await liveStar(laptop.ctx)).toBe(CARD8_PICK)
+
+    // A 4 GB card is still under the gate: no budget device, the RAM pick, no graphics figure.
+    // Nothing ranked fits its 3,900 MiB free anyway, so rule C would hand it back regardless.
+    const small = fixture({ probeReturns: [GTX1650] })
+    const benchSmall = await runAndPersistBenchmark(small.ctx)
+    expect(pickerMemoryFor(getSettings(small.ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
+    expect(benchSmall.recommendedModelId).toBe(RAM_PICK)
+    expect(benchSmall.gpu).toBeNull()
+    expect(await liveStar(small.ctx)).toBe(RAM_PICK)
 
     const desktop = fixture({ probeReturns: [RTX2060] })
     const benchDesktop = await runAndPersistBenchmark(desktop.ctx)
     expect(pickerMemoryFor(getSettings(desktop.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 5136 })
-    expect(benchDesktop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 4,512 MiB fits 5,136
+    expect(benchDesktop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 4,410 MiB fits 5,136
     expect(benchDesktop.gpu).toBe(RTX2060.name)
     expect(benchDesktop.gpuVramMb).toBe(6144)
     expect(await liveStar(desktop.ctx)).toBe(CARD8_PICK)
@@ -456,7 +475,7 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     expect(f.probe).toHaveBeenCalledTimes(1)
 
     const snap = buildPerformanceSnapshot(f.ctx)
-    // LIVE: the RTX 3070 fixture `{ 8192, freeMb 7900 }` → budget 7,900 MiB < the 9B's 7,912 → the 4B.
+    // LIVE: the RTX 3070 fixture `{ 8192, freeMb 7504 }` → budget 7,504 MiB < the 9B's 7,830 → the 4B.
     expect(snap.recommendation).toEqual({ modelId: CARD8_PICK, basis: 'discrete' })
     // HISTORICAL: what the check said at the time, untouched, with its old stamp.
     expect(snap.current?.recommendedModelId).toBe(RAM_PICK)
@@ -502,7 +521,7 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     const snap = buildPerformanceSnapshot(f.ctx)
     const m = discoverManifests(MANIFESTS).manifests.map((x) => x.manifest).find((x) => x.id === g12)
     expect(m).toBeDefined()
-    // The card's need (11,159 MiB with its 2.4 GiB cache) is over the 8,000 MiB budget: not "gpu".
+    // The card's need (11,041 MiB with its 2.4 GiB cache) is over the card's budget: not "gpu".
     expect(snap.placement.verdict).toMatchObject({ kind: 'partial', estimated: true, budgetMb: 8192, needMb: Math.round(weightsMib(m!)) })
     // Display stays one-decimal GiB; the verdict got the unrounded weights.
     expect(snap.placement.model?.sizeOnDiskGb).toBe(6.5)
