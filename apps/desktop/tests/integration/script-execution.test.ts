@@ -120,12 +120,20 @@ const LEGS: Leg[] = [
     skip: process.platform !== 'win32',
     ext: 'ps1',
     flag: (n) => `-${n}`,
-    run: (script, args) =>
-      spawnSync(
+    run: (script, args) => {
+      // GitHub's windows runner exports a PSModulePath meant for PowerShell 7; inherited by
+      // Windows PowerShell 5.1 it hides 5.1's own module directory, so `Get-FileHash`
+      // (Microsoft.PowerShell.Utility) fails to autoload and every hashing script dies with
+      // CommandNotFoundException (#310's verify-models cases were the first to hash on CI).
+      // Dropping the variable lets 5.1 rebuild its default path, as on any user's machine.
+      const env = { ...process.env }
+      delete env.PSModulePath
+      return spawnSync(
         'powershell.exe',
         ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', join(SCRIPTS, script), ...args],
-        { encoding: 'utf8', timeout: CHILD_TIMEOUT_MS, windowsHide: true }
+        { encoding: 'utf8', timeout: CHILD_TIMEOUT_MS, windowsHide: true, env }
       )
+    }
   },
   {
     name: 'bash scripts (.sh)',
