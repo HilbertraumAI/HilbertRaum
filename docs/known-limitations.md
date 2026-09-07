@@ -2273,12 +2273,12 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   reasoning extends to a laptop with BOTH an integrated and a discrete GPU — the picker's budget
   device is the largest device that is not integrated by name (`selectBudgetDevice`), so the
   recommendation and the "Your model" fit estimate are judged against the discrete card only,
-  never the iGPU's shared-RAM figure. llama.cpp's own `--fit` offload does not make that
-  distinction: it spreads layers across every device it lists, so the sidecar may still place
-  some layers on the iGPU alongside the discrete card during an actual start
-  (`docs/architecture.md` "GPU acceleration" runtime record) — a difference between what the
-  picker recommended a model against and what the runtime actually did, recorded but not
-  reconciled in this PR.
+  never the iGPU's shared-RAM figure. The runtime agrees, **measured 2026-09-07** (#318 leg 5,
+  issue #320): llama.cpp's `--fit` drops the integrated device by TYPE before it fills devices, so
+  the sidecar puts every buffer on the discrete card even where the driver lists the iGPU first —
+  the app passes no `--device` and does not need to (`docs/architecture.md` "GPU acceleration"
+  runtime record). Not measured: an Intel-first hybrid, of which the project has none; the
+  exclusion is by device type, so it is expected to carry over.
 - **Vulkan slower than CPU is possible** on weak-iGPU + fast-CPU machines. v1 does **not**
   auto-benchmark CPU vs GPU and pick a winner (decided, GPU record §1); the Settings
   "Use GPU acceleration" toggle covers that case.

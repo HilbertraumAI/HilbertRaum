@@ -106,6 +106,8 @@ describe('looksIntegrated', () => {
     // (11–36 GiB of SHARED memory) read as a discrete card on every consumer.
     ['Intel(R) Graphics (ARL)', true],
     ['Intel(R) Graphics (LNL)', true],
+    // #320 (owner decision 2026-09-07): the same family reported WITHOUT a platform code.
+    ['Intel(R) Graphics', true],
     ['Intel(R) Arc(TM) 140V GPU (16GB)', true],
     ['Intel(R) Iris(R) Xe Graphics (TGL GT2)', true],
     ['Intel(R) UHD Graphics 770', true],

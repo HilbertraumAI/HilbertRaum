@@ -3014,11 +3014,12 @@ a device fault. Bind races (REL-1, §5.5) are still excluded before any of this.
 > Tests: `runtime-ladder.test.ts` "#372", `core-model-ipc.test.ts` (verify), `engine-consent-ipc.test.ts`
 > (engine install), the `ctx.onModelInstalled` source-text pin, `gpu-ipc.test.ts` (Try GPU again).
 
-*Interaction with #320* (excluding a hybrid laptop's iGPU with `--device` at launch): if that
-lands, a rung-1 failure could be caused by the app's own device selection — and it is still
-classified correctly, because the forced-CPU rung would come up and flush the failure as the
-device verdict it is. A text-allowlist design would not have that property. No code in either
-issue touches the other: #320 changes rung *construction*, #312 the failure *branch*.
+*Interaction with #320* (excluding a hybrid laptop's iGPU with `--device` at launch): **decided
+2026-09-07 — it does not land**; the fit already drops the integrated device by type (runtime
+record above), so rung *construction* is unchanged and this interaction is moot. Had it landed, a
+rung-1 failure could have been caused by the app's own device selection — and would still be
+classified correctly, because the forced-CPU rung comes up and flushes the failure as the device
+verdict it is. A text-allowlist design would not have that property.
 
 (**Rung 1a**, the speculative-decoding rung, is documented in its own record — "MTP speculative
 decoding — design record (issue #182)" below. It never persists `gpuAutoDisabled`, and its
@@ -3178,10 +3179,20 @@ b9849's default **four unified slots** (`n_slots = 4`, `kv_unified = true`) when
 argv passes no `-np`; for a single-user chat app this costs real sliding-window/recurrent cache
 overhead the picker's `estimated_context_cache_gib` term accounts for (`model-benchmarks.md`
 §6.6), and whether to add `-np 1` is a runtime decision outside this section (BUILD_STATE §5 item
-21 (i)). Separately, llama.cpp's `--fit` offload spreads layers across **every** device
-`--list-devices` lists, integrated GPUs included (`common/fit.cpp`), so on a hybrid laptop the
-sidecar may itself place layers on the iGPU even though the picker's budget device deliberately
-excludes it from the recommendation (BUILD_STATE §5 item 22 (j)).
+21 (i)). Separately, whether `--fit` also puts layers on a hybrid laptop's iGPU — which the app
+never excludes with `--device` — was read from `common/fit.cpp` as "it spreads layers across every
+device `--list-devices` lists". **MEASURED FALSE on the pinned b9849 build (#318 leg 5, 2026-09-07;
+decided on #320 that the never-`--device` rule stands):** llama.cpp drops the integrated device
+**by type** before the filling pass. On the desktop hybrid (RTX 3080 Ti + UHD 770, discrete listed
+first) both devices appear in `device_info` and then `using device Vulkan0` alone; on the APU-first
+laptop (AMD Radeon(TM) Graphics listed FIRST, RTX 3060 Laptop second) every GPU buffer landed on
+the RTX and the fit's own device list never contained the iGPU — its "device 0" was Vulkan1. So an
+app-side `--device` would change nothing, and it would break the ladder's contract that
+`--device none` is the only device argument the app ever passes. Evidence:
+`eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg5-baseline.*`,
+`…/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/leg5-device-landing.comment.md`; BUILD_STATE §5 item 22 (j).
+Residual: no Intel-first hybrid exists in the project; the exclusion is by device type, so it is
+expected to carry over.
 
 "Try GPU again" is the dedicated `gpu:try-again` IPC: clears the flags **and** invalidates the
 session probe cache **and** re-probes + persists (a plain settings write would keep a
