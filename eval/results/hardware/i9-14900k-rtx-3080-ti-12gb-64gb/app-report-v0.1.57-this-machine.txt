@@ -1,0 +1,13 @@
+# Pasted 2026-09-07 from the drive's packaged app v0.1.57 after the current source build (dev, HILBERTRAUM_DRIVE_ROOT=K:) had re-run the check on this machine at 09:43 local and written the shared record. v0.1.57 predates the graphics-memory picker: no memory basis, no Your-model estimate.
+
+Hardware-Benchmark
+Zugewiesenes Profil: PRO
+Empfohlenes Modell: qwen3.5-9b-ud-q4kxl
+RAM: 63,7 GB
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+OS / Architektur: win32 (x64)
+GPU: NVIDIA GeForce RTX 3080 Ti
+Gemessene Lesegeschwindigkeit: 1.327 MB/s (aus einem Modellstart am 7.9.2026, 3,3 GB gelesen)
+Laufwerk schreiben: 397,1 MB/s
+Decodier-Geschwindigkeit (Token / Sek.): 186,1 (über 64 Token; gemessen mit dem geladenen Modell gemma4-e2b-it-qat-q4)
+Letzter Lauf: 7.9.2026, 09:43:11

@@ -1,0 +1,13 @@
+# Pasted 2026-09-07 from the drive's packaged app v0.1.57 (K:\HilbertRaum-0.1.57-portable.exe), first press: the STALE record the portable drive carried from a laptop (last run 9 Aug 2026), not this machine.
+
+Hardware-Benchmark
+Zugewiesenes Profil: LITE
+Empfohlenes Modell: qwen3.5-9b-ud-q4kxl
+RAM: 15,8 GB
+CPU: 11th Gen Intel(R) Core(TM) i7-1185G7 @ 3.00GHz (8 Kerne)
+OS / Architektur: win32 (x64)
+GPU: Intel(R) Iris(R) Xe Graphics
+Gemessene Lesegeschwindigkeit: 369,8 MB/s (aus einem Modellstart am 7.9.2026, 3,3 GB gelesen)
+Laufwerk schreiben: 454,9 MB/s
+Token / Sek.: 17 (gemessen mit dem geladenen Modell gemma4-e2b-it-qat-q4)
+Letzter Lauf: 9.8.2026, 18:39:35

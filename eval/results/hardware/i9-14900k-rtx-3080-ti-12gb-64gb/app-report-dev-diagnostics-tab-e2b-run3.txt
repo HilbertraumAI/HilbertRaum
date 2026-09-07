@@ -1,0 +1,22 @@
+# Pasted 2026-09-07 from the current source build (dev 0.1.59, HILBERTRAUM_DRIVE_ROOT=K:), Settings > Diagnostics tab: App & runtime card + a third benchmark re-run at 09:47:00 local (gemma4-e2b-it-qat-q4 active).
+
+App & Laufzeit
+App-Version: HilbertRaum 0.1.59
+Ausgewähltes Modell: gemma4-e2b-it-qat-q4
+Hardware-Profil: PRO
+Laufzeit: Läuft — gemma4-e2b-it-qat-q4 auf 127.0.0.1:52090 (in Ordnung)
+Beschleunigung: NVIDIA GeForce RTX 3080 Ti (GPU)
+Lokale API: An · Port 4980 · 0 beantwortet, 0 abgelehnt
+Laufzeit-Build: llama.cpp b9849 (vulkan)
+
+Hardware-Benchmark
+Zugewiesenes Profil: PRO
+Empfohlenes Modell: qwen3.5-9b-ud-q4kxl
+RAM: 63,7 GB
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+OS / Architektur: win32 (x64)
+GPU: NVIDIA GeForce RTX 3080 Ti
+Gemessene Lesegeschwindigkeit: 773,5 MB/s (aus einem Modellstart am 7.9.2026, 3,3 GB gelesen)
+Laufwerk schreiben: 327 MB/s
+Decodier-Geschwindigkeit (Token / Sek.): 110,9 (über 64 Token; gemessen mit dem geladenen Modell gemma4-e2b-it-qat-q4)
+Letzter Lauf: 7.9.2026, 09:47:00
