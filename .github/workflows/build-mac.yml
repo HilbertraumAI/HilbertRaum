@@ -1,0 +1,113 @@
+# Build, sign & notarize the macOS .app (Apple Silicon / arm64) on a GitHub-hosted macOS runner —
+# so a notarized, USB-launchable app can be produced WITHOUT owning a Mac. Manual trigger only
+# (it burns paid-tier macOS minutes and needs signing secrets, so it must never run on every push).
+#
+# Produces TWO downloadable artifacts — drop both onto the portable drive:
+#   • HilbertRaum-mac-arm64-app   → unzip; put HilbertRaum.app at the drive root, next to
+#                                    "Start HilbertRaum.command"
+#   • llama-runtime-mac-arm64     → unzip; put the `mac` folder into
+#                                    <drive>/hilbertraum/runtime/llama.cpp/
+# (Fetching the mac runtime here is deliberate: only a macOS host extracts the tarball's symlinks
+#  and sets the exec bit correctly — a Windows host cannot. See docs/packaging.md.)
+#
+# REQUIRED repo secrets — Settings → Secrets and variables → Actions:
+#   CSC_LINK                     base64 of your "Developer ID Application" cert (.p12)
+#                                  macOS: base64 -i DeveloperID.p12 | pbcopy
+#   CSC_KEY_PASSWORD             the .p12 export password
+#   APPLE_ID                     Apple Developer account email
+#   APPLE_APP_SPECIFIC_PASSWORD  app-specific password (appleid.apple.com → Sign-In & Security)
+#   APPLE_TEAM_ID                your 10-character Apple Team ID
+# electron-builder auto-signs (CSC_*) and auto-notarizes (APPLE_*) when these are present — the
+# hooks are already wired in apps/desktop/electron-builder.yml (mac.notarize + hardenedRuntime +
+# build/entitlements.mac.plist). WITHOUT the secrets the build still runs but yields an UNSIGNED,
+# NON-notarized app that macOS Gatekeeper blocks when launched from a USB drive.
+
+name: Build macOS app
+
+on:
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: 'Branch/tag/SHA to build — MUST contain PR #15 (else it will not build) and #17 (else PDF import breaks). Blank = this workflow''s branch.'
+        required: false
+        default: ''
+
+# Least privilege: read the repo, nothing else (artifact upload needs no extra scope).
+permissions:
+  contents: read
+
+concurrency:
+  group: build-mac-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-mac:
+    name: build-mac (arm64)
+    runs-on: macos-14          # Apple Silicon → arm64, matching the pinned Metal llama.cpp runtime
+    timeout-minutes: 90        # the notarization round-trip to Apple can take several minutes
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.ref || github.ref }}
+
+      - name: Set up Node.js 22.x
+        uses: actions/setup-node@v4
+        with:
+          # engines require >=22.5 (node:sqlite). 22.x ships npm 10 — no install-script blocking,
+          # so electron's postinstall extracts the platform binary cleanly.
+          node-version: '22.x'
+          cache: npm
+
+      # NOTE: unlike ci.yml we do NOT set ELECTRON_SKIP_BINARY_DOWNLOAD — packaging needs the real
+      # Electron mac binary. The repo postinstall (scripts/verify-electron.mjs) validates it.
+      - name: Install
+        run: npm ci
+
+      - name: Package · sign · notarize (.app)
+        env:
+          CSC_LINK: ${{ secrets.CSC_LINK }}
+          CSC_KEY_PASSWORD: ${{ secrets.CSC_KEY_PASSWORD }}
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_APP_SPECIFIC_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
+        run: npm run package     # electron-builder mac target (dir + hardenedRuntime + notarize)
+
+      - name: Locate & zip the .app
+        run: |
+          set -euo pipefail
+          APP="$(find apps/desktop/release -maxdepth 2 -name '*.app' -type d | head -n1)"
+          test -n "$APP" || { echo '::error::No .app was produced by electron-builder'; exit 1; }
+          echo "Found: $APP"
+          # ditto preserves the code signature, symlinks and resource forks (a plain zip corrupts
+          # a signed .app). --keepParent keeps the .app directory name inside the archive.
+          ditto -c -k --sequesterRsrc --keepParent "$APP" "$GITHUB_WORKSPACE/HilbertRaum-mac-arm64.zip"
+
+      - name: Verify signature & notarization (report-only)
+        run: |
+          APP="$(find apps/desktop/release -maxdepth 2 -name '*.app' -type d | head -n1)"
+          echo '--- codesign ---'; codesign -dv --verbose=4 "$APP" 2>&1 || true
+          echo '--- spctl (expect: accepted / source=Notarized Developer ID) ---'
+          spctl -a -vvv -t exec "$APP" 2>&1 || true
+
+      - name: Upload .app artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: HilbertRaum-mac-arm64-app
+          path: HilbertRaum-mac-arm64.zip
+          if-no-files-found: error
+
+      - name: Fetch matching mac llama.cpp runtime (native extraction)
+        run: |
+          set -euo pipefail
+          mkdir -p rt
+          bash scripts/fetch-runtime.sh --target "$PWD/rt" --os mac --arch arm64 --backend metal
+          ditto -c -k --keepParent "rt/runtime/llama.cpp/mac" "$GITHUB_WORKSPACE/llama-runtime-mac-arm64.zip"
+
+      - name: Upload mac runtime artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: llama-runtime-mac-arm64
+          path: llama-runtime-mac-arm64.zip
+          if-no-files-found: error
