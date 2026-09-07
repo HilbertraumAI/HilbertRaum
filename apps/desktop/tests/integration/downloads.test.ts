@@ -350,6 +350,97 @@ describe('DownloadManager vision (two files)', () => {
   })
 })
 
+// #310: the same job machinery over a THREE-file shard set — the manager already runs a model's
+// tasks as one job with summed bytes, so the whole capability is the planner's extra tasks.
+describe('DownloadManager multi-file weight (#310)', () => {
+  const shardPath = (n: number): string => `models/chat/big-${String(n).padStart(5, '0')}-of-00003.gguf`
+  const shardUrl = (n: number): string => `https://example.test/big-${n}.gguf`
+  /** A three-shard manifest whose every hash is the real hash of its body. */
+  function shardedManifest(bodies: [string, string, string]): ModelManifest {
+    return manifest({
+      id: 'sharded-chat',
+      local_path: shardPath(1),
+      sha256: sha256(bodies[0]),
+      download: {
+        url: shardUrl(1),
+        sha256: sha256(bodies[0]),
+        size_bytes: bodies[0].length,
+        license_url: 'https://example.test/license'
+      },
+      files: [2, 3].map((n) => ({
+        local_path: shardPath(n),
+        sha256: sha256(bodies[n - 1]),
+        download: { url: shardUrl(n), sha256: sha256(bodies[n - 1]), size_bytes: bodies[n - 1].length }
+      }))
+    })
+  }
+  const BODIES: [string, string, string] = ['shard-one-bytes', 'shard-two-bytes--', 'shard-three-bytes']
+  const abs = (root: string, n: number): string => join(root, ...shardPath(n).split('/'))
+
+  it('fetches every shard in order, sums their bytes, and settles done only after the LAST', async () => {
+    const m = shardedManifest(BODIES)
+    const root = tempRoot()
+    const { fetch, urls } = routedFetch({
+      [shardUrl(1)]: BODIES[0],
+      [shardUrl(2)]: BODIES[1],
+      [shardUrl(3)]: BODIES[2]
+    })
+    const mgr = new DownloadManager({ fetchImpl: fetch })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    expect(job.totalBytes).toBe(BODIES.reduce((n, b) => n + b.length, 0))
+
+    const finished = await waitForTerminal(mgr, job.jobId)
+    expect(finished.status).toBe('done')
+    expect(finished.unverified).toBe(false)
+    expect(finished.receivedBytes).toBe(BODIES.reduce((n, b) => n + b.length, 0))
+    expect(urls).toEqual([shardUrl(1), shardUrl(2), shardUrl(3)])
+    for (const n of [1, 2, 3]) expect(readFileSync(abs(root, n), 'utf8')).toBe(BODIES[n - 1])
+  })
+
+  it('fetches only the shards that are missing (a resumed half-installed set)', async () => {
+    const m = shardedManifest(BODIES)
+    const root = tempRoot()
+    mkdirSync(join(abs(root, 1), '..'), { recursive: true })
+    writeFileSync(abs(root, 1), BODIES[0]) // shard 1 arrived + verified in a prior run
+    writeFileSync(abs(root, 3), BODIES[2])
+    const { fetch, urls } = routedFetch({ [shardUrl(2)]: BODIES[1] })
+    const mgr = new DownloadManager({ fetchImpl: fetch })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
+    expect(urls).toEqual([shardUrl(2)])
+  })
+
+  it('a cancel between files stops before the NEXT shard is requested', async () => {
+    const m = shardedManifest(BODIES)
+    const root = tempRoot()
+    const { fetch, urls } = routedFetch({
+      [shardUrl(1)]: BODIES[0],
+      [shardUrl(2)]: BODIES[1],
+      [shardUrl(3)]: BODIES[2]
+    })
+    // Deterministic gate (the BE-4 idiom): hold the FIRST verify, cancel, then release.
+    let verifyEntered!: () => void
+    const verifyStarted = new Promise<void>((resolve) => (verifyEntered = resolve))
+    let releaseVerify!: () => void
+    const verifyGate = new Promise<void>((resolve) => (releaseVerify = resolve))
+    const mgr = new DownloadManager({
+      fetchImpl: fetch,
+      verifyImpl: async (path, expected) => {
+        verifyEntered()
+        await verifyGate
+        return verifyDownloadedFile(path, expected)
+      }
+    })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    await verifyStarted
+    expect(mgr.cancel(job.jobId).status).toBe('cancelled')
+    releaseVerify()
+    expect((await waitForTerminal(mgr, job.jobId)).status).toBe('cancelled')
+    expect(urls).toEqual([shardUrl(1)]) // shards 2 and 3 were never requested
+    expect(existsSync(abs(root, 2))).toBe(false)
+  })
+})
+
 // ---- the job state machine ----------------------------------------------------------
 
 describe('DownloadManager jobs', () => {

@@ -243,6 +243,23 @@ function scanProduction(): ScanResult {
   return { literals, dynamics }
 }
 
+/**
+ * First production file (by `listProductionFiles()` order) whose scan finds `key` reachable as a
+ * plain literal or via its plural base — used only to name the call site in a baseline-staleness
+ * failure message (#315 item 2). Returns null when the key is reachable only via a bounded-dynamic
+ * match (no single call site to name; the caller falls back to naming the rule instead).
+ */
+function findLiteralCallSite(key: string, catalogKeys: ReadonlySet<string>): string | null {
+  const bases = pluralBases(catalogKeys)
+  const base = key.endsWith('.one') ? key.slice(0, -'.one'.length) : key.endsWith('.other') ? key.slice(0, -'.other'.length) : null
+  for (const file of listProductionFiles()) {
+    const { literals } = scanSource(file, readFileSync(file, 'utf8'))
+    if (literals.has(key)) return file
+    if (base && bases.has(base) && literals.has(base)) return file
+  }
+  return null
+}
+
 // ---------------------------------------------------------------------------------------------
 // Exact-key exceptions (reviewed dynamic uses the bounded-prefix rule cannot decompose). Empty
 // today: EvidencePane.tsx's two dynamic keys (`review.source.kind.${…}`, `review.relation.${…}`)
@@ -254,33 +271,13 @@ function scanProduction(): ScanResult {
 const EXACT_KEY_EXCEPTIONS: readonly ExactKeyException[] = []
 
 // ---------------------------------------------------------------------------------------------
-// LEGACY_UNREFERENCED baseline (CG8 report mode): candidates the scan finds beyond the five F7
-// keys it was written to catch, frozen here so the guard is green today and only rejects NEW
-// orphans. Per the plan these are OUT OF SCOPE for this wave — unrelated dead copy from earlier
-// features, left for separate review, not deleted alongside F7. Each line records where this
-// scan (README above) was verified to find nothing: a repo-wide grep for the literal key string
-// outside the EN/DE catalogs, including `tests/`.
+// LEGACY_UNREFERENCED baseline (CG8 report mode): the place to freeze a FUTURE reviewed batch of
+// dead keys the scan finds beyond what it was written to catch (mirrors EXACT_KEY_EXCEPTIONS'
+// shape — a key alone is enough here since there is nothing to except, just to acknowledge as
+// dead pending deletion). The 17 keys this baseline originally held (#302 CG8) were reviewed and
+// deleted outright in #315 rather than kept baselined — none had a real call site. Empty today.
 // ---------------------------------------------------------------------------------------------
-const LEGACY_UNREFERENCED: readonly MessageKey[] = [
-  'docs.action.addToProject', // "Add to project…" — no project-picker action reads this key
-  'docs.exportTitle', // "Save this document as a Markdown file" — export button title unused
-  'docs.lifecycle.archived', // "Archived" lifecycle badge — no lifecycle badge renders it
-  'docs.lifecycle.temporary', // "Temporary" lifecycle badge — same, unused
-  'docs.meta.sections', // superseded by the plural `docs.meta.sectionsCount` (format.tsx:153)
-  'docs.meta.size', // "Size" meta label — no meta row reads it
-  'docs.meta.type', // "Type" meta label — same
-  'docs.project.deleteConfirm', // "Delete project" confirm copy — no delete-project flow calls it
-  'docs.section.collapse', // "Sections" collapse-button label — no collapse control uses it
-  'docs.summarizeTitle', // summarize-button title — no summarize action reads it
-  'docs.translateTitle', // translate-button title — no translate action reads it
-  'images.history.open', // "Open" history-row action — no history row reads it
-  'images.locked', // workspace-locked copy for Images — no lock gate reads this variant
-  'models.engine.installedNote', // "The AI engine is installed…" — no engine card reads it
-  'models.notPresentTitle', // "Model file not present" — no row/card title reads it
-  'models.selected', // "Selected" badge text — no badge reads this key
-  'skills.locked' // workspace-locked copy for Skills — main.skills.locked (a different key) is
-  // what registerSkillsIpc.ts actually throws; this renderer-side variant is unused
-]
+const LEGACY_UNREFERENCED: readonly MessageKey[] = []
 
 // =================================================================================================
 // Classifier unit tests (CG8 acceptance b/c/d): small fixtures, independent of the real catalog.
@@ -420,6 +417,21 @@ describe('i18n unused-key guard — production scan', () => {
     const catalogKeys = new Set(Object.keys(en))
     for (const key of LEGACY_UNREFERENCED) {
       expect(catalogKeys.has(key), `LEGACY_UNREFERENCED names a key that no longer exists: ${key}`).toBe(true)
+    }
+  })
+
+  it('no baselined key has gained a real use site', () => {
+    const catalogKeys = new Set(Object.keys(en))
+    const { literals, dynamics } = scanProduction()
+    const used = classifyUsedKeys(literals, dynamics, catalogKeys, EXACT_KEY_EXCEPTIONS)
+    for (const key of LEGACY_UNREFERENCED) {
+      expect(catalogKeys.has(key), `LEGACY_UNREFERENCED names a key that no longer exists: ${key}`).toBe(true)
+      if (used.has(key)) {
+        const site = findLiteralCallSite(key, catalogKeys) ?? '(a bounded-dynamic match — see boundedDynamicMatches)'
+        throw new Error(
+          `LEGACY_UNREFERENCED key "${key}" now has a real use site (${site}) — remove it from the baseline instead of leaving it "legacy unreferenced"`
+        )
+      }
     }
   })
 

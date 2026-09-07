@@ -18,6 +18,8 @@ import {
   checksumCacheStats,
   createSettingsHashStore,
   invalidateChecksum,
+  manifestFiles,
+  primeChecksum,
   recommendModelId,
   recommendModelIdByRam,
   recommendModelIdByVram,
@@ -634,6 +636,143 @@ describe('computeInstallState — vision (both files verified)', () => {
       sha256: createHash('sha256').update('lm-bytes').digest('hex'),
       mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: 'a'.repeat(64) }
     })
+    expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
+  })
+})
+
+// #310: a weight that ships as a `-00001-of-00004` shard set is FOUR files. The manifest's
+// `files:` list declares shards 2-4 with their own hashes, and every state below is decided
+// over the whole set — the issue's three reproduction probes, converted.
+describe('#310 multi-file install state (shard set)', () => {
+  const shardPath = (n: number): string => `models/chat/flash-${String(n).padStart(5, '0')}-of-00004.gguf`
+
+  function shardManifest(shas: [string, string, string, string]): ModelManifest {
+    return asManifest({
+      id: 'sharded-chat',
+      local_path: shardPath(1),
+      sha256: shas[0],
+      files: [2, 3, 4].map((n, i) => ({ local_path: shardPath(n), sha256: shas[i + 1] }))
+    })
+  }
+  function writeShard(root: string, n: number, content: string): string {
+    const dest = join(root, ...shardPath(n).split('/'))
+    mkdirSync(join(dest, '..'), { recursive: true })
+    writeFileSync(dest, content)
+    return createHash('sha256').update(content).digest('hex')
+  }
+  const bytes = (n: number): string => `shard-${n}-bytes`
+  const realHashes = (): [string, string, string, string] =>
+    [1, 2, 3, 4].map((n) => createHash('sha256').update(bytes(n)).digest('hex')) as [
+      string,
+      string,
+      string,
+      string
+    ]
+
+  it('enumerates every required shard, not just the first (issue probe 1)', () => {
+    const files = manifestFiles('C:/drive', shardManifest(realHashes()))
+    expect(files.map((f) => f.localPath)).toEqual([1, 2, 3, 4].map(shardPath))
+    expect(files.map((f) => f.kind)).toEqual(['weight', 'extra', 'extra', 'extra'])
+  })
+
+  it('refuses installed when only the VERIFIED first shard exists (issue probe 2)', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-shard-')
+    const h = writeShard(root, 1, bytes(1))
+    // The real checksum-cache seam: shard 1 is already known-good, so only the siblings' absence
+    // can produce the honest answer.
+    primeChecksum(join(root, ...shardPath(1).split('/')), h)
+    const m = shardManifest(realHashes())
+    expect(await computeInstallState(m, root, { developerMode: false })).toBe('missing')
+  })
+
+  it('refuses installed when the sibling shards are CORRUPT (issue probe 3)', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-shard-')
+    const h = writeShard(root, 1, bytes(1))
+    primeChecksum(join(root, ...shardPath(1).split('/')), h)
+    for (const n of [2, 3, 4]) writeShard(root, n, 'corrupt sibling bytes')
+    const m = shardManifest(realHashes())
+    expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
+  })
+
+  it('accepts the complete, matching set (criterion 4)', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-shard-')
+    for (const n of [1, 2, 3, 4]) writeShard(root, n, bytes(n))
+    expect(await computeInstallState(shardManifest(realHashes()), root, { developerMode: false })).toBe(
+      'installed'
+    )
+  })
+
+  it('counts EVERY shard in the verification byte denominator', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-shard-')
+    for (const n of [1, 2, 3, 4]) writeShard(root, n, bytes(n))
+    const dir = tempDir('hilbertraum-manifests-')
+    const shas = realHashes()
+    writeFileSync(
+      join(dir, 'sharded.yaml'),
+      stringify(
+        manifestObj({
+          id: 'sharded-chat',
+          local_path: shardPath(1),
+          sha256: shas[0],
+          files: [2, 3, 4].map((n, i) => ({ local_path: shardPath(n), sha256: shas[i + 1] }))
+        })
+      )
+    )
+    const events: ModelVerifyProgress[] = []
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      onProgress: (p) => events.push(p)
+    })
+    expect(models[0].state).toBe('installed')
+    const total = [1, 2, 3, 4].reduce((sum, n) => sum + Buffer.byteLength(bytes(n)), 0)
+    expect(events.every((e) => e.overallBytesTotal === total)).toBe(true)
+    expect(events.at(-1)!.overallBytesHashed).toBe(total)
+  })
+
+  // RT-3: the lazy path may answer from the cache only when EVERY file has a hit — a cached
+  // shard 1 next to three un-hashed siblings must not decide the model's state.
+  it('skipHash answers from the cache only when ALL shards are cached', async () => {
+    const root = tempDir('hilbertraum-shard-')
+    const shas = realHashes()
+    for (const n of [1, 2, 3, 4]) writeShard(root, n, bytes(n))
+    const abs = (n: number): string => join(root, ...shardPath(n).split('/'))
+    const m = shardManifest(shas)
+
+    // Only shard 1 cached ⇒ display-only 'installed', nothing hashed.
+    clearChecksumCache()
+    primeChecksum(abs(1), shas[0])
+    let before = checksumCacheStats.computed
+    expect(await computeInstallState(m, root, { developerMode: false, skipHash: true })).toBe('installed')
+    expect(checksumCacheStats.computed).toBe(before)
+
+    // All four cached, and shard 3's cached hash does NOT match ⇒ honest checksum_failed,
+    // still without hashing anything.
+    clearChecksumCache()
+    primeChecksum(abs(1), shas[0])
+    primeChecksum(abs(2), shas[1])
+    primeChecksum(abs(3), 'a'.repeat(64))
+    primeChecksum(abs(4), shas[3])
+    before = checksumCacheStats.computed
+    expect(await computeInstallState(m, root, { developerMode: false, skipHash: true })).toBe(
+      'checksum_failed'
+    )
+    expect(checksumCacheStats.computed).toBe(before)
+  })
+
+  it('treats a placeholder hash on a SIBLING the same as one on the primary', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-shard-')
+    for (const n of [1, 2, 3, 4]) writeShard(root, n, bytes(n))
+    const shas = realHashes()
+    const m = shardManifest([shas[0], 'REPLACE_WITH_REAL_HASH', shas[2], shas[3]])
+    expect(await computeInstallState(m, root, { developerMode: true })).toBe('installed')
     expect(await computeInstallState(m, root, { developerMode: false })).toBe('checksum_failed')
   })
 })

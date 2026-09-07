@@ -265,7 +265,7 @@ export const checksumCacheStats = { computed: 0 }
  *  file is named by its manifest slot, not its basename. */
 export interface ChecksumLabel {
   modelId: string | null
-  file: 'weight' | 'mmproj' | 'download' | null
+  file: 'weight' | 'mmproj' | 'extra' | 'download' | null
 }
 
 /** Monotonic id pairing `checksum_start`/`checksum_done` marks: concurrent hashes of
@@ -603,7 +603,10 @@ function safeDrivePath(rootPath: string, relPath: string): string {
   return full
 }
 
-/** One verifiable file a manifest carries (the GGUF, or a vision model's mmproj projector). */
+/**
+ * One verifiable file a manifest carries (the GGUF, a vision model's mmproj projector, or an
+ * `extra` file the manifest's `files:` list declares — e.g. shards 2..N of a GGUF shard set).
+ */
 export interface ManifestFile {
   /** Absolute, escape-guarded path on the drive. */
   path: string
@@ -612,16 +615,17 @@ export interface ManifestFile {
   /** Drive-relative path (forward slashes) for honest reporting (which file failed). */
   localPath: string
   /** Which manifest slot this file fills — labels the #106 checksum instrumentation. */
-  kind: 'weight' | 'mmproj'
+  kind: 'weight' | 'mmproj' | 'extra'
 }
 
 /**
  * The verifiable weight files a manifest carries: always the language GGUF, plus the mmproj
- * projector for a `role: vision` model (image-understanding plan §8.2). Install state requires
- * BOTH present + verified. Each entry has its own expected hash; the checksum cache keys by
- * (path, size, mtime) per file so the projector is hashed once like the GGUF. Exported so the
+ * projector for a `role: vision` model (image-understanding plan §8.2), plus every ADDITIONAL
+ * required file the manifest's `files:` list declares (#310). Install state requires ALL of
+ * them present + verified. Each entry has its own expected hash; the checksum cache keys by
+ * (path, size, mtime) per file so each is hashed once like the GGUF. Exported so the
  * drive-build verify side (`verifyDriveModels`/`buildChecksumsJson`, DIST-2) iterates exactly
- * the same set the install side does — a vision drive can never half-pass with only the GGUF.
+ * the same set the install side does — a drive can never half-pass with only the first file.
  */
 export function manifestFiles(rootPath: string, manifest: ModelManifest): ManifestFile[] {
   const files: ManifestFile[] = [
@@ -638,6 +642,16 @@ export function manifestFiles(rootPath: string, manifest: ModelManifest): Manife
       sha: manifest.mmproj.sha256,
       localPath: manifest.mmproj.localPath,
       kind: 'mmproj'
+    })
+  }
+  // #310: the rest of a multi-file weight, in declaration order, through the same drive-root
+  // escape guard as the weight and the projector.
+  for (const extra of manifest.files ?? []) {
+    files.push({
+      path: safeDrivePath(rootPath, extra.localPath),
+      sha: extra.sha256,
+      localPath: extra.localPath,
+      kind: 'extra'
     })
   }
   return files
@@ -677,9 +691,9 @@ export async function computeInstallState(
   if (!isSupportedRuntimeFormat(manifest.runtime, manifest.format)) {
     return 'unsupported'
   }
-  // A vision model is TWO files (GGUF + mmproj); install state requires BOTH present +
-  // verified (image-understanding plan §8.2). Non-vision models have exactly one file, so
-  // this loop is byte-identical to the old single-file behaviour for them.
+  // A model can be several files (GGUF + mmproj; GGUF + the `files:` list's shards, #310);
+  // install state requires EVERY one present + verified (image-understanding plan §8.2).
+  // A single-file model has exactly one entry, so this loop is byte-identical for it.
   const files = manifestFiles(rootPath, manifest)
   for (const f of files) {
     if (!existsSync(f.path)) return 'missing'

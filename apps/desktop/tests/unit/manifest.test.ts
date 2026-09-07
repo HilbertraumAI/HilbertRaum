@@ -476,6 +476,277 @@ describe('validateManifest — translation role (TranslateGemma, TG-1)', () => {
   })
 })
 
+// #310: a weight that ships as several files (llama.cpp's `-00001-of-000NN` shard set, or any
+// second file a model needs) is declared in an optional `files:` list — path + hash + optional
+// source per file. The validator is fail-closed: a partial or inconsistent declaration is an
+// error, never a silently-half-verified model.
+describe('validateManifest — files: additional required files (#310)', () => {
+  const SHARD1 = 'models/chat/big-00001-of-00004.gguf'
+  const shardRaw = (files: unknown, overrides: Record<string, unknown> = {}): Record<string, unknown> =>
+    rawManifest({ local_path: SHARD1, ...(files === undefined ? {} : { files }), ...overrides })
+  const shard = (n: number, total = 4): string =>
+    `models/chat/big-${String(n).padStart(5, '0')}-of-${String(total).padStart(5, '0')}.gguf`
+  const allShards = (): unknown[] =>
+    [2, 3, 4].map((n) => ({ local_path: shard(n), sha256: 'REPLACE_WITH_REAL_HASH' }))
+
+  it('accepts a complete shard set and camelCases every entry', () => {
+    const res = validateManifest(shardRaw(allShards()))
+    expect(res.errors).toEqual([])
+    expect(res.ok).toBe(true)
+    expect(res.manifest?.localPath).toBe(SHARD1)
+    expect(res.manifest?.files?.map((f) => f.localPath)).toEqual([shard(2), shard(3), shard(4)])
+    expect(res.manifest?.files?.every((f) => f.sha256 === 'replace_with_real_hash')).toBe(true)
+  })
+
+  it('accepts a NON-shard extra file (the field is generic, not shard-only)', () => {
+    const res = validateManifest(
+      rawManifest({ files: [{ local_path: 'models/chat/tokenizer.bin', sha256: 'a'.repeat(64) }] })
+    )
+    expect(res.errors).toEqual([])
+    expect(res.manifest?.files).toEqual([
+      { localPath: 'models/chat/tokenizer.bin', sha256: 'a'.repeat(64) }
+    ])
+  })
+
+  it('round-trips a per-file download block', () => {
+    const primary = 'b'.repeat(64)
+    const second = 'c'.repeat(64)
+    const res = validateManifest(
+      rawManifest({
+        local_path: shard(1, 2),
+        sha256: primary,
+        download: { url: 'https://x/1.gguf', sha256: primary, size_bytes: 10 },
+        files: [
+          {
+            local_path: shard(2, 2),
+            sha256: second,
+            download: { url: 'https://x/2.gguf', sha256: second, size_bytes: 20 }
+          }
+        ]
+      })
+    )
+    expect(res.errors).toEqual([])
+    expect(res.manifest?.files?.[0].download).toEqual({
+      url: 'https://x/2.gguf',
+      sha256: second,
+      sizeBytes: 20,
+      licenseUrl: null
+    })
+  })
+
+  it('a manifest WITHOUT files: is untouched (no files key on the result)', () => {
+    const res = validateManifest(rawManifest())
+    expect(res.ok).toBe(true)
+    expect(res.manifest).not.toHaveProperty('files')
+  })
+
+  it('rejects a non-list files:', () => {
+    const res = validateManifest(rawManifest({ files: 'models/chat/x.gguf' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"files" must be a list of mappings (local_path/sha256/download)')
+  })
+
+  it('rejects an empty files: list', () => {
+    const res = validateManifest(rawManifest({ files: [] }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"files" must not be an empty list — omit it instead')
+  })
+
+  it('rejects a member that is not a mapping', () => {
+    const res = validateManifest(rawManifest({ files: ['models/chat/x.gguf'] }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"files[0]" must be a mapping (local_path/sha256/download)')
+  })
+
+  it('rejects a member with no local_path', () => {
+    const res = validateManifest(rawManifest({ files: [{ sha256: 'a'.repeat(64) }] }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"files[0].local_path" is required and must be a non-empty string')
+  })
+
+  it('rejects an escaping or absolute member path (the same guard as local_path)', () => {
+    for (const p of ['../../etc/passwd', '/etc/passwd', 'C:/Windows/system32/x.gguf']) {
+      const res = validateManifest(rawManifest({ files: [{ local_path: p, sha256: 'a'.repeat(64) }] }))
+      expect(res.ok).toBe(false)
+      expect(res.errors).toContain(
+        '"files[0].local_path" must be a drive-relative path (no leading "/", drive letter, or ".." segment)'
+      )
+    }
+  })
+
+  it('rejects a member with no sha256', () => {
+    const res = validateManifest(rawManifest({ files: [{ local_path: 'models/chat/x.gguf' }] }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"files[0].sha256" is required and must be a string (hash or placeholder)')
+  })
+
+  it('rejects a member repeating the top-level local_path', () => {
+    const res = validateManifest(
+      rawManifest({ files: [{ local_path: 'models/chat/qwen3-4b-instruct-q4.gguf', sha256: 'a'.repeat(64) }] })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(
+      '"files[0].local_path" must not repeat a path the manifest already declares: models/chat/qwen3-4b-instruct-q4.gguf'
+    )
+  })
+
+  it('rejects a member repeating the mmproj path', () => {
+    const res = validateManifest(
+      rawManifest({
+        role: 'vision',
+        mmproj: { local_path: 'models/vision/mmproj.gguf', sha256: 'a'.repeat(64) },
+        files: [{ local_path: 'models/vision/mmproj.gguf', sha256: 'a'.repeat(64) }]
+      })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(
+      '"files[0].local_path" must not repeat a path the manifest already declares: models/vision/mmproj.gguf'
+    )
+  })
+
+  it('rejects a duplicate WITHIN the list', () => {
+    const res = validateManifest(
+      rawManifest({
+        files: [
+          { local_path: 'models/chat/x.gguf', sha256: 'a'.repeat(64) },
+          { local_path: 'models/chat/x.gguf', sha256: 'a'.repeat(64) }
+        ]
+      })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(
+      '"files[1].local_path" must not repeat a path the manifest already declares: models/chat/x.gguf'
+    )
+  })
+
+  it('rejects a top-level download with no download on an extra file', () => {
+    const hash = 'd'.repeat(64)
+    const res = validateManifest(
+      shardRaw(allShards(), { sha256: hash, download: { url: 'https://x/1.gguf', sha256: hash } })
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(
+      '"files[0].download" is required when the model declares a top-level "download" (a partial download plan would install a model that cannot start)'
+    )
+    // Every index is named, not just the first.
+    expect(res.errors.filter((e) => e.includes('is required when the model declares'))).toHaveLength(3)
+  })
+
+  it('rejects a download on an extra file with no top-level download', () => {
+    const hash = 'e'.repeat(64)
+    const res = validateManifest(
+      shardRaw([
+        { local_path: shard(2), sha256: hash, download: { url: 'https://x/2.gguf', sha256: hash } },
+        { local_path: shard(3), sha256: 'REPLACE_WITH_REAL_HASH' },
+        { local_path: shard(4), sha256: 'REPLACE_WITH_REAL_HASH' }
+      ])
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(
+      '"download" is required when "files[0]" declares one (a partial download plan would install a model that cannot start)'
+    )
+  })
+
+  it('rejects a per-file download whose real hash differs from the file hash', () => {
+    const primary = 'a'.repeat(64)
+    const fileSha = 'b'.repeat(64)
+    const res = validateManifest(
+      shardRaw(
+        [
+          { local_path: shard(2), sha256: fileSha, download: { url: 'https://x/2.gguf', sha256: 'c'.repeat(64) } },
+          { local_path: shard(3), sha256: fileSha, download: { url: 'https://x/3.gguf', sha256: fileSha } },
+          { local_path: shard(4), sha256: fileSha, download: { url: 'https://x/4.gguf', sha256: fileSha } }
+        ],
+        { sha256: primary, download: { url: 'https://x/1.gguf', sha256: primary } }
+      )
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(
+      '"files[0].download.sha256" must equal the "files[0].sha256" when both are real hashes'
+    )
+  })
+
+  it('applies the https-only URL gate (L-2) to a per-file download', () => {
+    const hash = 'f'.repeat(64)
+    const res = validateManifest(
+      shardRaw(
+        [2, 3, 4].map((n) => ({
+          local_path: shard(n),
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          download: { url: 'http://x/plain.gguf', sha256: 'REPLACE_WITH_REAL_HASH' }
+        })),
+        { sha256: hash, download: { url: 'https://x/1.gguf', sha256: hash } }
+      )
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"files[0].download.url" must be an https:// URL')
+  })
+
+  // The shard convention: `local_path` naming shard 1 of N is a promise that N-1 more files
+  // exist. Nothing else in the app can discover them, so the manifest must declare them.
+  it('rejects a shard-1 local_path with no files: list at all', () => {
+    const res = validateManifest(shardRaw(undefined))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(
+      '"local_path" names shard 1 of a multi-file weight but no "files" list declares the remaining shards'
+    )
+  })
+
+  it('rejects a primary that is not the FIRST shard', () => {
+    const res = validateManifest(rawManifest({ local_path: shard(2) }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(
+      '"local_path" must name the first shard (00001) of a multi-file weight, not shard 00002 of 00004'
+    )
+  })
+
+  it('names each missing sibling when the list is incomplete', () => {
+    const res = validateManifest(shardRaw([{ local_path: shard(2), sha256: 'REPLACE_WITH_REAL_HASH' }]))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(`"files" is missing a required shard of this weight: ${shard(3)}`)
+    expect(res.errors).toContain(`"files" is missing a required shard of this weight: ${shard(4)}`)
+    expect(res.errors).not.toContain(`"files" is missing a required shard of this weight: ${shard(2)}`)
+  })
+
+  it('names a misnumbered sibling (and still reports the one it displaced)', () => {
+    const res = validateManifest(
+      shardRaw([
+        { local_path: shard(2), sha256: 'REPLACE_WITH_REAL_HASH' },
+        { local_path: shard(3), sha256: 'REPLACE_WITH_REAL_HASH' },
+        { local_path: shard(5), sha256: 'REPLACE_WITH_REAL_HASH' }
+      ])
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(`"files[2].local_path" does not name a shard of this weight: ${shard(5)}`)
+    expect(res.errors).toContain(`"files" is missing a required shard of this weight: ${shard(4)}`)
+  })
+
+  it('names a shard of a DIFFERENT series listed as a sibling', () => {
+    const other = 'models/chat/other-00002-of-00004.gguf'
+    const res = validateManifest(
+      shardRaw([
+        { local_path: shard(2), sha256: 'REPLACE_WITH_REAL_HASH' },
+        { local_path: shard(3), sha256: 'REPLACE_WITH_REAL_HASH' },
+        { local_path: shard(4), sha256: 'REPLACE_WITH_REAL_HASH' },
+        { local_path: other, sha256: 'REPLACE_WITH_REAL_HASH' }
+      ])
+    )
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain(`"files[3].local_path" does not name a shard of this weight: ${other}`)
+  })
+
+  it('accepts a single-shard set (`-00001-of-00001`) with no files: list', () => {
+    const res = validateManifest(rawManifest({ local_path: 'models/chat/solo-00001-of-00001.gguf' }))
+    expect(res.errors).toEqual([])
+  })
+
+  it('rejects an impossible shard count', () => {
+    const res = validateManifest(rawManifest({ local_path: 'models/chat/x-00001-of-00000.gguf' }))
+    expect(res.ok).toBe(false)
+    expect(res.errors).toContain('"local_path" must name a shard set of at least one shard, not "-of-00000"')
+  })
+})
+
 describe('isRealSha256', () => {
   it('accepts a 64-char lower-case hex string', () => {
     expect(isRealSha256('a'.repeat(64))).toBe(true)

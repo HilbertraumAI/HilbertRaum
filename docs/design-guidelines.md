@@ -1499,6 +1499,17 @@ screen now keeps the active chat model pinned above a compact library of alterna
   matching every whitespace-separated term. Filter before grouping so a collapsed variant is
   directly discoverable. Tasks are Chat, Document search (embeddings + reranker), Translation,
   Images and Voice. Reset/empty states are explicit, and the active model remains visible.
+  Family options are DERIVED (#313): the `<select>` only offers families the current view and
+  task can actually yield (`availableFamilies`, `lib/modelLibrary.ts`) — excluding the pinned
+  active model, before search and before the family filter itself apply, so the two can never
+  disagree with `visibleModels`. A family already selected that the view/task change drops from
+  that set is never silently cleared or swapped: it stays the rendered value, appended to the
+  `<select>` with a "(none in this view)" marker. The empty state that follows names the reason
+  instead of the generic "no models match": On this drive names the family and quotes the exact
+  count Browse would then list for it (same task, same active-model exclusion, same search); in
+  Browse it says the family has nothing for the current task. A family-only reset button ("All
+  families") sits beside "Clear filters" so recovering from a dead-end family never has to discard
+  the search text or task too.
 - **Variant identity:** renderer-only, strip a recognized terminal quantization label from the
   display name, then key by role + family + runtime + remaining name. Preserve sizes, instruction
   revisions, generations, and QAT identity; suffixes that do not look like a quantization label
@@ -1545,15 +1556,16 @@ screen now keeps the active chat model pinned above a compact library of alterna
   panel owns a job the row does not repeat its progress or result. **Retry** resolves the exact
   variant id and reuses the existing confirmation with that variant's license link and a RESET
   acknowledgement; it is disabled with the reason when downloads are blocked by policy or the
-  Settings toggle, when the source was withdrawn (#196), or when the entry no longer offers a
-  download. **Dismiss** is remembered by job id — the result does not return on a refresh, a
+  Settings toggle, when the refresh reports the model already on this drive (#314), when the
+  source was withdrawn (#196), or when the entry no longer offers a download. **Dismiss** is remembered by job id — the result does not return on a refresh, a
   re-render or a re-entry of the screen — and the row's own Resume/verification affordances take
   over again. The panel is replaced only by an ACCEPTED new job (a cancelled dialog, a rejected
   start and an IPC rejection all keep the previous result) and disappears on a verified completion
   or a cancellation, exactly as before. A retained result is not a live job: `JOB_LIVE` remains
-  the only gate on other models' Download/Use. Recovering a download whose id is unknown after a
-  renderer reload is out of scope here (follow-up I5); ordinary screen navigation is covered by
-  the existing remembered-job mechanism.
+  the only gate on other models' Download/Use. A renderer reload, which wipes the remembered job
+  entirely, is recovered on mount (#314): the screen asks the main process which downloads still
+  need the user — adopting the live job, else the most recent unresolved result — and **Dismiss**
+  tells the main process too, so a dismissal made before the reload stays dismissed.
 
 Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `lib/modelAvailability.ts`
 (the pure `isModelInstalled` / `isModelOnDrive` / `isModelRunnableHere` / `orderPickerModels`, split

@@ -88,6 +88,23 @@ export interface MmprojSpec {
   download?: DownloadSpec
 }
 
+/**
+ * One ADDITIONAL required file of a model's weight, beyond the top-level `local_path`/`sha256`
+ * (#310). The canonical case is a GGUF that ships as a `-00001-of-000NN` shard set: the
+ * top-level path is shard 1 (the file `llama-server --model` receives, which finds its siblings
+ * by name) and every remaining shard is declared here with its own hash, so install state, the
+ * drive verifier, the byte accounting and the download planner account for the WHOLE weight.
+ * Deliberately generic — any second file a model needs belongs here rather than in a new slot.
+ */
+export interface RequiredFileSpec {
+  /** Path of the file relative to the DRIVE ROOT (e.g. `models/chat/x-00002-of-00004.gguf`). */
+  localPath: string
+  /** Expected SHA-256 (lower-case hex). May be a placeholder until a real drive is built. */
+  sha256: string
+  /** Optional upstream source for this file (one more `DownloadJob` of the same model). */
+  download?: DownloadSpec
+}
+
 /** A fully-validated manifest. Field names are camelCased from the YAML snake_case. */
 export interface ModelManifest {
   id: string
@@ -154,6 +171,15 @@ export interface ModelManifest {
    * `role: vision` models (image-understanding plan §8.1). See {@link MmprojSpec}.
    */
   mmproj?: MmprojSpec
+  /**
+   * The ADDITIONAL required files of this model's weight beyond `local_path` (#310).
+   * Absent on every single-file model — and when it is absent nothing anywhere changes.
+   * See {@link RequiredFileSpec}. The YAML block is emitted AFTER
+   * `local_path`/`sha256`/`download`/`mmproj`: the flat first-match scrapers in
+   * `verify-models.{sh,ps1}` and `fetch-models.{sh,ps1}` read the top-level keys by file
+   * order, so a nested `local_path:`/`sha256:` pair placed earlier would poison them.
+   */
+  files?: RequiredFileSpec[]
 }
 
 export interface ValidationResult {
@@ -169,6 +195,13 @@ const SPECULATIVE_SCHEMES: SpeculativeDecoding[] = ['mtp']
 
 /** 64 lower-case hex chars. Used to tell a real hash from a placeholder. */
 const SHA256_RE = /^[a-f0-9]{64}$/
+
+/**
+ * llama.cpp's multi-file GGUF convention: `<stem>-<index>-of-<total>.gguf` (#310). Groups:
+ * 1 = the 5-digit index, 2 = the 5-digit total, 3 = the extension as written. A path matching
+ * this names only PART of a weight, so the manifest must declare the rest in `files:`.
+ */
+const SHARD_RE = /-(\d{5})-of-(\d{5})(\.gguf)$/i
 
 export function isRealSha256(value: string): boolean {
   return SHA256_RE.test(value)
@@ -198,7 +231,9 @@ function validateDownloadSubBlock(
   dl: unknown,
   fileSha: string,
   errors: string[],
-  label: 'download' | 'mmproj.download'
+  // `files[N].download` joins the two original labels (#310); every message is derived from
+  // the label so a new slot needs no new message text.
+  label: 'download' | 'mmproj.download' | `files[${number}].download`
 ): DownloadSpec | undefined {
   if (!isObject(dl)) {
     errors.push(`"${label}" must be a mapping (url/sha256/size_bytes/license_url)`)
@@ -218,11 +253,11 @@ function validateDownloadSubBlock(
   const dlSha = typeof dlShaRaw === 'string' ? dlShaRaw.trim().toLowerCase() : ''
   // A real download hash must equal the real expected hash of the same file.
   if (isRealSha256(dlSha) && isRealSha256(fileSha) && dlSha !== fileSha) {
-    errors.push(
+    const owner =
       label === 'download'
-        ? '"download.sha256" must equal the top-level "sha256" when both are real hashes'
-        : '"mmproj.download.sha256" must equal the "mmproj.sha256" when both are real hashes'
-    )
+        ? 'the top-level "sha256"'
+        : `the "${label.slice(0, -'.download'.length)}.sha256"`
+    errors.push(`"${label}.sha256" must equal ${owner} when both are real hashes`)
   }
   const sizeRaw = dl['size_bytes']
   let sizeBytes: number | null = null
@@ -469,6 +504,118 @@ export function validateManifest(raw: unknown): ValidationResult {
     errors.push('"mmproj" projector block is required when role is "vision"')
   }
 
+  // Optional ADDITIONAL required files (#310): the rest of a multi-file weight, each with its
+  // own path + hash (+ optional source). Validated only when present, so every single-file
+  // manifest — the whole committed catalog today — validates byte-identically without it.
+  const hasTopDownload = raw['download'] !== undefined
+  let files: RequiredFileSpec[] | undefined
+  const rawFiles = raw['files']
+  if (rawFiles !== undefined) {
+    if (!Array.isArray(rawFiles)) {
+      errors.push('"files" must be a list of mappings (local_path/sha256/download)')
+    } else if (rawFiles.length === 0) {
+      // "Partial declaration" needs a crisp definition: an empty list is a typo, not a claim.
+      errors.push('"files" must not be an empty list — omit it instead')
+    } else {
+      // Every path this manifest already claims. A duplicate would hash the same file twice
+      // and double-count its bytes in the load-progress denominator.
+      const seen = new Set<string>()
+      if (localPath) seen.add(localPath)
+      if (mmproj?.localPath) seen.add(mmproj.localPath)
+      const parsed: RequiredFileSpec[] = []
+      rawFiles.forEach((entry: unknown, i: number) => {
+        if (!isObject(entry)) {
+          errors.push(`"files[${i}]" must be a mapping (local_path/sha256/download)`)
+          return
+        }
+        const rawLocal = entry['local_path']
+        let local = ''
+        if (typeof rawLocal !== 'string' || rawLocal.trim() === '') {
+          errors.push(`"files[${i}].local_path" is required and must be a non-empty string`)
+        } else {
+          local = rawLocal.trim()
+          if (isUnsafeManifestPath(local)) {
+            errors.push(
+              `"files[${i}].local_path" must be a drive-relative path (no leading "/", drive letter, or ".." segment)`
+            )
+          } else if (seen.has(local)) {
+            errors.push(
+              `"files[${i}].local_path" must not repeat a path the manifest already declares: ${local}`
+            )
+          } else {
+            seen.add(local)
+          }
+        }
+        const rawSha = entry['sha256']
+        if (typeof rawSha !== 'string' || rawSha.trim() === '') {
+          errors.push(`"files[${i}].sha256" is required and must be a string (hash or placeholder)`)
+        }
+        const sha = typeof rawSha === 'string' ? rawSha.trim().toLowerCase() : ''
+        const hasFileDownload = entry['download'] !== undefined
+        let fileDownload: DownloadSpec | undefined
+        if (hasFileDownload) {
+          fileDownload = validateDownloadSubBlock(entry['download'], sha, errors, `files[${i}].download`)
+        }
+        // Download all-or-nothing: the planner fetches exactly the files that carry a source,
+        // so a half-declared plan would install a model that cannot start.
+        if (hasTopDownload && !hasFileDownload) {
+          errors.push(
+            `"files[${i}].download" is required when the model declares a top-level "download" (a partial download plan would install a model that cannot start)`
+          )
+        }
+        if (!hasTopDownload && hasFileDownload) {
+          errors.push(
+            `"download" is required when "files[${i}]" declares one (a partial download plan would install a model that cannot start)`
+          )
+        }
+        parsed.push({
+          localPath: local,
+          sha256: sha,
+          ...(fileDownload ? { download: fileDownload } : {})
+        })
+      })
+      files = parsed
+    }
+  }
+
+  // Shard-convention completeness (#310). A `-00001-of-000NN.gguf` path names ONE piece of a
+  // weight; without the rest declared the app would hash a third of a model and call it
+  // installed. Non-shard entries in `files:` are untouched — the field stays generic.
+  const shard = SHARD_RE.exec(localPath)
+  if (shard) {
+    const total = Number(shard[2])
+    const stem = localPath.slice(0, shard.index)
+    if (total < 1) {
+      errors.push('"local_path" must name a shard set of at least one shard, not "-of-00000"')
+    } else if (Number(shard[1]) !== 1) {
+      errors.push(
+        `"local_path" must name the first shard (00001) of a multi-file weight, not shard ${shard[1]} of ${shard[2]}`
+      )
+    } else if (total > 1) {
+      const siblings: string[] = []
+      for (let n = 2; n <= total; n++) {
+        siblings.push(`${stem}-${String(n).padStart(5, '0')}-of-${shard[2]}${shard[3]}`)
+      }
+      if (rawFiles === undefined) {
+        errors.push(
+          '"local_path" names shard 1 of a multi-file weight but no "files" list declares the remaining shards'
+        )
+      } else if (files) {
+        const declared = files.map((f) => f.localPath)
+        for (const want of siblings) {
+          if (!declared.includes(want)) {
+            errors.push(`"files" is missing a required shard of this weight: ${want}`)
+          }
+        }
+        files.forEach((f, i) => {
+          if (SHARD_RE.test(f.localPath) && !siblings.includes(f.localPath)) {
+            errors.push(`"files[${i}].local_path" does not name a shard of this weight: ${f.localPath}`)
+          }
+        })
+      }
+    }
+  }
+
   if (errors.length > 0) {
     return { ok: false, errors }
   }
@@ -498,7 +645,8 @@ export function validateManifest(raw: unknown): ValidationResult {
       licenseReview,
       ...(download ? { download } : {}),
       ...(inputModalities ? { inputModalities } : {}),
-      ...(mmproj ? { mmproj } : {})
+      ...(mmproj ? { mmproj } : {}),
+      ...(files ? { files } : {})
     }
   }
 }

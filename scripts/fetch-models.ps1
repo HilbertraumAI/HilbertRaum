@@ -146,6 +146,57 @@ function Get-MmprojBlock([string]$text) {
   return ($out -join "`n")
 }
 
+# Extract the indented body of a top-level `files:` mapping — the ADDITIONAL required files of
+# a multi-file weight (#310, e.g. a GGUF shard set's shards 2..N) — the same shape as
+# Get-MmprojBlock. Emitted AFTER local_path/sha256/download/mmproj in every manifest
+# (model-policy.md key-order rule), so it never poisons the flat top-level reads.
+function Get-FilesBlock([string]$text) {
+  $out = New-Object System.Collections.Generic.List[string]
+  $inBlk = $false
+  foreach ($line in ($text -split "`n")) {
+    if (-not $inBlk) {
+      if ($line -match '^files:\s*$') { $inBlk = $true }
+    } elseif ($line -match '^\S') {
+      break
+    } else {
+      $out.Add($line)
+    }
+  }
+  return ($out -join "`n")
+}
+
+# Split a `files:` block (as text, e.g. from Get-FilesBlock) into one member's raw text per
+# list entry (#310). A member starts at its own `- local_path:` line (the leading `- ` is
+# stripped so Get-ManifestField sees `local_path:` at the front) and runs to the next one.
+function Get-FilesMembers([string]$block) {
+  $members = New-Object System.Collections.Generic.List[string]
+  $current = New-Object System.Collections.Generic.List[string]
+  foreach ($line in ($block -split "`n")) {
+    if ($line -match '^\s*-\s*local_path:') {
+      if ($current.Count -gt 0) { $members.Add(($current -join "`n")) }
+      $current = New-Object System.Collections.Generic.List[string]
+      $current.Add(($line -replace '^\s*-\s*', ''))
+    } elseif ($current.Count -gt 0) {
+      $current.Add($line)
+    }
+  }
+  if ($current.Count -gt 0) { $members.Add(($current -join "`n")) }
+  return $members
+}
+
+# Extract a member's own `download:` sub-block — everything after its `download:` line to the
+# end of the member's text (the contract's fixed shape: url/sha256/size_bytes are the download
+# block's only children and nothing else follows it in a files[] member).
+function Get-FileDownloadBlock([string]$memberText) {
+  $lines = $memberText -split "`n"
+  $idx = -1
+  for ($i = 0; $i -lt $lines.Count; $i++) {
+    if ($lines[$i] -match '^\s*download:\s*$') { $idx = $i; break }
+  }
+  if ($idx -lt 0 -or $idx -ge ($lines.Count - 1)) { return '' }
+  return ($lines[($idx + 1)..($lines.Count - 1)] -join "`n")
+}
+
 # Classify a destination file against its expected hash: verified|placeholder|mismatch|absent.
 function Get-FileState([string]$dest, [string]$sha) {
   if (-not (Test-Path $dest)) { return 'absent' }
@@ -279,10 +330,30 @@ foreach ($mf in $manifestFiles) {
   $ggufState = Get-FileState $dest $sha
   $mmprojState = if ($hasMmproj) { Get-FileState $mmprojDest $mmprojSha } else { $null }
 
+  # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards
+  # 2..N). Looped only when the model has a top-level download -- the validator's all-or-nothing
+  # rule guarantees every declared file then carries its own download block too. Classified once
+  # into $filePlans so the later fetch pass never re-hashes.
+  $fileMembers = Get-FilesMembers (Get-FilesBlock $text)
+  $totalFiles = 1 + $fileMembers.Count
+  $filePlans = @()
+  foreach ($member in $fileMembers) {
+    $fLocal = Get-ManifestField $member 'local_path'
+    if (-not $fLocal) { continue }
+    $fSha = Get-ManifestField $member 'sha256'; if ($fSha) { $fSha = $fSha.ToLower() }
+    $dlBlock = Get-FileDownloadBlock $member
+    $fUrl = Get-ManifestField $dlBlock 'url'
+    $fSize = Get-ManifestField $dlBlock 'size_bytes'
+    $fDest = Join-Path $Target ($fLocal -replace '/', [IO.Path]::DirectorySeparatorChar)
+    $fState = Get-FileState $fDest $fSha
+    $filePlans += [pscustomobject]@{ Local = $fLocal; Sha = $fSha; Url = $fUrl; Size = $fSize; Dest = $fDest; State = $fState }
+  }
+
   # Does anything need the network? (absent / checksum-mismatch). A model already fully present is
   # skipped WITHOUT a license prompt (the license is only relevant to an actual download).
   $needsFetch = ($ggufState -eq 'absent' -or $ggufState -eq 'mismatch') -or
-    ($hasMmproj -and ($mmprojState -eq 'absent' -or $mmprojState -eq 'mismatch'))
+    ($hasMmproj -and ($mmprojState -eq 'absent' -or $mmprojState -eq 'mismatch')) -or
+    (($filePlans | Where-Object { $_.State -eq 'absent' -or $_.State -eq 'mismatch' }).Count -gt 0)
 
   # Withdrawn upstream source (issue 196) -- only relevant when something WOULD be fetched: a
   # drive that already carries the weight is unaffected and verifies as usual. Skipped, not
@@ -312,6 +383,14 @@ foreach ($mf in $manifestFiles) {
   Invoke-HandleFile $id '' $dest $sha $url $localPath $ggufState $sizeBytes
   if ($hasMmproj) {
     Invoke-HandleFile $id ' (mmproj)' $mmprojDest $mmprojSha $mmprojUrl $mmprojLocal $mmprojState $mmprojSize
+  }
+  $fileIdx = 2
+  foreach ($fp in $filePlans) {
+    $label = " (file {0}/{1})" -f $fileIdx, $totalFiles
+    $fileDest = $fp.Dest; $fileSha = $fp.Sha; $fileUrl = $fp.Url; $fileLocal = $fp.Local; $fileState = $fp.State
+    $fileSize = $fp.Size
+    Invoke-HandleFile $id $label $fileDest $fileSha $fileUrl $fileLocal $fileState $fileSize
+    $fileIdx++
   }
 }
 

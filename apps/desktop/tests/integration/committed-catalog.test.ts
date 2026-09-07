@@ -923,25 +923,27 @@ describe('committed catalog — internal coherence invariants (F-06, F-16)', () 
 })
 
 // ---------------------------------------------------------------------------------------
-// PR #302 (F1) — sharded GGUF entries the catalog cannot honestly verify.
+// #310 — every multi-file weight is fully declared (replaces the PR #302 F1 containment guard).
+//
+// A weight that ships as several files (llama.cpp's `-00001-of-00004.gguf` shard set) used to
+// enter the app as ONE file: the schema knew only the top-level `local_path`/`sha256` plus a
+// vision model's `mmproj`, so `computeInstallState` reported a model `installed` with shards
+// 2-4 missing or corrupt, and download/prefetch/ETA accounting plus `verifyDriveModels` counted
+// a third of the real weight. The F1 block that stood here was a CATALOG regression guard for
+// that class — a shard-pattern path was simply banned. The schema now expresses the whole set
+// (`files:`) and the validator refuses a partial or inconsistent declaration, so the ban is
+// replaced by the real thing: a declared shard set is legal and verified, an undeclared one
+// cannot validate at all. Never an id allowlist.
+//
+// The Flash-Next id/name and family assertions below stay — those are #311's containment
+// (catalog membership), not this issue's verification story.
 //
 // The reviewed head of PR #302 carried a second commit (883f5e40) adding a Flash-Next chat
-// manifest whose weight is FOUR GGUF shards. The schema knows the files a manifest DECLARES —
-// the top-level `local_path`/`sha256` plus a vision model's `mmproj` — so `manifestFiles()`
-// enumerated shard 1 alone: `computeInstallState` reported the model `installed` while shards
-// 2-4 were missing or corrupt, the start then failed at load time, and download/prefetch/ETA
-// accounting plus `verifyDriveModels` all counted ~1/3 of the real weight. The owner split that
-// commit back out of PR #302 (Gate A, 2026-09-05); the manifest stays on its own branch and may
-// land only behind real multi-file verification and build containment (follow-up issues I1/I2).
-// This block pins the catalog side of that decision.
-//
-// Deliberately narrow: a CATALOG REGRESSION GUARD over the conventional llama.cpp shard naming
-// (`-00001-of-00004.gguf`) that the audited manifest used — not a runtime validator, and not
-// proof that arbitrary multi-file weights are safe. It says nothing about a renamed shard set,
-// and it does NOT claim one file per manifest (a vision model legitimately declares a GGUF AND
-// an mmproj projector). When I1/I2 teach the app to verify every required file, REPLACE this
-// guard with that coverage — never just exempt an id.
-const SHARDED_GGUF_RE = /-\d{5}-of-\d{5}\.gguf$/i
+// manifest whose weight is FOUR GGUF shards, with shards 2-4 recorded only in YAML comments
+// "for the operator". The owner split that commit back out of PR #302 (Gate A, 2026-09-05); the
+// manifest stays on its own branch and lands under #311. That audited YAML is the fixture below
+// — the red proof, now expressed as a validator rejection.
+const SHARDED_GGUF_RE = /-(\d{5})-of-(\d{5})\.gguf$/i
 
 /** The id the split removed from this PR (883f5e40 → `feat/qwen38-flash-next-manifest`). */
 const FLASH_NEXT_ID = 'qwen3.8-flash-next-ud-q4kxl'
@@ -1047,7 +1049,33 @@ license_review:
   notes: "PENDING 2026-09-04: base model Qwen/Qwen3.8-Flash-Next is NOT apache-2.0 but 'Qwen Community License 1.0' (https://huggingface.co/Qwen/Qwen3.8-Flash-Next/blob/main/LICENSE; HF card tag license:other). Grants use, copy, modify, distribute, sell; conditions: (1) keep the copyright + permission notice, model-name attribution only above 100M MAU / US$20M monthly revenue; (2) a licensee running a 'Model as a Service' or an 'AI Work Assistant' business (a product primarily designed for AI-assisted coding or office productivity) needs a separate Qwen license for commercial use. Whether a prepared HilbertRaum drive with document/office skills is an 'AI Work Assistant' under clause 2 is unresolved; do not bundle or sell until legal has reviewed. Quantization provenance: unsloth Dynamic UD-Q4_K_XL GGUF (unsloth/Qwen3.8-Flash-Next-GGUF, card license:other, base_model Qwen/Qwen3.8-Flash-Next). Runtime: unmerged llama.cpp PR #27742 required; dev-only until the runtime pin catches up."
 `
 
-describe('committed catalog — no unsupported sharded GGUF entries (PR #302 F1)', () => {
+/**
+ * The `files:` block the audited manifest was missing: shards 2-4 with the HF LFS OIDs its own
+ * comments recorded. Appended at column 0 AFTER `local_path`/`sha256` — the key-order rule the
+ * flat first-match scrapers in `verify-models.{sh,ps1}` / `fetch-models.{sh,ps1}` depend on.
+ */
+const FLASH_NEXT_FILES_BLOCK = `files:
+  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00002-of-00004.gguf
+    sha256: 3f342f1c1580473f1ee94ddd5b28206e8c07a70fa1a366f59d1d6c922919a6c9
+  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00003-of-00004.gguf
+    sha256: 56758f40269cad5cd9b0d3d6fbae0f40f6d5be6de49e4ab392dbe83157d9cbd3
+  - local_path: models/chat/qwen3.8-flash-next-ud-q4kxl-00004-of-00004.gguf
+    sha256: 753bda48b98ba4f1636134a90a967de1b2d3908a236c026e464777342e53510a
+`
+
+/** Discover a one-manifest catalog from YAML text, in a throwaway directory. */
+function discoverTempCatalog(yaml: string): ReturnType<typeof discoverManifests> {
+  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-shard-guard-'))
+  try {
+    mkdirSync(join(dir, 'chat'), { recursive: true })
+    writeFileSync(join(dir, 'chat', `${FLASH_NEXT_ID}.yaml`), yaml, 'utf8')
+    return discoverManifests(dir)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}
+
+describe('committed catalog — every multi-file weight is fully declared (#310)', () => {
   it('does not carry the Flash-Next manifest split out of PR #302', () => {
     const manifests = committedManifests()
     const ids = manifests.map((m) => m.id)
@@ -1067,13 +1095,33 @@ describe('committed catalog — no unsupported sharded GGUF entries (PR #302 F1)
     expect(ids).toEqual([...QWEN38_FAMILY_IDS].sort())
   })
 
-  it('declares no sharded GGUF weight or projector path anywhere in the catalog', () => {
-    expect(shardedGgufPaths(committedManifests())).toEqual([])
+  // The real coverage that replaces the ban. Every committed manifest validates (asserted at
+  // `committedManifests()`), and the validator now REFUSES a shard-pattern `local_path` without
+  // a complete `files:` list — so an undeclared shard set cannot be in the catalog at all. This
+  // states the property directly over the production enumeration, series by series, so it also
+  // covers a shard path reached through any other manifest slot.
+  it('declares no shard-pattern path whose sibling series is incomplete', () => {
+    const manifests = committedManifests()
+    const incomplete: string[] = []
+    for (const m of manifests) {
+      const declared = declaredFilePaths([m])
+      for (const p of declared) {
+        const hit = SHARDED_GGUF_RE.exec(p)
+        if (!hit) continue
+        const stem = p.slice(0, hit.index)
+        const total = Number(hit[2])
+        for (let n = 1; n <= total; n++) {
+          const sibling = `${stem}-${String(n).padStart(5, '0')}-of-${hit[2]}.gguf`
+          if (!declared.includes(sibling)) incomplete.push(`${m.id}: ${sibling} is not declared`)
+        }
+      }
+    }
+    expect(incomplete).toEqual([])
   })
 
-  // Control: without this the previous assertion could pass vacuously for a projector, because
-  // the guard would never look at one. The vision model is the catalog's only two-file entry.
-  it('enumerates the projector path too, so a sharded mmproj could not slip past the guard', () => {
+  // Control: without this the assertion above could pass vacuously for a projector, because it
+  // would never look at one. The vision model is the catalog's only multi-file entry today.
+  it('enumerates the projector path too, so a sharded mmproj could not slip past', () => {
     const manifests = committedManifests()
     const vision = manifests.filter((m) => m.role === 'vision')
     expect(vision.length, 'one vision manifest').toBe(1)
@@ -1084,24 +1132,38 @@ describe('committed catalog — no unsupported sharded GGUF entries (PR #302 F1)
     expect(declaredFilePaths(manifests).length).toBeGreaterThanOrEqual(manifests.length)
   })
 
-  // The red proof, committed: run the guard against the ACTUAL audited manifest in a throwaway
-  // catalog laid out like `model-manifests/chat/`. `discoverManifests()` takes any directory, so
-  // no test ever has to write into the real tree to prove the assertion above can fail.
-  it('flags the audited Flash-Next manifest in an isolated temporary catalog', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-shard-guard-'))
-    try {
-      mkdirSync(join(dir, 'chat'), { recursive: true })
-      writeFileSync(join(dir, 'chat', `${FLASH_NEXT_ID}.yaml`), FLASH_NEXT_MANIFEST_YAML, 'utf8')
-      const { manifests, errors } = discoverManifests(dir)
-      // Schema-valid and discovered: the guard's subject is a manifest the app would accept.
-      expect(errors, 'the audited manifest still validates').toEqual([])
-      expect(manifests.map((m) => m.manifest.id)).toEqual([FLASH_NEXT_ID])
-      expect(shardedGgufPaths(manifests.map((m) => m.manifest))).toEqual([
-        'models/chat/qwen3.8-flash-next-ud-q4kxl-00001-of-00004.gguf'
-      ])
-    } finally {
-      rmSync(dir, { recursive: true, force: true })
-    }
+  // The red proof, committed: the ACTUAL audited manifest in a throwaway catalog laid out like
+  // `model-manifests/chat/`. It used to VALIDATE and enumerate one file; it is now refused by
+  // the schema itself, so no drive can ever carry it half-verified.
+  it('REJECTS the audited Flash-Next manifest: shard 1 with no files: list', () => {
+    const { manifests, errors } = discoverTempCatalog(FLASH_NEXT_MANIFEST_YAML)
+    expect(manifests, 'a manifest naming part of a weight is skipped, not offered').toEqual([])
+    expect(errors).toHaveLength(1)
+    expect(errors[0]).toContain(
+      '"local_path" names shard 1 of a multi-file weight but no "files" list declares the remaining shards'
+    )
+  })
+
+  // …and the same manifest with the missing declaration added is fully understood: four files,
+  // each with its own hash, through the production enumeration every consumer iterates.
+  it('ACCEPTS the same manifest once its files: block declares shards 2-4', () => {
+    const { manifests, errors } = discoverTempCatalog(
+      `${FLASH_NEXT_MANIFEST_YAML}${FLASH_NEXT_FILES_BLOCK}`
+    )
+    expect(errors).toEqual([])
+    expect(manifests.map((m) => m.manifest.id)).toEqual([FLASH_NEXT_ID])
+    const files = manifestFiles(tmpdir(), manifests[0].manifest)
+    expect(files.map((f) => f.localPath)).toEqual([
+      'models/chat/qwen3.8-flash-next-ud-q4kxl-00001-of-00004.gguf',
+      'models/chat/qwen3.8-flash-next-ud-q4kxl-00002-of-00004.gguf',
+      'models/chat/qwen3.8-flash-next-ud-q4kxl-00003-of-00004.gguf',
+      'models/chat/qwen3.8-flash-next-ud-q4kxl-00004-of-00004.gguf'
+    ])
+    expect(files.map((f) => f.kind)).toEqual(['weight', 'extra', 'extra', 'extra'])
+    // Four DISTINCT expected hashes — the whole point of criterion 1.
+    expect(new Set(files.map((f) => f.sha)).size).toBe(4)
+    // The declared series is complete, so the catalog-wide assertion above would accept it.
+    expect(shardedGgufPaths([manifests[0].manifest])).toHaveLength(4)
   })
 })
 
