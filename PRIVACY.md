@@ -176,8 +176,8 @@ every control that bounds it — is in [`docs/local-api.md`](docs/local-api.md).
 Your data lives in your workspace directory. **In-app deletion** is available for individual items:
 you can delete documents, conversations, and image analyses from within the app — on an encrypted
 workspace this **shreds** the stored encrypted copy. You can also **export** outputs (document
-summaries/translations, chat transcripts) through an explicit save dialog. To delete **everything**
-at once, delete the `workspace/` folder (and, if you want, the `models/` and `logs/` folders) on
+summaries/translations, chat transcripts, a code block from an assistant answer) through an
+explicit save dialog. To delete **everything** at once, delete the `workspace/` folder (and, if you want, the `models/` and `logs/` folders) on
 your drive or app-data location.
 
 ## Encryption

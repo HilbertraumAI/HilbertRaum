@@ -329,6 +329,9 @@ with sources (see §7).
 3. Hover over (or tab to) any answer for its actions: **Try again** regenerates the latest
    answer (plain Chat only — not in *Ask my documents*), **Copy** copies it, and **Save** saves the
    conversation to a file of your choice. A small *"Copied"* / *"Saved to …"* note confirms each one.
+   A finished answer's own code blocks each get the same small **Copy** / **Save** pair, right on
+   the block: **Save** writes just that block, byte-for-byte, as `code.<ext>` (the extension comes
+   from the block's language — an unrecognized or missing language saves as `.txt`).
 4. **Save this conversation** is also in the **⋯** menu at the top right of the chat. The
    file is written wherever you choose — nothing leaves the device otherwise.
 5. To remove a conversation, hover over it in the list and open its **⋯** menu (or

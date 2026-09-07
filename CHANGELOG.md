@@ -133,6 +133,11 @@ from its first public `1.0.0` release onward.
   in `runtime/kiwix-tools/source/`, with a `SOURCES.md` record. Nothing changes if you build your
   own drive and install the knowledge-pack family yourself.
 
+- **Save just one code block from an answer, not the whole conversation.** Every code block in
+  a finished assistant answer now has its own small **Copy** and **Save** buttons. Save writes
+  only that block, byte-for-byte, as `code.<ext>` — the extension follows the block's language,
+  or `.txt` when none is recognized (#286).
+
 ### Changed
 
 - **The Linux/macOS install step for knowledge-pack tools is documented.** The panel's
