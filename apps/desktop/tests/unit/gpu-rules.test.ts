@@ -46,12 +46,22 @@ describe('looksIntegrated', () => {
     ['AMD Radeon(TM) 780M Graphics', true],
     ['AMD Radeon Vega 8 Graphics (RADV RAVEN)', true],
     ['Intel(R) Arc(TM) Graphics', true],
+    ['Intel(R) Graphics (ARL)', true],
+    // #320, owner decision 2026-09-07: the BARE Arrow/Lunar-Lake name, no platform code. It
+    // used to read discrete, so a 16–32 GiB shared-memory iGPU could become the budget device
+    // — a false negative, the one direction the module's bias note forbids. The alternative is
+    // anchored to the whole trimmed string, so the model-numbered discrete Arcs below stay out.
+    ['Intel(R) Graphics', true],
+    ['  Intel(R) Graphics  ', true],
     // Discrete → false (eligible for the bump)
     ['NVIDIA GeForce RTX 3080 Ti', false],
     ['AMD Radeon RX 6700 XT', false],
     ['NVIDIA GeForce GTX 1660', false],
     ['AMD Radeon RX 7800 XT (RADV NAVI32)', false],
-    ['Intel(R) Arc(TM) A770 Graphics', false]
+    // Re-asserted against the bare-name alternative above (#320): a discrete Arc carries its
+    // model number, so the anchor never reaches it.
+    ['Intel(R) Arc(TM) A770 Graphics', false],
+    ['Intel(R) Arc(TM) B580 Graphics', false]
   ])('%s → %s', (name, integrated) => {
     expect(looksIntegrated(name)).toBe(integrated)
   })

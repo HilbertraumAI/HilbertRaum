@@ -55,7 +55,24 @@ export function looksIntegrated(name: string): boolean {
   //     WITHOUT "(TM)" and WITH a trailing driver tag, which `radeon.*graphics$` misses) and
   //     the Strix Halo "AMD Radeon 8060S Graphics (RADV GFX1151)"; the discrete laptop
   //     "AMD Radeon RX 7700S" carries "RX" and no "Graphics" and must NOT match
-  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|intel\(r\) graphics \(|arc\(tm\) graphics|arc\(tm\) 1\d{2}v|radeon(\(tm\))? graphics|radeon(\(tm\))? \d{3,4}[ms] graphics|radeon.*graphics$|vega \d+/i.test(
+  // Owner decision 2026-09-07 (#320, after the #318 hardware session):
+  //   - "Intel(R) Graphics"                   the BARE Arrow/Lunar-Lake name with NO platform
+  //     code — the `intel\(r\) graphics \(` alternative above needs the "(ARL)"/"(LNL)" suffix,
+  //     so this form read as DISCRETE and a 16–36 GiB shared-memory iGPU could become the
+  //     budget device (a false NEGATIVE — the one direction the bias note forbids). The
+  //     alternative is ANCHORED to the whole trimmed string so a discrete Arc that carries its
+  //     model number ("Intel(R) Arc(TM) A770 Graphics", "B580") still does NOT match.
+  // Why the app still passes no `--device` to exclude an iGPU at launch (#320 (j), decided
+  // 2026-09-07 — the "the fit spreads layers over every listed device" premise was MEASURED
+  // FALSE on b9849): on the desktop hybrid the fit logged both devices in `device_info` and
+  // then "using device Vulkan0" only (`eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/
+  // leg5-baseline.*`); on the APU-first laptop, where the iGPU is listed FIRST, every GPU
+  // buffer landed on the RTX and the fit's own device list never contained the iGPU — its
+  // "device 0" was Vulkan1 (`…/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/leg5-device-landing.comment.md`).
+  // llama.cpp drops the integrated device BY TYPE before the filling pass, so an app-side
+  // `--device` would change nothing, would break the ladder's contract that `--device none` is
+  // the only device argument, and would add a name→device mapping that must survive driver renames.
+  return /iris|uhd|intel\(r\) (hd|arc.*integrated)|intel\(r\) graphics \(|^\s*intel\(r\) graphics\s*$|arc\(tm\) graphics|arc\(tm\) 1\d{2}v|radeon(\(tm\))? graphics|radeon(\(tm\))? \d{3,4}[ms] graphics|radeon.*graphics$|vega \d+/i.test(
     name
   )
 }

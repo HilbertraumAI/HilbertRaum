@@ -576,7 +576,11 @@ consumer machine.
    flags-at-default wrapper): `discrete` = a usable **budget device** is available for the NEXT
    start — the largest probed device at or above the runtime's own 6,144 MiB gate and not
    integrated by name (`selectBudgetDevice` / `looksIntegrated`, never the first device the driver
-   listed) — and the GPU is not switched off in Settings (`gpuMode: 'off'`) nor auto-disabled
+   listed; the name table matches the bare "Intel(R) Graphics" as integrated since 2026-09-07,
+   anchored so a model-numbered discrete Arc still does not — #320) — and the runtime agrees at
+   launch without an app-side `--device`: b9849's fit drops the integrated device by TYPE before it
+   fills devices (#318 leg 5; the "the fit spreads layers over every listed device" reading of
+   `common/fit.cpp` was measured false) — and the GPU is not switched off in Settings (`gpuMode: 'off'`) nor auto-disabled
    after a crash (`gpuAutoDisabled`); `unified` = Apple Silicon (stays `unified` even with the GPU
    switched off); `cpu` = everything else, including a card present but excluded by the flags
    above. Only `discrete` changes anything; `unified` and `cpu` keep the RAM pick.
@@ -700,6 +704,22 @@ the star (a lower-threshold, equal-or-higher-rank model always wins first). **Le
 Intel-first hybrid** was not available either; the AMD result — llama.cpp dropped the integrated
 device by TYPE before the filling pass — is expected to carry over, and `looksIntegrated`'s
 completeness (#320) is a name-table question, checked against the Intel names above.
+
+**2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
+closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
+spreads layers over every listed device — did not hold on the pinned b9849 build on either hybrid
+machine measured (desktop: both devices in `device_info`, then `using device Vulkan0` alone;
+APU-first laptop: iGPU listed first, every buffer on the RTX, the fit's own "device 0" was
+Vulkan1), so an app-side `--device` would change nothing, would break the ladder's contract that
+`--device none` is the only device argument, and would add a name→device mapping that has to
+survive driver renames. Every doc sentence claiming the spread is corrected. (h) `looksIntegrated`
+gains one **anchored bare-name alternative** for the exact trimmed string "Intel(R) Graphics" (no
+platform code): a false NEGATIVE there would make a 16–32 GiB shared-memory iGPU the budget device
+and star a model the machine cannot accelerate, the one direction the module's bias note forbids;
+the anchor keeps a model-numbered discrete Arc ("Intel(R) Arc(TM) A770 Graphics", "B580") out.
+Pinned in `gpu-rules.test.ts`. Evidence:
+`eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg5-baseline.*`,
+`…/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/leg5-device-landing.comment.md`.
 
 **The 6 GB row (N8).** Every 6 GB laptop card seen for this audit reports BELOW the runtime's
 6,144 MiB `discrete` gate on Vulkan (an RTX 4050 Laptop: 5,921 MiB; the RTX 3060 Laptop of leg 4:

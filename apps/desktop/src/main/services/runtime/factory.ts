@@ -555,7 +555,14 @@ class LadderRuntime implements ModelRuntime {
         // listed. On a hybrid [iGPU, dGPU] box `devices[0]` named the iGPU while the model
         // actually ran on the dGPU — and on a hybrid [iGPU, SMALL dGPU] box the old fallback did
         // the same, because nothing was "useful". Rung selection, `--fit` and the "never -ngl"
-        // policy are untouched; `--fit` still spreads layers over every listed device (#320).
+        // policy are untouched — and no `--device` is passed to steer them (#320, decided
+        // 2026-09-07): on b9849 the fit does NOT spread layers over every listed device. It drops
+        // the integrated one BY TYPE before the filling pass, measured on both hybrid machines
+        // (`eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg5-baseline.*` — both devices
+        // in `device_info`, then "using device Vulkan0" only; `…/ryzen-7-5800h-rtx-3060-laptop-
+        // 6gb-14gb/leg5-device-landing.comment.md` — iGPU listed FIRST, every buffer on the RTX,
+        // the fit's own "device 0" was Vulkan1), so an app-side `--device` would change nothing
+        // and would break the ladder's "`--device none` is the only device argument" contract.
         this.gpuName = displayDevice(devices)?.device.name ?? null
       } else {
         this.backend = 'cpu'

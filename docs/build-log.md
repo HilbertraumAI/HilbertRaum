@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-07 — BUILD_STATE §5 item 22 (h)/(j) retired verbatim (#320)
+
+Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 22 when the owner ruling of
+2026-09-07 on issue #320 landed (never-`--device` stands; `looksIntegrated` gains the anchored
+bare-name alternative), to keep §5 inside its 500-line budget. Durable record:
+`docs/model-benchmarks.md` §6.6 "2026-09-07 amendment (#320, owner decision)". Full text of the
+two letters as they stood before the collapse:
+
+(h) device choice / iGPU naming: the picker's budget device excludes integrated GPUs by name (`looksIntegrated`) rather than a runtime device-type flag, and on a Mac with the GPU switched off the class still reads `unified` (P2 decision) — is the name heuristic complete enough — decided 2026-09-06: keep the conservative heuristic until #318 leg 5, issue #320 — MEASURED 2026-09-07: the heuristic held on Intel Iris Xe / UHD 620 / UHD 770 and on AMD Radeon(TM) Graphics (every integrated device stayed out of the budget slot on real hardware; no Intel-first hybrid exists in the project, so #320 stays a name-table question); #303 P5 landed its own `shared/gpu-rules.ts` source (`isUsefulDevice` / `primaryUsefulDevice`, first-useful order) and the 2026-09-06 merge of `be177a34` into `feat/vram-aware-picker` unified the two (one rule module, the largest usable card, `nextStartMemoryFor` over the eligible probe);
+
+(j) llama.cpp's `--fit` still spreads layers over every listed device, integrated ones included, so a hybrid laptop's iGPU can still take layers the picker's budget device excluded from the recommendation — should the app pass `--device` to exclude it at launch too — decided 2026-09-06: keep the never-`--device` rule until #318 leg 5, issue #320 — MEASURED 2026-09-07 on an AMD-APU-first laptop: the fit's device list never contained the iGPU ("device 0" was the RTX), every buffer landed on the card, so `--device` would change nothing there; Intel-first unmeasured (none available);
+
+
 ## 2026-09-06 — ZIM follow-up wave steps 1–6: the dated entry retired verbatim (open-issues wave)
 
 _2026-09-06 — **ZIM follow-up wave, step 1 — #344 (`fix/344-failed-lock-rearm`, working paper `tmp/344-failed-lock-rearm.md`, git-ignored):** a FAILED lock left the chat
