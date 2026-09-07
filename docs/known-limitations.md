@@ -2500,7 +2500,9 @@ reports and phase plans were working papers; their full text lives in git histor
   measured against the raw server with no app code, with two different HTTP clients and every
   thread setting; small entries never stall (P7 real acceptance,
   `rag-design.md` §17 "Real acceptance" finding 3; an upstream defect, tracked for the
-  provisioning wave on #339). The app detects a stalled read with a short timeout (4 s per attempt) and
+  provisioning wave on #339). The linux-x86_64 build of the same release does NOT show it
+  (humaniser's probe of 2026-09-07: 0 of 40 reads short on the same entries, every thread
+  setting), so the upstream report names the Windows build only. The app detects a stalled read with a short timeout (4 s per attempt) and
   retries it on a fresh connection, up to three attempts (P7 fix; `ARTICLE_READ_TIMEOUT_MS` /
   `ARTICLE_READ_ATTEMPTS` in `client.ts`), so an article normally still opens and still reaches
   the answer; only a read that stalls on all three attempts (about one in a thousand at the
