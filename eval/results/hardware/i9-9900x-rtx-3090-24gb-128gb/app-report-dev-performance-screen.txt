@@ -1,0 +1,13 @@
+# Pasted 2026-09-07 from the current source build (dev, checkout = origin/master 740b0f27, HILBERTRAUM_DRIVE_ROOT = the app config directory, HILBERTRAUM_LLAMA_BIN = pinned b9849), Performance screen > Copy report, after the six #318 starts. The "Speed" and "Last run" lines are the app's own hardware check from 2026-09-06, not from this session.
+
+This computer
+Speed: 48.3 tokens / s (Measured with Qwen3.8 27B UD-Q4_K_M on 9/6/2026, over 64 tokens)
+Memory: 125.5 GB RAM
+CPU: Intel(R) Core(TM) i9-9900X CPU @ 3.50GHz (20 cores)
+Graphics memory: 24.2 GB VRAM (NVIDIA GeForce RTX 3090)
+Drive: 2,044.3 MB/s read
+Assigned profile: PRO
+Recommended for the next start: Qwen3.8 27B UD-Q4_K_M (graphics memory)
+Recommended at the time of the check: Qwen3.8 27B UD-Q5_K_M
+Context size: 32,768 tokens
+Last run: 9/6/2026, 6:45:55 PM
