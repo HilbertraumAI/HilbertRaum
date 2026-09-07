@@ -173,17 +173,26 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   const fitsBoth = (m: ModelManifest, budgetMb: number, ramGb: number): boolean =>
     fitsGraphicsMemory(m, budgetMb) && m.recommendedMinRamGb <= ramGb
 
-  // (j) Decision 11: the seven config-derived cache terms (tmp/PR-308-check-kv.json,
-  // `serverDefaultsVariant`: four unified slots, ubatch 2048; the 4B's figure is its 4,096-token
-  // window). EXACTLY these seven carry the field; every other manifest defaults to 0.5 GiB.
+  // (j) Decision 11: the seven config-derived cache terms (ubatch 2048; the 4B's figure is its
+  // 4,096-token window). EXACTLY these seven carry the field; every other manifest defaults to
+  // 0.5 GiB. RECOMPUTED 2026-09-07 for ONE server slot (issue #319: `CHAT_SERVER_ARGS` passes
+  // `-np 1`, replacing b9849's four unified slots). The rule, measured on the pin (leg7-baseline-q5km
+  // vs leg1-np-1 under `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/`, same model and
+  // context, one thing varied): the KV cache — and Gemma's sliding-window cache — is sized in CELLS
+  // from `--ctx-size` and is counted ONCE at either setting (512.00 MiB both times); only the
+  // RECURRENT state is per-sequence and drops exactly 4× (1,795.50 → 448.88 MiB). So the three
+  // Gemma terms, which have no recurrent state, do not move at all, and each Qwen term loses three
+  // quarters of its recurrent share. The two 27B figures use the MTP recurrent state (rs_seq 2 —
+  // both manifests opt into `speculative_decoding`; §6.6 finding 3 recorded the old 1.1 GiB as
+  // under-counting that case). Each manifest carries the full arithmetic in its own YAML comment.
   const CACHE_GIB: Record<string, number> = {
-    'gemma4-12b-it-qat-q4': 2.4,
-    'gemma4-26b-a4b-it-qat-q4': 1.5,
-    'gemma4-e2b-it-qat-q4': 0.1,
-    'qwen3.8-27b-ud-q4km': 1.1,
-    'qwen3.8-27b-ud-q5km': 1.1,
-    'qwen3.5-9b-ud-q4kxl': 0.4,
-    'qwen3.5-4b-ud-q4kxl': 0.3
+    'gemma4-12b-it-qat-q4': 2.4, // unchanged — no recurrent state
+    'gemma4-26b-a4b-it-qat-q4': 1.5, // unchanged — no recurrent state
+    'gemma4-e2b-it-qat-q4': 0.1, // unchanged — no recurrent state
+    'qwen3.8-27b-ud-q4km': 0.9, // was 1.1: KV 512 + RS 448.88 (MTP, 1 seq) = 960.88 MiB
+    'qwen3.8-27b-ud-q5km': 0.9, // was 1.1: same figures — the recurrent state is f32, quant-independent
+    'qwen3.5-9b-ud-q4kxl': 0.3, // was 0.4: KV 256 + 1 × 48 = 304 MiB
+    'qwen3.5-4b-ud-q4kxl': 0.2 // was 0.3: KV 128 + 1 × 48 = 176 MiB (at its 4,096 window)
   }
   it('pins the seven estimated_context_cache_gib values, and that no other manifest carries the field', () => {
     const all = committedManifests()
@@ -202,18 +211,18 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   const THRESHOLD_MIB: Record<string, number> = {
     'qwen3-4b-instruct-2507-q4': 4278,
     'qwen3-4b-instruct-q4': 4278,
-    'qwen3.5-4b-ud-q4kxl': 4512,
+    'qwen3.5-4b-ud-q4kxl': 4410,
     'gemma4-e2b-it-qat-q4': 4746,
     'qwen3-8b-instruct-q4': 7020,
     'ministral3-8b-instruct-2512-q4': 7239,
-    'qwen3.5-9b-ud-q4kxl': 8014,
+    'qwen3.5-9b-ud-q4kxl': 7912,
     'gemma4-12b-it-qat-q4': 11159,
     'qwen3-14b-instruct-q4': 11407,
     'gemma4-26b-a4b-it-qat-q4': 18353,
     'qwen3.6-27b-q4': 19961,
-    'qwen3.8-27b-ud-q4km': 20247,
+    'qwen3.8-27b-ud-q4km': 20042,
     'qwen3.6-27b-q5': 22923,
-    'qwen3.8-27b-ud-q5km': 23866,
+    'qwen3.8-27b-ud-q5km': 23661,
     'qwen3.5-35b-a3b-ud-q4kxl': 25884
   }
   it('pins every ranked chat model\'s graphics-memory threshold in raw MiB (boundary on both sides)', () => {
@@ -226,9 +235,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       expect(fitsGraphicsMemory(m, t), `${m.id} fits at ${t}`).toBe(true)
       expect(fitsGraphicsMemory(m, t - 1), `${m.id} does not fit at ${t - 1}`).toBe(false)
     }
-    // The two figures the decisions turn on, spelled out: the 9B needs 8,014 (0.4 GiB cache) —
-    // under a nominal 8 GiB but over what an idle 8 GB card has FREE; Gemma 12B 11,159 (2.4 GiB
-    // cache) = 10.9 GiB, where the PR's flat 0.5 GiB read 9.0 GiB.
+    // The two figures the decisions turn on, spelled out: the 9B needs 7,912 (0.3 GiB cache since
+    // #319) — under a nominal 8 GiB but STILL over what an idle 8 GB card has FREE (7,168), so
+    // `-np 1` does not move the 8 GB row; Gemma 12B 11,159 (2.4 GiB cache) = 10.9 GiB, where the
+    // PR's flat 0.5 GiB read 9.0 GiB.
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeLessThan(8192)
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeGreaterThan(8192 - 1024)
     expect(THRESHOLD_MIB['gemma4-12b-it-qat-q4']).toBeGreaterThan(10 * 1024)
@@ -240,8 +250,14 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // yields for a card reporting its nominal total) × RAM {8, 12, 16, 24, 32}. Reference for the
   // CHANGE (not the pin): the total-basis rule-C grid in the audit's a7 read 9B on the 8 GB row
   // from RAM 16, Q4 on the 20 GB row from RAM 24 and Q5 at 24 GB / RAM 32; on the free basis the
-  // 8 GB row is the 4B (the 9B's 8,014 MiB exceeds ≈ 7.2 GiB free), the 20 GB row is the 9B (Q4's
-  // 20,247 exceeds 19,456) and the 24 GB row is Q4 throughout (Q5's 23,866 exceeds 23,552).
+  // 8 GB row is the 4B (the 9B's need exceeds ≈ 7.2 GiB free), the 20 GB row is the 9B (Q4's need
+  // exceeds 19,456) and the 24 GB row is Q4 throughout (Q5's exceeds 23,552).
+  // UNCHANGED by the `-np 1` recomputation (issue #319, 2026-09-07), which is worth stating because
+  // the ruling expected the 24 GB row to flip: every threshold moved DOWN (4B −102, 9B −102, Q4/Q5
+  // −205 MiB), but none crossed a row's free figure. The two the decision watched: the 9B needs
+  // 7,912 against 7,168 free on the 8 GB row (744 short — it was 846 short), and Q5 needs 23,661
+  // against 23,552 on the 24 GB row (109 short — it was 314). Q5 takes the 24 GB star only once
+  // #321 computes the working share on the OFFLOADABLE weights, which is the PR after this one.
   const GRID: Array<[cardGb: number, picks: string]> = [
     [6, '4B / E2B / 4B / 4B / 4B'],
     [8, '4B / E2B / 4B / 4B / 4B'],

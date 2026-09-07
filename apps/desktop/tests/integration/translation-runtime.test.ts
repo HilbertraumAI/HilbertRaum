@@ -101,6 +101,9 @@ describe('TranslationRuntime — launch + translate', () => {
     expect(args).not.toContain('--reasoning-format') // not the chat CHAT_SERVER_ARGS
     expect(args).toContain('--ctx-size 4096') // plan §2 D4
     expect(args).toContain('--parallel 1') // sequential windows; contains #25142 (plan §2 D8/D9)
+    // One slot here is TRANSLATION_SLOT_ARGS' own decision, in the long form: the chat server's
+    // `-np 1` (#319) never reaches this sidecar, exactly as `--jinja` never does.
+    expect(args).not.toContain('-np ')
     // Issue #42: default posture = GPU auto-offload, the chat rung-1 shape — NO device args
     // (b9849 defaults ngl=auto + fit=on; on a GPU-less machine this IS CPU mode).
     expect(args).not.toContain('--device')

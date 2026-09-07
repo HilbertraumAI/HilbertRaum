@@ -413,6 +413,20 @@ describe('answer-depth mode → request mapping (D4)', () => {
     expect(args.join(' ')).toContain('--reasoning-format deepseek')
   })
 
+  it('runs ONE server slot: -np 1, not b9849\'s four unified slots (issue #319)', async () => {
+    const { args } = await captureBody()
+    // Owner decision 2026-09-07. The app is single-user and already serialises every lane that
+    // reaches this server (the model-slot arbiter; the local API's depth-one admission), so the
+    // four default slots were never used in parallel while costing card memory exactly where the
+    // fit decides between full and half speed: on the rig this turned the 27B Q5's 62/66 layers
+    // at 30.4 tok/s into 66/66 at 51.0 (#318 leg 1, recurrent state 1,795.50 → 448.88 MiB).
+    expect(args.join(' ')).toContain('-np 1')
+    // What it does NOT change: the context window. `--ctx-size` is the TOTAL cache on both
+    // settings and each slot still sees all of it (n_ctx_slot = 8192 either way), which is why
+    // only the per-SEQUENCE recurrent term moved in the manifests' cache estimates.
+    expect(args.join(' ')).toContain(`--ctx-size ${startOpts.contextTokens}`)
+  })
+
   it('sends cache_prompt:true so the slot KV prefix is reused across turns (skill-fence prefill is one-time)', async () => {
     const { body } = await captureBody()
     expect(body.cache_prompt).toBe(true)

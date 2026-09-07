@@ -135,6 +135,7 @@ describe('VisionRuntime — start + analyze', () => {
     expect(args).toContain('--device none') // CPU-pinned LM (V1-resolved)
     expect(args).toContain('--no-mmproj-offload') // projector on CPU too — b9849 offloads it to GPU by default (RUNTIME-6)
     expect(args).toContain('--parallel 1') // single slot — b9849 defaults to n_slots=4+unified KV (RUNTIME-5)
+    expect(args).not.toContain('-np ') // VISION_SLOT_ARGS' own long form; the chat `-np 1` (#319) does not reach here
     expect(args).toContain('--host 127.0.0.1') // loopback only
     expect(args).not.toContain('--reasoning-format') // non-reasoning VLM
     // The request inlines the image as a base64 data-URL and caches the prefill (V1).

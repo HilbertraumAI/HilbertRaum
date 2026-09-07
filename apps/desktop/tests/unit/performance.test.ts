@@ -306,8 +306,10 @@ describe('placementVerdict', () => {
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 16_384, graphicsBudgetMb: 1024, ...big, observed: null }).spillMb).toBe(18_883)
     // The same on a 4 GB box: RAM + VRAM cannot take the weights.
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: 4096, vramMb: 16_384, graphicsBudgetMb: 15_360, ...big, observed: null }).kind).toBe('too_large')
-    // The card's free figure decides, not its total: the same 8 GiB card holds the 9B (need
-    // 8,014 with its 0.4 GiB cache) at 8,100 free and not at 8,000.
+    // The card's free figure decides, not its total: the same 8 GiB card holds a 6.0 GB model
+    // carrying a 0.4 GiB cache term (need 8,014) at 8,100 free and not at 8,000. The cache term
+    // is supplied here, not read from a manifest, so this boundary is independent of the catalog —
+    // the real 9B carries 0.3 since `-np 1` (#319) and needs 7,912.
     const nineB = model(6.0, 0.4)
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 8192, graphicsBudgetMb: 8100, ...nineB, observed: null }).kind).toBe('gpu')
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 8192, graphicsBudgetMb: 8000, ...nineB, observed: null }).kind).toBe('partial')

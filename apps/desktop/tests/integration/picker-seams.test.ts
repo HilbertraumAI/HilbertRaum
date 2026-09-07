@@ -69,14 +69,17 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 
 // The committed catalog's answers at RAM 32 (benchmark.md table; audit §7 item 2): the RAM pick
-// is the 27B Q5. Since rule C on the free-memory basis (P3, decisions 10/11) an 8 GiB card with
-// ≈ 7.5–8.0 GiB FREE does not hold the 9B (8,014 MiB with its 0.4 GiB cache term), so the card
-// pick is the 4B — still divergent from the RAM pick, which is what the mutation guards need.
+// is the 27B Q5. Since rule C on the free-memory basis (P3, decisions 10/11) an 8 GiB card whose
+// FREE figure is under the 9B's threshold does not hold it, so the card pick is the 4B — still
+// divergent from the RAM pick, which is what the mutation guards need.
+// The threshold itself is pinned in `committed-catalog.test.ts`, not here; it moved 8,014 → 7,912
+// when the chat server took `-np 1` (issue #319, 2026-09-07), so CARD8's free figure moved with it
+// to stay on the low side. The PAIR is the point: CARD8 below the threshold, CARD8_ROOMY above it.
 const RAM_PICK = 'qwen3.8-27b-ud-q5km'
 const CARD8_PICK = 'qwen3.5-4b-ud-q4kxl'
 const CARD8_ROOMY_PICK = 'qwen3.5-9b-ud-q4kxl'
 
-const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 8000 }
+const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 7900 }
 // The same card with 8,100 MiB free: holds the 9B — the witness that the seams feed the FREE
 // figure (by total − 1,024 it would read 7,168 and give the 4B).
 const CARD8_ROOMY: GpuDevice = { ...CARD8, freeMb: 8100 }
@@ -158,7 +161,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(getSettings(withCard.ctx.db).gpuProbe?.devices).toEqual([CARD8])
     expect(await liveStar(withCard.ctx)).toBe(CARD8_PICK)
     // The budget is the probe's FREE figure (decision 10), raw MiB — not the total the tile shows.
-    expect(pickerMemoryFor(getSettings(withCard.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 8000 })
+    expect(pickerMemoryFor(getSettings(withCard.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: CARD8.freeMb })
 
     const noCard = fixture({ probeReturns: [] })
     const benchNoCard = await runAndPersistBenchmark(noCard.ctx)
@@ -453,7 +456,7 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     expect(f.probe).toHaveBeenCalledTimes(1)
 
     const snap = buildPerformanceSnapshot(f.ctx)
-    // LIVE: the RTX 3070 fixture `{ 8192, freeMb 8000 }` → budget 8,000 MiB < the 9B's 8,014 → the 4B.
+    // LIVE: the RTX 3070 fixture `{ 8192, freeMb 7900 }` → budget 7,900 MiB < the 9B's 7,912 → the 4B.
     expect(snap.recommendation).toEqual({ modelId: CARD8_PICK, basis: 'discrete' })
     // HISTORICAL: what the check said at the time, untouched, with its old stamp.
     expect(snap.current?.recommendedModelId).toBe(RAM_PICK)

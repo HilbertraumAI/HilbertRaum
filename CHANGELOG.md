@@ -156,6 +156,15 @@ from its first public `1.0.0` release onward.
   download-and-extract steps (including the tarball's single top-level folder) kept as a
   fallback.
 
+### Changed
+
+- **Larger models now fit on the graphics card that used to be just too small for them.** The chat
+  engine ran four answer slots at once, which is memory the app never used — it only ever answers
+  one question at a time. It now runs one. On a 24 GB card that is the difference between a 27B
+  model running half on the card and half on the processor at about 30 words a second, and running
+  entirely on the card at about 51. Nothing about your conversations changes: the context window is
+  exactly as long as before, and the recommended model on each computer is re-estimated to match.
+
 ### Fixed
 
 - **A laptop whose built-in graphics chip reports a short name is recognised as built-in.** Some

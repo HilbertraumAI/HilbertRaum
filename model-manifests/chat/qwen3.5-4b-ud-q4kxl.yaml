@@ -25,10 +25,16 @@ recommended_ram_gb: 16
 # disk) wins that tier on the disk-size tiebreak.
 recommendation_rank: 3
 recommended_context_tokens: 4096
-# Context cache at the 4,096-token window above (b9849 defaults: 4 unified slots): 128 MiB
-# full-attention KV (8 layers x 4 heads x 256) + 4 x 48 MiB recurrent state = 0.31 GiB (no SWA
-# cache); the picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11).
-estimated_context_cache_gib: 0.3
+# Context cache at the 4,096-token window above, recomputed 2026-09-07 for ONE server slot
+# (issue #319: CHAT_SERVER_ARGS now passes `-np 1`; the b9849 default of 4 unified slots is gone).
+# 128 MiB full-attention KV (8 layers x 4 heads x 256), counted ONCE -- it is sized in CELLS from
+# --ctx-size and does not change with the slot count -- plus 1 x 48 MiB recurrent state instead of
+# 4 x 48 (the recurrent state is the only per-SEQUENCE term) = 176 MiB = 0.172 GiB -> 0.2 (no SWA
+# cache; no MTP -- this manifest does not opt into speculative_decoding). Not started on hardware
+# for #318, so this is the derivation, not a measurement; the 9B's near-identical derivation was
+# confirmed within 2 MiB against a real start. The picker's graphics-fit cache term
+# (model-benchmarks.md §6.6, PR #308 audit decision 11, amended 2026-09-07 by #319).
+estimated_context_cache_gib: 0.2
 # Qwen3.5 operates in thinking mode by default (emits <think>...</think>), so the chat
 # template honours `enable_thinking` → the Deep answer mode applies (like the original 4B).
 supports_thinking_mode: true
