@@ -67,4 +67,11 @@ export function registerDownloadIpc(ctx: AppContext, manager?: DownloadManager):
   ipcHandle(IPC.getDownloadJob, (_e, jobId: string): DownloadJob => downloads.get(jobId))
 
   ipcHandle(IPC.cancelDownload, (_e, jobId: string): DownloadJob => downloads.cancel(jobId))
+
+  // #314: reload recovery. Both are ungated on purpose — like `downloads:get`/`downloads:cancel`
+  // they only read or bookkeep this service's own in-memory job state (no network, no DB, no
+  // workspace artifact), so no policy/setting gate and no unlock check applies.
+  ipcHandle(IPC.listDownloadJobs, (): DownloadJob[] => downloads.list())
+
+  ipcHandle(IPC.dismissDownloadJob, (_e, jobId: string): void => downloads.dismiss(jobId))
 }

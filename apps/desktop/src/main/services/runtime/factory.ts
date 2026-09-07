@@ -20,6 +20,7 @@ import { displayDevice } from '../../../shared/gpu-rules'
 import { startModelPrefetch, type ModelPrefetch } from './prefetch'
 import { isNextModelLoadSuppressed, recordModelLoadRead } from '../read-speed'
 import {
+  failureSignature,
   isBindRaceError,
   resolveCpuFallbackServerPath,
   resolveLlamaServerPath,
@@ -224,6 +225,13 @@ export interface RuntimeSelectionDeps {
     event: 'enabled' | 'skipped' | 'failed' | 'crashed',
     detail?: string
   ) => void
+  /**
+   * #312: fired once when EVERY real rung failed AND the forced-CPU rungs died the same way
+   * as the GPU rung — the model, not this machine's device, is the common cause. Nothing is
+   * persisted (`gpuAutoDisabled` stays untouched); the caller names the MODEL to the user.
+   * The walk still ends on the rung-4 mock, whose replies disclose that they are simulated.
+   */
+  onModelLoadFailure?: (opts: RuntimeStartOptions, reason: string) => void
   /** Test seam: override the prefetch reader (default {@link startModelPrefetch}). */
   makePrefetch?: (paths: string[]) => ModelPrefetch
   /** GPU ladder hooks. Omitted → defaults (gpuMode 'auto', no persistence). */
@@ -291,6 +299,7 @@ class LadderRuntime implements ModelRuntime {
       onSelect?: RuntimeSelectionDeps['onSelect']
       onWarmup?: RuntimeSelectionDeps['onWarmup']
       onSpeculative?: RuntimeSelectionDeps['onSpeculative']
+      onModelLoadFailure?: RuntimeSelectionDeps['onModelLoadFailure']
       warmupTimeoutMs: number
       onPrefetch?: RuntimeSelectionDeps['onPrefetch']
       makePrefetch: NonNullable<RuntimeSelectionDeps['makePrefetch']>
@@ -302,6 +311,15 @@ class LadderRuntime implements ModelRuntime {
 
   async start(): Promise<void> {
     let lastError: unknown = null
+    // #312: a rung-1 failure is only a DEVICE verdict once the forced-CPU rungs have had
+    // their say, so it is held here instead of persisted on the spot. The forced-CPU rungs
+    // are the control probe: one of them starting proves the model loads on this machine
+    // (flush — today's behaviour, one rung later); all of them dying the SAME way as the
+    // GPU rung proves the model is the common cause (drop, blame the model). A cancelled
+    // walk simply never reaches either point — it blames nothing (CODE-2).
+    let pendingGpuFailure: { reason: string; signature: string | null } | null = null
+    /** #312: the last forced-CPU rung's failure class — the control side of the comparison. */
+    let cpuSignature: string | null = null
     // #182: the #108 read sample and the #114 prefetch belong to the first rung we actually
     // SPAWN, which is no longer the same thing as `rungs[0]`: a skipped speculative rung
     // consumes index 0 without opening a load window, and gating on the index would have
@@ -393,26 +411,29 @@ class LadderRuntime implements ModelRuntime {
         }
         // CODE-2: a start that failed because the cancel KILLED it must abort the walk —
         // and must never be persisted as a GPU fault (the child was loading, not broken),
-        // so this check runs before the gpuAttempt persist below.
+        // so this check runs before the gpuAttempt branch below (which now HOLDS it — #312).
         if (this.cancelled) throw cancelledStartError()
+        const reason = err instanceof Error ? err.message : String(err)
         // #182: rung 1a failing says nothing about the GPU — the plain GPU rung is next in
         // the walk and IS the device verdict. Never persist `gpuAutoDisabled` here (an
         // unsupported flag on an older runtime would otherwise exile the machine to CPU),
         // but do latch the model off so later starts skip the doomed multi-GB load attempt.
         if (rung.speculative) {
-          const reason = err instanceof Error ? err.message : String(err)
           suppressSpeculative(this.opts.modelId)
           this.deps.onSpeculative?.(this.opts, 'failed', reason)
           continue
         }
         if (rung.gpuAttempt) {
-          // Persist so later starts skip straight to rung 2 — no repeated GPU timeouts.
-          const reason = err instanceof Error ? err.message : String(err)
           // REL-1: a port-bind race is a transient TOCTOU collision, NOT a GPU/device fault
           // (LlamaServer already retried once on a fresh port). Don't auto-disable GPU for the
           // whole session over one unlucky port steal — only a genuine device/driver/model
           // failure persists `gpuAutoDisabled`.
-          if (!isBindRaceError(reason)) this.deps.gpu.onGpuFailure?.(reason)
+          // #312: hold the rest for the forced-CPU control below; persisting here would
+          // blame the device for a model that cannot be loaded anywhere on this machine.
+          if (!isBindRaceError(reason)) pendingGpuFailure = { reason, signature: failureSignature(reason) }
+        } else {
+          // #312: the control's own failure — its class is what decides the held verdict.
+          cpuSignature = failureSignature(reason)
         }
         continue
       }
@@ -448,6 +469,15 @@ class LadderRuntime implements ModelRuntime {
           /* best-effort — the queued manager stop re-stops idempotently */
         }
         throw cancelledStartError()
+      }
+
+      // #312: this rung is accepted, and it is a forced-CPU one — the control probe says the
+      // model loads on this machine, so the held rung-1 failure WAS the device's. Persist it
+      // now (today's behaviour, one rung later) so later starts skip the GPU health timeout.
+      // After the CODE-2 check above on purpose: a cancelled walk still blames nothing.
+      if (!rung.gpuAttempt && pendingGpuFailure) {
+        this.deps.gpu.onGpuFailure?.(pendingGpuFailure.reason)
+        pendingGpuFailure = null
       }
 
       this.inner = runtime
@@ -503,9 +533,23 @@ class LadderRuntime implements ModelRuntime {
     // the queued stop would then have to undo a runtime nobody asked for.
     if (this.cancelled) throw cancelledStartError()
 
+    // #312: every real rung failed, so the control probe has answered. Same class on both
+    // sides ⇒ the MODEL is the common cause: drop the held failure (nothing persisted,
+    // `gpuLastError` untouched) and name the model instead. Anything else — differing
+    // classes, or a shape `failureSignature` does not recognise on either side — stays a
+    // device verdict, exactly as before: unknown evidence must never un-blame a real GPU
+    // fault and reinstate a multi-minute health timeout on every later start.
+    if (pendingGpuFailure) {
+      const modelFault = cpuSignature !== null && cpuSignature === pendingGpuFailure.signature
+      if (modelFault) this.deps.onModelLoadFailure?.(this.opts, pendingGpuFailure.reason)
+      else this.deps.gpu.onGpuFailure?.(pendingGpuFailure.reason)
+      pendingGpuFailure = null
+    }
+
     // Rung 4 — the existing graceful fallback: the app can never be stuck. The mock's
-    // replies are visibly simulated, and the next start retries the ladder (from rung 2,
-    // since a rung-1 failure persisted the auto-disable flag).
+    // replies are visibly simulated, and the next start retries the ladder — from rung 2
+    // when the rung-1 failure was persisted as a device fault, and from rung 1 again when
+    // #312 blamed the model instead (the auto-disable flag was never written).
     const mock = this.deps.makeMock(this.opts)
     await mock.start()
     this.inner = mock
@@ -739,6 +783,7 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
       onSelect: deps.onSelect,
       onWarmup: deps.onWarmup,
       onSpeculative: deps.onSpeculative,
+      onModelLoadFailure: deps.onModelLoadFailure,
       warmupTimeoutMs: deps.warmupTimeoutMs ?? WARMUP_TIMEOUT_MS,
       onPrefetch: deps.onPrefetch,
       makePrefetch: deps.makePrefetch ?? startModelPrefetch,

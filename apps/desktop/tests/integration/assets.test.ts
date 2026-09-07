@@ -307,6 +307,89 @@ describe('planModelDownloads', () => {
     expect(tasks[1].status).toBe('download') // mmproj must still be fetched
     expect(tasks[1].relPath).toBe('models/vision/vlm-mmproj.gguf')
   })
+
+  // #310: a shard set is N downloads of the SAME model. The validator's all-or-nothing rule
+  // means a downloadable multi-file weight declares a source for every file, so the plan can
+  // never install shard 1 alone and leave a model that cannot start.
+  describe('multi-file weights (#310)', () => {
+    const shardPath = (n: number): string => `models/chat/big-${String(n).padStart(5, '0')}-of-00003.gguf`
+    const shardUrl = (n: number): string => `https://example.test/big-${n}.gguf`
+    function shardedManifest(overrides: Record<string, unknown> = {}): ModelManifest {
+      return manifest({
+        id: 'sharded-chat',
+        local_path: shardPath(1),
+        license_review: { status: 'approved', reviewed_by: 'me', reviewed_at: '2026-01-01', notes: '' },
+        download: {
+          url: shardUrl(1),
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          size_bytes: 100,
+          license_url: 'https://example.test/license'
+        },
+        files: [2, 3].map((n) => ({
+          local_path: shardPath(n),
+          sha256: 'REPLACE_WITH_REAL_HASH',
+          download: { url: shardUrl(n), sha256: 'REPLACE_WITH_REAL_HASH', size_bytes: n * 100 }
+        })),
+        ...overrides
+      })
+    }
+
+    it('plans one task per declared file, in declaration order, with its own url/sha/size', async () => {
+      const root = tempDir('hilbertraum-assets-')
+      const tasks = await planModelDownloads(root, [shardedManifest()], { acceptLicense: true })
+      expect(tasks).toHaveLength(3)
+      expect(tasks.map((t) => t.id)).toEqual(['sharded-chat', 'sharded-chat', 'sharded-chat'])
+      expect(tasks.map((t) => t.relPath)).toEqual([shardPath(1), shardPath(2), shardPath(3)])
+      expect(tasks.map((t) => t.url)).toEqual([shardUrl(1), shardUrl(2), shardUrl(3)])
+      expect(tasks.map((t) => t.sizeBytes)).toEqual([100, 200, 300])
+      expect(tasks[2].dest).toBe(join(root, ...shardPath(3).split('/')))
+      // The extra shards inherit the model's license gate, like the projector does.
+      expect(tasks.every((t) => t.license === 'apache-2.0' && t.status === 'download')).toBe(true)
+    })
+
+    it('reports the per-file present/verified/mismatch state of every shard', async () => {
+      const root = tempDir('hilbertraum-assets-')
+      const hashes = [1, 2, 3].map((n) => sha256(`shard-${n}`))
+      const m = shardedManifest({
+        sha256: hashes[0],
+        download: { url: shardUrl(1), sha256: hashes[0], size_bytes: 100, license_url: null },
+        files: [2, 3].map((n) => ({
+          local_path: shardPath(n),
+          sha256: hashes[n - 1],
+          download: { url: shardUrl(n), sha256: hashes[n - 1], size_bytes: n * 100 }
+        }))
+      })
+      const write = (n: number, content: string): void => {
+        const dest = join(root, ...shardPath(n).split('/'))
+        mkdirSync(join(dest, '..'), { recursive: true })
+        writeFileSync(dest, content)
+      }
+      write(1, 'shard-1') // verified
+      write(3, 'stale bytes') // present but mismatched ⇒ re-fetch
+      const tasks = await planModelDownloads(root, [m], { acceptLicense: true })
+      expect(tasks.map((t) => t.status)).toEqual(['present-verified', 'download', 'download'])
+    })
+
+    it('skips the license gate for the whole set together', async () => {
+      const root = tempDir('hilbertraum-assets-')
+      const m = shardedManifest({
+        license_review: { status: 'pending', reviewed_by: null, reviewed_at: null, notes: '' }
+      })
+      const tasks = await planModelDownloads(root, [m], {})
+      expect(tasks.map((t) => t.status)).toEqual(['license-blocked', 'license-blocked', 'license-blocked'])
+    })
+
+    it('plans nothing extra for a manifest whose files: carry no download block', async () => {
+      const root = tempDir('hilbertraum-assets-')
+      const m = manifest({
+        id: 'local-only-shards',
+        local_path: shardPath(1),
+        download: undefined,
+        files: [2, 3].map((n) => ({ local_path: shardPath(n), sha256: 'REPLACE_WITH_REAL_HASH' }))
+      })
+      expect(await planModelDownloads(root, [m], { acceptLicense: true })).toEqual([])
+    })
+  })
 })
 
 describe('selectRuntimeBuild', () => {

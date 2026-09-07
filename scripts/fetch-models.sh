@@ -66,6 +66,45 @@ field_in() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space
 # Extract the indented body of a top-level `mmproj:` mapping (lines until the next column-0 key).
 mmproj_block_of() { awk '/^mmproj:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
 
+# Extract the indented body of a top-level `files:` mapping — the ADDITIONAL required files of
+# a multi-file weight (#310, e.g. a GGUF shard set's shards 2..N) — lines until the next
+# column-0 key. Mirrors mmproj_block_of; emitted AFTER local_path/sha256/download/mmproj in
+# every manifest (model-policy.md key-order rule), so it never poisons the flat top-level reads.
+files_block_of() { awk '/^files:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+
+# Split a `files:` block (as text, e.g. from files_block_of) into one TAB-separated record per
+# list member: local_path, sha256, download.url, download.size_bytes (raw — comments/quotes are
+# stripped by the caller via clean_value). A member starts at its own `- local_path:` line and
+# runs to the next one (or the end of the block). Every member declares a `download` when the
+# manifest carries a top-level one (validator all-or-nothing rule, #310).
+files_member_records() {
+  printf '%s\n' "$1" | awk '
+    function emit() { if (started) printf "%s\t%s\t%s\t%s\n", lp, sha, durl, dsize }
+    /^[[:space:]]*-[[:space:]]*local_path:/ {
+      emit()
+      started = 1; indl = 0
+      lp = $0; sub(/^[[:space:]]*-[[:space:]]*local_path:[[:space:]]*/, "", lp)
+      sha = ""; durl = ""; dsize = ""
+      next
+    }
+    started && /^[[:space:]]*download:[[:space:]]*$/ { indl = 1; next }
+    started && !indl && /^[[:space:]]*sha256:/ {
+      sha = $0; sub(/^[[:space:]]*sha256:[[:space:]]*/, "", sha); next
+    }
+    started && indl && /^[[:space:]]*url:/ {
+      durl = $0; sub(/^[[:space:]]*url:[[:space:]]*/, "", durl); next
+    }
+    started && indl && /^[[:space:]]*size_bytes:/ {
+      dsize = $0; sub(/^[[:space:]]*size_bytes:[[:space:]]*/, "", dsize); next
+    }
+    END { emit() }
+  '
+}
+
+# Same cleanup field()/field_in() apply after extracting a raw value: strip an inline YAML
+# comment, then quotes, then trailing whitespace.
+clean_value() { printf '%s\n' "$1" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
+
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
 # Classify a destination file against its expected hash: verified|placeholder|mismatch|absent.
@@ -244,11 +283,41 @@ for mf in "${MANIFEST_FILES[@]}"; do
   mmproj_state=""
   [[ $has_mmproj -eq 1 ]] && mmproj_state="$(file_state "$mmproj_dest" "$mmproj_sha")"
 
+  # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards
+  # 2..N). Looped only when the model has a top-level download — the validator's all-or-nothing
+  # rule guarantees every declared file then carries its own download block too. Classified once
+  # into files_plan (local\tsha\turl\tsize\tstate per line) so the later fetch pass never re-hashes.
+  files_block="$(files_block_of "$mf")"
+  total_files=1
+  files_plan=""
+  if [[ -n "$files_block" ]]; then
+    file_count=0
+    while IFS=$'\t' read -r f_local f_sha f_dlurl f_dlsize; do
+      [[ -z "$f_local" ]] && continue
+      f_local="$(clean_value "$f_local")"
+      f_sha="$(clean_value "$f_sha" | tr '[:upper:]' '[:lower:]')"
+      f_dlurl="$(clean_value "$f_dlurl")"
+      f_dlsize="$(clean_value "$f_dlsize")"
+      f_dest="$TARGET/$f_local"
+      f_state="$(file_state "$f_dest" "$f_sha")"
+      file_count=$((file_count + 1))
+      # A command substitution strips its trailing newline, so the separator is appended
+      # explicitly — otherwise two concatenated records would run together on one line.
+      files_plan="${files_plan}$(printf '%s\t%s\t%s\t%s\t%s' "$f_local" "$f_sha" "$f_dlurl" "$f_dlsize" "$f_state")"$'\n'
+    done < <(files_member_records "$files_block")
+    total_files=$((1 + file_count))
+  fi
+
   # Does anything need the network? (absent / checksum-mismatch). A model already fully present
   # is skipped WITHOUT a license prompt (the license is only relevant to an actual download).
   needs_fetch=0
   [[ "$gguf_state" == absent || "$gguf_state" == mismatch ]] && needs_fetch=1
   [[ $has_mmproj -eq 1 && ( "$mmproj_state" == absent || "$mmproj_state" == mismatch ) ]] && needs_fetch=1
+  if [[ -n "$files_plan" ]]; then
+    while IFS=$'\t' read -r _ _ _ _ f_state; do
+      [[ "$f_state" == absent || "$f_state" == mismatch ]] && needs_fetch=1
+    done <<< "$files_plan"
+  fi
 
   # Withdrawn upstream source (issue 196) — only relevant when something WOULD be fetched: a
   # drive that already carries the weight is unaffected and verifies as usual. Skipped, not
@@ -281,6 +350,14 @@ for mf in "${MANIFEST_FILES[@]}"; do
   # fetch-models.ps1's continue-then-summarize-then-exit-1 behavior (F-04, full audit 2026-07-16).
   handle_file "$id" "" "$dest" "$sha" "$url" "$local_path" "$gguf_state" "$size_bytes" || true
   [[ $has_mmproj -eq 1 ]] && { handle_file "$id" " (mmproj)" "$mmproj_dest" "$mmproj_sha" "$mmproj_url" "$mmproj_local" "$mmproj_state" "$mmproj_size" || true; }
+  if [[ -n "$files_plan" ]]; then
+    file_n=2
+    while IFS=$'\t' read -r f_local f_sha f_dlurl f_dlsize f_state; do
+      [[ -z "$f_local" ]] && continue
+      handle_file "$id" " (file $file_n/$total_files)" "$TARGET/$f_local" "$f_sha" "$f_dlurl" "$f_local" "$f_state" "$f_dlsize" || true
+      file_n=$((file_n + 1))
+    done <<< "$files_plan"
+  fi
 done
 
 echo

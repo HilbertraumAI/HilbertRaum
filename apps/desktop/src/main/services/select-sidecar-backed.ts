@@ -12,8 +12,15 @@ import { existsSync } from 'node:fs'
 /** The minimum a sidecar-backed model needs to be located on the drive. */
 export interface SidecarModel {
   id: string
-  /** Absolute path to the GGUF/GGML weight file. */
+  /** Absolute path to the PRIMARY GGUF/GGML weight file (a shard set's shard 1). */
   modelPath: string
+  /**
+   * Every file the weight requires, absolute (#310) — `resolveModelByRole` fills it from
+   * `manifestFiles()`. Absent/empty falls back to `[modelPath]`, which is what a single-file
+   * model has always meant. Existence only: these roles never hash (the Models screen and
+   * the ship-time gates do).
+   */
+  requiredPaths?: string[]
 }
 
 export interface SelectSidecarBackedDeps<TModel extends SidecarModel, TService> {
@@ -55,7 +62,10 @@ export function resolveSidecarSelection<TModel extends SidecarModel, TService>(
   if (!binPath) {
     return { available: false, reason: `no ${deps.binaryName} binary on the drive` }
   }
-  if (!modelExists(deps.model.modelPath)) {
+  // #310: EVERY required file, not just the primary — a shard set with shard 3 absent is not
+  // startable, and reporting the role available would fail at load time instead of at the gate.
+  const required = deps.model.requiredPaths?.length ? deps.model.requiredPaths : [deps.model.modelPath]
+  if (!required.every((p) => modelExists(p))) {
     return { available: false, reason: `${deps.modelNoun} weights not present` }
   }
   return { available: true, reason: 'binary + weights present', model: deps.model, binPath }

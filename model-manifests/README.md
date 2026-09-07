@@ -36,3 +36,10 @@ Key points when authoring a manifest:
 - `download` (optional, Phase 12) — `{ url, sha256, size_bytes?, license_url? }`. When present, the
   `fetch-models` scripts download + SHA-256-verify the weight. A real `download.sha256` must equal a
   real top-level `sha256`. See [`../docs/model-policy.md`](../docs/model-policy.md).
+- `files` (optional, #310) — the ADDITIONAL required files of this model's weight beyond
+  `local_path`/`sha256` (which stay the primary — shard 1). A list of
+  `{ local_path, sha256, download? }`, same shapes/rules as above. **Must be the LAST key in the
+  manifest**, after `local_path`/`sha256`/`download`/`mmproj` — `verify-models`/`fetch-models` read
+  the top-level keys by file order. See "Manifest fields (required)" in
+  [`../docs/model-policy.md`](../docs/model-policy.md) for the full validator rules (download
+  all-or-nothing, the shard-completeness rule).

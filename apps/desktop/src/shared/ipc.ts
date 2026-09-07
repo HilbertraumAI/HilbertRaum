@@ -191,6 +191,11 @@ export const IPC = {
   getDownloadJob: 'downloads:get',
   /** Cancel an in-flight download (the `.part` file is kept for a future resume). */
   cancelDownload: 'downloads:cancel',
+  /** #314: every download a reloaded renderer still has to show — the live job (if any) plus
+   *  the undismissed unresolved results. Needs no job id, so it re-attaches after a reload. */
+  listDownloadJobs: 'downloads:list',
+  /** #314: the user dismissed a terminal result; `downloads:list` stops offering it. */
+  dismissDownloadJob: 'downloads:dismiss',
   // In-app engine (llama.cpp sidecar) downloader — fetches the real runtime so models
   // stop falling back to the built-in demo runtime. Same gates as model downloads.
   /** Is the llama.cpp engine installed, and can it be fetched for this host? */

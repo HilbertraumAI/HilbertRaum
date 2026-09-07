@@ -41,7 +41,9 @@ channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`) +
 `updateConversationScope` (`chat:updateScope`, Phase 17 — replace/clear a documents
 conversation's "ask selected documents" scope) +
 `downloadModel`/`getDownloadJob`/`cancelDownload` (`downloads:start/get/cancel`, Phase 18 —
-the in-app model downloader, async-with-polling) +
+the in-app model downloader, async-with-polling) + `listDownloadJobs`/`dismissDownloadJob`
+(`downloads:list`/`downloads:dismiss`, issue #314 — reload recovery: which downloads still need
+the user, and dismissing one main-side) +
 `getAuditEvents(limit?, beforeId?)`/`exportAuditLog` (`audit:list`/`audit:export`, Phase 19 —
 the Diagnostics Activity panel, newest-first paging + save-dialog export) +
 `searchConversations` (`chat:search`, Phase 31) + `changeWorkspacePassword`
@@ -221,7 +223,22 @@ hard total (the number drifted twice, see DOC-3/F-20).
 `recommendModelIdByRam` / `recommendModelIdByVram`; `recommendModelId` is the legacy
 profile-based fallback — PR #308 §6.6), `buildModelList`, `selectModel`.
 States: `unsupported→missing→checksum_failed→installed` (+`running` overlay). `ModelInfo` shape per
-`shared/types.ts`. `local_path` resolved against the **drive root**.
+`shared/types.ts`. Every manifest path (`local_path`, `mmproj.local_path`, `files[].local_path`) is
+resolved against the **drive root**.
+✅ **`ModelManifest.files?: RequiredFileSpec[]`** (#310) — the ADDITIONAL required files of a
+weight beyond `local_path`/`sha256` (the primary — a shard set's shard 1), each
+`{ localPath, sha256, download? }`. Emitted after `local_path`/`sha256`/`download`/`mmproj` in the
+YAML (key-order rule — see "Drive layout, scripts & packaging" below). `manifestFiles()` appends
+these as `ManifestFile.kind: 'extra'` (the union is now `'weight' | 'mmproj' | 'extra'`;
+`ChecksumLabel.file` gained `'extra'` too), so every consumer that walks `manifestFiles()`
+— `computeInstallState`, the verify-bar/load-progress byte totals, the #114 prefetch list, the
+re-verify cache invalidation, `verifyDriveModels`, `buildChecksumsJson` — covers the whole weight
+with no further change. Validator: each member requires a drive-relative, non-repeating
+`local_path` and a `sha256`; a per-file `download` is all-or-nothing with the top-level `download`;
+a `local_path` matching the `-NNNNN-of-NNNNN.gguf` shard convention must be index 00001 and
+`files:` must declare exactly the remaining siblings (shard-completeness rule). An empty `files:`
+list is rejected. No forward-compat `format` marker yet — an older build ignores `files:` and
+reports shard 1 `installed` (known limitation; #311 owns a marker decision).
 ✅ **`services/runtime/`** — `ModelRuntime` interface + `RuntimeManager` (single active runtime,
 restart on switch) + `MockRuntime` (health ok; `chatStream` stubbed until Phase 3). Factory swap →
 `LlamaRuntime` in Phase 10. `RuntimeStatus` shape per `shared/types.ts`.
@@ -732,8 +749,9 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   present while `startingModelId` is (incl. the GPU-crash `forceRestart` window). The manager
   resolves `elapsedMs` (stamped with `startingModelId`, RE-stamped at queue-drain in `doStart`
   so a switch's elapsed measures THIS load, not the old model's stop) and `bytesTotal`
-  (`RuntimeStartOptions.weightBytes` — the manifest's full file set, covering a vision model's
-  mmproj — else one `statSync(modelPath)`), both once per window, never per poll tick. The
+  (`RuntimeStartOptions.weightBytes` — the manifest's full declared file set (`manifestFiles()`:
+  the weight, a vision model's mmproj, and any #310 `files:` entries) — else one
+  `statSync(modelPath)`), both once per window, never per poll tick. The
   `getRuntimeStatus` handler adds only `expectedMs` (bytesTotal over the effective-read sample,
   memoized per window). `expectedMs` is an ESTIMATE — renderers present it as approximate and
   cap displayed progress below 100% (ChatScreen caps at 97%; the window also spans the #109
@@ -888,7 +906,12 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   `config/{drive,policy}.json`. Idempotent; config only (re)written with `--force`.
 - `verify-models.{ps1,sh}` — `-Target`/`--target`, `-Generate`/`--generate`. Flat-YAML line-parses the
   manifests, SHA-256s present weights, prints `VERIFIED/UNVERIFIED/MISMATCH/MISSING/UNSUPPORTED`,
-  **exit 1 on a real-hash mismatch**; `--generate` writes `config/checksums.json`.
+  **exit 1 on a real-hash mismatch**; `--generate` writes `config/checksums.json`. Reads a `files:`
+  list the same way (#310): the primary is unlabeled, the mmproj projector keeps its own
+  `(mmproj)` label, and each `files:` entry is verified with a positional `(file N/M)` label;
+  `--generate` emits one `checksums.json` entry per declared file. The `files:` block must be
+  emitted AFTER `local_path`/`sha256`/`download`/`mmproj` in a manifest's YAML — a key-order rule
+  the flat first-match scraper depends on (see `docs/model-policy.md` "Manifest fields").
 - `setup-dev.{ps1,sh}` — `NODE_OPTIONS=--use-system-ca npm ci` (R6; lockfile-exact, issue #49) + build + test smoke.
 ✅ **Packaging** — `apps/desktop/electron-builder.yml` (portable Windows + mac/linux parity;
   `model-manifests/` as `extraResources`; asar; Electron ≥37). `npm run package` / `package:win`
@@ -921,7 +944,10 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   with a `download` block; reads fs to mark `present-verified`/`present-unverified`/`download`/
   `license-blocked` (license gate ∧ `acceptLicense`)/`source-withdrawn` (#196 — `download.withdrawn`
   is set and the file would have to be fetched; decided BEFORE the license gate, and the task
-  carries the note as `withdrawn`); reuses `weightPath`/`verifyChecksum`.
+  carries the note as `withdrawn`); reuses `weightPath`/`verifyChecksum`. Plans one task per
+  declared file with its own `download` block — the weight, the mmproj projector, and every #310
+  `files[]` entry that carries `download` (kind `'extra'`) — same job, `DownloadManager` sums their
+  bytes and resumes each separately (DIST-1 unchanged).
 - `selectRuntimeBuild(sources, {os, arch, backend?}) → RuntimeBuild | null` (default = first os/arch
   match = the CPU build) · `planRuntimeDownload(root, build, version) → {url, zipDest, extractTo,
   binaryPath, sha256, ...}` (escape-guarded) · `runtimeBinaryName(os)`.
@@ -965,19 +991,47 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   `assertDownloadAllowed(gates)` (friendly, cause-specific refusals: policy vs. Settings),
   `partPath(dest)`, `DownloadManager({ fetchImpl?, log? })` with `start({rootPath, manifest,
   gates, licenseAccepted?, hashStore?}) → Promise<DownloadJob>`, `get(jobId)`, `cancel(jobId)`
-  (keeps the `.part`), `activeJob()`. One live job at a time; `.part` → verify → rename;
-  mismatch deletes the partial; success invalidates the checksum-cache entry. A COMPLETE `.part`
+  (keeps the `.part`), `activeJob()`, and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`.
+  `list()` returns snapshots of the active job (if any) plus every retained terminal job that is
+  still UNRESOLVED and not dismissed, in creation order — never a verified `done`, never a
+  `cancelled` one. `dismiss(jobId)` records the id (unknown ids are a no-op) so `list()` stops
+  offering it; `pruneTerminalJobs()` drops a pruned job's dismissal record with it, so the set
+  stays bounded by `MAX_TERMINAL_JOBS`. One live job at a time; `.part` → verify → rename;
+  mismatch deletes the partial; success invalidates the checksum-cache entry OF THAT FILE — a
+  multi-file model (#310 `files:`, or a vision mmproj) invalidates each file's entry independently
+  as its own task completes. A COMPLETE `.part`
   (cancel/crash during verify, failed rename) is verified in place rather than Range-resumed —
   match renames, mismatch discards + clean restart (F-13, full-audit 2026-07-16).
+✅ **`ResolvedModel.requiredPaths: string[]`** (#310, `services/resolve-model.ts`) — every file a
+  sidecar-backed role's weight needs, absolute, from `manifestFiles()`; `modelPath` stays the
+  primary (shard 1). `resolveSidecarSelection` (`select-sidecar-backed.ts`) reports the role
+  unavailable unless EVERY path in `requiredPaths` exists (existence only, no hashing — same
+  posture as before); absent/empty falls back to `[modelPath]`.
 ✅ **`assets.ts` seam (additive):** `DownloadDeps += { signal?, headers?, append?, onResponse? }`,
   `downloadToFile → DownloadToFileResult { status, received, contentLength }` (append only on a
   real 206); `PlanModelOptions += { hashStore? }` (present multi-GB weights are not re-hashed).
 ✅ **IPC** `ipc/registerDownloadIpc.ts` — `downloadModel(modelId, {licenseAccepted?})`,
-  `getDownloadJob(jobId)`, `cancelDownload(jobId)`; gates re-read per call (policy from disk,
-  setting from the possibly-locked DB ⇒ off). Preload exposes all three. **Renderer:**
+  `getDownloadJob(jobId)`, `cancelDownload(jobId)`, and (#314) `listDownloadJobs() →
+  DownloadJob[]` (`downloads:list`) + `dismissDownloadJob(jobId)` (`downloads:dismiss`); gates
+  re-read per call (policy from disk, setting from the possibly-locked DB ⇒ off) — the last two
+  are ungated like `downloads:get`/`downloads:cancel`: read-only / in-memory, no network, no DB,
+  no unlock requirement. Preload exposes all five. **Renderer:**
   ModelsScreen Download button (missing/checksum_failed models with a manifest `download`
   block), gate explanations, the confirmation modal (size/license/URL + license-ack checkbox),
   progress + cancel via 1 s polling; SettingsScreen hint updated.
+✅ **`shared/downloads.ts` — `isUnresolvedDownloadResult(job)`** (#314): ONE predicate for
+  "this finished download is still the user's problem" — `failed`, or `done && unverified ===
+  true`. `DownloadManager.list()` filters by it and ModelsScreen derives its result panel from
+  it, so the two can never disagree about what survives a reload.
+✅ **Job retention and scoping (#314, explicit):** jobs live in **main-process memory for the
+  app-process lifetime** — up to 20 terminal jobs (`MAX_TERMINAL_JOBS`), each listed until it is
+  dismissed or pruned by newer jobs, whichever comes first. They are **not workspace-scoped**
+  (the manager is constructed once at app bootstrap and takes `rootPath` per call), so a
+  workspace lock or switch does not clear them. A **renderer reload keeps them** — that is what
+  `downloads:list` recovers, by adopting the live job, else the most recent unresolved result.
+  A full **app restart loses all of it**: nothing about a job is persisted (job `error` strings
+  are session-only by design). Only the resumable `.part` and an already-verified weight survive
+  a restart; resuming after one still takes a manual Download click.
 
 ### Audit log (Phase 19 live)
 ✅ **Types** (`shared/types.ts`): `AuditEventType` (the enum in `types.ts` is the authoritative

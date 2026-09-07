@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import {
+  availableFamilies,
   groupModelVariants,
   modelVariantName,
   variantGroupFace,
@@ -299,5 +300,59 @@ describe('variantGroupOrder — face first, then every other variant exactly onc
     expect(ordered.map((m) => m.displayName).sort()).toEqual(
       models.map((m) => m.displayName).sort()
     )
+  })
+})
+
+describe('availableFamilies (#313)', () => {
+  // Zeta/beta are on the drive; alpha/gamma are download-only. Beta and gamma share the
+  // "documents" task (embeddings + reranker); zeta and alpha are chat.
+  const zeta = model('Zeta chat', { family: 'zeta', role: 'chat', state: 'installed' })
+  const alpha = model('Alpha chat', { family: 'alpha', role: 'chat', state: 'missing' })
+  const beta = model('Beta embedder', { family: 'beta', role: 'embeddings', state: 'installed' })
+  const gamma = model('Gamma reranker', { family: 'gamma', role: 'reranker', state: 'missing' })
+  const catalog: ModelInfo[] = [zeta, alpha, beta, gamma]
+
+  it('offers only on-drive families for the installed view, every family for browse', () => {
+    expect(
+      availableFamilies(catalog, { activeChat: null, view: 'installed', task: 'all' })
+    ).toEqual(['beta', 'zeta'])
+    expect(
+      availableFamilies(catalog, { activeChat: null, view: 'browse', task: 'all' })
+    ).toEqual(['alpha', 'beta', 'gamma', 'zeta'])
+  })
+
+  it('narrows by the selected task, combined with the view', () => {
+    expect(
+      availableFamilies(catalog, { activeChat: null, view: 'browse', task: 'documents' })
+    ).toEqual(['beta', 'gamma'])
+    expect(
+      availableFamilies(catalog, { activeChat: null, view: 'installed', task: 'documents' })
+    ).toEqual(['beta'])
+  })
+
+  it('excludes the pinned active chat model, dropping a family that has no other member', () => {
+    // zeta's only member is the active model — it must disappear from both views once excluded.
+    expect(
+      availableFamilies(catalog, { activeChat: zeta, view: 'installed', task: 'all' })
+    ).toEqual(['beta'])
+    expect(
+      availableFamilies(catalog, { activeChat: zeta, view: 'browse', task: 'all' })
+    ).toEqual(['alpha', 'beta', 'gamma'])
+  })
+
+  it('has no search parameter to apply — the family set never narrows by a search term', () => {
+    // `availableFamilies`'s options type carries no `query`; the same call for the same
+    // view/task always yields the same set regardless of what a user has typed into search.
+    const first = availableFamilies(catalog, { activeChat: null, view: 'browse', task: 'all' })
+    const second = availableFamilies(catalog, { activeChat: null, view: 'browse', task: 'all' })
+    expect(first).toEqual(second)
+    expect(first).toEqual(['alpha', 'beta', 'gamma', 'zeta'])
+  })
+
+  it('is deterministically sorted regardless of catalog order', () => {
+    const shuffled = [gamma, zeta, alpha, beta]
+    expect(
+      availableFamilies(shuffled, { activeChat: null, view: 'browse', task: 'all' })
+    ).toEqual(['alpha', 'beta', 'gamma', 'zeta'])
   })
 })

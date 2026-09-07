@@ -620,9 +620,12 @@ password recovery — are documented in
     and downloading in the same session leaves the (detection-only, never-blocking) guard
     installed, so the sanctioned download is logged as a remote-connection notice. Cosmetic;
     a restart re-derives the posture.
-  - **Download progress display is per-renderer-session.** The job itself runs in the main
-    process and survives navigation; after an app restart the progress card is gone but the kept
-    `.part` resumes on the next Download click.
+  - **Download job state is per-app-process.** The job runs in the main process and survives
+    navigation; since #314 it also survives a **renderer reload** — the screen re-attaches on
+    mount via `downloads:list` (the live job, or the most recent undismissed failed/unverified
+    result), and a dismissal made before the reload stays dismissed. An **app restart** still
+    loses every job: nothing about a job is persisted, so the progress card and a failure's text
+    are gone, and the kept `.part` resumes only on the next manual Download click.
   - **A manifest `size_bytes` more than ~25% below the real file truncates the download**
     (BUG dl-size-cap-2026-07-03). `size_bytes` feeds a disk-fill body cap; the cap is now
     drift-tolerant (`size_bytes` + headroom), but a grossly-understated size still trips it near
@@ -2288,9 +2291,18 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   `start()` fails with a spawn error instead of falling back to the mock — and the fallback
   ladder's rungs 2–3 reuse the same wrong-arch binary. A DIY Intel-Mac user could drop a
   self-built x64 `llama-server` into `runtime/llama.cpp/mac/`; prepared drives do not.
-- **A failed first GPU start auto-disables GPU persistently** (`gpuAutoDisabled`) even when the
-  underlying cause was not the GPU (e.g. a corrupt model file failing rung 1). Harmless — the
-  CPU rungs still run and Diagnostics → "Try GPU again" clears the flag in one click.
+- **A model the runtime cannot load no longer disables GPU** (issue #312, fixed 2026-09-07). The
+  rung-1 failure is held until the forced-CPU rungs answer: one of them starting persists
+  `gpuAutoDisabled` as before, while every rung dying the same way blames the model — nothing is
+  persisted, and the user gets a notice naming the model plus the rung-4 mock's disclosed
+  simulated replies (architecture.md §5.2). Residuals: (a) **no per-model latch** — an unloadable
+  model re-walks the rungs on every start, so a repeat attempt can pay up to three 180 s health
+  timeouts; (b) the **health-timeout** path is classified conservatively — the tail of a child
+  that never became healthy is arbitrary, so those failures usually differ in class and stay a
+  device verdict; (c) **mixed-cause** failures still latch the GPU: a genuine device fault whose
+  CPU rungs fail for an unrelated reason (the Intel-Mac wrong-arch binary above) is blamed on the
+  device, which is the deliberate conservative default. Diagnostics → "Try GPU again" still
+  clears the flag in one click.
 - **The probe labels; the ladder guarantees.** `--list-devices` proves enumeration, not stable
   inference — a driver can enumerate fine and crash on the first compute submit. That case is
   handled by the crash auto-fallback (one CPU restart + a friendly notice); the in-flight reply
@@ -2403,6 +2415,13 @@ are decided scope, not oversights; the record's §7 carries the reasoning.
   No shipped drive carries the stale bytes: this model is not bundled on a preconfigured drive and
   is not in the `--with-assets` default set. If your drive already has it, the AI Model screen shows
   the checksum failure and Download fetches the corrected file over it.
+- **A shard set is verified only when DECLARED, never inferred from filenames (#310).** The
+  manifest's `files:` list is the only source of "this weight has more than one file" — the app
+  never scans `models/` for a `-NNNNN-of-NNNNN.gguf` sibling series on its own. An older build
+  that does not know `files:` simply ignores it and reports shard 1 `installed` (today's
+  behaviour, no worse; a forward-compat `format` marker is #311's containment decision, not built
+  here). There is also no per-file view in the UI yet — the Models screen's technical details show
+  only the primary path, even for a multi-file weight.
 
 ## Accessibility (WCAG 2.2 AA sweep — consciously accepted)
 

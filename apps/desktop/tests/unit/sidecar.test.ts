@@ -13,6 +13,7 @@ import {
   llamaServerDir,
   llamaOsDir,
   defaultThreadCount,
+  failureSignature,
   findFreePort,
   killRegisteredSidecarChildren,
   LlamaServer,
@@ -912,6 +913,68 @@ describe('redactExactKey / redactSidecarSecrets', () => {
 
 // ---- Crash-exit child reap registry (full-audit 2026-07-11 CODE-11) --------------------
 //
+// Issue #312 — the comparable failure CLASS the GPU ladder's CPU control probe compares on.
+// Text-matching llama.cpp's own vocabulary cannot do this job (a VRAM allocation failure — a
+// genuine device fault — prints the same "error loading model:" prefix as an unsupported
+// architecture), so the signature classifies only THIS module's four throw shapes plus the
+// final stderr line, and answers null for anything else; the ladder reads null as "unknown ⇒
+// device fault".
+describe('failureSignature (#312)', () => {
+  const EXIT = 'llama-server exited before becoming healthy'
+
+  it('classifies each of the four throw shapes', () => {
+    expect(failureSignature('llama-server failed to launch: spawn ENOENT')).toBe('launch')
+    expect(failureSignature(`${EXIT} (code 1)`)).toBe('exit:code 1')
+    expect(failureSignature(`${EXIT} (signal SIGABRT)`)).toBe('exit:signal SIGABRT')
+    expect(failureSignature('llama-server did not become healthy within 180000ms')).toBe('timeout')
+    expect(failureSignature('llama-server failed pre-spawn integrity verification')).toBe('integrity')
+  })
+
+  it('appends the LAST non-empty line of the — last output: tail', () => {
+    expect(failureSignature(`${EXIT} (code 1) — last output: error loading model: bad arch`)).toBe(
+      'exit:code 1 | error loading model: bad arch'
+    )
+    expect(
+      failureSignature('llama-server did not become healthy within 180000ms — last output: still loading')
+    ).toBe('timeout | still loading')
+  })
+
+  it('two exit failures differing only in EARLIER tail lines are equal', () => {
+    // Two loads of the same broken weight print different progress before the same final
+    // error — that noise must not make the CPU control look like a different failure.
+    const a = failureSignature(
+      `${EXIT} (code 1) — last output: load_tensors: loading 12 of 40\n\nerror loading model: bad arch`
+    )
+    const b = failureSignature(
+      `${EXIT} (code 1) — last output: load_tensors: loading 31 of 40\nerror loading model: bad arch   `
+    )
+    expect(a).toBe('exit:code 1 | error loading model: bad arch')
+    expect(b).toBe(a)
+  })
+
+  it('a health timeout never equals an exit, even with the same tail', () => {
+    const timeout = failureSignature(
+      'llama-server did not become healthy within 180000ms — last output: error loading model: bad arch'
+    )
+    const exit = failureSignature(`${EXIT} (code 1) — last output: error loading model: bad arch`)
+    expect(timeout).not.toBe(exit)
+    // …and neither do two exits with different codes.
+    expect(failureSignature(`${EXIT} (code 134)`)).not.toBe(failureSignature(`${EXIT} (code 1)`))
+  })
+
+  it('answers null for anything it does not recognise', () => {
+    for (const unknown of [
+      '',
+      'something went sideways',
+      'Model start was cancelled (stopped while loading)',
+      'llama-server start aborted',
+      'Error: connect ECONNREFUSED 127.0.0.1:8080'
+    ]) {
+      expect(failureSignature(unknown), unknown).toBeNull()
+    }
+  })
+})
+
 // A hard `uncaughtException` skips the graceful will-quit teardown; on Windows the sidecar
 // children (up to five co-resident llama-servers + whisper-cli) survive `process.exit(1)`,
 // holding GBs of RAM + loopback ports. The registry is the crash handler's kill list:

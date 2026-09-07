@@ -4,6 +4,7 @@ import { randomUUID } from 'node:crypto'
 import { tMain } from './i18n'
 import type { ModelManifest } from '../../shared/manifest'
 import type { DownloadJob } from '../../shared/types'
+import { isUnresolvedDownloadResult } from '../../shared/downloads'
 import {
   planModelDownloads,
   downloadToFile,
@@ -122,13 +123,16 @@ export function partPath(dest: string): string {
 const MAX_TERMINAL_JOBS = 20
 
 /**
- * Owns the in-app download jobs. Jobs live in memory for the session only; the
- * durable truth is the filesystem — a verified weight in place, or a resumable
- * `.part`.
+ * Owns the in-app download jobs. Jobs live in memory for the session only (never persisted —
+ * a renderer reload keeps them, an app restart loses them, #314); the durable truth is the
+ * filesystem — a verified weight in place, or a resumable `.part`.
  */
 export class DownloadManager {
   private jobs = new Map<string, DownloadJob>()
   private active: { jobId: string; controller: AbortController } | null = null
+  /** #314: terminal results the renderer dismissed. Session-only like `jobs`, and pruned
+   *  alongside it so the set stays bounded by MAX_TERMINAL_JOBS. */
+  private dismissed = new Set<string>()
   /** Synchronous single-flight latch covering the check-then-set window in `start()` that
    *  straddles an `await` (BUG vuln-scan-2026-06-21). True from passing the guard until
    *  `this.active` is set (or the start aborts/throws). */
@@ -257,6 +261,36 @@ export class DownloadManager {
   }
 
   /**
+   * #314 — every job a renderer that lost its memory still has to show: the live job (if any)
+   * plus every retained terminal job that is still UNRESOLVED (failed, or done-but-unverified)
+   * and not dismissed, in creation order. A verified `done` and a `cancelled` job are never
+   * listed — the model row carries their state. Snapshots, like `get()`.
+   */
+  list(): DownloadJob[] {
+    const live = this.activeJob()
+    const out: DownloadJob[] = []
+    for (const job of this.jobs.values()) {
+      if (job.jobId === live) {
+        out.push({ ...job })
+        continue
+      }
+      if (this.dismissed.has(job.jobId)) continue
+      if (isUnresolvedDownloadResult(job)) out.push({ ...job })
+    }
+    return out
+  }
+
+  /**
+   * #314 — the user dismissed a terminal result: `list()` stops offering it, so the dismissal
+   * survives a renderer reload (main-process memory does; the renderer's module state does not).
+   * An id this manager never issued (or already pruned) is a no-op: recording it would grow
+   * the set without ever bounding it.
+   */
+  dismiss(jobId: string): void {
+    if (this.jobs.has(jobId)) this.dismissed.add(jobId)
+  }
+
+  /**
    * Cancel an in-flight download. The `.part` file is kept so the next attempt resumes.
    * Cancelling a job that already reached a terminal state is a no-op. `verifying` is a
    * cancellable state too (BE-4, full-audit 2026-07-10): the SHA-256 over a multi-GB weight
@@ -278,7 +312,8 @@ export class DownloadManager {
    * Drop the oldest terminal jobs beyond the keep window. Jobs are session-only and a
    * long session can start many downloads — without this the map grows unbounded. The
    * Map iterates in insertion (= creation) order, so the front entries are the oldest;
-   * `get()` already answers pruned ids with a terminal "unknown job" snapshot.
+   * `get()` already answers pruned ids with a terminal "unknown job" snapshot. A pruned job's
+   * dismissal record goes with it (#314), so `dismissed` can never outgrow the keep window.
    */
   private pruneTerminalJobs(): void {
     const terminal = [...this.jobs.values()].filter(
@@ -286,6 +321,7 @@ export class DownloadManager {
     )
     for (const job of terminal.slice(0, Math.max(0, terminal.length - MAX_TERMINAL_JOBS))) {
       this.jobs.delete(job.jobId)
+      this.dismissed.delete(job.jobId)
     }
   }
 

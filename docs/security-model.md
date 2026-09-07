@@ -1893,9 +1893,9 @@ are tracked under "Open hardening items" in `BUILD_STATE.md`.)
 
 - **L-2 — model download URLs must be `https://`.** Cleartext `http://` leaks which model is
   being fetched and is downgrade-friendly. `shared/manifest.ts` `isHttpsUrl` is the single
-  definition of the rule; it gates `validateManifest` (both the `download` and `mmproj.download`
-  blocks) and the `downloadToFile` seam. The vuln-scan 2026-06-21 D3 hardening (below) later
-  extended the same https-only rule to **every redirect hop**.
+  definition of the rule; it gates `validateManifest` (the `download`, `mmproj.download`, and —
+  since #310 — every `files[N].download` block) and the `downloadToFile` seam. The vuln-scan
+  2026-06-21 D3 hardening (below) later extended the same https-only rule to **every redirect hop**.
 - **L-3 — `importPreflight` is unlock-gated and type-filtered.** The docs-IPC import preflight
   (`registerDocsIpc.ts`) was an unauthenticated filesystem probe; it now calls `requireUnlocked()`
   and drops non-string path elements exactly like `importDocuments`, so a compromised renderer
@@ -1945,12 +1945,14 @@ with a controlled `cwd`. Mirrors the absolute-path discipline already used for t
 escaping `local_path` (e.g. `../../../../etc/passwd`) passed `validateManifest` (which only checked
 non-empty) and was caught later by `safeDrivePath`'s **throw** — but that throw was unhandled on the
 `IPC.listModels` path, so **one** bad manifest errored the entire Models screen. Two defenses now:
-**(1)** `validateManifest` rejects any `local_path`/`mmproj.local_path` that is absolute (leading `/`,
-a `C:`-style drive letter, a UNC root) or contains a `..` segment, so `discoverManifests` records it in
-`errors` and **skips** it (the rest of the list still renders); **(2)** `buildModelList`'s per-manifest
-loop wraps `computeInstallState` in try/catch, so any manifest that still throws becomes an errored
-entry rather than failing the whole list — mirroring the existing `pendingHashBytes` pre-pass.
-`weightPath`/`safeDrivePath` keep their own runtime escape guard (defense in depth).
+**(1)** `validateManifest` rejects any `local_path`/`mmproj.local_path`/`files[N].local_path` (#310)
+that is absolute (leading `/`, a `C:`-style drive letter, a UNC root) or contains a `..` segment, so
+`discoverManifests` records it in `errors` and **skips** it (the rest of the list still renders);
+**(2)** `buildModelList`'s per-manifest loop wraps `computeInstallState` in try/catch, so any
+manifest that still throws becomes an errored entry rather than failing the whole list — mirroring
+the existing `pendingHashBytes` pre-pass. `weightPath`/`safeDrivePath` keep their own runtime escape
+guard (defense in depth), and `manifestFiles()` runs every `files[N].localPath` through the same
+`safeDrivePath` before it can reach a hash or a spawn argument.
 **(3)** The runtime list `runtime-sources.yaml` in the same folder (#245): the downloaded engine
 archive's on-disk name is taken from the URL's last path segment only when it is a plain filename
 (`^[A-Za-z0-9._-]{1,128}$` after percent-decoding, never `.`/`..`); anything else gets a synthetic

@@ -125,8 +125,12 @@ blocks you.
 1. Open **AI Model**. Your current model stays at the top. The **Model library** below defaults
    to **On this drive** when models are installed; **Browse models** shows the full catalog of
    alternatives, including downloads. Search by name, family, or exact variant, and filter by
-   task or family. Task groups are Chat, Document search (including rerankers), Translation,
-   Images, and Voice. Each compact row shows the purpose, storage size, minimum memory,
+   task or family. The family list only ever offers families the current view and task can
+   show; a family that stops applying after you switch view or task stays selected and marked
+   rather than silently changing, and the empty state that follows names the family and points at
+   Browse models with its count — a family-only reset sits beside **Clear filters**. Task groups
+   are Chat, Document search (including rerankers), Translation, Images, and Voice. Each compact
+   row shows the purpose, storage size, minimum memory,
    status, and available action. Expand **Technical details** for its description, automatic-use
    explanation, paths, and verification controls.
    Quantization variants of the same model share one entry. The installed/recommended choice
@@ -141,7 +145,7 @@ blocks you.
    - **Not downloaded** — the model file isn't on the drive (see Troubleshooting).
    - **Needs ≥N GB RAM** — this computer has less memory than the model's minimum, so it
      can't be selected or started here. Pick a smaller model — quality stays great.
-   - **Can't verify** — the file is present but its checksum didn't match. The model stays listed
+   - **Can't verify** — a required file is present but its checksum didn't match. The model stays listed
      under **On this drive** with its **Download** action, so you can repair it without hunting
      through the catalog; if it is one of several variants of the same model, that group opens
      automatically so the damaged version is visible straight away. (If the publisher has since
@@ -155,10 +159,10 @@ Once a model is **selected**, the app loads it again automatically every time yo
 app (after unlocking, on encrypted drives) — you don't have to come back to this screen. You
 can turn this off under **Settings → Load the selected model automatically**.
 
-> **First visit can take a few minutes:** the app verifies each model file's checksum the
+> **First visit can take a few minutes:** the app verifies every file the model needs the
 > first time it sees it. The result is remembered, so later visits are instant. The
-> **Verify checksum** button (under a card's **Technical details**) re-checks a file from
-> scratch whenever you want.
+> **Verify checksum** button (under a card's **Technical details**) re-checks every file the
+> model needs from scratch whenever you want.
 
 > **No model installed?** You can still try the interface: a model without a weight file shows
 > a **Try in demo mode** button (in developer mode) that runs a built-in demo model. Demo
@@ -187,9 +191,11 @@ it, each one verified before use. None of it ever happens by itself:
    If a download **fails**, or finishes without a checksum the app can verify, the result stays
    in that panel — named, with **Retry download** and **Dismiss** — until you act on it. It
    survives searching and filtering, and it is still there when you leave the **AI Model** screen
-   and come back. **Retry download** re-opens the same confirmation (size, license, address) for
-   exactly that model; it is greyed out with the reason when downloads are switched off or the
-   file is no longer offered. **Dismiss** clears the panel and puts the result back on the model's
+   and come back. Reloading the app window keeps it too: the screen finds the running download —
+   or the result you haven't dealt with yet — again by itself, and anything you dismissed stays
+   dismissed. **Retry download** re-opens the same confirmation (size, license, address) for
+   exactly that model; it is greyed out with the reason when downloads are switched off, the
+   file is no longer offered, or the model turns out to be on this drive already. **Dismiss** clears the panel and puts the result back on the model's
    own card, where its Resume button is.
 4. The file is checksum-verified before the app will use it — a corrupted download is
    discarded automatically, never silently kept.
@@ -217,6 +223,9 @@ words per second" and "faster than you can read". There is nothing to install or
 - If the graphics driver ever causes trouble, the app switches itself to **compatibility mode**
   (processor only — works on every machine) and tells you with a one-line note. After a driver
   update, **Try GPU again** on the same Diagnostics tab re-enables the graphics card.
+- If a particular model cannot be loaded on your computer at all, you get a note naming that
+  model and its replies are simulated until you pick another one — compatibility mode is *not*
+  switched on by it, so every other model keeps using your graphics card as usual.
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
   big speedups come from dedicated graphics cards.

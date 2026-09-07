@@ -173,6 +173,12 @@ const api = {
   /** Cancel an in-flight download; the partial file is kept for a future resume. */
   cancelDownload: (jobId: string): Promise<DownloadJob> =>
     ipcRenderer.invoke(IPC.cancelDownload, jobId),
+  /** #314: the downloads a reloaded renderer still has to show — the live job (if any) plus the
+   *  undismissed failed / unverified results. No job id needed, so it re-attaches after a reload. */
+  listDownloadJobs: (): Promise<DownloadJob[]> => ipcRenderer.invoke(IPC.listDownloadJobs),
+  /** #314: dismiss a terminal result in the main process so it stays dismissed across a reload. */
+  dismissDownloadJob: (jobId: string): Promise<void> =>
+    ipcRenderer.invoke(IPC.dismissDownloadJob, jobId),
 
   // ---- In-app engine (llama.cpp sidecar) downloader ----
   /** Is the real AI engine installed, and (if not) can it be fetched for this host? */

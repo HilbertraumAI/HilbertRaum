@@ -887,7 +887,7 @@ split), `install_state_done` (with `cacheHit`, separating a real multi-GB hash f
 size+mtime cache hit), `checksum_start` / `checksum_done` (issue #106: one pair per
 REAL full-file hash wherever it runs — the cached model-weight path and the download
 verify alike — with a shared `seq` to pair interleaved hashes, `{modelId, file:
-weight|mmproj|download}`, bytes, ms, ok; each real hash also writes one plain `app.log`
+weight|mmproj|extra|download}` (`extra` = a #310 `files:` entry), bytes, ms, ok; each real hash also writes one plain `app.log`
 line, visible without the perf log), `sidecar_healthy`, `runtime_selected`,
 `model_prefetch` (issue #114: one mark per event of the concurrent weight prefetch riding
 the load window — `started`/`skipped`, then the settle outcome `done`/`aborted`/`failed`;

@@ -59,6 +59,44 @@ field_in() { printf '%s\n' "$1" | sed -n "s/^[[:space:]]*$2[[:space:]]*:[[:space
 # Extract the indented body of a top-level `mmproj:` mapping (lines until the next column-0 key).
 mmproj_block_of() { awk '/^mmproj:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
 
+# Extract the indented body of a top-level `files:` mapping — the ADDITIONAL required files of
+# a multi-file weight (#310, e.g. a GGUF shard set's shards 2..N) — lines until the next
+# column-0 key. Mirrors mmproj_block_of; emitted AFTER local_path/sha256/download/mmproj in
+# every manifest (model-policy.md key-order rule), so it never poisons the flat top-level reads.
+files_block_of() { awk '/^files:[[:space:]]*$/{f=1;next} /^[^[:space:]]/{f=0} f' "$1"; }
+
+# Split a `files:` block (as text, e.g. from files_block_of) into one TAB-separated record per
+# list member: local_path, sha256, download.url, download.size_bytes (raw — comments/quotes are
+# stripped by the caller via clean_value). A member starts at its own `- local_path:` line and
+# runs to the next one (or the end of the block).
+files_member_records() {
+  printf '%s\n' "$1" | awk '
+    function emit() { if (started) printf "%s\t%s\t%s\t%s\n", lp, sha, durl, dsize }
+    /^[[:space:]]*-[[:space:]]*local_path:/ {
+      emit()
+      started = 1; indl = 0
+      lp = $0; sub(/^[[:space:]]*-[[:space:]]*local_path:[[:space:]]*/, "", lp)
+      sha = ""; durl = ""; dsize = ""
+      next
+    }
+    started && /^[[:space:]]*download:[[:space:]]*$/ { indl = 1; next }
+    started && !indl && /^[[:space:]]*sha256:/ {
+      sha = $0; sub(/^[[:space:]]*sha256:[[:space:]]*/, "", sha); next
+    }
+    started && indl && /^[[:space:]]*url:/ {
+      durl = $0; sub(/^[[:space:]]*url:[[:space:]]*/, "", durl); next
+    }
+    started && indl && /^[[:space:]]*size_bytes:/ {
+      dsize = $0; sub(/^[[:space:]]*size_bytes:[[:space:]]*/, "", dsize); next
+    }
+    END { emit() }
+  '
+}
+
+# Same cleanup field()/field_in() apply after extracting a raw value: strip an inline YAML
+# comment, then quotes, then trailing whitespace.
+clean_value() { printf '%s\n' "$1" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
+
 is_real_sha() { [[ "$1" =~ ^[a-f0-9]{64}$ ]]; }
 
 # Supported (runtime -> format) pairs — mirror models.ts SUPPORTED_RUNTIME_FORMATS (the app's
@@ -121,6 +159,16 @@ for mf in "${MANIFEST_FILES[@]}"; do
   mmproj_local="$(field_in "$mmproj_block" local_path)"
   mmproj_sha="$(field_in "$mmproj_block" sha256 | tr '[:upper:]' '[:lower:]')"
 
+  # #310: the ADDITIONAL required files of a multi-file weight (a GGUF shard set's shards
+  # 2..N), each verified with an " (file N/M)" label — M is the primary plus every declared
+  # file (mmproj is reported separately and does not count towards M).
+  files_block="$(files_block_of "$mf")"
+  total_files=1
+  if [[ -n "$files_block" ]]; then
+    file_count="$(files_member_records "$files_block" | grep -c '^' || true)"
+    total_files=$((1 + file_count))
+  fi
+
   if [[ "$format" != "$(supported_format_for "$runtime")" ]]; then
     total_weights=$((total_weights + 1))
     [[ $STRICT -eq 1 ]] && echo "STRICT: $id is UNSUPPORTED (must be VERIFIED)" >&2
@@ -130,6 +178,16 @@ for mf in "${MANIFEST_FILES[@]}"; do
 
   verify_file "$id" "" "$TARGET/$local_path" "$sha"
   [[ -n "$mmproj_local" ]] && verify_file "$id" " (mmproj)" "$TARGET/$mmproj_local" "$mmproj_sha"
+  if [[ -n "$files_block" ]]; then
+    file_n=2
+    while IFS=$'\t' read -r f_local f_sha _ _; do
+      [[ -z "$f_local" ]] && continue
+      f_local="$(clean_value "$f_local")"
+      f_sha="$(clean_value "$f_sha" | tr '[:upper:]' '[:lower:]')"
+      verify_file "$id" " (file $file_n/$total_files)" "$TARGET/$f_local" "$f_sha"
+      file_n=$((file_n + 1))
+    done < <(files_member_records "$files_block")
+  fi
 done
 
 # Emit one checksums.json entry per FILE (the GGUF, and a vision model's mmproj — DIST-2).
@@ -168,6 +226,14 @@ if [[ $GENERATE -eq 1 ]]; then
       mmproj_local="$(field_in "$(mmproj_block_of "$mf")" local_path)"
       emit_entry "$id" "$local_path"
       [[ -n "$mmproj_local" ]] && emit_entry "$id" "$mmproj_local"
+      # #310: one entry per ADDITIONAL declared file, same order as manifestFiles().
+      files_block="$(files_block_of "$mf")"
+      if [[ -n "$files_block" ]]; then
+        while IFS=$'\t' read -r f_local _ _ _; do
+          [[ -z "$f_local" ]] && continue
+          emit_entry "$id" "$(clean_value "$f_local")"
+        done < <(files_member_records "$files_block")
+      fi
     done
     [[ $first -eq 0 ]] && echo '    }'
     echo '  ]'

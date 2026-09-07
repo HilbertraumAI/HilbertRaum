@@ -131,6 +131,51 @@ export function isBindRaceError(message: string): boolean {
   return /address already in use|EADDRINUSE|only one usage of each socket address/i.test(message)
 }
 
+/** The suffix `stderrSuffix()` builds; the classifier below splits the tail off at it. */
+const LAST_OUTPUT_MARKER = ' — last output: '
+
+/** The ` — last output: …` tail's LAST non-empty line, or '' when there is no tail. */
+function lastOutputLine(message: string): string {
+  const at = message.lastIndexOf(LAST_OUTPUT_MARKER)
+  if (at < 0) return ''
+  const lines = message
+    .slice(at + LAST_OUTPUT_MARKER.length)
+    .split('\n')
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+  return lines.at(-1) ?? ''
+}
+
+/**
+ * A comparable CLASS for a start failure (#312), for the ladder's CPU control probe: two rungs
+ * that died the same way share a signature, so the ladder can tell "this MODEL will not load
+ * anywhere" from "this DEVICE is broken" without reading llama.cpp's own vocabulary — which
+ * drifts between builds, and in which a VRAM allocation failure reads exactly like an
+ * unsupported-architecture failure.
+ *
+ * Covers the four shapes this module throws — `launch` (spawn error), `exit:code N` /
+ * `exit:signal S`, `timeout` (the health budget), `integrity` (pre-spawn hash mismatch) — plus
+ * the last non-empty line of the captured `— last output:` tail, which on the exit path IS the
+ * failing line. Earlier tail lines are deliberately ignored: two loads of the same broken weight
+ * print different progress before the same final error. Returns null for anything else, and the
+ * ladder treats "no signature" as a device fault (its conservative default).
+ */
+export function failureSignature(reason: string): string | null {
+  const exit = /^llama-server exited before becoming healthy \((code -?\d+|signal \S+?)\)/.exec(reason)
+  const kind = exit
+    ? `exit:${exit[1]}`
+    : /^llama-server failed pre-spawn integrity verification/.test(reason)
+      ? 'integrity'
+      : /^llama-server failed to launch:/.test(reason)
+        ? 'launch'
+        : /^llama-server did not become healthy within \d+ms/.test(reason)
+          ? 'timeout'
+          : null
+  if (kind === null) return null
+  const tail = lastOutputLine(reason)
+  return tail ? `${kind} | ${tail}` : kind
+}
+
 /** A request abort signal plus a `clear()` that cancels its backing timeout timer. */
 export interface CombinedAbort {
   /** Aborts on EITHER the per-request timeout OR the optional caller signal. */

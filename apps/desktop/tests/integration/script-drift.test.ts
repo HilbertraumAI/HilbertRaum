@@ -748,3 +748,58 @@ describe('one commercial gate — builder + fetch-runtime literals (#233, #234)'
     expect(window.split('\n').slice(-25).join('\n')).toContain(flag)
   })
 })
+
+describe('verify-models / fetch-models enumerate every declared file (#310)', () => {
+  // Text-level anchors: each script must carry a dedicated `files:` block scraper (named like
+  // the existing mmproj_block_of / Get-MmprojBlock precedent) rather than hand-rolling the
+  // parse inline, so a future edit has one obvious place to keep in sync with manifestFiles().
+  it.each([
+    ['scripts/verify-models.sh', 'files_block_of() {', 'files_member_records() {'],
+    ['scripts/verify-models.ps1', 'function Get-FilesBlock', 'function Get-FilesMembers'],
+    ['scripts/fetch-models.sh', 'files_block_of() {', 'files_member_records() {'],
+    ['scripts/fetch-models.ps1', 'function Get-FilesBlock', 'function Get-FilesMembers']
+  ])('%s declares a files: block scraper and a member reader', (rel, blockMarker, memberMarker) => {
+    const src = read(rel)
+    expect(src, `${rel}: missing "${blockMarker}"`).toContain(blockMarker)
+    expect(src, `${rel}: missing "${memberMarker}"`).toContain(memberMarker)
+  })
+
+  // The additional-file label format `(file N/M)` (#310) must appear at the report site of
+  // every script — the load-bearing text a maintainer scanning `verify-models`'s or
+  // `fetch-models`'s output relies on to tell which shard failed.
+  it.each([
+    ['scripts/verify-models.sh'],
+    ['scripts/verify-models.ps1'],
+    ['scripts/fetch-models.sh'],
+    ['scripts/fetch-models.ps1']
+  ])('%s reports an additional declared file with the "(file " label', (rel) => {
+    expect(read(rel), `${rel}: missing the "(file " label`).toContain('(file ')
+  })
+
+  it('verify-models.sh loops files_member_records through verify_file, same as the mmproj call', () => {
+    const src = read('scripts/verify-models.sh')
+    expect(src).toContain('verify_file "$id" " (file $file_n/$total_files)"')
+  })
+
+  it('verify-models.ps1 loops Get-FilesMembers through Write-WeightResult, same as the mmproj call', () => {
+    const src = read('scripts/verify-models.ps1')
+    expect(src).toContain('Get-FilesMembers')
+    expect(src).toContain('Write-WeightResult')
+  })
+
+  it('verify-models --generate scripts emit one checksums.json entry per declared file', () => {
+    const sh = read('scripts/verify-models.sh')
+    const ps = read('scripts/verify-models.ps1')
+    // The generate loop calls emit_entry (sh) / builds an entry (ps1) once per files: member,
+    // in addition to the primary and the mmproj — the DIST-2 precedent this issue extends.
+    expect(sh).toContain('emit_entry "$id" "$(clean_value "$f_local")"')
+    expect(ps).toContain('$fileMembers')
+  })
+
+  it('fetch-models scripts pass the (file N/M) label through the EXISTING handle_file/Invoke-HandleFile arity (#310)', () => {
+    const sh = read('scripts/fetch-models.sh')
+    const ps = read('scripts/fetch-models.ps1')
+    expect(sh).toContain('handle_file "$id" " (file $file_n/$total_files)"')
+    expect(ps).toContain('Invoke-HandleFile $id $label')
+  })
+})

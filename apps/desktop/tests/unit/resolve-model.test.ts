@@ -6,16 +6,30 @@ import { describe, it, expect, vi, beforeEach } from 'vitest'
 
 const discoverManifests = vi.fn()
 const weightPath = vi.fn((root: string, m: { id: string }) => `${root}/weights/${m.id}.gguf`)
+// #310: the resolver reports EVERY required file, so the availability ladder can refuse a
+// half-present multi-file weight. The fake mirrors the real enumeration's shape.
+const manifestFiles = vi.fn((root: string, m: { id: string; files?: Array<{ localPath: string }> }) => [
+  { path: `${root}/weights/${m.id}.gguf`, sha: 'x', localPath: `weights/${m.id}.gguf`, kind: 'weight' },
+  ...(m.files ?? []).map((f) => ({ path: `${root}/${f.localPath}`, sha: 'x', localPath: f.localPath, kind: 'extra' }))
+])
 
 vi.mock('../../src/main/services/models', () => ({
   discoverManifests: (...a: unknown[]) => discoverManifests(...a),
-  weightPath: (...a: unknown[]) => weightPath(...(a as [string, { id: string }]))
+  weightPath: (...a: unknown[]) => weightPath(...(a as [string, { id: string }])),
+  manifestFiles: (...a: unknown[]) => manifestFiles(...(a as [string, { id: string }]))
 }))
 
 import { resolveModelByRole } from '../../src/main/services/resolve-model'
 
-function manifest(id: string, role: string, recommendedContextTokens = 4096) {
-  return { manifest: { id, role, recommendedContextTokens } }
+function manifest(id: string, role: string, recommendedContextTokens = 4096, extras: string[] = []) {
+  return {
+    manifest: {
+      id,
+      role,
+      recommendedContextTokens,
+      ...(extras.length > 0 ? { files: extras.map((localPath) => ({ localPath })) } : {})
+    }
+  }
 }
 
 describe('resolveModelByRole (M-A3)', () => {
@@ -40,6 +54,7 @@ describe('resolveModelByRole (M-A3)', () => {
     expect(resolveModelByRole('C:/m', 'C:/drive', 'embeddings')).toEqual({
       id: 'e5-embed',
       modelPath: 'C:/drive/weights/e5-embed.gguf',
+      requiredPaths: ['C:/drive/weights/e5-embed.gguf'],
       contextTokens: 512
     })
     expect(resolveModelByRole('C:/m', 'C:/drive', 'reranker')).toMatchObject({
@@ -52,8 +67,28 @@ describe('resolveModelByRole (M-A3)', () => {
     const m = resolveModelByRole('C:/m', 'C:/drive', 'transcriber', {
       includeContextTokens: false
     })
-    expect(m).toEqual({ id: 'whisper-base', modelPath: 'C:/drive/weights/whisper-base.gguf' })
+    expect(m).toEqual({
+      id: 'whisper-base',
+      modelPath: 'C:/drive/weights/whisper-base.gguf',
+      requiredPaths: ['C:/drive/weights/whisper-base.gguf']
+    })
     expect(m).not.toHaveProperty('contextTokens')
+  })
+
+  // #310: the primary stays the `--model` argument; requiredPaths carries the whole weight.
+  it('reports every required file of a multi-file weight (#310)', () => {
+    discoverManifests.mockReturnValue({
+      manifests: [manifest('sharded-embed', 'embeddings', 512, ['models/embed/e-00002-of-00002.gguf'])]
+    })
+    expect(resolveModelByRole('C:/m', 'C:/drive', 'embeddings')).toEqual({
+      id: 'sharded-embed',
+      modelPath: 'C:/drive/weights/sharded-embed.gguf',
+      requiredPaths: [
+        'C:/drive/weights/sharded-embed.gguf',
+        'C:/drive/models/embed/e-00002-of-00002.gguf'
+      ],
+      contextTokens: 512
+    })
   })
 
   it('returns null when no manifest matches the role', () => {
@@ -68,6 +103,7 @@ describe('resolveModelByRole (M-A3)', () => {
     expect(resolveModelByRole('C:/m', 'C:/drive', 'embeddings', { discovered })).toEqual({
       id: 'e5-embed',
       modelPath: 'C:/drive/weights/e5-embed.gguf',
+      requiredPaths: ['C:/drive/weights/e5-embed.gguf'],
       contextTokens: 512
     })
     expect(discoverManifests).not.toHaveBeenCalled()

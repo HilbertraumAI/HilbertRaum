@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,6 +51,7 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
+import { clearChecksumCache, primeChecksum } from '../../src/main/services/models'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { AppSettings, AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
@@ -584,6 +586,92 @@ describe('registerModelIpc', () => {
     const { result } = await invoke(handlers, IPC.verifyModel, 'qwen3-4b-instruct-q4')
     expect(result).toBe('missing') // no weights on disk in this fixture
     await expect(invoke(handlers, IPC.verifyModel, 'nope')).rejects.toThrow(/Unknown model id/)
+  })
+
+  // #310: the multi-file seams of the model IPC — the re-verify button's per-file cache
+  // invalidation, and the #107/#108/#114 byte + path accounting the runtime start receives.
+  describe('multi-file weights reach every IPC seam (#310)', () => {
+    const shardRel = (n: number): string => `models/chat/big-${String(n).padStart(5, '0')}-of-00003.gguf`
+    const shardBody = (n: number): string => `sharded-weight-body-${n}`
+    const shardAbs = (root: string, n: number): string => join(root, ...shardRel(n).split('/'))
+
+    /** A temp drive carrying a three-shard model, every file present with its real hash. */
+    function shardedDrive(): { root: string; manifestsDir: string } {
+      const root = mkdtempSync(join(tmpdir(), 'hilbertraum-shards-'))
+      const manifestsDir = join(root, 'model-manifests')
+      mkdirSync(manifestsDir, { recursive: true })
+      mkdirSync(join(root, 'models', 'chat'), { recursive: true })
+      const sha = (n: number): string => createHash('sha256').update(shardBody(n)).digest('hex')
+      for (const n of [1, 2, 3]) writeFileSync(shardAbs(root, n), shardBody(n))
+      writeFileSync(
+        join(manifestsDir, 'sharded.yaml'),
+        stringify({
+          id: 'sharded-chat',
+          display_name: 'Sharded Chat',
+          family: 'qwen3',
+          role: 'chat',
+          format: 'gguf',
+          runtime: 'llama_cpp',
+          license: 'apache-2.0',
+          size_on_disk_gb: 0.1,
+          recommended_min_ram_gb: 1,
+          recommended_ram_gb: 1,
+          recommended_context_tokens: 4096,
+          local_path: shardRel(1),
+          sha256: sha(1),
+          license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-09-07', notes: '' },
+          // Emitted AFTER the top-level path/hash keys — the key order the flat scrapers need.
+          files: [2, 3].map((n) => ({ local_path: shardRel(n), sha256: sha(n) }))
+        })
+      )
+      return { root, manifestsDir }
+    }
+
+    it('verifyModel invalidates the cache entry of EVERY declared file', async () => {
+      const { root, manifestsDir } = shardedDrive()
+      clearChecksumCache()
+      // A stale, WRONG cached hash for the LAST shard: only a per-file invalidation can
+      // recover from it — a weight-only invalidation would keep serving 'checksum_failed'.
+      primeChecksum(shardAbs(root, 3), 'a'.repeat(64))
+      const ctx = {
+        db: seededDb(),
+        manifestsDir,
+        paths: { rootPath: root, configPath: bogusConfigDir() },
+        isDev: true,
+        runtime: { activeModelId: () => null }
+      } as unknown as AppContext
+      reg(ctx)
+      const { result } = await invoke(handlers, IPC.verifyModel, 'sharded-chat')
+      expect(result).toBe('installed')
+    })
+
+    it('startRuntime passes every file as weightPaths and their SUM as weightBytes', async () => {
+      const { root, manifestsDir } = shardedDrive()
+      clearChecksumCache()
+      const started: Array<Record<string, unknown>> = []
+      const ctx = {
+        db: seededDb(),
+        manifestsDir,
+        paths: { rootPath: root, configPath: bogusConfigDir() },
+        isDev: true,
+        runtime: {
+          start: async (o: Record<string, unknown>) => {
+            started.push(o)
+            return { running: true, modelId: String(o.modelId), port: null, healthy: true, message: 'ok' }
+          },
+          activeModelId: () => null
+        }
+      } as unknown as AppContext
+      reg(ctx)
+      await invoke(handlers, IPC.startRuntime, 'sharded-chat')
+      // `--model` still receives shard 1 (llama.cpp finds the siblings by name)…
+      expect(started[0].modelPath).toBe(shardAbs(root, 1))
+      // …while the #114 prefetch list and the #107/#108 denominator cover the whole weight.
+      expect(started[0].weightPaths).toEqual([1, 2, 3].map((n) => shardAbs(root, n)))
+      expect(started[0].weightBytes).toBe(
+        [1, 2, 3].reduce((sum, n) => sum + Buffer.byteLength(shardBody(n)), 0)
+      )
+    })
   })
 
   // Beta #27 (D70): the Models screen's collapsed "Use this model" action = select + start in one

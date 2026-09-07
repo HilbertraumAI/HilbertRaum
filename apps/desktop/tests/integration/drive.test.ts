@@ -282,7 +282,72 @@ describe('verifyDriveModels — vision two-file fold (DIST-2)', () => {
   })
 })
 
+// #310: the same fold over a shard set. The drive verifier keeps ONE row per model and names
+// the FIRST offending file, so a drive carrying a quarter of a weight cannot pass the sell gate.
+const SHARD = (n: number): string => `models/chat/big-${String(n).padStart(5, '0')}-of-00003.gguf`
+
+function shardedManifest(shas: [string, string, string]): ModelManifest {
+  return asManifest({
+    id: 'sharded',
+    local_path: SHARD(1),
+    sha256: shas[0],
+    files: [
+      { local_path: SHARD(2), sha256: shas[1] },
+      { local_path: SHARD(3), sha256: shas[2] }
+    ]
+  })
+}
+const shardBytes = (n: number): string => `shard-${n}`
+const shardHash = (n: number): string => createHash('sha256').update(shardBytes(n)).digest('hex')
+
+describe('verifyDriveModels — multi-file weight fold (#310)', () => {
+  it('FAILS the model when a declared shard is MISSING, naming that file', async () => {
+    const root = tempDir('hilbertraum-verify-shards-')
+    const m = shardedManifest([shardHash(1), shardHash(2), shardHash(3)])
+    writeFileAt(root, SHARD(1), shardBytes(1))
+    writeFileAt(root, SHARD(3), shardBytes(3)) // shard 2 absent
+    const rows = await verifyDriveModels(root, [m])
+    expect(rows).toHaveLength(1) // one row per model, not per file
+    expect(rows[0].status).toBe('missing')
+    expect(rows[0].localPath).toBe(SHARD(2))
+  })
+
+  it('FAILS the model when a later shard is CORRUPT, naming that file', async () => {
+    const root = tempDir('hilbertraum-verify-shards-')
+    const m = shardedManifest([shardHash(1), shardHash(2), shardHash(3)])
+    writeFileAt(root, SHARD(1), shardBytes(1))
+    writeFileAt(root, SHARD(2), shardBytes(2))
+    writeFileAt(root, SHARD(3), 'corrupt shard bytes')
+    const [r] = await verifyDriveModels(root, [m])
+    expect(r.status).toBe('mismatch')
+    expect(r.localPath).toBe(SHARD(3))
+  })
+
+  it('VERIFIES the model only when EVERY shard matches', async () => {
+    const root = tempDir('hilbertraum-verify-shards-')
+    const m = shardedManifest([shardHash(1), shardHash(2), shardHash(3)])
+    for (const n of [1, 2, 3]) writeFileAt(root, SHARD(n), shardBytes(n))
+    const [r] = await verifyDriveModels(root, [m])
+    expect(r.status).toBe('verified')
+    expect(r.localPath).toBe(SHARD(1))
+  })
+})
+
 describe('buildChecksumsJson (generate mode)', () => {
+  // #310: one entry per declared file, in declaration order (the vision case below pins the
+  // same rule for the GGUF + projector pair).
+  it('captures every shard of a multi-file weight in declaration order', async () => {
+    const root = tempDir('hilbertraum-sums-shards-')
+    const m = shardedManifest([shardHash(1), shardHash(2), shardHash(3)])
+    for (const n of [1, 2]) writeFileAt(root, SHARD(n), shardBytes(n)) // shard 3 absent
+    const sums = await buildChecksumsJson(root, [m], '2026-09-07T00:00:00Z')
+    expect(sums.entries.map((e) => e.local_path)).toEqual([SHARD(1), SHARD(2), SHARD(3)])
+    expect(sums.entries.map((e) => e.id)).toEqual(['sharded', 'sharded', 'sharded'])
+    expect(sums.entries.map((e) => e.present)).toEqual([true, true, false])
+    expect(sums.entries[1].sha256).toBe(shardHash(2))
+    expect(sums.entries[2].sha256).toBe(null)
+  })
+
   it('captures BOTH the GGUF and the mmproj of a vision model (DIST-2)', async () => {
     const root = tempDir('hilbertraum-sums-vision-')
     const ggufHash = createHash('sha256').update('gguf').digest('hex')

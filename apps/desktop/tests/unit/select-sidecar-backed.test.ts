@@ -13,13 +13,14 @@ const MODEL: SidecarModel = { id: 'm', modelPath: 'C:/weights/m.gguf' }
 function run(over: {
   model: SidecarModel | null
   bin: string | null
-  weights: boolean
+  weights: boolean | ((path: string) => boolean)
 }) {
+  const weights = over.weights
   return resolveSidecarSelection<SidecarModel, unknown>({
     rootPath: 'C:/drive',
     model: over.model,
     resolveBin: () => over.bin,
-    modelExists: () => over.weights,
+    modelExists: typeof weights === 'function' ? weights : () => weights,
     makeReal: () => ({}),
     binaryName: 'llama-server',
     modelNoun: 'embedding model'
@@ -53,6 +54,55 @@ describe('resolveSidecarSelection (L16)', () => {
       expect(sel.model).toBe(MODEL)
       expect(sel.binPath).toBe('C:/bin/llama-server')
     }
+  })
+
+  // #310: a sidecar-backed role's weight can be several files. Existence only (these roles
+  // never hash) — but ALL of them, or the role would report available on a fraction of a model
+  // and fail at load time instead of at the gate.
+  describe('multi-file weights (#310)', () => {
+    const SHARDED: SidecarModel = {
+      id: 'm',
+      modelPath: 'C:/weights/m-00001-of-00003.gguf',
+      requiredPaths: [
+        'C:/weights/m-00001-of-00003.gguf',
+        'C:/weights/m-00002-of-00003.gguf',
+        'C:/weights/m-00003-of-00003.gguf'
+      ]
+    }
+
+    it('reports weights not present when ANY required file is absent', () => {
+      const sel = run({
+        model: SHARDED,
+        bin: 'C:/bin',
+        weights: (p) => !p.endsWith('m-00002-of-00003.gguf')
+      })
+      expect(sel.available).toBe(false)
+      expect(sel.reason).toBe('embedding model weights not present')
+    })
+
+    it('reports available when EVERY required file is present', () => {
+      const sel = run({ model: SHARDED, bin: 'C:/bin', weights: () => true })
+      expect(sel.available).toBe(true)
+    })
+
+    it('a present primary alone is not enough (the old single-file check)', () => {
+      const sel = run({ model: SHARDED, bin: 'C:/bin', weights: (p) => p === SHARDED.modelPath })
+      expect(sel.available).toBe(false)
+    })
+
+    it('falls back to [modelPath] when the caller declares no requiredPaths', () => {
+      const checked: string[] = []
+      const sel = run({
+        model: MODEL,
+        bin: 'C:/bin',
+        weights: (p) => {
+          checked.push(p)
+          return true
+        }
+      })
+      expect(sel.available).toBe(true)
+      expect(checked).toEqual(['C:/weights/m.gguf'])
+    })
   })
 
   it('checks the rungs in order: model first, then binary, then weights', () => {
