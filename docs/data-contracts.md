@@ -681,6 +681,13 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   `currentMachine`,
   `currentGpu` — the budget device for the next start, `{ name, totalMb, useful }` or null, the same
   device `BenchmarkResult.gpu` and the `listModels` ★ go by, never `settings.gpuProbe.devices[0]` —,
+  `graphicsDevice` — the device the graphics TILE names, `{ name, totalMb, useful }` or null
+  (`displayDevice` over the same eligible probe): a superset of `currentGpu` — equal to it when a
+  usable card exists, else the largest device that does not look integrated even when it is under
+  the usable gate (the 6 GB laptop card Vulkan reports at 5,9xx MiB, #321), else the integrated
+  device; null in the SAME cases as `currentGpu` (no eligible probe, no device in it, GPU switched
+  off / auto-disabled), so the tile's "acceleration is off" copy stands. Whether the card is USED
+  is `currentGpu`'s question, never this field's (owner decision 2026-09-07) —,
   `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
   `placement: { memoryClass, ramMb, vramMb, model, recommendedContextTokens, observed,
   observedMismatch, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }` (the
