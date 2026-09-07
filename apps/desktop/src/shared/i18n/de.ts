@@ -569,11 +569,8 @@ export const de: Record<keyof typeof en, string> = {
     'Importiere Dateien, um Fragen dazu zu stellen — alles bleibt auf diesem Laufwerk.',
   'docs.selectAria': '{title} zum Fragen auswählen',
   'docs.selectTitle': 'Auswählen, um nur ausgewählte Dokumente zu fragen',
-  'docs.meta.size': 'Größe',
-  'docs.meta.sections': 'Abschnitte',
   'docs.meta.sectionsCount.one': '{count} Abschnitt',
   'docs.meta.sectionsCount.other': '{count} Abschnitte',
-  'docs.meta.type': 'Typ',
   'docs.meta.summary': 'Zusammenfassung',
   'docs.scan.ocrOffer':
     'Nutze „Durchsuchbar machen (OCR)“ in dieser Zeile, um die Seiten auf diesem Laufwerk zu lesen.',
@@ -617,15 +614,11 @@ export const de: Record<keyof typeof en, string> = {
     '„Neu indexieren“ verwendet sie weiter',
   'docs.summarize': 'Zusammenfassen',
   'docs.summarizeAgain': 'Erneut zusammenfassen',
-  'docs.summarizeTitle':
-    'Eine Zusammenfassung mit dem lokalen Modell schreiben — nichts verlässt dieses Laufwerk',
   'docs.translate': 'Übersetzen',
-  'docs.translateTitle': 'Mit dem lokalen Modell übersetzen — nichts verlässt dieses Laufwerk',
   'docs.translateNoModel': 'Übersetzungsmodell holen…',
   'docs.translateNoModelTitle':
     'Zum Übersetzen wird das Übersetzungsmodell benötigt — lade es im KI-Modell-Bereich herunter',
   'docs.export': 'Exportieren',
-  'docs.exportTitle': 'Dieses Dokument als Markdown-Datei speichern',
   // #90: Original-Export für IMPORTIERTE Dokumente (generierte behalten das Text-"Exportieren"
   // oben). Die Warnung ist die Dokumente-Stimme des §24.3-Verschlüsselungsgrenze-Texts
   // (review.export.encryptionWarning, wortgleich).
@@ -1190,7 +1183,6 @@ export const de: Record<keyof typeof en, string> = {
   'models.engine.downloadingNoTotal': 'KI-Engine wird heruntergeladen…',
   'models.engine.verifying': 'KI-Engine wird geprüft…',
   'models.engine.extracting': 'KI-Engine wird entpackt…',
-  'models.engine.installedNote': 'Die KI-Engine ist installiert — starte ein Modell, um sie zu nutzen.',
   // Hinweis nur zur Sprach-Engine: die Chat-Engine ist installiert (Chat funktioniert echt);
   // nur die optionale Sprach-Engine (whisper.cpp) fehlt — daher ein ruhiger Info-Hinweis, kein
   // „Demo-Modus“-Alarm. Nutzt dieselben Download-Job-Schlüssel (Fortschritt/Wiederholen/Richtlinie).
@@ -1223,7 +1215,6 @@ export const de: Record<keyof typeof en, string> = {
     'Installiert — wird automatisch zum Übersetzen verwendet. Hier gibt es nichts zu starten.',
   'models.translation.notInstalled':
     'Wird nach der Installation automatisch zum Übersetzen verwendet — keine Einrichtung nötig.',
-  'models.selected': 'Ausgewählt',
   // Beta #27 (D70): „Auswählen“ + „Modell starten“ zu EINER primären Aktion pro Karte
   // zusammengefasst — sie macht dies zum aktiven Modell UND startet es, damit ein neuer Nutzer
   // genau einen klaren Weg zum Chatten hat. Die alten Schlüssel models.select / models.startRuntime
@@ -1236,7 +1227,6 @@ export const de: Record<keyof typeof en, string> = {
   'models.startingTitle': 'Dieses Modell wird geladen — bei großen Modellen kann das etwas dauern',
   'models.startMockTitle':
     'Noch keine Modell-Datei — teste die App im Demo-Modus, mit sichtbar simulierten Antworten',
-  'models.notPresentTitle': 'Modell-Datei nicht vorhanden',
   'models.tech.summary': 'Technische Details',
   'models.tech.id': 'Modell-ID',
   'models.tech.family': 'Familie',
@@ -1451,7 +1441,6 @@ export const de: Record<keyof typeof en, string> = {
   'skills.import.fromFile': 'Aus einer Datei (.skill.zip)…',
   'skills.import.fromFolder': 'Aus einem Ordner…',
   'skills.loading': 'Skills werden geladen…',
-  'skills.locked': 'Entsperre deinen Arbeitsbereich, um Skills zu verwalten.',
   'skills.loadFailed': 'Skills konnten nicht geladen werden.',
   // SKA-32: Hinweis auf Reconcile-Fehler (nur die Anzahl — nie ein Ordnername; §22-M1).
   'skills.reconcile.folderErrors.one':
@@ -2620,7 +2609,6 @@ export const de: Record<keyof typeof en, string> = {
   'docs.section.all': 'Alle Dokumente',
   'docs.section.noProjects': 'Noch keine Projekte',
   'docs.section.newProject': 'Neues Projekt',
-  'docs.section.collapse': 'Bereiche',
   // Die gesamte Dokumente-Unternavigation ein-/ausklappen (§11.6 — die Liste nutzt dann die volle Breite).
   'docs.rail.hide': 'Bereiche ausblenden',
   'docs.rail.show': 'Bereiche einblenden',
@@ -2640,11 +2628,9 @@ export const de: Record<keyof typeof en, string> = {
   'docs.project.deleteWith': 'Das Projekt und die nur hier abgelegten Dokumente löschen',
   'docs.project.deleteWithHint':
     'Nur Dokumente, die nicht in deiner Bibliothek oder einem anderen Projekt liegen, werden gelöscht. Bibliothekswissen bleibt unberührt.',
-  'docs.project.deleteConfirm': 'Projekt löschen',
   'docs.project.archivedNote':
     'Archiviert — als Quelle ausgeblendet, die Dokumente bleiben aber anderswo beantwortbar.',
   'docs.project.options': 'Projektoptionen',
-  'docs.action.addToProject': 'Zu Projekt hinzufügen…',
   'docs.action.moveToProject': 'In Projekt verschieben…',
   'docs.action.addToLibrary': 'In Bibliothek behalten',
   'docs.action.removeFromProject': 'Aus diesem Projekt entfernen',
@@ -2653,8 +2639,6 @@ export const de: Record<keyof typeof en, string> = {
   'docs.action.archive': 'Archivieren',
   'docs.action.unarchive': 'Aus dem Archiv holen',
   'docs.action.chooseProject': 'Projekt auswählen',
-  'docs.lifecycle.temporary': 'Temporär',
-  'docs.lifecycle.archived': 'Archiviert',
   'docs.chip.library': 'Bibliothek',
   'docs.chip.temporary': 'Temporär',
   'docs.chip.generated': 'Erzeugt',
@@ -2895,7 +2879,6 @@ export const de: Record<keyof typeof en, string> = {
   'images.avail.incompatible': 'Das KI-Bildmodell dieses Laufwerks braucht eine neuere KI-Engine.',
   'images.avail.cta': 'Zum KI-Modell',
   'images.avail.ocrPointer': 'Gescannte Dokumente? Nutze „Durchsuchbar machen (OCR)“ unter Dokumente.',
-  'images.locked': 'Entsperre deinen Arbeitsbereich, um ein Bild zu verstehen.',
   'images.drop.title': 'Bild hier ablegen',
   'images.drop.choose': 'oder ein Bild auswählen',
   'images.drop.types': 'PNG, JPEG oder WEBP',
@@ -2969,7 +2952,6 @@ export const de: Record<keyof typeof en, string> = {
   'images.history.runningOpen': 'Laufende Analyse ansehen',
   'images.history.turns.one': '{count} Frage',
   'images.history.turns.other': '{count} Fragen',
-  'images.history.open': 'Öffnen',
   'images.history.delete': 'Löschen',
   // DOC-11 (#150): zugänglicher Name pro Zeile – benennt das Objekt.
   'images.history.deleteAria': '{title} löschen',

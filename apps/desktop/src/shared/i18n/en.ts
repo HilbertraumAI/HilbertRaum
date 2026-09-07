@@ -543,11 +543,8 @@ export const en = {
   'docs.empty.line': 'Import files to ask questions about them — everything stays on this drive.',
   'docs.selectAria': 'Select {title} for asking',
   'docs.selectTitle': 'Select to ask only chosen documents',
-  'docs.meta.size': 'Size',
-  'docs.meta.sections': 'Sections',
   'docs.meta.sectionsCount.one': '{count} section',
   'docs.meta.sectionsCount.other': '{count} sections',
-  'docs.meta.type': 'Type',
   'docs.meta.summary': 'Summary',
   'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" on this row to read the pages on this drive.',
   'docs.scan.ocrMissing':
@@ -586,16 +583,13 @@ export const en = {
     'Run the local text recognition again and replace the stored reading — Re-index reuses it',
   'docs.summarize': 'Summarize',
   'docs.summarizeAgain': 'Summarize again',
-  'docs.summarizeTitle': 'Write a summary with the local model — nothing leaves this drive',
   'docs.translate': 'Translate',
-  'docs.translateTitle': 'Translate with the local model — nothing leaves this drive',
   // The model-missing state (TG-3, plan O2/D3): the Translate item disables and this
   // sibling item deep-links to the AI Model screen.
   'docs.translateNoModel': 'Get the translation model…',
   'docs.translateNoModelTitle':
     'Translating needs the translation model — download it on the AI Model screen',
   'docs.export': 'Export',
-  'docs.exportTitle': 'Save this document as a Markdown file',
   // #90: the original-bytes export for IMPORTED documents (generated docs keep the text
   // "Export" above). The warning is the docs voice of the §24.3 encryption-boundary copy
   // (review.export.encryptionWarning, verbatim) — shown in the ConfirmDialog on every
@@ -1158,7 +1152,6 @@ export const en = {
   'models.engine.downloadingNoTotal': 'Downloading the AI engine…',
   'models.engine.verifying': 'Verifying the AI engine…',
   'models.engine.extracting': 'Unpacking the AI engine…',
-  'models.engine.installedNote': 'The AI engine is installed — start a model to use it.',
   // Voice-engine-only note: the chat engine is installed (chat works for real); only the
   // optional voice engine (whisper.cpp) is missing, so this is a quiet info note — never the
   // "demo mode" alarm. Reuses the engine download job (progress/retry/policy) keys above.
@@ -1186,7 +1179,6 @@ export const en = {
   'models.vision.notInstalled': 'Available in the Images tab once installed — no setup needed.',
   'models.translation.installed': 'Installed — used automatically for translation. Nothing to start here.',
   'models.translation.notInstalled': 'Used automatically for translation once installed — no setup needed.',
-  'models.selected': 'Selected',
   // Beta #27 (D70): the Select + Start pair collapsed into ONE primary action per installed chat
   // card — it makes this the active model AND starts its runtime, so a first-time user has a single
   // obvious way to get to chatting (selected models still auto-start at launch; only mid-session did
@@ -1199,7 +1191,6 @@ export const en = {
   'models.startingTitle': 'This model is loading — it can take a little while for large models',
   'models.startMockTitle':
     'No model file yet — try the app in demo mode, with visibly simulated answers',
-  'models.notPresentTitle': 'Model file not present',
   'models.tech.summary': 'Technical details',
   'models.tech.id': 'Model id',
   'models.tech.family': 'Family',
@@ -1394,7 +1385,6 @@ export const en = {
   'skills.import.fromFile': 'From a file (.skill.zip)…',
   'skills.import.fromFolder': 'From a folder…',
   'skills.loading': 'Loading skills…',
-  'skills.locked': 'Unlock your workspace to manage skills.',
   'skills.loadFailed': 'Skills couldn’t be loaded.',
   // SKA-32: the reconcile-error notice (count only — never a folder name; §22-M1).
   'skills.reconcile.folderErrors.one':
@@ -2588,7 +2578,6 @@ export const en = {
   'docs.section.all': 'All documents',
   'docs.section.noProjects': 'No projects yet',
   'docs.section.newProject': 'New project',
-  'docs.section.collapse': 'Sections',
   // Collapse/expand the whole Documents sub-nav (§11.6 — the list then takes the full width).
   'docs.rail.hide': 'Hide sections',
   'docs.rail.show': 'Show sections',
@@ -2608,10 +2597,8 @@ export const en = {
   'docs.project.deleteWith': 'Delete the project and the documents that live only here',
   'docs.project.deleteWithHint':
     'Only documents not kept in your Library or another project are deleted. Library knowledge is never touched.',
-  'docs.project.deleteConfirm': 'Delete project',
   'docs.project.archivedNote': 'Archived — hidden as a source, but its documents stay answerable elsewhere.',
   'docs.project.options': 'Project options',
-  'docs.action.addToProject': 'Add to project…',
   'docs.action.moveToProject': 'Move to project…',
   'docs.action.addToLibrary': 'Keep in Library',
   'docs.action.removeFromProject': 'Remove from this project',
@@ -2620,8 +2607,6 @@ export const en = {
   'docs.action.archive': 'Archive',
   'docs.action.unarchive': 'Unarchive',
   'docs.action.chooseProject': 'Choose a project',
-  'docs.lifecycle.temporary': 'Temporary',
-  'docs.lifecycle.archived': 'Archived',
   'docs.chip.library': 'Library',
   'docs.chip.temporary': 'Temporary',
   'docs.chip.generated': 'Generated',
@@ -2877,9 +2862,6 @@ export const en = {
   'images.avail.incompatible': "This drive's vision model needs a newer AI engine.",
   'images.avail.cta': 'Go to AI Model',
   'images.avail.ocrPointer': 'Scanned documents? Use Make searchable (OCR) under Documents.',
-  // Locked posture (§5.6). The app shell normally gates the whole app behind the unlock
-  // screen, so this is a calm defensive fallback.
-  'images.locked': 'Unlock your workspace to understand an image.',
   // Drop zone (§5.2) — a large, focusable target; the "choose" button is the non-drag path.
   'images.drop.title': 'Drop an image here',
   'images.drop.choose': 'or choose an image',
@@ -2957,7 +2939,6 @@ export const en = {
   'images.history.runningOpen': 'View the running analysis',
   'images.history.turns.one': '{count} question',
   'images.history.turns.other': '{count} questions',
-  'images.history.open': 'Open',
   'images.history.delete': 'Delete',
   // DOC-11 (#150): per-row accessible name — names the object so rows are distinct to AT.
   'images.history.deleteAria': 'Delete {title}',
