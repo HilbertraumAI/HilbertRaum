@@ -125,8 +125,12 @@ blocks you.
 1. Open **AI Model**. Your current model stays at the top. The **Model library** below defaults
    to **On this drive** when models are installed; **Browse models** shows the full catalog of
    alternatives, including downloads. Search by name, family, or exact variant, and filter by
-   task or family. Task groups are Chat, Document search (including rerankers), Translation,
-   Images, and Voice. Each compact row shows the purpose, storage size, minimum memory,
+   task or family. The family list only ever offers families the current view and task can
+   show; a family that stops applying after you switch view or task stays selected and marked
+   rather than silently changing, and the empty state that follows names the family and points at
+   Browse models with its count — a family-only reset sits beside **Clear filters**. Task groups
+   are Chat, Document search (including rerankers), Translation, Images, and Voice. Each compact
+   row shows the purpose, storage size, minimum memory,
    status, and available action. Expand **Technical details** for its description, automatic-use
    explanation, paths, and verification controls.
    Quantization variants of the same model share one entry. The installed/recommended choice

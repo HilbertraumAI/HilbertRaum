@@ -639,6 +639,106 @@ describe('ModelsScreen — search, tasks and model variants', () => {
     expect(screen.getByText('Document embedder')).toBeVisible()
   })
 
+  describe('#313 family options follow the view and task', () => {
+    // active/newchat are chat; embed/rerank are the "documents" task (embeddings + reranker);
+    // voice is transcriber. bge/e5/whisper are installed (on this drive); colbert/phi are
+    // download-only, so they only ever appear in Browse.
+    function fixture(): ModelInfo[] {
+      return [
+        model({ id: 'active', displayName: 'Active model', family: 'llama', state: 'running' }),
+        model({ id: 'embed', displayName: 'Document embedder', family: 'e5', role: 'embeddings', state: 'installed' }),
+        model({ id: 'rerank', displayName: 'Document reranker', family: 'bge', role: 'reranker', state: 'installed' }),
+        model({ id: 'rerank-big', displayName: 'Big reranker', family: 'colbert', role: 'reranker', state: 'missing' }),
+        model({ id: 'voice', displayName: 'Voice model', family: 'whisper', role: 'transcriber', state: 'installed' }),
+        model({ id: 'newchat', displayName: 'New chat model', family: 'phi', role: 'chat', state: 'missing' })
+      ]
+    }
+
+    function familySelect(): HTMLElement {
+      return screen.getByRole('combobox', { name: 'Family' })
+    }
+
+    function familyOptionNames(): string[] {
+      return within(familySelect())
+        .getAllByRole('option')
+        .map((o) => o.textContent ?? '')
+    }
+
+    it('offers only on-drive families in On this drive, every family in Browse', async () => {
+      const user = userEvent.setup()
+      stub({ activeModelId: 'active', models: fixture() })
+      render(<ModelsScreen />)
+      await screen.findByText('Active model')
+      // Something is installed here, so the screen opens on "On this drive" (design-guidelines §15).
+      expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
+      expect(familyOptionNames()).toEqual(['All families', 'bge', 'e5', 'whisper'])
+      await user.click(screen.getByRole('radio', { name: 'Browse models' }))
+      expect(familyOptionNames()).toEqual(['All families', 'bge', 'colbert', 'e5', 'phi', 'whisper'])
+    })
+
+    it('narrows the family options by the selected task, combined with the view', async () => {
+      const user = userEvent.setup()
+      stub({ activeModelId: 'active', models: fixture() })
+      render(<ModelsScreen />)
+      await screen.findByText('Active model')
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'documents')
+      expect(familyOptionNames()).toEqual(['All families', 'bge', 'e5'])
+      await user.click(screen.getByRole('radio', { name: 'Browse models' }))
+      expect(familyOptionNames()).toEqual(['All families', 'bge', 'colbert', 'e5'])
+    })
+
+    it('keeps a family selected in Browse, marked and explained, after switching to On this drive', async () => {
+      const user = userEvent.setup()
+      stub({ activeModelId: 'active', models: fixture() })
+      render(<ModelsScreen />)
+      await screen.findByText('Active model')
+      await user.click(screen.getByRole('radio', { name: 'Browse models' }))
+      await user.selectOptions(familySelect(), 'phi')
+      expect(await screen.findByText('New chat model')).toBeVisible()
+      await user.click(screen.getByRole('radio', { name: 'On this drive' }))
+      // The selection survives the view change — never silently dropped or swapped to another family.
+      expect(familySelect()).toHaveValue('phi')
+      expect(
+        within(familySelect()).getByRole('option', { name: 'phi (none in this view)' })
+      ).toBeInTheDocument()
+      expect(
+        await screen.findByText('No phi models are on this drive. Browse models shows 1 model.')
+      ).toBeVisible()
+      await user.click(screen.getByRole('button', { name: 'Browse models' }))
+      // The advertised count matches exactly what Browse then lists.
+      expect(await screen.findByText('New chat model')).toBeVisible()
+      expect(screen.getByText('1 matching variant')).toBeVisible()
+    })
+
+    it('resets only the family, keeping the search text and task intact', async () => {
+      const user = userEvent.setup()
+      stub({ activeModelId: 'active', models: fixture() })
+      render(<ModelsScreen />)
+      await screen.findByText('Active model')
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'documents')
+      await user.type(screen.getByRole('searchbox'), 'reranker')
+      expect(screen.getByText('Document reranker')).toBeVisible()
+      await user.selectOptions(familySelect(), 'e5')
+      expect(await screen.findByText(/No models match/)).toBeVisible()
+      await user.click(screen.getByRole('button', { name: 'All families' }))
+      expect(familySelect()).toHaveValue('all')
+      expect(screen.getByRole('combobox', { name: 'Task' })).toHaveValue('documents')
+      expect(screen.getByRole('searchbox')).toHaveValue('reranker')
+      expect(await screen.findByText('Document reranker')).toBeVisible()
+    })
+
+    it('never changes the selected family when Task changes underneath it', async () => {
+      const user = userEvent.setup()
+      stub({ activeModelId: 'active', models: fixture() })
+      render(<ModelsScreen />)
+      await screen.findByText('Active model')
+      await user.selectOptions(familySelect(), 'bge')
+      expect(screen.getByText('Document reranker')).toBeVisible()
+      await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'chat')
+      expect(familySelect()).toHaveValue('bge')
+    })
+  })
+
   it('does not hide an installed variant when this computer has too little memory', async () => {
     stub({ models: [model({ state: 'installed', insufficientRam: true })] })
     render(<ModelsScreen />)

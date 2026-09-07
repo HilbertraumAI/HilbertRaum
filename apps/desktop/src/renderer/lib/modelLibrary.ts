@@ -1,10 +1,42 @@
 import type { ModelInfo } from '@shared/types'
-import { isModelInstalled, isModelRunnableHere } from './modelAvailability'
+import { isModelInstalled, isModelOnDrive, isModelRunnableHere } from './modelAvailability'
 
 export type ModelTask = 'chat' | 'documents' | 'translation' | 'vision' | 'transcriber'
+export type LibraryView = 'installed' | 'browse'
 
 export function modelTask(model: ModelInfo): ModelTask {
   return model.role === 'embeddings' || model.role === 'reranker' ? 'documents' : model.role
+}
+
+/**
+ * #313 — the view half of `ModelsScreen`'s `visibleModels` filter, extracted so the screen and
+ * `availableFamilies` below read the SAME rule and can never disagree about which view a model
+ * belongs to. "On this drive" lists a model whose state is known-usable or repairable
+ * (`isModelOnDrive`); Browse imposes no view restriction at all.
+ */
+export function matchesLibraryView(model: ModelInfo, view: LibraryView): boolean {
+  return view !== 'installed' || isModelOnDrive(model)
+}
+
+/**
+ * #313 — the family options the `<select>` can coherently offer: the sorted set of families
+ * among the rows the CURRENT view and task filters can yield, excluding the pinned active chat
+ * model (the same exclusion `visibleModels` applies). Deliberately does NOT apply search or the
+ * family filter itself — search narrows within a family, it does not decide which families are
+ * offered, and applying the family filter here would make every family but the selected one
+ * disappear. See `docs/design-guidelines.md` §15 "Search + task + family filters".
+ */
+export function availableFamilies(
+  models: ModelInfo[],
+  opts: { activeChat: ModelInfo | null; view: LibraryView; task: ModelTask | 'all' }
+): string[] {
+  const rows = models.filter(
+    (m) =>
+      m !== opts.activeChat &&
+      matchesLibraryView(m, opts.view) &&
+      (opts.task === 'all' || modelTask(m) === opts.task)
+  )
+  return [...new Set(rows.map((m) => m.family))].sort()
 }
 
 /** Only remove a recognized terminal quantization label. Keep size, generation,

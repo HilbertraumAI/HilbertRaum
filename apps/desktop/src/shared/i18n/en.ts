@@ -1068,6 +1068,13 @@ export const en = {
   'models.library.allTasks': 'All tasks',
   'models.library.family': 'Family',
   'models.library.allFamilies': 'All families',
+  // #313 — a family selected before the view/task change no longer applies stays the rendered
+  // value, marked instead of silently dropped or swapped.
+  'models.library.familyNotInView': '{name} (none in this view)',
+  'models.library.resetFamily': 'All families',
+  'models.library.noFamilyForTask': 'No {family} models match this task.',
+  'models.library.noFamilyOnDrive.one': 'No {family} models are on this drive. Browse models shows {count} model.',
+  'models.library.noFamilyOnDrive.other': 'No {family} models are on this drive. Browse models shows {count} models.',
   'models.library.chat': 'Chat',
   'models.library.translation': 'Translation',
   'models.library.images': 'Images',

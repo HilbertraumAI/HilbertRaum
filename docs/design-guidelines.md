@@ -1499,6 +1499,17 @@ screen now keeps the active chat model pinned above a compact library of alterna
   matching every whitespace-separated term. Filter before grouping so a collapsed variant is
   directly discoverable. Tasks are Chat, Document search (embeddings + reranker), Translation,
   Images and Voice. Reset/empty states are explicit, and the active model remains visible.
+  Family options are DERIVED (#313): the `<select>` only offers families the current view and
+  task can actually yield (`availableFamilies`, `lib/modelLibrary.ts`) — excluding the pinned
+  active model, before search and before the family filter itself apply, so the two can never
+  disagree with `visibleModels`. A family already selected that the view/task change drops from
+  that set is never silently cleared or swapped: it stays the rendered value, appended to the
+  `<select>` with a "(none in this view)" marker. The empty state that follows names the reason
+  instead of the generic "no models match": On this drive names the family and quotes the exact
+  count Browse would then list for it (same task, same active-model exclusion, same search); in
+  Browse it says the family has nothing for the current task. A family-only reset button ("All
+  families") sits beside "Clear filters" so recovering from a dead-end family never has to discard
+  the search text or task too.
 - **Variant identity:** renderer-only, strip a recognized terminal quantization label from the
   display name, then key by role + family + runtime + remaining name. Preserve sizes, instruction
   revisions, generations, and QAT identity; suffixes that do not look like a quantization label

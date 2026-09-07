@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, KnowledgePackToolsDialog, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
 import {
+  availableFamilies,
   groupModelVariants,
+  matchesLibraryView,
   matchesModelSearch,
   modelTask,
   variantGroupOrder,
@@ -9,7 +11,6 @@ import {
 } from '../lib/modelLibrary'
 import {
   isModelInstalled,
-  isModelOnDrive,
   orderPickerModels
 } from '../lib/modelAvailability'
 import { computeDownloadGate } from '../lib/downloadGate'
@@ -477,15 +478,29 @@ export function ModelsScreen(): JSX.Element {
   // The active chat model remains pinned outside the filters. The library contains
   // alternatives, ordered by availability/recommendation before grouping variants.
   const activeChat = chat.find(isActive) ?? null
-  const visibleModels = orderPickerModels(models.filter((m) =>
+  const currentView = libraryView ?? 'browse'
+  // #313 — the whole row filter (view/task/family/search), factored so the empty-state's "what
+  // would Browse show" count (below) is computed by the SAME rule as `visibleModels` itself, just
+  // with `view` substituted — the two can never disagree.
+  const matchesLibraryRow = (m: ModelInfo, view: typeof currentView): boolean =>
     m !== activeChat &&
     // F3/C1: the drive view lists known damaged entries too — the repair action is on the row.
-    (libraryView !== 'installed' || isModelOnDrive(m)) &&
+    matchesLibraryView(m, view) &&
     (task === 'all' || modelTask(m) === task) &&
     (family === 'all' || m.family === family) &&
     matchesModelSearch(m, query)
-  ))
-  const families = [...new Set(models.map((m) => m.family))].sort()
+  const visibleModels = orderPickerModels(models.filter((m) => matchesLibraryRow(m, currentView)))
+  const families = availableFamilies(models, { activeChat, view: currentView, task })
+  // #313 — a selected family the current view/task cannot yield: kept visible (never silently
+  // dropped) with a marker option, and the trigger for the family-specific empty state below.
+  const familyOutOfView = family !== 'all' && !families.includes(family)
+  // #313 — "On this drive" empty state names what Browse would show for the same family/task/
+  // search instead: `matchesLibraryRow` with `view` swapped to 'browse' guarantees the number
+  // matches exactly what the user sees after pressing the "Browse models" button below.
+  const browseRowCountForFamily =
+    familyOutOfView && currentView === 'installed'
+      ? models.filter((m) => matchesLibraryRow(m, 'browse')).length
+      : 0
   const hasFilters = query !== '' || task !== 'all' || family !== 'all'
   // F2/B1 — what the independent "Current model download" panel owns: the live job (as before)
   // AND an unresolved terminal result, until the user dismisses it, a new job is accepted, or the
@@ -1168,8 +1183,16 @@ export function ModelsScreen(): JSX.Element {
             <select className="select" value={family} onChange={(e) => setFamily(e.target.value)}>
               <option value="all">{t('models.library.allFamilies')}</option>
               {families.map((name) => <option key={name} value={name}>{name}</option>)}
+              {/* #313 — a family already selected stays the rendered value even when the current
+                  view/task can't yield it: never blank, never silently swapped to another family. */}
+              {familyOutOfView && (
+                <option value={family}>{t('models.library.familyNotInView', { name: family })}</option>
+              )}
             </select>
           </label>
+          {family !== 'all' && <Button size="sm" onClick={() => setFamily('all')}>
+            {t('models.library.resetFamily')}
+          </Button>}
           {hasFilters && <Button size="sm" onClick={() => { setQuery(''); setTask('all'); setFamily('all') }}>
             {t('models.library.clear')}
           </Button>}
@@ -1245,12 +1268,30 @@ export function ModelsScreen(): JSX.Element {
         <p className="hint" role="status">{tCount('models.library.results', visibleModels.length)}</p>
         {visibleModels.length === 0 ? (
           <div className="model-library-empty">
-            <p>{t(hasFilters ? 'models.library.noMatches' : libraryView === 'installed'
-              ? activeChat && isModelInstalled(activeChat) ? 'models.library.onlyActive' : 'models.library.noneInstalled'
-              : 'models.library.noAlternatives')}</p>
-            {libraryView === 'installed' && <Button onClick={() => setLibraryView('browse')}>
-              {t('models.library.browse')}
-            </Button>}
+            {/* #313 — a selected family the view/task combo can never satisfy gets its own
+                explanation instead of the generic "no models match" copy, naming the family and
+                (On this drive) the count Browse would show for it. */}
+            {familyOutOfView ? (
+              currentView === 'installed' ? (
+                <>
+                  <p>{tCount('models.library.noFamilyOnDrive', browseRowCountForFamily, { family })}</p>
+                  <Button onClick={() => setLibraryView('browse')}>
+                    {t('models.library.browse')}
+                  </Button>
+                </>
+              ) : (
+                <p>{t('models.library.noFamilyForTask', { family })}</p>
+              )
+            ) : (
+              <>
+                <p>{t(hasFilters ? 'models.library.noMatches' : currentView === 'installed'
+                  ? activeChat && isModelInstalled(activeChat) ? 'models.library.onlyActive' : 'models.library.noneInstalled'
+                  : 'models.library.noAlternatives')}</p>
+                {currentView === 'installed' && <Button onClick={() => setLibraryView('browse')}>
+                  {t('models.library.browse')}
+                </Button>}
+              </>
+            )}
           </div>
         ) : TASKS.map((entry) => {
           const list = visibleModels.filter((m) => modelTask(m) === entry.value)

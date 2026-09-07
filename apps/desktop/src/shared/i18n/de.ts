@@ -1097,6 +1097,13 @@ export const de: Record<keyof typeof en, string> = {
   'models.library.allTasks': 'Alle Aufgaben',
   'models.library.family': 'Familie',
   'models.library.allFamilies': 'Alle Familien',
+  // #313 — a family selected before the view/task change no longer applies stays the rendered
+  // value, marked instead of silently dropped or swapped.
+  'models.library.familyNotInView': '{name} (nicht in dieser Ansicht)',
+  'models.library.resetFamily': 'Alle Familien',
+  'models.library.noFamilyForTask': 'Keine {family}-Modelle passen zu dieser Aufgabe.',
+  'models.library.noFamilyOnDrive.one': 'Keine {family}-Modelle sind auf diesem Laufwerk. Modelle entdecken zeigt {count} Modell.',
+  'models.library.noFamilyOnDrive.other': 'Keine {family}-Modelle sind auf diesem Laufwerk. Modelle entdecken zeigt {count} Modelle.',
   'models.library.chat': 'Chat',
   'models.library.translation': 'Übersetzung',
   'models.library.images': 'Bilder',
