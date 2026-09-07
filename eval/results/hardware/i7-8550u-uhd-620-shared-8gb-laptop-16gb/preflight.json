@@ -164,5 +164,73 @@
   },
   "predicted_star_for_this_class": "RAM path (memory class cpu): expected qwen3.5-9b-ud-q4kxl at 16 GB — comfortable stage, recommended_ram_gb 16 <= 16, rank 3, winning the disk-size tiebreak over the equally ranked 4B (models.ts:906-931) — unless a stored §6.5 speed step-down applies. No §6.6 card prediction to test.",
   "starts_performed": 0,
-  "app_report": null
+  "app_report": {
+    "note": "Two Performance-screen runs on 2026-09-07 via npm run dev off origin/master 740b0f27; the pinned Kit had been removed from this machine, so the runtime is the dev root llama.cpp, not b9849. The picker reasons from the probe + settings flags, not the runtime build.",
+    "run1_gpu_off": {
+      "gpuMode": "off",
+      "gpuAutoDisabled": false,
+      "gpuLastError": null,
+      "graphics_tile": "Grafikbeschleunigung ist aus. Modelle laufen auf dem Prozessor. (kind: off)",
+      "profile": "LITE",
+      "tokensPerSecond": 3,
+      "recommendedModelId": "gemma4-e2b-it-qat-q4",
+      "speedIdentity": {
+        "memoryClass": "cpu",
+        "deviceName": null,
+        "contextTokens": 8192,
+        "backend": "cpu"
+      },
+      "verdict": "inconclusive for the name gate: gpuMode off short-circuits rule 1 before budget-device selection"
+    },
+    "run2_gpu_auto": {
+      "gpuMode": "auto",
+      "gpuAutoDisabled": false,
+      "gpuLastError": null,
+      "gpuProbe": {
+        "name": "Intel(R) UHD Graphics 620",
+        "totalMb": 8119,
+        "freeMb": 7457,
+        "probedAt": "2026-09-07T11:45:51.541Z"
+      },
+      "graphics_tile": "Keine (kind: none — currentGpu is the budget device and is null with no usable card)",
+      "profile": "TINY",
+      "tokensPerSecond": 2.9,
+      "recommendedModelId": "gemma4-e2b-it-qat-q4",
+      "basis": "Arbeitsspeicher (RAM)",
+      "speedIdentity": {
+        "memoryClass": "cpu",
+        "deviceName": null,
+        "contextTokens": 8192,
+        "backend": "cpu"
+      },
+      "gpu": null,
+      "gpuVramMb": null,
+      "speedBasis": {
+        "basis": "timings",
+        "tokens": 64
+      },
+      "effectiveRead": {
+        "mbps": 491.3,
+        "bytes": 5966095584,
+        "ms": 12144,
+        "source": "model_load",
+        "modelId": "qwen3.5-9b-ud-q4kxl"
+      },
+      "placement_9b": {
+        "backend": "cpu",
+        "cpuModelMb": 7384.75,
+        "cpuKvMb": 256,
+        "gpuModelMb": null
+      },
+      "verdict": "CONFIRMS the prediction: GPU on, device probed at 8119 MiB (clears the 6144 gate), yet memoryClass stays cpu with no budget device — the looksIntegrated name gate is what excludes it"
+    },
+    "corrections": [
+      "My predicted tile wording (\"Integriert, gemeinsamer Speicher\") was wrong; the tile shows \"Keine\". Correct by design: currentGpu is the budget device (registerBenchmarkIpc.ts:957,:984), null with no usable card, so graphicsFigure never reaches its kind:device branch and the integrated wording is unreachable on an integrated-only machine."
+    ],
+    "observations_not_defects": [
+      "The copy report renders kind:none as bare \"Keine\" (perf.rating.none) while the tile carries the fuller perf.tile.graphics.none, so a pasted report from an integrated-only machine does not show that a probed 8119 MiB device was excluded.",
+      "Profile flipped LITE -> TINY between runs differing only by 3.0 vs 2.9 tok/s. Threshold crossing, not a ratchet: classifyProfile recomputes from (ramGb, gpuUseful, tps) each run and VERY_LOW_TOKENS_PER_SECOND is exactly 3 (performance-rules.ts:19, benchmark.ts:137-145)."
+    ],
+    "cross_check": "The app stored gpuProbe reads 8119/7457 MiB for Intel(R) UHD Graphics 620 — byte-identical to llama-server --list-devices in the preflight."
+  }
 }
