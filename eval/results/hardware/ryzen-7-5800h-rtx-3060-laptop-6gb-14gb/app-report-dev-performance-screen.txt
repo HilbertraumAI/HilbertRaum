@@ -1,0 +1,21 @@
+Copy report from the Performance screen, pasted by the operator 2026-09-07 after the two leg-4
+starts. App = source build 0.1.59 running from the repo checkout (`npm run dev`) on branch
+`fix/graphics-tile-names-small-card` (PR #375), i.e. it INCLUDES the graphics-tile fix; the drive
+root is the dev workspace described in 00-preflight.md. No model was running when the report was
+taken, so it carries no "Dein Modell" placement row.
+
+--- verbatim ---
+Dieser Computer
+Geschwindigkeit: 100 Token / Sek. (Gemessen mit Gemma 4 E2B Instruct QAT Q4 am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 13,9 GB RAM
+CPU: AMD Ryzen 7 5800H with Radeon Graphics (16 Kerne)
+Grafikspeicher: 5,9 GB VRAM (NVIDIA GeForce RTX 3060 Laptop GPU)
+Laufwerk: 227,7 MB/s lesen
+Zugewiesenes Profil: LITE
+Empfohlen für den nächsten Start: Gemma 4 E2B Instruct QAT Q4 (Arbeitsspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Gemma 4 E2B Instruct QAT Q4
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 13:55:56
+
+Operator additions: the Graphics memory tile now reads "5,9 GB VRAM"; the starred model is
+Gemma 4 E2B Instruct QAT Q4.
