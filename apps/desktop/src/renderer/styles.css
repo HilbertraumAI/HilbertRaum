@@ -843,6 +843,27 @@ code, pre, kbd { font-family: var(--font-mono); }
 .msg-action:hover:not(:disabled) { color: var(--text); background: var(--surface-hover); }
 .msg-action:disabled { opacity: 0.5; cursor: default; }
 
+/* #286 — the per-code-block Copy/Save toolbar inside a persisted assistant answer. Same
+   reveal grammar as .msg-actions (hover or keyboard focus, never permanent chrome), parked
+   over the right end of Streamdown's code-block header row so it never covers code. The
+   surface fill keeps the labels legible where a block has no header (bare ``` fences). */
+.code-block { position: relative; }
+.code-block-actions {
+  position: absolute;
+  top: 4px;
+  right: 4px;
+  z-index: 1;
+  display: flex;
+  gap: 2px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease);
+}
+.code-block:hover .code-block-actions,
+.code-block-actions:focus-within { opacity: 1; }
+
 /* Composer footer affordances: quiet text-style menu/popover triggers. */
 .footer-menu-btn {
   display: inline-flex;

@@ -138,6 +138,11 @@ from its first public `1.0.0` release onward.
   pack or unplug its drive. Saving the same article again just points back to the copy you
   already made.
 
+- **Save just one code block from an answer, not the whole conversation.** Every code block in
+  a finished assistant answer now has its own small **Copy** and **Save** buttons. Save writes
+  only that block, byte-for-byte, as `code.<ext>` — the extension follows the block's language,
+  or `.txt` when none is recognized (#286).
+
 ### Changed
 
 - **Knowledge-pack questions that ask for a list or the largest, most or best-known items now

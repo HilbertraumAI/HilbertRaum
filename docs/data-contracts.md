@@ -46,6 +46,9 @@ the in-app model downloader, async-with-polling) +
 the Diagnostics Activity panel, newest-first paging + save-dialog export) +
 `searchConversations` (`chat:search`, Phase 31) + `changeWorkspacePassword`
 (`workspace:changePassword`, Phase 32) +
+`saveCodeBlock(messageId, content, language)` (`chat:saveCodeBlock`, issue #286 — save one
+fenced code block from a persisted assistant answer as its own file; renderer-supplied bytes,
+verbatim, no BOM; resolves with the path or null on cancel) +
 `startDocTask`/`getDocTask`/`cancelDocTask` (`doctasks:start/get/cancel`, Phases 33–35 —
 document tasks, async-with-polling; `cancelDocTask()` with no jobId cancels the active task;
 shapes `StartDocTaskRequest`/`DocTaskStatus`/`DocumentSummary` in `shared/types.ts`, and
@@ -1665,7 +1668,9 @@ whole renderer-visible surface.
 - **Smaller members** (owned here so the index is complete): `exportMessageTable(messageId)`
   (result-table CSV via save dialog), `previewDocument`/`previewDocumentPage` (bounded pages),
   `exportSummary(documentId)`, `exportDocumentOriginal(documentId)` (#90 — stored original
-  bytes via save dialog), `exportLog()`/`getLogTail()`, `getDroppedFilePath(file)` (the
+  bytes via save dialog), `saveCodeBlock(messageId, content, language)` (#286 — one fenced
+  code block from a persisted assistant answer, renderer-supplied bytes, via save dialog),
+  `exportLog()`/`getLogTail()`, `getDroppedFilePath(file)` (the
   Electron-37 `webUtils.getPathForFile` bridge — drag-drop path resolution), `perfMark(event)`
   (one-way, allowlisted timing mark for opt-in measurement runs — no data channel),
   `onModelVerifyProgress(cb)` (cold-hash progress stream), `onScopeNotice(conversationId, cb)`

@@ -51,6 +51,19 @@ describe('AssistantMarkdown security posture', () => {
     expect(container.textContent).toContain('<img src="x.png">')
   })
 
+  it('a fenced code block ships NO Streamdown download control (controls={false} stays off)', () => {
+    // #286 D4: the ONLY save path for a code block is window.api.saveCodeBlock — main writes the
+    // bytes behind the native dialog. Streamdown's own code-block controls are a renderer-side
+    // blob + <a download> (and a navigator.clipboard copy), which bypass that write boundary
+    // entirely. Turning `controls` on would mint them here — this pin fails if anyone does.
+    // Without the transcript's CodeBlockActions context (this render has none) the block carries
+    // no interactive chrome of ours either, so ZERO buttons is the correct assertion.
+    const { container } = render(<AssistantMarkdown text={'```js\nconst a = 1\n```'} />)
+    expect(container.querySelector('a[download]'), 'no blob download anchor').toBeNull()
+    expect(container.querySelector('button'), 'no Streamdown code-block control buttons').toBeNull()
+    expect(container.querySelector('code')?.textContent).toContain('const a = 1')
+  })
+
   it('renders a ```mermaid fence as a plain code block — the mermaid plugin stays absent', () => {
     // DEP-3 (2026-08-09) judged the mermaid/DOMPurify Dependabot alerts unreachable because no
     // mermaid plugin is passed (mdPlugins = { math }); wiring one in makes that chain a live

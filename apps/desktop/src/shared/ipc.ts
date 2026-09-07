@@ -81,6 +81,11 @@ export const IPC = {
   exportConversation: 'chat:export',
   /** Save one message's attached RESULT TABLE as CSV to a user-chosen file (result-tables §4). */
   exportMessageTable: 'chat:exportMessageTable',
+  /** #286: save ONE fenced code block of an assistant reply to a user-chosen file. The bytes are
+   *  renderer-supplied (the parsed block content + fence info string), not DB-derived: main only
+   *  validates the types, maps the info string through the fixed extension allowlist
+   *  (`shared/code-block-export.ts`) and writes verbatim (no BOM) behind the native save dialog. */
+  saveCodeBlock: 'chat:saveCodeBlock',
   /** Full-text search across conversations. Queries are content: never logged/audited. */
   searchConversations: 'chat:search',
   /**

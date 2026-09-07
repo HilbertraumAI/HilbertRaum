@@ -1,6 +1,9 @@
-import { memo, type ReactNode } from 'react'
-import { Streamdown, defaultRehypePlugins } from 'streamdown'
+import { cloneElement, isValidElement, memo, type ReactElement, type ReactNode } from 'react'
+import { Streamdown, defaultRehypePlugins, useIsCodeFenceIncomplete } from 'streamdown'
 import { math } from '@streamdown/math'
+import { codeBlockExtension } from '@shared/code-block-export'
+import { useCodeBlockActions, type CodeBlockActions } from './CodeBlockActionsContext'
+import { useT } from '../i18n'
 // katex is already in the bundle via @streamdown/math → rehype-katex; imported directly only
 // to VALIDATE partially-streamed TeX before typesetting it (completePartialTex below).
 import katex from 'katex'
@@ -145,10 +148,117 @@ const mdRemend = {
 // this list, so math is unaffected. Module-level for a stable reference (memoization).
 const mdRehypePlugins = [defaultRehypePlugins.sanitize]
 
+// ---------------------------------------------------------------------------------------------
+// #286 — the per-code-block Copy / Save toolbar.
+//
+// WHY `pre` AND NOT `code`: Streamdown's default `pre` is literally
+// `({children}) => isValidElement(children) ? cloneElement(children, {'data-block':'true'}) : children`
+// — it exists only to STAMP the child <code> as a block; the default `code` component then reads
+// that stamp and renders the whole `<div data-streamdown="code-block">` (header row with the
+// language + `<pre><code>` body), and renders `<code data-streamdown="inline-code">` without it.
+// Overriding `code` would therefore mean re-implementing Streamdown's block chrome (and would have
+// to re-handle inline code); overriding `pre` lets us keep every pixel of it and merely wrap.
+//
+// `controls={false}` STAYS (owner decision D4): Streamdown's own download control is a
+// blob + `<a download>` in the renderer, which bypasses the main-process write boundary (the
+// native save dialog IS the consent). Ours goes through `window.api.saveCodeBlock`.
+
+/** The block's exact code value + its fence language token, read off the child <code> element. */
+function readCodeChild(child: ReactElement): { content: string; language: string } {
+  const props = child.props as { className?: string; children?: unknown }
+  // Mirror Streamdown's own extraction: the highlighted body may be a string or a single
+  // element wrapping one.
+  const inner = props.children
+  let raw = ''
+  if (typeof inner === 'string') {
+    raw = inner
+  } else if (isValidElement(inner)) {
+    const nested = (inner.props as { children?: unknown }).children
+    if (typeof nested === 'string') raw = nested
+  }
+  // mdast-util-to-hast appends ONE '\n' to every code node's value (`value ? value + '\n' : ''`).
+  // D1 says "verbatim" = the code value AS PARSED, so strip exactly that one newline — otherwise
+  // every saved file would gain a byte the markdown never contained.
+  const content = raw.endsWith('\n') ? raw.slice(0, -1) : raw
+  const language = /language-([^\s]+)/.exec(props.className ?? '')?.[1] ?? ''
+  return { content, language }
+}
+
+/**
+ * The hover/focus toolbar over one fenced block. Mounted ONLY when the transcript provided
+ * CodeBlockActions — which is also why it may use the i18n hook: AssistantMarkdown itself renders
+ * in contexts with no I18nProvider (unit tests, other screens) and the bare `pre` path below must
+ * stay hook-free for them.
+ */
+function CodeBlockToolbar({
+  actions,
+  content,
+  language
+}: {
+  actions: CodeBlockActions
+  content: string
+  language: string
+}): JSX.Element | null {
+  const { t } = useT()
+  // Mid-stream the closing fence may not have arrived, so the "code" so far is a partial the user
+  // should not be saving. (Belt-and-braces: the live bubble is never given a provider at all.)
+  const incomplete = useIsCodeFenceIncomplete()
+  if (incomplete) return null
+  // Distinct accessible names per block: the extension comes from the SHARED allowlist, so the
+  // label can never promise an extension main would not use.
+  const saveTitle = t('chat.code.saveTitle', { ext: codeBlockExtension(language) })
+  const copyTitle = t('chat.code.copyTitle')
+  return (
+    <div className="code-block-actions">
+      <button
+        type="button"
+        className="msg-action"
+        title={copyTitle}
+        aria-label={copyTitle}
+        onClick={() => actions.onCopy(content)}
+      >
+        {t('chat.code.copy')}
+      </button>
+      <button
+        type="button"
+        className="msg-action"
+        title={saveTitle}
+        aria-label={saveTitle}
+        onClick={() => actions.onSave(content, language)}
+      >
+        {t('chat.code.save')}
+      </button>
+    </div>
+  )
+}
+
+/**
+ * `pre` override. With NO CodeBlockActions in context this is byte-for-byte Streamdown's default
+ * (clone the child with the `data-block` stamp) — so every non-transcript consumer, inline code,
+ * and the live streaming bubble keep the exact DOM they had before #286.
+ */
+function CodeBlockPre({ children }: { children?: ReactNode }): JSX.Element {
+  const actions = useCodeBlockActions()
+  if (!isValidElement(children)) return <>{children}</>
+  const child = cloneElement(children as ReactElement<Record<string, unknown>>, {
+    'data-block': 'true'
+  })
+  if (actions === null) return <>{child}</>
+  const { content, language } = readCodeChild(children)
+  return (
+    <div className="code-block">
+      {child}
+      <CodeBlockToolbar actions={actions} content={content} language={language} />
+    </div>
+  )
+}
+
 // Module-level so the reference is stable across every render — defining this inline in JSX would
 // hand Streamdown a fresh `components` object on each ~40 ms flush, busting the block memoization
 // that makes the live bubble O(n) instead of O(n²) (the whole point of FE-1 revisited).
 const mdComponents = {
+  // #286: the Copy/Save toolbar wrapper (a no-op passthrough without the transcript's context).
+  pre: CodeBlockPre,
   // Streamdown renders `**bold**` as a Tailwind-classed <span> (font-semibold). This app ships
   // no Tailwind, so that span would be UNSTYLED — map it back to a semantic <strong> the
   // existing `.md strong` CSS styles (and screen readers announce as emphasis). Every other

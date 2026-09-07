@@ -134,6 +134,7 @@ Where each existing control goes:
 | Thinking block | Single inline collapsed "Thinking…" line while generating (expand → the live reasoning text); auto-collapses when the answer streams. Stop stays available. ARIA live region for streaming. |
 | Citations | Inline, attached to the answer: "▸ Sources (3)" → source cards (name + page + snippet). No separate panel. |
 | Regenerate / Copy / Export | **Per-message action row** on hover/focus of an assistant answer ("Try again", "Copy", "Save"). Whole-conversation export → chat-header "⋯" overflow. |
+| Code-block Copy / Save | Same quiet action style, but **per code block**: revealed on hover or keyboard focus of the block itself (not shown while the answer is streaming), each with an accessible name that names the file type it saves as ("Save this code block as a .html file"). |
 | Errors / notices | Inline, in context, dismissible, rare. Never stacked at the top. |
 
 **Empty state that teaches:** one friendly line ("Ask a question, or ask about your

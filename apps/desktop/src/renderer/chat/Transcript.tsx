@@ -7,6 +7,7 @@ import { isReviewEligible } from '@shared/evidence-review'
 import { formatAnswerSpeed } from './answerSpeed'
 import { MessageActions } from './MessageActions'
 import { SourcesDisclosure } from './SourcesDisclosure'
+import { CodeBlockActionsContext } from './CodeBlockActionsContext'
 import { PackOutcomesNotice } from './PackOutcomesNotice'
 import { CoverageMeter, Icon, Spinner } from '../components'
 import { localizeServerCopy } from '../lib/displayMap'
@@ -73,6 +74,13 @@ interface TranscriptProps {
   onCopy: (content: string) => void
   onSave: () => void
   /**
+   * #286: save ONE fenced code block out of a persisted assistant reply as a file. Absent => no
+   * per-block toolbar renders anywhere (the affordance is opt-in, D3) and the markdown DOM is
+   * unchanged. `language` is the fence language token (model output); main maps it through the
+   * shared extension allowlist. Never wired on the live streaming bubble.
+   */
+  onSaveCodeBlock?: (messageId: string, content: string, language: string) => void
+  /**
    * Save one answer's attached RESULT TABLE as CSV (result-tables §4, Phase 2). Rendered only on
    * messages with `hasResultTable`; the MAIN side re-serializes the persisted table and opens the
    * save dialog. Absent ⇒ the affordance never renders.
@@ -136,6 +144,7 @@ export const Transcript = memo(function Transcript({
   isSkillOfferAvailable,
   onCopy,
   onSave,
+  onSaveCodeBlock,
   onExportTable,
   onOpenReview,
   onOpenArticle,
@@ -218,6 +227,7 @@ export const Transcript = memo(function Transcript({
               isSkillOfferAvailable={isSkillOfferAvailable}
               onCopy={onCopy}
               onSave={onSave}
+              onSaveCodeBlock={onSaveCodeBlock}
               onExportTable={onExportTable}
               onOpenReview={onOpenReview}
               onOpenArticle={onOpenArticle}
@@ -329,6 +339,7 @@ const MessageBlock = memo(function MessageBlock({
   isSkillOfferAvailable,
   onCopy,
   onSave,
+  onSaveCodeBlock,
   onExportTable,
   onOpenReview,
   onOpenArticle,
@@ -352,6 +363,7 @@ const MessageBlock = memo(function MessageBlock({
   isSkillOfferAvailable?: (installId: string) => boolean
   onCopy: (content: string) => void
   onSave: () => void
+  onSaveCodeBlock?: (messageId: string, content: string, language: string) => void
   onExportTable?: (messageId: string) => void
   onOpenReview?: (messageId: string) => void
   onOpenArticle?: (citation: Citation) => void
@@ -370,6 +382,20 @@ const MessageBlock = memo(function MessageBlock({
   // narrowing holds inside the handler closures below.
   const skillOffer =
     m.role === 'assistant' && isLast && onRunWithSkill != null ? m.skillOffer : undefined
+  // #286: the per-code-block Copy/Save actions for THIS persisted turn. null (no handler wired)
+  // means AssistantMarkdown renders exactly the DOM it rendered before the feature existed — the
+  // provider is inert. Memoized on the message id + the two (stable, useEventCallback'd) handlers
+  // so a re-render never hands Streamdown a fresh context value and re-renders every block (FE-3).
+  const codeBlockActions = useMemo(
+    () =>
+      onSaveCodeBlock
+        ? {
+            onCopy,
+            onSave: (content: string, language: string) => onSaveCodeBlock(m.id, content, language)
+          }
+        : null,
+    [m.id, onCopy, onSaveCodeBlock]
+  )
   return (
     <div className={`msg-block ${m.role}`}>
       <div className={`msg ${m.role}`}>
@@ -379,7 +405,11 @@ const MessageBlock = memo(function MessageBlock({
             {/* The fixed RAG answers (no-context / reindex-needed) are persisted
                 canonical English; the D-L4 display map translates them at render
                 — exact match only, real model output passes through untouched. */}
-            <AssistantMarkdown text={localizeServerCopy(t, m.content)} />
+            {/* #286: PERSISTED assistant turns only — the live streaming bubble below renders
+                AssistantMarkdown with no provider, so a half-streamed fence has no Save button. */}
+            <CodeBlockActionsContext.Provider value={codeBlockActions}>
+              <AssistantMarkdown text={localizeServerCopy(t, m.content)} />
+            </CodeBlockActionsContext.Provider>
           </div>
         ) : (
           <div className="msg-content">{m.content}</div>

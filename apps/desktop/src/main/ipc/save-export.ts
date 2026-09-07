@@ -30,6 +30,13 @@ export interface SaveExportDialogOptions {
  * Re-import is safe: the app's own CSV parser (papaparse) strips a leading BOM itself. NEVER on
  * other extensions: a BOM breaks strict JSON parsers (the audit-log export) and is wrong for .log
  * tooling.
+ *
+ * #286 (owner decision D1): the CODE-BLOCK save (`chat:saveCodeBlock`) is the deliberate
+ * exception and goes through `saveBinaryExport` instead — even when the user picks a `.txt`,
+ * `.md` or `.csv` destination. The issue requires the file to be byte-identical to the block
+ * (a BOM breaks a shebang, a `<!doctype html>` sniff and strict parsers alike), and the block's
+ * bytes are the user's own model output, not an app-authored transcript. The BOM rule above
+ * stays as recorded for transcripts, summaries and CSV exports.
  */
 export function bomFor(filePath: string): string {
   return /\.(?:md|txt|csv)$/i.test(filePath) ? '\ufeff' : ''

@@ -1097,6 +1097,7 @@ export function ChatScreen({
   const handleCopyMessage = useEventCallback(onCopyMessage)
   const handleSaveConversation = useEventCallback(onSaveConversation)
   const handleExportMessageTable = useEventCallback(onExportMessageTable)
+  const handleSaveCodeBlock = useEventCallback(onSaveCodeBlock)
   // EP-1 plan §7.2: hand off to the review workspace — an existing review by id, a first
   // review by message id (main's create is idempotent either way).
   const handleOpenReviewMessage = useEventCallback((messageId: string) => {
@@ -1876,6 +1877,19 @@ export function ChatScreen({
     }
   }
 
+  // #286: save ONE fenced code block out of an assistant reply. MAIN validates the arguments,
+  // maps the fence info string through the fixed extension allowlist and writes the bytes behind
+  // the native save dialog (the dialog IS the consent — the onSaveConversation posture); null =
+  // the user cancelled, a calm non-outcome with no toast and no banner.
+  async function onSaveCodeBlock(messageId: string, content: string, language: string): Promise<void> {
+    try {
+      const saved = await window.api.saveCodeBlock(messageId, content, language)
+      if (saved) showToast(t('chat.savedTo', { path: saved }))
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
   async function onNewChat(): Promise<void> {
     // full-audit 2026-07-11 CODE-30: this entry point used to skip the SKA-18 carry+delete (a
     // composer pick vanished, then resurrected on the next empty composer) AND discarded its
@@ -2396,6 +2410,9 @@ export function ChatScreen({
           onCopy={handleCopyMessage}
           onSave={handleSaveConversation}
           onExportTable={handleExportMessageTable}
+          // #286: the per-code-block Save (Copy reuses onCopy above). Placement — persisted
+          // assistant turns only, never the streaming bubble — lives in Transcript.
+          onSaveCodeBlock={handleSaveCodeBlock}
           // EP-1 plan §7.2: the review entry points (action row + sources footer). Only wired
           // when App provides the handoff (onOpenReview); per-message eligibility + labels are
           // resolved inside Transcript via the shared isReviewEligible + reviewSummaries.

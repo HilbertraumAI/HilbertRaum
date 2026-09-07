@@ -374,6 +374,12 @@ export const en = {
   // Result-tables §4 (Phase 2): shown only on answers carrying a structured result table.
   'chat.actions.exportCsv': 'Export CSV',
   'chat.actions.exportCsvTitle': 'Save this answer’s table as a CSV file (stays local)',
+  // #286: the per-code-block toolbar inside an answer (Copy + Save). The titles double as the
+  // accessible names, so blocks of different languages in one answer stay distinguishable.
+  'chat.code.copy': 'Copy',
+  'chat.code.copyTitle': 'Copy this code block to the clipboard',
+  'chat.code.save': 'Save',
+  'chat.code.saveTitle': 'Save this code block as a .{ext} file (stays local)',
 
   // ---- Chat: context compaction (context-compaction plan §5.1–§5.3) ----
   // The one-shot "summarizing…" status above the streaming bubble (§5.2).
@@ -1706,6 +1712,7 @@ export const en = {
   'diag.audit.conversation_deleted': 'Conversation deleted',
   'diag.audit.conversation_exported': 'Conversation exported',
   'diag.audit.message_table_exported': 'Answer table exported',
+  'diag.audit.code_block_exported': 'Code block saved as a file',
   'diag.audit.workspace_created': 'Workspace created',
   'diag.audit.workspace_unlocked': 'Workspace unlocked',
   'diag.audit.workspace_locked': 'Workspace locked',
@@ -2520,6 +2527,7 @@ export const en = {
   'main.dialog.exportSummary': 'Export summary',
   'main.dialog.exportChat': 'Export chat transcript',
   'main.dialog.exportTableCsv': 'Export table as CSV',
+  'main.dialog.exportCodeBlock': 'Save code block as a file',
   'main.dialog.exportAudit': 'Export activity log',
   'main.dialog.exportEvidencePack': 'Export evidence pack',
   'main.dialog.exportLog': 'Save diagnostic logs',

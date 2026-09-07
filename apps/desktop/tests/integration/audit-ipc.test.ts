@@ -106,6 +106,13 @@ const REVIEW_EXPORT_PATH_SENTINEL = 'XREVPATH_SENTINEL_private-client-folder'
 // #90: the original-bytes export's chosen destination is user-private (a path can reveal
 // private workstation structure); `document_exported` records the documentId ONLY.
 const DOC_EXPORT_PATH_SENTINEL = 'XDOCPATH_SENTINEL_private-desktop-folder'
+// #286: a fenced code block saved as a file — the block's TEXT, its raw fence INFO STRING (both
+// model output = content) and the sentinel-named destination must never reach runtime_events;
+// the event carries { messageId, bytes, extension } only (the allowlisted extension, not the
+// info string).
+const CODE_BLOCK_SENTINEL = 'XCODEBLOCK_SENTINEL_password = "hunter2"'
+const CODE_INFO_SENTINEL = 'XCODEINFO_SENTINEL_secret_project'
+const CODE_EXPORT_PATH_SENTINEL = 'XCODEPATH_SENTINEL_private-scripts-folder'
 const SENTINELS = [
   CHAT_SENTINEL,
   DOC_SENTINEL,
@@ -116,6 +123,9 @@ const SENTINELS = [
   PROJECT_SENTINEL,
   FILENAME_SENTINEL,
   DOC_EXPORT_PATH_SENTINEL,
+  CODE_BLOCK_SENTINEL,
+  CODE_INFO_SENTINEL,
+  CODE_EXPORT_PATH_SENTINEL,
   REVIEW_TITLE_SENTINEL,
   REVIEWER_SENTINEL,
   REVIEW_NOTE_SENTINEL,
@@ -315,6 +325,25 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
     ipcState.saveDialog.canceled = false
     ipcState.saveDialog.filePath = join(rootPath, 'transcript.md')
     await invoke(handlers, IPC.exportConversation, conv.id)
+    // -- #286: save a fenced code block of the reply through the real handler. The bytes are
+    // renderer-supplied: the block text AND the fence info string are model output, the
+    // destination is user-private — the sweep below proves none of the three reached
+    // runtime_events, and the metadata pin further down proves the event carries
+    // { messageId, bytes, extension } only.
+    const reply = replyRaw as Message
+    ipcState.saveDialog.canceled = false
+    ipcState.saveDialog.filePath = join(rootPath, `${CODE_EXPORT_PATH_SENTINEL}.py`)
+    const { result: codeBlockPath } = await invoke(
+      handlers,
+      IPC.saveCodeBlock,
+      reply.id,
+      `print("hi")\n${CODE_BLOCK_SENTINEL}\n`,
+      `python title="${CODE_INFO_SENTINEL}"`
+    )
+    expect(codeBlockPath).toBeTruthy()
+    expect(readFileSync(join(rootPath, `${CODE_EXPORT_PATH_SENTINEL}.py`), 'utf8')).toContain(
+      CODE_BLOCK_SENTINEL
+    ) // the flow really carried it
     await invoke(handlers, IPC.deleteConversation, conv.id)
 
     // -- documents: sentinel text inside the file body AND in the filename — both are
@@ -596,7 +625,8 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       'evidence_review_created',
       'evidence_review_ready',
       'evidence_review_deleted',
-      'evidence_pack_exported'
+      'evidence_pack_exported',
+      'code_block_exported'
     ]) {
       expect(types, `missing audit event: ${expected}`).toContain(expected)
     }
@@ -613,6 +643,18 @@ describe('audit wiring across the IPC layer (privacy sentinel grep)', () => {
       (e) => e.type === 'settings_changed'
     )
     expect(settingsEvent?.metadata).toEqual({ allowNetwork: true })
+
+    // #286: the code-block save records the message id, the byte count and the ALLOWLISTED
+    // extension ('py' — mapped from the info string, never the info string itself) and nothing else.
+    const codeBlockEvent = listAuditEvents(db, { limit: 5000 }).find(
+      (e) => e.type === 'code_block_exported'
+    )
+    expect(codeBlockEvent?.metadata).toEqual({
+      messageId: reply.id,
+      bytes: Buffer.byteLength(`print("hi")\n${CODE_BLOCK_SENTINEL}\n`, 'utf8'),
+      extension: 'py'
+    })
+    expect(codeBlockEvent?.message).not.toContain(CODE_INFO_SENTINEL)
 
     // S1: the document_imported event records the documentId + status + chunkCount ONLY —
     // a fixed message string with NO title (the conversation_exported precedent).

@@ -40,7 +40,8 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
 import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
-import { saveTextExport } from './save-export'
+import { saveBinaryExport, saveTextExport } from './save-export'
+import { codeBlockDefaultFileName, codeBlockExtension } from '../../shared/code-block-export'
 import { tableToCsv } from '../services/tables'
 import { loadResultTable } from '../services/tables/store'
 
@@ -60,6 +61,9 @@ import { loadResultTable } from '../services/tables/store'
 // renderer can show the "start a model" empty state. Starting the real llama.cpp
 // sidecar is heavy and is an explicit user action — keeping it explicit keeps the
 // service boundary clean.
+
+/** #286: the shape a persisted message id may take (UUID alphabet, bounded) — see saveCodeBlock. */
+const MESSAGE_ID_SHAPE = /^[A-Za-z0-9_-]{1,64}$/
 
 export function registerChatIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
@@ -413,4 +417,50 @@ export function registerChatIpc(ctx: AppContext): void {
     })
     return filePath
   })
+
+  // #286: save ONE fenced code block of an assistant reply as a file. Unlike the two exports
+  // above, the bytes are RENDERER-SUPPLIED (the parsed block content + the fence info string, as
+  // `copyToClipboard` sends text), not re-derived from the DB — the block is what the user sees.
+  // Posture: the #252 sender guard + `requireUnlocked` gate the call, the native save dialog is
+  // the consent, and nothing about the content is logged. The fence info string is MODEL OUTPUT:
+  // it never reaches a filename, a filter or an audit row un-mapped — only its allowlisted
+  // extension does (shared/code-block-export.ts, D6). Written VERBATIM through
+  // `saveBinaryExport` — no BOM even for a .txt/.md/.csv destination (D1; see the `bomFor`
+  // note) — because the issue requires byte identity (a BOM breaks a shebang). Returns the saved
+  // path, or null when the user cancelled or an argument has the wrong shape (no dialog then).
+  // `messageId` is the answer the block came from, for the audit row; it must LOOK like an id
+  // (the persisted-id alphabet) so a renderer-supplied string can never smuggle content into
+  // the audit log through that slot.
+  ipcHandle(
+    IPC.saveCodeBlock,
+    async (_e, messageId: string, content: string, language: string): Promise<string | null> => {
+      requireUnlocked()
+      if (typeof content !== 'string') return null
+      if (typeof messageId !== 'string' || !MESSAGE_ID_SHAPE.test(messageId)) return null
+      const info = typeof language === 'string' ? language : ''
+      const extension = codeBlockExtension(info)
+      const bytes = Buffer.from(content, 'utf8')
+      const filePath = await saveBinaryExport(
+        {
+          title: tMain('main.dialog.exportCodeBlock'),
+          defaultPath: codeBlockDefaultFileName(info),
+          filters: [
+            { name: extension.toUpperCase(), extensions: [extension] },
+            { name: tMain('main.dialog.filterAll'), extensions: ['*'] }
+          ]
+        },
+        bytes
+      )
+      if (!filePath) return null
+      log.info('Code block saved', { messageId, extension, bytes: bytes.length })
+      // Audit privacy rule: id + byte count + the ALLOWLISTED extension only — the block text, the
+      // raw info string and the chosen path are content.
+      ctx.audit?.('code_block_exported', 'A code block from an answer was saved to a file', {
+        messageId,
+        bytes: bytes.length,
+        extension
+      })
+      return filePath
+    }
+  )
 }
