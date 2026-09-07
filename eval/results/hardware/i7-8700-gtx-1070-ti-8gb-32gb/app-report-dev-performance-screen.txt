@@ -1,0 +1,25 @@
+# Pasted by the machine owner 2026-09-07 from the source build (0.1.59, `npm run dev`, HILBERTRAUM_DRIVE_ROOT at the drive), Performance screen → Copy report, taken after the leg-2 baseline start with the card otherwise idle. The app had started Gemma 4 12B on its own at launch.
+
+Dieser Computer
+Geschwindigkeit: 8,5 Token / Sek. (Gemessen mit Gemma 4 12B Instruct QAT Q4 am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 31,9 GB RAM
+CPU: Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz (12 Kerne)
+Grafikspeicher: 8,1 GB VRAM (NVIDIA GeForce GTX 1070 Ti)
+Laufwerk: 305 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.5 4B (UD-Q4_K_XL) (Grafikspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 4B (UD-Q4_K_XL)
+Kontextgröße: 4.096 Token
+Letzter Lauf: 7.9.2026, 11:31:13
+
+Owner's on-screen notes: "Qwen3.5 4B (UD-Q4_K_XL) is starred" · "Gemma 4 12B Instruct QAT Q4 is currently running"
+
+# Second paste (same screen, same moment) — the "Dein Modell" section and the graphics tile:
+
+Gemma 4 12B Instruct QAT Q4 · 6,5 GB auf dem Laufwerk · Kontext von 8.192 Token
+Belegt 9,3 GB mit diesem Kontext. 32 von 49 Schichten auf der GPU, etwa 3,5 GB laufen aus dem RAM. Die Karte war frei (7,3 von 8,1 GB), aber die Laufzeit reserviert zusätzlich 0,5 GB Arbeitspuffer und 1 GB Sicherheitsreserve und verschiebt ganze Schichten von der Karte, wenn die Summe knapp wird. Antworten langsamer.
+
+Grafikspeicher
+Nutzbar
+8,1GB VRAM
+NVIDIA GeForce GTX 1070 Ti
