@@ -7,7 +7,8 @@ import {
   matchesModelSearch,
   modelTask,
   variantGroupOrder,
-  type ModelTask
+  type ModelTask,
+  type ModelVariantGroup
 } from '../lib/modelLibrary'
 import {
   isModelInstalled,
@@ -517,6 +518,31 @@ export function ModelsScreen(): JSX.Element {
       ? models.filter((m) => matchesLibraryRow(m, 'browse')).length
       : 0
   const hasFilters = query !== '' || task !== 'all' || family !== 'all'
+  // #315 — grouping + expansion, computed ONCE per task section so the list below and the
+  // "current model download" panel's own-name decision (`renderedModelIds`) read the SAME
+  // groups/expansion instead of two copies that could disagree.
+  const sections = TASKS.map((entry) => {
+    const list = visibleModels.filter((m) => modelTask(m) === entry.value)
+    return {
+      entry,
+      groups: groupModelVariants(list).map((group) => {
+        // C1: a damaged variant must not hide inside a collapsed group — the whole recovery
+        // action sits on its row. An explicit user toggle still wins (both directions).
+        const hasRepair = group.models.some((m) => m.state === 'checksum_failed')
+        return { group, expanded: userToggledGroups.get(group.key) ?? hasRepair }
+      })
+    }
+  })
+  // #315 — every model id whose row is actually on screen below: a single-variant card, a
+  // group's face, or (only while expanded) any other member of that group.
+  const renderedModelIds = new Set<string>()
+  for (const section of sections) {
+    for (const { group, expanded } of section.groups) {
+      const ordered = variantGroupOrder(group)
+      renderedModelIds.add(ordered[0].id)
+      if (expanded) for (const m of ordered.slice(1)) renderedModelIds.add(m.id)
+    }
+  }
   // F2/B1 — what the independent "Current model download" panel owns: the live job (as before)
   // AND an unresolved terminal result, until the user dismisses it, a new job is accepted, or the
   // download ends verified/cancelled. Derived from `job` alone; no separate copy of the job.
@@ -534,6 +560,10 @@ export function ModelsScreen(): JSX.Element {
       (jobName?.jobId === panelJob.jobId ? jobName.name : null) ??
       panelJob.modelId
     : ''
+  // #315 — the panel's own name line is only needed while the model's row is off screen
+  // (filtered away, collapsed inside a group, or no longer listed); otherwise the row already
+  // carries the identity and repeating it in the panel just above is redundant.
+  const panelRowRendered = panelModel != null && renderedModelIds.has(panelModel.id)
 
   // Download gates: the drive policy is the ceiling, the Settings toggle the
   // switch. The copy distinguishes the two — "disabled by policy" vs. "turn it on in
@@ -863,13 +893,9 @@ export function ModelsScreen(): JSX.Element {
     )
   }
 
-  function libraryRows(list: ModelInfo[]): JSX.Element[] {
-    return groupModelVariants(list).map((group) => {
+  function libraryRows(groups: { group: ModelVariantGroup; expanded: boolean }[]): JSX.Element[] {
+    return groups.map(({ group, expanded }) => {
       if (group.models.length === 1) return card(group.models[0])
-      // C1: a damaged variant must not hide inside a collapsed group — the whole recovery action
-      // sits on its row. An explicit user toggle still wins (both directions).
-      const hasRepair = group.models.some((m) => m.state === 'checksum_failed')
-      const expanded = userToggledGroups.get(group.key) ?? hasRepair
       // F5: the collapsed card is the group FACE (an obtainable member of the leader's priority
       // cohort), then every other variant once, in the order the sort produced.
       const ordered = variantGroupOrder(group)
@@ -1225,7 +1251,10 @@ export function ModelsScreen(): JSX.Element {
             user acts, a new download is accepted, or the download ends verified/cancelled
             (design-guidelines §15 "Terminal download results"). */}
         {panelJob && <div className="model-library-download" role="region" aria-label={t('models.library.download')}>
-          <strong>{panelName}</strong>
+          {/* #315 — named here only while the row below is NOT on screen; when the row is
+              rendered (visible, single/face, or an expanded group member) it already carries
+              the identity, so naming it twice would be redundant. */}
+          {!panelRowRendered && <strong>{panelName}</strong>}
           {/* ONE always-mounted alert node for the whole panel lifetime: empty while the download
               runs, filled on the terminal transition. Same wrapper shape as ErrorBanner (audit
               M-U1) — a live region that only appears at failure is not reliably announced. */}
@@ -1321,11 +1350,10 @@ export function ModelsScreen(): JSX.Element {
               </>
             )}
           </div>
-        ) : TASKS.map((entry) => {
-          const list = visibleModels.filter((m) => modelTask(m) === entry.value)
-          return list.length > 0 && <section key={entry.value} aria-label={t(entry.label)}>
+        ) : sections.map(({ entry, groups }) => {
+          return groups.length > 0 && <section key={entry.value} aria-label={t(entry.label)}>
             <h3 className="model-task-heading">{t(entry.label)}</h3>
-            {libraryRows(list)}
+            {libraryRows(groups)}
           </section>
         })}
       </section>

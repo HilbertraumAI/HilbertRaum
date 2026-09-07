@@ -1553,7 +1553,11 @@ screen now keeps the active chat model pinned above a compact library of alterna
   last known display name, falling back to the model id, keeps it named. ONE alert element is
   mounted for the panel's whole lifetime — empty during progress, filled on the terminal
   transition — so the outcome is announced on an element that was already in the tree. While the
-  panel owns a job the row does not repeat its progress or result. **Retry** resolves the exact
+  panel owns a job the row does not repeat its progress or result. **Naming the model (#315):**
+  the row is the identity while it is on screen (a single card, a group's face, or a member of an
+  expanded group), so the panel's own name line renders only while that row is NOT rendered —
+  filtered away by search/task/family/view, collapsed inside a group, or no longer listed —
+  keeping the outcome named exactly once. **Retry** resolves the exact
   variant id and reuses the existing confirmation with that variant's license link and a RESET
   acknowledgement; it is disabled with the reason when downloads are blocked by policy or the
   Settings toggle, when the refresh reports the model already on this drive (#314), when the

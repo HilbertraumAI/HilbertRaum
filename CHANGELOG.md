@@ -179,6 +179,9 @@ from its first public `1.0.0` release onward.
   you had not dismissed comes back with its message and Retry/Dismiss, one you had dismissed stays
   dismissed, and Retry is no longer offered for a model that is already on the drive. Restarting
   the app itself still forgets the download (the partial file resumes on the next Download click).
+- **The download panel no longer repeats a model name that is already on screen.** While the
+  model's own row is visible below it, the "Current model download" panel leaves the name to the
+  row; it names the model itself only when the row is filtered away, collapsed or no longer listed.
 - **Small knowledge-pack polish.** The packs panel shows each archive's language by name ("German")
   instead of a three-letter code; while one pack is being enabled, disabled or removed, the other
   rows' buttons stay usable; a pack whose file is missing can be disabled, not only removed; and

@@ -1297,10 +1297,63 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       current = { ...current, status: 'done', unverified: true, receivedBytes: 1000 }
 
       expect(await panel().findByText('verify-models --generate')).toBeVisible()
-      expect(panel().getByText(second.displayName)).toBeVisible()
+      if (hide === 'search') {
+        // The search still excludes it entirely — no row anywhere — so the panel names it.
+        expect(panel().getByText(second.displayName)).toBeVisible()
+      } else {
+        // #315 — now installed, it outranks its still-missing sibling and becomes the
+        // collapsed group's FACE (`variantGroupFace`), so its row renders despite the
+        // collapse: the panel drops its own name line, the row (the face) carries it.
+        expect(panel().queryByText(second.displayName)).toBeNull()
+        expect(cardFor(second.displayName)).toBeVisible()
+      }
       expect(panel().getByRole('button', { name: DISMISS })).toBeEnabled()
     }
   )
+
+  it('#315 the panel names the model only while its row is off screen', async () => {
+    const user = userEvent.setup()
+    const first = variant('r315-q4', 'Row swap group Q4_K_M')
+    const second = variant('r315-q6', 'Row swap group Q6_K')
+    let current = jobOf('r315-job', second.id)
+    stubLive({ models: () => [first, second], job: () => current })
+    render(<ModelsScreen />)
+
+    await user.click(await screen.findByRole('button', { name: 'Show all variants (2)' }))
+    await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
+    await user.click(screen.getByRole('button', { name: 'Start download' }))
+    const region = await screen.findByRole('region', { name: REGION })
+    const alert = within(region).getByRole('alert')
+
+    current = { ...current, status: 'failed', error: 'row swap failure' }
+    await panel().findByText('row swap failure')
+
+    // Collapsed: the row is off screen, so the panel names the model.
+    await user.click(screen.getByRole('button', { name: 'Show fewer variants (2)' }))
+    expect(panel().getByText(second.displayName)).toBeVisible()
+    expect(panel().getByRole('button', { name: RETRY })).toBeEnabled()
+    expect(panel().getByRole('button', { name: DISMISS })).toBeEnabled()
+
+    // Expanded: the row is back, so the panel drops its own name line — the row carries it.
+    await user.click(screen.getByRole('button', { name: 'Show all variants (2)' }))
+    expect(panel().queryByText(second.displayName)).toBeNull()
+    expect(cardFor(second.displayName)).toBeVisible()
+
+    // A non-matching search hides the row again, so the name returns to the panel.
+    await user.type(screen.getByRole('searchbox'), 'no match')
+    expect(await panel().findByText(second.displayName)).toBeVisible()
+
+    // Clearing the search restores the (still expanded) row: the name leaves the panel again.
+    await user.clear(screen.getByRole('searchbox'))
+    await waitFor(() => expect(panel().queryByText(second.displayName)).toBeNull())
+    expect(cardFor(second.displayName)).toBeVisible()
+
+    // The region label, the alert node identity and the Retry/Dismiss names never changed.
+    expect(screen.getByRole('region', { name: REGION })).toBe(region)
+    expect(within(region).getByRole('alert')).toBe(alert)
+    expect(panel().getByRole('button', { name: RETRY })).toBeEnabled()
+    expect(panel().getByRole('button', { name: DISMISS })).toBeEnabled()
+  })
 
   it('sends the exact expanded variant ID and its own license acknowledgement to downloadModel', async () => {
     const user = userEvent.setup()
@@ -1461,11 +1514,18 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       current = { ...current, status: 'failed', error: 'checksum mismatch after retry' }
 
       expect(await panel().findByText('checksum mismatch after retry')).toBeVisible()
-      expect(panel().getByText('Refreshed model Q4')).toBeVisible()
       if (how === 'not at all') {
+        // The refresh dropped the model entirely — no row anywhere — so the panel is the
+        // only place left to name it.
+        expect(panel().getByText('Refreshed model Q4')).toBeVisible()
         // No retry target left: explained, not a button that could only fail.
         expect(panel().getByRole('button', { name: RETRY })).toBeDisabled()
         expect(panel().getByText(t('en', 'models.download.retryUnavailable'))).toBeVisible()
+      } else {
+        // #315 — the refresh kept it (now installed) and Browse lists it regardless of state,
+        // so its row is on screen: the panel does not repeat the name, the row still carries it.
+        expect(panel().queryByText('Refreshed model Q4')).toBeNull()
+        expect(cardFor('Refreshed model Q4')).toBeVisible()
       }
     }
   )
@@ -1496,7 +1556,10 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       await screen.findByText('refresh exploded', undefined, { timeout: 3000 })
     ).toBeInTheDocument()
     expect(panel().getByText('server closed the connection')).toBeVisible()
-    expect(panel().getByText(entry.displayName)).toBeVisible()
+    // #315 — the failed refresh left the previous model list (and its row) in place, so the
+    // panel does not repeat the name; the row still carries it.
+    expect(panel().queryByText(entry.displayName)).toBeNull()
+    expect(cardFor(entry.displayName)).toBeVisible()
   })
 
   // ---- Dismiss ----------------------------------------------------------------------------------
@@ -1738,7 +1801,10 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
 
     await user.click(within(cardFor(another.displayName)).getByRole('button', { name: 'Download' }))
     await user.click(screen.getByRole('button', { name: 'Start download' }))
-    expect(panel().getByText(another.displayName)).toBeVisible()
+    // #315 — Browse lists every row regardless of state, so `another`'s row is on screen: the
+    // panel does not repeat the name, the row still carries it.
+    expect(panel().queryByText(another.displayName)).toBeNull()
+    expect(cardFor(another.displayName)).toBeVisible()
     expect(screen.queryByText('stale result')).not.toBeInTheDocument()
   })
 
@@ -1778,7 +1844,9 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
 
     await user.click(within(cardFor(second.displayName)).getByRole('button', { name: 'Download' }))
     await user.click(screen.getByRole('button', { name: 'Start download' }))
-    expect(panel().getByText(second.displayName)).toBeVisible()
+    // #315 — Browse lists `second`'s row throughout, so the panel does not repeat its name.
+    expect(panel().queryByText(second.displayName)).toBeNull()
+    expect(cardFor(second.displayName)).toBeVisible()
 
     late.resolve(firstFailed)
     await act(async () => {
@@ -1786,7 +1854,8 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     })
     // The stale response must not resurrect the replaced result.
     expect(screen.queryByText('late failure')).not.toBeInTheDocument()
-    expect(panel().getByText(second.displayName)).toBeVisible()
+    expect(panel().queryByText(second.displayName)).toBeNull()
+    expect(cardFor(second.displayName)).toBeVisible()
     expect(api.listModels).toHaveBeenCalled()
   })
 
@@ -1810,7 +1879,10 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     await waitFor(() => expect(panel().getByText('failed while away')).toBeVisible(), {
       timeout: 3000
     })
-    expect(panel().getByText(entry.displayName)).toBeVisible()
+    // #315 — Browse lists the row regardless of state, so it is on screen here too: the panel
+    // does not repeat the name, the row still carries it.
+    expect(panel().queryByText(entry.displayName)).toBeNull()
+    expect(cardFor(entry.displayName)).toBeVisible()
     expect(panel().getByRole('button', { name: RETRY })).toBeEnabled()
   })
 
@@ -1833,7 +1905,10 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     current = { ...current, status: 'failed', error: 'embedder download failed' }
 
     expect(await panel().findByText('embedder download failed')).toBeVisible()
-    expect(panel().getByText(embedder.displayName)).toBeVisible()
+    // #315 — the default view lists this automatic-role row too, so the panel does not repeat
+    // the name; the row is where it is actually named.
+    expect(panel().queryByText(embedder.displayName)).toBeNull()
+    expect(cardFor(embedder.displayName)).toBeVisible()
   })
 
   // ---- EN + DE ----------------------------------------------------------------------------------
@@ -1906,7 +1981,10 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
 
       render(<ModelsScreen />)
       await screen.findByRole('region', { name: REGION })
-      expect(panel().getByText(entry.displayName)).toBeVisible()
+      // #315 — Browse lists the row again after the reload, so the panel does not repeat the
+      // name; the row still carries it.
+      expect(panel().queryByText(entry.displayName)).toBeNull()
+      expect(cardFor(entry.displayName)).toBeVisible()
       expect(panel().queryByText(bystander.displayName)).not.toBeInTheDocument()
       expect(panel().getByRole('button', { name: t('en', 'models.download.cancel') })).toBeEnabled()
       // …and the poll resumes against the adopted id, not a remembered one.
@@ -1935,7 +2013,11 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
 
       render(<ModelsScreen />)
       await screen.findByRole('region', { name: REGION })
-      expect(panel().getByText(entry.displayName)).toBeVisible()
+      // #315 — the row is on screen after the reload too, so the panel's own name line is
+      // gone; the failed banner sentence still names the model inside a longer sentence, which
+      // is fine, and the row carries the bare name.
+      expect(panel().queryByText(entry.displayName)).toBeNull()
+      expect(cardFor(entry.displayName)).toBeVisible()
       expect(panel().getByText('connection reset')).toBeVisible()
       expect(
         panel().getByText(t('en', 'models.download.failed', { name: entry.displayName }))
