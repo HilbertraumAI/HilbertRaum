@@ -612,6 +612,25 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
     await rt.stop()
   })
 
+  it('#312: gpuAutoDisabled false keeps the cold start on GPU auto-offload — no --device none', async () => {
+    // Acceptance 2, translation side. The chat ladder no longer persists `gpuAutoDisabled` for a
+    // model IT could not load, so the flag the sidecar reads here stays false and the next
+    // translation cold start still resolves 'auto'. The sibling above pins the true case.
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      gpu: { getGpuMode: () => 'auto', getGpuAutoDisabled: () => false }
+    })
+    await rt.translate(translateOpts)
+    expect(deviceOf(calls[0].args)).toBe('auto')
+    expect(calls[0].args.join(' ')).not.toContain('--device')
+    await rt.stop()
+  })
+
   it('the signals are re-read per COLD START: a Settings flip takes effect after a suspend, no restart', async () => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl } = translationFetch()

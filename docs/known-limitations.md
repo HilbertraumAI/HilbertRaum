@@ -2288,9 +2288,18 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   `start()` fails with a spawn error instead of falling back to the mock — and the fallback
   ladder's rungs 2–3 reuse the same wrong-arch binary. A DIY Intel-Mac user could drop a
   self-built x64 `llama-server` into `runtime/llama.cpp/mac/`; prepared drives do not.
-- **A failed first GPU start auto-disables GPU persistently** (`gpuAutoDisabled`) even when the
-  underlying cause was not the GPU (e.g. a corrupt model file failing rung 1). Harmless — the
-  CPU rungs still run and Diagnostics → "Try GPU again" clears the flag in one click.
+- **A model the runtime cannot load no longer disables GPU** (issue #312, fixed 2026-09-07). The
+  rung-1 failure is held until the forced-CPU rungs answer: one of them starting persists
+  `gpuAutoDisabled` as before, while every rung dying the same way blames the model — nothing is
+  persisted, and the user gets a notice naming the model plus the rung-4 mock's disclosed
+  simulated replies (architecture.md §5.2). Residuals: (a) **no per-model latch** — an unloadable
+  model re-walks the rungs on every start, so a repeat attempt can pay up to three 180 s health
+  timeouts; (b) the **health-timeout** path is classified conservatively — the tail of a child
+  that never became healthy is arbitrary, so those failures usually differ in class and stay a
+  device verdict; (c) **mixed-cause** failures still latch the GPU: a genuine device fault whose
+  CPU rungs fail for an unrelated reason (the Intel-Mac wrong-arch binary above) is blamed on the
+  device, which is the deliberate conservative default. Diagnostics → "Try GPU again" still
+  clears the flag in one click.
 - **The probe labels; the ladder guarantees.** `--list-devices` proves enumeration, not stable
   inference — a driver can enumerate fine and crash on the first compute submit. That case is
   handled by the crash auto-fallback (one CPU restart + a friendly notice); the in-flight reply

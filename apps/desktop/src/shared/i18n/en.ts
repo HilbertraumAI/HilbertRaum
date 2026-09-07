@@ -2300,6 +2300,11 @@ export const en = {
   // borrow the compatibility-mode copy above, which promises slower answers.
   'main.runtime.speedUpDisabled':
     'Turned off an optional speed-up for stability. The model is restarting — send your message again.',
+  // Issue #312: no rung could load THIS model, and the graphics card is not the suspect (nothing
+  // was disabled). Name the model and the next step — never "your GPU failed".
+  'main.runtime.modelCannotLoad':
+    '{model} could not be loaded on this computer — replies are simulated until you choose ' +
+    'another model.',
   'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',
   'main.translation.noModel':
     'Translating needs the translation model, which is not installed on this drive. ' +

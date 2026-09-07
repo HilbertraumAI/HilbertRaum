@@ -217,6 +217,9 @@ words per second" and "faster than you can read". There is nothing to install or
 - If the graphics driver ever causes trouble, the app switches itself to **compatibility mode**
   (processor only — works on every machine) and tells you with a one-line note. After a driver
   update, **Try GPU again** on the same Diagnostics tab re-enables the graphics card.
+- If a particular model cannot be loaded on your computer at all, you get a note naming that
+  model and its replies are simulated until you pick another one — compatibility mode is *not*
+  switched on by it, so every other model keeps using your graphics card as usual.
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
   big speedups come from dedicated graphics cards.

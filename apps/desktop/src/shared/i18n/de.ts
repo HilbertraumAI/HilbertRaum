@@ -2301,6 +2301,11 @@ export const de: Record<keyof typeof en, string> = {
   'main.runtime.speedUpDisabled':
     'Eine optionale Beschleunigung wurde aus Stabilitätsgründen abgeschaltet. Das Modell ' +
     'startet neu — schick deine Nachricht bitte noch einmal.',
+  // Issue #312: Keine Stufe konnte DIESES Modell laden — die Grafikkarte ist nicht die Ursache
+  // und bleibt unangetastet. Das Modell benennen, nie die Hardware beschuldigen.
+  'main.runtime.modelCannotLoad':
+    '{model} konnte auf diesem Computer nicht geladen werden — die Antworten sind simuliert, ' +
+    'bis du ein anderes Modell auswählst.',
   'main.noModelRunning':
     'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
   'main.translation.noModel':

@@ -402,6 +402,18 @@ function initBackend(): void {
         else if (event === 'skipped') log.info('Speculative decoding not used', fields)
         else log.warn(`Speculative decoding ${event} — continuing without it`, fields)
       },
+      // #312: every rung died the same way, so the MODEL is the common cause, not this
+      // machine's GPU — nothing is persisted here (no `gpuAutoDisabled`, no `gpuLastError`,
+      // no new audit type; the `runtime_started` entry already records `backend: 'mock'`).
+      // The user is told which model, over the existing ephemeral runtime:notice channel.
+      onModelLoadFailure: (opts, reason) => {
+        perfMark('runtime_model_load_failed', { modelId: opts.modelId })
+        log.warn('Model could not be loaded on any rung — the GPU is not the suspect', {
+          modelId: opts.modelId,
+          reason
+        })
+        notifyRenderer(tMain('main.runtime.modelCannotLoad', { model: opts.modelId }))
+      },
       onPrefetch: (opts, event, detail) => {
         perfMark('model_prefetch', { modelId: opts.modelId, event })
         if (event === 'failed') {
