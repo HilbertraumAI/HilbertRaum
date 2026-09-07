@@ -638,25 +638,77 @@ the free-memory basis"; `freeMb` per point 2 above):
 clears the 27B Q5's 23,866 MiB threshold, so it keeps `qwen3.8-27b-ud-q5km` — the one row the
 2026-09-05 total-memory grid also got right.)
 
-**The 8 GB row and the Gemma 9–11 GiB / MoE 17–18 GiB bands are predicted, unverified on
-hardware (G3).** On the free-memory basis an idle 8 GB card (≈ 7,168 MiB free) does not clear the
-9B's 8,014 MiB threshold, so the star is the 4B, not the 9B the retracted total-memory rule gave
-it — this row rests on the formula above, not a real start. Gemma 12B's threshold (11,159 MiB ≈
-9–11 GiB free) and the 26B-A4B MoE's threshold (18,353 MiB ≈ 17–18 GiB free) are likewise
-predicted only: neither is ever the star in the grid above (a lower-threshold, equal-or-higher
-rank model always wins first — the rank-3 9B needs only 8,014 MiB, so it out-competes the rank-2
-Gemma 12B and MoE at every budget where either would otherwise fit), but the ESTIMATE the "Your
-model" row shows for a model of that size on a card in that range must still be right, and that
-has not been checked against a real start. No model could be started on the machine available for
-this audit (Smart App Control); the hardware protocol is `tmp/PR-308-assumptions-check.md` §4,
-tracked as issue #318 (WP5 legs 2–3, 6–7). WP5 is explicitly **not** a
-merge gate (decision G3).
+**Hardware verification (issue #318, 2026-09-07) — the 6, 8, 12 and 24 GB rows are VERIFIED on
+real starts; the 20 GB row stays predicted.** When this section was written (G3) no model could be
+started on the audit machine, so the 8 GB row and the Gemma 9–11 GiB / MoE 17–18 GiB estimate bands
+rested on the formula alone. Six machines then ran the protocol (`tmp/PR-308-assumptions-check.md`
+§4, reproduced verbatim in #318) with the app's OWN rung-1/1a argv on the pinned b9849 build, one
+comment per start on #318; per-start JSON, the redacted `-lv 4` load logs, Vulkan heap samples and
+the pasted Performance Copy reports live under `eval/results/hardware/<slug>/`. Every §6.6 verdict
+held:
+
+| leg | card (probe total / free, MiB) | model at ctx 8192 | fit outcome | decode | app ★ (basis) |
+|---|---|---|---|---|---|
+| 2 | GTX 1070 Ti 8 GB (8,273 / 7,504) | 9B | **31/33** — the fit read 6,898 MiB free and fell 133 MiB short of its 1,024 target; identical with ~1 GB of desktop use | 20.2 tok/s | 4B (Grafikspeicher) ✔ |
+| 3 | RTX 3080 Ti 12 GB (12,084 / 11,316) | Gemma 12B | 49/49, 2,086 MiB to spare; identical with 1–2.7 GB of desktop use | 27.7 | 9B ✔ |
+| 4 | RTX 3060 Laptop 6 GB (5,994 / 5,226 — 150 below the gate) | E2B (the RAM pick) · 9B (question f) | E2B **36/36 on the card anyway** · 9B 18/33 | 86.4 · 5.2 | E2B (Arbeitsspeicher) ✔ |
+| 5 | same laptop: AMD Radeon(TM) Graphics listed FIRST, RTX 3060 second, no `--device` | E2B, 9B | every GPU buffer on the RTX; the fit's device list never contained the iGPU (its "device 0" was Vulkan1) | — | — |
+| 7 | RTX 3090 24 GB (24,822 / 23,575) | Q4 · Q5 | Q4 66/66 (4,704 MiB free at peak) · Q5 **62/66** under rung 1a (MTP on, `-np` auto) | 53.8 · 30.4 | Q4 ✔; the RAM pick Q5 demoted exactly as rule C says |
+| 1 | the rig, Q5, one thing varied per start | ubatch 2048→512 · `--fit-target` 1024→512 · `-np` auto→1 · MTP on→off | 65/66 · 64/66 · **66/66** · **66/66** | 38.9 · 34.7 · **51.0** · 30.7 | — |
+
+Two integrated-only laptops (Iris Xe 8,098 MiB, UHD 620 8,119 MiB) had no leg; both confirmed on
+hardware that `looksIntegrated` keeps a large integrated device out of the budget slot (class
+`cpu`, RAM basis) even with the GPU switched on. Findings every session reproduced — the rule and
+the thresholds above are unchanged; these bound how far they can be trusted:
+
+1. **The fit reasons from its OWN free reading**, taken after the Vulkan context is up, not from
+   the probe's: 606 MiB lower on the 1070 Ti (6,898 vs 7,504), 1,820 lower on the 3090 (21,755 vs
+   23,575), 204 lower on the RTX 3060 Laptop (5,022 vs 5,226). The estimate's working share + 1 GiB
+   margin absorbed that gap on every card measured; the 8 GB verdict would flip only on a fit
+   reading ≥ 7,031 MiB.
+2. **The probe's `VK_EXT_memory_budget` "free" figure does not track other processes' pre-spawn
+   use on NVIDIA** (7,504 at both 883 and 1,318 MiB of nvidia-smi use on the 1070 Ti; 11,316 at
+   2.6 and 5.4 GB on the 3080 Ti) and is static or nearly so while a model runs (unchanged on the
+   laptop, −673 MiB on the 1070 Ti). `GRAPHICS_IDLE_ALLOWANCE_MIB` and the protocol's desktop-use
+   distinction are moot on this backend, and a re-probe to fit a SECOND model beside a running one
+   reads a stale number.
+3. **The estimate is conservative everywhere:** 33 % on the 9B (8,014 vs 6,007 projected), ≈ 1.9 GiB
+   on Gemma 12B, 1,570 MiB on Q4, and **2.4× on the E2B** (4,746 vs 1,997 — the 15 % working share
+   is applied to the whole 3,147 MiB file although 2,152 MiB of it stays host-mapped). The
+   `estimated_context_cache_gib` terms are close (9B 0.4 GiB vs 440–457 MiB measured); Q5's 1.1 GiB
+   under-counts the 1,795 MiB its 4-slot recurrent state takes WITH MTP (the draft head triples the
+   state: rs_seq 2), which is why the Q5 estimate reads "partial, ~263 MiB spill" against ≈ 1,173 MiB
+   measured on the host.
+4. **The Q4-versus-Q5 boundary at 24 GB is a property of the rung-1a launch, not of the weights**
+   (leg 1): MTP costs the 552 MiB draft context plus 1,197 MiB of extra recurrent state at four
+   slots — the 859 MiB shortfall the baseline could not meet. `-np 1` (51.0 tok/s) or MTP off
+   (30.7) fully offloads Q5; under the app's launch MTP buys nothing on this card (30.4 at 62/66).
+   Since a refused or latched-off rung 1a lands on rung 1, the app can run Q5 fully offloaded while
+   its "Your model" row calls it partial. → #319 (`-np`), §5 item 22 (f).
+5. **The 214 / 246 MiB BAR heap on cards without resizable BAR is used** (the recurrent-state
+   buffer at load, staging during a request, ≤ 9 MiB of budget left at peak) — question (e).
+6. **The parser read every real partial-offload log correctly** (31/33, 18/33, 62/66, Gemma 32/49
+   on the 8 GB card) — #329 has its fixtures; one summary-field defect found there:
+   `ModelPlacement.gpuFreeAtStartMb` names the iGPU on a machine with no budget device.
+
+**Still predicted:** the **20 GB row** (leg 6 — no 20 GB card is available to the project). By
+interpolation from the rig, Q4 needs ≈ 19,460 MiB of the fit's own reading (17,885 projected +
+the 1,576 rung-1a target) while a 20 GB card's reading lands around 18,700–19,900 (≈ 20,470 probe
+minus finding 1's 600–1,800), so Q4 is expected to land partial and the 9B star stands. The Gemma
+10–11 GiB and MoE 17–18 GiB estimate bands (questions b, c) are likewise unmeasured; neither is ever
+the star (a lower-threshold, equal-or-higher-rank model always wins first). **Leg 5 on an
+Intel-first hybrid** was not available either; the AMD result — llama.cpp dropped the integrated
+device by TYPE before the filling pass — is expected to carry over, and `looksIntegrated`'s
+completeness (#320) is a name-table question, checked against the Intel names above.
 
 **The 6 GB row (N8).** Every 6 GB laptop card seen for this audit reports BELOW the runtime's
-6,144 MiB `discrete` gate on Vulkan (an RTX 4050 Laptop: 5,921 MiB) — so the "6 GB" row above
-describes only a card that reports AT OR ABOVE the gate (an RTX 2060: 6,144 MiB); a 6 GB laptop
-card below the gate is a RAM machine on the next start (`nextStartMemory` → `cpu`), same as
-today. Whether to lower the gate is an owner call (§5 item 22 (k)).
+6,144 MiB `discrete` gate on Vulkan (an RTX 4050 Laptop: 5,921 MiB; the RTX 3060 Laptop of leg 4:
+5,994) — so the "6 GB" row above describes only a card that reports AT OR ABOVE the gate (an RTX
+2060: 6,144 MiB); a 6 GB laptop card below the gate is a RAM machine on the next start
+(`nextStartMemory` → `cpu`), same as today. **Measured 2026-09-07 (#318 leg 4):** the gate costs
+nothing in PLACEMENT — llama.cpp's fit put the RAM pick fully on the sub-gate card (E2B 36/36,
+86 tok/s) — it only changes which model is starred, the basis wording, and the tile (which names the
+card under the gate since #375). Whether to lower it is an owner call (§5 item 22 (k), #321).
 
 **Thresholds** (`estimateGraphicsNeedMib`, every RANKED chat manifest, raw MiB; "fits from" =
 ⌈need⌉; the boundary is asserted on both sides in `committed-catalog.test.ts`):
