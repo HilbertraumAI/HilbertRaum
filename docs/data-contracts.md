@@ -440,10 +440,18 @@ override `--host`). The ladder gates the rung on a probed GPU with the weight's 
 validation error, never a silent default) → `ModelManifest.estimatedContextCacheGib?: number`
 (ABSENT when omitted; the 0.5 GiB default is the picker's, `VRAM_DEFAULT_CONTEXT_CACHE_GIB`). It is
 the per-model context-cache term of `estimateGraphicsNeedMib` (services/models.ts, §6.6 rule C):
-the cache the runtime allocates at the model's recommended window under the app's launch (b9849
-defaults, four unified slots, ubatch 2048). Carried by exactly the seven decision models (Gemma 4
-12B 2.4, 26B-A4B 1.5, E2B 0.1, Qwen3.8 27B UD-Q4/Q5 1.1, Qwen3.5 9B 0.4, 4B 0.3; pinned in
+the cache the runtime allocates at the model's recommended window under the app's launch (ubatch
+2048, and — since the 2026-09-07 `-np 1` decision on issue #319 — **ONE server slot**, not b9849's
+four unified ones). Carried by exactly the seven decision models (Gemma 4 12B 2.4, 26B-A4B 1.5,
+E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**; pinned in
 `committed-catalog.test.ts`); the GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
+**How the slot count enters the term** (§6.6 point 4, measured on the pin): the KV cache — and
+Gemma's sliding-window cache — is sized in CELLS from `--ctx-size` and is counted **once** whatever
+the slot count is; only the **recurrent state** is per-sequence, so `-np 1` divides just that share
+by four. Hence the three Gemma terms did not move at all and the four Qwen ones did. The two 27B
+figures use the MTP recurrent state (both opt into `speculative_decoding`); that does not
+double-count `MTP_VRAM_HEADROOM_MB`, which gates whether rung 1a is *attempted* and covers the draft
+head's own weights + KV.
 
 ### Document ingestion (Phase 4 live)
 ✅ **`services/ingestion/`** (spec §7.7). Full detail in [`docs/rag-design.md`](rag-design.md).
@@ -587,7 +595,8 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
   `budgetMb` → **§6.6 rule C** (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal)`:
   the RAM pick stands where `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` =
-  unrounded weights MiB × 1.15 + (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024 — AND
+  unrounded weights MiB × 1.15 + (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024, the cache term
+  computed for the app's ONE server slot since #319 — AND
   `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
   ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
   confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,

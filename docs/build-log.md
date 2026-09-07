@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-07 — BUILD_STATE §5 item 22 (f)/(i) retired verbatim (#319)
+
+Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 22 when the owner ruling of
+2026-09-07 on issue #319 landed (the chat server takes `-np 1`), to keep §5 inside its
+500-line budget. Durable record: `docs/model-benchmarks.md` §6.6 "2026-09-07 amendment (#319,
+owner decision)" plus its recomputed point 4, thresholds table and grid note. Full text of the
+two letters as they stood before the collapse:
+
+(f) the fit margin: on the rig the 27B Q5 lands 62/66 layers on a FREE 24 GB card — MEASURED 2026-09-07 (#318 leg 1): the shortfall is MTP itself (+552 MiB draft context, +1,197 MiB recurrent state at four slots); `-np 1` → 66/66 at 51 tok/s, MTP off → 66/66 at 30.7, ubatch 512 → 65/66, `--fit-target` 512 → 64/66, and the app's rung-1a start (30.4 at 62/66) gains nothing from MTP on this card; options unchanged (a smaller target, a smaller ubatch, `-np 1`, or a full-offload rung — the "never -ngl" rule would need a decision); owner call → #319;
+
+(i) the chat server's b9849 default of four unified slots (no `-np` passed) costs real cache overhead the picker's `estimated_context_cache_gib` now estimates around — should the app pass `-np 1` for a single-user session — decided 2026-09-06: measure both settings in #318 leg 1 first, issue #319 — MEASURED 2026-09-07: see (f), `-np 1` is the one variant that fully offloads Q5 on 24 GB (recurrent state 1,795 → 449 MiB), decision open on #319;
+
+
 ## 2026-09-07 — BUILD_STATE §5 item 22 (h)/(j) retired verbatim (#320)
 
 Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 22 when the owner ruling of

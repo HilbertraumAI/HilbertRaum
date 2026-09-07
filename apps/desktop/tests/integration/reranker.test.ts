@@ -155,6 +155,7 @@ describe('LlamaReranker', () => {
     // CHAT_SERVER_ARGS are chat-only (Phase 20) and must NOT leak to this sidecar.
     expect(args).not.toContain('--jinja')
     expect(args).not.toContain('--reasoning-format')
+    expect(args).not.toContain('-np ') // the chat server's one slot (#319) is chat-only too
     await reranker.stop()
     expect(child.killed).toBe(true)
   })

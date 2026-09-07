@@ -221,17 +221,24 @@ describe('runBenchmark picks by graphics memory on a discrete card (§6.6 rule C
     ramState.totalmemBytes = null
   })
 
-  it('24 GB card → the 27B Q4 (Q5 does not fit the free budget); 8 GB card → the 4B; no class → the RAM pick', async () => {
+  it('24 GB card → the 27B Q5 since -np 1 (#319); 8 GB card → the 4B; no class → the RAM pick', async () => {
     const manifests = realManifests()
     const base = { workspacePath: workspace(), manifests, runtime: null }
     // RTX 3090 as the Windows rig reports it (24,822 total); a probe without a free figure →
-    // total − 1,024 = 23,798 MiB. Q5 needs 23,866 → Q4 (20,247) is the highest-ranked fit.
+    // total − 1,024 = 23,798 MiB. Q5 needs 23,661 since the chat server took `-np 1` (issue #319,
+    // 2026-09-07: its cache term went 1.1 → 0.9 GiB), so the RAM pick now STANDS on this card
+    // instead of being demoted to Q4 — which is the outcome the ruling was after, and it matches
+    // the hardware: with `-np 1` this very card offloaded Q5 66/66 at 51.0 tok/s (#318 leg 1),
+    // where the four-slot launch managed 62/66 at 30.4. At 23,866 the old term missed by 68 MiB.
+    // NOTE the grid in §6.6 still reads Q4 on its 24 GB row: that row's nominal free figure is
+    // 24 × 1024 − 1024 = 23,552, 246 MiB under this real card's, and Q5 misses it by 109. #321's
+    // working-share fix is what carries the row itself.
     const big = await runBenchmark({ ...base, gpu: { name: 'RTX 3090', useful: true, totalMb: 24_822, budgetMb: 24_822 - 1024, memoryClass: 'discrete' } })
-    // An idle 8 GB card: 7,168 MiB free → the 9B's 8,014 does not fit → the 4B.
+    // An idle 8 GB card: 7,168 MiB free → the 9B's 7,912 still does not fit → the 4B.
     const small = await runBenchmark({ ...base, gpu: { name: 'RTX 3050', useful: true, totalMb: 8192, budgetMb: 7168, memoryClass: 'discrete' } })
     const none = await runBenchmark({ ...base, gpu: null })
     expect(big.ramGb).toBe(32)
-    expect(big.recommendedModelId).toBe('qwen3.8-27b-ud-q4km')
+    expect(big.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
     expect(small.recommendedModelId).toBe('qwen3.5-4b-ud-q4kxl')
     expect(none.recommendedModelId).toBe('qwen3.8-27b-ud-q5km')
     expect(none.recommendedModelId).toBe(recommendModelIdByRam(manifests, 32, 'chat'))

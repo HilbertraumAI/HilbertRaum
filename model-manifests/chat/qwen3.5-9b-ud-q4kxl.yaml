@@ -31,10 +31,18 @@ recommendation_rank: 3
 # 8192 here because this field is the SAFE LOCAL RUNTIME context budget for normal laptops, not
 # the theoretical model maximum. Revisit only after KV-cache/RAM budgeting + a long-context eval.
 recommended_context_tokens: 8192
-# Context cache at 8k under the app launch (b9849 defaults: 4 unified slots): 256 MiB full-attention
-# KV (8 layers x 4 heads x 256) + 4 x 48 MiB recurrent state = 0.438 GiB (no SWA cache); the
-# picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11).
-estimated_context_cache_gib: 0.4
+# Context cache at 8k under the app launch, recomputed 2026-09-07 for ONE server slot (issue #319:
+# CHAT_SERVER_ARGS now passes `-np 1`; the b9849 default of 4 unified slots is gone). 256 MiB
+# full-attention KV (8 layers x 4 heads x 256), counted ONCE -- it is sized in CELLS from --ctx-size
+# and does not change with the slot count -- plus 1 x 48 MiB recurrent state instead of 4 x 48
+# (the recurrent state is the only per-SEQUENCE term) = 304 MiB = 0.297 GiB -> 0.3 (no SWA cache;
+# no MTP -- this manifest does not opt into speculative_decoding).
+# Cross-check against a real start, eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg5-baseline.stderr.log
+# (33/33 layers, 4 slots): KV 256.00 + RS 201.00 = 457 MiB measured against the old 0.4 GiB term;
+# at one slot that reads 256.00 + 201.00/4 = 306.25 MiB, within 2 MiB of the derivation above.
+# The picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11,
+# amended 2026-09-07 by #319).
+estimated_context_cache_gib: 0.3
 # Qwen3.5 0.8B/2B/4B/9B have reasoning DISABLED by default in unsloth's llama.cpp examples
 # unless `enable_thinking=true`; the chat template still honours the switch, so the Deep answer
 # mode applies. Verify the live runtime behaviour by smoke test (BUILD_STATE Qwen3.5 wave).

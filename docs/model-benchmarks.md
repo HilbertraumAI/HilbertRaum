@@ -595,21 +595,34 @@ consumer machine.
    buffers (15 % of the weights), the model's own context-cache estimate, and the fit's fixed
    1 GiB `--fit-target` margin.
 4. `estimated_context_cache_gib` (optional manifest field, number ≥ 0) replaces the flat 0.5 GiB
-   term for the seven models whose figure was actually measured, derived from the b9849 server
-   defaults (`--ctx-size 8192`, `ubatch 2048`, 4 unified slots) against
-   `tmp/PR-308-check-kv.json`; every other manifest defaults to 0.5 GiB in code (the field is
-   absent, not stored as 0.5). Pinned in `committed-catalog.test.ts` ("pins the seven
-   `estimated_context_cache_gib` values, and that no other manifest carries the field"):
+   term for the seven models whose figure was derived from the launch config (`--ctx-size 8192`,
+   `ubatch 2048`; the 4B's figure is its own 4,096-token window); every other manifest defaults to
+   0.5 GiB in code (the field is absent, not stored as 0.5). **Recomputed 2026-09-07 for ONE server
+   slot** (issue #319: `CHAT_SERVER_ARGS` passes `-np 1` — the amendment below). Pinned in
+   `committed-catalog.test.ts` ("pins the seven `estimated_context_cache_gib` values, and that no
+   other manifest carries the field"); each manifest carries its own arithmetic in a YAML comment:
 
-   | model | `estimated_context_cache_gib` |
-   |---|---|
-   | `gemma4-12b-it-qat-q4` | 2.4 |
-   | `gemma4-26b-a4b-it-qat-q4` | 1.5 |
-   | `gemma4-e2b-it-qat-q4` | 0.1 |
-   | `qwen3.8-27b-ud-q4km` | 1.1 |
-   | `qwen3.8-27b-ud-q5km` | 1.1 |
-   | `qwen3.5-9b-ud-q4kxl` | 0.4 |
-   | `qwen3.5-4b-ud-q4kxl` | 0.3 |
+   | model | `estimated_context_cache_gib` | was (4 slots) | why it moved, or did not |
+   |---|---|---|---|
+   | `gemma4-12b-it-qat-q4` | 2.4 | 2.4 | no recurrent state — both Gemma caches are cell-sized |
+   | `gemma4-26b-a4b-it-qat-q4` | 1.5 | 1.5 | same |
+   | `gemma4-e2b-it-qat-q4` | 0.1 | 0.1 | same |
+   | `qwen3.8-27b-ud-q4km` | **0.9** | 1.1 | KV 512 + recurrent 448.88 MiB (MTP, 1 seq) = 960.9 MiB |
+   | `qwen3.8-27b-ud-q5km` | **0.9** | 1.1 | identical figures — the recurrent state is f32, quant-independent |
+   | `qwen3.5-9b-ud-q4kxl` | **0.3** | 0.4 | KV 256 + 1 × 48 = 304 MiB (measured at 4 slots: 256 + 201) |
+   | `qwen3.5-4b-ud-q4kxl` | **0.2** | 0.3 | KV 128 + 1 × 48 = 176 MiB, at its 4,096 window |
+
+   The rule behind the column, measured on the pin (`leg7-baseline-q5km` vs `leg1-np-1` under
+   `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/`: same model, same context, one thing
+   varied): **the KV cache — and, on Gemma, the sliding-window cache — is sized in CELLS from
+   `--ctx-size` and is counted ONCE at either setting** (512.00 MiB both times; Gemma's two caches
+   log as `4/1 seqs`, four sequences over ONE cache). **Only the recurrent state is
+   per-sequence**, so it drops exactly 4× (1,795.50 → 448.88 MiB). The two 27B figures use the
+   **MTP** recurrent state (`rs_seq 2` — both manifests opt into `speculative_decoding`, and
+   finding 3 below recorded the old 1.1 GiB as under-counting that case). That is not a double
+   count with `MTP_VRAM_HEADROOM_MB`: the constant gates whether rung 1a is *attempted* and covers
+   the draft head's own weights + KV, while this term is the context cache the fit estimate adds to
+   every start.
 
 5. RAM stays a HARD gate throughout: `recommended_min_ram_gb ≤ RAM`. The Models screen refuses to
    start a model over it, and the pick must never point at a refused model.
@@ -639,8 +652,18 @@ the free-memory basis"; `freeMb` per point 2 above):
 
 (4B = `qwen3.5-4b-ud-q4kxl`; E2B = `gemma4-e2b-it-qat-q4`; 9B = `qwen3.5-9b-ud-q4kxl`; Q4 =
 `qwen3.8-27b-ud-q4km`. A 32 GB-and-larger card's free memory, ≥ 31,744 MiB on this convention,
-clears the 27B Q5's 23,866 MiB threshold, so it keeps `qwen3.8-27b-ud-q5km` — the one row the
+clears the 27B Q5's threshold, so it keeps `qwen3.8-27b-ud-q5km` — the one row the
 2026-09-05 total-memory grid also got right.)
+
+**The grid is UNCHANGED by `-np 1`** (#319, 2026-09-07) even though four of the seven thresholds
+fell, because none crossed a row's free figure. The two the decision watched: the 9B needs 7,912
+against the 8 GB row's 7,168 free (744 short, where it was 846), and Q5 needs 23,661 against the
+24 GB row's 23,552 (109 short, where it was 314). A **real** 24 GB card is the exception worth
+naming: the RTX 3090 of #318 reports 24,822 MiB, so a probe without a free figure gives it
+23,798 — above Q5's new threshold, so on that card the RAM pick **Q5 now stands instead of being
+demoted to Q4** (pinned in `benchmark.test.ts`), which is what the hardware said all along (66/66
+at 51.0 tok/s with `-np 1`). The grid's nominal 24 GB point is 246 MiB stingier than that card and
+still reads Q4; #321's working-share fix is what carries the row itself.
 
 **Hardware verification (issue #318, 2026-09-07) — the 6, 8, 12 and 24 GB rows are VERIFIED on
 real starts; the 20 GB row stays predicted.** When this section was written (G3) no model could be
@@ -657,7 +680,7 @@ held:
 | 3 | RTX 3080 Ti 12 GB (12,084 / 11,316) | Gemma 12B | 49/49, 2,086 MiB to spare; identical with 1–2.7 GB of desktop use | 27.7 | 9B ✔ |
 | 4 | RTX 3060 Laptop 6 GB (5,994 / 5,226 — 150 below the gate) | E2B (the RAM pick) · 9B (question f) | E2B **36/36 on the card anyway** · 9B 18/33 | 86.4 · 5.2 | E2B (Arbeitsspeicher) ✔ |
 | 5 | same laptop: AMD Radeon(TM) Graphics listed FIRST, RTX 3060 second, no `--device` | E2B, 9B | every GPU buffer on the RTX; the fit's device list never contained the iGPU (its "device 0" was Vulkan1) | — | — |
-| 7 | RTX 3090 24 GB (24,822 / 23,575) | Q4 · Q5 | Q4 66/66 (4,704 MiB free at peak) · Q5 **62/66** under rung 1a (MTP on, `-np` auto) | 53.8 · 30.4 | Q4 ✔; the RAM pick Q5 demoted exactly as rule C says |
+| 7 | RTX 3090 24 GB (24,822 / 23,575) | Q4 · Q5 | Q4 66/66 (4,704 MiB free at peak) · Q5 **62/66** under rung 1a (MTP on, `-np` auto) | 53.8 · 30.4 | Q4 ✔; the RAM pick Q5 demoted exactly as rule C says — but see the #319 amendment: with `-np 1` this card stars Q5, which it then offloads 66/66 |
 | 1 | the rig, Q5, one thing varied per start | ubatch 2048→512 · `--fit-target` 1024→512 · `-np` auto→1 · MTP on→off | 65/66 · 64/66 · **66/66** · **66/66** | 38.9 · 34.7 · **51.0** · 30.7 | — |
 
 Two integrated-only laptops (Iris Xe 8,098 MiB, UHD 620 8,119 MiB) had no leg; both confirmed on
@@ -688,7 +711,10 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    slots — the 859 MiB shortfall the baseline could not meet. `-np 1` (51.0 tok/s) or MTP off
    (30.7) fully offloads Q5; under the app's launch MTP buys nothing on this card (30.4 at 62/66).
    Since a refused or latched-off rung 1a lands on rung 1, the app can run Q5 fully offloaded while
-   its "Your model" row calls it partial. → #319 (`-np`), §5 item 22 (f).
+   its "Your model" row calls it partial. → #319 (`-np`), §5 item 22 (f) — **DECIDED 2026-09-07:
+   the chat server takes `-np 1`; see the #319 amendment above.** This finding is the measurement
+   that decision was waiting for, and it is also why the two 27B cache terms are recomputed on the
+   MTP recurrent state rather than the smaller no-MTP one.
 5. **The 214 / 246 MiB BAR heap on cards without resizable BAR is used** (the recurrent-state
    buffer at load, staging during a request, ≤ 9 MiB of budget left at peak) — question (e).
 6. **The parser read every real partial-offload log correctly** (31/33, 18/33, 62/66, Gemma 32/49
@@ -704,6 +730,30 @@ the star (a lower-threshold, equal-or-higher-rank model always wins first). **Le
 Intel-first hybrid** was not available either; the AMD result — llama.cpp dropped the integrated
 device by TYPE before the filling pass — is expected to carry over, and `looksIntegrated`'s
 completeness (#320) is a name-table question, checked against the Intel names above.
+
+**2026-09-07 amendment (#319, owner decision): the chat server runs ONE slot.** `CHAT_SERVER_ARGS`
+passes `-np 1`; b9849's default of four unified slots is gone. Chat only — the embedder, the
+reranker, translation (`TRANSLATION_SLOT_ARGS`) and vision (`VISION_SLOT_ARGS`) keep their own
+args, the latter two already pinning one slot in the long form `--parallel 1` for their own
+reasons. **Why:** the app is single-user by design and already serialises every lane that reaches
+this server — the model-slot arbiter hands the one slot between chat and yielding builds, and the
+local API admits one external request with a queue depth of one, answering 429 beyond that. The
+four slots were never used in parallel, yet they cost 0.4–1.3 GiB of card memory exactly where the
+fit decides between full and half speed: leg 1 turned the 27B Q5's 62/66 layers at 30.4 tok/s into
+**66/66 at 51.0**, and on the 8 GB card the four slots cost the 9B 440 MiB where the fit missed a
+full offload by 133. **Accepted cost** (owner): with one slot a background job — categorisation,
+ZIM query expansion, a doc task — evicts the chat conversation's KV prefix; llama-server's host-RAM
+prompt cache restores it on a prefix match, so the cost is a restore, not a full re-prefill, and no
+in-app path depends on parallel slots. **What it does NOT change: the context window.**
+`--ctx-size` is the TOTAL cache size on both settings and every slot sees all of it
+(`n_ctx_slot = 8192` either way; `kv_unified` goes true → false, `n_seq_max` 4 → 1). That is the
+whole reason only four of the seven cache terms moved — see point 4 above for the rule and the
+recomputation, and the thresholds table for what it did to the numbers.
+`MTP_VRAM_HEADROOM_MB` stays at 3,584: it was measured at four slots and is now conservative, which
+is the safe direction (the guard refuses a rung it could have run, never the reverse), and the
+verdicts it was calibrated to reproduce — Q4/Q5 clear a 24 GB card, Q6_K does not — are unchanged.
+Evidence: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg1-np-1.*` against
+`leg7-baseline-q5km.*`; finding 4 below is the measurement this decision was waiting for.
 
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
@@ -733,15 +783,19 @@ card under the gate since #375). Whether to lower it is an owner call (§5 item 
 **Thresholds** (`estimateGraphicsNeedMib`, every RANKED chat manifest, raw MiB; "fits from" =
 ⌈need⌉; the boundary is asserted on both sides in `committed-catalog.test.ts`):
 
-| model | rank | need (MiB) | fits from (MiB) |
-|---|---|---|---|
-| qwen3.5-4b-ud-q4kxl | 3 | 4,511.7 | 4,512 |
-| gemma4-e2b-it-qat-q4 | 3 | 4,745.6 | 4,746 |
-| qwen3.5-9b-ud-q4kxl | 3 | 8,013.9 | 8,014 |
-| gemma4-12b-it-qat-q4 | 2 | 11,158.7 | 11,159 |
-| gemma4-26b-a4b-it-qat-q4 | 2 | 18,352.9 | 18,353 |
-| qwen3.8-27b-ud-q4km | 3 | 20,246.4 | 20,247 |
-| qwen3.8-27b-ud-q5km | 3 | 23,865.6 | 23,866 |
+| model | rank | need (MiB) | fits from (MiB) | was, at 4 slots |
+|---|---|---|---|---|
+| qwen3.5-4b-ud-q4kxl | 3 | 4,409.3 | **4,410** | 4,512 |
+| gemma4-e2b-it-qat-q4 | 3 | 4,745.6 | 4,746 | 4,746 |
+| qwen3.5-9b-ud-q4kxl | 3 | 7,911.5 | **7,912** | 8,014 |
+| gemma4-12b-it-qat-q4 | 2 | 11,158.7 | 11,159 | 11,159 |
+| gemma4-26b-a4b-it-qat-q4 | 2 | 18,352.9 | 18,353 | 18,353 |
+| qwen3.8-27b-ud-q4km | 3 | 20,041.6 | **20,042** | 20,247 |
+| qwen3.8-27b-ud-q5km | 3 | 23,660.8 | **23,661** | 23,866 |
+
+(The last column is the 4-slot figure this table carried until 2026-09-07; `-np 1` (#319) moved
+four of the seven — the 4B and 9B by 102 MiB, the two 27B quants by 205. The three Gemma rows have
+no recurrent state and did not move at all.)
 
 (Lower-ranked models sharing a tier with a ranked one above — `qwen3-4b-instruct-2507-q4`,
 `qwen3-4b-instruct-q4`, `qwen3-8b-instruct-q4`, `ministral3-8b-instruct-2512-q4`,
@@ -1410,7 +1464,10 @@ does not fit 24 GB** at ctx 8192; (3) breaks temp-0 byte-reproducibility (batche
 near-tie flips; distribution-equivalent output — the §2 harness must be re-run as the adoption
 gate); (4) draft depths n=3/4 neither break nor help (n=4 acceptance falls to 64%) — the
 "n=4 emits junk" claim circulating publicly did not reproduce on this stack; n=2 is the pick.
-`-np 1` showed no throughput effect at ctx 8192 (default `n_slots=4`, unified KV).
+`-np 1` showed no throughput effect at ctx 8192 (default `n_slots=4`, unified KV) — true as
+written, and not the reason the app adopted it on 2026-09-07 (#319): what the four slots cost is
+MEMORY (1,347 MiB of recurrent state on the 27B), which decides whether the model fully offloads at
+all. See the §6.6 2026-09-07 amendment.
 
 ### 9.5 The Qwen3.8 wave lost its upstream files (2026-08-20, issue #196)
 
