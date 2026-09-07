@@ -158,6 +158,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A laptop whose built-in graphics chip reports a short name is recognised as built-in.** Some
+  Intel drivers report the chip as plain "Intel(R) Graphics", with no platform code. The app read
+  that as a real graphics card, so a laptop with 16–32 GB of *shared* memory could be recommended a
+  model it has no way to accelerate. It is now treated as built-in, like every other name that
+  family reports; a separate Intel Arc graphics card is unaffected.
 - **The Performance screen names your graphics card even when it is too small to run models on.**
   The Graphics memory tile used to say "No usable graphics card" on a laptop whose card reports a
   little under 6 GB — the common 6 GB laptop card does — and on a laptop with two GPUs it could
