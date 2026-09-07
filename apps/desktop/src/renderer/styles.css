@@ -2676,6 +2676,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Offline article viewer: readable measure inside the wide modal; scrolls in the modal. */
 .pack-article { display: flex; flex-direction: column; gap: 8px; }
 .pack-article-source { margin: 0; }
+/* #340 Tier-2: the save action row — button, inline spinner or the failure line beside it. */
+.pack-article-save { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.pack-article-save .hint { margin: 0; }
 .pack-article-body { max-width: 68ch; }
 .pack-article-heading { font-size: var(--text-md); margin: 14px 0 4px; }
 .pack-article-para { margin: 0 0 10px; white-space: pre-wrap; }

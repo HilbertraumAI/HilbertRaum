@@ -97,6 +97,15 @@ function titleOf(id: string, sourcesById: ReadonlyMap<string, DocumentInfo>, t: 
  */
 export function provenanceLine(d: DocumentInfo, sourcesById: ReadonlyMap<string, DocumentInfo>, t: I18n['t']): ReactNode {
   if (!d.origin) return null
+  // A saved knowledge-pack article (#340 Tier-2): the archive is the source, not a document.
+  if ('type' in d.origin && d.origin.type === 'archive') {
+    return (
+      <>
+        {t('docs.provenance.articleBefore')}
+        <b>{d.origin.archiveTitle ?? t('docs.provenance.articleUnknownArchive')}</b>
+      </>
+    )
+  }
   const { kind, sourceDocumentIds } = provenanceView(d.origin)
   if (kind === 'compare') {
     const [a, b] = sourceDocumentIds

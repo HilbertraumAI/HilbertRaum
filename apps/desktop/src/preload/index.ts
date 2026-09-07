@@ -19,6 +19,7 @@ import type {
   KnowledgePack,
   KnowledgePackAddResult,
   KnowledgePackStatus,
+  PackArticleSaveResult,
   KnowledgePacksChangedEvent,
   ContextUsage,
   Conversation,
@@ -581,6 +582,9 @@ const api = {
     partial: boolean
   } | null> =>
     ipcRenderer.invoke(IPC.getPackArticle, packId, articlePath),
+  /** Save one pack article as a document (#340 Tier-2); the main side re-reads the text. */
+  savePackArticle: (packId: string, articlePath: string): Promise<PackArticleSaveResult> =>
+    ipcRenderer.invoke(IPC.savePackArticle, packId, articlePath),
   listCollections: (): Promise<Collection[]> => ipcRenderer.invoke(IPC.listCollections),
   /** Create a project. */
   createCollection: (

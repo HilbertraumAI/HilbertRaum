@@ -1192,6 +1192,28 @@ secondary. `lib/useKnowledgePackToolsInstall.ts` is the shared poll/cancel/remem
 already installed makes neither call. Tests: `KnowledgePacks.test.tsx` ("#339 P8-2: …" legs),
 `ModelsScreen.test.tsx` ("ModelsScreen — knowledge-pack tools row" describe block).
 
+**Tier-2 save action (2026-09-07, #340, D-Z21):** "Save to my documents" lives inside
+`ArticleModal` itself — under the attribution line (`chat.article.from`, decision 1140's
+description) and above the article body, never in a footer, since `Modal` has no footer slot.
+The button's accessible name carries the article title (decision 3's rule for a pack-named
+action in a list — `chat.article.saveAria`, "Save to my documents: {title}"), not a bare
+"Save", so a screen reader announces which article a repeated action targets; the visible label
+is the exact prefix of that name (WCAG 2.5.3, label in name), so speech input saying the label
+still activates it. Four states, one
+region: idle (the button, label `chat.article.save`), saving (the button disabled, a `Spinner`
+beside it, `role="status"`), saved (the button is replaced by a `role="status"` line naming the
+filed title — `chat.article.saved` / `chat.article.alreadySaved` when a prior save is found —
+so there is nothing left to click), and failed (the button stays, re-enabled, with the friendly
+reason inline beside it — the main-side sentence alone via `friendlyIpcError`, no stacked
+"could not be saved" prefix in front of a reason that already says so). A save that resolves
+after the viewer moved on to another article is discarded (a generation counter), so a result
+never lands on the wrong article. The evidence review's copy of the viewer passes
+`canSave={false}`: a review is read-only and its bridge is evidence-only, so the action exists
+only where the chat opens the viewer. No undo affordance: the saved copy is a real document, and removing it is
+the Documents screen's job (delete), not the viewer's — the viewer only ever adds. No "Open in
+Documents" jump yet either; the saved state names the filed title so the user can find it, and a
+direct jump is deferred with the citation-card shortcut (rag-design §17 D-Z21).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

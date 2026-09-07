@@ -2507,6 +2507,14 @@ reports and phase plans were working papers; their full text lives in git histor
   currently-unplugged pack says the article is unavailable, same as chat. Evidence reviews created on a pre-release knowledge-pack
   build that cite an archive may carry a wrongly resolved document identity and must be
   re-run; the app never rewrites a frozen review.
+- **A saved article ("Save to my documents" in the article viewer, #340 Tier-2, D-Z21) is a
+  snapshot, not a live link.** It is titled with the pack's title as it read AT SAVE TIME —
+  renaming or re-adding the pack afterward does not retitle a copy already made — and it is
+  never updated when the underlying archive changes; a newer edition of the same article needs
+  a fresh save. The Documents screen groups it under Generated with a provenance line naming the
+  archive it came from (it also sits in the Library like any import, so a default chat finds it), and it never goes stale the way a summary or translation can, because it
+  has no source document to fall behind. Not built: a citation-card shortcut that saves directly
+  without opening the viewer, and an "Open in Documents" jump from the viewer's saved state.
 - **Serving names are computed, not read back from the running server.** Every enabled
   pack's serving name follows the pinned libkiwix 14.1 `getHumanReadableIdFromPath` rule
   exactly (`identity.ts`); when two packs would compute the SAME name, the smaller UUID

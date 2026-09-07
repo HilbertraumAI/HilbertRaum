@@ -479,8 +479,10 @@ export function ReviewScreen({
       {/* #301 P6 (plan §9.23 (c)2): the SAME offline article viewer the chat uses, mounted
           beside the source-in-context modal. It reads through `packs:getArticle` with the
           frozen snapshot's pack id + article path; a removed / disabled / unplugged pack
-          resolves to null and the viewer says so — the review itself never changes. */}
-      <ArticleModal target={articleTarget} onClose={() => setArticleTarget(null)} />
+          resolves to null and the viewer says so — the review itself never changes. No save
+          action here (#340 Tier-2): a review is a read-only surface whose bridge is evidence-only;
+          saving an article to the documents is the chat viewer's job. */}
+      <ArticleModal target={articleTarget} onClose={() => setArticleTarget(null)} canSave={false} />
 
       <ConfirmDialog
         open={confirmClear}

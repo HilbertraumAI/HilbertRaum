@@ -165,7 +165,7 @@ export function registerDocsIpc(ctx: AppContext): void {
   // module is mid-import/re-indexing — the mirror of `requireNoActiveTask` below. Doc-task
   // ingestions themselves run OUTSIDE this set (DB-3), so the guard can never refuse a start
   // because of another task (the manager's own one-at-a-time lane covers that).
-  ctx.docIngestionActive = (documentId) => processing.has(documentId)
+  ctx.docIngestionActive = (documentId) => processing.has(documentId) || ctx.articleSaveActive?.(documentId) === true
 
   // DB-backed handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.
@@ -218,7 +218,8 @@ export function registerDocsIpc(ctx: AppContext): void {
   }
 
   const requireNotProcessing = (documentId: string): void => {
-    if (processing.has(documentId)) {
+    // A knowledge-pack article mid-save (#340 Tier-2) is an import in flight like any other.
+    if (processing.has(documentId) || ctx.articleSaveActive?.(documentId)) {
       throw new Error(tMain('main.docs.processing'))
     }
   }
@@ -967,7 +968,7 @@ export function registerDocsIpc(ctx: AppContext): void {
           // worked on by a live SKILL run (GAP-5): re-indexing under either would lose the race
           // (see requireNoActiveTask / requireNoActiveSkillRun). Count as failed so total still
           // adds up and the user sees it didn't complete.
-          if (processing.has(id) || ctx.docTasks?.isDocumentBusy(id) || ctx.skillRunActive?.(id)) {
+          if (processing.has(id) || ctx.articleSaveActive?.(id) || ctx.docTasks?.isDocumentBusy(id) || ctx.skillRunActive?.(id)) {
             job.failed += 1
             continue
           }

@@ -1955,3 +1955,111 @@ describe('T18 — knowledge-pack UI acceptance (#301 P6, plan §9.23)', () => {
     120_000
   )
 })
+
+// ---- #340 Tier-2 (D-Z21): "Save to my documents" in the article viewer ---------------------
+describe('ArticleModal — save to my documents (#340 Tier-2)', () => {
+  const article = {
+    title: 'Treibhausgas',
+    sections: [{ label: null, text: 'Treibhausgase sind Spurengase.' }],
+    partial: false
+  }
+  const target = { packId: 'uuid-climate', articlePath: 'Treibhausgas', archiveTitle: 'Klimawandel von Wikipedia' }
+
+  it('offers the save action once the article is ready, sends only the two ids, and reports the filed title', async () => {
+    const savePackArticle = vi.fn(async () => ({
+      documentId: 'doc-1',
+      title: 'Treibhausgas (Klimawandel von Wikipedia).md',
+      alreadySaved: false,
+      chunkCount: 3
+    }))
+    stubApi({ getPackArticle: async () => article, savePackArticle })
+    render(
+      <I18nProvider>
+        <ArticleModal target={target} onClose={() => {}} />
+      </I18nProvider>
+    )
+    const button = await screen.findByRole('button', { name: 'Save to my documents: Treibhausgas' })
+    await userEvent.click(button)
+    expect(savePackArticle).toHaveBeenCalledWith('uuid-climate', 'Treibhausgas')
+    expect(await screen.findByText(/Saved to your documents as “Treibhausgas \(Klimawandel von Wikipedia\)\.md”/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
+  })
+
+  it('says so when the article was already saved, naming the existing document', async () => {
+    stubApi({
+      getPackArticle: async () => article,
+      savePackArticle: vi.fn(async () => ({ documentId: 'doc-1', title: 'Treibhausgas (Klimawandel von Wikipedia).md', alreadySaved: true, chunkCount: 0 }))
+    })
+    render(
+      <I18nProvider>
+        <ArticleModal target={target} onClose={() => {}} />
+      </I18nProvider>
+    )
+    await userEvent.click(await screen.findByRole('button', { name: /Save to my documents/ }))
+    expect(await screen.findByText(/already in your documents as “Treibhausgas/)).toBeInTheDocument()
+  })
+
+  it('shows the friendly failure and keeps the action available when the save is refused', async () => {
+    stubApi({
+      getPackArticle: async () => article,
+      savePackArticle: vi.fn(async () => {
+        throw new Error("Error invoking remote method 'packs:saveArticle': Error: This article is not available right now, so it could not be saved.")
+      })
+    })
+    render(
+      <I18nProvider>
+        <ArticleModal target={target} onClose={() => {}} />
+      </I18nProvider>
+    )
+    await userEvent.click(await screen.findByRole('button', { name: /Save to my documents/ }))
+    // The main-side reason is a whole sentence already — shown alone, no stacked prefix.
+    expect(await screen.findByText(/This article is not available right now, so it could not be saved/)).toBeInTheDocument()
+    expect(screen.queryByText(/The article could not be saved\./)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Save to my documents/ })).toBeEnabled()
+  })
+
+  it('discards a save that resolves after the viewer moved on to another article', async () => {
+    type Saved = { documentId: string; title: string; alreadySaved: boolean; chunkCount: number }
+    let resolveSave: (r: Saved) => void = () => {}
+    stubApi({
+      getPackArticle: async () => article,
+      savePackArticle: () => new Promise<Saved>((r) => (resolveSave = r))
+    })
+    const { rerender } = render(
+      <I18nProvider>
+        <ArticleModal target={target} onClose={() => {}} />
+      </I18nProvider>
+    )
+    await userEvent.click(await screen.findByRole('button', { name: /Save to my documents/ }))
+    expect(screen.getByText(/Saving to your documents/)).toBeInTheDocument()
+    // The viewer moves to another article while the first save is still running.
+    rerender(
+      <I18nProvider>
+        <ArticleModal target={{ ...target, articlePath: 'Methan' }} onClose={() => {}} />
+      </I18nProvider>
+    )
+    expect(await screen.findByRole('button', { name: /Save to my documents/ })).toBeEnabled()
+    await act(async () => resolveSave({ documentId: 'doc-1', title: 'Treibhausgas (Klimawandel von Wikipedia).md', alreadySaved: false, chunkCount: 3 }))
+    // The stale result never lands on the new article: no "saved" line, the action still offered.
+    expect(screen.queryByText(/Saved to your documents/)).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /Save to my documents/ })).toBeEnabled()
+  })
+
+  it('has no save action while the article is loading or when it is unavailable', async () => {
+    let resolveArticle: (a: typeof article | null) => void = () => {}
+    stubApi({
+      getPackArticle: () => new Promise<typeof article | null>((r) => (resolveArticle = r)),
+      savePackArticle: vi.fn()
+    })
+    render(
+      <I18nProvider>
+        <ArticleModal target={target} onClose={() => {}} />
+      </I18nProvider>
+    )
+    expect(await screen.findByText(/Loading the article/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
+    await act(async () => resolveArticle(null))
+    expect(await screen.findByText(/not available right now/)).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
+  })
+})

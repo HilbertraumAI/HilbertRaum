@@ -132,6 +132,11 @@ from its first public `1.0.0` release onward.
   ships the knowledge-pack tools already installed now also carries their complete source code
   in `runtime/kiwix-tools/source/`, with a `SOURCES.md` record. Nothing changes if you build your
   own drive and install the knowledge-pack family yourself.
+- **Save a knowledge-pack article to your documents.** The article viewer now has a "Save to my
+  documents" button, so a page you found in an offline archive becomes a real, searchable
+  document in your own library — it stays findable and citable even if you later remove the
+  pack or unplug its drive. Saving the same article again just points back to the copy you
+  already made.
 
 ### Changed
 

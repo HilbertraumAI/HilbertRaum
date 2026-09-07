@@ -1288,7 +1288,7 @@ export interface CompareOrigin {
 }
 
 /** The kind of generation a `GeneratedProvenance` records. */
-export type GeneratedKind = 'summary' | 'translation' | 'compare' | 'transcript' | 'other'
+export type GeneratedKind = 'summary' | 'translation' | 'compare' | 'transcript' | 'other' | 'article'
 
 /**
  * Structured provenance for a document the app GENERATED from other documents
@@ -1312,7 +1312,35 @@ export interface GeneratedProvenance {
   createdAt: string
 }
 
-export type DocumentOrigin = TranslationOrigin | CompareOrigin | GeneratedProvenance
+export type DocumentOrigin = TranslationOrigin | CompareOrigin | GeneratedProvenance | ArchiveOrigin
+
+/**
+ * Provenance of a document SAVED from a knowledge-pack article (#340 Tier-2, rag-design §17
+ * D-Z21): the archive it came from and the entry inside it. No source DOCUMENT — the copy was
+ * derived from a ZIM entry, so staleness never fires for it and the duplicate check keys on
+ * (`packId`, `articlePath`). `archiveTitle` is the pack's title as it read at save time (display
+ * only; the pack may be renamed or removed later). Stored in `documents.origin_json`.
+ */
+export interface ArchiveOrigin {
+  type: 'archive'
+  /** knowledge_packs.id — the ZIM UUID. */
+  packId: string
+  /** The entry key inside the archive (the viewer's `articlePath`). */
+  articlePath: string
+  archiveTitle: string | null
+  createdAt: string
+}
+
+/** The result of `packs:saveArticle` (#340 Tier-2). `alreadySaved` = an earlier copy of this exact
+ *  entry exists and was returned instead of a second one. */
+export interface PackArticleSaveResult {
+  documentId: string
+  /** The document's title as filed (`<article> (<archive>).md`). */
+  title: string
+  alreadySaved: boolean
+  /** Chunks the copy was indexed into (0 when `alreadySaved` — not re-counted). */
+  chunkCount: number
+}
 
 /**
  * Normalize any stored provenance into the uniform view the UI renders: the generation
@@ -1327,6 +1355,10 @@ export function provenanceView(origin: DocumentOrigin): {
 } {
   if ('kind' in origin) {
     return { kind: origin.kind, sourceDocumentIds: origin.sourceDocumentIds }
+  }
+  // A saved knowledge-pack article (D-Z21): no source document — the archive is the source.
+  if (origin.type === 'archive') {
+    return { kind: 'article', sourceDocumentIds: [] }
   }
   if (origin.type === 'compare') {
     return { kind: 'compare', sourceDocumentIds: [...origin.comparedFrom] }
@@ -3066,6 +3098,9 @@ export type AuditEventType =
   // filenames — never in message or metadata.
   | 'knowledge_pack_added'
   | 'knowledge_pack_removed'
+  /** A pack article saved as a document (#340 Tier-2): ids + counts only — the pack id, the new
+   *  document id, status, chunkCount. Never the entry path or either title. */
+  | 'knowledge_pack_article_saved'
 
 /** One audit-log entry (a `runtime_events` row), newest-first over the IPC surface. */
 export interface AuditEvent {

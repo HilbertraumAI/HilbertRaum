@@ -121,6 +121,13 @@ export interface AppContext {
    */
   docIngestionActive?: (documentId: string) => boolean
   /**
+   * In-flight knowledge-pack article save (#340 Tier-2): true while `packs:saveArticle` is
+   * driving this document's row through the import path (registerZimIpc assigns it). The docs
+   * IPC guards treat it exactly like their own `processing` set — a delete or re-index under
+   * the import would race it. Optional so partial test contexts stay valid.
+   */
+  articleSaveActive?: (documentId: string) => boolean
+  /**
    * Skill registry (skills plan §8): the uniform disk-reconcile + state cache over the plain
    * app-skills/ + user-skills/ folders. Optional so partial test contexts stay valid. `reconcile`
    * needs an unlocked DB, so the live wiring reconciles best-effort at startup (plaintext_dev) and

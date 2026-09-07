@@ -273,6 +273,11 @@ export const IPC = {
   /** Read one article from a pack for the citation viewer — plain sectioned TEXT
    *  (`PackArticle`), resolved MAIN-side over the loopback sidecar; null when unavailable. */
   getPackArticle: 'packs:getArticle',
+  /** Save one pack article as a REAL document in the corpus (#340 Tier-2, D-Z21): the text is
+   *  re-read MAIN-side (only `packId` + `articlePath` cross the bridge) and run through the one
+   *  import path; resolves `PackArticleSaveResult`. A second save of the same entry returns the
+   *  existing document (`alreadySaved`). Locked ⇒ the friendly locked copy. */
+  savePackArticle: 'packs:saveArticle',
   // Document organization — collections (projects + built-ins). Handlers in
   // registerCollectionsIpc.ts; membership/lifecycle live on the docs: namespace above.
   /** All collections (built-ins first, then projects by name). */
