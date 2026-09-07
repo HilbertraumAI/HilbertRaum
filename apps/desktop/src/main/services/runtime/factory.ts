@@ -563,7 +563,8 @@ class LadderRuntime implements ModelRuntime {
         // LABEL ONLY (PR #303 audit M8.2 / P5 residual): the device a reader may SHOW is the
         // shared `displayDevice` one — the budget device (the largest USEFUL card), else the
         // largest device that does not look integrated even when it is under the usable gate
-        // (2026-09-07: a 6 GB laptop card Vulkan reports at 5,9xx MiB, #321), else the first
+        // (a 4 GB card; until #321 lowered the gate to 5,120 this also caught every 6 GB laptop
+        // card, which the Vulkan backend reports at 5,7xx–5,9xx MiB), else the first
         // listed. On a hybrid [iGPU, dGPU] box `devices[0]` named the iGPU while the model
         // actually ran on the dGPU — and on a hybrid [iGPU, SMALL dGPU] box the old fallback did
         // the same, because nothing was "useful". Rung selection, `--fit` and the "never -ngl"

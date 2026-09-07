@@ -45,7 +45,7 @@ export function parseListDevices(stdout: string): GpuDevice[] {
   return devices
 }
 
-// The usefulness rules — `looksIntegrated`, the 6 GiB `GPU_BUMP_MIN_VRAM_MB` gate and
+// The usefulness rules — `looksIntegrated`, the `GPU_BUMP_MIN_VRAM_MB` gate (5 GiB since #321) and
 // `gpuUsefulForProfile` (GPU record §8) — moved VERBATIM to `shared/gpu-rules.ts` with the
 // PR #303 audit (M8 / N3): the Performance screen must rate a device by the same definition
 // the profile bump and the memory class use, and the renderer cannot import this module (it

@@ -25,6 +25,19 @@ recommended_context_tokens: 8192
 # (That measured 2,048 MiB total is 384 below the 2,432 derived here; the term stays conservative
 # on purpose, and tightening it from the GGUF header is BUILD_STATE §5 item 22 (e), still open.)
 estimated_context_cache_gib: 2.4
+
+# The weights that stay HOST-mapped even on a full offload (embedding / output tables), MiB —
+# the picker subtracts them before applying its 15 % working share, because the runtime buffers
+# that share stands for scale with what is actually ON the card (issue #321, owner decision
+# 2026-09-07; model-benchmarks.md §6.6 point 3).
+# MEASURED, not derived — the app has no GGUF-header parser. Read off the
+# `CPU_Mapped model buffer size` line of a FULL-OFFLOAD start (49/49 layers):
+# eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg3-baseline.stderr.log
+# A PARTIAL offload inflates this line with the layers that did not fit, so only full-offload
+# starts count. Absent on any model never started on hardware, which then keeps the old
+# whole-file arithmetic; the GGUF-header derivation that would cover every model is
+# BUILD_STATE §5 item 22 (e), still open.
+host_mapped_weights_mib: 787.50
 supports_thinking_mode: true  # Phase-29 run #2: thinking-quality check passed (Deep 8/8 = Balanced 8/8, real reasoning) → flipped
 supports_tools: false
 local_path: models/chat/gemma4-12b-it-qat-q4.gguf

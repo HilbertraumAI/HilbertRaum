@@ -574,8 +574,9 @@ consumer machine.
 **The rule, as fixed** (`recommendChatModelId` → `recommendModelIdByVram` in `services/models.ts`):
 1. Memory class (`nextStartMemory` in `services/performance.ts`; `memoryClassOf` is its
    flags-at-default wrapper): `discrete` = a usable **budget device** is available for the NEXT
-   start — the largest probed device at or above the runtime's own 6,144 MiB gate and not
-   integrated by name (`selectBudgetDevice` / `looksIntegrated`, never the first device the driver
+   start — the largest probed device at or above the runtime's own **5,120 MiB** gate
+   (`USABLE_VRAM_MB`; 6,144 until the 2026-09-07 decision on #321 — see the N8 paragraph below)
+   and not integrated by name (`selectBudgetDevice` / `looksIntegrated`, never the first device the driver
    listed; the name table matches the bare "Intel(R) Graphics" as integrated since 2026-09-07,
    anchored so a model-numbered discrete Arc still does not — #320) — and the runtime agrees at
    launch without an app-side `--device`: b9849's fit drops the integrated device by TYPE before it
@@ -590,10 +591,42 @@ consumer machine.
    yields the identical 30-point grid below — every threshold sits > 300 MiB from either column,
    so the exact idle constant does not matter within that margin).
 3. A model fits the card (`fitsGraphicsMemory`) when `estimateGraphicsNeedMib(m) ≤ budgetMib`,
-   where `estimateGraphicsNeedMib(m) = weightsMib(m) × 1.15 + (m.estimatedContextCacheGib ?? 0.5)
-   × 1024 + 1,024`: the unrounded weights (decimal GB manifest size → MiB), the runtime's working
-   buffers (15 % of the weights), the model's own context-cache estimate, and the fit's fixed
-   1 GiB `--fit-target` margin.
+   where
+
+   ```
+   estimateGraphicsNeedMib(m) = weightsMib(m)
+                              + (weightsMib(m) − hostMappedWeightsMib(m)) × 0.15
+                              + (m.estimatedContextCacheGib ?? 0.5) × 1024
+                              + 1,024
+   ```
+
+   — the unrounded weights (decimal GB manifest size → MiB), the runtime's working buffers (15 % of
+   the weights that actually reach the card), the model's own context-cache estimate, and the fit's
+   fixed 1 GiB `--fit-target` margin. **The working share moved from the whole file to the
+   OFFLOADABLE weights on 2026-09-07** (owner decision, #321). It stands for the compute buffers
+   the runtime reserves BESIDE the weights on the card, and those scale with what is on the card —
+   but it was being applied to the embedding/output tables that stay `CPU_Mapped` too. On the E2B
+   that made the estimate **2.4× too high** (4,746 predicted against 1,997 projected and ≈ 1,998
+   used) because 2,152.50 of its 3,147 MiB never leaves the host; on the 9B it assumed 837 MiB
+   against a 498 MiB compute buffer. That barely mattered while sub-6 GiB cards never reached the
+   card path; with the gate at 5,120 they do, and "Your model" would have called the E2B far
+   tighter than it is. `host_mapped_weights_mib` is an optional manifest field carrying the
+   MEASURED figure — the app has no GGUF-header parser — read off the `CPU_Mapped model buffer
+   size` line of a **full-offload** start (a partial offload inflates it with the layers that did
+   not fit: the 9B logs 545.62 at 33/33 but 824.31 at 31/33). A manifest without it, i.e. any model
+   never started on hardware, keeps the old whole-file arithmetic rather than getting a guess:
+
+   | model | `host_mapped_weights_mib` | from |
+   |---|---|---|
+   | `gemma4-e2b-it-qat-q4` | 2,152.50 | leg 4, E2B 36/36 |
+   | `qwen3.5-9b-ud-q4kxl` | 545.62 | leg 5, 33/33 |
+   | `gemma4-12b-it-qat-q4` | 787.50 | leg 3, 49/49 |
+   | `qwen3.8-27b-ud-q4km` | 682.03 | leg 7, 66/66 |
+   | `qwen3.8-27b-ud-q5km` | 682.03 | leg 1 `-np 1`, 66/66 |
+
+   (`qwen3.5-4b-ud-q4kxl` and `gemma4-26b-a4b-it-qat-q4` were never started for #318 and carry no
+   field.) Deriving the split from the GGUF header would cover every model at once and stays open —
+   BUILD_STATE §5 item 22 (e).
 4. `estimated_context_cache_gib` (optional manifest field, number ≥ 0) replaces the flat 0.5 GiB
    term for the seven models whose figure was derived from the launch config (`--ctx-size 8192`,
    `ubatch 2048`; the 4B's figure is its own 4,096-token window); every other manifest defaults to
@@ -655,15 +688,24 @@ the free-memory basis"; `freeMb` per point 2 above):
 clears the 27B Q5's threshold, so it keeps `qwen3.8-27b-ud-q5km` — the one row the
 2026-09-05 total-memory grid also got right.)
 
-**The grid is UNCHANGED by `-np 1`** (#319, 2026-09-07) even though four of the seven thresholds
-fell, because none crossed a row's free figure. The two the decision watched: the 9B needs 7,912
-against the 8 GB row's 7,168 free (744 short, where it was 846), and Q5 needs 23,661 against the
-24 GB row's 23,552 (109 short, where it was 314). A **real** 24 GB card is the exception worth
-naming: the RTX 3090 of #318 reports 24,822 MiB, so a probe without a free figure gives it
-23,798 — above Q5's new threshold, so on that card the RAM pick **Q5 now stands instead of being
-demoted to Q4** (pinned in `benchmark.test.ts`), which is what the hardware said all along (66/66
-at 51.0 tok/s with `-np 1`). The grid's nominal 24 GB point is 246 MiB stingier than that card and
-still reads Q4; #321's working-share fix is what carries the row itself.
+**The grid above is UNCHANGED by both 2026-09-07 decisions** — every threshold fell, none crossed a
+row's free figure. What changed is not the grid's CONTENT but which machines reach it: before #321
+the 6 GB row described only a card reporting at or above 6,144 MiB (an RTX 2060), and every 6 GB
+laptop was a RAM machine that never got here at all. See the N8 paragraph below.
+
+Three near misses are worth stating so nobody re-derives them:
+
+- **The 9B still does not clear the 8 GB row.** 7,830 against 7,168 free — 662 short, where before
+  either decision it was 846. On the real GTX 1070 Ti (7,504 free) it is 326 short. The fit itself
+  will very likely land 33/33 now (the four slots cost it 440 MiB and it missed a full offload by
+  133), so this is the estimate staying deliberately conservative, not the fit failing.
+- **Q5 misses the nominal 24 GB row by 7 MiB** (23,559 vs 23,552) even after both decisions, so the
+  row still reads Q4. That row describes a card reporting exactly 24 GiB, which no 24 GB card the
+  project has seen actually does.
+- **…but a real 24 GB card stars Q5.** The RTX 3090 of #318 reports 24,822 MiB, so a probe without a
+  free figure gives it 23,798 — above Q5's threshold, and the RAM pick **stands instead of being
+  demoted to Q4** (pinned in `benchmark.test.ts`). That matches the hardware exactly: 66/66 layers
+  at 51.0 tok/s with `-np 1`.
 
 **Hardware verification (issue #318, 2026-09-07) — the 6, 8, 12 and 24 GB rows are VERIFIED on
 real starts; the 20 GB row stays predicted.** When this section was written (G3) no model could be
@@ -678,7 +720,7 @@ held:
 |---|---|---|---|---|---|
 | 2 | GTX 1070 Ti 8 GB (8,273 / 7,504) | 9B | **31/33** — the fit read 6,898 MiB free and fell 133 MiB short of its 1,024 target; identical with ~1 GB of desktop use | 20.2 tok/s | 4B (Grafikspeicher) ✔ |
 | 3 | RTX 3080 Ti 12 GB (12,084 / 11,316) | Gemma 12B | 49/49, 2,086 MiB to spare; identical with 1–2.7 GB of desktop use | 27.7 | 9B ✔ |
-| 4 | RTX 3060 Laptop 6 GB (5,994 / 5,226 — 150 below the gate) | E2B (the RAM pick) · 9B (question f) | E2B **36/36 on the card anyway** · 9B 18/33 | 86.4 · 5.2 | E2B (Arbeitsspeicher) ✔ |
+| 4 | RTX 3060 Laptop 6 GB (5,994 / 5,226 — 150 below the gate) | E2B (the RAM pick) · 9B (question f) | E2B **36/36 on the card anyway** · 9B 18/33 | 86.4 · 5.2 | E2B (Arbeitsspeicher) ✔ — after #321 lowered the gate to 5,120 this machine's star becomes the 4B on the **Grafikspeicher** basis; the measured record above is what the app did on the day |
 | 5 | same laptop: AMD Radeon(TM) Graphics listed FIRST, RTX 3060 second, no `--device` | E2B, 9B | every GPU buffer on the RTX; the fit's device list never contained the iGPU (its "device 0" was Vulkan1) | — | — |
 | 7 | RTX 3090 24 GB (24,822 / 23,575) | Q4 · Q5 | Q4 66/66 (4,704 MiB free at peak) · Q5 **62/66** under rung 1a (MTP on, `-np` auto) | 53.8 · 30.4 | Q4 ✔; the RAM pick Q5 demoted exactly as rule C says — but see the #319 amendment: with `-np 1` this card stars Q5, which it then offloads 66/66 |
 | 1 | the rig, Q5, one thing varied per start | ubatch 2048→512 · `--fit-target` 1024→512 · `-np` auto→1 · MTP on→off | 65/66 · 64/66 · **66/66** · **66/66** | 38.9 · 34.7 · **51.0** · 30.7 | — |
@@ -699,7 +741,9 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    laptop, −673 MiB on the 1070 Ti). `GRAPHICS_IDLE_ALLOWANCE_MIB` and the protocol's desktop-use
    distinction are moot on this backend, and a re-probe to fit a SECOND model beside a running one
    reads a stale number.
-3. **The estimate is conservative everywhere:** 33 % on the 9B (8,014 vs 6,007 projected), ≈ 1.9 GiB
+3. **The estimate is conservative everywhere** (the two structural causes named here were
+   CORRECTED on 2026-09-07 — the cache terms by #319, the working share by #321; the figures below
+   are what the estimate said on the day of the measurement)**:** 33 % on the 9B (8,014 vs 6,007 projected), ≈ 1.9 GiB
    on Gemma 12B, 1,570 MiB on Q4, and **2.4× on the E2B** (4,746 vs 1,997 — the 15 % working share
    is applied to the whole 3,147 MiB file although 2,152 MiB of it stays host-mapped). The
    `estimated_context_cache_gib` terms are close (9B 0.4 GiB vs 440–457 MiB measured); Q5's 1.1 GiB
@@ -730,6 +774,28 @@ the star (a lower-threshold, equal-or-higher-rank model always wins first). **Le
 Intel-first hybrid** was not available either; the AMD result — llama.cpp dropped the integrated
 device by TYPE before the filling pass — is expected to carry over, and `looksIntegrated`'s
 completeness (#320) is a name-table question, checked against the Intel names above.
+
+**2026-09-07 amendment (#321, owner decision): the usable-card gate is 5,120 MiB, and the working
+share is computed on the offloadable weights.** Two changes in one decision, because the second is
+what makes the first safe to show. `USABLE_VRAM_MB` (= `GPU_BUMP_MIN_VRAM_MB`) goes 6,144 → **5,120**
+so the common 6 GB laptop card reaches the card path — the full reasoning and the measured evidence
+are in the N8 paragraph above, which this decision rewrote. `estimateGraphicsNeedMib` subtracts a
+manifest's measured `host_mapped_weights_mib` before applying its 15 % working share — rule 3 above.
+The second matters because the first makes it visible: the share was 2.4× too generous on the E2B,
+which is exactly the model a 6 GB laptop lands on, so "Your model" would have called it far tighter
+than it is the moment those laptops started reaching the card path.
+
+Consequences, all pinned: the boundary tests flip to 5,119 out / 5,120 in and the three real cards
+in (`performance.test.ts`, `gpu-rules.test.ts`); the RTX 4050 Laptop now reaches the card path and
+stars the 4B, while a 4 GB GTX 1650 takes its place as the sub-gate case (`picker-seams.test.ts`);
+the hybrid [iGPU, RTX 3060 Laptop] probe now describes the CARD on every consumer, in either driver
+order (`performance-gpu.test.ts`); the tile reads "Usable" at 5,994 MiB and its "Under {min} GB"
+copy follows the constant to "Under 5 GB" on its own (`PerformanceScreen.test.tsx`). Five thresholds
+fell — the E2B by 323 MiB, the largest single correction in this section's history — and the
+30-point grid did not move: see the grid note above for the three near misses, including the 7 MiB
+by which Q5 still fails the nominal 24 GB row. Still open: deriving the host-mapped split from the
+GGUF header instead of a measured per-model field, which would cover the models never started on
+hardware (`qwen3.5-4b-ud-q4kxl`, `gemma4-26b-a4b-it-qat-q4`) — BUILD_STATE §5 item 22 (e).
 
 **2026-09-07 amendment (#319, owner decision): the chat server runs ONE slot.** `CHAT_SERVER_ARGS`
 passes `-np 1`; b9849's default of four unified slots is gone. Chat only — the embedder, the
@@ -771,31 +837,63 @@ Pinned in `gpu-rules.test.ts`. Evidence:
 `eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg5-baseline.*`,
 `…/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/leg5-device-landing.comment.md`.
 
-**The 6 GB row (N8).** Every 6 GB laptop card seen for this audit reports BELOW the runtime's
-6,144 MiB `discrete` gate on Vulkan (an RTX 4050 Laptop: 5,921 MiB; the RTX 3060 Laptop of leg 4:
-5,994) — so the "6 GB" row above describes only a card that reports AT OR ABOVE the gate (an RTX
-2060: 6,144 MiB); a 6 GB laptop card below the gate is a RAM machine on the next start
-(`nextStartMemory` → `cpu`), same as today. **Measured 2026-09-07 (#318 leg 4):** the gate costs
-nothing in PLACEMENT — llama.cpp's fit put the RAM pick fully on the sub-gate card (E2B 36/36,
-86 tok/s) — it only changes which model is starred, the basis wording, and the tile (which names the
-card under the gate since #375). Whether to lower it is an owner call (§5 item 22 (k), #321).
+**The 6 GB row (N8) — DECIDED 2026-09-07 (#321, owner): the gate comes down to 5,120 MiB.**
+
+*The finding, as it stood.* Every 6 GB laptop card the project has seen reports BELOW the runtime's
+then-6,144 MiB `discrete` gate on Vulkan — GTX 1660 SUPER **5,746**, RTX 4050 Laptop **5,921**, the
+RTX 3060 Laptop of leg 4 **5,994** — while an RTX 2060 reports exactly 6,144. That is not a driver
+quirk to be corrected: the RTX 3060 Laptop exposes ONE device-local heap of 5,994 MiB and the probe
+reports exactly it, where the 3090 and the 1070 Ti report the SUM of two heaps (24,576 + 246,
+8,059 + 214); `nvidia-smi`'s round 6,144 is the marketing figure. So the "6 GB" row described only
+the unusual card that reports at or above the gate, and the common 6 GB laptop was a RAM machine on
+every start (`nextStartMemory` → `cpu`).
+
+*What leg 4 measured.* The gate costs nothing in PLACEMENT — llama.cpp's fit put the RAM pick fully
+on the sub-gate card (E2B **36/36**, 86.4 tok/s, 3,225 MiB to spare) and never consults the gate.
+What the gate decides is only which model is STARRED, the basis wording, the profile bump and the
+tile's rating.
+
+*Why that is worth changing anyway.* On the machine measured (14 GB RAM) the star would not have
+moved: the RAM pick is the E2B and it fits the card either way. The case that bites is the **16 GB
+gaming laptop**, where the RAM pick is the 9B — and the 9B on this card measured **18/33 layers at
+5.2 tok/s**, against 20.2 at 31/33 on an 8 GB desktop card. Today's gate therefore sent the most
+common 6 GB configuration to a model running roughly four times slower than the alternative. With
+the gate at 5,120 the card path stars the 4B (4,410 MiB against a 5,226 MiB budget), fully offloaded
+at card speed.
+
+*Why 5,120.* It admits all three measured cards with margin for driver variance, and keeps 4 GB
+cards (≈ 4,096) OUT — where nothing ranked fits 4,410 anyway and rule C's no-fit fallback hands the
+machine back to the RAM pick regardless. Going lower gains nothing.
+
+*Blast radius, accepted.* The profile bump moves such a laptop one step up (a label, plus the
+RAM-unknown fallback picker); the tile reads "Usable" for these cards, which matches what the fit
+does with them; the boundary pins at 5,921 out / 6,144 in flip to 5,119 out / 5,120 in
+(`picker-seams.test.ts`, `performance.test.ts`). The tile has named the real card and its memory
+regardless of the gate since #375, so "my card is invisible" was already fixed and is not part of
+this. The 6 GB row's CONTENT is unchanged — 4B at RAM 8, E2B at RAM 12, 4B from RAM 16 up — but it
+is now a row about real hardware rather than about an RTX 2060.
+
+The working-share correction that rides along with this decision is rule 3 above.
 
 **Thresholds** (`estimateGraphicsNeedMib`, every RANKED chat manifest, raw MiB; "fits from" =
 ⌈need⌉; the boundary is asserted on both sides in `committed-catalog.test.ts`):
 
-| model | rank | need (MiB) | fits from (MiB) | was, at 4 slots |
-|---|---|---|---|---|
-| qwen3.5-4b-ud-q4kxl | 3 | 4,409.3 | **4,410** | 4,512 |
-| gemma4-e2b-it-qat-q4 | 3 | 4,745.6 | 4,746 | 4,746 |
-| qwen3.5-9b-ud-q4kxl | 3 | 7,911.5 | **7,912** | 8,014 |
-| gemma4-12b-it-qat-q4 | 2 | 11,158.7 | 11,159 | 11,159 |
-| gemma4-26b-a4b-it-qat-q4 | 2 | 18,352.9 | 18,353 | 18,353 |
-| qwen3.8-27b-ud-q4km | 3 | 20,041.6 | **20,042** | 20,247 |
-| qwen3.8-27b-ud-q5km | 3 | 23,660.8 | **23,661** | 23,866 |
+| model | rank | need (MiB) | fits from (MiB) | at 4 slots (before #319) | after #319, before #321 |
+|---|---|---|---|---|---|
+| qwen3.5-4b-ud-q4kxl | 3 | 4,409.3 | 4,410 | 4,512 | 4,410 |
+| gemma4-e2b-it-qat-q4 | 3 | 4,422.3 | **4,423** | 4,746 | 4,746 |
+| qwen3.5-9b-ud-q4kxl | 3 | 7,829.7 | **7,830** | 8,014 | 7,912 |
+| gemma4-12b-it-qat-q4 | 2 | 11,040.6 | **11,041** | 11,159 | 11,159 |
+| gemma4-26b-a4b-it-qat-q4 | 2 | 18,352.9 | 18,353 | 18,353 | 18,353 |
+| qwen3.8-27b-ud-q4km | 3 | 19,939.3 | **19,940** | 20,247 | 20,042 |
+| qwen3.8-27b-ud-q5km | 3 | 23,558.5 | **23,559** | 23,866 | 23,661 |
 
-(The last column is the 4-slot figure this table carried until 2026-09-07; `-np 1` (#319) moved
-four of the seven — the 4B and 9B by 102 MiB, the two 27B quants by 205. The three Gemma rows have
-no recurrent state and did not move at all.)
+(Two decisions of 2026-09-07 moved these, and the last two columns show them apart. `-np 1` (#319)
+recomputed the cache terms for one slot: the 4B and 9B fell 102 MiB, the two 27B quants 205, the
+three Gemma rows not at all. `host_mapped_weights_mib` (#321) then took the working share off the
+host-mapped weights: the E2B fell 323 MiB — by far the largest correction, and the one the decision
+was made for — Gemma 12B 118, the 9B 82, the two 27B quants 102. The 4B and the MoE 26B carry no
+measured host-mapped figure, so #321 left them exactly where #319 did.)
 
 (Lower-ranked models sharing a tier with a ranked one above — `qwen3-4b-instruct-2507-q4`,
 `qwen3-4b-instruct-q4`, `qwen3-8b-instruct-q4`, `ministral3-8b-instruct-2512-q4`,

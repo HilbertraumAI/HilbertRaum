@@ -125,7 +125,9 @@ invalid ram  → UNKNOWN   (detection failed)
 Adjustments, in order:
 - A **useful GPU** bumps one step toward `PRO` (capped at `PRO`). "Useful" is the
   **conservative Phase-16 gate** (`gpuUsefulForProfile` in `runtime/gpu.ts`): some probed
-  device has **≥ 6 GiB** (`GPU_BUMP_MIN_VRAM_MB = 6144`) **and** does not look integrated
+  device has **≥ 5 GiB** (`GPU_BUMP_MIN_VRAM_MB = 5120` — 6,144 until the 2026-09-07 decision on
+  #321 brought it down so the common 6 GB laptop card, which Vulkan reports at 5,7xx–5,9xx MiB,
+  counts; `model-benchmarks.md` §6.6 N8) **and** does not look integrated
   (`looksIntegrated` name heuristic, biased toward *not* bumping). Rationale: an Iris Xe
   reporting 16 GB of *shared* memory must never push a 16 GB laptop into BALANCED→PRO and a
   14B recommendation — a false negative only costs a too-small recommendation, never a
@@ -159,7 +161,7 @@ model's own context-cache estimate (a per-model manifest field, default 0.5 GiB)
 1 GiB margin ≤ the budget device's FREE memory` (the probe's free figure, else its total minus
 1,024 MiB), RAM always a hard gate. `budgetMb` comes from the **budget device**
 (`selectBudgetDevice` / `nextStartMemory` in `services/performance.ts`: the largest probed card at
-or above the runtime's own 6,144 MiB gate and not integrated by name — never the first device the
+or above the runtime's own 5,120 MiB gate and not integrated by name — never the first device the
 driver listed); on **unified memory** (Apple Silicon) and on a machine **without a usable card**
 — including one with graphics acceleration switched off in Settings, or auto-disabled after a
 crash — it is RAM-best-fit (`recommendModelIdByRam`: the largest model whose comfortable RAM
@@ -509,16 +511,18 @@ screen answers the user's question in plain words. Four cards:
    device** for the next start, `nextStartMemory` below; since the PR #308 audit `BenchmarkResult.gpu`
    / `gpuVramMb` and `PerformanceSnapshot.currentGpu` all name that device, never the first device
    the driver listed. The rating is the shared `isUsefulDevice` rule of `shared/gpu-rules.ts` — the
-   same 6 GiB + not-integrated gate the profile bump and the memory class use, never the memory
-   figure alone (PR #303 audit M8.1): "Usable" for a useful discrete card, "Small" for a discrete
-   card under 6 GiB with the plain consequence "models run on the processor", "Integrated" for a
+   same VRAM-floor + not-integrated gate the profile bump and the memory class use, never the
+   memory figure alone (PR #303 audit M8.1): "Usable" for a useful discrete card, "Small" for a
+   discrete card under the floor with the plain consequence "models run on the processor" (the copy
+   interpolates the constant, so it reads "Under 5 GB" since #321), "Integrated" for a
    RECORDED integrated device (a legacy result written by the old `devices[0]` rule, or another
    computer's) — its figure shown as "GB shared" with the copy "integrated, shared memory: models
    run on the processor", never blamed on size — and "None" without a device. For the computer the
    app is on, the ELIGIBLE probe's DISPLAY device (`PerformanceSnapshot.graphicsDevice`, with its
    `useful` flag: the budget device when there is one, else the LARGEST card that does not look
-   integrated even when it is under the gate — the common 6 GB laptop card Vulkan reports at
-   5,9xx MiB, #321 — else the integrated one; `displayDevice`, owner decision 2026-09-07: the tile
+   integrated even when it is under the gate — a 4 GB card; until #321 lowered the gate to 5,120
+   this also caught every 6 GB laptop card — else the integrated one; `displayDevice`, owner
+   decision 2026-09-07: the tile
    names the real card and its memory regardless of the gate, and the rating says whether it is
    used; `currentGpu` stays the budget device) is the freshest truth and wins; a result persisted
    before the field existed, or whose probe came back empty, gets the BUDGET device folded in by
@@ -577,8 +581,8 @@ device the copy names and the observed free/working figures all come from the EL
 `settings.gpuProbe` (`eligibleGpuProbe` in `shared/gpu-rules.ts`: stamped with this machine's key,
 or unstamped; a probe stamped elsewhere supplies nothing — the class is then `cpu` or `unified`,
 with no budget, no `currentGpu` and no fold-in) and, of it, ONE device: the **budget device**,
-the LARGEST probed device that passes the shared usable-card rule (`isUsefulDevice`: ≥ 6 GiB and
-not integrated by name — `primaryUsefulDevice`, which `selectBudgetDevice` in
+the LARGEST probed device that passes the shared usable-card rule (`isUsefulDevice`: at or above
+`USABLE_VRAM_MB` — 5 GiB since #321 — and not integrated by name — `primaryUsefulDevice`, which `selectBudgetDevice` in
 `services/performance.ts` is), never `devices[0]` — the pinned Vulkan build lists an integrated
 GPU beside the discrete one in driver order, so on a hybrid laptop the first device is as often
 the iGPU reporting 11–36 GiB of shared RAM as it is the card, where `devices[0]` used to hand the

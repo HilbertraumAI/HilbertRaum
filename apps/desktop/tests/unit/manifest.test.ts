@@ -116,6 +116,26 @@ describe('validateManifest', () => {
     }
   })
 
+  // #321: the measured host-mapped weight share, validated exactly like the cache term above —
+  // it moves a recommendation too, so a typo must fail the manifest rather than silently widen
+  // the estimate. Absent → `estimateGraphicsNeedMib` keeps its whole-file arithmetic.
+  it('parses host_mapped_weights_mib, leaving it undefined when omitted (#321)', () => {
+    expect(validateManifest(rawManifest({ host_mapped_weights_mib: 2152.5 })).manifest?.hostMappedWeightsMib).toBe(2152.5)
+    expect(validateManifest(rawManifest({ host_mapped_weights_mib: 0 })).manifest?.hostMappedWeightsMib).toBe(0)
+    const absent = validateManifest(rawManifest())
+    expect(absent.ok).toBe(true)
+    expect(absent.manifest?.hostMappedWeightsMib).toBeUndefined()
+    expect('hostMappedWeightsMib' in (absent.manifest ?? {})).toBe(false)
+  })
+
+  it('rejects a negative or non-numeric host_mapped_weights_mib (#321)', () => {
+    for (const value of [-1, 'x', '545.62', true, Number.NaN, Number.POSITIVE_INFINITY, null]) {
+      const res = validateManifest(rawManifest({ host_mapped_weights_mib: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('host_mapped_weights_mib')), String(value)).toBe(true)
+    }
+  })
+
   // Issue #182: `speculative_decoding` is a CLOSED enum on purpose — a free-form argument list
   // would let a hand-edited on-drive manifest inject any llama-server flag (`--host 0.0.0.0`
   // defeats the loopback-only invariant, since extras are appended last and a later flag wins).
