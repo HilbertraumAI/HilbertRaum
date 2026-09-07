@@ -1,0 +1,493 @@
+{
+  "hw_slug": "i7-8700-gtx-1070-ti-8gb-32gb",
+  "leg": "2",
+  "variant": "baseline",
+  "model_id": "qwen3.5-9b-ud-q4kxl",
+  "model_file": "qwen3.5-9b-ud-q4kxl.gguf",
+  "model_bytes": 5966095584,
+  "runtime": "9849 (799fcc04a)",
+  "argv": "--host 127.0.0.1 --port 52804 --model <drive>\\models\\chat\\qwen3.5-9b-ud-q4kxl.gguf --ctx-size 8192 --threads 6 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4",
+  "extra_args": [],
+  "ctx": 8192,
+  "threads": 6,
+  "physical_batch": 2048,
+  "before": {
+    "list_devices": "Available devices:\r\n  Vulkan0: NVIDIA GeForce GTX 1070 Ti (8273 MiB, 7504 MiB free)",
+    "nvidia_smi": {
+      "used": 883,
+      "total": 8192,
+      "free": 7177
+    },
+    "desktop": "idle as this machine gets: browser and chat apps closed, VS Code (driving the session) open",
+    "at": "2026-09-07T09:24:35.887Z"
+  },
+  "load_ms": 7785,
+  "after_load": {
+    "nvidia_smi": {
+      "used": 6643,
+      "total": 8192,
+      "free": 1417
+    },
+    "list_devices": "Available devices:\r\n  Vulkan0: NVIDIA GeForce GTX 1070 Ti (8273 MiB, 6831 MiB free)",
+    "at": "2026-09-07T09:24:45.468Z"
+  },
+  "prompt_tokens": 2015,
+  "request_ms": 42114,
+  "tokens_predicted": 512,
+  "timings": {
+    "cache_n": 0,
+    "prompt_n": 2015,
+    "prompt_ms": 16728.624,
+    "prompt_per_token_ms": 8.302046650124069,
+    "prompt_per_second": 120.45222607669346,
+    "predicted_n": 512,
+    "predicted_ms": 25289.701,
+    "predicted_per_token_ms": 49.393947265625,
+    "predicted_per_second": 20.245395546590288
+  },
+  "peak_nvidia_smi": {
+    "t": 1788773104637,
+    "used": 6691,
+    "total": 8192,
+    "free": 1369
+  },
+  "samples": [
+    {
+      "t": 1788773085489,
+      "used": 6643,
+      "total": 8192,
+      "free": 1417
+    },
+    {
+      "t": 1788773086504,
+      "used": 6651,
+      "total": 8192,
+      "free": 1408
+    },
+    {
+      "t": 1788773087504,
+      "used": 6653,
+      "total": 8192,
+      "free": 1407
+    },
+    {
+      "t": 1788773088507,
+      "used": 6653,
+      "total": 8192,
+      "free": 1407
+    },
+    {
+      "t": 1788773089518,
+      "used": 6670,
+      "total": 8192,
+      "free": 1390
+    },
+    {
+      "t": 1788773090520,
+      "used": 6670,
+      "total": 8192,
+      "free": 1390
+    },
+    {
+      "t": 1788773091534,
+      "used": 6670,
+      "total": 8192,
+      "free": 1390
+    },
+    {
+      "t": 1788773092546,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773093560,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773094575,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773095575,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773096579,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773097593,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773098607,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773099616,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773100619,
+      "used": 6688,
+      "total": 8192,
+      "free": 1372
+    },
+    {
+      "t": 1788773101620,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773102620,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773103632,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773104637,
+      "used": 6691,
+      "total": 8192,
+      "free": 1369
+    },
+    {
+      "t": 1788773105644,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773106647,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773107650,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773108655,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773109657,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773110657,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773111659,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773112663,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773113669,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773114678,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773115686,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773116693,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773117698,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773118704,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773119713,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773120719,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773121729,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773122733,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773123737,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773124745,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773125752,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773126760,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    },
+    {
+      "t": 1788773127600,
+      "used": 6690,
+      "total": 8192,
+      "free": 1370
+    }
+  ],
+  "after_stop": {
+    "nvidia_smi": {
+      "used": 879,
+      "total": 8192,
+      "free": 7181
+    },
+    "list_devices": "Available devices:\r\n  Vulkan0: NVIDIA GeForce GTX 1070 Ti (8273 MiB, 7504 MiB free)",
+    "exit": {
+      "code": null,
+      "sig": "SIGTERM"
+    }
+  },
+  "prompt_text_in_log": false,
+  "request_errors": [],
+  "fit": {
+    "offloaded": [
+      "0.04.493.712 I load_tensors: offloaded 31/33 layers to GPU"
+    ],
+    "buffers": [
+      "0.04.493.715 I load_tensors:   CPU_Mapped model buffer size =   824.31 MiB",
+      "0.04.493.716 I load_tensors:      Vulkan0 model buffer size =  4854.94 MiB",
+      "0.07.226.099 I llama_context: Vulkan_Host  output buffer size =     3.79 MiB",
+      "0.07.228.995 I llama_kv_cache:    Vulkan0 KV buffer size =   256.00 MiB",
+      "0.07.246.695 I llama_memory_recurrent:        CPU RS buffer size =    16.75 MiB",
+      "0.07.306.737 I llama_memory_recurrent:    Vulkan0 RS buffer size =   184.25 MiB",
+      "0.07.344.836 I sched_reserve:    Vulkan0 compute buffer size =   447.38 MiB",
+      "0.07.344.846 I sched_reserve: Vulkan_Host compute buffer size =   128.44 MiB"
+    ],
+    "kv": [
+      "0.00.165.102 I srv  llama_server: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true",
+      "0.04.015.240 I print_info: n_ctx_train           = 262144",
+      "0.04.015.254 I print_info: n_swa                 = 0",
+      "0.04.015.255 I print_info: is_swa_any            = 0",
+      "0.04.015.274 I print_info: n_ctx_orig_yarn       = 262144",
+      "0.07.225.591 I llama_context: constructing llama_context",
+      "0.07.225.599 I llama_context: n_seq_max     = 4",
+      "0.07.225.600 I llama_context: n_ctx         = 8192",
+      "0.07.225.600 I llama_context: n_ctx_seq     = 8192",
+      "0.07.225.600 I llama_context: n_batch       = 2048",
+      "0.07.225.600 I llama_context: n_ubatch      = 2048",
+      "0.07.225.601 I llama_context: causal_attn   = 1",
+      "0.07.225.601 I llama_context: flash_attn    = auto",
+      "0.07.225.602 I llama_context: kv_unified    = true",
+      "0.07.225.604 I llama_context: freq_base     = 10000000.0",
+      "0.07.225.606 I llama_context: freq_scale    = 1",
+      "0.07.225.606 I llama_context: n_rs_seq      = 0",
+      "0.07.225.607 I llama_context: n_outputs_max = 4",
+      "0.07.225.607 I llama_context: n_ctx_seq (8192) < n_ctx_train (262144) -- the full capacity of the model will not be utilized",
+      "0.07.226.099 I llama_context: Vulkan_Host  output buffer size =     3.79 MiB",
+      "0.07.246.695 I llama_memory_recurrent:        CPU RS buffer size =    16.75 MiB",
+      "0.07.306.737 I llama_memory_recurrent:    Vulkan0 RS buffer size =   184.25 MiB",
+      "0.07.306.751 I llama_memory_recurrent: size =  201.00 MiB (     4 cells,  32 layers,  4 seqs  0 rs_seq), R (f32):    9.00 MiB, S (f32):  192.00 MiB",
+      "0.07.616.079 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'",
+      "0.07.616.100 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 8192",
+      "0.07.616.104 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 8192",
+      "0.07.616.105 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 8192",
+      "0.07.616.105 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 8192",
+      "0.09.626.268 I slot   operator(): id  3 | task 0 | new prompt, n_ctx_slot = 8192, n_keep = 0, task.n_tokens = 2015",
+      "0.09.626.277 I slot   operator(): id  3 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)",
+      "0.16.044.711 I slot   operator(): id  3 | task 0 | cached n_tokens = 2011, memory_seq_rm [2011, end)"
+    ],
+    "fit": [
+      "# leg2-baseline — argv: <drive>\\runtime\\llama.cpp\\win\\llama-server.exe --host 127.0.0.1 --port 52804 --model <drive>\\models\\chat\\qwen3.5-9b-ud-q4kxl.gguf --ctx-size 8192 --threads 6 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4",
+      "0.00.170.549 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.170.550 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+      "0.00.170.557 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.00.874.514 I common_params_fit_impl: projected to use 6007 MiB of device memory vs. 6898 MiB of free device memory",
+      "0.00.874.527 I common_params_fit_impl: cannot meet free memory target of 1024 MiB, need to reduce device memory by 133 MiB",
+      "0.00.874.528 I common_params_fit_impl: context size set by user to 8192 -> no change",
+      "0.00.874.529 I common_params_fit_impl: id=0, target=5874 MiB",
+      "0.01.516.730 I common_params_fit_impl: memory for test allocation by device:",
+      "0.01.516.739 I common_params_fit_impl: id=0, n_layer= 0, n_part= 0, overflow_type=4, mem=   498 MiB",
+      "0.01.516.749 I common_params_fit_impl: filling dense layers back-to-front:",
+      "0.02.169.007 I common_params_fit_impl: memory for test allocation by device:",
+      "0.02.169.015 I common_params_fit_impl: id=0, n_layer=33, n_part= 0, overflow_type=4, mem=  6007 MiB",
+      "0.02.169.018 I common_params_fit_impl: start filling device 0, delta=33",
+      "0.02.875.099 I common_params_fit_impl: memory for test allocation by device:",
+      "0.02.875.106 I common_params_fit_impl: id=0, n_layer=32, n_part= 0, overflow_type=4, mem=  5885 MiB",
+      "0.02.875.109 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=32",
+      "0.03.543.502 I common_params_fit_impl: memory for test allocation by device:",
+      "0.03.543.510 I common_params_fit_impl: id=0, n_layer=31, n_part= 0, overflow_type=4, mem=  5742 MiB",
+      "0.03.543.513 I common_params_fit_impl: set ngl_per_device[0].n_layer=31",
+      "0.03.543.514 I common_params_fit_impl:   - Vulkan0 (NVIDIA GeForce GTX 1070 Ti): 31 layers,   5742 MiB used,   1155 MiB free",
+      "0.03.543.523 I common_fit_params: successfully fit params to free device memory",
+      "0.03.543.528 I common_fit_params: fitting params to free memory took 0.66 seconds",
+      "0.07.616.079 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'",
+      "0.07.616.261 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task",
+      "0.07.693.018 I srv  update_slots: all slots are idle",
+      "0.51.644.710 I srv  update_slots: all slots are idle"
+    ],
+    "device": [
+      "0.00.163.006 I cmn  common_param: device_info:",
+      "0.00.165.028 I cmn  common_param:   - Vulkan0 : NVIDIA GeForce GTX 1070 Ti (8273 MiB, 7504 MiB free)",
+      "0.00.170.549 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.170.557 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.00.818.151 I common_memory_breakdown_print: |   - Vulkan0 (GTX 1070 Ti) |  8273 = 6898 + (6007 =  5133 +     457 +     416) +       -4632 |",
+      "0.00.874.514 I common_params_fit_impl: projected to use 6007 MiB of device memory vs. 6898 MiB of free device memory",
+      "0.00.874.527 I common_params_fit_impl: cannot meet free memory target of 1024 MiB, need to reduce device memory by 133 MiB",
+      "0.01.452.311 I common_memory_breakdown_print: |   - Vulkan0 (GTX 1070 Ti) |  8273 = 7501 + ( 498 =     0 +       0 +     498) +         273 |",
+      "0.01.516.730 I common_params_fit_impl: memory for test allocation by device:",
+      "0.02.109.680 I common_memory_breakdown_print: |   - Vulkan0 (GTX 1070 Ti) |  8273 = 6898 + (6007 =  5133 +     457 +     416) +       -4632 |",
+      "0.02.169.007 I common_params_fit_impl: memory for test allocation by device:",
+      "0.02.169.018 I common_params_fit_impl: start filling device 0, delta=33",
+      "0.02.816.383 I common_memory_breakdown_print: |   - Vulkan0 (GTX 1070 Ti) |  8273 = 6923 + (5885 =  4989 +     448 +     447) +       -4535 |",
+      "0.02.875.099 I common_params_fit_impl: memory for test allocation by device:",
+      "0.02.875.109 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=32",
+      "0.03.483.269 I common_memory_breakdown_print: |   - Vulkan0 (GTX 1070 Ti) |  8273 = 6948 + (5742 =  4854 +     440 +     447) +       -4417 |",
+      "0.03.543.502 I common_params_fit_impl: memory for test allocation by device:",
+      "0.03.543.513 I common_params_fit_impl: set ngl_per_device[0].n_layer=31",
+      "0.03.543.514 I common_params_fit_impl:   - Vulkan0 (NVIDIA GeForce GTX 1070 Ti): 31 layers,   5742 MiB used,   1155 MiB free",
+      "0.03.543.523 I common_fit_params: successfully fit params to free device memory",
+      "0.03.755.375 I llama_prepare_model_devices: using device Vulkan0 (NVIDIA GeForce GTX 1070 Ti) (0000:01:00.0) - 7501 MiB free",
+      "0.04.493.716 I load_tensors:      Vulkan0 model buffer size =  4854.94 MiB",
+      "0.07.228.995 I llama_kv_cache:    Vulkan0 KV buffer size =   256.00 MiB",
+      "0.07.306.737 I llama_memory_recurrent:    Vulkan0 RS buffer size =   184.25 MiB",
+      "0.07.322.710 W sched_reserve: layer 0 is assigned to device CPU but the fused Gated Delta Net tensor is assigned to device Vulkan0 (usually due to missing support)",
+      "0.07.344.836 I sched_reserve:    Vulkan0 compute buffer size =   447.38 MiB"
+    ]
+  },
+  "excerpt": [
+    "# leg2-baseline — argv: <drive>\\runtime\\llama.cpp\\win\\llama-server.exe --host 127.0.0.1 --port 52804 --model <drive>\\models\\chat\\qwen3.5-9b-ud-q4kxl.gguf --ctx-size 8192 --threads 6 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4",
+    "0.00.163.006 I cmn  common_param: device_info:",
+    "0.00.165.102 I srv  llama_server: n_parallel is set to auto, using n_parallel = 4 and kv_unified = true",
+    "0.00.170.549 I cmn  common_init_: fitting params to device memory ...",
+    "0.00.170.550 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+    "0.00.170.557 I common_params_fit_impl: getting device memory data for initial parameters:",
+    "0.00.874.514 I common_params_fit_impl: projected to use 6007 MiB of device memory vs. 6898 MiB of free device memory",
+    "0.00.874.527 I common_params_fit_impl: cannot meet free memory target of 1024 MiB, need to reduce device memory by 133 MiB",
+    "0.00.874.528 I common_params_fit_impl: context size set by user to 8192 -> no change",
+    "0.00.874.529 I common_params_fit_impl: id=0, target=5874 MiB",
+    "0.01.516.730 I common_params_fit_impl: memory for test allocation by device:",
+    "0.01.516.739 I common_params_fit_impl: id=0, n_layer= 0, n_part= 0, overflow_type=4, mem=   498 MiB",
+    "0.01.516.749 I common_params_fit_impl: filling dense layers back-to-front:",
+    "0.02.169.007 I common_params_fit_impl: memory for test allocation by device:",
+    "0.02.169.015 I common_params_fit_impl: id=0, n_layer=33, n_part= 0, overflow_type=4, mem=  6007 MiB",
+    "0.02.169.018 I common_params_fit_impl: start filling device 0, delta=33",
+    "0.02.875.099 I common_params_fit_impl: memory for test allocation by device:",
+    "0.02.875.106 I common_params_fit_impl: id=0, n_layer=32, n_part= 0, overflow_type=4, mem=  5885 MiB",
+    "0.02.875.109 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=32",
+    "0.03.543.502 I common_params_fit_impl: memory for test allocation by device:",
+    "0.03.543.510 I common_params_fit_impl: id=0, n_layer=31, n_part= 0, overflow_type=4, mem=  5742 MiB",
+    "0.03.543.513 I common_params_fit_impl: set ngl_per_device[0].n_layer=31",
+    "0.03.543.514 I common_params_fit_impl:   - Vulkan0 (NVIDIA GeForce GTX 1070 Ti): 31 layers,   5742 MiB used,   1155 MiB free",
+    "0.03.543.523 I common_fit_params: successfully fit params to free device memory",
+    "0.03.543.528 I common_fit_params: fitting params to free memory took 0.66 seconds",
+    "0.03.755.375 I llama_prepare_model_devices: using device Vulkan0 (NVIDIA GeForce GTX 1070 Ti) (0000:01:00.0) - 7501 MiB free",
+    "0.04.015.240 I print_info: n_ctx_train           = 262144",
+    "0.04.015.254 I print_info: n_swa                 = 0",
+    "0.04.015.255 I print_info: is_swa_any            = 0",
+    "0.04.015.274 I print_info: n_ctx_orig_yarn       = 262144",
+    "0.04.015.289 I load_tensors: loading model tensors, this can take a while... (mmap = true, direct_io = false)",
+    "0.04.493.704 I load_tensors: offloading output layer to GPU",
+    "0.04.493.712 I load_tensors: offloading 30 repeating layers to GPU",
+    "0.04.493.712 I load_tensors: offloaded 31/33 layers to GPU",
+    "0.04.493.715 I load_tensors:   CPU_Mapped model buffer size =   824.31 MiB",
+    "0.04.493.716 I load_tensors:      Vulkan0 model buffer size =  4854.94 MiB",
+    "0.07.225.600 I llama_context: n_ctx         = 8192",
+    "0.07.225.600 I llama_context: n_ctx_seq     = 8192",
+    "0.07.225.602 I llama_context: kv_unified    = true",
+    "0.07.225.607 I llama_context: n_ctx_seq (8192) < n_ctx_train (262144) -- the full capacity of the model will not be utilized",
+    "0.07.226.099 I llama_context: Vulkan_Host  output buffer size =     3.79 MiB",
+    "0.07.228.995 I llama_kv_cache:    Vulkan0 KV buffer size =   256.00 MiB",
+    "0.07.246.695 I llama_memory_recurrent:        CPU RS buffer size =    16.75 MiB",
+    "0.07.306.737 I llama_memory_recurrent:    Vulkan0 RS buffer size =   184.25 MiB",
+    "0.07.306.751 I llama_memory_recurrent: size =  201.00 MiB (     4 cells,  32 layers,  4 seqs  0 rs_seq), R (f32):    9.00 MiB, S (f32):  192.00 MiB",
+    "0.07.322.710 W sched_reserve: layer 0 is assigned to device CPU but the fused Gated Delta Net tensor is assigned to device Vulkan0 (usually due to missing support)",
+    "0.07.344.836 I sched_reserve:    Vulkan0 compute buffer size =   447.38 MiB",
+    "0.07.344.846 I sched_reserve: Vulkan_Host compute buffer size =   128.44 MiB",
+    "0.07.616.079 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 8192, kv_unified = 'true'",
+    "0.07.616.100 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 8192",
+    "0.07.616.104 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 8192",
+    "0.07.616.105 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 8192",
+    "0.07.616.105 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 8192",
+    "0.07.616.261 I srv          init: idle slots will be saved to prompt cache and cleared upon starting a new task",
+    "0.07.693.018 I srv  update_slots: all slots are idle",
+    "0.09.626.268 I slot   operator(): id  3 | task 0 | new prompt, n_ctx_slot = 8192, n_keep = 0, task.n_tokens = 2015",
+    "0.51.644.710 I srv  update_slots: all slots are idle"
+  ],
+  "app_report": "# Pasted by the machine owner 2026-09-07 from the source build (0.1.59, `npm run dev`, HILBERTRAUM_DRIVE_ROOT at the drive), Performance screen → Copy report, taken after the leg-2 baseline start with the card otherwise idle. The app had started Gemma 4 12B on its own at launch.\n\nDieser Computer\nGeschwindigkeit: 8,5 Token / Sek. (Gemessen mit Gemma 4 12B Instruct QAT Q4 am 7.9.2026, über 64 Token)\nArbeitsspeicher: 31,9 GB RAM\nCPU: Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz (12 Kerne)\nGrafikspeicher: 8,1 GB VRAM (NVIDIA GeForce GTX 1070 Ti)\nLaufwerk: 305 MB/s lesen\nZugewiesenes Profil: PRO\nEmpfohlen für den nächsten Start: Qwen3.5 4B (UD-Q4_K_XL) (Grafikspeicher)\nEmpfohlen zum Zeitpunkt der Prüfung: Qwen3.5 4B (UD-Q4_K_XL)\nKontextgröße: 4.096 Token\nLetzter Lauf: 7.9.2026, 11:31:13\n\nOwner's on-screen notes: \"Qwen3.5 4B (UD-Q4_K_XL) is starred\" · \"Gemma 4 12B Instruct QAT Q4 is currently running\"\n\n# Second paste (same screen, same moment) — the \"Dein Modell\" section and the graphics tile:\n\nGemma 4 12B Instruct QAT Q4 · 6,5 GB auf dem Laufwerk · Kontext von 8.192 Token\nBelegt 9,3 GB mit diesem Kontext. 32 von 49 Schichten auf der GPU, etwa 3,5 GB laufen aus dem RAM. Die Karte war frei (7,3 von 8,1 GB), aber die Laufzeit reserviert zusätzlich 0,5 GB Arbeitspuffer und 1 GB Sicherheitsreserve und verschiebt ganze Schichten von der Karte, wenn die Summe knapp wird. Antworten langsamer.\n\nGrafikspeicher\nNutzbar\n8,1GB VRAM\nNVIDIA GeForce GTX 1070 Ti\n"
+}
