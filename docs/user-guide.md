@@ -145,7 +145,7 @@ blocks you.
    - **Not downloaded** — the model file isn't on the drive (see Troubleshooting).
    - **Needs ≥N GB RAM** — this computer has less memory than the model's minimum, so it
      can't be selected or started here. Pick a smaller model — quality stays great.
-   - **Can't verify** — the file is present but its checksum didn't match. The model stays listed
+   - **Can't verify** — a required file is present but its checksum didn't match. The model stays listed
      under **On this drive** with its **Download** action, so you can repair it without hunting
      through the catalog; if it is one of several variants of the same model, that group opens
      automatically so the damaged version is visible straight away. (If the publisher has since
@@ -159,10 +159,10 @@ Once a model is **selected**, the app loads it again automatically every time yo
 app (after unlocking, on encrypted drives) — you don't have to come back to this screen. You
 can turn this off under **Settings → Load the selected model automatically**.
 
-> **First visit can take a few minutes:** the app verifies each model file's checksum the
+> **First visit can take a few minutes:** the app verifies every file the model needs the
 > first time it sees it. The result is remembered, so later visits are instant. The
-> **Verify checksum** button (under a card's **Technical details**) re-checks a file from
-> scratch whenever you want.
+> **Verify checksum** button (under a card's **Technical details**) re-checks every file the
+> model needs from scratch whenever you want.
 
 > **No model installed?** You can still try the interface: a model without a weight file shows
 > a **Try in demo mode** button (in developer mode) that runs a built-in demo model. Demo

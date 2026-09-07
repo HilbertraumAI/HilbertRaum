@@ -242,8 +242,49 @@ the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdBy
 term, PR #308 §6.6 rule C — absent defaults to 0.5 GiB in code, so the field is set only for the
 seven models whose figure was actually measured), and — for a `role: vision`
 model — an **`mmproj` projector sub-block** + an informational `input_modalities` list (see "The
-vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools`, `dimensions`,
-`bundled_on_preconfigured_drive`) are ignored by the validator.
+vision role + mmproj projector" below), and an optional **`files:` list** (below, #310). Unknown
+extra keys (e.g. `supports_tools`, `dimensions`, `bundled_on_preconfigured_drive`) are ignored by
+the validator.
+
+- **`files`** (optional, #310) declares the ADDITIONAL required files of this model's weight
+  beyond `local_path`/`sha256`, which stay mandatory and PRIMARY — shard 1, the file
+  `llama-server --model` receives. Each member is a mapping `{ local_path, sha256, download? }`
+  (same shapes as the top-level fields; `download` validated by the same rules as the top-level
+  `download` block). **Key order**: `files:` must be the LAST manifest key, emitted after
+  `local_path`/`sha256`/`download`/`mmproj` — `verify-models.{sh,ps1}` and `fetch-models.{sh,ps1}`
+  scrape a manifest with a flat, first-match line parser (§"Re-verifying the catalog against
+  upstream" / "The DIY download flow" below) that reads the top-level keys by file order, so a
+  nested `local_path:`/`sha256:` pair placed earlier would poison them.
+  Validator rules (fail-closed, exact messages):
+  - `files` must be a non-empty list of mappings: `"files" must be a list of mappings
+    (local_path/sha256/download)`; `"files" must not be an empty list — omit it instead`.
+  - Each `files[N].local_path` is required, drive-relative (the same `local_path`/`mmproj.local_path`
+    containment rule), and must not repeat any path the manifest already declares (`local_path`,
+    `mmproj.local_path`, or an earlier `files[]` entry): `"files[N].local_path" must not repeat a
+    path the manifest already declares: <path>`.
+  - Each `files[N].sha256` is required (a real hash or a placeholder, same as the top-level
+    `sha256`).
+  - **Download all-or-nothing**: if the top-level `download` is present, every `files[N]` must
+    carry its own `download` (`"files[N].download" is required when the model declares a
+    top-level "download" (a partial download plan would install a model that cannot start)`), and
+    if any `files[N]` carries `download` the top-level must too (the mirror message). A real
+    `files[N].download.sha256` must equal the real `files[N].sha256`, exactly like the top-level
+    `download`/`sha256` pair.
+  - **Shard-convention completeness**: a `local_path` matching llama.cpp's
+    `<stem>-<NNNNN>-of-<NNNNN>.gguf` convention must be index `00001`, and `files:` must declare
+    EXACTLY the sibling paths for indices `2..N` — a missing, extra, or misnumbered sibling is
+    named in the error; a shard-looking `local_path` with no `files:` at all is rejected
+    (`"local_path" names shard 1 of a multi-file weight but no "files" list declares the remaining
+    shards`). Non-shard files in `files:` are unaffected — the field is generic, not
+    shard-specific.
+  An invalid manifest (any of the above) is logged and skipped by `discoverManifests` — never
+  listed, never installed, never startable. `manifestFiles()` appends every `files[]` entry as
+  `kind: 'extra'`, so install state, the verify/download-progress byte totals, the drive verifier,
+  `checksums.json`, and the download planner all account for the whole weight with no further
+  change (see "The in-app downloader" and `docs/data-contracts.md`). **Not done in this wave**: no
+  forward-compat `format` marker — an older build ignores `files:` and reports shard 1 `installed`
+  (today's behaviour, no worse; a marker is #311's containment decision to make). No `ModelInfo`/
+  Models-screen per-file view yet.
 
 - **`local_path`** is resolved **relative to the drive root**, so a value of
   `models/chat/foo.gguf` points at `<drive-root>/models/chat/foo.gguf`.
@@ -294,8 +335,10 @@ vision role + mmproj projector" below). Unknown extra keys (e.g. `supports_tools
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:
-`unsupported` → `missing` (file absent) → `checksum_failed` (hash mismatch, or placeholder hash
-outside developer mode) → `installed`. The active running model is shown as `running`.
+`unsupported` → `missing` (any required file absent) → `checksum_failed` (a hash mismatch on any
+required file, or a placeholder hash outside developer mode) → `installed`. "Required files" is
+every entry `manifestFiles()` enumerates — the weight, a vision model's mmproj, and any #310
+`files:` entries — not just the primary. The active running model is shown as `running`.
 
 ## License review gate
 ```yaml
@@ -359,6 +402,11 @@ Rules (validated in `shared/manifest.ts`):
 - `download.sha256` is required (a real lower-case hash, or a `REPLACE_WITH_REAL_HASH` placeholder).
   A **real** `download.sha256` must equal a **real** top-level `sha256` — they describe one file.
 - `download.size_bytes` (≥ 0) and `download.license_url` are optional.
+
+The same shape (and the same rules) apply to `mmproj.download` and, since #310, to a
+`files[N].download` block — each declares its own source and is validated against that file's own
+`sha256`. A model's `download` blocks are all-or-nothing: see "Manifest fields (required)" above
+for the `files:` rule.
 
 `size_bytes` feeds the progress bar AND the in-app downloader's disk-fill body cap
 (`modelWeightMaxBytes`). The cap is **drift-tolerant** — `size_bytes` grown by a comfortable headroom
@@ -809,9 +857,12 @@ wholesale by the first in-app or scripted install.
 ## The vision role + mmproj projector (image understanding, Phases V1–V5)
 
 The `vision` role powers the **Images** screen (design record: [`architecture.md`](architecture.md)
-"Image understanding — design record"). A vision model is **two files** — the language GGUF (the
-top-level `local_path`/`sha256`/`download`, like any model) **plus** a multimodal **`mmproj`
-projector** that `llama-server --mmproj` loads. The schema additions (`shared/manifest.ts`):
+"Image understanding — design record"). A vision model declares at least **two files** — the
+language GGUF (the top-level `local_path`/`sha256`/`download`, like any model) **plus** a
+multimodal **`mmproj` projector** that `llama-server --mmproj` loads; `mmproj` stays its own slot
+(never folded into `files:`), and a sharded vision GGUF would add its remaining shards via the
+`files:` list above (#310) — the declared file set, not necessarily exactly two. The schema
+additions (`shared/manifest.ts`):
 
 ```yaml
 role: vision
@@ -832,8 +883,11 @@ download:
 Validator rules (added in `shared/manifest.ts`): `mmproj` is **required iff `role: vision`**;
 `mmproj.local_path` non-empty; `mmproj.sha256` a real lower-case hash or `REPLACE_WITH_REAL_HASH`;
 a **real** `mmproj.download.sha256` must equal a **real** `mmproj.sha256` (same file). Install state
-(`services/models.ts`) requires **both** files present + SHA-256-verified. An older build that
-doesn't know `vision`/`mmproj` simply treats the manifest as `unsupported` (forward-compatible).
+(`services/models.ts`) requires **every** declared file — the GGUF, the mmproj, and any `files:`
+entries — present + SHA-256-verified. An older build that doesn't know `vision`/`mmproj` simply
+treats the manifest as `unsupported` (forward-compatible). The shard-completeness rule (#310)
+applies to `local_path`, not to `mmproj.local_path` — a sharded projector is not (yet) a case the
+validator enforces (the committed-catalog test covers it, see `docs/architecture.md`).
 
 **RAM tiering (PROD-1).** Min RAM is **12 GB** for the model alone (~4.6 GB peak RSS), but the
 honest co-residency bar is higher: vision + a 12B chat (~7 GB) + the E5 embedder = three
@@ -868,7 +922,10 @@ view, and the TG-6 measurements — lives in [`architecture.md`](architecture.md
 into those and deleted at TG-6 (git history keeps it).
 
 The schema addition is minimal — `translation` is a **single-file GGUF** (`shared/manifest.ts`
-`ModelRole` + `ROLES`), no `mmproj`:
+`ModelRole` + `ROLES`), no `mmproj` — the current TranslateGemma manifest declares no `files:`
+either. A sharded translation weight would use the same `files:` list as any other role (#310);
+`resolveSidecarSelection` already checks every one of `ResolvedModel.requiredPaths` for
+availability, existence-only, so this role needs no change to support one:
 
 ```yaml
 role: translation

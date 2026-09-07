@@ -68,21 +68,28 @@ master pipeline** that produces a finished, sellable drive (see the last section
     llama-server sidecar runs from (chat + embedder + reranker + vision + translation), so it is
     refused while any of them has a live child; a `whisper_cpp` install is refused mid-transcription/
     dictation. Installs touching only the OTHER family still proceed.
-- **Model weights** — GGUF files under `models/`, resolved from each manifest's `local_path` (relative
-  to the drive root) via `weightPath(rootPath, manifest)`. They are **git-ignored**; a real drive is
-  built by the prepare-drive scripts (and verified against the manifest `sha256`). The bundled
-  Qwen3 + E5 manifests now carry **real pinned hashes**; a model you add yourself starts as a
-  `REPLACE_WITH_REAL_HASH` placeholder until you capture it with `verify-models --generate`.
-- **Vision models are TWO files sharing one `modelId` (image understanding V1–V5).** A `role: vision`
-  manifest names the language GGUF (top-level `local_path`/`sha256`/`download`) **plus** an `mmproj`
-  projector sub-block (its own `local_path`/`sha256`/`download`, resolved by `mmprojPath(...)`). The
-  download topology is **two already-atomic single-file `DownloadJob`s under one `modelId`** (DIST-1):
-  each is `.part`-staged + verify-before-rename by the existing single-file machinery — no cross-file
-  progress aggregation, no two-phase verify. **Install = BOTH files present + SHA-256-verified**
-  (`computeInstallState`). Vision is **in the `--with-assets` default set** (since 2026-07-01 it is in
-  `$DefaultModelIds`/`DEFAULT_MODEL_IDS`), but it is **never auto-recommended in-app** (rank 0); a
-  hand-built drive pulls both files with `--only <vision-id>` or `--all-models`. See
-  [`model-policy.md`](model-policy.md) "The vision role + mmproj projector".
+- **Model weights** — GGUF files under `models/`, resolved from each manifest's declared paths
+  (`local_path` plus, since #310, any `files:` entries — every one relative to the drive root) via
+  `weightPath(rootPath, manifest)` / `manifestFiles(rootPath, manifest)`. They are **git-ignored**;
+  a real drive is built by the prepare-drive scripts (and verified against each file's manifest
+  `sha256`). The bundled Qwen3 + E5 manifests now carry **real pinned hashes**; a model you add
+  yourself starts as a `REPLACE_WITH_REAL_HASH` placeholder until you capture it with
+  `verify-models --generate`.
+- **A multi-file weight shares one `modelId` across its files (image understanding V1–V5;
+  generalised by #310).** A `role: vision` manifest names the language GGUF (top-level
+  `local_path`/`sha256`/`download`) **plus** an `mmproj` projector sub-block (its own
+  `local_path`/`sha256`/`download`, resolved by `mmprojPath(...)`) — today's only committed
+  multi-file case, always exactly two files. The schema is more general: a manifest's optional
+  `files:` list (#310) declares any further required files of the same weight (e.g. a GGUF shard
+  set's shards 2..N), each with its own path/hash/download. The download topology is **N
+  already-atomic single-file `DownloadJob`s under one `modelId`** (DIST-1): each is `.part`-staged
+  + verify-before-rename by the existing single-file machinery — no cross-file progress
+  aggregation, no two-phase verify. **Install = EVERY declared file present + SHA-256-verified**
+  (`computeInstallState`). Vision is **in the `--with-assets` default set** (since 2026-07-01 it is
+  in `$DefaultModelIds`/`DEFAULT_MODEL_IDS`), but it is **never auto-recommended in-app** (rank 0);
+  a hand-built drive pulls every file with `--only <vision-id>` or `--all-models`. See
+  [`model-policy.md`](model-policy.md) "The vision role + mmproj projector" and "Manifest fields
+  (required)" for the `files:` shape.
 
 ## How the app uses them at runtime
 - The **runtime factory** (`createSelectingRuntimeFactory`) and the **embedder factory**

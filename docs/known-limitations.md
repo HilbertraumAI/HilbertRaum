@@ -2412,6 +2412,13 @@ are decided scope, not oversights; the record's §7 carries the reasoning.
   No shipped drive carries the stale bytes: this model is not bundled on a preconfigured drive and
   is not in the `--with-assets` default set. If your drive already has it, the AI Model screen shows
   the checksum failure and Download fetches the corrected file over it.
+- **A shard set is verified only when DECLARED, never inferred from filenames (#310).** The
+  manifest's `files:` list is the only source of "this weight has more than one file" — the app
+  never scans `models/` for a `-NNNNN-of-NNNNN.gguf` sibling series on its own. An older build
+  that does not know `files:` simply ignores it and reports shard 1 `installed` (today's
+  behaviour, no worse; a forward-compat `format` marker is #311's containment decision, not built
+  here). There is also no per-file view in the UI yet — the Models screen's technical details show
+  only the primary path, even for a multi-file weight.
 
 ## Accessibility (WCAG 2.2 AA sweep — consciously accepted)
 

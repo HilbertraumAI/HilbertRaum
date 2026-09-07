@@ -105,7 +105,8 @@ real AI answers.
 **Fix:** add a real model file:
 1. On the **AI Model** screen, note the model marked *Recommended*.
 2. Put the matching `.gguf` weight file into `models/chat/` on the drive (and the embeddings
-   model into `models/embeddings/`). File names come from the model's manifest (`local_path`).
+   model into `models/embeddings/`). File names come from the model's manifest (`local_path`,
+   plus any additional files its `files:` list declares — #310).
 3. Put the `llama-server` program for your system into `runtime/llama.cpp/win` (Windows),
    `runtime/llama.cpp/mac` (macOS), or `runtime/llama.cpp/linux` (Linux).
 4. Restart the app and press **Use this model** again.
@@ -125,8 +126,10 @@ only downloads a model when you explicitly ask it to on the AI Model screen.
 
 ## A model shows "checksum failed"
 
-The model file on the drive doesn't match the expected fingerprint in its manifest. The file
-may be incomplete or corrupted. Re-copy the weight file, then run the verifier:
+A required file on the drive doesn't match the expected fingerprint in its manifest — for a
+model whose weight is more than one file (#310), `verify-models` names the specific offending
+file (with a `(mmproj)` or `(file N/M)` label) rather than just the model. The file may be
+incomplete or corrupted. Re-copy the named weight file, then run the verifier:
 
 ```powershell
 .\scripts\verify-models.ps1 -Target E:\         # Windows

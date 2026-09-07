@@ -1156,7 +1156,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   moment the load window ends either way, and by the CODE-2 stop/lock cancel (the reader must not
   keep the drive busy past a stop; abort lands within one 4 MiB chunk); (4) any prefetch outcome
   is control-flow-inert — 'failed' means the load proceeds unassisted; (5) the file set is
-  `weightPaths` (GGUF + a vision model's mmproj, from `startModelRuntime`'s manifest), falling
+  `weightPaths` (`manifestFiles()`'s full list — the GGUF, a vision model's mmproj, and since
+  #310 any `files:` entries — from `startModelRuntime`'s manifest), falling
   back to `modelPath`. The #108 `model_load` sample now measures the prefetch-assisted window —
   still the honest rate the user felt, closer to what the medium can deliver. Observability: the
   `onPrefetch` hook logs through main/index.ts + a `model_prefetch` perf mark pair.
@@ -9840,9 +9841,11 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   `validateDownloadSubBlock` (https-only, a real download hash equals the real file hash); optional
   informational `input_modalities`. Unknown keys ignored ⇒ older builds treat a vision manifest as
   `unsupported` (forward-compatible).
-- **`services/models.ts`** — vision install state = **both files present + verified**: `mmprojPath` +
-  `manifestFiles` thread through `computeInstallState` (precedence `unsupported → missing → checksum_failed
-  → installed`), the lazy `skipHash` path, and the `(path,size,mtime)` two-tier checksum cache.
+- **`services/models.ts`** — vision install state = **every declared file present + verified**:
+  `mmprojPath` + `manifestFiles` thread through `computeInstallState` (precedence `unsupported →
+  missing → checksum_failed → installed`), the lazy `skipHash` path, and the `(path,size,mtime)`
+  two-tier checksum cache. Since #310, `manifestFiles` appends the same treatment to every file a
+  manifest's `files:` list declares (kind `'extra'`) — GGUF, mmproj, and `files:` alike.
 - **`services/vision/`** — `status.ts` (`getVisionStatus`: no-runtime → no-model → incompatible →
   available; cheap, lazy, lock-safe), `limits.ts` (byte cap ~20 MiB env-overridable + extension/MIME
   guards + the D4 header pixel-bomb cap + `validateAnalyzeRequest` — the SEC-3 main-side re-validation
@@ -9954,12 +9957,14 @@ trust is unchanged (no new binary on the recommended path).
   `known-limitations.md`. (The original "ephemeral, no persistence" scope was **lifted 2026-06-20**
   — analyses are now saved to an encrypted, deletable history, §10.)
 
-**Commercial-drive gate (closed — verifies BOTH files; DIST-2).** `assertCommercialDrive` →
-`verifyDriveModels` now iterates the same `manifestFiles` set (GGUF + `mmproj`) that
-`computeInstallState` requires, folding to one per-model row that reports the FIRST non-`verified`
-file — so a half-installed vision drive (good GGUF, missing/corrupt projector) fails `weightsVerified`
-and cannot pass the sell gate. `buildChecksumsJson` likewise captures one entry per file. The download
-side matches: `planModelDownloads` + `fetch-models.{ps1,sh}` fetch both files (DIST-1), and the in-app
+**Commercial-drive gate (closed — verifies EVERY declared file; DIST-2, generalised by #310).**
+`assertCommercialDrive` → `verifyDriveModels` now iterates the same `manifestFiles` set — every
+declared file (GGUF, mmproj, and any `files:` entries) — that `computeInstallState` requires,
+folding to one per-model row that reports the FIRST non-`verified` file — so a half-installed
+vision drive (good GGUF, missing/corrupt projector) fails `weightsVerified` and cannot pass the
+sell gate, and the same fold now catches a partial shard set. `buildChecksumsJson` likewise
+captures one entry per file. The download side matches: `planModelDownloads` +
+`fetch-models.{ps1,sh}` fetch every declared file (DIST-1), and the in-app
 `DownloadManager` (UI) now does too — `start()` plans every task for the model and `run()` fetches each
 one sequentially under a single job (skipping files already present + verified, so a half-installed
 vision model downloads JUST the missing projector), reporting the COMBINED received/total. The job is
