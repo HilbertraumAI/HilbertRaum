@@ -7,6 +7,7 @@ import { isHttpsUrl, isRealSha256, type DownloadSpec, type ModelManifest, type M
 import type { OcrSources, RuntimeBuild, RuntimeFamily, RuntimeOs, RuntimeSources } from '../../shared/runtime-sources'
 import {
   beginChecksumInstrumentation,
+  manifestFiles,
   mmprojPath,
   sha256File,
   verifyChecksum,
@@ -123,15 +124,41 @@ export async function planModelDownloads(
         )
       )
     }
+
+    // #310: every ADDITIONAL required file that carries its own source is one more task of the
+    // SAME job (the manager already sums their bytes and resumes each separately). Without
+    // this a `download` block on shard 1 alone would install a model that cannot start — and
+    // the validator's all-or-nothing rule means a downloadable model declares them all.
+    if (manifest.files?.some((f) => f.download)) {
+      // The absolute paths come from the single enumeration (same order, same drive-root
+      // escape guard the install side uses) rather than a second join here.
+      const extras = manifestFiles(rootPath, manifest).filter((f) => f.kind === 'extra')
+      for (const [i, extra] of manifest.files.entries()) {
+        if (!extra.download) continue
+        tasks.push(
+          await planOneFile(
+            rootPath,
+            manifest,
+            extras[i].path,
+            extra.localPath,
+            extra.sha256,
+            extra.download,
+            'extra',
+            opts
+          )
+        )
+      }
+    }
   }
   return tasks
 }
 
 /**
- * Plan one downloadable file (the GGUF, or a vision model's mmproj projector). Shared by both
- * jobs of the two-file vision topology so the license gate + present/verified/placeholder state
- * machine has ONE definition. The license is the MODEL's (a vision projector inherits the same
- * `license_review` as its GGUF — they are one model).
+ * Plan one downloadable file (the GGUF, a vision model's mmproj projector, or an `extra` file
+ * from the manifest's `files:` list — #310). Shared by every job of a multi-file model so the
+ * license gate + present/verified/placeholder state machine has ONE definition. The license is
+ * the MODEL's (a projector or a shard inherits the same `license_review` as its GGUF — they are
+ * one model).
  */
 async function planOneFile(
   rootPath: string,
@@ -140,7 +167,7 @@ async function planOneFile(
   relPath: string,
   expectedSha256: string,
   download: DownloadSpec,
-  kind: 'weight' | 'mmproj',
+  kind: 'weight' | 'mmproj' | 'extra',
   opts: PlanModelOptions
 ): Promise<ModelDownloadTask> {
   const placeholderHash = !isRealSha256(expectedSha256)

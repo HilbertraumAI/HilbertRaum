@@ -1,4 +1,4 @@
-import { discoverManifests, weightPath, type DiscoveredManifest } from './models'
+import { discoverManifests, manifestFiles, weightPath, type DiscoveredManifest } from './models'
 import type { ModelRole } from '../../shared/manifest'
 
 // M-A3 (audit-2026-06-13): the embeddings / reranker / transcriber resolvers in index.ts
@@ -11,7 +11,14 @@ import type { ModelRole } from '../../shared/manifest'
 /** A model located on the drive: id + GGUF/GGML weight path (+ optional context window). */
 export interface ResolvedModel {
   id: string
+  /** The PRIMARY weight file — what the sidecar's `--model` receives (a shard set's shard 1). */
   modelPath: string
+  /**
+   * Every file this model's weight requires, absolute (#310): `modelPath` plus whatever the
+   * manifest's `files:` list declares. The availability ladder checks that they ALL exist, so
+   * a sidecar-backed role can never report available on a fraction of its weight.
+   */
+  requiredPaths: string[]
   /** The manifest's recommended context window; omitted for roles that don't use it. */
   contextTokens?: number
 }
@@ -44,7 +51,8 @@ export function resolveModelByRole(
     if (!found) return null
     const resolved: ResolvedModel = {
       id: found.manifest.id,
-      modelPath: weightPath(rootPath, found.manifest)
+      modelPath: weightPath(rootPath, found.manifest),
+      requiredPaths: manifestFiles(rootPath, found.manifest).map((f) => f.path)
     }
     // The transcriber's WhisperCliTranscriber takes no context window; embeddings + the
     // reranker do, so only attach it when the caller asks.
