@@ -205,6 +205,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
       expect(await liveStar(ctx)).toBe(CARD8_PICK)
       const snap = buildPerformanceSnapshot(ctx)
       expect(snap.currentGpu).toEqual({ name: RTX5060.name, totalMb: 8151, useful: true })
+      expect(snap.graphicsDevice).toEqual({ name: RTX5060.name, totalMb: 8151, useful: true })
       expect(snap.placement.memoryClass).toBe('discrete')
       expect(snap.placement.vramMb).toBe(8151)
     }
@@ -221,6 +222,8 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     expect(snap.placement.memoryClass).toBe('cpu')
     expect(snap.placement.vramMb).toBeNull()
     expect(snap.currentGpu).toBeNull()
+    // The tile still NAMES the integrated device, rated not usable (owner decision 2026-09-07).
+    expect(snap.graphicsDevice).toMatchObject({ name: ARL.name, useful: false })
     // The shared-memory figure never becomes a "card" for the Performance result either.
     expect(snap.current?.gpuVramMb).toBeNull()
   })

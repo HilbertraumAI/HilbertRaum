@@ -65,6 +65,7 @@ export function performanceSnapshot(over: Partial<PerformanceSnapshot> = {}): Pe
     currentMachine: true,
     otherMachines: [],
     currentGpu: null,
+    graphicsDevice: null,
     running: false,
     placement: {
       memoryClass: 'cpu',

@@ -33,7 +33,7 @@ import {
 import { latestModelPlacement, setModelPlacementObserver } from '../services/runtime/placement'
 import { latestEffectiveReadBySource } from '../services/read-speed'
 import { EVENTS, type AnswerSpeed } from '../../shared/ipc'
-import { eligibleGpuProbe, gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
+import { displayDevice, eligibleGpuProbe, gpuUsefulForProfile, isUsefulDevice } from '../../shared/gpu-rules'
 import { resolveLlamaServerPath } from '../services/runtime/sidecar'
 import { discoverManifests, graphicsBudgetMib, launchContextTokens, weightsMib } from '../services/models'
 import { getSettings, updateSettings } from '../services/settings'
@@ -955,6 +955,13 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
   // list; null with no usable card or the GPU switched off / auto-disabled.
   const memory = nextStartMemoryFor(settings, here)
   const probed = memory.device
+  // The device the graphics tile NAMES (owner decision 2026-09-07): the budget device when there
+  // is one, else the largest card that does not look integrated even under the usable gate (the
+  // common 6 GB laptop card Vulkan reports at 5,9xx MiB, #321), else the integrated one —
+  // `displayDevice` over the SAME eligible probe. Null with the GPU switched off / auto-disabled,
+  // exactly like `probed`, so the tile's "acceleration is off" copy stands. Whether the card is
+  // USED stays `probed`'s question: the record, the budget and the ★ never read this device.
+  const shown = memory.cpuForced ? null : displayDevice(eligibleGpuProbe(settings.gpuProbe, here)?.devices ?? [])
   // An unknown identity on either side reads as "this machine": the moved-drive check in
   // prepareFirstBenchmark makes the same call, so the two never contradict each other.
   const currentMachine = countsAsThisMachine(currentKey, here)
@@ -982,6 +989,7 @@ export function buildPerformanceSnapshot(ctx: AppContext): PerformanceSnapshot {
     // `useful` is the shared rule's verdict on the budget device (true for a discrete card by
     // construction; the Metal pool device on unified memory is rated by the same predicate).
     currentGpu: probed ? { name: probed.name, totalMb: probed.totalMb, useful: isUsefulDevice(probed) } : null,
+    graphicsDevice: shown ? { name: shown.device.name, totalMb: shown.device.totalMb, useful: shown.useful } : null,
     currentMachine,
     otherMachines: otherMachines(settings.benchmarkHistory, currentKey ?? here),
     // The benchmark's OWN span, read directly (M1): `modelBusyLane` answers "chat" first, so a

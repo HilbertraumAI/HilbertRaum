@@ -158,6 +158,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The Performance screen names your graphics card even when it is too small to run models on.**
+  The Graphics memory tile used to say "No usable graphics card" on a laptop whose card reports a
+  little under 6 GB — the common 6 GB laptop card does — and on a laptop with two GPUs it could
+  name the integrated one instead. It now names the card itself, with its own memory, and rates it
+  "Small"; whether models actually run on it is unchanged.
 - **A model that cannot be loaded no longer switches the whole app to compatibility mode.** When
   one model failed to start on the graphics card, the app used to conclude the graphics card was
   the problem and run every other model — and the next translation start — on the processor until

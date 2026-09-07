@@ -144,13 +144,16 @@ function profileTone(profile: BenchmarkResult['profile'] | undefined): Tone {
 
 /**
  * What the graphics tile (and the Copy report) has to say — resolved ONCE from the snapshot
- * (PR #303 audit M8 / N1). For the computer the app is on, the ELIGIBLE probe's device
- * (`snap.currentGpu`, selected and rated main-side by the shared rules) is the freshest truth
- * and wins; a result from another computer has only what its own check recorded. `name` and
- * `mb` always describe one device. The rating never comes from the memory figure alone: the
- * `useful` flag main computed for the live device, else the shared `isUsefulDevice` rule over
- * the recorded name + memory — so an integrated device reporting 16 GB of shared memory is
- * "Integrated", never "Usable".
+ * (PR #303 audit M8 / N1). For the computer the app is on, the ELIGIBLE probe's DISPLAY device
+ * (`snap.graphicsDevice`, selected and rated main-side by the shared rules: the budget device
+ * when there is one, else the largest card that does not look integrated even under the gate,
+ * else the integrated one — owner decision 2026-09-07: the tile names the real card and its
+ * memory regardless of the gate) is the freshest truth and wins; a result from another computer
+ * has only what its own check recorded. `name` and `mb` always describe one device. The rating
+ * never comes from the memory figure alone: the `useful` flag main computed for the live device,
+ * else the shared `isUsefulDevice` rule over the recorded name + memory — so an integrated device
+ * reporting 16 GB of shared memory is "Integrated", never "Usable", and a 6 GB laptop card at
+ * 5,994 MiB is named with "Small", never hidden behind "no usable graphics card".
  */
 type GraphicsFigure =
   | { kind: 'pending' }
@@ -162,7 +165,10 @@ type GraphicsFigure =
 
 function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot | null, gpuOff: boolean): GraphicsFigure {
   if (!bench) return { kind: 'pending' }
-  const live = snap?.currentMachine ? snap.currentGpu : null
+  // The display device is a superset of the budget device (`currentGpu`): equal when a usable
+  // card exists, the small or integrated one otherwise, null in the same off/no-probe cases. The
+  // `??` only covers a snapshot from a stub or bridge that predates the field.
+  const live = snap?.currentMachine ? (snap.graphicsDevice ?? snap.currentGpu) : null
   // With the GPU switched off or auto-disabled the snapshot names no device for the next start,
   // and a card the RESULT recorded while the GPU was on must not fill the tile in its place: the
   // verdict, the ★ and the "Your model" row already say RAM for that start (issue #325 (1)).
@@ -642,15 +648,16 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const graphics = graphicsFigure(bench, snap, gpuOff)
 
   /** Graphics memory decides what runs accelerated, so it stands beside RAM as its own
-   *  tile. One figure (`graphicsFigure`): `snapshot.currentGpu` — the BUDGET device for the
-   *  next start, the same card the Models ★ goes by, for the computer the app is on right now
-   *  — else what the result recorded; rated by the shared "usable" rule. Never the stored
-   *  probe's first device: on a hybrid laptop that is as often the iGPU's shared-RAM figure
-   *  (PR #308 audit decision 9). A device rated not usable is named honestly — an integrated
-   *  one (a recorded name) by its shared memory, a small discrete one by its size — and never
-   *  called "Usable"; a foreign result that never recorded the field says so; with the GPU
-   *  switched off or auto-disabled and no card for the next start, the copy names the cause
-   *  instead of a missing card. */
+   *  tile. One figure (`graphicsFigure`): `snapshot.graphicsDevice` — the card to NAME for the
+   *  computer the app is on right now: the budget device (the same card the Models ★ goes by)
+   *  when there is one, else the largest discrete-looking card even under the gate, else the
+   *  integrated one (owner decision 2026-09-07) — else what the result recorded; rated by the
+   *  shared "usable" rule. Never the stored probe's first device: on a hybrid laptop that is as
+   *  often the iGPU's shared-RAM figure (PR #308 audit decision 9). A device rated not usable
+   *  is named honestly — an integrated one by its shared memory, a small discrete one by its
+   *  size — and never called "Usable"; a foreign result that never recorded the field says so;
+   *  with the GPU switched off or auto-disabled and no card for the next start, the copy names
+   *  the cause instead of a missing card. */
   function graphicsTile(): JSX.Element {
     if (graphics.kind !== 'device') {
       const [sub, pill] =
