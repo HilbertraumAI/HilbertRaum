@@ -13,8 +13,10 @@ const args = Object.fromEntries(
     return acc
   }, [])
 )
-const EXE = 'K:\\runtime\\llama.cpp\\win\\llama-server.exe'
-const DRIVE_ROOT = 'K:\\'
+// Drive root from --drive <root> or HILBERTRAUM_DRIVE_ROOT — never hardcoded (CLAUDE.md).
+const DRIVE_ROOT = String(args.drive ?? process.env.HILBERTRAUM_DRIVE_ROOT ?? '').replace(/[\\/]*$/, '') + '\\'
+if (DRIVE_ROOT.length < 3) throw new Error('pass --drive <root> or set HILBERTRAUM_DRIVE_ROOT')
+const EXE = path.join(DRIVE_ROOT, 'runtime', 'llama.cpp', 'win', 'llama-server.exe')
 const leg = args.leg, variant = args.variant, modelPath = args.model, modelId = args.id
 const ctx = Number(args.ctx ?? 8192)
 const outDir = args.out
