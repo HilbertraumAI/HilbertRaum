@@ -1015,7 +1015,7 @@ guess.
 | SD2 | fixed P7 `566a1043` | A module-level memo keyed on the DB handle and the unlock epoch allows exactly one scheduled attempt per unlock. | `first-benchmark-scheduler.test.ts` "a failed new-computer run is not retried in the session; the next session re-checks and runs"; "a successful MANUAL run ends the re-check…" |
 | TH1 | fixed P8 `4baec2be` | The legacy-blob test's fixed 300 ms sleep replaced by an awaited scheduler outcome. | `performance-ipc.test.ts` (legacy-blob case) |
 | TH2 | fixed P8 `4baec2be` | `closePerformanceFixture()` tears down every DB/root/observer the performance test helper registered; a leak check showed zero growth across a targeted run. The other suites' ~2,500 leaked roots per full run (#335, 2026-09-06) are now recorded and removed by the harness itself — `tests/setup-temp-roots.ts` per file, `tests/global-temp-roots.ts` after the forks exit; design in `tests/helpers/temp-roots.ts`, rule in CONTRIBUTING.md. | `tests/helpers/performance-fixture.ts`; `tests/unit/temp-roots.test.ts` |
-| HW1 | follow-up issue #330 | Physical encrypted-drive A→B→A move, including an upgraded workspace with no history yet. Not attempted (§4). | — |
+| HW1 | verified 2026-09-07 (issue #330) | Physical encrypted-drive A→B→A move on two real computers (i9-14900K / RTX 3080 Ti and i7-8700 / GTX 1070 Ti, one exFAT SSD) for a fresh workspace AND an upgraded one created by 0.1.57 (keyed `lastBenchmark`, no history): new-computer background run on B, instant restore on A, the outgoing result backfilled, later samples update the headline and the matching entry only. Side findings are not persistence defects (§4). | `eval/results/hardware/330-round-trip-20260907/` (`00-protocol.md` + every report and log) |
 | HW2 | follow-up issue #329 | Same gap as T9: no captured real partial-offload load log. | — |
 | HW3 | performed P10 (live, CDP-driven, at `07dd9085`); the blocked legs are follow-up issue #331 | Passed in the dev app: EN/DE layout at 880/1024/1280 px in both themes with no horizontal overflow, the German rail label at font weight 600 on one line, the keyboard focus order (a real Tab walk in visual order, no trap) and Enter activation. The one failure it found — focus lost after an own run — is the HW3-focus row below (fixed P10). Not exercisable on the review box (no screen reader, no runtime, a first run that finishes in ~120 ms): announcements with assistive technology, a first-run check observed while mounted, a foreground chat during a check, a model load or file verification finishing while mounted. | `GermanSmoke.test.tsx` "PerformanceScreen renders German (PR #303 audit T6)"; `rail-labels.test.ts`; `PerformanceScreen.test.tsx` describe "PerformanceScreen: focus survives the run" |
 | HW4 | follow-up issue #332 | Hybrid `[iGPU, dGPU]` Vulkan order and Apple Silicon unified memory: synthetic fixtures only. | — |
@@ -1125,9 +1125,16 @@ commit references, and added the changelog entry.
 
 ### §4 Not verified here
 
-- **HW1** (follow-up issue #330): a physical encrypted-drive A→B→A move, including an
-  upgraded workspace with no history yet. P2's persistence repair is exercised only by
-  synthetic `machineKey` fixtures.
+- **HW1** — **verified 2026-09-07** (issue #330): the physical A→B→A move ran on two real
+  computers with one encrypted exFAT SSD, for a fresh workspace and for an upgraded one created
+  by 0.1.57 (keyed `lastBenchmark`, no history). Every acceptance box passed; the step record and
+  evidence live in `eval/results/hardware/330-round-trip-20260907/00-protocol.md`. Side findings
+  from the run, none of them a persistence defect: the unlock-time GPU probe can race the
+  auto-start and cache an empty answer for the session (#380); the Copy report's live "next
+  start" line under an "Another computer" heading (#381); a fresh workspace hashing every weight
+  before a model can be chosen (#382); `gpuAutoDisabled` is workspace-wide, not machine-stamped;
+  a USB bus reset drops the decrypted WAL and the next unlock simply restores again
+  (`known-limitations.md` "Performance screen and per-computer history").
 - **HW2 / T9** (follow-up issue #329): a captured real partial-offload load log from the
   pinned build. Every `_Host`/verbosity-4 fixture in the suite (`placement-parser.test.ts`,
   `placement-wiring.test.ts`) is handwritten from ggml's naming convention, not a captured log.

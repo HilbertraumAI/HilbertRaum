@@ -1,0 +1,30 @@
+# U-A2 — pasted by the machine owner 2026-09-07 from HilbertRaum 0.1.59 on computer A (launched via Start HilbertRaum.cmd), after unlocking workspace U back on A. First the Performance screen right after the unlock (the "Geprüft" line and the on-screen "Andere Computer" list, transcribed by the owner), then the Copy report taken after a later manual check at 22:37:59.
+
+# On screen right after the unlock:
+Geprüft 7.9.2026, 18:11:41
+
+Andere Computer, an denen dieses Laufwerk benutzt wurde
+Jeder Computer behält sein eigenes Ergebnis, damit das empfohlene Modell zum Gerät passt, nicht zum Laufwerk.
+
+22,2 Token / Sek. mit Qwen3.5 9B (UD-Q4_K_XL)
+Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz, 31,9 GB RAM, 8,1 GB VRAM · 7.9.2026 · über 64 Token
+
+# Copy report after the manual check (a NEW run on A):
+Dieser Computer
+Geschwindigkeit: 2,7 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 63,7 GB RAM
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+Grafikspeicher: Keine
+Laufwerk: 313,7 MB/s lesen
+Zugewiesenes Profil: BALANCED
+Empfohlen für den nächsten Start: Qwen3.6 27B Q4_K_M (Arbeitsspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.6 27B Q4_K_M
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 22:37:59
+- Die Textgenerierung war mit dem geladenen Modell (qwen3.5-9b-ud-q4kxl) sehr langsam, daher wurde das zugewiesene Profil eine Stufe herabgesetzt. Wenn dieses Modell größer ist als das empfohlene, starte das empfohlene Modell und führe den Benchmark erneut aus.
+- Die Textgenerierung lag mit dem geladenen Modell (qwen3.5-9b-ud-q4kxl) bei etwa 2.7 Tokens pro Sekunde, daher wurde die Modell-Empfehlung eine Größenstufe herabgesetzt, damit Antworten auf diesem Computer schnell bleiben.
+
+# Reading:
+# - UPGRADE BACKFILL (M4) + RESTORE: "Geprüft 18:11:41" is the 0.1.57 run — the workspace held it only in lastBenchmark when it left A; the i7 unlock replaced the headline, and this unlock restored it, so the outgoing result had been filed into the history first. Log: "Drive is back on a known computer: restored its benchmark result" (PRO / 27B) at 20:35:25Z and again at 20:36:37Z (two sessions, see the log), no run at either unlock.
+# - The i7 row (22.2 tok/s, 8.1 GB VRAM, 22:24) is untouched by A's later run at 22:37:59, which replaced A's own headline and entry (BALANCED, 2.7 tok/s, its own two warnings).
+# - The 2.7 tok/s figure and "Grafikspeicher: Keine" are A's degraded session, not a persistence effect: see U-A2.log.txt — the first session's auto-start failed (prefetch read failure + llama-server exit 0xC0000020 = STATUS_INVALID_FILE_FOR_SECTION, the model file could not be mapped), the second session's probe was empty again (auto-start race) and the 9B genuinely ran slowly. Followed up separately.

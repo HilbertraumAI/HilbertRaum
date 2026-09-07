@@ -1,0 +1,24 @@
+# F-A3 — pasted by the machine owner 2026-09-07 from HilbertRaum 0.1.59 on computer A (a NEW session at 19:09, again started by double-clicking the exe), Performance screen. Before "Erneut prüfen" the screen read: Geprüft 7.9.2026, 18:15:01 · Laufwerk: Schnell, 240,7 MB/s lesen, "Aus einem Modellstart am 7.9.2026, 6,0 GB gelesen" (the auto-start's model-load sample of this session, folded into the restored headline). After "Erneut prüfen" the screen said it currently sees no graphics card and that models run on the processor; the Copy report and the on-screen "Andere Computer" list followed:
+
+Dieser Computer
+Geschwindigkeit: 99,7 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 63,7 GB RAM
+CPU: Intel(R) Core(TM) i9-14900K (32 Kerne)
+Grafikspeicher: Keine
+Laufwerk: 240,7 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.8 27B UD-Q5_K_M (Arbeitsspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.8 27B UD-Q5_K_M
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 19:11:29
+
+Andere Computer, an denen dieses Laufwerk benutzt wurde
+Jeder Computer behält sein eigenes Ergebnis, damit das empfohlene Modell zum Gerät passt, nicht zum Laufwerk.
+
+22 Token / Sek. mit Qwen3.5 9B (UD-Q4_K_XL)
+Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz, 31,9 GB RAM · 7.9.2026 · über 64 Token
+
+# Reading:
+# - LATER SAMPLE on A: "Last run" advanced 18:15:01 → 19:11:29 and the headline is A's new run (99.7 tok/s, 240.7 MB/s, PRO). The i7's row is unchanged (22 tok/s with the 9B, i7-8700, 31.9 GB, 7.9.2026, over 64 tokens) — the other computer's entry was not disturbed. The on-screen row shows speed/model/cpu/ram/date only; F-B2 on the i7 will show A's updated row from the other side.
+# - "Grafikspeicher: Keine" + RAM-basis pick + the on-screen "no graphics card" notice: this session's device probe (re-run by the manual check at 19:11, with the model loaded and idle) again returned no devices, while the 9B decodes at 99.7 tok/s — GPU-class speed, so llama-server itself is on the card. Second direct-launch session with an empty probe; the one launcher-started session read "gpu". Tracked in the protocol's findings.
+# - "Qwen3.8 27B UD-Q5_K_M" as the check-time pick: the catalogue of this direct-launch session is the exe's bundled manifest set, not the drive's.

@@ -1,0 +1,27 @@
+# F-A1 — Settings → Diagnostics → log export, pasted by the machine owner 2026-09-07 (HilbertRaum 0.1.59 on computer A, workspace F, from creation to the clean quit). Timestamps are UTC (local = +2 h).
+
+2026-09-07T16:13:35.173Z [INFO] Workspace resolved {"root":"H:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-07T16:13:35.174Z [INFO] Workspace state {"state":"uninitialized","mode":null,"plaintextAllowed":false,"encryptionRequired":true}
+2026-09-07T16:13:35.175Z [INFO] Model manifests directory {"manifestsDir":"H:\\model-manifests"}
+2026-09-07T16:13:35.194Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-07T16:13:35.194Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-07T16:13:35.194Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-07T16:13:35.195Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-07T16:13:35.195Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-07T16:13:35.261Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-07T16:13:42.279Z [INFO] Workspace created {"mode":"encrypted"}
+2026-09-07T16:13:42.282Z [INFO] First run: benchmarking hardware in the background once the model start settles
+2026-09-07T16:13:42.299Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-07T16:13:42.299Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-07T16:13:42.665Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-9b-ud-q4kxl","ramGb":63.7}
+2026-09-07T16:13:53.399Z [INFO] Use model (select + start) {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T16:14:53.154Z [INFO] Model checksum hashed {"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":59736,"ok":true}
+2026-09-07T16:14:53.156Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-07T16:14:53.157Z [INFO] Model prefetch skipped {"modelId":"qwen3.5-9b-ud-q4kxl","detail":"weights just hashed — page-cache-warm"}
+2026-09-07T16:14:58.201Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-07T16:15:00.148Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-07T16:15:01.154Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056,"ms":21411,"ok":true}
+2026-09-07T16:15:01.239Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-9b-ud-q4kxl","ramGb":63.7}
+2026-09-07T16:15:12.314Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128,"ms":11159,"ok":true}
+
+# Reading: "First run: …" at workspace creation; with no model to wait for, the measurement ran at once (Benchmark complete 16:13:42.665Z, 0.4 s later, drive leg only). The second "Benchmark complete" at 16:15:01Z is the run that followed the owner's "Start … and measure" (the 9B start settled at 16:15:00Z), now with the speed leg (98.4 tok/s). No "Filed the last benchmark result …" line, as required (no same-machine seed on a fresh workspace).

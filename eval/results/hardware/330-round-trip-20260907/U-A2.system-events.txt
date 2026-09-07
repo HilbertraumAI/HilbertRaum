@@ -1,0 +1,13 @@
+# Windows System event log on computer A around the U-A2 first session (local time), captured 2026-09-07 ~22:50 with Get-WinEvent.
+# The USB SSD (disk 4, SanDisk Extreme, UASP) had a device reset with retried I/Os, then exFAT lost a delayed write on the
+# unlocked workspace's WAL. The app's own log at the same instant: "Model prefetch failed" and llama-server exit 0xC0000020
+# (STATUS_INVALID_FILE_FOR_SECTION: the weight file could not be mapped). `fsutil dirty query H:` afterwards: "Volume H: ist fehlerhaft"
+# (dirty bit set). The first session's restore write was lost (the second unlock logged the restore again); the second session's
+# writes persisted.
+
+22:35:41 UASPStor 129 (Warnung): Ein Zurücksetzen auf Gerät "\Device\RaidPort13" wurde ausgegeben.
+22:35:41 disk 153 (Warnung) x19: Der E/A-Vorgang an der logischen Blockadresse "0x..." für den Datenträger "4" (PDO-Name: \Device\000004ec) wurde wiederholt.
+         (LBAs 0x157a000, 0x157a400, 0x49bd000, 0xc832c000 … 0xc832fc00)
+22:35:45 exfat 50 (Warnung): {Datenverlust beim Schreiben} Nicht alle Daten für Datei "H:\workspace\hilbertraum.sqlite-wal" wurden gespeichert.
+         Die Daten gingen verloren. Mögliche Ursachen sind Computerhardware oder die Netzwerkverbindung. Geben Sie einen anderen Dateipfad an.
+22:35:45 Application Popup 26: Anwendungspopup: Windows - Fehler beim verzögerten Schreibvorgang: Exception Processing Message 0xc0000222 - Unexpected parameters
