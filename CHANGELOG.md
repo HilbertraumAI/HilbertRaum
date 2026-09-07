@@ -158,6 +158,27 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A model that cannot be loaded no longer switches the whole app to compatibility mode.** When
+  one model failed to start on the graphics card, the app used to conclude the graphics card was
+  the problem and run every other model — and the next translation start — on the processor until
+  you pressed "Try GPU again". It now checks whether the same model also fails on the processor:
+  if it does, the model is the problem, nothing is disabled, and a note names the model while its
+  replies are simulated. A real graphics-card fault still switches to compatibility mode as before.
+- **Models made of several files are verified completely.** A model whose weight comes as a set of
+  files can now declare every file with its own checksum, and the app treats the model as present
+  only when every file is there and verifies; the drive check, the download planner and the
+  progress figures count all of them. A manifest that names the first file of such a set without
+  the rest is refused instead of being shown as ready.
+- **The Family filter on the AI Model page only offers families you can actually see.** Its list
+  now follows the current view (On this drive / Browse models) and the Task filter, a family you
+  had selected stays visible and marked when the view no longer contains it, the empty message
+  says why and how many Browse models would show, and one click resets just the family without
+  losing your search or task.
+- **A model download survives reloading the app window.** Reloading the window while a download
+  runs re-attaches the progress and Cancel to the right model, a failed or unverifiable download
+  you had not dismissed comes back with its message and Retry/Dismiss, one you had dismissed stays
+  dismissed, and Retry is no longer offered for a model that is already on the drive. Restarting
+  the app itself still forgets the download (the partial file resumes on the next Download click).
 - **Small knowledge-pack polish.** The packs panel shows each archive's language by name ("German")
   instead of a three-letter code; while one pack is being enabled, disabled or removed, the other
   rows' buttons stay usable; a pack whose file is missing can be disabled, not only removed; and
