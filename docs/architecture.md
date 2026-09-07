@@ -3428,7 +3428,7 @@ minutes: the hash result is discarded, nothing is renamed into place, and a two-
 (vision) job stops before its next file (full-audit 2026-07-10 BE-4; previously a cancel
 there was silently dropped). One download at a time; jobs are
 in-memory, polled over `downloads:start/get/cancel` (the Phase-4 import precedent — no new
-event channels). On a VERIFIED success the checksum cache is **primed** with the hash just
+event channels; since #314 `downloads:list`/`downloads:dismiss` let a reloaded renderer re-attach). On a VERIFIED success the checksum cache is **primed** with the hash just
 computed (`models.ts` `primeChecksum`, keyed by the file's size+mtime) so the Models screen's
 install-state refresh reports `installed` WITHOUT re-hashing the multi-GB weight — this removed the
 invisible post-download "Checking…" gap where the card briefly looked un-downloaded (2026-07-01); a

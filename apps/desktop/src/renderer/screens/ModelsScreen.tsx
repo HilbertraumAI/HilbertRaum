@@ -29,6 +29,7 @@ import type {
   PolicyStatus,
   RuntimeStatus
 } from '@shared/types'
+import { isUnresolvedDownloadResult } from '@shared/downloads'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 
 // "AI Model" screen (guidelines §2/§3 principle: singular mental model).
@@ -141,22 +142,12 @@ let rememberedJobName: { jobId: string; name: string } | null = null
 /**
  * A terminal result the user dismissed, by job id (F2/B1): it must not come back on a refresh,
  * a re-render, or a remount within this renderer session. Module-scoped for the same reason
- * `rememberedJob` is — leaving and re-entering the screen remounts the component. Recovery after
- * a renderer RELOAD (which recreates this module) is a separate lifecycle, issue I5.
+ * `rememberedJob` is — leaving and re-entering the screen remounts the component. A renderer
+ * RELOAD recreates this module, so Dismiss also tells the main process (#314).
  */
 let dismissedJobId: string | null = null
 
 const JOB_LIVE: ReadonlySet<DownloadJob['status']> = new Set(['queued', 'downloading', 'verifying'])
-
-/**
- * A finished download the user still has to act on: it failed, or it completed but could not be
- * verified. These keep the independent download panel (named, with Retry / Dismiss) so a search,
- * a task/family/view filter or a collapsed group cannot swallow the outcome. A VERIFIED `done`
- * and a `cancelled` job need no panel — the row itself carries their state (existing behaviour).
- */
-function isUnresolvedResult(j: DownloadJob | null): boolean {
-  return j != null && (j.status === 'failed' || (j.status === 'done' && j.unverified === true))
-}
 
 // The engine download (like the model download) outlives leaving the screen.
 let rememberedEngineJob: EngineDownloadJob | null = null
@@ -271,6 +262,30 @@ export function ModelsScreen(): JSX.Element {
   useEffect(() => {
     // RD-5: the reject can land after unmount too — same FE-4 guard as every other setState here.
     refresh().catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
+  }, [])
+
+  // #314 — adopt an existing download after a renderer RELOAD, which wipes this module's memory.
+  // Ordinary navigation still wins (`rememberedJob` is set, so this does nothing); only an empty
+  // memory asks the main process which jobs are still the user's problem — the live one, plus the
+  // undismissed failed / unverified results. Seeding `job` is all it takes: the poll, the
+  // name-remembering effect and the panel derivation then run exactly as if nothing was lost.
+  useEffect(() => {
+    if (rememberedJob) return
+    // Promise.resolve + `?.`: an older preload or a partial test bridge resolves nothing.
+    Promise.resolve(window.api.listDownloadJobs?.())
+      .then((jobs) => {
+        if (!mountedRef.current || !Array.isArray(jobs) || jobs.length === 0) return
+        // A download the user started while this read was in flight is newer — never overwrite it.
+        if (jobRef.current) return
+        const unresolved = jobs.filter(isUnresolvedDownloadResult)
+        const adopted =
+          jobs.find((j) => JOB_LIVE.has(j.status)) ?? unresolved[unresolved.length - 1] ?? null
+        if (!adopted) return
+        jobRef.current = adopted
+        rememberedJob = adopted
+        setJob(adopted)
+      })
+      .catch(() => undefined)
   }, [])
 
   // Stream first-run verification progress (the cold-hash bar). The terminal `done` event
@@ -506,7 +521,9 @@ export function ModelsScreen(): JSX.Element {
   // AND an unresolved terminal result, until the user dismisses it, a new job is accepted, or the
   // download ends verified/cancelled. Derived from `job` alone; no separate copy of the job.
   const panelJob =
-    job && job.jobId !== dismissedJob && (JOB_LIVE.has(job.status) || isUnresolvedResult(job))
+    job &&
+    job.jobId !== dismissedJob &&
+    (JOB_LIVE.has(job.status) || isUnresolvedDownloadResult(job))
       ? job
       : null
   const panelLive = panelJob != null && JOB_LIVE.has(panelJob.status)
@@ -544,9 +561,15 @@ export function ModelsScreen(): JSX.Element {
   const retryTarget =
     panelJob && !panelLive ? models.find((m) => m.id === panelJob.modelId) ?? null : null
   const retryWithdrawn = retryTarget?.download?.withdrawn ?? null
+  // #314: the refresh reports the weight already on the drive, so Retry would offer to re-fetch
+  // gigabytes the user has. Its OWN case, not `retryUnavailable` — that copy ("no longer offered
+  // here, look for it in the library") would be plainly wrong about an installed model. It also
+  // outranks the withdrawn explanation: a copy on the drive is what the user actually asked about.
+  const retryInstalled = retryTarget != null && isModelInstalled(retryTarget)
   const retryUnavailable = retryTarget == null || retryTarget.download == null
   const retryBlockedReason =
     downloadsBlockedReason ??
+    (retryInstalled ? t('models.download.retryInstalled') : null) ??
     (retryWithdrawn != null ? t('models.download.withdrawn', { reason: retryWithdrawn }) : null) ??
     (retryUnavailable ? t('models.download.retryUnavailable') : null) ??
     // The same one-at-a-time gate the rows use; a retained result never widens it (see below).
@@ -1256,6 +1279,11 @@ export function ModelsScreen(): JSX.Element {
                   onClick={() => {
                     dismissedJobId = panelJob.jobId
                     setDismissedJob(panelJob.jobId)
+                    // #314: tell the main process too, so a renderer reload does not resurrect it.
+                    // Fire-and-forget — the in-session hiding above is already done.
+                    void Promise.resolve(window.api.dismissDownloadJob?.(panelJob.jobId)).catch(
+                      () => undefined
+                    )
                   }}
                 >
                   {t('models.download.dismiss')}

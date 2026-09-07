@@ -1556,15 +1556,16 @@ screen now keeps the active chat model pinned above a compact library of alterna
   panel owns a job the row does not repeat its progress or result. **Retry** resolves the exact
   variant id and reuses the existing confirmation with that variant's license link and a RESET
   acknowledgement; it is disabled with the reason when downloads are blocked by policy or the
-  Settings toggle, when the source was withdrawn (#196), or when the entry no longer offers a
-  download. **Dismiss** is remembered by job id — the result does not return on a refresh, a
+  Settings toggle, when the refresh reports the model already on this drive (#314), when the
+  source was withdrawn (#196), or when the entry no longer offers a download. **Dismiss** is remembered by job id — the result does not return on a refresh, a
   re-render or a re-entry of the screen — and the row's own Resume/verification affordances take
   over again. The panel is replaced only by an ACCEPTED new job (a cancelled dialog, a rejected
   start and an IPC rejection all keep the previous result) and disappears on a verified completion
   or a cancellation, exactly as before. A retained result is not a live job: `JOB_LIVE` remains
-  the only gate on other models' Download/Use. Recovering a download whose id is unknown after a
-  renderer reload is out of scope here (follow-up I5); ordinary screen navigation is covered by
-  the existing remembered-job mechanism.
+  the only gate on other models' Download/Use. A renderer reload, which wipes the remembered job
+  entirely, is recovered on mount (#314): the screen asks the main process which downloads still
+  need the user — adopting the live job, else the most recent unresolved result — and **Dismiss**
+  tells the main process too, so a dismissal made before the reload stays dismissed.
 
 Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `lib/modelAvailability.ts`
 (the pure `isModelInstalled` / `isModelOnDrive` / `isModelRunnableHere` / `orderPickerModels`, split

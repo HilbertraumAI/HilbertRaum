@@ -77,7 +77,11 @@ function stub(opts: {
     getPolicy: vi.fn(async () => opts.policy ?? policyStatus({ downloadsAllowed: true, settingOn: true })),
     getAppStatus: vi.fn(async () => appStatus),
     downloadModel: (opts.downloadModel ?? vi.fn()),
-    getDownloadJob: (opts.getDownloadJob ?? vi.fn())
+    getDownloadJob: (opts.getDownloadJob ?? vi.fn()),
+    // #314: the mount-time adopt read and the main-side dismissal. Idle by default — these
+    // tests exercise the ordinary lifecycle, where the screen's own memory answers first.
+    listDownloadJobs: vi.fn(async () => []),
+    dismissDownloadJob: vi.fn(async () => undefined)
   })
 }
 
@@ -1181,14 +1185,20 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     getDownloadJob?: (jobId: string) => Promise<DownloadJob>
     listModels?: () => Promise<ModelInfo[]>
     useModel?: ReturnType<typeof vi.fn>
+    /** #314: what the MAIN process still holds — what a reloaded screen adopts on mount. */
+    listDownloadJobs?: () => Promise<DownloadJob[]>
   }): {
     listModels: ReturnType<typeof vi.fn>
     downloadModel: ReturnType<typeof vi.fn>
     getDownloadJob: ReturnType<typeof vi.fn>
+    listDownloadJobs: ReturnType<typeof vi.fn>
+    dismissDownloadJob: ReturnType<typeof vi.fn>
   } {
     const listModels = vi.fn(opts.listModels ?? (async () => opts.models()))
     const downloadModel = vi.fn(opts.downloadModel ?? (async () => opts.job!()))
     const getDownloadJob = vi.fn(opts.getDownloadJob ?? (async () => opts.job!()))
+    const listDownloadJobs = vi.fn(opts.listDownloadJobs ?? (async () => []))
+    const dismissDownloadJob = vi.fn(async () => undefined)
     stubApi({
       listModels,
       getSettings: vi.fn(async () => ({
@@ -1204,9 +1214,11 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       onModelVerifyProgress: vi.fn(() => () => {}),
       downloadModel,
       getDownloadJob,
+      listDownloadJobs,
+      dismissDownloadJob,
       ...(opts.useModel ? { useModel: opts.useModel } : {})
     })
-    return { listModels, downloadModel, getDownloadJob }
+    return { listModels, downloadModel, getDownloadJob, listDownloadJobs, dismissDownloadJob }
   }
 
   const panel = (): ReturnType<typeof within> =>
@@ -1853,6 +1865,160 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
     }
   })
+
+  // ---- A renderer reload (#314) -----------------------------------------------------------------
+
+  describe('#314 — a download survives a renderer reload', () => {
+    /**
+     * A renderer reload as far as this screen can tell: the component goes away AND the module
+     * memory it normally recovers from is recreated empty. Everything the screen shows afterwards
+     * has to come back from the main process, through `listDownloadJobs`.
+     */
+    function reload(view: ReturnType<typeof render>): void {
+      view.unmount()
+      __resetModelsScreenMemoryForTests()
+    }
+
+    it('re-attaches progress and Cancel to the right model when the download is still running', async () => {
+      const user = userEvent.setup()
+      const entry = variant('reload-live', 'Reload live Q4')
+      const bystander = model({
+        id: 'reload-bystander',
+        displayName: 'Bystander model',
+        family: 'gemma'
+      })
+      const live = jobOf('reload-live-job', entry.id, { receivedBytes: 500, totalBytes: 1000 })
+      let mainSide: DownloadJob[] = []
+      const api = stubLive({
+        models: () => [entry, bystander],
+        job: () => live,
+        listDownloadJobs: async () => mainSide
+      })
+
+      const view = render(<ModelsScreen />)
+      await screen.findByText(entry.displayName)
+      await user.click(within(cardFor(entry.displayName)).getByRole('button', { name: 'Download' }))
+      await user.click(screen.getByRole('button', { name: 'Start download' }))
+      await screen.findByRole('region', { name: REGION })
+
+      mainSide = [live] // what the main process is still holding when the page reloads
+      reload(view)
+
+      render(<ModelsScreen />)
+      await screen.findByRole('region', { name: REGION })
+      expect(panel().getByText(entry.displayName)).toBeVisible()
+      expect(panel().queryByText(bystander.displayName)).not.toBeInTheDocument()
+      expect(panel().getByRole('button', { name: t('en', 'models.download.cancel') })).toBeEnabled()
+      // …and the poll resumes against the adopted id, not a remembered one.
+      await waitFor(() => expect(api.getDownloadJob).toHaveBeenCalledWith(live.jobId), {
+        timeout: 3000
+      })
+    })
+
+    it('shows an undismissed failed result again — named, with its error and gated actions', async () => {
+      const user = userEvent.setup()
+      const entry = variant('reload-failed', 'Reload failed Q4')
+      let current = jobOf('reload-failed-job', entry.id)
+      let mainSide: DownloadJob[] = []
+      stubLive({ models: () => [entry], job: () => current, listDownloadJobs: async () => mainSide })
+
+      const view = render(<ModelsScreen />)
+      await user.click(await screen.findByRole('button', { name: 'Download' }))
+      await user.click(screen.getByRole('button', { name: 'Start download' }))
+      current = { ...current, status: 'failed', error: 'connection reset' }
+      expect(
+        await panel().findByText('connection reset', undefined, { timeout: 3000 })
+      ).toBeVisible()
+
+      mainSide = [current]
+      reload(view)
+
+      render(<ModelsScreen />)
+      await screen.findByRole('region', { name: REGION })
+      expect(panel().getByText(entry.displayName)).toBeVisible()
+      expect(panel().getByText('connection reset')).toBeVisible()
+      expect(
+        panel().getByText(t('en', 'models.download.failed', { name: entry.displayName }))
+      ).toBeVisible()
+      expect(panel().getByRole('button', { name: RETRY })).toBeEnabled()
+      expect(panel().getByRole('button', { name: DISMISS })).toBeEnabled()
+    })
+
+    it('never resurrects a result the user dismissed before the reload', async () => {
+      const user = userEvent.setup()
+      const entry = variant('reload-dismissed', 'Reload dismissed Q4')
+      let current = jobOf('reload-dismissed-job', entry.id)
+      let mainSide: DownloadJob[] = []
+      const api = stubLive({
+        models: () => [entry],
+        job: () => current,
+        listDownloadJobs: async () => mainSide
+      })
+
+      const view = render(<ModelsScreen />)
+      await user.click(await screen.findByRole('button', { name: 'Download' }))
+      await user.click(screen.getByRole('button', { name: 'Start download' }))
+      current = { ...current, status: 'failed', error: 'dismissed for good' }
+      mainSide = [current]
+      await user.click(await panel().findByRole('button', { name: DISMISS }, { timeout: 3000 }))
+      // Dismiss told the MAIN process too — which is why its list comes back empty.
+      expect(api.dismissDownloadJob).toHaveBeenCalledWith(current.jobId)
+      mainSide = []
+
+      reload(view)
+      render(<ModelsScreen />)
+      await screen.findByText(entry.displayName)
+      expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument()
+    })
+
+    it.each(['verified' as const, 'cancelled' as const])(
+      'shows no panel after the reload when the download ended %s',
+      async (how) => {
+        const user = userEvent.setup()
+        const entry = variant(`reload-${how}`, 'Reload settled Q4')
+        let current = jobOf(`reload-settled-${how}-job`, entry.id)
+        // A verified `done` and a `cancelled` job are exactly what `downloads:list` withholds.
+        stubLive({ models: () => [entry], job: () => current, listDownloadJobs: async () => [] })
+
+        const view = render(<ModelsScreen />)
+        await user.click(await screen.findByRole('button', { name: 'Download' }))
+        await user.click(screen.getByRole('button', { name: 'Start download' }))
+        current =
+          how === 'verified'
+            ? { ...current, status: 'done', receivedBytes: 1000 }
+            : { ...current, status: 'cancelled' }
+        await waitFor(
+          () => expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument(),
+          { timeout: 3000 }
+        )
+
+        reload(view)
+        render(<ModelsScreen />)
+        await screen.findByText(entry.displayName)
+        expect(screen.queryByRole('region', { name: REGION })).not.toBeInTheDocument()
+      }
+    )
+
+    it('disables Retry and says the model is already here when the refresh reports it installed', async () => {
+      const user = userEvent.setup()
+      let entry = variant('retry-installed', 'Retry installed Q4')
+      let current = jobOf('retry-installed-job', entry.id)
+      stubLive({ models: () => [entry], job: () => current })
+
+      render(<ModelsScreen />)
+      await user.click(await screen.findByRole('button', { name: 'Download' }))
+      await user.click(screen.getByRole('button', { name: 'Start download' }))
+      // The weight is on the drive after all (a repair, a copy, a parallel install) while the job
+      // itself still ended badly: re-downloading gigabytes would be pointless, not just risky.
+      entry = { ...entry, state: 'installed' }
+      current = { ...current, status: 'failed', error: 'verification failed' }
+
+      const retry = await panel().findByRole('button', { name: RETRY }, { timeout: 3000 })
+      expect(retry).toBeDisabled()
+      expect(retry).toHaveAttribute('title', t('en', 'models.download.retryInstalled'))
+      expect(panel().getByText(t('en', 'models.download.retryInstalled'))).toBeVisible()
+    })
+  })
 })
 
 describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)', () => {
@@ -1904,6 +2070,8 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
       getEngineStatus: vi.fn(async () => idleEngine),
       getRuntimeStatus: vi.fn(async () => idleRuntime),
       onModelVerifyProgress: vi.fn(() => () => {}),
+      // #314: the mount-time adopt read. Nothing is downloading in these cases.
+      listDownloadJobs: vi.fn(async () => []),
       ...(opts.useModel ? { useModel: opts.useModel } : {})
     })
     return { listModels }

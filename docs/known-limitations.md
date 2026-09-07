@@ -620,9 +620,12 @@ password recovery — are documented in
     and downloading in the same session leaves the (detection-only, never-blocking) guard
     installed, so the sanctioned download is logged as a remote-connection notice. Cosmetic;
     a restart re-derives the posture.
-  - **Download progress display is per-renderer-session.** The job itself runs in the main
-    process and survives navigation; after an app restart the progress card is gone but the kept
-    `.part` resumes on the next Download click.
+  - **Download job state is per-app-process.** The job runs in the main process and survives
+    navigation; since #314 it also survives a **renderer reload** — the screen re-attaches on
+    mount via `downloads:list` (the live job, or the most recent undismissed failed/unverified
+    result), and a dismissal made before the reload stays dismissed. An **app restart** still
+    loses every job: nothing about a job is persisted, so the progress card and a failure's text
+    are gone, and the kept `.part` resumes only on the next manual Download click.
   - **A manifest `size_bytes` more than ~25% below the real file truncates the download**
     (BUG dl-size-cap-2026-07-03). `size_bytes` feeds a disk-fill body cap; the cap is now
     drift-tolerant (`size_bytes` + headroom), but a grossly-understated size still trips it near

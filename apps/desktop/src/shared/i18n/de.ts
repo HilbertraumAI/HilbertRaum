@@ -1173,6 +1173,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.download.retryUnavailable':
     'Dieses Modell wird hier nicht mehr zum Download angeboten und kann aus diesem Ergebnis ' +
     'nicht erneut gestartet werden. Blende es aus oder suche das Modell in der Bibliothek.',
+  // #314: Die Aktualisierung hat die Datei bereits gefunden — ein erneuter Download wäre unnötig.
+  'models.download.retryInstalled': 'Bereits auf diesem Laufwerk.',
   // #196: Der Anbieter hat genau diese Datei entfernt.
   'models.download.withdrawn':
     'Nicht mehr zum Download verfügbar: Der Anbieter hat genau diese Datei entfernt ' +

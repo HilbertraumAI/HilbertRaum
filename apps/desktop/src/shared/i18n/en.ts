@@ -1142,6 +1142,8 @@ export const en = {
   'models.download.retryUnavailable':
     'This model is no longer offered for download here, so it cannot be retried from this ' +
     'result. Dismiss it, or look for the model in the library.',
+  // #314: the refresh found the weight in place — retrying would re-download what is already here.
+  'models.download.retryInstalled': 'Already on this drive.',
   // #196: the publisher removed the exact file this manifest pins. Sentence case, no blame,
   // and it says what still works — this card is read by someone deciding what to install.
   'models.download.withdrawn':

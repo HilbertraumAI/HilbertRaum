@@ -41,7 +41,9 @@ channel (Phase 15, `EVENTS.runtimeNotice`, preload `onRuntimeNotice`) +
 `updateConversationScope` (`chat:updateScope`, Phase 17 — replace/clear a documents
 conversation's "ask selected documents" scope) +
 `downloadModel`/`getDownloadJob`/`cancelDownload` (`downloads:start/get/cancel`, Phase 18 —
-the in-app model downloader, async-with-polling) +
+the in-app model downloader, async-with-polling) + `listDownloadJobs`/`dismissDownloadJob`
+(`downloads:list`/`downloads:dismiss`, issue #314 — reload recovery: which downloads still need
+the user, and dismissing one main-side) +
 `getAuditEvents(limit?, beforeId?)`/`exportAuditLog` (`audit:list`/`audit:export`, Phase 19 —
 the Diagnostics Activity panel, newest-first paging + save-dialog export) +
 `searchConversations` (`chat:search`, Phase 31) + `changeWorkspacePassword`
@@ -989,7 +991,12 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   `assertDownloadAllowed(gates)` (friendly, cause-specific refusals: policy vs. Settings),
   `partPath(dest)`, `DownloadManager({ fetchImpl?, log? })` with `start({rootPath, manifest,
   gates, licenseAccepted?, hashStore?}) → Promise<DownloadJob>`, `get(jobId)`, `cancel(jobId)`
-  (keeps the `.part`), `activeJob()`. One live job at a time; `.part` → verify → rename;
+  (keeps the `.part`), `activeJob()`, and (#314) `list() → DownloadJob[]` / `dismiss(jobId)`.
+  `list()` returns snapshots of the active job (if any) plus every retained terminal job that is
+  still UNRESOLVED and not dismissed, in creation order — never a verified `done`, never a
+  `cancelled` one. `dismiss(jobId)` records the id (unknown ids are a no-op) so `list()` stops
+  offering it; `pruneTerminalJobs()` drops a pruned job's dismissal record with it, so the set
+  stays bounded by `MAX_TERMINAL_JOBS`. One live job at a time; `.part` → verify → rename;
   mismatch deletes the partial; success invalidates the checksum-cache entry OF THAT FILE — a
   multi-file model (#310 `files:`, or a vision mmproj) invalidates each file's entry independently
   as its own task completes. A COMPLETE `.part`
@@ -1004,11 +1011,27 @@ defaults, four unified slots, ubatch 2048). Carried by exactly the seven decisio
   `downloadToFile → DownloadToFileResult { status, received, contentLength }` (append only on a
   real 206); `PlanModelOptions += { hashStore? }` (present multi-GB weights are not re-hashed).
 ✅ **IPC** `ipc/registerDownloadIpc.ts` — `downloadModel(modelId, {licenseAccepted?})`,
-  `getDownloadJob(jobId)`, `cancelDownload(jobId)`; gates re-read per call (policy from disk,
-  setting from the possibly-locked DB ⇒ off). Preload exposes all three. **Renderer:**
+  `getDownloadJob(jobId)`, `cancelDownload(jobId)`, and (#314) `listDownloadJobs() →
+  DownloadJob[]` (`downloads:list`) + `dismissDownloadJob(jobId)` (`downloads:dismiss`); gates
+  re-read per call (policy from disk, setting from the possibly-locked DB ⇒ off) — the last two
+  are ungated like `downloads:get`/`downloads:cancel`: read-only / in-memory, no network, no DB,
+  no unlock requirement. Preload exposes all five. **Renderer:**
   ModelsScreen Download button (missing/checksum_failed models with a manifest `download`
   block), gate explanations, the confirmation modal (size/license/URL + license-ack checkbox),
   progress + cancel via 1 s polling; SettingsScreen hint updated.
+✅ **`shared/downloads.ts` — `isUnresolvedDownloadResult(job)`** (#314): ONE predicate for
+  "this finished download is still the user's problem" — `failed`, or `done && unverified ===
+  true`. `DownloadManager.list()` filters by it and ModelsScreen derives its result panel from
+  it, so the two can never disagree about what survives a reload.
+✅ **Job retention and scoping (#314, explicit):** jobs live in **main-process memory for the
+  app-process lifetime** — up to 20 terminal jobs (`MAX_TERMINAL_JOBS`), each listed until it is
+  dismissed or pruned by newer jobs, whichever comes first. They are **not workspace-scoped**
+  (the manager is constructed once at app bootstrap and takes `rootPath` per call), so a
+  workspace lock or switch does not clear them. A **renderer reload keeps them** — that is what
+  `downloads:list` recovers, by adopting the live job, else the most recent unresolved result.
+  A full **app restart loses all of it**: nothing about a job is persisted (job `error` strings
+  are session-only by design). Only the resumable `.part` and an already-verified weight survive
+  a restart; resuming after one still takes a manual Download click.
 
 ### Audit log (Phase 19 live)
 ✅ **Types** (`shared/types.ts`): `AuditEventType` (the enum in `types.ts` is the authoritative
