@@ -1,7 +1,8 @@
 import type { KnowledgePackOutcome } from '../../../shared/types'
 import type { ExternalRetrievalOutput, RetrievedChunk } from '../rag'
 import { CHUNK_DEFAULTS, chunkSegments } from '../ingestion/chunker'
-import { fetchArticleHtml, searchPack, searchPackTotal } from './client'
+import { fetchArticleHtml, searchPack, searchPackTotal, suggestTitles, type KiwixSearchHit } from './client'
+import type { QueryExpander } from './expand'
 import { zimArticleToSegmentsAsync } from './html'
 import { DF_PROBE_MAX_TERMS, narrowByFrequency, searchPattern } from './query-rewrite'
 
@@ -65,6 +66,24 @@ export const EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000
  * `PACK_SEARCH_CONCURRENCY`, so probes get a short budget of their own instead.
  */
 export const DF_PROBE_TIMEOUT_MS = 3_000
+/**
+ * #340 L3-b (D-Z20): how many articles the EXPANSION may add per pack on top of the plain
+ * search's `ARTICLES_PER_PACK` — the title-index hit and the concept query's top hit. NEW
+ * constants; `ARTICLES_PER_PACK` keeps its value and its role (the plain search's bound). The
+ * expansion's articles are fetched FIRST so the plain cap can never starve them, and the pack
+ * quota still bounds the total.
+ */
+export const EXPANSION_ARTICLES_PER_PACK = 2
+/** How many title-index rows the expansion asks `/suggest` for. */
+export const EXPANSION_TITLE_ROWS = 3
+/**
+ * Chunks kept from a LIST article (`Liste der …`, `List of …`), instead of `CHUNKS_PER_ARTICLE`:
+ * the name rows of a list carry none of the question's words, so the overlap picker would keep
+ * only the intro and trim exactly the rows a "which … are the largest" question needs. The
+ * reranker still scores every chunk against the original question.
+ */
+export const LIST_ARTICLE_CHUNKS = 8
+const LIST_TITLE_RE = /^(Liste |List of )/
 
 export interface ArmPack {
   /** knowledge_packs.id (ZIM UUID) — the books.id search filter. */
@@ -89,6 +108,13 @@ export interface CollectPackCandidatesOptions {
    * Production never sets it.
    */
   articleTimeoutMs?: number
+  /**
+   * #340 L3-b (D-Z20): the ask's query expander — ONE local-model call per ask, before any pack
+   * is searched; its concepts feed one extra `/search` and its list title one `/suggest` per
+   * pack, whose articles are fetched in ADDITION to the plain search's. Absent or resolving null
+   * ⇒ the arm runs exactly as before. Its abort is the ask's abort (rethrown).
+   */
+  expand?: QueryExpander
 }
 
 /** One pack's produced candidates, in the pack's own rank order (search hit order). */
@@ -214,6 +240,75 @@ export async function collectPackCandidates(
   //      answered honestly at zero, so the pack stays `searched` with 0 found rather than
   //      `search-failed` (`docs/rag-design.md` §17 D-Z18 amendment).
   const rewrite = searchPattern(question)
+
+  // #340 L3-b (D-Z20): ONE model call per ask, before any pack is searched, under the same
+  // signal. Null (no runtime, a non-JSON reply, the time bound, any failure) ⇒ the plain arm;
+  // the ask's own abort propagates like every other cancellation.
+  let expansion: Awaited<ReturnType<QueryExpander>> = null
+  if (opts.expand) {
+    try {
+      expansion = await opts.expand(question, signal)
+    } catch (err) {
+      if (aborted()) throw err
+      expansion = null
+    }
+  }
+
+  /**
+   * The expansion's own hits for one pack, in fetch order: the title index first (the exact
+   * list article, when the model named one), then the concept query's hits. Each source fails
+   * soft on its own (the other source and the plain search are unaffected); an abort is the
+   * caller's to classify. Only hits the plain search did NOT already return are kept.
+   */
+  async function expansionHits(pack: ArmPack, plain: readonly KiwixSearchHit[]): Promise<KiwixSearchHit[]> {
+    if (!expansion) return []
+    const seen = new Set(plain.map((h) => h.articlePath))
+    const out: KiwixSearchHit[] = []
+    const add = (rows: KiwixSearchHit[]): void => {
+      for (const row of rows) {
+        if (seen.has(row.articlePath)) continue
+        seen.add(row.articlePath)
+        out.push(row)
+      }
+    }
+    const servedName = names?.get(pack.id)
+    if (expansion.listTitle !== null && servedName !== undefined) {
+      try {
+        let rows = await suggestTitles(port, servedName, expansion.listTitle, EXPANSION_TITLE_ROWS, signal)
+        // The title index is PREFIX-only (R-6): a model title one word too long or inflected at
+        // its end ("… nach CO2-Emissionen" against "… nach CO2-Emission pro Kopf", measured
+        // 2026-09-07) matches nothing, so one shorter prefix — the title minus its last word —
+        // is tried once when the full title found nothing. One extra request, never more.
+        const words = expansion.listTitle.split(' ')
+        if (rows.length === 0 && words.length >= 3) {
+          // The shorter prefix is broader, so its rows are RANKED by how much of the dropped
+          // word they carry ("… nach Pro-Kopf-Emissionen" → the "… pro Kopf" row before "…
+          // nach Waldfläche"); a row sharing nothing keeps its index order, never dropped.
+          const tail = words[words.length - 1]!.toLowerCase().split('-').filter((t) => t.length >= 3)
+          const score = (title: string): number => {
+            const lower = title.toLowerCase()
+            return tail.filter((t) => lower.includes(t)).length
+          }
+          rows = (await suggestTitles(port, servedName, words.slice(0, -1).join(' '), EXPANSION_TITLE_ROWS * 2, signal))
+            .map((row, index) => ({ row, index, score: score(row.title) }))
+            .sort((a, b) => b.score - a.score || a.index - b.index)
+            .map((r) => r.row)
+        }
+        add(rows)
+      } catch (err) {
+        if (aborted()) throw err
+      }
+    }
+    if (expansion.concepts.length > 0) {
+      try {
+        add(await searchPack(port, pack.id, expansion.concepts.join(' '), ARTICLES_PER_PACK, signal))
+      } catch (err) {
+        if (aborted()) throw err
+      }
+    }
+    return out
+  }
+
   async function runPack(item: PackWork): Promise<void> {
     const { pack } = item
     let hits
@@ -259,13 +354,26 @@ export async function collectPackCandidates(
         }
       }
     }
+    // #340 L3-b: the expansion's articles come FIRST and count against their own small cap, so
+    // the plain search's `ARTICLES_PER_PACK` can never starve the one list article the whole
+    // stage exists to reach; the plain hits follow, bounded exactly as before.
+    let extra: KiwixSearchHit[] = []
+    try {
+      extra = await expansionHits(pack, hits)
+    } catch (err) {
+      if (aborted()) return noteAbort(err)
+    }
+    const queue: Array<{ hit: KiwixSearchHit; fromExpansion: boolean }> = [
+      ...extra.slice(0, EXPANSION_ARTICLES_PER_PACK).map((hit) => ({ hit, fromExpansion: true })),
+      ...hits.map((hit) => ({ hit, fromExpansion: false }))
+    ]
     let attempted = 0
     let read = 0
-    for (const hit of hits) {
+    for (const { hit, fromExpansion } of queue) {
       // Article requests are DERIVED FROM NEED (plan §9.21 (c)3): once the pack holds its
       // provisional quota, the remaining hits are not fetched at all.
       if (item.candidates.length >= item.quota) break
-      if (attempted >= ARTICLES_PER_PACK) break
+      if (!fromExpansion && attempted >= ARTICLES_PER_PACK) break
       // The published serving map (`Published.names`, #301 P3b/L4) is the route authority. A
       // hit whose parsed `urlId` is not the name this pack is served under is SKIPPED —
       // defensive within one generation: the search was filtered by `books.id`, so a
@@ -273,7 +381,7 @@ export async function collectPackCandidates(
       // fetching it would label another archive's text with this pack's title.
       const expected = names?.get(pack.id)
       if (expected !== undefined && hit.urlId !== expected) continue
-      attempted++
+      if (!fromExpansion) attempted++
       let html: string | null
       try {
         html = await fetchArticleHtml(port, expected ?? hit.urlId, hit.articlePath, signal, {
@@ -297,10 +405,13 @@ export async function collectPackCandidates(
         continue
       }
       const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
+      const title = article.title ?? hit.title
+      // A LIST article keeps more chunks (D-Z20): its name rows never overlap the question.
+      const keep = LIST_TITLE_RE.test(title) ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
       const scored = chunks
         .map((c, i) => ({ c, i, overlap: overlapScore(c.text, terms) }))
         .sort((a, b) => b.overlap - a.overlap || a.i - b.i)
-        .slice(0, CHUNKS_PER_ARTICLE)
+        .slice(0, keep)
       for (const { c, i, overlap } of scored) {
         item.candidates.push({
           chunkId: `zim:${pack.id}:${hit.articlePath}#${i}`,

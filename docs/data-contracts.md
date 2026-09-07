@@ -1930,3 +1930,6 @@ matrix (the `zim-real` row) for the full input table.
 `packs:refresh` as a DB-touching (non-exempt) channel; `packs:status` remains the sole
 exempt channel (in-memory service state only — its `excluded` field, #340, is the service's
 cached list, never a query). The IPC surface is unchanged by the follow-up wave: 145 channels.
+
+**#340 L3-b (D-Z20):** no shape change — `makeArm` gains an optional `{ expand }` (main-side
+only), the outcome union, the per-answer note, IPC and preload are unchanged.

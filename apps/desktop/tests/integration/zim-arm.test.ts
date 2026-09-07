@@ -18,6 +18,9 @@ import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import {
   ARTICLES_PER_PACK,
   DF_PROBE_TIMEOUT_MS,
+  CHUNKS_PER_ARTICLE,
+  EXPANSION_ARTICLES_PER_PACK,
+  LIST_ARTICLE_CHUNKS,
   MAX_EXTERNAL_CANDIDATES,
   allocateCandidates,
   collectPackCandidates,
@@ -120,6 +123,24 @@ async function waitUntilTrue(cond: () => boolean, rounds = 400): Promise<boolean
 const stallOnce = new Set<string>()
 /** Every article title the fake sidecar was asked for over `/raw`, in order. */
 const rawReads: string[] = []
+/** #340 L3-b: every `/search` pattern the `pack-expand` book received, and every `/suggest` call. */
+const expandSearches: string[] = []
+const suggestRequests: Array<{ content: string; term: string }> = []
+const LIST_ARTICLE = 'Liste der größten Kohlekraftwerke der Erde'
+/** A list article long enough to chunk into more than `CHUNKS_PER_ARTICLE` pieces (500-token chunks). */
+function listArticleHtml(): string {
+  const row = (n: number): string =>
+    `Kraftwerk Nummer ${n} steht in einem Land mit vielen Kohlevorkommen und liefert ` +
+    'elektrische Energie fuer eine grosse Region mit mehreren Millionen Einwohnern, die ' +
+    'ueberwiegend in Staedten und Industriegebieten leben und deren Bedarf stetig waechst. '
+  const sections: Array<[string, string]> = []
+  for (let sIdx = 0; sIdx < 8; sIdx++) {
+    let text = ''
+    for (let r = 0; r < 12; r++) text += row(sIdx * 12 + r + 1)
+    sections.push([`Rang ${sIdx * 12 + 1} bis ${sIdx * 12 + 12}`, text])
+  }
+  return articleHtml(LIST_ARTICLE, sections)
+}
 
 function searchXml(bookUrlId: string, titles: string[]): string {
   const items = titles
@@ -202,6 +223,21 @@ beforeAll(async () => {
         res.end(searchXml(`book-${book}`, []))
         return
       }
+      // #340 L3-b (D-Z20): the plain pattern finds two ordinary articles; the expansion's
+      // CONCEPT query finds a third (plus one the plain search already had — never fetched twice);
+      // a three-hit concept query proves the `EXPANSION_ARTICLES_PER_PACK` cap.
+      if (book === 'pack-expand') {
+        expandSearches.push(pattern)
+        const titles =
+          pattern === 'Konzept Suche'
+            ? ['Kraftwerk Tuoketuo', 'Kohlekraftwerk']
+            : pattern === 'Drei Treffer'
+              ? ['Kraftwerk A', 'Kraftwerk B', 'Kraftwerk C']
+              : ['Kohlekraftwerk', 'Kohleausstieg']
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(searchXml(`book-${book}`, titles))
+        return
+      }
       const titles =
         book === 'pack-climate'
           ? ['Treibhausgas', 'Treibhauspotential']
@@ -220,9 +256,61 @@ beforeAll(async () => {
       res.end(searchXml(`book-${book}`, titles))
       return
     }
+    // #340 L3-b (D-Z20): the title index the expansion's list title is looked up in — the real
+    // kiwix-serve shape (`value`, an HTML-bolded `label`, `kind: "path"`, the entry `path`),
+    // plus the synthetic `kind: "pattern"` row the capability probe reads, which must be skipped.
+    if (url.pathname === '/suggest') {
+      const content = url.searchParams.get('content') ?? ''
+      const term = url.searchParams.get('term') ?? ''
+      suggestRequests.push({ content, term })
+      if (term === 'Liste kaputt') {
+        res.writeHead(500)
+        res.end('boom')
+        return
+      }
+      // A title one word too long for the prefix index: nothing — the arm retries one word shorter.
+      if (term === 'Liste der größten Kohlekraftwerke der Erde') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('[]')
+        return
+      }
+      // The one-word-shorter fallback is broader: two rows, the wrong one first — the arm ranks
+      // them by the dropped word ('Erde') so the right list article is fetched first.
+      if (term === 'Liste der größten Kohlekraftwerke der') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([
+          { value: 'Liste der größten Kohlekraftwerke Europas', kind: 'path', path: 'Liste_der_größten_Kohlekraftwerke_Europas' },
+          { value: LIST_ARTICLE, kind: 'path', path: LIST_ARTICLE.replace(/ /g, '_') }
+        ]))
+        return
+      }
+      if (term === 'Liste der größten Kohlekraftwerke Welt') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end('[]')
+        return
+      }
+      if (content === 'book-pack-expand' && term.startsWith('Liste der größten')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(
+          JSON.stringify([
+            { value: LIST_ARTICLE, label: '&lt;b&gt;Liste&lt;/b&gt; der größten Kohlekraftwerke der Erde', kind: 'path', path: LIST_ARTICLE.replace(/ /g, '_') },
+            { value: term, label: term, kind: 'pattern' }
+          ])
+        )
+        return
+      }
+      res.writeHead(404)
+      res.end()
+      return
+    }
     if (url.pathname.startsWith('/raw/')) {
       const article = decodeURIComponent(url.pathname.split('/content/')[1] ?? '').replace(/_/g, ' ')
       rawReads.push(article)
+      if (article === LIST_ARTICLE) {
+        res.writeHead(200, { 'content-type': 'text/html' })
+        res.end(listArticleHtml())
+        return
+      }
       // One article whose fetch fails: the arm must skip THAT HIT and keep the others.
       if (article === 'Kaputt') {
         res.writeHead(500)
@@ -890,5 +978,130 @@ describe('retrieve() with an external arm', () => {
     // The seam is optional in both spellings: an explicitly-absent arm is the same as none.
     const explicitlyAbsent = await retrieve(db, embedder, fixture.query, SETTINGS, null, null, undefined, null)
     expect(explicitlyAbsent).toEqual(fixture.result)
+  })
+})
+
+// ---- #340 L3-b (D-Z20): the query expansion through the local model ---------------------------
+describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
+  const packs = [{ id: 'pack-expand', title: 'Klimawandel von Wikipedia' }]
+  const names = new Map([['pack-expand', 'book-pack-expand']])
+  const QUESTION = 'Welche sind die größten Kohlekraftwerke der Welt?'
+  const EXPANSION = { concepts: ['Konzept', 'Suche'], listTitle: 'Liste der größten Kohlekraftwerke' }
+  const reset = (): void => {
+    rawReads.length = 0
+    expandSearches.length = 0
+    suggestRequests.length = 0
+  }
+  const plainReads = ['Kohlekraftwerk', 'Kohleausstieg']
+
+  it('#340 L3-b: the expansion runs ONCE per ask; its title-index and concept articles are fetched FIRST and in addition to the plain hits; a duplicate is fetched once; a list article keeps more chunks', async () => {
+    reset()
+    let calls = 0
+    const expand = async (q: string): Promise<typeof EXPANSION> => {
+      calls++
+      expect(q).toBe(QUESTION)
+      return EXPANSION
+    }
+    const { candidates, outcomes } = await collectPackCandidates(port, packs, QUESTION, undefined, names, { expand })
+    expect(calls).toBe(1)
+    expect(suggestRequests).toEqual([{ content: 'book-pack-expand', term: 'Liste der größten Kohlekraftwerke' }])
+    expect(expandSearches).toEqual(['größten Kohlekraftwerke Welt', 'Konzept Suche'])
+    // The list article (title index) and the concept hit come first; the plain hits follow
+    // exactly as before; 'Kohlekraftwerk' — in both lists — is read once.
+    expect(rawReads).toEqual([LIST_ARTICLE, 'Kraftwerk Tuoketuo', ...plainReads])
+    const list = candidates.filter((c) => c.sourceTitle === LIST_ARTICLE)
+    expect(list.length).toBeGreaterThan(CHUNKS_PER_ARTICLE)
+    expect(list.length).toBeLessThanOrEqual(LIST_ARTICLE_CHUNKS)
+    expect(candidates.filter((c) => c.sourceTitle === 'Kohlekraftwerk').length).toBeLessThanOrEqual(CHUNKS_PER_ARTICLE)
+    expect(outcomes).toEqual([
+      { packId: 'pack-expand', title: 'Klimawandel von Wikipedia', status: 'searched', reason: null, found: candidates.length, admitted: candidates.length }
+    ])
+  })
+
+  it('#340 L3-b: a null expansion, a throwing expander and no expander at all produce the SAME arm — no /suggest, no concept search, the plain reads', async () => {
+    reset()
+    const none = await collectPackCandidates(port, packs, QUESTION, undefined, names)
+    expect(rawReads).toEqual(plainReads)
+    expect(suggestRequests).toEqual([])
+    expect(expandSearches).toEqual(['größten Kohlekraftwerke Welt'])
+    reset()
+    const nulled = await collectPackCandidates(port, packs, QUESTION, undefined, names, { expand: async () => null })
+    expect(rawReads).toEqual(plainReads)
+    expect(suggestRequests).toEqual([])
+    expect(nulled).toEqual(none)
+    reset()
+    const threw = await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+      expand: async () => {
+        throw new Error('runtime exploded')
+      }
+    })
+    expect(rawReads).toEqual(plainReads)
+    expect(threw).toEqual(none)
+  })
+
+  it('#340 L3-b: the ask cancelled while the expansion runs REJECTS with the abort — nothing is searched, never an empty list', async () => {
+    reset()
+    const ctrl = new AbortController()
+    const expand = async (_q: string, signal?: AbortSignal): Promise<null> => {
+      ctrl.abort()
+      const err = new Error('cancelled')
+      err.name = 'AbortError'
+      expect(signal?.aborted).toBe(true)
+      throw err
+    }
+    await expect(
+      collectPackCandidates(port, packs, QUESTION, ctrl.signal, names, { expand })
+    ).rejects.toMatchObject({ name: 'AbortError' })
+    expect(expandSearches).toEqual([])
+    expect(rawReads).toEqual([])
+  })
+
+  it('#340 L3-b: a list title the prefix index does not know is retried once, one word shorter', async () => {
+    reset()
+    await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+      expand: async () => ({ concepts: [], listTitle: 'Liste der größten Kohlekraftwerke Welt' })
+    })
+    expect(suggestRequests).toEqual([
+      { content: 'book-pack-expand', term: 'Liste der größten Kohlekraftwerke Welt' },
+      { content: 'book-pack-expand', term: 'Liste der größten Kohlekraftwerke' }
+    ])
+    expect(rawReads).toEqual([LIST_ARTICLE, ...plainReads])
+  })
+
+  it('#340 L3-b: the shorter fallback prefix is broader — its rows are ranked by the dropped word, the right list article first', async () => {
+    reset()
+    await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+      expand: async () => ({ concepts: [], listTitle: 'Liste der größten Kohlekraftwerke der Erde' })
+    })
+    expect(suggestRequests.map((r) => r.term)).toEqual(['Liste der größten Kohlekraftwerke der Erde', 'Liste der größten Kohlekraftwerke der'])
+    // Both fallback rows fit the expansion cap; the 'Erde' row is fetched before 'Europas'.
+    expect(rawReads).toEqual([LIST_ARTICLE, 'Liste der größten Kohlekraftwerke Europas', ...plainReads])
+  })
+
+  it('#340 L3-b: a failing title index costs only the title hit — the concept hit and the plain hits still arrive', async () => {
+    reset()
+    const { candidates } = await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+      expand: async () => ({ concepts: ['Konzept', 'Suche'], listTitle: 'Liste kaputt' })
+    })
+    expect(suggestRequests).toEqual([{ content: 'book-pack-expand', term: 'Liste kaputt' }])
+    expect(rawReads).toEqual(['Kraftwerk Tuoketuo', ...plainReads])
+    expect(candidates.some((c) => c.sourceTitle === 'Kraftwerk Tuoketuo')).toBe(true)
+  })
+
+  it('#340 L3-b: the expansion adds at most EXPANSION_ARTICLES_PER_PACK articles, the plain ARTICLES_PER_PACK bound is untouched, and without a served name the title index is not asked', async () => {
+    reset()
+    await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+      expand: async () => ({ concepts: ['Drei', 'Treffer'], listTitle: 'Liste der größten Kohlekraftwerke' })
+    })
+    // list article + 'Kraftwerk A' = the two expansion fetches; B and C are never read; the
+    // plain hits follow in full.
+    expect(rawReads).toEqual([LIST_ARTICLE, 'Kraftwerk A', ...plainReads])
+    expect(EXPANSION_ARTICLES_PER_PACK).toBe(2)
+    reset()
+    // No served-name map (a caller without the published library): the title index needs the
+    // served name, so only the concept query runs.
+    await collectPackCandidates(port, packs, QUESTION, undefined, undefined, { expand: async () => EXPANSION })
+    expect(suggestRequests).toEqual([])
+    expect(rawReads).toEqual(['Kraftwerk Tuoketuo', ...plainReads])
   })
 })

@@ -48,6 +48,7 @@ import {
   isClassificationTrigger,
   type ClassifyCandidate
 } from '../services/analysis/classify'
+import { makeQueryExpander } from '../services/zim/expand'
 import { isAggregationShaped, routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
@@ -769,7 +770,10 @@ export function registerRagIpc(ctx: AppContext): void {
             // Knowledge packs (ZIM wave): the query-time archive arm, only when this chat's
             // scope selected packs (opt-in per chat). makeArm returns null when the tools
             // are missing or nothing is retrievable; retrieve() isolates arm failures.
-            externalArm: ctx.zim?.makeArm(ctx.db, scope.packIds) ?? null,
+            // #340 L3-b (D-Z20, owner ruling 2026-09-07 "always"): the arm expands the question
+            // through the turn's own runtime — one short, bounded, grammar-constrained call per
+            // pack-scoped ask, before the search; any failure falls back to the plain pattern.
+            externalArm: ctx.zim?.makeArm(ctx.db, scope.packIds, { expand: makeQueryExpander(runtime) }) ?? null,
             // The turn's skill: its fence rides in the grounded user turn; the assistant row is
             // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
             skill,

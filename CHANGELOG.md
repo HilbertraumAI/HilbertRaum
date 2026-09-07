@@ -135,6 +135,11 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Knowledge-pack questions that ask for a list or the largest, most or best-known items now
+  find the list article more often.** Before searching, the app asks your local model for the
+  question's key concepts and the likely title of a list article — one short extra model call
+  per pack question, which never blocks the answer for more than a few seconds; a slow or
+  unavailable model just falls back to the plain search for that question.
 - **The Linux/macOS install step for knowledge-pack tools is documented.** The panel's
   "kiwix-tools are missing" notice, and the user guide, now point at a Troubleshooting
   section that names the recommended `fetch-runtime` script command first, with the manual
