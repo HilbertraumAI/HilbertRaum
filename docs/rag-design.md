@@ -3098,7 +3098,8 @@ the citation card later; the button shipped as **D-Z21** (above, `feat/340-tier2
 the citation-card shortcut still the owner's "later". *C4* — acquisition from Kiwix catalogs: ruled
 later, after the consent surface (D-Z19) has settled. *#339 items 3–6* — readiness never depends
 on `kiwix_tools` and `kiwix-search` stays installed-but-unused, both as built (D-Z17); the
-upstream report is the owner's to file (a Linux stall probe was asked of humaniser first);
+upstream report is the owner's to file (humaniser's Linux stall probe of 2026-09-07 came back
+0/40 short — finding 3 below — so the report is a win-x86_64 report; P8-6);
 `MAX_SELECTED_PACKS`, the ask deadline and the `/raw` retry constants are untouched.
 
 ### Real acceptance (T19, P7 — the machine-drivable legs, 2026-09-06)
@@ -3211,7 +3212,13 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   (84 KB 2/40, 211 KB 4/40, 234 KB 2–8 per 40–60, 294 KB 6/40, 508 KB 8/40, 707 KB 4/40) while
   a 24 KB entry never stalled in 180 reads; the same with `curl.exe`, with keep-alive on or off,
   with `--threads 1 / 4 / 16`, with 0 / 400 / 2500 ms between reads; the successful responses
-  carry `Content-Length` + `Connection: close`; the next request is answered normally. In the app a
+  carry `Content-Length` + `Connection: close`; the next request is answered normally.
+  **Not reproducible on linux-x86_64** (humaniser, 2026-09-07, Ubuntu 22.04.5, the same 3.8.1
+  release — libkiwix 14.1.1 / libzim 9.4.0 / libmicrohttpd 0.9.76 — the same climate pack, posted
+  on #339): 0 of 40 short reads on `Klimawandel` (508,338 B), `Treibhauseffekt` (234,141 B) and a
+  12 KB control, again 0/40 with `--threads 1` and `--threads 16` — 200 reads of the two large
+  entries without a missing byte or a timeout. The defect therefore sits in the win-x86_64 build
+  or libmicrohttpd's Windows socket path, not in libzim; the upstream report says so. In the app a
   stalled read cost the viewer 15 s → "unavailable" and the ask arm one silently skipped article
   (a real ask took 40 s and returned 16 instead of 20 passages). Mitigation (fix PR 2, commit
   0eb79f1f): `fetchArticleHtml` reads through `readRawArticle` with `ARTICLE_READ_TIMEOUT_MS =
