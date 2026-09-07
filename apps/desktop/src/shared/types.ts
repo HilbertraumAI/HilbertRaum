@@ -3014,6 +3014,11 @@ export type AuditEventType =
   // privacy rule as conversation_exported: metadata = { messageId, rows } only — the table's
   // columns/rows and the chosen path are content.
   | 'message_table_exported'
+  // #286: one fenced code block of an assistant reply saved as a file. Same privacy rule:
+  // metadata = { messageId, bytes, extension } only — the block's text, the raw fence info string
+  // and the chosen path are content. `extension` is safe because it comes from the FIXED
+  // allowlist in shared/code-block-export.ts (a closed set), never from the info string itself.
+  | 'code_block_exported'
   // Document-organization (plan §17): collection/membership/lifecycle changes. Metadata is
   // id + type + COUNT ONLY — never the collection/project NAME (a project name like
   // "Divorce" is content — exactly like a document title/filename, which S1 now withholds too).

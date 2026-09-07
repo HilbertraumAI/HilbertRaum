@@ -49,6 +49,7 @@ const AUDIT_TYPE_LABELS: Record<AuditEventType, MessageKey> = {
   conversation_deleted: 'diag.audit.conversation_deleted',
   conversation_exported: 'diag.audit.conversation_exported',
   message_table_exported: 'diag.audit.message_table_exported',
+  code_block_exported: 'diag.audit.code_block_exported',
   workspace_created: 'diag.audit.workspace_created',
   workspace_unlocked: 'diag.audit.workspace_unlocked',
   workspace_locked: 'diag.audit.workspace_locked',

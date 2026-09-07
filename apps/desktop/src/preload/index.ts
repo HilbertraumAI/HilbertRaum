@@ -373,6 +373,14 @@ const api = {
   /** Save one message's attached result table as CSV (result-tables §4); path, or null on cancel. */
   exportMessageTable: (messageId: string): Promise<string | null> =>
     ipcRenderer.invoke(IPC.exportMessageTable, messageId),
+  /** #286: save one fenced code block of the answer `messageId` as a file. `content` is the
+   *  block's parsed text (written byte-for-byte as UTF-8, no BOM); `language` is the raw fence
+   *  info string, which MAIN maps through a fixed allowlist to pick the suggested `code.<ext>`
+   *  name + filter (the id, byte count and that extension are all the audit row records).
+   *  Resolves with the saved path, or null when the user cancelled. Persisted turns only —
+   *  never the live bubble. */
+  saveCodeBlock: (messageId: string, content: string, language: string): Promise<string | null> =>
+    ipcRenderer.invoke(IPC.saveCodeBlock, messageId, content, language),
   /** Full-text search across all conversations. Results group hits per
    *  conversation, best match first; snippets carry SEARCH_MARK_* highlight markers. */
   searchConversations: (query: string): Promise<ConversationSearchResult[]> =>

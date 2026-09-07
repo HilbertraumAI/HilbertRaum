@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -34,6 +34,7 @@ vi.mock('electron', () => ({
 }))
 
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
+import { log } from '../../src/main/services/logging'
 import { registerBenchmarkIpc } from '../../src/main/ipc/registerBenchmarkIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { IPC, STREAM } from '../../src/shared/ipc'
@@ -659,5 +660,187 @@ describe('chat export handlers (T-8)', () => {
     const none = (await invoke(handlers, IPC.exportMessageTable, noTable.id)).result as string | null
     expect(none).toBeNull()
     expect(dialogState.lastSaveOptions).toBeUndefined() // returned before the save dialog
+  })
+})
+
+// #286: save ONE fenced code block as a file. The first export whose bytes are RENDERER-supplied
+// (the parsed block + fence info string) rather than DB-derived — so these pin the D1 byte
+// identity (no BOM even on a .txt/.csv destination), the D2 type gate, the D6 allowlist reaching
+// the dialog, cancel = null with nothing written/audited, and the audit/log privacy posture.
+describe('chat:saveCodeBlock (#286)', () => {
+  function ctxWithAudit(db: Db): { ctx: AppContext; audit: ReturnType<typeof vi.fn> } {
+    const audit = vi.fn()
+    const ctx = {
+      trustedSenders: ANY_SENDER,
+      db,
+      workspace: { isUnlocked: () => true },
+      runtime: { active: () => null, activeModelId: () => null },
+      audit
+    } as unknown as AppContext
+    return { ctx, audit }
+  }
+  const MSG_ID = '0f5a1c2e-9b7d-4e3a-8c6f-1234567890ab'
+  const CONTENT_SENTINEL = 'XCODE_SENTINEL_api_key_hunter2'
+  const INFO_SENTINEL = 'XINFO_SENTINEL_private_project'
+  const SENTINELS = [CONTENT_SENTINEL, INFO_SENTINEL]
+  const BOM = Buffer.from([0xef, 0xbb, 0xbf])
+  // Read through a function: TS narrows the hoisted state to never after an = undefined reset.
+  const lastSave = (): SaveDialogOptions | undefined => dialogState.lastSaveOptions
+
+  it('offers code.html + an HTML-first filter for an html fence, code.txt for an unknown language', async () => {
+    const { ctx } = ctxWithAudit(freshDb())
+    registerChatIpc(ctx)
+    dialogState.saveResult = { canceled: true }
+
+    await invoke(handlers, IPC.saveCodeBlock, MSG_ID, '<b>x</b>', 'html title="x"')
+    expect(lastSave()?.defaultPath).toBe('code.html')
+    expect(lastSave()?.title).toBe('Save code block as a file')
+    expect(lastSave()?.filters).toEqual([
+      { name: 'HTML', extensions: ['html'] },
+      { name: 'All files', extensions: ['*'] }
+    ])
+
+    dialogState.lastSaveOptions = undefined
+    await invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'fn main() {}', 'rust')
+    expect(lastSave()?.defaultPath).toBe('code.txt')
+    expect(lastSave()?.filters).toEqual([
+      { name: 'TXT', extensions: ['txt'] },
+      { name: 'All files', extensions: ['*'] }
+    ])
+
+    // No language at all (a bare fence) → txt too.
+    dialogState.lastSaveOptions = undefined
+    await invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'plain', '')
+    expect(lastSave()?.defaultPath).toBe('code.txt')
+  })
+
+  it('cancel → null, nothing written, nothing audited', async () => {
+    const { ctx, audit } = ctxWithAudit(freshDb())
+    registerChatIpc(ctx)
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+    dialogState.saveResult = { canceled: true, filePath: join(dir, 'code.html') }
+
+    const result = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, '<b>x</b>', 'html')).result
+    expect(result).toBeNull()
+    expect(readdirSync(dir)).toEqual([]) // no destination, no leftover tmp sibling
+    expect(audit).not.toHaveBeenCalled()
+  })
+
+  it('writes the bytes VERBATIM — no BOM — to a .txt and to a .csv destination (D1)', async () => {
+    const db = freshDb()
+    const { ctx } = ctxWithAudit(db)
+    registerChatIpc(ctx)
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+    // A shebang (a BOM would break it), umlauts (UTF-8 multi-byte), CRLF + a bare CR + a trailing
+    // newline (line endings "as generated") and an astral-plane emoji.
+    const content = '#!/bin/sh\necho "Grüße"\r\nprintf ß\rtail 🎉\n'
+
+    for (const name of ['out.txt', 'out.csv', 'out.sh']) {
+      const dest = join(dir, name)
+      dialogState.saveResult = { canceled: false, filePath: dest }
+      const saved = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, content, 'sh')).result
+      expect(saved).toBe(dest)
+      const onDisk = readFileSync(dest)
+      expect(onDisk.equals(Buffer.from(content, 'utf8')), name).toBe(true)
+      expect(onDisk.subarray(0, 3).equals(BOM), name).toBe(false)
+    }
+    // The transcript export DOES prefix a BOM on .txt (the recorded bomFor decision) — pin the
+    // contrast so a refactor that routes the code block through saveTextExport is caught.
+    const conv = createConversation(db, { title: 'BOM contrast' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'hi' })
+    const transcriptDest = join(dir, 'transcript.txt')
+    dialogState.saveResult = { canceled: false, filePath: transcriptDest }
+    await invoke(handlers, IPC.exportConversation, conv.id)
+    expect(readFileSync(transcriptDest).subarray(0, 3).equals(BOM)).toBe(true)
+  })
+
+  it('writes an empty block as an empty file', async () => {
+    const { ctx } = ctxWithAudit(freshDb())
+    registerChatIpc(ctx)
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+    const dest = join(dir, 'empty.txt')
+    dialogState.saveResult = { canceled: false, filePath: dest }
+    expect((await invoke(handlers, IPC.saveCodeBlock, MSG_ID, '', '')).result).toBe(dest)
+    expect(readFileSync(dest).length).toBe(0)
+  })
+
+  it('rejects non-string content and a malformed message id WITHOUT opening the dialog', async () => {
+    const { ctx, audit } = ctxWithAudit(freshDb())
+    registerChatIpc(ctx)
+    dialogState.saveResult = { canceled: false, filePath: join(tmpdir(), 'never-written.txt') }
+    dialogState.lastSaveOptions = undefined
+
+    for (const bad of [undefined, null, 42, { toString: () => 'x' }, ['a'], Buffer.from('a')]) {
+      const r = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, bad, 'html')).result
+      expect(r, `content=${String(bad)}`).toBeNull()
+    }
+    for (const badId of [undefined, null, 7, '', 'has space', 'a/b', 'x'.repeat(65), CONTENT_SENTINEL + ' ']) {
+      const r = (await invoke(handlers, IPC.saveCodeBlock, badId, 'text', 'html')).result
+      expect(r, `messageId=${String(badId)}`).toBeNull()
+    }
+    expect(dialogState.lastSaveOptions).toBeUndefined()
+    expect(audit).not.toHaveBeenCalled()
+
+    // A non-string language is tolerated (treated as no language → txt); the content still wins.
+    const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+    dialogState.saveResult = { canceled: false, filePath: join(dir, 'x.txt') }
+    const r = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'ok', 12 as unknown as string)).result
+    expect(r).toBe(join(dir, 'x.txt'))
+    expect(lastSave()?.defaultPath).toBe('code.txt')
+  })
+
+  it('refuses when the workspace is locked (requireUnlocked), before any dialog', async () => {
+    const { ctx } = ctxWithAudit(freshDb())
+    ;(ctx as unknown as { workspace: { isUnlocked: () => boolean } }).workspace = {
+      isUnlocked: () => false
+    }
+    registerChatIpc(ctx)
+    dialogState.lastSaveOptions = undefined
+    await expect(invoke(handlers, IPC.saveCodeBlock, MSG_ID, 'x', 'html')).rejects.toThrow()
+    expect(dialogState.lastSaveOptions).toBeUndefined()
+  })
+
+  it('audits { messageId, bytes, extension } ONLY; no audit row or log line carries the content, the info string or the path', async () => {
+    const { ctx, audit } = ctxWithAudit(freshDb())
+    registerChatIpc(ctx)
+    const logSpy = {
+      info: vi.spyOn(log, 'info'),
+      warn: vi.spyOn(log, 'warn'),
+      error: vi.spyOn(log, 'error')
+    }
+    try {
+      const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-codeblock-'))
+      const dest = join(dir, 'code.html')
+      dialogState.saveResult = { canceled: false, filePath: dest }
+      const content = `<!doctype html>\n<p>${CONTENT_SENTINEL}</p>\n`
+      const info = `html title="${INFO_SENTINEL}"`
+      const saved = (await invoke(handlers, IPC.saveCodeBlock, MSG_ID, content, info)).result
+      expect(saved).toBe(dest)
+      expect(readFileSync(dest, 'utf8')).toContain(CONTENT_SENTINEL) // the flow really carried it
+
+      expect(audit).toHaveBeenCalledTimes(1)
+      const [type, message, meta] = audit.mock.calls[0]!
+      expect(type).toBe('code_block_exported')
+      expect(meta).toEqual({
+        messageId: MSG_ID,
+        bytes: Buffer.byteLength(content, 'utf8'),
+        extension: 'html'
+      })
+      const recordedAudit = JSON.stringify([type, message, meta])
+      const recordedLog = JSON.stringify(
+        [logSpy.info, logSpy.warn, logSpy.error].flatMap((s) => s.mock.calls)
+      )
+      for (const sentinel of SENTINELS) {
+        expect(recordedAudit, `audit leaked ${sentinel}`).not.toContain(sentinel)
+        expect(recordedLog, `log leaked ${sentinel}`).not.toContain(sentinel)
+      }
+      expect(recordedAudit).not.toContain(dest) // the chosen path is user-private
+      expect(recordedLog).not.toContain(dest)
+      expect(recordedLog).not.toContain('title=') // the raw info string never reaches the log
+    } finally {
+      logSpy.info.mockRestore()
+      logSpy.warn.mockRestore()
+      logSpy.error.mockRestore()
+    }
   })
 })

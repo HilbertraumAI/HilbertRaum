@@ -533,7 +533,8 @@ exposed to logging via `WorkspaceController.encryptionKey()` (the same data key 
 families (`AuditEventType` in `shared/types.ts`) span model starts/stops and downloads; document
 imports/deletes and lifecycle/collection changes (`document_lifecycle_changed`, `collection_*`);
 document tasks and exports (`document_task_*`, `document_exported`/`summary_exported`); conversation
-lifecycle (`conversation_*`); skill management and runs (`skill_imported`/`deleted`/`enabled`/
+lifecycle (`conversation_*`) and the per-answer exports (`message_table_exported`,
+`code_block_exported`); skill management and runs (`skill_imported`/`deleted`/`enabled`/
 `disabled`, `skill_run_*`); workspace lock/unlock; privacy-relevant settings changes; policy
 warnings; and offline-guard detections. (`shared/types.ts` is the authoritative enum.) Its data
 class is defined by a **hard privacy rule**:
@@ -541,7 +542,10 @@ class is defined by a **hard privacy rule**:
 - Events carry **ids, model ids, and counts only** — NEVER chat content, document text,
   passwords, **or user-chosen names**. A chat transcript export records only the conversation
   id (even the chosen filename is excluded — it derives from the conversation title, which is
-  chat content); `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
+  chat content); a code-block save (#286) records `{ messageId, bytes, extension }` — the
+  extension is safe only because it comes from the fixed allowlist in
+  `shared/code-block-export.ts` (a closed set), never from the fence info string, which is
+  model output; `settings_changed` records the **privacy-relevant keys** (`allowNetwork`,
   `gpuMode`, `developerMode`) and their boolean/enum values, never any other setting's value.
   **Document titles/filenames are content (S1, full-audit-2026-06-30).** `document_imported` /
   `document_reindexed` (incl. the doc-task *materialize* path) record `documentId` + `status` +
@@ -677,6 +681,36 @@ same posture applies:
   sentinel-named source file.
 - **Scope:** one document per invocation (the save dialog is the per-file consent);
   bulk/multi-select export is deliberately deferred.
+
+## Code-block save boundary (issue #286)
+
+`chat:saveCodeBlock` writes ONE fenced code block of a persisted assistant answer to a
+user-chosen file. It is the first export whose bytes are **renderer-supplied** — the parsed
+block text plus the fence info string travel over IPC exactly as `copyToClipboard` sends
+text — rather than re-derived from the database in main. The posture is otherwise the
+transcript export's:
+
+- **Gate + consent:** the #252 sender guard and `requireUnlocked` gate the call; the native
+  save dialog (main only, `saveBinaryExport`) is the consent — the renderer never touches
+  fs, and Streamdown's own download control (a blob + `<a download>` in the renderer, which
+  would bypass this boundary) stays disabled (`controls={false}`, pinned in
+  `assistant-markdown.test.tsx`). Persisted turns only; the live streaming bubble has no
+  toolbar.
+- **Untrusted inputs:** `content` must be a string (anything else returns null before a
+  dialog); the fence info string is **model output** and never reaches a filename, a dialog
+  filter or an audit row un-mapped — only its allowlisted extension does
+  (`shared/code-block-export.ts`: first token, lower-cased, stripped to `[a-z0-9+#.-]`,
+  looked up in a fixed map, else `txt`; the suggested name is the fixed `code.<ext>`). The
+  message id must match the persisted-id alphabet so that slot cannot smuggle content into
+  the audit log either.
+- **Verbatim bytes, no BOM:** the block is written byte-for-byte as UTF-8 through
+  `saveBinaryExport` (the same atomic tmp-sibling → fsync → rename tail), deliberately NOT
+  `saveTextExport`, whose `bomFor` prefixes a BOM on `.md`/`.txt`/`.csv` — a BOM breaks a
+  shebang and the issue requires byte identity. The BOM decision stays for transcripts and CSV.
+- **Nothing content-bearing is recorded:** the log line carries the id, byte count and
+  extension; the audit row is `{ messageId, bytes, extension }`. Sentinel-swept in
+  `chat-ipc.test.ts` (content + info-string sentinels against every audit and log call) and in
+  `audit-ipc.test.ts` (a sentinel-named destination as well).
 
 ## Workspace modes (Phase 9)
 
