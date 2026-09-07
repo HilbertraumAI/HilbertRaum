@@ -19,3 +19,7 @@ package-lock.json text eol=lf
 *.onnx binary
 *.png binary
 *.pdf binary
+
+# Evidence-folder batch helpers (e.g. the #330 workspace swap script) are cmd.exe scripts too:
+# LF-only labels after parenthesised blocks are misparsed (seen 2026-09-07), so keep them CRLF.
+eval/**/*.cmd text eol=crlf
