@@ -2520,7 +2520,7 @@ describe('#340 Tier-2 — packs:saveArticle files the article as a real document
       // rows with an origin are otherwise never filed, D3/N1.)
       const library = getBuiltinCollection(h.db(), 'library')!
       const listed = listDocuments(h.db()).find((d) => d.id === saved.documentId)!
-      expect(listed.collections.map((c) => c.id)).toContain(library.id)
+      expect((listed.collections ?? []).map((c) => c.id)).toContain(library.id)
       // A conversation with no scope of its own resolves to the Library — the default that finds it.
       expect(resolveScope(h.db(), 'conversation-without-a-scope').collectionIds).toContain(library.id)
       // The stored copy is the converter's text, never HTML: a chunk carries the article body.
