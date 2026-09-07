@@ -1,0 +1,70 @@
+{
+  "issue": 318,
+  "kind": "preflight-only",
+  "date": "2026-09-07",
+  "hw_slug": "i7-1185g7-iris-xe-shared-8gb-laptop-16gb",
+  "legs_detected": [],
+  "legs_reason": "one integrated Vulkan device, no discrete device; the leg derivation rule's 'anything else' case. The picker's looksIntegrated matches the name, so there is no budget device, memory class = cpu, RAM pick stands; the §6.6 grid has no row for this class.",
+  "drive_root": "<drive>",
+  "runtime": {
+    "version_line": "version: 9849 (799fcc04a)",
+    "built_with": "Clang 20.1.8 for Windows x86_64",
+    "manifest": { "version": "b9849", "backend": "vulkan", "os": "win", "arch": "x64" },
+    "llama_server_sha256_per_runtime_manifest": "d6ae64cf1e8a985720efe75e9c5f0e9cecbb64056bb9959fe897fac76059c5c5"
+  },
+  "list_devices_raw": [
+    "Available devices:",
+    "  Vulkan0: Intel(R) Iris(R) Xe Graphics (8098 MiB, 7437 MiB free)"
+  ],
+  "list_devices_order": "integrated first (only device)",
+  "cpu": { "name": "11th Gen Intel(R) Core(TM) i7-1185G7 @ 3.00GHz", "cores": 4, "logical": 8 },
+  "ram": { "total_bytes": 16983785472, "total_gib": 15.8, "rounded_gb": 16, "modules": "8 x 2 GiB LPDDR4x-4267" },
+  "chassis": { "win32_chassis_types": [9], "form_factor": "laptop" },
+  "graphics": {
+    "probe": { "name": "Intel(R) Iris(R) Xe Graphics", "total_mib": 8098, "free_mib": 7437, "type": "integrated (shared memory)" },
+    "wmi": { "name": "Intel(R) Iris(R) Xe Graphics", "adapter_ram_bytes": 2147479552, "driver_version": "32.0.101.6737" },
+    "vulkaninfo": {
+      "instance_version": "1.4.304",
+      "api_version": "1.4.309",
+      "driver_version": "101.6737",
+      "driver_id": "DRIVER_ID_INTEL_PROPRIETARY_WINDOWS",
+      "device_type": "PHYSICAL_DEVICE_TYPE_INTEGRATED_GPU",
+      "device_id": "0x9a49",
+      "memory_heaps": [
+        { "index": 0, "size_bytes": 8491892736, "size_gib": 7.91, "budget_bytes": 7798862644, "budget_gib": 7.26, "flags": ["MEMORY_HEAP_DEVICE_LOCAL_BIT"] }
+      ],
+      "memory_types": "3 types, all heap 0: DEVICE_LOCAL; DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT; DEVICE_LOCAL|HOST_VISIBLE|HOST_COHERENT|HOST_CACHED",
+      "note": "no separate 214 MiB BAR heap on this device (single unified heap), so open question (e) does not apply here"
+    },
+    "discrepancy": "WMI AdapterRAM 2 GiB vs probe 8098 MiB shared; the probe's figure is used"
+  },
+  "os": { "product": "Windows 11 Home", "version": "10.0.26200", "display_version": "25H2", "ubr": 9168 },
+  "nvidia_smi": "not present (no NVIDIA device)",
+  "models_on_drive_for_legs": {
+    "qwen3.5-9b-ud-q4kxl": { "file": "qwen3.5-9b-ud-q4kxl.gguf", "size_bytes": 5966095584, "present": true, "manifest_sha256": "6f5d30666c2d8ae16a306e616d95341dcf3cc46810df84d7e6f5a7d1e4c1b293", "hash_verified_this_session": false },
+    "gemma4-12b-it-qat-q4": { "present": false },
+    "qwen3.8-27b-ud-q4km": { "present": false },
+    "qwen3.8-27b-ud-q5km": { "present": false }
+  },
+  "app_argv_reconstructed_rung1_chat_9b": [
+    "llama-server.exe", "--host", "127.0.0.1", "--port", "<p>",
+    "--model", "<drive>\\models\\chat\\qwen3.5-9b-ud-q4kxl.gguf",
+    "--ctx-size", "8192", "--threads", "4",
+    "--batch-size", "2048", "--ubatch-size", "2048",
+    "--jinja", "--reasoning-format", "deepseek", "-lv", "4"
+  ],
+  "app_argv_sources_origin_master_7af98a45": {
+    "--host/--port/--model/--ctx-size/--threads": "apps/desktop/src/main/services/runtime/sidecar.ts:511-538",
+    "--threads value": "defaultThreadCount = floor(logical/2) = 4, sidecar.ts:90-98",
+    "--ctx-size value": "manifest.recommendedContextTokens || settings.contextTokens, services/chat.ts:1450-1452; 9B manifest recommended_context_tokens: 8192",
+    "--batch-size/--ubatch-size": "min(ctx, CHAT_MAX_PHYSICAL_BATCH=2048), runtime/llama.ts:46 and :449; emitted sidecar.ts:519-521",
+    "--jinja --reasoning-format deepseek -lv 4": "CHAT_SERVER_ARGS, runtime/llama.ts:39",
+    "rung 1 extra args": "none, runtime/factory.ts:764",
+    "rung 1a extra args": "MTP_SERVER_ARGS --spec-type draft-mtp --spec-draft-n-max 2, factory.ts:95 (9B manifest has no speculative_decoding, so rung 1 only)",
+    "--fit-target/--fit-ctx/-np/--parallel/-ngl/--device": "not emitted on the chat path (repo-wide grep; --parallel 1 only in translation and vision); the 1024 MiB fit margin is llama.cpp's own default, noted at services/models.ts:937",
+    "env": "LLAMA_API_KEY, sidecar.ts:633"
+  },
+  "predicted_star_for_this_class": "RAM path (memory class cpu): expected qwen3.5-9b-ud-q4kxl for 16 GB unless a stored §6.5 speed step-down applies; no §6.6 card prediction to test",
+  "starts_performed": 0,
+  "app_report": null
+}
