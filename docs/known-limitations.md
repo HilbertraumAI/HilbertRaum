@@ -115,10 +115,24 @@ password recovery — are documented in
   but un-started weight is reported `installed` without being read at all. Damage in such a file
   is therefore found when the model is started, not before. Mitigations: the AI Model screen's
   per-model **Verify checksum** forces a real re-hash, its screen-level **Check all model files**
-  walks every present weight (neither can be cancelled once started — #420), the §7.4 start gate re-verifies whatever it launches, and the
+  walks every present weight (**since #420, 2026-09-08 the screen-level pass can be stopped** with
+  the Stop checking button beside its progress bar — what finished stays verified, the rest is simply
+  unchecked; the per-model Verify checksum button is still uncancellable, one file), the §7.4 start
+  gate re-verifies whatever it launches, and the
   ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully. Downloads now fsync the `.part` to the device before renaming it into place (F-34,
   full-audit 2026-07-16), closing the post-completion power-cut/unplug window that could otherwise
   persist the rename + `(size,mtime)` cache entry over a torn weight the cache then reports verified.
+- **A cancelled checksum read can leave a file PARTLY page-cache-warm with no warm mark (accept).**
+  #392 registers a hashed file in `checksumWarmedPaths` so a later model-load window over it never
+  times a RAM read — but only when the hash **completed**. A pass cancelled mid-file (#420) has
+  pulled part of that weight through the page cache and leaves no mark, so a model start right
+  afterwards can record a partly-warm `model_load` sample. Bounded: the figure lands between the two
+  honest ones (fully cold and fully warm), never above the warm one, and it is rare — it needs a
+  cancel landing inside one specific weight followed immediately by a start of that same model. The
+  alternatives are both worse: marking a partial read warm would suppress an honest sample on the
+  strength of a read that mostly did not happen, and recording a `checksum` sample for it would
+  publish a throughput figure for a duration the read never finished. Self-healing — the next cold
+  start of that model samples honestly.
 - **Sidecar binaries built by an OLD `fetch-runtime` carry no pre-spawn hash (accept + document).**
   The re-hash-before-spawn control ([`security-model.md`](security-model.md) "Re-hash
   sidecar binaries before spawn") re-verifies `llama-server` / `whisper-cli` against a SHA-256 the

@@ -1257,8 +1257,12 @@ export const en = {
   'models.verifyAllTitle': 'Re-check every model file on this drive against its SHA-256',
   'models.verifyAllHint':
     'Each model is checked when you start it. This checks every model file on this drive ' +
-    'instead — on a slow drive that can take several minutes, and it runs to the end once ' +
-    'it has started.',
+    'instead — on a slow drive that can take several minutes. You can stop it at any time; ' +
+    'the files already checked stay checked.',
+  // #420 — the Cancel beside the progress bar. "Stop checking" rather than a bare "Cancel":
+  // it stops a check, it does not undo one.
+  'models.verifyAllStop': 'Stop checking',
+  'models.verifyAllStopping': 'Stopping…',
   'models.confirm.title': 'Download {name}?',
   'models.confirm.start': 'Start download',
   'models.confirm.size': 'Size',

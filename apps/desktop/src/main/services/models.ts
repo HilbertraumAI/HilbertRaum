@@ -183,21 +183,70 @@ export function launchContextTokens(
 }
 
 /**
+ * Thrown when a hash was stopped by its caller's `AbortSignal` (#420) — never by an I/O
+ * failure, a missing file or a mismatch. Callers tell the two apart with `isHashAborted`:
+ * a cancelled verification is a calm outcome (what finished is cached, the rest is simply
+ * unchecked), an I/O failure is not.
+ */
+export class HashAbortedError extends Error {
+  constructor(filePath?: string) {
+    super(filePath ? `Hashing was cancelled: ${filePath}` : 'Hashing was cancelled')
+    this.name = 'HashAbortedError'
+  }
+}
+
+/** Is this the #420 cancellation, as opposed to a real hashing failure? */
+export function isHashAborted(err: unknown): boolean {
+  return (
+    err instanceof HashAbortedError || (err as { name?: string } | null)?.name === 'HashAbortedError'
+  )
+}
+
+/**
  * Stream a file through SHA-256 (large GGUF files never fully buffer in memory).
  * `onProgress` (optional) receives the running byte count, throttled to at most one call
  * per `PROGRESS_CHUNK_BYTES` (so the 64 KB read chunks of a multi-GB weight don't flood
  * IPC) — plus a final exact-total call. Used to drive the first-run verification bar.
+ *
+ * `signal` (#420) stops the read. The promise then REJECTS with `HashAbortedError`; it must
+ * never simply stop settling, because `computeInstallState`, `buildModelList`, the
+ * `listModels` handler and the renderer's busy flag all park on it. That is why the abort
+ * destroys the stream WITH an error: a bare `stream.destroy()` emits `close` and no
+ * `error`, so a naive abort would leave every awaiting caller waiting forever. The `close`
+ * handler is the belt to that braces — a close arriving without `end` or `error` still
+ * settles. The parameter is OPTIONAL and trailing: every other caller (the ship-time gates,
+ * the asset/binary/drive/ingestion verifiers, the download manager) is untouched and stays
+ * uncancellable by construction.
  */
 export function sha256File(
   filePath: string,
-  onProgress?: (bytesHashed: number) => void
+  onProgress?: (bytesHashed: number) => void,
+  signal?: AbortSignal
 ): Promise<string> {
   return new Promise((resolve, reject) => {
+    // An already-aborted signal never opens the file.
+    if (signal?.aborted) {
+      reject(new HashAbortedError(filePath))
+      return
+    }
     const hash = createHash('sha256')
     const stream = createReadStream(filePath)
     let hashed = 0
     let lastReported = 0
-    stream.on('error', reject)
+    let settled = false
+    const onAbort = (): void => {
+      stream.destroy(new HashAbortedError(filePath))
+    }
+    /** Settle exactly once and drop the signal listener — one pass hashes many files off
+     *  ONE signal, so an un-removed listener per file would pile up on it. */
+    const settle = (finish: () => void): void => {
+      if (settled) return
+      settled = true
+      signal?.removeEventListener('abort', onAbort)
+      finish()
+    }
+    signal?.addEventListener('abort', onAbort, { once: true })
+    stream.on('error', (err) => settle(() => reject(err)))
     stream.on('data', (chunk) => {
       hash.update(chunk)
       hashed += chunk.length
@@ -207,9 +256,20 @@ export function sha256File(
       }
     })
     stream.on('end', () => {
-      if (onProgress && hashed !== lastReported) onProgress(hashed)
-      resolve(hash.digest('hex'))
+      settle(() => {
+        if (onProgress && hashed !== lastReported) onProgress(hashed)
+        resolve(hash.digest('hex'))
+      })
     })
+    stream.on('close', () =>
+      settle(() =>
+        reject(
+          signal?.aborted
+            ? new HashAbortedError(filePath)
+            : new Error(`Read stream for ${filePath} closed before it finished`)
+        )
+      )
+    )
   })
 }
 
@@ -321,16 +381,67 @@ export function beginChecksumInstrumentation(
  * hash: progress sinks are multicast, each joiner still writes its own L2 store, and
  * `checksumCacheStats.computed` counts physical hashes only.
  */
-const inFlightHashes = new Map<
-  string,
-  {
-    promise: Promise<string>
-    sinks: Set<(bytesHashed: number) => void>
-    /** The LEADER's stat identity — joiners persist exactly this entry (see below). */
-    size: number
-    mtimeMs: number
-  }
->()
+interface InFlightHash {
+  promise: Promise<string>
+  sinks: Set<(bytesHashed: number) => void>
+  /** The LEADER's stat identity — joiners persist exactly this entry (see below). */
+  size: number
+  mtimeMs: number
+  /**
+   * #420 refcount — one token per caller still waiting on this physical read. The rule the
+   * whole cancellation design rests on: **the shared read is aborted only when EVERY waiter
+   * has abandoned it.** A caller with an abort signal drops its token and rejects on its own
+   * the moment that signal fires (so its loop stops at once), but the read itself continues
+   * for anyone else. A caller with NO signal — the §7.4 start gate, `verifyModel`, the
+   * ship-time gates — holds a token it never drops, so it can never be collateral damage of
+   * a cancelled Models-screen pass that happened to join the same file.
+   */
+  waiters: Set<object>
+  /** Abort the shared physical read (only ever called with an empty `waiters`). */
+  abort: () => void
+}
+
+const inFlightHashes = new Map<string, InFlightHash>()
+
+/**
+ * Wait on a shared in-flight hash as ONE waiter (#420). Without `signal` this is the
+ * pre-#420 behaviour plus a permanent token, i.e. an uncancellable wait that pins the read.
+ * With `signal`, an abort settles THIS caller immediately — the physical read only stops if
+ * this was the last waiter.
+ */
+function awaitInFlightHash(
+  entry: InFlightHash,
+  onProgress?: (bytesHashed: number) => void,
+  signal?: AbortSignal
+): Promise<string> {
+  const token = {}
+  entry.waiters.add(token)
+  if (!signal) return entry.promise
+  return new Promise<string>((resolve, reject) => {
+    let settled = false
+    const finish = (fn: () => void): void => {
+      if (settled) return
+      settled = true
+      signal.removeEventListener('abort', onAbort)
+      entry.waiters.delete(token)
+      fn()
+    }
+    function onAbort(): void {
+      if (settled) return
+      // Stop feeding this caller's bar, then hand the read over to whoever is left.
+      if (onProgress) entry.sinks.delete(onProgress)
+      finish(() => {
+        if (entry.waiters.size === 0) entry.abort()
+        reject(new HashAbortedError())
+      })
+    }
+    signal.addEventListener('abort', onAbort, { once: true })
+    entry.promise.then(
+      (actual) => finish(() => resolve(actual)),
+      (err) => finish(() => reject(err))
+    )
+  })
+}
 
 /** Drop all in-memory cached hashes (tests / an explicit re-verify). */
 export function clearChecksumCache(): void {
@@ -483,8 +594,11 @@ async function sha256FileCached(
   filePath: string,
   store?: HashStore,
   onProgress?: (bytesHashed: number) => void,
-  label?: ChecksumLabel
+  label?: ChecksumLabel,
+  signal?: AbortSignal
 ): Promise<string> {
+  // #420: an already-cancelled pass reads nothing at all, not even a cache entry.
+  if (signal?.aborted) throw new HashAbortedError(filePath)
   const st = statSync(filePath)
   const hit = hashCache.get(filePath)
   if (hit && hit.size === st.size && hit.mtimeMs === st.mtimeMs) return hit.actual
@@ -503,7 +617,7 @@ async function sha256FileCached(
   const inFlight = inFlightHashes.get(filePath)
   if (inFlight) {
     if (onProgress) inFlight.sinks.add(onProgress)
-    const actual = await inFlight.promise
+    const actual = await awaitInFlightHash(inFlight, onProgress, signal)
     store?.set(filePath, { size: inFlight.size, mtimeMs: inFlight.mtimeMs, actual })
     return actual
   }
@@ -516,29 +630,51 @@ async function sha256FileCached(
     st.size,
     filePath
   )
-  const run = (async (): Promise<string> => {
-    const actual = await sha256File(filePath, (b) => {
-      for (const sink of sinks) sink(b)
-    })
-    // Count + cache only a COMPLETED physical hash (a throwing hash increments nothing,
-    // matching the pre-#106 behaviour `install_state_done.cacheHit` depends on).
-    checksumCacheStats.computed += 1
-    const entry: CachedHash = { size: st.size, mtimeMs: st.mtimeMs, actual }
-    hashCache.set(filePath, entry)
-    store?.set(filePath, entry)
-    return actual
-  })()
-  inFlightHashes.set(filePath, { promise: run, sinks, size: st.size, mtimeMs: st.mtimeMs })
-  try {
-    const actual = await run
-    instrumentation.end(true)
-    return actual
-  } catch (err) {
-    instrumentation.end(false)
-    throw err
-  } finally {
-    inFlightHashes.delete(filePath)
+  // #420: the abort controller belongs to the PHYSICAL read, not to any one caller —
+  // `awaitInFlightHash` fires it only once every waiter has abandoned the read.
+  const controller = new AbortController()
+  const entry: InFlightHash = {
+    promise: undefined as unknown as Promise<string>,
+    sinks,
+    size: st.size,
+    mtimeMs: st.mtimeMs,
+    waiters: new Set<object>(),
+    abort: () => controller.abort()
   }
+  // The instrumentation, the `computed` counter and both cache writes now live INSIDE the
+  // run, because the run outlives its leader: a leader that cancels while a joiner is still
+  // waiting must not close the pair for a read that is still going (and a cancelled read
+  // must still close it with ok:false, which is what keeps a cancelled hash out of the #108
+  // read sample and out of #392's `checksumWarmedPaths`).
+  const run = (async (): Promise<string> => {
+    try {
+      const actual = await sha256File(
+        filePath,
+        (b) => {
+          for (const sink of sinks) sink(b)
+        },
+        controller.signal
+      )
+      // Count + cache only a COMPLETED physical hash (a throwing hash increments nothing,
+      // matching the pre-#106 behaviour `install_state_done.cacheHit` depends on).
+      checksumCacheStats.computed += 1
+      const cached: CachedHash = { size: st.size, mtimeMs: st.mtimeMs, actual }
+      hashCache.set(filePath, cached)
+      store?.set(filePath, cached)
+      instrumentation.end(true)
+      return actual
+    } catch (err) {
+      instrumentation.end(false)
+      throw err
+    } finally {
+      // Only ever retire OUR OWN entry (a later hash of the same path may already have
+      // registered its own).
+      if (inFlightHashes.get(filePath) === entry) inFlightHashes.delete(filePath)
+    }
+  })()
+  entry.promise = run
+  inFlightHashes.set(filePath, entry)
+  return awaitInFlightHash(entry, onProgress, signal)
 }
 
 /**
@@ -566,10 +702,11 @@ export async function verifyChecksum(
   expected: string,
   store?: HashStore,
   onProgress?: (bytesHashed: number) => void,
-  label?: ChecksumLabel
+  label?: ChecksumLabel,
+  signal?: AbortSignal
 ): Promise<ChecksumResult> {
   if (!existsSync(filePath)) return { exists: false, matched: null, actual: null }
-  const actual = await sha256FileCached(filePath, store, onProgress, label)
+  const actual = await sha256FileCached(filePath, store, onProgress, label, signal)
   if (!isRealSha256(expected)) return { exists: true, matched: null, actual }
   return { exists: true, matched: actual === expected, actual }
 }
@@ -688,6 +825,14 @@ export interface InstallStateOptions {
    * still used when present.
    */
   skipHash?: boolean
+  /**
+   * #420 cancellation. Checked at the head of the per-file loop AND threaded into the read
+   * itself, so a cancel between two multi-GB weights takes effect at once instead of after
+   * the current file finishes. Aborting makes this function throw `HashAbortedError`;
+   * `buildModelList` turns that into the calm "present but unchecked" answer. Omitted by
+   * the §7.4 start gate, `verifyModel` and the ship-time gates, which stay uncancellable.
+   */
+  signal?: AbortSignal
 }
 
 /**
@@ -709,6 +854,9 @@ export async function computeInstallState(
   for (const f of files) {
     if (!existsSync(f.path)) return 'missing'
   }
+  // #420: a cancel that landed before this model started must stop the pass here, not one
+  // multi-GB file later.
+  if (opts.signal?.aborted) throw new HashAbortedError()
 
   // A placeholder hash can never verify, so hashing the (multi-GB) file would be pure
   // wasted I/O — decide from the manifest alone. Outside developer mode an unverifiable
@@ -729,13 +877,16 @@ export async function computeInstallState(
   // bar advances monotonically (a cached file contributes 0 bytes and fires no progress).
   let hashedBase = 0
   for (const f of files) {
+    // #420 loop head: a cancel between two files of the same model stops it immediately.
+    if (opts.signal?.aborted) throw new HashAbortedError(f.path)
     const willHash = isRealSha256(f.sha) && !cachedHashFor(f.path, opts.hashStore)
     const check = await verifyChecksum(
       f.path,
       f.sha,
       opts.hashStore,
       willHash && opts.onProgress ? (b) => opts.onProgress!(hashedBase + b) : undefined,
-      { modelId: manifest.id, file: f.kind }
+      { modelId: manifest.id, file: f.kind },
+      opts.signal
     )
     if (check.matched === false) return 'checksum_failed'
     if (willHash) {
@@ -1231,6 +1382,23 @@ export interface BuildModelListOptions {
    * Distinguishes "lazy, no active model" (`null`) from "full hash" (absent).
    */
   onlyVerifyModelId?: string | null
+  /**
+   * #420 — the id that tags every `ModelVerifyProgress` of this pass. Minted by the RENDERER
+   * and handed down so the Cancel affordance has a handle from the instant the user starts
+   * the pass, not from the first progress event: `runId` used to be minted here and only
+   * reached the renderer on that first event (and no event fires at all when
+   * `overallBytesTotal === 0`), so a cancel clicked in between had nothing to send. Omitted
+   * ⇒ a fresh uuid, exactly as before.
+   */
+  runId?: string
+  /**
+   * #420 cancellation for the DISPLAY-side pass (the Models screen's "Check all model
+   * files"). An abort stops the hashing loops at the next file boundary; the models that had
+   * not been reached are reported present-but-UNCHECKED — the same answer RT-3 lazy
+   * verification gives — so a cancelled pass is a calm outcome, never an error. The §7.4
+   * start gate and the ship-time gates never pass one.
+   */
+  signal?: AbortSignal
 }
 
 export interface ModelListResult {
@@ -1286,12 +1454,22 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
   // to hash (everything cached) we emit no events and the renderer shows no bar.
   const emit = opts.onProgress && overallBytesTotal > 0 ? opts.onProgress : undefined
   // Tags every event of THIS pass so the renderer can lock onto one when passes overlap.
-  const runId = emit ? randomUUID() : ''
+  // #420: the renderer's own id when it supplied one (it is also the cancel handle).
+  const runId = emit ? (opts.runId ?? randomUUID()) : ''
 
   const models: ModelInfo[] = []
+  // #420: set once the pass has been cancelled. Every model from that point on — including
+  // the one that was mid-hash — is reported WITHOUT hashing, which is exactly what RT-3
+  // lazy verification reports for a present weight. Nothing is lost and nothing is faked:
+  // what finished before the cancel is in the checksum cache, the rest is simply unchecked
+  // and the §7.4 start gate still re-verifies whatever the user launches.
+  let cancelled = false
   for (let i = 0; i < manifests.length; i++) {
     const { manifest } = manifests[i]
-    const thisHashes = willHash[i] > 0
+    // Loop head: a cancel between two multi-GB weights stops the pass here, before the next
+    // one is opened.
+    if (!cancelled && opts.signal?.aborted) cancelled = true
+    const thisHashes = !cancelled && willHash[i] > 0
     if (emit && thisHashes) stepIndex++
     const stepAt = stepIndex // capture for this model's throttled callbacks
     let state: ModelState
@@ -1299,7 +1477,8 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
       state = await computeInstallState(manifest, opts.rootPath, {
         developerMode: opts.developerMode,
         hashStore: opts.hashStore,
-        skipHash: skipHashFor(manifest.id),
+        skipHash: cancelled || skipHashFor(manifest.id),
+        signal: opts.signal,
         onProgress:
           emit && thisHashes
             ? (bytesHashed) =>
@@ -1322,10 +1501,28 @@ export async function buildModelList(opts: BuildModelListOptions): Promise<Model
       // entire `IPC.listModels` handler — mirroring the pendingHashBytes() pre-pass, which
       // already tolerates the same throw, and discoverManifests' error channel (vuln-scan
       // 2026-06-21 [uncaught-exception-dos]).
-      errors.push(`${manifest.id}: ${err instanceof Error ? err.message : String(err)}`)
-      continue
+      //
+      // #420 is the ONE exception: a cancelled hash is not a broken manifest. Re-derive this
+      // model's state without hashing (cheap — statSync + cache lookups) and carry on in
+      // cancelled mode, so the list stays complete and every state in it stays honest.
+      const recovered = isHashAborted(err)
+        ? await computeInstallState(manifest, opts.rootPath, {
+            developerMode: opts.developerMode,
+            hashStore: opts.hashStore,
+            skipHash: true
+          }).catch(() => null)
+        : null
+      if (recovered === null) {
+        errors.push(`${manifest.id}: ${err instanceof Error ? err.message : String(err)}`)
+        if (isHashAborted(err)) cancelled = true
+        continue
+      }
+      cancelled = true
+      state = recovered
+      // …and fall through to the shared tail, so a cancelled model is described exactly like
+      // every other one (recommended ★, RAM gate, mock-startable).
     }
-    if (emit && thisHashes) completedBytes += willHash[i]
+    if (emit && thisHashes && !cancelled) completedBytes += willHash[i]
     if (opts.runningModelId && manifest.id === opts.runningModelId && state === 'installed') {
       state = 'running'
     }

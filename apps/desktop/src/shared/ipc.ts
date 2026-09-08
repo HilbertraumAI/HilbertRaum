@@ -30,6 +30,21 @@ export const IPC = {
    * itself reads through the cache and never re-hashes an unchanged file.
    */
   verifyModel: 'models:verify',
+  /**
+   * Cancel one in-flight DISPLAY-side verification pass (#420) — the Models screen's "Check
+   * all model files", a 25-minute operation on a slow drive that the user starts on purpose
+   * and must be able to stop. Takes the run id the RENDERER minted and passed to
+   * `listModels`, which is also the `runId` tagging that pass's `modelVerifyProgress`
+   * events; resolves `true` if a pass was found and aborted, `false` if nothing was running
+   * under that id (a no-op, never an error). Cancelling is not a failure: the pass returns a
+   * complete model list in which what finished is verified from the cache and the rest is
+   * simply unchecked. It can never reach the §7.4 start gate's own hash, the per-model
+   * "Verify checksum" button or the ship-time gates — none of them pass a signal, and a hash
+   * shared with an uncancellable caller (#106 single-flight) keeps running for that caller.
+   * NOT gated on the unlocked workspace, for the same reason `stopRuntime` is not: it only
+   * stops work that is already running and touches no database.
+   */
+  cancelModelVerify: 'models:cancelVerify',
   startRuntime: 'runtime:start',
   /**
    * The Models screen's one primary action per installed chat card (beta #27, D70): make a
@@ -572,6 +587,12 @@ export const EVENTS = {
    * to the calling renderer (`event.sender`) while first-run weight hashing runs, so the
    * first-run gate + first cold Models visit can show a determinate bar instead of an
    * opaque spinner. First-run-only in practice (the hash cache makes later passes a no-op).
+   *
+   * #420: `runId` is the RENDERER's id when it supplied one to `listModels` (the Models
+   * screen's "Check all model files" always does), which makes it the handle
+   * `cancelModelVerify` takes; otherwise main mints one, exactly as before. Either way the
+   * renderer locks onto one pass by it. A cancelled pass still emits its terminal `done`
+   * event, so the bar settles rather than lingering.
    */
   modelVerifyProgress: 'models:verifyProgress',
   /**

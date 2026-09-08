@@ -26,9 +26,13 @@ from its first public `1.0.0` release onward.
 ## [Unreleased]
 
 ### Added
-- **Check all model files.** A new action near the top of the AI Model screen checks every model
-  file on the drive against its published checksum. It replaces a check the app used to run on
-  its own every time you opened that screen (see Changed).
+- **Check all model files, and stop it when you want to.** A new action near the top of the AI
+  Model screen checks every model file on the drive against its published checksum. It replaces a
+  check the app used to run on its own every time you opened that screen (see Changed). On a slow
+  drive the full check can take several minutes, so **Stop checking** sits beside its progress bar:
+  the files it already checked stay checked, the rest are simply left unchecked, and stopping is
+  not treated as a failure. The check keeps running if you move to another screen — come back and
+  the progress bar and Stop checking are still there.
 - **A quieter left navigation.** The sidebar now has three groups: Chat, Documents, Translate
   and Images for everyday work; AI Model and Performance for the machine; Settings at the
   bottom. The HilbertRaum mark at the top is the Home button and lights up when you are on

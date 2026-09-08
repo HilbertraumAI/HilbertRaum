@@ -144,8 +144,12 @@ const api = {
   // on a cold cache — the workspace gate, the Performance screen and (since #382) an ordinary
   // Models-screen visit. It is omitted only by the Models screen's explicit "Check all model
   // files" action, which is the one caller that hashes the full set.
-  listModels: (lazyVerify?: boolean): Promise<ModelInfo[]> =>
-    ipcRenderer.invoke(IPC.listModels, lazyVerify),
+  // `verifyRunId` (#420): a renderer-minted id for THIS pass. It tags the pass's
+  // `modelVerifyProgress` events and is the handle `cancelModelVerify` takes — minted before
+  // the call so a Cancel clicked before the first progress event (or on a pass that emits
+  // none at all) still has something to send. Only the full pass supplies one.
+  listModels: (lazyVerify?: boolean, verifyRunId?: string): Promise<ModelInfo[]> =>
+    ipcRenderer.invoke(IPC.listModels, lazyVerify, verifyRunId),
   selectModel: (
     modelId: string
   ): Promise<{ activeModelId: string | null; activeEmbeddingModelId: string | null }> =>
@@ -153,6 +157,10 @@ const api = {
   /** Force a real re-hash of one model's weight file; resolves with the fresh state. */
   verifyModel: (modelId: string): Promise<ModelState> =>
     ipcRenderer.invoke(IPC.verifyModel, modelId),
+  /** #420: stop the "Check all model files" pass started under `verifyRunId`. Resolves
+   *  `true` when a pass was aborted, `false` when nothing was running under that id. */
+  cancelModelVerify: (verifyRunId: string): Promise<boolean> =>
+    ipcRenderer.invoke(IPC.cancelModelVerify, verifyRunId),
   startRuntime: (modelId: string): Promise<RuntimeStatus> =>
     ipcRenderer.invoke(IPC.startRuntime, modelId),
   /** Beta #27 (D70): select this model AND start its runtime in one MAIN-side action. */

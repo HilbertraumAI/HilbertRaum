@@ -2718,6 +2718,10 @@ code, pre, kbd { font-family: var(--font-mono); }
 .models-verify-all { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .models-verify-all > .hint { margin: 0; }
 .models-verify-all > .progress { align-self: stretch; }
+/* #420: the Stop-checking button sits under the bar — the same Progress + Cancel pairing the
+   download panels use — with a little more air than the 4px row gap so it reads as its own
+   action rather than as part of the bar. */
+.models-verify-all > .progress + .btn { margin-top: 4px; }
 
 /* Offline article viewer: readable measure inside the wide modal; scrolls in the modal. */
 .pack-article { display: flex; flex-direction: column; gap: 8px; }

@@ -96,8 +96,16 @@ const MODULES: Array<{
     name: 'registerModelIpc',
     register: registerModelIpc,
     // stopRuntime + the two read-only runtime channels touch the in-memory runtime / disk
-    // marker, never ctx.db, and must work at the gate.
-    exempt: new Set<string>([IPC.stopRuntime, IPC.getRuntimeStatus, IPC.getRuntimeInstall])
+    // marker, never ctx.db, and must work at the gate. #420's cancelVerify joins them for the
+    // same reason as stopRuntime: it only STOPS work already running (an AbortController in a
+    // module-scoped map), touches no ctx.db, and a workspace that locked mid-pass must still be
+    // able to end that pass.
+    exempt: new Set<string>([
+      IPC.stopRuntime,
+      IPC.getRuntimeStatus,
+      IPC.getRuntimeInstall,
+      IPC.cancelModelVerify
+    ])
   },
   { name: 'registerAuditIpc', register: registerAuditIpc, exempt: new Set<string>() },
   { name: 'registerRagIpc', register: registerRagIpc, exempt: new Set<string>() },

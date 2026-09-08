@@ -8,6 +8,7 @@ import { openDatabase } from '../../src/main/services/db'
 import { initPerf } from '../../src/main/services/perf'
 import {
   latestEffectiveRead,
+  latestEffectiveReadBySource,
   recordModelLoadRead,
   resetEffectiveReadForTests
 } from '../../src/main/services/read-speed'
@@ -1437,6 +1438,288 @@ describe('buildModelList — verification progress', () => {
     expect(events.every((e) => e.modelCount === 1)).toBe(true)
   })
 })
+// #420 — cancelling a verification pass. Before this, `sha256File` took no abort signal, so
+// the Models screen's "Check all model files" ran to the end whatever the user did: 39.44 GB
+// at a mean 25.8 MB/s on the #330 slow drive is ~25 minutes of USB I/O that survived
+// navigating away and even window destruction. Only the DISPLAY-side passes are cancellable;
+// the §7.4 start gate and the ship-time gates pass no signal and are untouched.
+describe('cancellable verification (#420)', () => {
+  /** A file big enough that `sha256File`'s 64 MiB progress throttle fires mid-read, which is
+   *  what makes a mid-file abort deterministic (and what the #392 warm mark needs). */
+  const OVER_PROGRESS_CHUNK = 70 * 1024 * 1024
+
+  function bigFile(): string {
+    const file = join(tempDir('hilbertraum-abort-'), 'weight.bin')
+    writeFileSync(file, Buffer.alloc(OVER_PROGRESS_CHUNK))
+    return file
+  }
+
+  function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
+    const dir = tempDir('hilbertraum-manifests-')
+    for (const [i, o] of objs.entries()) writeFileSync(join(dir, `m${i}.yaml`), stringify(o))
+    return dir
+  }
+  function writeWeight(rootPath: string, relPath: string, content: string): string {
+    const p = join(rootPath, relPath)
+    mkdirSync(parse(p).dir, { recursive: true })
+    writeFileSync(p, content)
+    return createHash('sha256').update(content).digest('hex')
+  }
+
+  // ---- trap 1: the promise must REJECT, never hang -----------------------------------
+  // `sha256File` attaches only `error` and `end`. A naive `stream.destroy()` emits `close`
+  // and NEITHER of those, so the promise would simply never settle and every awaiting caller
+  // — computeInstallState, buildModelList, the IPC handler, the renderer's busy flag — would
+  // park forever. These pin the rejection, not merely that hashing stopped.
+  it('rejects (never hangs) when the signal fires while the read is open', async () => {
+    clearChecksumCache()
+    const file = join(tempDir('hilbertraum-abort-'), 'weight.bin')
+    writeFileSync(file, 'abort me')
+    const controller = new AbortController()
+    const promise = sha256File(file, undefined, controller.signal)
+    controller.abort() // the stream is open (fs.open is async) → destroy-with-error path
+    await expect(promise).rejects.toThrow(/cancelled/i)
+  })
+
+  it('rejects without reading anything when the signal is ALREADY aborted', async () => {
+    clearChecksumCache()
+    const controller = new AbortController()
+    controller.abort()
+    // A path that does not exist: reaching the filesystem at all would give ENOENT instead.
+    await expect(
+      sha256File(join(tempDir('hilbertraum-abort-'), 'never-opened.bin'), undefined, controller.signal)
+    ).rejects.toThrow(/cancelled/i)
+  })
+
+  it('with NO signal it behaves exactly as before (progress + digest)', async () => {
+    clearChecksumCache()
+    const file = join(tempDir('hilbertraum-abort-'), 'weight.bin')
+    writeFileSync(file, 'unchanged')
+    const seen: number[] = []
+    await expect(sha256File(file, (b) => seen.push(b))).resolves.toBe(
+      createHash('sha256').update('unchanged').digest('hex')
+    )
+    expect(seen).toEqual([Buffer.byteLength('unchanged')])
+  })
+
+  it('aborts mid-file: the read stops and nothing is cached or counted', async () => {
+    clearChecksumCache()
+    const file = bigFile()
+    const before = checksumCacheStats.computed
+    const controller = new AbortController()
+    // The 64 MiB throttle fires once with ~6 MiB still to read — a genuine mid-read abort.
+    await expect(
+      sha256File(file, () => controller.abort(), controller.signal)
+    ).rejects.toThrow(/cancelled/i)
+    expect(checksumCacheStats.computed).toBe(before)
+  })
+
+  // ---- trap 2: single-flight sharing --------------------------------------------------
+  // `inFlightHashes` makes concurrent callers of the same path share ONE physical read —
+  // it exists precisely because the unlock auto-start races a Models-screen pass over the
+  // same weight. The rule: the shared read is aborted only when EVERY waiter has abandoned
+  // it, so an uncancellable caller can never be collateral damage.
+  it('a cancelled screen pass does not abort the hash an uncancellable caller joined', async () => {
+    clearChecksumCache()
+    const file = bigFile()
+    const expected = createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex')
+    const before = checksumCacheStats.computed
+    const controller = new AbortController()
+    // Same tick: the leader registers in `inFlightHashes` synchronously, so the second call
+    // JOINS it rather than starting a second multi-GB read.
+    const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
+    const gate = verifyChecksum(file, expected) // the §7.4 start gate — no signal
+    controller.abort()
+
+    await expect(screen).rejects.toThrow(/cancelled/i)
+    expect((await gate).matched).toBe(true) // the shared read ran to the end for the gate
+    expect(checksumCacheStats.computed).toBe(before + 1) // and it was ONE physical hash
+  })
+
+  it('…and the other way round: a cancelled JOINER leaves the uncancellable leader alone', async () => {
+    clearChecksumCache()
+    const file = bigFile()
+    const expected = createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex')
+    const before = checksumCacheStats.computed
+    const controller = new AbortController()
+    const gate = verifyChecksum(file, expected) // leads, uncancellable
+    const screen = verifyChecksum(file, expected, undefined, undefined, undefined, controller.signal)
+    controller.abort()
+
+    await expect(screen).rejects.toThrow(/cancelled/i)
+    expect((await gate).matched).toBe(true)
+    expect(checksumCacheStats.computed).toBe(before + 1)
+  })
+
+  it('the physical read DOES stop once every waiter has cancelled', async () => {
+    clearChecksumCache()
+    const file = bigFile()
+    const expected = createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex')
+    const before = checksumCacheStats.computed
+    const a = new AbortController()
+    const b = new AbortController()
+    const first = verifyChecksum(file, expected, undefined, undefined, undefined, a.signal)
+    const second = verifyChecksum(file, expected, undefined, undefined, undefined, b.signal)
+    a.abort()
+    b.abort()
+
+    await expect(first).rejects.toThrow(/cancelled/i)
+    await expect(second).rejects.toThrow(/cancelled/i)
+    // No completed physical hash ⇒ nothing counted and nothing cached.
+    expect(checksumCacheStats.computed).toBe(before)
+  })
+
+  // ---- the persistence guarantees a cancelled hash must leave alone -------------------
+  it('a cancelled hash records no read sample and never marks the file page-cache-warm', async () => {
+    clearChecksumCache()
+    resetEffectiveReadForTests()
+    const file = bigFile()
+    const controller = new AbortController()
+    await expect(
+      verifyChecksum(
+        file,
+        createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex'),
+        undefined,
+        () => controller.abort(),
+        { modelId: 'm', file: 'weight' },
+        controller.signal
+      )
+    ).rejects.toThrow(/cancelled/i)
+    expect(latestEffectiveReadBySource('checksum')).toBeNull()
+
+    // The teeth: the file was NOT registered in #392's warmed set, so a model-load window
+    // over it still records honestly. (A completed hash of the same file suppresses it —
+    // the contrast case below.)
+    recordModelLoadRead(file, 10_000, 'm', 6_000_000_000)
+    expect(latestEffectiveReadBySource('model_load')).not.toBeNull()
+  })
+
+  it('…while a COMPLETED hash of the same file does mark it warm (the contrast)', async () => {
+    clearChecksumCache()
+    resetEffectiveReadForTests()
+    const file = bigFile()
+    await verifyChecksum(
+      file,
+      createHash('sha256').update(Buffer.alloc(OVER_PROGRESS_CHUNK)).digest('hex'),
+      undefined,
+      undefined,
+      { modelId: 'm', file: 'weight' }
+    )
+    recordModelLoadRead(file, 10_000, 'm', 6_000_000_000)
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
+  })
+
+  // ---- the loops, not only the stream --------------------------------------------------
+  it('a cancel between two weights stops the pass immediately — the next model never hashes', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-root-')
+    const h1 = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
+    const h2 = writeWeight(root, 'models/chat/b.gguf', 'BBBBBBBB')
+    const dir = manifestsDirWith(
+      manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h1 }),
+      manifestObj({ id: 'b', local_path: 'models/chat/b.gguf', sha256: h2 })
+    )
+    const before = checksumCacheStats.computed
+    const controller = new AbortController()
+    const events: ModelVerifyProgress[] = []
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      signal: controller.signal,
+      // The first model's final progress event lands once its file is hashed — cancel there.
+      onProgress: (p) => {
+        events.push(p)
+        if (!p.done) controller.abort()
+      }
+    })
+    // Exactly ONE physical hash: the loop head saw the abort before opening the second file.
+    expect(checksumCacheStats.computed).toBe(before + 1)
+    // The list is still complete and honest: what was reached is verified, the rest is
+    // present-but-unchecked, which is exactly what RT-3 lazy verification reports.
+    expect(models.map((m) => m.id).sort()).toEqual(['a', 'b'])
+    expect(models.every((m) => m.state === 'installed')).toBe(true)
+    // No event ever names the model that was skipped, and the bar still settles.
+    expect(events.some((e) => e.modelId === 'b')).toBe(false)
+    expect(events.at(-1)?.done).toBe(true)
+  })
+
+  it('an already-cancelled pass hashes nothing at all and still settles the bar', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-root-')
+    const h = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
+    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
+    const before = checksumCacheStats.computed
+    const controller = new AbortController()
+    controller.abort()
+    const events: ModelVerifyProgress[] = []
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      signal: controller.signal,
+      onProgress: (p) => events.push(p)
+    })
+    expect(checksumCacheStats.computed).toBe(before)
+    expect(models[0].state).toBe('installed')
+    expect(events).toHaveLength(1)
+    expect(events[0].done).toBe(true)
+  })
+
+  it('a cancelled model is never reported as a manifest ERROR', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-root-')
+    const h = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
+    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
+    const controller = new AbortController()
+    controller.abort()
+    const { manifestErrors } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      signal: controller.signal
+    })
+    expect(manifestErrors).toEqual([])
+  })
+
+  it('the renderer-minted run id tags every event of the pass (it is the cancel handle)', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-root-')
+    const h = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
+    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
+    const events: ModelVerifyProgress[] = []
+    await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false,
+      runId: 'renderer-minted',
+      onProgress: (p) => events.push(p)
+    })
+    expect(events.length).toBeGreaterThan(0)
+    expect(events.every((e) => e.runId === 'renderer-minted')).toBe(true)
+  })
+
+  it('a pass with NO signal is byte-identical to before (nothing is cancellable by accident)', async () => {
+    clearChecksumCache()
+    const root = tempDir('hilbertraum-root-')
+    const h = writeWeight(root, 'models/chat/a.gguf', 'AAAA')
+    const dir = manifestsDirWith(manifestObj({ id: 'a', local_path: 'models/chat/a.gguf', sha256: h }))
+    const before = checksumCacheStats.computed
+    const { models } = await buildModelList({
+      manifestsDir: dir,
+      rootPath: root,
+      profile: 'UNKNOWN',
+      developerMode: false
+    })
+    expect(models[0].state).toBe('installed')
+    expect(checksumCacheStats.computed).toBe(before + 1)
+  })
+})
+
 
 describe('discoverManifests', () => {
   function writeManifest(dir: string, name: string, obj: unknown): void {

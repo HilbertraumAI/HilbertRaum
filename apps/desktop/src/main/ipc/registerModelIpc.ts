@@ -446,6 +446,20 @@ export async function maybeAutoStartActiveModel(ctx: AppContext): Promise<void> 
   }
 }
 
+/**
+ * In-flight DISPLAY-side verification passes, keyed by the run id the renderer minted and
+ * passed to `listModels` (#420) — the `inFlightStreams` pattern, with `cancelModelVerify`
+ * playing the part of `chat:stop`. Module scope, like `inFlightStreams`, so the registry
+ * survives a renderer navigating away and back: the pass keeps running in main and the
+ * revisited screen can still stop it.
+ *
+ * Only a pass the renderer NAMED is in here. The §7.4 start gate, the per-model "Verify
+ * checksum" button and the ship-time gates hash without a signal and are unreachable from
+ * this map — and by the single-flight refcount in `models.ts`, a physical read one of them
+ * shares with a cancelled pass keeps running for them.
+ */
+const verifyRuns = new Map<string, AbortController>()
+
 export function registerModelIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   // #108: persistence is a property of RECORDING — the observer fires on every sample
@@ -471,49 +485,78 @@ export function registerModelIpc(ctx: AppContext): void {
     if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.models.locked'))
   }
 
-  ipcHandle(IPC.listModels, async (event, lazyVerify?: boolean): Promise<ModelInfo[]> => {
-    requireUnlocked()
-    if (!ctx.manifestsDir) {
-      log.warn('No model-manifests directory found; returning empty model list')
-      return []
-    }
-    const s = getSettings(ctx.db)
-    const { models, manifestErrors } = await buildModelList({
-      manifestsDir: ctx.manifestsDir,
-      rootPath: ctx.paths.rootPath,
-      profile: s.lastBenchmark?.profile ?? 'UNKNOWN',
-      developerMode: developerLeniency(ctx, s),
-      runningModelId: ctx.runtime.activeModelId(),
-      hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
-      machineRamGb: machineRamGb(),
-      // §6.6: the ★ pick goes by graphics memory on a discrete card, the SAME rule
-      // runBenchmark applies, so the Performance screen and the Models screen agree.
-      ...pickerMemoryFor(s),
-      // §6.5 signal-aware step-down (issue #95): feed the persisted Diagnostics pairing
-      // (tok/s + the model that produced it, issue #52) into the chat recommendation.
-      // Derived fresh from lastBenchmark on every call — stateless, never compounds; the same
-      // function feeds the Performance snapshot's live recommendation (`liveChatRecommendation`).
-      speedSignal: speedSignalFor(s),
-      // RT-3: every ROUTINE caller passes lazyVerify, so only the active model is hashed on
-      // a cold cache — the chat path (the workspace gate into Chat), the Performance screen
-      // and, since #382, an ordinary Models-screen visit. The full corpus of multi-GB GGUFs
-      // is hashed only when the flag is omitted, which now means one explicit user action:
-      // the Models screen's "Check all model files". Display-only; the start gate
-      // (startModelRuntime) re-verifies the model it actually launches.
-      ...(lazyVerify ? { onlyVerifyModelId: s.activeModelId } : {}),
-      // First-run weight hashing can take a while on a fresh drive — stream progress back
-      // to the calling renderer so the gate + Models screen show a determinate bar. Guard
-      // against a closed/destroyed window (navigation away mid-hash).
-      onProgress: (p) => {
-        if (!event.sender.isDestroyed()) event.sender.send(EVENTS.modelVerifyProgress, p)
+  ipcHandle(
+    IPC.listModels,
+    async (event, lazyVerify?: boolean, verifyRunId?: string): Promise<ModelInfo[]> => {
+      requireUnlocked()
+      if (!ctx.manifestsDir) {
+        log.warn('No model-manifests directory found; returning empty model list')
+        return []
       }
-    })
-    if (manifestErrors.length > 0) {
-      log.warn('Invalid model manifests skipped', manifestErrors)
+      const s = getSettings(ctx.db)
+      // #420: only a pass the renderer named is cancellable, and it is registered BEFORE any
+      // hashing starts — so a Cancel clicked in the first seconds (before the first progress
+      // event, or on a pass that emits none because everything is cached) still finds it.
+      const controller = verifyRunId ? new AbortController() : undefined
+      if (verifyRunId && controller) verifyRuns.set(verifyRunId, controller)
+      try {
+        const { models, manifestErrors } = await buildModelList({
+          manifestsDir: ctx.manifestsDir,
+          rootPath: ctx.paths.rootPath,
+          profile: s.lastBenchmark?.profile ?? 'UNKNOWN',
+          developerMode: developerLeniency(ctx, s),
+          runningModelId: ctx.runtime.activeModelId(),
+          hashStore: createSettingsHashStore(() => ctx.db, ctx.paths.rootPath),
+          machineRamGb: machineRamGb(),
+          // §6.6: the ★ pick goes by graphics memory on a discrete card, the SAME rule
+          // runBenchmark applies, so the Performance screen and the Models screen agree.
+          ...pickerMemoryFor(s),
+          // §6.5 signal-aware step-down (issue #95): feed the persisted Diagnostics pairing
+          // (tok/s + the model that produced it, issue #52) into the chat recommendation.
+          // Derived fresh from lastBenchmark on every call — stateless, never compounds; the same
+          // function feeds the Performance snapshot's live recommendation (`liveChatRecommendation`).
+          speedSignal: speedSignalFor(s),
+          // RT-3: every ROUTINE caller passes lazyVerify, so only the active model is hashed on
+          // a cold cache — the chat path (the workspace gate into Chat), the Performance screen
+          // and, since #382, an ordinary Models-screen visit. The full corpus of multi-GB GGUFs
+          // is hashed only when the flag is omitted, which now means one explicit user action:
+          // the Models screen's "Check all model files". Display-only; the start gate
+          // (startModelRuntime) re-verifies the model it actually launches.
+          ...(lazyVerify ? { onlyVerifyModelId: s.activeModelId } : {}),
+          // First-run weight hashing can take a while on a fresh drive — stream progress back
+          // to the calling renderer so the gate + Models screen show a determinate bar. Guard
+          // against a closed/destroyed window (navigation away mid-hash).
+          onProgress: (p) => {
+            if (!event.sender.isDestroyed()) event.sender.send(EVENTS.modelVerifyProgress, p)
+          },
+          // #420: the renderer's id tags this pass's progress events, so the bar and the Cancel
+          // button address the same run.
+          ...(verifyRunId ? { runId: verifyRunId, signal: controller?.signal } : {})
+        })
+        if (manifestErrors.length > 0) {
+          log.warn('Invalid model manifests skipped', manifestErrors)
+        }
+        // #108: a cold-cache visit just hashed real multi-GB files — persist any fresh sample.
+        // A CANCELLED pass reaches here too: whatever finished hashing is a genuine sample.
+        persistEffectiveRead(ctx)
+        return models
+      } finally {
+        // Only ever retire our own registration.
+        if (verifyRunId && verifyRuns.get(verifyRunId) === controller) verifyRuns.delete(verifyRunId)
+      }
     }
-    // #108: a cold-cache visit just hashed real multi-GB files — persist any fresh sample.
-    persistEffectiveRead(ctx)
-    return models
+  )
+
+  // #420: stop an in-flight "Check all model files" pass. Deliberately NOT behind
+  // `requireUnlocked` — like `stopRuntime` it only STOPS work that is already running and
+  // touches no database, so a workspace that locked mid-pass must still be able to end it.
+  // A missing id is a no-op (`false`), never an error: the pass may simply have finished.
+  ipcHandle(IPC.cancelModelVerify, (_e, verifyRunId: string): boolean => {
+    const controller = typeof verifyRunId === 'string' ? verifyRuns.get(verifyRunId) : undefined
+    if (!controller) return false
+    log.info('Cancelling model verification pass', { verifyRunId })
+    controller.abort()
+    return true
   })
 
   ipcHandle(IPC.selectModel, (_e, modelId: string) => {
