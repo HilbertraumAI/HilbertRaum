@@ -7,6 +7,7 @@ import {
   computeServedSet,
   formatZimUuid,
   readZimHeader,
+  nativeArchivePath,
   servingNameFor
 } from '../../src/main/services/zim/identity'
 import { malformedZimFixture, uuidBytes, writeZimFixture } from '../helpers/zim-header'
@@ -102,6 +103,30 @@ describe('servingNameFor — libkiwix 14.1 Book::getHumanReadableIdFromPath', ()
     )
   })
 
+  it("#429 — a non-native separator makes the WHOLE path the name, and nativeArchivePath is the fix", () => {
+    // The forward-slash path Windows itself accepts survives step 2 intact, so the serving name
+    // carries the / that separates /raw/<book>/<action>/<path> and no URL can express it. This is
+    // NOT a divergence from libkiwix — it derives the same name from the same path (book.cpp
+    // getHumanReadableIdFromPath, #ifdef _WIN32). The input is normalized instead of the rule, so
+    // the two stay in agreement.
+    expect(servingNameFor("K:/zim/atlas.zim", "win32")).toBe("k:/zim/atlas")
+    expect(servingNameFor(nativeArchivePath("K:/zim/atlas.zim", "win32"), "win32")).toBe("atlas")
+    // Mixed separators too — the shape a config or env value most often arrives in.
+    expect(servingNameFor(nativeArchivePath('K:\\zim/sub/atlas.zim', 'win32'), 'win32')).toBe('atlas')
+  })
+
+  it("nativeArchivePath leaves a POSIX path alone — a backslash is a filename character there", () => {
+    expect(nativeArchivePath("/media/drive/zim/atlas.zim", "linux")).toBe("/media/drive/zim/atlas.zim")
+    // A literal backslash in a Linux filename must survive; converting it would rename the file.
+    expect(nativeArchivePath('/media/drive/zim/odd\\name.zim', 'linux')).toBe('/media/drive/zim/odd\\name.zim')
+    expect(servingNameFor(nativeArchivePath("/media/drive/zim/atlas.zim", "linux"), "linux")).toBe("atlas")
+  })
+
+  it("nativeArchivePath is idempotent on an already-native path", () => {
+    const once = nativeArchivePath("K:/zim/atlas.zim", "win32")
+    expect(nativeArchivePath(once, "win32")).toBe(once)
+    expect(once).toBe('K:\\zim\\atlas.zim')
+  })
   it('strips the directory with the PLATFORM separator, so both branches are pinned on one OS', () => {
     // win32 strips at the LAST backslash and leaves a forward slash alone…
     expect(servingNameFor('C:\\packs\\a\\b.zim', 'win32')).toBe('b')

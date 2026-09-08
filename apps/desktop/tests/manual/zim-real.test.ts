@@ -5,7 +5,7 @@ import { afterAll, describe, expect, it } from 'vitest'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { ZimService } from '../../src/main/services/zim'
 import { searchPackTotal } from '../../src/main/services/zim/client'
-import { readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
+import { nativeArchivePath, readZimHeader, servingNameFor } from '../../src/main/services/zim/identity'
 import { kiwixServeBinaryName, kiwixToolsDir } from '../../src/main/services/zim/tools'
 import { zimSmokeEnv } from '../helpers/zim-smoke-env'
 import { spawn, type ChildProcess } from 'node:child_process'
@@ -175,7 +175,19 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
       // slug rule for the path we registered it under, never the filename stem.
       const library = await svc.ensureServer(db)
       expect(library).not.toBeNull()
-      expect(library!.names.get(pack.id)).toBe(servingNameFor(zimFile, process.platform))
+      const servedName = library!.names.get(pack.id)
+      expect(servedName).toBe(servingNameFor(nativeArchivePath(zimFile), process.platform))
+      // …and the REAL server answers to it (#429). The assertion above compares our value with
+      // the function that produced it, so it holds for any input — including one that 404s on
+      // every article, which is exactly how a whole-path serving name went unnoticed until the
+      // arm reported an empty pack twenty lines later. This one asks the running kiwix-serve,
+      // through `/raw/<name>/meta/Title`: it needs no entry key, so it tests the ROUTE alone.
+      const routeProbe = await fetch(`http://127.0.0.1:${library!.port}/raw/${servedName}/meta/Title`)
+      expect(
+        routeProbe.status,
+        `kiwix-serve does not route /raw/${servedName}/… — our serving name and libkiwix's disagree`
+      ).toBe(200)
+      expect((await routeProbe.text()).trim()).toBe(pack.title)
 
       // The arm: real sidecar start + Xapian search + article fetch + chunking — through the
       // #340 L3-b expansion when the operator named a model (D-Z20), plain otherwise.

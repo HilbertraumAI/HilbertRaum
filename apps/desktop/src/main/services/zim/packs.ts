@@ -6,7 +6,7 @@ import { MAX_SELECTED_PACKS } from '../../../shared/types'
 import { type Db, prepareCached } from '../db'
 import { log } from '../logging'
 import { ftIndexHint, parseLibraryXml, type KiwixBook } from './client'
-import { ZimHeaderError, readZimHeader } from './identity'
+import { ZimHeaderError, nativeArchivePath, readZimHeader } from './identity'
 import { KiwixManageError } from './tools'
 
 // Knowledge-pack registry (ZIM wave): CRUD + disk reconciliation over the
@@ -43,6 +43,13 @@ export type ManageAddFn = (libraryXmlPath: string, zimPath: string, signal?: Abo
 export interface PackDeps {
   /** The drive's `zim/` folder (canonical pack home; may not exist). */
   zimDir: string
+  /**
+   * Which native path-separator convention an incoming archive path is normalized to (#429),
+   * the same injected-platform posture `kiwixManageAdd` uses for its argv (finding L9).
+   * Defaults to `process.platform` so production is unchanged and partial test contexts need
+   * not set it; tests pin both branches on one host.
+   */
+  platform?: NodeJS.Platform
   manageAdd: ManageAddFn
   /**
    * Where the registration throwaway `library.xml` goes (#301 P3b, findings L3/M4). Production
@@ -157,13 +164,23 @@ export type PackResolution =
  * No candidate existed at all ⇒ `'missing'`. One existed but none carried this identity ⇒
  * `'identity-mismatch'`, which is a materially different state for the user: the file is
  * there, it is simply not their archive any more.
+ *
+ * #429: the recorded path is normalized to the native separator here as well as at
+ * registration. `join()` already gives the drive-relative candidate a native path, but a
+ * `recorded_path` row written before that fix (or edited by hand) can still carry forward
+ * slashes on Windows — and a non-native path resolves and reads perfectly while producing an
+ * unroutable serving name downstream (`identity.ts` `nativeArchivePath`). Normalizing at THIS
+ * funnel means every consumer of `PackResolution.path` — the served set, the library build,
+ * the availability write — sees one convention, with no migration.
  */
 export function resolvePack(
   zimDir: string,
-  row: Pick<PackRow, 'id' | 'leaf' | 'recorded_path'>
+  row: Pick<PackRow, 'id' | 'leaf' | 'recorded_path'>,
+  platform: NodeJS.Platform = process.platform
 ): PackResolution {
   const candidates: string[] = [join(zimDir, row.leaf)]
-  if (row.recorded_path && row.recorded_path !== candidates[0]) candidates.push(row.recorded_path)
+  const recorded = row.recorded_path ? nativeArchivePath(row.recorded_path, platform) : ''
+  if (recorded && recorded !== candidates[0]) candidates.push(recorded)
   let sawCandidate = false
   let unreadable: string | null = null
   for (const candidate of candidates) {
@@ -382,7 +399,12 @@ export function servedCandidates(db: Db, zimDir: string): Array<{ id: string; pa
  * and its `id` must EQUAL the header UUID, or the registration fails: a manager that disagrees
  * with the header is not trusted to name the archive we just identified.
  */
-export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Promise<KnowledgePack> {
+export async function registerPack(db: Db, deps: PackDeps, rawZimPath: string): Promise<KnowledgePack> {
+  // #429: normalize the separator ONCE, at the boundary, so `recorded_path` — and therefore the
+  // serving name every later request is routed by — is native from the first write. The native
+  // form was already applied to `kiwix-manage`'s argv (`tools.ts`, finding L9), which is why a
+  // forward-slash path registered cleanly and then 404'd on every article read.
+  const zimPath = nativeArchivePath(rawZimPath, deps.platform)
   const { uuid } = readZimHeader(zimPath)
   const book = await readZimMetadata(deps, zimPath)
   if (book.id !== uuid) {
