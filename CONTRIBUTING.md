@@ -101,8 +101,8 @@ npm run test:watch                              # watch mode (re-runs affected t
   timeout ceiling — exemplars: `tests/integration/ocr-task.test.ts` (the `rasterizeReached`
   gate replacing a fixed `sleep(30)`), `tests/integration/vision-runtime.test.ts` (the
   injected-clock idle-teardown interlock) and `tests/integration/lock-admission-race.test.ts`
-  (the `settleOutcomes` recorder: the settle's own verdict instead of a wall clock measured
-  against the very production bound under test, #389). The rare *justified* fixed sleep — a
+  (the `settleEntered` gate plus the `settleOutcomes` recorder: the settle's own verdict instead
+  of a wall clock measured against the very production bound under test, #389). The rare *justified* fixed sleep — a
   wall-clock advance for timestamp ordering, a timeout simulation where the timer IS the semantics, a
   single-macrotask hop with no observable — must carry a comment saying so; everything else
   is a bug.

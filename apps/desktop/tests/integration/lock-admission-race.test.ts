@@ -151,6 +151,8 @@ interface Harness {
   settleEntered: () => boolean
   /** #389: one entry per settle — the registry's own verdict (`true` settled, `false` bounded). */
   settleOutcomes: () => boolean[]
+  /** #389: one entry per settle — live operations AT ENTRY, so a `true` verdict is not vacuous. */
+  settleLive: () => number[]
 }
 
 interface HarnessOptions {
@@ -298,19 +300,28 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
 
   // The plaintext-operation registry (#237), as `main/index.ts` wires it; optionally with the
   // settle bound shortened through the seam (the constant itself stays the production value).
-  // #389: the wrapper is UNCONDITIONAL so every case records the settle — that it was entered
-  // (the window under test, reached only after `abortAll()`), and the registry's own verdict per
-  // call: `true` = every live operation released inside the bound, `false` = the bound won. That
-  // verdict is the observable for "the settle, not merely the bound"; wall-clock margin measured
-  // against the very constant under test is not one.
+  // #389: the wrapper is UNCONDITIONAL so every case records the settle — that it was entered (the
+  // window under test, reached only after `abortAll()`), how many operations were LIVE at entry,
+  // and the registry's own verdict per call: `true` = every live operation released inside the
+  // bound, `false` = the bound won. That verdict is the observable for "the settle, not merely the
+  // bound"; wall-clock margin measured against the very constant under test is not one. The live
+  // count is what keeps a `true` honest: `awaitSettled` returns `true` immediately for an empty
+  // registry (plaintext-ops.ts, `if (live.size === 0) return true`).
+  // Every registry member is named explicitly rather than spread, so a member added to
+  // `PlaintextOpsRegistry` later is a compile error here instead of a silently dropped delegate.
   const ops = createPlaintextOps()
   const bound = opts.settleBoundMs
   let settleEntered = false
   const settleOutcomes: boolean[] = []
+  const settleLive: number[] = []
   ctx.plaintextOps = {
-    ...ops,
+    register: (kind, parent) => ops.register(kind, parent),
+    size: () => ops.size(),
+    abortAll: () => ops.abortAll(),
+    sweepRegistered: () => ops.sweepRegistered(),
     awaitSettled: async (ms) => {
       settleEntered = true
+      settleLive.push(ops.size())
       const outcome = await ops.awaitSettled(bound === undefined ? ms : Math.min(ms, bound))
       settleOutcomes.push(outcome)
       return outcome
@@ -358,7 +369,8 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     suspendEntered: () => entered,
     releaseSuspend: release,
     settleEntered: () => settleEntered,
-    settleOutcomes: () => [...settleOutcomes]
+    settleOutcomes: () => [...settleOutcomes],
+    settleLive: () => [...settleLive]
   }
 }
 
@@ -934,29 +946,37 @@ describe('plaintext operations across the lock boundary (#237)', () => {
     })
     lockP.catch(() => undefined)
     // Gate on the teardown actually reaching the plaintext settle — the window under test — rather
-    // than assuming a fixed drain got there.
-    expect(await waitUntil(() => h.settleEntered(), 1_000)).toBe(true)
-    // A SHORT drain over real time: it observes that the lock does not return on its own while the
-    // parser is parked. Ten ticks is ~3 % of the bound on a slow Windows runner, where the old
-    // 50-tick drain burned ~18 % of it inside the very window it then measured (#389).
+    // than assuming a fixed drain got there. The helper's default ceiling (200 ticks, ~3 s here) is
+    // deliberate: a longer one would outlast the local `testTimeout`, so a settle that is never
+    // entered would report a vitest timeout instead of this assertion.
+    expect(await waitUntil(() => h.settleEntered())).toBe(true)
+    // A SHORT drain over real time: it observes that the lock does not return on its own, and that
+    // nothing settled early, while the parser is parked. Ten ticks is ~3 % of the bound on a slow
+    // Windows runner, where the old 50-tick drain burned ~15 % of it (≈777 ms) inside the very
+    // window it then measured (#389).
     for (let i = 0; i < 10; i++) await tick()
     expect(lockSettled).toBe(false)
     expect(h.ctrl.isUnlocked()).toBe(true)
     expect(ocr.abortSeen()).toBe(true) // it was asked to stop; it just cannot
 
     ocr.release()
-    const tRelease = Date.now()
     const { result } = await lockP
     expect(result).toMatchObject({ state: 'locked' })
-    // THE proof, and no wall clock in it: the registry's own verdict for that settle. `true` = every
+    // The parked preview's operation was LIVE when the settle was entered, so the verdict below was
+    // earned: `awaitSettled` returns `true` at once for an empty registry, which would make the
+    // proof vacuous.
+    expect(h.settleLive()).toEqual([1])
+    // THE proof, and the whole claim: the registry's own verdict for that settle. `true` = every
     // live plaintext operation released inside the bound — the RELEASE let the lock through. Had the
     // bound won it would read `false`, as the sweep-bounded sibling below asserts.
+    // No wall clock stands beside it ON PURPOSE. The release→locked interval is not microtask hops:
+    // it contains the parser's own transient shred (overwrite + `fsyncSync` + `rmSync`) and then the
+    // whole vault re-encrypt (`wal_checkpoint(TRUNCATE)`, close, scrypt + AES, another fsync-ing
+    // shred) — real synchronous disk I/O whose duration is the runner's, not ours. Reconstructing
+    // the 5132 ms CI failure of the old assertion puts that tail at ~4.3 s, so any bound here would
+    // just reintroduce the flake class. "Never returned" is already covered by vitest's own
+    // `testTimeout`.
     expect(h.settleOutcomes()).toEqual([true])
-    // Belt and braces, anchored at the RELEASE — the interval the old comment described but did not
-    // measure (its window opened before the lock was invoked and swallowed the drain). All that
-    // remains after the release is microtask hops plus the vault re-encrypt of a tiny test DB: tens
-    // of ms here, so 2 s leaves ~50x headroom on a starved runner.
-    expect(Date.now() - tRelease).toBeLessThan(2_000)
     expect(transientNames(docs)).toEqual([])
     // The parser finished with text in hand — the handler's admission re-check refuses it.
     await expect(previewP).rejects.toThrow(t('en', 'main.docs.locked'))
