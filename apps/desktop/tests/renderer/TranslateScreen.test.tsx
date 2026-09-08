@@ -122,8 +122,55 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
     })
     render(<TranslateScreen onNavigate={vi.fn()} />)
     const hint = await screen.findByText(t('en', 'translate.device.gpuPartial', { done: 12, total: 49 }))
-    // The tooltip carries the cause (VRAM taken by the chat model) + the remedy (re-fit after idle).
+    // The tooltip carries the remedy; the fact line itself carries the cause (#42).
     expect(hint).toHaveAttribute('title', t('en', 'translate.device.partialTitle'))
+  })
+
+  // #42 (owner decision 2026-09-08, "no runtime change — fix the copy"): before this, the two
+  // starved fact lines stated only the SYMPTOM ("about processor speed"), leaving a user who
+  // reads no further with nothing to act on. The cause now rides the fact line in BOTH locales,
+  // and the remedy line below it is the ACTION only — so neither can silently regress to
+  // symptom-only, and the two lines cannot drift back into saying the same thing twice.
+  describe('#42 — the starved device lines name the cause, not just the symptom', () => {
+    // Assert on MEANING, not on the exact sentence: "chat model" is the cause the record
+    // (`known-limitations.md`, "A large resident chat model can starve GPU translation…") names,
+    // and the hedge is deliberate — a chat model is the usual cause, not the only one.
+    const namesTheCause = (s: string, lang: 'en' | 'de'): boolean =>
+      (lang === 'en' ? /chat model/i : /Chat-Modell/).test(s) &&
+      (lang === 'en' ? /usually/i : /meist/).test(s)
+
+    for (const lang of ['en', 'de'] as const) {
+      it(`${lang}: the partial and none fact lines both name the chat model as the usual cause`, () => {
+        const partial = t(lang, 'translate.device.gpuPartial', { done: 12, total: 49 })
+        const none = t(lang, 'translate.device.gpuNone', { total: 49 })
+        expect(namesTheCause(partial, lang), partial).toBe(true)
+        expect(namesTheCause(none, lang), none).toBe(true)
+        // The partial line still states the consequence too — the cause did not displace it.
+        expect(partial).toMatch(lang === 'en' ? /processor speed/i : /Prozessor-Tempo/)
+      })
+
+      it(`${lang}: the remedy line is the ACTION, and no longer repeats the cause sentence`, () => {
+        for (const key of ['translate.device.partialTitle', 'translate.device.gpuNoneTitle'] as const) {
+          const remedy = t(lang, key)
+          // It tells the user what to DO…
+          expect(remedy, key).toMatch(lang === 'en' ? /smaller chat model/i : /kleineres Chat-Modell/)
+          // …and does not restate the cause the fact line above now carries.
+          expect(namesTheCause(remedy, lang), `${key} still restates the cause`).toBe(false)
+        }
+      })
+    }
+
+    it('a fully-starved fit renders the cause on screen, not only in the tooltip', async () => {
+      stubApi({
+        getAppStatus: vi.fn(async () =>
+          appStatus({ translationDevice: { device: 'auto', gpuLayers: 0, totalLayers: 49, live: false } })
+        ),
+        getActiveTranslateJob: vi.fn(async () => null)
+      })
+      render(<TranslateScreen onNavigate={vi.fn()} />)
+      const hint = await screen.findByText(t('en', 'translate.device.gpuNone', { total: 49 }))
+      expect(hint.textContent).toMatch(/usually by the chat model/i)
+    })
   })
 
   it('CODE-23: a fully-starved fit (0 layers) says processor, not "partly on the graphics card"', async () => {

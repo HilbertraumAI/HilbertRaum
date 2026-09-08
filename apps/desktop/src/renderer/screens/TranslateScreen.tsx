@@ -192,9 +192,12 @@ export function TranslateScreen({
   // The partial-offload form is the point of the feature — under GPU auto-offload a large resident
   // chat model can leave the translator a sliver of VRAM, which decodes at ~processor speed and
   // would otherwise be indistinguishable from "GPU translation not working". #161 (FE-4): the
-  // cause/remedy for the starved outcomes ("a smaller chat model frees memory…") rides `remedy`
-  // and renders as VISIBLE text — a `title` tooltip on a non-focusable <p> is unreachable by
-  // keyboard, touch, and most screen readers, which defeated the entire point of the #42 reopen.
+  // remedy for the starved outcomes rides `remedy` and renders as VISIBLE text — a `title` tooltip
+  // on a non-focusable <p> is unreachable by keyboard, touch, and most screen readers, which
+  // defeated the entire point of the #42 reopen. #42 (owner decision 2026-09-08) then split the
+  // two lines by JOB: the fact line names the CAUSE ("the graphics memory was mostly taken,
+  // usually by the chat model"), `remedy` is the ACTION only. Nothing here changed — both lines
+  // are the same two keys as before; only what each says did.
   const deviceHint = ((): { text: string; title: string; remedy?: string } | null => {
     if (!device) return null
     if (device.device === 'cpu') {

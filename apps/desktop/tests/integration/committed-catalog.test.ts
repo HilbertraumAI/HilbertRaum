@@ -469,8 +469,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       // 4,000 MiB now holds the E2B (2,271 since §5 item 22 (e); it read 4,746 before), so the
       // card path resolves where it used to fall through to a null RAM pick. Note what this does
       // NOT mean: a 4 GB card still never becomes the budget device, because `USABLE_VRAM_MB` is
-      // 5,120 — but #321's stated reason for that floor ("nothing ranked fits 4,512 anyway") no
-      // longer holds on the arithmetic, and the floor now rests on driver variance alone.
+      // 5,120. #321's stated reason for that floor ("nothing ranked fits 4,512 anyway") no longer
+      // holds on the arithmetic; the floor was KEPT on a restated, measured reason instead (#321,
+      // 2026-09-08) — the E2B is the only ranked model that fits such a card, so admitting it
+      // would star the smallest model at every RAM size with no measurement behind the demotion.
       expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBe('gemma4-e2b-it-qat-q4')
       expect(onCard(chat, 2270, ram), `ram=${ram} 2,270`).toBeNull()
     }
@@ -484,6 +486,32 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     // rank-0 2B (#326), whose 2,962 MiB would otherwise fit here.
     expect(onCard(chat, 2270, 16)).toBe(recommendModelIdByRam(chat, 16, 'chat'))
     expect(onCard(chat, 2270, 16)).toBe('qwen3.5-9b-ud-q4kxl')
+  })
+
+  // #321 (owner decision 2026-09-08): `USABLE_VRAM_MB` stays 5,120, and this is the MEASURED
+  // basis that replaced #321's void "nothing ranked fits a 4 GB card anyway". If the floor is
+  // ever lowered, this test is the evidence it has to argue against — so it asserts the cost,
+  // not the constant (`gpu-rules.test.ts` pins the constant). Record: §6.6 N8 "Why 5,120 —
+  // RESTATED". Both budget forms a 4 GB card can produce are covered: the probe's free figure
+  // (~3,900) and the no-free-figure fallback (total − 1,024 = 3,072).
+  it('a 4 GB card would star the smallest ranked model at every RAM size — the reason the floor stays (#321)', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    for (const budget of [3900, 3072]) {
+      // The E2B is the ONLY ranked model that fits; the 4B, the next one up, needs 4,410.
+      const rankedFits = chat
+        .filter((m) => m.recommendationRank > 0 && fitsGraphicsMemory(m, budget))
+        .map((m) => m.id)
+      expect(rankedFits, `budget=${budget}`).toEqual(['gemma4-e2b-it-qat-q4'])
+      // So every RAM size collapses to it — including the two the decision names.
+      for (const ram of [8, 12, 16, 24, 32, 64]) {
+        expect(onCard(chat, budget, ram), `budget=${budget} ram=${ram}`).toBe('gemma4-e2b-it-qat-q4')
+      }
+    }
+    // What that demotes, on the RAM picker the card path would override.
+    expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(recommendModelIdByRam(chat, 32, 'chat')).toBe('qwen3.8-27b-ud-q5km')
+    // Only RAM 12 is unaffected: the RAM pick is already the E2B, so nothing moves there.
+    expect(recommendModelIdByRam(chat, 12, 'chat')).toBe('gemma4-e2b-it-qat-q4')
   })
 
   // (g) Unified / cpu with a KNOWN budget, and a legacy call without a class: the RAM pick,

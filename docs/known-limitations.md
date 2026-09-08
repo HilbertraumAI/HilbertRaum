@@ -1735,13 +1735,19 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the #42 reopen this state is OBSERVABLE instead of reading as "GPU translation not working":
   every cold start logs `"Translation sidecar started"` with the posture + the offloaded-layer
   split, and the Translate screen shows a muted device line in one of FIVE forms (#164 D-7b
-  completes the enumeration): GPU with the layer split / "partly on the graphics card … about
-  processor speed" / for a fully-starved 0-layer fit "runs on the processor — no layers fit on
-  the graphics card" (full-audit 2026-07-11 CODE-23) / plain "runs on the graphics card (GPU)"
-  when the GPU posture started but no offload line could be parsed from the server log
-  (`translate.device.gpuUnknown` — no split is invented) / CPU. Since #161 (FE-4) the
-  cause-and-remedy for the two starved forms is VISIBLE text under the device line, no longer
-  tooltip-only.
+  completes the enumeration): GPU with the layer split / "partly on the graphics card … the
+  graphics memory was mostly taken, usually by the chat model, so it runs at about processor
+  speed" / for a fully-starved 0-layer fit "runs on the processor — the graphics memory was fully
+  taken, usually by the chat model, so no layers fit on the graphics card" (full-audit 2026-07-11
+  CODE-23) / plain "runs on the graphics card (GPU)" when the GPU posture started but no offload
+  line could be parsed from the server log (`translate.device.gpuUnknown` — no split is invented) /
+  CPU. Since #161 (FE-4) the remedy for the two starved forms is VISIBLE text under the device
+  line, no longer tooltip-only. **The two starved forms name the CAUSE since the owner decision of
+  2026-09-08 on this issue (#42)** — they used to state the symptom ("about processor speed") alone, leaving a user who
+  read no further with nothing to act on; the remedy line below is now the ACTION only, so the two
+  do not repeat each other. The same decision refused both runtime remedies (forcing translation to
+  the processor, and an idle reclaim that largely exists already): `architecture.md` GPU record
+  §8.1. So this limitation stands as a limitation — the app explains it, it does not prevent it.
 - **Languages are a closed set of 51 — source AND target** (issue #31, 2026-07-07: the original
   curated 10 widened to TranslateGemma's full PRODUCTION tier — the 55 WMT24++-evaluated locales
   collapsed to 51 bare codes; `zh` is Simplified Chinese), validated server-side. The model's chat
