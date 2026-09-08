@@ -64,18 +64,32 @@ const latestBySource: Record<EffectiveReadSample['source'], EffectiveReadSample 
 }
 let suppressNextModelLoad = false
 /**
- * #392: absolute paths a `checksum` sample was recorded for in THIS process. A hash pulls the
- * file through the OS page cache, so a later model-load window over the same file measures RAM
+ * #392: absolute paths THIS process is known to have pulled through the OS page cache — a
+ * completed at-or-above-floor hash (`recordChecksumRead`) or a file the app itself wrote and
+ * left in place (`noteWeightWarmed`). A later model-load window over such a file measures RAM
  * on a big-RAM machine — the #108 mechanism, but the one-shot flag above only covers a start
  * whose OWN install check hashed. On the default first-run journey the Models screen hashes the
  * corpus first (#382), the start hits the size+mtime cache (`cacheHit: true`) and nothing
  * suppressed the RAM figure (#334 leg B1: 589 MB/s persisted for a 28 MB/s stick).
  * Never cleared inside the process: the page cache is OS-level and survives a workspace lock.
  * Consulted ONLY by `recordModelLoadRead`, never by the #114 prefetch peek — see the note there.
- * The `checksum` sample of the same session is the honest figure, so nothing is starved.
+ *
+ * Nothing is starved by the HASH entries: that session's `checksum` sample IS the honest figure
+ * for the file. The one deliberate exception is `noteWeightWarmed` — the download verify behind
+ * it is excluded from sampling by design (it reads bytes the app just wrote), so a start right
+ * after an in-app download now records nothing at all. That is honest absence rather than a
+ * wrong figure; the next cold start measures the medium.
  */
 const checksumWarmedPaths = new Set<string>()
-const pathKey = (p: string): string => resolve(p)
+/**
+ * Set key for a path. `resolve` normalises separators, `.`/`..` and a relative spelling, but on
+ * Windows it folds neither the drive letter nor the case (`path.resolve('d:\\x')` stays `d:\x`),
+ * so win32 keys are lower-cased. A junction or `subst` alias of the same file is deliberately NOT
+ * `realpath`'d: both sides of every comparison descend from the one `ctx.paths.rootPath`, so this
+ * is a safety net against spelling drift, not a requirement the feature rests on.
+ */
+const pathKey = (p: string): string =>
+  process.platform === 'win32' ? resolve(p).toLowerCase() : resolve(p)
 let observer: (() => void) | null = null
 /**
  * The clock a sample's `at` comes from. A sample is identified by that ISO timestamp (millisecond
@@ -231,11 +245,15 @@ export function isNextModelLoadSuppressed(): boolean {
  * Record a completed full-file checksum read (#106 instrumentation feeds this — cold
  * files only; the download verify is excluded at the call site).
  *
- * `filePath` (#392) is the file that was hashed; it joins `checksumWarmedPaths` so a later
- * model-load window over it records nothing. Registered BEFORE the sample floors: a file too
- * small (or a hash too quick) to carry throughput information was still pulled through the page
- * cache. Null/absent for a caller that has no path — the download verify passes null on purpose
- * (it hashes a `.part` that is renamed away, so its path must never enter the set).
+ * `filePath` (#392) is the file that was hashed to completion (models.ts gates this call on
+ * `ok`); it joins `checksumWarmedPaths` so a later model-load window over it records nothing.
+ * Registered only at or above the BYTE floor: a sub-64 MiB file cannot move a ≥ 2 GiB load
+ * window (under 3 % of it), and registering it would risk leaving the session with a warm mark
+ * and no sample behind it. The elapsed floor is deliberately not part of the condition — a
+ * floor-sized file hashed in under 250 ms was itself served from the cache, so it IS warm.
+ * Null/absent for a caller that has no path — the download verify passes null on purpose (it
+ * hashes a `.part` that is renamed away, so its path must never enter the set; the file's final
+ * path is registered by `noteWeightWarmed` instead).
  */
 export function recordChecksumRead(
   bytes: number,
@@ -243,8 +261,23 @@ export function recordChecksumRead(
   modelId: string | null,
   filePath?: string | null
 ): void {
-  if (filePath) checksumWarmedPaths.add(pathKey(filePath))
+  if (filePath && Number.isFinite(bytes) && bytes >= MIN_READ_SAMPLE_BYTES) {
+    checksumWarmedPaths.add(pathKey(filePath))
+  }
   record(bytes, ms, 'checksum', modelId)
+}
+
+/**
+ * #392: register a weight the APP ITSELF pulled through the page cache without hashing it as a
+ * sample — today the in-app downloader, whose bytes are cache-resident from the write and whose
+ * verify primes the checksum store (`finishVerifiedFile`), so nothing ever re-hashes the file
+ * and no `checksum` sample exists for it. A model start right after such a download would
+ * otherwise time a RAM read. Records no sample, only the warm mark: the honest figure for that
+ * medium arrives at the next cold start. Absolute path expected (the file's FINAL location,
+ * never the staged `.part`).
+ */
+export function noteWeightWarmed(filePath: string): void {
+  if (filePath) checksumWarmedPaths.add(pathKey(filePath))
 }
 
 /** The latest honest sample of this session, or null before the first qualifying read. */

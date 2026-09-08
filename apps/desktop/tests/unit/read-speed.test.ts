@@ -6,6 +6,7 @@ import {
   MIN_MODEL_LOAD_SAMPLE_BYTES,
   MIN_READ_SAMPLE_BYTES,
   MIN_READ_SAMPLE_MS,
+  noteWeightWarmed,
   preferCandidate,
   recordChecksumRead,
   recordModelLoadRead,
@@ -135,12 +136,38 @@ describe('effective-read latch (#108)', () => {
     expect(latestEffectiveReadBySource('model_load')).toBeNull()
   })
 
-  it('a hash below the sample floors still warms the page cache — and still suppresses', () => {
+  it('a sub-floor hash does NOT register the path (its warmth cannot move the window)', () => {
+    // Under 64 MiB is under 3 % of the ≥ 2 GiB a model_load sample needs, so such a file's
+    // warmth cannot meaningfully inflate the window — while registering it WOULD risk leaving a
+    // session with a warm mark and no sample behind it. Aligning registration with the byte
+    // floor keeps the no-starvation invariant true by construction.
     recordChecksumRead(MIN_READ_SAMPLE_BYTES - 1, 10_000, 'm', '/models/small.gguf')
     expect(latestEffectiveRead()).toBeNull() // no sample: the floor rejected it
 
     recordModelLoadRead('/models/small.gguf', 10_000, 'm', 6_000_000_000)
-    expect(latestEffectiveRead()).toBeNull() // …but the file WAS pulled through the cache
+    expect(latestEffectiveRead()?.source).toBe('model_load') // …and no warm mark either
+  })
+
+  it('a hash AT the byte floor registers even when the elapsed floor rejects the sample', () => {
+    // A floor-sized file hashed in under 250 ms was itself served from the cache — it IS warm.
+    recordChecksumRead(MIN_READ_SAMPLE_BYTES, MIN_READ_SAMPLE_MS - 1, 'm', '/models/w.gguf')
+    expect(latestEffectiveRead()).toBeNull()
+
+    recordModelLoadRead('/models/w.gguf', 10_000, 'm', 6_000_000_000)
+    expect(latestEffectiveRead()).toBeNull()
+  })
+
+  it('noteWeightWarmed registers a path the app WROTE: no sample, and the next load is dropped', () => {
+    noteWeightWarmed('/models/just-downloaded.gguf')
+    expect(latestEffectiveRead()).toBeNull() // a mark, not a sample
+
+    recordModelLoadRead('/models/just-downloaded.gguf', 10_000, 'm', 6_000_000_000)
+    expect(latestEffectiveRead()).toBeNull() // the start after a download times RAM — dropped
+
+    // The deliberate exception to "nothing is starved": no checksum sample stands behind this
+    // one (the download verify never samples). Honest absence; the next COLD start measures.
+    recordModelLoadRead('/models/other.gguf', 10_000, 'm', 6_000_000_000)
+    expect(latestEffectiveRead()?.source).toBe('model_load')
   })
 
   it('the session set and the one-shot flag are independent mechanisms', () => {
@@ -172,6 +199,20 @@ describe('effective-read latch (#108)', () => {
 
     expect(latestEffectiveReadBySource('model_load')).toBeNull()
   })
+
+  it.runIf(process.platform === 'win32')(
+    'win32: the drive letter and case are folded (resolve alone does not fold them)',
+    () => {
+      const absolute = resolve(join('models', 'corpus', 'w.gguf'))
+      const shouted = absolute.toUpperCase() // same file to Windows, a different string to a Set
+      expect(shouted).not.toBe(absolute)
+
+      recordChecksumRead(6_000_000_000, 60_000, 'm', absolute)
+      recordModelLoadRead(shouted, 10_000, 'm', 6_000_000_000)
+
+      expect(latestEffectiveReadBySource('model_load')).toBeNull()
+    }
+  )
 
   it('the set is never cleared inside the process: every later start of that weight stays suppressed', () => {
     recordChecksumRead(6_000_000_000, 60_000, 'm', '/models/w.gguf')

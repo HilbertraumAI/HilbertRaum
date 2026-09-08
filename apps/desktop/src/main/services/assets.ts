@@ -546,6 +546,10 @@ export async function verifyDownloadedFile(
   } catch {
     /* vanished between existsSync and stat — the stream error below reports it */
   }
+  // The `'download'` arm is the one that actually runs: all three callers of this function (the
+  // model-download verify, the F-13 complete-part settle, the engine-archive verify) pass that
+  // label. The other arm is defensive — a future non-download caller would be hashing a file in
+  // its final place, and THAT path should be remembered.
   const instrumentation = beginChecksumInstrumentation(
     label,
     bytes,

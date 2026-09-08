@@ -76,7 +76,16 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    load sample (#392, 2026-09-08) — the start's own install-state pass, a Models-screen verify or
    a background hash all warm the page cache, so the window would read RAM; the #114 prefetch skip
    stays tied to the start's own hash only — and the download
-   verify never samples (it reads bytes the app just wrote). A fresh install has no sample yet —
+   verify never samples (it reads bytes the app just wrote). A start right after an **in-app
+   download** therefore records no read sample at all: the verify is excluded by design and the
+   page-cache-warm load after it is dropped too (#392) — honest absence rather than a wrong figure,
+   and the next cold start records the medium. The #392 guard is process-scoped and **does not
+   survive a relaunch**: the checksum store is persistent, so on the next launch nothing hashes,
+   the warmed-path set is empty, and on a big-RAM machine a warm start records a `model_load`
+   sample that overwrites the honest checksum figure (`preferCandidate` lets `model_load` beat a
+   `checksum` incumbent unconditionally) — the figure oscillates with the cache's warmth until a
+   cold start. The ranking-rule amendment that would fix it is issue **#404**.
+   A fresh install has no sample yet —
    Diagnostics shows *"not measured yet — starting a model measures it"*; once present the row
    carries the sample's own date (the card's "Last run" describes the benchmark, not this row).
    `driveReadMbps` itself is still computed and persisted (continuity for old blobs + the probe's

@@ -2391,14 +2391,20 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   now remembers the absolute paths a `checksum` sample was recorded for in this process and drops
   a load sample over any of them, whoever hashed them — the honest checksum figure stays the
   headline. The #114 prefetch skip is deliberately NOT widened (it stays on the start's own hash):
-  the −49 % cold-start win is not traded for a data-quality guard. Residuals: (1) **a process
-  restart empties the set** while the OS page cache may still be warm on a big-RAM machine, so a
-  later launch's warm start can still record a RAM-speed figure — the pre-existing #108 boundary,
-  and `read-speed.ts`'s own header calls a warm start's rate "what the user felt"; (2) **a machine
-  that already persisted an inflated figure keeps it** — `preferCandidate` never lets a `checksum`
-  sample displace a `model_load` one. A possible amendment (a checksum figure *below* the 100 MB/s
-  gate cannot be hash-CPU-bound — the measured hash floor is 136 MB/s — so such a sample could be
-  allowed to displace) is an owner call, recorded on the issue.
+  the −49 % cold-start win is not traded for a data-quality guard. A start right after an **in-app
+  download** now records no read sample at all: the download verify is excluded from sampling by
+  design (it reads bytes the app just wrote) and the page-cache-warm load after it is dropped too
+  — honest absence rather than a wrong figure, and the next cold start records the medium.
+  Residuals, plainly: (1) **the fix does not survive a relaunch, and the figure oscillates with
+  the cache's warmth.** The checksum store is persistent, so on the NEXT launch nothing hashes,
+  the warmed-path set is empty, and on a big-RAM machine a warm start records a `model_load`
+  sample that **overwrites** the honest checksum figure #392 just persisted — `preferCandidate`
+  lets a `model_load` sample beat a `checksum` incumbent unconditionally. The #334 leg B1 state
+  therefore returns until a genuinely cold start happens. (2) **A machine that already persisted
+  an inflated figure keeps it**, for the same ranking reason. The amendment both residuals want —
+  a checksum figure *below* the 100 MB/s gate cannot be hash-CPU-bound (the measured hash floor is
+  136 MB/s), so such a sample could be allowed to displace a `model_load` incumbent — is an owner
+  call tracked as issue **#404**.
 - **The Home screen's launch preflight writes its 8 MiB probe at unlock**, in the same second the
   auto-start begins hashing (#334 perf marks, 0.4 s after `unlock_done`). It persists nothing and
   measured the same write figure as the sequenced probe after the load; noted, not sequenced.
