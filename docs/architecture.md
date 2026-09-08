@@ -577,8 +577,13 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   - **The bar needed a second render site.** Its only one was inside the `!models` branch, which
     lazy verification now skips, so a "Check all model files" pass would have hashed for minutes
     with nothing on screen. `verifyBar()` renders in both places.
-  - **The pass cannot be cancelled** — `sha256File` takes no abort signal. Out of scope here; the
-    button copy names the cost instead; cancellable verification is issue #420.
+  - **The pass CAN be cancelled — issue #420, 2026-09-08** (it could not when #382 shipped, and
+    the button copy said so). `sha256File` now takes an optional `AbortSignal`, threaded through
+    `sha256FileCached` → `computeInstallState` → `buildModelList`, and a **Stop checking** button
+    sits beside the bar. See "Cancelling a verification pass (#420)" below for the two traps that
+    made it non-trivial. The §7.4 start gate and the ship-time gates pass no signal and are
+    unchanged; the per-model **Verify checksum** button is deliberately still uncancellable (one
+    file, and it is the repair action).
   - **#108 is unaffected.** Under lazy verification a first start hashes its own weight
     (`cacheHit === false`), `suppressNextModelLoadSample()` fires, and an honest `checksum` sample
     is recorded from the one file that matters — #382 makes #392's guard unnecessary on the
@@ -974,12 +979,71 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   *finishing* step and the first cold AI Model screen visit render the shared `Progress` bar
   (byte-weighted %, "Checking model N of M") in place of the spinner; both keep their existing
   fallbacks (the gate's Skip + never-trap `catch`, the screen's calm "Checking…" hint). Each pass
-  carries a `runId` (`randomUUID`): `listModels` can run as **overlapping passes** (a screen remount,
+  carries a `runId`: `listModels` can run as **overlapping passes** (a screen remount,
   the download poll), each with a different `modelCount` as the cache warms, and the events broadcast
   to the renderer — so the renderer **locks onto the first `runId`** it sees and ignores the others
-  until that pass's `done` (without this the bar flips between e.g. "1 of 1" and "2 of 2"). Additive
+  until that pass's `done` (without this the bar flips between e.g. "1 of 1" and "2 of 2"). Since
+  **#420** the id is minted by the **renderer** when it supplies one (`listModels(lazyVerify,
+  verifyRunId)`) and is then also the **cancel handle**; main still mints a `randomUUID` for every
+  other caller. A **cancelled** pass still emits its terminal `done`, so the bar settles rather than
+  lingering. Additive
   behind the locked `listModels` contract; omitting the sink is zero-overhead, so tests/legacy callers
   are unchanged.
+- **Cancelling a verification pass (#420, 2026-09-08) — design record.** The full "Check all model
+  files" pass is a ~25-minute operation on the #330 slow drive (39.44 GB at a mean 25.8 MB/s) that
+  the user starts deliberately, so it must be stoppable. Before #382 the uncancellable pass was an
+  accidental block; after #382 it was a user-facing defect. Only the **display-side** passes are
+  cancellable — the §7.4 start gate, the per-model `verifyModel` and the ship-time gates pass no
+  signal and hash to the end, by construction rather than by convention.
+  - **The handle.** The renderer mints the run id (`crypto.randomUUID`) BEFORE calling
+    `listModels`, and `models:cancelVerify` takes it. The obvious alternative — main's own
+    `ModelVerifyProgress.runId` — leaves two holes: the id only reaches the renderer on the first
+    progress event (seconds of hashing later), and **no event fires at all** when
+    `overallBytesTotal === 0`. Both are precisely the windows a user clicks Cancel in. The change to
+    `listModels` is one optional trailing argument, so the three screens on that locked contract are
+    untouched. Main keys an `AbortController` registry (`verifyRuns`) by that id — the
+    `inFlightStreams` pattern, with one `cancelVerify` handler playing `chat:stop`. Like
+    `stopRuntime` the handler is **not** gated on an unlocked workspace: it only stops work already
+    running and touches no database.
+  - **Trap 1 — a naive abort would HANG, not stop.** `sha256File` attaches only `error` and `end`.
+    A bare `stream.destroy()` emits `close` and neither of those, so the returned promise would
+    never settle and every awaiting caller — `computeInstallState`, `buildModelList`, the IPC
+    handler, the renderer's busy flag — would park forever. The abort therefore destroys the stream
+    **with an error** (`HashAbortedError`), an already-aborted signal rejects without opening the
+    file, and a `close` handler settles anything that still reaches it. Pinned by tests that assert
+    the promise **rejects**, not merely that hashing stopped.
+  - **Trap 2 — single-flight sharing (the sharp one).** `inFlightHashes` (#106) makes concurrent
+    callers of the same path share ONE physical read; it exists precisely because the unlock
+    auto-start races a Models-screen pass over the same weight. A signal wired naively into the
+    leader would abort every joiner, so a cancelled display pass could kill the start gate's hash.
+    **The rule, refcounted:** each waiter holds a token; a waiter's own abort settles **that waiter**
+    at once (its loop stops immediately) but the shared read continues, and the physical read is
+    aborted **only when the last token is dropped**. A caller with no signal holds a token it never
+    drops, so it can never be collateral damage. Both interleavings are tested (gate joins the
+    screen's hash → screen cancels → gate still resolves; and the reverse).
+  - **Cancellation reaches the LOOPS, not only the stream.** `buildModelList` and
+    `computeInstallState` both check the signal at their loop heads, so a cancel between two
+    multi-GB weights takes effect before the next file is opened rather than after the current one
+    finishes.
+  - **A cancelled pass is a calm result, never an error.** `buildModelList` catches the abort and
+    reports the model it was on — and every model after it — **without hashing**, which is exactly
+    what RT-3 lazy verification reports for a present weight. The returned list stays complete and
+    honest: what finished is verified from the cache, the rest is simply unchecked, the §7.4 gate
+    still re-verifies whatever the user launches, and no error banner is shown. Nothing is
+    half-written: `checksumCacheStats.computed`, the L1/L2 cache entry, the #108 read sample and
+    #392's `checksumWarmedPaths` mark are all written only by a hash that **completed**.
+  - **Navigating away.** The pass runs in main and still survives leaving the screen — but the
+    Models screen now remembers it in module state (the `rememberedJob` pattern), so a revisit
+    re-draws the bar and can still stop it, instead of showing an idle screen while minutes of
+    hashing carry on. The memory is cleared by the pass's own `finally`, which runs whether or not
+    the screen is still mounted.
+  - **The gate's Skip is unchanged.** `WorkspaceGate`'s lazy pass hashes at most the ACTIVE model
+    since #382 — one file, the very one the start gate would hash moments later — so making Skip
+    abort it would only force the same read to happen twice.
+  - **Accepted residual.** A partially-read file IS partly page-cache-warm yet carries no
+    `checksumWarmedPaths` mark, so a later model-load window over it can sample a partly-warm read.
+    Bounded (the figure lands between the two honest ones) and rare; recorded in
+    `known-limitations.md`.
 - **Recommendation is RAM-best-fit (post-MVP).** `recommendModelIdByRam(manifests, ramGb)` picks the
   LARGEST model whose comfortable RAM (`recommended_ram_gb`) fits this machine; if nothing fits
   comfortably, the lightest model meeting its minimum; else none. Used by `listModels` (live

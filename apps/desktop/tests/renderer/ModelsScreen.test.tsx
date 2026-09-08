@@ -2673,7 +2673,10 @@ describe('lazy verification + "Check all model files" (#382)', () => {
     await user.click(screen.getByRole('button', { name: 'Check all model files' }))
 
     await waitFor(() => expect(listModels).toHaveBeenCalledTimes(3))
-    expect(listModels.mock.calls[1]).toEqual([]) // the explicit full pass
+    // The explicit full pass: `lazyVerify` still omitted (undefined), now carrying the #420
+    // renderer-minted run id that is also the Cancel handle.
+    expect(listModels.mock.calls[1][0]).toBeUndefined()
+    expect(listModels.mock.calls[1][1]).toEqual(expect.any(String))
     expect(listModels.mock.calls[2]).toEqual([true]) // run()'s trailing refresh, lazy again
   })
 
@@ -2697,3 +2700,174 @@ describe('lazy verification + "Check all model files" (#382)', () => {
     expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 })
+// #420 — the pass the user starts on purpose can now be stopped. Before this it ran to the
+// end whatever the user did: ~25 minutes of USB I/O on the #330 slow drive, surviving even
+// navigating away. Cancelling is not a failure, so the screen must settle calmly.
+describe('cancelling "Check all model files" (#420)', () => {
+  const idleEngine: EngineStatus = {
+    installed: true,
+    available: true,
+    version: '1',
+    backend: 'cpu',
+    missingFamilies: []
+  }
+  const idleRuntime = { running: false, modelId: null, startingModelId: null } as unknown as RuntimeStatus
+
+  /** Like the #382 stub, but the full pass is held open so a Cancel can land mid-pass. */
+  function stubCancellable(models: ModelInfo[]): {
+    listModels: ReturnType<typeof vi.fn>
+    cancelModelVerify: ReturnType<typeof vi.fn>
+    /** Let the held-open full pass resolve, as main does after an abort. */
+    settleFullPass: () => void
+    emit: (p: Partial<ModelVerifyProgress>) => void
+    runIdOf: () => string | undefined
+  } {
+    let releaseFullPass: (() => void) | null = null
+    const listModels = vi.fn(async (lazy?: boolean, _verifyRunId?: string) => {
+      if (lazy) return models
+      await new Promise<void>((resolve) => {
+        releaseFullPass = resolve
+      })
+      return models
+    })
+    const cancelModelVerify = vi.fn(async () => true)
+    let sink: ((p: ModelVerifyProgress) => void) | null = null
+    stubApi({
+      listModels,
+      cancelModelVerify,
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: models[0]?.id ?? null })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatus),
+      getEngineStatus: vi.fn(async () => idleEngine),
+      getRuntimeStatus: vi.fn(async () => idleRuntime),
+      onModelVerifyProgress: vi.fn((cb: (p: ModelVerifyProgress) => void) => {
+        sink = cb
+        return () => {
+          sink = null
+        }
+      }),
+      listDownloadJobs: vi.fn(async () => [])
+    })
+    const runIdOf = (): string | undefined =>
+      listModels.mock.calls.find((c) => !c[0])?.[1] as string | undefined
+    const emit = (p: Partial<ModelVerifyProgress>): void => {
+      act(() =>
+        sink?.({
+          runId: runIdOf() ?? 'run-1',
+          modelIndex: 1,
+          modelCount: 2,
+          modelId: 'big',
+          displayName: 'Big weight',
+          overallBytesHashed: 4_000_000_000,
+          overallBytesTotal: 10_000_000_000,
+          done: false,
+          ...p
+        })
+      )
+    }
+    return {
+      listModels,
+      cancelModelVerify,
+      settleFullPass: () => act(() => releaseFullPass?.()),
+      emit,
+      runIdOf
+    }
+  }
+
+  it('offers Stop checking as soon as the pass starts — before any progress event', async () => {
+    const user = userEvent.setup()
+    const installed = model({ id: 'big', displayName: 'Big weight', state: 'installed' })
+    const { settleFullPass } = stubCancellable([installed])
+    render(<ModelsScreen />)
+    await screen.findByText('Big weight')
+    expect(screen.queryByRole('button', { name: 'Stop checking' })).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('button', { name: 'Check all model files' }))
+
+    // The regression this pins: `runId` used to be minted in MAIN and only reached the
+    // renderer on the FIRST progress event, so a cancel clicked in this window (and on a pass
+    // that emits no events at all) had nothing to send.
+    expect(await screen.findByRole('button', { name: 'Stop checking' })).toBeVisible()
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    settleFullPass()
+  })
+
+  it('clicking it cancels the run the pass was started under, and the screen settles calmly', async () => {
+    const user = userEvent.setup()
+    const installed = model({ id: 'big', displayName: 'Big weight', state: 'installed' })
+    const { cancelModelVerify, settleFullPass, emit, runIdOf } = stubCancellable([installed])
+    render(<ModelsScreen />)
+    await screen.findByText('Big weight')
+    await user.click(screen.getByRole('button', { name: 'Check all model files' }))
+    await screen.findByRole('button', { name: 'Stop checking' })
+    emit({})
+    expect(screen.getByRole('progressbar')).toBeVisible()
+
+    await user.click(screen.getByRole('button', { name: 'Stop checking' }))
+    expect(cancelModelVerify).toHaveBeenCalledWith(runIdOf())
+    // Disabled while the cancel unwinds, so it cannot be fired twice.
+    expect(await screen.findByRole('button', { name: 'Stopping…' })).toBeDisabled()
+
+    // Main answers a cancelled pass with a complete list, not an error — so no banner, the
+    // bar goes, the action is offered again and the cards are still there.
+    settleFullPass()
+    await waitFor(() =>
+      expect(
+        screen.queryByRole('button', { name: /Stop checking|Stopping…/ })
+      ).not.toBeInTheDocument()
+    )
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    // The live region always exists; what matters is that it stays EMPTY — cancelling is
+    // not a failure, so no error copy lands in it.
+    expect(screen.getByRole('alert')).toBeEmptyDOMElement()
+    expect(screen.getByRole('button', { name: 'Check all model files' })).toBeEnabled()
+    expect(screen.getByText('Big weight')).toBeVisible()
+  })
+
+  it('a pass survives leaving the screen — the revisit shows the bar and can still stop it', async () => {
+    const user = userEvent.setup()
+    const installed = model({ id: 'big', displayName: 'Big weight', state: 'installed' })
+    const { cancelModelVerify, settleFullPass, emit, runIdOf } = stubCancellable([installed])
+    const first = render(<ModelsScreen />)
+    await screen.findByText('Big weight')
+    await user.click(screen.getByRole('button', { name: 'Check all model files' }))
+    await screen.findByRole('button', { name: 'Stop checking' })
+    emit({})
+
+    // Navigate away and back. The hash keeps running in MAIN either way; before #420 the
+    // revisited screen looked idle and the only way to stop it was gone with the component.
+    first.unmount()
+    render(<ModelsScreen />)
+    await screen.findByText('Big weight')
+    expect(screen.getByRole('progressbar')).toBeVisible()
+    expect(screen.getByText('Checking model 1 of 2: Big weight — 40%')).toBeVisible()
+    expect(screen.getByRole('button', { name: 'Checking all model files…' })).toBeDisabled()
+
+    await user.click(screen.getByRole('button', { name: 'Stop checking' }))
+    expect(cancelModelVerify).toHaveBeenCalledWith(runIdOf())
+    settleFullPass()
+  })
+
+  it('a pass that finished while the user was away leaves no stale bar behind', async () => {
+    const user = userEvent.setup()
+    const installed = model({ id: 'big', displayName: 'Big weight', state: 'installed' })
+    const { settleFullPass, emit } = stubCancellable([installed])
+    const first = render(<ModelsScreen />)
+    await screen.findByText('Big weight')
+    await user.click(screen.getByRole('button', { name: 'Check all model files' }))
+    await screen.findByRole('button', { name: 'Stop checking' })
+    emit({})
+    first.unmount()
+
+    // The pass finishes with nobody watching: its `finally` still clears the module memory.
+    settleFullPass()
+    await act(async () => undefined)
+
+    render(<ModelsScreen />)
+    await screen.findByText('Big weight')
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Stop checking' })).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Check all model files' })).toBeEnabled()
+  })
+})
+

@@ -58,7 +58,7 @@ import { getSettings, seedSettings, updateSettings } from '../../src/main/servic
 import type { AppSettings, AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { t } from '../../src/shared/i18n'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const REPO_MANIFESTS = join(process.cwd(), '..', '..', 'model-manifests')
@@ -372,6 +372,121 @@ describe('registerModelIpc', () => {
       expect(checksumCacheStats.computed).toBe(before)
     })
   })
+  // #420 — the full pass is a 25-minute operation on a slow drive that the user starts on
+  // purpose, so it must be stoppable. The handle is the run id the RENDERER mints and passes
+  // to `listModels` (main used to mint it and only reveal it on the first progress event).
+  describe('cancelModelVerify stops a full pass (#420)', () => {
+    /** A drive with two present, correctly-hashed chat weights + a startable runtime. */
+    function cancelCtx(): AppContext {
+      const root = mkdtempSync(join(tmpdir(), 'hilbertraum-cancel-'))
+      const manifestsDir = join(root, 'model-manifests')
+      mkdirSync(manifestsDir, { recursive: true })
+      mkdirSync(join(root, 'models', 'chat'), { recursive: true })
+      for (const id of ['alpha', 'beta']) {
+        const rel = `models/chat/${id}.gguf`
+        const body = `weight-body-${id}`
+        writeFileSync(join(root, ...rel.split('/')), body)
+        writeFileSync(
+          join(manifestsDir, `${id}.yaml`),
+          stringify({
+            id,
+            display_name: id,
+            family: 'qwen3',
+            role: 'chat',
+            format: 'gguf',
+            runtime: 'llama_cpp',
+            license: 'apache-2.0',
+            size_on_disk_gb: 0.1,
+            recommended_min_ram_gb: 1,
+            recommended_ram_gb: 1,
+            recommended_context_tokens: 4096,
+            local_path: rel,
+            sha256: createHash('sha256').update(body).digest('hex'),
+            license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-09-08', notes: '' }
+          })
+        )
+      }
+      return {
+        db: seededDb(),
+        manifestsDir,
+        paths: { rootPath: root, configPath: bogusConfigDir() },
+        isDev: false,
+        runtime: {
+          start: async () => ({ running: true, modelId: 'beta', port: null, healthy: true, message: 'ok' }),
+          activeModelId: () => null
+        }
+      } as unknown as AppContext
+    }
+
+    /**
+     * Start a full pass and click Cancel from inside its FIRST progress event — the real
+     * sequence (the renderer draws the bar, the user stops it), and deterministic: main sends
+     * that event from inside the hashing loop, so the abort lands before the next weight.
+     */
+    function passCancelledOnFirstProgress(runId: string): {
+      pass: Promise<unknown>
+      cancelled: () => boolean
+    } {
+      const event = makeEvent()
+      let didCancel = false
+      event.sender.send = vi.fn((_channel: string) => {
+        if (didCancel) return
+        didCancel = true
+        ;(handlers.get(IPC.cancelModelVerify) as (e: unknown, id: string) => unknown)(event, runId)
+      }) as unknown as typeof event.sender.send
+      const pass = Promise.resolve(
+        invokeWithEvent(handlers, IPC.listModels, event, undefined, runId)
+      )
+      return { pass, cancelled: () => didCancel }
+    }
+
+    it('cancels the in-flight pass: the weight it had not reached is never hashed', async () => {
+      reg(cancelCtx())
+      clearChecksumCache()
+      const before = checksumCacheStats.computed
+      const { pass, cancelled } = passCancelledOnFirstProgress('run-420')
+      const result = await pass
+
+      expect(cancelled()).toBe(true)
+      // ONE weight hashed: the loop head saw the abort before opening the second file.
+      expect(checksumCacheStats.computed).toBe(before + 1)
+      // The list is still complete and calm — a cancelled pass is an ordinary result, never
+      // a rejection: what finished is verified, the rest is simply unchecked.
+      const states = Object.fromEntries((result as ModelInfo[]).map((m) => [m.id, m.state]))
+      expect(states['alpha']).toBe('installed')
+      expect(states['beta']).toBe('installed')
+    })
+
+    it('is a no-op (false) when nothing is running under that id — including after the pass ended', async () => {
+      reg(cancelCtx())
+      clearChecksumCache()
+      expect(await invoke(handlers, IPC.cancelModelVerify, 'never-started')).toMatchObject({
+        result: false
+      })
+      await invoke(handlers, IPC.listModels, undefined, 'run-done')
+      // The registration is retired with the pass, so a late Cancel click is harmless.
+      expect(await invoke(handlers, IPC.cancelModelVerify, 'run-done')).toMatchObject({
+        result: false
+      })
+    })
+
+    it("does not disturb startModelRuntime's own §7.4 hash", async () => {
+      reg(cancelCtx())
+      clearChecksumCache()
+      const before = checksumCacheStats.computed
+      await passCancelledOnFirstProgress('run-gate').pass
+      expect(checksumCacheStats.computed).toBe(before + 1) // one of the two weights stayed unhashed
+
+      // The start gate passes NO signal, so a cancelled display pass can never reach it: the
+      // model it launches is hashed and verified exactly as before. `beta` is the weight the
+      // cancelled pass never reached, so nothing has cached it.
+      clearChecksumCache()
+      const beforeStart = checksumCacheStats.computed
+      await invoke(handlers, IPC.startRuntime, 'beta')
+      expect(checksumCacheStats.computed).toBe(beforeStart + 1)
+    })
+  })
+
 
   it('startRuntime throws on an unknown model id', async () => {
     const ctx = {

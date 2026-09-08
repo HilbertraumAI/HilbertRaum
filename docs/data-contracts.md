@@ -1795,14 +1795,19 @@ whole renderer-visible surface.
   `exportLog()`/`getLogTail()`, `getDroppedFilePath(file)` (the
   Electron-37 `webUtils.getPathForFile` bridge — drag-drop path resolution), `perfMark(event)`
   (one-way, allowlisted timing mark for opt-in measurement runs — no data channel),
-  `onModelVerifyProgress(cb)` (cold-hash progress stream), `onScopeNotice(conversationId, cb)`
+  `onModelVerifyProgress(cb)` (cold-hash progress stream), `cancelModelVerify(verifyRunId):
+  Promise<boolean>` (`models:cancelVerify` — #420: stop the Models screen's "Check all model
+  files" pass, keyed by the run id the RENDERER minted and passed to `listModels(lazyVerify,
+  verifyRunId)`; `true` when a pass was aborted, `false` when nothing was running under that id —
+  a no-op, never an error. Not gated on an unlocked workspace, like `stopRuntime`: it only stops
+  work already running and touches no database), `onScopeNotice(conversationId, cb)`
   (filename auto-scope one-shot), `copyToClipboard(text): Promise<boolean>` (main-process
   clipboard — the renderer's `navigator.clipboard` is denied in the `file://` context).
 
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (147 channels since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
+`shared/ipc.ts` (148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
 sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
 (now 3, `packs:changed` added) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented
@@ -1855,7 +1860,10 @@ one's behaviour stays owned by the design record named beside it.
   `ModelVerifyProgress` pushed to the calling renderer (`event.sender`) while first-run weight
   hashing runs, so the first-run gate and the first cold Models visit show a determinate bar
   instead of an opaque spinner. First-run-only in practice — the checksum cache makes later passes
-  a no-op.
+  a no-op. **#420:** `runId` is the RENDERER's id when it supplied one to `listModels` (the Models
+  screen's full pass always does), which makes it the handle `models:cancelVerify` takes; otherwise
+  main mints one as before. A cancelled pass still emits its terminal `done`, so the bar settles
+  rather than lingering.
 
 ### MVP Definition of Done (§4 / spec §22) — checklist
 | Criterion | Status |

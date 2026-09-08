@@ -161,6 +161,39 @@ const ENGINE_JOB_LIVE: ReadonlySet<EngineDownloadJob['status']> = new Set([
 ])
 
 /**
+ * The live "Check all model files" pass (#420). The pass runs in the MAIN process, so it
+ * survives leaving the screen — the same reason `rememberedJob` is module-scoped. Without
+ * this, a revisit mid-pass showed an idle-looking screen while minutes of hashing carried on
+ * behind it, and the Cancel affordance (the whole point of #420) was gone with the unmounted
+ * component. `latest` seeds a revisited screen's bar until the next progress event lands.
+ *
+ * The pass is active exactly while its `listModels` promise is pending: `verifyAllModelFiles`
+ * sets this and clears it in a `finally` that runs whether or not the screen is still mounted,
+ * so it can never be left stale by a pass that finished while the user was away.
+ */
+let activeVerify: { runId: string; latest: ModelVerifyProgress | null } | null = null
+
+/**
+ * A fresh id for one "Check all model files" pass (#420). Renderer-minted so Cancel has a
+ * handle before the call is even made; `crypto.randomUUID` is present in Chromium and in the
+ * jsdom test environment, and the counter fallback keeps a partial environment working (the
+ * id only has to be unique within this renderer session).
+ */
+let verifyRunSeq = 0
+function newVerifyRunId(): string {
+  const uuid = globalThis.crypto?.randomUUID?.()
+  return uuid ?? `verify-${Date.now()}-${++verifyRunSeq}`
+}
+
+/** Mounted screens listening for `activeVerify` changes (at most one in practice). */
+const verifyWatchers = new Set<(v: typeof activeVerify) => void>()
+
+function setActiveVerify(next: typeof activeVerify): void {
+  activeVerify = next
+  for (const watch of verifyWatchers) watch(next)
+}
+
+/**
  * Test/preview-only reset (optionally: seed) of this module's download memory. Module state is
  * deliberately outside React so it survives a remount, which also means a jsdom test or a preview
  * case has no other way to start from a known state. Production code never calls this.
@@ -174,6 +207,7 @@ export function __resetModelsScreenMemoryForTests(seed?: {
     seed?.job && seed.jobName ? { jobId: seed.job.jobId, name: seed.jobName } : null
   dismissedJobId = null
   rememberedEngineJob = null
+  setActiveVerify(null)
 }
 
 export function ModelsScreen(): JSX.Element {
@@ -196,7 +230,15 @@ export function ModelsScreen(): JSX.Element {
   // loading state (a cold ACTIVE model, the one file lazy verification still hashes) and,
   // since #382, IN PLACE on the loaded screen while "Check all model files" runs. Null once
   // nothing is hashing.
-  const [verifyProgress, setVerifyProgress] = useState<ModelVerifyProgress | null>(null)
+  const [verifyProgress, setVerifyProgress] = useState<ModelVerifyProgress | null>(
+    activeVerify?.latest ?? null
+  )
+  // #420: the live "Check all model files" pass, if one is running — including one this
+  // screen did not start itself (the user left mid-pass and came back). Non-null ⇒ the bar
+  // and its Cancel button are on screen and the action is disabled.
+  const [verifyRun, setVerifyRun] = useState(activeVerify)
+  // Set between the Cancel click and the pass unwinding, so the button can't be clicked twice.
+  const [verifyCancelling, setVerifyCancelling] = useState(false)
   // Runtime status — so a model that is loading in the background shows a disabled
   // "Starting…" button (the `startingModelId` is server truth that survives a revisit,
   // unlike the per-click `busy` flag). Without this, the still-enabled Start button let a
@@ -304,7 +346,10 @@ export function ModelsScreen(): JSX.Element {
   // clears it so the bar never lingers after hashing finishes. `?.` tolerates older
   // preloads / test stubs (they simply never drive the bar).
   useEffect(() => {
-    return window.api.onModelVerifyProgress?.((p) =>
+    return window.api.onModelVerifyProgress?.((p) => {
+      // #420: keep the module's memory of the live full pass fresh, so leaving and coming
+      // back re-draws the bar where it actually is instead of at zero.
+      if (activeVerify && activeVerify.runId === p.runId) activeVerify.latest = p.done ? null : p
       // Lock onto one pass: `listModels` can run as overlapping passes (a remount, the
       // download poll), each with its own `modelCount` as the cache warms — without this
       // the bar flips between "1 of 1" and "2 of 2". Ignore events from a different pass
@@ -313,7 +358,24 @@ export function ModelsScreen(): JSX.Element {
         if (prev && prev.runId !== p.runId) return prev
         return p.done ? null : p
       })
-    )
+    })
+  }, [])
+
+  // #420: follow the module-scoped full pass, so a screen that was remounted mid-pass shows
+  // the bar + Cancel, and one whose pass finished while the user was away settles by itself.
+  useEffect(() => {
+    const watch = (v: typeof activeVerify): void => {
+      if (!mountedRef.current) return
+      setVerifyRun(v)
+      if (!v) {
+        setVerifyCancelling(false)
+        setVerifyProgress(null)
+      }
+    }
+    verifyWatchers.add(watch)
+    return () => {
+      verifyWatchers.delete(watch)
+    }
   }, [])
 
   // While a model is starting in the background, poll runtime status so the "Starting…"
@@ -454,12 +516,44 @@ export function ModelsScreen(): JSX.Element {
    * is the full-verify mode `buildModelList` already has, so this needs no new channel; the
    * hashes it computes land in the (size, mtime) checksum store, so the `refresh()` that
    * `run` fires afterwards reports every state — `checksum_failed` included — from the cache.
+   *
+   * #420: the run id is minted HERE, before the call, and handed to main — so Cancel has a
+   * handle from the first instant, not from the first progress event (which can be seconds
+   * away, and never arrives at all when there is nothing to hash). The `finally` clears the
+   * module memory whether or not this screen is still mounted, which is what makes
+   * `activeVerify` an honest "a pass is running right now".
    */
   async function verifyAllModelFiles(): Promise<void> {
+    const runId = newVerifyRunId()
+    setActiveVerify({ runId, latest: null })
     await run('verify-all', async () => {
-      const m = await window.api.listModels()
-      if (mountedRef.current) setModels(m)
+      try {
+        const m = await window.api.listModels(undefined, runId)
+        if (mountedRef.current) setModels(m)
+      } finally {
+        setActiveVerify(null)
+      }
     })
+  }
+
+  /**
+   * #420: stop the pass. A cancelled pass is NOT a failure — main returns a complete list in
+   * which what finished is verified and the rest is simply unchecked — so nothing here shows
+   * an error banner; the call above resolves normally and `run`'s trailing refresh reports
+   * the settled state. A cancel that finds nothing (the pass ended a moment earlier) is a
+   * no-op by contract.
+   */
+  async function cancelVerifyAll(): Promise<void> {
+    const active = verifyRun
+    if (!active) return
+    setVerifyCancelling(true)
+    try {
+      await window.api.cancelModelVerify?.(active.runId)
+    } catch {
+      // Nothing to surface: either the pass had already finished, or it will finish on its
+      // own. Re-enable the button so the user can try again.
+      if (mountedRef.current) setVerifyCancelling(false)
+    }
   }
 
   /** Persist the context-size pick ('auto' = null override = the model's recommended window).
@@ -1102,17 +1196,18 @@ export function ModelsScreen(): JSX.Element {
 
       {/* #382: a screen-level, EXPLICIT full check. Ordinary visits verify lazily (only the
           active model), so nothing here hashes on its own any more; this is the one action
-          that walks every present weight. Its copy names the cost — a full pass took 25.5
-          minutes for 39.44 GB on the #330 slow drive — because it cannot be stopped once
-          started (cancellable verification is #420). The bar renders IN PLACE below it. */}
+          that walks every present weight — 25.5 minutes for 39.44 GB on the #330 slow drive.
+          #420: it can now be STOPPED. The bar renders IN PLACE below it with a Cancel button
+          beside it, the same Progress + Cancel pairing the download panels use; the Cancel
+          shows as soon as the pass starts, before the first progress event has arrived. */}
       <div className="models-verify-all">
         <Button
           size="sm"
-          disabled={busy !== null}
+          disabled={busy !== null || verifyRun !== null}
           title={t('models.verifyAllTitle')}
           onClick={() => void verifyAllModelFiles()}
         >
-          {busy === 'verify-all' ? (
+          {busy === 'verify-all' || verifyRun !== null ? (
             <>
               <Spinner /> {t('models.verifyingAll')}
             </>
@@ -1122,6 +1217,11 @@ export function ModelsScreen(): JSX.Element {
         </Button>
         <p className="hint">{t('models.verifyAllHint')}</p>
         {verifyBar()}
+        {verifyRun !== null && (
+          <Button size="sm" disabled={verifyCancelling} onClick={() => void cancelVerifyAll()}>
+            {verifyCancelling ? t('models.verifyAllStopping') : t('models.verifyAllStop')}
+          </Button>
+        )}
       </div>
 
       {anyDownloadable && downloadsBlockedReason && <Banner tone="info">{downloadsBlockedReason}</Banner>}

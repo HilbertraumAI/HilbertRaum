@@ -166,7 +166,10 @@ can turn this off under **Settings → Load the selected model automatically**.
 > Two ways to check on purpose: **Verify checksum** under a card's **Technical details**
 > re-checks that one model from scratch, and **Check all model files** near the top of the
 > screen checks every model file on the drive. The full check reads every file from beginning
-> to end: on a slow drive that can take several minutes, and it runs to the end once started.
+> to end, so on a slow drive it can take several minutes — you can stop it at any time with
+> **Stop checking** next to the progress bar, and the files it already checked stay checked. It
+> keeps running if you go to another screen; come back and the bar (and Stop checking) are still
+> there.
 
 > **No model installed?** You can still try the interface: a model without a weight file shows
 > a **Try in demo mode** button (in developer mode) that runs a built-in demo model. Demo
