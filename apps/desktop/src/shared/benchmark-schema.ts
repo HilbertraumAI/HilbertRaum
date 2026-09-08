@@ -185,8 +185,9 @@ export function normalizeSpeedIdentity(raw: unknown): SpeedSampleIdentity | null
 
 /**
  * An `EffectiveReadSample` (#108) or null. Every field is load-bearing — the Drive tile prints
- * the throughput, the GB and the date, and `preferCandidate` ranks on `source` and `at` — so a
- * sample missing any of them is dropped rather than half-rendered.
+ * the throughput, the GB and the date, and `preferCandidate` ranks on `source`, `at` and (since
+ * #404, for the media-bound-checksum rule) `mbps` — so a sample missing any of them is dropped
+ * rather than half-rendered.
  */
 export function normalizeEffectiveRead(raw: unknown): EffectiveReadSample | null {
   if (!isRecord(raw)) return null

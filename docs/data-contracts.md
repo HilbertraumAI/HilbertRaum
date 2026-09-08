@@ -355,8 +355,10 @@ auth is checked once at admission — SEC-F6). All three refuse via `workspaceAd
 `localApiServerAddress(port)` and `MIN/MAX_LOCAL_API_PORT` live in `shared/local-api.ts` so the
 card, the write gate, and the docs cannot disagree about the pasteable URL or the clamp.
 ✅ **IPC** `src/main/ipc/registerModelIpc.ts` — `listModels(lazyVerify?: boolean)` (#138 D-7:
-the RT-3 param — `true` hashes only the active model on a cold cache; the gate-into-chat path
-passes it, the Models screen omits it to hash the full set), `selectModel`, `startRuntime`,
+the RT-3 param — `true` hashes only the active model on a cold cache. Since #382 every routine
+caller passes it: the gate-into-chat path, the Performance screen and an ordinary Models-screen
+visit. It is omitted — hashing the full set — only by the Models screen's explicit "Check all
+model files" action), `selectModel`, `startRuntime`,
 `stopRuntime`; wired in `initBackend()`. `ctx` now carries `runtime` + `manifestsDir`. Runtime stopped
 on `will-quit`. Preload exposes all four. **Models screen** renders states/license/recommend/verify/
 select/start-stop. Hardware profile now comes from the **persisted Phase-7 benchmark**

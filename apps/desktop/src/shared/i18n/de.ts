@@ -1285,6 +1285,15 @@ export const de: Record<keyof typeof en, string> = {
     '(umgeht den Zwischenspeicher)',
   'models.verifying': 'Wird geprüft…',
   'models.verify': 'Prüfsumme prüfen',
+  // #382 — siehe en.ts.
+  'models.verifyAll': 'Alle Modelldateien prüfen',
+  'models.verifyingAll': 'Alle Modelldateien werden geprüft…',
+  'models.verifyAllTitle':
+    'Jede Modelldatei auf diesem Laufwerk erneut gegen ihre SHA-256-Prüfsumme prüfen',
+  'models.verifyAllHint':
+    'Jedes Modell wird beim Start geprüft. Hiermit werden stattdessen alle Modelldateien auf ' +
+    'diesem Laufwerk geprüft — auf einem langsamen Laufwerk kann das mehrere Minuten dauern, ' +
+    'und die Prüfung läuft nach dem Start bis zum Ende.',
   'models.confirm.title': '{name} herunterladen?',
   'models.confirm.start': 'Download starten',
   'models.confirm.size': 'Größe',

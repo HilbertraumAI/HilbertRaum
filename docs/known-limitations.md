@@ -110,9 +110,13 @@ password recovery — are documented in
   result is cached (in memory and in `AppSettings.checksumCache`) keyed by `(path, size, mtime)` —
   re-hashing multi-GB GGUFs on every visit/launch cost minutes of USB I/O. A same-size,
   mtime-preserving in-place tamper is therefore not re-detected by the app's routine checks (mtime
-  is attacker-forgeable anyway). Mitigations: the AI Model screen's **Verify checksum** forces a real
-  re-hash, and the ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash
-  fully. Downloads now fsync the `.part` to the device before renaming it into place (F-34,
+  is attacker-forgeable anyway). **Since #382 (2026-09-08) routine checks are also LAZY** — every
+  screen asks for `lazyVerify`, so on a cold cache only the ACTIVE model is hashed and a present
+  but un-started weight is reported `installed` without being read at all. Damage in such a file
+  is therefore found when the model is started, not before. Mitigations: the AI Model screen's
+  per-model **Verify checksum** forces a real re-hash, its screen-level **Check all model files**
+  walks every present weight, the §7.4 start gate re-verifies whatever it launches, and the
+  ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully. Downloads now fsync the `.part` to the device before renaming it into place (F-34,
   full-audit 2026-07-16), closing the post-completion power-cut/unplug window that could otherwise
   persist the rename + `(size,mtime)` cache entry over a torn weight the cache then reports verified.
 - **Sidecar binaries built by an OLD `fetch-runtime` carry no pre-spawn hash (accept + document).**
@@ -2411,21 +2415,34 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   default first-run journey (#382 hashes everything before a model can be chosen). `read-speed.ts`
   now remembers the absolute paths a `checksum` sample was recorded for in this process and drops
   a load sample over any of them, whoever hashed them — the honest checksum figure stays the
-  headline. The #114 prefetch skip is deliberately NOT widened (it stays on the start's own hash):
+  headline. (The premise "this is the default first-run journey" was true when written: #382 then
+  hashed everything before a model could be chosen. Since #382 the screen verifies lazily, so the
+  first-run path usually hashes on the start itself and the one-shot flag covers it — the
+  warmed-path set still earns its keep for "Check all model files", a background verify and any
+  later start of a weight hashed earlier in the session.) The #114 prefetch skip is deliberately
+  NOT widened (it stays on the start's own hash):
   the −49 % cold-start win is not traded for a data-quality guard. A start right after an **in-app
   download** now records no read sample at all: the download verify is excluded from sampling by
   design (it reads bytes the app just wrote) and the page-cache-warm load after it is dropped too
   — honest absence rather than a wrong figure, and the next cold start records the medium.
-  Residuals, plainly: (1) **the fix does not survive a relaunch, and the figure oscillates with
-  the cache's warmth.** The checksum store is persistent, so on the NEXT launch nothing hashes,
-  the warmed-path set is empty, and on a big-RAM machine a warm start records a `model_load`
-  sample that **overwrites** the honest checksum figure #392 just persisted — `preferCandidate`
-  lets a `model_load` sample beat a `checksum` incumbent unconditionally. The #334 leg B1 state
-  therefore returns until a genuinely cold start happens. (2) **A machine that already persisted
-  an inflated figure keeps it**, for the same ranking reason. The amendment both residuals want —
-  a checksum figure *below* the 100 MB/s gate cannot be hash-CPU-bound (the measured hash floor is
-  136 MB/s), so such a sample could be allowed to displace a `model_load` incumbent — is an owner
-  call tracked as issue **#404**.
+  Both residuals of the original fix — the warm relaunch re-persisting a page-cache figure, and a
+  machine that already carried one keeping it — were closed by **#404** (below).
+- **A warm relaunch used to re-persist a page-cache read figure over the honest checksum sample**
+  (issue #404, fixed 2026-09-08). Nothing hashes on a relaunch — the checksum store answers from
+  `(size, mtime)` — so #392's warmed-path set is empty and the auto-start's load window times the
+  OS page cache. `preferCandidate` let a `model_load` sample beat a `checksum` incumbent
+  unconditionally, so that page-cache figure displaced the honest one on both destinations and
+  took the 100 MB/s slow-read warning with it, every launch, for as long as the drive stayed slow.
+  The rule is now amended in **both** directions for a **media-bound** checksum sample — one below
+  `SLOW_READ_MBPS` (100), which cannot be hash-CPU-bound because the measured SHA-256 floor is
+  ~136 MB/s (`benchmark.md`, "Slow read"): such a candidate **may displace** a `model_load`
+  incumbent (repairing a machine that already carries an inflated figure), and symmetrically a
+  `model_load` candidate **does not displace** it (stopping the oscillation). Strict `<`, so a
+  sample at exactly 100 MB/s keeps the old ranking. `preferCandidate` stays the single ranking
+  rule; its four call sites all follow. **Accepted failure mode:** move the drive to a FASTER USB
+  port on the same machine — the port is not part of `machineKey` — and the slow figure stands
+  until something hashes again. It self-heals: a newer `checksum` sample still beats a `checksum`
+  incumbent, and since #382 every new model pick hashes at the start gate.
 - **The Home screen's launch preflight writes its 8 MiB probe at unlock**, in the same second the
   auto-start begins hashing (#334 perf marks, 0.4 s after `unlock_done`). It persists nothing and
   measured the same write figure as the sequenced probe after the load; noted, not sequenced.

@@ -16,13 +16,15 @@ import {
   suppressNextModelLoadSample,
   throughputMbps
 } from '../../src/main/services/read-speed'
+import { SLOW_READ_MBPS } from '../../src/shared/performance-rules'
 import type { EffectiveReadSample } from '../../src/shared/types'
 
 // #108: the honest effective-read latch. Policy under test: sample floors (tiny
 // files/instant reads carry no throughput information; model_load additionally needs
 // 2 GiB so parse/KV-alloc/graph-init fixed costs can't dominate the window), the source
 // ranking (a checksum sample can be hash-CPU-bound on fast media, so it only ever fills
-// absence and is replaced by model_load, never vice versa), the page-cache suppression
+// absence and is replaced by model_load, never vice versa — UNLESS it is media-bound, below
+// SLOW_READ_MBPS, which since #404 ranks by age in both directions), the page-cache suppression
 // — both the one-shot flag (a start whose OWN install-state pass hashed) and, since #392,
 // the per-path session set (a weight hashed ANYWHERE this session, e.g. by the Models
 // screen, records no load sample) — and the observer (persistence is a property of
@@ -102,6 +104,48 @@ describe('effective-read latch (#108)', () => {
     expect(preferCandidate(sample({ source: 'checksum' }), sample({ source: 'checksum' }))).toBe(true)
     expect(preferCandidate(sample({ source: 'model_load' }), sample({ source: 'checksum' }))).toBe(true)
     expect(preferCandidate(sample({ source: 'model_load' }), sample({ source: 'model_load' }))).toBe(true)
+  })
+
+  // #404: the SHA-256 floor is measured at ~136 MB/s (benchmark.md, "Slow read"), so a
+  // checksum sample below SLOW_READ_MBPS (100) cannot be hash-CPU-bound — the premise the
+  // "checksum only fills absence" rank rests on. Both halves of the amendment, and the
+  // boundary that keeps every older case honest.
+  it('#404: a MEDIA-bound checksum candidate displaces a model_load incumbent (half 1)', () => {
+    const slowHash = sample({ source: 'checksum', mbps: 30 })
+    expect(preferCandidate(slowHash, sample({ source: 'model_load', mbps: 589 }))).toBe(true)
+  })
+
+  it('#404: a model_load candidate does NOT displace a media-bound checksum incumbent (half 2)', () => {
+    const slowHash = sample({ source: 'checksum', mbps: 30 })
+    expect(preferCandidate(sample({ source: 'model_load', mbps: 589 }), slowHash)).toBe(false)
+    // A NEWER checksum still beats a checksum incumbent — this is what makes half 2's
+    // accepted failure mode (a faster USB port on the same machine) self-heal.
+    expect(preferCandidate(sample({ source: 'checksum', mbps: 133 }), slowHash)).toBe(true)
+  })
+
+  it('#404: exactly SLOW_READ_MBPS is NOT media-bound — the strict < boundary is pinned', () => {
+    const atThreshold = sample({ source: 'checksum', mbps: SLOW_READ_MBPS })
+    // Unchanged from before #404 in BOTH directions: the old rank still applies at 100 MB/s.
+    expect(preferCandidate(atThreshold, sample({ source: 'model_load' }))).toBe(false)
+    expect(preferCandidate(sample({ source: 'model_load' }), atThreshold)).toBe(true)
+    // One tenth below it flips both.
+    const justUnder = sample({ source: 'checksum', mbps: SLOW_READ_MBPS - 0.1 })
+    expect(preferCandidate(justUnder, sample({ source: 'model_load' }))).toBe(true)
+    expect(preferCandidate(sample({ source: 'model_load' }), justUnder)).toBe(false)
+  })
+
+  it('#404: the latch keeps a slow hash over a page-cache load window, in either order', () => {
+    // 3 GB over 100 s = 30 MB/s — a stick, not the SHA-256 floor. No path, so the #392
+    // warmed-path suppression is not what is under test here.
+    recordChecksumRead(3_000_000_000, 100_000, 'slow-media')
+    recordModelLoadRead('/ignored.gguf', 5_000, 'page-cache', 6_000_000_000) // 1,200 MB/s
+    expect(latestEffectiveRead()?.modelId).toBe('slow-media')
+    expect(latestEffectiveReadBySource('model_load')?.modelId).toBe('page-cache') // still latched per source
+
+    resetEffectiveReadForTests()
+    recordModelLoadRead('/ignored.gguf', 5_000, 'page-cache', 6_000_000_000)
+    recordChecksumRead(3_000_000_000, 100_000, 'slow-media')
+    expect(latestEffectiveRead()?.modelId).toBe('slow-media') // half 1 repairs the incumbent
   })
 
   it('suppressNextModelLoadSample is one-shot: the page-cache-warm load after a hash records nothing', () => {

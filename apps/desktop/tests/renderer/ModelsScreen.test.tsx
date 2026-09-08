@@ -15,6 +15,7 @@ import {
   type EngineOptionalFamily,
   type EngineStatus,
   type ModelInfo,
+  type ModelVerifyProgress,
   type PolicyStatus,
   type RuntimeStatus
 } from '../../src/shared/types'
@@ -2592,5 +2593,107 @@ describe('ModelsScreen — knowledge-pack tools row (#339 P8-2)', () => {
     expect(downloadEngine).toHaveBeenCalledTimes(1)
     expect(downloadEngine).toHaveBeenCalledWith()
     expect(downloadEngine.mock.calls[0]).toHaveLength(0)
+  })
+})
+
+// #382 — lazy verification on the Models screen. A fresh workspace on a slow drive used to
+// hash EVERY present weight before a single card rendered: 39.44 GB in 25.5 min at a mean
+// 25.8 MB/s on the #330 round trip, and this screen is the only route to a first model. The
+// screen now verifies lazily on every ordinary visit; the full pass moved to one explicit
+// opt-in action, which needs its own in-place progress bar (before #382 the only bar lived
+// inside the `!models` branch, which lazy verification skips).
+describe('lazy verification + "Check all model files" (#382)', () => {
+  const idleEngine: EngineStatus = {
+    installed: true,
+    available: true,
+    version: '1',
+    backend: 'cpu',
+    missingFamilies: []
+  }
+  const idleRuntime = { running: false, modelId: null, startingModelId: null } as unknown as RuntimeStatus
+
+  /** Stubs the screen's bridge and hands back the listModels spy + the progress emitter. */
+  function stubVerify(models: ModelInfo[]): {
+    listModels: ReturnType<typeof vi.fn>
+    emit: (p: Partial<ModelVerifyProgress>) => void
+  } {
+    const listModels = vi.fn(async () => models)
+    let sink: ((p: ModelVerifyProgress) => void) | null = null
+    stubApi({
+      listModels,
+      getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: models[0]?.id ?? null })),
+      getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
+      getAppStatus: vi.fn(async () => appStatus),
+      getEngineStatus: vi.fn(async () => idleEngine),
+      getRuntimeStatus: vi.fn(async () => idleRuntime),
+      onModelVerifyProgress: vi.fn((cb: (p: ModelVerifyProgress) => void) => {
+        sink = cb
+        return () => {
+          sink = null
+        }
+      }),
+      listDownloadJobs: vi.fn(async () => [])
+    })
+    const emit = (p: Partial<ModelVerifyProgress>): void => {
+      act(() =>
+        sink?.({
+          runId: 'run-1',
+          modelIndex: 1,
+          modelCount: 2,
+          modelId: 'big',
+          displayName: 'Big weight',
+          overallBytesHashed: 4_000_000_000,
+          overallBytesTotal: 10_000_000_000,
+          done: false,
+          ...p
+        })
+      )
+    }
+    return { listModels, emit }
+  }
+
+  it('the mount refresh asks for LAZY verification and the cards render straight away', async () => {
+    const installed = model({ id: 'big', displayName: 'Big weight', state: 'installed' })
+    const { listModels } = stubVerify([installed])
+    render(<ModelsScreen />)
+
+    expect(await screen.findByText('Big weight')).toBeVisible()
+    expect(listModels).toHaveBeenCalledTimes(1)
+    expect(listModels).toHaveBeenCalledWith(true)
+    assertNoUnexpectedApiCalls()
+  })
+
+  it('"Check all model files" runs the FULL pass (the flag omitted), then refreshes lazily', async () => {
+    const user = userEvent.setup()
+    const installed = model({ id: 'big', displayName: 'Big weight', state: 'installed' })
+    const { listModels } = stubVerify([installed])
+    render(<ModelsScreen />)
+    await screen.findByText('Big weight')
+
+    await user.click(screen.getByRole('button', { name: 'Check all model files' }))
+
+    await waitFor(() => expect(listModels).toHaveBeenCalledTimes(3))
+    expect(listModels.mock.calls[1]).toEqual([]) // the explicit full pass
+    expect(listModels.mock.calls[2]).toEqual([true]) // run()'s trailing refresh, lazy again
+  })
+
+  it('the progress bar renders IN PLACE on the loaded screen while the full pass hashes', async () => {
+    const installed = model({ id: 'big', displayName: 'Big weight', state: 'installed' })
+    const { emit } = stubVerify([installed])
+    render(<ModelsScreen />)
+    await screen.findByText('Big weight')
+
+    // Nothing hashing yet: no bar, and the cards are on screen.
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
+
+    emit({})
+    expect(screen.getByText('Checking model 1 of 2: Big weight — 40%')).toBeVisible()
+    expect(screen.getByRole('progressbar')).toBeVisible()
+    // The regression this pins: the bar must not replace the screen (pre-#382 its only render
+    // site was the `!models` branch, so a full pass here would have shown nothing at all).
+    expect(screen.getByText('Big weight')).toBeVisible()
+
+    emit({ done: true })
+    expect(screen.queryByRole('progressbar')).not.toBeInTheDocument()
   })
 })

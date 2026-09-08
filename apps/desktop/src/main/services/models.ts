@@ -683,8 +683,9 @@ export interface InstallStateOptions {
    * lazy mode) to report the inactive models for display without paying minutes of USB
    * I/O to SHA-256 every multi-GB GGUF on a cold cache. The §7.4 verification gate is
    * NOT relaxed: `startModelRuntime` re-verifies the model it actually launches, and the
-   * Models-screen visit + the ship-time gates (verify-models --strict /
-   * assertCommercialDrive) still hash fully. A cached hash is still used when present.
+   * Models screen's explicit "Check all model files" action (#382) + the ship-time gates
+   * (verify-models --strict / assertCommercialDrive) still hash fully. A cached hash is
+   * still used when present.
    */
   skipHash?: boolean
 }
@@ -1221,12 +1222,13 @@ export interface BuildModelListOptions {
    */
   onProgress?: (p: ModelVerifyProgress) => void
   /**
-   * RT-3 lazy verification (the chat path). When this property is PRESENT, only the model
-   * whose id matches is hashed on a cold cache; every other present weight is reported
-   * `installed` without hashing (display-only — the start gate re-verifies what it
-   * launches). Pass the active model id (or `null` to hash nothing) on the chat path; OMIT
-   * the property entirely (the default) on an explicit Models-screen visit to hash the full
-   * set. Distinguishes "lazy, no active model" (`null`) from "full hash" (absent).
+   * RT-3 lazy verification — since #382 the mode every routine caller uses. When this
+   * property is PRESENT, only the model whose id matches is hashed on a cold cache; every
+   * other present weight is reported `installed` without hashing (display-only — the start
+   * gate re-verifies what it launches). Pass the active model id (or `null` to hash
+   * nothing); OMIT the property entirely to hash the full set, which now happens only for
+   * the Models screen's explicit "Check all model files" action and the ship-time gates.
+   * Distinguishes "lazy, no active model" (`null`) from "full hash" (absent).
    */
   onlyVerifyModelId?: string | null
 }

@@ -24,7 +24,7 @@ vi.mock('electron', () => ({
 import { maybeRunFirstBenchmark, runAndPersistBenchmark } from '../../src/main/ipc/registerBenchmarkIpc'
 import { effectiveReadOrPersisted, persistEffectiveRead, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { modelBusyLane } from '../../src/main/ipc/model-busy'
-import { detectSystem } from '../../src/main/services/benchmark'
+import { detectSystem, upsertSlowReadWarning } from '../../src/main/services/benchmark'
 import type { Db } from '../../src/main/services/db'
 import { machineKey, resetPerformanceForTests, upsertHistory } from '../../src/main/services/performance'
 import {
@@ -644,9 +644,10 @@ describe('strictly increasing sample timestamps (A-D4): same-millisecond samples
   })
 })
 
-// #392: the Models-screen-then-start journey. The screen hashes the weight (#382 hashes the
-// whole corpus before a model can be chosen), the start hits the size+mtime cache so nothing
-// suppressed its window, the #114 prefetch pulled RAM, and the resulting model_load sample
+// #392: the hash-then-start journey. The Models screen hashed the weight (before #382 it hashed
+// the whole corpus before a model could be chosen; since #382 the "Check all model files" action
+// does), the start hits the size+mtime cache so nothing suppressed its window, the #114 prefetch
+// pulled RAM, and the resulting model_load sample
 // (589 MB/s for a 28 MB/s stick — #334 leg B1) outranked the honest checksum FOREVER:
 // `preferCandidate` never lets a checksum displace a model_load, on the latch or on any
 // persisted destination. So the 100 MB/s slow-read warning was dropped on the exact machine
@@ -681,11 +682,82 @@ describe('a weight hashed this session never persists a page-cache load figure (
     updateSettings(db, { lastBenchmark: mine, benchmarkHistory: [mine] })
     registerModelIpc(ctxWith(root, db))
 
-    recordChecksumRead(3_000_000_000, 100_000, 'other-model', '/models/corpus/other.gguf')
+    // 3 GB in 20 s = 150 MB/s. #404 made the SPEED of this unrelated incumbent load-bearing:
+    // a checksum under SLOW_READ_MBPS is media-bound and a model_load no longer displaces it,
+    // so the original 100 s (30 MB/s) would now assert #404's rule instead of this test's own
+    // subject — that a start of a weight NOTHING hashed still samples.
+    recordChecksumRead(3_000_000_000, 20_000, 'other-model', '/models/corpus/other.gguf')
     loadSample('corpus-model', 10_000, WEIGHT)
 
     const s = getSettings(db)
     expect(s.lastBenchmark?.effectiveRead).toMatchObject({ source: 'model_load', modelId: 'corpus-model' })
     expect(hasSlowReadWarning(s.lastBenchmark!.warnings)).toBe(false)
+  })
+})
+
+// #404: the WARM RELAUNCH, one session later. Nothing hashes on a relaunch — the checksum store
+// answers from (size, mtime) — so #392's suppression has nothing to fire on, and the auto-start's
+// load window times the OS page cache. Before #404 that page-cache figure displaced the honest
+// media-bound checksum sample on both destinations, and the #110 slow-read warning went with it;
+// every relaunch re-persisted it, so the state oscillated for as long as the drive stayed slow.
+describe('a warm relaunch never displaces a media-bound checksum figure (#404)', () => {
+  const WEIGHT = '/models/corpus/w.gguf'
+
+  it('the persisted 30 MB/s checksum survives a page-cache load on BOTH destinations, warning intact', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const mine = hereResult()
+    // Session 1 hashed the weight and persisted the honest figure to both destinations.
+    const honest: EffectiveReadSample = {
+      mbps: 30,
+      bytes: 3_000_000_000,
+      ms: 100_000,
+      source: 'checksum',
+      modelId: 'corpus-model',
+      at: '2026-09-07T09:00:00.000Z'
+    }
+    const carried = { ...mine, effectiveRead: honest, warnings: upsertSlowReadWarning(mine.warnings, 30) }
+    updateSettings(db, { lastBenchmark: carried, benchmarkHistory: [carried] })
+    registerModelIpc(ctxWith(root, db))
+
+    // Session 2: a warm relaunch. Nothing hashed, so the start's own install check is a cache
+    // hit and its window measures RAM — 3 GB in 10 s = 300 MB/s for a 30 MB/s stick.
+    loadSample('corpus-model', 10_000, WEIGHT)
+
+    const s = getSettings(db)
+    expect(s.lastBenchmark?.effectiveRead).toMatchObject({ source: 'checksum', mbps: 30 })
+    expect(s.benchmarkHistory[0].effectiveRead).toMatchObject({ source: 'checksum', mbps: 30 })
+    expect(hasSlowReadWarning(s.lastBenchmark!.warnings)).toBe(true)
+    expect(hasSlowReadWarning(s.benchmarkHistory[0].warnings)).toBe(true)
+    // The live latch agrees with what was persisted (one ranking rule, four call sites).
+    expect(effectiveReadOrPersisted(ctxWith(root, db))).toMatchObject({ source: 'checksum', mbps: 30 })
+    // The observed rows still show the load the session actually did.
+    expect(latestEffectiveReadBySource('model_load')?.modelId).toBe('corpus-model')
+  })
+
+  it('half 1 repairs a machine that already carries a page-cache figure', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const mine = hereResult()
+    // The pre-#404 state: 589 MB/s persisted for a 28 MB/s stick (#334 leg B1), no warning.
+    const inflated: EffectiveReadSample = {
+      mbps: 589,
+      bytes: 3_000_000_000,
+      ms: 5_093,
+      source: 'model_load',
+      modelId: 'corpus-model',
+      at: '2026-09-07T09:00:00.000Z'
+    }
+    const carried = { ...mine, effectiveRead: inflated }
+    updateSettings(db, { lastBenchmark: carried, benchmarkHistory: [carried] })
+    registerModelIpc(ctxWith(root, db))
+
+    // One "Check all model files" pass (or any cold hash) is enough to correct it.
+    recordChecksumRead(3_000_000_000, 100_000, 'corpus-model', WEIGHT)
+
+    const s = getSettings(db)
+    expect(s.lastBenchmark?.effectiveRead).toMatchObject({ source: 'checksum', mbps: 30 })
+    expect(s.benchmarkHistory[0].effectiveRead).toMatchObject({ source: 'checksum', mbps: 30 })
+    expect(hasSlowReadWarning(s.lastBenchmark!.warnings)).toBe(true)
   })
 })

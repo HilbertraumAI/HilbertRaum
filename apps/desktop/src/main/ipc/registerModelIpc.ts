@@ -494,9 +494,11 @@ export function registerModelIpc(ctx: AppContext): void {
       // Derived fresh from lastBenchmark on every call — stateless, never compounds; the same
       // function feeds the Performance snapshot's live recommendation (`liveChatRecommendation`).
       speedSignal: speedSignalFor(s),
-      // RT-3: the chat path (the workspace gate into Chat) passes lazyVerify so only the
-      // active model is hashed on a cold cache — the full corpus of multi-GB GGUFs is
-      // hashed only on an explicit Models-screen visit. Display-only; the start gate
+      // RT-3: every ROUTINE caller passes lazyVerify, so only the active model is hashed on
+      // a cold cache — the chat path (the workspace gate into Chat), the Performance screen
+      // and, since #382, an ordinary Models-screen visit. The full corpus of multi-GB GGUFs
+      // is hashed only when the flag is omitted, which now means one explicit user action:
+      // the Models screen's "Check all model files". Display-only; the start gate
       // (startModelRuntime) re-verifies the model it actually launches.
       ...(lazyVerify ? { onlyVerifyModelId: s.activeModelId } : {}),
       // First-run weight hashing can take a while on a fresh drive — stream progress back

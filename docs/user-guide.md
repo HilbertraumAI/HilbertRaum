@@ -159,10 +159,14 @@ Once a model is **selected**, the app loads it again automatically every time yo
 app (after unlocking, on encrypted drives) — you don't have to come back to this screen. You
 can turn this off under **Settings → Load the selected model automatically**.
 
-> **First visit can take a few minutes:** the app verifies every file the model needs the
-> first time it sees it. The result is remembered, so later visits are instant. The
-> **Verify checksum** button (under a card's **Technical details**) re-checks every file the
-> model needs from scratch whenever you want.
+> **Checking model files.** The app checks a model's files against their published checksums
+> before it runs the model, and remembers the result, so it only ever reads a large file again
+> when that file has changed. Opening this screen no longer checks every model you have — only
+> the one you are currently using — so the screen appears straight away even on a slow drive.
+> Two ways to check on purpose: **Verify checksum** under a card's **Technical details**
+> re-checks that one model from scratch, and **Check all model files** near the top of the
+> screen checks every model file on the drive. The full check reads every file from beginning
+> to end: on a slow drive that can take several minutes, and it runs to the end once started.
 
 > **No model installed?** You can still try the interface: a model without a weight file shows
 > a **Try in demo mode** button (in developer mode) that runs a built-in demo model. Demo
