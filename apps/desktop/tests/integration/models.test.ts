@@ -1755,6 +1755,37 @@ describe('discoverManifests', () => {
     const res = discoverManifests(dir)
     expect(res.manifests.length).toBe(1)
   })
+
+  // #333: the walk/read/parse phase split feeding the opt-in `discover_manifests` mark runs on
+  // a second code path (the `timed` branch — extra clocks, a byte count, and the file list
+  // hoisted out of the `for` head). Discovery is the §7.4 install gate's own source of truth, so
+  // the instrumentation must be provably semantics-free: same manifests, same errors, same
+  // order, with the perf log on and off. The mark's CONTENT is not asserted here — perf.ts
+  // buffers pre-`initPerf` marks in memory by design and exposes no reader.
+  it('returns an identical result with the perf log enabled (#333 instrumentation)', () => {
+    const dir = tempDir('hilbertraum-manifests-')
+    writeManifest(dir, 'good.yaml', manifestObj())
+    mkdirSync(join(dir, 'chat'), { recursive: true })
+    writeManifest(join(dir, 'chat'), 'nested.yml', manifestObj({ id: 'nested' }))
+    writeManifest(dir, 'bad.yaml', { id: 'broken' })
+
+    const before = process.env.HILBERTRAUM_PERF_LOG
+    const off = discoverManifests(dir)
+    process.env.HILBERTRAUM_PERF_LOG = '1'
+    let on: ReturnType<typeof discoverManifests>
+    try {
+      on = discoverManifests(dir)
+    } finally {
+      if (before === undefined) delete process.env.HILBERTRAUM_PERF_LOG
+      else process.env.HILBERTRAUM_PERF_LOG = before
+    }
+
+    expect(on.manifests.map((m) => m.manifest.id)).toEqual(off.manifests.map((m) => m.manifest.id))
+    expect(on.manifests.map((m) => m.sourceFile)).toEqual(off.manifests.map((m) => m.sourceFile))
+    expect(on.errors).toEqual(off.errors)
+    expect(off.manifests.length).toBe(2)
+    expect(off.errors.length).toBe(1)
+  })
 })
 
 // full-audit 2026-07-10 BE-5: launchContextTokens is the ONE spelling of the launch-window

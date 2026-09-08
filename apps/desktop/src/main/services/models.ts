@@ -20,7 +20,7 @@ import type {
 } from '../../shared/types'
 import { tMain } from './i18n'
 import { log } from './logging'
-import { perfMark, perfMs } from './perf'
+import { perfEnabled, perfMark, perfMs } from './perf'
 import { recordChecksumRead } from './read-speed'
 import type { Db } from './db'
 import { getSettings, updateSettings } from './settings'
@@ -115,16 +115,51 @@ function extname(name: string): string {
   return i < 0 ? '' : name.slice(i).toLowerCase()
 }
 
-/** Discover + parse + validate every manifest under `manifestsDir`. */
+/**
+ * Discover + parse + validate every manifest under `manifestsDir`.
+ *
+ * **Instrumented for issue #333** (`discover_manifests`, opt-in — `HILBERTRAUM_PERF_LOG=1`).
+ * This runs on 13 call sites, `performance:get` among them, and the drive launchers point
+ * `HILBERTRAUM_MANIFESTS_DIR` at the removable drive's own copy — so on the shipped path every
+ * call is a real read off slow media, and nothing measured it there. The mark splits the cost
+ * three ways so the media half and the CPU half can be told apart:
+ *
+ *   - `walkMs`  — `collectManifestFiles`: the recursive `readdirSync` (directory metadata),
+ *   - `readMs`  — the `readFileSync` calls only (the file bytes),
+ *   - the remainder (`ms − walkMs − readMs`) — YAML parse + `validateManifest`, pure CPU.
+ *
+ * The split matters because the OS page cache serves every call after the first from RAM,
+ * which leaves the REPEAT cost — what the Performance screen's push-driven refetch actually
+ * pays — floored by CPU that a faster drive never moves. A media-only measurement would
+ * therefore not settle the cache question #333 asks; both halves have to be on record.
+ *
+ * All of it is gated on `perfEnabled()`: with the log off (every normal user) this costs one
+ * env-var read and nothing else. Content rule holds — counts and durations, never a path.
+ */
 export function discoverManifests(manifestsDir: string): DiscoveryResult {
   const manifests: DiscoveredManifest[] = []
   const errors: string[] = []
   const seenIds = new Map<string, string>()
+  const timed = perfEnabled()
+  const startedAt = timed ? performance.now() : 0
+  let readMs = 0
+  let bytes = 0
 
-  for (const file of collectManifestFiles(manifestsDir)) {
+  // Hoisted out of the `for` head so the walk can be timed apart from the per-file work; an
+  // unreadable directory still throws from exactly here, which every caller already handles.
+  const files = collectManifestFiles(manifestsDir)
+  const walkMs = timed ? performance.now() - startedAt : 0
+
+  for (const file of files) {
     let raw: unknown
     try {
-      raw = parseYaml(readFileSync(file, 'utf8'))
+      const readAt = timed ? performance.now() : 0
+      const text = readFileSync(file, 'utf8')
+      if (timed) {
+        readMs += performance.now() - readAt
+        bytes += Buffer.byteLength(text, 'utf8')
+      }
+      raw = parseYaml(text)
     } catch (err) {
       errors.push(`${file}: YAML parse error — ${String(err)}`)
       continue
@@ -141,6 +176,16 @@ export function discoverManifests(manifestsDir: string): DiscoveryResult {
     }
     seenIds.set(result.manifest.id, file)
     manifests.push({ manifest: result.manifest, sourceFile: file })
+  }
+  if (timed) {
+    perfMark('discover_manifests', {
+      files: files.length,
+      ok: manifests.length,
+      bytes,
+      ms: perfMs(startedAt),
+      walkMs: Math.round(walkMs),
+      readMs: Math.round(readMs)
+    })
   }
   return { manifests, errors }
 }

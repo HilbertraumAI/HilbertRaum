@@ -2461,8 +2461,15 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   auto-start begins hashing (#334 perf marks, 0.4 s after `unlock_done`). It persists nothing and
   measured the same write figure as the sequenced probe after the load; noted, not sequenced.
 - **One `performance:get` read costs about 100 ms in the dev build** (a synchronous manifest scan
-  alongside settings and system detection) — measured once during development, not on slow
-  removable media; a cache is a follow-up if it proves to matter (issue #333).
+  alongside settings and system detection) — measured once during development, and on the
+  INTERNAL disk: the launchers point `HILBERTRAUM_MANIFESTS_DIR` at the drive's own copy, so the
+  shipped path reads off the removable drive. Instrumented 2026-09-08 (issue #333): the
+  `discover_manifests` / `performance_get` perf marks split the scan into walk / read /
+  parse+validate, and `scripts/measure-manifest-read.mjs` runs it standalone or against a
+  `perf.log`. Preliminary figures (`benchmark.md` §4 I5) put ~80 % of the warm repeat cost in
+  parse+validate CPU rather than in drive I/O — the page cache serves every read after the first
+  — so the cache question is not decided by media speed alone. The formal cold (eject/re-insert)
+  and end-to-end runs, and the decision, are still open.
 - **The silent re-check has no Home-screen notice yet.** The moved-drive re-check above runs with
   no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
   tracked in BUILD_STATE §5 item 22 (a).

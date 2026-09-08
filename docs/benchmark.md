@@ -1122,8 +1122,32 @@ line, visible without the perf log), `sidecar_healthy`, `runtime_selected`,
 the load window — `started`/`skipped`, then the settle outcome `done`/`aborted`/`failed`;
 `started` → settle times the window), `runtime_ready`, `first_token`, `stream_done`,
 `embedder_selected`, `drive_benchmark`,
+`discover_manifests` / `performance_get` (issue #333 — see below),
 and the `ingest_*` phase marks (`start`, `copy_done`, `parse_done`, `chunks_committed`,
 `embed_done`, `indexed`).
+
+### `discover_manifests` / `performance_get` — the #333 pair
+
+`discover_manifests` fires once per `discoverManifests` call — all thirteen call sites, not just
+the Performance screen — with `{files, ok, bytes, ms, walkMs, readMs}`. The three-way split is the
+point: `walkMs` is the recursive `readdirSync` (directory metadata), `readMs` the `readFileSync`
+bytes, and the remainder (`ms − walkMs − readMs`) YAML parse + `validateManifest`, which is pure
+CPU. Computing those fields costs extra clocks, so unlike every other mark the surrounding
+measurement code is itself gated — on `perfEnabled()`, a predicate `perf.ts` exports for exactly
+this case. With the log off, an instrumented scan costs one env-var read.
+
+`performance_get` wraps the IPC handler, not `buildPerformanceSnapshot`, so it spans exactly what
+the renderer awaits. The scan's share is the `discover_manifests` line immediately before it: the
+two are synchronous and adjacent, which is how `scripts/measure-manifest-read.mjs --log` pairs
+them (a scan with anything in between is reported as another caller's).
+
+**Reading these marks honestly.** The manifests are ~90–140 KiB and stay page-cache resident once
+read, so the first mark of a run and every later one measure different things — and this project
+has three recorded cases of a warm cache corrupting a drive figure (#392, #404, and #414, where an
+external `Get-FileHash` in the protocol itself reported 1,008 MB/s for a 407.9 MB/s drive). Cold
+means the first read since the drive's cache was dropped: eject the drive, re-insert it, then run.
+The warm figure is not the lesser one — it is what the screen's push-driven refetch actually pays,
+once per finished chat answer and once per model start while the screen sits open.
 
 Content rule, stricter than `app.log`: a mark carries only phase names, model and
 backend ids, byte counts, and millisecond durations. Never file names, paths of user
@@ -1225,7 +1249,7 @@ guess.
 | N3 | fixed P5 `be177a34` | `SLOW_TOKENS_PER_SECOND`/`SLOW_READ_MBPS`/`USABLE_VRAM_MB` moved to `shared/gpu-rules.ts` and `shared/performance-rules.ts`; the renderer's own copies deleted. | `gpu-rules.test.ts`; `shared/performance-rules.ts` |
 | N4 | fixed P6 `9f703b87` | `perf.tile.drive.noneHint` reads "…or file check". | `shared/i18n/en.ts` `perf.tile.drive.noneHint`; `PerformanceScreen.test.tsx` "N4: the empty Drive tile credits a file check as well as a model start" |
 | N5 | fixed P6 `9f703b87` | `perf.step.drive` renamed "Drive speed". | `shared/i18n/en.ts` `perf.step.drive`; `PerformanceScreen.test.tsx` "N5: the drive step is \"Drive speed\", not \"Drive write speed\" beside a tile reading MB/s read" |
-| N6 | follow-up issue #333 | Not a code change; see §4 for the one measurement taken so far. | — |
+| N6 | follow-up issue #333 | Not a code change; instrumented 2026-09-08 (`discover_manifests` / `performance_get` marks + `scripts/measure-manifest-read.mjs`). See §4 for the figures so far. | — |
 | N7 | documented (this phase) | This file's "Other computers" paragraph now names `currentKey ?? here` explicitly; the field already behaved this way. | `benchmark.md` "Other computers this drive has been used on." (this file) |
 | DX1 | fixed P3 `3fbc51d0` | The "session-only, never persisted" vs. "falls back to the persisted sample" contradiction is gone; this file and `data-contracts.md` agree. | `benchmark.md` "Observed while you worked."; `data-contracts.md` |
 | DX2 | fixed P9 (this phase) | This file's "Performance screen" section is a clean four-item list; "Your model" and "Models on this computer" no longer sit between numbered items. | `benchmark.md` "Performance screen" (this file) |
@@ -1377,7 +1401,27 @@ commit references, and added the changelog entry.
   two-device fixtures.
 - **I5** (follow-up issue #333): `performance:get`'s synchronous `discoverManifests` scan measured about 100 ms in one
   dev-build launch smoke (P3); not measured on slow USB media, and no cache was built pending
-  that measurement.
+  that measurement. **Instrumented 2026-09-08** — `discover_manifests` + `performance_get` perf
+  marks (above) and `scripts/measure-manifest-read.mjs`, which runs the phase split standalone
+  (`--dir <drive>/model-manifests`, the validator imported from the app's own source) or
+  summarises a real run's `perf.log` (`--log`). Note the dev smoke measured the INTERNAL disk:
+  the launchers set `HILBERTRAUM_MANIFESTS_DIR` to the drive's copy, so the shipped path reads
+  off the stick and the original figure was taken on the wrong medium.
+  **Preliminary figures, i7-8700, idle** (`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/manifest-read-20260908-preliminary.txt`
+  — read its header: none of it is a cold run under the eject/re-insert protocol). E: test stick,
+  28 manifests / 90.6 KiB: warm median **18.9 ms** (walk 0.8 / read 2.8 / parse+validate 15.1) —
+  **80 % of the warm cost is CPU**. Repo catalog on internal NVMe, 34 manifests: warm median
+  24.1 ms, 79 % CPU. The one near-cold observation, the session's first read of the stick before
+  anything had touched those files: 69.0 ms total, of which **27.4 ms of reads for 90.6 KiB across
+  28 opens** — about 1 ms per open, i.e. per-open latency, not throughput (that payload is ~3.6 ms
+  of bandwidth even at 25 MB/s). Two things follow, both against the issue's own framing: the
+  decision does not turn on media speed, because the page cache serves every repeat from RAM and
+  the floor underneath is parse + validate; and where media *does* show up it is IOPS, so a
+  catalog's FILE COUNT matters more than its size (relevant to #311, which would add manifests).
+  A same-machine control: the identical capture taken while the test suite ran doubled every
+  figure (44.5 ms warm median), which is what a CPU-bound cost looks like. **Still open:** the
+  formal cold run (eject/re-insert, `--cold-only`), the end-to-end `--log` run on a rig machine
+  with the full committed catalog, then the box-3 decision.
 - **I6** — **verified 2026-09-08** (issue #334): the P7 sequencing ran on real slow media — an
   SSK USB stick (28 MB/s cold read on the i7-8700's slow port, 133 MB/s on a Surface's; 87–91 MB/s
   as the app hashes there) carrying the 9B, moved from the #330 computer B to an i7-1185G7 /

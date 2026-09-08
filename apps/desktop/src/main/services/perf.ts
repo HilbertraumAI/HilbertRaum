@@ -36,6 +36,19 @@ function enabled(): boolean {
   return process.env.HILBERTRAUM_PERF_LOG === '1'
 }
 
+/**
+ * Whether marks are being recorded at all — for the rare call site that has to do WORK to
+ * produce a mark's fields (issue #333: `discoverManifests` splits its walk / read /
+ * parse+validate phases with extra `performance.now()` calls and a byte count). `perfMark`
+ * itself is already a no-op when disabled; this predicate lets the measurement code around it
+ * be one too, so an instrumented hot path costs a single env-var read for a normal user.
+ *
+ * Never gate a mark's SEMANTICS on this — only the cost of computing its fields.
+ */
+export function perfEnabled(): boolean {
+  return enabled()
+}
+
 function safeJson(v: unknown): string {
   try {
     return JSON.stringify(v)
