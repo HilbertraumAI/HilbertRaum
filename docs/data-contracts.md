@@ -449,9 +449,11 @@ E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**; pinned in
 `host_mapped_weights_mib` (optional; a number ≥ 0, validated exactly like the cache term above —
 wrong type or a negative value is an error, never a silent default) →
 `ModelManifest.hostMappedWeightsMib?: number` (ABSENT when omitted, and `estimateGraphicsNeedMib`
-then behaves as before). The weights that stay HOST-mapped even on a FULL offload — the
-embedding/output tables — which the estimate subtracts before applying its 15 % working share,
-because the runtime buffers that share stands for scale with what is actually ON the card. MEASURED
+then charges the whole file to the card — the conservative direction). The weights that stay
+HOST-mapped even on a FULL offload — the embedding/output tables — which the estimate subtracts from
+BOTH the weights term and the 15 % working share, because neither the weights nor the buffers that
+share stands for are on the card (§5 item 22 (e), 2026-09-08; #321 subtracted them from the share
+only, which closed 323 MiB of the E2B's 2,748 MiB over-estimate while 2,152.50 stayed). MEASURED
 per model, not derived: the app has no GGUF-header parser, so each figure is read off the
 `CPU_Mapped model buffer size` line of a full-offload start under `eval/results/hardware/` (a
 PARTIAL offload inflates that line with the layers that did not fit — the 9B logs 545.62 MiB at
@@ -609,9 +611,10 @@ head's own weights + KV.
   input of `recommendChatModelId(manifests, memory, speedSignal?)`: `discrete` with a positive
   `budgetMb` → **§6.6 rule C** (`recommendModelIdByVram(manifests, budgetMib, ramGb, role, signal)`:
   the RAM pick stands where `fitsGraphicsMemory(m, budgetMib)` — `estimateGraphicsNeedMib(m)` =
-  unrounded weights MiB + (unrounded weights MiB − `hostMappedWeightsMib` ?? 0) × 0.15 +
-  (`estimatedContextCacheGib` ?? 0.5) × 1024 + 1,024, i.e. the working share on the OFFLOADABLE
-  weights since #321 and the cache term computed for the app's ONE server slot since #319 — AND
+  (unrounded weights MiB − `hostMappedWeightsMib` ?? 0) × 1.15 + (`estimatedContextCacheGib` ?? 0.5)
+  × 1024 + 1,024, i.e. the OFFLOADABLE weights carry both the base and the 15 % working share
+  (§5 item 22 (e), 2026-09-08; #321 had taken them out of the share only) and the cache term is
+  computed for the app's ONE server slot since #319 — AND
   `recommendedMinRamGb ≤ ramGb`; else the highest-RANKED eligible model, ties by tier then size,
   ranked-only guard; else the RAM pick (partial-offload fallback); the §6.5 step-down applies once,
   confined to the eligible pool on both ends); every other class, or no budget → the RAM pick,

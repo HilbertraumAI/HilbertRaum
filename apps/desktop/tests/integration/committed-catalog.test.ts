@@ -148,7 +148,7 @@ describe('committed catalog — Qwen3.5 Unsloth wave', () => {
 
 // §6.6 RULE C (PR #308 audit, adopted 2026-09-06; decisions 1, 2, 4, 7, 10, 11): on a discrete
 // card the RAM pick stands wherever it fits the card's BUDGET — the probe's free memory (else
-// total − 1,024), raw MiB — against `estimateGraphicsNeedMib` (weights × 1.15 + the manifest's
+// total − 1,024), raw MiB — against `estimateGraphicsNeedMib` (offloadable weights × 1.15 + the manifest's
 // context-cache term + the 1 GiB fit margin); where it does not, the highest-ranked eligible
 // model; where nothing is eligible, the RAM pick (partial offload). The §6.5 step-down is
 // confined to the eligible pool (R1/R2). Every figure below is pinned against the COMMITTED
@@ -224,18 +224,27 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     expect(carriers).toEqual(Object.keys(HOST_MAPPED_MIB).sort())
   })
 
-  it('the working share applies to the OFFLOADABLE weights only, and a model without the field is unchanged (#321)', () => {
+  it('host-mapped weights are out of the BASE, not only the working share (§5 item 22 (e))', () => {
     const byId = Object.fromEntries(committedManifests().map((m) => [m.id, m]))
-    // The E2B is the case the decision was made for: 2,152.50 of its 3,147 MiB never reaches the
-    // card, so the old whole-file share over-reserved 323 MiB on a model that a 6 GB laptop is
-    // exactly the machine for. Spelled out rather than asserted through the constant so the
-    // arithmetic is legible: weights + (weights − hostMapped) × 0.15 + cache + margin.
+    // The shape, spelled out rather than asserted through the constants so it stays legible:
+    //   (weights − hostMapped) × 1.15 + cache + margin
     const e2b = byId['gemma4-e2b-it-qat-q4']
     const w = weightsMib(e2b)
-    expect(estimateGraphicsNeedMib(e2b)).toBeCloseTo(w + (w - 2152.5) * 0.15 + 0.1 * 1024 + 1024, 6)
-    // Whole-file would have read 323 MiB higher — the retired arithmetic, pinned as the delta.
-    expect(w * 1.15 + 0.1 * 1024 + 1024 - estimateGraphicsNeedMib(e2b)).toBeCloseTo(2152.5 * 0.15, 6)
-    // A ranked model with no measured figure keeps exactly the old whole-file arithmetic.
+    expect(estimateGraphicsNeedMib(e2b)).toBeCloseTo((w - 2152.5) * 1.15 + 0.1 * 1024 + 1024, 6)
+    // Why it moved. #321 took the host-mapped share out of the 15 % term only, which closed
+    // 2,152.50 × 0.15 = 323 MiB of the E2B's gap; the other 2,152.50 was still charged to the card
+    // by the base term. Both retired forms pinned as deltas so the history is checkable:
+    const whole = w * 1.15 + 0.1 * 1024 + 1024 // pre-#321
+    const shareOnly = w + (w - 2152.5) * 0.15 + 0.1 * 1024 + 1024 // #321
+    expect(whole - shareOnly).toBeCloseTo(2152.5 * 0.15, 6)
+    expect(shareOnly - estimateGraphicsNeedMib(e2b)).toBeCloseTo(2152.5, 6)
+    // Measured: llama.cpp projected 1,997 MiB and used ≈ 1,998 for this model (#318 leg 4). The
+    // estimate stays ABOVE the measurement — conservative is the safe direction — but by 1.14×
+    // rather than 2.4×.
+    expect(estimateGraphicsNeedMib(e2b)).toBeGreaterThan(1998)
+    expect(estimateGraphicsNeedMib(e2b) / 1998).toBeLessThan(1.2)
+    // A ranked model with no measured figure keeps the whole file as its base — the conservative
+    // direction, and the reason a missing field is safe.
     const fourB = byId['qwen3.5-4b-ud-q4kxl']
     expect(fourB.hostMappedWeightsMib).toBeUndefined()
     expect(estimateGraphicsNeedMib(fourB)).toBeCloseTo(weightsMib(fourB) * 1.15 + 0.2 * 1024 + 1024, 6)
@@ -259,17 +268,17 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3-4b-instruct-2507-q4': 4278,
     'qwen3-4b-instruct-q4': 4278,
     'qwen3.5-4b-ud-q4kxl': 4410,
-    'gemma4-e2b-it-qat-q4': 4423,
+    'gemma4-e2b-it-qat-q4': 2271,
     'qwen3-8b-instruct-q4': 7020,
     'ministral3-8b-instruct-2512-q4': 7239,
-    'qwen3.5-9b-ud-q4kxl': 7830,
-    'gemma4-12b-it-qat-q4': 11041,
+    'qwen3.5-9b-ud-q4kxl': 7285,
+    'gemma4-12b-it-qat-q4': 10254,
     'qwen3-14b-instruct-q4': 11407,
     'gemma4-26b-a4b-it-qat-q4': 18353,
     'qwen3.6-27b-q4': 19961,
-    'qwen3.8-27b-ud-q4km': 19940,
+    'qwen3.8-27b-ud-q4km': 19258,
     'qwen3.6-27b-q5': 22923,
-    'qwen3.8-27b-ud-q5km': 23559,
+    'qwen3.8-27b-ud-q5km': 22877,
     'qwen3.5-35b-a3b-ud-q4kxl': 25884
   }
   it('pins every ranked chat model\'s graphics-memory threshold in raw MiB (boundary on both sides)', () => {
@@ -311,8 +320,8 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     [8, '4B / E2B / 4B / 4B / 4B'],
     [12, '4B / E2B / 9B / 9B / 9B'],
     [16, '4B / E2B / 9B / 9B / 9B'],
-    [20, '4B / E2B / 9B / 9B / 9B'],
-    [24, '4B / E2B / 9B / Q4 / Q4']
+    [20, '4B / E2B / 9B / Q4 / Q4'],
+    [24, '4B / E2B / 9B / Q4 / Q5']
   ]
   it('pins the 30-point rule-C grid on the free-memory basis (RAM 8 / 12 / 16 / 24 / 32)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
@@ -345,26 +354,39 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   })
 
   // (f) Decision 10 on the audit's own machine: the GTX 1070 Ti reports 8,273 MiB total /
-  // 7,504 free on Windows Vulkan. By free memory the star is the 4B; a probe WITHOUT a free
-  // figure falls back to total − 1,024 = 7,249 → the 4B too. Public `--list-devices` lines
-  // (audit D1/D3) pinned beside it, in the picks the free basis gives them.
+  // 7,504 free on Windows Vulkan. The free-vs-total distinction decision 10 exists for is still
+  // the point — but which model it lands on moved with the estimate, so read the numbers, not the
+  // ids: at 7,504 free the 9B now fits (7,285), while a probe WITHOUT a free figure falls back to
+  // total − 1,024 = 7,249 and it does NOT. Public `--list-devices` lines (audit D1/D3) pinned
+  // beside it, in the picks the free basis gives them.
+  //
+  // The 9B on THIS card is the one place the §5 item 22 (e) change is load-bearing rather than
+  // cosmetic, so the measurement behind it, from #318 leg 2 at four slots: the fit read 6,898 MiB
+  // free, projected 6,007, and fell 133 MiB short of its own 1,024 MiB target — 31/33 layers,
+  // 20.2 tok/s. `-np 1` (#319) returns 150.75 MiB of recurrent state, 17.75 more than that
+  // shortfall, so the fit is expected to clear at 33/33 — and the app's estimate (7,285) still
+  // sits ABOVE what the fit asks for (5,856 projected + its 1,024 target = 6,880), i.e. the
+  // estimate remains the more conservative of the two. **Expected, not yet measured**: leg 2's
+  // confirming run on #319 is what settles it.
   it('judges the fit against the probe\'s free memory, else total − 1,024 (decision 10; the 1070 Ti case)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     const gtx1070ti = { totalMb: 8273, freeMb: 7504 }
     expect(graphicsBudgetMib(gtx1070ti)).toBe(7504)
-    expect(onCard(chat, graphicsBudgetMib(gtx1070ti)!, 16)).toBe('qwen3.5-4b-ud-q4kxl')
-    expect(onCard(chat, graphicsBudgetMib(gtx1070ti)!, 32)).toBe('qwen3.5-4b-ud-q4kxl')
+    expect(onCard(chat, graphicsBudgetMib(gtx1070ti)!, 16)).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(onCard(chat, graphicsBudgetMib(gtx1070ti)!, 32)).toBe('qwen3.5-9b-ud-q4kxl')
     const noFree = { totalMb: 8273 } as { totalMb: number; freeMb: number }
     expect(graphicsBudgetMib(noFree)).toBe(7249)
+    // …and on the total − 1,024 fallback the same card does NOT reach it: 7,285 > 7,249. The
+    // free-vs-total gap decision 10 exists for now straddles a threshold, which is the sharpest
+    // form this assertion has taken.
     expect(onCard(chat, graphicsBudgetMib(noFree)!, 16)).toBe('qwen3.5-4b-ud-q4kxl')
-    // By TOTAL the same card would have starred the 9B (7,830 ≤ 8,273) — the finding behind decision 10.
-    expect(onCard(chat, 8273, 16)).toBe('qwen3.5-9b-ud-q4kxl')
-    // Public lines: RTX 5060 8,151 / 7,573 free (Linux Vulkan) → 4B; RTX 3080 Ti 11,912 / 11,640
-    // (CUDA) → 9B (Gemma 12B's 11,041 fits too but ranks below); RTX 3090 24,575 / 23,332 (CUDA)
-    // → Q4 at RAM 32 (Q5's 23,559 does not fit 23,332); RTX 2060 6,144 / 5,136 → 4B.
-    expect(onCard(chat, 7573, 32)).toBe('qwen3.5-4b-ud-q4kxl')
+    // Public lines: RTX 5060 8,151 / 7,573 free (Linux Vulkan) → 9B (7,285 fits); RTX 3080 Ti
+    // 11,912 / 11,640 (CUDA) → 9B (Gemma 12B's 10,254 fits too but ranks below); RTX 3090
+    // 24,575 / 23,332 (CUDA) → Q5 at RAM 32 (22,877 fits — it did not before §5 item 22 (e));
+    // RTX 2060 6,144 / 5,136 → 4B.
+    expect(onCard(chat, 7573, 32)).toBe('qwen3.5-9b-ud-q4kxl')
     expect(onCard(chat, 11_640, 32)).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(onCard(chat, 23_332, 32)).toBe('qwen3.8-27b-ud-q4km')
+    expect(onCard(chat, 23_332, 32)).toBe('qwen3.8-27b-ud-q5km')
     expect(onCard(chat, 5136, 32)).toBe('qwen3.5-4b-ud-q4kxl')
   })
 
@@ -444,12 +466,24 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       expect(recommendModelIdByRam(chat, ram, 'chat'), `ram=${ram} RAM pick`).toBeNull()
       expect(onCard(chat, 24_000, ram), `ram=${ram} 24,000`).toBe('qwen3.8-27b-ud-q5km')
       expect(onCard(chat, 7168, ram), `ram=${ram} 7,168`).toBe('qwen3.5-4b-ud-q4kxl')
-      expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBeNull()
+      // 4,000 MiB now holds the E2B (2,271 since §5 item 22 (e); it read 4,746 before), so the
+      // card path resolves where it used to fall through to a null RAM pick. Note what this does
+      // NOT mean: a 4 GB card still never becomes the budget device, because `USABLE_VRAM_MB` is
+      // 5,120 — but #321's stated reason for that floor ("nothing ranked fits 4,512 anyway") no
+      // longer holds on the arithmetic, and the floor now rests on driver variance alone.
+      expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBe('gemma4-e2b-it-qat-q4')
+      expect(onCard(chat, 2270, ram), `ram=${ram} 2,270`).toBeNull()
     }
-    // With KNOWN RAM and nothing ranked fitting 4,000 MiB, the no-fit fallback wins: the RAM pick
-    // (the 9B at 16 GB), partially offloaded — never the rank-0 2B (#326).
-    expect(onCard(chat, 4000, 16)).toBe(recommendModelIdByRam(chat, 16, 'chat'))
-    expect(onCard(chat, 4000, 16)).toBe('qwen3.5-9b-ud-q4kxl')
+    // With KNOWN RAM, 4,000 MiB now has a ranked fit (the E2B at 2,271) so rule C takes it rather
+    // than falling back — the RAM pick at 16 GB is the 9B, which does not fit, so this is the
+    // ordinary demotion, not the no-fit path.
+    expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
+    expect(onCard(chat, 4000, 16)).toBe('gemma4-e2b-it-qat-q4')
+    // The no-fit fallback itself is unchanged, just reached lower down: under the smallest ranked
+    // threshold nothing is eligible, so the RAM pick stands, partially offloaded — and never the
+    // rank-0 2B (#326), whose 2,962 MiB would otherwise fit here.
+    expect(onCard(chat, 2270, 16)).toBe(recommendModelIdByRam(chat, 16, 'chat'))
+    expect(onCard(chat, 2270, 16)).toBe('qwen3.5-9b-ud-q4kxl')
   })
 
   // (g) Unified / cpu with a KNOWN budget, and a legacy call without a class: the RAM pick,
@@ -476,7 +510,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       expect(await star({})).toBe('qwen3.8-27b-ud-q5km')
       expect(await star({ memoryClass: 'cpu', graphicsBudgetMb: 24 * 1024 })).toBe('qwen3.8-27b-ud-q5km')
       expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 7168 })).toBe('qwen3.5-4b-ud-q4kxl')
-      expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 23_332 })).toBe('qwen3.8-27b-ud-q4km')
+      expect(await star({ memoryClass: 'discrete', graphicsBudgetMb: 23_332 })).toBe('qwen3.8-27b-ud-q5km')
     } finally {
       rmSync(rootPath, { recursive: true, force: true })
     }

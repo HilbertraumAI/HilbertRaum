@@ -156,7 +156,8 @@ both call `recommendChatModelId(manifests, { memoryClass, ramGb: round(ramGb), b
 speedSignal)` (model-benchmarks.md §6.6 rule C, **2026-09-06 amendment, PR #308 audit**): on a
 computer with a usable **discrete card** the pick is the best model that FITS THE CARD
 (`recommendModelIdByVram`: the RAM pick stands wherever it also fits the card; otherwise the
-fittest eligible model by rank, then RAM tier, then size) — "fits" means `weights × 1.15 + the
+fittest eligible model by rank, then RAM tier, then size) — "fits" means `(weights − the measured
+host-mapped share) × 1.15 + the
 model's own context-cache estimate (a per-model manifest field, default 0.5 GiB) + the fit's
 1 GiB margin ≤ the budget device's FREE memory` (the probe's free figure, else its total minus
 1,024 MiB), RAM always a hard gate. `budgetMb` comes from the **budget device**
@@ -698,7 +699,8 @@ once in the snapshot (19.8 GB → 18.4; display-only — the verdict gets the un
 `weightsMib`). Before the first start → an ESTIMATE (the copy says so and that the context cache is
 measured on the first start). **On a discrete card the estimate IS the picker's fit** (PR #308 audit
 decision 8, finding §4.1; 2026-09-06): `placementVerdict` calls `estimateGraphicsNeedMib(manifest)`
-— unrounded weights × 1.15 + the model's `estimated_context_cache_gib` (default 0.5) + the fit's
+— the OFFLOADABLE weights (unrounded, less the manifest's measured `host_mapped_weights_mib` where
+it has one) × 1.15 + the model's `estimated_context_cache_gib` (default 0.5) + the fit's
 1 GiB margin — against the picker's budget `graphicsBudgetMib(device)` (the probe's free figure,
 else total − 1024), exactly as the Models ★ does, so the row and the star can never call the same
 (model, card) pair differently; before, the row compared the one-decimal-rounded weights alone

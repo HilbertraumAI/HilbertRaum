@@ -594,8 +594,7 @@ consumer machine.
    where
 
    ```
-   estimateGraphicsNeedMib(m) = weightsMib(m)
-                              + (weightsMib(m) − hostMappedWeightsMib(m)) × 0.15
+   estimateGraphicsNeedMib(m) = (weightsMib(m) − hostMappedWeightsMib(m)) × 1.15
                               + (m.estimatedContextCacheGib ?? 0.5) × 1024
                               + 1,024
    ```
@@ -625,8 +624,39 @@ consumer machine.
    | `qwen3.8-27b-ud-q5km` | 682.03 | leg 1 `-np 1`, 66/66 |
 
    (`qwen3.5-4b-ud-q4kxl` and `gemma4-26b-a4b-it-qat-q4` were never started for #318 and carry no
-   field.) Deriving the split from the GGUF header would cover every model at once and stays open —
-   BUILD_STATE §5 item 22 (e).
+   field, so they keep the whole file as their base — the conservative direction.)
+
+   **2026-09-08: the host-mapped weights come out of the BASE too, not only the share.** #321 took
+   them out of the 15 % term on the reasoning that the share stands for buffers *beside* the weights
+   on the card; the same reasoning applies with far more force to the weights term itself, and that
+   is where the error actually lived. On the E2B, #321's share fix removed 323 MiB of a 2,748 MiB
+   gap — the other 2,152.50 was still being charged as VRAM for weights that never leave the host.
+   Against the five full-offload starts of #318, estimate versus what the card was really asked for:
+
+   | model | pre-#321 | #321 | now | measured | now / measured |
+   |---|---|---|---|---|---|
+   | E2B | 4,746 | 4,423 | **2,271** | 1,998 | **1.14×** (was 2.4×) |
+   | 9B | 8,014 | 7,830 | **7,285** | 6,007 | 1.21× |
+   | Gemma 12B | 11,159 | 11,041 | **10,254** | 9,227 | 1.11× |
+   | 27B Q4 | 20,247 | 19,940 | **19,258** | 17,885 | 1.08× |
+   | 27B Q5 | 23,866 | 23,559 | **22,877** | 19,692 | 1.16× |
+
+   Every row is still ABOVE the measurement: the estimate stays deliberately conservative, because
+   a too-small answer costs a silent partial offload while a too-large one costs a smaller
+   recommendation. What this does NOT fix is the 15 % share itself — the measured compute buffers
+   run **416–569 MiB** across models from 3.3 to 19.8 GB (they scale with ubatch and hidden width,
+   not with file size), so the share reads 149 MiB on the E2B and 2,730 on Q5. Replacing it with a
+   flat term was modelled and **rejected for now**: it flips the 8 GB row to the 9B, against #318
+   leg 2's measured 31/33 partial offload there.
+
+   **Why the GGUF header cannot replace the manifest field** (this retires that half of §5 item 22
+   (e)): the picker judges models the user has **not downloaded** — the ★ is set on a `missing`
+   model on purpose, and exactly ONE of the 29 chat manifests ships on a prepared drive. A header
+   parser answers for that one and goes silent for the other 28, which are precisely the ones the
+   recommendation exists to choose between. For a model that IS installed and HAS been started, the
+   measured `ModelPlacement` already beats any estimate. What stays open is narrower and is what
+   item 22 (e) now records: the two models with no measured figure, and the fact that nothing
+   recomputes the field when a manifest's weights change.
 4. `estimated_context_cache_gib` (optional manifest field, number ≥ 0) replaces the flat 0.5 GiB
    term for the seven models whose figure was derived from the launch config (`--ctx-size 8192`,
    `ubatch 2048`; the 4B's figure is its own 4,096-token window); every other manifest defaults to
@@ -680,32 +710,43 @@ the free-memory basis"; `freeMb` per point 2 above):
 | 8 GB | 7,168 | 4B | E2B | 4B | 4B | 4B |
 | 12 GB | 11,264 | 4B | E2B | 9B | 9B | 9B |
 | 16 GB | 15,360 | 4B | E2B | 9B | 9B | 9B |
-| 20 GB | 19,456 | 4B | E2B | 9B | 9B | 9B |
-| 24 GB | 23,552 | 4B | E2B | 9B | Q4 | Q4 |
+| 20 GB | 19,456 | 4B | E2B | 9B | Q4 | Q4 |
+| 24 GB | 23,552 | 4B | E2B | 9B | Q4 | Q5 |
 
 (4B = `qwen3.5-4b-ud-q4kxl`; E2B = `gemma4-e2b-it-qat-q4`; 9B = `qwen3.5-9b-ud-q4kxl`; Q4 =
 `qwen3.8-27b-ud-q4km`. A 32 GB-and-larger card's free memory, ≥ 31,744 MiB on this convention,
 clears the 27B Q5's threshold, so it keeps `qwen3.8-27b-ud-q5km` — the one row the
 2026-09-05 total-memory grid also got right.)
 
-**The grid above is UNCHANGED by both 2026-09-07 decisions** — every threshold fell, none crossed a
-row's free figure. What changed is not the grid's CONTENT but which machines reach it: before #321
-the 6 GB row described only a card reporting at or above 6,144 MiB (an RTX 2060), and every 6 GB
-laptop was a RAM machine that never got here at all. See the N8 paragraph below.
+**Two rows moved on 2026-09-08**, when item 22 (e) took host-mapped weights out of the estimate's
+base (rule 3 above). Neither of the 2026-09-07 decisions had moved the grid at all — every threshold
+fell but none crossed a row's free figure; #321's effect was on which machines REACH the grid, not
+on its content (the N8 paragraph below).
 
-Three near misses are worth stating so nobody re-derives them:
+- **20 GB / RAM ≥ 24: 9B → Q4.** Q4 needs 19,258 against 19,456 free. This row is **still
+  predicted** — no 20 GB card exists in the project — but the prediction is better grounded than the
+  one it replaces: §6.6's original "Q4 lands partial at 20 GB" was computed at four slots, and
+  `-np 1` (#319) cut ≈ 1,347 MiB of recurrent state from exactly that projection.
+- **24 GB / RAM 32: Q4 → Q5.** Q5 needs 22,877 against 23,552 free — it missed the nominal row by
+  7 MiB before this change. A *real* 24 GB card had already flipped at #319 (the RTX 3090 reports
+  24,822 MiB, so its budget is 23,798), and the hardware agrees: 66/66 layers at 51.0 tok/s.
 
-- **The 9B still does not clear the 8 GB row.** 7,830 against 7,168 free — 662 short, where before
-  either decision it was 846. On the real GTX 1070 Ti (7,504 free) it is 326 short. The fit itself
-  will very likely land 33/33 now (the four slots cost it 440 MiB and it missed a full offload by
-  133), so this is the estimate staying deliberately conservative, not the fit failing.
-- **Q5 misses the nominal 24 GB row by 7 MiB** (23,559 vs 23,552) even after both decisions, so the
-  row still reads Q4. That row describes a card reporting exactly 24 GiB, which no 24 GB card the
-  project has seen actually does.
-- **…but a real 24 GB card stars Q5.** The RTX 3090 of #318 reports 24,822 MiB, so a probe without a
-  free figure gives it 23,798 — above Q5's threshold, and the RAM pick **stands instead of being
-  demoted to Q4** (pinned in `benchmark.test.ts`). That matches the hardware exactly: 66/66 layers
-  at 51.0 tok/s with `-np 1`.
+**The 8 GB row does not move**: the 9B needs 7,285 against 7,168 free, 117 MiB short. But a real
+8 GB card is not that stingy — the GTX 1070 Ti reports **7,504** free, so on that card the 9B IS now
+starred. That is the one place this change is load-bearing rather than cosmetic, and the measurement
+behind it is #318 leg 2: at four slots the fit read 6,898 MiB free, projected 6,007, and fell
+**133 MiB** short of its own 1,024 MiB target — 31/33 layers at 20.2 tok/s. `-np 1` returns
+**150.75 MiB**, 17.75 more than that shortfall, so a full offload is expected; and the app's estimate
+(7,285) still sits above what the fit asks for (5,856 projected + its 1,024 target = 6,880), so the
+estimate remains the more conservative of the two. **Expected, not measured** — leg 2's confirming
+run on #319 settles it, and if the 9B lands partial there this row's real-card behaviour needs
+revisiting.
+
+One consequence worth recording because it undercuts a stated rationale: the E2B's threshold is now
+**2,271 MiB**, so a 4 GB card could hold a ranked model. #321 justified its 5,120 MiB floor partly as
+"nothing ranked fits 4,512 anyway, and rule C's no-fit fallback returns the RAM pick regardless".
+That arithmetic no longer holds; the floor now rests on driver variance and on 4 GB cards being weak,
+not on nothing fitting. The floor is unchanged here — moving it is an owner call, not a consequence.
 
 **Hardware verification (issue #318, 2026-09-07) — the 6, 8, 12 and 24 GB rows are VERIFIED on
 real starts; the 20 GB row stays predicted.** When this section was written (G3) no model could be
@@ -774,6 +815,19 @@ the star (a lower-threshold, equal-or-higher-rank model always wins first). **Le
 Intel-first hybrid** was not available either; the AMD result — llama.cpp dropped the integrated
 device by TYPE before the filling pass — is expected to carry over, and `looksIntegrated`'s
 completeness (#320) is a name-table question, checked against the Intel names above.
+
+**2026-09-08 amendment (§5 item 22 (e)): host-mapped weights leave the estimate's BASE, and the
+GGUF-header plan is retired.** #321 subtracted them from the 15 % working share; this subtracts them
+from the weights term as well, which is where the error actually was — on the E2B the share fix
+closed 323 MiB of a 2,748 MiB gap while 2,152.50 MiB of host-resident weights were still charged as
+VRAM. Rule 3 above carries the formula, the before/after table against the five measured starts, and
+the reason a GGUF-header parser cannot replace the manifest field (the picker judges models the user
+has NOT downloaded — exactly one of the 29 chat manifests ships on a prepared drive). Two grid rows
+move; the 8 GB row does not, though a real 8 GB card now stars the 9B — the grid note carries the
+leg-2 arithmetic that makes that expected rather than reckless, and what is still unmeasured.
+Rejected in the same pass: replacing the 15 % share with a flat compute term, which the measurements
+support (416–569 MiB across models from 3.3 to 19.8 GB) but which flips the 8 GB row against leg 2's
+measured partial offload.
 
 **2026-09-07 amendment (#321, owner decision): the usable-card gate is 5,120 MiB, and the working
 share is computed on the offloadable weights.** Two changes in one decision, because the second is
@@ -878,22 +932,23 @@ The working-share correction that rides along with this decision is rule 3 above
 **Thresholds** (`estimateGraphicsNeedMib`, every RANKED chat manifest, raw MiB; "fits from" =
 ⌈need⌉; the boundary is asserted on both sides in `committed-catalog.test.ts`):
 
-| model | rank | need (MiB) | fits from (MiB) | at 4 slots (before #319) | after #319, before #321 |
-|---|---|---|---|---|---|
-| qwen3.5-4b-ud-q4kxl | 3 | 4,409.3 | 4,410 | 4,512 | 4,410 |
-| gemma4-e2b-it-qat-q4 | 3 | 4,422.3 | **4,423** | 4,746 | 4,746 |
-| qwen3.5-9b-ud-q4kxl | 3 | 7,829.7 | **7,830** | 8,014 | 7,912 |
-| gemma4-12b-it-qat-q4 | 2 | 11,040.6 | **11,041** | 11,159 | 11,159 |
-| gemma4-26b-a4b-it-qat-q4 | 2 | 18,352.9 | 18,353 | 18,353 | 18,353 |
-| qwen3.8-27b-ud-q4km | 3 | 19,939.3 | **19,940** | 20,247 | 20,042 |
-| qwen3.8-27b-ud-q5km | 3 | 23,558.5 | **23,559** | 23,866 | 23,661 |
+| model | rank | need (MiB) | fits from (MiB) | 4 slots (pre-#319) | #319 | #321 |
+|---|---|---|---|---|---|---|
+| qwen3.5-4b-ud-q4kxl | 3 | 4,409.3 | 4,410 | 4,512 | 4,410 | 4,410 |
+| gemma4-e2b-it-qat-q4 | 3 | 2,270.2 | **2,271** | 4,746 | 4,746 | 4,423 |
+| qwen3.5-9b-ud-q4kxl | 3 | 7,284.3 | **7,285** | 8,014 | 7,912 | 7,830 |
+| gemma4-12b-it-qat-q4 | 2 | 10,253.0 | **10,254** | 11,159 | 11,159 | 11,041 |
+| gemma4-26b-a4b-it-qat-q4 | 2 | 18,352.9 | 18,353 | 18,353 | 18,353 | 18,353 |
+| qwen3.8-27b-ud-q4km | 3 | 19,257.2 | **19,258** | 20,247 | 20,042 | 19,940 |
+| qwen3.8-27b-ud-q5km | 3 | 22,876.4 | **22,877** | 23,866 | 23,661 | 23,559 |
 
-(Two decisions of 2026-09-07 moved these, and the last two columns show them apart. `-np 1` (#319)
-recomputed the cache terms for one slot: the 4B and 9B fell 102 MiB, the two 27B quants 205, the
-three Gemma rows not at all. `host_mapped_weights_mib` (#321) then took the working share off the
-host-mapped weights: the E2B fell 323 MiB — by far the largest correction, and the one the decision
-was made for — Gemma 12B 118, the 9B 82, the two 27B quants 102. The 4B and the MoE 26B carry no
-measured host-mapped figure, so #321 left them exactly where #319 did.)
+(Three changes moved these, shown apart. `-np 1` (#319) recomputed the cache terms for one slot:
+the 4B and 9B fell 102 MiB, the two 27B quants 205, the three Gemma rows not at all.
+`host_mapped_weights_mib` (#321) took the working share off the host-mapped weights: the E2B fell
+323 MiB, Gemma 12B 118, the 9B 82, the two 27B quants 102. Item 22 (e) then took those weights out
+of the BASE as well, which is the largest step of the three wherever a model keeps much of itself on
+the host: the E2B fell another 2,152 MiB, Gemma 12B 788, the 9B 546, the two 27B quants 682. The 4B
+and the MoE 26B carry no measured figure and were untouched by the last two.)
 
 (Lower-ranked models sharing a tier with a ranked one above — `qwen3-4b-instruct-2507-q4`,
 `qwen3-4b-instruct-q4`, `qwen3-8b-instruct-q4`, `ministral3-8b-instruct-2512-q4`,

@@ -940,7 +940,12 @@ export const VRAM_FIT_MARGIN_MIB = 1024
  *  ON THE CARD (the rig's 27B measured 2.8 GiB on 18.4 GiB of weights at a 2048-token batch,
  *  ~15 %). Applied to the OFFLOADABLE weights since #321 — `estimateGraphicsNeedMib` subtracts a
  *  manifest's measured `host_mapped_weights_mib` first, because buffers scale with what is
- *  actually on the card, not with the embedding tables that stay host-mapped. */
+ *  actually on the card, not with the embedding tables that stay host-mapped.
+ *  KNOWN WEAK (§5 item 22 (e)): the real compute buffers measured 416–569 MiB across models from
+ *  3.3 to 19.8 GB — near-flat, because they scale with ubatch and hidden width rather than with
+ *  file size — so this share under-reads the smallest models and over-reads the largest. Left as a
+ *  share on purpose: a flat term would flip the 8 GB row to the 9B, which #318 leg 2 measured
+ *  landing 31/33 there. */
 export const VRAM_WORKING_SHARE = 0.15
 /**
  * The context-cache term for a manifest that carries no `estimated_context_cache_gib`, GiB
@@ -966,32 +971,51 @@ export function weightsMib(m: ModelManifest): number {
 }
 
 /**
- * What the runtime needs on the card to hold EVERY layer of this model, MiB: the weights, the
- * working buffers beside them (15 % of the OFFLOADABLE weights), the context cache at the model's
- * recommended window under the app's launch (the manifest's `estimated_context_cache_gib`, else
- * 0.5 GiB), and the fit's own 1 GiB margin. The measured check behind the terms: Gemma 4 12B peaked
- * at 9,720 MiB on the rig (6,653 weights + 2,432 cache + ~635 compute).
+ * What the runtime needs ON THE CARD to hold every layer of this model, MiB:
  *
- * The working share is computed on the OFFLOADABLE weights since 2026-09-07 (issue #321, owner
- * decision). It is meant to cover the runtime's buffers BESIDE the weights on the card, and those
- * scale with what is actually on the card — but it used to be applied to the whole file, including
- * the embedding/output tables llama.cpp leaves host-mapped. On the E2B that made the estimate 2.4×
- * too high (4,746 predicted against 1,997 projected and ≈ 1,998 used) because 2,152.50 of its
- * 3,147 MiB stays `CPU_Mapped`; on the 9B it assumed 837 MiB against a 498 MiB compute buffer.
- * That mattered little while sub-6 GiB cards never reached the card path at all; with the gate at
- * 5,120 they do, and "Your model" would have called the E2B far tighter than it is.
+ *     (weights − hostMapped) × 1.15  +  contextCache  +  1 GiB fit margin
  *
- * `hostMappedWeightsMib` is the measured host-mapped share (see the field's doc comment: read off a
- * FULL-OFFLOAD start's `CPU_Mapped model buffer size`). It is optional and clamped to the weight
- * total, so a manifest without it — anything never started on hardware — keeps exactly the old
- * arithmetic rather than getting a guess. Deriving the split from the GGUF header instead would
- * cover every model at once and stays open (BUILD_STATE §5 item 22 (e)).
+ * — the weights that actually reach the card, the runtime's working buffers beside them (15 %),
+ * the context cache at the model's recommended window under the app's launch (the manifest's
+ * `estimated_context_cache_gib`, else 0.5 GiB), and the fit's own 1 GiB `--fit-target` margin.
+ *
+ * **Host-mapped weights are subtracted from the BASE, not only from the working share** (BUILD_STATE
+ * §5 item 22 (e), 2026-09-08). #321 took them out of the 15 % share on the reasoning that the share
+ * stands for buffers beside the weights on the card; the same reasoning applies with far more force
+ * to the weights term itself, and that is where the error actually lived. Measured against the five
+ * full-offload starts of #318 — estimate against what the card was really asked for:
+ *
+ *     E2B   4,746 → 4,423 → 2,271   vs 1,998 measured   (2.4× → 2.2× → 1.14×)
+ *     9B    8,014 → 7,830 → 7,285   vs 6,007            (1.33× → 1.30× → 1.21×)
+ *     G12  11,159 → 11,041 → 10,254 vs 9,227            (1.21× → 1.20× → 1.11×)
+ *     Q4   20,247 → 19,940 → 19,258 vs 17,885           (1.13× → 1.11× → 1.08×)
+ *     Q5   23,866 → 23,559 → 22,877 vs 19,692           (1.21× → 1.20× → 1.16×)
+ *
+ * The E2B is the case that made it visible: 2,152.50 of its 3,147 MiB never leaves the host, and
+ * #321's share fix removed only 323 MiB of a 2,748 MiB gap because the other 2,152 was being
+ * charged as VRAM by the base term. It mattered little while sub-6 GiB cards never reached the card
+ * path; since #321 lowered the gate to 5,120 they do, and the E2B is the model those laptops land on.
+ *
+ * The estimate stays deliberately conservative — every row above is still above the measurement,
+ * and the 1 GiB margin is kept — because a too-small answer costs a silent partial offload while a
+ * too-large one costs a smaller recommendation. What is NOT modelled well is the 15 % share itself:
+ * the measured compute buffers run 416–569 MiB across models from 3.3 to 19.8 GB (they scale with
+ * ubatch and hidden width, not with file size), so the share reads 149 MiB on the E2B and 2,730 on
+ * Q5. Replacing it with a flat term was considered and REJECTED for now: it flips the 8 GB row to
+ * the 9B, against #318 leg 2's measured 31/33 partial offload there.
+ *
+ * `hostMappedWeightsMib` is measured per model (see the field's doc comment: read off a FULL-OFFLOAD
+ * start's `CPU_Mapped model buffer size`), optional, and clamped to the weight total — a manifest
+ * without it keeps the whole file as the base, which is the conservative direction. Deriving the
+ * split from the GGUF header cannot replace it: the picker judges models the user has NOT downloaded
+ * (exactly one of the 29 chat manifests ships on a drive), so the number has to travel in the
+ * catalog. That analysis retires the "GGUF header" half of §5 item 22 (e).
  */
 export function estimateGraphicsNeedMib(m: ModelManifest): number {
   const w = weightsMib(m)
-  const hostMapped = Math.min(m.hostMappedWeightsMib ?? 0, w)
+  const onCard = w - Math.min(m.hostMappedWeightsMib ?? 0, w)
   const cacheGib = m.estimatedContextCacheGib ?? VRAM_DEFAULT_CONTEXT_CACHE_GIB
-  return w + (w - hostMapped) * VRAM_WORKING_SHARE + cacheGib * 1024 + VRAM_FIT_MARGIN_MIB
+  return onCard * (1 + VRAM_WORKING_SHARE) + cacheGib * 1024 + VRAM_FIT_MARGIN_MIB
 }
 
 /** Would every layer of this model land on a card offering `budgetMib` (see `graphicsBudgetMib`)? */
