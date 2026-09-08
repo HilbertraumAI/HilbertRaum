@@ -2635,6 +2635,18 @@ reports and phase plans were working papers; their full text lives in git histor
   than read again. Only a read that fails all three attempts shows "article unavailable" or costs
   the answer that one article, and the per-answer note then reports what was searched. The
   upstream defect itself is unchanged; the report to kiwix/kiwix-tools is still to be filed.
+- **The app never downloads an archive for you — by design (decided 2026-09-09, #417).** It
+  installs the *tools* that read archives (kiwix-serve and kiwix-manage, from the Knowledge-packs
+  panel or the AI Model screen, after you accept the licence), and it stops there. Getting the
+  archives themselves is yours: download a `.zim` from `library.kiwix.org` (or anywhere else) in
+  a browser, then copy it into the drive's `zim/` folder or add it through *Add packs…*. There is
+  no in-app catalogue to browse or search, and nothing tells you when an archive you have has
+  been republished in a newer edition — you would notice that on the Kiwix site and download it
+  yourself. The reason is not effort: everything the app offers to download is an exact file it
+  has pinned, with a size and a checksum it verifies before use, and a live catalogue cannot be
+  pinned that way — the app would have to quote you a size, a licence and a title it had not
+  checked. Downloading in a browser also gives you the things the app could not: a resumable
+  transfer you control, and a free choice of edition (`nopic`, `mini`, `maxi`).
 - **Multipart `.zimaa` archives are unsupported (R-2).** A ZIM split across multiple
   `.zim<aa|ab|…>` parts is not read by this app; only a single-file `.zim` archive is. This
   is unsupported AND UNTESTED: no code path explicitly rejects a multipart archive, and no
