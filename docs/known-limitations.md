@@ -2348,8 +2348,16 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   a machine with no `llama-server` — the probe is never called then); a probe that hits the bound
   answers "unknown" and is neither cached nor persisted, so the stored probe stands until the
   next start or check, and "Try GPU again" re-probes; and a start whose probe is unknown takes
-  its backend label from the load log's offload line instead of defaulting to `cpu`. Residual: a
-  genuinely wedged driver still waits the 10 s bound once per session before the auto-start.
+  its backend label from the load log's offload line instead of defaulting to `cpu`, naming the
+  device the start's own compute buffers landed on. Only the already-benchmarked path is
+  sequenced: a workspace with no stored result at all fires no probe there and still lets the
+  ladder's own probe run beside the upload — which needs no sequencing, because a timeout on that
+  path now answers "unknown" (labelled from the load log, nothing cached, nothing persisted) and
+  the measurement scheduled behind the start re-probes on an idle driver. Residuals: a genuinely
+  wedged driver still waits, once per session before the auto-start, the probe's 10 s bound plus
+  the one-time sidecar-binary verification, which the start itself would wait on anyway; and
+  "Try GPU again" against a still-wedged driver shows no change once the bound elapses — the
+  unknown answer writes and pushes nothing, and the button has no busy state of its own.
 - **A USB bus reset while unlocked drops the decrypted working copy's WAL.** exFAT reported a
   lost delayed write on `workspace/hilbertraum.sqlite-wal` after a UASP device reset (#330 round
   trip); the restore that session had written was gone, the next unlock restored again, and

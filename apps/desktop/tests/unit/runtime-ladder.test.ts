@@ -298,6 +298,30 @@ describe('the GPU start ladder', () => {
     expect(runtime.gpuName).toBe('NVIDIA GeForce RTX 3080 Ti')
   })
 
+  it('an UNKNOWN probe on a HYBRID box names the device the compute buffer landed on, not the first row (#380)', async () => {
+    // The `device_info` rows arrive in LOG order, which is not the order the fit used. On this
+    // project's own hybrid evidence (`eval/results/hardware/ryzen-7-5800h-rtx-3060-laptop-6gb-
+    // 14gb/leg5-device-landing.comment.md`) the AMD iGPU is `Vulkan0`, listed FIRST and given no
+    // buffers at all, while every buffer went to `Vulkan1`, the RTX. Naming `devices[0]` would
+    // credit the iGPU for a start that ran on the card — the DR2 / M8.2 defect again.
+    const h = ladderHarness({
+      probe: null,
+      stderr: [
+        [
+          '  - Vulkan0 : AMD Radeon(TM) Graphics (14000 MiB, 12000 MiB free)',
+          '  - Vulkan1 : NVIDIA GeForce RTX 3060 Laptop GPU (5994 MiB, 5600 MiB free)',
+          'load_tensors: offloaded 29/29 layers to GPU',
+          'sched_reserve:      Vulkan1 compute buffer size =  1024.00 MiB',
+          ''
+        ].join('\n')
+      ]
+    })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.backend).toBe('gpu')
+    expect(runtime.gpuName).toBe('NVIDIA GeForce RTX 3060 Laptop GPU')
+  })
+
   it('an UNKNOWN probe with NO offload line in the log still reads as cpu (#380)', async () => {
     const h = ladderHarness({ probe: null, stderr: ['main: server is listening on http://127.0.0.1:1234\n'] })
     const runtime = h.factory(opts)

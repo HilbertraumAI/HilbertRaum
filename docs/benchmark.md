@@ -476,7 +476,11 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    already resolved when none was fired, and it never rejects).
 2. **The probe settles** (#380, 2026-09-08). The seams gate the auto-start on `decision.probed`:
    about 1 s on an idle driver, nothing at all on a machine with no `llama-server` (the probe is
-   never called then), and at most the probe's own 10 s bound on a wedged driver. Before this the
+   never called then), and on a wedged driver the probe's 10 s bound plus the one-time
+   sidecar-binary verification, which the start itself would wait on anyway. (That verification —
+   a SHA-256 of the sidecar, `binary-verifier.ts` — runs BEFORE the kill-timer is armed and has no
+   bound of its own; bounding it here would buy nothing, because the server's own pre-spawn
+   verify shares the same session-cached promise for that path.) Before this the
    `--list-devices` child and the multi-GB weight upload competed for the same driver, and the
    start ladder — which shares the probe's in-flight promise — labelled the rung from whatever
    that race produced (#330: a card decoding at 98–100 tok/s reported as `cpu`, with an empty

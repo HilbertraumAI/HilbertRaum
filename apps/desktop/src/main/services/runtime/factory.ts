@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
-import type { GpuDevice } from '../../../shared/types'
+import type { GpuDevice, PlacementDevice } from '../../../shared/types'
 import type { SpeculativeDecoding } from '../../../shared/manifest'
 import type {
   ChatMessage,
@@ -330,6 +330,19 @@ function cancelledStartError(): Error {
 }
 
 /**
+ * The `device_info` row with the largest `pick`, or null when the list is empty or every value
+ * is zero. Used by the #380 unknown-probe label to name the device a start actually landed on.
+ * The shared `displayDevice` cannot be reused here: it takes `GpuDevice[]`, whose `totalMb` is
+ * non-null, while a `PlacementDevice`'s is nullable (the log need not have printed it).
+ */
+function largestPlacementRow(
+  rows: readonly PlacementDevice[],
+  pick: (d: PlacementDevice) => number
+): PlacementDevice | null {
+  return rows.reduce<PlacementDevice | null>((best, d) => (pick(d) > (best ? pick(best) : 0) ? d : best), null)
+}
+
+/**
  * The ladder runtime: presents one `ModelRuntime` to the `RuntimeManager`, walking the
  * rungs inside `start()`. `backend`/`gpuName` expose where it landed (→ RuntimeStatus).
  */
@@ -594,12 +607,23 @@ class LadderRuntime implements ModelRuntime {
           // weight upload.) The server's own log already said where the weights went, so label
           // from it rather than call a card-speed start "cpu" and push that verdict into the
           // chat header, Diagnostics, the persisted `ModelPlacement`, the #322 speed identity
-          // and the §5.3 crash auto-fallback gate. `devices[0]` is the right name here (not
-          // `displayDevice`): these are the `device_info` rows of THIS start, in the order the
-          // server itself used, not a catalogue of the machine's cards.
+          // and the §5.3 crash auto-fallback gate.
+          //
+          // The NAME is the device this start's COMPUTE BUFFERS landed on — never `devices[0]`.
+          // `placement.ts` pushes the `device_info` rows in LOG order, which is not the order the
+          // fit used: on this project's own hybrid evidence (`eval/results/hardware/ryzen-7-
+          // 5800h-rtx-3060-laptop-6gb-14gb/leg5-device-landing.comment.md`) `Vulkan0` is the AMD
+          // iGPU, listed FIRST and given no buffers at all, while every buffer went to `Vulkan1`,
+          // the RTX 3060 Laptop. Naming the first row would credit the iGPU for a start that ran
+          // on the card — exactly the DR2 / M8.2 defect `displayDevice` exists to prevent on the
+          // probe path. With no buffer line printed at all, the largest row is the better guess
+          // than the first one, for the same reason.
           const reading = placement.reading()
           this.backend = (reading.gpuLayers ?? 0) > 0 ? 'gpu' : 'cpu'
-          this.gpuName = this.backend === 'gpu' ? (reading.devices[0]?.name ?? null) : null
+          const used =
+            largestPlacementRow(reading.devices, (d) => d.computeMb ?? 0) ??
+            largestPlacementRow(reading.devices, (d) => d.totalMb ?? 0)
+          this.gpuName = this.backend === 'gpu' ? ((used ?? reading.devices[0])?.name ?? null) : null
         }
       } else {
         this.backend = 'cpu'

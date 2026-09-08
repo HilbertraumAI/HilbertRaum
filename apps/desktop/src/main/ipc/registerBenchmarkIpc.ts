@@ -91,7 +91,8 @@ function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBe
  * graphics tile there. Readers go through `eligibleGpuProbe`. The write rules, as merged from
  * the two audits: EVERY path that reaches the write persists THIS session's answer, stamped —
  * a probe that resolves (an empty list included: `probeGpuDevices` maps its failures to `[]` by
- * contract), a probe that CANNOT run (no binary resolves, no session probe) and a probe that
+ * contract — except its kill-timeout, which resolves `null`, the #380 exception below), a probe
+ * that CANNOT run (no binary resolves, no session probe) and a probe that
  * THREW all replace the old result with `{ devices, probedAt, machineKey: hereKey }` and notify
  * (PR #308 audit decision 6, findings R3/R5; GPU record §5.4). #303's "no binary → no write"
  * guarded against re-stamping OLD devices as local; an empty stamped result re-stamps nothing,
@@ -145,6 +146,17 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
     if (probed === null) {
       // #380: UNKNOWN, not "no GPU" — write nothing, push nothing, and describe the start that
       // follows with what this machine already has on record (foreign-stamped ⇒ nothing).
+      // Admission-gated like the write beside it: a workspace locked during the probe's bound
+      // makes `ctx.db` throw, and this branch would then land in the catch below and log a probe
+      // FAILURE plus attempt a (refused) empty write — neither is true here, so return the empty
+      // summary without touching the DB at all.
+      if (!workspaceAdmitsWork(ctx.workspace)) {
+        log.info('GPU probe timed out; workspace locked meanwhile')
+        return gpuSummary(
+          [],
+          nextStartMemory({ platform: process.platform, arch: process.arch, devices: [], gpuMode, gpuAutoDisabled })
+        )
+      }
       log.info('GPU probe timed out; the stored probe stands until the next start or check')
       devices = eligibleDevicesFor(getSettings(ctx.db), hereKey)
     } else {
@@ -165,9 +177,12 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   }
   // Read the flags AFTER the probe persisted: `tryGpuAgain` clears `gpuAutoDisabled` right
   // before it re-probes, and the summary must describe the start that follows that click. An
-  // unreadable settings row (locked) falls back to the GPU-on defaults. The devices are the
-  // ones THIS probe enumerated (eligible by construction — it ran here), not a re-read of the
-  // store, which a refused write would have left holding another machine's.
+  // unreadable settings row (locked) falls back to the GPU-on defaults. On every path that
+  // WROTE, the devices are the ones THIS probe enumerated (eligible by construction — it ran
+  // here), not a re-read of the store, which a refused write would have left holding another
+  // machine's. On the #380 unknown path there is no answer to describe, so they ARE a read of
+  // the store — deliberately, and filtered through `eligibleDevicesFor`, so a foreign-stamped
+  // record still supplies nothing and the same guarantee holds.
   try {
     ;({ gpuMode, gpuAutoDisabled } = getSettings(ctx.db))
   } catch {
@@ -431,7 +446,10 @@ export interface FirstBenchmarkSchedulerDeps {
  * common slow case, not the worst: a ~5 GB GGUF on the ~70 MB/s USB stick #108 measured is hashed
  * (cold checksum cache) and then loaded — roughly a minute each — so a healthy start on slow media
  * settles around this bound, while the pathological ones (a ladder walk of serial 180 s health
- * timeouts plus the 90 s warm-up) are what the continuation exists for. The value never decides
+ * timeouts plus the 90 s warm-up) are what the continuation exists for. Since #380 the promise
+ * the seams hand over is the probe→auto-start chain, so this budget also covers the session's
+ * device probe ahead of the start — about 1 s idle, its 10 s bound on a wedged driver, nothing
+ * at all without a binary; it does not move the sizing. The value never decides
  * whether the benchmark may overlap the load — it may not; it only decides when the caller's
  * outcome stops waiting.
  */
@@ -549,6 +567,14 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
     hereKey: null,
     probed: Promise.resolve()
   }
+  /**
+   * #380: this session's probe refresh, once it has been fired; `Promise.resolve()` until then.
+   * Declared OUTSIDE the try so the throw path below hands back a probe that IS in flight —
+   * `settings.lastBenchmark` is read before the refresh, but the restore/backfill writes after
+   * it can throw (a lock landing mid-decision), and returning the bare `nothing` there would
+   * break the invariant the seams rely on: `probed` settles when this session's probe did.
+   */
+  let probed: Promise<void> = Promise.resolve()
   try {
     // AUD-02: also skipped while a lock teardown runs — the benchmark spawns a sidecar and
     // persists settings, and the DB stays open for that whole window.
@@ -558,8 +584,6 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
     const db = ctx.db
     const settings = getSettings(db)
     const here = machineKey(detectSystem())
-    /** #380: this session's probe refresh, once it has been fired; `Promise.resolve()` until then. */
-    let probed: Promise<void> = Promise.resolve()
     const owed = (run: FirstBenchmarkRun): FirstBenchmarkDecision => {
       if (attemptMemo && attemptMemo.db === db && attemptMemo.epoch === epoch) {
         log.info('First-run benchmark already attempted in this session; not retrying before the next unlock')
@@ -637,15 +661,20 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
     }
     return owed('new-machine')
   } catch {
-    return nothing // settings unreadable (e.g. just locked again) — a manual run still works
+    // Settings unreadable (e.g. just locked again) — a manual run still works. `probed` rides
+    // along: a refresh already fired must still be waitable, or the seam's auto-start would
+    // race it again on exactly the path #380 fixed.
+    return { ...nothing, probed }
   }
 }
 
 /**
- * The measurement half (see the header above): run the decided measurement once `settled` —
- * the auto-start's promise (`maybeAutoStartActiveModel`), already settled when there was
- * nothing to start — has settled, within the bounded wait. Resolves to the outcome; never
- * rejects. The three post-unlock seams `void` it and stay non-blocking.
+ * The measurement half (see the header above): run the decided measurement once `settled` has
+ * settled, within the bounded wait. Since #380 the seams pass the whole probe→auto-start chain
+ * (`decision.probed.then(() => maybeAutoStartActiveModel(ctx))`), not the auto-start alone, so
+ * `settled` covers the session's device probe as well; either half being a no-op — no binary to
+ * probe, nothing to start — simply settles it sooner. Resolves to the outcome; never rejects.
+ * The three post-unlock seams `void` it and stay non-blocking.
  */
 export function scheduleFirstBenchmark(
   ctx: AppContext,

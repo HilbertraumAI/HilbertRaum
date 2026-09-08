@@ -1082,10 +1082,16 @@ describe('the production seams (registerWorkspaceIpc)', () => {
 
     const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
     expect(unlocked).toMatchObject({ ok: true })
-    await hops(5)
 
     // The driver has not answered yet — and NOTHING has been started, so the weight upload is
-    // not competing with the probe for it. (RED before the fix: `startCalls` is already 1.)
+    // not competing with the probe for it. RACED, not sampled after a fixed number of hops: the
+    // auto-start's own path runs `computeInstallState`, whose real fs work decides WHEN the
+    // pre-fix start lands, so a bare `startCalls === 0` after N hops could pass on the UNFIXED
+    // code purely because the disk was slow that run. Whichever settles first wins the race, so
+    // the pre-fix failure is unconditional. (RED before the fix: 'started'.)
+    const idle = hops(60).then(() => 'idle' as const)
+    expect(await Promise.race([rt.startReached.then(() => 'started' as const), idle])).toBe('idle')
+    await idle
     expect(probe.calls()).toBe(1)
     expect(rt.startCalls).toBe(0)
     expect(events).toEqual([])
