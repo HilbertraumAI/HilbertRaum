@@ -364,10 +364,12 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // cosmetic, so the measurement behind it, from #318 leg 2 at four slots: the fit read 6,898 MiB
   // free, projected 6,007, and fell 133 MiB short of its own 1,024 MiB target — 31/33 layers,
   // 20.2 tok/s. `-np 1` (#319) returns 150.75 MiB of recurrent state, 17.75 more than that
-  // shortfall, so the fit is expected to clear at 33/33 — and the app's estimate (7,285) still
+  // shortfall, so the fit was expected to clear at 33/33 — and the app's estimate (7,285) still
   // sits ABOVE what the fit asks for (5,856 projected + its 1,024 target = 6,880), i.e. the
-  // estimate remains the more conservative of the two. **Expected, not yet measured**: leg 2's
-  // confirming run on #319 is what settles it.
+  // estimate remains the more conservative of the two. **MEASURED 2026-09-08 (#391 leg 2):
+  // 33/33** on two starts — the fit read 7,350 MiB free under `-np 1`, projected 5,856 and left
+  // 1,494 ≥ 1,024; 29.0 tok/s (was 20.2 at 31/33). Evidence:
+  // eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/leg2-np1-verify.*
   it('judges the fit against the probe\'s free memory, else total − 1,024 (decision 10; the 1070 Ti case)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     const gtx1070ti = { totalMb: 8273, freeMb: 7504 }
