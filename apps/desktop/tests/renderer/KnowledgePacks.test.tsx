@@ -26,6 +26,7 @@ import type {
   KnowledgePackOutcome,
   KnowledgePackOutcomeReason,
   KnowledgePacksChangedEvent,
+  PackArticleSaveResult,
   PolicyStatus,
   RuntimeStatus
 } from '../../src/shared/types'
@@ -1427,7 +1428,11 @@ const T18_CITATION: Citation = {
   articlePath: 'A/Treibhausgas'
 }
 
-/** Citation card + the shared viewer, wired the way `ChatScreen` wires them (leg (d)). */
+/**
+ * Citation card + the shared viewer, wired the way `ChatScreen` wires the OPEN path (leg (d)).
+ * The #418 save shortcut is deliberately NOT wired here: this harness pins the viewer route and
+ * its focus trap, and the card shortcut has its own harness + describe at the end of this file.
+ */
 function ArticleHarness({ citation = T18_CITATION }: { citation?: Citation }): JSX.Element {
   const [target, setTarget] = useState<ArticleTarget | null>(null)
   return (
@@ -2061,5 +2066,174 @@ describe('ArticleModal — save to my documents (#340 Tier-2)', () => {
     await act(async () => resolveArticle(null))
     expect(await screen.findByText(/not available right now/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
+  })
+})
+
+// ---- #418: "Save to my documents" on the citation card (ruling C3, second half) -------------
+// The main-side machinery is D-Z21's and unchanged — these legs pin the ENTRY POINT: the five
+// states the issue names (idle / saving / saved / already saved / unavailable), that only the
+// two ids leave the card, that the copy is the viewer's own keys, and that the affordance is
+// gated on the callback so a read-only surface can never grow it by accident.
+describe('SourcesDisclosure — save an article from the citation card (#418)', () => {
+  const saveName = tr('en', 'chat.article.saveAria', { title: 'Treibhausgas' })
+  const filed = 'Treibhausgas (Klimawandel von Wikipedia).md'
+  const saved = (alreadySaved = false): PackArticleSaveResult => ({
+    documentId: 'doc-1',
+    title: filed,
+    alreadySaved,
+    chunkCount: alreadySaved ? 0 : 3
+  })
+
+  /** The card wired the way `ChatScreen` wires it, with an injectable save. */
+  function CardHarness({
+    onSaveArticle,
+    citations = [T18_CITATION]
+  }: {
+    onSaveArticle?: (packId: string, articlePath: string) => Promise<PackArticleSaveResult>
+    citations?: Citation[]
+  }): JSX.Element {
+    return (
+      <I18nProvider>
+        <SourcesDisclosure citations={citations} onOpenArticle={() => {}} onSaveArticle={onSaveArticle} />
+      </I18nProvider>
+    )
+  }
+
+  it('offers the shortcut beside "Open article", sends ONLY the two ids, and names the filed title', async () => {
+    const onSaveArticle = vi.fn(async () => saved())
+    render(<CardHarness onSaveArticle={onSaveArticle} />)
+    await userEvent.click(screen.getByRole('button', { name: /Sources/ }))
+    // Both affordances on the same card, the save one named for THIS article (§11.15 decision 3)
+    // with the visible label as the exact prefix of the name (WCAG 2.5.3, label in name).
+    expect(
+      screen.getByRole('button', {
+        name: tr('en', 'chat.sources.openArticleNamed', { title: 'Treibhausgas' })
+      })
+    ).toBeInTheDocument()
+    const save = screen.getByRole('button', { name: saveName })
+    expect(save).toHaveTextContent(tr('en', 'chat.article.save'))
+    await userEvent.click(save)
+    // Only the pack id and the entry key cross the boundary — never the snippet or the title.
+    expect(onSaveArticle).toHaveBeenCalledTimes(1)
+    expect(onSaveArticle).toHaveBeenCalledWith('uuid-climate', 'A/Treibhausgas')
+    // Saved: the viewer's OWN sentence, and nothing left to click.
+    expect(await screen.findByText(tr('en', 'chat.article.saved', { title: filed }))).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: saveName })).not.toBeInTheDocument()
+    // The citation itself is untouched beside it.
+    expect(screen.getByText('Treibhausgas')).toBeInTheDocument()
+  })
+
+  it('announces the outcome: the saved line is a live region', async () => {
+    render(<CardHarness onSaveArticle={async () => saved()} />)
+    await userEvent.click(screen.getByRole('button', { name: /Sources/ }))
+    await userEvent.click(screen.getByRole('button', { name: saveName }))
+    const status = await screen.findByRole('status')
+    expect(status).toHaveTextContent(tr('en', 'chat.article.saved', { title: filed }))
+  })
+
+  it('disables the action and swaps the label while the save is in flight', async () => {
+    let resolveSave: (r: PackArticleSaveResult) => void = () => {}
+    render(
+      <CardHarness onSaveArticle={() => new Promise<PackArticleSaveResult>((r) => (resolveSave = r))} />
+    )
+    await userEvent.click(screen.getByRole('button', { name: /Sources/ }))
+    await userEvent.click(screen.getByRole('button', { name: saveName }))
+    const saving = screen.getByRole('button', { name: saveName })
+    expect(saving).toBeDisabled()
+    expect(saving).toHaveTextContent(tr('en', 'chat.article.saving'))
+    await act(async () => resolveSave(saved()))
+    expect(await screen.findByText(tr('en', 'chat.article.saved', { title: filed }))).toBeInTheDocument()
+  })
+
+  it('says the article is already in the corpus instead of appearing to do nothing', async () => {
+    render(<CardHarness onSaveArticle={async () => saved(true)} />)
+    await userEvent.click(screen.getByRole('button', { name: /Sources/ }))
+    await userEvent.click(screen.getByRole('button', { name: saveName }))
+    expect(
+      await screen.findByText(tr('en', 'chat.article.alreadySaved', { title: filed }))
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: saveName })).not.toBeInTheDocument()
+  })
+
+  it('shows the friendly main-side reason and keeps the action retryable (unavailable / failed)', async () => {
+    let attempt = 0
+    const onSaveArticle = vi.fn(async () => {
+      attempt += 1
+      if (attempt === 1) {
+        throw new Error(
+          "Error invoking remote method 'packs:saveArticle': Error: This article is not available right now, so it could not be saved."
+        )
+      }
+      return saved()
+    })
+    render(<CardHarness onSaveArticle={onSaveArticle} />)
+    await userEvent.click(screen.getByRole('button', { name: /Sources/ }))
+    await userEvent.click(screen.getByRole('button', { name: saveName }))
+    // The main-side sentence alone — no stacked "could not be saved" prefix in front of it.
+    expect(
+      await screen.findByText(/This article is not available right now, so it could not be saved/)
+    ).toBeInTheDocument()
+    const retry = screen.getByRole('button', { name: saveName })
+    expect(retry).toBeEnabled()
+    await userEvent.click(retry)
+    expect(await screen.findByText(tr('en', 'chat.article.saved', { title: filed }))).toBeInTheDocument()
+  })
+
+  it('two cards citing the SAME article each answer for themselves — the second is told it is already saved', async () => {
+    const seen = new Set<string>()
+    const onSaveArticle = vi.fn(async (packId: string, articlePath: string) => {
+      const key = `${packId}::${articlePath}`
+      const already = seen.has(key)
+      seen.add(key)
+      return saved(already)
+    })
+    const twoCards: Citation[] = [T18_CITATION, { ...T18_CITATION, label: 'S2', section: 'Industrie' }]
+    render(<CardHarness onSaveArticle={onSaveArticle} citations={twoCards} />)
+    await userEvent.click(screen.getByRole('button', { name: /Sources/ }))
+    const buttons = screen.getAllByRole('button', { name: saveName })
+    expect(buttons).toHaveLength(2)
+    await userEvent.click(buttons[0]!)
+    expect(await screen.findByText(tr('en', 'chat.article.saved', { title: filed }))).toBeInTheDocument()
+    // The second card still offers its own action and gets the main side's duplicate answer.
+    await userEvent.click(screen.getByRole('button', { name: saveName }))
+    expect(
+      await screen.findByText(tr('en', 'chat.article.alreadySaved', { title: filed }))
+    ).toBeInTheDocument()
+    expect(onSaveArticle).toHaveBeenCalledTimes(2)
+  })
+
+  it('renders no shortcut without the callback — the gate that keeps it off read-only surfaces', async () => {
+    render(<CardHarness />)
+    await userEvent.click(screen.getByRole('button', { name: /Sources/ }))
+    // The open affordance is there; the save one is not.
+    expect(
+      screen.getByRole('button', {
+        name: tr('en', 'chat.sources.openArticleNamed', { title: 'Treibhausgas' })
+      })
+    ).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
+  })
+
+  it('renders no shortcut on a DOCUMENT citation, or on an archive citation missing its ids', async () => {
+    const docCitation: Citation = { label: 'S1', sourceTitle: 'Bericht.pdf', pageNumber: 3, snippet: 'x' }
+    const idless: Citation = { ...T18_CITATION, label: 'S2', packId: null, articlePath: null }
+    render(<CardHarness onSaveArticle={async () => saved()} citations={[docCitation, idless]} />)
+    await userEvent.click(screen.getByRole('button', { name: /Sources/ }))
+    expect(screen.queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
+  })
+
+  it('speaks German too — the card reuses the viewer keys, so there is no second translation', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    render(<CardHarness onSaveArticle={async () => saved()} />)
+    // The exact accessible name (the disclosure label carries parentheses, so no regex here).
+    await userEvent.click(
+      screen.getByRole('button', { name: tr('de', 'chat.sources.toggle', { count: 1 }) })
+    )
+    const save = screen.getByRole('button', {
+      name: tr('de', 'chat.article.saveAria', { title: 'Treibhausgas' })
+    })
+    expect(save).toHaveTextContent(tr('de', 'chat.article.save'))
+    await userEvent.click(save)
+    expect(await screen.findByText(tr('de', 'chat.article.saved', { title: filed }))).toBeInTheDocument()
   })
 })

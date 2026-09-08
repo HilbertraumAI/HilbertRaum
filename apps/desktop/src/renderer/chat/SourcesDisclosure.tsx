@@ -1,6 +1,8 @@
-import { useId, useState } from 'react'
-import type { Citation, CoverageMode } from '@shared/types'
-import { useT } from '../i18n'
+import { useEffect, useId, useRef, useState } from 'react'
+import type { Citation, CoverageMode, PackArticleSaveResult } from '@shared/types'
+import { Spinner } from '../components'
+import { useT, type I18n } from '../i18n'
+import { friendlyIpcError } from '../lib/errors'
 import { formatCitationLabel } from '../lib/displayMap'
 
 // "▸ Sources (N)" (guidelines §3): citations stay attached to the answer as an inline
@@ -26,12 +28,109 @@ import { formatCitationLabel } from '../lib/displayMap'
  *  so the two surfaces can never disagree about "large provenance set" rendering. */
 export const PROVENANCE_CARD_CAP = 24
 
+/** One archive card's save progress; absent from the render = idle (the action is offered). */
+type ArticleSaveState =
+  | { phase: 'saving' }
+  | { phase: 'saved'; result: PackArticleSaveResult }
+  | { phase: 'failed'; message: string }
+
+/**
+ * The citation card's "Save to my documents" shortcut (#418, the second half of ruling C3;
+ * `rag-design.md` §17 D-Z21, `design-guidelines.md` §11.15 "Tier-2 save action").
+ *
+ * State is PER CARD, deliberately: two cards can cite the same article (two chunks of it), and
+ * the honest answer for the second one is the main side's own duplicate join — `findSavedArticle`
+ * returns `alreadySaved: true` before any import runs, so the second card says "already in your
+ * documents" instead of silently doing nothing. No renderer-side cross-card bookkeeping can say
+ * that more truthfully, and the in-flight map main-side already collapses two overlapping
+ * invokes for the same entry.
+ *
+ * The four states read exactly as the viewer's button does (§11.15): idle, saving (disabled, the
+ * label swaps), saved / already saved (a `role="status"` line naming the filed title, with
+ * nothing left to click) and failed (the action returns, enabled, with the main-side sentence
+ * alone). The copy is the SAME five keys the viewer uses — one surface's wording cannot drift
+ * from the other's, and there is no second German translation to keep in step.
+ */
+function ArchiveSaveAction({
+  packId,
+  articlePath,
+  articleTitle,
+  onSaveArticle,
+  t
+}: {
+  packId: string
+  articlePath: string
+  /** The article's own title — the accessible name says WHICH article, per §11.15 decision 3. */
+  articleTitle: string
+  onSaveArticle: (packId: string, articlePath: string) => Promise<PackArticleSaveResult>
+  t: I18n['t']
+}): JSX.Element {
+  const [state, setState] = useState<ArticleSaveState | null>(null)
+  // A save that resolves after the turn left the tree must not set state on it. Assigned on
+  // mount (not only cleared on unmount) so a StrictMode remount re-arms it.
+  const mounted = useRef(true)
+  useEffect(() => {
+    mounted.current = true
+    return () => {
+      mounted.current = false
+    }
+  }, [])
+
+  async function onSave(): Promise<void> {
+    // A failed save is retryable (the viewer's rule); saving and saved are terminal for a click.
+    if (state?.phase === 'saving' || state?.phase === 'saved') return
+    setState({ phase: 'saving' })
+    try {
+      const result = await onSaveArticle(packId, articlePath)
+      if (mounted.current) setState({ phase: 'saved', result })
+    } catch (e) {
+      if (mounted.current) setState({ phase: 'failed', message: friendlyIpcError(e) })
+    }
+  }
+
+  if (state?.phase === 'saved') {
+    return (
+      <p className="hint source-card-save-state" role="status">
+        {state.result.alreadySaved
+          ? t('chat.article.alreadySaved', { title: state.result.title })
+          : t('chat.article.saved', { title: state.result.title })}
+      </p>
+    )
+  }
+  return (
+    <>
+      <button
+        type="button"
+        className="source-card-save"
+        disabled={state?.phase === 'saving'}
+        // Visible label + ": {title}" — the accessible name distinguishes a repeated action in a
+        // list (§11.15 decision 3) and the visible text stays its exact prefix (WCAG 2.5.3).
+        aria-label={t('chat.article.saveAria', { title: articleTitle })}
+        onClick={() => void onSave()}
+      >
+        {state?.phase === 'saving' ? t('chat.article.saving') : t('chat.article.save')}
+      </button>
+      {state?.phase === 'saving' && (
+        <span className="hint source-card-save-state" role="status">
+          <Spinner />
+        </span>
+      )}
+      {state?.phase === 'failed' && (
+        <p className="hint source-card-save-state">
+          <span aria-hidden="true">⚠</span> {state.message}
+        </p>
+      )}
+    </>
+  )
+}
+
 export function SourcesDisclosure({
   citations,
   mode,
   onReview,
   reviewDisabled,
-  onOpenArticle
+  onOpenArticle,
+  onSaveArticle
 }: {
   citations: Citation[]
   /** The answer's coverage mode; any whole-document mode (≠ relevance) renders as provenance. */
@@ -45,6 +144,19 @@ export function SourcesDisclosure({
   /** Knowledge packs (ZIM wave): opens the offline article viewer for an ARCHIVE citation.
    *  Absent ⇒ archive cards render read-only (optional-callback gating, like onReview). */
   onOpenArticle?: (citation: Citation) => void
+  /**
+   * #418 (ruling C3's second half): saves an ARCHIVE citation's article to the user's documents
+   * straight from the card, without opening the viewer first. Takes the two IDS, not the
+   * citation — the same pair `packs:saveArticle` carries, so the renderer's own boundary says
+   * that nothing else about the citation is an input to the import (D-Z21).
+   *
+   * Absent ⇒ no save affordance at all (optional-callback gating, like `onOpenArticle`). That is
+   * what keeps the shortcut out of read-only surfaces: an evidence review renders its source
+   * cards from `EvidencePane`, which does not mount this component, and would still have to opt
+   * in explicitly to get the action — the same boundary `ArticleModal`'s `canSave={false}` draws
+   * for the viewer.
+   */
+  onSaveArticle?: (packId: string, articlePath: string) => Promise<PackArticleSaveResult>
 }): JSX.Element {
   // tCount for the provenance labels (full-audit 2026-07-11 CODE-8): a one-section document
   // ("— 1 section") and a one-section reveal tail ("and 1 more section") are both reachable.
@@ -122,6 +234,20 @@ export function SourcesDisclosure({
                   >
                     {t('chat.sources.openArticle')}
                   </button>
+                )}
+                {/* #418: the save shortcut sits beside "Open article", the same quiet
+                    link-styled affordance under the same guard — the pair is right-aligned by
+                    `.source-card-open`'s `margin-left: auto`, and the save outcome takes the
+                    next line of the wrapping head row so a filed title never squeezes the
+                    citation's own title. */}
+                {c.sourceKind === 'archive' && c.packId && c.articlePath && onSaveArticle && (
+                  <ArchiveSaveAction
+                    packId={c.packId}
+                    articlePath={c.articlePath}
+                    articleTitle={c.sourceTitle}
+                    onSaveArticle={onSaveArticle}
+                    t={t}
+                  />
                 )}
               </div>
               {c.snippet && <div className="source-card-snippet">{c.snippet}</div>}

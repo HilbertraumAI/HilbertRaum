@@ -1110,6 +1110,14 @@ export function ChatScreen({
       setArticleTarget({ packId: c.packId, articlePath: c.articlePath, archiveTitle: c.archiveTitle })
     }
   })
+  // #418: the citation card's save shortcut. `useEventCallback` cannot carry the result back
+  // (it returns void by contract), and this closes over nothing, so a bare `useCallback` with an
+  // empty dependency list is the stable identity the MessageBlock memo needs. Only the two ids
+  // are forwarded — the card never becomes a content source (D-Z21).
+  const handleSaveArticle = useCallback(
+    (packId: string, articlePath: string) => window.api.savePackArticle(packId, articlePath),
+    []
+  )
   const handleTryAgain = useEventCallback(onTryAgain)
   const handleAnswerWithoutSkill = useEventCallback(onAnswerWithoutSkill)
   const handleRunWithSkill = useEventCallback(onRunWithSkill)
@@ -2418,6 +2426,7 @@ export function ChatScreen({
           // resolved inside Transcript via the shared isReviewEligible + reviewSummaries.
           onOpenReview={onOpenReview ? handleOpenReviewMessage : undefined}
           onOpenArticle={handleOpenArticle}
+          onSaveArticle={handleSaveArticle}
           reviewSummaries={reviewSummaries}
           reviewConversation={reviewConversation}
           actionsDisabled={busyStreaming}

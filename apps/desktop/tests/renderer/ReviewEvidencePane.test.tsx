@@ -298,6 +298,10 @@ describe('EvidencePane — filter + stepped reveal (P5, spec §25.6)', () => {
     // live registry can never redirect this row to a different archive.
     expect(onOpenArticle).toHaveBeenCalledTimes(1)
     expect(onOpenArticle.mock.calls[0][0]).toBe(source)
+    // #418: the review's source cards are NOT the chat's citation cards — EvidencePane renders
+    // its own, so the card-level save shortcut cannot reach a read-only review even by accident.
+    // (The viewer opened from here is separately pinned read-only via canSave={false}.)
+    expect(screen.queryByRole('button', { name: /Save to my documents/ })).not.toBeInTheDocument()
     // Unchanged by this phase: an archive is still never offered "Open source in context"
     // (there is no workspace document behind it).
     expect(screen.queryByText(tEn('review.sourceContext.open'))).not.toBeInTheDocument()

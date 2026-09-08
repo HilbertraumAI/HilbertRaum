@@ -2952,10 +2952,10 @@ offline article viewer. Files are registered in place, never copied.
   `zim-ipc-session` leg proves this by removing the pack mid-test and re-reading the document).
   Audit: `knowledge_pack_article_saved` carries `{ packId, documentId, status: 'indexed',
   chunkCount }` only — ids and counts, never the entry path or either title (S1; both are
-  content). What stays unbuilt: the citation-card shortcut (save straight from a citation without
-  opening the viewer, the owner's "later"), full enumeration/import of a whole archive (D-Z1),
+  content). What stays unbuilt: full enumeration/import of a whole archive (D-Z1),
   and an "Open in Documents" jump from the saved state — the Documents screen is the only way
-  back to it this wave. The evidence review's viewer (`ReviewScreen`) mounts the same modal with
+  back to it. The citation-card shortcut this record listed as unbuilt has since landed as
+  **D-Z23** below. The evidence review's viewer (`ReviewScreen`) mounts the same modal with
   `canSave={false}`: a review is read-only and its bridge is evidence-only. Tests: `zim-save-article.test.ts` (`articleDocumentTitle`,
   `renderArticleMarkdown`, pure), the "#340 Tier-2 — packs:saveArticle files the article as a
   real document (D-Z21)" describe in `zim-ipc-session.test.ts` (a real DB, the real handler, the
@@ -3022,6 +3022,53 @@ offline article viewer. Files are registered in place, never copied.
   mid-body socket error, the over-ceiling declaration, and the shipped constants — plus the
   pre-existing T19 describe and the `zim-ipc-session` / `zim-arm` stall legs, whose fakes now
   answer `Range` the way libkiwix does.
+
+- **D-Z23 — "Save to my documents" on the citation card (#418, the second half of ruling C3,
+  2026-09-08).** The viewer's save action (D-Z21) is now also reachable from the citation card
+  itself, so an article can be filed without opening it first. **Renderer-only: no main-process,
+  IPC, schema or data-contract change** — `packs:saveArticle` is unchanged and still the one path,
+  still carrying only `packId` + `articlePath`, and the recorded channel count stays 147 (D-Z16).
+  What is new is one gated affordance in `SourcesDisclosure`.
+
+  **The gate is the callback, and that is the read-only boundary.** `onSaveArticle` is optional;
+  absent ⇒ the affordance never renders (the `onReview` / `onOpenArticle` idiom). It is
+  additionally guarded on `sourceKind === 'archive' && packId && articlePath` — the same guard
+  "Open article" already carries — so a document citation and an archive citation persisted
+  before those fields existed both render exactly as before. `ChatScreen` is the only caller.
+  The evidence review cannot grow the shortcut by accident: `EvidencePane` renders its OWN source
+  cards and never mounts `SourcesDisclosure`, so the boundary is structural rather than a flag —
+  the counterpart to `ArticleModal`'s `canSave={false}`, which stays as the viewer's half.
+
+  **The signature is the two ids, not the citation** (`(packId, articlePath) => Promise<…>`). The
+  renderer's own boundary then says what the IPC contract says: nothing else about the citation —
+  not its snippet, not its title — is an input to the import. The article is still re-read
+  main-side by `getArticle`, so the renderer is never a content source (D-Z21).
+
+  **State is per card, deliberately.** Two cards can cite the same article (two chunks of it).
+  Rather than invent renderer-side cross-card bookkeeping, each card asks, and the second one gets
+  the main side's own duplicate answer — `findSavedArticle` returns `alreadySaved: true` before any
+  import runs, so the second card says "already in your documents" instead of appearing to do
+  nothing (the issue's explicit requirement), and the in-flight map already collapses two
+  overlapping invokes for the same entry. A save that resolves after the turn left the tree is
+  discarded (a mounted ref, re-armed on mount so a StrictMode remount does not disable it) — the
+  card's counterpart to the viewer's generation counter.
+
+  **The copy is the viewer's five keys, verbatim** (`chat.article.save` / `.saveAria` / `.saving` /
+  `.saved` / `.alreadySaved`). No new user-facing string, therefore no second German translation to
+  keep in step and no way for the two surfaces to drift — which is what the issue asked for when it
+  said the states "should read the same way here". States: idle (the action), saving (disabled, the
+  label swaps, a `role="status"` region beside it), saved / already saved (a `role="status"` line
+  naming the filed title, with nothing left to click) and failed — the friendly main-side sentence
+  alone via `friendlyIpcError`, the action returning enabled, so `main.zim.articleUnavailable` and
+  `main.zim.saveFailed` both read as themselves. UI record: `design-guidelines.md` §11.15
+  "Citation-card save shortcut". Tests: the "SourcesDisclosure — save an article from the citation
+  card (#418)" describe in `KnowledgePacks.test.tsx` (nine legs: the two ids and nothing else, the
+  five states, two cards for one article, the three no-render gates, and the German pass), the
+  `.source-card-save` legs in `zim-ui-layout-rules.test.ts` (the 24 px target, quiet styling, the
+  outcome on its own line) and the card-level absence assertion in `ReviewEvidencePane.test.tsx`.
+
+  **Still unbuilt after this** (D-Z21's own list, minus the shortcut): an "Open in Documents" jump
+  from the saved state, and full enumeration/import of a whole archive (D-Z1, #417).
 
 ### Module map
 
@@ -3161,9 +3208,10 @@ the app triggering the defect at all; the scope decision (opt-in per ask vs on b
 what a followed link costs the 20 s deadline) is still the owner's, and the converter would have
 to keep `<a href>` targets, which it drops today. *C3* —
 Tier-2 import: ruled (a), a "Save article to my documents" button in the article viewer FIRST,
-the citation card later; the button shipped as **D-Z21** (above, `feat/340-tier2-save-article`),
-the citation-card shortcut still the owner's "later". *C4* — acquisition from Kiwix catalogs: ruled
-later, after the consent surface (D-Z19) has settled. *#339 items 3–6* — readiness never depends
+the citation card later; the button shipped as **D-Z21** (above, `feat/340-tier2-save-article`)
+and the citation-card shortcut has since shipped too, as **D-Z23** (#418) — C3 is complete. *C4* —
+acquisition from Kiwix catalogs: ruled later, after the consent surface (D-Z19) has settled; the
+gate is satisfied and the catalog-source ruling is what remains (#417). *#339 items 3–6* — readiness never depends
 on `kiwix_tools` and `kiwix-search` stays installed-but-unused, both as built (D-Z17); the
 upstream report is the owner's to file (humaniser's Linux stall probe of 2026-09-07 came back
 0/40 short — finding 3 below — so the report is a win-x86_64 report; P8-6);
