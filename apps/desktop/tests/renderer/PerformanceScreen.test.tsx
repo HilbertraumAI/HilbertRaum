@@ -16,6 +16,7 @@ import {
 } from '../../src/shared/types'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
+import { fmt1 } from '../../src/renderer/lib/format'
 import { FIT_TARGET_MARGIN_MB } from '../../src/shared/performance-rules'
 import { stubApi } from '../helpers/renderer'
 
@@ -1559,7 +1560,12 @@ describe('PerformanceScreen: #325 residuals', () => {
   })
 
   it('#325 (2): the Copy report carries the live recommendation beside the one saved with the check', async () => {
-    const { api } = install(snapshot({ recommendation: { modelId: 'qwen3.5-4b-ud-q4kxl', basis: 'cpu' } }))
+    const { api } = install(
+      snapshot({
+        recommendation: { modelId: 'qwen3.5-4b-ud-q4kxl', basis: 'cpu' },
+        placement: placement({ recommendedContextTokens: 4096 })
+      })
+    )
     renderScreen()
     await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
     await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
@@ -1567,6 +1573,15 @@ describe('PerformanceScreen: #325 residuals', () => {
     expect(text).toContain('Recommended for the next start: Qwen3.5 4B (UD-Q4_K_XL) (RAM)')
     expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
     expect(text.indexOf('Recommended for the next start')).toBeLessThan(text.indexOf('Recommended at the time of the check'))
+    // #381: the context figure is the LIVE pick's launch context, so it sits directly under the
+    // live line — never after the saved one, where it reads as the saved pick's window.
+    const lines = text.split('\n')
+    const liveAt = lines.findIndex((l) => l.startsWith('Recommended for the next start'))
+    const contextAt = lines.findIndex((l) => l.startsWith('Context size:'))
+    const savedAt = lines.findIndex((l) => l.startsWith('Recommended at the time of the check:'))
+    expect(lines[contextAt]).toBe('Context size: 4,096 tokens')
+    expect(contextAt).toBe(liveAt + 1)
+    expect(contextAt).toBeLessThan(savedAt)
   })
 
   it('#325 (2): with no catalog there is no live line, and the saved line stands alone', async () => {
@@ -1634,5 +1649,68 @@ describe('PerformanceScreen: #325 residuals', () => {
     )
     expect(await screen.findByText(t('de', 'perf.model.runningOnCard'))).toBeInTheDocument()
     expect(t('de', 'perf.model.runningOnCard')).not.toBe(t('en', 'perf.model.runningOnCard'))
+  })
+})
+
+// Issue #381 (a side finding of the #330 round trip, F-B1.report.txt): under the "Another
+// computer: …" heading the report still printed the live pick — this machine's — as a bare
+// "Recommended for the next start", and the live pick's launch context after the SAVED line, so
+// a reader going down the page attributed both to the other machine.
+describe('PerformanceScreen: whose recommendation the report names (#381)', () => {
+  const otherMachineReport = () =>
+    install(
+      snapshot({
+        currentMachine: false,
+        recommendation: { modelId: 'qwen3.5-4b-ud-q4kxl', basis: 'cpu' },
+        placement: placement({ recommendedContextTokens: 4096 })
+      })
+    )
+
+  it('#381: under another computer’s heading the live pick is labelled as this computer’s, with its context beside it', async () => {
+    const { api } = otherMachineReport()
+    renderScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    const lines = text.split('\n')
+    expect(lines[0]).toBe('Another computer: Intel Core i7-1260P, 15.7 GB RAM')
+    expect(text).toContain('Recommended for the next start on this computer: Qwen3.5 4B (UD-Q4_K_XL) (RAM)')
+    // The unqualified label would read as the other machine's pick.
+    expect(text).not.toMatch(/^Recommended for the next start:/m)
+    const liveAt = lines.findIndex((l) => l.startsWith('Recommended for the next start on this computer:'))
+    const contextAt = lines.findIndex((l) => l.startsWith('Context size:'))
+    const savedAt = lines.findIndex((l) => l.startsWith('Recommended at the time of the check:'))
+    expect(lines[contextAt]).toBe('Context size: 4,096 tokens')
+    expect(contextAt).toBe(liveAt + 1)
+    expect(contextAt).toBeLessThan(savedAt)
+  })
+
+  it('#381: the same report in German (asserted from the catalog, D-L8)', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    const { api } = otherMachineReport()
+    render(
+      <I18nProvider>
+        <ToastProvider>
+          <PerformanceScreen onNavigate={vi.fn()} />
+        </ToastProvider>
+      </I18nProvider>
+    )
+    await userEvent.click(await screen.findByRole('button', { name: t('de', 'perf.copy') }))
+    await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+    const text = api.copyToClipboard.mock.calls[0][0] as string
+    const lines = text.split('\n')
+    expect(lines[0]).toBe(t('de', 'perf.report.otherComputer', { cpu: 'Intel Core i7-1260P', ram: fmt1(15.7, 'de') }))
+    const liveLabel = t('de', 'perf.recommendation.nextHere')
+    expect(text).toContain(`${liveLabel}: Qwen3.5 4B (UD-Q4_K_XL) (${t('de', 'perf.basis.cpu')})`)
+    expect(liveLabel).not.toBe(t('en', 'perf.recommendation.nextHere'))
+    expect(text).not.toContain(`${t('de', 'perf.recommendation.next')}:`)
+    const liveAt = lines.findIndex((l) => l.startsWith(`${liveLabel}:`))
+    const contextAt = lines.findIndex((l) => l.startsWith(`${t('de', 'models.context.title')}:`))
+    const savedAt = lines.findIndex((l) => l.startsWith(`${t('de', 'perf.recommendation.atCheckTime')}:`))
+    expect(lines[contextAt]).toBe(
+      `${t('de', 'models.context.title')}: ${t('de', 'models.tech.contextValue', { count: (4096).toLocaleString('de') })}`
+    )
+    expect(contextAt).toBe(liveAt + 1)
+    expect(contextAt).toBeLessThan(savedAt)
   })
 })
