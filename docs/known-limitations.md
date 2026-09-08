@@ -2379,8 +2379,12 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   hashes beside it (the 9B hash 65 → 213 s, the load 91 → 132 s), and a "Use model" press seconds
   after the start settled stopped the auto-started model under the check's speed leg (the run
   ended in 3.4 s). The persisted profile and ★ were unchanged; only that run's speed figure is
-  absent or chunk-based. Fix candidate: the speed leg's busy re-check also watches a start in
-  flight (`startingModelId`) and skips with the existing "speed skipped" warning (issue #393).
+  absent or chunk-based. FIXED 2026-09-08 (#393): the speed leg's busy re-check also watches a
+  start in flight (`startingModelId`, set synchronously before the queued start stops the running
+  model) and a stream cut by that stop raises the same "speed skipped" warning instead of a silent
+  missing figure; what remains is that the start's own pre-start hash (before
+  `RuntimeManager.start` is called) is invisible to every signal — it only slows the check by
+  drive contention, it stops nothing.
 - **A model started right after a Models-screen visit persists the page cache as the drive's read
   figure.** The #108 guard suppresses the load sample only when the START's own install check
   hashed the file; when the Models screen hashed it moments earlier the start hits the cache, the

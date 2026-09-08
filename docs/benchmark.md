@@ -479,6 +479,10 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    result for this computer persisted meanwhile by a manual run or another window
    (`'skipped-already-current'`). A thrown run is `'failed'` with the warn log. No outcome is
    retried within the session (below); the Performance screen runs the benchmark on demand at any time.
+   The speed leg's per-chunk predicate additionally watches a model **start in flight**
+   (`startingModelId`, #393, 2026-09-08) — a manual "Use model" beside the run stops the streamed
+   model, so the leg skips with `warnSpeedSkipped` instead of persisting a cut reading; the
+   settlement re-check itself is unchanged (a start is not a lane).
 
 The wait is **bounded** by `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS` (120 s — sized to the common slow
 case: a ~5 GB GGUF on the ~70 MB/s stick #108 measured is hashed and then loaded, roughly a minute
@@ -1289,7 +1293,9 @@ commit references, and added the changelog entry.
   Models-screen hash lets the page-cache load sample through the #108 guard (589 MB/s persisted
   for a 28 MB/s stick); the Home preflight's 8 MiB probe runs at unlock beside the hash; a healthy
   start at 87 MB/s on a 16 GB machine settles at 159 s, past the bound.
-  Follow-ups: #392 (the read sample), #393 (the overlap fix). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
+  Follow-ups: #392 (the read sample), #393 (the overlap fix — FIXED 2026-09-08, PR #TBD: the
+  speed leg's busy predicate also reads `startingModelId`, and a stream the stop cuts warns
+  instead of returning null silently). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
 
 ### §5 §-anchor legend
 

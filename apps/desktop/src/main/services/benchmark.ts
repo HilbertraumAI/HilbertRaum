@@ -311,6 +311,11 @@ export async function measureTokensPerSecond(
     if (count === 0 || seconds <= 0) return null
     return { tokensPerSecond: Math.round((count / seconds) * 10) / 10, basis: 'chunks', tokens: count }
   } catch {
+    // #393: a start that stopped the model MID-STREAM makes the iterator REJECT rather than
+    // deliver another chunk, so the per-chunk check above never fires and the reading would be
+    // lost silently (`speedSkipped` stays false ⇒ no warning at all). Ask once more here: a
+    // rejection with nothing busy stays silent as before (a plain probe failure).
+    if (opts?.modelBusy?.()) opts.onBusySkip?.()
     return null
   }
 }

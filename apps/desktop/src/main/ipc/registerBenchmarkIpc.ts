@@ -251,7 +251,15 @@ async function runBenchmarkAndPersist(
     // #185: the admission guard above ran seconds ago — before the GPU + drive probes — so
     // re-check right at the speed probe, ignoring our OWN span (which is held for this whole
     // function and would otherwise report the benchmark as busy against itself).
-    modelBusy: () => modelBusyLane(ctx, { ignore: ['benchmark'] }) != null,
+    //
+    // #393: a model START is not an occupancy lane, so `modelBusyLane` cannot see one — yet a
+    // manual "Use model" pressed beside this run STOPS the model the leg is streaming on
+    // (`RuntimeManager.doStart` stops `current` before loading the next one). `start()` sets
+    // `startingModelId` synchronously, strictly before the queued `doStart` reaches that stop,
+    // so reading it turns a cut reading into the honest `warnSpeedSkipped`. Measured on
+    // hardware in #334 leg S5. Every benchmark trigger awaits its OWN start before running, and
+    // a same-model start never sets the flag, so this can never skip every run.
+    modelBusy: () => modelBusyLane(ctx, { ignore: ['benchmark'] }) != null || modelStartInFlight(ctx),
     onProgress
   })
 
@@ -806,6 +814,19 @@ function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
   const status = ctx.runtime?.status?.()
   if (!status || !status.running || !status.healthy || status.startingModelId) return false
   return activeId == null || status.modelId === activeId
+}
+
+/**
+ * #393: is a model start in flight? Deliberately NOT an occupancy lane — that would touch
+ * `occupancy.ts`, `model-busy.ts` and the refusal copy of the chat / doc-task / skill lanes for a
+ * harm the measurement bounded (issue #393). Read straight off the manager's status, the field
+ * `chatModelResident` and the engine-install guard (`registerEngineIpc.ts`) already read.
+ * Optional-chained like every sibling probe: partial test contexts build a `runtime` with only the
+ * members they need (`performance-persistence.test.ts` builds one with no `status` at all), and an
+ * unwired probe means "no start in flight".
+ */
+function modelStartInFlight(ctx: AppContext): boolean {
+  return ctx.runtime?.status?.().startingModelId != null
 }
 
 /**

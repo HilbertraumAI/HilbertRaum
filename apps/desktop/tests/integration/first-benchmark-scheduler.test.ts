@@ -112,8 +112,15 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; r
   return { promise, resolve, reject }
 }
 
-/** A chat runtime stub whose stream yields a couple of chunks with timings — enough for the speed leg. */
-function stubRuntime(): ModelRuntime {
+/**
+ * A chat runtime stub whose stream yields a couple of chunks with timings — enough for the
+ * speed leg. `onChunk` runs BETWEEN the two yields: the window in which a manual "Use model"
+ * lands beside a running benchmark (#393). With `rejectAfterHook` the generator then THROWS
+ * instead of yielding the second chunk — the killed sidecar, whose iterator rejects rather
+ * than delivering another chunk (the realistic #334 leg S5 timing: chunks are ~125 ms apart at
+ * 8 tok/s, the `startingModelId` flip → the stop is one microtask).
+ */
+function stubRuntime(onChunk?: () => void, opts?: { rejectAfterHook?: boolean }): ModelRuntime {
   return {
     modelId: 'stub-chat',
     async start() {},
@@ -123,6 +130,8 @@ function stubRuntime(): ModelRuntime {
     },
     async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
       yield 'a'
+      onChunk?.()
+      if (opts?.rejectAfterHook) throw new Error('model stopped')
       yield 'b'
       options?.onFinish?.('length', { predicted_n: 2, predicted_per_second: 20 })
     }
@@ -147,6 +156,12 @@ interface FakeRuntime {
   startReached: Promise<RuntimeStartOptions>
   finishStart: () => void
   failStart: (err: Error) => void
+  /**
+   * A manual "Use model" enqueued beside a run (#393): sets `startingModelId` and resolves
+   * NOTHING, modelling `RuntimeManager.start()`'s synchronous flip (index.ts:519), which
+   * precedes the queued `doStart`'s stop of the running model (index.ts:608).
+   */
+  enqueueManualStart: (modelId: string) => void
   quit: () => void
 }
 
@@ -163,7 +178,17 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
     activeModelId: () => current?.modelId ?? null,
     status: () =>
       current
-        ? { running: true, modelId: current.modelId, port: 1, healthy: true, message: 'Running', backend: 'cpu' }
+        ? // A start in flight while some model runs is the manager's `switchingId`
+          // (`RuntimeManager.status()`, index.ts:706) — null while the SAME model is starting.
+          {
+            running: true,
+            modelId: current.modelId,
+            port: 1,
+            healthy: true,
+            message: 'Running',
+            backend: 'cpu',
+            startingModelId: starting
+          }
         : { ...stoppedStatus(), message: starting ? 'Starting' : 'Stopped', startingModelId: starting },
     isShutdown: () => shutdown,
     startCalls: 0,
@@ -186,6 +211,9 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
     startReached: reached.promise,
     finishStart: () => gate.resolve(),
     failStart: (err) => gate.reject(err),
+    enqueueManualStart: (modelId) => {
+      starting = modelId
+    },
     quit: () => {
       shutdown = true
     }
@@ -534,6 +562,64 @@ describe('scheduleFirstBenchmark: runs at once when nothing is starting', () => 
     expect(rt.startCalls).toBe(0)
     expect(runBenchmarkSpy.mock.calls[0][0].runtime).not.toBeNull()
     expect(getSettings(db).lastBenchmark).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
+  })
+})
+
+describe('a model start in flight beside the speed leg (#393)', () => {
+  /**
+   * One run of the same fixture with nothing interfering — the reference the interfered runs
+   * are compared against. A separate root/DB each time: the SD2 memo is keyed on the DB handle.
+   */
+  async function runOnce(active: (rt: FakeRuntime) => ModelRuntime): Promise<BenchmarkResult> {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { activeModelId: CHAT_MODEL })
+    const rt = fakeRuntime({ ready: true })
+    const ctx = autoStartCtx(root, db, rt)
+    rt.active = () => active(rt)
+    // Nothing is starting when the run is scheduled (the settlement re-check passes); the
+    // manual start arrives later, mid-stream, which is exactly the #393 window.
+    await expect(scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), Promise.resolve())).resolves.toBe('ran')
+    const saved = getSettings(db).lastBenchmark
+    expect(saved).not.toBeNull()
+    return saved as BenchmarkResult
+  }
+
+  it('a manual start enqueued during the run skips the speed leg with the warning, profile untouched (#393)', async () => {
+    // The sibling clean run: same fixture, same machine, no interference.
+    const clean = await runOnce(() => stubRuntime())
+    expect(clean.tokensPerSecond).toBe(20)
+
+    // "Use model" on ANOTHER model, pressed between two streamed chunks: `startingModelId` is
+    // set synchronously, strictly before the queued `doStart` stops the model we stream on.
+    const saved = await runOnce((rt) => stubRuntime(() => rt.enqueueManualStart('some-other-model')))
+
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
+    // The rest of the result is untouched: the profile still comes from RAM + GPU, and a
+    // skipped leg never steps it down.
+    expect(saved.profile).toBe(clean.profile)
+  })
+
+  it('a start that stops the model between two chunks still yields the skipped warning, not a silent null (#393)', async () => {
+    const clean = await runOnce(() => stubRuntime())
+
+    // The realistic S5 timing: the stop lands BETWEEN chunks, so the iterator rejects instead
+    // of delivering one and the per-chunk check never fires — the catch must warn all the same.
+    const saved = await runOnce((rt) =>
+      stubRuntime(() => rt.enqueueManualStart('some-other-model'), { rejectAfterHook: true })
+    )
+
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
+    expect(saved.profile).toBe(clean.profile)
+  })
+
+  it('nothing starting: the speed leg measures as before', async () => {
+    const saved = await runOnce(() => stubRuntime())
+
+    expect(saved).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
+    expect(saved.warnings).not.toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
   })
 })
 
