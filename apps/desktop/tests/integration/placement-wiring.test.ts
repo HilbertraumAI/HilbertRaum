@@ -1,3 +1,5 @@
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 
 // T11 (PR #303 audit remediation, P8): the WIRING around the placement parser — the two ends
@@ -16,10 +18,13 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 //      workspace is locked (or locking), and pushes `performance:changed` EITHER WAY (P3: the
 //      session latch moved, so the screen must re-read even when nothing was persisted).
 //
-// The logs below are HANDWRITTEN in the pinned build's verbosity-4 shapes (the `0.01.437.299 I`
-// prefix included), like `placement-parser.test.ts`'s fixtures. Capturing a REAL llama.cpp
-// verbosity-4 log and pinning these numbers to it stays open as follow-up I1 — deliberately NOT
-// stubbed out here as a skipped test, because a skipped test reads as coverage and is not.
+// Follow-up I1 — capture a REAL llama.cpp verbosity-4 log and pin these numbers to it — is
+// CLOSED (#329): both logs below are captured from the pinned build (b9849 799fcc04a) and
+// committed byte-for-byte. `placement-b9849-partial-20of33-hybrid.txt` is a 20/33 partial
+// offload on a hybrid Radeon-iGPU + RTX-3060 laptop (its cache spill lands in a plain `CPU KV`
+// buffer and it carries the recurrent-state pair); `placement-b9849-full-49of49-swa.txt` is a
+// 49/49 full offload of Gemma on an RTX 3080 Ti. So this file now proves the WIRING carries a
+// real reading end to end, not a shape someone typed.
 
 const electronState = vi.hoisted(() => ({
   handlers: new Map<string, (...args: any[]) => any>(),
@@ -62,51 +67,44 @@ import {
 
 const opts: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 4096 }
 
-const RTX: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 3100 }
+const RTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226 }
+
+const fixture = (name: string): string => readFileSync(join(__dirname, '..', 'fixtures', name), 'utf8')
 
 /**
- * A PARTIAL offload onto a card that is mostly busy: 30 of 41 layers on the GPU, the rest of the
- * weights `CPU_Mapped`, and the context cache split between the card and the backend's pinned
- * host buffer (`Vulkan_Host` — host memory, so the CPU side).
+ * A REAL partial offload onto a 6 GB laptop card: 20 of 33 layers on the GPU, the rest of the
+ * weights `CPU_Mapped`, and the context cache (KV plus the hybrid model's per-sequence recurrent
+ * state) split between the card and plain CPU buffers. Captured on b9849; the parser test greps
+ * every figure of it line by line.
  */
-const PARTIAL_LOG = [
-  '0.00.132.667 I device_info:',
-  '0.00.137.024 I   - Vulkan0 : NVIDIA GeForce RTX 3090 (24822 MiB, 3100 MiB free)',
-  '0.00.137.033 I   - CPU     : AMD Ryzen 9 5900X 12-Core Processor (32000 MiB, 20000 MiB free)',
-  '0.01.437.299 I load_tensors: offloading 30 repeating layers to GPU',
-  '0.01.437.302 I load_tensors: offloaded 30/41 layers to GPU',
-  '0.01.437.310 I load_tensors:      Vulkan0 model buffer size =  4100.50 MiB',
-  '0.01.437.318 I load_tensors:   CPU_Mapped model buffer size =  1500.25 MiB',
-  '0.01.500.001 I llama_kv_cache:      Vulkan0 KV buffer size =   480.00 MiB',
-  '0.01.500.010 I llama_kv_cache:  Vulkan_Host KV buffer size =   176.00 MiB',
-  '0.01.900.000 I sched_reserve:      Vulkan0 compute buffer size =   560.00 MiB',
-  ''
-].join('\n')
+const PARTIAL_LOG = fixture('placement-b9849-partial-20of33-hybrid.txt')
 
 /** The reading `PARTIAL_LOG` must produce — on its own, and after a discarded first attempt. */
 const PARTIAL_READING = {
-  gpuLayers: 30,
-  totalLayers: 41,
-  gpuModelMb: 4100.5,
-  cpuModelMb: 1500.25,
-  gpuKvMb: 480,
-  cpuKvMb: 176,
+  gpuLayers: 20,
+  totalLayers: 33,
+  gpuModelMb: 3393.11,
+  cpuModelMb: 2286.14,
+  gpuKvMb: 160,
+  cpuKvMb: 96,
+  gpuRsMb: 29.31,
+  cpuRsMb: 20.94,
   metalMaxWorkingSetMb: null,
-  gpuFreeAtStartMb: 3100,
-  gpuComputeMb: 560,
-  devices: [{ label: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24822, freeMb: 3100, computeMb: 560 }]
+  // The FIRST device_info row is the Radeon iGPU on this box — the legacy summary field, kept
+  // as the parser reports it; the snapshot attributes through `devices` (DR2).
+  gpuFreeAtStartMb: 8441,
+  gpuComputeMb: 498,
+  devices: [
+    { label: 'Vulkan0', name: 'AMD Radeon(TM) Graphics', totalMb: 8886, freeMb: 8441, computeMb: null },
+    { label: 'Vulkan1', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994, freeMb: 5226, computeMb: 498 }
+  ]
 }
 
-/** A FULL offload with much bigger buffers — the attempt that then fails to come up. */
-const FULL_LOG = [
-  '0.00.132.667 I device_info:',
-  '0.00.137.024 I   - Vulkan0 : NVIDIA GeForce RTX 3090 (24822 MiB, 22900 MiB free)',
-  '0.01.437.299 I load_tensors: offloaded 41/41 layers to GPU',
-  '0.01.437.310 I load_tensors:      Vulkan0 model buffer size =  9000.00 MiB',
-  '0.01.500.001 I llama_kv_cache:      Vulkan0 KV buffer size =  1280.00 MiB',
-  '0.01.900.000 I sched_reserve:      Vulkan0 compute buffer size =  2860.00 MiB',
-  ''
-].join('\n')
+/**
+ * A REAL FULL offload with much bigger buffers (49/49, 6637.63 MiB of weights and a 2,048 MiB
+ * SWA cache pair on an RTX 3080 Ti) — the attempt that then fails to come up.
+ */
+const FULL_LOG = fixture('placement-b9849-full-49of49-swa.txt')
 
 interface LadderAttempt {
   binPath: string
@@ -286,7 +284,7 @@ describe('the start ladder feeds the placement latch', () => {
   it('labels a start whose probe found nothing as cpu, with the same reading', async () => {
     const h = ladderHarness({ probe: [], stderr: [PARTIAL_LOG], machineKey: () => 'k-test' })
     await h.factory(opts).start()
-    expect(latestModelPlacement()).toMatchObject({ backend: 'cpu', gpuLayers: 30, totalLayers: 41 })
+    expect(latestModelPlacement()).toMatchObject({ backend: 'cpu', gpuLayers: 20, totalLayers: 33 })
   })
 
   it('gives every attempt its OWN parser: a retried rung never sums the failed load', async () => {
@@ -298,7 +296,7 @@ describe('the start ladder feeds the placement latch', () => {
     })
     await h.factory(opts).start()
 
-    // Rung 1 (GPU) printed a 41/41 full offload and then died; rung 2 (--device none) came up.
+    // Rung 1 (GPU) printed a 49/49 full offload and then died; rung 2 (--device none) came up.
     expect(h.attempts).toHaveLength(2)
     expect(h.attempts[0].extraArgs).toEqual([])
     expect(h.attempts[1].extraArgs).toEqual(['--device', 'none'])
@@ -307,9 +305,9 @@ describe('the start ladder feeds the placement latch', () => {
     expect(h.attempts[1].onStderrData).toBeTypeOf('function')
     expect(h.attempts[0].onStderrData).not.toBe(h.attempts[1].onStderrData)
 
-    // ONLY the second attempt's figures: 30/41 layers (not 41/41), 4100.5 MiB of weights on the
-    // card (not 13100.5 = 9000 + 4100.5), 480 MiB of cache (not 1760), 560 MiB of working buffers
-    // (not 3420) — and the second log's free-at-start (3100 MiB, not 22900).
+    // ONLY the second attempt's figures: 20/33 layers (not 49/49), 3393.11 MiB of weights on the
+    // card (not 10030.74 = 6637.63 + 3393.11), 160 MiB of KV cache (not 2208), 498 MiB of working
+    // buffers (not 1039.07) — and the second log's own device rows, not the 3080 Ti's.
     expect(latestModelPlacement()).toEqual({
       modelId: 'm',
       contextTokens: 4096,
@@ -331,7 +329,7 @@ describe('the start ladder feeds the placement latch', () => {
     await expect(runtime.start()).resolves.toBeUndefined()
     expect(observed).toBe(1)
     expect(runtime.backend).toBe('gpu')
-    expect(latestModelPlacement()).toMatchObject({ modelId: 'm', gpuLayers: 30 })
+    expect(latestModelPlacement()).toMatchObject({ modelId: 'm', gpuLayers: 20 })
   })
 })
 
@@ -344,13 +342,16 @@ describe('registerBenchmarkIpc persists every observed placement', () => {
     const record = placementRecord()
     recordModelPlacement(record)
 
-    // Round-trips through P4's normalizer unchanged — `gpuFreeAtStartMb`, `gpuComputeMb` and the
-    // per-device rows are OPTIONAL fields, and a normalizer that dropped them would still leave a
-    // valid-looking record behind.
+    // Round-trips through P4's normalizer unchanged — `gpuFreeAtStartMb`, `gpuComputeMb`, the
+    // recurrent-state pair and the per-device rows are OPTIONAL fields, and a normalizer that
+    // dropped them would still leave a valid-looking record behind.
     expect(getSettings(db).modelPlacements['m']).toEqual(record)
+    const stored = getSettings(db).modelPlacements['m']
+    expect(stored.gpuRsMb).toBe(29.31)
+    expect(stored.cpuRsMb).toBe(20.94)
     expect(spy).toHaveBeenCalledTimes(1)
     // The persist precedes the push (P3 ordering: the probe reads settings inside the push).
-    expect(spy.mock.results.map((r) => r.value)).toEqual([560])
+    expect(spy.mock.results.map((r) => r.value)).toEqual([498])
   })
 
   it('files each record under its own model id and keeps the earlier models', () => {
@@ -376,10 +377,10 @@ describe('registerBenchmarkIpc persists every observed placement', () => {
     registerBenchmarkIpc(ctx)
     recordModelPlacement(placementRecord({ modelId: 'other' }))
     recordModelPlacement(placementRecord())
-    recordModelPlacement(placementRecord({ contextTokens: 16384, gpuLayers: 41, at: '2026-09-06T10:00:00.000Z' }))
+    recordModelPlacement(placementRecord({ contextTokens: 16384, gpuLayers: 33, at: '2026-09-06T10:00:00.000Z' }))
 
     const placements = getSettings(db).modelPlacements
-    expect(placements['m']).toMatchObject({ contextTokens: 16384, gpuLayers: 41, at: '2026-09-06T10:00:00.000Z' })
+    expect(placements['m']).toMatchObject({ contextTokens: 16384, gpuLayers: 33, at: '2026-09-06T10:00:00.000Z' })
     expect(placements['other'].contextTokens).toBe(4096)
   })
 

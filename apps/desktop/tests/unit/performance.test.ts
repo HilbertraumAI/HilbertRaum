@@ -275,6 +275,22 @@ describe('placementVerdict', () => {
     expect(cpu.kind).toBe('cpu')
   })
 
+  it('counts the recurrent-state buffers in the need, and the CPU-side one in the spill (#329)', () => {
+    // A hybrid Gated-DeltaNet model allocates a per-sequence RS buffer beside the KV cache
+    // (`llama_memory_recurrent: … RS buffer size`), and the ESTIMATE side has always counted it
+    // (`estimatedContextCacheGib` = "KV + recurrent state"), so the OBSERVED figure was the low
+    // one. The numbers are the REAL 20/33 start in
+    // `tests/fixtures/placement-b9849-partial-20of33-hybrid.txt`.
+    const args = { memoryClass: 'discrete' as const, ramMb: 14_188, vramMb: 5994, sizeOnDiskGb: 5.8, ...noCard }
+    const real = { gpuLayers: 20, totalLayers: 33, gpuModelMb: 3393.11, cpuModelMb: 2286.14, gpuKvMb: 160, cpuKvMb: 96 }
+    // Without the RS pair: 3393.11 + 2286.14 + 160 + 96 = 5935.25; the spill 2286.14 + 96.
+    const without = placementVerdict({ ...args, observed: observed(real) })
+    expect(without).toMatchObject({ kind: 'partial', needMb: 5935, spillMb: 2382 })
+    // With it: + 29.31 on the card and + 20.94 on the CPU side, the latter part of the spill.
+    const withRs = placementVerdict({ ...args, observed: observed({ ...real, gpuRsMb: 29.31, cpuRsMb: 20.94 }) })
+    expect(withRs).toMatchObject({ kind: 'partial', needMb: 5986, spillMb: 2403 })
+  })
+
   it('a GPU start whose log carried no offload line is unknown, never "all on the GPU"', () => {
     const v = placementVerdict({ memoryClass: 'discrete', ramMb: 16_000, vramMb: 24_576, sizeOnDiskGb: 19.8, ...noCard, observed: observed({ gpuLayers: null, totalLayers: null, gpuModelMb: null, cpuModelMb: null, gpuKvMb: null }) })
     expect(v.kind).toBe('unknown')

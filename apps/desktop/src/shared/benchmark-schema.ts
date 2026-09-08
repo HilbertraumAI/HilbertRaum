@@ -287,8 +287,8 @@ export function normalizeBenchmarkHistory(raw: unknown): BenchmarkResult[] {
  * line and `placementVerdict` renders that as `unknown` (L7), which is the honest answer. A
  * reading that contradicts itself (`gpuLayers > totalLayers`) is not repairable, so the whole
  * record is rejected. `machineKey` is a string or null (null = an unknown machine, G3).
- * `gpuFreeAtStartMb`/`gpuComputeMb` are set only when the raw object has the key (absence =
- * "the log did not print it on the build that recorded this").
+ * `gpuFreeAtStartMb`/`gpuComputeMb`/`gpuRsMb`/`cpuRsMb` are set only when the raw object has the
+ * key (absence = "the log did not print it on the build that recorded this").
  */
 export function normalizeModelPlacement(raw: unknown, expectedModelId?: string): ModelPlacement | null {
   if (!isRecord(raw)) return null
@@ -320,6 +320,8 @@ export function normalizeModelPlacement(raw: unknown, expectedModelId?: string):
   }
   if ('gpuFreeAtStartMb' in raw) placement.gpuFreeAtStartMb = figure(raw.gpuFreeAtStartMb)
   if ('gpuComputeMb' in raw) placement.gpuComputeMb = figure(raw.gpuComputeMb)
+  if ('gpuRsMb' in raw) placement.gpuRsMb = figure(raw.gpuRsMb)
+  if ('cpuRsMb' in raw) placement.cpuRsMb = figure(raw.cpuRsMb)
   if ('devices' in raw) {
     // Present but unusable reads as "recorded, nothing usable" (`[]`), like the two figures above.
     placement.devices = Array.isArray(raw.devices)

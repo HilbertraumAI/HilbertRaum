@@ -205,6 +205,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The Performance page reports what a started model needs more accurately.** Its "Your model"
+  figures now count the model's recurrent-state cache — a second kind of working memory the newer
+  hybrid models keep beside the usual one — and no longer count a speculative-decoding start's
+  working buffer twice. The memory a started model needs is now reported close to what the card
+  actually gave it, where before it could read more than a gigabyte short.
 - **A laptop whose built-in graphics chip reports a short name is recognised as built-in.** Some
   Intel drivers report the chip as plain "Intel(R) Graphics", with no platform code. The app read
   that as a real graphics card, so a laptop with 16–32 GB of *shared* memory could be recommended a

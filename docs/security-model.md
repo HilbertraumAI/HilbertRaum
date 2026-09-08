@@ -2276,9 +2276,23 @@ sidecar-logging posture above ("Sidecar requests are authenticated"): stderr is 
 only, capped at `STDERR_TAIL_MAX = 4000` characters
 (`main/services/runtime/sidecar.ts`), redacted at the drain before it is ever read
 (`redactSidecarSecrets`), and never written to disk — it surfaces only inside a crash notice. No
-code changed to add this line; the wave's own open acceptance item (issue #329) is that a
-captured log from the pinned build must show verbosity 4 printing the load lines and no
-request/prompt content.
+code changed to add this line.
+
+That acceptance item (PR #303 audit DR3, issue #329) is **verified**, 2026-09-08. Across all 32
+verbosity-4 logs captured from the pinned build there is no `POST /` or `GET /` request line, no
+`"content"` or `"messages"` JSON body, no prompt or completion text, and every `conv_id=` is
+`conv_id= (empty=1)`: verbosity 4 raises LOAD-time logging, not request logging. Two things the
+result does NOT say. First, the only conversational-looking text in such a log is llama.cpp's own
+canned `example_format` template probe — a fixed `You are a helpful assistant` / `Hello` /
+`Hi there` exchange it renders through the model's Jinja template at load time, before the server
+listens; a standing test (`placement-parser.test.ts`, "the committed load logs carry no request or
+prompt content (DR3)") allows it only inside that block, so a future re-capture that leaks a real
+prompt fails the suite. Second, the four logs committed as test fixtures
+(`apps/desktop/tests/fixtures/placement-b9849-*.txt`) are HAND-redacted raw captures of the app's
+argv — a human replaced the drive path with `<drive>` — and are evidence about what llama.cpp
+prints, not about the sidecar's redaction. The sidecar's own guarantee is exactly the one above:
+the in-memory 4,000-character tail cap plus `redactExactKey` at the drain and
+`redactSidecarSecrets` at read time, with nothing written to disk.
 
 **Sidecar `serverMessage` is structural-only — accepted Info residual (SEC-N3).** `ChatRequestError`
 (runtime/`llama.ts`) keeps up to 500 chars of a non-JSON error body as `serverMessage`, surfaced via

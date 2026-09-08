@@ -820,9 +820,17 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    MTP recurrent state rather than the smaller no-MTP one.
 5. **The 214 / 246 MiB BAR heap on cards without resizable BAR is used** (the recurrent-state
    buffer at load, staging during a request, ≤ 9 MiB of budget left at peak) — question (e).
-6. **The parser read every real partial-offload log correctly** (31/33, 18/33, 62/66, Gemma 32/49
-   on the 8 GB card) — #329 has its fixtures; one summary-field defect found there:
-   `ModelPlacement.gpuFreeAtStartMb` names the iGPU on a machine with no budget device.
+6. **The parser read every real partial-offload log's LAYER SPLIT correctly** (31/33, 18/33,
+   62/66, Gemma 32/49 on the 8 GB card) — but not the whole placement. **Amended 2026-09-08**
+   while promoting four of these captures to fixtures (#329): the parser had never counted the
+   `RS buffer size` line at all — the per-sequence recurrent state of the hybrid models, 29–1,795
+   MiB of card memory in 26 of the 32 logs — and it summed an MTP start's draft-context compute
+   buffer a THIRD time, because llama.cpp reprints the buffer's unchanged size when the
+   speculative implementation re-reserves that context (1,665.34 MiB parsed where 1,145.28 was
+   allocated). Both are fixed; with them the parsed total lands within +29…+37 MiB of the
+   heap-measured VRAM on all seven measured runs, where before it missed by up to 1,658 MiB.
+   One summary-field defect from the same reading stays open:
+   `ModelPlacement.gpuFreeAtStartMb` names the iGPU on a machine with no budget device (#332).
 
 **Hardware confirmation (issue #391, 2026-09-08): the 24 GB row re-measured under the app's own
 post-#386 launch, and it holds.** Leg 7's confirming start was run on the same rig from the APP

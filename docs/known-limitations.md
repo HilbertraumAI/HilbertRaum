@@ -2400,9 +2400,12 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
   tracked in BUILD_STATE §5 item 22 (a).
 - **Remaining hardware acceptance not yet performed:** a real two-computer round trip on an
-  encrypted drive (including an upgraded workspace with no history yet), a captured real
-  partial-offload load log from the pinned build, a hybrid iGPU+dGPU device-order check, and
-  Apple Silicon unified-memory behaviour.
+  encrypted drive (including an upgraded workspace with no history yet), the hybrid iGPU+dGPU
+  device-order check, and Apple Silicon unified-memory behaviour. The captured real
+  partial-offload load log is done (#329, 2026-09-08), which narrows the hybrid clause: the
+  PARSER side is now witnessed by a real log — a Radeon iGPU listed first in `device_info` while
+  every buffer lands on the RTX, pinned as a fixture — so what stays open there is the
+  SNAPSHOT's device pairing on a hybrid box that also has a budget device (#332).
 
 ## Speculative decoding (MTP — [`architecture.md`](architecture.md) "MTP speculative decoding" record)
 
