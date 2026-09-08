@@ -2664,11 +2664,17 @@ reports and phase plans were working papers; their full text lives in git histor
   one, expect occasional off-language chunks. Aggregation or superlative questions ("which
   scientists are famous Austrians") get one extra step before the search: the app asks the
   local model for the concepts and the likely list-article title (one short model call per
-  pack question, measured at two to five seconds on a processor-only machine), which finds the
-  list article in the cases we measured. A question whose answer is spread across an
+  pack question), which finds the list article in the cases we measured. **What that step
+  costs is set by how long the model's answer is, not by how long the app has been running.**
+  Measured on a fast desktop processor with the bundled 4B model and no graphics card: two and
+  a half to six seconds, and the longest-answering questions land at the top of that range every
+  time. The same questions on a graphics card take under half a second; on a slower processor
+  they take four to ten. A question whose answer is spread across an
   article's individual rows, rather than named on the page itself, can still miss; and on a
-  machine where that model call takes longer than six seconds, the question falls back to
-  the plain search with no list-title step. Every ticked pack gets one line in the
+  machine slow enough that the call runs past twelve seconds, the question falls back to
+  the plain search with no list-title step — the answer is still grounded and still cites what
+  it used, it is just the plain search's articles. That fallback also costs the question those
+  twelve seconds before any pack is searched, out of the twenty the whole question is allowed. Every ticked pack gets one line in the
   "Knowledge packs:" note under the answer — searched (and how much it contributed) or
   not searched/failed with a short reason — even on an answer that cites nothing at all;
   an older answer, from before this note existed, says "outcome not recorded" instead.

@@ -42,15 +42,39 @@ export type QueryExpander = (question: string, signal?: AbortSignal) => Promise<
 /**
  * Wall-clock bound on the expansion (ms). It runs inside the arm's `EXTERNAL_RETRIEVAL_DEADLINE_MS`
  * BEFORE any pack is searched, so past this bound the request is aborted and the plain search
- * proceeds — one slow model must never eat the packs' whole budget. Measured 2026-09-07 with the
- * default 4B chat model on a CPU (an i9-14900K, no graphics card): 2.7–4.0 s per call when the
- * system prompt is prefilled from scratch, well under that once `cache_prompt` has kept the
- * prefix across asks (the app runtime always sets it). Six seconds leaves the packs fourteen of
- * the arm's twenty and still admits a first, uncached call on a slower processor.
+ * proceeds — one slow model must never eat the packs' whole budget.
+ *
+ * The bound has to afford the OUTPUT, not the prompt. Measured 2026-09-08 on the i9-14900K with
+ * the default 4B chat model at `-ngl 0`, reading llama.cpp's own `timings` (#423): the 215-token
+ * system prompt prefills in 0.17–0.26 s, and the reply — 26–63 tokens at 10.3–12.6 tok/s — is
+ * 92–96 % of the call. Wall time is therefore linear in reply length, and the question, not the
+ * model's warmth, decides it: the two list questions that emit 62–63 tokens cost 5.6–6.0 s warm,
+ * the one that emits 26 costs 2.4 s. The same seven questions on the same box with `-t 2` (a
+ * stand-in for a slower processor) cost 4.4–10.2 s at 6.7–8.8 tok/s.
+ *
+ * The old 6 s could not afford {@link EXPAND_MAX_TOKENS} on ANY of those machines — 96 tokens
+ * needs 8.5 s at the fastest rate measured — so the two constants contradicted each other, and
+ * the warm maximum on the reference machine already sat 3 % under the bound. Twelve seconds
+ * affords every reply measured (63 tokens at the slowest rate, 6.7 tok/s, plus its prefill:
+ * ~10.5 s) and affords the full cap from ~8.5 tok/s up. It does NOT afford the cap at the very
+ * slow end — that would need ~15 s of the arm's twenty, which the packs cannot spare.
+ *
+ * The cost of the change is paid only where the call is slow: a fast machine's calls finish in
+ * 2–6 s exactly as before, and the packs keep eight of the arm's twenty in the worst case. That
+ * is the D-Z20 ruling's own trade (quality over a few seconds of CPU), applied to the machines
+ * where the expansion was silently off before — `zim-expand.test.ts` pins the two constants
+ * against each other so they cannot drift apart again.
  */
-export const EXPAND_TIMEOUT_MS = 6_000
+export const EXPAND_TIMEOUT_MS = 12_000
 /** Output-token budget: six short words plus a title plus JSON framing. */
 export const EXPAND_MAX_TOKENS = 96
+/**
+ * The decode rate {@link EXPAND_TIMEOUT_MS} is derived from (output tokens per second), and the
+ * slowest measured on any configuration (#423, 2026-09-08: `-t 2` on the i9-14900K; the same box
+ * unrestricted does 10.3–12.6, its RTX 3080 Ti 186–193). Record only — nothing reads it at
+ * runtime; `zim-expand.test.ts` uses it to keep the bound and the token cap consistent.
+ */
+export const EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7
 /** Concept terms kept from the reply, at most. */
 export const EXPAND_MAX_TERMS = 6
 /** Longest single concept term / list title kept (chars); anything longer is dropped, not cut. */

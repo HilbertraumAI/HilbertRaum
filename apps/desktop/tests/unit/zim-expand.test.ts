@@ -4,10 +4,13 @@ import {
   EXPAND_MAX_TERMS,
   EXPAND_MAX_TERM_CHARS,
   EXPAND_RESPONSE_SCHEMA,
+  EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC,
+  EXPAND_TIMEOUT_MS,
   buildExpansionMessages,
   makeQueryExpander,
   parseExpansion
 } from '../../src/main/services/zim/expand'
+import { EXTERNAL_RETRIEVAL_DEADLINE_MS } from '../../src/main/services/zim/arm'
 import { MockRuntime } from '../../src/main/services/runtime/mock'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
@@ -317,5 +320,39 @@ describe('makeQueryExpander — the one bounded call', () => {
     await mock.start()
     const expander = makeQueryExpander(mock)
     expect(await expander!('Welche Länder stoßen am meisten CO2 aus?')).toBeNull()
+  })
+})
+
+// #423 — the wall-clock bound and the output-token cap are ONE decision, not two. Measured
+// 2026-09-08 on the i9-14900K (evidence `zim-wave-2026-09/evidence/cold-expand-2026-09-08/`):
+// 92-96 % of an expansion call is decode, so the bound is an affordable-OUTPUT budget, and the
+// pairing it replaced (6 s against 96 tokens) could not admit a maximum-length reply on any
+// configuration measured — including the fastest CPU the project has. These pin the pairing, so
+// an edit to either constant has to face the other instead of drifting past it.
+describe('the expansion bound and the token cap stay one decision (#423)', () => {
+  /** The longest reply seen across the three measured configurations, in output tokens. */
+  const LONGEST_MEASURED_REPLY_TOKENS = 64
+  /** Prefilling the 215-token system prompt, at the slow end of the measurements (0.65-1.24 s). */
+  const PREFILL_ALLOWANCE_MS = 1_300
+
+  it('affords the longest reply measured at the slowest decode rate measured', () => {
+    const needed =
+      (LONGEST_MEASURED_REPLY_TOKENS / EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC) * 1_000 + PREFILL_ALLOWANCE_MS
+    expect(EXPAND_TIMEOUT_MS).toBeGreaterThanOrEqual(needed)
+  })
+
+  it("affords the WHOLE token cap from a rate below the reference machine's own", () => {
+    // The rate at which a maximum-length reply just fits. It has to sit under the 10.3 tok/s the
+    // i9-14900K measured, or the cap is again a figure the bound can never admit anywhere.
+    const rateForFullCap = EXPAND_MAX_TOKENS / ((EXPAND_TIMEOUT_MS - PREFILL_ALLOWANCE_MS) / 1_000)
+    expect(rateForFullCap).toBeLessThan(10)
+  })
+
+  it("leaves the packs at least a third of the arm's per-ask deadline", () => {
+    // The expansion runs BEFORE any pack is searched, so its bound is taken straight out of the
+    // packs' share of `EXTERNAL_RETRIEVAL_DEADLINE_MS` on exactly the machines where it is slow.
+    expect(EXTERNAL_RETRIEVAL_DEADLINE_MS - EXPAND_TIMEOUT_MS).toBeGreaterThanOrEqual(
+      EXTERNAL_RETRIEVAL_DEADLINE_MS / 3
+    )
   })
 })
