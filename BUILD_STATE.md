@@ -713,7 +713,7 @@ open round's item stays the last block of §5.)
     record: [`docs/rag-design.md`](docs/rag-design.md) §17 "Deliberately not built").**
     (a) **kiwix_tools provisioning** — P8 successor issue #339. P8-1 (PR #354), P8-3 (PR #355), P8-2 consent
     (PR #363), P8-4 source bundle (PR #365), P8-5 prose (PR #364) — all MERGED 2026-09-07 (rulings 1–6 on #339);
-    the `/raw` cut-short MITIGATION shipped 2026-09-08 (`fix/339-range-first-article-read`, record rag-design **D-Z22**:
+    the `/raw` cut-short MITIGATION MERGED 2026-09-08 (PR #415, `84e97f3c`, record rag-design **D-Z22**:
     Range-first reads + inter-chunk idle detector + byte-exact resume; 60 real opens on K: 13 retries + 1 article lost
     → 0 + 0). **Nothing engineering is left on #339; the four remaining legs are the OWNER's:** P8-6 file the `/raw`
     report at kiwix/kiwix-tools (win-x86_64 only — humaniser's Linux probe 0/40; draft final) and record the URL in
@@ -721,14 +721,16 @@ open round's item stays the last block of §5.)
     half — `build-commercial-drive --kiwix-source-dir` against the real Kit drive on K:, all three platform bundles
     (`tests/fixtures/zim/required-checks.json` row, "STILL PENDING"); the GPL-3-via-root-`LICENSE` cross-reference and
     the libmicrohttpd version-from-recipe pin in model-policy. (T20-a is implemented, not pending.)
-    (b) **Tier 2** (persistent import of selected articles) — #340; **ruled 2026-09-06: C3 (a) a "Save article to my documents" button in the
-    article viewer first**, **built 2026-09-07** (`feat/340-tier2-save-article`, record rag-design D-Z21) — the citation-card shortcut stays
-    the owner's "later". Other #340 rulings of 2026-09-06: L2 keep 5 ("revisit with the same fixture after L3-b" — L3-b has landed, so the
-    5-vs-8 replay of `tests/fixtures/zim/quality-questions-de.json` on K: is due), L1 keep "not searched: no full-text index", C2
-    **UNBLOCKED by D-Z22** (the defect-route traffic argument is void; scope — opt-in per ask vs on by default — and the converter keeping
-    `<a href>` targets are still the owner's), C4 gate satisfied (D-Z19 shipped); (b) → `'path-unsupported'` (PR #360), (c) → normalise (PR #361); L3-b measured (PR #362; 0/6 raw, 2/6 through
-    the arm) then **ruled (a) ALWAYS on 2026-09-07 and built** (`feat/340-l3b-query-expansion`, record rag-design D-Z20): one local-model
-    call per pack ask, the list group 5/6 through the arm with the default 4B model on a CPU (2.4–5.3 s per call), the D-Z18 nine still 9/9.
+    (b) **#340 — CLOSED 2026-09-08, split into three successors.** Everything ruled was built: C3 (a) the viewer's "Save article to my
+    documents" (D-Z21, `feat/340-tier2-save-article`), L1 keep "not searched: no full-text index" (R-6 folded into L3-b), L3 (D-Z18) + the
+    #353 ladder (PR #366), L3-b ruled ALWAYS 2026-09-07 and built (D-Z20: one local-model call per pack ask, list group 5/6 through the arm
+    with the default 4B on a CPU, the D-Z18 nine still 9/9), `'path-unsupported'` (PR #360), LaTeX (PR #361), the collision surface (D-Z16)
+    and the six renderer nits (PR #351). Still OPEN, one issue each, all unruled: **#416** C2 link expansion — **unblocked by D-Z22** (the
+    defect-route traffic argument is void); needs the owner's scope ruling and an `<a href>`-preserving converter (`html.ts` drops targets
+    today), and carries the due **L2 revisit** (ruled keep 5 "revisit after L3-b"; the 5-vs-8 replay of `quality-questions-de.json` on K:).
+    **#417** C4 acquisition — gate satisfied by D-Z19; the catalog-source ruling
+    (library.kiwix.org OPDS only vs a curated list) blocks the rest. **#418** the citation-card save shortcut — the owner's "later", small
+    now that D-Z21 ships the machinery.
     (c) **Evidence identity for archive citations — CLOSED.** Identity resolution: P2, record rag-design D-Z5; the "Open article from a review" residual: closed P6, record design-guidelines §11.15.
     (d) **Manual acceptance leg — CLOSED 2026-09-06:** the airplane-mode demo (the real K: drive, `wikipedia_de_*` packs + kiwix-tools 3.8.1, network off) passed as T19 (viii); record rag-design §17 "Real acceptance".
     (e) Observation for item 1b's matrix, measured 2026-09-04 on the i7-8550U + UHD 620: GPU auto-offload gains nothing on pp (56 vs 57 t/s) and LOSES 45 percent on tg (11 vs 19.6) — on this iGPU
