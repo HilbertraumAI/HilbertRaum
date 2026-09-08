@@ -1850,6 +1850,7 @@ export const de: Record<keyof typeof en, string> = {
   'perf.basis.cpu': 'Arbeitsspeicher',
   'perf.recommendation.atCheckTime': 'Empfohlen zum Zeitpunkt der Prüfung',
   'perf.recommendation.next': 'Empfohlen für den nächsten Start',
+  'perf.recommendation.nextOnThisComputer': 'Empfohlen für den nächsten Start auf diesem Computer',
   'perf.verdict.noRecommendation': 'Noch kein Modell im Katalog passt zu diesem Computer.',
   'perf.verdict.notChecked':
     'Eine kurze Prüfung misst Arbeitsspeicher, Laufwerksgeschwindigkeit und, sobald ein Modell läuft, die Generierungsgeschwindigkeit.',
