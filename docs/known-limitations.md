@@ -2460,16 +2460,16 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The Home screen's launch preflight writes its 8 MiB probe at unlock**, in the same second the
   auto-start begins hashing (#334 perf marks, 0.4 s after `unlock_done`). It persists nothing and
   measured the same write figure as the sequenced probe after the load; noted, not sequenced.
-- **One `performance:get` read costs about 100 ms in the dev build** (a synchronous manifest scan
-  alongside settings and system detection) — measured once during development, and on the
-  INTERNAL disk: the launchers point `HILBERTRAUM_MANIFESTS_DIR` at the drive's own copy, so the
-  shipped path reads off the removable drive. Instrumented 2026-09-08 (issue #333): the
-  `discover_manifests` / `performance_get` perf marks split the scan into walk / read /
-  parse+validate, and `scripts/measure-manifest-read.mjs` runs it standalone or against a
-  `perf.log`. Preliminary figures (`benchmark.md` §4 I5) put ~80 % of the warm repeat cost in
-  parse+validate CPU rather than in drive I/O — the page cache serves every read after the first
-  — so the cache question is not decided by media speed alone. The formal cold (eject/re-insert)
-  and end-to-end runs, and the decision, are still open.
+- **One `performance:get` read costs about 27 ms on the drive** (a synchronous manifest scan
+  alongside settings and system detection), and about 90 ms once per session on a cold cache —
+  **measured on real removable media 2026-09-09, accepted as-is, no cache built** (issue #333,
+  closed; figures and reasoning in `benchmark.md` §4 I5). The earlier "~100 ms" figure was taken
+  on the reviewing machine's internal disk, while the launchers point `HILBERTRAUM_MANIFESTS_DIR`
+  at the drive's own copy. Of the 27 ms, only 18 ms is the scan and 82 % of that is YAML
+  parse + validation — CPU that a faster drive does not move — so the screen stays honest about
+  what it costs: a cache could have removed 18 ms of it, on a screen that is pushed rather than
+  polled. What a slow drive *does* affect is the cold read, and there the cost is per-open
+  latency, so a catalog's file count matters more than its size.
 - **The silent re-check has no Home-screen notice yet.** The moved-drive re-check above runs with
   no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
   tracked in BUILD_STATE §5 item 22 (a).

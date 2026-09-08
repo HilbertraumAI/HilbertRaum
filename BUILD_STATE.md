@@ -28,13 +28,15 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
-_2026-09-08 — **#333 instrumented (`perf/333-manifest-read-instrumentation`), record `benchmark.md` §4 **I5** + Perf marks
-"`discover_manifests` / `performance_get` — the #333 pair":** two opt-in marks (the scan's walk / read / parse+validate split; the
-IPC handler end to end) + `scripts/measure-manifest-read.mjs` for both halves; `perfEnabled()` keeps the disabled path free.
-Two corrections: the original ~100 ms was measured on the INTERNAL disk, but the launchers point `HILBERTRAUM_MANIFESTS_DIR` at the
-drive's copy; and ~80 % of the WARM repeat cost is parse+validate CPU (18.9 ms median on the E: stick), so the cache question is not media-bound as framed. OPEN:
-the eject/re-insert cold run, the end-to-end `--log` run, then the decision — which would touch 13 call sites and reverse PF-4's
-recorded "deliberately NO stateful module cache"._
+_2026-09-09 — **#333 CLOSED — measured, no cache** (instrumented on `perf/333-manifest-read-instrumentation`, PR #431; record
+`benchmark.md` §4 **I5** + Perf marks "`discover_manifests` / `performance_get` — the #333 pair"; evidence
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/manifest-read-333-measurement.txt`): on the drive, cold (eject/replug ×3:
+90.3 / 75.6 / 92.2 ms) and end to end through the app (20 reads: median **27 ms**, scan 18 of it, ~9 ms settings + detectSystem).
+Owner decision: acceptable as measured. A cache saves 18 ms on a pushed screen, would not have touched the 116 ms tail (that read's
+scan was 15 ms — the rest was the settings read contending with the benchmark's drive probe), and the screen is a minority caller
+(66 scans vs 20 reads). Corrections on record: the old ~100 ms was the INTERNAL disk while the launchers point
+`HILBERTRAUM_MANIFESTS_DIR` at the drive's copy; the cost is CPU (82 % parse+validate) not media; and the app has ONE window, so the
+per-chat-answer exposure is smaller than the pre-measurement analysis claimed. Instrumentation kept._
 _2026-09-08 — **#339 Range-first article reads (`fix/339-range-first-article-read`), record `rag-design.md` §17 **D-Z22**:**
 every `/raw` article request (and the redirect hop) now carries `Range: bytes=0-`, which libkiwix serves through its 16 KiB
 callback reader instead of the one-buffer path that carries the win-x86_64 cut-short defect — so the app stops TRIGGERING an

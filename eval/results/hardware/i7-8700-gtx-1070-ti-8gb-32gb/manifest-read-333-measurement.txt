@@ -1,0 +1,112 @@
+#333 — performance:get manifest-scan read cost: THE MEASUREMENT
+================================================================
+2026-09-08/09, DESKTOPDIT (i7-8700, 12 cores, 34.3 GB), machine otherwise idle.
+Drive: E: lite test stick (USB 3, ~116 MB/s sequential), 28 manifests / 90.6 KiB.
+App: dev build at master 2c7704ac (the instrumentation), HILBERTRAUM_DRIVE_ROOT=E:\,
+HILBERTRAUM_MANIFESTS_DIR=E:\model-manifests, HILBERTRAUM_PERF_LOG=1.
+Raw perf.log left on the stick at E:\logs\perf.log (logs are not committed).
+
+PART A — the media half, cold and warm
+--------------------------------------
+COLD protocol actually performed: software eject + physical unplug/replug before EVERY
+sample, no Explorer access to the drive in between. This is the run #333 was waiting for.
+
+COLD SAMPLES — issue #333, E: stick (28 manifests / 90.6 KiB), i7-8700 idle, 2026-09-08/09
+Protocol: software eject + physical unplug/replug before each sample; no Explorer access between.
+
+--- cold sample 1 ---
+  total 90.3 ms   walk 4.5 ms (5%)   read 46.0 ms (51%)   parse+validate 39.9 ms (44%)
+  effective read 2.0 MB/s over 28 opens
+--- cold sample 2 ---
+  total 75.6 ms   walk 5.1 ms (7%)   read 30.2 ms (40%)   parse+validate 40.4 ms (53%)
+  effective read 3.1 MB/s over 28 opens — compare against the drive's known sequential figure; far above it means a warm cache
+--- cold sample 3 ---
+  total 92.2 ms   walk 5.3 ms (6%)   read 40.2 ms (44%)   parse+validate 46.7 ms (51%)
+  effective read 2.3 MB/s over 28 opens — compare against the drive's known sequential figure; far above it means a warm cache
+
+--- warm set, same insertion (--trials 12) ---
+FIRST TRIAL (cold only if the drive's cache was dropped — eject/re-insert, then --cold-only)
+  total 49.2 ms   walk 1.1 ms (2%)   read 3.7 ms (7%)   parse+validate 44.4 ms (90%)
+  effective read 25.3 MB/s over 28 opens — compare against the drive's known sequential figure; far above it means a warm cache
+
+WARM TRIALS (trials 2..12) — what a pushed refetch pays
+  total                      median   19.3 ms   min   16.3 ms   p95   22.7 ms   max   22.7 ms   (n=11)
+  walk (readdir)             median    0.7 ms   min    0.7 ms   p95    1.1 ms   max    1.1 ms   (n=11)
+  read (readFileSync)        median    2.6 ms   min    2.4 ms   p95    3.3 ms   max    3.3 ms   (n=11)
+  parse + validate (CPU)     median   15.8 ms   min   13.1 ms   p95   18.7 ms   max   18.7 ms   (n=11)
+
+  Warm floor: 82% of the warm median is parse+validate CPU — a faster drive cannot move it.
+
+#333 acceptance — what this run answers and what it does not:
+  [~] box 1 (end-to-end performance:get cost)  → --log mode, from a real app run on the drive
+  [x] box 2 (the scan's share, isolated)       → the phase split above
+  [x] box 3 (the decision)                     → CLOSE, no cache (owner, 2026-09-09) — see below
+
+
+PART B — end to end, through the real app on the drive
+------------------------------------------------------
+20 `performance_get` reads from one session: unlock, Performance screen, three "Check
+again" runs, a "Start … and measure" (a real model start — `runtime_ready` and
+`sidecar_healthy` are in the log), and several navigations away and back.
+
+Marks         111 total · 20 performance_get · 46 scans by other callers
+
+FIRST performance:get of the run (cold cache, if the app had not scanned yet)
+  total 73.0 ms   scan 28.0 ms (38% of it)   walk 1.0 ms   read 3.0 ms   parse+validate 24.0 ms
+
+SUBSEQUENT READS (n=19) — the pushed refetches
+  performance:get end to end median   27.0 ms   min   17.0 ms   p95  116.0 ms   max  116.0 ms   (n=19)
+    of which: manifest scan  median   18.0 ms   min   13.0 ms   p95   34.0 ms   max   34.0 ms   (n=19)
+    … walk (readdir)         median    1.0 ms   min    1.0 ms   p95    1.0 ms   max    1.0 ms   (n=19)
+    … read (bytes)           median    3.0 ms   min    2.0 ms   p95    3.0 ms   max    3.0 ms   (n=19)
+    … parse + validate       median   14.0 ms   min   10.0 ms   p95   30.0 ms   max   30.0 ms   (n=19)
+
+  The scan is 67% of the median read — the rest is the settings
+  read and detectSystem(), which touch no manifest file.
+
+#333 acceptance — what this run answers and what it does not:
+  [x] box 1 (end-to-end performance:get cost)  → above, on the real drive
+  [x] box 2 (the scan's share, isolated)       → the split above
+  [x] box 3 (the decision)                     → CLOSE, no cache (owner, 2026-09-09) — see below
+
+
+WHAT THE NUMBERS SAY
+--------------------
+1. COLD, on the stick: ~90 ms for the scan (median of 3: 90.3 / 75.6 / 92.2). Reads are
+   ~1.6 ms per file open, i.e. per-open LATENCY: 90.6 KiB is ~3.6 ms of bandwidth even at
+   25 MB/s. So catalog FILE COUNT drives this, not catalog size — relevant to #311.
+   Paid once per session; the model load happening around it moves gigabytes.
+
+2. WARM, which is what a pushed refetch actually pays: end-to-end median 27 ms, of which
+   the manifest scan is 18 ms and the settings read + detectSystem() the other ~9 ms.
+   82 % of the scan's own warm cost is YAML parse + validateManifest — CPU that no drive
+   speed moves. A perfect manifest cache takes 27 ms → ~9 ms.
+
+3. THE TAIL IS NOT THE MANIFESTS. The slowest read of the session (116 ms) had a 15 ms
+   scan inside it; the other ~100 ms was the settings read contending with the benchmark's
+   own drive probe, which was running at that moment (`drive_benchmark` two lines above it
+   in the log). A manifest cache would not have touched that case.
+
+4. THE PERFORMANCE SCREEN IS A MINORITY CALLER. 66 `discover_manifests` in the session
+   against 20 `performance_get`: 46 scans came from the other 12 call sites (the start
+   gate, the model list, the downloader). Optimising this for the Performance screen alone
+   would leave two thirds of the scans untouched.
+
+5. A CORRECTION to the pre-measurement analysis: the app has ONE main window, so the
+   "a read per finished chat answer" exposure is smaller than stated — the answer-speed
+   push only causes a read while the Performance screen is mounted, and you cannot be
+   chatting on another screen at the same time. The realistic repeat drivers are the
+   screen's own actions and background events (a model load, a sidecar unloading).
+
+DECISION — owner, 2026-09-09: CLOSE, NO CACHE
+-------------------------------------------
+Closed on these figures; no cache built. 27 ms median, ~90 ms once per session on a
+cold stick, on a screen that is pushed rather than polled, is not a felt delay — and the
+available saving is 18 ms of it. Against that, a cache lands on 13 call sites including the
+spec §7.4 install gate and the ship-time commercial gate, and reverses the recorded PF-4
+ruling ("deliberately NO stateful module cache", build-log 2026-07-10).
+
+NOT MEASURED HERE: a genuinely slow stick. E: reads ~116 MB/s; the #334 SSK stick is
+28 MB/s. But the cold cost here is per-open latency and the warm cost is CPU, and neither
+scales with sequential speed — a 4x slower medium moves the ~40 ms read component of the
+cold sample, not the 27 ms warm median that decides the question.
