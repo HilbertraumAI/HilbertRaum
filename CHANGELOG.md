@@ -213,6 +213,16 @@ from its first public `1.0.0` release onward.
   card. The graphics check now finishes before the model starts, and a check that times out no
   longer counts as "no card": what the app already knew about this computer stays, and the model's
   own start log decides where it is really running.
+- **The copied Performance report no longer files this computer's recommendation under another
+  computer's heading.** When the figures on the page came from a different machine, the report was
+  headed "Another computer: …" but still listed the model recommended for the next start *here*,
+  and its context size, as plain lines underneath — so whoever read it took both for the other
+  machine's. That line now reads "Recommended for the next start on this computer", and the context
+  size sits directly beneath it in every report — your own computer's as well — because it is the
+  context that recommended model would start with, not the one saved with the check. The same
+  report also kept saying "Graphics acceleration is off" for the other machine's graphics whenever
+  acceleration happened to be off *here*; it now shows what that computer actually recorded, on the
+  Performance page as well as in the copied report.
 - **A laptop whose built-in graphics chip reports a short name is recognised as built-in.** Some
   Intel drivers report the chip as plain "Intel(R) Graphics", with no platform code. The app read
   that as a real graphics card, so a laptop with 16–32 GB of *shared* memory could be recommended a
