@@ -465,9 +465,12 @@ per model, not derived: the app has no GGUF-header parser, so each figure is rea
 PARTIAL offload inflates that line with the layers that did not fit — the 9B logs 545.62 MiB at
 33/33 but 824.31 at 31/33). Carried by the five models started for #318 (E2B 2,152.50, 9B 545.62,
 Gemma 12B 787.50, 27B UD-Q4 682.03, UD-Q5 682.03) and, since the #391 hardware round of 2026-09-08,
-by the last two as well (4B 497.31 off a 33/33 start, MoE 26B 577.50 off a 31/31 one) — so **every
-ranked chat model carries a measured figure** and the "absent" branch below is a rule for future
-manifests rather than a live case. All seven are pinned in `committed-catalog.test.ts`. The
+by the last two as well (4B 497.31 off a 33/33 start, MoE 26B 577.50 off a 31/31 one). Those seven,
+pinned in `committed-catalog.test.ts`, include all five rank-3 models, so **every model rule C can
+ever star carries a measured figure**. They are NOT every ranked manifest: 8 of the 15 carry none
+and keep the whole file as their base — the "absent" branch below is a live case, reached by the
+"Your model" estimate for a model the user installs by hand, not merely a rule for future
+manifests. The
 GGUF-header derivation that would have covered models never started is RETIRED (the picker judges
 models the user has not downloaded, so the number has to travel in the catalog); what stays open
 under BUILD_STATE §5 item 22 (e) is narrower — nothing recomputes the field when a manifest's
