@@ -738,9 +738,12 @@ behind it is #318 leg 2: at four slots the fit read 6,898 MiB free, projected 6,
 **133 MiB** short of its own 1,024 MiB target — 31/33 layers at 20.2 tok/s. `-np 1` returns
 **150.75 MiB**, 17.75 more than that shortfall, so a full offload is expected; and the app's estimate
 (7,285) still sits above what the fit asks for (5,856 projected + its 1,024 target = 6,880), so the
-estimate remains the more conservative of the two. **Expected, not measured** — leg 2's confirming
-run on #319 settles it, and if the 9B lands partial there this row's real-card behaviour needs
-revisiting.
+estimate remains the more conservative of the two. **MEASURED 2026-09-08 (#391 leg 2): 33/33,
+twice.** The fit read 7,350 MiB free under `-np 1` — not 6,898: the reading moves with the slot
+count on every card measured (finding 1 below) — projected 5,856 and left 1,494 ≥ 1,024; on the
+2026-09-07 reading the same projection would still leave 1,042, the 18 MiB pass predicted here.
+Decode 29.0 tok/s (was 20.2 at 31/33). Evidence
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/leg2-np1-verify*.*`.
 
 One consequence worth recording because it undercuts a stated rationale: the E2B's threshold is now
 **2,271 MiB**, so a 4 GB card could hold a ranked model. #321 justified its 5,120 MiB floor partly as
@@ -761,6 +764,7 @@ held:
 | leg | card (probe total / free, MiB) | model at ctx 8192 | fit outcome | decode | app ★ (basis) |
 |---|---|---|---|---|---|
 | 2 | GTX 1070 Ti 8 GB (8,273 / 7,504) | 9B | **31/33** — the fit read 6,898 MiB free and fell 133 MiB short of its 1,024 target; identical with ~1 GB of desktop use | 20.2 tok/s | 4B (Grafikspeicher) ✔ |
+| 2 fu | same card, re-run 2026-09-08 under #391 with `-np 1` now in `CHAT_SERVER_ARGS` (two starts, one with the #318 heap sampler polling) | 9B | **33/33** both times — the fit read **7,350** MiB free (not 6,898: finding 1 below), projected 5,856, "will leave 1494 >= 1024 MiB, no changes needed"; `CPU_Mapped 545.62` (the manifest's figure, now measured on a second card); RS 50.25 MiB at 1 seq; the BAR heap still used (149.6 of 214 MiB) | **29.0** tok/s | 9B — computed with the app's picker on this probe line (`committed-catalog.test.ts`, the 1070 Ti case), not read off the screen that session; **#390's 8 GB behaviour CONFIRMED** |
 | 3 | RTX 3080 Ti 12 GB (12,084 / 11,316) | Gemma 12B | 49/49, 2,086 MiB to spare; identical with 1–2.7 GB of desktop use | 27.7 | 9B ✔ |
 | 4 | RTX 3060 Laptop 6 GB (5,994 / 5,226 — 150 below the gate) | E2B (the RAM pick) · 9B (question f) | E2B **36/36 on the card anyway** · 9B 18/33 | 86.4 · 5.2 | E2B (Arbeitsspeicher) ✔ — after #321 lowered the gate to 5,120 this machine's star becomes the 4B on the **Grafikspeicher** basis; the measured record above is what the app did on the day |
 | 5 | same laptop: AMD Radeon(TM) Graphics listed FIRST, RTX 3060 second, no `--device` | E2B, 9B | every GPU buffer on the RTX; the fit's device list never contained the iGPU (its "device 0" was Vulkan1) | — | — |
@@ -776,7 +780,14 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    the probe's: 606 MiB lower on the 1070 Ti (6,898 vs 7,504), 1,820 lower on the 3090 (21,755 vs
    23,575), 204 lower on the RTX 3060 Laptop (5,022 vs 5,226). The estimate's working share + 1 GiB
    margin absorbed that gap on every card measured; the 8 GB verdict would flip only on a fit
-   reading ≥ 7,031 MiB.
+   reading ≥ 7,031 MiB. **2026-09-08 (#391): the reading moves with the slot count.** Under `-np 1`
+   every card read higher than at four slots — 3080 Ti 11,111 → 11,262, RTX 3060 Laptop 5,022 →
+   5,173, 1070 Ti 6,898 → 7,350 — and the gap to the probe's figure tracks the recurrent-state
+   buffer: ≈ 1× RS on the first two (205 → 54 MiB against RS 201.00 → 50.25), ≈ 3× RS on the
+   1070 Ti (606 → 154), the card whose BAR heap that buffer lands in. Six data points, a pattern
+   rather than an explanation. The 1070 Ti's 2026-09-07 reading was not noise: byte-identical with
+   and without ~1 GB of desktop use then, and the 2026-09-08 pair byte-identical with and without
+   the heap sampler.
 2. **The probe's `VK_EXT_memory_budget` "free" figure does not track other processes' pre-spawn
    use on NVIDIA** (7,504 at both 883 and 1,318 MiB of nvidia-smi use on the 1070 Ti; 11,316 at
    2.6 and 5.4 GB on the 3080 Ti) and is static or nearly so while a model runs (unchanged on the
