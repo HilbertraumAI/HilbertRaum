@@ -2611,6 +2611,37 @@ offline article viewer. Files are registered in place, never copied.
   session's reconcile. A confirmed-`'no'` pack is skipped by the ask (outcome
   `not-searchable`) but stays fully readable in the article viewer, which never consults
   `searchable`.
+  **#429 amendment (2026-09-08) — the serving name is derived from a NATIVE path, and a total
+  route disagreement is `read-failed`.** `servingNameFor` mirrors libkiwix's
+  `Book::getHumanReadableIdFromPath` including its `#ifdef _WIN32` branch, which strips a run up
+  to the last BACKSLASH and nothing else (re-verified against the 14.1.1 corresponding-source
+  bundle the Kit ships, P8-4). Windows accepts a forward-slash path everywhere, so one can reach
+  us intact — and then libkiwix and the mirror AGREE on the serving name `k:/zim/<stem>`, which
+  is simply unroutable: it carries the `/` that separates `/raw/<book>/<action>/<path>`. `/search`
+  is asked with `books.id` and keeps working, so the pack searched normally and every article
+  404'd. **The fix normalizes the INPUT, never the rule** — teaching the mirror to strip both
+  separators would end the agreement and mis-serve wherever libkiwix kept the whole path, moving
+  the failure rather than removing it. `identity.ts` `nativeArchivePath(path, platform)` (win32:
+  `/` → `\`; POSIX: unchanged, where a backslash is an ordinary filename character) is applied at
+  the registration boundary, so `recorded_path` is native from the first write, and again in
+  `resolvePack`, the one funnel every consumer of a pack path reads from — so a row written by an
+  older build, or edited by hand, is covered with no migration. This is the same injected-platform
+  normalization `kiwixManageAdd` already applied to the manager's ARGV (finding L9): that half
+  existed, which is exactly why such a path registered cleanly and then failed downstream.
+  Second half, in `arm.ts`: the L4 route guard (a hit whose `urlId` is not the name we serve the
+  pack under is refused) used to `continue` silently, so a pack whose EVERY hit disagreed settled
+  `searched` with nothing found — indistinguishable from "this archive had nothing to say", and
+  undiagnosable. Those refusals are now counted, a pack with hits and no readable article settles
+  **`read-failed`** whether every fetch failed or every hit was refused before the fetch (the
+  existing code and copy, "failed: no article could be read", is true of both), and the
+  disagreement is logged once with the pack id and the two NAMES — route identifiers, never a
+  path (D-Z1's sentinel rule). No shape changes: `KnowledgePackOutcomeReason`'s 14 codes,
+  `ServedLibrary`, the IPC and the persisted rows are untouched. Tests: `zim-identity.test.ts`
+  pins `nativeArchivePath` on both platform branches and the whole-path name it prevents;
+  `zim-packs.test.ts` pins the resolve funnel; `zim-arm.test.ts` pins the `read-failed` verdict
+  with a positive control; and the manual smoke's serving-name assertion — which compared our
+  value against the function that produced it and therefore held for any input — now also asks
+  the RUNNING kiwix-serve, via `/raw/<name>/meta/Title`, which needs no entry key.
 - **D-Z12 — scope (P4, 2026-09-06; review M10, ruling D4).** The user's intent to answer
   without the document corpus is an explicit, additive `DocumentScope.documentsOff?: true`
   — persisted by BOTH scope owners (`serializeDocumentScope` in `chat.ts`,

@@ -1981,8 +1981,10 @@ export type KnowledgePackOutcomeStatus = 'searched' | 'skipped' | 'failed'
  * (`ServedLibrary.excluded`) · `not-searchable`: confirmed no full-text index · `tools-missing`
  * · `mode`: a whole-document / compare answer, which reads the document only and never queries
  * packs · `search-failed`: `/search` answered non-200 (a 404 is ambiguous — never persisted as a
- * capability) or the request failed · `read-failed`: every article fetch of a pack with hits
- * failed · `timeout`: the pack's request was cut by the per-ask deadline mid-flight · `deadline`:
+ * capability) or the request failed · `read-failed`: a pack with hits yielded no readable
+ * article — every fetch failed or 404'd, or (#429) every hit was refused by the route guard
+ * because the served library and the search response disagree about this pack's name
+ * · `timeout`: the pack's request was cut by the per-ask deadline mid-flight · `deadline`:
  * the pack was never started before the per-ask deadline · `server-restarted`: the request guard
  * discarded both attempts (`StaleServerError`).
  */

@@ -493,6 +493,9 @@ export class ZimService {
       this.deps.manageSpawn ?? this.deps.spawn ?? ((cmd, args, o) => nodeSpawn(cmd, args, o))
     return {
       zimDir: this.zimDir,
+      // #429: the same injected platform the manager argv normalization uses, so a registration
+      // stores a native `recorded_path` and the serving name derived from it stays routable.
+      platform: this.opts.platform,
       // The registration throwaway lives in the owned transient dir, under a name taken from
       // the ONE generation allocator, and is tracked on the operation BEFORE it is written
       // (plan §9.17 (c)1) so the lock/quit sweep can shred it if the operation cannot cancel.

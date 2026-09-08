@@ -6,7 +6,7 @@ import { MAX_SELECTED_PACKS } from '../../../shared/types'
 import { type Db, prepareCached } from '../db'
 import { log } from '../logging'
 import { ftIndexHint, parseLibraryXml, type KiwixBook } from './client'
-import { ZimHeaderError, readZimHeader } from './identity'
+import { ZimHeaderError, nativeArchivePath, readZimHeader } from './identity'
 import { KiwixManageError } from './tools'
 
 // Knowledge-pack registry (ZIM wave): CRUD + disk reconciliation over the
@@ -43,6 +43,13 @@ export type ManageAddFn = (libraryXmlPath: string, zimPath: string, signal?: Abo
 export interface PackDeps {
   /** The drive's `zim/` folder (canonical pack home; may not exist). */
   zimDir: string
+  /**
+   * Which native path-separator convention an incoming archive path is normalized to (#429),
+   * the same injected-platform posture `kiwixManageAdd` uses for its argv (finding L9).
+   * Defaults to `process.platform` so production is unchanged and partial test contexts need
+   * not set it; tests pin both branches on one host.
+   */
+  platform?: NodeJS.Platform
   manageAdd: ManageAddFn
   /**
    * Where the registration throwaway `library.xml` goes (#301 P3b, findings L3/M4). Production
@@ -157,13 +164,23 @@ export type PackResolution =
  * No candidate existed at all ⇒ `'missing'`. One existed but none carried this identity ⇒
  * `'identity-mismatch'`, which is a materially different state for the user: the file is
  * there, it is simply not their archive any more.
+ *
+ * #429: the recorded path is normalized to the native separator here as well as at
+ * registration. `join()` already gives the drive-relative candidate a native path, but a
+ * `recorded_path` row written before that fix (or edited by hand) can still carry forward
+ * slashes on Windows — and a non-native path resolves and reads perfectly while producing an
+ * unroutable serving name downstream (`identity.ts` `nativeArchivePath`). Normalizing at THIS
+ * funnel means every consumer of `PackResolution.path` — the served set, the library build,
+ * the availability write — sees one convention, with no migration.
  */
 export function resolvePack(
   zimDir: string,
-  row: Pick<PackRow, 'id' | 'leaf' | 'recorded_path'>
+  row: Pick<PackRow, 'id' | 'leaf' | 'recorded_path'>,
+  platform: NodeJS.Platform = process.platform
 ): PackResolution {
   const candidates: string[] = [join(zimDir, row.leaf)]
-  if (row.recorded_path && row.recorded_path !== candidates[0]) candidates.push(row.recorded_path)
+  const recorded = row.recorded_path ? nativeArchivePath(row.recorded_path, platform) : ''
+  if (recorded && recorded !== candidates[0]) candidates.push(recorded)
   let sawCandidate = false
   let unreadable: string | null = null
   for (const candidate of candidates) {
@@ -393,6 +410,13 @@ export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Pro
   // into the session's database (nor into the NEXT session's, after a lock + unlock).
   deps.assert?.()
   const leaf = basename(zimPath)
+  // #429: what gets STORED is native, so the serving name derived from it downstream is routable.
+  // Only the stored form — every read above (the header, the metadata) and `fileSize` below stay
+  // on the path the caller gave, which the OS accepts as it is; normalizing before the I/O would
+  // invent a filename that need not exist. `kiwix-manage`'s argv is normalized inside
+  // `kiwixManageAdd` itself (finding L9); that half existing alone is exactly why such a path
+  // registered cleanly and only then 404'd on every article read.
+  const recordedPath = nativeArchivePath(zimPath, deps.platform)
   const now = nowIso()
   const existing = prepareCached(db, 'SELECT added_at FROM knowledge_packs WHERE id = ?').get(uuid) as
     | { added_at: string }
@@ -423,7 +447,7 @@ export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Pro
     book.mediaCount,
     fileSize(zimPath),
     leaf,
-    zimPath,
+    recordedPath,
     // The archive's own `_ftindex` tag — a HINT, never a verdict (#301 P4, M7). `searchable`
     // and `searchable_key` are deliberately NOT written here: only the reconcile's key pass and
     // the /suggest probe touch them, so a re-add can never invent a capability.

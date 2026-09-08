@@ -181,6 +181,39 @@ describe('knowledge-pack registry', () => {
     expect(resolvePack(zimDir, row)).toEqual({ path: canonical, uuid: U.alpha })
   })
 
+  it('#429 — a recorded path with a foreign separator still resolves, in the native form', async () => {
+    // A row written before the registration boundary normalized separators (or edited by hand)
+    // can carry forward slashes on Windows. Such a path OPENS fine on Windows — which is why
+    // this went unseen — but the serving name derived from it downstream carries the whole path
+    // and no /raw/<book>/... URL can express it. `resolvePack` hands out the native form so the
+    // one funnel every consumer reads from has one convention.
+    const { db, deps, root, zimDir } = makeHarness()
+    const elsewhere = join(root, 'elsewhere-slashes')
+    mkdirSync(elsewhere)
+    const external = addZimFile(elsewhere, 'ext.zim', U.alpha)
+    await registerPack(db, deps, external)
+    const row = (recorded: string): { id: string; leaf: string; recorded_path: string } => ({
+      id: U.alpha,
+      leaf: 'never-on-drive.zim', // forces the RECORDED candidate to be the one that resolves
+      recorded_path: recorded
+    })
+
+    // The `platform` argument only changes the separator, so this test cannot assert the win32
+    // branch on a POSIX host: the normalized path would have to EXIST for the resolve to reach
+    // the header, and `/tmp/x\ext.zim` is a different (absent) file on Linux. `nativeArchivePath`
+    // itself is pinned on BOTH branches, host-independently, in `zim-identity.test.ts`; what is
+    // asserted here is the part that needs a real file — that the funnel resolves and normalizes.
+    if (process.platform === 'win32') {
+      const foreign = external.split('\\').join('/')
+      expect(foreign).not.toBe(external) // the leg is meaningless if nothing was swapped
+      expect(resolvePack(zimDir, row(foreign), 'win32')).toEqual({ path: external, uuid: U.alpha })
+    }
+
+    // On POSIX a backslash is an ordinary filename character, so nothing is rewritten and a
+    // native path resolves exactly as before — the contract this fix must not break.
+    expect(resolvePack(zimDir, row(external), 'linux')).toEqual({ path: external, uuid: U.alpha })
+  })
+
   it('remove and enable/disable behave and report row existence', async () => {
     const { db, deps, zimDir } = makeHarness()
     const file = addZimFile(zimDir, 'a.zim', U.alpha)

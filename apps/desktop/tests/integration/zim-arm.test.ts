@@ -1214,3 +1214,38 @@ describe('the shipped per-pack article cap (#340 L2, revisited 2026-09-08 on #41
     expect(EXPANSION_ARTICLES_PER_PACK).toBeLessThan(ARTICLES_PER_PACK)
   })
 })
+
+// #429 — the served library and the search response can disagree about a pack's name (a
+// non-native separator in the recorded path used to produce an unroutable whole-path serving
+// name). The L4 guard already refused every such hit; what it did NOT do was say so, and the
+// pack settled `searched` with nothing found — "this archive had nothing to say", which is both
+// wrong and undiagnosable. Same guard, honest verdict.
+describe('#429 — a pack whose every hit is refused by the route guard is read-failed, not empty', () => {
+  const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
+  const question = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
+
+  it('settles read-failed and produces nothing when the published name is not the one the hits carry', async () => {
+    const wrong = new Map([['pack-climate', 'k:/zim/klimawandel']]) // the #429 shape, verbatim
+    const { candidates, outcomes } = await collectPackCandidates(port, packs, question, undefined, wrong)
+
+    expect(candidates).toEqual([])
+    expect(outcomes).toHaveLength(1)
+    expect(outcomes[0]).toMatchObject({
+      packId: 'pack-climate',
+      status: 'failed',
+      reason: 'read-failed',
+      found: 0,
+      admitted: 0
+    })
+  })
+
+  it('the SAME pack with the name its hits carry produces candidates and settles searched', async () => {
+    // The control: without it the assertion above would also pass if the fixture were simply
+    // broken, which is the failure mode the tautological serving-name check had.
+    const right = new Map([['pack-climate', 'book-pack-climate']])
+    const { candidates, outcomes } = await collectPackCandidates(port, packs, question, undefined, right)
+
+    expect(candidates.length).toBeGreaterThan(0)
+    expect(outcomes[0]).toMatchObject({ status: 'searched', reason: null })
+  })
+})

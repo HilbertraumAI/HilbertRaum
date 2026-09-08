@@ -1,6 +1,7 @@
 import type { KnowledgePackOutcome } from '../../../shared/types'
 import type { ExternalRetrievalOutput, RetrievedChunk } from '../rag'
 import { CHUNK_DEFAULTS, chunkSegments } from '../ingestion/chunker'
+import { log } from '../logging'
 import { fetchArticleHtml, searchPack, searchPackTotal, suggestTitles, type KiwixSearchHit } from './client'
 import type { QueryExpander } from './expand'
 import { zimArticleToSegmentsAsync } from './html'
@@ -383,6 +384,9 @@ export async function collectPackCandidates(
     let expansionChunks = 0
     let attempted = 0
     let read = 0
+    /** Plain hits skipped because the response's `urlId` was not the name we serve this pack
+     *  under (#429) — a route disagreement, never "nothing relevant". */
+    let mismatched = 0
     for (const { hit, fromExpansion } of queue) {
       // Article requests are DERIVED FROM NEED (plan §9.21 (c)3): once the pack holds its
       // provisional quota, the remaining hits are not fetched at all.
@@ -395,7 +399,14 @@ export async function collectPackCandidates(
       // disagreeing link would mean the response describes a book we did not ask about, and
       // fetching it would label another archive's text with this pack's title.
       const expected = names?.get(pack.id)
-      if (expected !== undefined && hit.urlId !== expected) continue
+      if (expected !== undefined && hit.urlId !== expected) {
+        // #429: this used to `continue` silently, and a pack whose EVERY hit disagreed then
+        // settled `searched` with nothing found — "this archive had nothing to say", the one
+        // reading a user cannot act on and a developer cannot diagnose. Counted instead, and
+        // the settlement below treats an all-disagreement pack as unreadable, which it is.
+        if (!fromExpansion) mismatched++
+        continue
+      }
       if (!fromExpansion) attempted++
       let html: string | null
       try {
@@ -447,9 +458,22 @@ export async function collectPackCandidates(
         })
       }
     }
-    // Hits existed and every single fetch of them failed: a materially different state from
+    // Hits existed and none of them could be read: a materially different state from
     // "searched, nothing relevant" — the pack IS searchable, its articles were not readable.
-    item.settlement = attempted > 0 && read === 0 ? 'read-failed' : 'searched'
+    // Two ways to get there, one verdict (#429): every fetch failed or 404'd (`attempted > 0 &&
+    // read === 0`), or every hit was refused before the fetch because the served library and the
+    // search response disagree about this pack's name (`attempted === 0 && mismatched > 0`).
+    // The second is a defect on our side, not the archive's, so it is also logged — with the
+    // pack id and the two NAMES, which are route identifiers, never a path (the sentinel rule).
+    if (attempted === 0 && mismatched > 0) {
+      log.warn('Knowledge pack served under a name its own search results do not use', {
+        packId: pack.id,
+        servedAs: names?.get(pack.id) ?? null,
+        hitsSkipped: mismatched
+      })
+    }
+    item.settlement =
+      (attempted > 0 && read === 0) || (attempted === 0 && mismatched > 0) ? 'read-failed' : 'searched'
     item.settled = true
   }
 

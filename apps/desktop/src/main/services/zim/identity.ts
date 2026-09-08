@@ -131,6 +131,28 @@ export function servingNameFor(path: string, platform: NodeJS.Platform = process
   return name
 }
 
+/**
+ * An archive path in the platform's own separator convention — the form every consumer of a
+ * pack path must be given (#429).
+ *
+ * WHY THIS EXISTS AND NOT A FIX IN `servingNameFor`. Step 2 above is a faithful mirror of
+ * libkiwix's `#ifdef _WIN32` branch, which strips a run up to the last BACKSLASH and nothing
+ * else (`book.cpp` `getHumanReadableIdFromPath`, verified against the 14.1.1 corresponding
+ * source bundle on the Kit drive). Windows itself accepts `K:/zim/x.zim` everywhere, so such a
+ * path reaches us intact — and then BOTH libkiwix and this mirror derive the serving name
+ * `k:/zim/x` from it. They AGREE; the name is simply unroutable, because it carries the `/`
+ * that separates `/raw/<book>/<action>/<path>`, so every article request 404s while `/search`
+ * (asked with `books.id`) keeps working. Teaching `servingNameFor` to strip both separators
+ * would end that agreement and mis-serve wherever libkiwix kept the whole path — the failure
+ * would move, not go away. The input is what has to be native, not the rule.
+ *
+ * On a POSIX platform a backslash is an ordinary filename character, so this is win32-only and
+ * `platform` is injected (the L9 posture) so both branches are pinned on either host.
+ */
+export function nativeArchivePath(path: string, platform: NodeJS.Platform = process.platform): string {
+  return platform === 'win32' ? path.replace(/\//g, '\\') : path
+}
+
 /** One pack excluded from the served library because an earlier book already owns its name
  *  (`collidesWith` KEEPS it — the smaller UUID, libkiwix's own first-wins rule). The shared
  *  shape since #340 (D-Z16): `packs:status.excluded` carries it to the panel. */

@@ -2258,14 +2258,20 @@ describe('T16 — per-ask knowledge-pack outcomes end to end (#301 P4, M6/M7)', 
         h.hooks.beforeRespond = async () => undefined
 
         expect(shape(msgA.packOutcomes)).toEqual([{ packId: alpha, status: 'searched', reason: null }])
-        expect(shape(msgB.packOutcomes)).toEqual([{ packId: bravo, status: 'searched', reason: null }])
+        // bravo reads read-failed, not searched (#429): this fixture SEARCH_XML carries the same
+        // urlId (`alpha`) for every book, so every one of bravo's hits is a cross-book link the
+        // L4 route guard refuses — a pack with hits and no readable article. It used to settle
+        // `searched` with nothing found, indistinguishable from "this archive had nothing to
+        // say". The two sets now differ, which makes this leg's real subject — that one ask's
+        // outcomes never cross-write another's — visible rather than merely consistent.
+        expect(shape(msgB.packOutcomes)).toEqual([{ packId: bravo, status: 'failed', reason: 'read-failed' }])
         // …and on RELOAD each conversation reads back its own set, keyed to its own message.
         expect(listMessages(db, convA.id).at(-1)).toMatchObject({ id: msgA.id })
         expect(shape(listMessages(db, convA.id).at(-1)?.packOutcomes)).toEqual([
           { packId: alpha, status: 'searched', reason: null }
         ])
         expect(shape(listMessages(db, convB.id).at(-1)?.packOutcomes)).toEqual([
-          { packId: bravo, status: 'searched', reason: null }
+          { packId: bravo, status: 'failed', reason: 'read-failed' }
         ])
       }
       // ---- (10) SCOPE CHANGED MID-ASK: the persisted set is the ASK-TIME one ------------------
