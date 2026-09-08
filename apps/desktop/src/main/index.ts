@@ -726,7 +726,10 @@ function initBackend(): void {
   // speed leg never contend with the multi-GB weight hash + load, and the speed leg sees the
   // runtime the start brought up. Neither call blocks startup.
   const firstBenchmark = prepareFirstBenchmark(ctx)
-  const autoStarted = maybeAutoStartActiveModel(ctx)
+  // #380: the auto-start waits for the session's probe (≈1 s idle; resolved at once with no binary),
+  // so the ladder finds a settled device list instead of racing the weight upload for the driver.
+  // (`appCtx` rather than `ctx`: inside the closure the module-level handle widens back to null.)
+  const autoStarted = firstBenchmark.probed.then(() => maybeAutoStartActiveModel(appCtx))
   void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
   // Plaintext-dev post-unlock seam for the local API (encrypted workspaces start it
   // after unlock/create in registerWorkspaceIpc); no-op unless policy ∧ setting permit.

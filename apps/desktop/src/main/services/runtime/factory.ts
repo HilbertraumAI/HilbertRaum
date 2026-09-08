@@ -201,8 +201,12 @@ export interface GpuLadderDeps {
   getGpuAutoDisabled?: () => boolean
   /** Persist a rung-1 (GPU attempt) failure; must never throw. */
   onGpuFailure?: (reason: string) => void
-  /** Probe used to label a rung-1 start 'gpu' vs 'cpu' (inject the session cache). */
-  probeDevices?: (binPath: string) => Promise<GpuDevice[]>
+  /**
+   * Probe used to label a rung-1 start 'gpu' vs 'cpu' (inject the session cache).
+   * `null` means UNKNOWN (the probe hit its kill-timeout, #380) — NOT "no device": the
+   * label then comes from this start's own load log instead.
+   */
+  probeDevices?: (binPath: string) => Promise<GpuDevice[] | null>
   /** Resolve the rung-3 safety-net binary (default: `<os>/cpu/llama-server[.exe]`). */
   resolveCpuBin?: (rootPath: string) => string | null
   /**
@@ -408,6 +412,12 @@ class LadderRuntime implements ModelRuntime {
       // the backend label is normally already known. Probing only after health would
       // stall the first start by up to the probe's 10 s bound and mislabel a crash
       // inside that window as 'cpu'.
+      //
+      // #380: the concurrent kick-off STAYS — but it is no longer the only guard against a
+      // wrong label. The unlock seams now settle this session's probe refresh BEFORE the
+      // auto-start is called, so on the path that produced the #330 mislabel the cached
+      // answer is already in hand here; and when the probe IS unknown (its 10 s bound), the
+      // label falls back to this start's own load log below rather than to "cpu".
       const probe = this.deps.gpu.probeDevices ?? ((bin: string) => probeGpuDevices(bin))
       // #182: the speculative rung is the ONE rung that must know the device BEFORE it
       // spawns — its whole justification is measured on a fully offloaded GPU start, and
@@ -426,7 +436,7 @@ class LadderRuntime implements ModelRuntime {
         }
       }
       const probePromise = rung.gpuAttempt
-        ? probe(rung.binPath).catch(() => [] as GpuDevice[])
+        ? probe(rung.binPath).catch(() => null)
         : null
       if (rung.speculative) this.deps.onSpeculative?.(this.opts, 'enabled')
       // One placement reading per attempt (a retried rung must not sum two loads).
@@ -559,24 +569,38 @@ class LadderRuntime implements ModelRuntime {
         // The rung-1 binary auto-offloads when a device exists; the (cached) probe is
         // what names the backend for the UI. Empty probe ⇒ this start IS CPU mode.
         const devices = await probePromise
-        this.backend = devices.length > 0 ? 'gpu' : 'cpu'
-        // LABEL ONLY (PR #303 audit M8.2 / P5 residual): the device a reader may SHOW is the
-        // shared `displayDevice` one — the budget device (the largest USEFUL card), else the
-        // largest device that does not look integrated even when it is under the usable gate
-        // (a 4 GB card; until #321 lowered the gate to 5,120 this also caught every 6 GB laptop
-        // card, which the Vulkan backend reports at 5,7xx–5,9xx MiB), else the first
-        // listed. On a hybrid [iGPU, dGPU] box `devices[0]` named the iGPU while the model
-        // actually ran on the dGPU — and on a hybrid [iGPU, SMALL dGPU] box the old fallback did
-        // the same, because nothing was "useful". Rung selection, `--fit` and the "never -ngl"
-        // policy are untouched — and no `--device` is passed to steer them (#320, decided
-        // 2026-09-07): on b9849 the fit does NOT spread layers over every listed device. It drops
-        // the integrated one BY TYPE before the filling pass, measured on both hybrid machines
-        // (`eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg5-baseline.*` — both devices
-        // in `device_info`, then "using device Vulkan0" only; `…/ryzen-7-5800h-rtx-3060-laptop-
-        // 6gb-14gb/leg5-device-landing.comment.md` — iGPU listed FIRST, every buffer on the RTX,
-        // the fit's own "device 0" was Vulkan1), so an app-side `--device` would change nothing
-        // and would break the ladder's "`--device none` is the only device argument" contract.
-        this.gpuName = displayDevice(devices)?.device.name ?? null
+        if (devices !== null) {
+          this.backend = devices.length > 0 ? 'gpu' : 'cpu'
+          // LABEL ONLY (PR #303 audit M8.2 / P5 residual): the device a reader may SHOW is the
+          // shared `displayDevice` one — the budget device (the largest USEFUL card), else the
+          // largest device that does not look integrated even when it is under the usable gate
+          // (a 4 GB card; until #321 lowered the gate to 5,120 this also caught every 6 GB laptop
+          // card, which the Vulkan backend reports at 5,7xx–5,9xx MiB), else the first
+          // listed. On a hybrid [iGPU, dGPU] box `devices[0]` named the iGPU while the model
+          // actually ran on the dGPU — and on a hybrid [iGPU, SMALL dGPU] box the old fallback did
+          // the same, because nothing was "useful". Rung selection, `--fit` and the "never -ngl"
+          // policy are untouched — and no `--device` is passed to steer them (#320, decided
+          // 2026-09-07): on b9849 the fit does NOT spread layers over every listed device. It drops
+          // the integrated one BY TYPE before the filling pass, measured on both hybrid machines
+          // (`eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg5-baseline.*` — both devices
+          // in `device_info`, then "using device Vulkan0" only; `…/ryzen-7-5800h-rtx-3060-laptop-
+          // 6gb-14gb/leg5-device-landing.comment.md` — iGPU listed FIRST, every buffer on the RTX,
+          // the fit's own "device 0" was Vulkan1), so an app-side `--device` would change nothing
+          // and would break the ladder's "`--device none` is the only device argument" contract.
+          this.gpuName = displayDevice(devices)?.device.name ?? null
+        } else {
+          // #380: the probe timed out under this very load — UNKNOWN, not "no device". (On the
+          // #330 round trip a `--list-devices` that takes 1.07 s idle took 7.7 s beside the
+          // weight upload.) The server's own log already said where the weights went, so label
+          // from it rather than call a card-speed start "cpu" and push that verdict into the
+          // chat header, Diagnostics, the persisted `ModelPlacement`, the #322 speed identity
+          // and the §5.3 crash auto-fallback gate. `devices[0]` is the right name here (not
+          // `displayDevice`): these are the `device_info` rows of THIS start, in the order the
+          // server itself used, not a catalogue of the machine's cards.
+          const reading = placement.reading()
+          this.backend = (reading.gpuLayers ?? 0) > 0 ? 'gpu' : 'cpu'
+          this.gpuName = this.backend === 'gpu' ? (reading.devices[0]?.name ?? null) : null
+        }
       } else {
         this.backend = 'cpu'
         this.gpuName = null
@@ -675,7 +699,7 @@ class LadderRuntime implements ModelRuntime {
    * Ordered cheapest-first so the common no-op paths never touch the probe.
    */
   private async speculativeVerdict(
-    probe: (binPath: string) => Promise<GpuDevice[]>,
+    probe: (binPath: string) => Promise<GpuDevice[] | null>,
     binPath: string
   ): Promise<{ ok: true } | { ok: false; reason: string }> {
     if (isSpeculativeSuppressed(this.opts.modelId)) {
@@ -687,7 +711,12 @@ class LadderRuntime implements ModelRuntime {
       // VRAM check below cannot be made. Refuse rather than guess.
       return { ok: false, reason: 'weight size unknown — cannot check VRAM headroom' }
     }
-    const devices = await probe(binPath).catch(() => [] as GpuDevice[])
+    const devices = await probe(binPath).catch(() => null)
+    // #380: "don't know" answers no, like every other branch here — an unknown probe cannot
+    // establish the VRAM headroom the measured gain depends on.
+    if (devices === null) {
+      return { ok: false, reason: 'device probe timed out — cannot check VRAM headroom' }
+    }
     if (devices.length === 0) {
       return { ok: false, reason: 'no GPU device (the measured gain is a full-offload GPU result)' }
     }

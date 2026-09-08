@@ -68,7 +68,12 @@ function ladderHarness(config: {
   latchGpuFailures?: boolean
   /** #312: rung 4 uses the REAL mock runtime, so its disclosed reply can be streamed. */
   realMock?: boolean
-  probe?: GpuDevice[]
+  /** The injected probe's answer. `null` is UNKNOWN (its kill-timeout, #380); a promise lets a
+   *  case settle it only AFTER the fake server started. Omitted ⇒ `[]`. */
+  probe?: GpuDevice[] | null | Promise<GpuDevice[] | null>
+  /** #380: stderr the Nth attempt emits from inside `start()`, through the ladder's own parser
+   *  feed (the `placement-wiring.test.ts` idiom) — the order a real load prints it in. */
+  stderr?: string[]
   gpuMode?: 'auto' | 'off'
   gpuAutoDisabled?: boolean
   cpuBin?: string | null
@@ -130,6 +135,8 @@ function ladderHarness(config: {
     return {
       modelId: o.modelId,
       start: async () => {
+        const stderr = config.stderr?.[index]
+        if (stderr != null) rung?.onStderrData?.(stderr)
         await config.onStart?.(index)
         if (index < (config.failFirst ?? 0)) {
           throw new Error(
@@ -196,7 +203,8 @@ function ladderHarness(config: {
         failures.push(reason)
         if (config.latchGpuFailures) autoDisabled = true
       },
-      probeDevices: async () => config.probe ?? [],
+      // `?? []` would turn a deliberate `null` (UNKNOWN, #380) back into "no device".
+      probeDevices: async () => (config.probe === undefined ? [] : await config.probe),
       resolveCpuBin: () => (config.cpuBin === undefined ? '/bin/cpu/llama-server' : config.cpuBin),
       onGpuCrash: (o, info) => crashes.push({ opts: o, info }),
       onSpeculativeCrash: (o, info) => specCrashes.push({ opts: o, info })
@@ -225,6 +233,15 @@ function abortError(): Error {
   const err = new Error('The operation was aborted.')
   err.name = 'AbortError'
   return err
+}
+
+/** A promise plus its resolver — lets a case settle an injected answer at a chosen moment. */
+function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
+  let resolve!: (v: T) => void
+  const promise = new Promise<T>((res) => {
+    resolve = res
+  })
+  return { promise, resolve }
 }
 
 /** Resolve once `cond` holds (micro/macro-task polling; injected budgets keep this fast). */
@@ -256,6 +273,56 @@ describe('the GPU start ladder', () => {
     await runtime.start()
     expect(runtime.backend).toBe('cpu')
     expect(runtime.gpuName).toBeNull()
+  })
+
+  // #380 — an UNKNOWN probe (its 10 s kill-timeout, which the #330 round trip hit because the
+  // `--list-devices` child was competing with this very weight upload for the driver) is not
+  // "no device". The server's own load log already says where the weights went, and that is
+  // what the label must follow: a card decoding at 98–100 tok/s reported as "cpu" poisons the
+  // chat header, Diagnostics, the persisted placement, the #322 speed identity and the §5.3
+  // crash auto-fallback gate.
+  it('an UNKNOWN probe labels the rung from the load log: offloaded layers ⇒ gpu, named from device_info (#380)', async () => {
+    const h = ladderHarness({
+      probe: null,
+      stderr: [
+        [
+          '  - Vulkan0 : NVIDIA GeForce RTX 3080 Ti (12300 MiB, 11511 MiB free)',
+          'load_tensors: offloaded 33/33 layers to GPU',
+          ''
+        ].join('\n')
+      ]
+    })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.backend).toBe('gpu')
+    expect(runtime.gpuName).toBe('NVIDIA GeForce RTX 3080 Ti')
+  })
+
+  it('an UNKNOWN probe with NO offload line in the log still reads as cpu (#380)', async () => {
+    const h = ladderHarness({ probe: null, stderr: ['main: server is listening on http://127.0.0.1:1234\n'] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.backend).toBe('cpu')
+    expect(runtime.gpuName).toBeNull()
+  })
+
+  it('a probe that answers only AFTER the server start resolved still labels the rung gpu (the concurrent kick-off is intact)', async () => {
+    // The #380 fallback must not have cost the ordinary slow-probe path its label: the ladder
+    // still awaits the probe after health, so an answer that lands late is used, not skipped.
+    const late = deferred<GpuDevice[] | null>()
+    const h = ladderHarness({ probe: late.promise })
+    const runtime = h.factory(opts)
+    let settled = false
+    const start = runtime.start().then(() => {
+      settled = true
+    })
+    await until(() => h.calls.length === 1)
+    await new Promise((r) => setImmediate(r))
+    expect(settled).toBe(false) // parked on the probe, with the fake server already started
+    late.resolve([RTX])
+    await start
+    expect(runtime.backend).toBe('gpu')
+    expect(runtime.gpuName).toBe('NVIDIA GeForce RTX 3080 Ti')
   })
 
   it('a hybrid [iGPU, dGPU] box is LABELLED with the discrete card, not the first enumerated device', async () => {

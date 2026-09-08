@@ -106,7 +106,8 @@ function withBinary(root: string): void {
   writeFileSync(join(dir, llamaServerBinaryName()), '')
 }
 
-function fakeProbe(impl: () => Promise<GpuDevice[]>): CachedGpuProbe {
+/** `null` from `impl` is the kill-timeout's UNKNOWN answer (#380), not "no device". */
+function fakeProbe(impl: () => Promise<GpuDevice[] | null>): CachedGpuProbe {
   return Object.assign((_bin: string) => impl(), { invalidate: () => undefined })
 }
 
@@ -430,6 +431,59 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     await run2
     expect(getSettings(db).gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: here() })
     expect(spy).toHaveBeenCalledTimes(3) // + the flag clear and the write
+  })
+
+  // #380 — the ONE exception to decision 6. A probe that hits its 10 s kill-timeout resolves
+  // `null`: not an answer but the absence of one. Persisting the empty stamped probe there is
+  // exactly the #330 failure — the driver was busy with the weight upload, and a card machine
+  // was recorded (tile "None"), classed from RAM and labelled "cpu" for the rest of the session.
+  it('a TIMED-OUT probe on a machine with a stamped card: nothing is written, the stored probe stands', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    withBinary(root)
+    const before = probe([RTX], here())
+    updateSettings(db, { gpuProbe: before, gpuAutoDisabled: true, gpuLastError: 'Vulkan device lost' })
+    const spy = performanceChangedSpy(flagsAndProbe(db))
+
+    await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => null) }))
+
+    expect(getSettings(db).gpuProbe).toEqual(before)
+    // ONE push: the flag clear (A-D1). An unknown probe writes nothing, so it pushes nothing.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([
+      { gpuAutoDisabled: false, gpuLastError: null, gpuProbe: before }
+    ])
+  })
+
+  it('a benchmark whose probe timed out reports THIS machine’s card and leaves the probe untouched', async () => {
+    // Decision 6 exists so the ★, the benchmark and the tile cannot disagree. With an unknown
+    // probe they agree on the RECORD instead of on an empty answer nobody measured.
+    const root = freshRoot()
+    const db = seededDb(root)
+    withBinary(root)
+    const before = probe([RTX], here())
+    updateSettings(db, { gpuProbe: before })
+
+    const result = await runAndPersistBenchmark(ctxWith(root, db, { probeGpu: fakeProbe(async () => null) }))
+
+    expect(result.gpu).toBe(RTX.name)
+    expect(result.gpuVramMb).toBe(RTX.totalMb)
+    expect(result.profile).toBe(classifyProfile(result.ramGb, { gpuUseful: true }))
+    expect(getSettings(db).gpuProbe).toEqual(before)
+  })
+
+  it('a TIMED-OUT probe over a FOREIGN-stamped record: still nothing written, and this machine still has no card', () => {
+    // The stamp keeps doing its job: "unknown" never promotes another machine's devices to
+    // local, it only declines to overwrite what is stored.
+    const root = freshRoot()
+    const db = seededDb(root)
+    withBinary(root)
+    const before = probe([RTX], FOREIGN_KEY)
+    updateSettings(db, { gpuProbe: before, lastBenchmark: legacyResult() })
+
+    return tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => null) })).then(() => {
+      expect(getSettings(db).gpuProbe).toEqual(before)
+      expect(buildPerformanceSnapshot(ctxWith(root, db)).currentGpu).toBeNull()
+    })
   })
 })
 

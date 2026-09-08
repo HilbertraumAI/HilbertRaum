@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // The first-run benchmark behind the model auto-start (PR #303 audit L1 / SD2, owner decision
@@ -65,12 +65,14 @@ import { machineKey, resetPerformanceForTests } from '../../src/main/services/pe
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeStartOptions } from '../../src/main/services/runtime'
+import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
+import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { WorkspaceController, createEncryptedVaultOnDisk, vaultPathsFrom } from '../../src/main/services/workspace-vault'
 import { IPC } from '../../src/shared/ipc'
-import type { AppSettings, BenchmarkResult, PrivacyPolicy, RuntimeStatus } from '../../src/shared/types'
+import type { AppSettings, BenchmarkResult, GpuDevice, PrivacyPolicy, RuntimeStatus } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   closePerformanceFixture,
@@ -96,6 +98,8 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 }
 
 const here = (): string | null => machineKey(detectSystem())
+/** The card of the #330 round trip — the one the probe was too slow to enumerate. */
+const RTX_DEVICE: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 /** One macrotask hop — room for a wrong implementation to (wrongly) start I/O before an assert. */
 const hop = (): Promise<void> => new Promise((r) => setImmediate(r))
 async function hops(n: number): Promise<void> {
@@ -263,7 +267,7 @@ function sessionWorkspace(): {
 }
 
 /** A context wired like production for the workspace IPC seams: `db` resolves through the controller. */
-function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime): AppContext {
+function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime, probeGpu?: CachedGpuProbe): AppContext {
   const ctx = {
     trustedSenders: ANY_SENDER,
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
@@ -273,14 +277,35 @@ function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime):
     workspace: ctrl,
     runtime,
     manifestsDir: REPO_MANIFESTS,
+    probeGpu,
     isDev: true
   } as unknown as AppContext
   registerWorkspaceIpc(ctx)
   return ctx
 }
 
+/** The session-cached probe seam, driven by hand — the injected fn never spawns anything. */
+function fakeProbe(impl: () => Promise<GpuDevice[] | null>): CachedGpuProbe & { calls: () => number } {
+  let calls = 0
+  const probe = (_bin: string): Promise<GpuDevice[] | null> => {
+    calls += 1
+    return impl()
+  }
+  return Object.assign(probe, { invalidate: () => undefined, calls: () => calls })
+}
+
+/** A drive root with a placeholder `llama-server`, so `probeAndPersistGpu` resolves a binary. */
+function withBinary(root: string): void {
+  mkdirSync(llamaServerDir(root), { recursive: true })
+  writeFileSync(join(llamaServerDir(root), llamaServerBinaryName()), 'fake-binary')
+}
+
 /** An encrypted vault whose settings hold `seed`, LOCKED, so the unlock handler opens it. */
-function lockedVault(seed: Partial<AppSettings>, runtime: FakeRuntime): { ctrl: WorkspaceController; ctx: AppContext } {
+function lockedVault(
+  seed: Partial<AppSettings>,
+  runtime: FakeRuntime,
+  probeGpu?: CachedGpuProbe
+): { ctrl: WorkspaceController; ctx: AppContext; root: string } {
   const root = freshRoot()
   mkdirSync(join(root, 'config'), { recursive: true })
   const vp = vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'workspace', 'hilbertraum.sqlite') })
@@ -290,7 +315,7 @@ function lockedVault(seed: Partial<AppSettings>, runtime: FakeRuntime): { ctrl: 
   ctrl.unlock(PASSWORD)
   updateSettings(ctrl.requireDb(), seed)
   ctrl.lock()
-  return { ctrl, ctx: seamCtx(root, ctrl, runtime) }
+  return { ctrl, ctx: seamCtx(root, ctrl, runtime, probeGpu), root }
 }
 
 /** A foreign headline with no local history: the new-computer decision, seeded synchronously. */
@@ -320,7 +345,15 @@ describe('prepareFirstBenchmark: the cheap half', () => {
   it('a fresh workspace owes a first run; a known computer is restored synchronously and owes nothing; a legacy blob owes nothing', () => {
     const root = freshRoot()
     const fresh = seededDb(root)
-    expect(prepareFirstBenchmark(ctxWith(root, fresh))).toEqual({ run: 'first-run', attempted: false, epoch: undefined, hereKey: here() })
+    expect(prepareFirstBenchmark(ctxWith(root, fresh))).toEqual({
+      run: 'first-run',
+      attempted: false,
+      epoch: undefined,
+      hereKey: here(),
+      // #380: no probe fires on a first run (there is no benchmark to refresh beside), so this
+      // is the already-resolved placeholder — the seam's auto-start is not delayed at all.
+      probed: expect.any(Promise)
+    })
 
     const db = seededDb(root)
     const foreign = result()
@@ -346,7 +379,13 @@ describe('prepareFirstBenchmark: the cheap half', () => {
     const db = seededDb(root)
     const ws = sessionWorkspace()
     ws.beginLock()
-    expect(prepareFirstBenchmark(ctxWith(root, db, { workspace: ws }))).toEqual({ run: null, attempted: false, epoch: undefined, hereKey: null })
+    expect(prepareFirstBenchmark(ctxWith(root, db, { workspace: ws }))).toEqual({
+      run: null,
+      attempted: false,
+      epoch: undefined,
+      hereKey: null,
+      probed: expect.any(Promise)
+    })
     ws.completeLock()
     expect(prepareFirstBenchmark(ctxWith(root, db, { workspace: ws }))).toMatchObject({ run: null })
   })
@@ -1018,6 +1057,89 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     expect(runBenchmarkSpy.mock.calls[0][0].runtime?.modelId).toBe('stub-chat')
     expect(getSettings(ctx.db).lastBenchmark).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
     expect(getSettings(ctx.db).benchmarkHistory.map((e) => machineKey(e))).toEqual([here(), machineKey(foreign)])
+    ctrl.lock()
+  })
+
+  // #380 — the unlock-time probe/auto-start race. `prepareFirstBenchmark` fired the probe
+  // fire-and-forget and the seam called the auto-start in the SAME tick, so the
+  // `--list-devices` child and the multi-GB weight upload competed for the driver. The ladder
+  // shares that very in-flight promise, so on the #330 round trip the probe hit its 10 s bound,
+  // an empty stamped probe was persisted (tile "None", RAM basis) and a card decoding at
+  // 98–100 tok/s was labelled "cpu". The auto-start now waits for the probe to settle.
+  it('unlock on a card machine: the auto-start WAITS for the session probe, whose write lands first', async () => {
+    const events: string[] = []
+    const rt = fakeRuntime({ onStart: () => events.push('runtime.start') })
+    const known = hereResult()
+    const pending = deferred<GpuDevice[] | null>()
+    const probe = fakeProbe(() => pending.promise)
+    const { ctrl, ctx, root } = lockedVault(
+      { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
+      rt,
+      probe
+    )
+    withBinary(root)
+    setPerformanceChangedSink(() => events.push('performance:changed'))
+
+    const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
+    expect(unlocked).toMatchObject({ ok: true })
+    await hops(5)
+
+    // The driver has not answered yet — and NOTHING has been started, so the weight upload is
+    // not competing with the probe for it. (RED before the fix: `startCalls` is already 1.)
+    expect(probe.calls()).toBe(1)
+    expect(rt.startCalls).toBe(0)
+    expect(events).toEqual([])
+
+    pending.resolve([RTX_DEVICE])
+    await rt.startReached
+
+    // The probe's stamped write — and its push — precede the start the ladder will label.
+    expect(getSettings(ctx.db).gpuProbe).toMatchObject({ devices: [RTX_DEVICE], machineKey: here() })
+    expect(events).toEqual(['performance:changed', 'runtime.start'])
+    rt.finishStart()
+    ctrl.lock()
+  })
+
+  it('unlock on a card-less machine: an EMPTY answer still releases the auto-start', async () => {
+    const rt = fakeRuntime()
+    const known = hereResult()
+    const pending = deferred<GpuDevice[] | null>()
+    const { ctrl, ctx, root } = lockedVault(
+      { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
+      rt,
+      fakeProbe(() => pending.promise)
+    )
+    withBinary(root)
+
+    await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
+    await hops(5)
+    expect(rt.startCalls).toBe(0)
+
+    pending.resolve([])
+    await rt.startReached // the control: the gate releases on ANY settled answer, not just a card
+    expect(getSettings(ctx.db).gpuProbe).toMatchObject({ devices: [], machineKey: here() })
+    rt.finishStart()
+    ctrl.lock()
+  })
+
+  it('unlock with NO binary for this OS: nothing to probe, so the auto-start is not delayed at all', async () => {
+    // The 10 s bound only exists for a wedged driver. A machine with no `llama-server` never
+    // calls the probe — `resolveLlamaServerPath` is null — and the empty stamped write happens
+    // synchronously, so the start is reached without waiting for anything.
+    const rt = fakeRuntime()
+    const known = hereResult()
+    const never = deferred<GpuDevice[] | null>()
+    const probe = fakeProbe(() => never.promise)
+    const { ctrl } = lockedVault(
+      { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
+      rt,
+      probe
+    )
+
+    await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
+    await rt.startReached
+    expect(probe.calls()).toBe(0)
+    rt.finishStart()
     ctrl.lock()
   })
 })

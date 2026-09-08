@@ -205,6 +205,14 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **On a drive moved to a computer with a graphics card, the first model start after unlocking no
+  longer reports "no graphics card".** The app used to check the computer's graphics devices at the
+  same moment it began loading the model, and on a busy drive that check could run out of time — so
+  the app said this computer had no graphics card, based its model recommendation on ordinary
+  memory, and reported the model as running on the processor while it was in fact running on the
+  card. The graphics check now finishes before the model starts, and a check that times out no
+  longer counts as "no card": what the app already knew about this computer stays, and the model's
+  own start log decides where it is really running.
 - **A laptop whose built-in graphics chip reports a short name is recognised as built-in.** Some
   Intel drivers report the chip as plain "Intel(R) Graphics", with no platform code. The app read
   that as a real graphics card, so a laptop with 16–32 GB of *shared* memory could be recommended a

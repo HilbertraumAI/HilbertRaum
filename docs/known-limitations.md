@@ -2337,13 +2337,19 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   `gpuLastError`) is a plain workspace setting with no `machineKey` stamp, unlike `gpuProbe`: a
   GPU failure persisted on one computer keeps the next computer on the CPU rung until "Try GPU
   again". Seen as a risk in the #330 round trip (the flag was never set there).
-- **The unlock-time device probe can lose a race with the auto-start.** `prepareFirstBenchmark`
-  fires the session's one `--list-devices` probe in the same tick as the active model's
-  auto-start. Under the concurrent weight upload the probe took 7.7 s against its 10 s bound on
-  an RTX 3080 Ti (#330 round trip, `eval/results/hardware/330-round-trip-20260907/probe-race.txt`),
-  and a timed-out probe is cached as "no GPU" for the session: the graphics tile reads "None",
-  the recommendation falls to the RAM basis and the start is labelled `cpu` while the model
-  actually runs on the card. "Try GPU again" re-probes. Follow-up issue #380.
+- **The unlock-time device probe could lose a race with the auto-start — FIXED 2026-09-08
+  (#380).** `prepareFirstBenchmark` used to fire the session's one `--list-devices` probe in the
+  same tick as the active model's auto-start. Under the concurrent weight upload the probe took
+  7.7 s against its 10 s bound on an RTX 3080 Ti (#330 round trip,
+  `eval/results/hardware/330-round-trip-20260907/probe-race.txt`), and a timed-out probe was
+  cached as "no GPU" for the session: the graphics tile read "None", the recommendation fell to
+  the RAM basis and the start was labelled `cpu` while the model actually ran on the card. Now:
+  the auto-start waits for the session probe (about 1 s on an idle driver, and nothing at all on
+  a machine with no `llama-server` — the probe is never called then); a probe that hits the bound
+  answers "unknown" and is neither cached nor persisted, so the stored probe stands until the
+  next start or check, and "Try GPU again" re-probes; and a start whose probe is unknown takes
+  its backend label from the load log's offload line instead of defaulting to `cpu`. Residual: a
+  genuinely wedged driver still waits the 10 s bound once per session before the auto-start.
 - **A USB bus reset while unlocked drops the decrypted working copy's WAL.** exFAT reported a
   lost delayed write on `workspace/hilbertraum.sqlite-wal` after a UASP device reset (#330 round
   trip); the restore that session had written was gone, the next unlock restored again, and
@@ -2391,8 +2397,6 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The Home screen's launch preflight writes its 8 MiB probe at unlock**, in the same second the
   auto-start begins hashing (#334 perf marks, 0.4 s after `unlock_done`). It persists nothing and
   measured the same write figure as the sequenced probe after the load; noted, not sequenced.
-- **A GPU probe that times out internally persists as an empty stamped probe** — indistinguishable
-  from a machine that genuinely has no usable graphics device until a later probe succeeds.
 - **One `performance:get` read costs about 100 ms in the dev build** (a synchronous manifest scan
   alongside settings and system detection) — measured once during development, not on slow
   removable media; a cache is a follow-up if it proves to matter (issue #333).

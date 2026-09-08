@@ -11,13 +11,21 @@ import type { ChildProcessLike, SpawnFn } from './sidecar'
 //
 // The probe can prove enumeration only, never stable inference — the start LADDER in
 // factory.ts is the actual guarantee; this feeds the UI label, Diagnostics, and the
-// conservative classifyProfile bump. Never throws: any failure → [].
+// conservative classifyProfile bump. Never throws: any failure → `[]` (an ANSWER: "this
+// machine enumerates no device") EXCEPT the kill-timeout → `null` (UNKNOWN: the driver
+// never answered), which is never cached and never persisted (#380).
 
 /**
  * Kill the probe child after this long; a wedged driver must not stall startup.
  * Generous (10 s, not ~3 s) because a COLD Vulkan driver init under disk load can take
  * that long, and a false-empty probe mislabels a working GPU machine as CPU. Still
  * once per session, off the start's critical path, and a real wedge is still killed.
+ *
+ * #380: hitting this bound is NOT "no GPU" — the probe resolves `null` ("unknown"), the
+ * cache drops the entry so the next caller re-probes, and nothing is persisted. On the
+ * #330 round trip a `--list-devices` that normally takes 1.07 s took 7.7 s under the
+ * concurrent weight upload; a slower drive would have crossed this bound and stamped a
+ * card machine as "None".
  */
 export const DEFAULT_PROBE_TIMEOUT_MS = 10_000
 
@@ -67,11 +75,17 @@ export interface GpuProbeDeps {
 
 /**
  * Spawn `<binPath> --list-devices`, parse stdout, and resolve the device list. Bounded
- * by a kill-timeout; NEVER throws/rejects — a missing binary, spawn error, non-zero
- * exit, timeout, or a failed pre-spawn integrity check all resolve to `[]` (which simply
- * reads as "no usable GPU").
+ * by a kill-timeout; NEVER throws/rejects — a missing binary, spawn error, non-zero exit
+ * or a failed pre-spawn integrity check all resolve to `[]`, which reads as "no usable
+ * GPU" because that is what those cases MEAN: the machine answered, and the answer was
+ * nothing.
+ *
+ * The kill-timeout is the one case that is not an answer, so it resolves `null` — UNKNOWN
+ * (#380). Callers must not read `null` as "no GPU": the session cache drops it (the next
+ * caller re-probes), `probeAndPersistGpu` writes nothing (the stored probe stands) and the
+ * start ladder labels the rung from the load log instead.
  */
-export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promise<GpuDevice[]> {
+export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promise<GpuDevice[] | null> {
   const spawn = deps.spawn ?? ((cmd, args, opts) => nodeSpawn(cmd, args, opts))
   const timeoutMs = deps.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
   const verify = deps.verify ?? verifyBinaryBeforeSpawn
@@ -85,7 +99,7 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
   }
   if (verification === 'mismatch') return []
 
-  return new Promise((resolve) => {
+  return new Promise<GpuDevice[] | null>((resolve) => {
     let child: ChildProcessLike
     try {
       // REL-7: windowsHide so the once-per-session probe never flashes a console window on
@@ -105,7 +119,7 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
 
     let stdout = ''
     let settled = false
-    const finish = (devices: GpuDevice[]): void => {
+    const finish = (devices: GpuDevice[] | null): void => {
       if (settled) return
       settled = true
       clearTimeout(timer)
@@ -117,7 +131,8 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
       } catch {
         /* best-effort */
       }
-      finish([])
+      // #380: the driver never answered — UNKNOWN, not "no GPU". The child is still killed.
+      finish(null)
     }, timeoutMs)
 
     child.stdout?.on('data', (chunk: unknown) => {
@@ -135,11 +150,16 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
 
 /** The session probe cache: callable like `probeGpuDevices`, plus invalidation. */
 export interface CachedGpuProbe {
-  (binPath: string): Promise<GpuDevice[]>
+  (binPath: string): Promise<GpuDevice[] | null>
   /**
    * Drop every cached result so the next call re-probes. Wired to "Try GPU again":
-   * a probe that timed out once (cold/wedged driver) must not stay cached as
-   * "no GPU" after the user explicitly asks for a retry.
+   * a probe whose answer is stale or wrong (a driver that has since come up, a card
+   * plugged in) must not survive the user explicitly asking for a retry.
+   *
+   * #380: a probe that TIMED OUT no longer needs this button — it resolves `null`
+   * ("unknown") and drops itself from the cache the moment it settles, so the next
+   * caller re-probes on its own. `invalidate()` remains the user's override for a
+   * cached ANSWER (`[]` or a device list).
    */
   invalidate(): void
 }
@@ -148,9 +168,14 @@ export interface CachedGpuProbe {
  * Session-cached probe: at most one real `--list-devices` subprocess per binary per app
  * session (§5.1 "cached"), until `invalidate()`. The same cached fn feeds the start
  * ladder, Diagnostics, and the benchmark injection so they never disagree in-session.
+ *
+ * An ANSWER is cached (a device list, or `[]`); an UNKNOWN (`null`, the kill-timeout) is
+ * NOT — the entry is dropped once it settles so the next caller re-probes (#380). The
+ * drop is identity-guarded, so it can never remove a NEWER entry filed for the same
+ * binary in between.
  */
 export function createCachedGpuProbe(deps: GpuProbeDeps = {}): CachedGpuProbe {
-  const cache = new Map<string, Promise<GpuDevice[]>>()
+  const cache = new Map<string, Promise<GpuDevice[] | null>>()
   // R5 (full-audit-2026-06-30, Phase C): binaries whose probe child is still alive. A probe's
   // timeout `SIGKILL`s but does NOT await the reap, and the child is `unref`'d — so dropping an
   // in-flight entry and re-probing (rapid "Try GPU again" mashing during a slow/cold driver init)
@@ -158,14 +183,21 @@ export function createCachedGpuProbe(deps: GpuProbeDeps = {}): CachedGpuProbe {
   // `invalidate()` drops only SETTLED entries; while a probe is in flight a re-probe COALESCES onto
   // the existing promise (no second child), and the entry becomes invalidate-able once it settles.
   const inFlight = new Set<string>()
-  const probe = (binPath: string): Promise<GpuDevice[]> => {
+  const probe = (binPath: string): Promise<GpuDevice[] | null> => {
     let pending = cache.get(binPath)
     if (!pending) {
-      pending = probeGpuDevices(binPath, deps)
-      cache.set(binPath, pending)
+      const created = probeGpuDevices(binPath, deps)
+      pending = created
+      cache.set(binPath, created)
       inFlight.add(binPath)
       // probeGpuDevices never rejects (its contract), but `finally` is correct regardless.
-      void pending.finally(() => inFlight.delete(binPath))
+      void created.finally(() => inFlight.delete(binPath))
+      // #380: an UNKNOWN answer must not be the session's answer. Dropped only AFTER it
+      // settles — R5's in-flight coalescing is untouched, so a re-probe during the wedge
+      // still rides the one child — and only if this entry is still the cached one.
+      void created.then((devices) => {
+        if (devices === null && cache.get(binPath) === created) cache.delete(binPath)
+      })
     }
     return pending
   }
