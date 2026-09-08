@@ -101,7 +101,10 @@ async function main() {
     '--threads', String(threads), // sidecar.ts:534-535 (defaultThreadCount, sidecar.ts:90-98)
     '--batch-size', String(physicalBatch), // sidecar.ts:516-524 (llama.ts:460)
     '--ubatch-size', String(ubatch ?? physicalBatch), // variant: ubatch 2048 -> 512
-    '--jinja', '--reasoning-format', 'deepseek', '-lv', '4', // llama.ts:39 CHAT_SERVER_ARGS (llama.ts:461 puts them before the rung's extraArgs)
+    // `-np 1` since 2026-09-07 (issue #319, PR #386): ONE server slot, part of CHAT_SERVER_ARGS
+    // itself now, not a variant. A run without it measures the pre-#386 four-slot launch — which
+    // is what `--extra "-np 1"` meant when leg 1 used it to VARY this setting.
+    '--jinja', '--reasoning-format', 'deepseek', '-lv', '4', '-np', '1', // llama.ts:39 CHAT_SERVER_ARGS (llama.ts:461 puts them before the rung's extraArgs)
     ...(mtp ? MTP_SERVER_ARGS : []), // factory.ts:754-760 rung 1a extraArgs; rung 1 (factory.ts:764) adds nothing
     ...extra // protocol variants only (-np 1, --fit-target 512); never -ngl / --device
   ]
