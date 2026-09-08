@@ -369,6 +369,11 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       await screen.findByRole('heading', { name: t('de', 'diag.bench.title') })
     ).toBeInTheDocument()
+    // §5 item 22 (b): `getSettings` throws here, so there is no `lastBenchmark` — the card's
+    // German EMPTY state must render (a heading over nothing was the state this replaced), and
+    // the benchmark run button must be absent in German too, not just in English.
+    expect(screen.getByText(t('de', 'diag.bench.empty'))).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Benchmark/i })).not.toBeInTheDocument()
     expect(screen.getByText(t('de', 'diag.localOnly'))).toBeInTheDocument()
     expect(
       screen.getByRole('heading', { name: t('de', 'diag.activity.title') })

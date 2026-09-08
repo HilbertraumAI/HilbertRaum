@@ -1455,6 +1455,56 @@ describe('PerformanceScreen: where a speed figure came from', () => {
     expect(screen.getAllByText('Slow').length).toBeGreaterThanOrEqual(1)
     expect(screen.getByText(/Intel Core i9-13900K, 64\.0 GB RAM, 24\.0 GB VRAM · .* · over 64 tokens/)).toBeInTheDocument()
   })
+
+  // §5 item 22 (d), owner decision 2026-09-08: how long a model took to START was answerable
+  // only for the CURRENT machine ("Observed while you worked"), although every persisted result
+  // already carries the sample. No schema change — `BenchmarkResult.effectiveRead` is on the
+  // history rows too; this is a renderer change. The three branches below are the whole feature,
+  // and the middle one is the honesty of it.
+  describe('item 22 (d): the model-start duration on an other-computer row', () => {
+    it("a 'model_load' sample shows the duration as a model start", async () => {
+      install(snapshot({ otherMachines: [office] }))
+      renderScreen()
+      await screen.findByText(/41 tokens \/ s with/)
+      // office's sample: 13,500 ms → 13.5 s, beside the machine's own facts.
+      expect(screen.getByText(/Intel Core i9-13900K, .* · model start 13\.5 s ·/)).toBeInTheDocument()
+    })
+
+    it("a 'checksum' sample is a FILE CHECK and is never labelled a model start", async () => {
+      const checked = result({
+        cpuModel: 'Checksum Box',
+        effectiveRead: { mbps: 70, bytes: 2_500_000_000, ms: 36_000, source: 'checksum', modelId: 'qwen3.5-4b-ud-q4kxl', at: '2026-08-28T10:00:00Z' }
+      })
+      install(snapshot({ otherMachines: [checked] }))
+      renderScreen()
+      await screen.findByText(/Checksum Box/)
+      expect(screen.getByText(/Checksum Box, .* · file check 36\.0 s ·/)).toBeInTheDocument()
+      // The teeth: a full file check reads the same bytes but is NOT a model start.
+      expect(screen.queryByText(/model start/)).not.toBeInTheDocument()
+    })
+
+    it('a row persisted before the field existed shows NOTHING — no placeholder, no zero', async () => {
+      const legacy = result({ cpuModel: 'Legacy Box' })
+      delete (legacy as Partial<BenchmarkResult>).effectiveRead
+      install(snapshot({ otherMachines: [legacy] }))
+      renderScreen()
+      await screen.findByText(/Legacy Box/)
+      expect(screen.queryByText(/model start/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/file check/)).not.toBeInTheDocument()
+      // A "0.0 s" would read as "it started instantly" — the row must simply not claim.
+      expect(screen.queryByText(/0\.0 s/)).not.toBeInTheDocument()
+      // The rest of the sub line is unaffected.
+      expect(screen.getByText(/Legacy Box, 15\.7 GB RAM · .* · over 64 tokens$/)).toBeInTheDocument()
+    })
+
+    it('an explicit null effectiveRead behaves like an absent one', async () => {
+      install(snapshot({ otherMachines: [result({ cpuModel: 'Null Box', effectiveRead: null })] }))
+      renderScreen()
+      await screen.findByText(/Null Box/)
+      expect(screen.queryByText(/model start/)).not.toBeInTheDocument()
+      expect(screen.queryByText(/file check/)).not.toBeInTheDocument()
+    })
+  })
 })
 
 // PR #303 audit P6 (N4 / N5): two labels that contradicted the figure beside them.

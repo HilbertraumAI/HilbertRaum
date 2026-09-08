@@ -794,6 +794,27 @@ first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" un
 the speed pill is Good/Slow only for a runtime-timings figure — see "Speed provenance travels
 with the figure" above — and the neutral "Approximate" otherwise).
 
+**The read sample's duration on those rows** (§5 item 22 (d), owner decision 2026-09-08). "How
+long does a model take to start on that machine" was answerable for the CURRENT machine only, in
+"Observed while you worked". **No schema change was needed** — every persisted per-machine row is a
+`BenchmarkResult` and already carries `effectiveRead: EffectiveReadSample` (`{ mbps, bytes, ms,
+source, modelId, at }`); the row was already reading it for the "Slow drive" pill. So this is a
+renderer change alone (`otherLoadNote` in `PerformanceScreen.tsx`), and `data-contracts.md` is
+untouched. Three branches, and the middle one is the honesty of it:
+
+- `source: 'model_load'` → "model start {seconds} s" (`perf.others.load`) — a model start;
+- `source: 'checksum'` → "file check {seconds} s" (`perf.others.check`) — a FULL FILE CHECK, which
+  reads the same bytes but is not a model start and is never labelled one. This is the same split
+  the current machine's rows have made with two separate keys since #108;
+- **absent or null** → nothing rendered. Not a placeholder and not a "0.0 s", which would read as
+  "it started instantly"; a row persisted before the field existed simply does not claim.
+
+The fragment sits between the machine's identity/date and the speed-basis qualifier, so the
+machine's own facts stay together and the qualifier on the headline figure stays trailing. The
+**Copy report carries none of this, because it has no other-computers section at all**:
+`buildReport` renders the "This computer" card from one `BenchmarkResult` (heading itself
+"Another computer: …" when that result is foreign, L6). Adding one was not part of the decision.
+
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
 in `registerBenchmarkIpc.ts`): `current`, `recommendation` (the live pick, see "Recommendation"),
 `currentMachine`, `currentGpu` (`{ name, totalMb, useful } | null` — the eligible probe's budget
@@ -877,6 +898,53 @@ list instead of an opaque "Running…" button. The first-run path passes no call
 step is labelled **"Drive speed"**, not "Drive write speed" (PR #303 audit N5): the step's write
 probe is one input, and the tile the user reads next to it reports MB/s *read* — naming the step
 after the write leg contradicted the figure it leads to.
+
+### The Diagnostics benchmark card — a support artifact (§5 item 22 (b), owner decision 2026-09-08)
+
+When the Performance screen took the answer (2026-09-05), the intended split was already recorded
+above — "Diagnostics keeps the raw table and its Copy button as the support surface" — but the card
+itself was not trimmed to it. It still ran the check and still repeated two INTERPRETIVE rows.
+**Performance owns both the answer and the action**: "Check this computer" / "Check again"
+(`perf.check` / `perf.checkAgain`) call the very `runBenchmark()` this card duplicated, and it is
+now the only renderer caller of it. The card is therefore the RAW MEASUREMENT plus Copy, and
+nothing else.
+
+**Dropped.** The Run / Re-run button and its handler; **"Assigned profile"** (`diag.bench.profile`
+as a row here — the key itself stays, the Performance Copy report uses it); and **"Recommended
+model"**, which was the check's HISTORICAL pick and which the PR #303 audit identified as a
+live-vs-history confusion source. `diag.bench.run` / `.rerun` / `.running` / `.failed` /
+`.recommended` are deleted; `.profile` and `.noMatch` are NOT (both live on in `buildReport`).
+
+**Kept.** RAM, CPU, OS/arch, GPU, Measured read speed, Drive write, Decode speed, Last run, the
+warnings list, and Copy.
+
+**The `ErrorBanner` goes with the button** — checked deliberately rather than left standing. SH-2
+(#145) mounts a banner unconditionally so the FIRST failure of an ACTION is announced instead of
+swallowed; this one's `message` was fed only by the `runBenchmark` catch, so with no action it
+could never fill, and an always-mounted banner that cannot fill is dead markup. The SH-2 property
+is not lost: it holds for "Try GPU again", now the only action in the tab that can fail (and the
+only remaining `error`-shaped state there), and Performance carries its own `perf.failed` line for
+the action it took over. The FE-8 case that exercised `friendlyIpcError` through the benchmark
+button is replaced by an absence assertion; FE-8's actual property is still asserted on
+"Try GPU again", which routes through the same `runAndSurface` / `friendlyIpcError` path.
+
+**An empty state, because the card would otherwise be a dead end.** With no check ever run
+(`lastBenchmark === null`) the card previously rendered a heading, a hint and — once the button
+went — nothing. `diag.bench.empty` names where the check lives: "No check has run on this computer
+yet. Open the Performance screen to run one." A TEXT pointer, not a button: `SettingsScreen` takes
+no navigation prop and no Settings tab navigates today, so wiring one through for a single sentence
+would cost more than the pointer is worth, and Diagnostics is deliberately quieter than a
+destination screen. `diag.bench.hint` is rewritten to match — it described a button that is gone.
+
+**The Copy report MIRRORS the card; the dropped rows are not kept "for bug reports".** Three
+reasons, in order of weight. (1) A stale *recommended model* pasted into a support message is worse
+than an absent one — a reader takes it for what the app recommends now, which is the confusion the
+#303 audit named; the LIVE pick is in the Performance Copy report, which already heads itself
+"This computer" / "Another computer: …". (2) The *assigned profile* is not lost from the tab at
+all: the App & runtime card and its own Copy report carry `hardwareProfile`, and that one is live
+rather than recorded. (3) This file's standing invariant is that a card row and its Copy text
+render from the same helper "so the two can never disagree" — rows kept only in the report break
+it, and nobody could then tell which set the card was supposed to show.
 
 
 ## Perf marks (opt-in, `HILBERTRAUM_PERF_LOG=1`)

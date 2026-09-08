@@ -66,20 +66,19 @@ function stubDiag(
 }
 
 describe('DiagnosticsTab — localized errors (FE-8)', () => {
-  it('shows a friendly benchmark error without the IPC transport / Error-class prefix', async () => {
-    const user = userEvent.setup()
-    const runBenchmark = vi.fn(async () => {
-      throw new Error("Error invoking remote method 'runBenchmark': Error: benchmark exploded")
-    })
-    stubDiag({ runBenchmark })
-    renderTab()
-    await user.click(await screen.findByRole('button', { name: 'Run benchmark' }))
+  // The FE-8 benchmark case is GONE with the benchmark button (§5 item 22 (b), owner decision
+  // 2026-09-08): this tab no longer runs the check, so it has no benchmark failure to localize.
+  // FE-8's actual property — friendlyIpcError strips the Electron transport prefix and the
+  // Error-class name before the localized copy interpolates it — is still asserted below, on
+  // "Try GPU again", which is now the only action in this tab that can fail. The benchmark's own
+  // failure path moved with the action to the Performance screen (`perf.failed`).
 
-    const banner = await screen.findByText(/Benchmark failed:/)
-    expect(banner).toHaveTextContent('Benchmark failed: benchmark exploded')
-    // The transport prefix + Error-class name were stripped (the bug FE-8 fixes).
-    expect(banner.textContent).not.toContain('Error invoking remote method')
-    expect(banner.textContent).not.toContain('Error:')
+  it('the benchmark card offers no action to fail — the check lives on Performance now', async () => {
+    stubDiag()
+    renderTab()
+    await screen.findByText('Hardware benchmark')
+    expect(screen.queryByRole('button', { name: /run benchmark/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(/Benchmark failed/)).not.toBeInTheDocument()
   })
 
   // full-audit 2026-07-11 CODE-27: "Try GPU again" was the one handler in the file without a
