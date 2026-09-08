@@ -44,6 +44,7 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 import type { Db } from '../services/db'
 import { modelBusyLane, modelBusyMessageKey, type ModelBusyLane } from './model-busy'
 import { log } from '../services/logging'
+import { perfEnabled, perfMark, perfMs } from '../services/perf'
 
 // IPC for the hardware benchmark + model recommendation (spec §9.1, §11).
 //
@@ -1272,7 +1273,21 @@ export function registerBenchmarkIpc(ctx: AppContext): void {
   })
   ipcHandle(IPC.getPerformance, (): PerformanceSnapshot => {
     requireUnlocked()
-    return buildPerformanceSnapshot(ctx)
+    // #333: the END-TO-END cost of one snapshot read, marked HERE rather than inside
+    // `buildPerformanceSnapshot` so it spans exactly what the renderer awaits — the settings
+    // read, `detectSystem`, the manifest scan and the pure composition over them. The scan's
+    // own share is the `discover_manifests` line immediately before this one (they are
+    // synchronous and adjacent; `scripts/measure-manifest-read.mjs --log` pairs them on that
+    // adjacency and reports any unpaired scan as another caller's).
+    //
+    // The screen is pushed, not polled, but the pushes include one per finished chat answer
+    // and one per model start — so the figure that matters is the repeat cost while the screen
+    // sits open, not the cost of opening it once.
+    const timed = perfEnabled()
+    const startedAt = timed ? performance.now() : 0
+    const snapshot = buildPerformanceSnapshot(ctx)
+    if (timed) perfMark('performance_get', { ms: perfMs(startedAt) })
+    return snapshot
   })
   // §5 item 22 (a). Session state only — no DB read, nothing persisted, and `movedDriveNotice`
   // itself fail-closes to null on a locked workspace, so this stays a pure getter that a Home

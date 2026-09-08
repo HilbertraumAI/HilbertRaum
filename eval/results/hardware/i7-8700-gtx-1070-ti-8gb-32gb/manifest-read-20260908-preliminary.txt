@@ -1,0 +1,85 @@
+PRELIMINARY — issue #333, 2026-09-08, DESKTOPDIT (i7-8700, 34.3 GB, the 1070 Ti leg machine).
+
+WHAT THIS IS AND IS NOT
+-----------------------
+This capture establishes the WARM repeat cost of the manifest scan and its media/CPU split. It
+does NOT contain a cold figure taken under the eject/re-insert protocol, and the formal cold run
+plus the end-to-end `--log` run from a real app launch on the drive are still owed (benchmark.md
+§4 I5). Read the trial-1 line of each block with that in mind: by the time these two blocks were
+captured the files had already been read several times in the session, so trial 1 here is warm
+too — its `read` component (3.9 ms on the stick) is cache speed, not the medium.
+
+THE ONE NEAR-COLD OBSERVATION, recorded here because it cannot be reproduced without an
+eject/re-insert. The session's FIRST read of E:/model-manifests, on an idle machine, before
+anything else had touched those files (20:19:35Z, same script, --trials 12):
+
+    total 69.0 ms   walk 1.4 ms   read 27.4 ms   parse+validate 40.2 ms
+    → 27.4 ms for 90.6 KiB across 28 opens ≈ 1.0 ms/open, i.e. per-open latency on USB, not
+      throughput (90.6 KiB at even 25 MB/s is ~3.6 ms of bandwidth). Directory metadata was
+      already warm from an `ls`, so `walk` is understated and the true cold total is higher.
+
+Both blocks below were taken on an otherwise IDLE machine. An earlier attempt at this same file
+was taken while the test suite ran and every figure came out roughly double (warm median 44.5 ms
+against 18.2 ms here) — which is itself evidence that the cost is CPU-bound rather than
+media-bound, and a warning that these figures move with whatever else the box is doing.
+
+$ node --no-warnings scripts/measure-manifest-read.mjs --dir E:/model-manifests --trials 12
+==========================================================================================
+HilbertRaum — performance:get manifest-scan read cost (issue #333)
+2026-09-08T20:30:10.061Z
+win32 x64 · Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz · 12 cores · 34.3 GB RAM
+
+Directory     E:/model-manifests
+Catalog       28 manifest files · 90.6 KiB · 28 valid, 0 rejected
+Trials        12
+
+FIRST TRIAL (cold only if the drive's cache was dropped — eject/re-insert, then --cold-only)
+  total 44.0 ms   walk 1.5 ms (3%)   read 3.7 ms (8%)   parse+validate 38.8 ms (88%)
+  effective read 25.2 MB/s over 28 opens — compare against the drive's known sequential figure; far above it means a warm cache
+
+WARM TRIALS (trials 2..12) — what a pushed refetch pays
+  total                      median   18.9 ms   min   16.9 ms   p95   20.8 ms   max   20.8 ms   (n=11)
+  walk (readdir)             median    0.8 ms   min    0.7 ms   p95    1.3 ms   max    1.3 ms   (n=11)
+  read (readFileSync)        median    2.7 ms   min    2.5 ms   p95    3.0 ms   max    3.0 ms   (n=11)
+  parse + validate (CPU)     median   15.1 ms   min   13.5 ms   p95   16.9 ms   max   16.9 ms   (n=11)
+
+  Warm floor: 80% of the warm median is parse+validate CPU — a faster drive cannot move it.
+
+#333 acceptance — what this run answers and what it does not:
+  [~] box 1 (end-to-end performance:get cost)  → --log mode, from a real app run on the drive
+  [x] box 2 (the scan's share, isolated)       → the phase split above
+  [ ] box 3 (the decision)                     → owner call on these figures
+
+JSON written to manifest-read-20260908-e-stick.json
+
+
+$ node --no-warnings scripts/measure-manifest-read.mjs --trials 12    # repo copy, internal NVMe
+==========================================================================================
+HilbertRaum — performance:get manifest-scan read cost (issue #333)
+2026-09-08T20:30:10.611Z
+win32 x64 · Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz · 12 cores · 34.3 GB RAM
+
+Directory     C:\work\HilbertRaum\model-manifests
+Catalog       34 manifest files · 136.5 KiB · 34 valid, 0 rejected
+Trials        12
+
+  ! This is the repo's own model-manifests/ on the INTERNAL disk. The CPU half below is
+    valid; the media half is not the drive. Re-run with --dir <drive>/model-manifests.
+
+FIRST TRIAL (cold only if the drive's cache was dropped — eject/re-insert, then --cold-only)
+  total 58.6 ms   walk 2.4 ms (4%)   read 5.7 ms (10%)   parse+validate 50.5 ms (86%)
+  effective read 24.7 MB/s over 34 opens — compare against the drive's known sequential figure; far above it means a warm cache
+
+WARM TRIALS (trials 2..12) — what a pushed refetch pays
+  total                      median   24.1 ms   min   21.9 ms   p95   29.0 ms   max   29.0 ms   (n=11)
+  walk (readdir)             median    0.8 ms   min    0.8 ms   p95    0.9 ms   max    0.9 ms   (n=11)
+  read (readFileSync)        median    4.3 ms   min    4.1 ms   p95    4.9 ms   max    4.9 ms   (n=11)
+  parse + validate (CPU)     median   19.0 ms   min   17.0 ms   p95   23.3 ms   max   23.3 ms   (n=11)
+
+  Warm floor: 79% of the warm median is parse+validate CPU — a faster drive cannot move it.
+
+#333 acceptance — what this run answers and what it does not:
+  [~] box 1 (end-to-end performance:get cost)  → --log mode, from a real app run on the drive
+  [x] box 2 (the scan's share, isolated)       → the phase split above
+  [ ] box 3 (the decision)                     → owner call on these figures
+

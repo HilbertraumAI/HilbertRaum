@@ -28,6 +28,13 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-08 — **#333 instrumented (`perf/333-manifest-read-instrumentation`), record `benchmark.md` §4 **I5** + Perf marks
+"`discover_manifests` / `performance_get` — the #333 pair":** two opt-in marks (the scan's walk / read / parse+validate split; the
+IPC handler end to end) + `scripts/measure-manifest-read.mjs` for both halves; `perfEnabled()` keeps the disabled path free.
+Two corrections: the original ~100 ms was measured on the INTERNAL disk, but the launchers point `HILBERTRAUM_MANIFESTS_DIR` at the
+drive's copy; and ~80 % of the WARM repeat cost is parse+validate CPU (18.9 ms median on the E: stick), so the cache question is not media-bound as framed. OPEN:
+the eject/re-insert cold run, the end-to-end `--log` run, then the decision — which would touch 13 call sites and reverse PF-4's
+recorded "deliberately NO stateful module cache"._
 _2026-09-08 — **#339 Range-first article reads (`fix/339-range-first-article-read`), record `rag-design.md` §17 **D-Z22**:**
 every `/raw` article request (and the redirect hop) now carries `Range: bytes=0-`, which libkiwix serves through its 16 KiB
 callback reader instead of the one-buffer path that carries the win-x86_64 cut-short defect — so the app stops TRIGGERING an

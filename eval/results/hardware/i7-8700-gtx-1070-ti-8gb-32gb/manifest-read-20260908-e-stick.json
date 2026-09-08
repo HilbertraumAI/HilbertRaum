@@ -1,0 +1,133 @@
+{
+  "mode": "trials",
+  "manifestsDir": "E:/model-manifests",
+  "machine": "HilbertRaum — performance:get manifest-scan read cost (issue #333)\n2026-09-08T20:30:10.064Z\nwin32 x64 · Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz · 12 cores · 34.3 GB RAM",
+  "shape": {
+    "files": 28,
+    "ok": 28,
+    "invalid": 0,
+    "bytes": 92753
+  },
+  "runs": [
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 1.4731000000000165,
+      "readMs": 3.680499999999995,
+      "parseMs": 38.81469999999999,
+      "totalMs": 43.9683
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 1.2690999999999804,
+      "readMs": 2.863999999999919,
+      "parseMs": 16.662700000000086,
+      "totalMs": 20.795799999999986
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.949799999999982,
+      "readMs": 2.8664000000000556,
+      "parseMs": 16.93919999999997,
+      "totalMs": 20.75540000000001
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.8692000000000064,
+      "readMs": 2.7184999999999206,
+      "parseMs": 15.534600000000097,
+      "totalMs": 19.122300000000024
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.9621999999999957,
+      "readMs": 2.666099999999915,
+      "parseMs": 14.651600000000087,
+      "totalMs": 18.279899999999998
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.7497999999999934,
+      "readMs": 2.9128000000000043,
+      "parseMs": 15.54159999999996,
+      "totalMs": 19.204199999999958
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.7848000000000184,
+      "readMs": 2.911700000000053,
+      "parseMs": 15.394699999999943,
+      "totalMs": 19.091200000000015
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.7415000000000305,
+      "readMs": 3.015799999999956,
+      "parseMs": 15.12760000000003,
+      "totalMs": 18.884900000000016
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.8079999999999927,
+      "readMs": 2.6475999999998976,
+      "parseMs": 13.50220000000013,
+      "totalMs": 16.95780000000002
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.7239999999999895,
+      "readMs": 2.676400000000001,
+      "parseMs": 13.512699999999995,
+      "totalMs": 16.913099999999986
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.7933000000000447,
+      "readMs": 2.675999999999931,
+      "parseMs": 14.089800000000025,
+      "totalMs": 17.5591
+    },
+    {
+      "files": 28,
+      "ok": 28,
+      "invalid": 0,
+      "bytes": 92753,
+      "walkMs": 0.7590000000000146,
+      "readMs": 2.544399999999996,
+      "parseMs": 13.568699999999978,
+      "totalMs": 16.87209999999999
+    }
+  ]
+}
