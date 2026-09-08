@@ -21,7 +21,9 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    a failure falls back to `''` / `0` and never throws.
 2. **GPU** ([`architecture.md`](architecture.md) GPU record §5.1/§8): the IPC layer runs
    the **session-cached `llama-server --list-devices` probe** on the drive's own sidecar binary
-   (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws) and
+   (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws; every
+   failure resolves `[]`, but a probe that hits the bound answers `null` (unknown) and is neither
+   cached nor persisted, #380) and
    **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful, totalMb,
    budgetMb, memoryClass }` — `name`, `totalMb` and `budgetMb` describe ONE device, the BUDGET
    device `nextStartMemory` selects for the next start (the largest usable card by the
@@ -43,15 +45,22 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    audit decision 6: a card recorded on a previous session of the SAME machine never outlives a
    refresh that could not see it, so the Models badge, the benchmark and the tile agree; an empty
    stamped result re-stamps no old device, so #303's "never re-stamp old devices as local" holds
-   either way, and the foreign-machine case is covered by the stamp). The key and the workspace
+   either way, and the foreign-machine case is covered by the stamp). **The one exception (#380,
+   2026-09-08):** a probe that TIMED OUT is not an answer but the absence of one, so it writes
+   nothing and pushes nothing — the stored stamped probe stands until the next start, the next
+   check or "Try GPU again" — and the summary injected into that run is built from what this
+   machine already has on record (`eligibleDevicesFor`), so decision 6's real requirement (the ★,
+   the benchmark's `gpu` and the tile agree) still holds. Persisting the empty stamped probe there
+   was exactly the #330 failure: the driver was busy with the weight upload, and a card machine
+   was recorded as having none. The key and the workspace
    session epoch are captured before the probe and admission is re-checked after it, for every
    path (the AUD-03 seam `startModelRuntime` uses), so a probe that outlives a lock, or a lock and
    a re-unlock, never writes. With no binary / no devices / a failed probe, `gpu` stays `null`
    and nothing blocks. The persisted probe is additionally refreshed **once per session** in the
    background (even when a benchmark already exists — `prepareFirstBenchmark`, the cheap half of
-   the first-run benchmark, fires it before the model auto-start, PR #303 P7), so a drive moved to
-   another machine re-labels itself; Diagnostics' "Try GPU again" (`gpu:try-again` IPC)
-   invalidates the session cache and re-probes immediately.
+   the first-run benchmark, fires it, and the auto-start waits for it (#380, 2026-09-08), PR #303
+   P7), so a drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
+   (`gpu:try-again` IPC) invalidates the session cache and re-probes immediately.
 3. **Drive speed** (`measureDriveSpeed`): writes a small temp file
    (`DRIVE_PROBE_BYTES = 8 MB` of random bytes) **inside the workspace**, times a sequential
    write (with `fsync`) then a read, and reports MB/s. The temp file is **always removed**
@@ -421,7 +430,8 @@ and its key differs from this machine's:
   the background exactly as on a fresh workspace — scheduled behind the model auto-start, see
   "Scheduling behind the auto-start" below.
 
-Either way the per-session GPU probe refresh still happens first. The `benchmarkHistory` write
+Either way the per-session GPU probe refresh still happens first, and settles before the
+auto-start begins (#380). The `benchmarkHistory` write
 gate accepts an array of VALID results only (junk and unkeyed elements dropped, one record per
 machine, newest first, length capped; the 256 KB serialized cap applies to the list) — see
 "Schemas and legacy records" above.
@@ -479,12 +489,26 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    AUD-02 admission guard, the session-epoch capture, the per-session GPU probe refresh, and the
    restore / same-machine seed / new-machine backfill writes with their `performance:changed`
    pushes — a known computer's profile and ★ pick come back promptly, before anything heavy
-   starts. It returns a **decision**: `run: 'first-run' | 'new-machine' | null`, plus the epoch
-   and this machine's key.
-2. `maybeAutoStartActiveModel(ctx)` — now returns a promise that settles when the start
-   completed, was skipped (no model, toggle off, a runtime already up, locked) or failed (caught;
-   it never rejects).
-3. `scheduleFirstBenchmark(ctx, decision, started)` — the **measurement** half, `void`ed by the
+   starts. It returns a **decision**: `run: 'first-run' | 'new-machine' | null`, plus the epoch,
+   this machine's key, and `probed` — the promise of the probe refresh it just fired (#380;
+   already resolved when none was fired, and it never rejects).
+2. **The probe settles** (#380, 2026-09-08). The seams gate the auto-start on `decision.probed`:
+   about 1 s on an idle driver, nothing at all on a machine with no `llama-server` (the probe is
+   never called then), and on a wedged driver the probe's 10 s bound plus the one-time
+   sidecar-binary verification, which the start itself would wait on anyway. (That verification —
+   a SHA-256 of the sidecar, `binary-verifier.ts` — runs BEFORE the kill-timer is armed and has no
+   bound of its own; bounding it here would buy nothing, because the server's own pre-spawn
+   verify shares the same session-cached promise for that path.) Before this the
+   `--list-devices` child and the multi-GB weight upload competed for the same driver, and the
+   start ladder — which shares the probe's in-flight promise — labelled the rung from whatever
+   that race produced (#330: a card decoding at 98–100 tok/s reported as `cpu`, with an empty
+   stamped probe persisted behind it). `maybeAutoStartActiveModel` re-checks admission and
+   `startModelRuntime` re-checks the epoch, so a lock landing inside that window is handled
+   exactly as before.
+3. `maybeAutoStartActiveModel(ctx)` — returns a promise that settles when the start completed,
+   was skipped (no model, toggle off, a runtime already up, locked) or failed (caught; it never
+   rejects).
+4. `scheduleFirstBenchmark(ctx, decision, started)` — the **measurement** half, `void`ed by the
    seams (the handlers never block on it). With nothing owed it resolves `'not-needed'` at once.
    Otherwise it waits for the start to settle — success **or** failure: a failed start still
    permits the benchmark, just without the speed leg — then re-checks the world and runs
@@ -497,6 +521,12 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    result for this computer persisted meanwhile by a manual run or another window
    (`'skipped-already-current'`). A thrown run is `'failed'` with the warn log. No outcome is
    retried within the session (below); the Performance screen runs the benchmark on demand at any time.
+   The speed leg's per-chunk predicate additionally watches a model **start in flight**
+   (`startingModelId`) and whether the manager still holds the runtime the run captured
+   (`active() !== runtime` — a start that COMPLETED between the capture and the leg puts the flag
+   back to null and commits a new one) (#393, 2026-09-08) — a manual "Use model" beside the run
+   stops the streamed model, so the leg skips with `warnSpeedSkipped` instead of persisting a cut
+   reading; the settlement re-check itself is unchanged (a start is not a lane).
 
 The wait is **bounded** by `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS` (120 s — sized to the common slow
 case: a ~5 GB GGUF on the ~70 MB/s stick #108 measured is hashed and then loaded, roughly a minute
@@ -917,6 +947,8 @@ locked); the moved-drive restore, the upgrade seed and the new-machine backfill 
 `prepareFirstBenchmark`; every GPU probe write (`probeAndPersistGpu`: a completed probe, incl.
 an empty device list, so "Try GPU again" pushes through it, and the EMPTY probe persisted when the
 probe cannot run or threw — PR #308 decision 6 — so the tile and the ★ drop a stale card at once;
+a probe that TIMED OUT writes and pushes NOTHING, because it is unknown rather than an answer and
+the stored probe stands (#380, 2026-09-08);
 and, since issue #323 (2026-09-06), the refresh a completed chat-engine install triggers:
 `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall`, which re-runs the
 same `probeAndPersistGpu` — cache invalidated first, the same admission / unlock-epoch checks —
@@ -960,7 +992,9 @@ failure can hide the other.
 step only when it SUCCEEDED — `'system'` always; `'drive'` only when the write/fsync probe
 produced figures (a failed probe reports nothing, the result carries `warnDriveProbe`);
 `'speed'` only when a tokens/sec reading was actually obtained (not when no runtime was up, not
-when the leg was skipped as busy — `warnSpeedSkipped` — and not when the probe failed);
+when the leg was skipped as busy — `warnSpeedSkipped` — and not when the probe failed); since #393
+a probe that FAILED while something was busy (the stop that killed the stream) raises
+`warnSpeedSkipped` as well — only a failure with nothing busy stays silent;
 `'done'` always. A later step never implies an omitted earlier one succeeded. `'done'` means
 the PROBES are complete: it precedes the persist and the occupancy release, so it is not the
 idle signal — the terminal `performance:changed` after both is. The IPC handler forwards the
@@ -1275,8 +1309,8 @@ commit references, and added the changelog entry.
   computers with one encrypted exFAT SSD, for a fresh workspace and for an upgraded one created
   by 0.1.57 (keyed `lastBenchmark`, no history). Every acceptance box passed; the step record and
   evidence live in `eval/results/hardware/330-round-trip-20260907/00-protocol.md`. Side findings
-  from the run, none of them a persistence defect: the unlock-time GPU probe can race the
-  auto-start and cache an empty answer for the session (#380); the Copy report's live "next
+  from the run, none of them a persistence defect: the unlock-time GPU probe could race the
+  auto-start and cache an empty answer for the session (#380, fixed 2026-09-08, PR #407); the Copy report's live "next
   start" line under an "Another computer" heading (#381); a fresh workspace hashing every weight
   before a model can be chosen (#382); `gpuAutoDisabled` is workspace-wide, not machine-stamped;
   a USB bus reset drops the decrypted WAL and the next unlock simply restores again
@@ -1317,7 +1351,11 @@ commit references, and added the changelog entry.
   Models-screen hash lets the page-cache load sample through the #108 guard (589 MB/s persisted
   for a 28 MB/s stick); the Home preflight's 8 MiB probe runs at unlock beside the hash; a healthy
   start at 87 MB/s on a 16 GB machine settles at 159 s, past the bound.
-  Follow-ups: #392 (the read sample — fixed 2026-09-08, PR #406: a start of a weight hashed anywhere in the session records no load sample), #393 (the overlap fix). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
+  Follow-ups: #392 (the read sample — fixed 2026-09-08, PR #406: a start of a weight hashed anywhere
+  in the session records no load sample), #393 (the overlap fix — FIXED 2026-09-08, PR #405: the
+  speed leg's busy predicate also reads `startingModelId` and the identity of the runtime it
+  captured, and a stream the stop cuts warns instead of returning null silently). Record:
+  `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
 
 ### §5 §-anchor legend
 

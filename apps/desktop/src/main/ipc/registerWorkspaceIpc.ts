@@ -188,7 +188,11 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // its drive probe never contends with the weight hash + load and its speed leg sees the
       // runtime. The handler never awaits the scheduler.
       const firstBenchmark = prepareFirstBenchmark(ctx)
-      const autoStarted = maybeAutoStartActiveModel(ctx)
+      // #380: the auto-start waits for the session's probe (≈1 s idle; resolved at once with no
+      // binary), so the ladder finds a settled device list instead of racing the weight upload
+      // for the driver. `maybeAutoStartActiveModel` re-checks admission and `startModelRuntime`
+      // the epoch, so a lock landing inside that ≈1 s is handled exactly as before.
+      const autoStarted = firstBenchmark.probed.then(() => maybeAutoStartActiveModel(ctx))
       void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
       // Post-unlock seam for the local API (policy ∧ setting gated; D3/D7).
       maybeStartLocalApi(ctx)
@@ -296,7 +300,8 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // and has no active model yet — the auto-start is a no-op then and the measurement runs
         // at once — but a re-created vault that restored settings gets the full order.
         const firstBenchmark = prepareFirstBenchmark(ctx)
-        const autoStarted = maybeAutoStartActiveModel(ctx)
+        // #380: the auto-start waits for the session's probe, as on the unlock seam above.
+        const autoStarted = firstBenchmark.probed.then(() => maybeAutoStartActiveModel(ctx))
         void scheduleFirstBenchmark(ctx, firstBenchmark, autoStarted)
         // Third post-unlock seam (create runs the same sequence as unlock): a re-created
         // vault that restored `localApiEnabled: true` starts the endpoint here.

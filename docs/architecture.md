@@ -893,8 +893,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   first-run). Since PR #303 P7 that order is deliberately the REVERSE — the automatic measurement is
   scheduled behind the auto-start's settlement (benchmark.md "Scheduling behind the auto-start"), so on
   a machine with an active model the probe DOES run, on the freshly started runtime. The steal stays
-  bounded: the #185 busy check at the probe skips the leg when a chat is already in flight, a probe that
-  becomes contended mid-stream is discarded, the probe is capped at 64 tokens, and SD2 allows one
+  bounded: the #185 busy check at the probe skips the leg when a chat is already in flight or a model
+  start is (#393), a probe that becomes contended mid-stream is discarded, the probe is capped at 64
+  tokens, and SD2 allows one
   automatic attempt per unlock session. A precise in-flight gate still needs a streaming signal not
   cheaply available here.
 - **RT-9 (§17(b) fixed user-turn fence reserve).** The `cache_prompt` prefix-reuse win is LATENT — no
@@ -2726,15 +2727,24 @@ adds is the safety machinery:
 - **`services/runtime/gpu.ts`** — `probeGpuDevices(binPath)` spawns the drive's own
   `llama-server --list-devices` (offline, no model, sub-second, kill-timeout-bounded (10 s);
   resolves on the child's `close` event so late-buffered stdout is never truncated; never
-  throws — any failure → `[]`) and `parseListDevices` parses it (pure, fixture-tested). The
+  throws — any failure → `[]`, **except** the kill-timeout → `null`, "unknown": the driver never
+  answered, which is not the same fact as "this machine has no device" (#380, 2026-09-08)) and
+  `parseListDevices` parses it (pure, fixture-tested). The
   spawn passes **`windowsHide: true`** (REL-7) so the once-per-session probe never flashes a
   console window on Windows, and the child is **`unref()`'d** right after spawn (REL-8): the
   probe is not tracked by `shutdown()`, so detaching it from the parent event loop means a
   wedged/cold driver can never delay app quit — the probe's own 10 s kill-timeout still reaps it.
   `looksIntegrated(name)` is the conservative iGPU heuristic for the Phase-16 profile bump
   (covers Windows + RADV APU names and Meteor-Lake Arc). `createCachedGpuProbe()` memoizes per
-  binary per session and exposes `invalidate()` (wired to "Try GPU again"). The ladder kicks
-  the probe off concurrently with the rung-1 server start. The probe labels the backend for the
+  binary per session and exposes `invalidate()` (wired to "Try GPU again") — but a `null` entry
+  **drops itself** the moment it settles (identity-guarded), so an unknown answer is never the
+  session's answer and the next caller re-probes; R5's in-flight coalescing is untouched, so a
+  re-probe during the wedge still rides the one child. The ladder kicks
+  the probe off concurrently with the rung-1 server start, and since #380 the three post-unlock
+  seams settle the session's probe refresh BEFORE the auto-start (`FirstBenchmarkDecision.probed`),
+  so on that path the answer is normally already in hand; when the probe IS unknown the rung is
+  labelled from this start's own load log (`placement.reading().gpuLayers > 0` ⇒ `gpu`, named from
+  the `device_info` rows) rather than defaulting to `cpu`. The probe labels the backend for the
   UI; it can't prove stable inference — the ladder is the actual guarantee.
 - **The start ladder** (`factory.ts`, §5.2): rung 1 = default binary, default args (GPU
   auto-offload; on a GPU-less machine this *is* CPU mode) → rung 2 = same binary, **`--device
@@ -2862,7 +2872,7 @@ start ladder" subsection above; **§ numbers below are stable — code comments 
 | CPU-only safety net | Also ship the pure-CPU build at `runtime/llama.cpp/<os>/cpu/` (+16/+15 MB) — rung 3 of the ladder | Last-resort escape if `ggml-vulkan`'s mere presence destabilizes a machine (AV/loader edge cases) |
 | User control | **GPU is always the default**; only a detected problem (the ladder) moves a machine to CPU. Settings has a "Use GPU acceleration" toggle (default on); Diagnostics has "Try GPU again" | Zero-technical-knowledge rule |
 | `-ngl` strategy | **Pass nothing** — b9585 defaults to `-ngl auto` + `--fit on` (VRAM-aware auto-offload). CPU is forced with `--device none`, never `-ngl 0` | Upstream owns VRAM fitting (§3) |
-| GPU detection | **Both**: a `--list-devices` probe (labels the backend for UI/profile) **and** the try-then-fallback start ladder (the actual guarantee) | The probe can't prove inference works; the ladder can't name the GPU |
+| GPU detection | **Both**: a `--list-devices` probe (labels the backend for UI/profile) **and** the try-then-fallback start ladder (the actual guarantee). A probe that hits its 10 s bound is **unknown**, not "no device": the rung is then labelled from the load log's offload line (#380, 2026-09-08) | The probe can't prove inference works; the ladder can't name the GPU |
 | First-start CPU-vs-GPU auto-benchmark | **Not built** | v1 trusts llama.cpp auto-offload even on weak iGPUs; §8's honest copy covers the modest-gain case |
 | macOS | **No change** — arm64 already runs Metal with auto-offload; mac/x64 + win/arm64 are out of scope (Intel Macs documented in `known-limitations.md`) | Upstream ships mac/x64 with Metal off; macOS has no Vulkan |
 | Embedder (E5) | **Forced CPU** (`--device none`) | See §7 |
@@ -2957,6 +2967,7 @@ start(model), settings.gpuMode = 'auto' (default)
 │           and only past the probe/VRAM precondition — MTP record §4). Rung 1 IS its fallback.
 ├─ Rung 1 — default binary, NO -ngl/--device args (auto-offload; GPU-less machine ⇒ already CPU)
 │           the cached probe runs CONCURRENTLY with the server start and labels backend gpu|cpu
+│           an UNKNOWN probe (its 10 s bound) labels from this start's load log instead (#380)
 ├─ Rung 2 — same binary + `--device none`   (after rung-1 spawn error / exit / health timeout)
 ├─ Rung 3 — pure-CPU safety-net build <os>/cpu/llama-server (if present)
 └─ Rung 4 — MockRuntime (existing graceful-fallback rule — never stuck)
@@ -3176,8 +3187,8 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
 | `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder once its CPU control probe confirms a *device* fault (§5.2, #312); cleared by "Try GPU again". A model no rung can load writes neither field |
 | Models blamed as unloadable this session (#372) | `factory.ts` module state (`Map<modelId, reason>`, the #182 `speculativeSuppressed` idiom) — never persisted; a latched model's next start spawns no rung. Cleared per model by "Verify checksum" / a completed download of it, for every model by a chat-engine install, and by an app restart — **not** by "Try GPU again" (§5.2) |
-| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run |
-| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` still names `devices[0]`, the first device the driver listed, display only; it is not the budget device the picker or the Performance tile use |
+| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run. **Decision 6 amended (#380, 2026-09-08):** its one exception is a probe that TIMED OUT — that is not an answer but the absence of one, so it writes nothing and pushes nothing, the stored stamped probe stands until the next start / check / "Try GPU again", and the summary the run uses comes from this machine's record (`eligibleDevicesFor`), which is what decision 6 actually requires. Persisting the empty stamped probe there was the #330 failure: the driver was busy with the weight upload, and a card machine was recorded as having none |
+| Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` is the shared `displayDevice(devices)` pick (PR #303 audit M8.2: the budget device, else the largest non-integrated one, else the first listed — an earlier `devices[0]` rule named the iGPU on a hybrid box while the model ran on the dGPU), display only; it is not necessarily the budget device the picker or the Performance tile use. When the probe is UNKNOWN (#380) both the backend and the name come from this start's own load log instead — `gpuLayers > 0` ⇒ `gpu`, named from the `device_info` row that took the largest COMPUTE buffer (else the largest row). Never the FIRST row: the parser keeps them in LOG order, which is not the order the fit used — on the `ryzen-7-5800h-rtx-3060-laptop-6gb-14gb` evidence `Vulkan0` is the iGPU, listed first and given no buffers at all, while every buffer went to the RTX at `Vulkan1`. `displayDevice` itself cannot be reused there: it takes `GpuDevice[]`, whose `totalMb` is non-null, and a `PlacementDevice`'s is nullable |
 
 **Runtime record (PR #308 audit, 2026-09-06; the `-np` half DECIDED 2026-09-07), not a picker
 change.** The chat server used to run on b9849's default **four unified slots** (`n_slots = 4`,
@@ -12147,13 +12158,21 @@ But a guard at admission is not enough, and blocking chat for the whole run is n
   accurate for every lane except this one.
 
 So the probe re-checks occupancy immediately before it starts **and on every streamed chunk**, and
-**discards** a contended reading (`modelBusy` / `onBusySkip` in `benchmark.ts`). `tokensPerSecond:
-null` is the honest answer and an already-supported one — it is exactly what a machine with no
-runtime yields. The discard is never silent: it raises **`main.benchmark.warnSpeedSkipped`** (a
-persist-canonical warning, so it is in `DISPLAY_MAP_KEYS`), distinct from "no runtime was up,
-nothing to measure", which stays silent as it always has. Breaking out of the `for await` runs the
-generator's `return()`, so the generation gate decrements normally — this path never creates the
-abandoned count the gate's epoch guard exists to heal.
+**discards** a contended reading (`modelBusy` / `onBusySkip` in `benchmark.ts`). Since **#393** that
+predicate reads two more things: `status().startingModelId` — a model start is not a lane, but a
+manual "Use model" beside the run STOPS the model the leg streams on (`RuntimeManager.doStart`
+stops `current` before loading), and `start()` sets that field synchronously, strictly before the
+queued stop — and whether the manager still hands out the very runtime object the run captured
+(`active() !== runtime`), which is what a start that COMPLETED between the capture and the leg
+leaves behind, the flag already back to null. A stream the stop makes **reject** rather than
+deliver another chunk is treated the same way: the `catch` asks the predicate once more before
+returning. `tokensPerSecond: null` is the honest answer and an already-supported one — it is
+exactly what a machine with no runtime yields. The discard is never silent whenever something is
+busy: it raises **`main.benchmark.warnSpeedSkipped`** (a persist-canonical warning, so it is in
+`DISPLAY_MAP_KEYS`), distinct from "no runtime was up, nothing to measure" and from a plain probe
+failure with nothing busy, which stay silent as they always have. Breaking out of the `for await`
+runs the generator's `return()`, so the generation gate decrements normally — this path never
+creates the abandoned count the gate's epoch guard exists to heal.
 
 ### §5 Leak posture
 

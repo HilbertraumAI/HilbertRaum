@@ -2337,13 +2337,27 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   `gpuLastError`) is a plain workspace setting with no `machineKey` stamp, unlike `gpuProbe`: a
   GPU failure persisted on one computer keeps the next computer on the CPU rung until "Try GPU
   again". Seen as a risk in the #330 round trip (the flag was never set there).
-- **The unlock-time device probe can lose a race with the auto-start.** `prepareFirstBenchmark`
-  fires the session's one `--list-devices` probe in the same tick as the active model's
-  auto-start. Under the concurrent weight upload the probe took 7.7 s against its 10 s bound on
-  an RTX 3080 Ti (#330 round trip, `eval/results/hardware/330-round-trip-20260907/probe-race.txt`),
-  and a timed-out probe is cached as "no GPU" for the session: the graphics tile reads "None",
-  the recommendation falls to the RAM basis and the start is labelled `cpu` while the model
-  actually runs on the card. "Try GPU again" re-probes. Follow-up issue #380.
+- **The unlock-time device probe could lose a race with the auto-start — FIXED 2026-09-08
+  (#380).** `prepareFirstBenchmark` used to fire the session's one `--list-devices` probe in the
+  same tick as the active model's auto-start. Under the concurrent weight upload the probe took
+  7.7 s against its 10 s bound on an RTX 3080 Ti (#330 round trip,
+  `eval/results/hardware/330-round-trip-20260907/probe-race.txt`), and a timed-out probe was
+  cached as "no GPU" for the session: the graphics tile read "None", the recommendation fell to
+  the RAM basis and the start was labelled `cpu` while the model actually ran on the card. Now:
+  the auto-start waits for the session probe (about 1 s on an idle driver, and nothing at all on
+  a machine with no `llama-server` — the probe is never called then); a probe that hits the bound
+  answers "unknown" and is neither cached nor persisted, so the stored probe stands until the
+  next start or check, and "Try GPU again" re-probes; and a start whose probe is unknown takes
+  its backend label from the load log's offload line instead of defaulting to `cpu`, naming the
+  device the start's own compute buffers landed on. Only the already-benchmarked path is
+  sequenced: a workspace with no stored result at all fires no probe there and still lets the
+  ladder's own probe run beside the upload — which needs no sequencing, because a timeout on that
+  path now answers "unknown" (labelled from the load log, nothing cached, nothing persisted) and
+  the measurement scheduled behind the start re-probes on an idle driver. Residuals: a genuinely
+  wedged driver still waits, once per session before the auto-start, the probe's 10 s bound plus
+  the one-time sidecar-binary verification, which the start itself would wait on anyway; and
+  "Try GPU again" against a still-wedged driver shows no change once the bound elapses — the
+  unknown answer writes and pushes nothing, and the button has no busy state of its own.
 - **A USB bus reset while unlocked drops the decrypted working copy's WAL.** exFAT reported a
   lost delayed write on `workspace/hilbertraum.sqlite-wal` after a UASP device reset (#330 round
   trip); the restore that session had written was gone, the next unlock restored again, and
@@ -2379,8 +2393,15 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   hashes beside it (the 9B hash 65 → 213 s, the load 91 → 132 s), and a "Use model" press seconds
   after the start settled stopped the auto-started model under the check's speed leg (the run
   ended in 3.4 s). The persisted profile and ★ were unchanged; only that run's speed figure is
-  absent or chunk-based. Fix candidate: the speed leg's busy re-check also watches a start in
-  flight (`startingModelId`) and skips with the existing "speed skipped" warning (issue #393).
+  absent or chunk-based. FIXED 2026-09-08 (#393): the speed leg's busy re-check also watches a
+  start in flight (`startingModelId`, set synchronously before the queued start stops the running
+  model) **and** whether the manager still holds the runtime the leg captured — so a start that
+  COMPLETED between the capture and the leg is caught too — and a stream cut by that stop raises
+  the same "speed skipped" warning instead of a silent missing figure. What remains is the start's
+  own pre-start hash (before `RuntimeManager.start` is called): invisible to every signal, but it
+  only slows the check by drive contention, it stops nothing. A start that WEDGES leaves
+  `startingModelId` set for the session, so every automatic check that session skips its speed
+  leg — a model that never finishes loading is unmeasurable anyway, and the warning says so.
 - **A model started right after a Models-screen visit persisted the page cache as the drive's read
   figure** (issue #392, fixed 2026-09-08). The #108 guard suppressed the load sample only when the
   START's own install check hashed the file; when the Models screen hashed it moments earlier the
@@ -2408,8 +2429,6 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The Home screen's launch preflight writes its 8 MiB probe at unlock**, in the same second the
   auto-start begins hashing (#334 perf marks, 0.4 s after `unlock_done`). It persists nothing and
   measured the same write figure as the sequenced probe after the load; noted, not sequenced.
-- **A GPU probe that times out internally persists as an empty stamped probe** — indistinguishable
-  from a machine that genuinely has no usable graphics device until a later probe succeeds.
 - **One `performance:get` read costs about 100 ms in the dev build** (a synchronous manifest scan
   alongside settings and system detection) — measured once during development, not on slow
   removable media; a cache is a follow-up if it proves to matter (issue #333).

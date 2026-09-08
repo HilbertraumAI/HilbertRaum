@@ -210,6 +210,14 @@ from its first public `1.0.0` release onward.
   hybrid models keep beside the usual one — and no longer count a speculative-decoding start's
   working buffer more than once. The memory a started model needs is now reported close to what
   the card actually gave it, where before it could read more than a gigabyte short.
+- **On a drive moved to a computer with a graphics card, the first model start after unlocking no
+  longer reports "no graphics card".** The app used to check the computer's graphics devices at the
+  same moment it began loading the model, and on a busy drive that check could run out of time — so
+  the app said this computer had no graphics card, based its model recommendation on ordinary
+  memory, and reported the model as running on the processor while it was in fact running on the
+  card. The graphics check now finishes before the model starts, and a check that times out no
+  longer counts as "no card": what the app already knew about this computer stays, and the model's
+  own start log decides where it is really running.
 - **The drive read figure on the Performance page no longer takes a memory-speed reading.** When
   you started a model shortly after the AI Model page had checked its files, the app timed a start
   that was reading from memory rather than from the drive — and kept that flattering figure for
@@ -400,6 +408,11 @@ from its first public `1.0.0` release onward.
   closed the app). Those files are now shipped, and a test keeps the list complete. Verified on a
   Windows build with the German and English language files; if recognition still cannot start on
   your machine, the app now tells you instead of closing.
+- **Starting another model while the automatic performance check is running no longer loses the
+  check's speed reading silently.** Pressing "Use model" beside a running check stops the model the
+  check is measuring, so the speed figure was simply absent from the result with nothing to explain
+  it. The check now says the speed was skipped because the model was busy; the rating and the
+  recommended model still come from RAM, processor and drive speed.
 
 ### Changed
 

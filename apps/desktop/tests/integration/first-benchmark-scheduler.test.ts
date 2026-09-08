@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { mkdirSync } from 'node:fs'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 // The first-run benchmark behind the model auto-start (PR #303 audit L1 / SD2, owner decision
@@ -58,19 +58,21 @@ import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { t } from '../../src/shared/i18n'
-import { detectSystem, type RunBenchmarkDeps } from '../../src/main/services/benchmark'
+import { classifyProfile, detectSystem, type RunBenchmarkDeps } from '../../src/main/services/benchmark'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
 import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeStartOptions } from '../../src/main/services/runtime'
+import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
+import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { WorkspaceController, createEncryptedVaultOnDisk, vaultPathsFrom } from '../../src/main/services/workspace-vault'
 import { IPC } from '../../src/shared/ipc'
-import type { AppSettings, BenchmarkResult, PrivacyPolicy, RuntimeStatus } from '../../src/shared/types'
+import type { AppSettings, BenchmarkResult, GpuDevice, HardwareProfile, PrivacyPolicy, RuntimeStatus } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   closePerformanceFixture,
@@ -96,6 +98,8 @@ const ENCRYPTION_REQUIRED: PrivacyPolicy = {
 }
 
 const here = (): string | null => machineKey(detectSystem())
+/** The card of the #330 round trip — the one the probe was too slow to enumerate. */
+const RTX_DEVICE: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 /** One macrotask hop — room for a wrong implementation to (wrongly) start I/O before an assert. */
 const hop = (): Promise<void> => new Promise((r) => setImmediate(r))
 async function hops(n: number): Promise<void> {
@@ -112,10 +116,20 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; r
   return { promise, resolve, reject }
 }
 
-/** A chat runtime stub whose stream yields a couple of chunks with timings — enough for the speed leg. */
-function stubRuntime(): ModelRuntime {
+/**
+ * A chat runtime stub whose stream yields a couple of chunks with timings — enough for the
+ * speed leg. `onChunk` runs BETWEEN the two yields: the window in which a manual "Use model"
+ * lands beside a running benchmark (#393). With `rejectAfterHook` the generator then THROWS
+ * instead of yielding the second chunk — the killed sidecar, whose iterator rejects rather
+ * than delivering another chunk (the realistic #334 leg S5 timing: chunks are ~125 ms apart at
+ * 8 tok/s, the `startingModelId` flip → the stop is one microtask).
+ */
+function stubRuntime(
+  onChunk?: () => void,
+  opts?: { rejectAfterHook?: boolean; modelId?: string; perSecond?: number }
+): ModelRuntime {
   return {
-    modelId: 'stub-chat',
+    modelId: opts?.modelId ?? 'stub-chat',
     async start() {},
     async stop() {},
     async health() {
@@ -123,8 +137,10 @@ function stubRuntime(): ModelRuntime {
     },
     async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
       yield 'a'
+      onChunk?.()
+      if (opts?.rejectAfterHook) throw new Error('model stopped')
       yield 'b'
-      options?.onFinish?.('length', { predicted_n: 2, predicted_per_second: 20 })
+      options?.onFinish?.('length', { predicted_n: 2, predicted_per_second: opts?.perSecond ?? 20 })
     }
   }
 }
@@ -147,6 +163,20 @@ interface FakeRuntime {
   startReached: Promise<RuntimeStartOptions>
   finishStart: () => void
   failStart: (err: Error) => void
+  /**
+   * A manual "Use model" enqueued beside a run (#393): sets `startingModelId` and resolves
+   * NOTHING, modelling `RuntimeManager.start()`'s synchronous flip (index.ts:519), which
+   * precedes the queued `doStart`'s stop of the running model (index.ts:608).
+   */
+  enqueueManualStart: (modelId: string) => void
+  /**
+   * That start COMPLETING beside the run (#393): the flag goes back to null and the manager
+   * commits a NEW runtime object (`this.current = this.decorateWithGenerationGate(next)`,
+   * index.ts:640) — the one the leg captured is dead and is no longer what `active()` hands out.
+   */
+  completeManualStart: (modelId: string) => void
+  /** Install the running runtime, once, the way a committed start does (identity is stable). */
+  setCurrent: (next: ModelRuntime | null) => void
   quit: () => void
 }
 
@@ -163,7 +193,17 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
     activeModelId: () => current?.modelId ?? null,
     status: () =>
       current
-        ? { running: true, modelId: current.modelId, port: 1, healthy: true, message: 'Running', backend: 'cpu' }
+        ? // A start in flight while some model runs is the manager's `switchingId`
+          // (`RuntimeManager.status()`, index.ts:706) — null while the SAME model is starting.
+          {
+            running: true,
+            modelId: current.modelId,
+            port: 1,
+            healthy: true,
+            message: 'Running',
+            backend: 'cpu',
+            startingModelId: starting === current.modelId ? null : starting
+          }
         : { ...stoppedStatus(), message: starting ? 'Starting' : 'Stopped', startingModelId: starting },
     isShutdown: () => shutdown,
     startCalls: 0,
@@ -186,6 +226,16 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
     startReached: reached.promise,
     finishStart: () => gate.resolve(),
     failStart: (err) => gate.reject(err),
+    enqueueManualStart: (modelId) => {
+      starting = modelId
+    },
+    completeManualStart: (modelId) => {
+      starting = null
+      current = stubRuntime(undefined, { modelId })
+    },
+    setCurrent: (next) => {
+      current = next
+    },
     quit: () => {
       shutdown = true
     }
@@ -263,7 +313,7 @@ function sessionWorkspace(): {
 }
 
 /** A context wired like production for the workspace IPC seams: `db` resolves through the controller. */
-function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime): AppContext {
+function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime, probeGpu?: CachedGpuProbe): AppContext {
   const ctx = {
     trustedSenders: ANY_SENDER,
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
@@ -273,14 +323,35 @@ function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime):
     workspace: ctrl,
     runtime,
     manifestsDir: REPO_MANIFESTS,
+    probeGpu,
     isDev: true
   } as unknown as AppContext
   registerWorkspaceIpc(ctx)
   return ctx
 }
 
+/** The session-cached probe seam, driven by hand — the injected fn never spawns anything. */
+function fakeProbe(impl: () => Promise<GpuDevice[] | null>): CachedGpuProbe & { calls: () => number } {
+  let calls = 0
+  const probe = (_bin: string): Promise<GpuDevice[] | null> => {
+    calls += 1
+    return impl()
+  }
+  return Object.assign(probe, { invalidate: () => undefined, calls: () => calls })
+}
+
+/** A drive root with a placeholder `llama-server`, so `probeAndPersistGpu` resolves a binary. */
+function withBinary(root: string): void {
+  mkdirSync(llamaServerDir(root), { recursive: true })
+  writeFileSync(join(llamaServerDir(root), llamaServerBinaryName()), 'fake-binary')
+}
+
 /** An encrypted vault whose settings hold `seed`, LOCKED, so the unlock handler opens it. */
-function lockedVault(seed: Partial<AppSettings>, runtime: FakeRuntime): { ctrl: WorkspaceController; ctx: AppContext } {
+function lockedVault(
+  seed: Partial<AppSettings>,
+  runtime: FakeRuntime,
+  probeGpu?: CachedGpuProbe
+): { ctrl: WorkspaceController; ctx: AppContext; root: string } {
   const root = freshRoot()
   mkdirSync(join(root, 'config'), { recursive: true })
   const vp = vaultPathsFrom({ configPath: join(root, 'config'), dbPath: join(root, 'workspace', 'hilbertraum.sqlite') })
@@ -290,7 +361,7 @@ function lockedVault(seed: Partial<AppSettings>, runtime: FakeRuntime): { ctrl: 
   ctrl.unlock(PASSWORD)
   updateSettings(ctrl.requireDb(), seed)
   ctrl.lock()
-  return { ctrl, ctx: seamCtx(root, ctrl, runtime) }
+  return { ctrl, ctx: seamCtx(root, ctrl, runtime, probeGpu), root }
 }
 
 /** A foreign headline with no local history: the new-computer decision, seeded synchronously. */
@@ -320,7 +391,15 @@ describe('prepareFirstBenchmark: the cheap half', () => {
   it('a fresh workspace owes a first run; a known computer is restored synchronously and owes nothing; a legacy blob owes nothing', () => {
     const root = freshRoot()
     const fresh = seededDb(root)
-    expect(prepareFirstBenchmark(ctxWith(root, fresh))).toEqual({ run: 'first-run', attempted: false, epoch: undefined, hereKey: here() })
+    expect(prepareFirstBenchmark(ctxWith(root, fresh))).toEqual({
+      run: 'first-run',
+      attempted: false,
+      epoch: undefined,
+      hereKey: here(),
+      // #380: no probe fires on a first run (there is no benchmark to refresh beside), so this
+      // is the already-resolved placeholder — the seam's auto-start is not delayed at all.
+      probed: expect.any(Promise)
+    })
 
     const db = seededDb(root)
     const foreign = result()
@@ -346,7 +425,13 @@ describe('prepareFirstBenchmark: the cheap half', () => {
     const db = seededDb(root)
     const ws = sessionWorkspace()
     ws.beginLock()
-    expect(prepareFirstBenchmark(ctxWith(root, db, { workspace: ws }))).toEqual({ run: null, attempted: false, epoch: undefined, hereKey: null })
+    expect(prepareFirstBenchmark(ctxWith(root, db, { workspace: ws }))).toEqual({
+      run: null,
+      attempted: false,
+      epoch: undefined,
+      hereKey: null,
+      probed: expect.any(Promise)
+    })
     ws.completeLock()
     expect(prepareFirstBenchmark(ctxWith(root, db, { workspace: ws }))).toMatchObject({ run: null })
   })
@@ -534,6 +619,114 @@ describe('scheduleFirstBenchmark: runs at once when nothing is starting', () => 
     expect(rt.startCalls).toBe(0)
     expect(runBenchmarkSpy.mock.calls[0][0].runtime).not.toBeNull()
     expect(getSettings(db).lastBenchmark).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
+  })
+})
+
+describe('a model start in flight beside the speed leg (#393)', () => {
+  /**
+   * A crawl: strictly below `VERY_LOW_TOKENS_PER_SECOND` (3), so a run that MEASURES it steps
+   * the profile one rung down. That is what makes the profile assertions below discriminating —
+   * the stub's usual 20 tok/s classifies exactly like no reading at all.
+   */
+  const CRAWL_TPS = 2
+
+  /**
+   * One run of the fixture, with the runtime the manager holds built by `build`. A separate
+   * root/DB each time: the SD2 memo is keyed on the DB handle.
+   *
+   * The runtime is installed ONCE, so `active()` hands out the same object on every call —
+   * `RuntimeManager.active()` returns `this.current`, a single decorator instance per committed
+   * start (runtime/index.ts:640/677), and the leg's identity check reads exactly that.
+   */
+  async function runOnce(build: (rt: FakeRuntime) => ModelRuntime): Promise<BenchmarkResult> {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { activeModelId: CHAT_MODEL })
+    const rt = fakeRuntime({ ready: true })
+    const ctx = autoStartCtx(root, db, rt)
+    rt.setCurrent(build(rt))
+    // Nothing is starting when the run is scheduled (the settlement re-check passes); the
+    // manual start arrives later, mid-stream, which is exactly the #393 window.
+    await expect(scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), Promise.resolve())).resolves.toBe('ran')
+    const saved = getSettings(db).lastBenchmark
+    expect(saved).not.toBeNull()
+    return saved as BenchmarkResult
+  }
+
+  /** The two classifications a run on THIS host can land on: with no speed input, and with a crawl. */
+  const profiles = (): { noSpeed: HardwareProfile; stepped: HardwareProfile } => {
+    const ramGb = detectSystem().ramGb
+    // The same inputs `runBenchmark` classifies with here: no usable GPU (these roots carry no
+    // probe binary, so the probe reports no devices).
+    return {
+      noSpeed: classifyProfile(ramGb, { tokensPerSecond: null, gpuUseful: false }),
+      stepped: classifyProfile(ramGb, { tokensPerSecond: CRAWL_TPS, gpuUseful: false })
+    }
+  }
+
+  it('a manual start enqueued during the run skips the speed leg with the warning, profile untouched (#393)', async () => {
+    const { noSpeed, stepped } = profiles()
+    // The sibling run measures a CRAWL, so its profile is stepped DOWN. Unless this host is
+    // already on the lowest rung (RAM ≤ 8 GB and no useful GPU, where `Math.max(idx - 1, 0)` is
+    // a no-op), the two classifications differ and the comparison below can genuinely fail.
+    const slow = await runOnce(() => stubRuntime(undefined, { perSecond: CRAWL_TPS }))
+    expect(slow.tokensPerSecond).toBe(CRAWL_TPS)
+    expect(slow.profile).toBe(stepped)
+
+    // "Use model" on ANOTHER model, pressed between two streamed chunks: `startingModelId` is
+    // set synchronously, strictly before the queued `doStart` stops the model we stream on.
+    const saved = await runOnce((rt) => stubRuntime(() => rt.enqueueManualStart('some-other-model')))
+
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
+    // The rest of the result is untouched: the profile is the no-speed classification from RAM
+    // and GPU alone — a skipped leg never steps it down, the way a measured crawl would.
+    expect(saved.profile).toBe(noSpeed)
+    if (stepped !== noSpeed) expect(saved.profile).not.toBe(slow.profile)
+  })
+
+  it('a start that stops the model between two chunks still yields the skipped warning, not a silent null (#393)', async () => {
+    const { noSpeed } = profiles()
+
+    // The realistic S5 timing: the stop lands BETWEEN chunks, so the iterator rejects instead
+    // of delivering one and the per-chunk check never fires — the catch must warn all the same.
+    const saved = await runOnce((rt) =>
+      stubRuntime(() => rt.enqueueManualStart('some-other-model'), { rejectAfterHook: true })
+    )
+
+    // `tokensPerSecond` is already null on the unfixed code (the catch returned null silently) —
+    // the WARNING is what discriminates here: without it the missing figure has no explanation.
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
+    expect(saved.profile).toBe(noSpeed)
+  })
+
+  it('a start that COMPLETED between the runtime capture and the leg skips it too (#393)', async () => {
+    // The gap the review found: `runBenchmarkAndPersist` captures `ctx.runtime.active()` before
+    // the GPU + drive probes. A start that COMPLETES in that window puts `startingModelId` back
+    // to null and commits a NEW runtime — the captured one is dead, so neither the lane check nor
+    // the start-in-flight check sees anything. The manager no longer holding the captured object
+    // is the signal.
+    const saved = await runOnce((rt) => stubRuntime(() => rt.completeManualStart('some-other-model')))
+
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
+  })
+
+  it('a completed start whose stop also killed the captured stream warns rather than going silent (#393)', async () => {
+    const saved = await runOnce((rt) =>
+      stubRuntime(() => rt.completeManualStart('some-other-model'), { rejectAfterHook: true })
+    )
+
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
+  })
+
+  it('nothing starting: the speed leg measures as before', async () => {
+    const saved = await runOnce(() => stubRuntime())
+
+    expect(saved).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
+    expect(saved.warnings).not.toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
   })
 })
 
@@ -1018,6 +1211,95 @@ describe('the production seams (registerWorkspaceIpc)', () => {
     expect(runBenchmarkSpy.mock.calls[0][0].runtime?.modelId).toBe('stub-chat')
     expect(getSettings(ctx.db).lastBenchmark).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
     expect(getSettings(ctx.db).benchmarkHistory.map((e) => machineKey(e))).toEqual([here(), machineKey(foreign)])
+    ctrl.lock()
+  })
+
+  // #380 — the unlock-time probe/auto-start race. `prepareFirstBenchmark` fired the probe
+  // fire-and-forget and the seam called the auto-start in the SAME tick, so the
+  // `--list-devices` child and the multi-GB weight upload competed for the driver. The ladder
+  // shares that very in-flight promise, so on the #330 round trip the probe hit its 10 s bound,
+  // an empty stamped probe was persisted (tile "None", RAM basis) and a card decoding at
+  // 98–100 tok/s was labelled "cpu". The auto-start now waits for the probe to settle.
+  it('unlock on a card machine: the auto-start WAITS for the session probe, whose write lands first', async () => {
+    const events: string[] = []
+    const rt = fakeRuntime({ onStart: () => events.push('runtime.start') })
+    const known = hereResult()
+    const pending = deferred<GpuDevice[] | null>()
+    const probe = fakeProbe(() => pending.promise)
+    const { ctrl, ctx, root } = lockedVault(
+      { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
+      rt,
+      probe
+    )
+    withBinary(root)
+    setPerformanceChangedSink(() => events.push('performance:changed'))
+
+    const { result: unlocked } = await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
+    expect(unlocked).toMatchObject({ ok: true })
+
+    // The driver has not answered yet — and NOTHING has been started, so the weight upload is
+    // not competing with the probe for it. RACED, not sampled after a fixed number of hops: the
+    // auto-start's own path runs `computeInstallState`, whose real fs work decides WHEN the
+    // pre-fix start lands, so a bare `startCalls === 0` after N hops could pass on the UNFIXED
+    // code purely because the disk was slow that run. Whichever settles first wins the race, so
+    // the pre-fix failure is unconditional. (RED before the fix: 'started'.)
+    const idle = hops(60).then(() => 'idle' as const)
+    expect(await Promise.race([rt.startReached.then(() => 'started' as const), idle])).toBe('idle')
+    await idle
+    expect(probe.calls()).toBe(1)
+    expect(rt.startCalls).toBe(0)
+    expect(events).toEqual([])
+
+    pending.resolve([RTX_DEVICE])
+    await rt.startReached
+
+    // The probe's stamped write — and its push — precede the start the ladder will label.
+    expect(getSettings(ctx.db).gpuProbe).toMatchObject({ devices: [RTX_DEVICE], machineKey: here() })
+    expect(events).toEqual(['performance:changed', 'runtime.start'])
+    rt.finishStart()
+    ctrl.lock()
+  })
+
+  it('unlock on a card-less machine: an EMPTY answer still releases the auto-start', async () => {
+    const rt = fakeRuntime()
+    const known = hereResult()
+    const pending = deferred<GpuDevice[] | null>()
+    const { ctrl, ctx, root } = lockedVault(
+      { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
+      rt,
+      fakeProbe(() => pending.promise)
+    )
+    withBinary(root)
+
+    await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
+    await hops(5)
+    expect(rt.startCalls).toBe(0)
+
+    pending.resolve([])
+    await rt.startReached // the control: the gate releases on ANY settled answer, not just a card
+    expect(getSettings(ctx.db).gpuProbe).toMatchObject({ devices: [], machineKey: here() })
+    rt.finishStart()
+    ctrl.lock()
+  })
+
+  it('unlock with NO binary for this OS: nothing to probe, so the auto-start is not delayed at all', async () => {
+    // The 10 s bound only exists for a wedged driver. A machine with no `llama-server` never
+    // calls the probe — `resolveLlamaServerPath` is null — and the empty stamped write happens
+    // synchronously, so the start is reached without waiting for anything.
+    const rt = fakeRuntime()
+    const known = hereResult()
+    const never = deferred<GpuDevice[] | null>()
+    const probe = fakeProbe(() => never.promise)
+    const { ctrl } = lockedVault(
+      { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
+      rt,
+      probe
+    )
+
+    await invoke(handlers, IPC.unlockWorkspace, PASSWORD)
+    await rt.startReached
+    expect(probe.calls()).toBe(0)
+    rt.finishStart()
     ctrl.lock()
   })
 })
