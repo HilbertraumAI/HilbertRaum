@@ -1228,8 +1228,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   thinking on + temp 0.6. Thinking is toggled per request via
   `chat_template_kwargs.enable_thinking` (D5, verified against the pinned llama.cpp b9585);
   every chat sidecar is spawned with `--jinja --reasoning-format deepseek`
-  (`CHAT_SERVER_ARGS`) so the kwarg acts and reasoning streams as separate
-  `delta.reasoning_content` frames. `stripThinkBlocks` (services/chat.ts) scrubs any inline
+  (`CHAT_SERVER_ARGS`, which also carries `-lv 4` for the placement parser and, since
+  2026-09-07, `-np 1` — one server slot; GPU record runtime record, issue #319) so the kwarg
+  acts and reasoning streams as separate `delta.reasoning_content` frames. `stripThinkBlocks` (services/chat.ts) scrubs any inline
   `<think>` block from persisted replies AND from assistant turns replayed as history (D6 —
   the collapsed "Thinking…" block is a live-stream affordance only; an all-think aborted
   reply persists nothing). Document answers (`rag/`) never pass a mode — grounded answers
@@ -2783,7 +2784,7 @@ adds is the safety machinery:
   (`gpu:try-again`) that clears `gpuAutoDisabled`/`gpuLastError`, invalidates the session probe
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
   The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful, totalMb, budgetMb, memoryClass }`
-  (`gpuUsefulForProfile`: ≥ 6144 MiB AND not integrated → the conservative `classifyProfile`
+  (`gpuUsefulForProfile`: ≥ `USABLE_VRAM_MB` — 5120 MiB since #321 — AND not integrated → the conservative `classifyProfile`
   bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
   `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name`,
   `totalMb` and `budgetMb` are one device's, the BUDGET device `nextStartMemory` selects, PR #308
@@ -3174,12 +3175,22 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 | `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run |
 | Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` still names `devices[0]`, the first device the driver listed, display only; it is not the budget device the picker or the Performance tile use |
 
-**Runtime record (PR #308 audit, 2026-09-06), not a picker change.** The chat server runs on
-b9849's default **four unified slots** (`n_slots = 4`, `kv_unified = true`) whenever the app's
-argv passes no `-np`; for a single-user chat app this costs real sliding-window/recurrent cache
-overhead the picker's `estimated_context_cache_gib` term accounts for (`model-benchmarks.md`
-§6.6), and whether to add `-np 1` is a runtime decision outside this section (BUILD_STATE §5 item
-21 (i)). Separately, whether `--fit` also puts layers on a hybrid laptop's iGPU — which the app
+**Runtime record (PR #308 audit, 2026-09-06; the `-np` half DECIDED 2026-09-07), not a picker
+change.** The chat server used to run on b9849's default **four unified slots** (`n_slots = 4`,
+`kv_unified = true`) because the app's argv passed no `-np`; for a single-user chat app that cost
+real recurrent/sliding-window cache the picker's `estimated_context_cache_gib` term had to account
+for (`model-benchmarks.md` §6.6). **Owner decision 2026-09-07 (issue #319): `CHAT_SERVER_ARGS`
+passes `-np 1`** — one slot, chat only. The app already serialises every lane that reaches this
+server (the model-slot arbiter; the local API's depth-one admission answering 429 beyond it), so
+the four slots were never used in parallel, and on the rig one slot turned the 27B Q5's 62/66
+layers at 30.4 tok/s into 66/66 at 51.0 by cutting the recurrent state from 1,795.50 to 448.88 MiB
+(#318 leg 1). It does **not** change the context window: `--ctx-size` is the total cache on both
+settings and each slot sees all of it (`n_ctx_slot = 8192` either way), so only the per-sequence
+recurrent term moved in the seven manifest cache estimates — the KV and Gemma's sliding-window
+caches are cell-sized and counted once. Accepted cost: a background job now evicts the chat
+conversation's KV prefix, which llama-server's host-RAM prompt cache restores on a prefix match.
+Record: `model-benchmarks.md` §6.6 "2026-09-07 amendment (#319)"; BUILD_STATE §5 item 22 (f)/(i).
+Separately, whether `--fit` also puts layers on a hybrid laptop's iGPU — which the app
 never excludes with `--device` — was read from `common/fit.cpp` as "it spreads layers across every
 device `--list-devices` lists". **MEASURED FALSE on the pinned b9849 build (#318 leg 5, 2026-09-07;
 decided on #320 that the never-`--device` rule stands):** llama.cpp drops the integrated device
@@ -3246,10 +3257,17 @@ codebase's permanent, tested forced-CPU spawn example.
 measured values before release notes claim anything.)
 
 **Profile bump rule:** `classifyProfile` takes a precomputed `gpuUseful: boolean` =
-`gpuUsefulForProfile(devices)`: some device has **≥ 6144 MiB** AND `!looksIntegrated(name)`.
+`gpuUsefulForProfile(devices)`: some device has **≥ `USABLE_VRAM_MB`** AND `!looksIntegrated(name)`.
 Conservative by design — an iGPU reporting 16 GB of *shared* RAM must never bump a laptop's
 profile; a false negative only costs a too-small model recommendation. The regex lives in
-`runtime/gpu.ts` (fixture-tested, covers Windows + RADV APU names and Meteor-Lake Arc).
+`shared/gpu-rules.ts` (re-exported by `runtime/gpu.ts`; fixture-tested, covers Windows + RADV APU
+names, Meteor-Lake Arc and, since #320, the bare `Intel(R) Graphics`). **The floor is 5,120 MiB
+since 2026-09-07** (issue #321, owner decision; 6,144 before): every 6 GB laptop card the project
+has measured reports below 6,144 on Vulkan — GTX 1660 SUPER 5,746, RTX 4050 Laptop 5,921, RTX 3060
+Laptop 5,994 — so the most common 6 GB configuration was classed `cpu` and starred a model it
+cannot accelerate (the 9B measured 18/33 layers at 5.2 tok/s on such a card). Lowering the floor
+moves the bump one step up on those laptops, which is the accepted cost; 4 GB cards stay out.
+Reasoning and evidence: `model-benchmarks.md` §6.6 N8.
 
 **UI:** Settings toggle ("Uses your graphics card to speed up responses when available…"),
 Diagnostics Acceleration + runtime-build lines, compatibility-mode notice + "Try GPU again",
@@ -12160,7 +12178,7 @@ whole second weight on the drive, this needs a flag.
 | Draft depth | `--spec-draft-n-max 2` | Measured pick: n=2 gives 77–91 % acceptance; n=3/4 neither break nor help (acceptance falls to 64 % at n=4). The publicly circulating "n=4 emits junk" claim did not reproduce on this stack. |
 | KV quantization | **Not adopted** (`--spec-draft-type-k/v q8_0` + `--cache-type-k/v q8_0`) | Recovers ~1.6 GiB but quantizes the MAIN KV cache, whose long-context quality is unvalidated on our harness — and it still does not make Q6_K fit 24 GB, which was the only reason to consider it. |
 | The off-GPU question (issue gate 3) | **The runtime drops it off-GPU**, structurally | The issue offered two ways to close this: prove the flag harmless on CPU, or drop it. Dropping is decidable without hardware and cannot regress: the measured gain is a full-offload GPU result, and MTP on CPU is simply unmeasured. |
-| `-np 1` | Not passed | Showed no throughput effect at ctx 8192 (default `n_slots=4`, unified KV) — a change with no measured benefit is not a change. |
+| `-np 1` | Not passed **at the time (#182); PASSED since 2026-09-07 (#319)** | The #182 finding stands as written — on a card where the model ALREADY fully offloads, one slot buys no throughput. #318 leg 1 measured the case that finding could not see: on a 24 GB card the four slots cost the Q5 1,347 MiB of recurrent state, which is the difference between 62/66 layers at 30.4 tok/s and 66/66 at 51.0. The benefit is a full offload, not a faster one. |
 
 ### §3 The mechanism: rung 1a
 

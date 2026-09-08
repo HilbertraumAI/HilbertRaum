@@ -23,10 +23,38 @@ recommended_ram_gb: 32
 recommendation_rank: 3
 # Safe LOCAL runtime budget (catalog convention for the big additions), not the native window.
 recommended_context_tokens: 8192
-# Context cache at 8k under the app launch (b9849 defaults: 4 unified slots): 512 MiB full-attention
-# KV (16 layers x 4 heads x 256) + 4 x 144 MiB recurrent state = 1.063 GiB (no SWA cache); the
-# picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11).
-estimated_context_cache_gib: 1.1
+# Context cache at 8k under the app launch, recomputed 2026-09-07 for ONE server slot (issue #319:
+# CHAT_SERVER_ARGS now passes `-np 1`; the b9849 default of 4 unified slots is gone). MEASURED on
+# the pin, not derived -- this model is the one the #318 leg-1 variants were run on:
+# eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg7-baseline-q5km.stderr.log (4 slots) vs
+# .../leg1-np-1.stderr.log (1 slot), same model, same ctx, one thing varied:
+#   512.00 MiB KV       -- sized in CELLS from --ctx-size, counted ONCE; IDENTICAL on both settings
+#                          (480.00 Vulkan0 + 32.00 CPU at 4 slots; 512.00 Vulkan0 at 1)
+#   448.88 MiB recurrent state -- per SEQUENCE: 1,795.50 MiB at 4 seqs / 4 = 448.88 at 1 seq
+#   ---------
+#   960.88 MiB = 0.938 GiB -> 0.9 (one decimal, nearest; the file's convention)
+# The recurrent figure is the MTP one (rs_seq 2 -- this manifest opts into speculative_decoding, and
+# the draft head triples the state: 598.50 MiB at 4 seqs with MTP off vs 1,795.50 with it on;
+# model-benchmarks.md §6.6 finding 3, which records the old 1.1 GiB as UNDER-counting the MTP case).
+# Counting it here is not a double count: MTP_VRAM_HEADROOM_MB (runtime/factory.ts) gates the
+# rung-1a ATTEMPT on free VRAM above the weights and covers the draft head's own weights + KV, while
+# this term is the context cache the picker's fit estimate adds to every start. The picker's
+# graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11, amended 2026-09-07
+# by #319).
+estimated_context_cache_gib: 0.9
+
+# The weights that stay HOST-mapped even on a full offload (embedding / output tables), MiB —
+# the picker subtracts them before applying its 15 % working share, because the runtime buffers
+# that share stands for scale with what is actually ON the card (issue #321, owner decision
+# 2026-09-07; model-benchmarks.md §6.6 point 3).
+# MEASURED, not derived — the app has no GGUF-header parser. Read off the
+# `CPU_Mapped model buffer size` line of a FULL-OFFLOAD start (66/66 layers):
+# eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg1-np-1.stderr.log
+# A PARTIAL offload inflates this line with the layers that did not fit, so only full-offload
+# starts count. Absent on any model never started on hardware, which then keeps the old
+# whole-file arithmetic; the GGUF-header derivation that would cover every model is
+# BUILD_STATE §5 item 22 (e), still open.
+host_mapped_weights_mib: 682.03
 supports_thinking_mode: true
 # MTP speculative decoding, OPT-IN (issue #182 record in architecture.md; §9.4 addendum).
 # §9.5 successor gate: the draft head is still in-GGUF for THIS file, VERIFIED 2026-08-20 on

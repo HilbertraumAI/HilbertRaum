@@ -5,7 +5,7 @@ import type { GpuDevice, GpuProbeResult } from './types'
 // profile-bump gate (`services/runtime/gpu.ts` re-exports these), the snapshot builder (main)
 // and the Performance screen (renderer) can never disagree about which device counts, which one
 // is shown, and what its memory figure means. Before this module there were three rules: the
-// runtime gate (≥ 6 GiB AND not integrated), the graphics tile (≥ 6144 alone) and `devices[0]`
+// runtime gate (a VRAM floor AND not integrated), the graphics tile (the floor alone) and `devices[0]`
 // for every recorded figure — so an Intel Iris Xe reporting 16 GB of SHARED memory rendered
 // "16.0 GB VRAM · Usable" beside "Will run on the processor", and a hybrid `[iGPU, dGPU]` box
 // took its class from the dGPU but its budget, VRAM and name from the iGPU.
@@ -20,9 +20,29 @@ export type GpuDeviceLike = Pick<GpuDevice, 'name' | 'totalMb'>
 /**
  * Minimum dedicated memory (MiB) before a device counts as usable. The profile bump
  * (`gpuUsefulForProfile`), the memory class, the VRAM budget and the graphics tile's "Usable"
- * rating all read this one constant: 6 GiB.
+ * rating all read this one constant: **5 GiB since 2026-09-07** (issue #321, owner decision;
+ * 6 GiB = 6,144 before that).
+ *
+ * Why it moved. Every 6 GB laptop card the project has seen reports BELOW 6,144 on the Vulkan
+ * backend — GTX 1660 SUPER **5,746**, RTX 4050 Laptop **5,921**, RTX 3060 Laptop **5,994** — while
+ * an RTX 2060 reports exactly 6,144. That is not a driver quirk to be corrected: the RTX 3060
+ * Laptop exposes ONE 5,994 MiB device-local heap and the probe reports exactly it (`nvidia-smi`'s
+ * round 6,144 is the marketing figure). So the common 6 GB laptop was classed `cpu` and got the RAM
+ * pick. #318 leg 4 measured what that costs: the gate changes nothing about PLACEMENT — llama.cpp's
+ * fit put the RAM pick fully on the sub-gate card (E2B 36/36, 86 tok/s) — it only changes which
+ * model is starred. The case that bites is the 16 GB gaming laptop, whose RAM pick is the 9B, and
+ * the 9B on that card measured **18/33 layers at 5.2 tok/s**. With the gate at 5,120 the card path
+ * stars the 4B instead, fully offloaded at card speed.
+ *
+ * Why 5,120 and not lower. It admits all three measured cards with room for driver variance, and it
+ * keeps 4 GB cards (≈ 4,096) OUT — where the smallest ranked model does not fit anyway and rule C's
+ * no-fit fallback hands the machine back to the RAM pick regardless. Going lower gains nothing.
+ *
+ * Blast radius, accepted by the owner: the profile bump moves such a laptop one step up (label + the
+ * RAM-unknown fallback picker only), and the graphics tile reads "Usable" for these cards — which
+ * matches what the fit does with them. Record: `model-benchmarks.md` §6.6 N8.
  */
-export const USABLE_VRAM_MB = 6144
+export const USABLE_VRAM_MB = 5120
 /** The profile-bump gate's historical name for the same constant (GPU record §8). */
 export const GPU_BUMP_MIN_VRAM_MB = USABLE_VRAM_MB
 
@@ -78,7 +98,8 @@ export function looksIntegrated(name: string): boolean {
 }
 
 /**
- * ≥ 6 GiB AND not integrated-looking: a device a model can actually be accelerated on. The
+ * At or above `USABLE_VRAM_MB` AND not integrated-looking: a device a model can actually be
+ * accelerated on (the floor is 5 GiB since #321, 2026-09-07 — see the constant). The
  * single predicate behind every "usable" answer in the app.
  */
 export function isUsefulDevice(device: GpuDeviceLike): boolean {
@@ -119,7 +140,7 @@ export function primaryUsefulDevice<T extends GpuDeviceLike>(devices: readonly T
  * What a screen may SHOW — the device the graphics tile names (`PerformanceSnapshot.graphicsDevice`)
  * and a GPU start is labelled with: the primary useful device (`useful: true`); else the LARGEST
  * device that does not look integrated (`useful: false` — a discrete card under the gate, such as
- * the common 6 GB laptop card the Vulkan backend reports at 5,9xx MiB, #321); else the first
+ * a 4 GB card, or a 6 GB one whose driver reports it under 5,120 MiB); else the first
  * listed device (`useful: false` — an integrated-only machine). An unusable device is named with
  * its OWN memory figure so the copy can say "small" or "integrated, shared memory" honestly, never
  * implying acceleration — on a hybrid laptop the old `devices[0]` fallback named the iGPU's shared

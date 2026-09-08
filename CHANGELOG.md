@@ -156,6 +156,27 @@ from its first public `1.0.0` release onward.
   download-and-extract steps (including the tarball's single top-level folder) kept as a
   fallback.
 
+### Changed
+
+- **A 6 GB laptop graphics card now counts as a graphics card.** Most 6 GB laptop cards report a
+  little under 6 GB to the app — an RTX 3060 Laptop says 5.9 GB — and the app used to treat anything
+  under 6 GB as unusable, so it recommended a model sized for your memory instead of your card. On a
+  16 GB laptop that meant a model running about four times slower than the one that fits the card.
+  Such a card is now recognised, the Performance screen rates it "Usable", and the recommendation is
+  made against it. Cards of about 4 GB are still too small, which has not changed.
+- **The "Your model" estimate is no longer needlessly pessimistic.** It counted the whole model
+  file against your graphics memory, including the part that always stays in main memory — on the
+  smallest bundled model that overstated the requirement by more than twice. It now counts only
+  what actually goes to the card, which it can do for the models whose split has been measured on
+  real hardware. Two effects you may notice: a 24 GB card is offered the larger 27B model, and an
+  8 GB card is offered the 9B where it used to be offered the 4B.
+- **Larger models now fit on the graphics card that used to be just too small for them.** The chat
+  engine ran four answer slots at once, which is memory the app never used — it only ever answers
+  one question at a time. It now runs one. On a 24 GB card that is the difference between a 27B
+  model running half on the card and half on the processor at about 30 words a second, and running
+  entirely on the card at about 51. Nothing about your conversations changes: the context window is
+  exactly as long as before, and the recommended model on each computer is re-estimated to match.
+
 ### Fixed
 
 - **A laptop whose built-in graphics chip reports a short name is recognised as built-in.** Some
@@ -166,8 +187,8 @@ from its first public `1.0.0` release onward.
 - **The Performance screen names your graphics card even when it is too small to run models on.**
   The Graphics memory tile used to say "No usable graphics card" on a laptop whose card reports a
   little under 6 GB — the common 6 GB laptop card does — and on a laptop with two GPUs it could
-  name the integrated one instead. It now names the card itself, with its own memory, and rates it
-  "Small"; whether models actually run on it is unchanged.
+  name the integrated one instead. It now names the card itself, with its own memory. (Such a card
+  is also recognised as usable now — see the entry above.)
 - **A model that cannot be loaded no longer switches the whole app to compatibility mode.** When
   one model failed to start on the graphics card, the app used to conclude the graphics card was
   the problem and run every other model — and the next translation start — on the processor until

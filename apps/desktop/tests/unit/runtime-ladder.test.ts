@@ -45,7 +45,8 @@ beforeEach(() => clearModelLoadLatches())
 const RTX: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 /** A hybrid laptop's FIRST enumerated device: integrated, reporting shared system memory. */
 const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16384, freeMb: 12000 }
-/** A discrete card UNDER the 6,144 MiB usable gate — the 6 GB laptop class of #321. */
+/** A discrete card UNDER the usable gate — a 4 GB card since #321 lowered it to 5,120 MiB
+ *  (the 6 GB laptop class that used to sit here now clears it). */
 const GTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, freeMb: 3600 }
 
 interface LadderCall {

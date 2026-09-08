@@ -28,7 +28,8 @@ const RTX = dev('Vulkan1', 'NVIDIA GeForce RTX 3090', 24_576)
 const RX = dev('Vulkan0', 'AMD Radeon RX 6700 XT', 12_272)
 const GTX = dev('Vulkan0', 'NVIDIA GeForce GTX 1650', 4096)
 // A real hybrid laptop (Ryzen 7 5800H, 2026-09-07): the iGPU is listed first, and the "6 GB"
-// card reports 5,994 MiB on the Vulkan backend — under the 6,144 gate (#321).
+// card reports 5,994 MiB on the Vulkan backend. That was under the old 6,144 gate; since #321
+// lowered it to 5,120 the card is USEFUL, which is the whole point of the change.
 const RADEON_IGPU = dev('Vulkan0', 'AMD Radeon(TM) Graphics', 8886)
 const RTX3060L = dev('Vulkan1', 'NVIDIA GeForce RTX 3060 Laptop GPU', 5994)
 
@@ -68,20 +69,28 @@ describe('looksIntegrated', () => {
 })
 
 describe('isUsefulDevice — the single predicate', () => {
-  it('needs BOTH 6 GiB and a discrete-looking name', () => {
+  it('needs BOTH the VRAM floor and a discrete-looking name', () => {
     expect(isUsefulDevice(RTX)).toBe(true)
     expect(isUsefulDevice(RX)).toBe(true)
     // 16 GB of SHARED memory is not a card (M8.1).
     expect(isUsefulDevice(IRIS)).toBe(false)
-    // A discrete card below the gate is not usable either.
+    // A discrete card below the gate is not usable either — a 4 GB GTX 1650 since #321.
     expect(isUsefulDevice(GTX)).toBe(false)
   })
 
-  it('the gate is inclusive at exactly 6 GiB and is the profile bump’s constant', () => {
-    expect(USABLE_VRAM_MB).toBe(6144)
+  it('the gate is inclusive at exactly 5 GiB and is the profile bump’s constant (#321)', () => {
+    expect(USABLE_VRAM_MB).toBe(5120)
     expect(GPU_BUMP_MIN_VRAM_MB).toBe(USABLE_VRAM_MB)
-    expect(isUsefulDevice({ name: 'NVIDIA GeForce RTX 2060', totalMb: 6144 })).toBe(true)
-    expect(isUsefulDevice({ name: 'NVIDIA GeForce RTX 2060', totalMb: 6143 })).toBe(false)
+    expect(isUsefulDevice({ name: 'NVIDIA GeForce RTX 2060', totalMb: 5120 })).toBe(true)
+    expect(isUsefulDevice({ name: 'NVIDIA GeForce RTX 2060', totalMb: 5119 })).toBe(false)
+    // The three real sub-6,144 cards the decision was made for (#318 leg 4 + the #308 audit):
+    // all three are now in, which is the entire point of lowering the gate.
+    expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1660 SUPER', totalMb: 5746 })).toBe(true)
+    expect(isUsefulDevice({ name: 'NVIDIA GeForce RTX 4050 Laptop GPU', totalMb: 5921 })).toBe(true)
+    expect(isUsefulDevice(RTX3060L)).toBe(true)
+    // …and a 4 GB card stays out: nothing ranked fits its 4,096 MiB anyway, so rule C's no-fit
+    // fallback would hand the machine back to the RAM pick regardless.
+    expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1650', totalMb: 4096 })).toBe(false)
   })
 })
 
@@ -136,18 +145,29 @@ describe('displayDevice — what a screen may show', () => {
   })
 
   it('prefers a small DISCRETE card over an integrated one, whatever the driver order (owner decision 2026-09-07)', () => {
-    // A hybrid laptop lists the iGPU first; its 6 GB card reports 5,994 MiB on Vulkan — under
-    // the gate (#321), so it is no budget device — and the tile must still name THE card with
-    // its own memory, rated "Small", never the iGPU's shared figure the old `devices[0]`
-    // fallback handed it. Whether the card is USED is `primaryUsefulDevice`'s question.
+    // A hybrid laptop lists the iGPU first, and the tile must name THE card with its own memory,
+    // never the iGPU's shared figure the old `devices[0]` fallback handed it. Below the gate the
+    // card is named with `useful: false` so the copy can say "small" honestly — a 4 GB GTX 1650
+    // since #321 lowered the gate to 5,120.
     expect(displayDevice([IRIS, GTX])).toEqual({ device: GTX, useful: false })
-    expect(displayDevice([RADEON_IGPU, RTX3060L])).toEqual({ device: RTX3060L, useful: false })
-    expect(displayDevice([RTX3060L, RADEON_IGPU])).toEqual({ device: RTX3060L, useful: false })
-    // Two small discrete cards: the larger one, like the budget rule.
-    expect(displayDevice([GTX, RTX3060L])).toEqual({ device: RTX3060L, useful: false })
-    // The verdict is untouched: 5,994 MiB is under the gate, so there is still no budget device.
-    expect(isUsefulDevice(RTX3060L)).toBe(false)
-    expect(primaryUsefulDevice([RADEON_IGPU, RTX3060L])).toBeNull()
+    // The same hybrid laptop's RTX 3060 Laptop (5,994 MiB) is USEFUL since #321, in either driver
+    // order: named, and now also the budget device — the tile says "Usable" rather than "Small".
+    expect(displayDevice([RADEON_IGPU, RTX3060L])).toEqual({ device: RTX3060L, useful: true })
+    expect(displayDevice([RTX3060L, RADEON_IGPU])).toEqual({ device: RTX3060L, useful: true })
+    // A useful card beside a sub-gate one: the useful one wins outright, not by size.
+    expect(displayDevice([GTX, RTX3060L])).toEqual({ device: RTX3060L, useful: true })
+    // The verdict follows: 5,994 ≥ 5,120, so this machine HAS a budget device now.
+    expect(isUsefulDevice(RTX3060L)).toBe(true)
+    expect(primaryUsefulDevice([RADEON_IGPU, RTX3060L])).toBe(RTX3060L)
+  })
+
+  it('two SUB-gate discrete cards: the larger one is named, still useful: false (#321)', () => {
+    const gtx1630 = { id: 'Vulkan1', name: 'NVIDIA GeForce GTX 1630', totalMb: 4096 }
+    const gtx1650ti = { id: 'Vulkan0', name: 'NVIDIA GeForce GTX 1650 Ti', totalMb: 4096 }
+    expect(displayDevice([gtx1630, { ...gtx1650ti, totalMb: 5000 }])).toEqual({
+      device: { ...gtx1650ti, totalMb: 5000 },
+      useful: false
+    })
   })
 
   it('is null with no device', () => {

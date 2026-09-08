@@ -110,6 +110,18 @@ export const MTP_SERVER_ARGS: readonly string[] = ['--spec-type', 'draft-mtp', '
  * offloads fewer layers, so an unaffordable MTP start would look healthy while decoding at
  * partial-offload speed (the issue-#42 class). A skipped rung 1a costs nothing; a silent
  * partial offload costs everything the flag was added to buy.
+ *
+ * MEASURED AT FOUR SLOTS, kept unchanged at one (issue #319, owner decision 2026-09-07). Since the
+ * chat server passes `-np 1` the recurrent state an MTP start pays is 4× smaller (Q5 on the rig:
+ * 1,795.50 → 448.88 MiB, #318 leg 1), so 3.5 GiB is now MORE headroom than the rung needs. That is
+ * the safe direction — the guard refuses a rung it could have run, never the reverse — and the
+ * verdicts it was calibrated to reproduce (Q4/Q5 clear a 24 GB card, Q6_K does not) are unchanged.
+ * Re-deriving it for one slot would let Q6_K through on hardware nobody has measured it on.
+ *
+ * Not to be confused with the picker's `estimated_context_cache_gib` (see the two 27B manifests):
+ * this constant gates whether rung 1a is ATTEMPTED and covers the draft head's own weights + KV;
+ * that term is the context cache the fit estimate adds to EVERY start. Different consumers, no
+ * double count.
  */
 export const MTP_VRAM_HEADROOM_MB = 3584
 
@@ -551,7 +563,8 @@ class LadderRuntime implements ModelRuntime {
         // LABEL ONLY (PR #303 audit M8.2 / P5 residual): the device a reader may SHOW is the
         // shared `displayDevice` one — the budget device (the largest USEFUL card), else the
         // largest device that does not look integrated even when it is under the usable gate
-        // (2026-09-07: a 6 GB laptop card Vulkan reports at 5,9xx MiB, #321), else the first
+        // (a 4 GB card; until #321 lowered the gate to 5,120 this also caught every 6 GB laptop
+        // card, which the Vulkan backend reports at 5,7xx–5,9xx MiB), else the first
         // listed. On a hybrid [iGPU, dGPU] box `devices[0]` named the iGPU while the model
         // actually ran on the dGPU — and on a hybrid [iGPU, SMALL dGPU] box the old fallback did
         // the same, because nothing was "useful". Rung selection, `--fit` and the "never -ngl"

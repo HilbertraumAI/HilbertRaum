@@ -1,0 +1,13 @@
+{
+  "sha256": "6f5d30666c2d8ae16a306e616d95341dcf3cc46810df84d7e6f5a7d1e4c1b293",
+  "runtime_env": "Vulkan backend (b9849 Windows build) · Windows 11 Home 10.0.26200",
+  "driver": "NVIDIA 32.0.16.1088; Intel 32.0.101.7082",
+  "heaps": "RTX 3080 Ti heap 0 device-local 11.80 GiB; no separate BAR heap · Intel UHD 770 one host-memory heap",
+  "argv_sources": "the shipped argv with `--extra \"-np 4\"` appended, so the command line carries `-np 1 -np 4` and llama.cpp takes the LAST — confirmed in the log (`n_slots = 4`). Everything else identical to `leg5-np1-verify`, run minutes later in the same session.",
+  "device_info_free_total": "Vulkan0 RTX 3080 Ti 11,316 / 12,084 MiB · Vulkan1 Intel UHD 770 48,060 / 32,606 MiB (raw order: discrete first, integrated second — unchanged)",
+  "desktop": "idle, same session as `leg5-np1-verify` — the weight file is in the OS page cache (load 5.2 s against that run's 17.5 s), which is the whole point of this control",
+  "fit": "offloaded **33/33** layers to GPU · buffers: Vulkan0 KV **256.00 MiB**, Vulkan0 **RS 201.00 MiB** (4 cells, 32 layers, **4 seqs**, 0 rs_seq) — i.e. the four-slot recurrent state the baseline had · **n_seq_max 4, kv_unified false, n_slots 4, n_ctx_slot 2048**",
+  "varied": "`-np 4` instead of the shipped `-np 1`, run WARM so the speed comparison isolates the slot count instead of the page cache",
+  "app_view": "not read — argv reconstruction, app closed.",
+  "predicted_vs_measured": "**Two findings.** (1) **Speed: no effect.** Warm, four slots decoded 103.09 tok/s and prefilled 2,834; warm, one slot decoded 99.89 and prefilled 2,318. The +21 % that `leg5-np1-verify` appeared to show against the COLD baseline was page-cache warmth, not `-np`. This reproduces the #182 finding (no throughput effect at ctx 8192) on a second machine and model, and confirms that #319's case for `-np 1` rests entirely on the 150.75 MiB of card memory it returns — not on speed. Caveat: the control's decode sample is 33 tokens (it hit a stop) against the other run's 512, so treat 103.09 as indicative; both sit at ≈ 100 tok/s. (2) **An explicit `-np 4` is NOT what the app used to do, and is worse.** Passing no `-np` at all gave `kv_unified = true` with `n_ctx_slot = 8192` — four sequences sharing one 8,192-cell cache. Passing `-np 4` explicitly gives `kv_unified = false` and **`n_ctx_slot = 2048`**: the context is SPLIT four ways. So the pre-#319 default was the benign form of four slots, and this control's slot count is not a like-for-like re-creation of it. It does not affect the memory figures compared here (KV 256.00 and RS 201.00 match the baseline exactly), and it is a useful reminder for anyone tempted to pass a slot count explicitly."
+}

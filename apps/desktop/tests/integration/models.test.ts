@@ -849,7 +849,7 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
   const all = [tiny, mid, big, huge]
   const slowOn = (id: string) => ({ tokensPerSecond: SLOW_PICK_TOKENS_PER_SECOND - 1, measuredModelId: id })
 
-  it('estimateGraphicsNeedMib: unrounded weights MiB × 1.15 + the cache term × 1024 + the 1,024 MiB margin', () => {
+  it('estimateGraphicsNeedMib: OFFLOADABLE weights MiB × 1.15 + the cache term × 1024 + the 1,024 MiB margin', () => {
     // 6.0 decimal GB = 5,722.0 MiB of weights; with the 0.5 GiB default cache: 8,116.3 MiB.
     expect(weightsMib(mid)).toBeCloseTo(5722.0, 0)
     expect(estimateGraphicsNeedMib(mid)).toBeCloseTo(8116.3, 0)
@@ -861,6 +861,19 @@ describe('recommendModelIdByVram / recommendChatModelId (§6.6 rule C)', () => {
     expect(fitsGraphicsMemory(big, 23_000)).toBe(false)
     // Decision 11: a manifest's own cache figure replaces the 0.5 GiB default — 0.4 GiB on the
     // 9B-shaped model reads 8,013.9; 1.1 GiB on the 27B-shaped one reads 23,865.6.
+    // §5 item 22 (e): a measured host-mapped share leaves BOTH the base and the 15 % term. The
+    // 9B's real figures — 6.0 GB with 545.62 MiB host-mapped and a 0.3 GiB cache — read 7,284.3,
+    // against 8,116.3 for the same weights with no field at all.
+    const hostMapped = asManifest({
+      id: 'hostMapped',
+      size_on_disk_gb: 6.0,
+      estimated_context_cache_gib: 0.3,
+      host_mapped_weights_mib: 545.62
+    })
+    expect(estimateGraphicsNeedMib(hostMapped)).toBeCloseTo((5722.045 - 545.62) * 1.15 + 0.3 * 1024 + 1024, 1)
+    // Clamped, never negative: a figure at or above the weights leaves the cache + margin alone.
+    const silly = asManifest({ id: 'silly', size_on_disk_gb: 6.0, host_mapped_weights_mib: 99_999 })
+    expect(estimateGraphicsNeedMib(silly)).toBeCloseTo(0.5 * 1024 + 1024, 6)
     const mid04 = asManifest({ id: 'mid04', size_on_disk_gb: 6.0, estimated_context_cache_gib: 0.4 })
     const big11 = asManifest({ id: 'big11', size_on_disk_gb: 19.8, estimated_context_cache_gib: 1.1 })
     expect(estimateGraphicsNeedMib(mid04)).toBeCloseTo(8013.9, 0)

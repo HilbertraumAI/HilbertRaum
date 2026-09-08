@@ -190,13 +190,25 @@ describe('selectBudgetDevice', () => {
     expect(selectBudgetDevice([SMALL])).toBeNull()
   })
 
-  it('reuses the runtime\'s 6 GiB gate at its exact boundary (N8): 5,921 MiB is out, 6,144 is in', () => {
-    expect(GPU_BUMP_MIN_VRAM_MB).toBe(6144)
-    // What a 6 GB laptop card actually reports (the assumptions check's N8 figure).
-    const laptop6 = { ...CARD8, name: 'NVIDIA GeForce RTX 3050 Laptop GPU', totalMb: 5921 }
-    expect(selectBudgetDevice([laptop6])).toBeNull()
-    const exactly = { ...laptop6, totalMb: 6144 }
+  it('reuses the runtime\'s VRAM gate at its exact boundary (N8, 5 GiB since #321): 5,119 out, 5,120 in', () => {
+    expect(GPU_BUMP_MIN_VRAM_MB).toBe(5120)
+    const laptop = { ...CARD8, name: 'NVIDIA GeForce RTX 3050 Laptop GPU', totalMb: 5119 }
+    expect(selectBudgetDevice([laptop])).toBeNull()
+    const exactly = { ...laptop, totalMb: 5120 }
     expect(selectBudgetDevice([exactly])).toBe(exactly)
+    // The three 6 GB laptop cards the project has actually measured — every one of them reports
+    // BELOW the old 6,144 gate on Vulkan, which is why it moved (#321, owner decision 2026-09-07).
+    for (const [name, totalMb] of [
+      ['NVIDIA GeForce GTX 1660 SUPER', 5746],
+      ['NVIDIA GeForce RTX 4050 Laptop GPU', 5921],
+      ['NVIDIA GeForce RTX 3060 Laptop GPU', 5994]
+    ] as const) {
+      const card = { ...CARD8, name, totalMb }
+      expect(selectBudgetDevice([card]), name).toBe(card)
+    }
+    // A 4 GB card is still no budget device: nothing ranked fits its 4,096 MiB, so rule C's
+    // no-fit fallback would hand the machine back to the RAM pick anyway.
+    expect(selectBudgetDevice([SMALL])).toBeNull()
   })
 })
 
@@ -290,7 +302,7 @@ describe('placementVerdict', () => {
   })
 
   it('estimates from the weights before the first start: the picker\'s fit on a card, headroom on unified / cpu', () => {
-    // Discrete (PR #308 audit decision 8): the picker's own need — unrounded weights × 1.15 + the
+    // Discrete (PR #308 audit decision 8): the picker's own need — offloadable weights × 1.15 + the
     // cache term + the 1 GiB margin — against the picker's BUDGET (free, else total − 1024), never
     // the weights against 92 % of the total. A 5.8 GB model (5,531 MiB; need 7,897 with the default
     // cache) on a 24 GiB card with 23,552 free fits; `needMb` stays the weights alone.
@@ -306,8 +318,11 @@ describe('placementVerdict', () => {
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 16_384, graphicsBudgetMb: 1024, ...big, observed: null }).spillMb).toBe(18_883)
     // The same on a 4 GB box: RAM + VRAM cannot take the weights.
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: 4096, vramMb: 16_384, graphicsBudgetMb: 15_360, ...big, observed: null }).kind).toBe('too_large')
-    // The card's free figure decides, not its total: the same 8 GiB card holds the 9B (need
-    // 8,014 with its 0.4 GiB cache) at 8,100 free and not at 8,000.
+    // The card's free figure decides, not its total: the same 8 GiB card holds a 6.0 GB model
+    // carrying a 0.4 GiB cache term (need 8,014) at 8,100 free and not at 8,000. Both the cache
+    // term and the host-mapped share are supplied here, not read from a manifest, so this boundary
+    // is independent of the catalog — the real 9B carries 0.3 since `-np 1` (#319) and 545.62 MiB
+    // of host-mapped weights since #321, and needs 7,830.
     const nineB = model(6.0, 0.4)
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 8192, graphicsBudgetMb: 8100, ...nineB, observed: null }).kind).toBe('gpu')
     expect(placementVerdict({ memoryClass: 'discrete', ramMb: 32_768, vramMb: 8192, graphicsBudgetMb: 8000, ...nineB, observed: null }).kind).toBe('partial')

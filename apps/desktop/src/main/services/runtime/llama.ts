@@ -26,7 +26,44 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
  *   --reasoning-format deepseek  thinking output streams as separate
  *                                `delta.reasoning_content` frames — never inline
  *                                `<think>` tags in `delta.content`
+ *   -np 1                        ONE server slot instead of b9849's four (see below)
  * The E5 embedder composes `LlamaServer` directly and does not get these.
+ */
+/**
+ * `-np 1` (issue #319, owner decision 2026-09-07): one server slot, not b9849's default of four
+ * unified ones. CHAT ONLY — the embedder, the reranker, translation (`TRANSLATION_SLOT_ARGS`) and
+ * vision (`VISION_SLOT_ARGS`) keep their own args; the latter two already pass the long form
+ * `--parallel 1` for their own reasons.
+ *
+ * Why one slot is correct here: the app is single-user by design and already serialises every lane
+ * that reaches this server — the model-slot arbiter (`analysis/model-slot-arbiter.ts`) hands the
+ * one slot between chat and yielding builds, and the local API admits one external request with a
+ * queue depth of one, answering 429 beyond that (`local-api/admission.ts`). The four slots were
+ * never used in parallel, and they cost card memory exactly where the fit decides between full and
+ * half speed.
+ *
+ * What `-np` does NOT change: the CONTEXT WINDOW. `--ctx-size` is the TOTAL cache size on both
+ * settings, and each slot sees all of it. Measured on the pin, same model, same context, one thing
+ * varied (`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg7-baseline-q5km.stderr.log` vs
+ * `leg1-np-1.stderr.log`):
+ *   -np auto  →  n_parallel = 4, kv_unified = true,  n_seq_max = 4, n_ctx = n_ctx_seq = 8192,
+ *                n_slots = 4, n_ctx_slot = 8192   ·  KV 512.00 MiB  ·  recurrent state 1,795.50 MiB
+ *   -np 1     →  n_parallel = 1, kv_unified = false, n_seq_max = 1, n_ctx = n_ctx_seq = 8192,
+ *                n_slots = 1, n_ctx_slot = 8192   ·  KV 512.00 MiB  ·  recurrent state   448.88 MiB
+ * The KV (and, on Gemma, the sliding-window) cache is sized in CELLS from `--ctx-size` and is
+ * counted ONCE either way; only the RECURRENT state is per-sequence, so it drops exactly 4×. That
+ * is why the manifests' `estimated_context_cache_gib` terms were recomputed for one slot while
+ * three of the seven did not move at all (`model-benchmarks.md` §6.6, 2026-09-07 amendment).
+ *
+ * What it bought, measured (#318 leg 1, RTX 3090, 27B Q5 at ctx 8192, the app's own rung-1a argv):
+ * 62/66 layers at 30.4 tok/s → **66/66 at 51.0 tok/s**, the one variant that fully offloads Q5 on a
+ * 24 GB card while keeping MTP. On the 8 GB card (leg 2) the four slots cost the 9B 440 MiB and the
+ * fit missed a full offload by 133.
+ *
+ * Accepted cost (owner): with one slot a background job (categorisation, ZIM query expansion, a doc
+ * task) evicts the chat conversation's KV prefix. llama-server's host-RAM prompt cache restores it
+ * on a prefix match, so the cost is a restore, not a full re-prefill — bounded, and no in-app path
+ * depends on parallel slots.
  */
 /**
  * `-lv 4` (log verbosity): the pinned build prints its load log (`load_tensors: offloaded X/Y
@@ -36,7 +73,7 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
  * lines, 5 → also the `--fit` dry-run pass with 0.00 MiB buffers, which would double the
  * offload line). Load-time lines only; per-request logging is unchanged at 4.
  */
-export const CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format', 'deepseek', '-lv', '4'] as const
+export const CHAT_SERVER_ARGS = ['--jinja', '--reasoning-format', 'deepseek', '-lv', '4', '-np', '1'] as const
 
 /**
  * Physical-batch cap for the chat sidecar's prompt prefill (RT-1, perf audit 2026-06-18).

@@ -67,7 +67,10 @@ async function main() {
     '--threads', String(threads), // sidecar.ts:534-535 (defaultThreadCount, sidecar.ts:90-98)
     '--batch-size', String(physicalBatch), // sidecar.ts:516-524 (llama.ts:460)
     '--ubatch-size', String(physicalBatch),
-    '--jinja', '--reasoning-format', 'deepseek', '-lv', '4', // llama.ts:39 CHAT_SERVER_ARGS
+    // `-np 1` since 2026-09-07 (issue #319, PR #386): ONE server slot, part of CHAT_SERVER_ARGS
+    // itself now, not a variant. A run without it measures the pre-#386 four-slot launch — which
+    // is what `--extra "-np 1"` meant when leg 1 used it to VARY this setting.
+    '--jinja', '--reasoning-format', 'deepseek', '-lv', '4', '-np', '1', // llama.ts:39 CHAT_SERVER_ARGS
     ...extra // factory.ts:763 rung 1 extraArgs = [] (no -ngl, no --device); variants add here
   ]
   const before = { list_devices: listDevices(), nvidia_smi: smi(), desktop: desktopNote, at: new Date().toISOString() }

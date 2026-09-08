@@ -98,11 +98,12 @@ export const ESTIMATE_HEADROOM = 0.92
 /**
  * The BUDGET device (PR #308 audit, decision 9): the one card whose memory the chat pick,
  * the placement verdict and the graphics tile are measured against. The LARGEST device that
- * passes the ONE usable-card rule (`isUsefulDevice` in `shared/gpu-rules.ts`: ≥ 6 GiB and
+ * passes the ONE usable-card rule (`isUsefulDevice` in `shared/gpu-rules.ts`: at or above
+ * `USABLE_VRAM_MB`, 5 GiB since #321, and
  * not integrated by name), never `devices[0]`: the pinned Vulkan build lists an integrated
  * GPU beside the discrete one in DRIVER order, so on a hybrid laptop the first device is as
  * often the iGPU reporting 11–36 GiB of shared RAM as it is the card. Null when no device
- * passes (an integrated-only laptop, a sub-6 GiB card, an empty probe). The implementation IS
+ * passes (an integrated-only laptop, a card under the floor, an empty probe). The implementation IS
  * `primaryUsefulDevice` (the #303 P5 name; the two rules were unified at the #303/#308 merge),
  * kept under this name because the #308 records cite it.
  */
@@ -283,7 +284,7 @@ export interface PlacementVerdictInput {
  * layer on the GPU is 'gpu' (unified memory reads the same way), fewer is 'partial' with
  * the CPU-side bytes as the spill, a CPU backend is 'cpu', and a GPU start whose log carried
  * no offload line is 'unknown' rather than a guess. ESTIMATED (no start yet): on a discrete
- * card the picker's own fit (`estimateGraphicsNeedMib` — unrounded weights × 1.15 + the
+ * card the picker's own fit (`estimateGraphicsNeedMib` — the OFFLOADABLE weights × 1.15 + the
  * model's context-cache term + the fit's 1 GiB margin — against the picker's budget, PR #308
  * audit decision 8, finding §4.1), so this row and the Models ★ can never call the same
  * (model, card) pair differently; a card that cannot hold it still runs the model if RAM can

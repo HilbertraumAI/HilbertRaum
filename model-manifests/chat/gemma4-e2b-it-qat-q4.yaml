@@ -31,10 +31,28 @@ recommended_ram_gb: 12
 # on a machine where tok/s is the binding constraint it is the ratified speed/quality pick.
 recommendation_rank: 3
 recommended_context_tokens: 8192
-# Context cache at 8k under the app launch (b9849 defaults: 4 unified slots, ubatch 2048): 24 MiB
-# full-attention + 48 MiB sliding-window (only 15 of 35 layers own a cache) = 0.07 GiB; the
+# Context cache at 8k under the app launch (ubatch 2048): 24 MiB full-attention + 48 MiB
+# sliding-window (only 15 of 35 layers own a cache) = 0.07 GiB, rounded up to the 0.1 floor; the
 # picker's graphics-fit cache term (model-benchmarks.md §6.6, PR #308 audit decision 11).
+# UNCHANGED by the 2026-09-07 `-np 1` recomputation (issue #319): this architecture has NO recurrent
+# state, and the recurrent state is the only per-SEQUENCE term -- both Gemma caches are sized in
+# CELLS from --ctx-size and are counted once whatever the slot count is (measured on the 12B twin,
+# eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg3-baseline.stderr.log: "4/1 seqs" is four
+# sequences over ONE cache).
 estimated_context_cache_gib: 0.1
+
+# The weights that stay HOST-mapped even on a full offload (embedding / output tables), MiB —
+# the picker subtracts them before applying its 15 % working share, because the runtime buffers
+# that share stands for scale with what is actually ON the card (issue #321, owner decision
+# 2026-09-07; model-benchmarks.md §6.6 point 3).
+# MEASURED, not derived — the app has no GGUF-header parser. Read off the
+# `CPU_Mapped model buffer size` line of a FULL-OFFLOAD start (36/36 layers):
+# eval/results/hardware/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/leg4-baseline-e2b.stderr.log
+# A PARTIAL offload inflates this line with the layers that did not fit, so only full-offload
+# starts count. Absent on any model never started on hardware, which then keeps the old
+# whole-file arithmetic; the GGUF-header derivation that would cover every model is
+# BUILD_STATE §5 item 22 (e), still open.
+host_mapped_weights_mib: 2152.50
 # Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server;
 # `enable_thinking: false` suppresses cleanly (0 reasoning chars, content intact). Deep vs
 # Balanced on the 8-item set: 7/8 vs 8/8 (arithmetic slip on train-arrival) — the flip rule
