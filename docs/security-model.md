@@ -2281,8 +2281,17 @@ code changed to add this line.
 That acceptance item (PR #303 audit DR3, issue #329) is **verified**, 2026-09-08. Across all 32
 verbosity-4 logs captured from the pinned build there is no `POST /` or `GET /` request line, no
 `"content"` or `"messages"` JSON body, no prompt or completion text, and every `conv_id=` is
-`conv_id= (empty=1)`: verbosity 4 raises LOAD-time logging, not request logging. Two things the
-result does NOT say. First, the only conversational-looking text in such a log is llama.cpp's own
+`conv_id= (empty=1)`.
+
+State that precisely, because "verbosity 4 does not log requests" would be false: verbosity 4
+raises load-time **and per-request DIAGNOSTIC** logging — slot ids, token counts, timings, sampler
+parameters and cache state, so each captured log carries a complete request cycle's METADATA
+(`launch_slot_`, `new prompt, n_ctx_slot = 8192 … task.n_tokens = 2015`, `print_timing`,
+`release: … n_tokens = 2526`). What it prints no trace of is **prompt or completion text, and any
+request body**. The verified claim is about the content of that logging, not its existence.
+
+Two further things the result does NOT say. First, the only conversational-looking text in such
+a log is llama.cpp's own
 canned `example_format` template probe — a fixed `You are a helpful assistant` / `Hello` /
 `Hi there` exchange it renders through the model's Jinja template at load time, before the server
 listens; a standing test (`placement-parser.test.ts`, "the committed load logs carry no request or

@@ -36,7 +36,11 @@ import type { ModelPlacement, PlacementDevice } from '../../../shared/types'
 // re-reserves the draft context and REPRINTS its unchanged size. Summing every line counted
 // that buffer a third time (1,665.34 MiB where 1,145.28 was allocated). MAX, not "skip a
 // repeated block": a re-reserve may legitimately print a LARGER figure, and that is the size.
-// `llama_context: constructing llama_context` is the context boundary.
+// `llama_context: constructing llama_context` is the context boundary. The rule ASSUMES each
+// llama_context is constructed ONCE per server process — true of all 32 captured logs, the
+// `--fit-target` runs included. A future build whose fit loop tore a context down and rebuilt
+// it would reprint `constructing llama_context` and be counted as a second context: that is a
+// parser regression to recognise as one, not a mystery.
 //
 // Two lines are deliberately NOT counted:
 //   `sched_reserve: Vulkan_Host compute buffer size = 128.16 MiB` — host memory, present on

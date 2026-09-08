@@ -316,10 +316,16 @@ describe('createPlacementParser', () => {
   })
 })
 
-// PR #303 audit DR3, verified and now STANDING: verbosity 4 raises llama.cpp's LOAD-time
-// logging, not request logging — a captured log carries no prompt, no completion and no request
-// body. These four fixtures are committed to a PUBLIC repo, so the check runs on every suite:
-// a future re-capture that leaks a conversation reddens here instead of shipping.
+// PR #303 audit DR3, verified and now STANDING. Precisely what the fixtures show: verbosity 4
+// raises llama.cpp's load-time AND per-request DIAGNOSTIC logging — slot ids, token counts,
+// timings, sampler parameters and cache state, so every fixture DOES carry a complete request
+// cycle's metadata (`launch_slot_`, `new prompt, n_ctx_slot = 8192 … task.n_tokens = 2015`,
+// `print_timing`, `release`) — but no prompt or completion TEXT and no request body. "Verbosity 4
+// does not log requests" would be false; what is true is that it logs no content.
+//
+// These four fixtures are committed to a PUBLIC repo, so the check runs on every suite and is a
+// WHITELIST, not a blacklist: every line must fall into one of five known classes, so injected
+// prose ANYWHERE in a future re-capture reddens here instead of shipping.
 describe('the committed load logs carry no request or prompt content (DR3)', () => {
   const NAMES = [
     'placement-b9849-partial-20of33-hybrid.txt',
@@ -334,27 +340,56 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
   // probe — `chat template, example_format: '…'`, a fixed system/user/assistant exchange it
   // renders through the model's Jinja template at load time, BEFORE the server listens. It is
   // llama.cpp's string, not the user's, so it is allowed only INSIDE that block.
-  const CANNED = ['You are a helpful assistant', 'Hi there', 'How are you?']
+  const CANNED = ['You are a helpful assistant', 'Hello', 'Hi there', 'How are you?']
+  /** `0.11.421.745 I ` — the prefix every real log line of the pinned build carries. */
+  const TIMESTAMPED = /^\d+\.\d\d\.\d\d\d\.\d\d\d [IWE] /
+  /** `print_info: LF token              = 107 '` — a token literal whose value IS a newline. */
+  const OPEN_TOKEN_LITERAL = /token\s*=\s*\d+ '$/
+
+  /**
+   * The `example_format` block: from the line that opens it to the next line that is a lone
+   * quote. The search starts AFTER the opening line on purpose — a lone `'` also occurs in
+   * ordinary log content (the SWA fixture has one at line 152, closing
+   * `print_info: LF token = 107 '` + a raw newline), and taking the first one in the file would
+   * end the block before it began.
+   */
+  const blockOf = (lines: string[]): { open: number; close: number } => {
+    const open = lines.findIndex((l) => l.includes('chat template, example_format:'))
+    const rest = open < 0 ? -1 : lines.slice(open + 1).findIndex((l) => l.trim() === "'")
+    return { open, close: rest < 0 ? -1 : open + 1 + rest }
+  }
 
   it.each(NAMES)('%s', (name) => {
     const text = fixture(name)
     for (const needle of FORBIDDEN) expect(`${name}: ${text.includes(needle)}`).toBe(`${name}: false`)
-    // Every slot line prints its conversation id; on a load-only capture it is always empty.
+    // Every slot line prints its conversation id; the app never sets one, so it is always empty.
     const ids = text.match(/conv_id=[^|,\n]*/g) ?? []
     expect(ids.length).toBeGreaterThan(0)
     for (const id of ids) expect(id.trim()).toBe('conv_id= (empty=1)')
     // The capture is the real thing: the verbosity the parser needs, and a load it can read.
     expect(text).toContain('verbosity = 4')
     expect(text).toMatch(/offloaded\s+\d+\/\d+\s+layers to GPU/)
-    // The canned probe, and nothing like it, outside the `example_format` block.
+
     const lines = text.split('\n')
-    const open = lines.findIndex((l) => l.includes('chat template, example_format:'))
-    const rest = open < 0 ? -1 : lines.slice(open + 1).findIndex((l) => l.trim() === "'")
-    const close = rest < 0 ? -1 : open + 1 + rest
+    const { open, close } = blockOf(lines)
+    // The canned probe, and nothing like it, outside the block.
     lines.forEach((l, i) => {
       for (const c of CANNED) {
         if (l.includes(c)) expect(`${name}:${i + 1} ${c}`).toBe(`${name}:${i + 1} ${open >= 0 && i > open && i <= close ? c : 'OUTSIDE example_format'}`)
       }
+    })
+
+    // THE NET: every line is one of five classes. Anything else — a pasted prompt, a stray note,
+    // an editor's comment — fails, naming the line.
+    lines.forEach((l, i) => {
+      const ok =
+        (i === 0 && l.startsWith('# ')) || // (a) the hand-written `# <leg> — argv: …` header
+        TIMESTAMPED.test(l) || // (b) a real log line
+        (open >= 0 && i > open && i <= close) || // (c) inside the canned template block
+        l.startsWith('\t') || // (d) a tab-indented sampler-params continuation
+        (l === "'" && OPEN_TOKEN_LITERAL.test(lines[i - 1] ?? '')) || // (e) a newline token literal
+        (i === lines.length - 1 && l === '') // the file's trailing newline
+      expect(`${name}:${i + 1} ${ok ? 'classified' : JSON.stringify(l.slice(0, 80))}`).toBe(`${name}:${i + 1} classified`)
     })
   })
 })

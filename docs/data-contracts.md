@@ -169,9 +169,9 @@ shape-checked — on WRITE and on READ**, by the pure normalizers in
   also carry **`gpuRsMb?` / `cpuRsMb?`** — the recurrent-state cache a hybrid (Gated-DeltaNet)
   model allocates beside the KV buffers (`llama_memory_recurrent: <device> RS buffer size`),
   allocated per sequence and therefore kept out of `gpuKvMb`/`cpuKvMb`. Like `devices?`, each is
-  set only when the raw record has the key: absence means the recording build printed no `RS`
-  line (so its `gpuKvMb` is KV-only), while present-and-`null` means the model has no recurrent
-  state.
+  set only when the raw record has the key: absence means the recording build predates the pair
+  (so its `gpuKvMb` is KV-only), while present-and-`null` means the recording build printed no
+  usable `RS` figure — a dense model prints none, and `figure()` also nulls a malformed value.
 - `gpuProbe` (P5) — `{ devices: GpuDevice[], probedAt, machineKey? }` via `normalizeGpuProbe`,
   behind the unchanged top-level object gate: a `devices` ARRAY is required (junk items dropped —
   a device needs a non-empty `name` and a finite `totalMb`; `id` reads as `''` and `freeMb` as
