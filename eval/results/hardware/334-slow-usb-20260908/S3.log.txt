@@ -1,0 +1,74 @@
+2026-09-08T00:26:29.841Z [INFO] Workspace resolved {"root":"E:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-08T00:26:29.844Z [INFO] Workspace state {"state":"uninitialized","mode":null,"plaintextAllowed":false,"encryptionRequired":true}
+2026-09-08T00:26:29.844Z [INFO] Model manifests directory {"manifestsDir":"E:\\model-manifests"}
+2026-09-08T00:26:29.878Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-08T00:26:29.882Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-08T00:26:29.882Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-08T00:26:29.883Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-08T00:26:29.883Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-08T00:26:29.908Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-08T00:26:39.270Z [INFO] Workspace created {"mode":"encrypted"}
+2026-09-08T00:26:39.277Z [INFO] First run: benchmarking hardware in the background once the model start settles
+2026-09-08T00:26:39.306Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:26:39.306Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-08T00:26:39.840Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-4b-ud-q4kxl","ramGb":31.9}
+2026-09-08T00:27:14.787Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056,"ms":33150,"ok":true}
+2026-09-08T00:27:36.643Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128,"ms":21855,"ok":true}
+2026-09-08T00:30:24.828Z [INFO] Model checksum hashed {"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960,"ms":168175,"ok":true}
+2026-09-08T00:31:08.743Z [INFO] Model checksum hashed {"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256,"ms":43873,"ok":true}
+2026-09-08T00:32:35.073Z [INFO] Model checksum hashed {"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":86328,"ok":true}
+2026-09-08T00:32:37.594Z [INFO] Model checksum hashed {"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728,"ms":2516,"ok":true}
+2026-09-08T00:32:53.124Z [INFO] Model checksum hashed {"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896,"ms":15525,"ok":true}
+2026-09-08T00:33:00.129Z [INFO] Model checksum hashed {"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967,"ms":6962,"ok":true}
+2026-09-08T00:34:59.300Z [INFO] Use model (select + start) {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:34:59.352Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-08T00:34:59.358Z [INFO] Model prefetch started {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:35:00.859Z [INFO] Model prefetch done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:35:08.862Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:35:09.702Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:35:17.026Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:35:18.131Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:35:18.131Z [INFO] quit: ZIM transients cleaned
+2026-09-08T00:35:18.131Z [INFO] quit: locking workspace
+2026-09-08T00:38:20.910Z [INFO] Workspace resolved {"root":"E:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-08T00:38:20.919Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-08T00:38:20.919Z [INFO] Model manifests directory {"manifestsDir":"E:\\model-manifests"}
+2026-09-08T00:38:20.965Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-08T00:38:20.968Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-08T00:38:20.969Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-08T00:38:20.969Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-08T00:38:20.969Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-08T00:38:20.974Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-08T00:38:26.431Z [INFO] Workspace unlocked
+2026-09-08T00:38:26.441Z [INFO] Auto-starting the active model runtime in the background {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:38:26.496Z [WARN] Auto-start of the active model failed (start it from the AI Model screen) {"modelId":"qwen3.5-9b-ud-q4kxl","error":"Error: \"Qwen3.5 9B (UD-Q4_K_XL)\" can't be started — its model file isn't installed on this drive yet."}
+2026-09-08T00:38:26.499Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:38:26.499Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-08T00:39:26.916Z [INFO] Use model (select + start) {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:39:27.003Z [INFO] Start runtime {"modelId":"qwen3-14b-instruct-q4","state":"installed"}
+2026-09-08T00:39:27.008Z [INFO] Model prefetch started {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:40:24.751Z [INFO] Model prefetch done {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:40:28.678Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3-14b-instruct-q4","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:40:30.621Z [INFO] Model warm-up generation done {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:42:52.822Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-4b-ud-q4kxl","ramGb":31.9}
+2026-09-08T00:43:57.484Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:43:59.009Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:43:59.009Z [INFO] quit: ZIM transients cleaned
+2026-09-08T00:43:59.009Z [INFO] quit: locking workspace
+2026-09-08T00:46:15.133Z [INFO] Workspace resolved {"root":"D:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-08T00:46:15.140Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-08T00:46:15.140Z [INFO] Model manifests directory {"manifestsDir":"D:\\model-manifests"}
+2026-09-08T00:46:15.219Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-08T00:46:15.224Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-08T00:46:15.226Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-08T00:46:15.226Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-08T00:46:15.227Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-08T00:46:15.232Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-08T00:46:21.227Z [INFO] Workspace unlocked
+2026-09-08T00:46:21.245Z [INFO] Drive is on a new computer: benchmarking it in the background once the model start settles
+2026-09-08T00:46:21.246Z [INFO] Auto-starting the active model runtime in the background {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:46:21.283Z [WARN] Auto-start of the active model failed (start it from the AI Model screen) {"modelId":"qwen3-14b-instruct-q4","error":"Error: \"Qwen3 14B Instruct Q4\" can't be started — its model file isn't installed on this drive yet."}
+2026-09-08T00:46:21.307Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:46:21.307Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-08T00:46:22.936Z [INFO] Benchmark complete {"profile":"LITE","recommendedModelId":"qwen3.5-9b-ud-q4kxl","ramGb":15.8}
+2026-09-08T00:47:42.451Z [INFO] Model checksum hashed {"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":65514,"ok":true}
