@@ -1312,7 +1312,7 @@ commit references, and added the changelog entry.
   Models-screen hash lets the page-cache load sample through the #108 guard (589 MB/s persisted
   for a 28 MB/s stick); the Home preflight's 8 MiB probe runs at unlock beside the hash; a healthy
   start at 87 MB/s on a 16 GB machine settles at 159 s, past the bound.
-  Follow-ups: #392 (the read sample), #393 (the overlap fix — FIXED 2026-09-08, PR #TBD: the
+  Follow-ups: #392 (the read sample), #393 (the overlap fix — FIXED 2026-09-08, PR #405: the
   speed leg's busy predicate also reads `startingModelId` and the identity of the runtime it
   captured, and a stream the stop cuts warns
   instead of returning null silently). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
