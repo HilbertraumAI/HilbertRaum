@@ -2858,9 +2858,10 @@ offline article viewer. Files are registered in place, never copied.
   … gibt es`") is guesswork the fixture never validated as complete. `services/zim/expand.ts`
   `makeQueryExpander(runtime)` builds the call: ONE per ask (never per pack), `mode: 'fast'`
   (thinking off), temperature 0, `EXPAND_MAX_TOKENS = 96`, the D55 `responseSchema` (the same
-  grammar-constrained-JSON machinery `classify.ts` uses), and its own `EXPAND_TIMEOUT_MS = 6_000`
+  grammar-constrained-JSON machinery `classify.ts` uses), and its own `EXPAND_TIMEOUT_MS`
   bound INSIDE `arm.ts`'s 20 s `EXTERNAL_RETRIEVAL_DEADLINE_MS` — a stuck call leaves the packs
-  fourteen seconds, never nothing; and when the arm's DEADLINE itself elapses mid-expansion the
+  eight seconds, never nothing (it was `6_000` leaving fourteen until the #423 amendment below);
+  and when the arm's DEADLINE itself elapses mid-expansion the
   arm degrades exactly as before this stage — no expansion, every pack settles `deadline` — while
   the ask's own cancellation is rethrown (the arm, not the expander, tells the two apart via
   `askSignal`; measured 2026-09-07 with the default 4B model on an i9-14900K
@@ -2880,7 +2881,36 @@ offline article viewer. Files are registered in place, never copied.
   the group fell to the plain-arm 2/6. The arm degrades exactly as designed (no expansion, plain
   search, nothing thrown), so this is a quality cliff on the first ask, not a correctness defect
   — tracked on its own issue; evidence
-  `ai_drive-archive/zim-wave-2026-09/evidence/l2-revisit-2026-09-08/` row 4.** `parseExpansion` then sanitises the reply against
+  `ai_drive-archive/zim-wave-2026-09/evidence/l2-revisit-2026-09-08/` row 4.**
+  **#423 amendment (2026-09-08, same machine, same runtime, same model; evidence
+  `ai_drive-archive/zim-wave-2026-09/evidence/cold-expand-2026-09-08/`, both harnesses driving
+  the real `makeQueryExpander` and reading llama.cpp's own `timings`): the cliff above is real
+  but its cause is NOT warmth, and two sentences of this record were wrong. (1) The cost is
+  DECODE, not prefill — the 215-token system prompt prefills in 0.17–0.26 s while the 26–63-token
+  reply takes 2.2–5.6 s at 10.3–12.6 tok/s, i.e. 92–96 % of the call; wall time is linear in
+  reply length, so the QUESTION sets it (the two list questions that emit 62–63 tokens cost
+  5.6–6.0 s warm, the one that emits 26 costs 2.4 s), and `cache_prompt` is worth ~0.3 s once.
+  (2) "Six seconds … still admits a first, uncached call on a slower processor" was false: the
+  warm maximum on this machine was already 5 807 ms against the 6 000 ms bound, and the same
+  seven questions at `-t 2` (a stand-in for a slower processor, 6.7–8.8 tok/s) cost 4.4–10.2 s
+  and lost 3 of 7 permanently — warm, on every ask, not on the first. The 6 s bound also could
+  not afford `EXPAND_MAX_TOKENS = 96` on ANY configuration measured (96 tokens needs 8.5 s at the
+  fastest CPU rate), so the two constants had never been consistent. Cold adds only 0.2–1.7 s per
+  call; it pushed an already-marginal distribution over an edge it was always sitting on. Also
+  ruled out: an aborted call does not poison the next (llama-server releases the slot on
+  disconnect — two forced aborts, then a normal 4 066 ms call), and the same seven questions on
+  this box's RTX 3080 Ti at `-ngl 99` cost 171–378 ms, so the whole effect is CPU-only. **Fixed
+  by raising `EXPAND_TIMEOUT_MS` to `12_000`** — it affords every reply measured at the slowest
+  rate measured, and affords the whole token cap from ~9 tok/s up; the packs keep eight of the
+  arm's twenty in the worst case, which is the D-Z20 ruling's own quality-over-seconds trade
+  applied to the machines where the expansion was silently off. A fast machine is unchanged (its
+  calls finish in 2–6 s and never reach the bound). `zim-expand.test.ts` now pins the bound, the
+  token cap and `EXTERNAL_RETRIEVAL_DEADLINE_MS` against each other so they cannot drift apart
+  again, and `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7` records the rate they are derived
+  from. NOT claimed: no re-run of the list-group fixture was needed for the constant (the lever's
+  quality is D-Z20's own 5/6 measurement, which this only makes reachable more often), and the
+  slow end is one thread-restricted stand-in on one box, not a second machine.**
+  `parseExpansion` then sanitises the reply against
   the SAME lists `query-rewrite.ts` uses (`isContentWord`, `TOKEN_RE`): a concept survives only
   when it is a content word (no function or frame word — "liste" itself is a German frame word
   and never survives, even when the model offers it), not already in the plain pattern

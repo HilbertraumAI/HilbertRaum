@@ -225,6 +225,14 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **List questions against knowledge packs now work on slower computers too.** When you ask a
+  pack something like "which countries emit the most CO2", the app first asks your local model
+  what a list article about it would be called. That step was given six seconds, which turned out
+  to be less than the answer itself can take: the longest-answering questions used almost all of
+  it even on a fast desktop processor, and on a slower one they ran past it every time, so those
+  questions quietly fell back to the plain search and missed the list article. The step now has
+  twelve seconds, which covers every case we measured. Nothing changes on a computer that was
+  already fast enough — those calls finish in a few seconds and never reach the limit.
 - **Knowledge-pack articles open on the first try on Windows.** The pack server sometimes stopped
   sending a large article half-way through, which cost about four seconds per affected article and
   occasionally lost one from an answer entirely; the app now asks for articles in a way that
