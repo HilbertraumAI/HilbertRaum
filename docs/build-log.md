@@ -27,6 +27,32 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-08 — BUILD_STATE §5 item 22 (b)/(d) retired verbatim
+
+Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 22 when the owner ruling of
+2026-09-08 landed on both letters, to keep §5 inside its 500-line budget.
+
+**(b)** — the Diagnostics benchmark card sheds what Performance now owns: the run action, the
+always-mounted `ErrorBanner` beside it (SH-2/#145 — with no action it could never fill), the
+"Assigned profile" row and the "Recommended model" row (the check's HISTORICAL pick, a
+live-vs-history confusion source the PR #303 audit named). What stays is the raw measurement
+plus Copy, and a new empty state pointing at Performance so the card is not a dead end before
+the first check. The Copy report MIRRORS the card rather than keeping the dropped rows.
+
+**(d)** — the other-machine history rows show the read sample's duration. No schema change was
+needed: the persisted rows are `BenchmarkResult`s and already carry `effectiveRead`. A
+`model_load` sample is named a model start, a `checksum` sample a full file check, and a row
+without the field renders nothing.
+
+Durable record for both: `docs/benchmark.md` — "The Diagnostics benchmark card — a support
+artifact" and "The read sample's duration on those rows". Full text of the two letters as they
+stood before the collapse:
+
+(b) the Diagnostics benchmark card could shrink to the raw table + Copy now that the answer lives on Performance;
+
+(d) model-load duration per machine in the history rows (the `model_load` sample carries it; only the current machine shows it today);
+
+
 ## 2026-09-08 — BUILD_STATE §5 item 22 (g) retired verbatim (#42)
 
 Collapsed to a one-line pointer in `BUILD_STATE.md` §5 item 22 when the owner ruling of

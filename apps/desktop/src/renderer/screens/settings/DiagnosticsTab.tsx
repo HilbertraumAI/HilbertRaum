@@ -2,7 +2,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { Banner, Button, ErrorBanner, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
-import { friendlyIpcError, runAndSurface } from '../../lib/errors'
+import { runAndSurface } from '../../lib/errors'
 import { fmt1 } from '../../lib/format'
 import { formatSize } from '../documents/format'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
@@ -239,12 +239,24 @@ function lastRunValue(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): s
   return Number.isNaN(ran.getTime()) ? t('diag.app.unknown') : ran.toLocaleString(lang)
 }
 
-/** Plain-text rendering of the "Hardware benchmark" card for the Copy button. */
+/**
+ * Plain-text rendering of the "Hardware benchmark" card for the Copy button — the SUPPORT
+ * ARTIFACT: the raw measurement, nothing interpreted.
+ *
+ * The report MIRRORS the card exactly (§5 item 22 (b), owner decision 2026-09-08), which is why
+ * the two rows the card dropped are not kept here "because people paste this into bug reports":
+ *   - "Recommended model" is the check's HISTORICAL pick. A stale pick in a pasted report is worse
+ *     than an absent one — a reader takes it for what the app recommends now, which is the exact
+ *     live-vs-history confusion the PR #303 audit identified. The LIVE pick is in the Performance
+ *     screen's own Copy report, which already heads itself "This computer" / "Another computer".
+ *   - "Assigned profile" is not lost from this tab at all: the App & runtime card and its Copy
+ *     report carry `hardwareProfile`, and THAT one is live rather than recorded.
+ * Keeping rows in the report that the card no longer shows would also break this file's standing
+ * invariant — card row and Copy text render from the same helpers "so the two can never disagree".
+ */
 function buildBenchmarkReport(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string {
   const lines = [
     t('diag.bench.title'),
-    `${t('diag.bench.profile')}: ${bench.profile}`,
-    `${t('diag.bench.recommended')}: ${bench.recommendedModelId ?? t('diag.bench.noMatch')}`,
     `${t('diag.bench.ram')}: ${bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} GB` : t('diag.app.unknown')}`,
     `${t('diag.bench.cpu')}: ${(bench.cpuModel || t('diag.app.unknown')) + (bench.cpuCores > 0 ? t('diag.bench.cores', { count: bench.cpuCores }) : '')}`,
     `${t('diag.bench.osArch')}: ${bench.os || t('diag.app.unknown')} (${bench.arch || t('diag.app.unknown')})`,
@@ -273,12 +285,11 @@ export function DiagnosticsTab(): JSX.Element {
   const [install, setInstall] = useState<RuntimeInstallInfo | null>(null)
   const [logTail, setLogTail] = useState<string[] | null>(null)
   const [showLogs, setShowLogs] = useState(false)
-  const [running, setRunning] = useState(false)
-  const [error, setError] = useState<string | null>(null)
   // full-audit 2026-07-11 CODE-27: "Try GPU again" was the one handler in this file without
   // a try/catch + mounted guard — a rejected re-probe was an unhandled rejection with zero
-  // feedback. Its failure gets its own banner next to the button (the benchmark's `error`
-  // slot carries benchmark-specific copy).
+  // feedback. Its failure gets its own banner next to the button. Since §5 item 22 (b)
+  // (2026-09-08) it is the ONLY action in this tab that can fail, so this is the only
+  // `error`-style state left — the benchmark's went with the benchmark's button.
   const [gpuRetryError, setGpuRetryError] = useState<string | null>(null)
   // Activity panel: loaded on demand, paged via the beforeId cursor.
   const [showActivity, setShowActivity] = useState(false)
@@ -439,25 +450,6 @@ export function DiagnosticsTab(): JSX.Element {
     )
   }
 
-  async function runBenchmark(): Promise<void> {
-    setRunning(true)
-    setError(null)
-    try {
-      const result = await window.api.runBenchmark()
-      setBench(result)
-      // The benchmark re-probes + persists the GPU info — refresh so the
-      // Acceleration line reflects it without a manual "Refresh".
-      void refreshStatus()
-    } catch (err) {
-      // friendlyIpcError strips the Electron transport prefix + Error-class name so the
-      // localized diag.bench.failed copy interpolates a clean message, not raw English
-      // boilerplate (audit FE-8).
-      setError(friendlyIpcError(err))
-    } finally {
-      setRunning(false)
-    }
-  }
-
   return (
     <>
       <p className="hint">{t('diag.localOnly')}</p>
@@ -519,37 +511,37 @@ export function DiagnosticsTab(): JSX.Element {
         </div>
       </div>
 
+      {/* The benchmark card is a SUPPORT ARTIFACT (§5 item 22 (b), owner decision 2026-09-08):
+          the raw measurement rows plus Copy, and nothing else. The Performance screen owns both
+          the answer and the action — "Check this computer" / "Check again" call the very
+          `runBenchmark()` this card used to duplicate — and it answers in plain words what the
+          two interpretive rows here answered worse: the assigned profile, and a "Recommended
+          model" that was the check's HISTORICAL pick (a live-vs-history confusion source the
+          PR #303 audit named). No `ErrorBanner` either: SH-2 (#145) exists so the FIRST failure
+          of an ACTION is announced, and with the action gone this one could never fill — the
+          property lives on for "Try GPU again" below and for Performance's own action. */}
       <div className="card">
         <h2>{t('diag.bench.title')}</h2>
         <p className="hint">{t('diag.bench.hint')}</p>
-        <div className="actions">
-          <Button size="sm" onClick={() => void runBenchmark()} disabled={running}>
-            {running ? t('diag.bench.running') : bench ? t('diag.bench.rerun') : t('diag.bench.run')}
-          </Button>
-          {bench && (
-            <Button
-              size="sm"
-              title={t('diag.copyTitle')}
-              onClick={() => copyReport(buildBenchmarkReport(bench, t, lang))}
-            >
-              {t('diag.copy')}
-            </Button>
-          )}
-        </div>
-        {/* SH-2 (#145): always-mounted so the FIRST failure is announced. */}
-        <ErrorBanner message={error ? t('diag.bench.failed', { error }) : null} t={t} />
-
-        {bench && (
+        {!bench ? (
+          // Without a check the card would otherwise be a heading over nothing — say where the
+          // check lives. A text pointer, not a button: no Settings tab navigates today, and
+          // Diagnostics is deliberately quieter than a destination screen.
+          <p className="hint">{t('diag.bench.empty')}</p>
+        ) : (
           <>
+            <div className="actions">
+              <Button
+                size="sm"
+                title={t('diag.copyTitle')}
+                onClick={() => copyReport(buildBenchmarkReport(bench, t, lang))}
+              >
+                {t('diag.copy')}
+              </Button>
+            </div>
             {/* Match the 8px gap the .actions row has above it, so the results don't
                 crowd the buttons. */}
             <dl className="kv mt-2">
-              <dt>{t('diag.bench.profile')}</dt>
-              <dd>
-                <strong>{bench.profile}</strong>
-              </dd>
-              <dt>{t('diag.bench.recommended')}</dt>
-              <dd>{bench.recommendedModelId ?? t('diag.bench.noMatch')}</dd>
               <dt>{t('diag.bench.ram')}</dt>
               <dd>{bench.ramGb > 0 ? `${fmt1(bench.ramGb, lang)} GB` : t('diag.app.unknown')}</dd>
               <dt>{t('diag.bench.cpu')}</dt>

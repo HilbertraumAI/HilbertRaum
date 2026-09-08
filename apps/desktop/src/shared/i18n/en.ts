@@ -1987,20 +1987,30 @@ export const en = {
   'perf.others.row': '{tps} tokens / s with {model}',
   'perf.others.rowNoSpeed': '{model} recommended, speed not measured',
   'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
+  // §5 item 22 (d): the read sample's duration on an other-computer row. TWO keys, because a
+  // `checksum` sample is a full file check and not a model start — the same distinction the
+  // current machine's "Observed while you worked" rows make with `perf.observed.load` /
+  // `perf.observed.check`. A row with no sample renders neither (never a placeholder).
+  'perf.others.load': 'model start {seconds} s',
+  'perf.others.check': 'file check {seconds} s',
   'perf.footer': 'The full technical report with every raw figure stays in Settings, Diagnostics.',
   'perf.footerLink': 'Open Diagnostics',
   'perf.unknownModel': 'the loaded model',
   'perf.unknownCpu': 'Unknown CPU',
   'diag.bench.title': 'Hardware benchmark',
+  // §5 item 22 (b) (2026-09-08): this card is the raw measurement for a support message; the
+  // Performance screen holds the answer and the action, so the hint points there rather than
+  // describing a button this card no longer has.
   'diag.bench.hint':
-    'Measures RAM, CPU, and drive speed on this device to recommend a model. Runs ' +
-    'entirely offline — no data leaves your machine.',
-  'diag.bench.running': 'Running…',
-  'diag.bench.rerun': 'Re-run benchmark',
-  'diag.bench.run': 'Run benchmark',
-  'diag.bench.failed': 'Benchmark failed: {error}',
+    'The raw figures from the last check on this computer, for a support message. The ' +
+    'Performance screen explains what they mean and runs a new check. Everything is measured ' +
+    'offline — no data leaves your machine.',
+  'diag.bench.empty':
+    'No check has run on this computer yet. Open the Performance screen to run one.',
+  // `diag.bench.profile` / `.noMatch` are still live — the Performance screen's Copy report
+  // uses both. `.run` / `.rerun` / `.running` / `.failed` / `.recommended` went with the button
+  // and the two interpretive rows.
   'diag.bench.profile': 'Assigned profile',
-  'diag.bench.recommended': 'Recommended model',
   'diag.bench.noMatch': 'No matching model',
   'diag.bench.ram': 'RAM',
   'diag.bench.cpu': 'CPU',

@@ -1993,20 +1993,27 @@ export const de: Record<keyof typeof en, string> = {
   'perf.others.row': '{tps} Token / Sek. mit {model}',
   'perf.others.rowNoSpeed': '{model} empfohlen, Geschwindigkeit nicht gemessen',
   'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
+  // §5 item 22 (d): Dauer der Lesemessung in der Zeile eines anderen Computers. ZWEI Schlüssel —
+  // eine `checksum`-Messung ist eine vollständige Dateiprüfung, kein Modellstart.
+  'perf.others.load': 'Modellstart {seconds} s',
+  'perf.others.check': 'Dateiprüfung {seconds} s',
   'perf.footer': 'Der vollständige technische Bericht mit allen Rohwerten bleibt unter Einstellungen, Diagnose.',
   'perf.footerLink': 'Diagnose öffnen',
   'perf.unknownModel': 'dem geladenen Modell',
   'perf.unknownCpu': 'Unbekannte CPU',
   'diag.bench.title': 'Hardware-Benchmark',
+  // §5 item 22 (b) (2026-09-08): Diese Karte zeigt die Rohwerte für eine Support-Nachricht; die
+  // Antwort und die Aktion liegen im Leistungs-Bildschirm.
   'diag.bench.hint':
-    'Misst RAM, CPU und Laufwerksgeschwindigkeit dieses Geräts, um ein Modell zu ' +
-    'empfehlen. Läuft komplett offline — keine Daten verlassen dein Gerät.',
-  'diag.bench.running': 'Läuft…',
-  'diag.bench.rerun': 'Benchmark erneut ausführen',
-  'diag.bench.run': 'Benchmark ausführen',
-  'diag.bench.failed': 'Benchmark fehlgeschlagen: {error}',
+    'Die Rohwerte der letzten Prüfung auf diesem Computer, für eine Support-Nachricht. Der ' +
+    'Leistungs-Bildschirm erklärt, was sie bedeuten, und führt eine neue Prüfung aus. Alles ' +
+    'wird offline gemessen — keine Daten verlassen dein Gerät.',
+  'diag.bench.empty':
+    'Auf diesem Computer wurde noch keine Prüfung ausgeführt. Öffne den Leistungs-Bildschirm, ' +
+    'um eine zu starten.',
+  // `diag.bench.profile` / `.noMatch` bleiben in Gebrauch — der Kopier-Bericht des
+  // Leistungs-Bildschirms nutzt beide.
   'diag.bench.profile': 'Zugewiesenes Profil',
-  'diag.bench.recommended': 'Empfohlenes Modell',
   'diag.bench.noMatch': 'Kein passendes Modell',
   'diag.bench.ram': 'RAM',
   'diag.bench.cpu': 'CPU',
