@@ -27,6 +27,89 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-08 — BUILD_STATE §5 item 22 (a) rewritten; its original text retired verbatim
+
+NOT a collapse — letter (a) asked for two things and only one was decided, so it was REWRITTEN
+in place rather than reduced to a pointer.
+
+**Shipped:** the moved-drive notice on Home. `prepareFirstBenchmark` runs after every unlock and
+was entirely silent: it either restored this computer's stored result (re-measuring NOTHING, so
+the figures on Performance are as old as that result) or owed a background measurement. Home now
+reports which, through `MovedDriveNotice` — session state keyed like SD2's `attemptMemo`, because
+after a restore nothing persisted distinguishes it from an ordinary same-machine launch. Three
+kinds, and only the two that need one offer "Check this computer": `measuring` deliberately does
+not, so the notice never asks for a check that is already under way.
+
+**Deferred, with the reason on the record:** the readiness row ("This computer: Balanced, about
+12 tokens/s"). It would put a NUMBER on the first screen that can be stale, absent, or from
+another computer — the exact defect class the PR #303 audit spent M2/M4/A4 fixing on Performance,
+where the fix cost a provenance rule, a same-machine gate and a machine-naming heading that Home
+has none of. Letter 22 (c) also still carries an open residual on German rail label width at the
+600 weight, so the row would land on a surface whose sizing is unsettled.
+
+Durable record: `docs/benchmark.md` "The user is told which of the two happened", under
+"History per machine". Original text of (a) before the rewrite:
+
+(a) a Home readiness row ("This computer: Balanced, about 12 tokens/s") plus a moved-drive notice with a "Check this computer" action (the mock-up's Home artboard; today the re-check is silent in the background);
+
+
+## 2026-09-08 — BUILD_STATE §5 item 22 (b)/(d) retired verbatim
+
+Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 22 when the owner ruling of
+2026-09-08 landed on both letters, to keep §5 inside its 500-line budget.
+
+**(b)** — the Diagnostics benchmark card sheds what Performance now owns: the run action, the
+always-mounted `ErrorBanner` beside it (SH-2/#145 — with no action it could never fill), the
+"Assigned profile" row and the "Recommended model" row (the check's HISTORICAL pick, a
+live-vs-history confusion source the PR #303 audit named). What stays is the raw measurement
+plus Copy, and a new empty state pointing at Performance so the card is not a dead end before
+the first check. The Copy report MIRRORS the card rather than keeping the dropped rows.
+
+**(d)** — the other-machine history rows show the read sample's duration. No schema change was
+needed: the persisted rows are `BenchmarkResult`s and already carry `effectiveRead`. A
+`model_load` sample is named a model start, a `checksum` sample a full file check, and a row
+without the field renders nothing.
+
+Durable record for both: `docs/benchmark.md` — "The Diagnostics benchmark card — a support
+artifact" and "The read sample's duration on those rows". Full text of the two letters as they
+stood before the collapse:
+
+(b) the Diagnostics benchmark card could shrink to the raw table + Copy now that the answer lives on Performance;
+
+(d) model-load duration per machine in the history rows (the `model_load` sample carries it; only the current machine shows it today);
+
+
+## 2026-09-08 — BUILD_STATE §5 item 22 (g) retired verbatim (#42)
+
+Collapsed to a one-line pointer in `BUILD_STATE.md` §5 item 22 when the owner ruling of
+2026-09-08 landed: **no runtime change** for chat/translation contention on one card, and the
+gap is closed in COPY instead — the two starved Translate device lines now name the cause, and
+the remedy line under them is the action alone. Both proposals in the letter were refused on
+the record: an idle reclaim largely EXISTS (the ~2-minute sidecar teardown forces a fresh
+`--fit` on the next cold start), and forcing translation to the processor would pessimise every
+machine where both fit (measured on a 24 GB RTX 3090: ~13 GB free gives a full offload at
+~75 tok/s against ~3–4 forced to CPU). Durable record: `docs/architecture.md` GPU record §8.1,
+with the behaviour in `docs/known-limitations.md` ("A large resident chat model can starve GPU
+translation…"). Full text of (g) as it stood before the collapse:
+
+(g) start-order contention between chat and translation on one card (the "Models on this computer" card now names it): force translation to the processor while chat holds the card, or reclaim the card when translation goes idle, owner call;
+
+
+## 2026-09-08 — the 5,120 MiB usable-card floor: its RATIONALE retired verbatim (#321)
+
+Not a §5 collapse — letter (k) stays open and the constant did not move. What was retired is the
+REASON recorded for it: #321 justified `USABLE_VRAM_MB = 5120` partly on arithmetic that the
+estimate fixes of 2026-09-07/08 (#319, #321, and item 22 (e)/PR #390) made void, since the E2B
+now needs 2,271 MiB and a 4 GB card can therefore hold a ranked model. The owner ruling of
+2026-09-08 keeps 5,120 on a measured basis instead: at ~3,900 MiB free the E2B is the only
+ranked model that fits, so admitting 4 GB cards would star it at every RAM size, and no 4 GB
+card has ever been measured in this project. Durable record: `docs/model-benchmarks.md` §6.6 N8,
+"Why 5,120 — RESTATED". The void wording, as it stood in N8 and in the `gpu-rules.ts` doc
+comment before the rewrite:
+
+*Why 5,120.* It admits all three measured cards with margin for driver variance, and keeps 4 GB cards (≈ 4,096) OUT — where nothing ranked fits 4,410 anyway and rule C's no-fit fallback hands the machine back to the RAM pick regardless. Going lower gains nothing.
+
+
 ## 2026-09-07 — BUILD_STATE §5 item 22 (k) retired verbatim (#321)
 
 Collapsed to a one-line pointer in `BUILD_STATE.md` §5 item 22 when the owner ruling of

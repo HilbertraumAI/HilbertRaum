@@ -176,6 +176,32 @@ from its first public `1.0.0` release onward.
   model running half on the card and half on the processor at about 30 words a second, and running
   entirely on the card at about 51. Nothing about your conversations changes: the context window is
   exactly as long as before, and the recommended model on each computer is re-estimated to match.
+- **Home now tells you when the drive has moved to a different computer.** Plugging the drive into
+  another machine used to be silent: the app quietly put back the figures it had stored for that
+  computer, or quietly started measuring it, and either way the Performance screen just showed
+  numbers. Home now says which happened — "the figures are from an earlier check on {date} —
+  nothing was measured just now", with a "Check this computer" button, or "a check is running in
+  the background", with no button, because one already is.
+- **The hardware benchmark card in Settings → Diagnostics is now just the raw figures.** The
+  Performance screen answers what this computer can run and holds the button that checks it, so the
+  card no longer repeats a "Run benchmark" button, the assigned profile, or a "Recommended model"
+  row that showed what the *last* check picked rather than what the app recommends now. What stays
+  is what you would paste into a support message — memory, processor, graphics card, measured read
+  and write speed, decode speed, when the check ran — and the Copy button. Before any check has
+  run, the card points you at the Performance screen instead of sitting empty. Your assigned
+  profile is still on the App & runtime card above it, and it is the live one.
+- **Other computers in the Performance list now show how long a model took to start there.** The
+  figure was already recorded for every computer this drive has been used on; only the current one
+  showed it. A row measured by a full file check rather than a model start says so, and a computer
+  checked before the app recorded this shows nothing rather than a made-up figure.
+- **When translation is slow, the Translate screen now says why on the line that reports it.** It
+  used to say only that translation was running partly on the graphics card "at about processor
+  speed" — a fact with nothing to act on. It now names the cause in the same sentence: the graphics
+  memory was mostly taken, usually by the chat model. The line underneath is the remedy alone — use
+  a smaller chat model, or stop it before translating — instead of repeating the explanation. The
+  same applies when nothing at all fits on the card. Translation itself is unchanged: the app still
+  gives it whatever graphics memory is free rather than forcing it onto the processor, because on a
+  computer where both fit that is many times faster.
 
 ### Fixed
 

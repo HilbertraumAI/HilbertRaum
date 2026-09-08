@@ -21,6 +21,7 @@ import {
   DEFAULT_SETTINGS,
   type AppStatus,
   type ModelInfo,
+  type MovedDriveNotice,
   type PerformanceSnapshot,
   type RuntimeStatus
 } from '../../src/shared/types'
@@ -137,7 +138,12 @@ describe('German render smokes (Phase 40)', () => {
         slowDriveWarning: null,
         problems: []
       })),
-      getRuntimeStatus: vi.fn(async () => runningStatus)
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      // §5 item 22 (a): the moved-drive notice is a Home surface, so it belongs in this smoke.
+      // The restored case is the one that interpolates a date, which is where a German render
+      // can go wrong on its own.
+      getMovedDriveNotice: vi.fn(async (): Promise<MovedDriveNotice> => ({ kind: 'restored', ranAt: '2026-08-14T09:00:00Z' })),
+      onPerformanceChanged: vi.fn(() => () => {})
     })
     render(german(<HomeScreen onNavigate={() => {}} />))
 
@@ -146,6 +152,10 @@ describe('German render smokes (Phase 40)', () => {
     ).toBeInTheDocument()
     expect(await screen.findByText(t('de', 'home.headline.ready'))).toBeInTheDocument()
     expect(screen.getByText(t('de', 'home.workspace.label'))).toBeInTheDocument()
+    expect(
+      screen.getByText(t('de', 'home.moved.restored', { when: '14.8.2026' }))
+    ).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'perf.check') })).toBeInTheDocument()
   })
 
   it('ChatScreen renders German (empty state + composer)', async () => {
@@ -369,6 +379,11 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       await screen.findByRole('heading', { name: t('de', 'diag.bench.title') })
     ).toBeInTheDocument()
+    // §5 item 22 (b): `getSettings` throws here, so there is no `lastBenchmark` — the card's
+    // German EMPTY state must render (a heading over nothing was the state this replaced), and
+    // the benchmark run button must be absent in German too, not just in English.
+    expect(screen.getByText(t('de', 'diag.bench.empty'))).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: /Benchmark/i })).not.toBeInTheDocument()
     expect(screen.getByText(t('de', 'diag.localOnly'))).toBeInTheDocument()
     expect(
       screen.getByRole('heading', { name: t('de', 'diag.activity.title') })

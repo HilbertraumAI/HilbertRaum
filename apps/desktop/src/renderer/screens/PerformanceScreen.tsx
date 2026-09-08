@@ -118,6 +118,25 @@ function secondsOf(sample: EffectiveReadSample, lang: UiLanguage): string {
   return fmt1(sample.ms / 1000, lang)
 }
 
+/**
+ * The read sample's duration as ONE fragment of an other-computer row's sub line (§5 item 22 (d),
+ * owner decision 2026-09-08): "how long did a model take to start on that machine" was answerable
+ * only for the current machine, in "Observed while you worked", although every persisted result
+ * carries the sample (`BenchmarkResult.effectiveRead` — no schema change was needed for this).
+ *
+ * Three branches, and the split is the honesty of the row: a `model_load` sample IS a model start
+ * and is named one; a `checksum` sample is a full file check that happens to read the same bytes
+ * and must NOT be labelled a model start (the current machine's section has said so with two
+ * separate copy keys since #108); and a row persisted before the field existed shows NOTHING —
+ * never a placeholder or a zero, which would read as "it started instantly".
+ */
+function otherLoadNote(bench: BenchmarkResult, t: I18n['t'], lang: UiLanguage): string | null {
+  const sample = bench.effectiveRead
+  if (!sample) return null
+  const seconds = secondsOf(sample, lang)
+  return sample.source === 'model_load' ? t('perf.others.load', { seconds }) : t('perf.others.check', { seconds })
+}
+
 /** The model's display name when the catalog knows it, else its id (an old result may name
  *  a model no longer in the catalog), else the "loaded model" placeholder. */
 function modelName(id: string | null | undefined, models: ModelInfo[], t: I18n['t']): string {
@@ -1138,6 +1157,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                             ram: fmt1Safe(entry.ramGb, lang),
                             when: fmtDate(entry.ranAt, lang)
                           }),
+                      // Item 22 (d): the model-start (or file-check) duration, before the speed
+                      // qualifier so the machine's own facts stay together and the qualifier on
+                      // the headline figure stays trailing.
+                      otherLoadNote(entry, t, lang),
                       basisNote
                     ]
                       .filter(Boolean)

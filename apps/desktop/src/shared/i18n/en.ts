@@ -64,6 +64,23 @@ export const en = {
   'home.preflight.continue':
     'You can still continue. If the app doesn’t open, see the troubleshooting guide in the ' +
     'drive’s {folder} folder.',
+  // §5 item 22 (a): the moved-drive check used to be entirely silent. THREE messages, because
+  // the states are three different facts — a restore measured nothing, a new computer already
+  // has a check running, and a skipped/failed background check means no figures at all. The
+  // middle one deliberately carries no action: a check is already under way.
+  'home.moved.restored':
+    'This drive was last used on a different computer. The figures for this computer are from ' +
+    'an earlier check on {when} — nothing was measured just now.',
+  // The same fact for a restored result whose own date is unknown (a legacy record: `ranAt: ''`).
+  // Never print "Invalid Date" — say the thing that is still true.
+  'home.moved.restoredUndated':
+    'This drive was last used on a different computer. The figures for this computer are from ' +
+    'an earlier check — nothing was measured just now.',
+  'home.moved.measuring':
+    'This drive has not been used on this computer before. A check is running in the ' +
+    'background; the Performance screen shows the figures when it finishes.',
+  'home.moved.owed':
+    'This drive has not been checked on this computer yet, so there are no figures for it.',
   'home.checking': 'Checking…',
   'home.workspace.label': 'Workspace',
   'home.workspace.encrypted': 'Encrypted — locked with your password when the app is closed',
@@ -1987,20 +2004,30 @@ export const en = {
   'perf.others.row': '{tps} tokens / s with {model}',
   'perf.others.rowNoSpeed': '{model} recommended, speed not measured',
   'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
+  // §5 item 22 (d): the read sample's duration on an other-computer row. TWO keys, because a
+  // `checksum` sample is a full file check and not a model start — the same distinction the
+  // current machine's "Observed while you worked" rows make with `perf.observed.load` /
+  // `perf.observed.check`. A row with no sample renders neither (never a placeholder).
+  'perf.others.load': 'model start {seconds} s',
+  'perf.others.check': 'file check {seconds} s',
   'perf.footer': 'The full technical report with every raw figure stays in Settings, Diagnostics.',
   'perf.footerLink': 'Open Diagnostics',
   'perf.unknownModel': 'the loaded model',
   'perf.unknownCpu': 'Unknown CPU',
   'diag.bench.title': 'Hardware benchmark',
+  // §5 item 22 (b) (2026-09-08): this card is the raw measurement for a support message; the
+  // Performance screen holds the answer and the action, so the hint points there rather than
+  // describing a button this card no longer has.
   'diag.bench.hint':
-    'Measures RAM, CPU, and drive speed on this device to recommend a model. Runs ' +
-    'entirely offline — no data leaves your machine.',
-  'diag.bench.running': 'Running…',
-  'diag.bench.rerun': 'Re-run benchmark',
-  'diag.bench.run': 'Run benchmark',
-  'diag.bench.failed': 'Benchmark failed: {error}',
+    'The raw figures from the last check on this computer, for a support message. The ' +
+    'Performance screen explains what they mean and runs a new check. Everything is measured ' +
+    'offline — no data leaves your machine.',
+  'diag.bench.empty':
+    'No check has run on this computer yet. Open the Performance screen to run one.',
+  // `diag.bench.profile` / `.noMatch` are still live — the Performance screen's Copy report
+  // uses both. `.run` / `.rerun` / `.running` / `.failed` / `.recommended` went with the button
+  // and the two interpretive rows.
   'diag.bench.profile': 'Assigned profile',
-  'diag.bench.recommended': 'Recommended model',
   'diag.bench.noMatch': 'No matching model',
   'diag.bench.ram': 'RAM',
   'diag.bench.cpu': 'CPU',
@@ -3004,27 +3031,34 @@ export const en = {
   // then runs at roughly processor speed and otherwise reads as "GPU translation not working".
   'translate.device.gpu': 'Translation runs on the graphics card (GPU, {done}/{total} layers)',
   'translate.device.gpuUnknown': 'Translation runs on the graphics card (GPU)',
+  // The two STARVED forms name the CAUSE on the fact line itself, not only in the remedy under it
+  // (issue #42, owner decision 2026-09-08): "about processor speed" alone stated the symptom, and
+  // a user who reads no further has nothing to act on. "Usually" is deliberate — a resident chat
+  // model is the common cause, not the only one (another app can hold the card just as well).
   'translate.device.gpuPartial':
-    'Translation runs only partly on the graphics card ({done}/{total} layers) — about processor speed',
+    'Translation runs only partly on the graphics card ({done}/{total} layers) — the graphics ' +
+    'memory was mostly taken, usually by the chat model, so it runs at about processor speed',
   // The fully-starved fit (0 layers): "runs only partly on the graphics card (0/49 layers)" was
   // self-contradictory — nothing runs on the graphics card (full-audit 2026-07-11 CODE-23).
   'translate.device.gpuNone':
-    'Translation runs on the processor — no layers fit on the graphics card (0/{total} layers)',
+    'Translation runs on the processor — the graphics memory was fully taken, usually by the ' +
+    'chat model, so no layers fit on the graphics card (0/{total} layers)',
   'translate.device.cpu': 'Translation runs on the processor (CPU)',
   'translate.device.title':
     'Where the translation model ran when it last started. It decides again on each start ' +
     '(it unloads about 2 minutes after the last translation).',
+  // #42: these two used to repeat the cause and then give the remedy. With the cause on the fact
+  // line above, they are the REMEDY only — the two lines no longer say the same thing twice.
   'translate.device.partialTitle':
-    'The graphics memory was mostly taken — usually by the chat model — so only part of the ' +
-    'translation model fit on the graphics card, and translation runs at roughly processor ' +
-    'speed. A smaller chat model frees memory; the translator re-fits on its next start ' +
-    '(about 2 minutes after the last translation).',
-  // CODE-23: same cause/remedy as partialTitle, worded for the none-fit outcome.
+    'To give the translator more of the card: use a smaller chat model, or stop it before ' +
+    'translating. The translator re-fits on its next start (about 2 minutes after the last ' +
+    'translation).',
+  // CODE-23: the same remedy, worded for the none-fit outcome — here it is not "more of the
+  // card" but the card at all.
   'translate.device.gpuNoneTitle':
-    'The graphics memory was fully taken — usually by the chat model — so none of the ' +
-    'translation model fit on the graphics card, and translation runs on the processor. ' +
-    'A smaller chat model frees memory; the translator re-fits on its next start ' +
-    '(about 2 minutes after the last translation).',
+    'To get the translator onto the card at all: use a smaller chat model, or stop it before ' +
+    'translating. The translator re-fits on its next start (about 2 minutes after the last ' +
+    'translation).',
   // Friendly error rows — a CODE is mapped here; raw model/runtime text never shows.
   'translate.err.noModel': 'The translation model is no longer available. Open the AI Model screen to install it.',
   'translate.err.badRequest': 'Pick a source and target language and enter some text to translate.',

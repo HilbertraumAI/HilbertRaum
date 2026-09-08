@@ -94,6 +94,19 @@ export const de: Record<keyof typeof en, string> = {
   'home.preflight.continue':
     'Du kannst trotzdem fortfahren. Wenn sich die App nicht öffnet, findest du die ' +
     'Anleitung zur Fehlerbehebung im Ordner {folder} auf dem Laufwerk.',
+  // §5 item 22 (a): DREI Meldungen, weil es drei verschiedene Sachverhalte sind. Die mittlere
+  // trägt bewusst keine Aktion — eine Prüfung läuft bereits.
+  'home.moved.restored':
+    'Dieses Laufwerk wurde zuletzt an einem anderen Computer benutzt. Die Werte für diesen ' +
+    'Computer stammen aus einer früheren Prüfung vom {when} — gerade eben wurde nichts gemessen.',
+  'home.moved.restoredUndated':
+    'Dieses Laufwerk wurde zuletzt an einem anderen Computer benutzt. Die Werte für diesen ' +
+    'Computer stammen aus einer früheren Prüfung — gerade eben wurde nichts gemessen.',
+  'home.moved.measuring':
+    'Dieses Laufwerk wurde an diesem Computer noch nicht benutzt. Eine Prüfung läuft im ' +
+    'Hintergrund; der Leistungs-Bildschirm zeigt die Werte, sobald sie fertig ist.',
+  'home.moved.owed':
+    'Dieses Laufwerk wurde an diesem Computer noch nicht geprüft, daher gibt es keine Werte dafür.',
   'home.checking': 'Wird geprüft…',
   'home.workspace.label': 'Arbeitsbereich',
   'home.workspace.encrypted':
@@ -1993,20 +2006,27 @@ export const de: Record<keyof typeof en, string> = {
   'perf.others.row': '{tps} Token / Sek. mit {model}',
   'perf.others.rowNoSpeed': '{model} empfohlen, Geschwindigkeit nicht gemessen',
   'perf.others.sub': '{cpu}, {ram} GB RAM · {when}',
+  // §5 item 22 (d): Dauer der Lesemessung in der Zeile eines anderen Computers. ZWEI Schlüssel —
+  // eine `checksum`-Messung ist eine vollständige Dateiprüfung, kein Modellstart.
+  'perf.others.load': 'Modellstart {seconds} s',
+  'perf.others.check': 'Dateiprüfung {seconds} s',
   'perf.footer': 'Der vollständige technische Bericht mit allen Rohwerten bleibt unter Einstellungen, Diagnose.',
   'perf.footerLink': 'Diagnose öffnen',
   'perf.unknownModel': 'dem geladenen Modell',
   'perf.unknownCpu': 'Unbekannte CPU',
   'diag.bench.title': 'Hardware-Benchmark',
+  // §5 item 22 (b) (2026-09-08): Diese Karte zeigt die Rohwerte für eine Support-Nachricht; die
+  // Antwort und die Aktion liegen im Leistungs-Bildschirm.
   'diag.bench.hint':
-    'Misst RAM, CPU und Laufwerksgeschwindigkeit dieses Geräts, um ein Modell zu ' +
-    'empfehlen. Läuft komplett offline — keine Daten verlassen dein Gerät.',
-  'diag.bench.running': 'Läuft…',
-  'diag.bench.rerun': 'Benchmark erneut ausführen',
-  'diag.bench.run': 'Benchmark ausführen',
-  'diag.bench.failed': 'Benchmark fehlgeschlagen: {error}',
+    'Die Rohwerte der letzten Prüfung auf diesem Computer, für eine Support-Nachricht. Der ' +
+    'Leistungs-Bildschirm erklärt, was sie bedeuten, und führt eine neue Prüfung aus. Alles ' +
+    'wird offline gemessen — keine Daten verlassen dein Gerät.',
+  'diag.bench.empty':
+    'Auf diesem Computer wurde noch keine Prüfung ausgeführt. Öffne den Leistungs-Bildschirm, ' +
+    'um eine zu starten.',
+  // `diag.bench.profile` / `.noMatch` bleiben in Gebrauch — der Kopier-Bericht des
+  // Leistungs-Bildschirms nutzt beide.
   'diag.bench.profile': 'Zugewiesenes Profil',
-  'diag.bench.recommended': 'Empfohlenes Modell',
   'diag.bench.noMatch': 'Kein passendes Modell',
   'diag.bench.ram': 'RAM',
   'diag.bench.cpu': 'CPU',
@@ -3007,27 +3027,33 @@ export const de: Record<keyof typeof en, string> = {
   // Gedämpfter Geräte-Hinweis (Issue #42 Reopen — das Chat-#36-Pendant).
   'translate.device.gpu': 'Übersetzung läuft auf der Grafikkarte (GPU, {done}/{total} Schichten)',
   'translate.device.gpuUnknown': 'Übersetzung läuft auf der Grafikkarte (GPU)',
+  // Issue #42: Die beiden „ausgehungerten" Formen nennen die URSACHE auf der Faktenzeile selbst,
+  // nicht nur in der Abhilfe darunter. „meist" ist bewusst gewählt — das Chat-Modell ist die
+  // häufige, nicht die einzige Ursache.
   'translate.device.gpuPartial':
-    'Übersetzung läuft nur teilweise auf der Grafikkarte ({done}/{total} Schichten) — etwa Prozessor-Tempo',
+    'Übersetzung läuft nur teilweise auf der Grafikkarte ({done}/{total} Schichten) — der ' +
+    'Grafikspeicher war größtenteils belegt, meist durch das Chat-Modell, daher etwa Prozessor-Tempo',
   // Der Null-Schichten-Fall: „läuft nur teilweise … (0/49 Schichten)" widersprach sich selbst
   // (full-audit 2026-07-11 CODE-23).
   'translate.device.gpuNone':
-    'Übersetzung läuft auf dem Prozessor — keine Schicht passte auf die Grafikkarte (0/{total} Schichten)',
+    'Übersetzung läuft auf dem Prozessor — der Grafikspeicher war vollständig belegt, meist durch ' +
+    'das Chat-Modell, sodass keine Schicht auf die Grafikkarte passte (0/{total} Schichten)',
   'translate.device.cpu': 'Übersetzung läuft auf dem Prozessor (CPU)',
   'translate.device.title':
     'Wo das Übersetzungsmodell beim letzten Start gelaufen ist. Es entscheidet bei jedem Start neu ' +
     '(etwa 2 Minuten nach der letzten Übersetzung wird es entladen).',
+  // #42: Diese beiden wiederholten die Ursache und nannten dann die Abhilfe. Da die Ursache
+  // jetzt auf der Faktenzeile steht, sind sie NUR noch die Abhilfe.
   'translate.device.partialTitle':
-    'Der Grafikspeicher war größtenteils belegt — meist durch das Chat-Modell —, sodass nur ein Teil ' +
-    'des Übersetzungsmodells auf die Grafikkarte passte und die Übersetzung etwa in Prozessor-Tempo ' +
-    'läuft. Ein kleineres Chat-Modell gibt Speicher frei; der Übersetzer passt sich beim nächsten ' +
-    'Start neu an (etwa 2 Minuten nach der letzten Übersetzung).',
-  // CODE-23: dieselbe Ursache/Abhilfe wie partialTitle, formuliert für den Nichts-passte-Fall.
+    'Damit mehr vom Übersetzer auf die Karte passt: ein kleineres Chat-Modell verwenden oder es ' +
+    'vor dem Übersetzen beenden. Der Übersetzer passt sich beim nächsten Start neu an (etwa ' +
+    '2 Minuten nach der letzten Übersetzung).',
+  // CODE-23: dieselbe Abhilfe, formuliert für den Nichts-passte-Fall — hier geht es nicht um
+  // „mehr von der Karte", sondern um die Karte überhaupt.
   'translate.device.gpuNoneTitle':
-    'Der Grafikspeicher war vollständig belegt — meist durch das Chat-Modell —, sodass nichts vom ' +
-    'Übersetzungsmodell auf die Grafikkarte passte und die Übersetzung auf dem Prozessor läuft. ' +
-    'Ein kleineres Chat-Modell gibt Speicher frei; der Übersetzer passt sich beim nächsten ' +
-    'Start neu an (etwa 2 Minuten nach der letzten Übersetzung).',
+    'Damit der Übersetzer überhaupt auf die Karte passt: ein kleineres Chat-Modell verwenden oder ' +
+    'es vor dem Übersetzen beenden. Der Übersetzer passt sich beim nächsten Start neu an (etwa ' +
+    '2 Minuten nach der letzten Übersetzung).',
   'translate.err.noModel': 'Das Übersetzungsmodell ist nicht mehr verfügbar. Öffne den KI-Modell-Bildschirm, um es zu installieren.',
   'translate.err.badRequest': 'Wähle eine Ausgangs- und Zielsprache und gib einen Text zum Übersetzen ein.',
   'translate.err.busy': 'Es läuft bereits eine Übersetzung. Warte, bis sie fertig ist, und versuche es dann erneut.',

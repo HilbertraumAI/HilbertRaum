@@ -3266,8 +3266,12 @@ since 2026-09-07** (issue #321, owner decision; 6,144 before): every 6 GB laptop
 has measured reports below 6,144 on Vulkan — GTX 1660 SUPER 5,746, RTX 4050 Laptop 5,921, RTX 3060
 Laptop 5,994 — so the most common 6 GB configuration was classed `cpu` and starred a model it
 cannot accelerate (the 9B measured 18/33 layers at 5.2 tok/s on such a card). Lowering the floor
-moves the bump one step up on those laptops, which is the accepted cost; 4 GB cards stay out.
-Reasoning and evidence: `model-benchmarks.md` §6.6 N8.
+moves the bump one step up on those laptops, which is the accepted cost; 4 GB cards stay out — and
+since 2026-09-08 they stay out on a RESTATED reason (owner decision on #321): the original "nothing
+ranked fits a 4 GB card anyway" went void when the E2B's threshold fell to 2,271 MiB, and the floor was KEPT because the
+E2B is the ONLY ranked model that fits such a card, so admitting it would star the smallest model at
+every RAM size with no 4 GB measurement anywhere in the project to justify the demotion. Reasoning
+and evidence: `model-benchmarks.md` §6.6 N8 ("Why 5,120 — RESTATED").
 
 **UI:** Settings toggle ("Uses your graphics card to speed up responses when available…"),
 Diagnostics Acceleration + runtime-build lines, compatibility-mode notice + "Try GPU again",
@@ -3277,6 +3281,37 @@ benchmark-card GPU row. Since #36 the Chat header also carries a muted `model ·
 auto-disable latch it reads `CPU (compatibility mode)` — the persistent, low-key home of the
 ephemeral fallback notice (the `runtime:notice` broadcast also re-reads the status so the
 hint flips mid-session). Never "GPU failed" / "your hardware is bad".
+
+#### §8.1 Chat/translation contention on one card — NO runtime change (#42, owner decision 2026-09-08)
+
+Two services can want the same card: the resident chat model and the translation sidecar, which
+launches with VRAM-aware auto-offload (`--fit`) and takes whatever the chat model left. Whichever
+starts second gets the leftovers. Two runtime remedies were on the table; both are refused, and the
+record is why.
+
+- **"Reclaim the card when translation goes idle" — largely EXISTS already.** The sidecar unloads
+  about 2 minutes after the last translation, and that teardown is exactly what forces a fresh
+  `--fit` on the next cold start. Freeing memory mid-session already takes effect at the next start;
+  there is no held allocation to reclaim beyond it.
+- **"Force translation to the processor while chat holds the card" — would PESSIMISE every machine
+  where both fit.** Measured on a 24 GB RTX 3090 (`model-benchmarks.md` §11.4): ~13 GB free gives
+  translation a FULL offload at ~75 tok/s, against ~3–4 tok/s forced to the CPU. A rule that trades
+  75 for 3.5 to avoid a case that only bites when the card is nearly full is a net loss.
+
+The condition is also already OBSERVABLE — the Translate screen's device line has covered all five
+forms since #164 (D-7b), and the "Models on this computer" card carries the start-order warning when
+both are resident on the card.
+
+**What was actually wrong was the COPY.** The two starved fact lines stated the symptom and nothing
+else — "about processor speed" — so a user who read no further had a fact and no action. Both now
+name the cause on the fact line itself ("the graphics memory was mostly taken, usually by the chat
+model"), and the remedy line under them (visible text since #161/FE-4, not tooltip-only) is the
+ACTION alone, so the two no longer say the same thing twice. `usually` is deliberate: a resident
+chat model is the common cause, not the only one — another application can hold the card just as
+well. Keys: `translate.device.gpuPartial` / `gpuNone` (cause) and `partialTitle` / `gpuNoneTitle`
+(remedy), in both locales; pinned by `TranslateScreen.test.tsx` "#42" so neither can regress to
+symptom-only. Full behaviour: `known-limitations.md`, "A large resident chat model can starve GPU
+translation…".
 
 ### GPU failure modes (all handled, none block)
 

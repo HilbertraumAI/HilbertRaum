@@ -269,9 +269,12 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     renderDiagnostics()
 
     expect(await screen.findByText('Hardware benchmark')).toBeInTheDocument()
-    // Twice: the App-&-runtime profile row and the benchmark card's own.
-    expect(screen.getAllByText('BALANCED').length).toBeGreaterThanOrEqual(1)
-    expect(screen.getByText('No matching model')).toBeInTheDocument()
+    // §5 item 22 (b): the benchmark card no longer carries the profile or the recommended-model
+    // row, so "BALANCED" is now the App-&-runtime row's alone and "No matching model" is gone
+    // from this tab entirely. The point of the case is unchanged — the normalized legacy blob
+    // must render without throwing and must say "unknown" rather than print "Invalid Date".
+    expect(screen.getAllByText('BALANCED')).toHaveLength(1)
+    expect(screen.queryByText('No matching model')).not.toBeInTheDocument()
     // RAM, CPU and OS already said "unknown"; the date now does too.
     expect(screen.getAllByText('unknown').length).toBeGreaterThanOrEqual(2)
     expect(screen.queryByText(/Invalid Date/)).not.toBeInTheDocument()
@@ -279,6 +282,68 @@ describe('Settings → Diagnostics (advanced) — copy & save logs', () => {
     await user.click(screen.getAllByRole('button', { name: 'Copy' })[1])
     expect(lastCopied).toContain('Last run: unknown')
     expect(lastCopied).not.toContain('Invalid Date')
+  })
+
+  // §5 item 22 (b), owner decision 2026-09-08: the Diagnostics benchmark card is a SUPPORT
+  // ARTIFACT — the raw measurement plus Copy. The action and the two interpretive rows moved to
+  // the Performance screen, which owns both the answer and the same `runBenchmark()` call.
+  describe('the benchmark card is the raw measurement only (§5 item 22 (b))', () => {
+    it('drops the run action and its error banner — Performance owns the check', async () => {
+      stubDiagnostics()
+      renderDiagnostics()
+      await screen.findByText('Test CPU', { exact: false })
+      for (const name of [/run benchmark/i, /re-run benchmark/i, /running/i]) {
+        expect(screen.queryByRole('button', { name })).not.toBeInTheDocument()
+      }
+      // The card keeps its Copy — it is the support artifact, and the report is why it exists.
+      expect(screen.getAllByRole('button', { name: 'Copy' }).length).toBeGreaterThanOrEqual(2)
+    })
+
+    it('drops the interpretive rows from the card AND the copy report, keeping every raw row', async () => {
+      const user = userEvent.setup()
+      stubDiagnostics()
+      renderDiagnostics()
+      await screen.findByText('Test CPU', { exact: false })
+
+      // Gone from the card: the assigned profile (the App & runtime card carries the LIVE one)
+      // and the recommended model (the check's HISTORICAL pick — the live-vs-history confusion
+      // the PR #303 audit named; the live pick is on the Performance screen).
+      // (The App & runtime card's own "Selected model" row still names qwen3-4b — that one is
+      // the LIVE selection, not the check's historical recommendation.)
+      expect(screen.queryByText('Recommended model')).not.toBeInTheDocument()
+      // "Assigned profile" is the benchmark card's label; "Hardware profile" is the App &
+      // runtime one, which stays.
+      expect(screen.queryByText('Assigned profile')).not.toBeInTheDocument()
+      expect(screen.getByText('Hardware profile')).toBeInTheDocument()
+
+      // Every RAW measurement row stays.
+      // getAllByText: a few of these labels also appear on the System card below.
+      for (const label of ['RAM', 'CPU', 'OS / arch', 'GPU', 'Measured read speed', 'Drive write', 'Decode speed (tokens / sec)', 'Last run']) {
+        expect(screen.getAllByText(label).length, label).toBeGreaterThanOrEqual(1)
+      }
+
+      // The report MIRRORS the card: the two rows are not kept "for bug reports" either.
+      await user.click(screen.getAllByRole('button', { name: 'Copy' })[1])
+      expect(lastCopied).toContain('Hardware benchmark')
+      expect(lastCopied).toContain('Test CPU')
+      expect(lastCopied).not.toContain('Recommended model')
+      expect(lastCopied).not.toContain('Assigned profile')
+      // …and the App & runtime report still carries the LIVE profile, so nothing support needs
+      // was actually lost from this tab.
+      await user.click(screen.getAllByRole('button', { name: 'Copy' })[0])
+      expect(lastCopied).toContain('Hardware profile: BALANCED')
+    })
+
+    it('with no check ever run, points at Performance instead of showing an empty card', async () => {
+      stubDiagnostics({ getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, lastBenchmark: null })) })
+      renderDiagnostics()
+      expect(await screen.findByText('Hardware benchmark')).toBeInTheDocument()
+      expect(
+        screen.getByText('No check has run on this computer yet. Open the Performance screen to run one.')
+      ).toBeInTheDocument()
+      // No Copy for a report that would have nothing in it (App & runtime + Logs still have theirs).
+      expect(screen.queryByText('Last run')).not.toBeInTheDocument()
+    })
   })
 
   it('copies the logs from a fresh tail read', async () => {

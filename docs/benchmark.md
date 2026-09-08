@@ -408,6 +408,46 @@ gate accepts an array of VALID results only (junk and unkeyed elements dropped, 
 machine, newest first, length capped; the 256 KB serialized cap applies to the list) — see
 "Schemas and legacy records" above.
 
+**The user is told which of the two happened** (§5 item 22 (a), owner decision 2026-09-08). Both
+branches used to be SILENT, and they are different facts that must not share a message: a restore
+re-measures **nothing**, so the figures the user is about to read are as old as the restored
+result; a new computer has a measurement already under way. `MovedDriveNotice`
+(`benchmark:movedDriveNotice`) carries the distinction to Home:
+
+| kind | set by | Home says | offers the check? |
+|---|---|---|---|
+| `restored` (+ the result's own `ranAt`) | the restore branch | the figures are from an earlier check on that date, nothing was measured just now | **yes** |
+| `measuring` | an accepted `new-machine` decision | a check is running in the background | **no** — one is already under way |
+| `owed` | that scheduling ending in anything but a run | this computer has not been checked yet | **yes** |
+
+It is **session state, not settings**, and deliberately so: once a restore has happened,
+`lastBenchmark` is this machine's and nothing persisted distinguishes "restored just now" from an
+ordinary same-machine launch. The memo is keyed exactly like SD2's `attemptMemo` — the workspace
+DB handle AND the unlock epoch — so a lock/unlock retires it and a new session decides afresh.
+`runOnceSettled` moves `measuring` → `owed` on every terminal outcome that is not a run
+(`skipped-busy`, `failed`, `skipped-admission`, …) and pushes `performance:changed` for it,
+because the run's own idle push fires BEFORE the notice moves; `'deferred'` keeps `measuring`
+(a continuation is still pending) and a persisted run clears the notice inside
+`runAndPersistBenchmark`, so its existing push already carries the cleared state and no second
+push is emitted. Any successful check clears it, which is what the notice's own action leads to.
+A **`first-run` on a fresh workspace sets nothing**: that is not a moved drive, and "this drive has
+not been used on this computer before" would be a lie about a workspace never used anywhere.
+
+On Home the notice is an informational `Banner` (nothing is wrong — the drive moved), following
+`runPreflight`'s precedent for a friendly non-blocking note, read once on mount and re-read on
+`performance:changed` so an open Home corrects itself when the background check finishes. Its
+action **navigates to Performance** rather than running the check from Home: every Home button
+navigates ("Choose a model" opens AI Model rather than choosing one), and since item 22 (b)
+Performance is the one place the check is started from. It reuses `perf.check` for its label.
+
+**The readiness row is NOT part of this** (the other half of letter (a) — "This computer:
+Balanced, about 12 tokens/s" — deferred deliberately, 2026-09-08). It would put a NUMBER on the
+first screen that can be stale, absent, or from another computer: the exact defect class the PR
+#303 audit spent M2/M4/A4 fixing on Performance, where the fix cost a provenance rule, a
+same-machine gate and a heading that names the machine. Home has none of that scaffolding. Item 22
+(c) also still carries an open residual about German rail label width at the 600 weight, so the
+row would land on a surface whose sizing is not settled.
+
 **Scheduling behind the auto-start (PR #303 audit L1 / SD2, owner decision G5).** The three
 post-unlock seams (the plaintext startup in `main/index.ts`, unlock and create in
 `registerWorkspaceIpc`) used to fire the first-run benchmark and `maybeAutoStartActiveModel`
@@ -438,7 +478,7 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    (`'skipped-busy'`, the same predicate the run itself refuses on, read in the same tick), and a
    result for this computer persisted meanwhile by a manual run or another window
    (`'skipped-already-current'`). A thrown run is `'failed'` with the warn log. No outcome is
-   retried within the session (below); Diagnostics runs the benchmark on demand at any time.
+   retried within the session (below); the Performance screen runs the benchmark on demand at any time.
 
 The wait is **bounded** by `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS` (120 s — sized to the common slow
 case: a ~5 GB GGUF on the ~70 MB/s stick #108 measured is hashed and then loaded, roughly a minute
@@ -799,6 +839,27 @@ first, each with its speed/model, CPU/RAM/date and rating pills ("Slow drive" un
 the speed pill is Good/Slow only for a runtime-timings figure — see "Speed provenance travels
 with the figure" above — and the neutral "Approximate" otherwise).
 
+**The read sample's duration on those rows** (§5 item 22 (d), owner decision 2026-09-08). "How
+long does a model take to start on that machine" was answerable for the CURRENT machine only, in
+"Observed while you worked". **No schema change was needed** — every persisted per-machine row is a
+`BenchmarkResult` and already carries `effectiveRead: EffectiveReadSample` (`{ mbps, bytes, ms,
+source, modelId, at }`); the row was already reading it for the "Slow drive" pill. So this is a
+renderer change alone (`otherLoadNote` in `PerformanceScreen.tsx`), and `data-contracts.md` is
+untouched. Three branches, and the middle one is the honesty of it:
+
+- `source: 'model_load'` → "model start {seconds} s" (`perf.others.load`) — a model start;
+- `source: 'checksum'` → "file check {seconds} s" (`perf.others.check`) — a FULL FILE CHECK, which
+  reads the same bytes but is not a model start and is never labelled one. This is the same split
+  the current machine's rows have made with two separate keys since #108;
+- **absent or null** → nothing rendered. Not a placeholder and not a "0.0 s", which would read as
+  "it started instantly"; a row persisted before the field existed simply does not claim.
+
+The fragment sits between the machine's identity/date and the speed-basis qualifier, so the
+machine's own facts stay together and the qualifier on the headline figure stays trailing. The
+**Copy report carries none of this, because it has no other-computers section at all**:
+`buildReport` renders the "This computer" card from one `BenchmarkResult` (heading itself
+"Another computer: …" when that result is foreign, L6). Adding one was not part of the decision.
+
 **Data path**: one IPC read, `performance:get` → `PerformanceSnapshot` (`buildPerformanceSnapshot`
 in `registerBenchmarkIpc.ts`): `current`, `recommendation` (the live pick, see "Recommendation"),
 `currentMachine`, `currentGpu` (`{ name, totalMb, useful } | null` — the eligible probe's budget
@@ -882,6 +943,53 @@ list instead of an opaque "Running…" button. The first-run path passes no call
 step is labelled **"Drive speed"**, not "Drive write speed" (PR #303 audit N5): the step's write
 probe is one input, and the tile the user reads next to it reports MB/s *read* — naming the step
 after the write leg contradicted the figure it leads to.
+
+### The Diagnostics benchmark card — a support artifact (§5 item 22 (b), owner decision 2026-09-08)
+
+When the Performance screen took the answer (2026-09-05), the intended split was already recorded
+above — "Diagnostics keeps the raw table and its Copy button as the support surface" — but the card
+itself was not trimmed to it. It still ran the check and still repeated two INTERPRETIVE rows.
+**Performance owns both the answer and the action**: "Check this computer" / "Check again"
+(`perf.check` / `perf.checkAgain`) call the very `runBenchmark()` this card duplicated, and it is
+now the only renderer caller of it. The card is therefore the RAW MEASUREMENT plus Copy, and
+nothing else.
+
+**Dropped.** The Run / Re-run button and its handler; **"Assigned profile"** (`diag.bench.profile`
+as a row here — the key itself stays, the Performance Copy report uses it); and **"Recommended
+model"**, which was the check's HISTORICAL pick and which the PR #303 audit identified as a
+live-vs-history confusion source. `diag.bench.run` / `.rerun` / `.running` / `.failed` /
+`.recommended` are deleted; `.profile` and `.noMatch` are NOT (both live on in `buildReport`).
+
+**Kept.** RAM, CPU, OS/arch, GPU, Measured read speed, Drive write, Decode speed, Last run, the
+warnings list, and Copy.
+
+**The `ErrorBanner` goes with the button** — checked deliberately rather than left standing. SH-2
+(#145) mounts a banner unconditionally so the FIRST failure of an ACTION is announced instead of
+swallowed; this one's `message` was fed only by the `runBenchmark` catch, so with no action it
+could never fill, and an always-mounted banner that cannot fill is dead markup. The SH-2 property
+is not lost: it holds for "Try GPU again", now the only action in the tab that can fail (and the
+only remaining `error`-shaped state there), and Performance carries its own `perf.failed` line for
+the action it took over. The FE-8 case that exercised `friendlyIpcError` through the benchmark
+button is replaced by an absence assertion; FE-8's actual property is still asserted on
+"Try GPU again", which routes through the same `runAndSurface` / `friendlyIpcError` path.
+
+**An empty state, because the card would otherwise be a dead end.** With no check ever run
+(`lastBenchmark === null`) the card previously rendered a heading, a hint and — once the button
+went — nothing. `diag.bench.empty` names where the check lives: "No check has run on this computer
+yet. Open the Performance screen to run one." A TEXT pointer, not a button: `SettingsScreen` takes
+no navigation prop and no Settings tab navigates today, so wiring one through for a single sentence
+would cost more than the pointer is worth, and Diagnostics is deliberately quieter than a
+destination screen. `diag.bench.hint` is rewritten to match — it described a button that is gone.
+
+**The Copy report MIRRORS the card; the dropped rows are not kept "for bug reports".** Three
+reasons, in order of weight. (1) A stale *recommended model* pasted into a support message is worse
+than an absent one — a reader takes it for what the app recommends now, which is the confusion the
+#303 audit named; the LIVE pick is in the Performance Copy report, which already heads itself
+"This computer" / "Another computer: …". (2) The *assigned profile* is not lost from the tab at
+all: the App & runtime card and its own Copy report carry `hardwareProfile`, and that one is live
+rather than recorded. (3) This file's standing invariant is that a card row and its Copy text
+render from the same helper "so the two can never disagree" — rows kept only in the report break
+it, and nobody could then tell which set the card was supposed to show.
 
 
 ## Perf marks (opt-in, `HILBERTRAUM_PERF_LOG=1`)
