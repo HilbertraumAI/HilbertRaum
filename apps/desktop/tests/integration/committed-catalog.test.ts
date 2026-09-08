@@ -208,9 +208,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'gemma4-12b-it-qat-q4': 787.5, // leg 3, 49/49
     'qwen3.8-27b-ud-q4km': 682.03, // leg 7, 66/66
     'qwen3.8-27b-ud-q5km': 682.03, // leg 1 `-np 1`, 66/66
-    'qwen3.5-4b-ud-q4kxl': 497.31 // #391 leg 4 follow-up (b), 33/33 on the RTX 3060 Laptop
+    'qwen3.5-4b-ud-q4kxl': 497.31, // #391 leg 4 follow-up (b), 33/33 on the RTX 3060 Laptop
+    'gemma4-26b-a4b-it-qat-q4': 577.5 // #391 last item, 31/31 on the RTX 3090 (the only card that holds it)
   }
-  it('pins the six measured host_mapped_weights_mib values, and that no other manifest carries the field (#321)', () => {
+  it('pins the seven measured host_mapped_weights_mib values, and that no other manifest carries the field (#321)', () => {
     const all = committedManifests()
     const byId = Object.fromEntries(all.map((m) => [m.id, m]))
     for (const [id, mib] of Object.entries(HOST_MAPPED_MIB)) {
@@ -288,7 +289,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.5-9b-ud-q4kxl': 7285,
     'gemma4-12b-it-qat-q4': 10254,
     'qwen3-14b-instruct-q4': 11407,
-    'gemma4-26b-a4b-it-qat-q4': 18353,
+    'gemma4-26b-a4b-it-qat-q4': 17689, // was 18,353 until its host-mapped 577.50 was measured (#391)
     'qwen3.6-27b-q4': 19961,
     'qwen3.8-27b-ud-q4km': 19258,
     'qwen3.6-27b-q5': 22923,
