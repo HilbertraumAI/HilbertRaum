@@ -1,0 +1,29 @@
+[pre] nvidia-smi {"used":696,"total":24576,"free":23431}
+[pre] list-devices
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23665 MiB free)
+[app] workspace state: {"state":"unlocked","mode":"plaintext_dev","plaintextAllowed":true,"encryptionRequired":false}
+[app] unlock attempt on state=unlocked: {"ok":true,"state":{"state":"unlocked","mode":"plaintext_dev","plaintextAllowed":true,"encryptionRequired":false}}
+[app] performance snapshot written (2818 B)
+[app] copy report failed: TimeoutError: locator.click: Timeout 30000ms exceeded.
+Call log:
+[2m  - waiting for getByRole('button', { name: /^(Copy|Kopieren)$/ }).first()[22m
+
+[start] backend=gpu healthy=true state=? in 10.4 s
+[start] status: {"running":true,"modelId":"qwen3.8-27b-ud-q5km","port":42121,"healthy":true,"message":"llama-server ready on 127.0.0.1:42121","backend":"gpu","gpuName":"NVIDIA GeForce RTX 3090","contextWindow":32768,"warmedUp":false,"startingModelId":null}
+[applog] 2026-09-07T10:43:58.501Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.8-27b-ud-q4km","reason":"started via rung 1a (GPU auto-offload + MTP speculative decoding) (backend: gpu)"}
+[applog] 2026-09-07T11:08:57.209Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.8-27b-ud-q4km","reason":"started via rung 1a (GPU auto-offload + MTP speculative decoding) (backend: gpu)"}
+[applog] 2026-09-08T05:27:16.262Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.8-27b-ud-q5km","reason":"started via rung 1a (GPU auto-offload + MTP speculative decoding) (backend: gpu)"}
+[applog] 2026-09-08T05:26:14.792Z [INFO] Speculative decoding enabled (MTP draft head) {"modelId":"qwen3.8-27b-ud-q4km"}
+[applog] 2026-09-08T05:26:27.187Z [INFO] Speculative decoding enabled (MTP draft head) {"modelId":"qwen3.8-27b-ud-q4km"}
+[applog] 2026-09-08T05:27:06.753Z [INFO] Speculative decoding enabled (MTP draft head) {"modelId":"qwen3.8-27b-ud-q5km"}
+[applog] 2026-09-07T10:43:58.501Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.8-27b-ud-q4km","reason":"started via rung 1a (GPU auto-offload + MTP speculative decoding) (backend: gpu)"}
+[applog] 2026-09-07T11:08:57.209Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.8-27b-ud-q4km","reason":"started via rung 1a (GPU auto-offload + MTP speculative decoding) (backend: gpu)"}
+[applog] 2026-09-08T05:27:16.262Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.8-27b-ud-q5km","reason":"started via rung 1a (GPU auto-offload + MTP speculative decoding) (backend: gpu)"}
+[argv] <drive>/runtime/llama.cpp/linux/llama-server --host 127.0.0.1 --port 42121 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 32768 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --spec-type draft-mtp --spec-draft-n-max 2
+[loaded] nvidia-smi {"used":22749,"total":24576,"free":1378}
+[chat] speed line(s): ["33 tok/s · 4.5 s to first token · 916 tokens"]
+[timings] {"prompt_ms":4284.46,"prompt_n":2509,"prompt_per_second":585.6,"predicted_ms":27497.75,"predicted_n":916,"predicted_per_second":33.31} (2 blocks, 1 new)
+[after] nvidia-smi {"used":679,"total":24576,"free":23448}
+[done] /home/<user>/projects/oi/HilbertRaum/eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg7-app-q5km.json
+[done] offloaded: ["0.03.524.654 I load_tensors: offloaded 66/66 layers to GPU"]

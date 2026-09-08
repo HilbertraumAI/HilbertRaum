@@ -1,0 +1,61 @@
+2026-09-08T00:16:19.115Z [INFO] Workspace resolved {"root":"E:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-08T00:16:19.117Z [INFO] Workspace state {"state":"uninitialized","mode":null,"plaintextAllowed":false,"encryptionRequired":true}
+2026-09-08T00:16:19.117Z [INFO] Model manifests directory {"manifestsDir":"E:\\model-manifests"}
+2026-09-08T00:16:19.171Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-08T00:16:19.174Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-08T00:16:19.176Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-08T00:16:19.176Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-08T00:16:19.177Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-08T00:16:19.201Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-08T00:16:28.161Z [INFO] Workspace created {"mode":"encrypted"}
+2026-09-08T00:16:28.206Z [INFO] First run: benchmarking hardware in the background once the model start settles
+2026-09-08T00:16:28.236Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:16:28.236Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-08T00:16:29.214Z [INFO] Benchmark complete {"profile":"PRO","recommendedModelId":"qwen3.5-4b-ud-q4kxl","ramGb":31.9}
+2026-09-08T00:17:05.856Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056,"ms":33693,"ok":true}
+2026-09-08T00:17:27.436Z [INFO] Model checksum hashed {"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128,"ms":21575,"ok":true}
+2026-09-08T00:20:09.257Z [INFO] Model checksum hashed {"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960,"ms":161814,"ok":true}
+2026-09-08T00:20:57.497Z [INFO] Model checksum hashed {"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256,"ms":48234,"ok":true}
+2026-09-08T00:22:29.901Z [INFO] Model checksum hashed {"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":92396,"ok":true}
+2026-09-08T00:22:32.689Z [INFO] Model checksum hashed {"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728,"ms":2783,"ok":true}
+2026-09-08T00:22:51.524Z [INFO] Model checksum hashed {"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896,"ms":18830,"ok":true}
+2026-09-08T00:22:57.906Z [INFO] Model checksum hashed {"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967,"ms":6335,"ok":true}
+2026-09-08T00:24:44.820Z [INFO] Use model (select + start) {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:24:44.875Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-08T00:24:44.880Z [INFO] Model prefetch started {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:24:46.263Z [INFO] Model prefetch done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:24:53.895Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:24:54.777Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:25:48.269Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:25:49.343Z [INFO] Knowledge-pack transient cleanup {"reason":"quit","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:25:49.343Z [INFO] quit: ZIM transients cleaned
+2026-09-08T00:25:49.343Z [INFO] quit: locking workspace
+2026-09-08T00:49:04.537Z [INFO] Workspace resolved {"root":"D:\\","preparedDrive":true,"detectedFromAppLocation":false}
+2026-09-08T00:49:04.547Z [INFO] Workspace state {"state":"locked","mode":"encrypted","plaintextAllowed":false,"encryptionRequired":true}
+2026-09-08T00:49:04.547Z [INFO] Model manifests directory {"manifestsDir":"D:\\model-manifests"}
+2026-09-08T00:49:04.596Z [INFO] Embedder backend selected {"kind":"e5","reason":"binary + weights present"}
+2026-09-08T00:49:04.600Z [INFO] Reranker backend selected {"kind":"llama","reason":"binary + weights present"}
+2026-09-08T00:49:04.602Z [INFO] Transcriber backend selected {"kind":"none","reason":"no whisper-cli binary on the drive"}
+2026-09-08T00:49:04.602Z [INFO] OCR backend selected {"kind":"none","reason":"no OCR language files on the drive"}
+2026-09-08T00:49:04.602Z [INFO] Translation backend selected {"kind":"none","reason":"translation model weights not present"}
+2026-09-08T00:49:04.611Z [INFO] Offline posture {"offlineMode":true,"networkAllowed":false,"note":"No network in the core path; loopback (127.0.0.1/localhost) is exempt."}
+2026-09-08T00:49:12.796Z [INFO] Workspace unlocked
+2026-09-08T00:49:12.813Z [INFO] Drive is on a new computer: benchmarking it in the background once the model start settles
+2026-09-08T00:49:12.813Z [INFO] Auto-starting the active model runtime in the background {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:49:12.855Z [INFO] Knowledge-pack transient cleanup {"reason":"session-start","removed":0,"kept":0,"unknownEntries":0}
+2026-09-08T00:49:12.855Z [INFO] Session start: ZIM transients cleaned {"removed":0}
+2026-09-08T00:51:12.863Z [INFO] First-run benchmark deferred: the model start has not settled within the wait bound {"waitedMs":120000}
+2026-09-08T00:52:46.381Z [INFO] Model checksum hashed {"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":213520,"ok":true}
+2026-09-08T00:52:46.386Z [INFO] Start runtime {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed"}
+2026-09-08T00:52:46.392Z [INFO] Model prefetch skipped {"modelId":"qwen3.5-9b-ud-q4kxl","detail":"weights just hashed — page-cache-warm"}
+2026-09-08T00:54:38.962Z [INFO] Model checksum hashed {"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960,"ms":318154,"ok":true}
+2026-09-08T00:54:58.994Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:55:01.638Z [INFO] Model warm-up generation done {"modelId":"qwen3.5-9b-ud-q4kxl"}
+2026-09-08T00:55:04.411Z [INFO] Use model (select + start) {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:55:04.485Z [INFO] Start runtime {"modelId":"qwen3-14b-instruct-q4","state":"installed"}
+2026-09-08T00:55:05.375Z [INFO] Benchmark complete {"profile":"LITE","recommendedModelId":"qwen3.5-9b-ud-q4kxl","ramGb":15.8}
+2026-09-08T00:55:05.821Z [INFO] Model prefetch started {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:56:03.387Z [INFO] Model prefetch done {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:57:44.565Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3-14b-instruct-q4","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:57:48.121Z [INFO] Model warm-up generation done {"modelId":"qwen3-14b-instruct-q4"}
+2026-09-08T00:58:46.597Z [INFO] Benchmark complete {"profile":"LITE","recommendedModelId":"qwen3.5-9b-ud-q4kxl","ramGb":15.8}

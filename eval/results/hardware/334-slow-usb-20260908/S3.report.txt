@@ -1,0 +1,13 @@
+Dieser Computer
+Geschwindigkeit: Noch nicht gemessen
+Arbeitsspeicher: 15,8 GB RAM
+CPU: 11th Gen Intel(R) Core(TM) i7-1185G7 @ 3.00GHz (8 Kerne)
+Grafikspeicher: 7,9 GB gemeinsam (Intel(R) Iris(R) Xe Graphics)
+Laufwerk: 91,1 MB/s lesen
+Zugewiesenes Profil: LITE
+Empfohlen für den nächsten Start: Qwen3.5 9B (UD-Q4_K_XL) (Arbeitsspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 9B (UD-Q4_K_XL)
+Kontextgröße: 8.192 Token
+Letzter Lauf: 8.9.2026, 02:46:22
+- Dieses Laufwerk ist eher langsam. Modelle funktionieren trotzdem, das Laden kann aber länger dauern.
+- Das Lesen von diesem Laufwerk lag bei etwa 91 MB/s. Beim Modellstart wird die ganze Modelldatei mit dieser Geschwindigkeit gelesen, Modellstarts dauern auf diesem Laufwerk daher lange.

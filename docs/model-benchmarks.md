@@ -743,9 +743,12 @@ behind it is #318 leg 2: at four slots the fit read 6,898 MiB free, projected 6,
 **133 MiB** short of its own 1,024 MiB target — 31/33 layers at 20.2 tok/s. `-np 1` returns
 **150.75 MiB**, 17.75 more than that shortfall, so a full offload is expected; and the app's estimate
 (7,285) still sits above what the fit asks for (5,856 projected + its 1,024 target = 6,880), so the
-estimate remains the more conservative of the two. **Expected, not measured** — leg 2's confirming
-run on #319 settles it, and if the 9B lands partial there this row's real-card behaviour needs
-revisiting.
+estimate remains the more conservative of the two. **MEASURED 2026-09-08 (#391 leg 2): 33/33,
+twice.** The fit read 7,350 MiB free under `-np 1` — not 6,898: the reading moves with the slot
+count on every card measured (finding 1 below) — projected 5,856 and left 1,494 ≥ 1,024; on the
+2026-09-07 reading the same projection would still leave 1,042, the 18 MiB pass predicted here.
+Decode 29.0 tok/s (was 20.2 at 31/33). Evidence
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/leg2-np1-verify*.*`.
 
 One consequence worth recording because it undercuts a stated rationale: the E2B's threshold is now
 **2,271 MiB**, so a 4 GB card could hold a ranked model. #321 justified its 5,120 MiB floor partly as
@@ -766,6 +769,7 @@ held:
 | leg | card (probe total / free, MiB) | model at ctx 8192 | fit outcome | decode | app ★ (basis) |
 |---|---|---|---|---|---|
 | 2 | GTX 1070 Ti 8 GB (8,273 / 7,504) | 9B | **31/33** — the fit read 6,898 MiB free and fell 133 MiB short of its 1,024 target; identical with ~1 GB of desktop use | 20.2 tok/s | 4B (Grafikspeicher) ✔ |
+| 2 fu | same card, re-run 2026-09-08 under #391 with `-np 1` now in `CHAT_SERVER_ARGS` (two starts, one with the #318 heap sampler polling) | 9B | **33/33** both times — the fit read **7,350** MiB free (not 6,898: finding 1 below), projected 5,856, "will leave 1494 >= 1024 MiB, no changes needed"; `CPU_Mapped 545.62` (the manifest's figure, now measured on a second card); RS 50.25 MiB at 1 seq; the BAR heap still used (149.6 of 214 MiB) | **29.0** tok/s | 9B — computed with the app's picker on this probe line (`committed-catalog.test.ts`, the 1070 Ti case), not read off the screen that session; **#390's 8 GB behaviour CONFIRMED** |
 | 3 | RTX 3080 Ti 12 GB (12,084 / 11,316) | Gemma 12B | 49/49, 2,086 MiB to spare; identical with 1–2.7 GB of desktop use | 27.7 | 9B ✔ |
 | 4 | RTX 3060 Laptop 6 GB (5,994 / 5,226 — 150 below the gate) | E2B (the RAM pick) · 9B (question f) | E2B **36/36 on the card anyway** · 9B 18/33 | 86.4 · 5.2 | E2B (Arbeitsspeicher) ✔ — after #321 lowered the gate to 5,120 this machine's star becomes the 4B on the **Grafikspeicher** basis; the measured record above is what the app did on the day |
 | 5 | same laptop: AMD Radeon(TM) Graphics listed FIRST, RTX 3060 second, no `--device` | E2B, 9B | every GPU buffer on the RTX; the fit's device list never contained the iGPU (its "device 0" was Vulkan1) | — | — |
@@ -782,7 +786,14 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    the probe's: 606 MiB lower on the 1070 Ti (6,898 vs 7,504), 1,820 lower on the 3090 (21,755 vs
    23,575), 204 lower on the RTX 3060 Laptop (5,022 vs 5,226). The estimate's working share + 1 GiB
    margin absorbed that gap on every card measured; the 8 GB verdict would flip only on a fit
-   reading ≥ 7,031 MiB.
+   reading ≥ 7,031 MiB. **2026-09-08 (#391): the reading moves with the slot count.** Under `-np 1`
+   every card read higher than at four slots — 3080 Ti 11,111 → 11,262, RTX 3060 Laptop 5,022 →
+   5,173, 1070 Ti 6,898 → 7,350 — and the gap to the probe's figure tracks the recurrent-state
+   buffer: ≈ 1× RS on the first two (205 → 54 MiB against RS 201.00 → 50.25), ≈ 3× RS on the
+   1070 Ti (606 → 154), the card whose BAR heap that buffer lands in. Six data points, a pattern
+   rather than an explanation. The 1070 Ti's 2026-09-07 reading was not noise: byte-identical with
+   and without ~1 GB of desktop use then, and the 2026-09-08 pair byte-identical with and without
+   the heap sampler.
 2. **The probe's `VK_EXT_memory_budget` "free" figure does not track other processes' pre-spawn
    use on NVIDIA** (7,504 at both 883 and 1,318 MiB of nvidia-smi use on the 1070 Ti; 11,316 at
    2.6 and 5.4 GB on the 3080 Ti) and is static or nearly so while a model runs (unchanged on the
@@ -812,6 +823,34 @@ the thresholds above are unchanged; these bound how far they can be trusted:
 6. **The parser read every real partial-offload log correctly** (31/33, 18/33, 62/66, Gemma 32/49
    on the 8 GB card) — #329 has its fixtures; one summary-field defect found there:
    `ModelPlacement.gpuFreeAtStartMb` names the iGPU on a machine with no budget device.
+
+**Hardware confirmation (issue #391, 2026-09-08): the 24 GB row re-measured under the app's own
+post-#386 launch, and it holds.** Leg 7's confirming start was run on the same rig from the APP
+(not the harness), on a build carrying #386 + #387 + #390, so the rung is production's own choice;
+evidence under `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/` as `leg7-app-q5km.*`,
+`leg7-app-q5km-ctx8192.*` and `leg7-harness-control-q5km.*`.
+
+| what | #318 (2026-09-07, four slots) | #391 (2026-09-08, the app, `-np 1`) |
+|---|---|---|
+| app ★ (Performance Copy report) | Qwen3.8 27B UD-Q4_K_M (graphics memory) | **Qwen3.8 27B UD-Q5_K_M (graphics memory)** |
+| Q5 at ctx 8192, rung 1a | 62/66, 1,173 MiB on the host | **66/66**, `will leave 3591 >= 1576 MiB, no changes needed` |
+| Q5 at ctx 32768, rung 1a | not started | **66/66**, `will leave 1834 >= 1672 MiB` |
+| recurrent state | 1,795.50 MiB (4 cells, 4 seqs, 2 rs_seq) | **448.88 MiB (1 cells, 64 layers, 1 seqs 2 rs_seq)** |
+
+Both halves of #319's prediction for this card are therefore confirmed on hardware: the star flips
+to Q5, and the app's own launch offloads it whole, with room to spare even at four times the
+context the leg assumed. `CPU_Mapped model buffer size` read **682.03 MiB** on both full-offload
+starts, which is exactly the `host_mapped_weights_mib` already in the Q5 manifest.
+
+One acceptance figure did NOT reproduce, and it is not a placement effect: decode came out at
+**37.4 tok/s** from the app and **38.0 tok/s** from the #318 harness re-run unchanged beside it,
+against the 51.0 that same harness produced on 2026-09-07 with the same argv, the same 2,015-token
+prompt and the same MTP acceptance (308/405 both days). Prefill fell in step (643 to 665 against
+903). `nvidia-smi` sampled through a repeat (`leg7-clock-state-2026-09-08.csv`) has the card's
+memory clock at 5001 MHz in eight of ten in-load samples where its P0 figure is 9501, with no
+throttle reason active and 244 W drawn of a 350 W limit. Decode on a 27B is memory-bandwidth-bound,
+so the rig's clock state, not the app, is what the day's tok/s figures measure. Treat 37.4 / 38.0 as
+a same-day pair and keep 51.0 as the P0 figure until the rig is re-measured at P0.
 
 **Still predicted:** the **20 GB row** (leg 6 — no 20 GB card is available to the project). By
 interpolation from the rig, Q4 needs ≈ 19,460 MiB of the fit's own reading (17,885 projected +
@@ -871,7 +910,17 @@ fit decides between full and half speed: leg 1 turned the 27B Q5's 62/66 layers 
 full offload by 133. **Accepted cost** (owner): with one slot a background job — categorisation,
 ZIM query expansion, a doc task — evicts the chat conversation's KV prefix; llama-server's host-RAM
 prompt cache restores it on a prefix match, so the cost is a restore, not a full re-prefill, and no
-in-app path depends on parallel slots. **What it does NOT change: the context window.**
+in-app path depends on parallel slots. **The restore half of that cost MEASURED FALSE on 2026-09-08
+(#391 leg 7, evidence `leg7-app-q5km-evicted-prefix.*`); the decision stands, the cost is larger
+than stated.** Consecutive turns in one conversation do reuse the prefix in the slot (22 tokens
+re-prefilled on turn 2 of 190 cached). But once another task takes the one slot, the server saves the
+conversation to the host cache and then refuses to load it back: `forcing full prompt re-processing
+due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see llama.cpp PR #13194)`.
+Both 27B quants are hybrid/recurrent, so the restore path is closed to them. Measured: a 435-token
+conversation, evicted by one turn in another conversation, re-prefilled **305 of 452 tokens** on
+return; only the 147-token system prefix survived, because it is common to every conversation and
+stays in the slot. The cost therefore scales with conversation length rather than being constant, and
+it is paid on every hand-back. Follow-up: #399. **What it does NOT change: the context window.**
 `--ctx-size` is the TOTAL cache size on both settings and every slot sees all of it
 (`n_ctx_slot = 8192` either way; `kv_unified` goes true → false, `n_seq_max` 4 → 1). That is the
 whole reason only four of the seven cache terms moved — see point 4 above for the rule and the

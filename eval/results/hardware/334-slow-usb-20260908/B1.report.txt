@@ -1,0 +1,19 @@
+Dieser Computer
+Geschwindigkeit: 21,3 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 8.9.2026, über 64 Token)
+Arbeitsspeicher: 31,9 GB RAM
+CPU: Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz (12 Kerne)
+Grafikspeicher: 8,1 GB VRAM (NVIDIA GeForce GTX 1070 Ti)
+Laufwerk: 589,1 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.5 4B (UD-Q4_K_XL) (Grafikspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 4B (UD-Q4_K_XL)
+Kontextgröße: 4.096 Token
+Letzter Lauf: 8.9.2026, 01:29:06
+- Dieses Laufwerk ist eher langsam. Modelle funktionieren trotzdem, das Laden kann aber länger dauern.
+
+# Reading (B1, workspace W1 on B, slow port): the manual check at 23:29:06Z after "Use model"
+# on the 9B. "Laufwerk: 589,1 MB/s lesen" is NOT the stick (28 MB/s cold read on this port): the
+# Models screen had hashed the 9B 96 s before the start, so the start's own install check hit the
+# cache, the load sample was not suppressed, and the prefetch read the page cache (5.97 GB in
+# 10.1 s). The write-probe warning ("eher langsam", 18–19 MB/s) fired; the 100 MB/s read warning
+# could not. See 00-protocol.md, finding 1.

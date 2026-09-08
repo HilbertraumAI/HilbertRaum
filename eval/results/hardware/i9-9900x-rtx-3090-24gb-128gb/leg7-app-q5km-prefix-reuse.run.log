@@ -1,0 +1,6 @@
+[start] backend=gpu healthy=true ctx=32768; VRAM 22586 MiB
+[turn 1] done in 6.4 s
+[turn 2] done in 6.3 s
+[turn 3] done in 6.3 s
+[prefills] [{"task":0,"ms":428.94,"tokens":13},{"task":6,"ms":1077.17,"tokens":171},{"task":18,"ms":668.05,"tokens":22},{"task":28,"ms":673.46,"tokens":22}]
+[speed lines] ["28 tok/s · 1.3 s to first token · 18 tokens","32 tok/s · 0.7 s to first token · 19 tokens","25 tok/s · 0.7 s to first token · 33 tokens"]

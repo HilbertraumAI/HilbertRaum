@@ -51,6 +51,8 @@ estimated_context_cache_gib: 0.3
 # MEASURED, not derived — the app has no GGUF-header parser. Read off the
 # `CPU_Mapped model buffer size` line of a FULL-OFFLOAD start (33/33 layers):
 # eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg5-baseline.stderr.log
+# Re-measured 2026-09-08 on the GTX 1070 Ti under -np 1 (#391 leg 2): 545.62 again at 33/33 —
+# eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/leg2-np1-verify.stderr.log
 # A PARTIAL offload inflates this line with the layers that did not fit, so only full-offload
 # starts count. Absent on any model never started on hardware, which then keeps the old
 # whole-file arithmetic; the GGUF-header derivation that would cover every model is
