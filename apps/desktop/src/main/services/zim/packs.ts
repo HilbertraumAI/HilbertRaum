@@ -399,12 +399,7 @@ export function servedCandidates(db: Db, zimDir: string): Array<{ id: string; pa
  * and its `id` must EQUAL the header UUID, or the registration fails: a manager that disagrees
  * with the header is not trusted to name the archive we just identified.
  */
-export async function registerPack(db: Db, deps: PackDeps, rawZimPath: string): Promise<KnowledgePack> {
-  // #429: normalize the separator ONCE, at the boundary, so `recorded_path` — and therefore the
-  // serving name every later request is routed by — is native from the first write. The native
-  // form was already applied to `kiwix-manage`'s argv (`tools.ts`, finding L9), which is why a
-  // forward-slash path registered cleanly and then 404'd on every article read.
-  const zimPath = nativeArchivePath(rawZimPath, deps.platform)
+export async function registerPack(db: Db, deps: PackDeps, zimPath: string): Promise<KnowledgePack> {
   const { uuid } = readZimHeader(zimPath)
   const book = await readZimMetadata(deps, zimPath)
   if (book.id !== uuid) {
@@ -415,6 +410,13 @@ export async function registerPack(db: Db, deps: PackDeps, rawZimPath: string): 
   // into the session's database (nor into the NEXT session's, after a lock + unlock).
   deps.assert?.()
   const leaf = basename(zimPath)
+  // #429: what gets STORED is native, so the serving name derived from it downstream is routable.
+  // Only the stored form — every read above (the header, the metadata) and `fileSize` below stay
+  // on the path the caller gave, which the OS accepts as it is; normalizing before the I/O would
+  // invent a filename that need not exist. `kiwix-manage`'s argv is normalized inside
+  // `kiwixManageAdd` itself (finding L9); that half existing alone is exactly why such a path
+  // registered cleanly and only then 404'd on every article read.
+  const recordedPath = nativeArchivePath(zimPath, deps.platform)
   const now = nowIso()
   const existing = prepareCached(db, 'SELECT added_at FROM knowledge_packs WHERE id = ?').get(uuid) as
     | { added_at: string }
@@ -445,7 +447,7 @@ export async function registerPack(db: Db, deps: PackDeps, rawZimPath: string): 
     book.mediaCount,
     fileSize(zimPath),
     leaf,
-    zimPath,
+    recordedPath,
     // The archive's own `_ftindex` tag — a HINT, never a verdict (#301 P4, M7). `searchable`
     // and `searchable_key` are deliberately NOT written here: only the reconcile's key pass and
     // the /suggest probe touch them, so a re-add can never invent a capability.
