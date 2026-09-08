@@ -2381,13 +2381,30 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   ended in 3.4 s). The persisted profile and ★ were unchanged; only that run's speed figure is
   absent or chunk-based. Fix candidate: the speed leg's busy re-check also watches a start in
   flight (`startingModelId`) and skips with the existing "speed skipped" warning (issue #393).
-- **A model started right after a Models-screen visit persists the page cache as the drive's read
-  figure.** The #108 guard suppresses the load sample only when the START's own install check
-  hashed the file; when the Models screen hashed it moments earlier the start hits the cache, the
-  prefetch reads RAM, and the model-load sample (589 MB/s for a 28 MB/s stick, #334 leg B1)
-  outranks the honest checksum sample for good — so the 100 MB/s slow-read warning never fires on
-  that machine and the next-start estimate is optimistic. This is the default first-run journey
-  (#382 hashes everything before a model can be chosen). Issue #392.
+- **A model started right after a Models-screen visit persisted the page cache as the drive's read
+  figure** (issue #392, fixed 2026-09-08). The #108 guard suppressed the load sample only when the
+  START's own install check hashed the file; when the Models screen hashed it moments earlier the
+  start hit the cache, the prefetch read RAM, and the model-load sample (589 MB/s for a 28 MB/s
+  stick, #334 leg B1) outranked the honest checksum sample for good — so the 100 MB/s slow-read
+  warning never fired on that machine and the next-start estimate stayed optimistic. This is the
+  default first-run journey (#382 hashes everything before a model can be chosen). `read-speed.ts`
+  now remembers the absolute paths a `checksum` sample was recorded for in this process and drops
+  a load sample over any of them, whoever hashed them — the honest checksum figure stays the
+  headline. The #114 prefetch skip is deliberately NOT widened (it stays on the start's own hash):
+  the −49 % cold-start win is not traded for a data-quality guard. A start right after an **in-app
+  download** now records no read sample at all: the download verify is excluded from sampling by
+  design (it reads bytes the app just wrote) and the page-cache-warm load after it is dropped too
+  — honest absence rather than a wrong figure, and the next cold start records the medium.
+  Residuals, plainly: (1) **the fix does not survive a relaunch, and the figure oscillates with
+  the cache's warmth.** The checksum store is persistent, so on the NEXT launch nothing hashes,
+  the warmed-path set is empty, and on a big-RAM machine a warm start records a `model_load`
+  sample that **overwrites** the honest checksum figure #392 just persisted — `preferCandidate`
+  lets a `model_load` sample beat a `checksum` incumbent unconditionally. The #334 leg B1 state
+  therefore returns until a genuinely cold start happens. (2) **A machine that already persisted
+  an inflated figure keeps it**, for the same ranking reason. The amendment both residuals want —
+  a checksum figure *below* the 100 MB/s gate cannot be hash-CPU-bound (the measured hash floor is
+  136 MB/s), so such a sample could be allowed to displace a `model_load` incumbent — is an owner
+  call tracked as issue **#404**.
 - **The Home screen's launch preflight writes its 8 MiB probe at unlock**, in the same second the
   auto-start begins hashing (#334 perf marks, 0.4 s after `unlock_done`). It persists nothing and
   measured the same write figure as the sequenced probe after the load; noted, not sequenced.
