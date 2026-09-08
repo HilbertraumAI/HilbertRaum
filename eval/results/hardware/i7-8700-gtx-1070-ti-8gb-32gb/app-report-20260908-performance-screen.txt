@@ -1,0 +1,76 @@
+# Pasted by the machine owner 2026-09-08 20:52 local, closing #414 — the one evidence gap #391 leg 2
+# left open. Source build: `npm run dev` on a clean `master` checkout at 33aaa806 (contains #390,
+# `eed03a07`), HILBERTRAUM_DRIVE_ROOT=D:\ (the prepared lite drive; runtime b9849 `799fcc04a`,
+# byte-identical to the leg-2 preflight line 5). Manifests came from the CHECKOUT
+# (`C:\work\HilbertRaum\model-manifests`, the dev-build behaviour), i.e. the post-#387/#390 values
+# incl. the 9B's `host_mapped_weights_mib: 545.62`. Performance screen -> "Bericht kopieren",
+# after "Diesen Computer prüfen" plus a "Qwen3.5 9B starten und messen" leg.
+#
+# THIS IS THE REPORT #414 ASKED FOR: the star below was READ OFF THE SCREEN, not computed. The
+# leg-2 session filled §6.6's `2 fu` row from `committed-catalog.test.ts` instead, which exercises
+# `graphicsBudgetMib` + the picker but skips the live probe -> `nextStartMemory` ->
+# `liveChatRecommendation` -> rendered-line chain.
+#
+# Probe on this machine at the same session, run directly against the drive's own binary
+# (`D:\runtime\llama.cpp\win\llama-server.exe --list-devices`):
+#     Vulkan0: NVIDIA GeForce GTX 1070 Ti (8273 MiB, 7504 MiB free)
+# — byte-identical to the line the picker test pins. Budget 7,504 >= the 9B's 7,285 estimate;
+# the total-1024 fallback (7,249) would have starred the 4B, so the free-vs-total distinction is
+# what carries this row (§6.6 decision 10).
+#
+# NOT taken from the portable exe on that drive: `HilbertRaum-0.1.59-portable.exe` there is built
+# from c227c63e (PR #385), ~2.5 h BEFORE #390 merged, and still stars the 4B. See the earlier
+# `app-report-dev-performance-screen.txt` in this directory for that pre-#390 screen.
+
+Dieser Computer
+Geschwindigkeit: 30 Token / Sek. (Gemessen mit Qwen3.5 9B (UD-Q4_K_XL) am 8.9.2026, über 64 Token)
+Arbeitsspeicher: 31,9 GB RAM
+CPU: Intel(R) Core(TM) i7-8700 CPU @ 3.20GHz (12 Kerne)
+Grafikspeicher: 8,1 GB VRAM (NVIDIA GeForce GTX 1070 Ti)
+Laufwerk: 1.008,4 MB/s lesen
+Zugewiesenes Profil: PRO
+Empfohlen für den nächsten Start: Qwen3.5 9B (UD-Q4_K_XL) (Grafikspeicher)
+Kontextgröße: 8.192 Token
+Empfohlen zum Zeitpunkt der Prüfung: Qwen3.5 9B (UD-Q4_K_XL)
+Letzter Lauf: 8.9.2026, 20:52:54
+
+# ---------------------------------------------------------------------------------------------
+# CAVEAT on ONE row — `Laufwerk: 1.008,4 MB/s lesen` is CONTAMINATED and must not be cited as this
+# drive's media speed. It is an artefact of the session's own preparation, recorded here rather
+# than edited out (the report is verbatim, per #414).
+#
+# This machine's controller is an Intel USB 3.0 xHCI (Gen 1, 5 Gbps ~ 500 MB/s ceiling), so
+# 1,008 MB/s cannot come off the media at all. Cause: a pre-flight `Get-FileHash -SHA256` on
+# `D:\models\chat\qwen3.5-9b-ud-q4kxl.gguf` (run to check the drive's `require_sha256_match`
+# policy before launching) pulled all 5.97 GB into the Windows page cache; the app's read sample
+# then hit that warm file. Measured on this drive, same session, 8 MiB sequential reads:
+#     cold, 27B at an 11 GB offset never touched ....  407.9 MB/s   <- the real media rate
+#     warm, the 9B that had just been hashed ........ 6748.7 MB/s   <- RAM, not the drive
+# 1,008.4 sits between the two, i.e. a partly-warm sample.
+#
+# This is the #392 class (a hash lets a page-cache load sample through the #108 guard), fixed in
+# PR #406 by suppressing the load sample for any weight hashed THIS SESSION — a guard that cannot
+# see a hash run by an external process, which is what happened here. Not a regression; a blind
+# spot worth knowing when preparing a measurement leg.
+#
+# NOTHING ELSE IN THE REPORT IS AFFECTED. Read speed is an input to neither surface this file is
+# evidence for: `liveChatRecommendation` reads the GPU probe + machine RAM + the catalog, and
+# `classifyProfile` reads RAM + `gpuUseful` + tok/s. The star and PRO are what they would have
+# been on a cold sample.
+#
+# Drive-link note, for anyone reproducing this: the drive first enumerated on a USB 2.0 port
+# (ACPI `RHUB#HS11`, then `HS03`, then `HS04` — 43.1-43.7 MB/s across five files, the USB 2.0 High
+# Speed ceiling) before being moved to `RHUB#SS07`, where it runs 407.9 MB/s cold. `HS` vs `SS` in
+# `DEVPKEY_Device_LocationPaths` is the one reliable tell; the drive's speed is not.
+#
+# Leg-2 context for comparison: that session's report read `Laufwerk: 305 MB/s lesen` and ran
+# Gemma 4 12B (not present on this drive today). The drive rows therefore differ between the two
+# reports; the recommendation and profile rows do not.
+# ---------------------------------------------------------------------------------------------
+
+# Cross-check against the measured leg-2 evidence in this directory (leg2-np1-verify.*):
+#   decode      29.0 tok/s at 33/33 (measured, 512 tokens)  vs  30 tok/s here (app check, 64 tokens)
+#   star        computed 9B                                  vs  9B READ OFF THE SCREEN
+#   basis       Grafikspeicher (rule C on the free budget)   vs  Grafikspeicher
+#   profile     PRO                                          vs  PRO (RAM 32 -> BALANCED, +1 for the useful card)
+# #390's 8 GB behaviour is confirmed on the app's own output, not only on the picker functions.
