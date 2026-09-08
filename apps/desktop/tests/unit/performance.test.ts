@@ -302,7 +302,7 @@ describe('placementVerdict', () => {
   })
 
   it('estimates from the weights before the first start: the picker\'s fit on a card, headroom on unified / cpu', () => {
-    // Discrete (PR #308 audit decision 8): the picker's own need — unrounded weights × 1.15 + the
+    // Discrete (PR #308 audit decision 8): the picker's own need — offloadable weights × 1.15 + the
     // cache term + the 1 GiB margin — against the picker's BUDGET (free, else total − 1024), never
     // the weights against 92 % of the total. A 5.8 GB model (5,531 MiB; need 7,897 with the default
     // cache) on a 24 GiB card with 23,552 free fits; `needMb` stays the weights alone.

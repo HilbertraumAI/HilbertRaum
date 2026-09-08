@@ -164,10 +164,12 @@ from its first public `1.0.0` release onward.
   16 GB laptop that meant a model running about four times slower than the one that fits the card.
   Such a card is now recognised, the Performance screen rates it "Usable", and the recommendation is
   made against it. Cards of about 4 GB are still too small, which has not changed.
-- **The "Your model" estimate is no longer needlessly pessimistic on small models.** It counted the
-  whole model file against your graphics memory, including the part that always stays in main
-  memory. On the smallest bundled model that overstated the requirement by more than twice. The
-  estimate now counts only what actually goes to the card.
+- **The "Your model" estimate is no longer needlessly pessimistic.** It counted the whole model
+  file against your graphics memory, including the part that always stays in main memory — on the
+  smallest bundled model that overstated the requirement by more than twice. It now counts only
+  what actually goes to the card, which it can do for the models whose split has been measured on
+  real hardware. Two effects you may notice: a 24 GB card is offered the larger 27B model, and an
+  8 GB card is offered the 9B where it used to be offered the 4B.
 - **Larger models now fit on the graphics card that used to be just too small for them.** The chat
   engine ran four answer slots at once, which is memory the app never used — it only ever answers
   one question at a time. It now runs one. On a 24 GB card that is the difference between a 27B

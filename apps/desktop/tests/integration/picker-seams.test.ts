@@ -73,15 +73,19 @@ const MANIFESTS = join(__dirname, '..', '..', '..', '..', 'model-manifests')
 // FREE figure is under the 9B's threshold does not hold it, so the card pick is the 4B — still
 // divergent from the RAM pick, which is what the mutation guards need.
 // The threshold itself is pinned in `committed-catalog.test.ts`, not here; it moved 8,014 → 7,912
-// (#319, `-np 1`) → 7,830 (#321, the working share on the offloadable weights). CARD8 therefore
-// carries the GTX 1070 Ti's own measured free figure from the #318 session (7,504) rather than a
-// number picked just above the threshold of the day. The PAIR is the point: CARD8 below the
-// threshold, CARD8_ROOMY above it.
+// (#319, `-np 1`) → 7,830 (#321) → 7,285 (§5 item 22 (e), host-mapped weights out of the base).
+// CARD8 is an 8 GiB card with ≈ 1.3 GB in use, chosen with real HEADROOM under the threshold
+// rather than just below whichever value is current — it has been re-pinned twice already this
+// wave. The PAIR is the point: CARD8 below the threshold, CARD8_ROOMY above it.
 const RAM_PICK = 'qwen3.8-27b-ud-q5km'
 const CARD8_PICK = 'qwen3.5-4b-ud-q4kxl'
 const CARD8_ROOMY_PICK = 'qwen3.5-9b-ud-q4kxl'
+// The hybrid fixture's discrete card (RTX 5060, 7,573 MiB free) clears the 9B's threshold since
+// §5 item 22 (e) took host-mapped weights out of the estimate's base — it was the 4B before. These
+// cases are about WHICH DEVICE the seams choose, not which model, so the model follows the card.
+const RTX5060_PICK = CARD8_ROOMY_PICK
 
-const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 7504 }
+const CARD8: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3070', totalMb: 8192, freeMb: 6900 }
 // The same card with 8,100 MiB free: holds the 9B — the witness that the seams feed the FREE
 // figure (by total − 1,024 it would read 7,168 and give the 4B).
 const CARD8_ROOMY: GpuDevice = { ...CARD8, freeMb: 8100 }
@@ -221,10 +225,10 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     for (const devices of [[ARL, RTX5060], [RTX5060, ARL]]) {
       const { ctx } = fixture({ probeReturns: devices })
       const bench = await runAndPersistBenchmark(ctx)
-      expect(bench.recommendedModelId).toBe(CARD8_PICK)
+      expect(bench.recommendedModelId).toBe(RTX5060_PICK)
       expect(bench.gpu).toBe(RTX5060.name)
       expect(bench.gpuVramMb).toBe(8151)
-      expect(await liveStar(ctx)).toBe(CARD8_PICK)
+      expect(await liveStar(ctx)).toBe(RTX5060_PICK)
       const snap = buildPerformanceSnapshot(ctx)
       expect(snap.currentGpu).toEqual({ name: RTX5060.name, totalMb: 8151, useful: true })
       expect(snap.graphicsDevice).toEqual({ name: RTX5060.name, totalMb: 8151, useful: true })
@@ -252,7 +256,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
 
   it('the persisted probe alone (no benchmark run) drives the Models ★ and the snapshot the same way', async () => {
     const { ctx } = fixture({ probeReturns: [], persisted: [ARL, RTX5060] })
-    expect(await liveStar(ctx)).toBe(CARD8_PICK)
+    expect(await liveStar(ctx)).toBe(RTX5060_PICK)
     const snap = buildPerformanceSnapshot(ctx)
     expect(snap.currentGpu?.name).toBe(RTX5060.name)
     expect(snap.placement.vramMb).toBe(8151)
@@ -402,7 +406,7 @@ describe('picker seams: a probe that cannot run or that threw persists an EMPTY 
     const bench = await runAndPersistBenchmark(f.ctx)
     expect(getSettings(f.ctx.db).gpuProbe?.devices).toEqual([ARL, RTX5060])
     expect(getSettings(f.ctx.db).gpuProbe?.probedAt).not.toBe(STALE_AT)
-    expect(bench.recommendedModelId).toBe(CARD8_PICK)
+    expect(bench.recommendedModelId).toBe(RTX5060_PICK)
     expect(bench.gpu).toBe(RTX5060.name)
   })
 
@@ -475,7 +479,7 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     expect(f.probe).toHaveBeenCalledTimes(1)
 
     const snap = buildPerformanceSnapshot(f.ctx)
-    // LIVE: the RTX 3070 fixture `{ 8192, freeMb 7504 }` → budget 7,504 MiB < the 9B's 7,830 → the 4B.
+    // LIVE: the RTX 3070 fixture `{ 8192, freeMb 6900 }` → budget 6,900 MiB < the 9B's 7,285 → the 4B.
     expect(snap.recommendation).toEqual({ modelId: CARD8_PICK, basis: 'discrete' })
     // HISTORICAL: what the check said at the time, untouched, with its old stamp.
     expect(snap.current?.recommendedModelId).toBe(RAM_PICK)
@@ -489,7 +493,7 @@ describe('picker seams: the Performance snapshot carries the LIVE recommendation
     ['an 8 GiB probe', { probeReturns: [] as GpuDevice[], persisted: [CARD8] }, CARD8_PICK, 'discrete'],
     ['no probe', { probeReturns: [] as GpuDevice[], persisted: [] as GpuDevice[] }, RAM_PICK, 'cpu'],
     ['GPU off with a card present', { probeReturns: [] as GpuDevice[], persisted: [CARD8], settings: { gpuMode: 'off' as const } }, RAM_PICK, 'cpu'],
-    ['a hybrid laptop, Intel first', { probeReturns: [] as GpuDevice[], persisted: [ARL, RTX5060] }, CARD8_PICK, 'discrete']
+    ['a hybrid laptop, Intel first', { probeReturns: [] as GpuDevice[], persisted: [ARL, RTX5060] }, RTX5060_PICK, 'discrete']
   ])('both surfaces agree with %s: the listModels ★ === snapshot.recommendation.modelId (%s)', async (_label, opts, expected, basis) => {
     const f = withSavedRamPick(fixture(opts))
     const snap = buildPerformanceSnapshot(f.ctx)

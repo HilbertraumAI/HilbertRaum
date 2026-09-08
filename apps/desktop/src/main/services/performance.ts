@@ -284,7 +284,7 @@ export interface PlacementVerdictInput {
  * layer on the GPU is 'gpu' (unified memory reads the same way), fewer is 'partial' with
  * the CPU-side bytes as the spill, a CPU backend is 'cpu', and a GPU start whose log carried
  * no offload line is 'unknown' rather than a guess. ESTIMATED (no start yet): on a discrete
- * card the picker's own fit (`estimateGraphicsNeedMib` — unrounded weights × 1.15 + the
+ * card the picker's own fit (`estimateGraphicsNeedMib` — the OFFLOADABLE weights × 1.15 + the
  * model's context-cache term + the fit's 1 GiB margin — against the picker's budget, PR #308
  * audit decision 8, finding §4.1), so this row and the Models ★ can never call the same
  * (model, card) pair differently; a card that cannot hold it still runs the model if RAM can
