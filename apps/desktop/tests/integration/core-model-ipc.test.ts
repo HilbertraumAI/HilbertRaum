@@ -51,7 +51,7 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
 import { registerCoreIpc } from '../../src/main/ipc/registerCoreIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from '../../src/main/ipc/registerModelIpc'
 import { IPC } from '../../src/shared/ipc'
-import { clearChecksumCache, primeChecksum } from '../../src/main/services/models'
+import { checksumCacheStats, clearChecksumCache, primeChecksum } from '../../src/main/services/models'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
@@ -290,6 +290,87 @@ describe('registerModelIpc', () => {
     expect(models.every((m) => typeof m.id === 'string')).toBe(true)
     // Not a developer (toggle off, packaged build) → no mock-start affordance (M10).
     expect(models.every((m) => m.startableAsMock !== true)).toBe(true)
+  })
+
+  // #382: `listModels(lazyVerify)` is what keeps a fresh workspace on a slow drive out of a
+  // 25-minute hash before a model can be chosen (39.44 GB at a mean 25.8 MB/s, sequential, on
+  // the #330 round trip). The Models screen passes `true` on every ordinary visit now; only its
+  // explicit "Check all model files" action omits the flag.
+  describe('listModels(lazyVerify) hashes one weight, not the corpus (#382)', () => {
+    /** A temp drive with two present, correctly-hashed chat weights. */
+    function twoWeightDrive(): { root: string; manifestsDir: string } {
+      const root = mkdtempSync(join(tmpdir(), 'hilbertraum-lazy-'))
+      const manifestsDir = join(root, 'model-manifests')
+      mkdirSync(manifestsDir, { recursive: true })
+      mkdirSync(join(root, 'models', 'chat'), { recursive: true })
+      for (const id of ['alpha', 'beta']) {
+        const rel = `models/chat/${id}.gguf`
+        const body = `weight-body-${id}`
+        writeFileSync(join(root, ...rel.split('/')), body)
+        writeFileSync(
+          join(manifestsDir, `${id}.yaml`),
+          stringify({
+            id,
+            display_name: id,
+            family: 'qwen3',
+            role: 'chat',
+            format: 'gguf',
+            runtime: 'llama_cpp',
+            license: 'apache-2.0',
+            size_on_disk_gb: 0.1,
+            recommended_min_ram_gb: 1,
+            recommended_ram_gb: 1,
+            recommended_context_tokens: 4096,
+            local_path: rel,
+            sha256: createHash('sha256').update(body).digest('hex'),
+            license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-09-08', notes: '' }
+          })
+        )
+      }
+      return { root, manifestsDir }
+    }
+
+    function lazyCtx(): AppContext {
+      const { root, manifestsDir } = twoWeightDrive()
+      const db = seededDb()
+      updateSettings(db, { activeModelId: 'alpha' })
+      return {
+        db,
+        manifestsDir,
+        paths: { rootPath: root, configPath: bogusConfigDir() },
+        isDev: false,
+        runtime: { activeModelId: () => null }
+      } as unknown as AppContext
+    }
+
+    it('lazyVerify: true hashes ONLY the active model; both weights still report installed', async () => {
+      reg(lazyCtx())
+      clearChecksumCache()
+      const before = checksumCacheStats.computed
+      const { result } = await invoke(handlers, IPC.listModels, true)
+      expect(checksumCacheStats.computed).toBe(before + 1)
+      const states = Object.fromEntries((result as ModelInfo[]).map((m) => [m.id, m.state]))
+      expect(states['alpha']).toBe('installed') // hashed + verified
+      expect(states['beta']).toBe('installed') // present, unhashed — display-only
+    })
+
+    it('no argument ("Check all model files") still hashes every present weight', async () => {
+      reg(lazyCtx())
+      clearChecksumCache()
+      const before = checksumCacheStats.computed
+      await invoke(handlers, IPC.listModels)
+      expect(checksumCacheStats.computed).toBe(before + 2)
+    })
+
+    it('lazyVerify: true with no active model hashes nothing at all', async () => {
+      const ctx = lazyCtx()
+      updateSettings(ctx.db, { activeModelId: null })
+      reg(ctx)
+      clearChecksumCache()
+      const before = checksumCacheStats.computed
+      await invoke(handlers, IPC.listModels, true)
+      expect(checksumCacheStats.computed).toBe(before)
+    })
   })
 
   it('startRuntime throws on an unknown model id', async () => {

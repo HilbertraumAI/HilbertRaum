@@ -192,8 +192,10 @@ export function ModelsScreen(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
   const [machineRam, setMachineRam] = useState<number | null>(UNKNOWN_RAM)
-  // First cold visit hashes the (multi-GB) weights; this drives a determinate bar in the
-  // loading state instead of an opaque spinner. Null once nothing is hashing.
+  // Drives a determinate bar instead of an opaque spinner while weights hash — in the
+  // loading state (a cold ACTIVE model, the one file lazy verification still hashes) and,
+  // since #382, IN PLACE on the loaded screen while "Check all model files" runs. Null once
+  // nothing is hashing.
   const [verifyProgress, setVerifyProgress] = useState<ModelVerifyProgress | null>(null)
   // Runtime status — so a model that is loading in the background shows a disabled
   // "Starting…" button (the `startingModelId` is server truth that survives a revisit,
@@ -237,7 +239,16 @@ export function ModelsScreen(): JSX.Element {
 
   async function refresh(): Promise<void> {
     const [m, s, p, e, rt] = await Promise.all([
-      window.api.listModels(),
+      // #382: LAZY verification. The Models screen used to omit the flag and hash every
+      // present weight before it could render a single card — 25.5 min for 39.44 GB on the
+      // #330 slow-drive round trip (mean 25.8 MB/s, strictly sequential), and this screen is
+      // the ONLY route to a first model on a fresh workspace (`activeModelId` starts null).
+      // Lazy resolves to `onlyVerifyModelId: settings.activeModelId`, so at most ONE weight
+      // is hashed here. The §7.4 gate is untouched: `startModelRuntime` re-verifies what it
+      // launches and the ship-time gates always hash fully. Passive `checksum_failed`
+      // discovery for models nothing has started is traded away on purpose — the explicit
+      // "Check all model files" action below is the replacement.
+      window.api.listModels(true),
       window.api.getSettings(),
       window.api.getPolicy().catch(() => null),
       // Wrapped in Promise.resolve so a partial bridge (older preload, or a test stub that
@@ -309,7 +320,7 @@ export function ModelsScreen(): JSX.Element {
   // button flips to "Stop" on its own once the GGUF finishes loading (a full `refresh`
   // also picks up the new `running` model state).
   // SH-9 (#149): while a model starts, poll ONLY the small getRuntimeStatus — the previous
-  // full 6-IPC refresh() (listModels full-verify, settings, policy, engine, runtime, app
+  // full 6-IPC refresh() (listModels, settings, policy, engine, runtime, app
   // status) rebuilt every card ~2.5 s for minutes on a 20 GB GGUF. One full refresh runs on
   // the starting→settled transition, which also re-fires this effect and clears the timer.
   useEffect(() => {
@@ -413,6 +424,44 @@ export function ModelsScreen(): JSX.Element {
     }
   }
 
+  /**
+   * #382: the determinate hashing bar, rendered by BOTH sites — the blocked loading state
+   * (a cold active model) and, in place, the loaded screen while "Check all model files"
+   * runs. Before #382 the only render site was inside the `!models` branch, so a full pass
+   * on a loaded screen would have hashed for minutes with nothing on screen at all.
+   * Null whenever nothing is hashing, or before the byte denominator is known.
+   */
+  function verifyBar(): JSX.Element | null {
+    const p = verifyProgress
+    if (!p || p.overallBytesTotal <= 0) return null
+    const pct = Math.min(100, Math.round((p.overallBytesHashed / p.overallBytesTotal) * 100))
+    return (
+      <Progress
+        label={t('models.checkingProgress', {
+          n: p.modelIndex,
+          m: p.modelCount,
+          name: p.displayName,
+          pct
+        })}
+        value={p.overallBytesHashed}
+        max={p.overallBytesTotal}
+      />
+    )
+  }
+
+  /**
+   * #382: the explicit opt-in replacement for the passive full hash. Omitting `lazyVerify`
+   * is the full-verify mode `buildModelList` already has, so this needs no new channel; the
+   * hashes it computes land in the (size, mtime) checksum store, so the `refresh()` that
+   * `run` fires afterwards reports every state — `checksum_failed` included — from the cache.
+   */
+  async function verifyAllModelFiles(): Promise<void> {
+    await run('verify-all', async () => {
+      const m = await window.api.listModels()
+      if (mountedRef.current) setModels(m)
+    })
+  }
+
   /** Persist the context-size pick ('auto' = null override = the model's recommended window).
    *  Applies at the next model start — the card's hint (+ restart note while one runs) says so. */
   async function onContextSizeChange(value: string): Promise<void> {
@@ -456,26 +505,11 @@ export function ModelsScreen(): JSX.Element {
   }
 
   if (!models || !settings) {
-    const p = verifyProgress
-    const pct =
-      p && p.overallBytesTotal > 0
-        ? Math.min(100, Math.round((p.overallBytesHashed / p.overallBytesTotal) * 100))
-        : null
+    const bar = verifyBar()
     return (
       <div className="screen models-screen">
         <h1>{t('models.title')}</h1>
-        {p && pct != null ? (
-          <Progress
-            label={t('models.checkingProgress', {
-              n: p.modelIndex,
-              m: p.modelCount,
-              name: p.displayName,
-              pct
-            })}
-            value={p.overallBytesHashed}
-            max={p.overallBytesTotal}
-          />
-        ) : (
+        {bar ?? (
           <p className="hint">
             <Spinner /> {t('models.checking')}
           </p>
@@ -1065,6 +1099,30 @@ export function ModelsScreen(): JSX.Element {
     <div className="screen models-screen">
       <h1>{t('models.title')}</h1>
       <p className="lead">{t('models.lead')}</p>
+
+      {/* #382: a screen-level, EXPLICIT full check. Ordinary visits verify lazily (only the
+          active model), so nothing here hashes on its own any more; this is the one action
+          that walks every present weight. Its copy names the cost — a full pass took 25.5
+          minutes for 39.44 GB on the #330 slow drive — because it cannot be stopped once
+          started (cancellable verification is #420). The bar renders IN PLACE below it. */}
+      <div className="models-verify-all">
+        <Button
+          size="sm"
+          disabled={busy !== null}
+          title={t('models.verifyAllTitle')}
+          onClick={() => void verifyAllModelFiles()}
+        >
+          {busy === 'verify-all' ? (
+            <>
+              <Spinner /> {t('models.verifyingAll')}
+            </>
+          ) : (
+            t('models.verifyAll')
+          )}
+        </Button>
+        <p className="hint">{t('models.verifyAllHint')}</p>
+        {verifyBar()}
+      </div>
 
       {anyDownloadable && downloadsBlockedReason && <Banner tone="info">{downloadsBlockedReason}</Banner>}
 

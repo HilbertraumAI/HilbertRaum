@@ -2694,6 +2694,12 @@ code, pre, kbd { font-family: var(--font-mono); }
 .packs-card-actions { display: flex; gap: 8px; margin-top: 4px; }
 .packs-tools-hint { margin: 0; }
 
+/* #382: the screen-level "Check all model files" action — the button, its consequence line
+   and the in-place hashing bar, stacked as a quiet row rather than a Banner. */
+.models-verify-all { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+.models-verify-all > .hint { margin: 0; }
+.models-verify-all > .progress { align-self: stretch; }
+
 /* Offline article viewer: readable measure inside the wide modal; scrolls in the modal. */
 .pack-article { display: flex; flex-direction: column; gap: 8px; }
 .pack-article-source { margin: 0; }

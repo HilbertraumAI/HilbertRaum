@@ -1249,6 +1249,16 @@ export const en = {
     'Re-hash the file on disk and check it against its SHA-256 (bypasses the cache)',
   'models.verifying': 'Verifying…',
   'models.verify': 'Verify checksum',
+  // #382: the screen-level opt-in full check. Ordinary visits verify only the model in use,
+  // so this is the one action that walks every present weight — the copy names the cost
+  // because the pass cannot be stopped once it starts.
+  'models.verifyAll': 'Check all model files',
+  'models.verifyingAll': 'Checking all model files…',
+  'models.verifyAllTitle': 'Re-check every model file on this drive against its SHA-256',
+  'models.verifyAllHint':
+    'Each model is checked when you start it. This checks every model file on this drive ' +
+    'instead — on a slow drive that can take several minutes, and it runs to the end once ' +
+    'it has started.',
   'models.confirm.title': 'Download {name}?',
   'models.confirm.start': 'Start download',
   'models.confirm.size': 'Size',

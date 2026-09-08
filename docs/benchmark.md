@@ -309,6 +309,43 @@ probe-based drive notes. It selects that note by **exact canonical-English match
 word-regex would silently mis-bind once two drive-worded warnings can co-fire, and
 `PreflightResult.slowDriveWarning` holds a single string).
 
+### The media-bound checksum rule (§6, issue #404, 2026-09-08)
+
+**§6.1 — what was wrong.** `preferCandidate` (`services/read-speed.ts`, one function, four call
+sites through `effectiveReadOrPersisted`, `rankSamples` and `effectiveReadPatch`) let a
+`model_load` sample beat a `checksum` incumbent unconditionally. On a warm relaunch nothing
+hashes — the checksum store answers from `(size, mtime)` — so #392's warmed-path set is empty and
+the auto-start's load window times the OS page cache. That page-cache figure then displaced the
+honest checksum sample on both destinations and took the #110 slow-read warning with it, every
+launch, for as long as the drive stayed slow (#334 leg B1: **589 MB/s persisted for a 28 MB/s
+stick**).
+
+**§6.2 — the fact the amendment rests on.** The rank existed because a checksum sample can be
+hash-CPU-bound and under-report the medium — but only down to the SHA-256 floor, **measured at
+~136 MB/s** ("Slow read", above). A checksum sample below `SLOW_READ_MBPS = 100` therefore cannot
+be CPU-bound: the medium set that figure. Call such a sample **media-bound**.
+
+**§6.3 — the rule as built.** Both halves, complementary rather than alternative:
+
+1. A media-bound `checksum` candidate **may displace** a `model_load` incumbent. This repairs a
+   machine that already carries a page-cache figure — one cold hash, or one "Check all model
+   files" pass, corrects it.
+2. Symmetrically, a `model_load` candidate **does not displace** a media-bound `checksum`
+   incumbent. This is what stops the relaunch oscillation.
+
+Strict `<`, matching `upsertSlowReadWarning` and the Performance screen's drive rating: a sample
+at exactly 100 MB/s keeps the pre-#404 ranking in both directions. `preferCandidate` remains the
+**single** ranking rule — no call site adds a second one — so the live latch, the two persisted
+destinations and `eligiblePersistedSample` cannot disagree. Machine identity is still decided
+before the ranking (G3 below); nothing here loosens that.
+
+**§6.4 — accepted failure mode.** Move the drive to a FASTER USB port on the same machine and the
+slow figure stands until something hashes again, because the port is not part of `machineKey`
+(measured spread on one box: 28–133 MB/s by port, #334). Accepted **because it self-heals**: a
+newer `checksum` sample still beats a `checksum` incumbent, and since #382 every new model pick
+hashes at the start gate. The opposite failure — a fast port persisting an inflated figure over an
+honest slow one — is the one that actually misled users, and half 1 closes it.
+
 ## Persistence
 
 Spec §8 defines **no `benchmarks` table**, so the last result is persisted via the **settings
@@ -337,7 +374,8 @@ it was measured on, so it is carried forward — into a fresh run, its slow-read
 Known, unequal keys are foreign and never a candidate, so a NEW computer's first benchmark starts
 with no read figure rather than the previous computer's; a local `checksum` sample beats a
 foreign persisted `model_load` one because identity is decided **before** the source ranking
-(`preferCandidate`: same-machine `model_load` beats `checksum`, else the newer sample). **G3:**
+(`preferCandidate`: same-machine `model_load` beats `checksum` — unless that `checksum` is
+media-bound, see "The media-bound checksum rule" below — else the newer sample). **G3:**
 an unknown identity on **either** side (a `null` key — a legacy blob, a failed detection) stays
 eligible as "this machine". That is a compatibility policy, not proof of provenance: an old
 workspace keeps behaving as before, and an unkeyed result never acquires a fabricated key or a
@@ -1312,7 +1350,9 @@ commit references, and added the changelog entry.
   from the run, none of them a persistence defect: the unlock-time GPU probe could race the
   auto-start and cache an empty answer for the session (#380, fixed 2026-09-08, PR #407); the Copy report's live "next
   start" line under an "Another computer" heading (#381); a fresh workspace hashing every weight
-  before a model can be chosen (#382); `gpuAutoDisabled` is workspace-wide, not machine-stamped;
+  before a model can be chosen (#382, FIXED 2026-09-08 — the Models screen verifies lazily and the
+  full pass moved to an explicit "Check all model files" action; `architecture.md` RT-3
+  amendment); `gpuAutoDisabled` is workspace-wide, not machine-stamped;
   a USB bus reset drops the decrypted WAL and the next unlock simply restores again
   (`known-limitations.md` "Performance screen and per-computer history").
 - **HW2 / T9** (closed 2026-09-08, #329): real b9849 partial- and full-offload load logs are

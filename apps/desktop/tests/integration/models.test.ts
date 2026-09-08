@@ -1239,10 +1239,13 @@ describe('buildModelList — RAM gate', () => {
   })
 })
 
-// RT-3 lazy verification (the chat path): on a cold cache, the chat path
-// (`onlyVerifyModelId`) must hash ONLY the active model, while the Models-screen path
-// (no `onlyVerifyModelId`) hashes the full set. Inactive present weights are still reported
-// `installed` (display-only — the start gate re-verifies what it launches).
+// RT-3 lazy verification. On a cold cache the lazy mode (`onlyVerifyModelId`) hashes ONLY the
+// named model, while the full mode (no `onlyVerifyModelId`) hashes the full set. Since #382
+// lazy is what every routine caller uses — the workspace gate, the Performance screen AND an
+// ordinary Models-screen visit — and the full mode has exactly one caller left: the Models
+// screen's explicit "Check all model files" action (plus the ship-time gates, which have their
+// own path). Inactive present weights are still reported `installed` (display-only — the start
+// gate re-verifies what it launches).
 describe('buildModelList — RT-3 lazy verification', () => {
   function manifestsDirWith(...objs: Array<Record<string, unknown>>): string {
     const dir = tempDir('hilbertraum-manifests-')
@@ -1284,7 +1287,7 @@ describe('buildModelList — RT-3 lazy verification', () => {
     expect(byId['b']).toBe('installed') // present, reported without hashing (display-only)
   })
 
-  it('Models-screen path (cold cache) hashes the FULL set', async () => {
+  it('"Check all model files" (cold cache) hashes the FULL set', async () => {
     const { dir, root } = twoModels()
     clearChecksumCache()
     const before = checksumCacheStats.computed

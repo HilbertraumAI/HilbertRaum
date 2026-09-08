@@ -1,5 +1,6 @@
 import { statSync } from 'node:fs'
 import { resolve } from 'node:path'
+import { SLOW_READ_MBPS } from '../../shared/performance-rules'
 import type { EffectiveReadSample } from '../../shared/types'
 
 // Honest effective read throughput (issue #108), measured as a BYPRODUCT of the real
@@ -19,8 +20,11 @@ import type { EffectiveReadSample } from '../../shared/types'
 //     the app just WROTE (the download `.part` verify reads its own dirty pages back from
 //     the cache: hash-CPU speed, not media; models.ts excludes the 'download' label).
 //     On fast media the SHA-256 is CPU-bound (a few hundred MB/s), so a cold checksum
-//     sample can UNDER-report the medium; it therefore only ever fills absence and is
-//     replaced — never the other way around — by a `model_load` sample.
+//     sample can UNDER-report the medium — but only DOWN TO the hash floor, measured at
+//     ~136 MB/s (benchmark.md, "Slow read"). Below `SLOW_READ_MBPS` (100) a checksum sample
+//     is therefore MEDIA-bound, not CPU-bound, and outranks a `model_load` sample the same
+//     way any newer sample does (#404). At or above that threshold it keeps the old rank:
+//     it fills absence and is replaced by a `model_load` sample, never the other way round.
 //
 // The 8 MB benchmark probe cannot produce this number (F-35: its read leg is served
 // from the page cache — RAM speed, ~100× inflated on slow media). This figure is what
@@ -68,9 +72,12 @@ let suppressNextModelLoad = false
  * completed at-or-above-floor hash (`recordChecksumRead`) or a file the app itself wrote and
  * left in place (`noteWeightWarmed`). A later model-load window over such a file measures RAM
  * on a big-RAM machine — the #108 mechanism, but the one-shot flag above only covers a start
- * whose OWN install check hashed. On the default first-run journey the Models screen hashes the
- * corpus first (#382), the start hits the size+mtime cache (`cacheHit: true`) and nothing
- * suppressed the RAM figure (#334 leg B1: 589 MB/s persisted for a 28 MB/s stick).
+ * whose OWN install check hashed. The journey that needed it: the Models screen used to hash the
+ * whole corpus before rendering, so the start hit the size+mtime cache (`cacheHit: true`) and
+ * nothing suppressed the RAM figure (#334 leg B1: 589 MB/s persisted for a 28 MB/s stick). Since
+ * #382 that screen verifies lazily and a first start usually hashes its own weight, which the
+ * one-shot flag covers — but the set still earns its keep for "Check all model files", a
+ * background verify, and any later start of a weight hashed earlier in the session.
  * Never cleared inside the process: the page cache is OS-level and survives a workspace lock.
  * Consulted ONLY by `recordModelLoadRead`, never by the #114 prefetch peek — see the note there.
  *
@@ -127,18 +134,49 @@ export function throughputMbps(bytes: number, ms: number): number | null {
 }
 
 /**
+ * A `checksum` sample slow enough that the MEDIUM, not the SHA-256, set the figure. The hash
+ * floor is measured at ~136 MB/s (benchmark.md, "Slow read"), so anything under
+ * `SLOW_READ_MBPS` (100) cannot be CPU-bound — the one premise the source ranking below rests
+ * on ("a checksum sample may under-report the medium") does not hold for it. Strict `<`,
+ * matching `upsertSlowReadWarning` and the Performance screen's drive rating: a sample at
+ * exactly 100 MB/s is NOT media-bound.
+ */
+function mediaBoundChecksum(s: EffectiveReadSample): boolean {
+  return s.source === 'checksum' && s.mbps < SLOW_READ_MBPS
+}
+
+/**
  * The source-ranking rule, in one place (also applied by `persistEffectiveRead` against
- * each PERSISTED destination, so a fresh session's checksum sample can never overwrite
- * last session's model-load sample): a candidate loses only when it is a `checksum` sample
- * and the incumbent is a `model_load` one; otherwise the newer candidate wins. Applied
- * only among samples of the SAME machine — a foreign persisted sample is excluded before
- * this rule runs (benchmark-persistence.ts `sampleEligible`).
+ * each PERSISTED destination, so a fresh session's checksum sample can never overwrite last
+ * session's model-load sample): a `checksum` candidate loses to a `model_load` incumbent,
+ * because on fast media the hash is CPU-bound and under-reports; otherwise the newer
+ * candidate wins. Applied only among samples of the SAME machine — a foreign persisted
+ * sample is excluded before this rule runs (benchmark-persistence.ts `sampleEligible`).
+ *
+ * #404 amends both directions for a MEDIA-bound checksum sample (`mediaBoundChecksum`), and
+ * the two halves are complementary rather than alternatives:
+ *
+ *  1. Such a candidate DOES displace a `model_load` incumbent. That incumbent is the
+ *     page-cache figure of a warm relaunch (#392's own mechanism suppresses the honest ones),
+ *     so the rule was preserving the inflated number over the honest one. This repairs a
+ *     machine that already carries such a figure.
+ *  2. Symmetrically, a `model_load` candidate does NOT displace a media-bound `checksum`
+ *     incumbent — which is what stopped the relaunch oscillation: every warm relaunch
+ *     re-persisted its RAM-speed load window over the honest checksum sample of the session
+ *     that hashed.
+ *
+ * Half 2's known failure mode is ACCEPTED because it self-heals: move the drive to a faster
+ * USB port on the SAME machine (the port is not part of `machineKey`) and the slow figure
+ * stands until something hashes again — but a newer `checksum` sample still beats a
+ * `checksum` incumbent, and since #382 every new model pick hashes at the start gate.
  */
 export function preferCandidate(
   candidate: EffectiveReadSample,
   incumbent: EffectiveReadSample | null | undefined
 ): boolean {
   if (!incumbent) return true
+  if (mediaBoundChecksum(candidate)) return true // #404 half 1
+  if (candidate.source === 'model_load' && mediaBoundChecksum(incumbent)) return false // #404 half 2
   return !(candidate.source === 'checksum' && incumbent.source === 'model_load')
 }
 

@@ -13,10 +13,10 @@ import { preferCandidate } from './read-speed'
 //
 // Identity BEFORE ranking. A persisted sample is only ever a candidate for THIS machine when
 // the machine identities on both sides allow it (`sampleEligible`); only then does the
-// source ranking (`preferCandidate`: model_load beats checksum, else the newer sample) get a
-// say. Without the gate a drive moved to a new computer inherited the old computer's drive
-// figure — its MB/s, `at`, `modelId` and its slow-read warning — into the new computer's
-// first benchmark (M2).
+// source ranking (`preferCandidate`: model_load beats checksum UNLESS that checksum is
+// media-bound — under `SLOW_READ_MBPS`, #404 — else the newer sample) get a say. Without the
+// gate a drive moved to a new computer inherited the old computer's drive figure — its MB/s,
+// `at`, `modelId` and its slow-read warning — into the new computer's first benchmark (M2).
 
 /**
  * G3 — whether a result (or a bare machine key) counts as "this machine" for carrying a
@@ -33,7 +33,9 @@ export function sampleEligible(
   return key == null || hereKey == null || key === hereKey
 }
 
-/** Newest first; a `model_load` sample outranks any `checksum` sample regardless of age. */
+/** Newest first; a `model_load` sample outranks any `checksum` sample regardless of age —
+ *  except a MEDIA-bound one (under `SLOW_READ_MBPS`), which `preferCandidate` ranks by age
+ *  like any other sample (#404). */
 function rankSamples(candidates: ReadonlyArray<EffectiveReadSample | null | undefined>): EffectiveReadSample | null {
   const present = candidates.filter((s): s is EffectiveReadSample => s != null)
   present.sort((a, b) => (a.at < b.at ? 1 : a.at > b.at ? -1 : 0))

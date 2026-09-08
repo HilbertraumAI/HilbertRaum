@@ -140,8 +140,10 @@ const api = {
     ipcRenderer.invoke(IPC.changeWorkspacePassword, currentPassword, nextPassword),
 
   // ---- Models + runtime ----
-  // `lazyVerify` (RT-3): the chat path (workspace gate) passes true so only the active
-  // model is hashed on a cold cache; the Models screen omits it to hash the full set.
+  // `lazyVerify` (RT-3): every routine caller passes true so only the active model is hashed
+  // on a cold cache — the workspace gate, the Performance screen and (since #382) an ordinary
+  // Models-screen visit. It is omitted only by the Models screen's explicit "Check all model
+  // files" action, which is the one caller that hashes the full set.
   listModels: (lazyVerify?: boolean): Promise<ModelInfo[]> =>
     ipcRenderer.invoke(IPC.listModels, lazyVerify),
   selectModel: (

@@ -26,6 +26,9 @@ from its first public `1.0.0` release onward.
 ## [Unreleased]
 
 ### Added
+- **Check all model files.** A new action near the top of the AI Model screen checks every model
+  file on the drive against its published checksum. It replaces a check the app used to run on
+  its own every time you opened that screen (see Changed).
 - **A quieter left navigation.** The sidebar now has three groups: Chat, Documents, Translate
   and Images for everyday work; AI Model and Performance for the machine; Settings at the
   bottom. The HilbertRaum mark at the top is the Home button and lights up when you are on
@@ -158,6 +161,13 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **The AI Model screen opens straight away, even on a slow drive.** It used to check every model
+  file on the drive before it would show anything at all — on a slow USB drive holding the full set
+  that was around 25 minutes of reading before a first model could even be chosen. It now checks
+  only the model you are using, like every other screen already did. A model is still checked
+  before it is started, and the new **Check all model files** action checks everything on purpose.
+  The trade: a damaged file in a model you have never started is now found when you start it, or
+  when you run one of the two checks, rather than the next time you open the screen.
 - **A 6 GB laptop graphics card now counts as a graphics card.** Most 6 GB laptop cards report a
   little under 6 GB to the app — an RTX 3060 Laptop says 5.9 GB — and the app used to treat anything
   under 6 GB as unusable, so it recommended a model sized for your memory instead of your card. On a
@@ -210,6 +220,13 @@ from its first public `1.0.0` release onward.
   occasionally lost one from an answer entirely; the app now asks for articles in a way that
   avoids the problem, and on the rare occasion a read still stops it is resumed from where it
   stopped instead of being read again.
+- **A slow drive is no longer reported as fast after a restart.** When the app reopens and starts
+  your model, the computer often serves that file from memory rather than from the drive, and the
+  app was recording that memory speed as the drive's speed — replacing the honest figure it had
+  measured while actually reading the drive, and taking the "this drive is slow" note with it.
+  That happened on every restart, so the figure kept flipping. A drive-speed figure measured while
+  checking a file is now kept when it is genuinely slow, and one such measurement also corrects a
+  computer that had already recorded the inflated number.
 - **The Performance page reports what a started model needs more accurately.** Its "Your model"
   figures now count the model's recurrent-state cache — a second kind of working memory the newer
   hybrid models keep beside the usual one — and no longer count a speculative-decoding start's

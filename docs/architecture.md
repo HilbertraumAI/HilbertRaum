@@ -555,9 +555,34 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
   model is hashed on a cold cache; other present weights are reported `installed` **without** hashing
   (display-only) — a live cached hash is still served for free, so a known `checksum_failed` still
   surfaces. Threaded via a new optional `lazyVerify` arg on the `listModels` IPC: the `WorkspaceGate`
-  (chat path) passes `true` with the active model id; the Models screen omits it and hashes the full
-  set. **The §7.4 gate is intact** — `startModelRuntime` re-verifies the model it actually launches,
-  and `verify-models --strict` / `assertCommercialDrive` still hash fully.
+  (chat path) passes `true` with the active model id. **The §7.4 gate is intact** —
+  `startModelRuntime` re-verifies the model it actually launches, and `verify-models --strict` /
+  `assertCommercialDrive` still hash fully.
+- **RT-3 amendment (#382, 2026-09-08) — the Models screen verifies lazily too.** RT-3 left the
+  Models screen on the full pass, and `models` starts `null` there, so the WHOLE screen (cards,
+  the star pick, downloads, the engine install) waited behind it. On the #330 slow-drive round
+  trip that was **39.44 GB / 36.73 GiB in 1,529,844 ms = 25.5 min at a mean 25.8 MB/s**, strictly
+  sequential — and the 27B alone was 16.8 GB / 648 s, **43 % of the wait, on a box whose ★ pick is
+  the 9B**. Because `DEFAULT_SETTINGS.activeModelId` is `null`, a fresh workspace auto-starts
+  nothing and Chat has no picker, so this screen is the SOLE route to a first model: the cost was
+  unavoidable and paid before any choice. The screen now passes `lazyVerify: true` like every
+  other caller, and the full pass moved to an explicit **"Check all model files"** action beside
+  the lead. Consequences, all accepted:
+  - **Passive `checksum_failed` discovery for un-started models is gone.** Damage is found when a
+    model is started (the gate hashes), by the per-model "Verify checksum" button, or by the new
+    action. This is the trade the option was chosen for.
+  - **A workspace whose ACTIVE model is not cached still blocks for that one file.** Lazy resolves
+    to `onlyVerifyModelId: settings.activeModelId`; that is one weight, it matches the gate's own
+    behaviour, and it is rare after this change because the start gate warms the cache.
+  - **The bar needed a second render site.** Its only one was inside the `!models` branch, which
+    lazy verification now skips, so a "Check all model files" pass would have hashed for minutes
+    with nothing on screen. `verifyBar()` renders in both places.
+  - **The pass cannot be cancelled** — `sha256File` takes no abort signal. Out of scope here; the
+    button copy names the cost instead; cancellable verification is issue #420.
+  - **#108 is unaffected.** Under lazy verification a first start hashes its own weight
+    (`cacheHit === false`), `suppressNextModelLoadSample()` fires, and an honest `checksum` sample
+    is recorded from the one file that matters — #382 makes #392's guard unnecessary on the
+    first-run path rather than breaking it.
 
 **Sidecars (`services/runtime/sidecar.ts`, `services/embeddings/e5.ts`).**
 - **RT-4 — embedder physical batch.** In `--embedding` mode llama-server forces `n_batch = n_ubatch`
