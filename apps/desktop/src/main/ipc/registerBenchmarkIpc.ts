@@ -242,16 +242,40 @@ async function runBenchmarkAndPersist(
   // never loses an observation.
   const effectiveRead = effectiveReadOrPersisted(ctx)
 
+  // The ONE runtime this run measures. Captured here, before the GPU + drive probes, so the
+  // busy predicate below can tell it apart from whatever the manager holds later (#393).
+  const runtime = ctx.runtime.active()
+
   const measured = await runBenchmark({
     workspacePath: ctx.paths.workspacePath,
     manifests,
-    runtime: ctx.runtime.active(),
+    runtime,
     gpu,
     effectiveRead,
     // #185: the admission guard above ran seconds ago — before the GPU + drive probes — so
     // re-check right at the speed probe, ignoring our OWN span (which is held for this whole
     // function and would otherwise report the benchmark as busy against itself).
-    modelBusy: () => modelBusyLane(ctx, { ignore: ['benchmark'] }) != null,
+    //
+    // #393: a model START is not an occupancy lane, so `modelBusyLane` cannot see one — yet a
+    // manual "Use model" pressed beside this run STOPS the model the leg is streaming on
+    // (`RuntimeManager.doStart` stops `current` before loading the next one). `start()` sets
+    // `startingModelId` synchronously, strictly before the queued `doStart` reaches that stop,
+    // so reading it turns a cut reading into the honest `warnSpeedSkipped`. Measured on
+    // hardware in #334 leg S5. Every benchmark trigger awaits its OWN start before running, and
+    // a same-model start never sets the flag through `start()` (its idempotency check returns
+    // early), so this can never skip every run; `forceRestart` does set it, and is masked only
+    // while the old `current` is still up — the identity term below catches the rest of that
+    // window.
+    //
+    // …and the identity term itself: the leg measures ONE runtime, captured above. If the
+    // manager no longer hands out that object, whatever it streams now is not the reading this
+    // run set out to take — a start that COMPLETED between the capture and the leg (the flag
+    // back to null, a new `current` committed) is invisible to both terms above, and the
+    // captured runtime is dead. Same-model `forceRestart` lands here too.
+    modelBusy: () =>
+      modelBusyLane(ctx, { ignore: ['benchmark'] }) != null ||
+      modelStartInFlight(ctx) ||
+      ctx.runtime.active() !== runtime,
     onProgress
   })
 
@@ -806,6 +830,19 @@ function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
   const status = ctx.runtime?.status?.()
   if (!status || !status.running || !status.healthy || status.startingModelId) return false
   return activeId == null || status.modelId === activeId
+}
+
+/**
+ * #393: is a model start in flight? Deliberately NOT an occupancy lane — that would touch
+ * `occupancy.ts`, `model-busy.ts` and the refusal copy of the chat / doc-task / skill lanes for a
+ * harm the measurement bounded (issue #393). Read straight off the manager's status, the field
+ * `chatModelResident` and the engine-install guard (`registerEngineIpc.ts`) already read.
+ * Optional-chained like every sibling probe: partial test contexts build a `runtime` with only the
+ * members they need (`performance-persistence.test.ts` builds one with no `status` at all), and an
+ * unwired probe means "no start in flight".
+ */
+function modelStartInFlight(ctx: AppContext): boolean {
+  return ctx.runtime?.status?.().startingModelId != null
 }
 
 /**

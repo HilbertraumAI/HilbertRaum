@@ -759,7 +759,11 @@ describe('picker seams: the speed sample carries the identity it was measured un
 
   it('the benchmark records the class, the budget device, the launched context and the backend the sample was measured under', async () => {
     const f = fixture({ probeReturns: [CARD8] })
-    ;(f.ctx.runtime as unknown as { active: () => ModelRuntime | null }).active = () => runtimeOnCard(CARD8_PICK)
+    // ONE runtime object, handed out on every call — `RuntimeManager.active()` returns
+    // `this.current`, a single instance per committed start, and since #393 the speed leg's busy
+    // predicate compares the runtime it captured against what the manager holds now.
+    const running = runtimeOnCard(CARD8_PICK)
+    ;(f.ctx.runtime as unknown as { active: () => ModelRuntime | null }).active = () => running
     const bench = await runAndPersistBenchmark(f.ctx)
     expect(bench.tokensPerSecond).not.toBeNull()
     expect(bench.measuredModelId).toBe(CARD8_PICK)
