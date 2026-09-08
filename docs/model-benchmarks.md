@@ -807,6 +807,34 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    on the 8 GB card) — #329 has its fixtures; one summary-field defect found there:
    `ModelPlacement.gpuFreeAtStartMb` names the iGPU on a machine with no budget device.
 
+**Hardware confirmation (issue #391, 2026-09-08): the 24 GB row re-measured under the app's own
+post-#386 launch, and it holds.** Leg 7's confirming start was run on the same rig from the APP
+(not the harness), on a build carrying #386 + #387 + #390, so the rung is production's own choice;
+evidence under `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/` as `leg7-app-q5km.*`,
+`leg7-app-q5km-ctx8192.*` and `leg7-harness-control-q5km.*`.
+
+| what | #318 (2026-09-07, four slots) | #391 (2026-09-08, the app, `-np 1`) |
+|---|---|---|
+| app ★ (Performance Copy report) | Qwen3.8 27B UD-Q4_K_M (graphics memory) | **Qwen3.8 27B UD-Q5_K_M (graphics memory)** |
+| Q5 at ctx 8192, rung 1a | 62/66, 1,173 MiB on the host | **66/66**, `will leave 3591 >= 1576 MiB, no changes needed` |
+| Q5 at ctx 32768, rung 1a | not started | **66/66**, `will leave 1834 >= 1672 MiB` |
+| recurrent state | 1,795.50 MiB (4 cells, 4 seqs, 2 rs_seq) | **448.88 MiB (1 cells, 64 layers, 1 seqs 2 rs_seq)** |
+
+Both halves of #319's prediction for this card are therefore confirmed on hardware: the star flips
+to Q5, and the app's own launch offloads it whole, with room to spare even at four times the
+context the leg assumed. `CPU_Mapped model buffer size` read **682.03 MiB** on both full-offload
+starts, which is exactly the `host_mapped_weights_mib` already in the Q5 manifest.
+
+One acceptance figure did NOT reproduce, and it is not a placement effect: decode came out at
+**37.4 tok/s** from the app and **38.0 tok/s** from the #318 harness re-run unchanged beside it,
+against the 51.0 that same harness produced on 2026-09-07 with the same argv, the same 2,015-token
+prompt and the same MTP acceptance (308/405 both days). Prefill fell in step (643 to 665 against
+903). `nvidia-smi` sampled through a repeat (`leg7-clock-state-2026-09-08.csv`) has the card's
+memory clock at 5001 MHz in eight of ten in-load samples where its P0 figure is 9501, with no
+throttle reason active and 244 W drawn of a 350 W limit. Decode on a 27B is memory-bandwidth-bound,
+so the rig's clock state, not the app, is what the day's tok/s figures measure. Treat 37.4 / 38.0 as
+a same-day pair and keep 51.0 as the P0 figure until the rig is re-measured at P0.
+
 **Still predicted:** the **20 GB row** (leg 6 — no 20 GB card is available to the project). By
 interpolation from the rig, Q4 needs ≈ 19,460 MiB of the fit's own reading (17,885 projected +
 the 1,576 rung-1a target) while a 20 GB card's reading lands around 18,700–19,900 (≈ 20,470 probe

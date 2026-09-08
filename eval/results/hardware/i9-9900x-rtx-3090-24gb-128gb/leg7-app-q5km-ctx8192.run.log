@@ -1,0 +1,19 @@
+[pre] nvidia-smi {"used":616,"total":24576,"free":23512}
+[pre] list-devices
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23745 MiB free)
+[settings] contextTokensOverride was 32768, contextTokens 80000
+[settings] now contextTokensOverride=null
+[start] backend=gpu healthy=true contextWindow=8192 in 10.3 s
+[start] status: {"running":true,"modelId":"qwen3.8-27b-ud-q5km","port":40935,"healthy":true,"message":"llama-server ready on 127.0.0.1:40935","backend":"gpu","gpuName":"NVIDIA GeForce RTX 3090","contextWindow":8192,"warmedUp":false,"startingModelId":null}
+[applog] 2026-09-08T05:29:58.514Z [INFO] Speculative decoding enabled (MTP draft head) {"modelId":"qwen3.8-27b-ud-q5km"}
+[applog] 2026-09-08T05:30:08.033Z [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.8-27b-ud-q5km","reason":"started via rung 1a (GPU auto-offload + MTP speculative decoding) (backend: gpu)"}
+[argv] <drive>/runtime/llama.cpp/linux/llama-server --host 127.0.0.1 --port 40935 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --spec-type draft-mtp --spec-draft-n-max 2
+[loaded] nvidia-smi {"used":20895,"total":24576,"free":3233}
+[prompt] 107 tok/paragraph → 2015 tokens
+[timings] {"cache_n":0,"prompt_n":2015,"prompt_ms":3031.521,"prompt_per_token_ms":1.5044769230769233,"prompt_per_second":664.6828440245012,"predicted_n":512,"predicted_ms":13677.804,"predicted_per_token_ms":26.7144609375,"predicted_per_second":37.43290955185496,"draft_n":407,"draft_n_accepted":307}
+[log-timings] {"prompt_ms":3031.52,"prompt_n":2015,"prompt_per_second":664.68,"predicted_ms":13677.8,"predicted_n":512,"predicted_per_second":37.43}
+[after] nvidia-smi {"used":603,"total":24576,"free":23525}
+[settings] restored contextTokensOverride=32768
+[done] /home/<user>/projects/oi/HilbertRaum/eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg7-app-q5km-ctx8192.json
+[done] offloaded: ["0.03.501.697 I load_tensors: offloaded 66/66 layers to GPU"]

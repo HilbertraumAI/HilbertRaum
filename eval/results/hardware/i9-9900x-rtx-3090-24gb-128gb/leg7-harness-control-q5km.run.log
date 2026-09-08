@@ -1,0 +1,16 @@
+[pre] nvidia-smi {"used":552,"total":24576,"free":23575}
+[pre] heaps []
+[pre] list-devices
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23808 MiB free)
+[argv] --host 127.0.0.1 --port 46689 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --spec-type draft-mtp --spec-draft-n-max 2
+[loaded] 9054 ms; nvidia-smi {"used":20828,"total":24576,"free":3300}
+[loaded] heaps []
+[loaded] list-devices while loaded
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 3465 MiB free)
+[prompt] 107 tok/paragraph × 19 → 2015 tokens
+[timings] {"cache_n":0,"prompt_n":2015,"prompt_ms":3135.262,"prompt_per_token_ms":1.5559612903225808,"prompt_per_second":642.6895104779121,"predicted_n":512,"predicted_ms":13460.724,"predicted_per_token_ms":26.2904765625,"predicted_per_second":38.036587036477385,"draft_n":405,"draft_n_accepted":308}
+[peak] used 21019 MiB; tokens_predicted=512 prompt_n=2015
+[after] nvidia-smi {"used":552,"total":24576,"free":23575} exit {"code":0,"sig":null}
+[done] leg7-harness-control-q5km.json
