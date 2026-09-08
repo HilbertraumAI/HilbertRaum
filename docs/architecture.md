@@ -894,8 +894,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   scheduled behind the auto-start's settlement (benchmark.md "Scheduling behind the auto-start"), so on
   a machine with an active model the probe DOES run, on the freshly started runtime. The steal stays
   bounded: the #185 busy check at the probe skips the leg when a chat is already in flight or a model
-  start is (#393), a probe that
-  becomes contended mid-stream is discarded, the probe is capped at 64 tokens, and SD2 allows one
+  start is (#393), a probe that becomes contended mid-stream is discarded, the probe is capped at 64
+  tokens, and SD2 allows one
   automatic attempt per unlock session. A precise in-flight gate still needs a streaming signal not
   cheaply available here.
 - **RT-9 (§17(b) fixed user-turn fence reserve).** The `cache_prompt` prefix-reuse win is LATENT — no
@@ -12145,18 +12145,20 @@ But a guard at admission is not enough, and blocking chat for the whole run is n
 
 So the probe re-checks occupancy immediately before it starts **and on every streamed chunk**, and
 **discards** a contended reading (`modelBusy` / `onBusySkip` in `benchmark.ts`). Since **#393** that
-predicate also reads `status().startingModelId`: a model start is not a lane, but a manual "Use
-model" beside the run STOPS the model the leg streams on (`RuntimeManager.doStart` stops `current`
-before loading), and `start()` sets that field synchronously, strictly before the queued stop. A
-stream the stop makes **reject** rather than deliver another chunk is treated the same way — the
-`catch` asks the predicate once more before returning — so the discard is never silent whenever
-something is busy, while a plain probe failure with nothing busy stays silent as before.
-`tokensPerSecond: null` is the honest answer and an already-supported one — it is exactly what a machine with no
-runtime yields. The discard is never silent: it raises **`main.benchmark.warnSpeedSkipped`** (a
-persist-canonical warning, so it is in `DISPLAY_MAP_KEYS`), distinct from "no runtime was up,
-nothing to measure", which stays silent as it always has. Breaking out of the `for await` runs the
-generator's `return()`, so the generation gate decrements normally — this path never creates the
-abandoned count the gate's epoch guard exists to heal.
+predicate reads two more things: `status().startingModelId` — a model start is not a lane, but a
+manual "Use model" beside the run STOPS the model the leg streams on (`RuntimeManager.doStart`
+stops `current` before loading), and `start()` sets that field synchronously, strictly before the
+queued stop — and whether the manager still hands out the very runtime object the run captured
+(`active() !== runtime`), which is what a start that COMPLETED between the capture and the leg
+leaves behind, the flag already back to null. A stream the stop makes **reject** rather than
+deliver another chunk is treated the same way: the `catch` asks the predicate once more before
+returning. `tokensPerSecond: null` is the honest answer and an already-supported one — it is
+exactly what a machine with no runtime yields. The discard is never silent whenever something is
+busy: it raises **`main.benchmark.warnSpeedSkipped`** (a persist-canonical warning, so it is in
+`DISPLAY_MAP_KEYS`), distinct from "no runtime was up, nothing to measure" and from a plain probe
+failure with nothing busy, which stay silent as they always have. Breaking out of the `for await`
+runs the generator's `return()`, so the generation gate decrements normally — this path never
+creates the abandoned count the gate's epoch guard exists to heal.
 
 ### §5 Leak posture
 

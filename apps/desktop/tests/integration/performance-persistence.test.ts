@@ -383,7 +383,11 @@ describe('a sample landing mid-run survives the persist (M6)', () => {
     const db = seededDb(root)
     const mine = hereResult({ effectiveRead: { ...foreignSample, modelId: 'before-run', mbps: 300 } })
     updateSettings(db, { lastBenchmark: mine, benchmarkHistory: [mine] })
-    const ctx = ctxWith(root, db, { runtime: { occupancy: new ModelOccupancy(), active: () => stubRuntime() } })
+    // ONE runtime object, handed out on every call — `RuntimeManager.active()` returns
+    // `this.current`, a single instance per committed start, and since #393 the speed leg's busy
+    // predicate compares the runtime it captured against what the manager holds now.
+    const running = stubRuntime()
+    const ctx = ctxWith(root, db, { runtime: { occupancy: new ModelOccupancy(), active: () => running } })
     registerModelIpc(ctx)
     const steps: BenchmarkProgressStep[] = []
 

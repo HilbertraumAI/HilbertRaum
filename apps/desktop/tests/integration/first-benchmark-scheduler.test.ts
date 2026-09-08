@@ -58,7 +58,7 @@ import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
 import { t } from '../../src/shared/i18n'
-import { detectSystem, type RunBenchmarkDeps } from '../../src/main/services/benchmark'
+import { classifyProfile, detectSystem, type RunBenchmarkDeps } from '../../src/main/services/benchmark'
 import type { AppContext } from '../../src/main/services/context'
 import type { Db } from '../../src/main/services/db'
 import { machineKey, resetPerformanceForTests } from '../../src/main/services/performance'
@@ -70,7 +70,7 @@ import type { KdfParams } from '../../src/main/services/security/crypto'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
 import { WorkspaceController, createEncryptedVaultOnDisk, vaultPathsFrom } from '../../src/main/services/workspace-vault'
 import { IPC } from '../../src/shared/ipc'
-import type { AppSettings, BenchmarkResult, PrivacyPolicy, RuntimeStatus } from '../../src/shared/types'
+import type { AppSettings, BenchmarkResult, HardwareProfile, PrivacyPolicy, RuntimeStatus } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import {
   closePerformanceFixture,
@@ -120,9 +120,12 @@ function deferred<T = void>(): { promise: Promise<T>; resolve: (v: T) => void; r
  * than delivering another chunk (the realistic #334 leg S5 timing: chunks are ~125 ms apart at
  * 8 tok/s, the `startingModelId` flip → the stop is one microtask).
  */
-function stubRuntime(onChunk?: () => void, opts?: { rejectAfterHook?: boolean }): ModelRuntime {
+function stubRuntime(
+  onChunk?: () => void,
+  opts?: { rejectAfterHook?: boolean; modelId?: string; perSecond?: number }
+): ModelRuntime {
   return {
-    modelId: 'stub-chat',
+    modelId: opts?.modelId ?? 'stub-chat',
     async start() {},
     async stop() {},
     async health() {
@@ -133,7 +136,7 @@ function stubRuntime(onChunk?: () => void, opts?: { rejectAfterHook?: boolean })
       onChunk?.()
       if (opts?.rejectAfterHook) throw new Error('model stopped')
       yield 'b'
-      options?.onFinish?.('length', { predicted_n: 2, predicted_per_second: 20 })
+      options?.onFinish?.('length', { predicted_n: 2, predicted_per_second: opts?.perSecond ?? 20 })
     }
   }
 }
@@ -162,6 +165,14 @@ interface FakeRuntime {
    * precedes the queued `doStart`'s stop of the running model (index.ts:608).
    */
   enqueueManualStart: (modelId: string) => void
+  /**
+   * That start COMPLETING beside the run (#393): the flag goes back to null and the manager
+   * commits a NEW runtime object (`this.current = this.decorateWithGenerationGate(next)`,
+   * index.ts:640) — the one the leg captured is dead and is no longer what `active()` hands out.
+   */
+  completeManualStart: (modelId: string) => void
+  /** Install the running runtime, once, the way a committed start does (identity is stable). */
+  setCurrent: (next: ModelRuntime | null) => void
   quit: () => void
 }
 
@@ -187,7 +198,7 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
             healthy: true,
             message: 'Running',
             backend: 'cpu',
-            startingModelId: starting
+            startingModelId: starting === current.modelId ? null : starting
           }
         : { ...stoppedStatus(), message: starting ? 'Starting' : 'Stopped', startingModelId: starting },
     isShutdown: () => shutdown,
@@ -213,6 +224,13 @@ function fakeRuntime(opts: { ready?: boolean; onStart?: () => void } = {}): Fake
     failStart: (err) => gate.reject(err),
     enqueueManualStart: (modelId) => {
       starting = modelId
+    },
+    completeManualStart: (modelId) => {
+      starting = null
+      current = stubRuntime(undefined, { modelId })
+    },
+    setCurrent: (next) => {
+      current = next
     },
     quit: () => {
       shutdown = true
@@ -567,16 +585,27 @@ describe('scheduleFirstBenchmark: runs at once when nothing is starting', () => 
 
 describe('a model start in flight beside the speed leg (#393)', () => {
   /**
-   * One run of the same fixture with nothing interfering — the reference the interfered runs
-   * are compared against. A separate root/DB each time: the SD2 memo is keyed on the DB handle.
+   * A crawl: strictly below `VERY_LOW_TOKENS_PER_SECOND` (3), so a run that MEASURES it steps
+   * the profile one rung down. That is what makes the profile assertions below discriminating —
+   * the stub's usual 20 tok/s classifies exactly like no reading at all.
    */
-  async function runOnce(active: (rt: FakeRuntime) => ModelRuntime): Promise<BenchmarkResult> {
+  const CRAWL_TPS = 2
+
+  /**
+   * One run of the fixture, with the runtime the manager holds built by `build`. A separate
+   * root/DB each time: the SD2 memo is keyed on the DB handle.
+   *
+   * The runtime is installed ONCE, so `active()` hands out the same object on every call —
+   * `RuntimeManager.active()` returns `this.current`, a single decorator instance per committed
+   * start (runtime/index.ts:640/677), and the leg's identity check reads exactly that.
+   */
+  async function runOnce(build: (rt: FakeRuntime) => ModelRuntime): Promise<BenchmarkResult> {
     const root = freshRoot()
     const db = seededDb(root)
     updateSettings(db, { activeModelId: CHAT_MODEL })
     const rt = fakeRuntime({ ready: true })
     const ctx = autoStartCtx(root, db, rt)
-    rt.active = () => active(rt)
+    rt.setCurrent(build(rt))
     // Nothing is starting when the run is scheduled (the settlement re-check passes); the
     // manual start arrives later, mid-stream, which is exactly the #393 window.
     await expect(scheduleFirstBenchmark(ctx, prepareFirstBenchmark(ctx), Promise.resolve())).resolves.toBe('ran')
@@ -585,10 +614,25 @@ describe('a model start in flight beside the speed leg (#393)', () => {
     return saved as BenchmarkResult
   }
 
+  /** The two classifications a run on THIS host can land on: with no speed input, and with a crawl. */
+  const profiles = (): { noSpeed: HardwareProfile; stepped: HardwareProfile } => {
+    const ramGb = detectSystem().ramGb
+    // The same inputs `runBenchmark` classifies with here: no usable GPU (these roots carry no
+    // probe binary, so the probe reports no devices).
+    return {
+      noSpeed: classifyProfile(ramGb, { tokensPerSecond: null, gpuUseful: false }),
+      stepped: classifyProfile(ramGb, { tokensPerSecond: CRAWL_TPS, gpuUseful: false })
+    }
+  }
+
   it('a manual start enqueued during the run skips the speed leg with the warning, profile untouched (#393)', async () => {
-    // The sibling clean run: same fixture, same machine, no interference.
-    const clean = await runOnce(() => stubRuntime())
-    expect(clean.tokensPerSecond).toBe(20)
+    const { noSpeed, stepped } = profiles()
+    // The sibling run measures a CRAWL, so its profile is stepped DOWN. Unless this host is
+    // already on the lowest rung (RAM ≤ 8 GB and no useful GPU, where `Math.max(idx - 1, 0)` is
+    // a no-op), the two classifications differ and the comparison below can genuinely fail.
+    const slow = await runOnce(() => stubRuntime(undefined, { perSecond: CRAWL_TPS }))
+    expect(slow.tokensPerSecond).toBe(CRAWL_TPS)
+    expect(slow.profile).toBe(stepped)
 
     // "Use model" on ANOTHER model, pressed between two streamed chunks: `startingModelId` is
     // set synchronously, strictly before the queued `doStart` stops the model we stream on.
@@ -596,13 +640,14 @@ describe('a model start in flight beside the speed leg (#393)', () => {
 
     expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
     expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
-    // The rest of the result is untouched: the profile still comes from RAM + GPU, and a
-    // skipped leg never steps it down.
-    expect(saved.profile).toBe(clean.profile)
+    // The rest of the result is untouched: the profile is the no-speed classification from RAM
+    // and GPU alone — a skipped leg never steps it down, the way a measured crawl would.
+    expect(saved.profile).toBe(noSpeed)
+    if (stepped !== noSpeed) expect(saved.profile).not.toBe(slow.profile)
   })
 
   it('a start that stops the model between two chunks still yields the skipped warning, not a silent null (#393)', async () => {
-    const clean = await runOnce(() => stubRuntime())
+    const { noSpeed } = profiles()
 
     // The realistic S5 timing: the stop lands BETWEEN chunks, so the iterator rejects instead
     // of delivering one and the per-chunk check never fires — the catch must warn all the same.
@@ -610,9 +655,32 @@ describe('a model start in flight beside the speed leg (#393)', () => {
       stubRuntime(() => rt.enqueueManualStart('some-other-model'), { rejectAfterHook: true })
     )
 
+    // `tokensPerSecond` is already null on the unfixed code (the catch returned null silently) —
+    // the WARNING is what discriminates here: without it the missing figure has no explanation.
     expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
     expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
-    expect(saved.profile).toBe(clean.profile)
+    expect(saved.profile).toBe(noSpeed)
+  })
+
+  it('a start that COMPLETED between the runtime capture and the leg skips it too (#393)', async () => {
+    // The gap the review found: `runBenchmarkAndPersist` captures `ctx.runtime.active()` before
+    // the GPU + drive probes. A start that COMPLETES in that window puts `startingModelId` back
+    // to null and commits a NEW runtime — the captured one is dead, so neither the lane check nor
+    // the start-in-flight check sees anything. The manager no longer holding the captured object
+    // is the signal.
+    const saved = await runOnce((rt) => stubRuntime(() => rt.completeManualStart('some-other-model')))
+
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
+  })
+
+  it('a completed start whose stop also killed the captured stream warns rather than going silent (#393)', async () => {
+    const saved = await runOnce((rt) =>
+      stubRuntime(() => rt.completeManualStart('some-other-model'), { rejectAfterHook: true })
+    )
+
+    expect(saved).toMatchObject({ tokensPerSecond: null, measuredModelId: null })
+    expect(saved.warnings).toContain(t('en', 'main.benchmark.warnSpeedSkipped'))
   })
 
   it('nothing starting: the speed leg measures as before', async () => {

@@ -242,10 +242,14 @@ async function runBenchmarkAndPersist(
   // never loses an observation.
   const effectiveRead = effectiveReadOrPersisted(ctx)
 
+  // The ONE runtime this run measures. Captured here, before the GPU + drive probes, so the
+  // busy predicate below can tell it apart from whatever the manager holds later (#393).
+  const runtime = ctx.runtime.active()
+
   const measured = await runBenchmark({
     workspacePath: ctx.paths.workspacePath,
     manifests,
-    runtime: ctx.runtime.active(),
+    runtime,
     gpu,
     effectiveRead,
     // #185: the admission guard above ran seconds ago — before the GPU + drive probes — so
@@ -258,8 +262,20 @@ async function runBenchmarkAndPersist(
     // `startingModelId` synchronously, strictly before the queued `doStart` reaches that stop,
     // so reading it turns a cut reading into the honest `warnSpeedSkipped`. Measured on
     // hardware in #334 leg S5. Every benchmark trigger awaits its OWN start before running, and
-    // a same-model start never sets the flag, so this can never skip every run.
-    modelBusy: () => modelBusyLane(ctx, { ignore: ['benchmark'] }) != null || modelStartInFlight(ctx),
+    // a same-model start never sets the flag through `start()` (its idempotency check returns
+    // early), so this can never skip every run; `forceRestart` does set it, and is masked only
+    // while the old `current` is still up — the identity term below catches the rest of that
+    // window.
+    //
+    // …and the identity term itself: the leg measures ONE runtime, captured above. If the
+    // manager no longer hands out that object, whatever it streams now is not the reading this
+    // run set out to take — a start that COMPLETED between the capture and the leg (the flag
+    // back to null, a new `current` committed) is invisible to both terms above, and the
+    // captured runtime is dead. Same-model `forceRestart` lands here too.
+    modelBusy: () =>
+      modelBusyLane(ctx, { ignore: ['benchmark'] }) != null ||
+      modelStartInFlight(ctx) ||
+      ctx.runtime.active() !== runtime,
     onProgress
   })
 

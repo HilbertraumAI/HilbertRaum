@@ -2381,10 +2381,13 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   ended in 3.4 s). The persisted profile and ★ were unchanged; only that run's speed figure is
   absent or chunk-based. FIXED 2026-09-08 (#393): the speed leg's busy re-check also watches a
   start in flight (`startingModelId`, set synchronously before the queued start stops the running
-  model) and a stream cut by that stop raises the same "speed skipped" warning instead of a silent
-  missing figure; what remains is that the start's own pre-start hash (before
-  `RuntimeManager.start` is called) is invisible to every signal — it only slows the check by
-  drive contention, it stops nothing.
+  model) **and** whether the manager still holds the runtime the leg captured — so a start that
+  COMPLETED between the capture and the leg is caught too — and a stream cut by that stop raises
+  the same "speed skipped" warning instead of a silent missing figure. What remains is the start's
+  own pre-start hash (before `RuntimeManager.start` is called): invisible to every signal, but it
+  only slows the check by drive contention, it stops nothing. A start that WEDGES leaves
+  `startingModelId` set for the session, so every automatic check that session skips its speed
+  leg — a model that never finishes loading is unmeasurable anyway, and the warning says so.
 - **A model started right after a Models-screen visit persists the page cache as the drive's read
   figure.** The #108 guard suppresses the load sample only when the START's own install check
   hashed the file; when the Models screen hashed it moments earlier the start hits the cache, the

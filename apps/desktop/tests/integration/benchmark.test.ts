@@ -459,6 +459,59 @@ describe('measureTokensPerSecond', () => {
     expect(seen).toEqual({ prompt: BENCHMARK_PROMPT, maxTokens: BENCHMARK_TOKEN_TARGET })
     expect(BENCHMARK_PROMPT).toMatch(/paragraph/)
   })
+
+  // #393 — the REJECTING stream. A model start that stopped the sidecar mid-stream makes the
+  // iterator throw instead of delivering another chunk, so the per-chunk busy check never fires
+  // and the probe lands in the `catch`. It must still say WHY the reading is missing when
+  // something is busy — and stay silent when nothing is (a plain probe failure).
+  /** One chunk, then the stop: the second `next()` REJECTS instead of yielding. */
+  function throwingRuntime(): ModelRuntime {
+    return {
+      ...timedRuntime(['a'], undefined),
+      async *chatStream() {
+        yield 'a'
+        throw new Error('model stopped')
+      }
+    }
+  }
+
+  it('a stream that THROWS while the model is busy reports the skip (#393)', async () => {
+    const onBusySkip = vi.fn()
+    let calls = 0
+    // Not busy at the pre-stream check (the leg was admitted) nor at the per-chunk check after
+    // the first chunk — busy only by the time the stop has killed the stream and the catch asks.
+    const reading = await measureTokensPerSecond(throwingRuntime(), {
+      modelBusy: () => calls++ >= 2,
+      onBusySkip
+    })
+    expect(reading).toBeNull()
+    expect(onBusySkip).toHaveBeenCalledTimes(1)
+    expect(calls).toBe(3)
+  })
+
+  it('a stream that THROWS with nothing busy stays silent — a plain probe failure (#393)', async () => {
+    const onBusySkip = vi.fn()
+    const reading = await measureTokensPerSecond(throwingRuntime(), { modelBusy: () => false, onBusySkip })
+    expect(reading).toBeNull()
+    expect(onBusySkip).not.toHaveBeenCalled()
+  })
+
+  it('never throws when the busy predicate itself throws in the catch (#393)', async () => {
+    // The catch runs at the moment the runtime is dying, so the predicate it consults can blow
+    // up (a manager tearing down under it). The function is documented "never throws".
+    const onBusySkip = vi.fn()
+    let calls = 0
+    const reading = await measureTokensPerSecond(throwingRuntime(), {
+      modelBusy: () => {
+        // Admitted at the pre-stream check (outside the try), then gone.
+        if (calls++ === 0) return false
+        throw new Error('runtime gone')
+      },
+      onBusySkip
+    })
+    expect(reading).toBeNull()
+    expect(onBusySkip).not.toHaveBeenCalled()
+  })
 })
 
 // ---- Warnings (spec §11.3 + §11.4 friendly copy) --------------------------------

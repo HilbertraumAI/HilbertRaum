@@ -314,8 +314,13 @@ export async function measureTokensPerSecond(
     // #393: a start that stopped the model MID-STREAM makes the iterator REJECT rather than
     // deliver another chunk, so the per-chunk check above never fires and the reading would be
     // lost silently (`speedSkipped` stays false ⇒ no warning at all). Ask once more here: a
-    // rejection with nothing busy stays silent as before (a plain probe failure).
-    if (opts?.modelBusy?.()) opts.onBusySkip?.()
+    // rejection with nothing busy stays silent as before (a plain probe failure). Guarded: this
+    // runs at the moment the runtime is dying, and this function never throws (see the header).
+    try {
+      if (opts?.modelBusy?.()) opts.onBusySkip?.()
+    } catch {
+      /* the predicate reads a manager tearing down under us; the missing reading is answer enough */
+    }
     return null
   }
 }
