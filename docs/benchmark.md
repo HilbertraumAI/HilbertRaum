@@ -21,7 +21,9 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    a failure falls back to `''` / `0` and never throws.
 2. **GPU** ([`architecture.md`](architecture.md) GPU record §5.1/§8): the IPC layer runs
    the **session-cached `llama-server --list-devices` probe** on the drive's own sidecar binary
-   (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws) and
+   (`services/runtime/gpu.ts` — an offline subprocess, kill-timeout-bounded, never throws; every
+   failure resolves `[]`, but a probe that hits the bound answers `null` (unknown) and is neither
+   cached nor persisted, #380) and
    **injects** the summary into `runBenchmark` (`RunBenchmarkDeps.gpu: { name, useful, totalMb,
    budgetMb, memoryClass }` — `name`, `totalMb` and `budgetMb` describe ONE device, the BUDGET
    device `nextStartMemory` selects for the next start (the largest usable card by the
@@ -43,15 +45,22 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    audit decision 6: a card recorded on a previous session of the SAME machine never outlives a
    refresh that could not see it, so the Models badge, the benchmark and the tile agree; an empty
    stamped result re-stamps no old device, so #303's "never re-stamp old devices as local" holds
-   either way, and the foreign-machine case is covered by the stamp). The key and the workspace
+   either way, and the foreign-machine case is covered by the stamp). **The one exception (#380,
+   2026-09-08):** a probe that TIMED OUT is not an answer but the absence of one, so it writes
+   nothing and pushes nothing — the stored stamped probe stands until the next start, the next
+   check or "Try GPU again" — and the summary injected into that run is built from what this
+   machine already has on record (`eligibleDevicesFor`), so decision 6's real requirement (the ★,
+   the benchmark's `gpu` and the tile agree) still holds. Persisting the empty stamped probe there
+   was exactly the #330 failure: the driver was busy with the weight upload, and a card machine
+   was recorded as having none. The key and the workspace
    session epoch are captured before the probe and admission is re-checked after it, for every
    path (the AUD-03 seam `startModelRuntime` uses), so a probe that outlives a lock, or a lock and
    a re-unlock, never writes. With no binary / no devices / a failed probe, `gpu` stays `null`
    and nothing blocks. The persisted probe is additionally refreshed **once per session** in the
    background (even when a benchmark already exists — `prepareFirstBenchmark`, the cheap half of
-   the first-run benchmark, fires it before the model auto-start, PR #303 P7), so a drive moved to
-   another machine re-labels itself; Diagnostics' "Try GPU again" (`gpu:try-again` IPC)
-   invalidates the session cache and re-probes immediately.
+   the first-run benchmark, fires it, and the auto-start waits for it (#380, 2026-09-08), PR #303
+   P7), so a drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
+   (`gpu:try-again` IPC) invalidates the session cache and re-probes immediately.
 3. **Drive speed** (`measureDriveSpeed`): writes a small temp file
    (`DRIVE_PROBE_BYTES = 8 MB` of random bytes) **inside the workspace**, times a sequential
    write (with `fsync`) then a read, and reports MB/s. The temp file is **always removed**
@@ -421,7 +430,8 @@ and its key differs from this machine's:
   the background exactly as on a fresh workspace — scheduled behind the model auto-start, see
   "Scheduling behind the auto-start" below.
 
-Either way the per-session GPU probe refresh still happens first. The `benchmarkHistory` write
+Either way the per-session GPU probe refresh still happens first, and settles before the
+auto-start begins (#380). The `benchmarkHistory` write
 gate accepts an array of VALID results only (junk and unkeyed elements dropped, one record per
 machine, newest first, length capped; the 256 KB serialized cap applies to the list) — see
 "Schemas and legacy records" above.
@@ -479,12 +489,26 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    AUD-02 admission guard, the session-epoch capture, the per-session GPU probe refresh, and the
    restore / same-machine seed / new-machine backfill writes with their `performance:changed`
    pushes — a known computer's profile and ★ pick come back promptly, before anything heavy
-   starts. It returns a **decision**: `run: 'first-run' | 'new-machine' | null`, plus the epoch
-   and this machine's key.
-2. `maybeAutoStartActiveModel(ctx)` — now returns a promise that settles when the start
-   completed, was skipped (no model, toggle off, a runtime already up, locked) or failed (caught;
-   it never rejects).
-3. `scheduleFirstBenchmark(ctx, decision, started)` — the **measurement** half, `void`ed by the
+   starts. It returns a **decision**: `run: 'first-run' | 'new-machine' | null`, plus the epoch,
+   this machine's key, and `probed` — the promise of the probe refresh it just fired (#380;
+   already resolved when none was fired, and it never rejects).
+2. **The probe settles** (#380, 2026-09-08). The seams gate the auto-start on `decision.probed`:
+   about 1 s on an idle driver, nothing at all on a machine with no `llama-server` (the probe is
+   never called then), and on a wedged driver the probe's 10 s bound plus the one-time
+   sidecar-binary verification, which the start itself would wait on anyway. (That verification —
+   a SHA-256 of the sidecar, `binary-verifier.ts` — runs BEFORE the kill-timer is armed and has no
+   bound of its own; bounding it here would buy nothing, because the server's own pre-spawn
+   verify shares the same session-cached promise for that path.) Before this the
+   `--list-devices` child and the multi-GB weight upload competed for the same driver, and the
+   start ladder — which shares the probe's in-flight promise — labelled the rung from whatever
+   that race produced (#330: a card decoding at 98–100 tok/s reported as `cpu`, with an empty
+   stamped probe persisted behind it). `maybeAutoStartActiveModel` re-checks admission and
+   `startModelRuntime` re-checks the epoch, so a lock landing inside that window is handled
+   exactly as before.
+3. `maybeAutoStartActiveModel(ctx)` — returns a promise that settles when the start completed,
+   was skipped (no model, toggle off, a runtime already up, locked) or failed (caught; it never
+   rejects).
+4. `scheduleFirstBenchmark(ctx, decision, started)` — the **measurement** half, `void`ed by the
    seams (the handlers never block on it). With nothing owed it resolves `'not-needed'` at once.
    Otherwise it waits for the start to settle — success **or** failure: a failed start still
    permits the benchmark, just without the speed leg — then re-checks the world and runs
@@ -923,6 +947,8 @@ locked); the moved-drive restore, the upgrade seed and the new-machine backfill 
 `prepareFirstBenchmark`; every GPU probe write (`probeAndPersistGpu`: a completed probe, incl.
 an empty device list, so "Try GPU again" pushes through it, and the EMPTY probe persisted when the
 probe cannot run or threw — PR #308 decision 6 — so the tile and the ★ drop a stale card at once;
+a probe that TIMED OUT writes and pushes NOTHING, because it is unknown rather than an answer and
+the stored probe stands (#380, 2026-09-08);
 and, since issue #323 (2026-09-06), the refresh a completed chat-engine install triggers:
 `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall`, which re-runs the
 same `probeAndPersistGpu` — cache invalidated first, the same admission / unlock-epoch checks —
@@ -1128,7 +1154,7 @@ guess.
 | M4 | fixed P2 `86fa8e10` | `backfillOutgoing` seeds the outgoing computer into history before it is replaced, on the startup, restore, run and manual paths. | `performance-persistence.test.ts` "a manual first move (runAndPersistBenchmark, no history) keeps the old computer"; "restore (A→B→A) brings back the NEWEST outgoing sample, the one that landed mid-run" |
 | M5 | pre-wave fix pinned P1 `5121af46`; residual fixed P4 `9530b2a5` | The Memory tile's fit claim was removed before this wave (`db7e816a`); the zero-context-manifest residual now resolves via the launch path's own `launchContextTokens`, main-side, for both the active and recommended model. | `performance-schema.test.ts` "falls back to the settings default for a manifest that states NO window (never \"0-token\")"; "the user override wins over both, up to the 131 072 ceiling" |
 | M6 | fixed P2 `86fa8e10` | `runAndPersistBenchmark` re-resolves the eligible sample after both the drive and speed legs and folds the newest one in (`mergeSampleIntoResult`) before persisting. | `performance-persistence.test.ts` "at the drive step boundary — the result, the headline and the history carry it, with its warning"; "at the speed step boundary (a runtime is up, so the speed leg runs)" |
-| M7 | pre-wave fix pinned P1 `5121af46` | `isCpuDevice` treats `CPU*` OR `*_HOST` as CPU-side (ggml's pinned host buffers); already shipped in the PR's own `ce741533`. Real-log capture stays open (T9). | `placement-parser.test.ts` "files the GPU backend's _Host KV buffer under the CPU side (the partial-offload spill)"; "files a CUDA_Host model buffer (--no-mmap CPU-side weights) under the CPU side" |
+| M7 | pre-wave fix pinned P1 `5121af46`; real-log capture done 2026-09-08 (#329) | `isCpuDevice` treats `CPU*` OR `*_HOST` as CPU-side (ggml's pinned host buffers); already shipped in the PR's own `ce741533`. The captured b9849 logs sharpen the claim rather than change it: they witness `CPU_Mapped` model buffers (32 logs) and `<Backend>_Host` COMPUTE buffers (54 lines), and where a partial offload spills the KV cache at all it lands in a plain `CPU KV` buffer (5 of the 10 captured partial offloads spill only the recurrent state — 31/33 ×3, 64/66, 65/66 print no `CPU KV` line); a `*_Host` **KV** buffer appears in no capture, so that branch of M7 stays convention-pinned (ggml's naming rule, not an observation) and keeps its handwritten test. | `placement-parser.test.ts` "files the GPU backend's _Host KV buffer under the CPU side (the partial-offload spill)"; "files a CUDA_Host model buffer (--no-mmap CPU-side weights) under the CPU side"; "reads a REAL 20/33 partial offload on a hybrid iGPU + dGPU laptop, whole reading (b9849)" |
 | M8 | fixed P5 `be177a34` | One shared `isUsefulDevice`/`gpuUsefulForProfile`/`primaryUsefulDevice`/`displayDevice` rule (`shared/gpu-rules.ts`); `GpuProbeResult.machineKey` stamped and checked before any fold-in. | `performance-gpu.test.ts` "a hybrid [iGPU, dGPU] probe: currentGpu, the VRAM budget, the class and the fold-in all describe the dGPU"; "a probe stamped with ANOTHER machine supplies nothing…" |
 | L1 | fixed P7 `566a1043` | `prepareFirstBenchmark` (cheap restore/backfill) runs before `maybeAutoStartActiveModel`; the scheduler awaits the start before any drive/speed probe. | `first-benchmark-scheduler.test.ts` "no benchmark I/O while the start is pending; once it resolves the run measures the started runtime" |
 | L2 | fixed P2 `86fa8e10` | `persistEffectiveRead` (via `effectiveReadPatch`) writes a qualifying sample to `lastBenchmark` AND the matching history entry. | `performance-persistence.test.ts` "updates both lastBenchmark and the matching history entry"; "repairs a stale history entry beside a headline that already carries the sample" |
@@ -1152,7 +1178,7 @@ guess.
 | T6 | fixed P6 `9f703b87` | German component smoke added for the Performance screen; rail-label coverage itself was already fixed pre-wave. | `GermanSmoke.test.tsx` "PerformanceScreen renders German (PR #303 audit T6)" |
 | T7 | fixed P8 `4baec2be` | The history-replace test now uses a distinct `tokensPerSecond` per machine and asserts identity and order, not just a resolved value. | `performance.test.ts` "replaces the entry for the same machine, newest first, keeps other machines" |
 | T8 | fixed P8 `4baec2be` | Pins that `initBackend` wires `setAnswerSpeedObserver` through `observeAnswerSpeed`, never `recordAnswerSpeed` directly. | `answer-speed-wiring.test.ts` "setAnswerSpeedObserver, inside initBackend, is given a callback that calls observeAnswerSpeed" |
-| T9 | handwritten fixtures fixed P1 `5121af46` + P8 `4baec2be`; real log is follow-up issue #329 | `_Host` KV/model-buffer lines and a verbosity-4 partial-offload log are pinned from ggml's naming convention; no captured log from the pinned build exists yet. | `placement-parser.test.ts`; `placement-wiring.test.ts` (top-of-file comment names the gap) |
+| T9 | CLOSED 2026-09-08 (#329) | 32 verbosity-4 load logs captured from the pinned build (b9849 `799fcc04a`) across four machines (i7-8700 5 logs, i9-14900K 10, i9-9900X 12, Ryzen 7 5800H 5) now live under `eval/results/hardware/`; four are promoted to byte-for-byte fixtures — `placement-b9849-partial-20of33-hybrid.txt` (a hybrid Radeon-iGPU + RTX-3060 laptop, the partial offload the issue asked for), `-partial-18of33-np4.txt` (the same box at four slots, the per-sequence regression case), `-partial-62of66-mtp.txt` (two llama_contexts and three reserve blocks on an RTX 3090) and `-full-49of49-swa.txt` (Gemma's two-buffer SWA cache on an RTX 3080 Ti). The surviving handwritten fixtures cover only what no capture witnesses: CUDA and Metal devices, the legacy `llm_load_tensors:`/`llama_kv_cache_unified:` prefixes, chunk reassembly at pathological boundaries, two GPUs both holding weights, and the `*_Host` KV buffer (M7). Promoting them found — and this change fixed — two parser gaps: the `RS buffer size` line (the hybrid models' per-sequence recurrent state, 29–1,795 MiB on the card and 17–112 MiB CPU-side, in 26 of the 32 logs) matched no regex, and an MTP start's draft-context compute buffer was summed a third time when llama.cpp reprints its unchanged size on the speculative re-reserve. With both fixed, the parsed total lands within +28.6…+36.6 MiB of the heap-measured VRAM on all seven measured 3090 runs. | `placement-parser.test.ts` (the four "REAL …" cases); `placement-wiring.test.ts` (both logs are captures now) |
 | T10 | fixed P1 `5121af46` (L7 half) + P4 `9530b2a5` (L8 half) | Covered by L7's and L8's fixes and evidence. | see L7, L8 |
 | T11 | fixed P8 `4baec2be` | Ladder-to-persister wiring: backend, context and machine stamp latch before warm-up ends; a retried rung never sums two loads. | `placement-wiring.test.ts` "gives every attempt its OWN parser: a retried rung never sums the failed load" |
 | T12 | fixed P5 `be177a34` | Covered by M8's fix and evidence (the integrated-device and hybrid-order cases). | `PerformanceScreen.test.tsx` "T12: an integrated device reporting 16 GB of shared memory is \"Integrated\", never \"Usable\", beside \"On processor\" (M8.1)" |
@@ -1170,12 +1196,12 @@ guess.
 | TH1 | fixed P8 `4baec2be` | The legacy-blob test's fixed 300 ms sleep replaced by an awaited scheduler outcome. | `performance-ipc.test.ts` (legacy-blob case) |
 | TH2 | fixed P8 `4baec2be` | `closePerformanceFixture()` tears down every DB/root/observer the performance test helper registered; a leak check showed zero growth across a targeted run. The other suites' ~2,500 leaked roots per full run (#335, 2026-09-06) are now recorded and removed by the harness itself — `tests/setup-temp-roots.ts` per file, `tests/global-temp-roots.ts` after the forks exit; design in `tests/helpers/temp-roots.ts`, rule in CONTRIBUTING.md. | `tests/helpers/performance-fixture.ts`; `tests/unit/temp-roots.test.ts` |
 | HW1 | verified 2026-09-07 (issue #330) | Physical encrypted-drive A→B→A move on two real computers (i9-14900K / RTX 3080 Ti and i7-8700 / GTX 1070 Ti, one exFAT SSD) for a fresh workspace AND an upgraded one created by 0.1.57 (keyed `lastBenchmark`, no history): new-computer background run on B, instant restore on A, the outgoing result backfilled, later samples update the headline and the matching entry only. Side findings are not persistence defects (§4). | `eval/results/hardware/330-round-trip-20260907/` (`00-protocol.md` + every report and log) |
-| HW2 | follow-up issue #329 | Same gap as T9: no captured real partial-offload load log. | — |
+| HW2 | CLOSED 2026-09-08 (#329) | Same gap as T9, closed by the same capture: real partial-offload load logs from the pinned build now exist (20/33 and 18/33 on a hybrid laptop, 62/66 on an RTX 3090) and are committed as fixtures. | `apps/desktop/tests/fixtures/placement-b9849-*.txt`; `eval/results/hardware/` |
 | HW3 | performed P10 (live, CDP-driven, at `07dd9085`); the blocked legs are follow-up issue #331 | Passed in the dev app: EN/DE layout at 880/1024/1280 px in both themes with no horizontal overflow, the German rail label at font weight 600 on one line, the keyboard focus order (a real Tab walk in visual order, no trap) and Enter activation. The one failure it found — focus lost after an own run — is the HW3-focus row below (fixed P10). Not exercisable on the review box (no screen reader, no runtime, a first run that finishes in ~120 ms): announcements with assistive technology, a first-run check observed while mounted, a foreground chat during a check, a model load or file verification finishing while mounted. | `GermanSmoke.test.tsx` "PerformanceScreen renders German (PR #303 audit T6)"; `rail-labels.test.ts`; `PerformanceScreen.test.tsx` describe "PerformanceScreen: focus survives the run" |
 | HW4 | follow-up issue #332 | Hybrid `[iGPU, dGPU]` Vulkan order and Apple Silicon unified memory: synthetic fixtures only. | — |
 | DR1 | fixed P5 `be177a34` | Chat/translation "on the card" rows now respect `gpuMode`, `gpuAutoDisabled` and the matching observed backend, not the hardware class alone. | `performance-gpu.test.ts` "gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — the hardware class is untouched"; "a matching start OBSERVED on the CPU backend puts the chat row on the processor and judges it against RAM" |
 | DR2 | fixed P5 `be177a34` | `ModelPlacement.devices` keeps every GPU row of the `device_info` block; `attributedGpuFigures` matches by device name, never the first row's. | `placement-parser.test.ts` "keeps every GPU row of a hybrid device_info block with its own compute buffer, by label (DR2)"; `performance-gpu.test.ts` "a hybrid log: the figures are the selected dGPU's, by name — never the first row's" |
-| DR3 | verify-only | No code change (the sidecar's own redaction and in-memory tail cap already apply). Folded into issue #329's acceptance criteria: the captured log must show verbosity 4 printing the load lines and no request content. | — |
+| DR3 | VERIFIED 2026-09-08 (#329) | No code change. Checked across all 32 captured verbosity-4 logs: no `POST /` or `GET /` request line, no `"content"` or `"messages"` JSON body, no prompt or completion text, every `conv_id=` occurrence is `conv_id= (empty=1)`, 163 `<drive>` redactions and zero home paths (`C:\Users`, `/home/`, `/Users/`). Precisely: verbosity 4 raises load-time AND per-request DIAGNOSTIC logging (slot ids, token counts, timings, sampler parameters, cache state — every fixture carries a complete request cycle's metadata, `launch_slot_` through `print_timing` and `release`); it prints no prompt or completion text and no request body. Two caveats: (1) the only conversational-looking text is llama.cpp's own canned `example_format` template probe (`You are a helpful assistant` / `Hello` / `Hi there`), a fixed string it renders through the model's Jinja template at load time, before the server listens — the standing test allows it only inside that block, so a future capture that leaks a real prompt reddens; (2) these committed logs are HAND-redacted raw captures of the app's argv, not sidecar output — the sidecar's own guarantee is the in-memory 4,000-char tail cap plus `redactExactKey`/`redactSidecarSecrets` (`src/main/services/runtime/sidecar.ts:418`, `:436-442`), and it never writes stderr to disk. | `placement-parser.test.ts` describe "the committed load logs carry no request or prompt content (DR3)" |
 | DR4 | fixed P6 `9f703b87` | `FIT_TARGET_MARGIN_MB`/`CARD_FREE_SLACK_MB` are named constants in `shared/performance-rules.ts`, interpolated into the copy instead of a hard-coded "1 GB". | `PerformanceScreen.test.tsx` "DR4: all three partial copies state the runtime margin from the shared constant, never a literal" |
 | DR5 | fixed P5 `be177a34` (owner ruling) | `loadedAtOnceMb` sums per memory class — see §1's third gate ruling. | `performance.test.ts` "discrete: the chat adds its OBSERVED partial-offload spill; an estimate, a full offload or an unknown split add 0"; `performance-gpu.test.ts` "cpu class: every row counts" |
 | DR6 | fixed P3 `3fbc51d0` | The chat row's `loaded` flag comes from `chatModelResident()` (runtime state), not `active() != null`. | `performance-ipc.test.ts` "the chat row is \"loaded\" only once the ACTIVE model is running and ready (DR6)" |
@@ -1283,15 +1309,17 @@ commit references, and added the changelog entry.
   computers with one encrypted exFAT SSD, for a fresh workspace and for an upgraded one created
   by 0.1.57 (keyed `lastBenchmark`, no history). Every acceptance box passed; the step record and
   evidence live in `eval/results/hardware/330-round-trip-20260907/00-protocol.md`. Side findings
-  from the run, none of them a persistence defect: the unlock-time GPU probe can race the
-  auto-start and cache an empty answer for the session (#380); the Copy report's live "next
+  from the run, none of them a persistence defect: the unlock-time GPU probe could race the
+  auto-start and cache an empty answer for the session (#380, fixed 2026-09-08, PR #407); the Copy report's live "next
   start" line under an "Another computer" heading (#381); a fresh workspace hashing every weight
   before a model can be chosen (#382); `gpuAutoDisabled` is workspace-wide, not machine-stamped;
   a USB bus reset drops the decrypted WAL and the next unlock simply restores again
   (`known-limitations.md` "Performance screen and per-computer history").
-- **HW2 / T9** (follow-up issue #329): a captured real partial-offload load log from the
-  pinned build. Every `_Host`/verbosity-4 fixture in the suite (`placement-parser.test.ts`,
-  `placement-wiring.test.ts`) is handwritten from ggml's naming convention, not a captured log.
+- **HW2 / T9** (closed 2026-09-08, #329): real b9849 partial- and full-offload load logs are
+  captured and pinned as `apps/desktop/tests/fixtures/placement-b9849-*.txt`, and both
+  `placement-parser.test.ts` and `placement-wiring.test.ts` read them. Still unwitnessed by any
+  capture, so still handwritten from ggml's naming convention: CUDA and Metal devices, a
+  `<Backend>_Host` **KV** buffer (M7), and two GPUs both holding weights (HW4 / #332).
 - **HW3** (performed at P10; the blocked legs are follow-up issue #331): the live,
   CDP-driven review at `07dd9085` passed EN/DE layout at 880/1024/1280 px in both themes, the
   German rail label at font weight 600, the keyboard focus order and Enter activation; the

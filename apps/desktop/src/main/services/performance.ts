@@ -303,7 +303,17 @@ export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict
   const { memoryClass, ramMb, vramMb, graphicsBudgetMb, sizeOnDiskGb, manifest, observed } = input
   const budgetMb = memoryBudgetMb(memoryClass, ramMb, vramMb, observed)
   if (observed) {
-    const needMb = sum(observed.gpuModelMb, observed.cpuModelMb, observed.gpuKvMb, observed.cpuKvMb)
+    // Weights + the WHOLE context cache: the KV buffers and, on a hybrid (Gated-DeltaNet)
+    // model, the per-sequence recurrent state beside them (#329; absent on records written
+    // before it, and on every dense model).
+    const needMb = sum(
+      observed.gpuModelMb,
+      observed.cpuModelMb,
+      observed.gpuKvMb,
+      observed.cpuKvMb,
+      observed.gpuRsMb ?? null,
+      observed.cpuRsMb ?? null
+    )
     const figures = attributedGpuFigures(observed, input.gpuName ?? null)
     const base = {
       needMb,
@@ -321,7 +331,8 @@ export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict
       return { ...base, kind: 'unknown', spillMb: null }
     }
     if (observed.gpuLayers >= observed.totalLayers) return { ...base, kind: 'gpu', spillMb: null }
-    return { ...base, kind: 'partial', spillMb: sum(observed.cpuModelMb, observed.cpuKvMb) }
+    // The spill is everything the CPU side holds: weights, KV cache and recurrent state.
+    return { ...base, kind: 'partial', spillMb: sum(observed.cpuModelMb, observed.cpuKvMb, observed.cpuRsMb ?? null) }
   }
   const est = { estimated: true, budgetMb, freeAtStartMb: null, workingMb: null, gpuLayers: null, totalLayers: null, spillMb: null }
   if (sizeOnDiskGb == null || sizeOnDiskGb <= 0) return { ...est, kind: 'unknown', needMb: null }

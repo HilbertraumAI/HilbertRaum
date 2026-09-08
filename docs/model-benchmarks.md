@@ -653,10 +653,15 @@ consumer machine.
    Every row is still ABOVE the measurement: the estimate stays deliberately conservative, because
    a too-small answer costs a silent partial offload while a too-large one costs a smaller
    recommendation. What this does NOT fix is the 15 % share itself — the measured compute buffers
-   run **416–569 MiB** across models from 3.3 to 19.8 GB (they scale with ubatch and hidden width,
-   not with file size), so the share reads 149 MiB on the E2B and 2,730 on Q5. Replacing it with a
-   flat term was modelled and **rejected for now**: it flips the 8 GB row to the 9B, against #318
-   leg 2's measured 31/33 partial offload there.
+   run **316–664 MiB per `llama_context`** across the six models in the 33 captured logs, 2.9 to
+   19.8 GB on disk (**corrected 2026-09-08, #329**, recounted when the MoE capture landed: the earlier "416–569 MiB across models from
+   3.3 to 19.8 GB" was wrong in both directions — 316.16 is the 4B at ctx 4,096, 664.18 the 27B Q5
+   at ctx 32,768, and the 3.3 GB E2B's own load log is not among the committed captures). They are
+   near-flat in file size and set instead by ubatch, context size and the layer split: 174 MiB on
+   that same Q5 under a `--ubatch-size 512` probe. The MoE capture added under #391 falls inside
+   the range rather than widening it — 428.07 MiB on 14.4 GB of weights, between the 4B and the Q5. So the share reads 149 MiB on the E2B and 2,730
+   on Q5. Replacing it with a flat term was modelled and **rejected for now**: it flips the 8 GB
+   row to the 9B, against #318 leg 2's measured 31/33 partial offload there.
 
    **Why the GGUF header cannot replace the manifest field** (this retires that half of §5 item 22
    (e)): the picker judges models the user has **not downloaded** — the ★ is set on a `missing`
@@ -825,9 +830,21 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    MTP recurrent state rather than the smaller no-MTP one.
 5. **The 214 / 246 MiB BAR heap on cards without resizable BAR is used** (the recurrent-state
    buffer at load, staging during a request, ≤ 9 MiB of budget left at peak) — question (e).
-6. **The parser read every real partial-offload log correctly** (31/33, 18/33, 62/66, Gemma 32/49
-   on the 8 GB card) — #329 has its fixtures; one summary-field defect found there:
-   `ModelPlacement.gpuFreeAtStartMb` names the iGPU on a machine with no budget device.
+6. **The parser read every real partial-offload log's LAYER SPLIT correctly** — in the committed
+   captures 31/33, 18/33, 62/66 and Gemma **36/49** on the 12 GB card
+   (`leg3-diag-fit-target-4096`). (The 8 GB card's "32 von 49" Gemma start of #318 was read off
+   the Performance screen, not a load log; its logs in the repo are all the 9B, so no committed
+   capture carries a 32/49 split.) But the split is not the whole placement. **Amended
+   2026-09-08** while promoting four of these captures to fixtures (#329): the parser had never
+   counted the `RS buffer size` line at all — the per-sequence recurrent state of the hybrid
+   models, 29–1,795 MiB of card memory in 26 of the 32 logs — and it summed an MTP start's
+   draft-context compute buffer a THIRD time, because llama.cpp reprints the buffer's unchanged
+   size when the speculative implementation re-reserves that context (1,665.34 MiB parsed where
+   1,145.28 was allocated). Both are fixed; with them the parsed total lands within +28.6…+36.6
+   MiB of the heap-measured VRAM on all seven measured runs, where before it missed by up to
+   1,658 MiB.
+   One summary-field defect from the same reading stays open:
+   `ModelPlacement.gpuFreeAtStartMb` names the iGPU on a machine with no budget device (#332).
 
 **Hardware confirmation (issue #391, 2026-09-08): the 24 GB row re-measured under the app's own
 post-#386 launch, and it holds.** Leg 7's confirming start was run on the same rig from the APP
@@ -880,7 +897,8 @@ has NOT downloaded — exactly one of the 29 chat manifests ships on a prepared 
 move; the 8 GB row does not, though a real 8 GB card now stars the 9B — the grid note carries the
 leg-2 arithmetic that makes that expected rather than reckless, and what is still unmeasured.
 Rejected in the same pass: replacing the 15 % share with a flat compute term, which the measurements
-support (416–569 MiB across models from 3.3 to 19.8 GB) but which flips the 8 GB row against leg 2's
+support (316–664 MiB per `llama_context` across the six models in the 33 captured logs, 2.9 to
+19.8 GB on disk — corrected 2026-09-08, #329) but which flips the 8 GB row against leg 2's
 measured partial offload.
 
 **2026-09-07 amendment (#321, owner decision): the usable-card gate is 5,120 MiB, and the working

@@ -2410,9 +2410,21 @@ export interface ModelPlacement {
    * the cache (`sched_reserve: <device> compute buffer size`), MiB summed over every GPU
    * device; null when not printed. Part of why a fit can leave layers off a card that would
    * hold the weights. Optional: absent on records persisted before the field existed. See
-   * `devices` for the per-device figure.
+   * `devices` for the per-device figure. Counted once per llama_context (a speculative start
+   * has two, and re-reserves the draft one — `runtime/placement.ts`, #329).
    */
   gpuComputeMb?: number | null
+  /**
+   * The RECURRENT-state cache a hybrid (Gated-DeltaNet) model allocates beside the KV cache
+   * (`llama_memory_recurrent: <device> RS buffer size`), MiB summed over the GPU devices; null
+   * when the model printed no RS line (a dense transformer has none). Allocated PER SEQUENCE,
+   * so `-np 4` pays it four times where the KV cache is merely sliced — which is why it is not
+   * folded into `gpuKvMb`. Optional: absent on records persisted before #329, whose `gpuKvMb`
+   * is therefore KV-only.
+   */
+  gpuRsMb?: number | null
+  /** The same recurrent state on the CPU side (`CPU RS buffer size`), MiB summed; see `gpuRsMb`. */
+  cpuRsMb?: number | null
   /**
    * Every GPU row of the log's `device_info` block with the compute buffer reserved on it
    * (`runtime/placement.ts`; PR #303 audit DR2). The join between the log and the probe: the

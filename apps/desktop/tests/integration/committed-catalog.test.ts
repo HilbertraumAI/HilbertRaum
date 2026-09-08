@@ -199,9 +199,11 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // applying its 15 % working share. Each figure is the `CPU_Mapped model buffer size` of a
   // FULL-OFFLOAD start under `eval/results/hardware/` — a partial offload inflates that line with
   // the layers that did not fit (the 9B logs 545.62 at 33/33 but 824.31 at 31/33), so only
-  // full-offload starts count. Exactly the five models #318 actually started carry the field; the
-  // 4B and the MoE 26B were never started and keep the old whole-file arithmetic rather than a
-  // guess. Deriving the split from the GGUF header would cover all of them — §5 item 22 (e).
+  // full-offload starts count. The five models #318 started carry the field, and #391 added the
+  // last two — the 4B (PR #400, 33/33 on the RTX 3060 Laptop) and the MoE 26B (PR #409, 31/31 on
+  // the RTX 3090, the only card that holds it) — so EVERY ranked chat model now has a measured
+  // figure. The whole-file fallback below is therefore a rule for future manifests, not a live
+  // case. Deriving the split from the GGUF header instead is RETIRED — §5 item 22 (e).
   const HOST_MAPPED_MIB: Record<string, number> = {
     'gemma4-e2b-it-qat-q4': 2152.5, // leg 4, 36/36
     'qwen3.5-9b-ud-q4kxl': 545.62, // leg 5, 33/33
