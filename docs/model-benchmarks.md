@@ -784,7 +784,7 @@ held:
 | leg | card (probe total / free, MiB) | model at ctx 8192 | fit outcome | decode | app ★ (basis) |
 |---|---|---|---|---|---|
 | 2 | GTX 1070 Ti 8 GB (8,273 / 7,504) | 9B | **31/33** — the fit read 6,898 MiB free and fell 133 MiB short of its 1,024 target; identical with ~1 GB of desktop use | 20.2 tok/s | 4B (Grafikspeicher) ✔ |
-| 2 fu | same card, re-run 2026-09-08 under #391 with `-np 1` now in `CHAT_SERVER_ARGS` (two starts, one with the #318 heap sampler polling) | 9B | **33/33** both times — the fit read **7,350** MiB free (not 6,898: finding 1 below), projected 5,856, "will leave 1494 >= 1024 MiB, no changes needed"; `CPU_Mapped 545.62` (the manifest's figure, now measured on a second card); RS 50.25 MiB at 1 seq; the BAR heap still used (149.6 of 214 MiB) | **29.0** tok/s | 9B — computed with the app's picker on this probe line (`committed-catalog.test.ts`, the 1070 Ti case), not read off the screen that session; **#390's 8 GB behaviour CONFIRMED** |
+| 2 fu | same card, re-run 2026-09-08 under #391 with `-np 1` now in `CHAT_SERVER_ARGS` (two starts, one with the #318 heap sampler polling) | 9B | **33/33** both times — the fit read **7,350** MiB free (not 6,898: finding 1 below), projected 5,856, "will leave 1494 >= 1024 MiB, no changes needed"; `CPU_Mapped 545.62` (the manifest's figure, now measured on a second card); RS 50.25 MiB at 1 seq; the BAR heap still used (149.6 of 214 MiB) | **29.0** tok/s | 9B (Grafikspeicher) ✔ — **read off the Performance screen 2026-09-08 (#414)**, `app-report-20260908-performance-screen.txt`: a `npm run dev` build on a checkout containing #390, the drive's own probe reading `8273 / 7504` live, `Empfohlen für den nächsten Start: Qwen3.5 9B (UD-Q4_K_XL) (Grafikspeicher)`, profile PRO, 30 tok/s over the check's 64 tokens. The row previously cited the computed pick (`committed-catalog.test.ts`, the 1070 Ti case); the app's own chain now agrees with it. **#390's 8 GB behaviour CONFIRMED** |
 | 3 | RTX 3080 Ti 12 GB (12,084 / 11,316) | Gemma 12B | 49/49, 2,086 MiB to spare; identical with 1–2.7 GB of desktop use | 27.7 | 9B ✔ |
 | 4 | RTX 3060 Laptop 6 GB (5,994 / 5,226 — 150 below the gate) | E2B (the RAM pick) · 9B (question f) | E2B **36/36 on the card anyway** · 9B 18/33 | 86.4 · 5.2 | E2B (Arbeitsspeicher) ✔ — after #321 lowered the gate to 5,120 this machine's star becomes the 4B on the **Grafikspeicher** basis; the measured record above is what the app did on the day |
 | 5 | same laptop: AMD Radeon(TM) Graphics listed FIRST, RTX 3060 second, no `--device` | E2B, 9B | every GPU buffer on the RTX; the fit's device list never contained the iGPU (its "device 0" was Vulkan1) | — | — |
@@ -851,6 +851,16 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    1,658 MiB.
    One summary-field defect from the same reading stays open:
    `ModelPlacement.gpuFreeAtStartMb` names the iGPU on a machine with no budget device (#332).
+7. **A leg's own preparation can contaminate the report's drive row** (added 2026-09-08, #414).
+   The 1070 Ti report reads `Laufwerk: 1.008,4 MB/s lesen` on a drive whose media rate is
+   **407.9 MB/s** — the machine's Intel USB 3.0 xHCI (Gen 1, ~500 MB/s ceiling) cannot deliver
+   1,008 at all. Cause: a pre-flight `Get-FileHash` on the 9B, run to check the drive's
+   `require_sha256_match` policy, left all 5.97 GB in the page cache and the app's read sample hit
+   it warm (the same file re-read measures 6,748.7 MB/s, i.e. RAM). This is the #392 class that
+   PR #406 fixed for weights hashed inside the app — a guard that cannot see an EXTERNAL hasher.
+   Hash a weight the leg will not sample, or drop the cache (a replug dismounts the volume) before
+   the check. Harmless to every verdict in this section: read speed is an input to neither
+   `liveChatRecommendation` nor `classifyProfile`.
 
 **Hardware confirmation (issue #391, 2026-09-08): the 24 GB row re-measured under the app's own
 post-#386 launch, and it holds.** Leg 7's confirming start was run on the same rig from the APP
