@@ -277,10 +277,17 @@ let hashSeq = 0
  * hash. Shared by `sha256FileCached` (the cached model-weight path) and the download
  * manager's verify-after-download (the one model-weight hash that bypasses the cache).
  * `end` never throws (perfMark and log both swallow their own failures).
+ *
+ * `filePath` (#392) is the absolute file being hashed, forwarded to `recordChecksumRead` so a
+ * later model-load window over the same file records no page-cache-warm sample. It stays OUT of
+ * `ChecksumLabel` deliberately: the label feeds `perfMark`, and the perf-log content rule
+ * forbids file names and paths (see the label's own doc above). Callers pass null when the path
+ * must not be remembered — the download verify's `.part` is renamed away afterwards.
  */
 export function beginChecksumInstrumentation(
   label: ChecksumLabel,
-  bytes: number | null
+  bytes: number | null,
+  filePath?: string | null
 ): { end: (ok: boolean) => void } {
   const seq = ++hashSeq
   const t0 = performance.now()
@@ -299,7 +306,7 @@ export function beginChecksumInstrumentation(
       // media figure and suppress the #110 warning on the exact slow-stick fresh
       // install the feature targets.
       if (ok && bytes != null && label.file !== 'download') {
-        recordChecksumRead(bytes, ms, label.modelId)
+        recordChecksumRead(bytes, ms, label.modelId, filePath)
       }
     }
   }
@@ -502,9 +509,12 @@ async function sha256FileCached(
   }
   const sinks = new Set<(bytesHashed: number) => void>()
   if (onProgress) sinks.add(onProgress)
+  // #392: this branch is the real cache MISS — a physical multi-GB read that leaves the file
+  // page-cache-warm. Hand the path over so a later model-load window over it never samples RAM.
   const instrumentation = beginChecksumInstrumentation(
     label ?? { modelId: null, file: null },
-    st.size
+    st.size,
+    filePath
   )
   const run = (async (): Promise<string> => {
     const actual = await sha256File(filePath, (b) => {

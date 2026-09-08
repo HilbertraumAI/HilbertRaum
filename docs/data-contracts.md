@@ -644,7 +644,13 @@ head's own weights + KV.
   session's model-load sample; `'download'`-labelled hashes never sample (they read bytes the app
   just wrote — page-cache-resident, the F-35 class); a start whose install-state pass really
   hashed suppresses its own load-window sample (`suppressNextModelLoadSample` — the hash warmed
-  the cache). Persisted as **`BenchmarkResult.effectiveRead?: EffectiveReadSample | null`** —
+  the cache), and since **#392** (2026-09-08) so does a start over a weight hashed ANYWHERE in the
+  session: `recordChecksumRead` takes the hashed absolute path and `recordModelLoadRead` drops a
+  sample whose file set intersects the paths remembered for this process (main-process lifetime,
+  never cleared on a workspace lock — the page cache is OS-level; a process restart is the
+  pre-existing boundary). The #114 prefetch skip stays on the one-shot flag only. The shape of
+  `EffectiveReadSample` is unchanged — this is a recording rule, not a field.
+  Persisted as **`BenchmarkResult.effectiveRead?: EffectiveReadSample | null`** —
   optional (absent on results persisted before the field existed; `null` = nothing measured
   yet) — written by `persistEffectiveRead` (registerModelIpc), which is registered as the
   read-speed OBSERVER (fires on every accepted sample, so a background download path persists

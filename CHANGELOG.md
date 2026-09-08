@@ -205,6 +205,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The drive read figure on the Performance page no longer takes a memory-speed reading.** When
+  you started a model shortly after the AI Model page had checked its files, the app timed a start
+  that was reading from memory rather than from the drive — and kept that flattering figure for
+  good. The figure measured by the file check, which is the honest one, now stays, so the warning
+  that model starts will be slow appears on a slow drive as it should.
 - **The copied Performance report no longer files this computer's recommendation under another
   computer's heading.** When the figures on the page came from a different machine, the report was
   headed "Another computer: …" but still listed the model recommended for the next start *here*,

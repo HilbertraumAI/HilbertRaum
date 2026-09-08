@@ -1153,7 +1153,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   `runtime-ladder.test.ts` + `runtime-prefetch.test.ts`: (1) FIRST rung only — a later rung
   re-reads a file the failed attempt already pulled through the cache (the #108 sample rule's
   reasoning); (2) skipped when the install-state pass just hashed the weights — the same one-shot
-  #108 suppression signal, peeked without consuming (`isNextModelLoadSuppressed`); (3) aborted the
+  #108 suppression signal, peeked without consuming (`isNextModelLoadSuppressed`); since **#392**
+  the #108 SAMPLE rule is deliberately broader than this skip (any hash of the weight this
+  session drops the load sample; only the start's OWN hash skips the prefetch), because a stale
+  warmth signal costs at most one droppable sample but a wrongly skipped prefetch costs the
+  measured −49 % cold-start win; (3) aborted the
   moment the load window ends either way, and by the CODE-2 stop/lock cancel (the reader must not
   keep the drive busy past a stop; abort lands within one 4 MiB chunk); (4) any prefetch outcome
   is control-flow-inert — 'failed' means the load proceeds unassisted; (5) the file set is

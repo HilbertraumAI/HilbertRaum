@@ -22,6 +22,7 @@ import {
   isNextModelLoadSuppressed,
   latestEffectiveRead,
   MIN_READ_SAMPLE_MS,
+  recordChecksumRead,
   resetEffectiveReadForTests,
   suppressNextModelLoadSample
 } from '../../src/main/services/read-speed'
@@ -914,6 +915,24 @@ describe('concurrent weight prefetch (#114)', () => {
     // The peek did NOT consume the #108 suppression — recordModelLoadRead did, as before.
     expect(isNextModelLoadSuppressed()).toBe(false)
     expect(latestEffectiveRead()).toBeNull()
+  })
+
+  // #392 decision (d): the SAMPLE rule is deliberately broader than the PREFETCH skip. "Hashed
+  // some time this session" is a weaker warmth signal than "hashed microseconds ago" — on a
+  // RAM-constrained machine those pages may already be evicted (#107) — and the asymmetry
+  // decides: dropping one possibly-honest load sample costs nothing (the session's checksum
+  // sample IS the honest figure), while skipping the prefetch on a genuinely cold cache costs
+  // the measured −49 % cold-start win on a 23.5 MB/s stick (prefetch.ts header). Pinned here so
+  // a later simplification cannot re-merge the two mechanisms.
+  it('a weight hashed EARLIER in the session still prefetches, but records no load sample (#392)', async () => {
+    recordChecksumRead(6_000_000_000, 60_000, 'm', opts.modelPath)
+    const h = ladderHarness({ startDelayMs: MIN_READ_SAMPLE_MS + 60 })
+    await h.factory({ ...opts, weightBytes: 6_000_000_000 }).start()
+
+    expect(h.prefetches).toHaveLength(1)
+    expect(h.prefetchEvents[0]?.event).toBe('started')
+    // …and the window that prefetch rode read page-cache-warm pages: the checksum stands.
+    expect(latestEffectiveRead()?.source).toBe('checksum')
   })
 
   it('first rung only: a failed rung 1 does not re-prefetch on rung 2', async () => {
