@@ -205,6 +205,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The drive read figure on the Performance page no longer takes a memory-speed reading.** When
+  you started a model shortly after the AI Model page had checked its files, the app timed a start
+  that was reading from memory rather than from the drive — and kept that flattering figure for
+  good. The figure measured by the file check, which is the honest one, now stays, so the warning
+  that model starts will be slow appears on a slow drive as it should.
 - **A laptop whose built-in graphics chip reports a short name is recognised as built-in.** Some
   Intel drivers report the chip as plain "Intel(R) Graphics", with no platform code. The app read
   that as a real graphics card, so a laptop with 16–32 GB of *shared* memory could be recommended a

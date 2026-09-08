@@ -1,4 +1,5 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest'
+import { join, resolve } from 'node:path'
 import {
   latestEffectiveRead,
   latestEffectiveReadBySource,
@@ -21,8 +22,10 @@ import type { EffectiveReadSample } from '../../src/shared/types'
 // 2 GiB so parse/KV-alloc/graph-init fixed costs can't dominate the window), the source
 // ranking (a checksum sample can be hash-CPU-bound on fast media, so it only ever fills
 // absence and is replaced by model_load, never vice versa), the page-cache suppression
-// (a start whose install-state pass just hashed the file must not sample the warm
-// load), and the observer (persistence is a property of recording).
+// — both the one-shot flag (a start whose OWN install-state pass hashed) and, since #392,
+// the per-path session set (a weight hashed ANYWHERE this session, e.g. by the Models
+// screen, records no load sample) — and the observer (persistence is a property of
+// recording).
 
 function sample(over: Partial<EffectiveReadSample> = {}): EffectiveReadSample {
   return {
@@ -107,6 +110,91 @@ describe('effective-read latch (#108)', () => {
 
     recordModelLoadRead('/ignored.gguf', 10_000, 'cold-next-start', 6_000_000_000)
     expect(latestEffectiveRead()?.modelId).toBe('cold-next-start') // consumed, next start samples
+  })
+
+  // #392: the one-shot flag above only covers a start whose OWN install check hashed. On the
+  // default first-run journey the Models screen hashes the corpus first (#382), the start hits
+  // the size+mtime cache and the RAM figure was persisted for good (#334 leg B1: 589 MB/s for a
+  // 28 MB/s stick). A path a checksum sample was recorded for THIS process is remembered.
+  it('a weight hashed earlier in the session records no load sample — the checksum stays the figure', () => {
+    recordChecksumRead(6_000_000_000, 60_000, 'm', '/models/w.gguf')
+    recordModelLoadRead('/models/w.gguf', 10_000, 'm', 6_000_000_000)
+
+    expect(latestEffectiveRead()?.source).toBe('checksum')
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
+  })
+
+  it('any-intersection: a multi-file model whose mmproj alone was hashed is treated warm', () => {
+    recordChecksumRead(6_000_000_000, 60_000, 'm', '/models/mm.proj')
+    recordModelLoadRead('/models/w.gguf', 10_000, 'm', 6_000_000_000, [
+      '/models/w.gguf',
+      '/models/mm.proj'
+    ])
+
+    expect(latestEffectiveRead()?.source).toBe('checksum')
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
+  })
+
+  it('a hash below the sample floors still warms the page cache — and still suppresses', () => {
+    recordChecksumRead(MIN_READ_SAMPLE_BYTES - 1, 10_000, 'm', '/models/small.gguf')
+    expect(latestEffectiveRead()).toBeNull() // no sample: the floor rejected it
+
+    recordModelLoadRead('/models/small.gguf', 10_000, 'm', 6_000_000_000)
+    expect(latestEffectiveRead()).toBeNull() // …but the file WAS pulled through the cache
+  })
+
+  it('the session set and the one-shot flag are independent mechanisms', () => {
+    suppressNextModelLoadSample()
+    recordModelLoadRead('/never-hashed.gguf', 10_000, 'warm-by-flag', 6_000_000_000)
+    expect(latestEffectiveRead()).toBeNull() // the flag suppressed it…
+
+    recordModelLoadRead('/never-hashed.gguf', 10_000, 'cold-next-start', 6_000_000_000)
+    expect(latestEffectiveRead()?.modelId).toBe('cold-next-start') // …and only it: the path is not in the set
+  })
+
+  it('a path never hashed still samples, and the set is per path, not per session', () => {
+    recordChecksumRead(6_000_000_000, 60_000, 'a', '/a.gguf')
+    recordModelLoadRead('/b.gguf', 10_000, 'b', 6_000_000_000)
+
+    expect(latestEffectiveRead()?.source).toBe('model_load')
+    expect(latestEffectiveRead()?.modelId).toBe('b')
+  })
+
+  it('paths are compared resolved: a non-normalised spelling of the hashed file is still warm', () => {
+    // Two spellings of ONE file that survive `join`'s own normalisation on every platform:
+    // the relative form (what a caller may hold) and its absolute resolution.
+    const relative = join('models', 'corpus', 'w.gguf')
+    const absolute = resolve(relative)
+    expect(absolute).not.toBe(relative)
+
+    recordChecksumRead(6_000_000_000, 60_000, 'm', absolute)
+    recordModelLoadRead(relative, 10_000, 'm', 6_000_000_000)
+
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
+  })
+
+  it('the set is never cleared inside the process: every later start of that weight stays suppressed', () => {
+    recordChecksumRead(6_000_000_000, 60_000, 'm', '/models/w.gguf')
+    recordModelLoadRead('/models/w.gguf', 10_000, 'm', 6_000_000_000)
+    recordModelLoadRead('/models/w.gguf', 10_000, 'm', 6_000_000_000)
+
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
+    expect(latestEffectiveRead()?.source).toBe('checksum')
+  })
+
+  it('a checksum recorded with no path (the pre-#392 signature) warms nothing', () => {
+    recordChecksumRead(6_000_000_000, 60_000, 'm')
+    recordModelLoadRead('/models/w.gguf', 10_000, 'm', 6_000_000_000)
+
+    expect(latestEffectiveRead()?.source).toBe('model_load')
+  })
+
+  it('resetEffectiveReadForTests clears the warmed-path set (the shared fixture relies on it)', () => {
+    recordChecksumRead(6_000_000_000, 60_000, 'm', '/models/w.gguf')
+    resetEffectiveReadForTests()
+
+    recordModelLoadRead('/models/w.gguf', 10_000, 'm', 6_000_000_000)
+    expect(latestEffectiveRead()?.source).toBe('model_load')
   })
 
   it('a stat failure in recordModelLoadRead (no bytes override) records nothing and does not throw', () => {

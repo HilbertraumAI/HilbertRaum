@@ -72,8 +72,10 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    on fast media, so a `model_load` sample always replaces a `checksum` one, never vice versa).
    Measured separation: ~70 MB/s on the stick vs 430+ on SSDs. Honesty guards (adversarial-review
    round 2026-08-09): a `model_load` sample needs ≥ 2 GiB (parse/KV-alloc/graph-init fixed costs
-   must not dominate the window), a start whose install-state pass just HASHED the file records
-   no load sample (the hash warmed the page cache — the window would read RAM), and the download
+   must not dominate the window), a start of a weight hashed anywhere in this session records no
+   load sample (#392, 2026-09-08) — the start's own install-state pass, a Models-screen verify or
+   a background hash all warm the page cache, so the window would read RAM; the #114 prefetch skip
+   stays tied to the start's own hash only — and the download
    verify never samples (it reads bytes the app just wrote). A fresh install has no sample yet —
    Diagnostics shows *"not measured yet — starting a model measures it"*; once present the row
    carries the sample's own date (the card's "Last run" describes the benchmark, not this row).
@@ -1289,7 +1291,7 @@ commit references, and added the changelog entry.
   Models-screen hash lets the page-cache load sample through the #108 guard (589 MB/s persisted
   for a 28 MB/s stick); the Home preflight's 8 MiB probe runs at unlock beside the hash; a healthy
   start at 87 MB/s on a 16 GB machine settles at 159 s, past the bound.
-  Follow-ups: #392 (the read sample), #393 (the overlap fix). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
+  Follow-ups: #392 (the read sample — fixed 2026-09-08, PR #TBD: a start of a weight hashed anywhere in the session records no load sample), #393 (the overlap fix). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
 
 ### §5 §-anchor legend
 

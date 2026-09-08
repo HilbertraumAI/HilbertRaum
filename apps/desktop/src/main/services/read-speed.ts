@@ -1,4 +1,5 @@
 import { statSync } from 'node:fs'
+import { resolve } from 'node:path'
 import type { EffectiveReadSample } from '../../shared/types'
 
 // Honest effective read throughput (issue #108), measured as a BYPRODUCT of the real
@@ -7,10 +8,13 @@ import type { EffectiveReadSample } from '../../shared/types'
 //   - the model-load window: GGUF (+ mmproj) bytes over the ladder's first-rung
 //     spawn-to-healthy elapsed (`LadderRuntime.start`). Later rungs re-read a file the
 //     failed attempt just pulled through the page cache, so only the FIRST attempt of a
-//     ladder walk is honest and only it is recorded — and a start whose install-state
-//     pass just HASHED the file is suppressed the same way (`suppressNextModelLoadSample`;
-//     the hash pulls the file through the page cache, so on a big-RAM machine the load
-//     window would read RAM and record an F-35-class inflated figure).
+//     ladder walk is honest and only it is recorded — and a start over a file ANY hash of
+//     this session already pulled through the page cache is suppressed the same way, since
+//     on a big-RAM machine the load window would then read RAM and record an F-35-class
+//     inflated figure. Two mechanisms, deliberately different in scope (#392): the one-shot
+//     `suppressNextModelLoadSample` (the start's OWN install-state pass hashed) and the
+//     per-path `checksumWarmedPaths` set below (hashed anywhere this session — the Models
+//     screen, a background verify). Only the one-shot flag also skips the #114 prefetch.
 //   - a checksum pass (#106): bytes hashed over elapsed — but never the verify of a file
 //     the app just WROTE (the download `.part` verify reads its own dirty pages back from
 //     the cache: hash-CPU speed, not media; models.ts excludes the 'download' label).
@@ -59,6 +63,19 @@ const latestBySource: Record<EffectiveReadSample['source'], EffectiveReadSample 
   checksum: null
 }
 let suppressNextModelLoad = false
+/**
+ * #392: absolute paths a `checksum` sample was recorded for in THIS process. A hash pulls the
+ * file through the OS page cache, so a later model-load window over the same file measures RAM
+ * on a big-RAM machine — the #108 mechanism, but the one-shot flag above only covers a start
+ * whose OWN install check hashed. On the default first-run journey the Models screen hashes the
+ * corpus first (#382), the start hits the size+mtime cache (`cacheHit: true`) and nothing
+ * suppressed the RAM figure (#334 leg B1: 589 MB/s persisted for a 28 MB/s stick).
+ * Never cleared inside the process: the page cache is OS-level and survives a workspace lock.
+ * Consulted ONLY by `recordModelLoadRead`, never by the #114 prefetch peek — see the note there.
+ * The `checksum` sample of the same session is the honest figure, so nothing is starved.
+ */
+const checksumWarmedPaths = new Set<string>()
+const pathKey = (p: string): string => resolve(p)
 let observer: (() => void) | null = null
 /**
  * The clock a sample's `at` comes from. A sample is identified by that ISO timestamp (millisecond
@@ -150,16 +167,25 @@ function record(
  * file set) beats a bare `modelPath` stat, which under-counts a vision model's mmproj.
  * A stat failure records nothing; a suppressed window (the same call just hashed the
  * file — page-cache-warm) consumes the suppression and records nothing.
+ *
+ * #392: `weightPaths` (the same file set the #114 prefetch reads; `modelPath` when the caller
+ * has no list) is checked against `checksumWarmedPaths` as well — ANY intersection suppresses.
+ * A vision model whose mmproj alone was hashed counts as warm: conservative, and it costs
+ * nothing, because that session's `checksum` sample is the honest figure. Unlike the one-shot
+ * flag this is never consumed: every later start of a hashed weight stays suppressed.
  */
 export function recordModelLoadRead(
   modelPath: string,
   ms: number,
   modelId: string | null,
-  bytesTotal?: number | null
+  bytesTotal?: number | null,
+  weightPaths?: readonly string[] | null
 ): void {
   const wasSuppressed = suppressNextModelLoad
   suppressNextModelLoad = false
   if (wasSuppressed) return
+  const files = weightPaths?.length ? weightPaths : [modelPath]
+  if (files.some((p) => checksumWarmedPaths.has(pathKey(p)))) return
   let bytes: number
   if (bytesTotal != null) {
     bytes = bytesTotal
@@ -188,14 +214,36 @@ export function suppressNextModelLoadSample(): void {
  * hash. The same fact that makes the load sample dishonest (the file is page-cache-warm)
  * makes the ladder's concurrent prefetch pointless, so `LadderRuntime.start` skips it.
  * `recordModelLoadRead` still consumes the flag afterwards.
+ *
+ * Deliberately tied to the ONE-SHOT flag only, never to `checksumWarmedPaths` (#392): "hashed
+ * some time this session" is a weaker warmth signal than "hashed microseconds ago" — on a
+ * RAM-constrained machine those pages may have been evicted since (the #107 mechanism) — and
+ * the asymmetry decides. Dropping one possibly-honest load SAMPLE costs nothing (that session's
+ * checksum sample is the honest figure), while skipping the PREFETCH on a cache that has gone
+ * cold again forfeits the measured −49 % cold-start win on a 23.5 MB/s stick (prefetch.ts
+ * header). So the sample rule is broader than the prefetch skip, on purpose.
  */
 export function isNextModelLoadSuppressed(): boolean {
   return suppressNextModelLoad
 }
 
-/** Record a completed full-file checksum read (#106 instrumentation feeds this — cold
- *  files only; the download verify is excluded at the call site). */
-export function recordChecksumRead(bytes: number, ms: number, modelId: string | null): void {
+/**
+ * Record a completed full-file checksum read (#106 instrumentation feeds this — cold
+ * files only; the download verify is excluded at the call site).
+ *
+ * `filePath` (#392) is the file that was hashed; it joins `checksumWarmedPaths` so a later
+ * model-load window over it records nothing. Registered BEFORE the sample floors: a file too
+ * small (or a hash too quick) to carry throughput information was still pulled through the page
+ * cache. Null/absent for a caller that has no path — the download verify passes null on purpose
+ * (it hashes a `.part` that is renamed away, so its path must never enter the set).
+ */
+export function recordChecksumRead(
+  bytes: number,
+  ms: number,
+  modelId: string | null,
+  filePath?: string | null
+): void {
+  if (filePath) checksumWarmedPaths.add(pathKey(filePath))
   record(bytes, ms, 'checksum', modelId)
 }
 
@@ -229,7 +277,8 @@ export function setReadSpeedClockForTests(fn: (() => Date) | null): void {
   clock = fn ?? (() => new Date())
 }
 
-/** Test seam: clear the session latch, the timestamp memo, suppression, clock and observer. */
+/** Test seam: clear the session latch, the timestamp memo, both suppression mechanisms (the
+ *  one-shot flag and the #392 warmed-path set), clock and observer. */
 export function resetEffectiveReadForTests(): void {
   clock = () => new Date()
   lastAcceptedAtMs = null
@@ -237,5 +286,6 @@ export function resetEffectiveReadForTests(): void {
   latestBySource.model_load = null
   latestBySource.checksum = null
   suppressNextModelLoad = false
+  checksumWarmedPaths.clear()
   observer = null
 }
