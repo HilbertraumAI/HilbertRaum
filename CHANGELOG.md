@@ -205,6 +205,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **The Performance page reports what a started model needs more accurately.** Its "Your model"
+  figures now count the model's recurrent-state cache — a second kind of working memory the newer
+  hybrid models keep beside the usual one — and no longer count a speculative-decoding start's
+  working buffer more than once. The memory a started model needs is now reported close to what
+  the card actually gave it, where before it could read more than a gigabyte short.
 - **On a drive moved to a computer with a graphics card, the first model start after unlocking no
   longer reports "no graphics card".** The app used to check the computer's graphics devices at the
   same moment it began loading the model, and on a busy drive that check could run out of time — so

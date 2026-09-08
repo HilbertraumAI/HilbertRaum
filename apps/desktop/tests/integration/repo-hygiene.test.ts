@@ -39,8 +39,13 @@ describe('repo hygiene — lockfile discipline (issue #49)', () => {
 describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // `txt` joined the filter with licenses/ (LIC-1, 2026-07-12b): the pinned license
   // texts are inlined verbatim into the generated DRIVE-NOTICES.md, so a stray byte
-  // there ships onto every drive. The only pre-existing .txt under the covered roots
-  // are two plain-ASCII test fixtures (byte-checked when the root was added).
+  // there ships onto every drive. The .txt files under the covered roots are the SIX
+  // captured-tool-output fixtures in `tests/fixtures/` — a `--list-devices` capture, a chat-SSE
+  // timings capture, and the four b9849 load logs added by #329. They are no longer all plain
+  // ASCII (the load logs carry
+  // an em dash in their `# … — argv:` header and BPE merge glyphs in the vocab lines), but the
+  // two nets here are about NUL bytes and a UTF-8 BOM, which none of them has: each was
+  // byte-checked when it was added, and both nets still pass over all six.
   //
   // AUD-06: `sh|ps1|cmd|command` joined the filter too. Before that, the scripts/ walk below
   // covered only the .mjs files there — the 6 .sh + 8 .ps1 provisioning scripts, which are the

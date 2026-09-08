@@ -14,10 +14,40 @@ import type { ModelPlacement, PlacementDevice } from '../../../shared/types'
 //   load_tensors:   CUDA0 model buffer size = 18942.52 MiB
 //   load_tensors:   CPU_Mapped model buffer size =   400.00 MiB
 //   llama_kv_cache: CUDA0 KV buffer size = 1360.00 MiB
+//   llama_memory_recurrent: Vulkan0 RS buffer size = 184.25 MiB
 //   ggml_metal_init: recommendedMaxWorkingSetSize = 51539.61 MB
 // A device whose name starts with "CPU" (CPU, CPU_Mapped) or ends in "_Host" (Vulkan_Host,
 // CUDA_Host: pinned host memory the backend keeps CPU-side) is the CPU side; everything else
 // is a GPU. The lines are printed from log verbosity 4 up (`-lv 4`, CHAT_SERVER_ARGS).
+//
+// The RS buffer is the RECURRENT state of a hybrid (Gated-DeltaNet) model — the other half of
+// its context cache, allocated PER SEQUENCE, so `-np 4` pays it four times while the KV cache
+// is merely sliced. It gets its own pair of fields rather than being folded into the KV ones:
+// records written before #329 carry KV-only figures under `gpuKvMb`, and model-benchmarks.md
+// §6.6 rests on telling a cell-sized KV cache from a per-sequence recurrent state. It is real
+// card memory (29–1,795 MiB on the captured logs) and the ESTIMATE side already counts it
+// (`estimatedContextCacheGib` = "KV + recurrent state"), so omitting it made the OBSERVED
+// figure the low one.
+//
+// Compute buffers are counted ONCE PER CONTEXT PER DEVICE, taking the MAX of what that context
+// printed — llama.cpp keeps one such buffer per context per backend and only GROWS it when a
+// graph is re-reserved. A speculative start (`--spec-type draft-mtp`) constructs TWO contexts
+// (main + draft) and prints THREE `sched_reserve` blocks: adding the draft implementation
+// re-reserves the draft context and REPRINTS its unchanged size. Summing every line counted
+// that buffer a third time (1,665.34 MiB where 1,145.28 was allocated). MAX, not "skip a
+// repeated block": a re-reserve may legitimately print a LARGER figure, and that is the size.
+// `llama_context: constructing llama_context` is the context boundary. The rule ASSUMES each
+// llama_context is constructed ONCE per server process — true of all 32 captured logs, the
+// `--fit-target` runs included. A future build whose fit loop tore a context down and rebuilt
+// it would reprint `constructing llama_context` and be counted as a second context: that is a
+// parser regression to recognise as one, not a mystery.
+//
+// Two lines are deliberately NOT counted:
+//   `sched_reserve: Vulkan_Host compute buffer size = 128.16 MiB` — host memory, present on
+//   full offloads too, so it is not spill and never card memory (dropped below, by isCpuDevice);
+//   `~llama_context: Vulkan0 compute buffer size of 679.1215 MiB, does not match expectation of
+//   625.2188 MiB` — a teardown warning with no `= N MiB`, so it matches nothing. It must never
+//   be summed: it reports the same buffer the reserve already accounted for.
 //
 // The `device_info` block names each device TWICE over — by ggml's label (`Vulkan0`, the name
 // the buffer lines use) and by the driver's name (the one `--list-devices` prints too):
@@ -27,11 +57,18 @@ import type { ModelPlacement, PlacementDevice } from '../../../shared/types'
 // The parser keeps every GPU row (`devices`) with the compute buffer reserved on it, so the
 // snapshot can attribute the free-at-start and working figures to the device it actually
 // selected (PR #303 audit DR2) instead of the first row / the sum over all devices — which
-// on a hybrid box described the iGPU while the budget described the dGPU.
+// on a hybrid box described the iGPU while the budget described the dGPU. The legacy summary
+// `gpuFreeAtStartMb` still takes the FIRST row, which on a hybrid box IS the iGPU (the captured
+// 20/33 log lists the Radeon first and puts every buffer on the RTX): the fix is to attribute
+// through `devices`, and re-pointing the summary field is left to #332.
 
 const OFFLOAD_RE = /offloaded\s+(\d+)\s*\/\s*(\d+)\s+layers to GPU/
 const MODEL_BUFFER_RE = /(\S+) model buffer size\s*=\s*([\d.]+)\s*MiB/
 const KV_BUFFER_RE = /(\S+) KV buffer size\s*=\s*([\d.]+)\s*MiB/
+/** `llama_memory_recurrent:    Vulkan0 RS buffer size =   184.25 MiB` (the recurrent state). */
+const RS_BUFFER_RE = /(\S+) RS buffer size\s*=\s*([\d.]+)\s*MiB/
+/** `llama_context: constructing llama_context` — the boundary between compute-buffer owners. */
+const CONTEXT_START_RE = /llama_context: constructing llama_context/
 /** `sched_reserve:    Vulkan0 compute buffer size =  2860.00 MiB` (the working buffers). */
 const COMPUTE_BUFFER_RE = /(\S+) compute buffer size\s*=\s*([\d.]+)\s*MiB/
 const METAL_BUDGET_RE = /recommendedMaxWorkingSetSize\s*=\s*([\d.]+)\s*MB/
@@ -50,6 +87,10 @@ export interface PlacementReading {
   cpuModelMb: number | null
   gpuKvMb: number | null
   cpuKvMb: number | null
+  /** Recurrent (RS) state on GPU devices, MiB summed; null when the model prints no RS line. */
+  gpuRsMb: number | null
+  /** Recurrent (RS) state on the CPU side, MiB summed; null when the model prints no RS line. */
+  cpuRsMb: number | null
   metalMaxWorkingSetMb: number | null
   /** Free MiB on the first GPU device when the server started (the `device_info` block). */
   gpuFreeAtStartMb: number | null
@@ -82,17 +123,32 @@ export function createPlacementParser(): PlacementParser {
     cpuModelMb: null,
     gpuKvMb: null,
     cpuKvMb: null,
+    gpuRsMb: null,
+    cpuRsMb: null,
     metalMaxWorkingSetMb: null,
     gpuFreeAtStartMb: null,
     gpuComputeMb: null
   }
   /** The GPU rows of the `device_info` block, in log order. */
   const rows: Array<Omit<PlacementDevice, 'computeMb'>> = []
-  /** Compute buffers by device LABEL — joined onto the rows in `reading()`, whichever line came first. */
+  /** Compute buffers of CLOSED contexts by device LABEL — joined onto the rows in `reading()`. */
   const computeByLabel = new Map<string, number>()
+  /** The OPEN context's largest compute buffer per device label (one buffer per context per backend). */
+  const openContext = new Map<string, number>()
   let pending = ''
-  const add = (key: 'gpuModelMb' | 'cpuModelMb' | 'gpuKvMb' | 'cpuKvMb' | 'gpuComputeMb', mb: number): void => {
+  const add = (
+    key: 'gpuModelMb' | 'cpuModelMb' | 'gpuKvMb' | 'cpuKvMb' | 'gpuRsMb' | 'cpuRsMb' | 'gpuComputeMb',
+    mb: number
+  ): void => {
     r[key] = round2((r[key] ?? 0) + mb)
+  }
+  /** Bank the open context's buffers and start a fresh one (contexts SUM, lines within one MAX). */
+  const closeContext = (): void => {
+    for (const [label, mb] of openContext) {
+      add('gpuComputeMb', mb)
+      computeByLabel.set(label, round2((computeByLabel.get(label) ?? 0) + mb))
+    }
+    openContext.clear()
   }
   const line = (text: string): void => {
     const off = OFFLOAD_RE.exec(text)
@@ -111,12 +167,22 @@ export function createPlacementParser(): PlacementParser {
       add(isCpuDevice(kv[1]) ? 'cpuKvMb' : 'gpuKvMb', Number(kv[2]))
       return
     }
+    const rs = RS_BUFFER_RE.exec(text)
+    if (rs) {
+      add(isCpuDevice(rs[1]) ? 'cpuRsMb' : 'gpuRsMb', Number(rs[2]))
+      return
+    }
+    if (CONTEXT_START_RE.test(text)) {
+      closeContext()
+      return
+    }
     const compute = COMPUTE_BUFFER_RE.exec(text)
     if (compute) {
+      // The `<Backend>_Host` compute buffer is host memory and appears on full offloads too,
+      // so it is dropped rather than counted as spill.
       if (!isCpuDevice(compute[1])) {
         const mb = Number(compute[2])
-        add('gpuComputeMb', mb)
-        computeByLabel.set(compute[1], round2((computeByLabel.get(compute[1]) ?? 0) + mb))
+        openContext.set(compute[1], Math.max(openContext.get(compute[1]) ?? 0, mb))
       }
       return
     }
@@ -144,10 +210,22 @@ export function createPlacementParser(): PlacementParser {
         nl = pending.indexOf('\n')
       }
     },
-    reading: () => ({
-      ...r,
-      devices: rows.map((row) => ({ ...row, computeMb: computeByLabel.get(row.label) ?? null }))
-    })
+    // A log can end mid-context (the last context is never "closed" by a following one), so the
+    // reading FLUSHES the open one — on a copy, never destructively: `reading()` is called more
+    // than once per start and must give the same answer each time.
+    reading: () => {
+      const byLabel = new Map(computeByLabel)
+      let gpuComputeMb = r.gpuComputeMb
+      for (const [label, mb] of openContext) {
+        byLabel.set(label, round2((byLabel.get(label) ?? 0) + mb))
+        gpuComputeMb = round2((gpuComputeMb ?? 0) + mb)
+      }
+      return {
+        ...r,
+        gpuComputeMb,
+        devices: rows.map((row) => ({ ...row, computeMb: byLabel.get(row.label) ?? null }))
+      }
+    }
   }
 }
 

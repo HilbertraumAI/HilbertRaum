@@ -390,9 +390,22 @@ describe('normalizeModelPlacement', () => {
     const p = normalizeModelPlacement(placement())!
     expect('gpuFreeAtStartMb' in p).toBe(false)
     expect('gpuComputeMb' in p).toBe(false)
+    // The recurrent-state pair (#329) is optional the same way: a record written before the
+    // parser read the `RS buffer size` line has neither key, which must stay distinguishable
+    // from "the model printed no RS line" (present, null).
+    expect('gpuRsMb' in p).toBe(false)
+    expect('cpuRsMb' in p).toBe(false)
     const withFree = normalizeModelPlacement({ ...placement(), gpuFreeAtStartMb: 20_000, gpuComputeMb: 'x' })!
     expect(withFree.gpuFreeAtStartMb).toBe(20_000)
     expect(withFree.gpuComputeMb).toBeNull()
+    const withRs = normalizeModelPlacement({ ...placement(), gpuRsMb: 1683.28, cpuRsMb: 'x' })!
+    expect(withRs.gpuRsMb).toBe(1683.28)
+    expect(withRs.cpuRsMb).toBeNull()
+    // Present-but-null survives as null (the key stays), and a negative figure is no measurement.
+    const nulled = normalizeModelPlacement({ ...placement(), gpuRsMb: null, cpuRsMb: -1 })!
+    expect('gpuRsMb' in nulled).toBe(true)
+    expect(nulled.gpuRsMb).toBeNull()
+    expect(nulled.cpuRsMb).toBeNull()
   })
 
   it('keeps the device rows (DR2): valid rows survive, junk rows drop, absence stays absent, a non-array reads as none', () => {

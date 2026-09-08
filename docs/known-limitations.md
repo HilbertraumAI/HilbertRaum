@@ -2435,10 +2435,14 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The silent re-check has no Home-screen notice yet.** The moved-drive re-check above runs with
   no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
   tracked in BUILD_STATE §5 item 22 (a).
-- **Remaining hardware acceptance not yet performed:** a real two-computer round trip on an
-  encrypted drive (including an upgraded workspace with no history yet), a captured real
-  partial-offload load log from the pinned build, a hybrid iGPU+dGPU device-order check, and
-  Apple Silicon unified-memory behaviour.
+- **Remaining hardware acceptance not yet performed:** the hybrid iGPU+dGPU device-order check
+  and Apple Silicon unified-memory behaviour. Two items left this list: the two-computer round
+  trip on an encrypted drive, including an upgraded workspace with no history yet, was verified
+  2026-09-07 (#330, `benchmark.md` HW1); and the captured real partial-offload load log is done
+  (#329, 2026-09-08), which narrows the hybrid clause to its snapshot half — the PARSER side is
+  now witnessed by a real log (a Radeon iGPU listed first in `device_info` while every buffer
+  lands on the RTX, pinned as a fixture), so what stays open there is the SNAPSHOT's device
+  pairing on a hybrid box that also has a budget device (#332).
 
 ## Speculative decoding (MTP — [`architecture.md`](architecture.md) "MTP speculative decoding" record)
 
