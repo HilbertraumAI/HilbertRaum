@@ -1,0 +1,9 @@
+[start] backend=gpu healthy=true ctx=32768; VRAM 22587 MiB
+[A turn 1] done in 6.4 s
+[nav] conversations in list after A: 141
+[B turn 1 (takes the slot)] done in 6.3 s
+[nav] 142 conversations; marker at index 1; first three labels ["Name two mountains in Austria. One short","PREFIXTESTALPHA. The river runs past the","erkläre phononen"]
+[nav] reopened conversation shows 1 existing speed line(s): ["34 tok/s · 1.8 s to first token · 19 tokens"]
+[A turn 2 (prefix was evicted)] done in 6.3 s
+[prefills] [{"task":0,"ms":432.8,"tokens":13},{"task":6,"ms":1582.49,"tokens":415},{"task":17,"ms":580.81,"tokens":22},{"task":27,"ms":1391.18,"tokens":305}]
+[speed lines in the reopened conversation] ["34 tok/s · 1.8 s to first token · 19 tokens","31 tok/s · 1.4 s to first token · 23 tokens"]

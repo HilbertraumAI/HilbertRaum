@@ -893,7 +893,17 @@ fit decides between full and half speed: leg 1 turned the 27B Q5's 62/66 layers 
 full offload by 133. **Accepted cost** (owner): with one slot a background job — categorisation,
 ZIM query expansion, a doc task — evicts the chat conversation's KV prefix; llama-server's host-RAM
 prompt cache restores it on a prefix match, so the cost is a restore, not a full re-prefill, and no
-in-app path depends on parallel slots. **What it does NOT change: the context window.**
+in-app path depends on parallel slots. **The restore half of that cost MEASURED FALSE on 2026-09-08
+(#391 leg 7, evidence `leg7-app-q5km-evicted-prefix.*`); the decision stands, the cost is larger
+than stated.** Consecutive turns in one conversation do reuse the prefix in the slot (22 tokens
+re-prefilled on turn 2 of 190 cached). But once another task takes the one slot, the server saves the
+conversation to the host cache and then refuses to load it back: `forcing full prompt re-processing
+due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see llama.cpp PR #13194)`.
+Both 27B quants are hybrid/recurrent, so the restore path is closed to them. Measured: a 435-token
+conversation, evicted by one turn in another conversation, re-prefilled **305 of 452 tokens** on
+return; only the 147-token system prefix survived, because it is common to every conversation and
+stays in the slot. The cost therefore scales with conversation length rather than being constant, and
+it is paid on every hand-back. Follow-up: #399. **What it does NOT change: the context window.**
 `--ctx-size` is the TOTAL cache size on both settings and every slot sees all of it
 (`n_ctx_slot = 8192` either way; `kv_unified` goes true → false, `n_seq_max` 4 → 1). That is the
 whole reason only four of the seven cache terms moved — see point 4 above for the rule and the

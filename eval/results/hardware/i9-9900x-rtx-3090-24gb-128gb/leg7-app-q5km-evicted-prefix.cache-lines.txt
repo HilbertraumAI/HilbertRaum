@@ -1,0 +1,32 @@
+0.09.261.247 I srv    load_model: prompt cache is enabled, size limit: 8192 MiB
+0.09.261.251 I srv    load_model: use `--cache-ram 0` to disable the prompt cache
+0.09.261.279 I srv          init: idle slots will be saved to prompt cache upon starting a new task
+0.09.548.125 I srv  get_availabl: updating prompt cache
+0.09.548.138 I srv          load:  - looking for better prompt, base f_keep = -1.000, sim = 0.000
+0.09.548.166 I srv        update:  - cache state: 0 prompts, 0.000 MiB (limits: 8192.000 MiB, 32768 tokens, 8589934592 est)
+0.09.548.175 I srv  get_availabl: prompt cache update took 0.04 ms
+0.09.548.436 I slot   operator(): id  0 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)
+0.09.780.785 I slot   operator(): id  0 | task 0 | cached n_tokens = 9, memory_seq_rm [9, end)
+0.10.239.296 I slot print_timing: id  0 | task 0 | prompt eval time =     432.80 ms /    13 tokens (   33.29 ms per token,    30.04 tokens per second)
+0.13.318.281 I srv  get_availabl: updating prompt cache
+0.13.318.458 I srv   prompt_save:  - saving prompt with length 20, total state size = 150.955 MiB (draft: 0.079 MiB)
+0.13.529.941 I srv          load:  - looking for better prompt, base f_keep = 0.050, sim = 0.002
+0.13.529.947 I srv        update:  - cache state: 1 prompts, 300.617 MiB (limits: 8192.000 MiB, 32768 tokens, 32768 est)
+0.13.529.950 I srv  get_availabl: prompt cache update took 211.67 ms
+0.13.530.047 I slot   operator(): id  0 | task 6 | forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+0.13.537.180 I slot   operator(): id  0 | task 6 | cached n_tokens = 0, memory_seq_rm [0, end)
+0.14.241.040 I slot   operator(): id  0 | task 6 | cached n_tokens = 147, memory_seq_rm [147, end)
+0.15.027.483 I slot   operator(): id  0 | task 6 | cached n_tokens = 411, memory_seq_rm [411, end)
+0.15.672.400 I slot print_timing: id  0 | task 6 | prompt eval time =    1582.49 ms /   415 tokens (    3.81 ms per token,   262.24 tokens per second)
+0.20.659.452 I srv  get_availabl: updating prompt cache
+0.20.659.630 I srv   prompt_save:  - saving prompt with length 435, total state size = 178.530 MiB (draft: 1.708 MiB)
+0.20.902.179 I srv          load:  - looking for better prompt, base f_keep = 0.345, sim = 0.888
+0.20.902.189 I srv        update:  - cache state: 2 prompts, 629.350 MiB (limits: 8192.000 MiB, 32768 tokens, 32768 est)
+0.20.902.194 I srv  get_availabl: prompt cache update took 242.74 ms
+0.20.948.769 I slot   operator(): id  0 | task 17 | cached n_tokens = 147, memory_seq_rm [147, end)
+0.21.394.001 I slot   operator(): id  0 | task 17 | cached n_tokens = 165, memory_seq_rm [165, end)
+0.22.055.979 I slot print_timing: id  0 | task 17 | prompt eval time =     580.81 ms /    22 tokens (   26.40 ms per token,    37.88 tokens per second)
+0.31.774.776 I slot   operator(): id  0 | task 27 | cached n_tokens = 147, memory_seq_rm [147, end)
+0.32.683.567 I slot   operator(): id  0 | task 27 | cached n_tokens = 435, memory_seq_rm [435, end)
+0.32.987.594 I slot   operator(): id  0 | task 27 | cached n_tokens = 448, memory_seq_rm [448, end)
+0.33.822.541 I slot print_timing: id  0 | task 27 | prompt eval time =    1391.18 ms /   305 tokens (    4.56 ms per token,   219.24 tokens per second)
