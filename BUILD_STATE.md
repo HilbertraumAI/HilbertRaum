@@ -717,9 +717,9 @@ open round's item stays the last block of §5.)
     **Nothing engineering is left on #339; the four remaining legs are the OWNER's:** P8-6 file the `/raw`
     report at kiwix/kiwix-tools (win-x86_64 only — humaniser's Linux probe 0/40; draft final) and record the URL in
     known-limitations, rag-design finding 3 and a #339 comment; R-4 mac/linux code-signing inspection; T20-d's second
-    half — `build-commercial-drive --kiwix-source-dir` against the real Kit drive on K:, all three platform bundles
-    (`tests/fixtures/zim/required-checks.json` row, "STILL PENDING") — **K: today carries only `runtime/kiwix-tools/win/`
-    and no `source/` at all, so that leg needs a drive-prep pass first**; the GPL-3-via-root-`LICENSE` cross-reference and
+    half — `build-commercial-drive --kiwix-source-dir` against the real Kit drive on K:, all three platform bundles: the KIWIX HALF IS DONE 2026-09-08 — all three
+    bundles installed with markers + the five source archives, and the gate reports kiwixSourceBundle/optionalRuntimesConsistent TRUE (`required-checks.json` T20-d row);
+    only the (non-kiwix) sellability of K: is left; the GPL-3-via-root-`LICENSE` cross-reference and
     the libmicrohttpd version-from-recipe pin in model-policy. (T20-a is implemented, not pending.)
     (b) **#340 — CLOSED 2026-09-08, split into three successors; everything ruled was built.** Outcome + ledger: rag-design §17 D-Z16/D-Z18/D-Z20/D-Z21 and
     its "Owner rulings of 2026-09-06" paragraph (C3 (a), L1, L3 + the #353 ladder, L3-b, `path-unsupported`, LaTeX, the collision surface, the six renderer nits;
@@ -730,7 +730,7 @@ open round's item stays the last block of §5.)
     reused verbatim (no drift, no second German string); the review boundary is structural (`EvidencePane` never mounts `SourcesDisclosure`). Doc gap closed on the
     way past: the SHIPPED D-Z21 viewer button had never reached user-guide §7b or the changelog — both now cover the pair. **Still OPEN, one issue each, both
     unruled:** **#416** C2 link expansion — unblocked by D-Z22 (the defect-route traffic argument is void); needs the owner’s scope ruling and an `<a href>`-preserving
-    converter (`html.ts` drops targets today), and carries the due **L2 revisit** (keep 5 "revisit after L3-b"; the 5-vs-8 replay of `quality-questions-de.json` on K:).
+    converter (`html.ts` drops targets today). Its **L2 revisit is DONE 2026-09-08** — keep 5, measured (rag-design §17 "L2 REVISIT"); side finding → the cold-expansion issue.
     **#417** C4 acquisition — gate satisfied by D-Z19; the catalog-source ruling (library.kiwix.org OPDS only vs a curated list) blocks the rest.
     (c) **Evidence identity for archive citations — CLOSED.** Identity resolution: P2, record rag-design D-Z5; the "Open article from a review" residual: closed P6, record design-guidelines §11.15.
     (d) **Manual acceptance leg — CLOSED 2026-09-06:** the airplane-mode demo (the real K: drive, `wikipedia_de_*` packs + kiwix-tools 3.8.1, network off) passed as T19 (viii); record rag-design §17 "Real acceptance".
