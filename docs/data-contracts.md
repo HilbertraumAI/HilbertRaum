@@ -464,9 +464,14 @@ per model, not derived: the app has no GGUF-header parser, so each figure is rea
 `CPU_Mapped model buffer size` line of a full-offload start under `eval/results/hardware/` (a
 PARTIAL offload inflates that line with the layers that did not fit — the 9B logs 545.62 MiB at
 33/33 but 824.31 at 31/33). Carried by the five models started for #318 (E2B 2,152.50, 9B 545.62,
-Gemma 12B 787.50, 27B UD-Q4 682.03, UD-Q5 682.03; pinned in `committed-catalog.test.ts`); the two
-never started carry nothing. The GGUF-header derivation that would cover every model is the same
-open item, BUILD_STATE §5 item 22 (e).
+Gemma 12B 787.50, 27B UD-Q4 682.03, UD-Q5 682.03) and, since the #391 hardware round of 2026-09-08,
+by the last two as well (4B 497.31 off a 33/33 start, MoE 26B 577.50 off a 31/31 one) — so **every
+ranked chat model carries a measured figure** and the "absent" branch below is a rule for future
+manifests rather than a live case. All seven are pinned in `committed-catalog.test.ts`. The
+GGUF-header derivation that would have covered models never started is RETIRED (the picker judges
+models the user has not downloaded, so the number has to travel in the catalog); what stays open
+under BUILD_STATE §5 item 22 (e) is narrower — nothing recomputes the field when a manifest's
+weights change.
 **How the slot count enters the term** (§6.6 point 4, measured on the pin): the KV cache — and
 Gemma's sliding-window cache — is sized in CELLS from `--ctx-size` and is counted **once** whatever
 the slot count is; only the **recurrent state** is per-sequence, so `-np 1` divides just that share
