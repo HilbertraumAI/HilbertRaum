@@ -1,0 +1,24 @@
+# Taken 2026-09-08 from the current source build (dev; checkout = branch
+# hw/391-i9-9900x-rtx-3090-24gb-128gb-20260908 off origin/master e07b9893, i.e. with #386, #387
+# and #390 merged; HILBERTRAUM_DRIVE_ROOT = the app config directory, HILBERTRAUM_LLAMA_BIN =
+# a tee wrapper around the drive's pinned b9849), Performance screen > Copy report, UI language
+# English, before the leg-7 starts. The "Speed" and "Last run" lines are the app's own hardware
+# check from 2026-09-06, not from this session; "Recommended for the next start" is the LIVE pick
+# recomputed by the current code (PerformanceScreen.tsx:288).
+
+This computer
+Speed: 48.3 tokens / s (Measured with Qwen3.8 27B UD-Q4_K_M on 9/6/2026, over 64 tokens)
+Memory: 125.5 GB RAM
+CPU: Intel(R) Core(TM) i9-9900X CPU @ 3.50GHz (20 cores)
+Graphics memory: 24.2 GB VRAM (NVIDIA GeForce RTX 3090)
+Drive: 2,078.6 MB/s read
+Assigned profile: PRO
+Recommended for the next start: Qwen3.8 27B UD-Q5_K_M (graphics memory)
+Recommended at the time of the check: Qwen3.8 27B UD-Q5_K_M
+Context size: 32,768 tokens
+Last run: 9/6/2026, 6:45:55 PM
+
+# For comparison, the same line from the #318 session (2026-09-07, master 740b0f27, pre-#386):
+#   Recommended for the next start: Qwen3.8 27B UD-Q4_K_M (graphics memory)
+# and the raw live pick behind it, `performance:get`.recommendation, today:
+#   {"modelId":"qwen3.8-27b-ud-q5km","basis":"discrete"}
