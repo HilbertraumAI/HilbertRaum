@@ -1905,10 +1905,15 @@ library build, `null` until this session computed one and after a lock; absent o
 never a database read, so the channel stays lock-exempt) · `packs:getArticle` (`PackArticle | null` — plain sectioned
 TEXT, never HTML; the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
 alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
-contract-refused target returns `null` and the locator does not change; a `/raw` read that
-kiwix-serve leaves incomplete (the body stops short and the connection hangs) is retried on a
-fresh connection — `ARTICLE_READ_TIMEOUT_MS` 4 s per attempt, `ARTICLE_READ_ATTEMPTS` 3, only on
-that timeout, never on the caller's own abort (P7 T19 finding 3, an upstream truncation); `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
+contract-refused target returns `null` and the locator does not change; both requests carry
+`Range: bytes=0-`, which routes the read past the upstream Windows cut-short defect and makes
+`206` as much an article as `200` (#339, rag-design D-Z22); a `/raw` read that
+kiwix-serve leaves incomplete anyway (the body stops short and the connection hangs) is retried —
+`ARTICLE_READ_IDLE_MS` 1 s between chunks and `ARTICLE_READ_TIMEOUT_MS` 4 s per attempt,
+`ARTICLE_READ_ATTEMPTS` 3 counting resumes, only on those timers, never on the caller's own abort
+(P7 T19 finding 3, an upstream truncation); a stall that delivered part of the body is resumed
+with `Range: bytes=<received>-` and accepted only against an exact `Content-Range`, so a partial
+body never reaches a caller; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
 stopped short of the whole article — input cap, work budget or unterminated markup —
 Phase 1, PR #294 review H1; the modal shows a hint line instead of presenting the partial
 text as complete; a refused entry key (empty, > 2048 chars, a control character, a `.`/`..`
