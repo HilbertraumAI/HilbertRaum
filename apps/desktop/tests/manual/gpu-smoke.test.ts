@@ -75,7 +75,10 @@ describe.skipIf(!enabled)('GPU smoke (manual, real binaries + real model + real 
     expect(binPath).toBeTruthy()
     const devices = await probeGpuDevices(binPath!)
     console.log('probe:', devices)
-    expect(devices.length).toBeGreaterThan(0)
+    // #380: `null` means the probe hit its 10 s kill-timeout — a wedged driver on the smoke box,
+    // which is a real failure of this smoke, not "this machine has no GPU".
+    expect(devices).not.toBeNull()
+    expect(devices!.length).toBeGreaterThan(0)
   })
 
   it('rung 1: starts on the GPU with default args and streams tokens', { timeout: 300_000 }, async () => {

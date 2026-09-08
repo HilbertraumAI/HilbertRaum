@@ -57,7 +57,8 @@ function seededDb(root: string): Db {
   return db
 }
 
-function fakeProbe(devices: GpuDevice[]): CachedGpuProbe & { invalidated: () => number } {
+/** `null` stands for the kill-timeout's UNKNOWN answer (#380), not "no device". */
+function fakeProbe(devices: GpuDevice[] | null): CachedGpuProbe & { invalidated: () => number } {
   let invalidations = 0
   const probe = (async () => devices) as unknown as CachedGpuProbe
   probe.invalidate = () => {
@@ -131,5 +132,26 @@ describe('maybeRunFirstBenchmark — per-session probe refresh', () => {
     expect((getSettings(db).lastBenchmark as unknown as { profile: string }).profile).toBe(
       'BALANCED'
     )
+  })
+
+  it('a probe that TIMED OUT persists nothing — the stored probe stands (#380)', async () => {
+    // The sibling of the case above. The refresh is the same, the answer is not: a probe that
+    // never came back is unknown, and unknown must not be written into the record the tile, the
+    // memory class and the Models ★ read. (Before #380 this stamped an empty probe here, which
+    // is how the #330 round trip lost a working RTX to "None" + the RAM basis.)
+    const root = rootWithBinary()
+    const db = seededDb(root)
+    const stored = { devices: [RTX], probedAt: '2026-06-01T00:00:00Z' }
+    updateSettings(db, {
+      lastBenchmark: { profile: 'BALANCED' } as unknown as BenchmarkResult,
+      gpuProbe: stored
+    })
+
+    await maybeRunFirstBenchmark(ctxWith(root, db, fakeProbe(null)))
+    // The refresh is fired from `prepareFirstBenchmark`, not awaited by the scheduler: give it
+    // every chance to write before asserting that it did not.
+    for (let i = 0; i < 5; i++) await new Promise((r) => setImmediate(r))
+
+    expect(getSettings(db).gpuProbe).toEqual(stored)
   })
 })

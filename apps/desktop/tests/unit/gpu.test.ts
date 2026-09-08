@@ -172,7 +172,7 @@ describe('probeGpuDevices', () => {
     })
     const devices = await probeGpuDevices('/bin/llama-server', { spawn })
     expect(devices).toHaveLength(1)
-    expect(devices[0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
+    expect(devices![0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
     expect(calls[0].args).toEqual(['--list-devices'])
   })
 
@@ -186,7 +186,7 @@ describe('probeGpuDevices', () => {
     })
     const devices = await probeGpuDevices('/bin/llama-server', { spawn })
     expect(devices).toHaveLength(1)
-    expect(devices[0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
+    expect(devices![0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
   })
 
   it('resolves [] on a non-zero exit', async () => {
@@ -197,19 +197,25 @@ describe('probeGpuDevices', () => {
     expect(await probeGpuDevices('/bin/llama-server', { spawn })).toEqual([])
   })
 
-  it('resolves [] on a spawn error (missing binary) — never rejects', async () => {
+  // #380: the three "the machine answered, and the answer was nothing" paths keep resolving [].
+  // Only the kill-timeout below is UNKNOWN, so these pins are what keeps the exception narrow.
+  it('resolves [] on a spawn error (missing binary) — never rejects, and never null', async () => {
     const { spawn } = probeSpawn((child) => {
       child.emit('error', new Error('ENOENT'))
     })
     expect(await probeGpuDevices('/missing/llama-server', { spawn })).toEqual([])
   })
 
-  it('kills a hung probe on timeout and resolves [] (T6 — fake timers, no wall-clock flake)', async () => {
+  it('kills a hung probe on timeout and resolves NULL — unknown, NOT "no GPU" (#380; T6 — fake timers, no wall-clock flake)', async () => {
     // T6 (post-merge audit Phase 5): the prior version awaited a REAL 20 ms setTimeout against a
     // never-exiting child — a TEST-1-family wall-clock flake. Drive the probe's own kill-timeout
     // through fake timers instead (the combine-signals.test.ts idiom) so it fires deterministically.
     // `verify` is injected as a trivial resolver so only the timeout path is under fake-timer
     // control (no real fs/microtask racing the timer); the verify path has its own test below.
+    //
+    // #380: this used to resolve `[]`, which every consumer read as "this machine has no card".
+    // Under the #330 weight upload the driver simply had not answered yet — the child is still
+    // killed (a wedge must not stall startup), but the ANSWER is now the absence of one.
     vi.useFakeTimers()
     let child!: FakeProbeChild
     const spawn: SpawnFn = () => {
@@ -224,7 +230,7 @@ describe('probeGpuDevices', () => {
     // Flush the pre-spawn verify() microtask (arming the timer), then trip the kill-timeout.
     await vi.advanceTimersByTimeAsync(20)
     const devices = await probe
-    expect(devices).toEqual([])
+    expect(devices).toBeNull()
     expect(child.killed).toBe(true)
   })
 
@@ -235,8 +241,9 @@ describe('probeGpuDevices', () => {
     expect(await probeGpuDevices('/bin/llama-server', { spawn })).toEqual([])
   })
 
-  it('resolves [] WITHOUT spawning when the binary fails pre-spawn verification (vuln-scan B)', async () => {
+  it('resolves [] WITHOUT spawning when the binary fails pre-spawn verification (vuln-scan B) — never null', async () => {
     // The probe must NEVER throw — a tampered binary reads as "no GPU", same as a missing one.
+    // #380: still `[]`, not `null` — a binary we refuse to run is an answer, not a wedged driver.
     let spawned = false
     const spawn: SpawnFn = () => {
       spawned = true
@@ -249,6 +256,8 @@ describe('probeGpuDevices', () => {
 })
 
 describe('createCachedGpuProbe', () => {
+  afterEach(() => vi.useRealTimers()) // the #380 timeout case below uses fake timers
+
   function countingSpawn(): { spawn: SpawnFn; count: () => number } {
     let spawned = 0
     const spawn: SpawnFn = () => {
@@ -273,6 +282,47 @@ describe('createCachedGpuProbe', () => {
     // A different binary is its own cache entry.
     await probe('/bin/y')
     expect(count()).toBe(2)
+  })
+
+  it('a TIMED-OUT probe is never cached: the next call re-probes without anyone pressing "Try GPU again" (#380)', async () => {
+    vi.useFakeTimers()
+    let spawned = 0
+    const children: FakeProbeChild[] = []
+    const spawn: SpawnFn = () => {
+      spawned += 1
+      const child = new FakeProbeChild() // never exits on its own — the wedged driver
+      children.push(child)
+      return child
+    }
+    const probe = createCachedGpuProbe({ spawn, timeoutMs: 20, verify: async () => 'skip-dev' })
+
+    const p1 = probe('/bin/x')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(await p1).toBeNull()
+    expect(children[0].killed).toBe(true)
+    expect(spawned).toBe(1)
+
+    // The unknown answer left NO entry behind (it dropped itself once it settled), so the very
+    // next caller — the ladder, the next unlock's refresh — asks the driver again. Before #380
+    // the `[]` this resolved stayed the session's answer and every consumer read "no GPU".
+    const p2 = probe('/bin/x')
+    await vi.advanceTimersByTimeAsync(20)
+    expect(await p2).toBeNull()
+    expect(spawned).toBe(2)
+  })
+
+  it('an EMPTY answer IS cached — "this machine enumerates nothing" is an answer (#380 contrast)', async () => {
+    let spawned = 0
+    const spawn: SpawnFn = () => {
+      spawned += 1
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('close', 0, null)) // exit 0, no device lines: a GPU-less box
+      return child
+    }
+    const probe = createCachedGpuProbe({ spawn })
+    expect(await probe('/bin/x')).toEqual([])
+    expect(await probe('/bin/x')).toEqual([])
+    expect(spawned).toBe(1) // one child: the session keeps the answer, exactly as before
   })
 
   it('invalidate() drops the cache so the next call re-probes (Try GPU again)', async () => {
