@@ -206,8 +206,9 @@ describe('selectBudgetDevice', () => {
       const card = { ...CARD8, name, totalMb }
       expect(selectBudgetDevice([card]), name).toBe(card)
     }
-    // A 4 GB card is still no budget device: nothing ranked fits its 4,096 MiB, so rule C's
-    // no-fit fallback would hand the machine back to the RAM pick anyway.
+    // A 4 GB card is still no budget device — on the reason RESTATED by #321, not the void one:
+    // the E2B (2,271 MiB) does fit such a card, but it is the ONLY ranked model that does, so
+    // admitting it would star the E2B at every RAM size with nothing measured behind that.
     expect(selectBudgetDevice([SMALL])).toBeNull()
   })
 })

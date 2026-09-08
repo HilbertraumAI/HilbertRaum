@@ -3007,27 +3007,33 @@ export const de: Record<keyof typeof en, string> = {
   // Gedämpfter Geräte-Hinweis (Issue #42 Reopen — das Chat-#36-Pendant).
   'translate.device.gpu': 'Übersetzung läuft auf der Grafikkarte (GPU, {done}/{total} Schichten)',
   'translate.device.gpuUnknown': 'Übersetzung läuft auf der Grafikkarte (GPU)',
+  // Issue #42: Die beiden „ausgehungerten" Formen nennen die URSACHE auf der Faktenzeile selbst,
+  // nicht nur in der Abhilfe darunter. „meist" ist bewusst gewählt — das Chat-Modell ist die
+  // häufige, nicht die einzige Ursache.
   'translate.device.gpuPartial':
-    'Übersetzung läuft nur teilweise auf der Grafikkarte ({done}/{total} Schichten) — etwa Prozessor-Tempo',
+    'Übersetzung läuft nur teilweise auf der Grafikkarte ({done}/{total} Schichten) — der ' +
+    'Grafikspeicher war größtenteils belegt, meist durch das Chat-Modell, daher etwa Prozessor-Tempo',
   // Der Null-Schichten-Fall: „läuft nur teilweise … (0/49 Schichten)" widersprach sich selbst
   // (full-audit 2026-07-11 CODE-23).
   'translate.device.gpuNone':
-    'Übersetzung läuft auf dem Prozessor — keine Schicht passte auf die Grafikkarte (0/{total} Schichten)',
+    'Übersetzung läuft auf dem Prozessor — der Grafikspeicher war vollständig belegt, meist durch ' +
+    'das Chat-Modell, sodass keine Schicht auf die Grafikkarte passte (0/{total} Schichten)',
   'translate.device.cpu': 'Übersetzung läuft auf dem Prozessor (CPU)',
   'translate.device.title':
     'Wo das Übersetzungsmodell beim letzten Start gelaufen ist. Es entscheidet bei jedem Start neu ' +
     '(etwa 2 Minuten nach der letzten Übersetzung wird es entladen).',
+  // #42: Diese beiden wiederholten die Ursache und nannten dann die Abhilfe. Da die Ursache
+  // jetzt auf der Faktenzeile steht, sind sie NUR noch die Abhilfe.
   'translate.device.partialTitle':
-    'Der Grafikspeicher war größtenteils belegt — meist durch das Chat-Modell —, sodass nur ein Teil ' +
-    'des Übersetzungsmodells auf die Grafikkarte passte und die Übersetzung etwa in Prozessor-Tempo ' +
-    'läuft. Ein kleineres Chat-Modell gibt Speicher frei; der Übersetzer passt sich beim nächsten ' +
-    'Start neu an (etwa 2 Minuten nach der letzten Übersetzung).',
-  // CODE-23: dieselbe Ursache/Abhilfe wie partialTitle, formuliert für den Nichts-passte-Fall.
+    'Damit mehr vom Übersetzer auf die Karte passt: ein kleineres Chat-Modell verwenden oder es ' +
+    'vor dem Übersetzen beenden. Der Übersetzer passt sich beim nächsten Start neu an (etwa ' +
+    '2 Minuten nach der letzten Übersetzung).',
+  // CODE-23: dieselbe Abhilfe, formuliert für den Nichts-passte-Fall — hier geht es nicht um
+  // „mehr von der Karte", sondern um die Karte überhaupt.
   'translate.device.gpuNoneTitle':
-    'Der Grafikspeicher war vollständig belegt — meist durch das Chat-Modell —, sodass nichts vom ' +
-    'Übersetzungsmodell auf die Grafikkarte passte und die Übersetzung auf dem Prozessor läuft. ' +
-    'Ein kleineres Chat-Modell gibt Speicher frei; der Übersetzer passt sich beim nächsten ' +
-    'Start neu an (etwa 2 Minuten nach der letzten Übersetzung).',
+    'Damit der Übersetzer überhaupt auf die Karte passt: ein kleineres Chat-Modell verwenden oder ' +
+    'es vor dem Übersetzen beenden. Der Übersetzer passt sich beim nächsten Start neu an (etwa ' +
+    '2 Minuten nach der letzten Übersetzung).',
   'translate.err.noModel': 'Das Übersetzungsmodell ist nicht mehr verfügbar. Öffne den KI-Modell-Bildschirm, um es zu installieren.',
   'translate.err.badRequest': 'Wähle eine Ausgangs- und Zielsprache und gib einen Text zum Übersetzen ein.',
   'translate.err.busy': 'Es läuft bereits eine Übersetzung. Warte, bis sie fertig ist, und versuche es dann erneut.',

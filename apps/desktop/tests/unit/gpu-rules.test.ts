@@ -88,9 +88,19 @@ describe('isUsefulDevice — the single predicate', () => {
     expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1660 SUPER', totalMb: 5746 })).toBe(true)
     expect(isUsefulDevice({ name: 'NVIDIA GeForce RTX 4050 Laptop GPU', totalMb: 5921 })).toBe(true)
     expect(isUsefulDevice(RTX3060L)).toBe(true)
-    // …and a 4 GB card stays out: nothing ranked fits its 4,096 MiB anyway, so rule C's no-fit
-    // fallback would hand the machine back to the RAM pick regardless.
+    // …and a 4 GB card stays out. NOT because nothing ranked fits it — the E2B needs 2,271 MiB
+    // and would fit — but because it is the only ranked model that fits ~3,900 MiB free, so
+    // admitting such a card would star the E2B at every RAM size with no measurement behind the
+    // demotion (#321, restated reason; `model-benchmarks.md` §6.6 N8 "Why 5,120 — RESTATED").
     expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1650', totalMb: 4096 })).toBe(false)
+  })
+
+  // #321: the floor is a DECISION, not an arithmetic consequence — its original justification
+  // went void when the E2B's threshold fell to 2,271 MiB. Pin that it did not move with it.
+  it('the floor did not move when the estimate fixes made a 4 GB card able to hold a ranked model (#321)', () => {
+    expect(USABLE_VRAM_MB).toBe(5120)
+    expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1650', totalMb: 4096 })).toBe(false)
+    expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1650 Ti', totalMb: 4032 })).toBe(false)
   })
 })
 

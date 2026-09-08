@@ -3004,27 +3004,34 @@ export const en = {
   // then runs at roughly processor speed and otherwise reads as "GPU translation not working".
   'translate.device.gpu': 'Translation runs on the graphics card (GPU, {done}/{total} layers)',
   'translate.device.gpuUnknown': 'Translation runs on the graphics card (GPU)',
+  // The two STARVED forms name the CAUSE on the fact line itself, not only in the remedy under it
+  // (issue #42, owner decision 2026-09-08): "about processor speed" alone stated the symptom, and
+  // a user who reads no further has nothing to act on. "Usually" is deliberate — a resident chat
+  // model is the common cause, not the only one (another app can hold the card just as well).
   'translate.device.gpuPartial':
-    'Translation runs only partly on the graphics card ({done}/{total} layers) — about processor speed',
+    'Translation runs only partly on the graphics card ({done}/{total} layers) — the graphics ' +
+    'memory was mostly taken, usually by the chat model, so it runs at about processor speed',
   // The fully-starved fit (0 layers): "runs only partly on the graphics card (0/49 layers)" was
   // self-contradictory — nothing runs on the graphics card (full-audit 2026-07-11 CODE-23).
   'translate.device.gpuNone':
-    'Translation runs on the processor — no layers fit on the graphics card (0/{total} layers)',
+    'Translation runs on the processor — the graphics memory was fully taken, usually by the ' +
+    'chat model, so no layers fit on the graphics card (0/{total} layers)',
   'translate.device.cpu': 'Translation runs on the processor (CPU)',
   'translate.device.title':
     'Where the translation model ran when it last started. It decides again on each start ' +
     '(it unloads about 2 minutes after the last translation).',
+  // #42: these two used to repeat the cause and then give the remedy. With the cause on the fact
+  // line above, they are the REMEDY only — the two lines no longer say the same thing twice.
   'translate.device.partialTitle':
-    'The graphics memory was mostly taken — usually by the chat model — so only part of the ' +
-    'translation model fit on the graphics card, and translation runs at roughly processor ' +
-    'speed. A smaller chat model frees memory; the translator re-fits on its next start ' +
-    '(about 2 minutes after the last translation).',
-  // CODE-23: same cause/remedy as partialTitle, worded for the none-fit outcome.
+    'To give the translator more of the card: use a smaller chat model, or stop it before ' +
+    'translating. The translator re-fits on its next start (about 2 minutes after the last ' +
+    'translation).',
+  // CODE-23: the same remedy, worded for the none-fit outcome — here it is not "more of the
+  // card" but the card at all.
   'translate.device.gpuNoneTitle':
-    'The graphics memory was fully taken — usually by the chat model — so none of the ' +
-    'translation model fit on the graphics card, and translation runs on the processor. ' +
-    'A smaller chat model frees memory; the translator re-fits on its next start ' +
-    '(about 2 minutes after the last translation).',
+    'To get the translator onto the card at all: use a smaller chat model, or stop it before ' +
+    'translating. The translator re-fits on its next start (about 2 minutes after the last ' +
+    'translation).',
   // Friendly error rows — a CODE is mapped here; raw model/runtime text never shows.
   'translate.err.noModel': 'The translation model is no longer available. Open the AI Model screen to install it.',
   'translate.err.badRequest': 'Pick a source and target language and enter some text to translate.',

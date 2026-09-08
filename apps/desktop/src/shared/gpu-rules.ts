@@ -34,9 +34,18 @@ export type GpuDeviceLike = Pick<GpuDevice, 'name' | 'totalMb'>
  * the 9B on that card measured **18/33 layers at 5.2 tok/s**. With the gate at 5,120 the card path
  * stars the 4B instead, fully offloaded at card speed.
  *
- * Why 5,120 and not lower. It admits all three measured cards with room for driver variance, and it
- * keeps 4 GB cards (≈ 4,096) OUT — where the smallest ranked model does not fit anyway and rule C's
- * no-fit fallback hands the machine back to the RAM pick regardless. Going lower gains nothing.
+ * Why 5,120 and not lower — the reason RESTATED 2026-09-08 (owner decision on #321), because the
+ * original one went void. #321 argued that keeping 4 GB cards (≈ 4,096) out costs nothing "since nothing ranked fits them
+ * anyway". That arithmetic died with the estimate fixes: the E2B now needs 2,271 MiB (#319 + #321 +
+ * the host-mapped BASE fix), so a 4 GB card CAN hold a ranked model. The floor stays for a different,
+ * measured reason: at ~3,900 MiB free the E2B is the ONLY ranked model that fits, so admitting 4 GB
+ * cards would star it at every RAM size — demoting the 9B at 16 GB and the 27B Q5 at 32 GB to the
+ * smallest model in the catalog. That is the same trade #321 made at 6 GB, but there it was backed by
+ * a measurement (the 9B at 18/33 layers, 5.2 tok/s, against the 4B fully offloaded) and here there is
+ * NONE — no 4 GB card has ever been measured in this project. Lowering the floor on an unmeasured
+ * guess would risk the #318 leg-4 mistake in reverse. What reopens it: a real 4 GB card measured on
+ * the protocol. Above the floor, 5,120 admits all three measured 6 GB cards with room for driver
+ * variance.
  *
  * Blast radius, accepted by the owner: the profile bump moves such a laptop one step up (label + the
  * RAM-unknown fallback picker only), and the graphics tile reads "Usable" for these cards — which

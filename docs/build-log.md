@@ -27,6 +27,37 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-08 — BUILD_STATE §5 item 22 (g) retired verbatim (#42)
+
+Collapsed to a one-line pointer in `BUILD_STATE.md` §5 item 22 when the owner ruling of
+2026-09-08 landed: **no runtime change** for chat/translation contention on one card, and the
+gap is closed in COPY instead — the two starved Translate device lines now name the cause, and
+the remedy line under them is the action alone. Both proposals in the letter were refused on
+the record: an idle reclaim largely EXISTS (the ~2-minute sidecar teardown forces a fresh
+`--fit` on the next cold start), and forcing translation to the processor would pessimise every
+machine where both fit (measured on a 24 GB RTX 3090: ~13 GB free gives a full offload at
+~75 tok/s against ~3–4 forced to CPU). Durable record: `docs/architecture.md` GPU record §8.1,
+with the behaviour in `docs/known-limitations.md` ("A large resident chat model can starve GPU
+translation…"). Full text of (g) as it stood before the collapse:
+
+(g) start-order contention between chat and translation on one card (the "Models on this computer" card now names it): force translation to the processor while chat holds the card, or reclaim the card when translation goes idle, owner call;
+
+
+## 2026-09-08 — the 5,120 MiB usable-card floor: its RATIONALE retired verbatim (#321)
+
+Not a §5 collapse — letter (k) stays open and the constant did not move. What was retired is the
+REASON recorded for it: #321 justified `USABLE_VRAM_MB = 5120` partly on arithmetic that the
+estimate fixes of 2026-09-07/08 (#319, #321, and item 22 (e)/PR #390) made void, since the E2B
+now needs 2,271 MiB and a 4 GB card can therefore hold a ranked model. The owner ruling of
+2026-09-08 keeps 5,120 on a measured basis instead: at ~3,900 MiB free the E2B is the only
+ranked model that fits, so admitting 4 GB cards would star it at every RAM size, and no 4 GB
+card has ever been measured in this project. Durable record: `docs/model-benchmarks.md` §6.6 N8,
+"Why 5,120 — RESTATED". The void wording, as it stood in N8 and in the `gpu-rules.ts` doc
+comment before the rewrite:
+
+*Why 5,120.* It admits all three measured cards with margin for driver variance, and keeps 4 GB cards (≈ 4,096) OUT — where nothing ranked fits 4,410 anyway and rule C's no-fit fallback hands the machine back to the RAM pick regardless. Going lower gains nothing.
+
+
 ## 2026-09-07 — BUILD_STATE §5 item 22 (k) retired verbatim (#321)
 
 Collapsed to a one-line pointer in `BUILD_STATE.md` §5 item 22 when the owner ruling of
