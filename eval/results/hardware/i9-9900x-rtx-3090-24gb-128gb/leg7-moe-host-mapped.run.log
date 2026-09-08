@@ -1,0 +1,16 @@
+[pre] nvidia-smi {"used":564,"total":24576,"free":23564}
+[pre] heaps []
+[pre] list-devices
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 23797 MiB free)
+[argv] --host 127.0.0.1 --port 35395 --model <drive>/models/chat/gemma4-26b-a4b-it-qat-q4.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1
+[loaded] 7016 ms; nvidia-smi {"used":15536,"total":24576,"free":8591}
+[loaded] heaps []
+[loaded] list-devices while loaded
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3090 (24822 MiB, 8502 MiB free)
+[prompt] 104 tok/paragraph × 19 → 2041 tokens
+[timings] {"cache_n":0,"prompt_n":2042,"prompt_ms":7498.546,"prompt_per_token_ms":3.6721576885406466,"prompt_per_second":272.31946033270987,"predicted_n":512,"predicted_ms":7482.69,"predicted_per_token_ms":14.61462890625,"predicted_per_second":68.42459062182184}
+[peak] used 17408 MiB; tokens_predicted=512 prompt_n=2042
+[after] nvidia-smi {"used":559,"total":24576,"free":23568} exit {"code":0,"sig":null}
+[done] leg7-moe-host-mapped.json

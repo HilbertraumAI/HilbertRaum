@@ -37,7 +37,7 @@ import type { ModelPlacement, PlacementDevice } from '../../../shared/types'
 // that buffer a third time (1,665.34 MiB where 1,145.28 was allocated). MAX, not "skip a
 // repeated block": a re-reserve may legitimately print a LARGER figure, and that is the size.
 // `llama_context: constructing llama_context` is the context boundary. The rule ASSUMES each
-// llama_context is constructed ONCE per server process — true of all 32 captured logs, the
+// llama_context is constructed ONCE per server process — true of all 33 captured logs, the
 // `--fit-target` runs included. A future build whose fit loop tore a context down and rebuilt
 // it would reprint `constructing llama_context` and be counted as a second context: that is a
 // parser regression to recognise as one, not a mystery.

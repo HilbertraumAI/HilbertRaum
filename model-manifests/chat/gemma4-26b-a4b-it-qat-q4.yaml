@@ -27,6 +27,17 @@ recommended_ram_gb: 32
 # qwen3.5-35b-a3b total-vs-active trade at 4–8 GB less disk/RAM.
 recommendation_rank: 2
 recommended_context_tokens: 8192
+# Weights that stay HOST-mapped even on a full offload (the embedding/output tensors): the picker
+# subtracts them from the estimate's base and before applying its 15 % working share, because the
+# runtime buffers that share stands for scale with what is actually ON the card (issue #321, owner
+# decision 2026-09-07; base since 2026-09-08, §5 item 22 (e); model-benchmarks.md §6.6 point 3).
+# MEASURED, not derived — the app has no GGUF-header parser. Read off the
+# `CPU_Mapped model buffer size` line of a FULL-OFFLOAD start (31/31 layers) on the RTX 3090, the
+# only card in the project that can hold this model:
+# eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg7-moe-host-mapped.stderr.log
+# (issue #391, the last open item, 2026-09-08). A PARTIAL offload inflates this line with the
+# layers that did not fit, so only full-offload starts count.
+host_mapped_weights_mib: 577.50
 # Context cache at 8k under the app launch (ubatch 2048): 320 MiB full-attention + 1,200 MiB
 # sliding-window cells = 1.484 GiB; the picker's graphics-fit cache term (model-benchmarks.md
 # §6.6, PR #308 audit decision 11).
@@ -35,6 +46,14 @@ recommended_context_tokens: 8192
 # CELLS from --ctx-size and are counted once whatever the slot count is (measured on the 12B twin,
 # eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg3-baseline.stderr.log: "4/1 seqs" is four
 # sequences over ONE cache). This model was never started on hardware for #318 (estimate band only).
+# STILL DERIVED, and now known to be HIGH: the first hardware start (2026-09-08, #391, see the
+# host-mapped note below) logged the two caches at 160.00 MiB (8192 cells, 5 layers, 1/1 seqs)
+# non-SWA + 600.00 MiB (3072 cells, 25 layers, 1/1 seqs) SWA = 760.00 MiB, against the 1,536 this
+# term claims: 2.02x too high, and the derivation above is exactly double the measurement on both
+# halves. The `-np 1` reasoning attached to it is nonetheless confirmed, both caches log 1/1 seqs.
+# LEFT UNCHANGED deliberately: the cache term is its own picker input with its own decision
+# history, and lowering it moves this model's threshold a further ~776 MiB. Owner call, not a
+# by-product of the host-mapped measurement.
 estimated_context_cache_gib: 1.5
 # Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server (as the
 # 2026-07-23 smoke found); `enable_thinking: false` suppresses cleanly (0 reasoning chars,
