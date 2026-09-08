@@ -27,6 +27,32 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-08 — BUILD_STATE §5 item 22 (a) rewritten; its original text retired verbatim
+
+NOT a collapse — letter (a) asked for two things and only one was decided, so it was REWRITTEN
+in place rather than reduced to a pointer.
+
+**Shipped:** the moved-drive notice on Home. `prepareFirstBenchmark` runs after every unlock and
+was entirely silent: it either restored this computer's stored result (re-measuring NOTHING, so
+the figures on Performance are as old as that result) or owed a background measurement. Home now
+reports which, through `MovedDriveNotice` — session state keyed like SD2's `attemptMemo`, because
+after a restore nothing persisted distinguishes it from an ordinary same-machine launch. Three
+kinds, and only the two that need one offer "Check this computer": `measuring` deliberately does
+not, so the notice never asks for a check that is already under way.
+
+**Deferred, with the reason on the record:** the readiness row ("This computer: Balanced, about
+12 tokens/s"). It would put a NUMBER on the first screen that can be stale, absent, or from
+another computer — the exact defect class the PR #303 audit spent M2/M4/A4 fixing on Performance,
+where the fix cost a provenance rule, a same-machine gate and a machine-naming heading that Home
+has none of. Letter 22 (c) also still carries an open residual on German rail label width at the
+600 weight, so the row would land on a surface whose sizing is unsettled.
+
+Durable record: `docs/benchmark.md` "The user is told which of the two happened", under
+"History per machine". Original text of (a) before the rewrite:
+
+(a) a Home readiness row ("This computer: Balanced, about 12 tokens/s") plus a moved-drive notice with a "Check this computer" action (the mock-up's Home artboard; today the re-check is silent in the background);
+
+
 ## 2026-09-08 — BUILD_STATE §5 item 22 (b)/(d) retired verbatim
 
 Collapsed to one-line pointers in `BUILD_STATE.md` §5 item 22 when the owner ruling of

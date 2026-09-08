@@ -94,6 +94,19 @@ export const de: Record<keyof typeof en, string> = {
   'home.preflight.continue':
     'Du kannst trotzdem fortfahren. Wenn sich die App nicht öffnet, findest du die ' +
     'Anleitung zur Fehlerbehebung im Ordner {folder} auf dem Laufwerk.',
+  // §5 item 22 (a): DREI Meldungen, weil es drei verschiedene Sachverhalte sind. Die mittlere
+  // trägt bewusst keine Aktion — eine Prüfung läuft bereits.
+  'home.moved.restored':
+    'Dieses Laufwerk wurde zuletzt an einem anderen Computer benutzt. Die Werte für diesen ' +
+    'Computer stammen aus einer früheren Prüfung vom {when} — gerade eben wurde nichts gemessen.',
+  'home.moved.restoredUndated':
+    'Dieses Laufwerk wurde zuletzt an einem anderen Computer benutzt. Die Werte für diesen ' +
+    'Computer stammen aus einer früheren Prüfung — gerade eben wurde nichts gemessen.',
+  'home.moved.measuring':
+    'Dieses Laufwerk wurde an diesem Computer noch nicht benutzt. Eine Prüfung läuft im ' +
+    'Hintergrund; der Leistungs-Bildschirm zeigt die Werte, sobald sie fertig ist.',
+  'home.moved.owed':
+    'Dieses Laufwerk wurde an diesem Computer noch nicht geprüft, daher gibt es keine Werte dafür.',
   'home.checking': 'Wird geprüft…',
   'home.workspace.label': 'Arbeitsbereich',
   'home.workspace.encrypted':

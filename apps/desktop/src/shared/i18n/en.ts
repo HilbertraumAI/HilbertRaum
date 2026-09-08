@@ -64,6 +64,23 @@ export const en = {
   'home.preflight.continue':
     'You can still continue. If the app doesn’t open, see the troubleshooting guide in the ' +
     'drive’s {folder} folder.',
+  // §5 item 22 (a): the moved-drive check used to be entirely silent. THREE messages, because
+  // the states are three different facts — a restore measured nothing, a new computer already
+  // has a check running, and a skipped/failed background check means no figures at all. The
+  // middle one deliberately carries no action: a check is already under way.
+  'home.moved.restored':
+    'This drive was last used on a different computer. The figures for this computer are from ' +
+    'an earlier check on {when} — nothing was measured just now.',
+  // The same fact for a restored result whose own date is unknown (a legacy record: `ranAt: ''`).
+  // Never print "Invalid Date" — say the thing that is still true.
+  'home.moved.restoredUndated':
+    'This drive was last used on a different computer. The figures for this computer are from ' +
+    'an earlier check — nothing was measured just now.',
+  'home.moved.measuring':
+    'This drive has not been used on this computer before. A check is running in the ' +
+    'background; the Performance screen shows the figures when it finishes.',
+  'home.moved.owed':
+    'This drive has not been checked on this computer yet, so there are no figures for it.',
   'home.checking': 'Checking…',
   'home.workspace.label': 'Workspace',
   'home.workspace.encrypted': 'Encrypted — locked with your password when the app is closed',

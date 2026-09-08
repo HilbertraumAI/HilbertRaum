@@ -408,6 +408,46 @@ gate accepts an array of VALID results only (junk and unkeyed elements dropped, 
 machine, newest first, length capped; the 256 KB serialized cap applies to the list) — see
 "Schemas and legacy records" above.
 
+**The user is told which of the two happened** (§5 item 22 (a), owner decision 2026-09-08). Both
+branches used to be SILENT, and they are different facts that must not share a message: a restore
+re-measures **nothing**, so the figures the user is about to read are as old as the restored
+result; a new computer has a measurement already under way. `MovedDriveNotice`
+(`benchmark:movedDriveNotice`) carries the distinction to Home:
+
+| kind | set by | Home says | offers the check? |
+|---|---|---|---|
+| `restored` (+ the result's own `ranAt`) | the restore branch | the figures are from an earlier check on that date, nothing was measured just now | **yes** |
+| `measuring` | an accepted `new-machine` decision | a check is running in the background | **no** — one is already under way |
+| `owed` | that scheduling ending in anything but a run | this computer has not been checked yet | **yes** |
+
+It is **session state, not settings**, and deliberately so: once a restore has happened,
+`lastBenchmark` is this machine's and nothing persisted distinguishes "restored just now" from an
+ordinary same-machine launch. The memo is keyed exactly like SD2's `attemptMemo` — the workspace
+DB handle AND the unlock epoch — so a lock/unlock retires it and a new session decides afresh.
+`runOnceSettled` moves `measuring` → `owed` on every terminal outcome that is not a run
+(`skipped-busy`, `failed`, `skipped-admission`, …) and pushes `performance:changed` for it,
+because the run's own idle push fires BEFORE the notice moves; `'deferred'` keeps `measuring`
+(a continuation is still pending) and a persisted run clears the notice inside
+`runAndPersistBenchmark`, so its existing push already carries the cleared state and no second
+push is emitted. Any successful check clears it, which is what the notice's own action leads to.
+A **`first-run` on a fresh workspace sets nothing**: that is not a moved drive, and "this drive has
+not been used on this computer before" would be a lie about a workspace never used anywhere.
+
+On Home the notice is an informational `Banner` (nothing is wrong — the drive moved), following
+`runPreflight`'s precedent for a friendly non-blocking note, read once on mount and re-read on
+`performance:changed` so an open Home corrects itself when the background check finishes. Its
+action **navigates to Performance** rather than running the check from Home: every Home button
+navigates ("Choose a model" opens AI Model rather than choosing one), and since item 22 (b)
+Performance is the one place the check is started from. It reuses `perf.check` for its label.
+
+**The readiness row is NOT part of this** (the other half of letter (a) — "This computer:
+Balanced, about 12 tokens/s" — deferred deliberately, 2026-09-08). It would put a NUMBER on the
+first screen that can be stale, absent, or from another computer: the exact defect class the PR
+#303 audit spent M2/M4/A4 fixing on Performance, where the fix cost a provenance rule, a
+same-machine gate and a heading that names the machine. Home has none of that scaffolding. Item 22
+(c) also still carries an open residual about German rail label width at the 600 weight, so the
+row would land on a surface whose sizing is not settled.
+
 **Scheduling behind the auto-start (PR #303 audit L1 / SD2, owner decision G5).** The three
 post-unlock seams (the plaintext startup in `main/index.ts`, unlock and create in
 `registerWorkspaceIpc`) used to fire the first-run benchmark and `maybeAutoStartActiveModel`
@@ -438,7 +478,7 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    (`'skipped-busy'`, the same predicate the run itself refuses on, read in the same tick), and a
    result for this computer persisted meanwhile by a manual run or another window
    (`'skipped-already-current'`). A thrown run is `'failed'` with the warn log. No outcome is
-   retried within the session (below); Diagnostics runs the benchmark on demand at any time.
+   retried within the session (below); the Performance screen runs the benchmark on demand at any time.
 
 The wait is **bounded** by `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS` (120 s — sized to the common slow
 case: a ~5 GB GGUF on the ~70 MB/s stick #108 measured is hashed and then loaded, roughly a minute
