@@ -1552,6 +1552,28 @@ describe('PerformanceScreen: #325 residuals', () => {
     }
   })
 
+  it('#381 review: acceleration off HERE never overwrites another computer’s recorded card — the tile and the report both name it', async () => {
+    for (const flags of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
+      const { api } = install(
+        snapshot({ current: recordedCard, currentMachine: false, currentGpu: null, graphicsDevice: null, placement: placement({ memoryClass: 'cpu', vramMb: null }) }),
+        { getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, ...flags })) }
+      )
+      renderScreen()
+      // One `graphicsFigure` feeds the tile AND the report, so the leak showed on both. The
+      // pill is the tile's own tell: the record's card rates "Usable", the off branch "None".
+      expect(await screen.findByText('Usable')).toBeInTheDocument()
+      expect(screen.getByText('NVIDIA GeForce RTX 3070')).toBeInTheDocument()
+      expect(screen.queryByText('Graphics acceleration is off. Models run on the processor.')).not.toBeInTheDocument()
+      await userEvent.click(screen.getByRole('button', { name: 'Copy report' }))
+      await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
+      const text = api.copyToClipboard.mock.calls[0][0] as string
+      expect(text.split('\n')[0]).toBe('Another computer: Intel Core i7-1260P, 15.7 GB RAM')
+      expect(text).toContain('Graphics memory: 8.0 GB VRAM (NVIDIA GeForce RTX 3070)')
+      expect(text).not.toContain('Graphics acceleration is off')
+      cleanup()
+    }
+  })
+
   it('#325 (1): with the GPU on, the same recorded card still fills the tile (the fallback is kept)', async () => {
     install(snapshot({ current: recordedCard, currentGpu: null }))
     renderScreen()
@@ -1585,12 +1607,15 @@ describe('PerformanceScreen: #325 residuals', () => {
   })
 
   it('#325 (2): with no catalog there is no live line, and the saved line stands alone', async () => {
-    const { api } = install(snapshot({ recommendation: null }))
+    // Both figures derive from `recommendation?.modelId` MAIN-side (`contextFor(null)` is null),
+    // so "no live pick" and "no context" are the only pair the snapshot can carry (#381 review).
+    const { api } = install(snapshot({ recommendation: null, placement: placement({ recommendedContextTokens: null }) }))
     renderScreen()
     await userEvent.click(await screen.findByRole('button', { name: 'Copy report' }))
     await waitFor(() => expect(api.copyToClipboard).toHaveBeenCalledTimes(1))
     const text = api.copyToClipboard.mock.calls[0][0] as string
     expect(text).not.toContain('Recommended for the next start')
+    expect(text).not.toContain('Context size')
     expect(text).toContain('Recommended at the time of the check: Qwen3.5 9B (UD-Q4_K_XL)')
   })
 
@@ -1700,9 +1725,11 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
     const text = api.copyToClipboard.mock.calls[0][0] as string
     const lines = text.split('\n')
     expect(lines[0]).toBe(t('de', 'perf.report.otherComputer', { cpu: 'Intel Core i7-1260P', ram: fmt1(15.7, 'de') }))
-    const liveLabel = t('de', 'perf.recommendation.nextHere')
+    const liveLabel = t('de', 'perf.recommendation.nextOnThisComputer')
     expect(text).toContain(`${liveLabel}: Qwen3.5 4B (UD-Q4_K_XL) (${t('de', 'perf.basis.cpu')})`)
-    expect(liveLabel).not.toBe(t('en', 'perf.recommendation.nextHere'))
+    expect(liveLabel).not.toBe(t('en', 'perf.recommendation.nextOnThisComputer'))
+    // Not merely "different from English": the German line must say WHOSE computer it is.
+    expect(t('de', 'perf.recommendation.nextOnThisComputer')).toContain('diesem Computer')
     expect(text).not.toContain(`${t('de', 'perf.recommendation.next')}:`)
     const liveAt = lines.findIndex((l) => l.startsWith(`${liveLabel}:`))
     const contextAt = lines.findIndex((l) => l.startsWith(`${t('de', 'models.context.title')}:`))

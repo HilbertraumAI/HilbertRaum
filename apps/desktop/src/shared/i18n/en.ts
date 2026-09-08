@@ -1821,7 +1821,7 @@ export const en = {
   'perf.recommendation.next': 'Recommended for the next start',
   // Same line where the report's headline record is ANOTHER machine's: the pick is still this
   // computer's, and unlabelled it reads as the other machine's (issue #381).
-  'perf.recommendation.nextHere': 'Recommended for the next start on this computer',
+  'perf.recommendation.nextOnThisComputer': 'Recommended for the next start on this computer',
   'perf.verdict.noRecommendation': 'No model in the catalog matches this computer yet.',
   'perf.verdict.notChecked':
     'A quick check measures memory, drive speed and, once a model runs, generation speed.',

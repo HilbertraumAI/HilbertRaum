@@ -191,7 +191,10 @@ function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot
   // With the GPU switched off or auto-disabled the snapshot names no device for the next start,
   // and a card the RESULT recorded while the GPU was on must not fill the tile in its place: the
   // verdict, the ★ and the "Your model" row already say RAM for that start (issue #325 (1)).
-  if (gpuOff && !live) return { kind: 'off' }
+  // That off state is THIS machine's, never the record's, so it can only speak for a record
+  // measured here (#381 review): `live` is null for a foreign record too, and the gate fired on
+  // it, replacing that machine's own recorded card with this machine's "acceleration is off".
+  if (gpuOff && !live && (snap?.currentMachine ?? true)) return { kind: 'off' }
   const mb = live?.totalMb ?? bench.gpuVramMb ?? null
   const name = live?.name ?? bench.gpu ?? null
   if (mb == null || mb <= 0) {
@@ -291,7 +294,7 @@ function buildReport(
   // Then the result's own pick, which is what the check said at the time.
   if (live) {
     lines.push(
-      `${t(currentMachine ? 'perf.recommendation.next' : 'perf.recommendation.nextHere')}: ${live.modelId ? `${modelName(live.modelId, models, t)} (${t(`perf.basis.${live.basis}`)})` : t('diag.bench.noMatch')}`
+      `${t(currentMachine ? 'perf.recommendation.next' : 'perf.recommendation.nextOnThisComputer')}: ${live.modelId ? `${modelName(live.modelId, models, t)} (${t(`perf.basis.${live.basis}`)})` : t('diag.bench.noMatch')}`
     )
     if (contextTokens != null) lines.push(`${t('models.context.title')}: ${t('models.tech.contextValue', { count: contextTokens.toLocaleString(lang) })}`)
   }
