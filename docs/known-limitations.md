@@ -2602,12 +2602,18 @@ reports and phase plans were working papers; their full text lives in git histor
   `rag-design.md` §17 "Real acceptance" finding 3; an upstream defect, tracked for the
   provisioning wave on #339). The linux-x86_64 build of the same release does NOT show it
   (humaniser's probe of 2026-09-07: 0 of 40 reads short on the same entries, every thread
-  setting), so the upstream report names the Windows build only. The app detects a stalled read with a short timeout (4 s per attempt) and
-  retries it on a fresh connection, up to three attempts (P7 fix; `ARTICLE_READ_TIMEOUT_MS` /
-  `ARTICLE_READ_ATTEMPTS` in `client.ts`), so an article normally still opens and still reaches
-  the answer; only a read that stalls on all three attempts (about one in a thousand at the
-  measured rate) shows "article unavailable" or costs the answer that one article, and the
-  per-answer note then reports what was searched.
+  setting), so the upstream report names the Windows build only. **The app no longer triggers it**
+  (2026-09-08, `rag-design.md` §17 D-Z22): every article request asks for a byte range, which
+  makes the server read the entry through a different, sound code path — 880 such reads on the
+  Kit drive without a single short one, against 70 of 600 short on the plain route in the same
+  session, and 60 consecutive article opens with no retry at all where the plain route needed 13
+  and lost one article. The old detector stays as the safety net behind it: a read that goes
+  quiet mid-body for a second, or an attempt that runs past 4 s, is retried up to three times
+  (`ARTICLE_READ_IDLE_MS` / `ARTICLE_READ_TIMEOUT_MS` / `ARTICLE_READ_ATTEMPTS` in `client.ts`),
+  and a stall that did deliver part of the article is now resumed from where it stopped rather
+  than read again. Only a read that fails all three attempts shows "article unavailable" or costs
+  the answer that one article, and the per-answer note then reports what was searched. The
+  upstream defect itself is unchanged; the report to kiwix/kiwix-tools is still to be filed.
 - **Multipart `.zimaa` archives are unsupported (R-2).** A ZIM split across multiple
   `.zim<aa|ab|…>` parts is not read by this app; only a single-file `.zim` archive is. This
   is unsupported AND UNTESTED: no code path explicitly rejects a multipart archive, and no

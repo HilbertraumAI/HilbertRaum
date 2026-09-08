@@ -215,6 +215,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Knowledge-pack articles open on the first try on Windows.** The pack server sometimes stopped
+  sending a large article half-way through, which cost about four seconds per affected article and
+  occasionally lost one from an answer entirely; the app now asks for articles in a way that
+  avoids the problem, and on the rare occasion a read still stops it is resumed from where it
+  stopped instead of being read again.
 - **A slow drive is no longer reported as fast after a restart.** When the app reopens and starts
   your model, the computer often serves that file from memory rather than from the drive, and the
   app was recording that memory speed as the drive's speed — replacing the honest figure it had

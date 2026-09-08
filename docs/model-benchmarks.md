@@ -627,8 +627,14 @@ consumer machine.
 
    (The MoE was the last one missing, and only the RTX 3090 can fully offload it. Measured
    2026-09-08 on its first hardware start ever: the weight had to be fetched onto the rig first.
-   **Every ranked chat model now carries a measured figure**, so the "a manifest without it keeps
-   the whole file" path above is a rule for future manifests rather than a live case.)
+   **Every model rule C can ever star now carries a measured figure** — the five rank-3 models,
+   plus the two rank-2 tier winners in the table below. That holds because the E2B has both the
+   lowest threshold (2,271; the next is 3,838) and the lowest RAM floor of any ranked model, so a
+   rank-3 model is eligible whenever any ranked model is, and rank sorts first.
+   **It is NOT every ranked model, and the whole-file path is not dead:** 8 of the 15 ranked
+   manifests carry no figure — exactly the 8 this section omits from the thresholds table below as
+   unable to win rule C — so they keep the whole file as their base. That is conservative for the ★,
+   which never lands on them, but it is what "Your model" uses for one a user installs by hand.)
 
    **2026-09-08: the host-mapped weights come out of the BASE too, not only the share.** #321 took
    them out of the 15 % term on the reasoning that the share stands for buffers *beside* the weights

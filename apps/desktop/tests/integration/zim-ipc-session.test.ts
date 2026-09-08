@@ -11,7 +11,7 @@ import {
   rmSync,
   writeFileSync
 } from 'node:fs'
-import { createServer } from 'node:http'
+import { createServer, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
 
@@ -247,6 +247,34 @@ interface HarnessOptions {
   platform?: NodeJS.Platform
 }
 
+/**
+ * Answer a `/raw` request the way libkiwix does under the Range-first read (#339 D-Z22): a
+ * `Range: bytes=<n>-` on a 200 becomes `206` + `Content-Range` + the tail. Anything else — no
+ * Range header, a redirect, an error status — is answered verbatim.
+ */
+function sendRangeAware(
+  res: ServerResponse,
+  status: number,
+  body: string,
+  from: number | null,
+  headers: Record<string, string> = {}
+): void {
+  const buf = Buffer.from(body, 'utf8')
+  const base = { 'content-type': 'text/html', ...headers }
+  if (from === null || status !== 200 || from >= buf.length) {
+    res.writeHead(status, base)
+    res.end(buf)
+    return
+  }
+  const tail = buf.subarray(from)
+  res.writeHead(206, {
+    ...base,
+    'content-length': String(tail.length),
+    'content-range': `bytes ${from}-${buf.length - 1}/${buf.length}`
+  })
+  res.end(tail)
+}
+
 async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness> {
   const vault = opts.vault ?? 'encrypted'
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-zimsession-'))
@@ -303,13 +331,25 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       } catch {
         /* a parked response released by teardown still answers */
       }
+      // #339 D-Z22: every `/raw` article request now carries `Range: bytes=<n>-`, and libkiwix
+      // answers it `206` + `Content-Range` + the tail. The fake does the same, so the resume
+      // path is what these legs exercise — the way the real server behaves.
+      const rangeFrom = ((): number | null => {
+        const h = req.headers.range
+        if (typeof h !== 'string') return null
+        const m = /^bytes=(\d+)-$/.exec(h.trim())
+        return m ? Number(m[1]) : null
+      })()
       // #301 P7 T19: the measured stall — headers, an honest length, most of the body, then
       // silence. Left hanging on purpose; the client's per-attempt timeout is what ends it.
       const cut = hooks.truncate(url)
       if (cut) {
-        res.writeHead(200, {
+        res.writeHead(rangeFrom === null ? 200 : 206, {
           'content-type': 'text/html',
-          'content-length': String(cut.total)
+          'content-length': String(cut.total),
+          ...(rangeFrom === null
+            ? {}
+            : { 'content-range': `bytes ${rangeFrom}-${cut.total - 1}/${cut.total}` })
         })
         res.write(cut.partial) // …and the rest never arrives
         return
@@ -318,8 +358,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
       // "the viewer fetched the OTHER archive" cannot pass as a success.
       const custom = hooks.respond(url)
       if (custom) {
-        res.writeHead(custom.status, { 'content-type': 'text/html', ...custom.headers })
-        res.end(custom.body)
+        sendRangeAware(res, custom.status, custom.body, rangeFrom, custom.headers)
         return
       }
       if (url.startsWith('/search')) {
@@ -328,8 +367,7 @@ async function sessionHarness(opts: HarnessOptions = {}): Promise<SessionHarness
         return
       }
       if (url.startsWith('/raw/')) {
-        res.writeHead(200, { 'content-type': 'text/html' })
-        res.end(ARTICLE_HTML)
+        sendRangeAware(res, 200, ARTICLE_HTML, rangeFrom)
         return
       }
       res.writeHead(404)

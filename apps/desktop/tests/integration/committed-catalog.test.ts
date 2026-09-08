@@ -201,9 +201,16 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // the layers that did not fit (the 9B logs 545.62 at 33/33 but 824.31 at 31/33), so only
   // full-offload starts count. The five models #318 started carry the field, and #391 added the
   // last two — the 4B (PR #400, 33/33 on the RTX 3060 Laptop) and the MoE 26B (PR #409, 31/31 on
-  // the RTX 3090, the only card that holds it) — so EVERY ranked chat model now has a measured
-  // figure. The whole-file fallback below is therefore a rule for future manifests, not a live
-  // case. Deriving the split from the GGUF header instead is RETIRED — §5 item 22 (e).
+  // the RTX 3090, the only card that holds it). Those seven include all five RANK-3 models, so
+  // every model rule C can ever star carries one: the E2B's threshold (2,271, next 3,838) and RAM
+  // floor are both the lowest of any ranked model, so a rank-3 model is eligible whenever any
+  // ranked model is, and `eligibleOrder` sorts rank first. NOT every ranked model, though — 8 of
+  // the 15 ranked manifests carry none (rank 2: qwen3-4b-instruct-q4, ministral3-8b-instruct-2512-q4;
+  // rank 1: qwen3-4b-instruct-2507-q4, qwen3-8b-instruct-q4, qwen3-14b-instruct-q4, qwen3.6-27b-q4,
+  // qwen3.6-27b-q5, qwen3.5-35b-a3b-ud-q4kxl) and keep the whole-file base, which "Your model" uses
+  // for one a user installs by hand. The assertion below pins that set exactly, so a future
+  // measurement has to update this comment with it.
+  // Deriving the split from the GGUF header instead is RETIRED — §5 item 22 (e).
   const HOST_MAPPED_MIB: Record<string, number> = {
     'gemma4-e2b-it-qat-q4': 2152.5, // leg 4, 36/36
     'qwen3.5-9b-ud-q4kxl': 545.62, // leg 5, 33/33

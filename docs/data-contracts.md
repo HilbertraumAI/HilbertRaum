@@ -467,9 +467,12 @@ per model, not derived: the app has no GGUF-header parser, so each figure is rea
 PARTIAL offload inflates that line with the layers that did not fit — the 9B logs 545.62 MiB at
 33/33 but 824.31 at 31/33). Carried by the five models started for #318 (E2B 2,152.50, 9B 545.62,
 Gemma 12B 787.50, 27B UD-Q4 682.03, UD-Q5 682.03) and, since the #391 hardware round of 2026-09-08,
-by the last two as well (4B 497.31 off a 33/33 start, MoE 26B 577.50 off a 31/31 one) — so **every
-ranked chat model carries a measured figure** and the "absent" branch below is a rule for future
-manifests rather than a live case. All seven are pinned in `committed-catalog.test.ts`. The
+by the last two as well (4B 497.31 off a 33/33 start, MoE 26B 577.50 off a 31/31 one). Those seven,
+pinned in `committed-catalog.test.ts`, include all five rank-3 models, so **every model rule C can
+ever star carries a measured figure**. They are NOT every ranked manifest: 8 of the 15 carry none
+and keep the whole file as their base — the "absent" branch below is a live case, reached by the
+"Your model" estimate for a model the user installs by hand, not merely a rule for future
+manifests. The
 GGUF-header derivation that would have covered models never started is RETIRED (the picker judges
 models the user has not downloaded, so the number has to travel in the catalog); what stays open
 under BUILD_STATE §5 item 22 (e) is narrower — nothing recomputes the field when a manifest's
@@ -1907,10 +1910,15 @@ library build, `null` until this session computed one and after a lock; absent o
 never a database read, so the channel stays lock-exempt) · `packs:getArticle` (`PackArticle | null` — plain sectioned
 TEXT, never HTML; the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
 alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
-contract-refused target returns `null` and the locator does not change; a `/raw` read that
-kiwix-serve leaves incomplete (the body stops short and the connection hangs) is retried on a
-fresh connection — `ARTICLE_READ_TIMEOUT_MS` 4 s per attempt, `ARTICLE_READ_ATTEMPTS` 3, only on
-that timeout, never on the caller's own abort (P7 T19 finding 3, an upstream truncation); `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
+contract-refused target returns `null` and the locator does not change; both requests carry
+`Range: bytes=0-`, which routes the read past the upstream Windows cut-short defect and makes
+`206` as much an article as `200` (#339, rag-design D-Z22); a `/raw` read that
+kiwix-serve leaves incomplete anyway (the body stops short and the connection hangs) is retried —
+`ARTICLE_READ_IDLE_MS` 1 s between chunks and `ARTICLE_READ_TIMEOUT_MS` 4 s per attempt,
+`ARTICLE_READ_ATTEMPTS` 3 counting resumes, only on those timers, never on the caller's own abort
+(P7 T19 finding 3, an upstream truncation); a stall that delivered part of the body is resumed
+with `Range: bytes=<received>-` and accepted only against an exact `Content-Range`, so a partial
+body never reaches a caller; `PackArticle` adds `partial: boolean`, true when `html.ts`'s converter
 stopped short of the whole article — input cap, work budget or unterminated markup —
 Phase 1, PR #294 review H1; the modal shows a hint line instead of presenting the partial
 text as complete; a refused entry key (empty, > 2048 chars, a control character, a `.`/`..`
