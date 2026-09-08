@@ -67,6 +67,7 @@ import type {
   ModelVerifyProgress,
   PickDocumentsResult,
   LocalApiConnectionInfo,
+  MovedDriveNotice,
   PerformanceSnapshot,
   PolicyStatus,
   PreflightResult,
@@ -292,6 +293,8 @@ const api = {
   runBenchmark: (): Promise<BenchmarkResult> => ipcRenderer.invoke(IPC.runBenchmark),
   /** The Performance screen's one read: last result, per-machine history, observed figures. */
   getPerformance: (): Promise<PerformanceSnapshot> => ipcRenderer.invoke(IPC.getPerformance),
+  /** What the moved-drive check did this unlock session, for Home's notice (§5 item 22 (a)). */
+  getMovedDriveNotice: (): Promise<MovedDriveNotice | null> => ipcRenderer.invoke(IPC.getMovedDriveNotice),
   /** Subscribe to the steps of a benchmark THIS window started; returns an unsubscribe fn. */
   onBenchmarkProgress: (cb: (step: BenchmarkProgressStep) => void): (() => void) => {
     const handler = (_e: unknown, step: BenchmarkProgressStep) => cb(step)

@@ -9,6 +9,7 @@ import type {
   GpuDevice,
   MemoryClass,
   ModelPlacement,
+  MovedDriveNotice,
   PerformanceSnapshot,
   ResidentModelRow
 } from '../../shared/types'
@@ -173,7 +174,7 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
  * Throws the friendly, localized refusal (`BenchmarkBusyError`). The Diagnostics button
  * surfaces it; the first-run scheduler (`scheduleFirstBenchmark`) reports it as
  * `'skipped-busy'` and — SD2 — does not retry within the session: the next unlock re-checks,
- * and Diagnostics can run it on demand meanwhile. A refused call emits NO
+ * and the Performance screen can run it on demand meanwhile. A refused call emits NO
  * `performance:changed`: the span it saw belongs to the running benchmark, whose own release
  * will announce the idle state — a refusal announcing it would tell the screen the first run
  * had finished.
@@ -290,6 +291,10 @@ async function runBenchmarkAndPersist(
   const here = machineKey(result)
   const history = upsertHistory(backfillOutgoing(settings.benchmarkHistory, settings.lastBenchmark, here), result)
   updateSettings(ctx.db, { benchmarkHistory: history, lastBenchmark: result })
+  // §5 item 22 (a): this computer now has a result measured just now, so the moved-drive notice
+  // has nothing left to say — whichever of its states was standing. Covers the automatic run and
+  // the "Check this computer" the notice itself points at. The caller's `finally` pushes.
+  setMovedDriveNotice(ctx.db, ctx.workspace.unlockEpoch?.(), null)
   log.info('Benchmark complete', {
     profile: result.profile,
     recommendedModelId: result.recommendedModelId,
@@ -374,7 +379,7 @@ export type FirstBenchmarkOutcome =
   | 'skipped-attempted'
   /** The start did not settle within `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS`; one continuation remains. */
   | 'deferred'
-  /** The run threw (a refused late persist included) — logged; Diagnostics can run it on demand. */
+  /** The run threw (a refused late persist included) — logged; the Performance screen can run it on demand. */
   | 'failed'
 
 /** The scheduler's injectable seams — production passes none. */
@@ -416,9 +421,70 @@ const defaultTimer: NonNullable<FirstBenchmarkSchedulerDeps['timer']> = (fn, ms)
  */
 let attemptMemo: { db: Db; epoch: number | undefined } | null = null
 
+/**
+ * The MOVED-DRIVE NOTICE (§5 item 22 (a), owner decision 2026-09-08). `prepareFirstBenchmark`
+ * runs after every unlock and, on a drive that has changed computers, either restores this
+ * machine's stored entry into `lastBenchmark` (nothing is re-measured, so the figures on
+ * Performance are older than this launch) or owes a background measurement. The user was told
+ * NEITHER. Home now says which of the two happened.
+ *
+ * Why a latch and not a derivation: after the restore, `lastBenchmark` is this machine's and is
+ * indistinguishable from an ordinary same-machine state, so nothing in settings can answer "was
+ * this restored just now?". The latch is keyed like `attemptMemo` — the workspace DB handle AND
+ * the unlock epoch — so a lock/unlock retires it automatically, exactly as it retires the
+ * one-attempt memo; a new session makes its own decision.
+ *
+ * A `first-run` on a fresh workspace deliberately sets NOTHING: that is not a moved drive, and
+ * this notice is the moved-drive check's voice, not a general "no benchmark yet" banner.
+ */
+let movedDriveMemo: { db: Db; epoch: number | undefined; notice: MovedDriveNotice } | null = null
+
+/** Record (or clear) this session's moved-drive state. `null` retires it. */
+function setMovedDriveNotice(db: Db, epoch: number | undefined, notice: MovedDriveNotice | null): void {
+  movedDriveMemo = notice === null ? null : { db, epoch, notice }
+}
+
+/**
+ * What the scheduled measurement's outcome means for the notice. Only a `new-machine` decision
+ * ever reaches this with a `measuring` notice standing.
+ *   - the result landed (`ran`), or one for this computer was saved meanwhile → nothing to say;
+ *   - `deferred` → a continuation is still pending, so "a check is running" stays TRUE;
+ *   - `skipped-attempted` → a second scheduling in the same session; the first one's state stands;
+ *   - anything else (busy, failed, locked, quitting) → no check ran and none will this session,
+ *     so the notice must stop claiming one is running and offer the check instead.
+ */
+function settleMovedDriveNotice(ctx: AppContext, decision: FirstBenchmarkDecision, outcome: FirstBenchmarkOutcome): void {
+  if (decision.run !== 'new-machine') return
+  if (outcome === 'deferred' || outcome === 'skipped-attempted') return
+  let db: Db
+  try {
+    db = ctx.db
+  } catch {
+    return // locked: the memo's key no longer matches anyway, so the getter is already silent
+  }
+  if (!movedDriveMemo || movedDriveMemo.db !== db || movedDriveMemo.epoch !== decision.epoch) return
+  const done = outcome === 'ran' || outcome === 'skipped-already-current'
+  setMovedDriveNotice(db, decision.epoch, done ? null : { kind: 'owed' })
+}
+
 /** Test seam: forget the session's attempt (the fixtures call it in `beforeEach`). */
 export function resetFirstBenchmarkForTests(): void {
   attemptMemo = null
+  movedDriveMemo = null
+}
+
+/**
+ * The notice for THIS unlock session, or null when there is nothing to say — a same-machine
+ * launch, a fresh workspace, a lock since the decision, or a completed measurement. Never throws.
+ */
+export function movedDriveNotice(ctx: AppContext): MovedDriveNotice | null {
+  if (!movedDriveMemo) return null
+  try {
+    if (movedDriveMemo.db !== ctx.db) return null
+  } catch {
+    return null // locked
+  }
+  return movedDriveMemo.epoch === ctx.workspace.unlockEpoch?.() ? movedDriveMemo.notice : null
 }
 
 /**
@@ -457,6 +523,10 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
           ? 'First run: benchmarking hardware in the background once the model start settles'
           : 'Drive is on a new computer: benchmarking it in the background once the model start settles'
       )
+      // Item 22 (a): a new computer means a check IS running (or about to be) — Home says so and
+      // deliberately offers NO action for it, so the notice never asks for a check that is
+      // already under way. A `first-run` sets nothing: that is not a moved drive.
+      if (run === 'new-machine') setMovedDriveNotice(db, epoch, { kind: 'measuring' })
       return { run, attempted: false, epoch, hereKey: here }
     }
     if (settings.lastBenchmark === null) return owed('first-run')
@@ -500,6 +570,9 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
         profile: known.profile,
         recommendedModelId: known.recommendedModelId
       })
+      // Item 22 (a): NOTHING was re-measured here — the figures the user is about to read were
+      // measured on `known.ranAt`, possibly long ago. Home says so, and offers the check.
+      setMovedDriveNotice(db, epoch, { kind: 'restored', ranAt: known.ranAt })
       // The screen may already be open on the outgoing computer's result: tell it.
       notifyPerformanceChanged()
       return { run: null, attempted: false, epoch, hereKey: here }
@@ -576,8 +649,28 @@ async function runAfterSettled(
   return 'deferred'
 }
 
-/** The settlement re-checks, then the run. Never throws. */
+/**
+ * The settlement re-checks and the run, plus the moved-drive notice's terminal update (§5 item
+ * 22 (a)). Every terminal outcome of an owed measurement passes through here — the direct path
+ * and the deferred continuation alike — so the notice cannot be left claiming "a check is
+ * running" after the run was skipped as busy, failed, or found the workspace locked. The push
+ * is what makes an already-open Home correct itself without a remount.
+ */
 async function runOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision): Promise<FirstBenchmarkOutcome> {
+  const before = movedDriveMemo?.notice ?? null
+  const outcome = await runMeasurementOnceSettled(ctx, decision)
+  settleMovedDriveNotice(ctx, decision, outcome)
+  // Push only when the notice actually changed AND nothing else already announced it. A run that
+  // PERSISTED clears the notice at persist time and its own `finally` pushes after that, so its
+  // push already carries the cleared state — a second one would be churn. Every other terminal
+  // outcome either pushed before the notice moved (a failed run's idle bracket) or never pushed
+  // at all (the skips run no measurement), so this is their only signal.
+  if (outcome !== 'ran' && (movedDriveMemo?.notice ?? null) !== before) notifyPerformanceChanged()
+  return outcome
+}
+
+/** The settlement re-checks, then the run. Never throws. */
+async function runMeasurementOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision): Promise<FirstBenchmarkOutcome> {
   const label = decision.run === 'first-run' ? 'First-run benchmark' : 'New-computer benchmark'
   try {
     // The same three guards `startModelRuntime` applies after its long pre-start window
@@ -598,10 +691,10 @@ async function runOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision)
     // #185: the busy refusal lands here too (right after unlock, a doc task or the user's first
     // message can already own the model; a benchmark span means another run is in progress).
     // The same predicate `runAndPersistBenchmark` refuses on, read in the same tick, so the two
-    // never disagree. Not retried within the session (SD2); Diagnostics can run it on demand.
+    // never disagree. Not retried within the session (SD2); the Performance screen can run it on demand.
     const busy = modelBusyLane(ctx)
     if (busy) {
-      log.info(`${label} skipped: the model is busy (${busy}); re-run from Diagnostics`)
+      log.info(`${label} skipped: the model is busy (${busy}); re-run from the Performance screen`)
       return 'skipped-busy'
     }
     // A manual run, or another window's, may have supplied this computer's result while the
@@ -622,7 +715,7 @@ async function runOnceSettled(ctx: AppContext, decision: FirstBenchmarkDecision)
     // Unreachable in practice (the lane check above ran in the same tick) — kept so the outcome
     // can never misreport a refusal as a failure.
     if (err instanceof BenchmarkBusyError) return 'skipped-busy'
-    log.warn('First-run benchmark skipped or failed (re-run from Diagnostics)', String(err))
+    log.warn('First-run benchmark skipped or failed (re-run from the Performance screen)', String(err))
     return 'failed'
   }
 }
@@ -1056,6 +1149,13 @@ export function registerBenchmarkIpc(ctx: AppContext): void {
   ipcHandle(IPC.getPerformance, (): PerformanceSnapshot => {
     requireUnlocked()
     return buildPerformanceSnapshot(ctx)
+  })
+  // §5 item 22 (a). Session state only — no DB read, nothing persisted, and `movedDriveNotice`
+  // itself fail-closes to null on a locked workspace, so this stays a pure getter that a Home
+  // mount can call without caring about the unlock race.
+  ipcHandle(IPC.getMovedDriveNotice, (): MovedDriveNotice | null => {
+    requireUnlocked()
+    return movedDriveNotice(ctx)
   })
   ipcHandle(IPC.tryGpuAgain, (): Promise<AppSettings> => {
     requireUnlocked()

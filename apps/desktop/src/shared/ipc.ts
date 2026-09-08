@@ -245,6 +245,12 @@ export const IPC = {
   /** The Performance screen's one read: last result, per-machine history, observed figures. */
   getPerformance: 'performance:get',
   /**
+   * What the moved-drive check did for this unlock session (`MovedDriveNotice | null`) — Home's
+   * one-shot read, re-read on `performance:changed`. Session state, not settings: after a restore
+   * nothing in the store distinguishes "restored just now" from an ordinary same-machine launch.
+   */
+  getMovedDriveNotice: 'benchmark:moved-drive-notice',
+  /**
    * "Try GPU again": clears `gpuAutoDisabled`/`gpuLastError`,
    * invalidates the session probe cache, re-probes + persists, returns fresh settings.
    */

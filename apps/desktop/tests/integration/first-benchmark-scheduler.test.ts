@@ -45,6 +45,7 @@ import {
   BenchmarkBusyError,
   FIRST_BENCHMARK_SETTLE_TIMEOUT_MS,
   maybeRunFirstBenchmark,
+  movedDriveNotice,
   prepareFirstBenchmark,
   resetFirstBenchmarkForTests,
   runAndPersistBenchmark,
@@ -376,6 +377,120 @@ describe('prepareFirstBenchmark: the cheap half', () => {
   })
 })
 
+// §5 item 22 (a), owner decision 2026-09-08: the moved-drive check used to be entirely silent —
+// it either restored this computer's stored result (re-measuring NOTHING) or owed a background
+// measurement, and the user was told neither. `movedDriveNotice` is the session state Home reads.
+// The teeth here are the DISTINCTIONS: a restore is not a measurement, an owed run that never
+// happened is not a run in progress, and a same-machine launch says nothing at all.
+describe('movedDriveNotice: what the moved-drive check did (§5 item 22 (a))', () => {
+  it('says nothing on an ordinary same-machine launch, a fresh workspace, or a legacy blob', () => {
+    const root = freshRoot()
+    // A fresh workspace owes a FIRST RUN — which is not a moved drive, and must not borrow this
+    // notice: "this drive has not been used on this computer before" would be a lie about a
+    // workspace that has never been used anywhere.
+    const fresh = seededDb(root)
+    const freshCtx = ctxWith(root, fresh)
+    expect(prepareFirstBenchmark(freshCtx)).toMatchObject({ run: 'first-run' })
+    expect(movedDriveNotice(freshCtx)).toBeNull()
+
+    const same = seededDb(root)
+    updateSettings(same, { lastBenchmark: hereResult() })
+    const sameCtx = ctxWith(root, same)
+    prepareFirstBenchmark(sameCtx)
+    expect(movedDriveNotice(sameCtx)).toBeNull()
+
+    const legacy = seededDb(root)
+    updateSettings(legacy, { lastBenchmark: { profile: 'BALANCED' } as unknown as BenchmarkResult })
+    const legacyCtx = ctxWith(root, legacy)
+    prepareFirstBenchmark(legacyCtx)
+    expect(movedDriveNotice(legacyCtx)).toBeNull()
+  })
+
+  it('a RESTORE says so and carries the restored result’s own date — nothing was re-measured', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const foreign = result()
+    const known = hereResult()
+    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, known] })
+    const ctx = ctxWith(root, db)
+
+    expect(prepareFirstBenchmark(ctx)).toMatchObject({ run: null })
+    // The date is the RESTORED result's, not "now": that is the whole point — the figures the
+    // user is about to read on Performance were measured then.
+    expect(movedDriveNotice(ctx)).toEqual({ kind: 'restored', ranAt: known.ranAt })
+    expect(runBenchmarkSpy).not.toHaveBeenCalled()
+  })
+
+  it('a NEW computer says a check is running, and stops saying so once the run lands', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    movedToNewMachine(db)
+    const ctx = ctxWith(root, db)
+
+    const decision = prepareFirstBenchmark(ctx)
+    expect(decision).toMatchObject({ run: 'new-machine' })
+    // While it is owed AND running, the notice claims exactly that — and Home renders no action
+    // for this state, so it never asks for a check that is already under way.
+    expect(movedDriveNotice(ctx)).toEqual({ kind: 'measuring' })
+
+    await expect(scheduleFirstBenchmark(ctx, decision, Promise.resolve())).resolves.toBe('ran')
+    // A measured result for this computer exists now: there is nothing left to say.
+    expect(movedDriveNotice(ctx)).toBeNull()
+  })
+
+  it('an owed run that is SKIPPED stops claiming a check is running, and offers one instead', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    movedToNewMachine(db)
+    const ctx = ctxWith(root, db)
+
+    const decision = prepareFirstBenchmark(ctx)
+    expect(movedDriveNotice(ctx)).toEqual({ kind: 'measuring' })
+
+    // Another lane owns the model at settlement — the ordinary `skipped-busy` outcome. (A skill
+    // run, not a doc task: the doc-task span is answered through `ctx.docTasks`, which a bare
+    // fixture context does not wire.) Without this transition the notice would claim
+    // "a check is running in the background" for the rest of the session, and no check would
+    // ever run (SD2: one automatic attempt per unlock).
+    const release = ctx.runtime.occupancy.begin('skill-run')
+    await expect(scheduleFirstBenchmark(ctx, decision, Promise.resolve())).resolves.toBe('skipped-busy')
+    release()
+    expect(movedDriveNotice(ctx)).toEqual({ kind: 'owed' })
+    expect(runBenchmarkSpy).not.toHaveBeenCalled()
+  })
+
+  it('a manual check clears the notice, whichever state was standing', async () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const foreign = result()
+    const known = hereResult()
+    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, known] })
+    const ctx = ctxWith(root, db)
+
+    prepareFirstBenchmark(ctx)
+    expect(movedDriveNotice(ctx)).toMatchObject({ kind: 'restored' })
+
+    // This is what the notice's "Check this computer" leads to on the Performance screen.
+    await runAndPersistBenchmark(ctx)
+    expect(movedDriveNotice(ctx)).toBeNull()
+  })
+
+  it('is session-scoped: another workspace handle sees nothing', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const foreign = result()
+    updateSettings(db, { lastBenchmark: foreign, benchmarkHistory: [foreign, hereResult()] })
+    const ctx = ctxWith(root, db)
+    prepareFirstBenchmark(ctx)
+    expect(movedDriveNotice(ctx)).toMatchObject({ kind: 'restored' })
+
+    // A different DB handle is a different session (the key `attemptMemo` uses): the notice is
+    // not global state leaking across workspaces.
+    const other = seededDb(freshRoot())
+    expect(movedDriveNotice(ctxWith(root, other))).toBeNull()
+  })
+})
+
 describe('scheduleFirstBenchmark: runs at once when nothing is starting', () => {
   it('a fresh workspace with no active model: the auto-start settles immediately and the run lands', async () => {
     const root = freshRoot()
@@ -704,11 +819,15 @@ describe('SD2: one automatic attempt per unlock session', () => {
     await expect(scheduleFirstBenchmark(ctx, d1, Promise.resolve())).resolves.toBe('failed')
     expect(runBenchmarkSpy).toHaveBeenCalledTimes(1)
     expect(getSettings(db).lastBenchmark).toEqual(foreign)
-    // Four pushes: the once-per-session probe refresh at prepare (the EMPTY stamped probe of a
+    // Five pushes: the once-per-session probe refresh at prepare (the EMPTY stamped probe of a
     // root without a binary, PR #308 decision 6; no span held), then the failed run still
     // bracketed itself — the running push, the run's own probe write (held), the idle push
-    // after the release.
-    expect(spy.mock.results.map((r) => r.value)).toEqual([false, true, true, false])
+    // after the release — and finally the moved-drive notice's own (§5 item 22 (a)): the run's
+    // idle push fired BEFORE the notice moved from "measuring" to "owed", so without this fifth
+    // one an already-open Home would keep claiming a check is running. The span is released by
+    // then, hence `false`. A run that PERSISTS pushes no extra one (it clears the notice before
+    // its own idle push), which is why only this failure path grew a push.
+    expect(spy.mock.results.map((r) => r.value)).toEqual([false, true, true, false, false])
 
     // The same session asks again (a second unlock landing on an already-open workspace, any
     // later caller): no retry.

@@ -2510,6 +2510,30 @@ export interface LiveRecommendation {
 }
 
 /**
+ * What the moved-drive check did for THIS unlock session (`benchmark:movedDriveNotice`,
+ * §5 item 22 (a), owner decision 2026-09-08). The check runs after every unlock and used to be
+ * entirely silent; Home now reports it, and the two cases are DIFFERENT facts that must not
+ * share a message:
+ *
+ * - `restored` — this computer had a stored result and it was put back as the headline. **Nothing
+ *   was measured just now**, so what Performance shows was measured on `ranAt`, which may be
+ *   long ago. A check is worth offering.
+ * - `measuring` — this computer had no stored result, so a measurement is owed and runs in the
+ *   background (behind the model auto-start). A check must NOT be offered: one is already under
+ *   way, and asking for a second would be wrong.
+ * - `owed` — that background measurement will not happen this session after all: it was skipped
+ *   (the model was busy, the workspace locked, the app is quitting) or it failed. The honest
+ *   message is that this computer has not been checked, with the check offered.
+ *
+ * Null when there is nothing to say: a same-machine launch, a first run on a fresh workspace
+ * (not a moved drive), or a completed measurement. Session-scoped: a lock/unlock retires it.
+ */
+export type MovedDriveNotice =
+  | { kind: 'restored'; /** ISO-8601 `ranAt` of the restored result. */ ranAt: string }
+  | { kind: 'measuring' }
+  | { kind: 'owed' }
+
+/**
  * Everything the Performance screen renders, in one read (`performance:get`).
  * `current` is `settings.lastBenchmark`; `otherMachines` is the history minus the current
  * machine's entry; the `observed` figures come from real use (a finished chat answer, a

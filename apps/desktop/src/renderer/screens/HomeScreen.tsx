@@ -3,7 +3,13 @@ import { Badge, Banner, Button, Icon, type IconName } from '../components'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 import { localizeServerCopy } from '../lib/displayMap'
 import { useT } from '../i18n'
-import type { AppStatus, DocumentInfo, PreflightResult, RuntimeStatus } from '@shared/types'
+import type {
+  AppStatus,
+  DocumentInfo,
+  MovedDriveNotice,
+  PreflightResult,
+  RuntimeStatus
+} from '@shared/types'
 
 interface Props {
   onNavigate: (screen: string) => void
@@ -28,11 +34,13 @@ export const __homeScreenRenderCount = { value: 0 }
 
 export function HomeScreen({ onNavigate }: Props): JSX.Element {
   if (import.meta.env.DEV) __homeScreenRenderCount.value += 1
-  const { t, tCount } = useT()
+  const { t, tCount, lang } = useT()
   const [status, setStatus] = useState<AppStatus | null>(null)
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
   const [preflight, setPreflight] = useState<PreflightResult | null>(null)
+  /** §5 item 22 (a): what the moved-drive check did this session, or null when nothing to say. */
+  const [moved, setMoved] = useState<MovedDriveNotice | null>(null)
 
   useEffect(() => {
     let active = true
@@ -51,6 +59,29 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       .catch(() => active && setPreflight(null))
     return () => {
       active = false
+    }
+  }, [])
+
+  // The moved-drive notice (§5 item 22 (a), owner decision 2026-09-08). One-shot on mount like
+  // the reads above — and then re-read on `performance:changed`, the SAME push the Performance
+  // screen listens to, because the state this reports genuinely changes under an open Home: the
+  // background measurement it announces finishes (or is skipped), and the check the notice points
+  // at clears it. A read failure leaves the notice absent, never a half-message.
+  useEffect(() => {
+    let active = true
+    // `Promise.resolve(...)` rather than a bare `.then`: an older preload (or a test harness
+    // that does not stub this one) hands back `undefined`, and the honest reading of "I could
+    // not ask" is the same as the honest reading of "nothing to report" — no notice.
+    const read = (): void => {
+      Promise.resolve(window.api?.getMovedDriveNotice?.())
+        .then((n) => active && setMoved(n ?? null))
+        .catch(() => active && setMoved(null))
+    }
+    read()
+    const off = window.api?.onPerformanceChanged?.(read)
+    return () => {
+      active = false
+      off?.()
     }
   }, [])
 
@@ -84,6 +115,29 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const preflightNotes = preflight
     ? [...preflight.problems, ...(preflight.slowDriveWarning ? [preflight.slowDriveWarning] : [])]
     : []
+
+  // §5 item 22 (a). The three states say three DIFFERENT things, and the difference between the
+  // first two is the point of the notice: a restore re-measured NOTHING (the figures are dated),
+  // while a new computer has a measurement already under way. Only the two that need one get the
+  // action — offering "Check this computer" while a check is running would ask for a second.
+  // The action NAVIGATES to Performance, where the check lives: every Home button navigates
+  // ("Choose a model" opens AI Model rather than choosing one), and since item 22 (b) Performance
+  // is the one place the check is started from.
+  const movedNote = ((): { text: string; action: boolean } | null => {
+    if (!moved) return null
+    if (moved.kind === 'restored') {
+      const d = new Date(moved.ranAt)
+      return {
+        text: Number.isNaN(d.getTime())
+          ? t('home.moved.restoredUndated')
+          : t('home.moved.restored', { when: d.toLocaleDateString(lang) }),
+        action: true
+      }
+    }
+    return moved.kind === 'measuring'
+      ? { text: t('home.moved.measuring'), action: false }
+      : { text: t('home.moved.owed'), action: true }
+  })()
 
   const modelRunning = running
   const indexedCount = docs?.filter((d) => d.status === 'indexed').length ?? null
@@ -224,6 +278,25 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
               )
             })()}
           </p>
+        </Banner>
+      )}
+
+      {/* The moved-drive notice (§5 item 22 (a)). Informational, not a warning: nothing is
+          wrong — the drive simply changed computers, and the user is told which of the two
+          things the silent check did. `runPreflight`'s banner above is the precedent for a
+          friendly, non-blocking note on Home. */}
+      {movedNote && (
+        <Banner
+          tone="info"
+          action={
+            movedNote.action ? (
+              <Button size="sm" onClick={() => onNavigate('performance')}>
+                {t('perf.check')}
+              </Button>
+            ) : undefined
+          }
+        >
+          <p>{movedNote.text}</p>
         </Banner>
       )}
 

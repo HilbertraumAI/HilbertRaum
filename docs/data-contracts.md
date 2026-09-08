@@ -722,7 +722,19 @@ head's own weights + KV.
   graphicsBudgetMib(device)` — the picker's fit — with `needMb` = the unrounded weights and
   `budgetMb` = the card's total; `PlacementVerdictInput` in services/performance.ts carries
   `graphicsBudgetMb`, `manifest` and the base's `gpuName` for it),
-  `observed: { lastAnswer, lastModelLoad, lastChecksum }`). **P5 (M8 / DR1 / DR5), merged with
+  `observed: { lastAnswer, lastModelLoad, lastChecksum }`).
+  **`benchmark:moved-drive-notice`** (§5 item 22 (a), 2026-09-08) returns
+  **`MovedDriveNotice | null`** = `{ kind: 'restored'; ranAt: string } | { kind: 'measuring' } |
+  { kind: 'owed' }` — what the moved-drive check did for THIS unlock session, for Home's notice.
+  It is **session state, not settings**: after a restore, `lastBenchmark` is this machine's and
+  nothing persisted distinguishes "restored just now" from an ordinary same-machine launch, so
+  the memo is keyed like SD2's `attemptMemo` (workspace DB handle + unlock epoch) and a
+  lock/unlock retires it. `restored` = this computer's stored entry was put back and **nothing
+  was re-measured** (`ranAt` is that result's own date); `measuring` = a `new-machine` decision
+  whose background measurement is under way (Home offers NO check for it); `owed` = that
+  measurement ended in anything but a run. Null on a same-machine launch, a `first-run` on a
+  fresh workspace (not a moved drive), a completed check, or a locked workspace. Nothing is
+  written; the getter never throws. **P5 (M8 / DR1 / DR5), merged with
   PR #308 decisions 6/9**: `currentGpu` is `{ name, totalMb, useful } | null` — the ELIGIBLE
   probe's BUDGET device for the next start (`eligibleGpuProbe`, `shared/gpu-rules.ts`, then
   `nextStartMemoryFor` in services/performance.ts: the largest usable card, `useful` = the shared

@@ -176,6 +176,12 @@ from its first public `1.0.0` release onward.
   model running half on the card and half on the processor at about 30 words a second, and running
   entirely on the card at about 51. Nothing about your conversations changes: the context window is
   exactly as long as before, and the recommended model on each computer is re-estimated to match.
+- **Home now tells you when the drive has moved to a different computer.** Plugging the drive into
+  another machine used to be silent: the app quietly put back the figures it had stored for that
+  computer, or quietly started measuring it, and either way the Performance screen just showed
+  numbers. Home now says which happened — "the figures are from an earlier check on {date} —
+  nothing was measured just now", with a "Check this computer" button, or "a check is running in
+  the background", with no button, because one already is.
 - **The hardware benchmark card in Settings → Diagnostics is now just the raw figures.** The
   Performance screen answers what this computer can run and holds the button that checks it, so the
   card no longer repeats a "Run benchmark" button, the assigned profile, or a "Recommended model"
