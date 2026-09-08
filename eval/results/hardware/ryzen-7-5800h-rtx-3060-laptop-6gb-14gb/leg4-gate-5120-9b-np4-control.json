@@ -1,0 +1,363 @@
+{
+  "hw_slug": "ryzen-7-5800h-rtx-3060-laptop-6gb-14gb",
+  "leg": "4",
+  "variant": "gate-5120-9b-np4-control",
+  "model_id": "qwen3.5-9b-ud-q4kxl",
+  "model_file": "qwen3.5-9b-ud-q4kxl.gguf",
+  "model_bytes": 5966095584,
+  "runtime": "9849 (799fcc04a)",
+  "argv": "--host 127.0.0.1 --port 56754 --model <drive>\\models\\chat\\qwen3.5-9b-ud-q4kxl.gguf --ctx-size 8192 --threads 8 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 -np 4",
+  "extra_args": [
+    "-np",
+    "4"
+  ],
+  "ctx": 8192,
+  "threads": 8,
+  "physical_batch": 2048,
+  "before": {
+    "list_devices": "Available devices:\r\n  Vulkan0: AMD Radeon(TM) Graphics (8886 MiB, 8441 MiB free)\r\n  Vulkan1: NVIDIA GeForce RTX 3060 Laptop GPU (5994 MiB, 5226 MiB free)",
+    "nvidia_smi": {
+      "used": 216,
+      "total": 6144,
+      "free": 5779
+    },
+    "desktop": "idle, app closed; AC connected; CONTROL: -np 4 reproduces the pre-#386 four-slot launch of 2026-09-07",
+    "at": "2026-09-08T06:15:28.850Z"
+  },
+  "load_ms": 38602,
+  "after_load": {
+    "nvidia_smi": {
+      "used": 4042,
+      "total": 6144,
+      "free": 1953
+    },
+    "list_devices": "Available devices:\r\n  Vulkan0: AMD Radeon(TM) Graphics (8886 MiB, 8441 MiB free)\r\n  Vulkan1: NVIDIA GeForce RTX 3060 Laptop GPU (5994 MiB, 5226 MiB free)",
+    "at": "2026-09-08T06:16:09.887Z"
+  },
+  "prompt_tokens": 2015,
+  "request_ms": 17815,
+  "tokens_predicted": 33,
+  "timings": {
+    "cache_n": 0,
+    "prompt_n": 2015,
+    "prompt_ms": 4252.519,
+    "prompt_per_token_ms": 2.110431265508685,
+    "prompt_per_second": 473.8368011994773,
+    "predicted_n": 33,
+    "predicted_ms": 13141.257,
+    "predicted_per_token_ms": 398.2199090909091,
+    "predicted_per_second": 2.5111753008102653
+  },
+  "peak_nvidia_smi": {
+    "t": 1788848175074,
+    "used": 4128,
+    "total": 6144,
+    "free": 1867
+  },
+  "samples": [
+    {
+      "t": 1788848169997,
+      "used": 4043,
+      "total": 6144,
+      "free": 1952
+    },
+    {
+      "t": 1788848170998,
+      "used": 3618,
+      "total": 6144,
+      "free": 2377
+    },
+    {
+      "t": 1788848172029,
+      "used": 4108,
+      "total": 6144,
+      "free": 1887
+    },
+    {
+      "t": 1788848173047,
+      "used": 4108,
+      "total": 6144,
+      "free": 1887
+    },
+    {
+      "t": 1788848174059,
+      "used": 4124,
+      "total": 6144,
+      "free": 1871
+    },
+    {
+      "t": 1788848175074,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848176093,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848177125,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848178137,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848179156,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848180161,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848181209,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848182225,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848183232,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848184321,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848185328,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848186342,
+      "used": 4128,
+      "total": 6144,
+      "free": 1867
+    },
+    {
+      "t": 1788848187353,
+      "used": 4101,
+      "total": 6144,
+      "free": 1894
+    },
+    {
+      "t": 1788848187902,
+      "used": 4101,
+      "total": 6144,
+      "free": 1894
+    }
+  ],
+  "after_stop": {
+    "nvidia_smi": {
+      "used": 183,
+      "total": 6144,
+      "free": 5812
+    },
+    "list_devices": "Available devices:\r\n  Vulkan0: AMD Radeon(TM) Graphics (8886 MiB, 8441 MiB free)\r\n  Vulkan1: NVIDIA GeForce RTX 3060 Laptop GPU (5994 MiB, 5226 MiB free)",
+    "exit": {
+      "code": null,
+      "sig": "SIGTERM"
+    }
+  },
+  "ignore_eos": false,
+  "prompt_text_in_log": false,
+  "request_errors": [],
+  "fit": {
+    "offloaded": [
+      "0.15.434.322 I load_tensors: offloaded 18/33 layers to GPU"
+    ],
+    "buffers": [
+      "0.15.434.332 I load_tensors:   CPU_Mapped model buffer size =  2555.45 MiB",
+      "0.15.434.335 I load_tensors:      Vulkan1 model buffer size =  3123.80 MiB",
+      "0.27.002.843 I llama_context: Vulkan_Host  output buffer size =     3.79 MiB",
+      "0.27.005.111 I llama_kv_cache:        CPU KV buffer size =    96.00 MiB",
+      "0.27.059.165 I llama_kv_cache:    Vulkan1 KV buffer size =   160.00 MiB",
+      "0.27.561.878 I llama_memory_recurrent:        CPU RS buffer size =   100.50 MiB",
+      "0.27.689.540 I llama_memory_recurrent:    Vulkan1 RS buffer size =   100.50 MiB",
+      "0.28.789.334 I sched_reserve:    Vulkan1 compute buffer size =   424.03 MiB",
+      "0.28.789.348 I sched_reserve: Vulkan_Host compute buffer size =   104.44 MiB"
+    ],
+    "kv": [
+      "0.12.425.004 I print_info: n_ctx_train           = 262144",
+      "0.12.425.043 I print_info: n_swa                 = 0",
+      "0.12.425.045 I print_info: is_swa_any            = 0",
+      "0.12.425.089 I print_info: n_ctx_orig_yarn       = 262144",
+      "0.26.999.813 I llama_context: constructing llama_context",
+      "0.26.999.913 I llama_context: n_seq_max     = 4",
+      "0.26.999.916 I llama_context: n_ctx         = 8192",
+      "0.26.999.916 I llama_context: n_ctx_seq     = 2048",
+      "0.26.999.917 I llama_context: n_batch       = 2048",
+      "0.26.999.918 I llama_context: n_ubatch      = 2048",
+      "0.26.999.920 I llama_context: causal_attn   = 1",
+      "0.26.999.921 I llama_context: flash_attn    = auto",
+      "0.26.999.922 I llama_context: kv_unified    = false",
+      "0.26.999.931 I llama_context: freq_base     = 10000000.0",
+      "0.26.999.933 I llama_context: freq_scale    = 1",
+      "0.26.999.933 I llama_context: n_rs_seq      = 0",
+      "0.26.999.934 I llama_context: n_outputs_max = 4",
+      "0.26.999.936 I llama_context: n_ctx_seq (2048) < n_ctx_train (262144) -- the full capacity of the model will not be utilized",
+      "0.27.002.843 I llama_context: Vulkan_Host  output buffer size =     3.79 MiB",
+      "0.27.561.878 I llama_memory_recurrent:        CPU RS buffer size =   100.50 MiB",
+      "0.27.689.540 I llama_memory_recurrent:    Vulkan1 RS buffer size =   100.50 MiB",
+      "0.27.689.561 I llama_memory_recurrent: size =  201.00 MiB (     4 cells,  32 layers,  4 seqs  0 rs_seq), R (f32):    9.00 MiB, S (f32):  192.00 MiB",
+      "0.38.129.336 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 2048, kv_unified = 'false'",
+      "0.38.130.366 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 2048",
+      "0.38.130.375 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 2048",
+      "0.38.130.378 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 2048",
+      "0.38.130.379 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 2048",
+      "0.41.289.678 I slot   operator(): id  3 | task 0 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 2015",
+      "0.41.289.855 I slot   operator(): id  3 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)",
+      "0.44.244.274 I slot   operator(): id  3 | task 0 | cached n_tokens = 2011, memory_seq_rm [2011, end)"
+    ],
+    "fit": [
+      "# leg4-gate-5120-9b-np4-control — argv: <drive>\\runtime\\llama.cpp\\win\\llama-server.exe --host 127.0.0.1 --port 56754 --model <drive>\\models\\chat\\qwen3.5-9b-ud-q4kxl.gguf --ctx-size 8192 --threads 8 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 -np 4",
+      "0.00.622.126 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.622.136 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+      "0.00.622.441 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.02.950.606 I common_params_fit_impl: projected to use 5983 MiB of device memory vs. 5022 MiB of free device memory",
+      "0.02.951.009 I common_params_fit_impl: cannot meet free memory target of 1024 MiB, need to reduce device memory by 1984 MiB",
+      "0.02.951.013 I common_params_fit_impl: context size set by user to 8192 -> no change",
+      "0.02.951.016 I common_params_fit_impl: id=0, target=3998 MiB",
+      "0.04.832.602 I common_params_fit_impl: memory for test allocation by device:",
+      "0.04.832.628 I common_params_fit_impl: id=0, n_layer= 0, n_part= 0, overflow_type=4, mem=   423 MiB",
+      "0.04.832.633 I common_params_fit_impl: filling dense layers back-to-front:",
+      "0.06.742.603 I common_params_fit_impl: memory for test allocation by device:",
+      "0.06.742.613 I common_params_fit_impl: id=0, n_layer=33, n_part= 0, overflow_type=4, mem=  5983 MiB",
+      "0.06.742.619 I common_params_fit_impl: start filling device 0, delta=33",
+      "0.08.224.825 I common_params_fit_impl: memory for test allocation by device:",
+      "0.08.224.837 I common_params_fit_impl: id=0, n_layer=21, n_part= 0, overflow_type=4, mem=  4240 MiB",
+      "0.08.224.843 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=21",
+      "0.09.771.633 I common_params_fit_impl: memory for test allocation by device:",
+      "0.09.771.644 I common_params_fit_impl: id=0, n_layer=19, n_part= 0, overflow_type=4, mem=  4008 MiB",
+      "0.09.771.829 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=19",
+      "0.11.374.791 I common_params_fit_impl: memory for test allocation by device:",
+      "0.11.374.807 I common_params_fit_impl: id=0, n_layer=18, n_part= 0, overflow_type=4, mem=  3808 MiB",
+      "0.11.374.811 I common_params_fit_impl: set ngl_per_device[0].n_layer=18",
+      "0.11.374.814 I common_params_fit_impl:   - Vulkan1 (NVIDIA GeForce RTX 3060 Laptop GPU): 18 layers,   3808 MiB used,   1214 MiB free",
+      "0.11.374.825 I common_fit_params: successfully fit params to free device memory",
+      "0.11.374.837 I common_fit_params: fitting params to free memory took 1.56 seconds",
+      "0.38.129.336 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 2048, kv_unified = 'false'",
+      "0.38.132.581 I srv          init: idle slots will be saved to prompt cache upon starting a new task",
+      "0.38.252.562 I srv  update_slots: all slots are idle",
+      "0.58.687.061 I srv  update_slots: all slots are idle"
+    ],
+    "device": [
+      "0.00.580.608 I cmn  common_param: device_info:",
+      "0.00.584.669 I cmn  common_param:   - Vulkan0 : AMD Radeon(TM) Graphics (8886 MiB, 8441 MiB free)",
+      "0.00.600.284 I cmn  common_param:   - Vulkan1 : NVIDIA GeForce RTX 3060 Laptop GPU (5994 MiB, 5226 MiB free)",
+      "0.00.622.126 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.622.441 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.02.784.442 I common_memory_breakdown_print: |   - Vulkan1 (RTX 3060 Laptop GPU) |  5994 = 5022 + (5983 =  5133 +     457 +     392) +       -5011 |",
+      "0.02.950.606 I common_params_fit_impl: projected to use 5983 MiB of device memory vs. 5022 MiB of free device memory",
+      "0.02.951.009 I common_params_fit_impl: cannot meet free memory target of 1024 MiB, need to reduce device memory by 1984 MiB",
+      "0.04.647.263 I common_memory_breakdown_print: |   - Vulkan1 (RTX 3060 Laptop GPU) |  5994 = 5223 + ( 423 =     0 +       0 +     423) +         347 |",
+      "0.04.832.602 I common_params_fit_impl: memory for test allocation by device:",
+      "0.06.590.028 I common_memory_breakdown_print: |   - Vulkan1 (RTX 3060 Laptop GPU) |  5994 = 5022 + (5983 =  5133 +     457 +     392) +       -5011 |",
+      "0.06.742.603 I common_params_fit_impl: memory for test allocation by device:",
+      "0.06.742.619 I common_params_fit_impl: start filling device 0, delta=33",
+      "0.08.066.015 I common_memory_breakdown_print: |   - Vulkan1 (RTX 3060 Laptop GPU) |  5994 = 5097 + (4240 =  3527 +     285 +     427) +       -3344 |",
+      "0.08.224.825 I common_params_fit_impl: memory for test allocation by device:",
+      "0.08.224.843 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=21",
+      "0.09.629.386 I common_memory_breakdown_print: |   - Vulkan1 (RTX 3060 Laptop GPU) |  5994 = 5114 + (4008 =  3258 +     268 +     481) +       -3128 |",
+      "0.09.771.633 I common_params_fit_impl: memory for test allocation by device:",
+      "0.09.771.829 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=19",
+      "0.11.222.664 I common_memory_breakdown_print: |   - Vulkan1 (RTX 3060 Laptop GPU) |  5994 = 5122 + (3808 =  3123 +     260 +     424) +       -2937 |",
+      "0.11.374.791 I common_params_fit_impl: memory for test allocation by device:",
+      "0.11.374.811 I common_params_fit_impl: set ngl_per_device[0].n_layer=18",
+      "0.11.374.814 I common_params_fit_impl:   - Vulkan1 (NVIDIA GeForce RTX 3060 Laptop GPU): 18 layers,   3808 MiB used,   1214 MiB free",
+      "0.11.374.825 I common_fit_params: successfully fit params to free device memory",
+      "0.11.772.484 I llama_prepare_model_devices: using device Vulkan1 (NVIDIA GeForce RTX 3060 Laptop GPU) (0000:01:00.0) - 5223 MiB free",
+      "0.15.434.335 I load_tensors:      Vulkan1 model buffer size =  3123.80 MiB",
+      "0.27.059.165 I llama_kv_cache:    Vulkan1 KV buffer size =   160.00 MiB",
+      "0.27.689.540 I llama_memory_recurrent:    Vulkan1 RS buffer size =   100.50 MiB",
+      "0.27.839.256 W sched_reserve: layer 0 is assigned to device CPU but the fused Gated Delta Net tensor is assigned to device Vulkan1 (usually due to missing support)",
+      "0.28.789.334 I sched_reserve:    Vulkan1 compute buffer size =   424.03 MiB"
+    ]
+  },
+  "excerpt": [
+    "# leg4-gate-5120-9b-np4-control — argv: <drive>\\runtime\\llama.cpp\\win\\llama-server.exe --host 127.0.0.1 --port 56754 --model <drive>\\models\\chat\\qwen3.5-9b-ud-q4kxl.gguf --ctx-size 8192 --threads 8 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 -np 4",
+    "0.00.580.608 I cmn  common_param: device_info:",
+    "0.00.622.126 I cmn  common_init_: fitting params to device memory ...",
+    "0.00.622.136 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+    "0.00.622.441 I common_params_fit_impl: getting device memory data for initial parameters:",
+    "0.02.950.606 I common_params_fit_impl: projected to use 5983 MiB of device memory vs. 5022 MiB of free device memory",
+    "0.02.951.009 I common_params_fit_impl: cannot meet free memory target of 1024 MiB, need to reduce device memory by 1984 MiB",
+    "0.02.951.013 I common_params_fit_impl: context size set by user to 8192 -> no change",
+    "0.02.951.016 I common_params_fit_impl: id=0, target=3998 MiB",
+    "0.04.832.602 I common_params_fit_impl: memory for test allocation by device:",
+    "0.04.832.628 I common_params_fit_impl: id=0, n_layer= 0, n_part= 0, overflow_type=4, mem=   423 MiB",
+    "0.04.832.633 I common_params_fit_impl: filling dense layers back-to-front:",
+    "0.06.742.603 I common_params_fit_impl: memory for test allocation by device:",
+    "0.06.742.613 I common_params_fit_impl: id=0, n_layer=33, n_part= 0, overflow_type=4, mem=  5983 MiB",
+    "0.06.742.619 I common_params_fit_impl: start filling device 0, delta=33",
+    "0.08.224.825 I common_params_fit_impl: memory for test allocation by device:",
+    "0.08.224.837 I common_params_fit_impl: id=0, n_layer=21, n_part= 0, overflow_type=4, mem=  4240 MiB",
+    "0.08.224.843 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=21",
+    "0.09.771.633 I common_params_fit_impl: memory for test allocation by device:",
+    "0.09.771.644 I common_params_fit_impl: id=0, n_layer=19, n_part= 0, overflow_type=4, mem=  4008 MiB",
+    "0.09.771.829 I common_params_fit_impl: set ngl_per_device_high[0].n_layer=19",
+    "0.11.374.791 I common_params_fit_impl: memory for test allocation by device:",
+    "0.11.374.807 I common_params_fit_impl: id=0, n_layer=18, n_part= 0, overflow_type=4, mem=  3808 MiB",
+    "0.11.374.811 I common_params_fit_impl: set ngl_per_device[0].n_layer=18",
+    "0.11.374.814 I common_params_fit_impl:   - Vulkan1 (NVIDIA GeForce RTX 3060 Laptop GPU): 18 layers,   3808 MiB used,   1214 MiB free",
+    "0.11.374.825 I common_fit_params: successfully fit params to free device memory",
+    "0.11.374.837 I common_fit_params: fitting params to free memory took 1.56 seconds",
+    "0.11.772.484 I llama_prepare_model_devices: using device Vulkan1 (NVIDIA GeForce RTX 3060 Laptop GPU) (0000:01:00.0) - 5223 MiB free",
+    "0.12.425.004 I print_info: n_ctx_train           = 262144",
+    "0.12.425.043 I print_info: n_swa                 = 0",
+    "0.12.425.045 I print_info: is_swa_any            = 0",
+    "0.12.425.089 I print_info: n_ctx_orig_yarn       = 262144",
+    "0.12.425.128 I load_tensors: loading model tensors, this can take a while... (mmap = true, direct_io = false)",
+    "0.15.434.310 I load_tensors: offloading output layer to GPU",
+    "0.15.434.321 I load_tensors: offloading 17 repeating layers to GPU",
+    "0.15.434.322 I load_tensors: offloaded 18/33 layers to GPU",
+    "0.15.434.332 I load_tensors:   CPU_Mapped model buffer size =  2555.45 MiB",
+    "0.15.434.335 I load_tensors:      Vulkan1 model buffer size =  3123.80 MiB",
+    "0.26.999.916 I llama_context: n_ctx         = 8192",
+    "0.26.999.916 I llama_context: n_ctx_seq     = 2048",
+    "0.26.999.922 I llama_context: kv_unified    = false",
+    "0.26.999.936 I llama_context: n_ctx_seq (2048) < n_ctx_train (262144) -- the full capacity of the model will not be utilized",
+    "0.27.002.843 I llama_context: Vulkan_Host  output buffer size =     3.79 MiB",
+    "0.27.005.111 I llama_kv_cache:        CPU KV buffer size =    96.00 MiB",
+    "0.27.059.165 I llama_kv_cache:    Vulkan1 KV buffer size =   160.00 MiB",
+    "0.27.561.878 I llama_memory_recurrent:        CPU RS buffer size =   100.50 MiB",
+    "0.27.689.540 I llama_memory_recurrent:    Vulkan1 RS buffer size =   100.50 MiB",
+    "0.27.689.561 I llama_memory_recurrent: size =  201.00 MiB (     4 cells,  32 layers,  4 seqs  0 rs_seq), R (f32):    9.00 MiB, S (f32):  192.00 MiB",
+    "0.27.839.256 W sched_reserve: layer 0 is assigned to device CPU but the fused Gated Delta Net tensor is assigned to device Vulkan1 (usually due to missing support)",
+    "0.28.789.334 I sched_reserve:    Vulkan1 compute buffer size =   424.03 MiB",
+    "0.28.789.348 I sched_reserve: Vulkan_Host compute buffer size =   104.44 MiB",
+    "0.38.129.336 I srv    load_model: initializing, n_slots = 4, n_ctx_slot = 2048, kv_unified = 'false'",
+    "0.38.130.366 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 2048",
+    "0.38.130.375 I slot   load_model: id  1 | task -1 | new slot, n_ctx = 2048",
+    "0.38.130.378 I slot   load_model: id  2 | task -1 | new slot, n_ctx = 2048",
+    "0.38.130.379 I slot   load_model: id  3 | task -1 | new slot, n_ctx = 2048",
+    "0.38.132.581 I srv          init: idle slots will be saved to prompt cache upon starting a new task",
+    "0.38.252.562 I srv  update_slots: all slots are idle",
+    "0.41.289.678 I slot   operator(): id  3 | task 0 | new prompt, n_ctx_slot = 2048, n_keep = 0, task.n_tokens = 2015",
+    "0.58.687.061 I srv  update_slots: all slots are idle"
+  ],
+  "app_report": null
+}

@@ -207,9 +207,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.5-9b-ud-q4kxl': 545.62, // leg 5, 33/33
     'gemma4-12b-it-qat-q4': 787.5, // leg 3, 49/49
     'qwen3.8-27b-ud-q4km': 682.03, // leg 7, 66/66
-    'qwen3.8-27b-ud-q5km': 682.03 // leg 1 `-np 1`, 66/66
+    'qwen3.8-27b-ud-q5km': 682.03, // leg 1 `-np 1`, 66/66
+    'qwen3.5-4b-ud-q4kxl': 497.31 // #391 leg 4 follow-up (b), 33/33 on the RTX 3060 Laptop
   }
-  it('pins the five measured host_mapped_weights_mib values, and that no other manifest carries the field (#321)', () => {
+  it('pins the six measured host_mapped_weights_mib values, and that no other manifest carries the field (#321)', () => {
     const all = committedManifests()
     const byId = Object.fromEntries(all.map((m) => [m.id, m]))
     for (const [id, mib] of Object.entries(HOST_MAPPED_MIB)) {
@@ -244,10 +245,23 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     expect(estimateGraphicsNeedMib(e2b)).toBeGreaterThan(1998)
     expect(estimateGraphicsNeedMib(e2b) / 1998).toBeLessThan(1.2)
     // A ranked model with no measured figure keeps the whole file as its base — the conservative
-    // direction, and the reason a missing field is safe.
+    // direction, and the reason a missing field is safe. (This example used to be the 4B; it
+    // carries a measured 497.31 since #391 leg 4 follow-up (b), so the 8B stands in for it.)
+    const noFigure = byId['qwen3-8b-instruct-q4']
+    expect(noFigure.hostMappedWeightsMib).toBeUndefined()
+    expect(estimateGraphicsNeedMib(noFigure)).toBeCloseTo(
+      weightsMib(noFigure) * 1.15 + (noFigure.estimatedContextCacheGib ?? 0.5) * 1024 + 1024,
+      6
+    )
+    // And the 4B, now that it has one: the measurement moved its need by 497.31 × 1.15 = 571.9 MiB.
     const fourB = byId['qwen3.5-4b-ud-q4kxl']
-    expect(fourB.hostMappedWeightsMib).toBeUndefined()
-    expect(estimateGraphicsNeedMib(fourB)).toBeCloseTo(weightsMib(fourB) * 1.15 + 0.2 * 1024 + 1024, 6)
+    expect(fourB.hostMappedWeightsMib).toBe(497.31)
+    expect(estimateGraphicsNeedMib(fourB)).toBeCloseTo((weightsMib(fourB) - 497.31) * 1.15 + 0.2 * 1024 + 1024, 6)
+    expect(weightsMib(fourB) * 1.15 + 0.2 * 1024 + 1024 - estimateGraphicsNeedMib(fourB)).toBeCloseTo(497.31 * 1.15, 6)
+    // Measured on the RTX 3060 Laptop: llama.cpp projected 3,261 MiB at 33/33. Conservative still,
+    // but 1.18× rather than the 1.35× the whole-file base gave.
+    expect(estimateGraphicsNeedMib(fourB)).toBeGreaterThan(3261)
+    expect(estimateGraphicsNeedMib(fourB) / 3261).toBeLessThan(1.2)
   })
 
   it('pins the seven estimated_context_cache_gib values, and that no other manifest carries the field', () => {
@@ -267,7 +281,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   const THRESHOLD_MIB: Record<string, number> = {
     'qwen3-4b-instruct-2507-q4': 4278,
     'qwen3-4b-instruct-q4': 4278,
-    'qwen3.5-4b-ud-q4kxl': 4410,
+    'qwen3.5-4b-ud-q4kxl': 3838, // was 4,410 until its host-mapped 497.31 was measured (#391)
     'gemma4-e2b-it-qat-q4': 2271,
     'qwen3-8b-instruct-q4': 7020,
     'ministral3-8b-instruct-2512-q4': 7239,
@@ -473,16 +487,19 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
       // NOT mean: a 4 GB card still never becomes the budget device, because `USABLE_VRAM_MB` is
       // 5,120. #321's stated reason for that floor ("nothing ranked fits 4,512 anyway") no longer
       // holds on the arithmetic; the floor was KEPT on a restated, measured reason instead (#321,
-      // 2026-09-08) — the E2B is the only ranked model that fits such a card, so admitting it
-      // would star the smallest model at every RAM size with no measurement behind the demotion.
-      expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBe('gemma4-e2b-it-qat-q4')
+      // 2026-09-08).
+      // SINCE #391 (leg 4 follow-up (b), 2026-09-08) the pick here is the **4B**, not the E2B:
+      // its measured host-mapped 497.31 MiB dropped its need 4,410 → 3,838, which 4,000 now
+      // clears. See the floor test below — this is the half of the restated reason that no
+      // longer holds, and it is flagged there for the owner rather than papered over.
+      expect(onCard(chat, 4000, ram), `ram=${ram} 4,000`).toBe('qwen3.5-4b-ud-q4kxl')
       expect(onCard(chat, 2270, ram), `ram=${ram} 2,270`).toBeNull()
     }
-    // With KNOWN RAM, 4,000 MiB now has a ranked fit (the E2B at 2,271) so rule C takes it rather
-    // than falling back — the RAM pick at 16 GB is the 9B, which does not fit, so this is the
-    // ordinary demotion, not the no-fit path.
+    // With KNOWN RAM, 4,000 MiB has a ranked fit so rule C takes it rather than falling back —
+    // the RAM pick at 16 GB is the 9B, which does not fit, so this is the ordinary demotion, not
+    // the no-fit path. Since #391 the demotion lands on the 4B (3,838) rather than the E2B.
     expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
-    expect(onCard(chat, 4000, 16)).toBe('gemma4-e2b-it-qat-q4')
+    expect(onCard(chat, 4000, 16)).toBe('qwen3.5-4b-ud-q4kxl')
     // The no-fit fallback itself is unchanged, just reached lower down: under the smallest ranked
     // threshold nothing is eligible, so the RAM pick stands, partially offloaded — and never the
     // rank-0 2B (#326), whose 2,962 MiB would otherwise fit here.
@@ -496,18 +513,32 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // not the constant (`gpu-rules.test.ts` pins the constant). Record: §6.6 N8 "Why 5,120 —
   // RESTATED". Both budget forms a 4 GB card can produce are covered: the probe's free figure
   // (~3,900) and the no-free-figure fallback (total − 1,024 = 3,072).
-  it('a 4 GB card would star the smallest ranked model at every RAM size — the reason the floor stays (#321)', () => {
+  // ⚠ WEAKENED BY MEASUREMENT, 2026-09-08 (#391 leg 4 follow-up (b)) — OWNER DECISION PENDING.
+  // The 4B's measured host-mapped 497.31 MiB moved its need 4,410 → 3,838, so it now fits the
+  // PROBE-FREE budget form (~3,900) that a 4 GB card produces. The "smallest ranked model at
+  // every RAM size" argument therefore survives only at the no-free-figure form (3,072), where
+  // the E2B is still alone. Nothing here is a reason to move `USABLE_VRAM_MB` on its own — the
+  // floor is unchanged and `gpu-rules.test.ts` still pins 5,120 — but the evidence a lowering
+  // would have to argue against is now half of what it was, and that is the owner's call, not a
+  // test's. Recorded so the next reader sees the erosion rather than a quietly re-pinned literal.
+  it('a 4 GB card: the smallest-ranked-model argument now holds only for the 3,072 budget form (#321, #391)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
-    for (const budget of [3900, 3072]) {
-      // The E2B is the ONLY ranked model that fits; the 4B, the next one up, needs 4,410.
-      const rankedFits = chat
-        .filter((m) => m.recommendationRank > 0 && fitsGraphicsMemory(m, budget))
-        .map((m) => m.id)
-      expect(rankedFits, `budget=${budget}`).toEqual(['gemma4-e2b-it-qat-q4'])
-      // So every RAM size collapses to it — including the two the decision names.
-      for (const ram of [8, 12, 16, 24, 32, 64]) {
-        expect(onCard(chat, budget, ram), `budget=${budget} ram=${ram}`).toBe('gemma4-e2b-it-qat-q4')
-      }
+    const fits = (budget: number) =>
+      chat.filter((m) => m.recommendationRank > 0 && fitsGraphicsMemory(m, budget)).map((m) => m.id)
+    // The no-free-figure form (total − 1,024): the E2B is still the ONLY ranked model that fits,
+    // so every RAM size still collapses to it — the decision's original shape, intact.
+    expect(fits(3072)).toEqual(['gemma4-e2b-it-qat-q4'])
+    for (const ram of [8, 12, 16, 24, 32, 64]) {
+      expect(onCard(chat, 3072, ram), `budget=3072 ram=${ram}`).toBe('gemma4-e2b-it-qat-q4')
+    }
+    // The probe's free-figure form: the 4B (3,838) now fits beside the E2B, so a 4 GB card would
+    // star the 4B — a real model, measured — rather than collapsing to the smallest one.
+    expect(fits(3900)).toEqual(['gemma4-e2b-it-qat-q4', 'qwen3.5-4b-ud-q4kxl'])
+    // Rule C only ever demotes, never promotes above the RAM pick, so RAM 12 keeps the E2B (its
+    // RAM pick already) while every larger RAM size now stops at the 4B instead of the E2B.
+    expect(onCard(chat, 3900, 12), 'budget=3900 ram=12').toBe('gemma4-e2b-it-qat-q4')
+    for (const ram of [8, 16, 24, 32, 64]) {
+      expect(onCard(chat, 3900, ram), `budget=3900 ram=${ram}`).toBe('qwen3.5-4b-ud-q4kxl')
     }
     // What that demotes, on the RAM picker the card path would override.
     expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
