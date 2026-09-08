@@ -30,11 +30,24 @@ recommended_context_tokens: 4096
 # 128 MiB full-attention KV (8 layers x 4 heads x 256), counted ONCE -- it is sized in CELLS from
 # --ctx-size and does not change with the slot count -- plus 1 x 48 MiB recurrent state instead of
 # 4 x 48 (the recurrent state is the only per-SEQUENCE term) = 176 MiB = 0.172 GiB -> 0.2 (no SWA
-# cache; no MTP -- this manifest does not opt into speculative_decoding). Not started on hardware
-# for #318, so this is the derivation, not a measurement; the 9B's near-identical derivation was
-# confirmed within 2 MiB against a real start. The picker's graphics-fit cache term
+# cache; no MTP -- this manifest does not opt into speculative_decoding).
+# CONFIRMED ON HARDWARE 2026-09-08 (issue #391, leg 4 follow-up (b); it was a derivation only
+# until then): a 33/33 start at --ctx-size 4096 with -np 1 logged KV `128.00 MiB (4096 cells,
+# 8 layers, 1/1 seqs)` -- 128 MiB exactly as derived -- and recurrent `50.25 MiB (1 cells,
+# 32 layers, 1 seqs)`, i.e. 178.25 MiB against the 176 MiB derived, within 2.25 MiB. Same
+# agreement the 9B's near-identical derivation reached. The picker's graphics-fit cache term
 # (model-benchmarks.md §6.6, PR #308 audit decision 11, amended 2026-09-07 by #319).
 estimated_context_cache_gib: 0.2
+# Weights that stay HOST-mapped even on a full offload (the embedding/output tensors): the picker
+# subtracts them before applying its 15 % working share, because the runtime buffers that share
+# stands for scale with what is actually ON the card (issue #321, owner decision 2026-09-07;
+# model-benchmarks.md §6.6 point 3).
+# MEASURED, not derived — the app has no GGUF-header parser. Read off the
+# `CPU_Mapped model buffer size` line of a FULL-OFFLOAD start (33/33 layers):
+# eval/results/hardware/ryzen-7-5800h-rtx-3060-laptop-6gb-14gb/leg4-gate-5120-4b.stderr.log
+# (issue #391, leg 4 follow-up (b), 2026-09-08). A PARTIAL offload inflates this line with the
+# layers that did not fit, so only full-offload starts count.
+host_mapped_weights_mib: 497.31
 # Qwen3.5 operates in thinking mode by default (emits <think>...</think>), so the chat
 # template honours `enable_thinking` → the Deep answer mode applies (like the original 4B).
 supports_thinking_mode: true
