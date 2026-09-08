@@ -1181,3 +1181,36 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
     expect(outcomes.find((o) => o.packId === 'pack-expand')?.status).toBe('searched')
   })
 })
+
+// ---- #340 L2 revisit (#416, 2026-09-08): the shipped per-pack article cap ---------------------
+describe('the shipped per-pack article cap (#340 L2, revisited 2026-09-08 on #416)', () => {
+  it('ARTICLES_PER_PACK is 5, and 8 was measured to move nothing', () => {
+    // The 2026-09-06 ruling kept 5 and said "revisit with the same fixture after L3-b". L3-b
+    // landed (D-Z20) and HALF the ruling's reason went void — "a longer page only adds /raw
+    // reads on the stall-prone route" stopped being true at D-Z22 (Range-first reads). The
+    // revisit therefore settled it on retrieval quality alone, against the real kiwix-serve
+    // 3.8.1 and the fixture's own pack on the K: Kit drive (rag-design §17, the L2 REVISIT
+    // paragraph; evidence ai_drive-archive/zim-wave-2026-09/evidence/l2-revisit-2026-09-08/):
+    //
+    //   • the constant is BOTH the /search pageLength and the fetch cap, so 8 can only help if
+    //     an expected title sits at rank 6-8 — 0 of the fixture's 17 questions does, while
+    //     16 of 17 pages DID return more than 5 hits;
+    //   • through the real arm with the drive-bundled 4B: 9/9 core and 5/6 list at BOTH caps.
+    //
+    // Raising this buys /raw reads, not answers. The surviving reason for 5 is the one that was
+    // always the stronger half: one selected pack already gets the whole candidate quota.
+    expect(ARTICLES_PER_PACK).toBe(5)
+    // The cap bounds FETCHING only; admission is the quota’s job. The plain search alone tops
+    // out just UNDER the ceiling (5 x 4 = 20 of 24), but the expansion’s two articles carry it
+    // over — and that is what was measured: a single selected pack reached 24 of 24 in three of
+    // the five recorded runs AT CAP 5 (21 in the other two). So the articles a cap of 8 adds
+    // compete for slots the pack already fills, and the search-rank leg says what is in them:
+    // nothing the fixture wanted.
+    expect(ARTICLES_PER_PACK * CHUNKS_PER_ARTICLE).toBeLessThan(MAX_EXTERNAL_CANDIDATES)
+    expect(
+      ARTICLES_PER_PACK * CHUNKS_PER_ARTICLE + EXPANSION_ARTICLES_PER_PACK * LIST_ARTICLE_CHUNKS
+    ).toBeGreaterThanOrEqual(MAX_EXTERNAL_CANDIDATES)
+    // The expansion's own small cap is separate and is NOT bounded by this one (D-Z20).
+    expect(EXPANSION_ARTICLES_PER_PACK).toBeLessThan(ARTICLES_PER_PACK)
+  })
+})

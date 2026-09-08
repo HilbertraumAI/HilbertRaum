@@ -2872,7 +2872,15 @@ offline article viewer. Files are registered in place, never copied.
   and the "… pro Kopf" row is the one wanted). **Measured through the arm with the real tools and
   the default 4B chat model on a CPU (2026-09-07, the manual smoke with HILBERTRAUM_ZIM_MODEL): the
   list group 5/6 hit@5 (2/6 before), the D-Z18 nine still 9/9, 2.4–5.3 s per expansion call; the
-  smoke asserts the list group at LIST_GROUP_MIN_HITS = 4 whenever a model is configured.** `parseExpansion` then sanitises the reply against
+  smoke asserts the list group at LIST_GROUP_MIN_HITS = 4 whenever a model is configured.**
+  **Re-measured 2026-09-08 (#416's L2 revisit, same machine, same runtime, same model): 5/6 and
+  9/9 reproduce exactly once the model is WARM (2.5–4.2 s per call) — but on the FIRST
+  pack-scoped ask after a model start the call can exceed its whole `EXPAND_TIMEOUT_MS` budget
+  and resolve null. One recorded run had all six list questions time out at 6002–6016 ms, and
+  the group fell to the plain-arm 2/6. The arm degrades exactly as designed (no expansion, plain
+  search, nothing thrown), so this is a quality cliff on the first ask, not a correctness defect
+  — tracked on its own issue; evidence
+  `ai_drive-archive/zim-wave-2026-09/evidence/l2-revisit-2026-09-08/` row 4.** `parseExpansion` then sanitises the reply against
   the SAME lists `query-rewrite.ts` uses (`isContentWord`, `TOKEN_RE`): a concept survives only
   when it is a content word (no function or frame word — "liste" itself is a German frame word
   and never survives, even when the model offers it), not already in the plain pattern
@@ -3198,6 +3206,37 @@ the follow-up wave through `packs:status.excluded` (D-Z16, #340); the per-answer
 built, and why.** *L2* — `ARTICLES_PER_PACK` stays 5 for every pack: the measured failures of
 the list shape were not helped by hits 6–10, and one selected pack already gets the whole
 24-candidate quota, so a longer page only adds `/raw` reads on the stall-prone route (D-Z13).
+
+  **L2 REVISIT — done 2026-09-08 (#416), the constant is UNCHANGED and its reason is RESTATED.**
+  The ruling itself said "revisit with the same fixture after L3-b"; L3-b landed as D-Z20, and
+  **half the rationale above is void** — "only adds `/raw` reads on the stall-prone route" stopped
+  being true when D-Z22 made every article read Range-first. So the revisit had to settle it on
+  retrieval quality alone, and it does. Measured on the K: Kit drive against the fixture's own
+  pack (`wikipedia_de_climate-change_nopic_2026-07`), i9-14900K, pinned 3.8.1, evidence
+  `ai_drive-archive/zim-wave-2026-09/evidence/l2-revisit-2026-09-08/`:
+  - **Search ranks (decisive, model-free).** The constant is BOTH the `/search` `pageLength` and
+    the fetch cap, so 8 can only help if an expected title sits at rank 6–8. Asking the real
+    server for 8 hits per stage, replaying the shipped rewrite's three stages: **0 of 17
+    questions** have an expected title at rank 6, 7 or 8 — hit@5 and hit@8 are both 11/15
+    answerable, every core hit lands at rank 1 or 2, and every miss has no expected title
+    anywhere in the page. **16 of 17 pages did return more than 5 hits**, so this is not "the
+    search had nothing more to give".
+  - **Through the real arm, at 5 and at 8**, with a real model so the list group goes through the
+    D-Z20 expansion: `qwen3-4b-instruct-q4` (the `bundled_on_preconfigured_drive` 4B the D-Z20
+    record means) gives **9/9 core and 5/6 list at BOTH caps** — reproducing the record's figure
+    exactly; `qwen3.5-4b-ud-q4kxl` gives 9/9 and 4/6 at both caps, with byte-identical
+    per-question top-5 title lists.
+  Note what the second leg does NOT say: the extra articles are not inert. The plain search alone
+  tops out just under the ceiling (5 × `CHUNKS_PER_ARTICLE` = 20 of 24) and the expansion's two
+  articles carry it over, so a single selected pack **already reaches 24 of 24** — measured in
+  three of the five recorded runs at cap 5, 21 in the other two. A cap of 8 therefore does produce
+  more candidates; they simply compete for slots the pack already fills, and the first leg says
+  what is in them: nothing any fixture question was looking for.
+  So the surviving reason for 5 is the one that was always the stronger half — **one selected pack
+  already gets the whole 24-candidate quota** — and a longer page buys `/raw` reads, not answers.
+  `ARTICLES_PER_PACK` is pinned at 5 with this measurement in `zim-arm.test.ts` ("the shipped
+  per-pack article cap"). **Caveat on scope:** one pack, one 27 MB archive — the only ZIM on K:.
+  A full Wikipedia is a different rank distribution, and #417 is what would put one on a drive.
 *L1* — the title-index `/suggest` arm stays unbuilt and an index-less pack keeps "not searched:
 no full-text index": alone it is prefix-bound (no title match for "österreichische
 Wissenschaftler"); paired with a synthesised "Liste …" prefix it is part of L3-b. *L3-b* —

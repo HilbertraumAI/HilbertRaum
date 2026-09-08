@@ -730,7 +730,7 @@ open round's item stays the last block of §5.)
     reused verbatim (no drift, no second German string); the review boundary is structural (`EvidencePane` never mounts `SourcesDisclosure`). Doc gap closed on the
     way past: the SHIPPED D-Z21 viewer button had never reached user-guide §7b or the changelog — both now cover the pair. **Still OPEN, one issue each, both
     unruled:** **#416** C2 link expansion — unblocked by D-Z22 (the defect-route traffic argument is void); needs the owner’s scope ruling and an `<a href>`-preserving
-    converter (`html.ts` drops targets today), and carries the due **L2 revisit** (keep 5 "revisit after L3-b"; the 5-vs-8 replay of `quality-questions-de.json` on K:).
+    converter (`html.ts` drops targets today). Its **L2 revisit is DONE 2026-09-08** — keep 5, measured (rag-design §17 "L2 REVISIT"); side finding → the cold-expansion issue.
     **#417** C4 acquisition — gate satisfied by D-Z19; the catalog-source ruling (library.kiwix.org OPDS only vs a curated list) blocks the rest.
     (c) **Evidence identity for archive citations — CLOSED.** Identity resolution: P2, record rag-design D-Z5; the "Open article from a review" residual: closed P6, record design-guidelines §11.15.
     (d) **Manual acceptance leg — CLOSED 2026-09-06:** the airplane-mode demo (the real K: drive, `wikipedia_de_*` packs + kiwix-tools 3.8.1, network off) passed as T19 (viii); record rag-design §17 "Real acceptance".
