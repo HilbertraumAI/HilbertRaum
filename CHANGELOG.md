@@ -395,6 +395,11 @@ from its first public `1.0.0` release onward.
   closed the app). Those files are now shipped, and a test keeps the list complete. Verified on a
   Windows build with the German and English language files; if recognition still cannot start on
   your machine, the app now tells you instead of closing.
+- **Starting another model while the automatic performance check is running no longer loses the
+  check's speed reading silently.** Pressing "Use model" beside a running check stops the model the
+  check is measuring, so the speed figure was simply absent from the result with nothing to explain
+  it. The check now says the speed was skipped because the model was busy; the rating and the
+  recommended model still come from RAM, processor and drive speed.
 
 ### Changed
 
