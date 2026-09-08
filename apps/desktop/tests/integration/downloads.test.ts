@@ -11,6 +11,11 @@ import {
 } from '../../src/main/services/downloads'
 import { verifyDownloadedFile, type FetchFn } from '../../src/main/services/assets'
 import { weightPath, mmprojPath, type HashStore } from '../../src/main/services/models'
+import {
+  latestEffectiveRead,
+  recordModelLoadRead,
+  resetEffectiveReadForTests
+} from '../../src/main/services/read-speed'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
 
@@ -469,6 +474,39 @@ describe('DownloadManager jobs', () => {
     // Prime (not invalidate) the checksum cache with the hash just verified, so the Models screen
     // reports `installed` without redundantly re-hashing the multi-GB weight (download→verify UX).
     expect(primed.find((p) => p.path === dest)?.actual).toBe(sha256(body))
+  })
+
+  // #392 (review round): the prime above is exactly why this file is never re-hashed — so no
+  // `checksum` sample will ever exist for it, and its bytes are page-cache-resident from the
+  // WRITE. A model start right after the download would time a RAM read and persist it as the
+  // drive's speed. `finishVerifiedFile` marks the final path warm instead; that start records
+  // nothing at all (honest absence — the download verify is excluded from sampling by design),
+  // and the next cold start measures the medium.
+  it('a finished download marks its weight page-cache-warm: the start after it records no read sample (#392)', async () => {
+    resetEffectiveReadForTests()
+    const body = 'real-model-weights-bytes'
+    const m = verifiedManifest(body)
+    const root = tempRoot()
+    const dest = weightPath(root, m)
+    const mgr = new DownloadManager({ fetchImpl: rangeFetch(body).fetch })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    expect((await waitForTerminal(mgr, job.jobId)).status).toBe('done')
+
+    recordModelLoadRead(dest, 10_000, m.id, 6_000_000_000)
+    expect(latestEffectiveRead()).toBeNull()
+  })
+
+  it('a download that FAILS verification marks nothing: a later start of that path still samples (#392)', async () => {
+    resetEffectiveReadForTests()
+    const m = verifiedManifest('the-bytes-we-expected')
+    const root = tempRoot()
+    const dest = weightPath(root, m)
+    const mgr = new DownloadManager({ fetchImpl: rangeFetch('tampered-bytes').fetch })
+    const job = await mgr.start({ rootPath: root, manifest: m, gates: OPEN })
+    expect((await waitForTerminal(mgr, job.jobId)).status).toBe('failed')
+
+    recordModelLoadRead(dest, 10_000, m.id, 6_000_000_000)
+    expect(latestEffectiveRead()?.source).toBe('model_load')
   })
 
   it('placeholder expected hash → job done but flagged unverified (checksum honesty, R5)', async () => {

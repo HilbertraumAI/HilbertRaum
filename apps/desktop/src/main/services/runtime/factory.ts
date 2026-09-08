@@ -541,7 +541,10 @@ class LadderRuntime implements ModelRuntime {
       // the walk only: a later rung re-reads a file the failed attempt already pulled
       // through the page cache, so its number would be inflated. (A start whose
       // install-state pass just hashed the file is suppressed inside read-speed.ts for
-      // the same page-cache reason.) Excludes the #109 warm-up (which runs below) and
+      // the same page-cache reason — and since #392 so is a start over a weight hashed
+      // ANYWHERE this session, which is why the file set is passed too: the same
+      // `weightPaths ?? [modelPath]` expression the prefetch above uses, so the sample rule
+      // and the prefetch see one file set.) Excludes the #109 warm-up (which runs below) and
       // never throws; a mock rung never reaches here. `weightBytes` covers a vision
       // model's mmproj too — the bare modelPath stat under-counts it. Since #114 the
       // window is prefetch-assisted — the figure remains the honest effective rate the
@@ -552,7 +555,8 @@ class LadderRuntime implements ModelRuntime {
           this.opts.modelPath,
           performance.now() - loadT0,
           this.opts.modelId,
-          this.opts.weightBytes
+          this.opts.weightBytes,
+          this.opts.weightPaths ?? [this.opts.modelPath]
         )
       }
 

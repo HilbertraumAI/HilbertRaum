@@ -81,9 +81,20 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    on fast media, so a `model_load` sample always replaces a `checksum` one, never vice versa).
    Measured separation: ~70 MB/s on the stick vs 430+ on SSDs. Honesty guards (adversarial-review
    round 2026-08-09): a `model_load` sample needs ≥ 2 GiB (parse/KV-alloc/graph-init fixed costs
-   must not dominate the window), a start whose install-state pass just HASHED the file records
-   no load sample (the hash warmed the page cache — the window would read RAM), and the download
-   verify never samples (it reads bytes the app just wrote). A fresh install has no sample yet —
+   must not dominate the window), a start of a weight hashed anywhere in this session records no
+   load sample (#392, 2026-09-08) — the start's own install-state pass, a Models-screen verify or
+   a background hash all warm the page cache, so the window would read RAM; the #114 prefetch skip
+   stays tied to the start's own hash only — and the download
+   verify never samples (it reads bytes the app just wrote). A start right after an **in-app
+   download** therefore records no read sample at all: the verify is excluded by design and the
+   page-cache-warm load after it is dropped too (#392) — honest absence rather than a wrong figure,
+   and the next cold start records the medium. The #392 guard is process-scoped and **does not
+   survive a relaunch**: the checksum store is persistent, so on the next launch nothing hashes,
+   the warmed-path set is empty, and on a big-RAM machine a warm start records a `model_load`
+   sample that overwrites the honest checksum figure (`preferCandidate` lets `model_load` beat a
+   `checksum` incumbent unconditionally) — the figure oscillates with the cache's warmth until a
+   cold start. The ranking-rule amendment that would fix it is issue **#404**.
+   A fresh install has no sample yet —
    Diagnostics shows *"not measured yet — starting a model measures it"*; once present the row
    carries the sample's own date (the card's "Last run" describes the benchmark, not this row).
    `driveReadMbps` itself is still computed and persisted (continuity for old blobs + the probe's
@@ -510,6 +521,12 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    result for this computer persisted meanwhile by a manual run or another window
    (`'skipped-already-current'`). A thrown run is `'failed'` with the warn log. No outcome is
    retried within the session (below); the Performance screen runs the benchmark on demand at any time.
+   The speed leg's per-chunk predicate additionally watches a model **start in flight**
+   (`startingModelId`) and whether the manager still holds the runtime the run captured
+   (`active() !== runtime` — a start that COMPLETED between the capture and the leg puts the flag
+   back to null and commits a new one) (#393, 2026-09-08) — a manual "Use model" beside the run
+   stops the streamed model, so the leg skips with `warnSpeedSkipped` instead of persisting a cut
+   reading; the settlement re-check itself is unchanged (a start is not a lane).
 
 The wait is **bounded** by `FIRST_BENCHMARK_SETTLE_TIMEOUT_MS` (120 s — sized to the common slow
 case: a ~5 GB GGUF on the ~70 MB/s stick #108 measured is hashed and then loaded, roughly a minute
@@ -975,7 +992,9 @@ failure can hide the other.
 step only when it SUCCEEDED — `'system'` always; `'drive'` only when the write/fsync probe
 produced figures (a failed probe reports nothing, the result carries `warnDriveProbe`);
 `'speed'` only when a tokens/sec reading was actually obtained (not when no runtime was up, not
-when the leg was skipped as busy — `warnSpeedSkipped` — and not when the probe failed);
+when the leg was skipped as busy — `warnSpeedSkipped` — and not when the probe failed); since #393
+a probe that FAILED while something was busy (the stop that killed the stream) raises
+`warnSpeedSkipped` as well — only a failure with nothing busy stays silent;
 `'done'` always. A later step never implies an omitted earlier one succeeded. `'done'` means
 the PROBES are complete: it precedes the persist and the occupancy release, so it is not the
 idle signal — the terminal `performance:changed` after both is. The IPC handler forwards the
@@ -1330,7 +1349,11 @@ commit references, and added the changelog entry.
   Models-screen hash lets the page-cache load sample through the #108 guard (589 MB/s persisted
   for a 28 MB/s stick); the Home preflight's 8 MiB probe runs at unlock beside the hash; a healthy
   start at 87 MB/s on a 16 GB machine settles at 159 s, past the bound.
-  Follow-ups: #392 (the read sample), #393 (the overlap fix). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
+  Follow-ups: #392 (the read sample — fixed 2026-09-08, PR #406: a start of a weight hashed anywhere
+  in the session records no load sample), #393 (the overlap fix — FIXED 2026-09-08, PR #405: the
+  speed leg's busy predicate also reads `startingModelId` and the identity of the runtime it
+  captured, and a stream the stop cuts warns instead of returning null silently). Record:
+  `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
 
 ### §5 §-anchor legend
 

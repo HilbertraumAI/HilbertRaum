@@ -213,6 +213,11 @@ from its first public `1.0.0` release onward.
   card. The graphics check now finishes before the model starts, and a check that times out no
   longer counts as "no card": what the app already knew about this computer stays, and the model's
   own start log decides where it is really running.
+- **The drive read figure on the Performance page no longer takes a memory-speed reading.** When
+  you started a model shortly after the AI Model page had checked its files, the app timed a start
+  that was reading from memory rather than from the drive — and kept that flattering figure for
+  good. The figure measured by the file check, which is the honest one, now stays, so the warning
+  that model starts will be slow appears on a slow drive as it should.
 - **The copied Performance report no longer files this computer's recommendation under another
   computer's heading.** When the figures on the page came from a different machine, the report was
   headed "Another computer: …" but still listed the model recommended for the next start *here*,
@@ -398,6 +403,11 @@ from its first public `1.0.0` release onward.
   closed the app). Those files are now shipped, and a test keeps the list complete. Verified on a
   Windows build with the German and English language files; if recognition still cannot start on
   your machine, the app now tells you instead of closing.
+- **Starting another model while the automatic performance check is running no longer loses the
+  check's speed reading silently.** Pressing "Use model" beside a running check stops the model the
+  check is measuring, so the speed figure was simply absent from the result with nothing to explain
+  it. The check now says the speed was skipped because the model was busy; the rating and the
+  recommended model still come from RAM, processor and drive speed.
 
 ### Changed
 
