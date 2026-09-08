@@ -818,6 +818,18 @@ A *knowledge pack* is a ZIM archive — a compressed offline copy of a reference
 The Kiwix project publishes thousands (Wikipedia in ~100 languages, Wiktionary,
 Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
 
+**Choosing what to download.** The catalogue offers the same site in several editions, and the
+file name says which: `maxi` is the full articles with pictures, `nopic` the full text without
+them, `mini` only the opening summaries. Sizes run from a few dozen megabytes for a single-topic
+subset (`wikipedia_de_climate-change_nopic`) to tens of gigabytes for a complete Wikipedia — so
+a subset of the topic you actually want usually beats "all", and remember the file is used where
+it lies rather than copied into the app, so it has to fit on the drive next to your models. Two
+things are worth checking before you commit to a long download. The archive should carry a
+**full-text index**, or the app can only read it and never search it — the panel marks such a
+pack "No full-text index" and skips it when answering. And on Windows the folder and file name
+must be plain ASCII: an umlaut or an accent anywhere in the path stops the archive being added
+(the drive's own `zim/` folder is always safe).
+
 1. **One-time setup:** the kiwix-tools programs (kiwix-serve, kiwix-manage) must be on your
    drive. The first time, the panel offers to install them — a dialog states the size, the
    GPL-3.0-or-later license and the source, and asks you to accept the license; or place them
