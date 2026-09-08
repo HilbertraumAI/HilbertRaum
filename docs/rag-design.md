@@ -2962,6 +2962,67 @@ offline article viewer. Files are registered in place, never copied.
   real import pipeline), and the "ArticleModal — save to my documents (#340 Tier-2)" describe in
   `KnowledgePacks.test.tsx` (the four UI states).
 
+- **D-Z22 — Range-first article reads (#339, 2026-09-08).** Every `/raw` article request the app
+  makes carries `Range: bytes=0-`, and a read that stalls anyway is RESUMED from the byte it
+  stopped at instead of being read again. Why: the win-x86_64 kiwix-serve cuts 5–20 % of
+  `/raw/<book>/content/<entry>` reads of a large `text/html` entry short (finding 3 below) — an
+  upstream defect the owner reports but cannot ship a fix for, and the 4 s × 3 retry that P7 put
+  behind it cost ~4 s per affected open and still lost an article to three consecutive stalls.
+  **The measured escape:** libkiwix resolves `bytes=0-` as PARTIAL content even though it spans
+  the whole entry (`byte_range.cpp`), so the article is served through the **16 KiB callback
+  reader** rather than as one 500 KB buffer — and the defect lives on the buffer path only.
+  Measured 2026-09-07 on NVMe and repeated 2026-09-08 off the **USB Kit drive on K:** (pinned
+  kiwix-tools 3.8.1, `wikipedia_de_climate-change_nopic_2026-07`, loopback): **0 bad in 800 curl
+  Range reads** (four server configurations × five entries 234 KB–974 KB × 40) plus 160 hop reads
+  and 160 node:http reads on NVMe, and again **0 bad in 880** on K: (600 curl + 120 hop + 160
+  node), bodies sha256-identical to completed plain reads — while the interleaved plain reads
+  stalled 442/800 and 70/600. The end-to-end A/B, same machine and minute, 60 consecutive article
+  opens through the shipped `fetchArticleHtml` against the real server on K:: **13 stall retries
+  and 1 article lost at 953.8 ms/open without the header, 0 and 0 at 19.9 ms/open with it.**
+  What: `kiwixGet` gained an explicit `headers` option and a bytes-level core; `readRawArticle`
+  sends the header on the first request AND on the redirect hop; `fetchArticleHtml` accepts `206`
+  wherever it accepted `200` (a server that ignores the header still answers `200`, which is
+  still the article). `Content-Range` is recorded on the response — only the resume reads it.
+  **The idle detector:** `kiwixGet` also gained an INTER-CHUNK timer (`ARTICLE_READ_IDLE_MS =
+  1_000`), armed on the headers and re-armed on every data chunk, beside the whole-attempt
+  `ARTICLE_READ_TIMEOUT_MS`; `KiwixTimeoutError` now says which fired (`kind: 'idle' | 'total'`)
+  and carries `status`, `contentLength` and the bytes received. Because that timer tears the
+  request down with an error of the client's OWN making, the caller's abort is now given
+  precedence explicitly instead of by relying on node's abort error being the one that arrives —
+  the `zim-arm` "an aborted ask signal propagates out of collectPackCandidates" leg caught the race. 1,000 ms is ~40× the worst
+  inter-chunk gap either drive produced (**24.6 ms** NVMe, **17.8 ms** USB; p90 ≤ 16.5 / 13.9,
+  ttfb ≤ 11 ms, a whole 974 KB body ≤ 31 ms) — a healthy read is fast and never quiet, a stall is
+  silence with the connection left open. The USB figure is why the constant did NOT move: the
+  prompt's threshold for raising it to 1,500 was a USB gap over 100 ms. **The resume:** when an
+  attempt times out after headers with status 200/206, a declared `Content-Length` within
+  `MAX_BODY_BYTES`, and `0 < bytesReceived < Content-Length`, the next attempt sends
+  `Range: bytes=<bytesReceived>-`. Measured on the real server, that answers the missing tail
+  byte-exactly in ~6 ms (3/3 on NVMe, 3/3 on K:). It is accepted only against proof — `206`,
+  `Content-Range` exactly `bytes <received>-<len-1>/<len>`, and a tail of exactly the promised
+  length; a `200` from a server ignoring Range, a `416`, a mismatching range or a short tail
+  discards the prefix and reads the whole entry again. Prefix and tail are joined as BYTES and
+  decoded once, because a stall can cut a multi-byte character in half. Resumes are never
+  CHAINED (a stalled resume's bytes only mean what its own `Content-Range` said, and a Range read
+  has never stalled in 1,120 measured reads), a stall before the first body byte has no prefix to
+  resume from, and a partial body never reaches a caller. Why a resume is safe against the pack
+  file changing underneath it: the read lives inside one `ZimService.withServer` guard window,
+  and a lock or pack change aborts through the caller's signal, which keeps precedence over every
+  retry. `ARTICLE_READ_ATTEMPTS` (3) counts every request, fresh or resume. Caveats: a server
+  that ignores `Range` loses only the mitigation, not correctness; the upstream defect is
+  untouched, so the safety net stays. **What did NOT change:** `MAX_SELECTED_PACKS`, the ask
+  deadline, `ARTICLE_READ_TIMEOUT_MS`, `ARTICLE_READ_ATTEMPTS`, the arm's chunking, the viewer,
+  the request guard, `probeSearchable`, and the `/search` / `/suggest` / health-probe routes —
+  which still send no `Range` header at all (pinned by a test leg). The log line
+  `kiwix-serve cut a knowledge-pack article read short — retrying` gained `kind` and `resume` and
+  still carries no path and no serving name (finding L1). Tests: the `zim-client.test.ts` describe
+  "fetchArticleHtml reads /raw Range-first and resumes a stall (#339, rag-design §17 D-Z22)" —
+  the header on both requests and on no other route, `206`/`200`/404 acceptance, the idle timer
+  against a live drip and against a headers-only stall, the byte-exact resume across a split
+  character, the four refusals, the no-chaining and no-prefix rules, abort during a resume, a
+  mid-body socket error, the over-ceiling declaration, and the shipped constants — plus the
+  pre-existing T19 describe and the `zim-ipc-session` / `zim-arm` stall legs, whose fakes now
+  answer `Range` the way libkiwix does.
+
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
@@ -2970,7 +3031,8 @@ path — P1b), `math.ts` (`<math alttext>` LaTeX → plain text, a single-cursor
 #340, D-Z3 amendment), `client.ts` (node:http + search/
 library XML parsing; the ONE entry-key encoder with the L5 contract — controls, dot
 segments, 2048-char bound; URL-shaped and empty-segment keys accepted, P5; `KiwixBook.tags`
-+ `probeSearchable` — the `/suggest` capability probe, D-Z11, P4), `tools.ts`
++ `probeSearchable` — the `/suggest` capability probe, D-Z11, P4; the Range-first `/raw` reader
+with the idle detector and the resume — D-Z22, #339), `tools.ts`
 (binary discovery `runtime/kiwix-tools/<os>/`, dev-only
 `HILBERTRAUM_KIWIX_BIN`, the verified `kiwix-manage` runner — pre-spawn verifier, PID
 registration for as long as the child may be running, settles only after a terminal
@@ -3068,9 +3130,11 @@ outcomes notice over every reason code); `ReviewEvidencePane.test.tsx` / `Review
 Provisioning of the `kiwix_tools` family: the family contract landed (#339 P8-1, D-Z17) —
 `runtime-sources.yaml`, the in-app installer, the sell gate. The consent step that lets a user
 reach the installer (P8-2), the drive scripts' `fetch-runtime`/`prepare-drive` support (P8-3),
-and the network-inventory prose in PRIVACY/README/user-guide/security-model (P8-5) have since
-landed too. Still open: the on-drive corresponding-source bundle (P8-4), in flight as a sibling
-PR. Also not built: full enumeration / import of a whole archive (a saved article, D-Z21, is
+the network-inventory prose in PRIVACY/README/user-guide/security-model (P8-5) and the on-drive
+corresponding-source bundle (P8-4, PR #365) have since landed too — the whole P8 build is in.
+What remains on #339 is the owner's alone: filing the upstream `/raw` report, the mac/linux
+code-signing inspection (R-4), the `--kiwix-source-dir` builder run against the real Kit drive
+(T20-d) and two licence confirmations. Also not built: full enumeration / import of a whole archive (a saved article, D-Z21, is
 the built half of Tier-2); an
 in-app ZIM catalog/downloader; evidence review
 over archive citations (they resolve as honest 'unresolved'); packs on the whole-document
@@ -3091,8 +3155,11 @@ the list shape were not helped by hits 6–10, and one selected pack already get
 no full-text index": alone it is prefix-bound (no title match for "österreichische
 Wissenschaftler"); paired with a synthesised "Liste …" prefix it is part of L3-b. *L3-b* —
 concept expansion through a model call: ruled (a) "always" on 2026-09-07 and built as **D-Z20**
-(above). *C2* — link expansion not
-until the upstream `/raw` cut-short fix ships (it doubles traffic on the defect route). *C3* —
+(above). *C2* — link expansion: the reason it was deferred (it doubles traffic on the defect
+route, and the upstream `/raw` fix had not shipped) is **gone — unblocked by D-Z22**, which stops
+the app triggering the defect at all; the scope decision (opt-in per ask vs on by default, and
+what a followed link costs the 20 s deadline) is still the owner's, and the converter would have
+to keep `<a href>` targets, which it drops today. *C3* —
 Tier-2 import: ruled (a), a "Save article to my documents" button in the article viewer FIRST,
 the citation card later; the button shipped as **D-Z21** (above, `feat/340-tier2-save-article`),
 the citation-card shortcut still the owner's "later". *C4* — acquisition from Kiwix catalogs: ruled
@@ -3242,7 +3309,12 @@ edition — its copied tag STILL says `_ftindex:yes`, a lying hint); **C** the m
   (bytes received 130,310 / 195,590 of the entries' lengths), every one was retried and
   completed — five on the second attempt (~4.1 s to open), one on the third (8.1 s) — zero
   "article read failed" lines, every open ended on the real article; before the fix the same
-  sample had 12 of 60 opens end in the unavailable state.
+  sample had 12 of 60 opens end in the unavailable state. **SUPERSEDED 2026-09-08 by D-Z22**
+  (above): the app no longer triggers the defect at all — every `/raw` article request carries
+  `Range: bytes=0-`, which libkiwix serves through its callback reader, and the 4 s × 3 retry
+  above is now only the safety net behind it. The same 60-open loop on the Kit drive that day:
+  13 retries and one article lost outright without the header, **0 retries and 0 lost** with it.
+  The upstream defect itself is unchanged and the report is still the owner's to file.
 - **The owner's legs (2026-09-06, the owner on the i9-14900K with the real K: HilbertRaum
   drive — an encrypted workspace from 2026-08-20, kiwix-tools 3.8.1 in `runtime\kiwix-tools\win`,
   the indexed pack in `zim\`, the index-less one added from `zim-external\` outside the drive, the

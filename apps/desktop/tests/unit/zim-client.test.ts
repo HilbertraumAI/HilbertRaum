@@ -5,6 +5,7 @@ import { readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   ARTICLE_READ_ATTEMPTS,
+  ARTICLE_READ_IDLE_MS,
   ARTICLE_READ_TIMEOUT_MS,
   ArticlePathError,
   KiwixTimeoutError,
@@ -71,6 +72,20 @@ let requestCount = 0
 /** Every request URL the fixture server received, in order — the redirect legs assert not just
  *  the answer but exactly WHICH routes were asked for, and in what order (#301 P7 T19). */
 const requestLog: string[] = []
+/** The `Range` header of every request, positionally aligned with `requestLog` (#339 D-Z22):
+ *  the Range-first legs assert not just which routes were asked for but under which header. */
+const rangeLog: Array<string | undefined> = []
+/** Clears both logs together — they are read by index against each other. */
+function resetRequestLog(): void {
+  requestLog.length = 0
+  rangeLog.length = 0
+}
+/** The `/raw` requests of the leg so far, each with the `Range` header it carried. */
+function rawRequests(): Array<{ url: string; range: string | undefined }> {
+  return requestLog
+    .map((url, i) => ({ url, range: rangeLog[i] }))
+    .filter((e) => e.url.startsWith('/raw/'))
+}
 /**
  * What the fixture answers on a `/raw/` request (#301 P7 T19): a status, optional response
  * headers (a redirect's `Location`) and a body; null falls through to the default article
@@ -90,9 +105,33 @@ const requestLog: string[] = []
  */
 type RawStall =
   | { stall: 'silent' }
-  | { stall: 'truncated'; partial: string; total: number }
+  | { stall: 'truncated'; partial: string | Buffer; total: number }
   | { stall: 'reset'; partial: string }
-type RawFixtureAnswer = { status: number; headers?: Record<string, string>; body: string } | RawStall
+  /** Headers and a `Content-Length`, then silence with NOT ONE body byte — the shape that must
+   *  never be resumed, because there is no prefix to resume from (#339 D-Z22 leg 6). */
+  | { stall: 'headers-only'; total: number }
+  /** Slow but ALIVE: `chunks` pieces of `body`, one every `everyMs`. Not a stall — the idle
+   *  detector must not cut it (#339 D-Z22 leg 3). */
+  | { drip: { body: string; chunks: number; everyMs: number } }
+/**
+ * A plain answer. Status 200 answers are RANGE-AWARE by default (#339 D-Z22): a
+ * `Range: bytes=<n>-` request is answered `206` + `Content-Range` + the tail, exactly as
+ * libkiwix does. The optional fields express the misbehaviours a resume must refuse.
+ */
+type RawAnswerBody = {
+  status: number
+  headers?: Record<string, string>
+  body: string
+  /** Answer `200` with the WHOLE body even under `Range` — a server that ignores the header. */
+  ignoreRange?: boolean
+  /** Send this `Content-Range` instead of the true one (the mismatching-range leg). */
+  contentRange?: string
+  /** Send only this many bytes of the tail, honestly framed (the short-tail leg). */
+  tailBytes?: number
+  /** Answer `416 Range Not Satisfiable` to any `Range` request. */
+  unsatisfiable?: boolean
+}
+type RawFixtureAnswer = RawAnswerBody | RawStall
 let rawHook: ((url: string) => RawFixtureAnswer | null) | null = null
 /**
  * Every hanging `/raw` URL whose connection the CLIENT tore down (it gave up). A leg asserts
@@ -101,10 +140,50 @@ let rawHook: ((url: string) => RawFixtureAnswer | null) | null = null
  */
 const parkedClosedByClient: string[] = []
 
+/** The offset of an open `bytes=<n>-` range, or null when the request carried no such header.
+ *  The client only ever sends that one form (#339 D-Z22). */
+function rangeStart(header: string | string[] | undefined): number | null {
+  if (typeof header !== 'string') return null
+  const m = /^bytes=(\d+)-$/.exec(header.trim())
+  return m ? Number(m[1]) : null
+}
+
+/**
+ * Answer a `/raw` request the way libkiwix does (#339 D-Z22): a `Range: bytes=<n>-` on a 200
+ * answer becomes `206` + `Content-Range: bytes <n>-<len-1>/<len>` + the tail; no Range, a
+ * non-200 status, or `ignoreRange` keeps the plain answer. The remaining fields inject the
+ * misbehaviours a resume has to refuse.
+ */
+function sendRawAnswer(res: http.ServerResponse, answer: RawAnswerBody, from: number | null): void {
+  const buf = Buffer.from(answer.body, 'utf8')
+  const headers = { 'content-type': 'text/html', ...answer.headers }
+  if (from === null || answer.ignoreRange === true || answer.status !== 200) {
+    res.writeHead(answer.status, headers)
+    res.end(buf)
+    return
+  }
+  if (answer.unsatisfiable === true || from >= buf.length) {
+    res.writeHead(416, { ...headers, 'content-range': `bytes */${buf.length}` })
+    res.end('range not satisfiable')
+    return
+  }
+  const tail = buf.subarray(from)
+  const sent = answer.tailBytes === undefined ? tail : tail.subarray(0, answer.tailBytes)
+  res.writeHead(206, {
+    ...headers,
+    // Honestly framed even when short: the client must catch the short tail on the LENGTH it
+    // was promised in `Content-Range`, not on a framing error.
+    'content-length': String(sent.length),
+    'content-range': answer.contentRange ?? `bytes ${from}-${buf.length - 1}/${buf.length}`
+  })
+  res.end(sent)
+}
+
 beforeAll(async () => {
   server = http.createServer((req, res) => {
     requestCount++
     requestLog.push(req.url ?? '')
+    rangeLog.push(typeof req.headers.range === 'string' ? req.headers.range : undefined)
     if (req.url?.startsWith('/slow')) return // never responds — timeout leg
     if (req.url?.startsWith('/suggest')) {
       const answer = suggestHook?.(req.url) ?? null
@@ -158,15 +237,42 @@ beforeAll(async () => {
       return
     }
     if (req.url?.startsWith('/raw/')) {
-      const answer = rawHook?.(req.url) ?? null
+      const url = req.url
+      const from = rangeStart(req.headers.range)
+      const parkOnClientClose = (): void => {
+        // `writableFinished` is false exactly when the client tore the connection down first —
+        // the proof that the retry opened a FRESH socket rather than reusing a stuck one.
+        res.on('close', () => {
+          if (!res.writableFinished) parkedClosedByClient.push(url)
+        })
+      }
+      const answer = rawHook?.(url) ?? null
+      if (answer && 'drip' in answer) {
+        // Slow but alive: the client's idle timer must be re-armed by every one of these.
+        const { body, chunks, everyMs } = answer.drip
+        const buf = Buffer.from(body, 'utf8')
+        res.writeHead(from === null ? 200 : 206, {
+          'content-type': 'text/html',
+          'content-length': String(buf.length),
+          ...(from === null ? {} : { 'content-range': `bytes 0-${buf.length - 1}/${buf.length}` })
+        })
+        const step = Math.ceil(buf.length / chunks)
+        let sent = 0
+        const pump = (): void => {
+          if (sent >= buf.length) {
+            res.end()
+            return
+          }
+          res.write(buf.subarray(sent, sent + step))
+          sent += step
+          setTimeout(pump, everyMs).unref?.()
+        }
+        setTimeout(pump, everyMs).unref?.()
+        return
+      }
       if (answer && 'stall' in answer) {
-        const url = req.url
         if (answer.stall === 'silent') {
-          // `writableFinished` is false exactly when the client tore the connection down first —
-          // the proof that the retry opened a FRESH socket rather than reusing a stuck one.
-          res.on('close', () => {
-            if (!res.writableFinished) parkedClosedByClient.push(url)
-          })
+          parkOnClientClose()
           return // nothing is ever sent
         }
         if (answer.stall === 'reset') {
@@ -174,26 +280,43 @@ beforeAll(async () => {
           res.write(answer.partial, () => res.destroy()) // a real socket error mid-body
           return
         }
-        res.on('close', () => {
-          if (!res.writableFinished) parkedClosedByClient.push(url)
-        })
+        parkOnClientClose()
+        if (answer.stall === 'headers-only') {
+          // Framed exactly like a real answer — and then not one body byte ever arrives.
+          res.writeHead(from === null ? 200 : 206, {
+            'content-type': 'text/html',
+            'content-length': String(answer.total),
+            ...(from === null
+              ? {}
+              : { 'content-range': `bytes ${from}-${answer.total - 1}/${answer.total}` })
+          })
+          // Node holds headers back until the first write — flush them explicitly, or this
+          // would be indistinguishable from `'silent'` and would never arm the client's
+          // inter-chunk timer at all.
+          res.flushHeaders()
+          return
+        }
         // The measured shape: a complete, HONEST `Content-Length`, then only part of the body.
-        res.writeHead(200, { 'content-type': 'text/html', 'content-length': String(answer.total) })
+        res.writeHead(from === null ? 200 : 206, {
+          'content-type': 'text/html',
+          'content-length': String(answer.total),
+          ...(from === null
+            ? {}
+            : { 'content-range': `bytes ${from}-${answer.total - 1}/${answer.total}` })
+        })
         res.write(answer.partial) // …and the rest never comes
         return
       }
       if (answer) {
-        res.writeHead(answer.status, { 'content-type': 'text/html', ...answer.headers })
-        res.end(answer.body)
+        sendRawAnswer(res, answer, from)
         return
       }
-      if (req.url.includes('/raw/missing/')) {
+      if (url.includes('/raw/missing/')) {
         res.writeHead(404)
         res.end('not found')
         return
       }
-      res.writeHead(200, { 'content-type': 'text/html' })
-      res.end('<html><body><p>Artikel</p></body></html>')
+      sendRawAnswer(res, { status: 200, body: '<html><body><p>Artikel</p></body></html>' }, from)
       return
     }
     res.writeHead(200)
@@ -347,7 +470,7 @@ describe('parseSearchTotal / searchPackTotal (#353 document-frequency ladder)', 
   })
 
   it('requests pageLength=1 on the same /search route and returns the parsed total', async () => {
-    requestLog.length = 0
+    resetRequestLog()
     await expect(searchPackTotal(port, 'uuid-1', 'Treibhausgas')).resolves.toBe(301)
     const url = requestLog.find((u) => u.startsWith('/search'))
     expect(url).toContain('pageLength=1')
@@ -406,7 +529,7 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
   const rawLog = (): string[] => requestLog.filter((u) => u.startsWith('/raw/'))
 
   beforeEach(() => {
-    requestLog.length = 0
+    resetRequestLog()
   })
   afterEach(() => {
     rawHook = null
@@ -424,7 +547,7 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
 
   it('(a2) the same one hop for 301, 307 and 308, and a /raw-shaped Location is accepted too', async () => {
     for (const status of [301, 302, 307, 308]) {
-      requestLog.length = 0
+      resetRequestLog()
       install({
         [ALIAS_URL]: redirectTo(`/content/${NAME}/Treibhauspotential`, status),
         [TARGET_URL]: { status: 200, body: TARGET_HTML }
@@ -433,7 +556,7 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
       expect(rawLog(), `status ${status}`).toEqual([ALIAS_URL, TARGET_URL])
     }
     // Some builds could answer with the /raw route instead; the same book is the whole test.
-    requestLog.length = 0
+    resetRequestLog()
     install({
       [ALIAS_URL]: redirectTo(`/raw/${NAME}/content/Treibhauspotential`),
       [TARGET_URL]: { status: 200, body: TARGET_HTML }
@@ -462,7 +585,7 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
     // `..%2Fx` decodes per segment to `../x`, whose `..` segment is the enumeration vector L5
     // exists to stop; `x%00y` decodes to a C0 control character.
     for (const hostile of ['..%2Fx', 'x%00y', '%2E%2E/x']) {
-      requestLog.length = 0
+      resetRequestLog()
       install({ [ALIAS_URL]: redirectTo(`/content/${NAME}/${hostile}`) })
       await expect(fetchArticleHtml(port, NAME, ALIAS), hostile).resolves.toBeNull()
       expect(rawLog(), hostile).toEqual([ALIAS_URL])
@@ -478,13 +601,13 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
       '/something/else'
     ]
     for (const location of locations) {
-      requestLog.length = 0
+      resetRequestLog()
       install({ [ALIAS_URL]: redirectTo(location), [TARGET_URL]: { status: 200, body: TARGET_HTML } })
       await expect(fetchArticleHtml(port, NAME, ALIAS), location).resolves.toBeNull()
       expect(rawLog(), location).toEqual([ALIAS_URL])
     }
     // A redirect status with no `Location` header at all is the same honest null.
-    requestLog.length = 0
+    resetRequestLog()
     install({ [ALIAS_URL]: { status: 302, body: '' } })
     await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBeNull()
     expect(rawLog()).toEqual([ALIAS_URL])
@@ -501,7 +624,7 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
     expect(rawLog()).toEqual([ALIAS_URL, targetUrl])
     expect(rawLog()[1]).not.toContain('%25')
     // …and an already-encoded slash inside one segment stays inside it, both ways.
-    requestLog.length = 0
+    resetRequestLog()
     const encodedSlash = raw('A/a%252Fb')
     install({
       [ALIAS_URL]: redirectTo(`/content/${NAME}/A/a%252Fb`),
@@ -522,7 +645,7 @@ describe('fetchArticleHtml follows one same-book redirect (#301 P7 T19)', () => 
     await expect(fetchArticleHtml(port, NAME, ALIAS)).resolves.toBeNull()
     expect(rawLog()).toEqual([ALIAS_URL, TARGET_URL])
 
-    requestLog.length = 0
+    resetRequestLog()
     install({
       [ALIAS_URL]: redirectTo(`/content/${NAME}/Treibhauspotential`),
       [TARGET_URL]: { status: 500, body: 'boom' }
@@ -574,7 +697,7 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
     fetchArticleHtml(port, NAME, ENTRY, signal, { timeoutMs: STALL_TIMEOUT_MS })
 
   beforeEach(() => {
-    requestLog.length = 0
+    resetRequestLog()
     parkedClosedByClient.length = 0
   })
   afterEach(() => {
@@ -668,7 +791,7 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
       { status: 500, body: 'boom' },
       { status: 302, headers: { location: '/content/other_book/x' }, body: '' }
     ] as const) {
-      requestLog.length = 0
+      resetRequestLog()
       installQueues({ [ENTRY_URL]: [answer, { status: 200, body: HTML }] })
       const pending = read()
       if (answer.status === 500) {
@@ -695,7 +818,7 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
   it('(g) the other routes are untouched: /suggest and /search are tried exactly once', async () => {
     // The stall retry is scoped to `/raw`; a probe timeout is still one request and an unknown.
     suggestHook = () => 'park'
-    requestLog.length = 0
+    resetRequestLog()
     await expect(
       probeSearchable(port, 'parked', undefined, { timeoutMs: STALL_TIMEOUT_MS })
     ).resolves.toBeNull()
@@ -704,9 +827,293 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
 
     // …and a search still makes exactly one request per call (it answers here; the point is
     // that nothing in the search path grew a retry).
-    requestLog.length = 0
+    resetRequestLog()
     await expect(searchPack(port, 'uuid-1', 'Treibhausgas', 5)).resolves.toHaveLength(2)
     expect(requestLog.filter((u) => u.startsWith('/search'))).toHaveLength(1)
+  })
+})
+
+describe('fetchArticleHtml reads /raw Range-first and resumes a stall (#339, rag-design §17 D-Z22)', () => {
+  const NAME = 'wikipedia_de_climate-change_nopic_2026-07'
+  const ENTRY = 'Klimawandel' // the measured 508,338-byte staller
+  const ALIAS = 'CO2-Äquivalent'
+  /** Long enough for a resume to be a real join, and full of multi-byte characters so the cut
+   *  can be placed INSIDE one. */
+  const HTML =
+    '<html><body><h1>Klimawandel</h1>' +
+    '<p>Änderung der Erdatmosphäre — Größenordnung 1,5 °C.</p>'.repeat(60) +
+    '</body></html>'
+  const BYTES = Buffer.from(HTML, 'utf8')
+  /**
+   * A cut ONE BYTE into a two-byte UTF-8 sequence. The measured stall cuts at an arbitrary byte
+   * offset (a multiple of 65,280), so this is the real hazard: decoding the prefix and the tail
+   * separately would turn the split character into two replacement characters. The client joins
+   * BYTES and decodes once.
+   */
+  const CUT = (() => {
+    for (let i = Math.floor(BYTES.length / 2); i < BYTES.length - 2; i++) {
+      if ((BYTES[i]! & 0xe0) === 0xc0) return i + 1
+    }
+    throw new Error('fixture has no multi-byte character to cut')
+  })()
+  const TRUNCATED: RawStall = {
+    stall: 'truncated',
+    partial: BYTES.subarray(0, CUT),
+    total: BYTES.length
+  }
+  const ANSWER: RawAnswerBody = { status: 200, body: HTML }
+  const raw = (encodedKey: string): string => `/raw/${NAME}/content/${encodedKey}`
+  const ENTRY_URL = raw('Klimawandel')
+  const ALIAS_URL = raw('CO2-%C3%84quivalent')
+  const TARGET_URL = raw('Treibhauspotential')
+  /** Shrunk for these legs; the shipped budgets are 4 s total and 1 s idle. */
+  const TOTAL_MS = 3_000
+  const IDLE_MS = 150
+
+  const installQueues = (queues: Record<string, RawFixtureAnswer[]>): void => {
+    rawHook = (url) => queues[url]?.shift() ?? { status: 404, body: 'not found' }
+  }
+  const read = (signal?: AbortSignal, key = ENTRY): Promise<string | null> =>
+    fetchArticleHtml(port, NAME, key, signal, { timeoutMs: TOTAL_MS, idleMs: IDLE_MS })
+
+  beforeEach(() => {
+    resetRequestLog()
+    parkedClosedByClient.length = 0
+  })
+  afterEach(() => {
+    rawHook = null
+  })
+
+  // ---- (1) + (2) the Range header itself ----------------------------------------
+
+  it('(1) the first request AND the redirect hop carry Range: bytes=0-; /search and /suggest carry none', async () => {
+    installQueues({
+      [ALIAS_URL]: [
+        { status: 302, headers: { location: `/content/${NAME}/Treibhauspotential` }, body: '' }
+      ],
+      [TARGET_URL]: [ANSWER]
+    })
+    await expect(read(undefined, ALIAS)).resolves.toBe(HTML)
+    expect(rawRequests()).toEqual([
+      { url: ALIAS_URL, range: 'bytes=0-' },
+      { url: TARGET_URL, range: 'bytes=0-' }
+    ])
+
+    // The mitigation is scoped to the article route: nothing else may start sending a header
+    // whose whole purpose is to dodge one route's server-side defect (T19 leg (g)).
+    resetRequestLog()
+    suggestHook = () => SUGGEST_FIXTURES.indexed!
+    await expect(probeSearchable(port, 'indexed')).resolves.toBe('yes')
+    await expect(searchPack(port, 'uuid-1', 'Treibhausgas', 5)).resolves.toHaveLength(2)
+    suggestHook = null
+    expect(rangeLog.every((r) => r === undefined)).toBe(true)
+    expect(requestLog.some((u) => u.startsWith('/suggest'))).toBe(true)
+    expect(requestLog.some((u) => u.startsWith('/search'))).toBe(true)
+  })
+
+  it('(2) a 206 is the article on the first request and on the hop, and a 200 still is too', async () => {
+    // The real server answers 206 + Content-Range to `bytes=0-`; the fixture does the same.
+    installQueues({ [ENTRY_URL]: [ANSWER] })
+    await expect(read()).resolves.toBe(HTML)
+
+    resetRequestLog()
+    installQueues({
+      [ALIAS_URL]: [
+        { status: 302, headers: { location: `/content/${NAME}/Treibhauspotential` }, body: '' }
+      ],
+      [TARGET_URL]: [ANSWER]
+    })
+    await expect(read(undefined, ALIAS)).resolves.toBe(HTML)
+
+    // A server that ignores the header answers 200 with the whole body — still the article.
+    resetRequestLog()
+    installQueues({ [ENTRY_URL]: [{ ...ANSWER, ignoreRange: true }] })
+    await expect(read()).resolves.toBe(HTML)
+    expect(rawRequests()).toEqual([{ url: ENTRY_URL, range: 'bytes=0-' }])
+
+    // …and a 404 is still the honest skip, under the header like without it.
+    resetRequestLog()
+    installQueues({ [ENTRY_URL]: [{ status: 404, body: 'not found' }] })
+    await expect(read()).resolves.toBeNull()
+    expect(rawRequests()).toEqual([{ url: ENTRY_URL, range: 'bytes=0-' }])
+  })
+
+  // ---- (3) the inter-chunk idle detector ----------------------------------------
+
+  it('(3) silence after a partial body is caught by the IDLE timer, long before the total one', async () => {
+    installQueues({ [ENTRY_URL]: [TRUNCATED, TRUNCATED, TRUNCATED] })
+    const started = Date.now()
+    let caught: unknown
+    await read().catch((err: unknown) => {
+      caught = err
+    })
+    expect(caught).toBeInstanceOf(KiwixTimeoutError)
+    expect((caught as KiwixTimeoutError).kind).toBe('idle')
+    expect((caught as KiwixTimeoutError).timeoutMs).toBe(IDLE_MS)
+    expect((caught as KiwixTimeoutError).headersReceived).toBe(true)
+    expect((caught as KiwixTimeoutError).bytesReceived).toBe(CUT)
+    expect((caught as KiwixTimeoutError).status).toBe(206)
+    expect((caught as KiwixTimeoutError).contentLength).toBe(BYTES.length)
+    // Three attempts on the idle timer, not on the total one: the whole ladder is well inside
+    // ONE total budget. This is the point of the detector.
+    expect(rawRequests()).toHaveLength(ARTICLE_READ_ATTEMPTS)
+    expect(Date.now() - started).toBeLessThan(TOTAL_MS)
+  })
+
+  it('(3b) a slow but LIVE body is never cut: every chunk re-arms the idle timer', async () => {
+    installQueues({
+      [ENTRY_URL]: [{ drip: { body: HTML, chunks: 8, everyMs: Math.floor(IDLE_MS / 2) } }]
+    })
+    await expect(read()).resolves.toBe(HTML)
+    expect(rawRequests()).toHaveLength(1) // one request; nothing was retried
+  })
+
+  it('(3c) a server that never sends headers at all still rejects on the TOTAL timer', async () => {
+    // The idle timer is armed by the headers, so a request that is merely accepted and never
+    // answered is the total budget's business — exactly as before D-Z22.
+    installQueues({ [ENTRY_URL]: [{ stall: 'silent' }, { stall: 'silent' }, { stall: 'silent' }] })
+    let caught: unknown
+    await fetchArticleHtml(port, NAME, ENTRY, undefined, { timeoutMs: 200, idleMs: IDLE_MS }).catch(
+      (err: unknown) => {
+        caught = err
+      }
+    )
+    expect(caught).toBeInstanceOf(KiwixTimeoutError)
+    expect((caught as KiwixTimeoutError).kind).toBe('total')
+    expect((caught as KiwixTimeoutError).headersReceived).toBe(false)
+    expect((caught as KiwixTimeoutError).bytesReceived).toBe(0)
+  })
+
+  // ---- (4) + (5) + (6) the resume -----------------------------------------------
+
+  it('(4) a stall is RESUMED from the byte it stopped at, in exactly two requests, byte-exactly', async () => {
+    installQueues({ [ENTRY_URL]: [TRUNCATED, ANSWER] })
+    const html = await read()
+    // Byte-identical to the entry — including the multi-byte character the cut split in half,
+    // which only survives because the prefix and the tail are joined BEFORE the UTF-8 decode.
+    expect(html).toBe(HTML)
+    expect(html).not.toContain(String.fromCharCode(0xfffd)) // no replacement character
+    expect(rawRequests()).toEqual([
+      { url: ENTRY_URL, range: 'bytes=0-' },
+      { url: ENTRY_URL, range: `bytes=${CUT}-` }
+    ])
+    expect(parkedClosedByClient).toContain(ENTRY_URL)
+  })
+
+  it('(5) a resume the server does not prove is DISCARDED, and the whole entry is read again', async () => {
+    const refusals: Array<[string, RawAnswerBody]> = [
+      // A server that ignores Range answers 200 with the whole body — the prefix would double it.
+      ['a 200 ignoring Range', { ...ANSWER, ignoreRange: true }],
+      ['a 416', { ...ANSWER, unsatisfiable: true }],
+      ['a mismatching Content-Range', { ...ANSWER, contentRange: `bytes 0-${BYTES.length - 1}/${BYTES.length}` }],
+      ['a tail shorter than promised', { ...ANSWER, tailBytes: 16 }]
+    ]
+    for (const [label, refusal] of refusals) {
+      resetRequestLog()
+      installQueues({ [ENTRY_URL]: [TRUNCATED, refusal, ANSWER] })
+      await expect(read(), label).resolves.toBe(HTML)
+      // Three requests: the stall, the refused resume, and a FRESH whole-entry read.
+      expect(rawRequests(), label).toEqual([
+        { url: ENTRY_URL, range: 'bytes=0-' },
+        { url: ENTRY_URL, range: `bytes=${CUT}-` },
+        { url: ENTRY_URL, range: 'bytes=0-' }
+      ])
+    }
+  })
+
+  it('(5b) the attempt ceiling still bounds a read whose resume keeps being refused', async () => {
+    // A fourth answering entry sits in the queue: the bound is the code's, not the fixture's.
+    installQueues({
+      [ENTRY_URL]: [TRUNCATED, { ...ANSWER, unsatisfiable: true }, TRUNCATED, ANSWER]
+    })
+    await expect(read()).rejects.toThrow()
+    expect(rawRequests()).toHaveLength(ARTICLE_READ_ATTEMPTS)
+  })
+
+  it('(6) a stall BEFORE the first body byte is not resumed: the next request is a fresh read', async () => {
+    installQueues({ [ENTRY_URL]: [{ stall: 'headers-only', total: BYTES.length }, ANSWER] })
+    const started = Date.now()
+    await expect(read()).resolves.toBe(HTML)
+    // There is no prefix, so there is nothing to resume from: attempt 2 asks for the whole entry.
+    expect(rawRequests()).toEqual([
+      { url: ENTRY_URL, range: 'bytes=0-' },
+      { url: ENTRY_URL, range: 'bytes=0-' }
+    ])
+    // Headers DID arrive, so the idle timer — not the total one — is what ended attempt 1.
+    expect(Date.now() - started).toBeLessThan(TOTAL_MS)
+  })
+
+  it('(6b) a stalled resume is not chained: the third attempt reads the whole entry', async () => {
+    installQueues({ [ENTRY_URL]: [TRUNCATED, TRUNCATED, ANSWER] })
+    await expect(read()).resolves.toBe(HTML)
+    expect(rawRequests()).toEqual([
+      { url: ENTRY_URL, range: 'bytes=0-' },
+      { url: ENTRY_URL, range: `bytes=${CUT}-` },
+      { url: ENTRY_URL, range: 'bytes=0-' }
+    ])
+  })
+
+  // ---- (7) the boundaries the resume must not cross ------------------------------
+
+  it('(7) a caller abort during the resume rejects at once, with no further attempt', async () => {
+    const ac = new AbortController()
+    const reason = new Error('the ask was cancelled')
+    let seen = 0
+    rawHook = (url) => {
+      if (url !== ENTRY_URL) return { status: 404, body: 'not found' }
+      if (++seen === 2) ac.abort(reason) // as the resume request arrives
+      return TRUNCATED
+    }
+    let caught: unknown
+    await read(ac.signal).catch((err: unknown) => {
+      caught = err
+    })
+    expect(caught).not.toBeInstanceOf(KiwixTimeoutError)
+    expect((caught as Error).name).toBe('AbortError')
+    expect((caught as Error).cause).toBe(reason)
+    expect(rawRequests()).toHaveLength(2)
+  })
+
+  it('(7b) a mid-body socket error during a Range read is still not retried', async () => {
+    installQueues({ [ENTRY_URL]: [{ stall: 'reset', partial: HTML.slice(0, 40) }, ANSWER] })
+    let caught: unknown
+    await read().catch((err: unknown) => {
+      caught = err
+    })
+    expect(caught).toBeInstanceOf(Error)
+    expect(caught).not.toBeInstanceOf(KiwixTimeoutError)
+    expect(rawRequests()).toHaveLength(1)
+  })
+
+  it('(7c) a stall whose declared length is over the 8 MiB ceiling is never assembled', async () => {
+    // `MAX_BODY_BYTES` bounds the ASSEMBLED body, and the assembled body is exactly the declared
+    // `Content-Length` — so an over-ceiling entry is refused before a single tail byte is asked
+    // for, and the fresh read that follows rejects on the ceiling the way it always did.
+    installQueues({
+      [ENTRY_URL]: [
+        { stall: 'truncated', partial: BYTES.subarray(0, CUT), total: CEILING_BYTES + 1 },
+        ANSWER
+      ]
+    })
+    await expect(read()).resolves.toBe(HTML)
+    expect(rawRequests()).toEqual([
+      { url: ENTRY_URL, range: 'bytes=0-' },
+      { url: ENTRY_URL, range: 'bytes=0-' }
+    ])
+  })
+
+  // ---- (10) the shipped constants ------------------------------------------------
+
+  it('(10) the shipped idle budget clears the measured inter-chunk gaps by 40x', async () => {
+    // Largest gap between two body chunks through this very stack: 24.6 ms on the NVMe
+    // measurement machine, 17.8 ms off the USB Kit drive on K: (2026-09-08). D-Z22.
+    const MEASURED_MAX_GAP_MS = 24.6
+    expect(ARTICLE_READ_IDLE_MS).toBe(1_000)
+    expect(ARTICLE_READ_IDLE_MS).toBeGreaterThanOrEqual(40 * MEASURED_MAX_GAP_MS)
+    // The idle timer must fire well before the whole-attempt one, or it detects nothing.
+    expect(ARTICLE_READ_IDLE_MS).toBeLessThan(ARTICLE_READ_TIMEOUT_MS)
+    // And the whole ladder still fits inside the arm's 20 s per-ask deadline.
+    expect(ARTICLE_READ_TIMEOUT_MS * ARTICLE_READ_ATTEMPTS).toBeLessThan(20_000)
   })
 })
 

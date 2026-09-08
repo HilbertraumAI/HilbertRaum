@@ -27,6 +27,32 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-08 — the three closed ZIM knowledge-pack wave entries retired verbatim (#301 / #339 / #340)
+
+Retired from the BUILD_STATE preamble when the #339 Range-first read (D-Z22) landed: all three waves are
+MERGED and their still-open legs are the owner-only residuals tracked in §5 item 21. Verbatim below.
+
+_2026-09-06 — **ZIM follow-up wave (steps 1–6) — MERGED** on the owner's instruction: #348 (#344 failed-lock re-arm), #349 (D-Z15 post-registration probe), #350 (D-Z16 `packs:status.excluded`), #351 (UI nits), #354 (#339 P8-1 family contract, D-Z17), #355 (P8-3 scripts), #356 (#340 L3 rewrite, D-Z18) → master tip `ab0f060d`; #357/#358 records + a cancel-leg race fix. Full text of the step entries: `docs/build-log.md` "2026-09-06 — ZIM follow-up wave steps 1–6"._
+
+_2026-09-06/07 — **ZIM open-issues wave (#352, #353, #339 P8-2/P8-4/P8-5, #340 (b)/(c)) — MERGED 2026-09-07 on the owner's instruction** (#359, #360, #362, #366, #361, #363, #364, #365 with merge commits in that order; #352 and #353 closed by the merges) (paper `tmp/zim-open-issues-blast-radius-2026-09-06.md`, git-ignored; the owner's rulings of 2026-09-06 are posted on #339 and #340). Off master `b7b761fe`: **#359** #352 docs (script-first Linux/macOS install, humaniser's linux per-binary hashes); **#360** #340 (b) `'path-unsupported'` add-failure code (win32 ∧ non-ASCII path ∧ manager refusal); **#361** #340 (c) `zim/math.ts` LaTeX → plain text (D-Z3 amendment; sub/superscripts as plain characters); **#362** the L3-b list-question fixture (measured only); **#366** #353 the document-frequency ladder after both patterns return zero (D-Z18 amendment; `totalResults` verified on the real kiwix-serve); **#363** #339 P8-2 the consent step (`downloadEngine({ families })`, `EngineStatus.optionalFamilies`, the two surfaces, D-Z19); stacked on #363: **#364** P8-5 the network-inventory prose (the "on by default" contradiction resolved on the code's side; the inventory sentence pinned in four docs + `privacy.network.hint`) and **#365** P8-4 the corresponding-source bundle (`source_bundle:` pin, `checks.kiwixSourceBundle` fail-closed, the builder's `--kiwix-source-dir` leg, `zim/NOTICES/<uuid>.md`, T20-b/c/d). Rebase conflicts on the way in were CHANGELOG bullets (both kept), the #359/#363 `packs.toolsMissing` copy, #364's troubleshooting section (in-app first, #359's script + hand-placement kept) and the drive-layout tree comment. Suite: master 414 files / 6,657 tests → #365 416 / 6,678. Records: rag-design §17 D-Z19 + amendments, "Deliberately not built" (the rulings), data-contracts, design-guidelines §11.15; §5 item 21 (a)/(b)/(l) below. **Open owner legs:** file the upstream kiwix-serve report (P8-6; draft `tmp/339-upstream-report.md` final after humaniser's 2026-09-07 Linux probe, 0/40 short → win-x86_64-only); R-4 mac/linux signature inspection; T20-a/T20-d real Kit-drive runs on K: (T20-d's scratch-target half is recorded in the row); the L3-b ruling on #340 (always / shape-trigger / never); the GPL-3-via-root-`LICENSE` cross-reference in model-policy; the libmicrohttpd recipe pin; C4 catalog sources; merging the eight PRs._
+
+_2026-09-06 — **ZIM knowledge packs (PR #294 → #301) — WAVE CLOSED: Phases 0–7 complete, #294 MERGED to master (`92e86a07`, 16:12 UTC), #301 closed by the merge.**_
+The PR's review remediation — 28 findings (H1–H4, M1–M11, L1–L9 with L10 withdrawn, DOC-1–DOC-4; three assessed High, H3 and DOC-1/DOC-2 Medium) — closed across P0–P6 on the integration branch `feat/zim-knowledge-packs`;
+master merged in at P0 (`bfdb514a`) and again at P7 (`ddd704ad`). Durable records: `rag-design.md` §17 D-Z1–D-Z14 (with a §-anchor legend),
+`data-contracts.md` "Knowledge packs", `security-model.md` "kiwix-serve — the one unauthenticated sidecar", `design-guidelines.md` §11.15. Correction to
+the 2026-09-04 MVP entry below: its "Suite green (5660+)" and "no-arm path byte-identical, pinned" were the PR author's own claims — P0 replaced the
+tautological byte-identity test with a fixture captured from master `bfdb514a` (L6) and counted 409 / 5,824 at the merge. Per-phase suite deltas: P0
+411/5,841 → P1 5,854 → P1b 5,866 → P2 5,870 → P3a 5,918 → P3b 5,958 → P5 6,001 → P4 6,035 → P6 6,060 (5,980 / 79). Phase PRs (verified via `gh pr list
+--state merged --base feat/zim-knowledge-packs`): #304 P0, #305 P1, #306 P1b, #307 P2, #309 P3a, #316 P3b, #317 P5, #328 P4, #336 P6. The ten per-phase
+dated entries (P0–P6 + the 2026-09-04 MVP entry) are verbatim in `docs/build-log.md` under the 2026-09-06 P7 heading.
+P7 (2026-09-06): master merged in (`f3d45517`); PRs #337 (a ZIM redirect entry opens its target — T19 finding 1), #338 (records), #341 (retry a `/raw` read the pinned
+kiwix-serve cuts short — T19 finding 3, an UPSTREAM defect of kiwix-tools 3.8.1 win-x86_64), #342 (T18-b in real Electron), #343 (the owner's T19 legs on the real K:
+drive — relocated drive, live/failed lock, offline ask — all passed; item 21(d) closed), #345 (T19-a wording) → integration head `9f7fb8dd`; full suite on the final code
+tree 421 files / 6,193 tests (6,112 passed / 79 skipped / the known zim-arm abort load flake, green alone), typecheck + build green; the Opus review found no defect
+candidate; #294's CI green on the merge result with master `ddd704ad` (all four legs + ci-success). Follow-ups: #339 (P8 provisioning), #340 (P9 capabilities + the UI /
+searchability / LaTeX residuals), #344 (a failed lock leaves the chat engine stopped until a model is re-selected — not a pack defect). The working paper and its
+scratch tree were deleted after the merge; the maintainer-local evidence (screenshots, logs, the D5 bundle inputs) is archived outside the repo.
+
 ## 2026-09-08 — BUILD_STATE §5 item 22 (a) rewritten; its original text retired verbatim
 
 NOT a collapse — letter (a) asked for two things and only one was decided, so it was REWRITTEN

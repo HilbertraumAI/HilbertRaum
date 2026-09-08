@@ -205,6 +205,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Knowledge-pack articles open on the first try on Windows.** The pack server sometimes stopped
+  sending a large article half-way through, which cost about four seconds per affected article and
+  occasionally lost one from an answer entirely; the app now asks for articles in a way that
+  avoids the problem, and on the rare occasion a read still stops it is resumed from where it
+  stopped instead of being read again.
 - **The Performance page reports what a started model needs more accurately.** Its "Your model"
   figures now count the model's recurrent-state cache — a second kind of working memory the newer
   hybrid models keep beside the usual one — and no longer count a speculative-decoding start's

@@ -306,9 +306,32 @@ beforeAll(async () => {
     if (url.pathname.startsWith('/raw/')) {
       const article = decodeURIComponent(url.pathname.split('/content/')[1] ?? '').replace(/_/g, ' ')
       rawReads.push(article)
+      // #339 D-Z22: every article request now carries `Range: bytes=<n>-`; libkiwix answers it
+      // `206` + `Content-Range` + the tail, and so does this fake — so the stall leg below
+      // exercises the RESUME path rather than a whole re-read.
+      const rangeFrom = ((): number | null => {
+        const h = req.headers.range
+        if (typeof h !== 'string') return null
+        const m = /^bytes=(\d+)-$/.exec(h.trim())
+        return m ? Number(m[1]) : null
+      })()
+      const sendArticle = (html: string): void => {
+        const buf = Buffer.from(html, 'utf8')
+        if (rangeFrom === null || rangeFrom >= buf.length) {
+          res.writeHead(200, { 'content-type': 'text/html' })
+          res.end(buf)
+          return
+        }
+        const tail = buf.subarray(rangeFrom)
+        res.writeHead(206, {
+          'content-type': 'text/html',
+          'content-length': String(tail.length),
+          'content-range': `bytes ${rangeFrom}-${buf.length - 1}/${buf.length}`
+        })
+        res.end(tail)
+      }
       if (article === LIST_ARTICLE) {
-        res.writeHead(200, { 'content-type': 'text/html' })
-        res.end(listArticleHtml())
+        sendArticle(listArticleHtml())
         return
       }
       // One article whose fetch fails: the arm must skip THAT HIT and keep the others.
@@ -320,8 +343,7 @@ beforeAll(async () => {
       // One article big enough to need several converter slices (P1b), so an ask that is
       // cancelled while it converts has something to be cancelled during.
       if (article === 'Grossartikel') {
-        res.writeHead(200, { 'content-type': 'text/html' })
-        res.end(bigArticleHtml())
+        sendArticle(bigArticleHtml())
         bigArticleServed = true
         return
       }
@@ -334,15 +356,18 @@ beforeAll(async () => {
       // the connection hangs and the last part never arrives. The client's per-attempt timeout
       // ends it, and the retry (the title is already consumed) reads the article whole.
       if (stallOnce.delete(article)) {
-        res.writeHead(200, {
+        const total = Buffer.byteLength(body)
+        res.writeHead(rangeFrom === null ? 200 : 206, {
           'content-type': 'text/html',
-          'content-length': String(Buffer.byteLength(body))
+          'content-length': String(total),
+          ...(rangeFrom === null
+            ? {}
+            : { 'content-range': `bytes ${rangeFrom}-${total - 1}/${total}` })
         })
         res.write(body.slice(0, Math.floor(body.length * 0.85)))
         return
       }
-      res.writeHead(200, { 'content-type': 'text/html' })
-      res.end(body)
+      sendArticle(body)
       return
     }
     res.writeHead(404)
