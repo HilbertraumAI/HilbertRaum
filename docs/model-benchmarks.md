@@ -771,7 +771,7 @@ held:
 | 5 | same laptop: AMD Radeon(TM) Graphics listed FIRST, RTX 3060 second, no `--device` | E2B, 9B | every GPU buffer on the RTX; the fit's device list never contained the iGPU (its "device 0" was Vulkan1) | — | — |
 | 7 | RTX 3090 24 GB (24,822 / 23,575) | Q4 · Q5 | Q4 66/66 (4,704 MiB free at peak) · Q5 **62/66** under rung 1a (MTP on, `-np` auto) | 53.8 · 30.4 | Q4 ✔; the RAM pick Q5 demoted exactly as rule C says — but see the #319 amendment: with `-np 1` this card stars Q5, which it then offloads 66/66 |
 | 1 | the rig, Q5, one thing varied per start | ubatch 2048→512 · `--fit-target` 1024→512 · `-np` auto→1 · MTP on→off | 65/66 · 64/66 · **66/66** · **66/66** | 38.9 · 34.7 · **51.0** · 30.7 | — |
-| 4 fu | same laptop, re-run 2026-09-08 under #391 with `-np 1` now in `CHAT_SERVER_ARGS` | 4B at its own ctx **4096** · 9B at 8192 | 4B **33/33**, `CPU_Mapped 497.31` · 9B **20/33** (was 18/33: one slot returns 150.75 MiB of recurrent state) | 59.4 · 4.2 (both on AC; on battery the same 4B start reads 4.2) | reported separately — #391 part (a) |
+| 4 fu | same laptop, re-run 2026-09-08 under #391 with `-np 1` now in `CHAT_SERVER_ARGS` | 4B at its own ctx **4096** · 9B at 8192 | 4B **33/33**, `CPU_Mapped 497.31` · 9B **20/33** (was 18/33: one slot returns 150.75 MiB of recurrent state) | 59.4 · 4.2 (both on AC; on battery the same 4B start reads 4.2) | E2B (**Grafikspeicher**) ✔ unchanged, tile 5,9 GB VRAM, profile **BALANCED** — but only after a re-measure: the profile is a field of the stored benchmark record and the machine's was pre-#387 |
 
 Two integrated-only laptops (Iris Xe 8,098 MiB, UHD 620 8,119 MiB) had no leg; both confirmed on
 hardware that `looksIntegrated` keeps a large integrated device out of the budget slot (class

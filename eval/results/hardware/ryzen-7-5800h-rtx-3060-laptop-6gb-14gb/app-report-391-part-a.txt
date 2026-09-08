@@ -1,0 +1,121 @@
+Copy report from the Performance screen, pasted by the operator 2026-09-08 for issue #391 part (a)
+("What the app shows, at 14 GB RAM"). App = source build running from the repo checkout
+(`npm run dev`) on branch `hw/391-ryzen-7-5800h-rtx-3060-laptop-6gb-14gb-20260908`, i.e. off
+master AFTER #386 / #387 / #390. Drive root is the dev workspace described in 00-preflight.md.
+No model was running when the report was taken, so it carries no "Dein Modell" placement row.
+
+Deviation to state: `qwen3.5-4b-ud-q4kxl.gguf` was staged into this workspace's models/chat
+earlier in the session for the leg (b) start, so the workspace holds one model more than it did
+on 2026-09-07. It does not affect the ★, which is computed over the catalog, not over what is
+installed.
+
+--- verbatim ---
+Dieser Computer
+Geschwindigkeit: 62,6 Token / Sek. (Gemessen mit Gemma 4 E4B Instruct QAT Q4 am 7.9.2026, über 64 Token)
+Arbeitsspeicher: 13,9 GB RAM
+CPU: AMD Ryzen 7 5800H with Radeon Graphics (16 Kerne)
+Grafikspeicher: 5,9 GB VRAM (NVIDIA GeForce RTX 3060 Laptop GPU)
+Laufwerk: 281,5 MB/s lesen
+Zugewiesenes Profil: LITE
+Empfohlen für den nächsten Start: Gemma 4 E2B Instruct QAT Q4 (Grafikspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Gemma 4 E2B Instruct QAT Q4
+Kontextgröße: 8.192 Token
+Letzter Lauf: 7.9.2026, 19:26:19
+
+--- RE-MEASURED the same day, after the read-out below explained the LITE reading ---
+
+The operator pressed the Performance screen's measure action once; nothing else changed (same
+build, same branch, same machine, app never restarted). The profile flipped:
+
+Dieser Computer
+Geschwindigkeit: 62,9 Token / Sek. (Gemessen mit Gemma 4 E4B Instruct QAT Q4 am 8.9.2026, über 64 Token)
+Arbeitsspeicher: 13,9 GB RAM
+CPU: AMD Ryzen 7 5800H with Radeon Graphics (16 Kerne)
+Grafikspeicher: 5,9 GB VRAM (NVIDIA GeForce RTX 3060 Laptop GPU)
+Laufwerk: 281,5 MB/s lesen
+Zugewiesenes Profil: BALANCED
+Empfohlen für den nächsten Start: Gemma 4 E2B Instruct QAT Q4 (Grafikspeicher)
+Empfohlen zum Zeitpunkt der Prüfung: Gemma 4 E2B Instruct QAT Q4
+Kontextgröße: 8.192 Token
+Letzter Lauf: 8.9.2026, 09:05:38
+
+Speed is unchanged within noise (62,6 -> 62,9 tok/s on the same model and the same 64 tokens), so
+the profile moved on `gpuUseful` alone, exactly as the derivation below says. Both reports are kept:
+the first is the evidence for the staleness finding, the second is #391's answer.
+
+--- what this settles, against #391's table ---
+
+| row                | #391 expected            | reported                              | verdict |
+|--------------------|--------------------------|---------------------------------------|---------|
+| Grafikspeicher tile| 5,9 GB VRAM (RTX 3060)   | 5,9 GB VRAM (NVIDIA GeForce RTX 3060 Laptop GPU) | MATCHES |
+| basis              | Grafikspeicher           | **Grafikspeicher**                    | MATCHES |
+| ★                  | gemma4-e2b-it-qat-q4     | Gemma 4 E2B Instruct QAT Q4           | MATCHES (unchanged, as the #321 comment's correction predicted — not the 4B) |
+| Profil             | BALANCED                 | **LITE** first, **BALANCED** after one re-measure | MATCHES, but only after a re-measure — see below |
+
+The Klein/Nutzbar rating word is not part of the Copy report text; the report carries the tile's
+figure and device name only. The basis flipping to "Grafikspeicher" is the observable proof that
+the card is now the budget device, i.e. that #387's lowered gate is in effect on this build.
+
+--- why the FIRST report read LITE (measured, not inferred — and then confirmed by the re-run) ---
+
+`Zugewiesenes Profil` is NOT recomputed live. It is a field of the PERSISTED benchmark record,
+written when a measurement runs. Read out of this workspace's settings table
+(`workspace/hilbertraum.sqlite`, key `lastBenchmark`, read-only):
+
+    profile:        "LITE"
+    finishedAt:     2026-09-07T17:26:19.883Z      <- = "Letzter Lauf 7.9.2026, 19:26:19"
+    tokensPerSecond: 62.6
+    speedIdentity:  { memoryClass: "cpu", deviceName: null, contextTokens: 8192, backend: "gpu" }
+    gpu:            null
+
+That record was produced by the PRE-#387 build: `memoryClass: "cpu"` and `gpu: null` are exactly
+what the 6,144 MiB gate did to this card. The `gpuProbe` key, by contrast, was re-probed today
+(`probedAt: 2026-09-08T06:23:15.375Z`) and lists Vulkan1 at 5,994 / 5,226 — which is why the
+RECOMMENDATION line is live and post-#387 while the PROFILE line is not.
+
+So the LITE reading is a stale record, not a contradiction of #321's arithmetic. On the committed
+code the bump does fire for this machine:
+
+    classifyProfile(13.9, { gpuUseful: true, tokensPerSecond: 62.6 })
+      ramGb 13.9 <= 16                      -> idx 1 (LITE)
+      gpuUseful (5,994 >= USABLE_VRAM_MB 5,120, not integrated) -> idx 2 (BALANCED)
+      tps 62.6 is not < VERY_LOW_TOKENS_PER_SECOND (3)          -> no downgrade
+      = BALANCED
+
+`gpuUsefulForProfile` reads the same `USABLE_VRAM_MB` constant #387 lowered (`shared/gpu-rules.ts`:
+`GPU_BUMP_MIN_VRAM_MB = USABLE_VRAM_MB`), so there is no second gate holding the profile back.
+
+The displayed value therefore only turns BALANCED after the next measurement run on this machine —
+and the re-measure above did exactly that, on an unchanged build, with the speed figure unmoved.
+That is the prediction and its confirmation in the same session.
+
+The report does timestamp what it shows ("Letzter Lauf"), so this is not SILENT staleness. But it
+is staleness with teeth: a gate change ships a new recommendation basis immediately (the
+"Empfohlen" line was already post-#387 in the first report) while leaving the profile label on the
+same screen describing the previous build's verdict, until someone happens to re-measure. Nobody
+is prompted to. Worth a decision of its own; not filed as an issue here because the owner asked
+for the re-run rather than the issue.
+
+--- verdict on the BALANCED bump, which #391 explicitly asks for ---
+
+It does not look wrong on this machine, and the strongest reason is that it costs nothing:
+
+1. `profile` does NOT choose the model when the machine RAM is known. `buildModelList`
+   (`services/models.ts:1235-1244`) uses `recommendChatModelId` (rule C + RAM) whenever
+   `machineRamGb != null`, and falls back to `recommendModelId(profile, ...)` only on the legacy
+   no-RAM path. The ★ here is unchanged at the E2B before and after the bump — measured, both
+   reports say so. So BALANCED is a LABEL on the Performance screen, not a lever.
+2. The label is defensible on this hardware. The card really does accelerate: this session
+   measured the 4B fully offloaded 33/33 at 59.4 tok/s and the app's own benchmark reads
+   62.9 tok/s; the September session measured the E2B 36/36 at 86 tok/s. Calling that machine
+   LITE — the same step as a machine with no usable card at all — was the less accurate of the
+   two labels. On the profile scale a 32 GB CPU-only box is also BALANCED, and this laptop beats
+   one at chat inference.
+3. What is genuinely coarse is not this machine's answer but the RULE: the bump is a flat +1 on
+   a single boolean, so a 5,120 MiB card and a 24 GB card earn the same step. That is the part
+   with no measurement behind it. It did not misfire here.
+
+Where the label overstates, for the record: 14 GB RAM + 6 GB VRAM cannot hold a 9B — this session
+measured 20/33 at 4.15 tok/s — so a reader who takes BALANCED to mean "mid-size models are
+comfortable" would be wrong. The ★ does not make that mistake, because it never consults the
+profile.
