@@ -6,7 +6,11 @@ import { join, parse } from 'node:path'
 import { stringify } from 'yaml'
 import { openDatabase } from '../../src/main/services/db'
 import { initPerf } from '../../src/main/services/perf'
-import { latestEffectiveRead, resetEffectiveReadForTests } from '../../src/main/services/read-speed'
+import {
+  latestEffectiveRead,
+  recordModelLoadRead,
+  resetEffectiveReadForTests
+} from '../../src/main/services/read-speed'
 import { seedSettings, getSettings, updateSettings } from '../../src/main/services/settings'
 import {
   beginChecksumInstrumentation,
@@ -270,8 +274,8 @@ describe('checksum instrumentation + single-flight (#106)', () => {
     const bytes = 6_000_000_000
     // Real elapsed above the 250 ms sample floor, so the LABEL — not the floor — is
     // what the download assertion proves.
-    const overFloor = async (file: 'download' | 'weight'): Promise<void> => {
-      const instrumentation = beginChecksumInstrumentation({ modelId: 'm', file }, bytes)
+    const overFloor = async (file: 'download' | 'weight', path?: string | null): Promise<void> => {
+      const instrumentation = beginChecksumInstrumentation({ modelId: 'm', file }, bytes, path)
       await new Promise((r) => setTimeout(r, 300))
       instrumentation.end(true)
     }
@@ -284,6 +288,34 @@ describe('checksum instrumentation + single-flight (#106)', () => {
 
     // Both hashes were fully instrumented regardless.
     expect(readLog().filter((l) => l.includes(' checksum_done '))).toHaveLength(2)
+  })
+
+  it("a 'download' verify never adds its path to the #392 warmed set (the .part is renamed away)", async () => {
+    resetEffectiveReadForTests()
+    const bytes = 6_000_000_000
+    // What `verifyDownloadedFile` does for a download: the label says 'download' AND the path
+    // is withheld, so neither the sample nor the warmed set learns about the staged `.part`.
+    const download = beginChecksumInstrumentation({ modelId: 'm', file: 'download' }, bytes, null)
+    await new Promise((r) => setTimeout(r, 300))
+    download.end(true)
+    expect(latestEffectiveRead()).toBeNull()
+
+    // A model started from that very path afterwards therefore still samples honestly.
+    recordModelLoadRead('/models/w.gguf', 10_000, 'm', bytes)
+    expect(latestEffectiveRead()?.source).toBe('model_load')
+  })
+
+  it('a real weight hash registers its path: the start that follows records no load sample (#392)', async () => {
+    resetEffectiveReadForTests()
+    const bytes = 6_000_000_000
+    const weight = '/models/w.gguf'
+    const hash = beginChecksumInstrumentation({ modelId: 'm', file: 'weight' }, bytes, weight)
+    await new Promise((r) => setTimeout(r, 300))
+    hash.end(true)
+    expect(latestEffectiveRead()?.source).toBe('checksum')
+
+    recordModelLoadRead(weight, 10_000, 'm', bytes)
+    expect(latestEffectiveRead()?.source).toBe('checksum') // the RAM figure never lands
   })
 })
 

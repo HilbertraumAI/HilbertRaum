@@ -17,6 +17,7 @@ import {
   type VerifyResult
 } from './assets'
 import { invalidateChecksum, primeChecksum, type HashStore } from './models'
+import { noteWeightWarmed } from './read-speed'
 
 // In-app model downloader (architecture.md "In-app model downloader"). A thin job
 // state machine over the `assets.ts` seams: `planModelDownloads` (license gate +
@@ -658,6 +659,12 @@ export class DownloadManager {
     verify: VerifyResult
   ): void {
     renameSync(partPath(task.dest), task.dest)
+    // #392: the bytes at `task.dest` are page-cache-resident — the app wrote them moments ago —
+    // and the prime below means nothing will ever re-hash them, so no `checksum` sample exists
+    // for this file either. A model start right after the download would time a RAM read and
+    // persist it as the drive's speed. Mark the FINAL path warm (never the `.part`, which is
+    // gone): this start records no read sample at all, and the next cold one measures the medium.
+    noteWeightWarmed(task.dest)
     // Prime the checksum cache with the hash we JUST computed (identical bytes, same file) so the
     // Models screen's install-state refresh reports `installed` immediately instead of redundantly
     // re-hashing the multi-GB weight — that re-hash is the invisible gap where the card briefly

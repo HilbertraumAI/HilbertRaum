@@ -55,9 +55,10 @@ const hasSlowReadWarning = (warnings: readonly string[]): boolean =>
   warnings.some((w) => w.includes('model starts will be slow'))
 const here = (): string | null => machineKey(detectSystem())
 
-/** 3 GB in 10 s: a 300 MB/s model-load sample (above the #110 gate). */
-function loadSample(modelId: string, ms = 10_000): void {
-  recordModelLoadRead('unused', ms, modelId, 3_000_000_000)
+/** 3 GB in 10 s: a 300 MB/s model-load sample (above the #110 gate). The path matters since
+ *  #392 — a weight hashed anywhere in the session records no load sample at all. */
+function loadSample(modelId: string, ms = 10_000, path = 'unused'): void {
+  recordModelLoadRead(path, ms, modelId, 3_000_000_000)
 }
 
 /** A bare runtime whose stream yields a few chunks — enough for the speed leg to run. */
@@ -636,5 +637,51 @@ describe('strictly increasing sample timestamps (A-D4): same-millisecond samples
     expect(s.benchmarkHistory[0].effectiveRead?.modelId).toBe('load-first')
     // The observed rows still tell the two apart.
     expect(latestEffectiveReadBySource('checksum')!.at > latestEffectiveReadBySource('model_load')!.at).toBe(true)
+  })
+})
+
+// #392: the Models-screen-then-start journey. The screen hashes the weight (#382 hashes the
+// whole corpus before a model can be chosen), the start hits the size+mtime cache so nothing
+// suppressed its window, the #114 prefetch pulled RAM, and the resulting model_load sample
+// (589 MB/s for a 28 MB/s stick — #334 leg B1) outranked the honest checksum FOREVER:
+// `preferCandidate` never lets a checksum displace a model_load, on the latch or on any
+// persisted destination. So the 100 MB/s slow-read warning was dropped on the exact machine
+// class the feature exists for.
+describe('a weight hashed this session never persists a page-cache load figure (#392)', () => {
+  const WEIGHT = '/models/corpus/w.gguf'
+
+  it('the checksum figure survives the start that follows it — on both destinations, warning intact', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const mine = hereResult()
+    updateSettings(db, { lastBenchmark: mine, benchmarkHistory: [mine] })
+    registerModelIpc(ctxWith(root, db))
+
+    // The Models screen hashes the weight: 3 GB in 100 s = 30 MB/s, well under the #110 gate.
+    recordChecksumRead(3_000_000_000, 100_000, 'corpus-model', WEIGHT)
+    // …then the user starts that model. Page-cache-warm: 300 MB/s of RAM, not of the stick.
+    loadSample('corpus-model', 10_000, WEIGHT)
+
+    expect(latestEffectiveRead()?.source).toBe('checksum')
+    const s = getSettings(db)
+    expect(s.lastBenchmark?.effectiveRead).toMatchObject({ source: 'checksum', mbps: 30 })
+    expect(s.benchmarkHistory[0].effectiveRead).toMatchObject({ source: 'checksum', mbps: 30 })
+    expect(hasSlowReadWarning(s.lastBenchmark!.warnings)).toBe(true)
+    expect(hasSlowReadWarning(s.benchmarkHistory[0].warnings)).toBe(true)
+  })
+
+  it('a start of a weight nothing hashed still persists its model_load sample', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    const mine = hereResult()
+    updateSettings(db, { lastBenchmark: mine, benchmarkHistory: [mine] })
+    registerModelIpc(ctxWith(root, db))
+
+    recordChecksumRead(3_000_000_000, 100_000, 'other-model', '/models/corpus/other.gguf')
+    loadSample('corpus-model', 10_000, WEIGHT)
+
+    const s = getSettings(db)
+    expect(s.lastBenchmark?.effectiveRead).toMatchObject({ source: 'model_load', modelId: 'corpus-model' })
+    expect(hasSlowReadWarning(s.lastBenchmark!.warnings)).toBe(false)
   })
 })

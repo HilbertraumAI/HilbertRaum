@@ -191,7 +191,10 @@ function graphicsFigure(bench: BenchmarkResult | null, snap: PerformanceSnapshot
   // With the GPU switched off or auto-disabled the snapshot names no device for the next start,
   // and a card the RESULT recorded while the GPU was on must not fill the tile in its place: the
   // verdict, the ★ and the "Your model" row already say RAM for that start (issue #325 (1)).
-  if (gpuOff && !live) return { kind: 'off' }
+  // That off state is THIS machine's, never the record's, so it can only speak for a record
+  // measured here (#381 review): `live` is null for a foreign record too, and the gate fired on
+  // it, replacing that machine's own recorded card with this machine's "acceleration is off".
+  if (gpuOff && !live && (snap?.currentMachine ?? true)) return { kind: 'off' }
   const mb = live?.totalMb ?? bench.gpuVramMb ?? null
   const name = live?.name ?? bench.gpu ?? null
   if (mb == null || mb <= 0) {
@@ -281,15 +284,21 @@ function buildReport(
   ]
   // The LIVE pick for the next start (the same one the AI Model screen stars) with the memory it
   // was judged against, so a report compared with someone else's shows what the app would
-  // actually pick (issue #325 (2)); null only without a catalog. Then the result's own pick,
-  // which is what the check said at the time.
+  // actually pick (issue #325 (2)); null only without a catalog. It is THIS computer's pick even
+  // when the headline record is another machine's, so there it is labelled as such (issue #381):
+  // a reader going down from "Another computer: …" otherwise attributes it to that machine
+  // (F-B1.report.txt from the #330 round trip). The context size belongs directly beside it — it
+  // is the live pick's launch context on this machine (`recommendedContextTokens`, resolved
+  // MAIN-side from the live id), not the saved pick's window; after the saved line it read as
+  // that one's. `contextFor(null)` is null, so a report without a live pick states no context.
+  // Then the result's own pick, which is what the check said at the time.
   if (live) {
     lines.push(
-      `${t('perf.recommendation.next')}: ${live.modelId ? `${modelName(live.modelId, models, t)} (${t(`perf.basis.${live.basis}`)})` : t('diag.bench.noMatch')}`
+      `${t(currentMachine ? 'perf.recommendation.next' : 'perf.recommendation.nextOnThisComputer')}: ${live.modelId ? `${modelName(live.modelId, models, t)} (${t(`perf.basis.${live.basis}`)})` : t('diag.bench.noMatch')}`
     )
+    if (contextTokens != null) lines.push(`${t('models.context.title')}: ${t('models.tech.contextValue', { count: contextTokens.toLocaleString(lang) })}`)
   }
   lines.push(`${t('perf.recommendation.atCheckTime')}: ${bench.recommendedModelId ? modelName(bench.recommendedModelId, models, t) : t('diag.bench.noMatch')}`)
-  if (contextTokens != null) lines.push(`${t('models.context.title')}: ${t('models.tech.contextValue', { count: contextTokens.toLocaleString(lang) })}`)
   lines.push(`${t('diag.bench.lastRun')}: ${fmtDateTime(bench.ranAt, lang)}`)
   for (const w of bench.warnings) lines.push(`- ${localizeServerCopy(t, w)}`)
   return lines.join('\n')

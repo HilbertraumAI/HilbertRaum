@@ -530,7 +530,9 @@ export interface VerifyResult {
  * `checksum_done.ok` field means "the hash ran to completion" (a mismatch still
  * completed); the match outcome is the returned `VerifyResult`. Verify-after-download
  * reads bytes the app just wrote (page-cache-resident), so the 'download' label is
- * excluded from the #108 effective-read sampling at the recording site.
+ * excluded from the #108 effective-read sampling at the recording site — and, since #392,
+ * from the warmed-path set too: `filePath` here is the staged `.part`, which is renamed away
+ * once it verifies, so remembering it would key the set on a path no model ever loads from.
  */
 export async function verifyDownloadedFile(
   filePath: string,
@@ -544,7 +546,15 @@ export async function verifyDownloadedFile(
   } catch {
     /* vanished between existsSync and stat — the stream error below reports it */
   }
-  const instrumentation = beginChecksumInstrumentation(label, bytes)
+  // The `'download'` arm is the one that actually runs: all three callers of this function (the
+  // model-download verify, the F-13 complete-part settle, the engine-archive verify) pass that
+  // label. The other arm is defensive — a future non-download caller would be hashing a file in
+  // its final place, and THAT path should be remembered.
+  const instrumentation = beginChecksumInstrumentation(
+    label,
+    bytes,
+    label.file === 'download' ? null : filePath
+  )
   let actual: string
   try {
     actual = await sha256File(filePath)

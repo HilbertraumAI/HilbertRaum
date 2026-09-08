@@ -72,9 +72,20 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    on fast media, so a `model_load` sample always replaces a `checksum` one, never vice versa).
    Measured separation: ~70 MB/s on the stick vs 430+ on SSDs. Honesty guards (adversarial-review
    round 2026-08-09): a `model_load` sample needs ≥ 2 GiB (parse/KV-alloc/graph-init fixed costs
-   must not dominate the window), a start whose install-state pass just HASHED the file records
-   no load sample (the hash warmed the page cache — the window would read RAM), and the download
-   verify never samples (it reads bytes the app just wrote). A fresh install has no sample yet —
+   must not dominate the window), a start of a weight hashed anywhere in this session records no
+   load sample (#392, 2026-09-08) — the start's own install-state pass, a Models-screen verify or
+   a background hash all warm the page cache, so the window would read RAM; the #114 prefetch skip
+   stays tied to the start's own hash only — and the download
+   verify never samples (it reads bytes the app just wrote). A start right after an **in-app
+   download** therefore records no read sample at all: the verify is excluded by design and the
+   page-cache-warm load after it is dropped too (#392) — honest absence rather than a wrong figure,
+   and the next cold start records the medium. The #392 guard is process-scoped and **does not
+   survive a relaunch**: the checksum store is persistent, so on the next launch nothing hashes,
+   the warmed-path set is empty, and on a big-RAM machine a warm start records a `model_load`
+   sample that overwrites the honest checksum figure (`preferCandidate` lets `model_load` beat a
+   `checksum` incumbent unconditionally) — the figure oscillates with the cache's warmth until a
+   cold start. The ranking-rule amendment that would fix it is issue **#404**.
+   A fresh install has no sample yet —
    Diagnostics shows *"not measured yet — starting a model measures it"*; once present the row
    carries the sample's own date (the card's "Last run" describes the benchmark, not this row).
    `driveReadMbps` itself is still computed and persisted (continuity for old blobs + the probe's
@@ -219,8 +230,15 @@ best fit for this computer's graphics memory / unified memory / RAM"); the saved
 at the time of the check" (also the Copy report's label). The Copy report additionally carries the
 live pick on its own line, "Recommended for the next start: \<model\> (\<basis\>)", ahead of the
 saved one, so a report compared with someone else's shows what the app would actually pick
-(issue #325, 2026-09-06; omitted when `recommendation` is null). `null` only without a catalog. A
-"recommendation changed since this check" note was deliberately omitted (audit gate G4).
+(issue #325, 2026-09-06; omitted when `recommendation` is null). The context-size line follows that
+live line in BOTH cases — this computer's record and another's — because it is the LIVE pick's
+launch context; after the saved line it read as the saved pick's window. Under an "Another
+computer: …" heading the live line additionally reads "Recommended for the next start **on this
+computer**" (`perf.recommendation.nextOnThisComputer`), because both lines are THIS machine's and
+unlabelled they read as the headline machine's (issue #381, 2026-09-08). `null` only without a
+catalog — and `recommendedContextTokens` derives from the same live id, so "no live pick" and "no
+context line" always travel together. A "recommendation changed since this check" note was
+deliberately omitted (audit gate G4).
 
 **Speed-signal step-down (issue #95, since 2026-08-09).** The picker optionally consumes the
 persisted probe pairing (`tokensPerSecond` + `measuredModelId`): a probe strictly under
@@ -608,11 +626,19 @@ marked with the tile's own qualifier, "Approximate: counted chunks, not runtime 
 app never invents one. Two consequences beyond the tile: the **Copy report** carries the qualifier
 in the Speed line and heads itself "This computer" only when `snapshot.currentMachine` — otherwise
 "Another computer: \<cpu\>, \<ram\> GB RAM", because the report is pasted into a support message
-where the old heading misattributed every figure under it; and an **other-computer row** whose
-figure is approximate is rated with the neutral "Approximate" pill (`perf.rating.approx`, neutral
-tone) instead of Good/Slow, with the qualifier appended to its sub line. Good/Slow is a claim
-about the machine, and a chunk count over wall time (prefill included) cannot support one.
-`speedIsApprox` / `speedBasisNote` in `PerformanceScreen.tsx` are the single source for all three.
+where the old heading misattributed every figure under it. Two lines under that heading are NOT the
+record's, and #381 (2026-09-08) settled both: the live "next start" line and the context size
+beside it are this computer's either way, so there they are labelled "on this computer" rather than
+left to be read as the other machine's; and the Graphics memory tile's "Graphics acceleration is
+off" — this machine's setting (`gpuMode: 'off'` / `gpuAutoDisabled`), not the record's — is now
+shown only for a record measured HERE (`graphicsFigure` gates it on `snapshot.currentMachine`;
+`live` is null for a foreign record too, so it used to replace that machine's own recorded card).
+One `graphicsFigure` call feeds the tile and the report, so the gate fixes both. And an
+**other-computer row** whose figure is approximate is rated with the neutral "Approximate" pill
+(`perf.rating.approx`, neutral tone) instead of Good/Slow, with the qualifier appended to its sub
+line. Good/Slow is a claim about the machine, and a chunk count over wall time (prefill included)
+cannot support one. `speedIsApprox` / `speedBasisNote` in `PerformanceScreen.tsx` are the single
+source for all three.
 **Your model** (a row under the tiles; 2026-09-05, owner direction): whether the ACTIVE model fits
 is not a property of RAM or of VRAM alone, so neither tile says it. The row names the model, its
 size on disk and the context it launches with, then gives one verdict against this computer's
@@ -1291,7 +1317,7 @@ commit references, and added the changelog entry.
   Models-screen hash lets the page-cache load sample through the #108 guard (589 MB/s persisted
   for a 28 MB/s stick); the Home preflight's 8 MiB probe runs at unlock beside the hash; a healthy
   start at 87 MB/s on a 16 GB machine settles at 159 s, past the bound.
-  Follow-ups: #392 (the read sample), #393 (the overlap fix). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
+  Follow-ups: #392 (the read sample — fixed 2026-09-08, PR #406: a start of a weight hashed anywhere in the session records no load sample), #393 (the overlap fix). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
 
 ### §5 §-anchor legend
 
