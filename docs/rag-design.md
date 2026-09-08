@@ -3310,8 +3310,27 @@ to keep `<a href>` targets, which it drops today. *C3* —
 Tier-2 import: ruled (a), a "Save article to my documents" button in the article viewer FIRST,
 the citation card later; the button shipped as **D-Z21** (above, `feat/340-tier2-save-article`)
 and the citation-card shortcut has since shipped too, as **D-Z23** (#418) — C3 is complete. *C4* —
-acquisition from Kiwix catalogs: ruled later, after the consent surface (D-Z19) has settled; the
-gate is satisfied and the catalog-source ruling is what remains (#417). *#339 items 3–6* — readiness never depends
+acquisition from Kiwix catalogs: **RULED 2026-09-09 — NOT BUILT, and not deferred (#417 closed).**
+The gate the earlier ruling waited on (D-Z19) was satisfied, and the owner then ruled the feature
+out on its merits rather than choosing a catalog source: **the app downloads the TOOLS that run
+Kiwix, and nothing else; the archives are the user's to fetch and place.** That division is
+already whole — the `kiwix_tools` family installs from inside the app (D-Z19, two entry points,
+licence-accept dialog, size and source stated), and an archive is added by copying a `.zim` into
+the drive's `zim/` folder or through *Add packs…*, used in place, documented as the normal
+workflow in `user-guide.md` §7b (which names `library.kiwix.org` in its opening line) rather than
+as a stopgap. What the ruling BUYS, and why it is not merely "less work": the pinned
+network-inventory sentence in `PRIVACY.md` / `README.md` / `user-guide.md` / `security-model.md`
+(and `privacy.network.hint`, pinned verbatim by `repo-hygiene.test.ts`) stays true unchanged —
+models, engine, pack tools, each confirmed and verified, all pinned artifacts with a SHA-256 the
+project computed. A live catalog could never be pinned that way (archives are republished monthly;
+their URL, size and licence would be whatever the server asserted that day), so shipping it would
+have meant showing users facts the app had not verified — the one thing D-Z19 exists to prevent.
+`docs/product-vision.md` also books *curation* as what the preconfigured Kit sells, which an
+in-core curated source list would have spent. Consequences accepted: no in-app browsing or
+searching of the Kiwix catalog; no in-app update when an archive is republished; the
+`path-unsupported` non-ASCII Windows limit and the "copy the file, then Refresh" step stay on the
+user's side of the line. Revisit only on evidence that hand-placement is the thing blocking
+adoption — not to complete a symmetry with the model downloader. *#339 items 3–6* — readiness never depends
 on `kiwix_tools` and `kiwix-search` stays installed-but-unused, both as built (D-Z17); the
 upstream report is the owner's to file (humaniser's Linux stall probe of 2026-09-07 came back
 0/40 short — finding 3 below — so the report is a win-x86_64 report; P8-6);
