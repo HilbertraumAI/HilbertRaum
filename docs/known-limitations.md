@@ -2374,8 +2374,23 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **A model start that never settles defers the automatic check to the next launch** instead of
   waiting indefinitely or measuring an unfinished load.
 - **A manual (non-automatic) model start already in flight is not awaited by the scheduler.** Only
-  the automatic auto-start is sequenced ahead of the benchmark; a manual start and an automatic
-  check can still overlap on a very slow drive (tracked as issue #334).
+  the automatic auto-start is sequenced ahead of the benchmark. Measured 2026-09-08 (#334,
+  `eval/results/hardware/334-slow-usb-20260908/`): a Models-screen visit during the auto-start
+  hashes beside it (the 9B hash 65 → 213 s, the load 91 → 132 s), and a "Use model" press seconds
+  after the start settled stopped the auto-started model under the check's speed leg (the run
+  ended in 3.4 s). The persisted profile and ★ were unchanged; only that run's speed figure is
+  absent or chunk-based. Fix candidate: the speed leg's busy re-check also watches a start in
+  flight (`startingModelId`) and skips with the existing "speed skipped" warning (issue #393).
+- **A model started right after a Models-screen visit persists the page cache as the drive's read
+  figure.** The #108 guard suppresses the load sample only when the START's own install check
+  hashed the file; when the Models screen hashed it moments earlier the start hits the cache, the
+  prefetch reads RAM, and the model-load sample (589 MB/s for a 28 MB/s stick, #334 leg B1)
+  outranks the honest checksum sample for good — so the 100 MB/s slow-read warning never fires on
+  that machine and the next-start estimate is optimistic. This is the default first-run journey
+  (#382 hashes everything before a model can be chosen). Issue #392.
+- **The Home screen's launch preflight writes its 8 MiB probe at unlock**, in the same second the
+  auto-start begins hashing (#334 perf marks, 0.4 s after `unlock_done`). It persists nothing and
+  measured the same write figure as the sequenced probe after the load; noted, not sequenced.
 - **A GPU probe that times out internally persists as an empty stamped probe** — indistinguishable
   from a machine that genuinely has no usable graphics device until a later probe succeeds.
 - **One `performance:get` read costs about 100 ms in the dev build** (a synchronous manifest scan

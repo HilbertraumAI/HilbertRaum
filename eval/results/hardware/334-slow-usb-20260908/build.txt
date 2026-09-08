@@ -1,0 +1,8 @@
+# Build under test (#334)
+
+- artifact: HilbertRaum-0.1.59-portable.exe, 110,763,827 bytes, packaged 2026-09-08 00:56 on DESKTOPDIT (i7-8700 / GTX 1070 Ti, #330 computer B)
+- source: master c227c63e (merge of PR #385, 2026-09-07), clean working tree
+- command: npm run package:win (electron-vite build + electron-builder --win portable; electron 43.4.0)
+- sha256: b5d5131279d5283e5c68ee4ed46774c1329e5e5998c826bba64b49bf1d40dda6
+- drive: E: "SSK Drive", SSK USB3.2 stick, 58.2 GB exFAT, lite layout of 2026-08-31, runtime b9849, manifests identical to the repo; cold read 28.3 MB/s on the slow port (116 MB/s on the USB 3 port)
+- launch: _334-start-perf.cmd (sets HILBERTRAUM_PERF_LOG=1, then Start HilbertRaum.cmd)
