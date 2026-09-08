@@ -1291,7 +1291,7 @@ commit references, and added the changelog entry.
   by 0.1.57 (keyed `lastBenchmark`, no history). Every acceptance box passed; the step record and
   evidence live in `eval/results/hardware/330-round-trip-20260907/00-protocol.md`. Side findings
   from the run, none of them a persistence defect: the unlock-time GPU probe could race the
-  auto-start and cache an empty answer for the session (#380, fixed 2026-09-08, PR #TBD); the Copy report's live "next
+  auto-start and cache an empty answer for the session (#380, fixed 2026-09-08, PR #407); the Copy report's live "next
   start" line under an "Another computer" heading (#381); a fresh workspace hashing every weight
   before a model can be chosen (#382); `gpuAutoDisabled` is workspace-wide, not machine-stamped;
   a USB bus reset drops the decrypted WAL and the next unlock simply restores again
