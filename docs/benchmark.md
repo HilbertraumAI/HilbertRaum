@@ -447,6 +447,11 @@ the measurement once the start actually settles; a session or process that ends 
 nothing (the next launch re-checks), and a start that never settles leaves it to the next launch
 too. Nothing cancels the user's model start, and no new occupancy lane exists. The timer is
 injectable (`deps.timer`) so the timeout is testable without real time; production passes no deps.
+Measured 2026-09-08 (#334, `eval/results/hardware/334-slow-usb-20260908/`): a healthy 9B start on
+an 87 MB/s stick path with 15.8 GB RAM took 68 s to hash and 91 s to load, so the bound fired and
+the continuation ran 10 s after settlement — the deferral is the ordinary outcome on such media,
+not the pathological one, and it is benign by construction (no production caller consumes the
+`'deferred'` outcome; only the log line differs).
 
 **One automatic attempt per unlock session (SD2).** Since the moved-drive check, a key mismatch
 re-triggered a background run at every unlock until a same-machine result persisted, with no
@@ -1157,8 +1162,20 @@ commit references, and added the changelog entry.
 - **I5** (follow-up issue #333): `performance:get`'s synchronous `discoverManifests` scan measured about 100 ms in one
   dev-build launch smoke (P3); not measured on slow USB media, and no cache was built pending
   that measurement.
-- **I6** (follow-up issue #334): physical slow-USB contention between the drive probe and a
-  real multi-GB model load; P7's sequencing is exercised only with a stubbed runtime.
+- **I6** — **verified 2026-09-08** (issue #334): the P7 sequencing ran on real slow media — an
+  SSK USB stick (28 MB/s cold read on the i7-8700's slow port, 133 MB/s on a Surface's; 87–91 MB/s
+  as the app hashes there) carrying the 9B, moved from the #330 computer B to an i7-1185G7 /
+  Iris Xe Surface with 15.8 GB. Every box: hash and load observable (68 s + 91 s), no benchmark
+  I/O inside either (the continuation's drive probe 0.4 s after `runtime_ready`), the 120 s
+  deferral fired and the continuation measured the started runtime (8 tok/s), a missing-file
+  start failure let the check run at once without a speed leg, and the manual-overlap gap was
+  MEASURED: a Models-screen hash beside the auto-start slowed its hash 3.3× and its load 1.5×,
+  and a "Use model" press 2.8 s after settlement stopped the auto-started model under the speed
+  leg (the run ended in 3.4 s) — bounded harm, profile and ★ unchanged. Side findings: a
+  Models-screen hash lets the page-cache load sample through the #108 guard (589 MB/s persisted
+  for a 28 MB/s stick); the Home preflight's 8 MiB probe runs at unlock beside the hash; a healthy
+  start at 87 MB/s on a 16 GB machine settles at 159 s, past the bound.
+  Follow-ups: #392 (the read sample), #393 (the overlap fix). Record: `eval/results/hardware/334-slow-usb-20260908/00-protocol.md` (+ reports, logs, perf marks).
 
 ### §5 §-anchor legend
 

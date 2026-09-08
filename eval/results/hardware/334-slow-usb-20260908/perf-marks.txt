@@ -1,0 +1,169 @@
+2026-09-07T23:10:55.312Z 205.9 app_ready
+2026-09-07T23:10:55.400Z 294.1 embedder_selected {"kind":"e5"}
+2026-09-07T23:10:55.446Z 340.4 backend_init_done {"ms":134}
+2026-09-07T23:10:57.328Z 2222.5 window_ready_to_show
+2026-09-07T23:10:57.355Z 2249.7 gate_visible
+2026-09-07T23:11:08.895Z 13789.5 vault_unlocked {"kdfMs":488,"decryptMs":61,"dbBytes":479232}
+2026-09-07T23:11:09.782Z 14676.6 drive_benchmark {"writeMbps":18.1,"readMbps":2822.8}
+2026-09-07T23:11:24.585Z 29479.8 checksum_start {"seq":1,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056}
+2026-09-07T23:12:40.627Z 105523.7 checksum_done {"seq":1,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056,"ms":76044,"ok":true}
+2026-09-07T23:12:40.636Z 105532.6 checksum_start {"seq":2,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128}
+2026-09-07T23:13:39.478Z 164374.7 checksum_done {"seq":2,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128,"ms":58842,"ok":true}
+2026-09-07T23:13:39.488Z 164383.8 checksum_start {"seq":3,"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960}
+2026-09-07T23:20:08.527Z 553429.4 checksum_done {"seq":3,"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960,"ms":389046,"ok":true}
+2026-09-07T23:20:08.535Z 553437.9 checksum_start {"seq":4,"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256}
+2026-09-07T23:21:36.689Z 641586.8 checksum_done {"seq":4,"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256,"ms":88149,"ok":true}
+2026-09-07T23:21:36.697Z 641595.2 checksum_start {"seq":5,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584}
+2026-09-07T23:25:37.805Z 882704.1 checksum_done {"seq":5,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":241109,"ok":true}
+2026-09-07T23:25:37.814Z 882713.6 checksum_start {"seq":6,"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728}
+2026-09-07T23:25:47.731Z 892630.3 checksum_done {"seq":6,"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728,"ms":9917,"ok":true}
+2026-09-07T23:25:47.737Z 892635.8 checksum_start {"seq":7,"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896}
+2026-09-07T23:26:32.304Z 937203.0 checksum_done {"seq":7,"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896,"ms":44567,"ok":true}
+2026-09-07T23:26:32.347Z 937245.7 checksum_start {"seq":8,"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967}
+2026-09-07T23:26:51.686Z 956584.4 checksum_done {"seq":8,"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967,"ms":19339,"ok":true}
+2026-09-07T23:27:02.368Z 967266.4 install_state_done {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed","ms":0,"cacheHit":true}
+2026-09-07T23:27:02.377Z 967275.9 model_prefetch {"modelId":"qwen3.5-9b-ud-q4kxl","event":"started"}
+2026-09-07T23:27:03.836Z 968734.8 model_prefetch {"modelId":"qwen3.5-9b-ud-q4kxl","event":"done"}
+2026-09-07T23:27:12.504Z 977402.6 sidecar_healthy {"port":61196,"embedding":false,"ms":10123}
+2026-09-07T23:27:12.510Z 977408.5 runtime_selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-07T23:27:13.372Z 978270.4 runtime_ready {"modelId":"qwen3.5-9b-ud-q4kxl","backend":"gpu","ms":10998}
+2026-09-07T23:29:03.253Z 1088153.1 drive_benchmark {"writeMbps":19.4,"readMbps":2792.8}
+2026-09-07T23:33:00.237Z 1325137.3 vault_lock_done {"checkpointMs":72,"encryptMs":83,"shredMs":26,"dbBytes":503808}
+2026-09-07T23:54:51.713Z 237.2 app_ready
+2026-09-07T23:54:51.768Z 292.1 embedder_selected {"kind":"e5"}
+2026-09-07T23:54:51.778Z 301.9 backend_init_done {"ms":65}
+2026-09-07T23:54:53.080Z 1603.2 window_ready_to_show
+2026-09-07T23:54:53.122Z 1645.6 gate_visible
+2026-09-07T23:55:43.812Z 224.7 app_ready
+2026-09-07T23:55:43.893Z 305.7 embedder_selected {"kind":"e5"}
+2026-09-07T23:55:43.913Z 325.5 backend_init_done {"ms":101}
+2026-09-07T23:55:45.200Z 1613.0 window_ready_to_show
+2026-09-07T23:55:45.247Z 1659.2 gate_visible
+2026-09-07T23:56:05.747Z 22160.0 vault_unlocked {"kdfMs":550,"decryptMs":21,"dbBytes":503808}
+2026-09-07T23:56:05.771Z 22183.8 unlock_done {"totalMs":597}
+2026-09-07T23:56:05.881Z 22293.4 checksum_start {"seq":1,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584}
+2026-09-07T23:56:06.200Z 22612.4 drive_benchmark {"writeMbps":43,"readMbps":2128.8}
+2026-09-07T23:57:14.060Z 90476.2 checksum_done {"seq":1,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":68183,"ok":true}
+2026-09-07T23:57:14.067Z 90483.3 install_state_done {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed","ms":68193,"cacheHit":false}
+2026-09-07T23:57:14.072Z 90488.2 model_prefetch {"modelId":"qwen3.5-9b-ud-q4kxl","event":"skipped"}
+2026-09-07T23:58:45.908Z 182310.9 sidecar_healthy {"port":29415,"embedding":false,"ms":91819}
+2026-09-07T23:58:45.915Z 182317.8 runtime_selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-07T23:58:48.521Z 184924.1 runtime_ready {"modelId":"qwen3.5-9b-ud-q4kxl","backend":"gpu","ms":94438}
+2026-09-07T23:58:48.849Z 185251.7 drive_benchmark {"writeMbps":43.8,"readMbps":2113.5}
+2026-09-08T00:09:24.947Z 821348.1 vault_lock_done {"checkpointMs":77,"encryptMs":31,"shredMs":45,"dbBytes":503808}
+2026-09-08T00:16:19.056Z 203.3 app_ready
+2026-09-08T00:16:19.171Z 318.4 embedder_selected {"kind":"e5"}
+2026-09-08T00:16:19.201Z 348.6 backend_init_done {"ms":145}
+2026-09-08T00:16:21.095Z 2241.9 window_ready_to_show
+2026-09-08T00:16:21.156Z 2303.6 gate_visible
+2026-09-08T00:16:28.138Z 9285.2 vault_unlocked {"kdfMs":479,"decryptMs":14,"dbBytes":479232}
+2026-09-08T00:16:29.204Z 10351.6 drive_benchmark {"writeMbps":34.8,"readMbps":3010.1}
+2026-09-08T00:16:32.117Z 13264.5 checksum_start {"seq":1,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056}
+2026-09-08T00:17:05.811Z 46958.0 checksum_done {"seq":1,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056,"ms":33693,"ok":true}
+2026-09-08T00:17:05.858Z 47005.5 checksum_start {"seq":2,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128}
+2026-09-08T00:17:27.433Z 68580.1 checksum_done {"seq":2,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128,"ms":21575,"ok":true}
+2026-09-08T00:17:27.438Z 68585.6 checksum_start {"seq":3,"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960}
+2026-09-08T00:20:09.252Z 230399.6 checksum_done {"seq":3,"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960,"ms":161814,"ok":true}
+2026-09-08T00:20:09.258Z 230406.5 checksum_start {"seq":4,"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256}
+2026-09-08T00:20:57.492Z 278640.1 checksum_done {"seq":4,"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256,"ms":48234,"ok":true}
+2026-09-08T00:20:57.499Z 278647.2 checksum_start {"seq":5,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584}
+2026-09-08T00:22:29.896Z 371043.2 checksum_done {"seq":5,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":92396,"ok":true}
+2026-09-08T00:22:29.903Z 371050.3 checksum_start {"seq":6,"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728}
+2026-09-08T00:22:32.685Z 373832.9 checksum_done {"seq":6,"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728,"ms":2783,"ok":true}
+2026-09-08T00:22:32.690Z 373838.0 checksum_start {"seq":7,"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896}
+2026-09-08T00:22:51.520Z 392667.5 checksum_done {"seq":7,"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896,"ms":18830,"ok":true}
+2026-09-08T00:22:51.526Z 392673.8 checksum_start {"seq":8,"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967}
+2026-09-08T00:22:57.861Z 399008.9 checksum_done {"seq":8,"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967,"ms":6335,"ok":true}
+2026-09-08T00:24:44.870Z 506021.0 install_state_done {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed","ms":0,"cacheHit":true}
+2026-09-08T00:24:44.877Z 506028.1 model_prefetch {"modelId":"qwen3.5-9b-ud-q4kxl","event":"started"}
+2026-09-08T00:24:46.258Z 507409.5 model_prefetch {"modelId":"qwen3.5-9b-ud-q4kxl","event":"done"}
+2026-09-08T00:24:53.890Z 515041.6 sidecar_healthy {"port":64873,"embedding":false,"ms":9011}
+2026-09-08T00:24:53.895Z 515046.3 runtime_selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:24:54.779Z 515930.6 runtime_ready {"modelId":"qwen3.5-9b-ud-q4kxl","backend":"gpu","ms":9905}
+2026-09-08T00:25:49.493Z 570641.4 vault_lock_done {"checkpointMs":66,"encryptMs":23,"shredMs":48,"dbBytes":503808}
+2026-09-08T00:26:29.774Z 203.2 app_ready
+2026-09-08T00:26:29.878Z 307.1 embedder_selected {"kind":"e5"}
+2026-09-08T00:26:29.908Z 336.5 backend_init_done {"ms":133}
+2026-09-08T00:26:31.727Z 2156.1 window_ready_to_show
+2026-09-08T00:26:31.761Z 2189.7 gate_visible
+2026-09-08T00:26:39.214Z 9642.7 vault_unlocked {"kdfMs":489,"decryptMs":14,"dbBytes":479232}
+2026-09-08T00:26:39.830Z 10258.9 drive_benchmark {"writeMbps":37.7,"readMbps":2805.9}
+2026-09-08T00:26:41.632Z 12061.2 checksum_start {"seq":1,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056}
+2026-09-08T00:27:14.782Z 45210.9 checksum_done {"seq":1,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"weight","bytes":1929901056,"ms":33150,"ok":true}
+2026-09-08T00:27:14.789Z 45217.8 checksum_start {"seq":2,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128}
+2026-09-08T00:27:36.639Z 67072.5 checksum_done {"seq":2,"modelId":"qwen2.5-vl-3b-instruct-q4","file":"mmproj","bytes":1338428128,"ms":21855,"ok":true}
+2026-09-08T00:27:36.645Z 67078.0 checksum_start {"seq":3,"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960}
+2026-09-08T00:30:24.823Z 235253.3 checksum_done {"seq":3,"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960,"ms":168175,"ok":true}
+2026-09-08T00:30:24.830Z 235260.1 checksum_start {"seq":4,"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256}
+2026-09-08T00:31:08.703Z 279133.3 checksum_done {"seq":4,"modelId":"qwen3-4b-instruct-q4","file":"weight","bytes":2497280256,"ms":43873,"ok":true}
+2026-09-08T00:31:08.745Z 279175.7 checksum_start {"seq":5,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584}
+2026-09-08T00:32:35.068Z 365504.2 checksum_done {"seq":5,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":86328,"ok":true}
+2026-09-08T00:32:35.075Z 365511.0 checksum_start {"seq":6,"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728}
+2026-09-08T00:32:37.591Z 368027.3 checksum_done {"seq":6,"modelId":"multilingual-e5-small-q8","file":"weight","bytes":241873728,"ms":2516,"ok":true}
+2026-09-08T00:32:37.596Z 368032.2 checksum_start {"seq":7,"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896}
+2026-09-08T00:32:53.121Z 383557.3 checksum_done {"seq":7,"modelId":"bge-reranker-v2-m3-f16","file":"weight","bytes":1159776896,"ms":15525,"ok":true}
+2026-09-08T00:32:53.127Z 383563.2 checksum_start {"seq":8,"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967}
+2026-09-08T00:33:00.089Z 390525.0 checksum_done {"seq":8,"modelId":"whisper-small-multilingual","file":"weight","bytes":487601967,"ms":6962,"ok":true}
+2026-09-08T00:34:59.348Z 509778.1 install_state_done {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed","ms":0,"cacheHit":true}
+2026-09-08T00:34:59.354Z 509784.9 model_prefetch {"modelId":"qwen3.5-9b-ud-q4kxl","event":"started"}
+2026-09-08T00:35:00.855Z 511285.8 model_prefetch {"modelId":"qwen3.5-9b-ud-q4kxl","event":"done"}
+2026-09-08T00:35:08.856Z 519287.0 sidecar_healthy {"port":53938,"embedding":false,"ms":9498}
+2026-09-08T00:35:08.862Z 519292.6 runtime_selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:35:09.704Z 520135.0 runtime_ready {"modelId":"qwen3.5-9b-ud-q4kxl","backend":"gpu","ms":10352}
+2026-09-08T00:35:18.279Z 528709.2 vault_lock_done {"checkpointMs":71,"encryptMs":54,"shredMs":10,"dbBytes":503808}
+2026-09-08T00:38:20.903Z 199.5 app_ready
+2026-09-08T00:38:20.965Z 262.0 embedder_selected {"kind":"e5"}
+2026-09-08T00:38:20.974Z 270.7 backend_init_done {"ms":71}
+2026-09-08T00:38:22.831Z 2128.1 window_ready_to_show
+2026-09-08T00:38:22.891Z 2187.7 gate_visible
+2026-09-08T00:38:26.400Z 5696.9 vault_unlocked {"kdfMs":487,"decryptMs":50,"dbBytes":503808}
+2026-09-08T00:38:26.416Z 5713.3 unlock_done {"totalMs":555}
+2026-09-08T00:38:26.461Z 5758.1 install_state_done {"modelId":"qwen3.5-9b-ud-q4kxl","state":"missing","ms":1,"cacheHit":true}
+2026-09-08T00:38:26.828Z 6124.7 drive_benchmark {"writeMbps":28.6,"readMbps":2985.1}
+2026-09-08T00:39:26.964Z 66264.9 install_state_done {"modelId":"qwen3-14b-instruct-q4","state":"installed","ms":0,"cacheHit":true}
+2026-09-08T00:39:27.005Z 66305.7 model_prefetch {"modelId":"qwen3-14b-instruct-q4","event":"started"}
+2026-09-08T00:40:24.746Z 124046.7 model_prefetch {"modelId":"qwen3-14b-instruct-q4","event":"done"}
+2026-09-08T00:40:28.672Z 127969.3 sidecar_healthy {"port":64625,"embedding":false,"ms":61661}
+2026-09-08T00:40:28.678Z 127975.4 runtime_selected {"kind":"llama","modelId":"qwen3-14b-instruct-q4","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:40:30.623Z 129920.4 runtime_ready {"modelId":"qwen3-14b-instruct-q4","backend":"gpu","ms":63617}
+2026-09-08T00:42:40.802Z 260100.7 drive_benchmark {"writeMbps":29.9,"readMbps":3544}
+2026-09-08T00:43:59.178Z 338477.0 vault_lock_done {"checkpointMs":28,"encryptMs":52,"shredMs":44,"dbBytes":503808}
+2026-09-08T00:46:15.122Z 194.8 app_ready
+2026-09-08T00:46:15.219Z 291.0 embedder_selected {"kind":"e5"}
+2026-09-08T00:46:15.232Z 304.4 backend_init_done {"ms":109}
+2026-09-08T00:46:16.684Z 1756.3 window_ready_to_show
+2026-09-08T00:46:16.716Z 1788.7 gate_visible
+2026-09-08T00:46:21.140Z 6212.5 vault_unlocked {"kdfMs":501,"decryptMs":67,"dbBytes":503808}
+2026-09-08T00:46:21.171Z 6243.3 unlock_done {"totalMs":602}
+2026-09-08T00:46:21.279Z 6351.8 install_state_done {"modelId":"qwen3-14b-instruct-q4","state":"missing","ms":3,"cacheHit":true}
+2026-09-08T00:46:21.672Z 6744.5 drive_benchmark {"writeMbps":28.7,"readMbps":1379.5}
+2026-09-08T00:46:22.922Z 7994.6 drive_benchmark {"writeMbps":29.2,"readMbps":1034.7}
+2026-09-08T00:46:36.934Z 22006.7 checksum_start {"seq":1,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584}
+2026-09-08T00:47:42.446Z 87520.8 checksum_done {"seq":1,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":65514,"ok":true}
+2026-09-08T00:48:26.023Z 131098.4 vault_lock_done {"checkpointMs":61,"encryptMs":61,"shredMs":17,"dbBytes":503808}
+2026-09-08T00:49:04.526Z 238.8 app_ready
+2026-09-08T00:49:04.596Z 308.4 embedder_selected {"kind":"e5"}
+2026-09-08T00:49:04.611Z 323.4 backend_init_done {"ms":84}
+2026-09-08T00:49:06.276Z 1988.2 window_ready_to_show
+2026-09-08T00:49:06.308Z 2020.0 gate_visible
+2026-09-08T00:49:12.708Z 8420.6 vault_unlocked {"kdfMs":515,"decryptMs":57,"dbBytes":503808}
+2026-09-08T00:49:12.741Z 8453.2 unlock_done {"totalMs":607}
+2026-09-08T00:49:12.847Z 8559.9 checksum_start {"seq":1,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584}
+2026-09-08T00:49:13.204Z 8916.3 drive_benchmark {"writeMbps":27.9,"readMbps":1272.3}
+2026-09-08T00:49:20.789Z 16501.4 checksum_start {"seq":2,"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960}
+2026-09-08T00:52:46.374Z 222079.5 checksum_done {"seq":1,"modelId":"qwen3.5-9b-ud-q4kxl","file":"weight","bytes":5966095584,"ms":213520,"ok":true}
+2026-09-08T00:52:46.383Z 222088.3 install_state_done {"modelId":"qwen3.5-9b-ud-q4kxl","state":"installed","ms":213530,"cacheHit":false}
+2026-09-08T00:52:46.388Z 222093.8 model_prefetch {"modelId":"qwen3.5-9b-ud-q4kxl","event":"skipped"}
+2026-09-08T00:54:38.948Z 334655.8 checksum_done {"seq":2,"modelId":"qwen3-14b-instruct-q4","file":"weight","bytes":9001752960,"ms":318154,"ok":true}
+2026-09-08T00:54:58.956Z 354655.9 sidecar_healthy {"port":1565,"embedding":false,"ms":132558}
+2026-09-08T00:54:58.995Z 354694.4 runtime_selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:55:01.640Z 357340.0 runtime_ready {"modelId":"qwen3.5-9b-ud-q4kxl","backend":"gpu","ms":135248}
+2026-09-08T00:55:02.013Z 357713.2 drive_benchmark {"writeMbps":35.2,"readMbps":1969.9}
+2026-09-08T00:55:04.479Z 360178.7 install_state_done {"modelId":"qwen3-14b-instruct-q4","state":"installed","ms":1,"cacheHit":true}
+2026-09-08T00:55:05.817Z 361516.9 model_prefetch {"modelId":"qwen3-14b-instruct-q4","event":"started"}
+2026-09-08T00:56:03.374Z 419078.0 model_prefetch {"modelId":"qwen3-14b-instruct-q4","event":"done"}
+2026-09-08T00:57:44.517Z 520220.3 sidecar_healthy {"port":4893,"embedding":false,"ms":158699}
+2026-09-08T00:57:44.565Z 520268.0 runtime_selected {"kind":"llama","modelId":"qwen3-14b-instruct-q4","reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+2026-09-08T00:57:48.124Z 523823.8 runtime_ready {"modelId":"qwen3-14b-instruct-q4","backend":"gpu","ms":163639}
+2026-09-08T00:58:28.376Z 564075.6 drive_benchmark {"writeMbps":28.4,"readMbps":1877.6}
+2026-09-08T00:59:28.702Z 624400.7 vault_lock_done {"checkpointMs":68,"encryptMs":66,"shredMs":46,"dbBytes":503808}
