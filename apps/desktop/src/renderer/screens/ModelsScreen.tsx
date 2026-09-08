@@ -1104,7 +1104,7 @@ export function ModelsScreen(): JSX.Element {
           active model), so nothing here hashes on its own any more; this is the one action
           that walks every present weight. Its copy names the cost — a full pass took 25.5
           minutes for 39.44 GB on the #330 slow drive — because it cannot be stopped once
-          started (cancellation is tracked separately). The bar renders IN PLACE below it. */}
+          started (cancellable verification is #420). The bar renders IN PLACE below it. */}
       <div className="models-verify-all">
         <Button
           size="sm"

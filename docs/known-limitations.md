@@ -115,7 +115,7 @@ password recovery — are documented in
   but un-started weight is reported `installed` without being read at all. Damage in such a file
   is therefore found when the model is started, not before. Mitigations: the AI Model screen's
   per-model **Verify checksum** forces a real re-hash, its screen-level **Check all model files**
-  walks every present weight, the §7.4 start gate re-verifies whatever it launches, and the
+  walks every present weight (neither can be cancelled once started — #420), the §7.4 start gate re-verifies whatever it launches, and the
   ship-time gates (`verify-models --strict`, `assertCommercialDrive`) always hash fully. Downloads now fsync the `.part` to the device before renaming it into place (F-34,
   full-audit 2026-07-16), closing the post-completion power-cut/unplug window that could otherwise
   persist the rename + `(size,mtime)` cache entry over a torn weight the cache then reports verified.

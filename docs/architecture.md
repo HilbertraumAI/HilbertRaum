@@ -578,7 +578,7 @@ contract. Condensed from `docs/performance-audit-2026-06-18.md` §4.2/§4.3/§4.
     lazy verification now skips, so a "Check all model files" pass would have hashed for minutes
     with nothing on screen. `verifyBar()` renders in both places.
   - **The pass cannot be cancelled** — `sha256File` takes no abort signal. Out of scope here; the
-    button copy names the cost instead, and cancellable verification is tracked separately.
+    button copy names the cost instead; cancellable verification is issue #420.
   - **#108 is unaffected.** Under lazy verification a first start hashes its own weight
     (`cacheHit === false`), `suppressNextModelLoadSample()` fires, and an honest `checksum` sample
     is recorded from the one file that matters — #382 makes #392's guard unnecessary on the
