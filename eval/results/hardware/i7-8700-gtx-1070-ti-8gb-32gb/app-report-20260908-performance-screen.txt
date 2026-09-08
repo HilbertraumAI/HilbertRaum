@@ -68,6 +68,36 @@ Letzter Lauf: 8.9.2026, 20:52:54
 # reports; the recommendation and profile rows do not.
 # ---------------------------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------------------------
+# THE STORED RECORD ON THIS MACHINE WAS STALE, and the app said so itself. Main-process log of
+# this session, verbatim (the same staleness #400 found on the laptop leg — a profile/★ row keeps
+# describing the PREVIOUS build's verdict until someone re-measures):
+#
+#   18:52:38 [INFO] Workspace unlocked
+#   18:52:38 [INFO] Drive is back on a known computer: restored its benchmark result
+#                   {"profile":"PRO","recommendedModelId":"qwen3.5-4b-ud-q4kxl"}
+#   18:52:39 [INFO] Auto-starting the active model runtime in the background
+#                   {"modelId":"qwen3.5-9b-ud-q4kxl"}
+#   18:52:45 [INFO] Runtime backend selected {"kind":"llama","modelId":"qwen3.5-9b-ud-q4kxl",
+#                   "reason":"started via rung 1 (default args, GPU auto-offload) (backend: gpu)"}
+#   18:52:54 [INFO] Benchmark complete
+#                   {"profile":"PRO","recommendedModelId":"qwen3.5-9b-ud-q4kxl","ramGb":31.9}
+#
+# The restored record is this machine's own, written by the pre-#390 leg-2 session: `recommended
+# ModelId` **qwen3.5-4b-ud-q4kxl**. Sixteen seconds later, on a build carrying #390, the re-check
+# recorded **qwen3.5-9b-ud-q4kxl**. That is #390's 8 GB change, before and after, on one machine
+# in one session — and it is why the row this evidence supports could not have been closed by
+# reading the SAVED record: only a re-measure moves it. `Zugewiesenes Profil: PRO` was stable
+# across both (RAM 32 -> BALANCED, +1 for the useful card; no drive or tok/s input at this margin).
+#
+# Note also `started via rung 1 (default args, GPU auto-offload)` — the app's own launch, not a
+# harness argv, which is what makes the 30 tok/s comparable to leg 2's 29.0.
+#
+# Incidental corroboration of the page-cache caveat above: `Model prefetch started` 18:52:39.605 ->
+# `done` 18:52:41.082, i.e. 5.97 GB in 1.48 s (~4 GB/s). No USB link does that; the weight was
+# already resident from the pre-flight hash.
+# ---------------------------------------------------------------------------------------------
+
 # Cross-check against the measured leg-2 evidence in this directory (leg2-np1-verify.*):
 #   decode      29.0 tok/s at 33/33 (measured, 512 tokens)  vs  30 tok/s here (app check, 64 tokens)
 #   star        computed 9B                                  vs  9B READ OFF THE SCREEN
