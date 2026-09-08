@@ -1212,8 +1212,32 @@ never lands on the wrong article. The evidence review's copy of the viewer passe
 `canSave={false}`: a review is read-only and its bridge is evidence-only, so the action exists
 only where the chat opens the viewer. No undo affordance: the saved copy is a real document, and removing it is
 the Documents screen's job (delete), not the viewer's — the viewer only ever adds. No "Open in
-Documents" jump yet either; the saved state names the filed title so the user can find it, and a
-direct jump is deferred with the citation-card shortcut (rag-design §17 D-Z21).
+Documents" jump yet either; the saved state names the filed title so the user can find it (a
+direct jump is still deferred — rag-design §17 D-Z21/D-Z23).
+
+**Citation-card save shortcut (2026-09-08, #418, D-Z23):** the same action, one step earlier —
+on the citation card, without opening the viewer. It sits **beside "Open article" in the card
+head**, under the identical guard, and is the identical kind of affordance: quiet and
+link-styled (`.source-card-save`), never a loud button inside the disclosure — the rule
+`.source-card-open` already carries applies unchanged, including the WCAG 2.5.8 24 px minimum
+target (pinned in `zim-ui-layout-rules.test.ts`). `.source-card-open`'s `margin-left: auto` already
+right-aligns the pair, so the second action adds no margin of its own, and the head row's
+`flex-wrap` plus `flex-basis: 100%` on the outcome line means a filed title takes the next line
+rather than squeezing the citation's own title and badges.
+
+**The copy is the viewer's, verbatim** — the same five keys, so the two surfaces read
+identically by construction and there is no second German string to maintain. The four states
+therefore behave exactly as the Tier-2 record above describes them, with the same accessible-name
+rule (decision 3: "Save to my documents: {title}", the visible label its exact prefix). The one
+case the card adds is **two cards citing the same article**: each asks for itself and the second
+gets the main side's duplicate answer ("already in your documents"), which is honest and needs no
+renderer-side bookkeeping.
+
+**Where it must NOT appear:** a read-only surface. The evidence review renders its source cards
+from `EvidencePane`, a different component that never mounts `SourcesDisclosure`, so the boundary
+is structural rather than a flag — and the affordance is additionally gated on its optional
+callback, which only `ChatScreen` supplies. That is the card-level counterpart to the viewer's
+`canSave={false}`; both are pinned by tests.
 
 ---
 

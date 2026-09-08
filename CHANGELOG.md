@@ -70,6 +70,12 @@ from its first public `1.0.0` release onward.
   open the article offline. Fully local: the pack server binds to 127.0.0.1 only,
   archives are used in place and never copied. Needs the kiwix-tools binaries on the
   drive — still a manual step in this release (see the user guide §7b).
+- **Keep a knowledge-pack article in your documents.** *Save to my documents* files a copy of a
+  cited article alongside everything else you have imported, so it stays searchable even after
+  you disable or remove that pack, or unplug the drive it lives on. The action sits on the
+  citation itself, next to *Open article*, and inside the article view; it names the copy it
+  filed, and saving the same article twice tells you it is already there instead of making a
+  second one. Reviews stay read-only, so it is not offered there.
 - **Knowledge packs are found once, not on every open.** The list is discovered when you
   unlock and by an explicit **Refresh** in *Documents → Knowledge packs*, instead of a
   fresh drive scan every time the panel opens or a message is sent — packs load

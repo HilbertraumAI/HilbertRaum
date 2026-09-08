@@ -2675,6 +2675,25 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .source-card-open:hover { text-decoration: underline; }
 
+/* #418 (ruling C3's second half): the "Save to my documents" shortcut beside "Open article".
+   Same quiet link styling and the same WCAG 2.5.8 24 px minimum target — never a loud button
+   inside the disclosure. It needs no `margin-left: auto` of its own: `.source-card-open`
+   already pushes the pair to the end of the head row. */
+.source-card-save {
+  background: none;
+  border: none;
+  padding: 0;
+  color: var(--accent);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  min-height: 24px;
+}
+.source-card-save:hover:not(:disabled) { text-decoration: underline; }
+.source-card-save:disabled { color: var(--text-muted); cursor: default; }
+/* The save outcome (saved / already saved / the friendly failure) takes the whole next line of
+   the wrapping head row, so a filed title never squeezes the citation's own title and badges. */
+.source-card-save-state { flex-basis: 100%; margin: 4px 0 0; }
+
 /* Packs management panel (Documents screen). Cards reuse the shared .card chrome. */
 .packs-panel { display: flex; flex-direction: column; gap: 12px; max-width: 1000px; }
 /* `.packs-list` is a <ul> (#301 P6, plan §9.23 (b)7 — list semantics); reset native list

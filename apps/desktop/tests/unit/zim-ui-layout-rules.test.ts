@@ -50,6 +50,21 @@ describe('knowledge-pack layout rules (#301 P6) — the stylesheet carries what 
   it('the link-styled pack actions meet the 24 px minimum target (WCAG 2.5.8)', () => {
     expect(rule('.source-card-open')).toContain('min-height: 24px')
     expect(rule('.pack-outcomes-toggle')).toContain('min-height: 24px')
+    // #418: the citation card's save shortcut is the third of them and must not be the exception.
+    expect(rule('.source-card-save')).toContain('min-height: 24px')
+  })
+
+  it('#418 the save shortcut is quiet like its neighbour, and its outcome takes its own line', () => {
+    const save = rule('.source-card-save')
+    // Link-styled, never a loud button inside the disclosure (§11.15 / the .source-card-open rule).
+    expect(save).toContain('background: none')
+    expect(save).toContain('border: none')
+    // It needs no margin of its own: .source-card-open right-aligns the pair.
+    expect(save).not.toContain('margin-left: auto')
+    // A filed title is a whole sentence — it wraps to its own line of the head row instead of
+    // squeezing the citation's title and badges beside it.
+    expect(rule('.source-card-save-state')).toContain('flex-basis: 100%')
+    expect(rule('.source-card-head')).toContain('flex-wrap: wrap')
   })
 
   it('the knowledge-pack blocks use role tokens only — no literal colour', () => {

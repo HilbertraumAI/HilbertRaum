@@ -1,6 +1,12 @@
 import { Fragment, memo, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AssistantMarkdown } from './AssistantMarkdownLazy'
-import type { Citation, ConversationSummaryMarker, EvidenceReviewSummary, Message } from '@shared/types'
+import type {
+  Citation,
+  ConversationSummaryMarker,
+  EvidenceReviewSummary,
+  Message,
+  PackArticleSaveResult
+} from '@shared/types'
 import type { AnswerSpeed } from '@shared/ipc'
 import type { UiLanguage } from '@shared/i18n'
 import { isReviewEligible } from '@shared/evidence-review'
@@ -97,6 +103,9 @@ interface TranscriptProps {
   /** Knowledge packs (ZIM wave): open the offline article viewer for an archive citation.
    *  Absent => archive source cards render without the open affordance. */
   onOpenArticle?: (citation: Citation) => void
+  /** #418: save an archive citation's article to the user's documents from the card itself.
+   *  Absent => the save affordance never renders (optional-callback gating, like onOpenArticle). */
+  onSaveArticle?: (packId: string, articlePath: string) => Promise<PackArticleSaveResult>
   /**
    * Known review state per message id (null = checked, none exists) — drives the
    * "Review evidence" vs "Continue review" label + the Draft/Ready chip (spec §9.4).
@@ -148,6 +157,7 @@ export const Transcript = memo(function Transcript({
   onExportTable,
   onOpenReview,
   onOpenArticle,
+  onSaveArticle,
   reviewSummaries,
   reviewConversation,
   actionsDisabled,
@@ -231,6 +241,7 @@ export const Transcript = memo(function Transcript({
               onExportTable={onExportTable}
               onOpenReview={onOpenReview}
               onOpenArticle={onOpenArticle}
+              onSaveArticle={onSaveArticle}
               reviewSummary={reviewSummaries?.get(m.id) ?? null}
               reviewConversation={reviewConversation}
               actionsDisabled={actionsDisabled}
@@ -343,6 +354,7 @@ const MessageBlock = memo(function MessageBlock({
   onExportTable,
   onOpenReview,
   onOpenArticle,
+  onSaveArticle,
   reviewSummary,
   reviewConversation,
   actionsDisabled,
@@ -367,6 +379,7 @@ const MessageBlock = memo(function MessageBlock({
   onExportTable?: (messageId: string) => void
   onOpenReview?: (messageId: string) => void
   onOpenArticle?: (citation: Citation) => void
+  onSaveArticle?: (packId: string, articlePath: string) => Promise<PackArticleSaveResult>
   reviewSummary?: EvidenceReviewSummary | null
   reviewConversation?: { mode: 'chat' | 'documents' } | null
   actionsDisabled: boolean
@@ -426,6 +439,7 @@ const MessageBlock = memo(function MessageBlock({
               onReview={openReview}
               reviewDisabled={actionsDisabled}
               onOpenArticle={onOpenArticle}
+              onSaveArticle={onSaveArticle}
             />
             {/* Honesty (whole-document-analysis §4.5/§5.2; full-doc-skills §3.3/D48): render the
                 answer's PERSISTED coverage when we have it, else fall back to the relevance label —

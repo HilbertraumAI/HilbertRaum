@@ -829,7 +829,15 @@ Wikivoyage, …) at `library.kiwix.org`; download once, use forever offline.
    directly to this chat are still used either way.
 5. **Read the source:** answers cite pack articles like documents; *Open article* on a
    citation shows the article text offline — also from an evidence review's archive row.
-6. **See what each pack did:** under an answer, a “Knowledge packs:” line lists every
+6. **Keep an article:** *Save to my documents* files a copy of a cited article in your
+   documents, where it is searchable like anything else you imported — **even if you later
+   disable or remove that pack, or unplug the drive it lives on**. The action sits on the
+   citation itself, next to *Open article*, and inside the article view; either way it says
+   what it filed the copy as. Save the same article twice and the app tells you it is already
+   in your documents rather than making a second copy. A review is read-only, so the action
+   is not offered there. To remove a saved copy, delete it on the **Documents** screen — the
+   pack and its file are untouched either way.
+7. **See what each pack did:** under an answer, a “Knowledge packs:” line lists every
    ticked pack — searched (and how much it contributed), or not searched/failed with a
    short reason, such as over the 12-pack limit, no full-text search index, or the pack
    server restarted mid-question. In the sources picker, a greyed-out pack always says why
