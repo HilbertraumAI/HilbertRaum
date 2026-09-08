@@ -717,9 +717,9 @@ open round's item stays the last block of §5.)
     **Nothing engineering is left on #339; the four remaining legs are the OWNER's:** P8-6 file the `/raw`
     report at kiwix/kiwix-tools (win-x86_64 only — humaniser's Linux probe 0/40; draft final) and record the URL in
     known-limitations, rag-design finding 3 and a #339 comment; R-4 mac/linux code-signing inspection; T20-d's second
-    half — `build-commercial-drive --kiwix-source-dir` against the real Kit drive on K:, all three platform bundles
-    (`tests/fixtures/zim/required-checks.json` row, "STILL PENDING") — **K: today carries only `runtime/kiwix-tools/win/`
-    and no `source/` at all, so that leg needs a drive-prep pass first**; the GPL-3-via-root-`LICENSE` cross-reference and
+    half — `build-commercial-drive --kiwix-source-dir` against the real Kit drive on K:, all three platform bundles: the KIWIX HALF IS DONE 2026-09-08 — all three
+    bundles installed with markers + the five source archives, and the gate reports kiwixSourceBundle/optionalRuntimesConsistent TRUE (`required-checks.json` T20-d row);
+    only the (non-kiwix) sellability of K: is left; the GPL-3-via-root-`LICENSE` cross-reference and
     the libmicrohttpd version-from-recipe pin in model-policy. (T20-a is implemented, not pending.)
     (b) **#340 — CLOSED 2026-09-08, split into three successors; everything ruled was built.** Outcome + ledger: rag-design §17 D-Z16/D-Z18/D-Z20/D-Z21 and
     its "Owner rulings of 2026-09-06" paragraph (C3 (a), L1, L3 + the #353 ladder, L3-b, `path-unsupported`, LaTeX, the collision surface, the six renderer nits;
