@@ -28,6 +28,15 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-09 — **Knowledge packs get a public face (`docs/knowledge-packs.md` + README section; docs-only,
+`docs/knowledge-packs-readme-and-page`):** the feature shipped but the repo did not say so — one README bullet (#5 of 10,
+linking nowhere) and user-guide §7b, reachable only through "walkthrough of every screen". New canonical page
+`docs/knowledge-packs.md` (§1 why, §2 choosing packs + sizing a drive, §3 the tools, §4 adding, §5 asking, §6 privacy —
+R-9 and the network-inventory sentence VERBATIM, §7 the measured edges as a table, §8 maintainer pointers), plus a README
+"Knowledge packs — an offline Wikipedia" section, ToC row, Documentation-table row, the hero line, and the bullet rewritten
+to link it. No code, no behaviour change. The rest of the GitHub-presence review is owner-side and tracked nowhere else:
+repo About text + `zim`/`kiwix`/`wikipedia`/`offline` topics, a v0.1.60 release (the packs entries sit in CHANGELOG
+`[Unreleased]`; v0.1.59 predates the wave), a first screenshot, a pack-problem issue template, the org profile README._
 _2026-09-09 — **#333 CLOSED — measured, no cache** (instrumented on `perf/333-manifest-read-instrumentation`, PR #431; record
 `benchmark.md` §4 **I5** + Perf marks "`discover_manifests` / `performance_get` — the #333 pair"; evidence
 `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/manifest-read-333-measurement.txt`): on the drive, cold (eject/replug ×3:
@@ -163,18 +172,6 @@ only, tracked as follow-ups #310/#311/#312 (shards, Flash-Next landing, GPU ladd
 #313/#314 (family filter, renderer-reload recovery) and #315 (review residuals). Final head =
 the PR #302 tip (CI green on every phase); 379 / 5,784 passed, 74 skipped locally._
 
-_2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
-`docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
-non-findings; containment items 1–8; the 14 decisions on their defaults; B1..B9 ports; a §-anchor
-legend for the deleted working papers); §5 item 19 → ROUND COMPLETE with the open residuals; the
-round's eleven dated entries archived verbatim to `docs/build-log.md`; containment items 4 and 7
-promoted verbatim to `known-limitations.md` (decisions #221/#222/#226 still unanswered); the three
-Phase 0 doc lines that still carried audit IDs now cite issues; decision issues #218–#231 and
-#262/#263/#264 closed "default stands — re-open on request" / "accepted — §52"; #217 closed after the
-merge; the five `tmp/` working papers deleted after the merge.**_ Open Phase F: #236, #240, #243, #247,
-#248, #250, #274 (each self-sufficient — its plan detail was copied to the issue). Docs-only, no launch
-smoke. Suite: 371 / 5,570 / 74 excluding the Electron smoke (raw 372 / 5,576 / 74; the smoke ran).
-
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -193,7 +190,8 @@ ledger `docs/architecture.md` §52), and the five 2026-09-04 Phase F entries (PR
 entries of the #290/#291 wave (PRs #295/#300/#297/#299) and Phase F PR 6 + close-out (#293, #292) on
 2026-09-05 at ZIM Phase 3a (preamble budget), and the ten ZIM knowledge-packs wave entries
 (Phases 0–6 + the 2026-09-04 MVP entry, PRs #304–#336) on 2026-09-06 at the P7 close-out (preamble
-budget) —
+budget), and the 2026-09-03 audit-2026-09-02 Phase 9b close-out entry (PR #282) on 2026-09-09
+(preamble budget, making room for the knowledge-packs docs entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
