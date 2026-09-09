@@ -450,9 +450,11 @@ validation error, never a silent default) → `ModelManifest.estimatedContextCac
 the per-model context-cache term of `estimateGraphicsNeedMib` (services/models.ts, §6.6 rule C):
 the cache the runtime allocates at the model's recommended window under the app's launch (ubatch
 2048, and — since the 2026-09-07 `-np 1` decision on issue #319 — **ONE server slot**, not b9849's
-four unified ones). Carried by exactly the seven decision models (Gemma 4 12B 2.4, 26B-A4B 1.5,
+four unified ones). Carried by exactly the seven decision models (Gemma 4 12B 2.4, 26B-A4B **0.8**,
 E2B 0.1, Qwen3.8 27B UD-Q4/Q5 **0.9**, Qwen3.5 9B **0.3**, 4B **0.2**; pinned in
 `committed-catalog.test.ts`); the GGUF-header estimate (BUILD_STATE §5 item 22 (e)) retires it.
+Six are DERIVED from the launch config; the 26B-A4B's is MEASURED off its first hardware start
+(#412, 2026-09-08 — the derived 1.5 it replaced was 2.02× the 760.00 MiB the start logged).
 ✅ **Host-mapped weight share (#321, owner decision 2026-09-07):** manifest
 `host_mapped_weights_mib` (optional; a number ≥ 0, validated exactly like the cache term above —
 wrong type or a negative value is an error, never a silent default) →

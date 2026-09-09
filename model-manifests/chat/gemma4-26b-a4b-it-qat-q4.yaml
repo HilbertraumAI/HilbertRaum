@@ -38,23 +38,39 @@ recommended_context_tokens: 8192
 # (issue #391, the last open item, 2026-09-08). A PARTIAL offload inflates this line with the
 # layers that did not fit, so only full-offload starts count.
 host_mapped_weights_mib: 577.50
-# Context cache at 8k under the app launch (ubatch 2048): 320 MiB full-attention + 1,200 MiB
-# sliding-window cells = 1.484 GiB; the picker's graphics-fit cache term (model-benchmarks.md
-# §6.6, PR #308 audit decision 11).
-# UNCHANGED by the 2026-09-07 `-np 1` recomputation (issue #319): this architecture has NO recurrent
-# state, and the recurrent state is the only per-SEQUENCE term -- both Gemma caches are sized in
-# CELLS from --ctx-size and are counted once whatever the slot count is (measured on the 12B twin,
-# eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg3-baseline.stderr.log: "4/1 seqs" is four
-# sequences over ONE cache). This model was never started on hardware for #318 (estimate band only).
-# STILL DERIVED, and now known to be HIGH: the first hardware start (2026-09-08, #391, see the
-# host-mapped note below) logged the two caches at 160.00 MiB (8192 cells, 5 layers, 1/1 seqs)
-# non-SWA + 600.00 MiB (3072 cells, 25 layers, 1/1 seqs) SWA = 760.00 MiB, against the 1,536 this
-# term claims: 2.02x too high, and the derivation above is exactly double the measurement on both
-# halves. The `-np 1` reasoning attached to it is nonetheless confirmed, both caches log 1/1 seqs.
-# LEFT UNCHANGED deliberately: the cache term is its own picker input with its own decision
-# history, and lowering it moves this model's threshold a further ~776 MiB. Owner call, not a
-# by-product of the host-mapped measurement.
-estimated_context_cache_gib: 1.5
+# Context cache at 8k under the app launch (ubatch 2048); the picker's graphics-fit cache term
+# (model-benchmarks.md §6.6, PR #308 audit decision 11).
+# MEASURED since 2026-09-08 (issue #412), replacing the 1.5 derived before this model had ever
+# been started. The first hardware start (#391, the RTX 3090 -- the only card in the project that
+# holds it) logged the iswa pair at ONE sequence: 160.00 MiB (8192 cells, 5 layers, 1/1 seqs)
+# non-SWA + 600.00 MiB (3072 cells, 25 layers, 1/1 seqs) SWA = 760.00 MiB, against the 1,536 the
+# old term claimed. Evidence:
+# eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg7-moe-host-mapped.stderr.log
+# WHY IT DRIFTED is deliberately NOT recorded as a cause. The old derivation was exactly double the
+# measurement on both halves, which invites "it assumed 4 bytes per element where llama.cpp
+# allocates 2" -- but the 12B twin's derivation, written the same way, is 4x high on its
+# full-attention half (512 derived, 128.00 measured) and EXACT on its sliding-window half (1,920
+# both), so no single per-element error explains the family. A K/V double-count fits this model's
+# two halves just as well, and nothing separates the two. These terms were derived per model, by
+# hand; this one had no log to check against and nothing forced the check.
+# 0.8 GiB (819.2 MiB), not 0.7: one decimal is the file convention and 760.00 MiB rounds nearer to
+# 0.7, but five of the seven terms sit at or above their own figure and 0.8 keeps 59 MiB of
+# headroom. Little turns on the choice -- VRAM_FIT_MARGIN_MIB adds 1 GiB on top of the whole
+# estimate, and the star does not move at either value (see the threshold note below).
+# UNCHANGED by the 2026-09-07 `-np 1` recomputation (issue #319), and the measurement CONFIRMS that
+# reasoning: this architecture has NO recurrent state, the recurrent state is the only per-SEQUENCE
+# term, and both Gemma caches are sized in CELLS from --ctx-size and counted once whatever the slot
+# count is -- both halves above log "1/1 seqs" (the 12B twin logs the same caches as "4/1 seqs",
+# four sequences over ONE cache:
+# eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg3-baseline.stderr.log).
+# THRESHOLD: this drops `estimateGraphicsNeedMib` from 17,689 to 16,972 MiB (717 MiB). The star does
+# not move anywhere: swept over every budget from 1,000 to 49,152 MiB against ten RAM sizes, with
+# and without a crawl signal measured on each chat model, the pick is identical before and after --
+# this model is rank 2 and never wins rule C at any point in that sweep (asserted in
+# committed-catalog.test.ts). What DOES change is the Performance screen's "Your model" row for
+# someone who installed this model by hand and has not started it yet: it no longer overstates the
+# card requirement by 717 MiB.
+estimated_context_cache_gib: 0.8
 # Thinking VERIFIED PER SIZE 2026-07-30 (§9.3): thinks by default on the raw server (as the
 # 2026-07-23 smoke found); `enable_thinking: false` suppresses cleanly (0 reasoning chars,
 # content intact) — the #50 extract path is safe. Deep vs Balanced on the 8-item set: 8/8 vs

@@ -654,7 +654,7 @@ consumer machine.
    | 27B Q4 | 20,247 | 19,940 | **19,258** | 17,885 | 1.08× |
    | 27B Q5 | 23,866 | 23,559 | **22,877** | 19,692 | 1.16× |
    | 4B | 4,410 | 4,410 | **3,838** | 3,261 | 1.18× (added #391) |
-   | MoE 26B | 18,353 | 18,353 | **17,689** | 14,943 | 1.18× (added #391) |
+   | MoE 26B | 18,353 | 18,353 | **16,972** | 14,943 | 1.14× (17,689 until #412 corrected the cache term) |
 
    Every row is still ABOVE the measurement: the estimate stays deliberately conservative, because
    a too-small answer costs a silent partial offload while a too-large one costs a smaller
@@ -688,7 +688,7 @@ consumer machine.
    | model | `estimated_context_cache_gib` | was (4 slots) | why it moved, or did not |
    |---|---|---|---|
    | `gemma4-12b-it-qat-q4` | 2.4 | 2.4 | no recurrent state — both Gemma caches are cell-sized |
-   | `gemma4-26b-a4b-it-qat-q4` | 1.5 | 1.5 | same |
+   | `gemma4-26b-a4b-it-qat-q4` | **0.8** | 1.5 | same — but the 1.5 was DERIVED and measured 760.00 MiB on the model's first hardware start (#412 below); the `-np 1` reasoning itself is confirmed, both halves log `1/1 seqs` |
    | `gemma4-e2b-it-qat-q4` | 0.1 | 0.1 | same |
    | `qwen3.8-27b-ud-q4km` | **0.9** | 1.1 | KV 512 + recurrent 448.88 MiB (MTP, 1 seq) = 960.9 MiB |
    | `qwen3.8-27b-ud-q5km` | **0.9** | 1.1 | identical figures — the recurrent state is f32, quant-independent |
@@ -790,7 +790,7 @@ held:
 | 5 | same laptop: AMD Radeon(TM) Graphics listed FIRST, RTX 3060 second, no `--device` | E2B, 9B | every GPU buffer on the RTX; the fit's device list never contained the iGPU (its "device 0" was Vulkan1) | — | — |
 | 7 | RTX 3090 24 GB (24,822 / 23,575) | Q4 · Q5 | Q4 66/66 (4,704 MiB free at peak) · Q5 **62/66** under rung 1a (MTP on, `-np` auto) | 53.8 · 30.4 | Q4 ✔; the RAM pick Q5 demoted exactly as rule C says — but see the #319 amendment: with `-np 1` this card stars Q5, which it then offloads 66/66 |
 | 1 | the rig, Q5, one thing varied per start | ubatch 2048→512 · `--fit-target` 1024→512 · `-np` auto→1 · MTP on→off | 65/66 · 64/66 · **66/66** · **66/66** | 38.9 · 34.7 · **51.0** · 30.7 | — |
-| 7 moe | the rig, 2026-09-08 under #391, the last open item: the MoE's first hardware start ever (the weight had to be fetched onto the machine) | `gemma4-26b-a4b-it-qat-q4` at 8192, **rung 1** (no `speculative_decoding`, so no MTP) | **31/31** — `projected to use 14943 MiB vs. 23766 free`, "will leave 8822 >= 1024 MiB, no changes needed"; **`CPU_Mapped 577.50`**, the deliverable; KV an iswa pair at one sequence, 160.00 (8192 cells, 5 layers) + 600.00 (3072 cells, 25 layers) = **760.00** against the 1,536 the derived cache term claims; compute 428.07 + 88.08 host | **68.4** tok/s (same-day: memory clock parked at 5001 MHz, see the leg 7 note above) | n/a, app closed; rank 2, never the automatic pick while a rank-3 model fits |
+| 7 moe | the rig, 2026-09-08 under #391, the last open item: the MoE's first hardware start ever (the weight had to be fetched onto the machine) | `gemma4-26b-a4b-it-qat-q4` at 8192, **rung 1** (no `speculative_decoding`, so no MTP) | **31/31** — `projected to use 14943 MiB vs. 23766 free`, "will leave 8822 >= 1024 MiB, no changes needed"; **`CPU_Mapped 577.50`**, the deliverable; KV an iswa pair at one sequence, 160.00 (8192 cells, 5 layers) + 600.00 (3072 cells, 25 layers) = **760.00** against the 1,536 the derived cache term claimed — the measurement the term now carries (#412); compute 428.07 + 88.08 host | **68.4** tok/s (same-day: memory clock parked at 5001 MHz, see the leg 7 note above) | n/a, app closed; rank 2, never the automatic pick while a rank-3 model fits |
 | 4 fu | same laptop, re-run 2026-09-08 under #391 with `-np 1` now in `CHAT_SERVER_ARGS` | 4B at its own ctx **4096** · 9B at 8192 | 4B **33/33**, `CPU_Mapped 497.31` · 9B **20/33** (was 18/33: one slot returns 150.75 MiB of recurrent state) | 59.4 · 4.2 (both on AC; on battery the same 4B start reads 4.2) | E2B (**Grafikspeicher**) ✔ unchanged, tile 5,9 GB VRAM, profile **BALANCED** — but only after a re-measure: the profile is a field of the stored benchmark record and the machine's was pre-#387 |
 
 Two integrated-only laptops (Iris Xe 8,098 MiB, UHD 620 8,119 MiB) had no leg; both confirmed on
@@ -897,8 +897,9 @@ minus finding 1's 600–1,800), so Q4 is expected to land partial and the 9B sta
 10–11 GiB estimate band (question b) is likewise unmeasured; it is never the star (a lower-threshold,
 equal-or-higher-rank model always wins first). **The MoE band (question c) is no longer predicted:
 measured 2026-09-08 under #391 on the RTX 3090, 31/31 layers with the fit projecting 14,943 MiB, so
-the estimate's 17–18 GiB band was high by ~3 GiB and now reads 17,689. It is still never the star,
-for the rank reason above, and no grid row moved.** **Leg 5 on an
+the estimate's 17–18 GiB band was high by ~3 GiB and now reads 16,972 (17,689 until the same
+start's cache measurement was taken up by #412). It is still never the star, for the rank reason
+above, and no grid row moved.** **Leg 5 on an
 Intel-first hybrid** was not available either; the AMD result — llama.cpp dropped the integrated
 device by TYPE before the filling pass — is expected to carry over, and `looksIntegrated`'s
 completeness (#320) is a name-table question, checked against the Intel names above.
@@ -1062,7 +1063,7 @@ The working-share correction that rides along with this decision is rule 3 above
 | gemma4-e2b-it-qat-q4 | 3 | 2,270.2 | **2,271** | 4,746 | 4,746 | 4,423 |
 | qwen3.5-9b-ud-q4kxl | 3 | 7,284.3 | **7,285** | 8,014 | 7,912 | 7,830 |
 | gemma4-12b-it-qat-q4 | 2 | 10,253.0 | **10,254** | 11,159 | 11,159 | 11,041 |
-| gemma4-26b-a4b-it-qat-q4 | 2 | 17,688.7 | **17,689** | 18,353 | 18,353 | 18,353 |
+| gemma4-26b-a4b-it-qat-q4 | 2 | 16,971.9 | **16,972** | 18,353 | 18,353 | 18,353 |
 | qwen3.8-27b-ud-q4km | 3 | 19,257.2 | **19,258** | 20,247 | 20,042 | 19,940 |
 | qwen3.8-27b-ud-q5km | 3 | 22,876.4 | **22,877** | 23,866 | 23,661 | 23,559 |
 
@@ -1074,7 +1075,9 @@ of the BASE as well, which is the largest step of the three wherever a model kee
 the host: the E2B fell another 2,152 MiB, Gemma 12B 788, the 9B 546, the two 27B quants 682. The 4B
 and the MoE 26B carried no measured figure at the time and so were untouched by the last two; both
 were measured on 2026-09-08 under #391 and fell then, the 4B by 572 MiB and the MoE by 664, which is
-why their three history columns are flat and their "fits from" is not.)
+why their three history columns are flat and their "fits from" is not. A fourth change touched the
+MoE alone: #412 replaced its DERIVED `estimated_context_cache_gib` with the 760.00 MiB the same
+start measured — 1.5 → 0.8 GiB, a further 717 MiB, 17,689 → 16,972.)
 
 (Lower-ranked models sharing a tier with a ranked one above — `qwen3-4b-instruct-2507-q4`,
 `qwen3-4b-instruct-q4`, `qwen3-8b-instruct-q4`, `ministral3-8b-instruct-2512-q4`,

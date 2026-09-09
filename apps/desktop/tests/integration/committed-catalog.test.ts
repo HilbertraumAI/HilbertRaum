@@ -188,7 +188,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // under-counting that case). Each manifest carries the full arithmetic in its own YAML comment.
   const CACHE_GIB: Record<string, number> = {
     'gemma4-12b-it-qat-q4': 2.4, // unchanged — no recurrent state
-    'gemma4-26b-a4b-it-qat-q4': 1.5, // unchanged — no recurrent state
+    'gemma4-26b-a4b-it-qat-q4': 0.8, // MEASURED 760.00 MiB (#412); was a derived 1.5
     'gemma4-e2b-it-qat-q4': 0.1, // unchanged — no recurrent state
     'qwen3.8-27b-ud-q4km': 0.9, // was 1.1: KV 512 + RS 448.88 (MTP, 1 seq) = 960.88 MiB
     'qwen3.8-27b-ud-q5km': 0.9, // was 1.1: same figures — the recurrent state is f32, quant-independent
@@ -298,7 +298,7 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     'qwen3.5-9b-ud-q4kxl': 7285,
     'gemma4-12b-it-qat-q4': 10254,
     'qwen3-14b-instruct-q4': 11407,
-    'gemma4-26b-a4b-it-qat-q4': 17689, // was 18,353 until its host-mapped 577.50 was measured (#391)
+    'gemma4-26b-a4b-it-qat-q4': 16972, // 18,353 → 17,689 (host-mapped, #391) → 16,972 (measured cache, #412)
     'qwen3.6-27b-q4': 19961,
     'qwen3.8-27b-ud-q4km': 19258,
     'qwen3.6-27b-q5': 22923,
@@ -323,6 +323,39 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     expect(THRESHOLD_MIB['qwen3.5-9b-ud-q4kxl']).toBeGreaterThan(8192 - 1024)
     expect(THRESHOLD_MIB['gemma4-12b-it-qat-q4']).toBeGreaterThan(10 * 1024)
     expect(THRESHOLD_MIB['gemma4-12b-it-qat-q4']).toBeLessThan(11 * 1024)
+  })
+
+  // (e2) Issue #412 backs its own decision. Correcting the MoE's context-cache term from a derived
+  // 1.5 to the MEASURED 0.8 GiB drops its threshold 717 MiB (17,689 → 16,972), and the argument for
+  // taking it was that the star cannot move. That is asserted here rather than reasoned about,
+  // because two rule-C branches bypass the rank ordering the informal argument rested on: step 2's
+  // `base && eligible(base)` takes the RAM pick BEFORE the ranked pool is consulted, and
+  // `applySpeedSignal` gates a crawl on `eligible(measured)`, so widening eligibility can unlock a
+  // step-down that was previously suppressed. The MoE is rank 2 behind five rank-3 models and its
+  // 32 GB comfortable tier keeps it out of both branches — so it wins rule C NOWHERE, which is a
+  // stronger statement than "the correction did not move it" and is what the manifest comment cites.
+  it('#412: the MoE never wins rule C, at any budget, RAM size or speed signal', () => {
+    const chat = committedManifests().filter((m) => m.role === 'chat')
+    const moe = 'gemma4-26b-a4b-it-qat-q4'
+    expect(chat.find((m) => m.id === moe)!.estimatedContextCacheGib).toBe(0.8)
+    const budgets: number[] = []
+    // Fine around the corrected threshold (where eligibility actually changed), coarse elsewhere.
+    for (let b = 16_900; b <= 17_800; b++) budgets.push(b)
+    for (let b = 1024; b <= 49_152; b += 37) budgets.push(b)
+    const rams = [4, 8, 12, 14, 16, 20, 21, 23, 24, 31, 32, 48, 64, 128]
+    for (const budget of budgets) {
+      for (const ram of rams) {
+        expect(onCard(chat, budget, ram), `budget=${budget} ram=${ram}`).not.toBe(moe)
+      }
+    }
+    // …and with a crawl measured on every chat model, at the RAM sizes that clear its 20 GB floor.
+    for (const measured of chat) {
+      for (const budget of [16_972, 17_000, 17_688, 17_689, 20_480, 23_332, 32_768]) {
+        for (const ram of [20, 24, 32, 64, 128]) {
+          expect(onCard(chat, budget, ram, crawlOn(measured.id)), `measured=${measured.id} budget=${budget} ram=${ram}`).not.toBe(moe)
+        }
+      }
+    }
   })
 
   // (d) The 30-point grid on the free-memory basis: cards {6, 8, 12, 16, 20, 24} GB as
