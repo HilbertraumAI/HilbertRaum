@@ -27,11 +27,35 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
-## 2026-09-09 — the audit 2026-09-02 Phase 9b close-out entry retired verbatim (PR #282)
+## 2026-09-09 — three closed dated entries retired verbatim (preamble budget)
 
-_Retired from `BUILD_STATE.md` on 2026-09-09 for the preamble budget, making room for the
-knowledge-packs docs entry. The round it closes is long done; its durable ledger is
-`docs/architecture.md` §52._
+Moved out of `BUILD_STATE.md` on 2026-09-09 to keep the preamble inside its 200-line budget
+(`repo-hygiene.test.ts`): the 2026-09-02 audit round's Phase 9b close-out entry (PR #282), making
+room for the knowledge-packs docs entry; the Model library UX wave entry (PR #302), making room for
+the #331 HW3-acceptance entry; and — because those two waves landed in parallel and each had drained
+only its own line's worth — the #286 save-a-code-block entry, for the four lines the merged preamble
+was still over. All three waves are closed and carry their own durable records — the code-block save
+in `docs/security-model.md` "Code-block save boundary" and user-guide §6, the Model library UX wave
+in `docs/design-guidelines.md` §15 and the user guide, the 2026-09-02 audit round in
+`docs/architecture.md` §52.
+
+_2026-09-07 — **Save a code block from an answer (#286, `feat/286-save-code-block`):** every
+fenced code block in a persisted assistant answer gets its own Copy/Save toolbar; Save writes
+verbatim bytes (no BOM, via `saveBinaryExport`) — renderer-supplied content over the new
+`chat:saveCodeBlock` channel, mapped through a fixed extension allowlist, persisted turns only;
+audit records ids/bytes/extension only, never the text or path. Record: `security-model.md`
+"Code-block save boundary"; docs: user-guide §6, `data-contracts.md`, `design-guidelines.md`, `PRIVACY.md`, `CHANGELOG.md`._
+
+_2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
+(owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
+filters and expandable quantization groups (`docs/design-guidelines.md` §15, user-guide §5/§6);
+F2 keeps a failed/unverified download's named result with Retry/Dismiss; F3 keeps repair-state
+models visible and auto-expands their groups; F5 fronts a tied group with an obtainable variant;
+a catalog guard plus F7 cleanup retire dead keys/CSS and add an unused-i18n-key guard. Rebuilt
+on master as UX-only: Flash-Next (`feat/qwen38-flash-next-manifest`) split out, contained here
+only, tracked as follow-ups #310/#311/#312 (shards, Flash-Next landing, GPU ladder) plus
+#313/#314 (family filter, renderer-reload recovery) and #315 (review residuals). Final head =
+the PR #302 tip (CI green on every phase); 379 / 5,784 passed, 74 skipped locally._
 
 _2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
 `docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46

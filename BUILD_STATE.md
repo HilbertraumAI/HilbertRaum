@@ -28,6 +28,22 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-09 — **#331 CLOSED — the four blocked HW3 acceptance legs performed** (`docs/331-hardware-acceptance-legs`;
+record `benchmark.md` §2 row HW3 + §4 HW3; evidence `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md`).
+A workspace created on a SECOND computer with the 14B active made leg 2 a real moved-drive `new-machine` run behind a 66 s model
+start — the review box's ~120 ms first run reproduced here first, and a FRESH workspace would not have helped either
+(`activeModelId` starts null, so nothing precedes the check). **Passed:** the moved-drive check observed window-open → completion
+(13.7 s), transitioning with no navigation; a foreground chat inside a benchmark span (both M1 halves — a chat never masquerades as
+a span nor hides one; the ~130–270 ms overlap is structural, `modelBusy` is re-checked inside the speed leg); a model load
+(120.3 MB/s) and a full file verification (85.5 s forced re-hash, 242 s cold `#382`/`#420` pass) each refreshing rows and tiles in
+place, matching what persisted. **Three defects filed:** under Narrator — against a positive control proving live regions DO work in
+the app's window — NEITHER live region is announced. **#436** is the serious one: `ErrorBanner`'s always-mounted `role="alert"` is
+defeated by the `Banner` nested inside it, whose `role="status"` is itself a live region mounted WITH its text (M-U1 one level
+down), affecting 11 screens + the gate's #145 wrong-password banner; a control fixed the remedy — inner `aria-live="off"` does NOT
+work, the inner role must go. **#437** the step region (inserted with content AND progress carried only by a CSS class +
+`aria-hidden` icon). **#438** an automatic run's step list never advances (progress is addressed to the invoking window; the screen
+renders the list for any held span, correct per M1). Lesson to keep: `role="status"` and `role="alert"` are both live regions —
+nesting one inside the other silences the outer. Docs: `benchmark.md`, `known-limitations.md` (Performance + Accessibility)._
 _2026-09-09 — **Knowledge packs get a public face (`docs/knowledge-packs.md` + README section; docs-only,
 `docs/knowledge-packs-readme-and-page`):** the feature shipped but the repo did not say so — one README bullet (#5 of 10,
 linking nowhere) and user-guide §7b, reachable only through "walkthrough of every screen". New canonical page
@@ -78,12 +94,6 @@ MODEL (nothing persisted, `runtime:notice` names it), a CPU rung starting persis
 follow view + task, a kept selection is marked, family-only reset; #314 `downloads:list`/`downloads:dismiss` re-attach a download after
 a renderer reload, dismissal lives in main memory; #315 findBy assertions, baseline staleness test, 17 dead keys deleted. Owner rulings
 taken on the plan defaults (PR body). Suite: master 421 files / 6,815 tests → 422 / 6,930 (85 skipped); typecheck + build green; the zim-packs T14 case flaked once under full load (green alone, untouched here). Residuals: §5 item 23._
-_2026-09-07 — **Save a code block from an answer (#286, `feat/286-save-code-block`):** every
-fenced code block in a persisted assistant answer gets its own Copy/Save toolbar; Save writes
-verbatim bytes (no BOM, via `saveBinaryExport`) — renderer-supplied content over the new
-`chat:saveCodeBlock` channel, mapped through a fixed extension allowlist, persisted turns only;
-audit records ids/bytes/extension only, never the text or path. Record: `security-model.md`
-"Code-block save boundary"; docs: user-guide §6, `data-contracts.md`, `design-guidelines.md`, `PRIVACY.md`, `CHANGELOG.md`._
 _2026-09-06 — **Follow-up wave on `feat/performance-screen` (#303), one commit per issue, ledger `tmp/followups-303-ledger.md`:**
 #325 closed `4293f95f` (GPU-off tile never falls back to a recorded card; Copy report carries the live pick; "Running on the graphics card right now." line — visual unverified);
 #323 closed `b0b26eec` (a completed chat-engine install re-runs the probe refresh when this machine's eligible probe is empty); #335 closed `6f1bcde1` (the harness records and removes every suite's temp root; ~2,500 leaked roots per run → 0); #322 closed — `speedIdentity` + the one-directional gate in `speedSignalFor` (a sample counts for a next start no faster than the measured path; §6.5 2026-09-06 amendment, owner-confirmed on review of the first draft)._
@@ -161,17 +171,6 @@ check in `maybeRunFirstBenchmark` restores a known machine's result or benchmark
 `benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
 `docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
 storage + IPC). §5 item 22 tracks the residuals._
-_2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
-(owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
-filters and expandable quantization groups (`docs/design-guidelines.md` §15, user-guide §5/§6);
-F2 keeps a failed/unverified download's named result with Retry/Dismiss; F3 keeps repair-state
-models visible and auto-expands their groups; F5 fronts a tied group with an obtainable variant;
-a catalog guard plus F7 cleanup retire dead keys/CSS and add an unused-i18n-key guard. Rebuilt
-on master as UX-only: Flash-Next (`feat/qwen38-flash-next-manifest`) split out, contained here
-only, tracked as follow-ups #310/#311/#312 (shards, Flash-Next landing, GPU ladder) plus
-#313/#314 (family filter, renderer-reload recovery) and #315 (review residuals). Final head =
-the PR #302 tip (CI green on every phase); 379 / 5,784 passed, 74 skipped locally._
-
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -190,8 +189,10 @@ ledger `docs/architecture.md` §52), and the five 2026-09-04 Phase F entries (PR
 entries of the #290/#291 wave (PRs #295/#300/#297/#299) and Phase F PR 6 + close-out (#293, #292) on
 2026-09-05 at ZIM Phase 3a (preamble budget), and the ten ZIM knowledge-packs wave entries
 (Phases 0–6 + the 2026-09-04 MVP entry, PRs #304–#336) on 2026-09-06 at the P7 close-out (preamble
-budget), and the 2026-09-03 audit-2026-09-02 Phase 9b close-out entry (PR #282) on 2026-09-09
-(preamble budget, making room for the knowledge-packs docs entry) —
+budget), and the 2026-09-03 audit-2026-09-02 Phase 9b close-out entry (PR #282), the 2026-09-05
+Model library UX wave entry (PR #302) and the 2026-09-07 #286 save-a-code-block entry on 2026-09-09
+(preamble budget, making room for the knowledge-packs docs entry and the #331 HW3-acceptance
+entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 

@@ -2473,6 +2473,17 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The silent re-check has no Home-screen notice yet.** The moved-drive re-check above runs with
   no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
   tracked in BUILD_STATE §5 item 22 (a).
+- **Nothing on this screen is announced to a screen reader** (verified by ear with Narrator on
+  2026-09-09, issue #331, against a positive control proving live regions do work in the app's
+  window). Two separate defects, neither fixed yet: the progress-step list is inserted already
+  containing its content AND carries progress only in a CSS class and an `aria-hidden` icon, so
+  a check is silent from start to finish (#437); and the failure banner is silent too (#436) —
+  which is NOT specific to this screen, see the entry below.
+- **An automatic check shows a step list that never advances.** A first-run or moved-drive check
+  is run by the main process, and progress steps are addressed only to the window that pressed
+  the button — but the screen renders the list whenever the backend span is held (correct per
+  audit M1). So a moved-drive check sits frozen on step 1 for its whole duration (measured:
+  13.7 s) and then disappears. A manual check does advance. Tracked as #438.
 - **Remaining hardware acceptance not yet performed:** the hybrid iGPU+dGPU device-order check
   and Apple Silicon unified-memory behaviour. Two items left this list: the two-computer round
   trip on an encrypted drive, including an upgraded workspace with no history yet, was verified
@@ -2552,7 +2563,22 @@ identifier), added forced-colors (Windows High Contrast) rules for the custom-dr
 controls (Switch, strength meter — #151 KL-3: the inventory is now THREE, the chat context
 meter `.context-meter-track/-fill` joined later and carries no forced-colors rule; accepted
 because its value is never color-only — the numeric label carries the meaning), and verified
-the reduced-motion kill-switch. Accepted as-is, with reasons:
+the reduced-motion kill-switch.
+
+**NOT accepted — an open defect, recorded here so it is not mistaken for one of the acceptances
+below.** Verified by ear with Narrator on 2026-09-09 (issue #331), against a positive control
+that proved live regions do work in the app's own Electron window: **`ErrorBanner`'s message is
+never announced** (#436). The component exists to implement audit finding M-U1 — an always-mounted
+`role="alert" aria-live="assertive"` container whose text swaps inside it — but the `Banner`
+nested within it carries `role="status"`, which is itself a live region (implicit
+`aria-live="polite"`) and IS mounted with its text. The nearest live-region ancestor governs, so
+M-U1's anti-pattern is reintroduced one level down. This is the shared failure surface for **11
+screens**, and for `WorkspaceGate`'s wrong-password banner — the SH-2 / #145 fix — so a failed
+unlock is silent too. A control isolated the remedy: `aria-live="off"` on the inner element does
+NOT help; the inner live-region role has to go. The lesson generalises — **`role="status"` and
+`role="alert"` are both live regions, so nesting one inside the other silences the outer one.**
+
+Accepted as-is, with reasons:
 
 - **Hairline `--border` separators are ~1.3:1.** They are decorative row/card separators,
   never the sole identifier of a component (cards pair them with surface fill + shadow;
