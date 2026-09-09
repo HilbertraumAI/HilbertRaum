@@ -98,7 +98,9 @@ the full recovery path.
 
 - **The simple way:** copy `.zim` files into the drive's `zim/` folder. They are found when you
   unlock, and on **Refresh** under *Documents → Knowledge packs*.
-- **From anywhere else:** *Documents → Knowledge packs → Add packs…*.
+- **From anywhere else:** *Documents → Knowledge packs → Add packs…*. **Knowledge packs** is the
+  switch next to the Documents title; while you have no pack, Home's readiness card and the chat's
+  sources picker offer **Add packs** too.
 
 Files are **used in place** — nothing is copied, nothing is re-encoded, and a pack is never
 written to. Removing a pack's registration forgets it; the file itself is never deleted.
@@ -113,7 +115,8 @@ Packs are **per chat and off by default**. In a documents chat, open the sources
 ("Answering from…") and tick the packs you want under *Knowledge packs*; up to 12 in one chat.
 
 - **Answer from packs alone** by unticking **Search my documents** at the top of the picker.
-  Files you attached directly to that chat are still used either way.
+  Files you attached directly to that chat are still used either way. **Ask this pack** on a
+  pack's row under *Documents → Knowledge packs* opens such a chat directly.
 - **Read the source:** answers cite pack articles the way they cite documents, and *Open
   article* shows the article text offline — including from an evidence review's archive row.
 - **See what each pack did:** a "Knowledge packs:" line under the answer names every ticked

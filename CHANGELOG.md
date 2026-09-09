@@ -26,6 +26,15 @@ from its first public `1.0.0` release onward.
 ## [Unreleased]
 
 ### Added
+- **Knowledge packs, one click from the Documents title.** The Documents screen now has a switch
+  next to its title — **My documents | Knowledge packs** — instead of a "Reference" entry at the
+  bottom of the sidebar. In the packs view each pack has an **Enabled** switch, an **Ask this
+  pack** button that opens a chat answering from that pack alone, and a **⋯** menu for Remove.
+  The first-run notice became a setup card, and the empty view names `library.kiwix.org` with a
+  **Copy the library address** button. Home's readiness card gained a **Knowledge packs** row,
+  and the chat's "Answering from" picker offers **Add packs…** while you have none.
+- **Filter documents by name.** A search box above the document list narrows the current
+  section as you type.
 - **Check all model files, and stop it when you want to.** A new action near the top of the AI
   Model screen checks every model file on the drive against its published checksum. It replaces a
   check the app used to run on its own every time you opened that screen (see Changed). On a slow
@@ -158,6 +167,13 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **A calmer Documents sidebar.** It shows what you have, with a count on every entry: All
+  documents, Recently added, a **Needs attention** entry that appears only while an import
+  failed or a document needs a re-index (replacing the Needs re-index, Failed imports, Large
+  files, Audio and Scanned views), your projects with an Unfiled row, and the Library /
+  Temporary / Generated / Archived locations behind **More**, each only while it holds
+  something. The introductory paragraph now shows only while the list is empty, and Import
+  files sits at the right end of the toolbar.
 - **Knowledge-pack questions that ask for a list or the largest, most or best-known items now
   find the list article more often.** Before searching, the app asks your local model for the
   question's key concepts and the likely title of a list article — one short extra model call

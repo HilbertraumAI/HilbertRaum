@@ -104,6 +104,15 @@ export const en = {
   'home.docs.badgeReady': 'Ready',
   'home.docs.badgeNone': 'None yet',
   'home.docs.add': 'Add documents',
+  // §11.16: Home's fourth readiness row — the knowledge packs (an offline Wikipedia) as a source.
+  'home.packs.label': 'Knowledge packs',
+  'home.packsReady.one': '{count} knowledge pack ready to ask',
+  'home.packsReady.other': '{count} knowledge packs ready to ask',
+  'home.packs.none': 'No packs yet — add an offline Wikipedia to ask general questions',
+  'home.packs.noneEnabled': 'No pack is enabled — turn one on under Documents',
+  'home.packs.badgeNoneEnabled': 'None enabled',
+  'home.packs.add': 'Add packs',
+  'home.packs.open': 'Open knowledge packs',
   'home.actions.startChat': 'Start chatting',
   'home.actions.askDocs': 'Ask my documents',
 
@@ -2628,14 +2637,23 @@ export const en = {
   'docs.section.heading': 'Sections',
   'docs.section.library': 'Library',
   'docs.section.projects': 'Projects',
-  // Group header over the system buckets (Library / Temporary / Generated / Archived), §11.6.
-  'docs.section.locations': 'Locations',
   'docs.section.temporary': 'Temporary',
   'docs.section.generated': 'Generated',
   'docs.section.archived': 'Archived',
   'docs.section.all': 'All documents',
-  'docs.section.noProjects': 'No projects yet',
   'docs.section.newProject': 'New project',
+  // §11.16 (2026-09-09): the header's mode switch — the Documents screen carries the user's own
+  // files AND the knowledge-pack management panel as two modes of one destination.
+  'docs.mode.aria': 'Documents view',
+  'docs.mode.documents': 'My documents',
+  'docs.mode.packs': 'Knowledge packs',
+  // §11.16: the toolbar's name filter (a query-time filter over the visible section).
+  'docs.filter.placeholder': 'Filter by name…',
+  'docs.filter.aria': 'Filter documents by name',
+  'docs.filter.noMatch': 'No documents match “{query}”.',
+  // §11.16: the empty state's second line — the other kind of source this screen manages.
+  'docs.empty.packsLine': 'Or add a knowledge pack — an offline Wikipedia the chat can answer from.',
+  'docs.empty.packsAction': 'Knowledge packs',
   // Collapse/expand the whole Documents sub-nav (§11.6 — the list then takes the full width).
   'docs.rail.hide': 'Hide sections',
   'docs.rail.show': 'Show sections',
@@ -2682,17 +2700,16 @@ export const en = {
     'search index from your workspace. The original files outside the workspace are not touched.',
   'docs.empty.section': 'Nothing here yet.',
 
-  // ---- Document organization — smart views (plan §7.6/§12.1, Phase E) ----
-  // Query-time filters over document metadata, not stored collections.
-  'docs.smart.heading': 'Views',
+  // ---- Document organization — smart views (plan §7.6/§12.1, Phase E; regrouped §11.16) ----
+  // Query-time filters over document metadata, not stored collections. §11.16 folded the
+  // diagnostic views into ONE attention-driven entry (failed imports + stale embeddings) that
+  // only appears while something needs doing; the size/audio/scan views were retired.
   'docs.smart.recentlyAdded': 'Recently added',
   'docs.smart.unfiled': 'Unfiled',
-  'docs.smart.needsReindex': 'Needs re-index',
-  'docs.smart.largeFiles': 'Large files',
-  'docs.smart.failed': 'Failed imports',
-  'docs.smart.audio': 'Audio',
-  'docs.smart.ocr': 'Scanned / OCR',
-  // Views "More" disclosure: the rare diagnostic views fold behind this (§11.6).
+  'docs.smart.attention': 'Needs attention',
+  'docs.smart.attentionTitle': 'Failed imports and documents that need a re-index',
+  // The rail's "More" disclosure: the system locations (Library / Temporary / Generated /
+  // Archived) fold behind it, each shown only while it holds something (§11.16).
   'docs.smart.more': 'More',
   // Staleness indicator on a generated document (plan §15.3). Quiet, non-blaming;
   // re-running the task is the only fix (snapshot semantics are unchanged).
@@ -2780,16 +2797,26 @@ export const en = {
   // reader's button list names none of them.
   'chat.sources.openArticleNamed': 'Open article: {title}',
   // ---- #301 P6 — END ------------------------------------------------------------------------
-  'docs.section.sources': 'Reference',
-  'docs.section.packs': 'Knowledge packs',
   'packs.add': 'Add packs…',
   'packs.addBusy': 'Adding…',
   'packs.refresh': 'Refresh',
-  'packs.lead': 'ZIM archives (for example an offline Wikipedia) the chat can answer from. Files are used in place and never copied; drop archives into the drive’s zim folder or add them here.',
+  'packs.lead': 'Offline reference archives (ZIM files — an offline Wikipedia, for example) the chat can answer from. Files are used in place and never copied: drop them into the drive’s zim folder or add them here.',
+  // §11.16: the panel's summary line — three parts joined with " · ".
+  'packs.summary.count.one': '{count} pack',
+  'packs.summary.count.other': '{count} packs',
+  'packs.summary.enabled.one': '{count} enabled',
+  'packs.summary.enabled.other': '{count} enabled',
+  'packs.summary.size': '{size} on this drive',
   'packs.loading': 'Loading packs…',
   'packs.refreshing': 'Checking the drive for packs…',
   'packs.emptyTitle': 'No knowledge packs yet',
-  'packs.emptyLine': 'Add a ZIM archive, or copy one into the drive’s zim folder and reopen this view.',
+  'packs.emptyLine': 'Download a single-file .zim archive from library.kiwix.org, then add it here or copy it into the drive’s zim folder.',
+  // §11.16: the empty state's quiet second action — the app never opens a browser itself.
+  'packs.copyLibrary': 'Copy the library address',
+  'packs.copiedToast': 'Copied library.kiwix.org',
+  'packs.copyFailed': 'Could not copy — the address is library.kiwix.org',
+  // §11.16: the tools-missing notice became a setup card with a title.
+  'packs.setup.title': 'One-time setup: the knowledge-pack tools',
   'packs.toolsMissing': 'The kiwix-tools binaries are not installed on this drive, so packs cannot be added or searched. See Troubleshooting → “The panel says kiwix-tools are missing” for the install step.',
   // #339 P8-2 (the owner's ruling, 2026-09-06): the panel notice's own install action — the SAME
   // consent dialog shape as a model download (`KnowledgePackToolsDialog.tsx`), confirming calls
@@ -2847,15 +2874,15 @@ export const en = {
     'Its file name clashes with “{title}”, so only that pack is served — rename this file to use both.',
   'packs.state.notServedTitleUnknown':
     'Its file name clashes with another pack’s, so only that pack is served — rename this file to use both.',
-  'packs.enable': 'Enable',
-  'packs.disable': 'Disable',
-  'packs.working': 'Working…',
+  // §11.16: per-pack enablement is ONE Switch (role="switch", checked = enabled) named after the
+  // pack; "Ask this pack" opens a chat that answers from this pack alone (documents off).
+  'packs.switchLabel': 'Use {title} in chats',
+  'packs.ask': 'Ask this pack',
+  'packs.askTitle': 'Open a chat that answers from this pack alone',
+  'packs.rowMenu': 'More actions for {title}',
   'packs.remove': 'Remove',
   // #301 P6 (plan §9.23 (b)6): accessible names for the per-row action buttons — visible
   // text stays the plain verb; the name a screen reader announces includes the pack title.
-  'packs.enableNamed': 'Enable {title}',
-  'packs.disableNamed': 'Disable {title}',
-  'packs.removeNamed': 'Remove {title}',
   'packs.listLabel': 'Knowledge packs',
   'packs.removeTitle': 'Remove this knowledge pack?',
   'packs.removeConfirm': 'Remove pack',
@@ -2875,6 +2902,9 @@ export const en = {
   'chat.scope.attachmentsOnlyTap': 'Just the files in this chat',
   'chat.scope.filesInChatLine': 'Files in this chat',
   'chat.scope.noProjects': 'No projects yet',
+  // §11.16: with no pack registered the picker offers the way in instead of omitting the section.
+  'chat.scope.noPacks': 'No knowledge packs on this drive yet.',
+  'chat.scope.addPacks': 'Add packs…',
   'chat.scope.archivedFallback': 'This project was archived — answering from your Library.',
   // Beta-feedback Phase 4 (#26/D71): the always-visible "Answering from:" chip near the composer.
   // Reframes the scope popover's trigger so the active retrieval scope is legible BEFORE asking —

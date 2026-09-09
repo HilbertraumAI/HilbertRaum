@@ -113,6 +113,9 @@ Home answers "is everything ready?" at a glance:
   is up, the row flips to **Running** by itself.
 - **Documents** — how many files are ready to ask about, with an **Add documents** shortcut
   when there are none.
+- **Knowledge packs** — how many offline reference packs (an offline Wikipedia, §7b) are ready
+  to ask, with an **Add packs** shortcut when there are none and **Open knowledge packs** when
+  none is switched on.
 
 **Start chatting** is the one big button — everything else is a quiet shortcut. If the
 drive is read-only, low on space, or slow, a friendly note appears here too; it never
@@ -644,15 +647,20 @@ A few honest notes about recordings:
 
 ### Organize your documents (Library, Projects, Temporary)
 
-The **Documents** screen has a list of **sections** down the left so a one-off invoice never
-pollutes the same pile as your long-term records. It reads as four groups:
+The **Documents** screen has a short list of **sections** down the left so a one-off invoice
+never pollutes the same pile as your long-term records. It only shows what you actually have,
+and every entry carries a count:
 
 - **All documents** (at the top) — everything, regardless of section. This is where you land.
+- **Recently added** — the same list, newest first.
+- **Needs attention** — appears only while something needs doing: an import that failed, or a
+  document that needs a re-index. From here, **Retry all** / **Re-index all** fix them in one go.
 - **Projects** — focused folders you create (e.g. *"Tax 2025"*, *"Client Müller"*). Use the
-  **+** next to **Projects** to make one; the **⋯** menu renames, archives, or deletes it. A
-  document can be in a project **and** in your Library at the same time — it is the *same* file,
-  not a copy, so it is never stored or indexed twice.
-- **Locations** — the built-in places a document can live:
+  **+** next to **Projects** to make one (with no project yet, the group is a single **+ New
+  project** row); the **⋯** menu renames, archives, or deletes it. A document can be in a project
+  **and** in your Library at the same time — it is the *same* file, not a copy, so it is never
+  stored or indexed twice. **Unfiled** — documents in no project — is the last row of the group.
+- **More** — the built-in places a document can live, each shown only while it holds something:
   - **Library** — your long-term knowledge base. Everything you import lands here by default and
     it is the default source when you ask your documents.
   - **Temporary** — one-off files you want to read *now* without adding them to your Library
@@ -662,13 +670,14 @@ pollutes the same pile as your long-term records. It reads as four groups:
     they came from and are kept out of your default answers (see below).
   - **Archived** — documents you've set aside: kept on the drive but left out of answers until
     you un-archive them.
-- **Views** — handy filters that just narrow the list (they don't move anything). The common
-  ones — *Recently added*, *Unfiled*, *Needs re-index* — are always shown; the rarer diagnostic
-  ones — *Large files*, *Failed imports*, *Audio*, *Scanned / OCR* — fold behind a **More**
-  toggle and only appear when there's something to show.
 
-Use the **«** handle at the top of the list to **collapse the whole sidebar** when you want the
+Above the list, **Filter by name** narrows whatever section you are in as you type. Use the
+**«** handle at the top of the sections to **collapse the whole sidebar** when you want the
 document list full-width; the **»** handle brings it back. Your choice is remembered.
+
+The switch next to the title — **My documents | Knowledge packs** — takes you to the offline
+reference archives the chat can also answer from (§7b); they are managed here because they are
+a source like your documents, but they are not documents, so that view has no sections.
 
 **Move things around.** Each document row's **⋯** menu files it into a
 project (**Move to project…**), **Keep in Library**, marks it **Temporary** or **Archived**, or
@@ -837,12 +846,15 @@ must be plain ASCII: an umlaut or an accent anywhere in the path stops the archi
    missing”](troubleshooting.md#the-panel-says-kiwix-tools-are-missing).
 2. **Add packs:** copy `.zim` files into the drive’s `zim/` folder (found when you
    unlock, and on Refresh), or use *Documents → Knowledge packs → Add packs…* for files
-   stored elsewhere. Files are used in place — nothing is copied. The list updates
-   itself when you unlock; use **Refresh** under Knowledge packs after copying files
-   while the app is open.
+   stored elsewhere (**Knowledge packs** is the switch next to the Documents title; Home's
+   readiness card and the chat's sources picker both offer **Add packs** while you have none).
+   Files are used in place — nothing is copied. The list updates itself when you unlock; use
+   **Refresh** under Knowledge packs after copying files while the app is open. Each pack has
+   an **Enabled** switch; a disabled pack stays listed but cannot be ticked in a chat.
 3. **Use them in a chat:** in a documents chat, open the sources picker
    (“Answering from…”) and tick the packs under *Knowledge packs*. Packs are
-   per-chat and off by default. You can tick up to 12 packs in one chat.
+   per-chat and off by default. You can tick up to 12 packs in one chat. **Ask this pack** on
+   a pack's row is the shortcut: it opens a chat that answers from that pack alone.
 4. **Answer from packs only, if you want:** untick **Search my documents** at the top of
    the sources picker to answer only from the ticked knowledge packs — files you attached
    directly to this chat are still used either way.
@@ -867,7 +879,7 @@ must be plain ASCII: an umlaut or an accent anywhere in the path stops the archi
    folder cannot both be served — the panel marks the later one "Not served" and names the
    pack that keeps the name; rename one file to use both.
 
-Removing a pack's registration (the **Remove** button) only forgets it — the file itself is
+Removing a pack's registration (**Remove** in the pack's **⋯** menu) only forgets it — the file itself is
 never deleted. An article from a pack that has no full-text search index is still readable:
 use *Open article* on it directly, even though that pack is skipped when the app searches.
 Whole-document reads and document comparisons never consult knowledge packs — the answer

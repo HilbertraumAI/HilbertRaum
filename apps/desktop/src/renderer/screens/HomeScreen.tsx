@@ -6,6 +6,7 @@ import { useT } from '../i18n'
 import type {
   AppStatus,
   DocumentInfo,
+  KnowledgePack,
   MovedDriveNotice,
   PreflightResult,
   RuntimeStatus
@@ -38,6 +39,9 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const [status, setStatus] = useState<AppStatus | null>(null)
   const [runtime, setRuntime] = useState<RuntimeStatus | null>(null)
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
+  // §11.16: the knowledge packs for the fourth readiness row. Null = not known (still loading,
+  // an older bridge without the channel, or a failed read) — the row simply does not render.
+  const [packs, setPacks] = useState<KnowledgePack[] | null>(null)
   const [preflight, setPreflight] = useState<PreflightResult | null>(null)
   /** §5 item 22 (a): what the moved-drive check did this session, or null when nothing to say. */
   const [moved, setMoved] = useState<MovedDriveNotice | null>(null)
@@ -52,6 +56,12 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       ?.listDocuments()
       .then((d) => active && setDocs(d ?? []))
       .catch(() => active && setDocs([]))
+    // §11.16: best-effort like the reads above — `Promise.resolve(...)` because an older preload
+    // (or a test harness that does not stub the channel) hands back `undefined`, and "could not
+    // ask" reads the same as "nothing to say": no row.
+    Promise.resolve(window.api?.listKnowledgePacks?.())
+      .then((p) => active && setPacks(Array.isArray(p) ? p : null))
+      .catch(() => active && setPacks(null))
     // Friendly, non-blocking launch preflight (drive writable / space / speed).
     window.api
       ?.runPreflight?.()
@@ -250,6 +260,59 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       ) : undefined
   }
 
+  // §11.16: the knowledge packs as a fourth readiness row — the offline Wikipedia is a source
+  // like the documents, so Home says whether one is ready and offers the way in when none is.
+  // Three states: no pack registered (add), packs registered but none usable (open the panel),
+  // at least one present AND enabled (ready). Hidden entirely while the packs are unknown.
+  const packsRow: ReadinessRowProps | null = (() => {
+    if (packs == null) return null
+    const ready = packs.filter((p) => p.available && p.enabled).length
+    if (packs.length === 0) {
+      return {
+        icon: 'book',
+        label: t('home.packs.label'),
+        value: t('home.packs.none'),
+        badge: (
+          <Badge tone="neutral" icon="○">
+            {t('home.docs.badgeNone')}
+          </Badge>
+        ),
+        action: (
+          <Button size="sm" onClick={() => onNavigate('documents:packs')}>
+            {t('home.packs.add')}
+          </Button>
+        )
+      }
+    }
+    if (ready === 0) {
+      return {
+        icon: 'book',
+        label: t('home.packs.label'),
+        value: t('home.packs.noneEnabled'),
+        badge: (
+          <Badge tone="neutral" icon="○">
+            {t('home.packs.badgeNoneEnabled')}
+          </Badge>
+        ),
+        action: (
+          <Button size="sm" onClick={() => onNavigate('documents:packs')}>
+            {t('home.packs.open')}
+          </Button>
+        )
+      }
+    }
+    return {
+      icon: 'book',
+      label: t('home.packs.label'),
+      value: tCount('home.packsReady', ready),
+      badge: (
+        <Badge tone="success" icon="✓">
+          {t('home.docs.badgeReady')}
+        </Badge>
+      )
+    }
+  })()
+
   return (
     <div className="screen">
       <h1>{headline}</h1>
@@ -304,6 +367,7 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
         <ReadinessRow {...workspaceRow} />
         <ReadinessRow {...modelRow} />
         <ReadinessRow {...docsRow} />
+        {packsRow && <ReadinessRow {...packsRow} />}
       </div>
 
       {/* One loud primary at a time (§6). When a model is needed, the unblocking action

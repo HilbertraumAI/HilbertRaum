@@ -10,7 +10,7 @@ const PRODUCT_KEYS: Record<string, string> = {
   'hilbertraum.uiLanguage': 'i18n.tsx',
   'hilbertraum.chat.listCollapsed': 'screens/ChatScreen.tsx',
   'hilbertraum.docs.railCollapsed': 'screens/documents/types.ts',
-  'hilbertraum.docs.viewsMoreOpen': 'screens/documents/types.ts'
+  'hilbertraum.docs.locationsMoreOpen': 'screens/documents/types.ts'
 }
 // Written only by the dev preview harness (never read by the app).
 const DEV_HARNESS_KEYS = ['hilbertraum.chat.listView']

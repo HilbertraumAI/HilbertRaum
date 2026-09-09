@@ -46,6 +46,23 @@ verbatim bytes (no BOM, via `saveBinaryExport`) — renderer-supplied content ov
 audit records ids/bytes/extension only, never the text or path. Record: `security-model.md`
 "Code-block save boundary"; docs: user-guide §6, `data-contracts.md`, `design-guidelines.md`, `PRIVACY.md`, `CHANGELOG.md`._
 
+_2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** the total-memory
+rule shipped here is **superseded** by the 2026-09-06 PR #308 audit amendment above (rule C on free memory; §6.6)._
+
+_2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
+third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
+the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
+Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
+tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
+`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
+cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
+`placementVerdict`), the session's observed figures (last
+answer via a `chat:speed` observer, last model start / file check via per-source read-speed
+latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
+check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
+`benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
+`docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
+storage + IPC). §5 item 22 tracks the residuals._
 _2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
 (owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
 filters and expandable quantization groups (`docs/design-guidelines.md` §15, user-guide §5/§6);
