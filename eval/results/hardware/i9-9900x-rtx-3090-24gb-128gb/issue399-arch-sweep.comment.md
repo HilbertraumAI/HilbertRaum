@@ -56,18 +56,18 @@ No model logs `llama_memory_hybrid`; the qwen35 family logs `llama_memory_recurr
 
 #### What it answers (D2)
 
-**The split is exactly the one llama.cpp's message names, and it has two positive controls.**
+**The split is exactly the one llama.cpp's message names, and it has three positive controls.**
 A model with neither a sliding window nor recurrent state restores its evicted prefix from the host
 prompt cache — on a dense (`qwen3`), a MoE (`qwen3moe`) and a third-vendor dense (`mistral3`)
-architecture — so #386's recorded
-"the cost is a restore, not a full re-prefill" IS true, for those two models. Every model that has
+architecture — so #386's recorded "the cost is a restore, not a full re-prefill" IS true, for those
+three models. Every model that has
 SWA (all four `gemma4` manifests) **or** recurrent state (every `qwen35` / `qwen35moe` manifest,
 including all three 27B quants) re-prefills its whole history down to the shared system prefix.
 
 That is the entire modern Qwen/Gemma catalog. Of the fourteen measured, eleven are affected; the
 three that are not are the two legacy `qwen3` entries and `ministral3-8b-instruct-2512-q4` (the DIY
-default-set chat model, rank kept — the one ranked model in the catalog that is NOT affected). In particular
-**both 8–12 GB tier picks are affected** (`gemma4-e2b`, `gemma4-e4b`), which is the case the issue's
+default-set chat model, rank kept — the one ranked model in the catalog that is NOT affected). In particular **both 8–12 GB tier
+picks are affected** (`gemma4-e2b`, `gemma4-e4b`), which is the case the issue's
 second comment flagged as unaffordable, and so is the bundled/catalog-default `qwen3.5-4b-ud-q4kxl`
 and the DIY 9B. Ministral 3 is the one ranked model that keeps the restore.
 
@@ -82,15 +82,16 @@ and the DIY 9B. Ministral 3 is the one ranked model that keeps the restore.
    for `forcing full` will conclude, wrongly, that the restore works. The token count is the only
    honest read.
 2. **The affected set is not "the two 27B quants, and probably Gemma".** It is every ranked chat
-   model in the catalog. The issue's point 5 guessed the set was "probably wider"; it is wider than
-   that guess, because the whole Qwen 3.5 / 3.8 line is recurrent, not just the 27B.
+   model in the catalog except `ministral3-8b-instruct-2512-q4`. The issue's point 5 guessed the set
+   was "probably wider"; it is wider than that guess, because the whole Qwen 3.5 / 3.8 line is
+   recurrent, not just the 27B.
 
 #### Cost side-observation (D5)
 
 On the affected models the host prompt cache is written on every hand-back and never read. Sizes
 from the capture, for one eviction of a ~1,500-token conversation: `qwen3.8-27b-*` 247.22 MiB saved,
 456.19 MiB resident after three requests; `qwen3.5-35b-a3b` 92.59 / 189.98 MiB; `gemma4-12b` 343.59 /
-357.34 MiB; `gemma4-e2b` 14.86 / 15.38 MiB. The default limit is 8,192 MiB of host RAM. On the two
+357.34 MiB; `gemma4-e2b` 14.86 / 15.38 MiB. The default limit is 8,192 MiB of host RAM. On the three
 RESTORED models the same bytes are written and then actually used.
 
 #### What this run could not measure
