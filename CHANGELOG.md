@@ -188,8 +188,11 @@ from its first public `1.0.0` release onward.
   file against your graphics memory, including the part that always stays in main memory — on the
   smallest bundled model that overstated the requirement by more than twice. It now counts only
   what actually goes to the card, which it can do for the models whose split has been measured on
-  real hardware. Two effects you may notice: a 24 GB card is offered the larger 27B model, and an
-  8 GB card is offered the 9B where it used to be offered the 4B.
+  real hardware. The same estimate also allows for the memory your conversation itself needs; for
+  the Gemma 26B mixture-of-experts model that allowance had been calculated rather than measured,
+  and was twice what the model actually asks for. It is now the measured figure. Two effects you
+  may notice: a 24 GB card is offered the larger 27B model, and an 8 GB card is offered the 9B
+  where it used to be offered the 4B.
 - **Larger models now fit on the graphics card that used to be just too small for them.** The chat
   engine ran four answer slots at once, which is memory the app never used — it only ever answers
   one question at a time. It now runs one. On a 24 GB card that is the difference between a 27B
