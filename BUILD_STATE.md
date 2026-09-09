@@ -36,7 +36,9 @@ R-9 and the network-inventory sentence VERBATIM, §7 the measured edges as a tab
 "Knowledge packs — an offline Wikipedia" section, ToC row, Documentation-table row, the hero line, and the bullet rewritten
 to link it. No code, no behaviour change. The rest of the GitHub-presence review is owner-side and tracked nowhere else:
 repo About text + `zim`/`kiwix`/`wikipedia`/`offline` topics, a v0.1.60 release (the packs entries sit in CHANGELOG
-`[Unreleased]`; v0.1.59 predates the wave), a first screenshot, a pack-problem issue template, the org profile README._
+`[Unreleased]`; v0.1.59 predates the wave), a first screenshot, the org profile README. The follow-up PR #441 adds the repo's
+first `.github/ISSUE_TEMPLATE/`: a knowledge-pack report form asking for the facts that decide those reports, and a `config.yml`
+that keeps blank issues one click away and routes vulnerabilities to the private advisory channel._
 _2026-09-09 — **#333 CLOSED — measured, no cache** (instrumented on `perf/333-manifest-read-instrumentation`, PR #431; record
 `benchmark.md` §4 **I5** + Perf marks "`discover_manifests` / `performance_get` — the #333 pair"; evidence
 `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/manifest-read-333-measurement.txt`): on the drive, cold (eject/replug ×3:
