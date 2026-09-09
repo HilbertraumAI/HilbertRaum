@@ -3379,11 +3379,13 @@ has measured reports below 6,144 on Vulkan — GTX 1660 SUPER 5,746, RTX 4050 La
 Laptop 5,994 — so the most common 6 GB configuration was classed `cpu` and starred a model it
 cannot accelerate (the 9B measured 18/33 layers at 5.2 tok/s on such a card). Lowering the floor
 moves the bump one step up on those laptops, which is the accepted cost; 4 GB cards stay out — and
-since 2026-09-08 they stay out on a RESTATED reason (owner decision on #321): the original "nothing
-ranked fits a 4 GB card anyway" went void when the E2B's threshold fell to 2,271 MiB, and the floor was KEPT because the
-E2B is the ONLY ranked model that fits such a card, so admitting it would star the smallest model at
-every RAM size with no 4 GB measurement anywhere in the project to justify the demotion. Reasoning
-and evidence: `model-benchmarks.md` §6.6 N8 ("Why 5,120 — RESTATED").
+since 2026-09-08 they stay out on a RESTATED reason (owner decision on #321, its arithmetic corrected
+2026-09-10 by #413): the original "nothing ranked fits a 4 GB card anyway" went void when the E2B's
+threshold fell to 2,271 MiB, and the floor was KEPT because the E2B is the ONLY ranked model that
+fits the budget such a card actually produces (≈ 3,328 MiB — its ~4,096 total less the 768 MiB idle
+reserve measured on every card in the project; the 4B's 3,838 does not fit it), so admitting it would
+star the smallest model at every RAM size with no 4 GB measurement anywhere in the project to justify
+the demotion. Reasoning and evidence: `model-benchmarks.md` §6.6 N8 ("Why 5,120 — RESTATED").
 
 **UI:** Settings toggle ("Uses your graphics card to speed up responses when available…"),
 Diagnostics Acceleration + runtime-build lines, compatibility-mode notice + "Try GPU again",

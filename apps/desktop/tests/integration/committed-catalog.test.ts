@@ -554,17 +554,24 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // basis that replaced #321's void "nothing ranked fits a 4 GB card anyway". If the floor is
   // ever lowered, this test is the evidence it has to argue against — so it asserts the cost,
   // not the constant (`gpu-rules.test.ts` pins the constant). Record: §6.6 N8 "Why 5,120 —
-  // RESTATED". Both budget forms a 4 GB card can produce are covered: the probe's free figure
-  // (~3,900) and the no-free-figure fallback (total − 1,024 = 3,072).
-  // ⚠ WEAKENED BY MEASUREMENT, 2026-09-08 (#391 leg 4 follow-up (b)) — OWNER DECISION PENDING.
-  // The 4B's measured host-mapped 497.31 MiB moved its need 4,410 → 3,838, so it now fits the
-  // PROBE-FREE budget form (~3,900) that a 4 GB card produces. The "smallest ranked model at
-  // every RAM size" argument therefore survives only at the no-free-figure form (3,072), where
-  // the E2B is still alone. Nothing here is a reason to move `USABLE_VRAM_MB` on its own — the
-  // floor is unchanged and `gpu-rules.test.ts` still pins 5,120 — but the evidence a lowering
-  // would have to argue against is now half of what it was, and that is the owner's call, not a
-  // test's. Recorded so the next reader sees the erosion rather than a quietly re-pinned literal.
-  it('a 4 GB card: the smallest-ranked-model argument now holds only for the 3,072 budget form (#321, #391)', () => {
+  // RESTATED".
+  //
+  // RESOLVED 2026-09-10 (#413), replacing the "⚠ WEAKENED BY MEASUREMENT — OWNER DECISION PENDING"
+  // note this block carried since 2026-09-08. The erosion was real but rested on the wrong budget
+  // figure. #391 moved the 4B's need 4,410 → 3,838, which clears the ~3,900 the N8 text called a
+  // 4 GB card's probe-free budget — so on THAT figure the 4B, not the E2B, is the star and the
+  // "smallest ranked model at every RAM size" argument survives only at 3,072. But 3,900 was never
+  // a measurement: it is a fixture invented alongside the gate change itself (`freeMb: 3900` in
+  // `picker-seams.test.ts`, `performance.test.ts`, `performance-gpu.test.ts`, commit `c3247fe5`),
+  // and no 4 GB card has ever been probed. Every card that HAS been probed idles with the same
+  // desktop-set reserve — 768 MiB on the RTX 3060 Laptop, 769 on the GTX 1070 Ti, 768 on the RTX
+  // 3080 Ti, 1,014 on the RTX 3090, and those are floors — so a real 4 GB card's budget is nearer
+  // 4,096 − 768 = 3,328, which the 4B does NOT clear. All THREE forms are asserted below: 3,072
+  // (no free figure), 3,328 (the measured reserve — the one a real card would produce) and 3,900
+  // (the fixture, kept so the one form that would weaken the argument stays visible rather than
+  // being quietly dropped). The floor is unchanged; lowering it is still an owner call and still
+  // wants a real 4 GB card on the §6.6 protocol.
+  it('a 4 GB card: the smallest-ranked-model argument holds at both budget forms a real one produces (#321, #391, #413)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     const fits = (budget: number) =>
       chat.filter((m) => m.recommendationRank > 0 && fitsGraphicsMemory(m, budget)).map((m) => m.id)
@@ -574,16 +581,29 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
     for (const ram of [8, 12, 16, 24, 32, 64]) {
       expect(onCard(chat, 3072, ram), `budget=3072 ram=${ram}`).toBe('gemma4-e2b-it-qat-q4')
     }
-    // The probe's free-figure form: the 4B (3,838) now fits beside the E2B, so a 4 GB card would
-    // star the 4B — a real model, measured — rather than collapsing to the smallest one.
+    // The probe-free form as a REAL 4 GB card would report it (#413): ~4,096 less the 768 MiB idle
+    // reserve every probed card shows. The 4B's 3,838 misses it by 510, so the E2B is alone here
+    // too and the collapse is the same as at 3,072 — this is the form the N8 argument rests on.
+    expect(fits(3328)).toEqual(['gemma4-e2b-it-qat-q4'])
+    for (const ram of [8, 12, 16, 24, 32, 64]) {
+      expect(onCard(chat, 3328, ram), `budget=3328 ram=${ram}`).toBe('gemma4-e2b-it-qat-q4')
+    }
+    // For the 4B to fit at all, a 4 GB card would have to report a free figure of 3,838 — i.e. a
+    // TOTAL of ≥ 4,606 on the same reserve, which a 4 GB card does not have. Pinned as the
+    // boundary the #413 argument turns on.
+    expect(fits(3837)).toEqual(['gemma4-e2b-it-qat-q4'])
+    expect(fits(3838)).toEqual(['gemma4-e2b-it-qat-q4', 'qwen3.5-4b-ud-q4kxl'])
+    // The fixture form (~3,900), kept visible: the ONE budget at which the argument would weaken,
+    // reachable only by a 4 GB card with no desktop drawn on it. The 4B fits beside the E2B, so
+    // such a card would star a real model rather than collapsing to the smallest one.
     expect(fits(3900)).toEqual(['gemma4-e2b-it-qat-q4', 'qwen3.5-4b-ud-q4kxl'])
     // Rule C only ever demotes, never promotes above the RAM pick, so RAM 12 keeps the E2B (its
-    // RAM pick already) while every larger RAM size now stops at the 4B instead of the E2B.
+    // RAM pick already) while every larger RAM size stops at the 4B instead of the E2B.
     expect(onCard(chat, 3900, 12), 'budget=3900 ram=12').toBe('gemma4-e2b-it-qat-q4')
     for (const ram of [8, 16, 24, 32, 64]) {
       expect(onCard(chat, 3900, ram), `budget=3900 ram=${ram}`).toBe('qwen3.5-4b-ud-q4kxl')
     }
-    // What that demotes, on the RAM picker the card path would override.
+    // What the collapse demotes, on the RAM picker the card path would override.
     expect(recommendModelIdByRam(chat, 16, 'chat')).toBe('qwen3.5-9b-ud-q4kxl')
     expect(recommendModelIdByRam(chat, 32, 'chat')).toBe('qwen3.8-27b-ud-q5km')
     // Only RAM 12 is unaffected: the RAM pick is already the E2B, so nothing moves there.

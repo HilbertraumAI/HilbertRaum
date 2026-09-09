@@ -89,9 +89,11 @@ describe('isUsefulDevice — the single predicate', () => {
     expect(isUsefulDevice({ name: 'NVIDIA GeForce RTX 4050 Laptop GPU', totalMb: 5921 })).toBe(true)
     expect(isUsefulDevice(RTX3060L)).toBe(true)
     // …and a 4 GB card stays out. NOT because nothing ranked fits it — the E2B needs 2,271 MiB
-    // and would fit — but because it is the only ranked model that fits ~3,900 MiB free, so
-    // admitting such a card would star the E2B at every RAM size with no measurement behind the
-    // demotion (#321, restated reason; `model-benchmarks.md` §6.6 N8 "Why 5,120 — RESTATED").
+    // and would fit — but because it is the only ranked model that fits the budget such a card
+    // actually produces (≈ 4,096 − the 768 MiB idle reserve measured on every probed card = 3,328;
+    // the 4B's 3,838 does not clear it), so admitting such a card would star the E2B at every RAM
+    // size with no measurement behind the demotion (#321, restated reason, arithmetic corrected by
+    // #413; `model-benchmarks.md` §6.6 N8 "Why 5,120 — RESTATED").
     expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1650', totalMb: 4096 })).toBe(false)
   })
 

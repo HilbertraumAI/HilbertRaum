@@ -770,7 +770,11 @@ One consequence worth recording because it undercuts a stated rationale: the E2B
 "nothing ranked fits 4,512 anyway, and rule C's no-fit fallback returns the RAM pick regardless".
 That arithmetic no longer holds. Settled 2026-09-08 (owner decision, #321): the floor STAYS at 5,120
 and its recorded reason is replaced — see "Why 5,120 — RESTATED" in the N8 paragraph below, which
-rests on what the star would actually do at ~3,900 MiB free rather than on nothing fitting.
+rests on what the star would actually do at the budget such a card produces rather than on nothing
+fitting. That budget figure was itself corrected 2026-09-10 (#413): the 2026-09-08 text said
+~3,900 MiB free, which no probed card supports — on the 768 MiB idle reserve measured on every card
+in this project it is ≈ 3,328, below the 4B's 3,838, so the E2B is alone at BOTH budget forms and
+the argument is intact. The N8 note carries the reserve table.
 
 **Hardware verification (issue #318, 2026-09-07) — the 6, 8, 12 and 24 GB rows are VERIFIED on
 real starts; the 20 GB row stays predicted.** When this section was written (G3) no model could be
@@ -1085,35 +1089,72 @@ moved: the RAM pick is the E2B and it fits the card either way. The case that bi
 gaming laptop**, where the RAM pick is the 9B — and the 9B on this card measured **18/33 layers at
 5.2 tok/s**, against 20.2 at 31/33 on an 8 GB desktop card. Today's gate therefore sent the most
 common 6 GB configuration to a model running roughly four times slower than the alternative. With
-the gate at 5,120 the card path stars the 4B (4,410 MiB against a 5,226 MiB budget), fully offloaded
-at card speed.
+the gate at 5,120 the card path stars the 4B (4,410 MiB when this was decided, 3,838 since #391,
+against a 5,226 MiB budget), fully offloaded at card speed.
 
-*Why 5,120 — RESTATED 2026-09-08 (owner decision, issue #321).* The floor is UNCHANGED; its
-recorded reason was wrong and is replaced here. #321 wrote that keeping 4 GB cards (≈ 4,096) out
-costs nothing, "where nothing ranked fits 4,410 anyway and rule C's no-fit fallback hands the
-machine back to the RAM pick regardless". That arithmetic is void: the three estimate fixes of
-2026-09-07/08 took the E2B from 4,746 MiB to **2,271** (the threshold table below), so a 4 GB card
-CAN hold a ranked model — the point already recorded under rule 3 above.
+*Why 5,120 — RESTATED 2026-09-08 (owner decision, issue #321), and RE-RESTATED 2026-09-10 (#413).*
+The floor is UNCHANGED through both; what moved each time is the reason recorded for it. #321 wrote
+that keeping 4 GB cards (≈ 4,096) out costs nothing, "where nothing ranked fits 4,410 anyway and
+rule C's no-fit fallback hands the machine back to the RAM pick regardless". That arithmetic is
+void: the three estimate fixes of 2026-09-07/08 took the E2B from 4,746 MiB to **2,271** (the
+threshold table below), so a 4 GB card CAN hold a ranked model — the point already recorded under
+rule 3 above.
 
-The floor stays on a different and measured basis. At **~3,900 MiB free the E2B is the ONLY ranked
-model that fits** (the 4B, the next one up, needs 4,410; the same holds for the 3,072 MiB budget a
-4 GB card gets when the probe reports no free figure). So admitting 4 GB cards would star the E2B at
-EVERY RAM size — verified against the committed catalog at RAM 8 / 16 / 24 / 32 / 64: the 4B, the 9B,
-the 27B Q4 and the 27B Q5 all collapse to the E2B; only at RAM 12, where the RAM pick is already the
-E2B, would the star not move. That is the same trade #321 made at 6 GB — but there the trade was
+The floor stays on a different and measured basis — the arithmetic note below carries the budget
+figure it rests on, which is the part 2026-09-10 corrected. At the budget a 4 GB card actually
+produces, **the E2B is the ONLY ranked model that fits**, so admitting such cards would star it at
+EVERY RAM size — verified against the committed catalog at RAM 8 / 16 / 24 / 32 / 64: the 4B, the
+9B, the 27B Q4 and the 27B Q5 all collapse to the E2B; only at RAM 12, where the RAM pick is already
+the E2B, would the star not move. That is the same trade #321 made at 6 GB — but there the trade was
 backed by a MEASUREMENT (leg 4 and the 16 GB gaming laptop: the 9B at 18/33 layers, 5.2 tok/s,
 against a fully offloaded 4B at card speed), and here there is none: **no 4 GB card has ever been
 measured in this project**. Demoting a 32 GB machine from the 27B Q5 to the smallest model in the
 catalog on an unmeasured guess is exactly the #318 leg-4 mistake in reverse — leg 4 is what proved a
 gate assumption wrong once already.
 
+*What "the budget a 4 GB card actually produces" is — the arithmetic corrected 2026-09-10 (#413).*
+The 2026-09-08 version of this paragraph put that budget at **~3,900 MiB free**, and #413 then
+reported the argument half-dead on it: #391 measured the 4B's host-mapped weights at 497.31 MiB,
+moving its need 4,410 → **3,838**, which 3,900 clears — so on that figure the 4B, not the E2B, would
+be the star, and "the smallest ranked model at every RAM size" would hold only for the no-free-figure
+budget form. Both readings rest on a number that was never a measurement. **3,900 is a fixture
+value**, invented alongside the gate change itself (`freeMb: 3900` in `picker-seams.test.ts`,
+`performance.test.ts` and `performance-gpu.test.ts`, commit `c3247fe5`); no 4 GB card has ever been
+probed. What the probed cards do show is an idle reserve set by the DESKTOP, not by the size of the
+card:
+
+| card | Vulkan total | best idle free | reserve |
+|---|---|---|---|
+| RTX 3060 Laptop | 5,994 | 5,226 | **768** |
+| GTX 1070 Ti | 8,273 | 7,504 | **769** |
+| RTX 3080 Ti | 12,084 | 11,316 | **768** |
+| RTX 3090 | 24,822 | 23,808 | 1,014 |
+
+768 MiB across three cards spanning 6 → 12 GB, and it is a FLOOR rather than a typical figure: the
+worst 1070 Ti reading in the same evidence is 1,686 MiB used, and that box read 1,591 used under an
+ordinary desktop session on 2026-09-10. Applied to a 4 GB card, `graphicsBudgetMib` (the probe's free
+figure, else total − 1,024) is therefore **≈ 4,096 − 768 = 3,328 MiB**, not 3,900 — and the 4B at
+3,838 does not fit it. For the 4B to fit, a card would have to REPORT ≥ 4,606 MiB, which a 4 GB card
+does not have. The probe-free form therefore voids this argument only on a 4 GB card with no desktop
+drawn on it, a machine the project has never seen; on every card it HAS probed, both budget forms —
+the free figure and the no-free-figure total − 1,024 = 3,072 — still collapse to the E2B alone. The
+cost of a lowering stays pinned on both forms in `committed-catalog.test.ts` either way, and that
+test now asserts the 3,328 form beside them.
+
 *What would reopen it.* A real 4 GB card measured on the §6.6 protocol: the E2B fully offloaded on
 that card against the RAM pick partially offloaded, on a 16 GB and a 32 GB machine. If the card wins
 those, the floor comes down the way it came down for 6 GB. Until then it stays where the measured
-cards put it. (One correction to the framing while restating it: the E2B is not "the smallest
-BUNDLED model" — the only chat model with `bundled_on_preconfigured_drive: true` is
-`qwen3-4b-instruct-q4`. The E2B is the smallest-NEED ranked model, which is why it is the one that
-fits.)
+cards put it. Two things such a card settles before it runs a single benchmark, and both are cheap:
+what it reports as its TOTAL, and what it reports FREE with a desktop on it. **The total is what a
+lowering would have to be set from, and 4,096 is not it** — reported totals do not track nominal
+capacity, and the four measured cards split in both directions: 3080 Ti 12,084 for a nominal 12,288
+and 3060 Laptop 5,994 for 6,144, against 1070 Ti 8,273 for 8,192 and 3090 24,822 for 24,576, the
+latter two summing a second BAR heap. Picking 4,096 off the nominal figure would repeat exactly the
+#321 mistake this row exists to record — every 6 GB card reporting under a 6,144 gate is how the
+6 GB row got here. (One correction to the framing, carried over from the 2026-09-08 restatement:
+the E2B is not "the smallest BUNDLED model" — the only chat model with
+`bundled_on_preconfigured_drive: true` is `qwen3-4b-instruct-q4`. The E2B is the smallest-NEED
+ranked model, which is why it is the one that fits.)
 
 Above the floor the original reason stands: 5,120 admits all three measured 6 GB cards with margin
 for driver variance.

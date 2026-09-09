@@ -207,8 +207,10 @@ describe('selectBudgetDevice', () => {
       expect(selectBudgetDevice([card]), name).toBe(card)
     }
     // A 4 GB card is still no budget device — on the reason RESTATED by #321, not the void one:
-    // the E2B (2,271 MiB) does fit such a card, but it is the ONLY ranked model that does, so
-    // admitting it would star the E2B at every RAM size with nothing measured behind that.
+    // the E2B (2,271 MiB) does fit such a card, but it is the ONLY ranked model that does at the
+    // ≈ 3,328 MiB budget one actually produces (#413), so admitting it would star the E2B at every
+    // RAM size with nothing measured behind that. SMALL's `freeMb: 3900` is a fixture, not a
+    // reading: no 4 GB card has ever been probed, and every card that has idles ~768 MiB down.
     expect(selectBudgetDevice([SMALL])).toBeNull()
   })
 })
