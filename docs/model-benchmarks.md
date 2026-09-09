@@ -1020,7 +1020,12 @@ build still runs. And `CHAT_SERVER_ARGS` gains `--cache-ram 0` for the affected 
 so the unreadable copy is no longer written; every other family, **including an unmeasured one**,
 keeps today's behaviour, because disabling the cache on an unaffected model would cost real restores
 while leaving it on merely continues the waste. Residual: a pause longer than the delay still lets
-the build resume and evict, so returning from a break costs ONE slow reply — once, not per turn.
+the build resume and evict, so returning from a break costs ONE slow reply — once, not per turn. Both
+sides of the D5 gate were checked on hardware before it shipped — on `i7-8700-gtx-1070-ti-8gb-32gb`
+the app spawned `qwen3.5-9b-ud-q4kxl` WITH `--cache-ram 0` and `qwen3-14b-instruct-q4` without it
+(read from the OS process list, not from our own code), and the affected model still started fully
+offloaded, its 50.25 MiB recurrent state matching the sweep's 9B row exactly:
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/399-cache-ram-gate-smoke.md`.
 
 **A methodological warning for anyone reproducing this.** Do **not** grep for `forcing full prompt
 re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see llama.cpp
