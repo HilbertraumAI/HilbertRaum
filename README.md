@@ -7,7 +7,7 @@
 
 ### Your private AI workspace, fully offline
 
-> Chat with a local AI, ask questions about your private documents, and keep everything on your own computer.
+> Chat with a local AI, ask questions about your private documents and an offline Wikipedia, and keep everything on your own computer.
 
 [![License: GPL-3.0-or-later](https://img.shields.io/badge/License-GPL--3.0--or--later-blue.svg)](LICENSE)
 [![Platform: Windows · macOS · Linux](https://img.shields.io/badge/Platform-Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-informational.svg)](#what-you-need)
@@ -36,10 +36,11 @@
   answers grounded in your files. Retrieval combines vector and keyword search with a reranker
   and can be scoped to your library, a project, a section, specific documents, or the files
   attached to a chat.
-- 📚 **Knowledge packs (optional).** Register ZIM archives — such as an offline Wikipedia — as
-  per-chat sources searched alongside your documents. Needs the kiwix-tools binaries (GPL-3.0-or-later)
-  on the drive — the app offers to install them in-app with your consent, the first time you need
-  them, or you can place them yourself.
+- 📚 **Knowledge packs — an offline Wikipedia (optional).** Register ZIM archives — Wikipedia in ~100 languages,
+  Wiktionary, Wikivoyage — as per-chat sources searched and cited alongside your documents, with
+  the article readable offline in the app. Needs the kiwix-tools binaries (GPL-3.0-or-later) on
+  the drive — the app offers to install them with your consent, the first time you need them, or
+  you can place them yourself. See [Knowledge packs](#knowledge-packs--an-offline-wikipedia).
 - 🖼️ **Image understanding.** Ask questions about a picture with a local vision model. The analysis
   history is encrypted at rest and can be deleted.
 - 🎙️ **Audio and voice.** Transcribe audio files with Whisper, dictate prompts, and OCR scanned pages.
@@ -64,6 +65,7 @@
 - [What you need](#what-you-need)
 - [Getting started (DIY / from source)](#getting-started-diy--from-source)
 - [Supported models](#supported-models)
+- [Knowledge packs — an offline Wikipedia](#knowledge-packs--an-offline-wikipedia)
 - [Two distribution paths](#two-distribution-paths)
 - [Documentation](#documentation)
 - [For developers](#for-developers)
@@ -292,6 +294,43 @@ Document Q&A needs the embeddings model; chat needs one of the chat models. Bigg
 models are smarter but slower on CPU, so pick by your RAM. Benchmark methodology and measured
 numbers are in [`docs/model-benchmarks.md`](docs/model-benchmarks.md).
 
+## Knowledge packs — an offline Wikipedia
+
+HilbertRaum can answer from **ZIM archives**: compressed, self-contained offline copies of
+reference sites. The [Kiwix](https://kiwix.org) project publishes thousands at
+[`library.kiwix.org`](https://library.kiwix.org) — Wikipedia in about a hundred languages, plus
+Wiktionary, Wikivoyage, Stack Exchange, Project Gutenberg. Download one once, and the model can
+search and cite it forever, with no network.
+
+A pack is a **source**, not a bigger model: the app searches the archive, hands the model the
+passages it found, and the answer cites the articles it used — and *Open article* shows the
+article text, offline, in the app. Packs are per chat and off by default (up to 12 in one chat),
+and unticking **Search my documents** answers from the packs alone.
+
+1. **Get the tools once.** `kiwix-serve` and `kiwix-manage` are not bundled (GPL-3.0-or-later).
+   The **Knowledge packs** panel offers to install them — size, license and source stated, your
+   consent required, SHA-256 verified — or provision them yourself against the drive with
+   `scripts/fetch-runtime.sh --target <drive> --family kiwix_tools`
+   (`.\scripts\fetch-runtime.ps1 -Target E:\ -Family kiwix_tools` on Windows).
+2. **Add packs.** Copy `.zim` files into the drive's `zim/` folder, or use *Documents →
+   Knowledge packs → Add packs…*. Files are used in place; nothing is copied.
+3. **Ask.** Open a documents chat's sources picker ("Answering from…") and tick the packs.
+
+**Sizing a drive:** a `nopic` Simple English Wikipedia is a few hundred megabytes, a language
+Wikipedia without images a few to some tens of gigabytes, full English with images roughly a
+hundred. The library lists every file's exact size, and the `nopic` / `mini` variants are
+usually the right trade for a portable drive. Take a single-file `.zim` (multipart `.zimaa`
+sets are not read) and prefer a build with a full-text index.
+
+Asking never leaves your machine: the pack server binds to loopback only. One limit belongs in
+plain sight: While the workspace is unlocked and a knowledge pack has been used in a chat, other
+programs running under your own user account on this computer can read the enabled packs through
+the pack server, which has no password of its own; locking or quitting stops it.
+
+Full detail — choosing packs, the setup paths, the privacy posture and every measured limit —
+is in [`docs/knowledge-packs.md`](docs/knowledge-packs.md); the step-by-step walkthrough is
+[user guide §7b](docs/user-guide.md#7b-knowledge-packs--ask-an-offline-wikipedia).
+
 ## Two distribution paths
 
 - **Open-source DIY toolkit.** Clone this repo, prepare your own drive, and download supported
@@ -308,6 +347,7 @@ numbers are in [`docs/model-benchmarks.md`](docs/model-benchmarks.md).
 |---|---|
 | [`docs/product-vision.md`](docs/product-vision.md) | Product intent: thesis, target user, commercial model, positioning guardrails, scope, roadmap |
 | [`docs/user-guide.md`](docs/user-guide.md) | End-user walkthrough of every screen and feature |
+| [`docs/knowledge-packs.md`](docs/knowledge-packs.md) | Knowledge packs (ZIM / offline Wikipedia): choosing packs, setup, asking, privacy posture, the measured limits |
 | [`docs/architecture.md`](docs/architecture.md) | System design, services, IPC, runtimes, design records |
 | [`docs/rag-design.md`](docs/rag-design.md) | Retrieval pipeline: ingestion, chunking, hybrid search, rerank |
 | [`docs/security-model.md`](docs/security-model.md) | Threat model, encrypted vault, offline guard, audit log |

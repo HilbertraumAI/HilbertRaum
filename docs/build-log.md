@@ -27,6 +27,24 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-09 — the audit 2026-09-02 Phase 9b close-out entry retired verbatim (PR #282)
+
+_Retired from `BUILD_STATE.md` on 2026-09-09 for the preamble budget, making room for the
+knowledge-packs docs entry. The round it closes is long done; its durable ledger is
+`docs/architecture.md` §52._
+
+_2026-09-03 — **Audit 2026-09-02 Phase 9b — round close-out (PR #282): the durable ledger
+`docs/architecture.md` §52 (every finding ID → issue, disposition, PR and the facts as fixed; the 46
+non-findings; containment items 1–8; the 14 decisions on their defaults; B1..B9 ports; a §-anchor
+legend for the deleted working papers); §5 item 19 → ROUND COMPLETE with the open residuals; the
+round's eleven dated entries archived verbatim to `docs/build-log.md`; containment items 4 and 7
+promoted verbatim to `known-limitations.md` (decisions #221/#222/#226 still unanswered); the three
+Phase 0 doc lines that still carried audit IDs now cite issues; decision issues #218–#231 and
+#262/#263/#264 closed "default stands — re-open on request" / "accepted — §52"; #217 closed after the
+merge; the five `tmp/` working papers deleted after the merge.**_ Open Phase F: #236, #240, #243, #247,
+#248, #250, #274 (each self-sufficient — its plan detail was copied to the issue). Docs-only, no launch
+smoke. Suite: 371 / 5,570 / 74 excluding the Electron smoke (raw 372 / 5,576 / 74; the smoke ran).
+
 ## 2026-09-08 — the three closed ZIM knowledge-pack wave entries retired verbatim (#301 / #339 / #340)
 
 Retired from the BUILD_STATE preamble when the #339 Range-first read (D-Z22) landed: all three waves are
