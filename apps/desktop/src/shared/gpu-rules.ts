@@ -35,17 +35,35 @@ export type GpuDeviceLike = Pick<GpuDevice, 'name' | 'totalMb'>
  * stars the 4B instead, fully offloaded at card speed.
  *
  * Why 5,120 and not lower — the reason RESTATED 2026-09-08 (owner decision on #321), because the
- * original one went void. #321 argued that keeping 4 GB cards (≈ 4,096) out costs nothing "since nothing ranked fits them
- * anyway". That arithmetic died with the estimate fixes: the E2B now needs 2,271 MiB (#319 + #321 +
- * the host-mapped BASE fix), so a 4 GB card CAN hold a ranked model. The floor stays for a different,
- * measured reason: at ~3,900 MiB free the E2B is the ONLY ranked model that fits, so admitting 4 GB
- * cards would star it at every RAM size — demoting the 9B at 16 GB and the 27B Q5 at 32 GB to the
- * smallest model in the catalog. That is the same trade #321 made at 6 GB, but there it was backed by
- * a measurement (the 9B at 18/33 layers, 5.2 tok/s, against the 4B fully offloaded) and here there is
- * NONE — no 4 GB card has ever been measured in this project. Lowering the floor on an unmeasured
- * guess would risk the #318 leg-4 mistake in reverse. What reopens it: a real 4 GB card measured on
- * the protocol. Above the floor, 5,120 admits all three measured 6 GB cards with room for driver
- * variance.
+ * original one went void; its arithmetic was corrected again 2026-09-10 (#413). #321 argued that
+ * keeping 4 GB cards (≈ 4,096) out costs nothing "since nothing ranked fits them anyway". That
+ * arithmetic died with the estimate fixes: the E2B now needs 2,271 MiB (#319 + #321 + the
+ * host-mapped BASE fix), so a 4 GB card CAN hold a ranked model. The floor stays for a different,
+ * measured reason: at the budget such a card actually produces the E2B is the ONLY ranked model
+ * that fits, so admitting 4 GB cards would star it at every RAM size — demoting the 9B at 16 GB and
+ * the 27B Q5 at 32 GB to the smallest model in the catalog. That is the same trade #321 made at
+ * 6 GB, but there it was backed by a measurement (the 9B at 18/33 layers, 5.2 tok/s, against the 4B
+ * fully offloaded) and here there is NONE — no 4 GB card has ever been measured in this project.
+ * Lowering the floor on an unmeasured guess would risk the #318 leg-4 mistake in reverse.
+ *
+ * What "the budget such a card actually produces" is (#413, 2026-09-10). The 2026-09-08 text put it
+ * at ~3,900 MiB free, which #391 then undercut: the 4B's measured host-mapped weights moved its need
+ * 4,410 → 3,838, and 3,900 clears that. But 3,900 was never a measurement — it is a TEST FIXTURE
+ * invented alongside this constant's own change, and no 4 GB card has ever been probed. Every card
+ * that HAS been probed idles with the same reserve, set by the desktop rather than by the size of
+ * the card: 768 MiB on the RTX 3060 Laptop (5,994 → 5,226), 769 on the GTX 1070 Ti (8,273 → 7,504),
+ * 768 on the RTX 3080 Ti (12,084 → 11,316), 1,014 on the RTX 3090 — and those are FLOORS, the same
+ * 1070 Ti having been seen at 1,686 used. So `graphicsBudgetMib` on a 4 GB card is ≈ 4,096 − 768 =
+ * 3,328, not 3,900, and the 4B does not fit it: a card would have to REPORT ≥ 4,606 MiB for that.
+ * Both budget forms — the probe's free figure and the no-free-figure total − 1,024 = 3,072 — still
+ * collapse to the E2B alone, and both are pinned in `committed-catalog.test.ts`.
+ *
+ * What reopens it: a real 4 GB card measured on the protocol. Note for whoever runs it that 4,096 is
+ * NOT the floor value to lower to — reported totals do not track nominal capacity and the four
+ * measured cards split both ways (3080 Ti 12,084 of 12,288 and 3060 Laptop 5,994 of 6,144, against
+ * 1070 Ti 8,273 of 8,192 and 3090 24,822 of 24,576, the latter two summing a second BAR heap).
+ * Choosing off the nominal figure is the #321 mistake this constant exists to record. Above the
+ * floor, 5,120 admits all three measured 6 GB cards with room for driver variance.
  *
  * Blast radius, accepted by the owner: the profile bump moves such a laptop one step up (label + the
  * RAM-unknown fallback picker only), and the graphics tile reads "Usable" for these cards — which
