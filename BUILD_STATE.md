@@ -28,6 +28,26 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-10 — **#436 + #437 CLOSED — the two silent live regions fixed** (`fix/436-437-live-region-announce`).
+**#436:** `role="status"` is a LIVE REGION (implicit `aria-live="polite"`), not a quieter label — so the `Banner` nested inside
+`ErrorBanner`'s always-mounted `role="alert"` wrapper became the nearest live-region ancestor of the message AND arrived already
+containing it: M-U1 one level down, silencing the shared failure surface of 11 screens + the gate's #145 wrong-password banner.
+`Banner`'s `role` prop now accepts `null` (render no role at all; `aria-live="off"` does NOT work, the ROLE has to go) and
+`ErrorBanner` passes it. The blast radius was one site larger than the issue said: `ModelsScreen`'s download panel keeps its own
+hand-rolled copy of the wrapper with TWO nested `role="status"` Banners — same defect, fixed the same way. **#437:** the
+Performance step list was BOTH inserted with its content and textless as it advanced (progress rode only on `perf-step-{state}`
+and an `aria-hidden` icon). The `<ul>` is now mounted unconditionally (`.perf-steps:empty` collapses it, idle layout unchanged)
+and each step carries its state IN its accessible text — the visible label is `aria-hidden` and an sr-only twin reads
+"<step>: <state>" (new `perf.step.state.*` keys, EN+DE) — so an advance is a whole-line text change WITH context, plus
+`aria-current="step"` on the active item. Guard: `tests/unit/live-region-nesting.test.ts` parses every renderer `.tsx` and fails
+on ANY live-region role nested inside another (it flags all three pre-fix sites; two fixtures pin the broken and the fixed shape).
+**Not closed by this branch: the BY-EAR leg.** Both issues require re-verification with a screen reader (#436 also on the #145
+wrong-password path, #437 during a real multi-second check) — that needs Narrator on the 1070 Ti box and is the remaining
+acceptance item on the PR. **Sequencing:** #438 (an automatic run's steps never advance) is still an open owner call on the same
+subtree; this fix is forward-compatible with either of its options — under option 2 the items render on `ownActionInFlight`
+instead of `busy`, a one-condition change, not a rework. Docs: `benchmark.md` §2 row HW3 + §4, `known-limitations.md`
+(Performance + Accessibility), `design-guidelines.md` §6 error announcements._
+
 _2026-09-09 — **#399 CLOSED — the §6.6 record corrected and both owner decisions landed** (`fix/399-prompt-cache-restore`;
 record `model-benchmarks.md` §6.6 "2026-09-09 correction (#399)", `known-limitations.md` "The one chat slot and the prompt
 cache"; evidence PR #445). The old accepted-cost clause said "both 27B quants are hybrid/recurrent, so the restore path is
@@ -112,66 +132,6 @@ MODEL (nothing persisted, `runtime:notice` names it), a CPU rung starting persis
 follow view + task, a kept selection is marked, family-only reset; #314 `downloads:list`/`downloads:dismiss` re-attach a download after
 a renderer reload, dismissal lives in main memory; #315 findBy assertions, baseline staleness test, 17 dead keys deleted. Owner rulings
 taken on the plan defaults (PR body). Suite: master 421 files / 6,815 tests → 422 / 6,930 (85 skipped); typecheck + build green; the zim-packs T14 case flaked once under full load (green alone, untouched here). Residuals: §5 item 23._
-_2026-09-06 — **Follow-up wave on `feat/performance-screen` (#303), one commit per issue, ledger `tmp/followups-303-ledger.md`:**
-#325 closed `4293f95f` (GPU-off tile never falls back to a recorded card; Copy report carries the live pick; "Running on the graphics card right now." line — visual unverified);
-#323 closed `b0b26eec` (a completed chat-engine install re-runs the probe refresh when this machine's eligible probe is empty); #335 closed `6f1bcde1` (the harness records and removes every suite's temp root; ~2,500 leaked roots per run → 0); #322 closed — `speedIdentity` + the one-directional gate in `speedSignalFor` (a sample counts for a next start no faster than the measured path; §6.5 2026-09-06 amendment, owner-confirmed on review of the first draft)._
-
-_2026-09-06 — **PR #308 audit remediation (`feat/vram-aware-picker`, stacked on #303):** R1–R6 closed —
-P1 sync (`7aae2716`), P2 budget device + next-start class (`81661c69`), P2a empty-probe persistence
-(`8cb4422d`), P3 rule C on the free-memory budget + per-model cache term (`bf9a09b0`), P4 live
-Performance recommendation (`a468f6e1`), P5 records (`e4b762e9`); base re-merged as #303 landed (the
-second merge unified #303 P5's `gpu-rules` with this wave's helper). Decisions 1–11 adopted; record
-`model-benchmarks.md` §6.6 (2026-09-06 amendment) + §6.5; **owner sign-off given 2026-09-06** in the PR
-review. #318 hardware legs (not a gate); (h)–(k) → #320 / #319 / #320 / #321 (all: keep, measure first);
-#324 omitted; #326 → strictly ranked card-path fallback; residuals #322, #323, #325; #327 fixed by #303._
-
-_2026-09-06 — **PR #303 audit remediation on `feat/performance-screen` (master `ddd704ad` merged in
-first; one commit per phase, CI green on each; working ledger `tmp/pr-303-fix-plan-ledger.md`,
-untracked; durable record → `docs/benchmark.md` at P9).** P1 pinned the M7 `_Host` and L7
-empty-reading fixes of `ce741533`, removed the `skills.title` orphan, archived §5 item 20. P2 repaired
-M2/M4/M6/L2 together (`services/benchmark-persistence.ts`: identity before source ranking under G3,
-outgoing-result backfill, commit-time re-resolution, samples to both destinations). P3 made the screen
-pushed, never polled (`performance:changed` after every mutation incl. runtime and sidecar residency;
-`running` = the held span; observed rows = session latches; honest `drive`/`speed` steps; the renderer
-splits backend running from its own action) — the dev launch smoke caught and fixed a StrictMode
-double-mount defect and measured `performance:get` ≈ 100 ms (I5). P4 validates `lastBenchmark`,
-`benchmarkHistory`, `modelPlacements` on read and write (`shared/benchmark-schema.ts`; the legacy
-profile-only record survives unkeyed), resolves the displayed context with `launchContextTokens`, and
-counts a placement as measured only when its context/backend match the configuration. P5 made one
-machine-eligible GPU source (`gpuProbe.machineKey`, `shared/gpu-rules.ts`, paired name + memory,
-configuration-aware resident rows, class-aware RAM total, free/working figures by device; a CI-only
-same-millisecond sample clash was fixed by an injectable read-speed clock). P6 carried the speed basis
-into the report and rows, fixed the first-start / per-drive / observed-unknown / N4 / N5 copy, named
-the fit margin from `shared/performance-rules.ts`, added the German smoke and the display-device labels. P7 sequenced the first-run / moved-drive
-measurement behind the auto-start (L1/SD2, G5): `prepareFirstBenchmark` does the cheap seed /
-backfill / restore before `maybeAutoStartActiveModel` (now awaitable), `scheduleFirstBenchmark` waits
-for the start to settle under a 120 s bound and otherwise keeps one continuation, re-checks admission
-/ epoch / shutdown / busy / "already current" before running, allows one automatic attempt per unlock
-epoch, and the run refuses to persist into a session that locked or re-opened meanwhile. P8 closed the test gaps (T7/T8/T11/TH1/TH2): the history-order assertion names both
-identities, a source-text + behavioural pin covers the answer-speed observer wiring, the 300 ms sleep
-became an await on P7's outcome, one shared teardown closes the fixture's DBs and removes its temp
-roots (2,683 leaked roots from earlier runs cleared), and a ladder-to-placement wiring test drives
-the real rung factory with a fake sidecar's stderr (one parser per attempt; the persister writes,
-skips while locked, and survives a throwing observer). P9 wrote the durable record — `docs/benchmark.md` "Audit remediation record — PR #303"
-§1–§5 (decisions, a 63-row disposition matrix, the design as built, what is not verified, a §-anchor
-legend) — plus user-guide §5a "Performance", the privacy inventories in `PRIVACY.md` /
-`security-model.md`, the known-limitations block, the `architecture.md` supersession notes, and the
-DR11 host-conditional assertion turned into a fixed expectation. P10 cross-reviewed the candidate `07dd9085` (Opus over the Fable phases, Fable
-over the Opus phases, both over the Sonnet docs and the P0 delta inventory): no user-facing defect;
-four low main-process items, one schema hardening gap, a keyboard focus loss after "Check again" and
-issue #327 (the Diagnostics acceleration line bypassing the eligible-probe rule, filed by the PR #308
-review against this branch) repaired with fail-before/pass-after tests; the audit probes re-run at the
-candidate pass every main-process case (22 / 2 superseded by design / 1 retired); HW3 performed live
-over CDP — EN/DE, light/dark, 880/1024/1280 px, the German rail at weight 600, a real Tab walk and
-Enter activation all passed; a synthetic moved-drive restart verified M2/M4/P7 end to end. Blocked
-legs (screen-reader announcements; a first-run, chat or model-load while mounted — no runtime here)
-carried into the follow-up issues. P11 closed the wave without a source change: follow-up
-issues #329–#334 (a real partial-offload log, the two-computer round trip, the blocked HW3 legs,
-hybrid / Apple Silicon hardware, the slow-media read cost, slow-USB sequencing) and #335 (temp-root
-hygiene in other suites), the record's issue and commit references filled, the changelog entry,
-the keyboard-focus repair re-verified live in the dev app. Merge is the owner's call; the branch
-stays._
-
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -192,7 +152,9 @@ entries of the #290/#291 wave (PRs #295/#300/#297/#299) and Phase F PR 6 + close
 (Phases 0–6 + the 2026-09-04 MVP entry, PRs #304–#336) on 2026-09-06 at the P7 close-out (preamble
 budget), and the Phase 9b close-out (PR #282), Model library UX (PR #302) and #286 save-a-code-block
 entries on 2026-09-09 (preamble budget, making room for the knowledge-packs docs and #331
-HW3-acceptance entries) —
+HW3-acceptance entries), and the three closed 2026-09-06 entries (the #303 follow-up wave, the PR #308
+audit remediation, the PR #303 audit remediation) on 2026-09-10 (preamble budget, making room for the
+#436/#437 accessibility entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 

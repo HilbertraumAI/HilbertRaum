@@ -27,6 +27,72 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-10 — the three 2026-09-06 entries retired verbatim (preamble budget)
+
+_Moved out of `BUILD_STATE.md` while making room for the #436/#437 accessibility entry. All three
+waves are closed: the #303 follow-up wave, the PR #308 audit remediation, and the PR #303 audit
+remediation. Their durable records live in `docs/benchmark.md` and `docs/model-benchmarks.md` §6.5/§6.6._
+
+_2026-09-06 — **Follow-up wave on `feat/performance-screen` (#303), one commit per issue, ledger `tmp/followups-303-ledger.md`:**
+#325 closed `4293f95f` (GPU-off tile never falls back to a recorded card; Copy report carries the live pick; "Running on the graphics card right now." line — visual unverified);
+#323 closed `b0b26eec` (a completed chat-engine install re-runs the probe refresh when this machine's eligible probe is empty); #335 closed `6f1bcde1` (the harness records and removes every suite's temp root; ~2,500 leaked roots per run → 0); #322 closed — `speedIdentity` + the one-directional gate in `speedSignalFor` (a sample counts for a next start no faster than the measured path; §6.5 2026-09-06 amendment, owner-confirmed on review of the first draft)._
+
+_2026-09-06 — **PR #308 audit remediation (`feat/vram-aware-picker`, stacked on #303):** R1–R6 closed —
+P1 sync (`7aae2716`), P2 budget device + next-start class (`81661c69`), P2a empty-probe persistence
+(`8cb4422d`), P3 rule C on the free-memory budget + per-model cache term (`bf9a09b0`), P4 live
+Performance recommendation (`a468f6e1`), P5 records (`e4b762e9`); base re-merged as #303 landed (the
+second merge unified #303 P5's `gpu-rules` with this wave's helper). Decisions 1–11 adopted; record
+`model-benchmarks.md` §6.6 (2026-09-06 amendment) + §6.5; **owner sign-off given 2026-09-06** in the PR
+review. #318 hardware legs (not a gate); (h)–(k) → #320 / #319 / #320 / #321 (all: keep, measure first);
+#324 omitted; #326 → strictly ranked card-path fallback; residuals #322, #323, #325; #327 fixed by #303._
+
+_2026-09-06 — **PR #303 audit remediation on `feat/performance-screen` (master `ddd704ad` merged in
+first; one commit per phase, CI green on each; working ledger `tmp/pr-303-fix-plan-ledger.md`,
+untracked; durable record → `docs/benchmark.md` at P9).** P1 pinned the M7 `_Host` and L7
+empty-reading fixes of `ce741533`, removed the `skills.title` orphan, archived §5 item 20. P2 repaired
+M2/M4/M6/L2 together (`services/benchmark-persistence.ts`: identity before source ranking under G3,
+outgoing-result backfill, commit-time re-resolution, samples to both destinations). P3 made the screen
+pushed, never polled (`performance:changed` after every mutation incl. runtime and sidecar residency;
+`running` = the held span; observed rows = session latches; honest `drive`/`speed` steps; the renderer
+splits backend running from its own action) — the dev launch smoke caught and fixed a StrictMode
+double-mount defect and measured `performance:get` ≈ 100 ms (I5). P4 validates `lastBenchmark`,
+`benchmarkHistory`, `modelPlacements` on read and write (`shared/benchmark-schema.ts`; the legacy
+profile-only record survives unkeyed), resolves the displayed context with `launchContextTokens`, and
+counts a placement as measured only when its context/backend match the configuration. P5 made one
+machine-eligible GPU source (`gpuProbe.machineKey`, `shared/gpu-rules.ts`, paired name + memory,
+configuration-aware resident rows, class-aware RAM total, free/working figures by device; a CI-only
+same-millisecond sample clash was fixed by an injectable read-speed clock). P6 carried the speed basis
+into the report and rows, fixed the first-start / per-drive / observed-unknown / N4 / N5 copy, named
+the fit margin from `shared/performance-rules.ts`, added the German smoke and the display-device labels. P7 sequenced the first-run / moved-drive
+measurement behind the auto-start (L1/SD2, G5): `prepareFirstBenchmark` does the cheap seed /
+backfill / restore before `maybeAutoStartActiveModel` (now awaitable), `scheduleFirstBenchmark` waits
+for the start to settle under a 120 s bound and otherwise keeps one continuation, re-checks admission
+/ epoch / shutdown / busy / "already current" before running, allows one automatic attempt per unlock
+epoch, and the run refuses to persist into a session that locked or re-opened meanwhile. P8 closed the test gaps (T7/T8/T11/TH1/TH2): the history-order assertion names both
+identities, a source-text + behavioural pin covers the answer-speed observer wiring, the 300 ms sleep
+became an await on P7's outcome, one shared teardown closes the fixture's DBs and removes its temp
+roots (2,683 leaked roots from earlier runs cleared), and a ladder-to-placement wiring test drives
+the real rung factory with a fake sidecar's stderr (one parser per attempt; the persister writes,
+skips while locked, and survives a throwing observer). P9 wrote the durable record — `docs/benchmark.md` "Audit remediation record — PR #303"
+§1–§5 (decisions, a 63-row disposition matrix, the design as built, what is not verified, a §-anchor
+legend) — plus user-guide §5a "Performance", the privacy inventories in `PRIVACY.md` /
+`security-model.md`, the known-limitations block, the `architecture.md` supersession notes, and the
+DR11 host-conditional assertion turned into a fixed expectation. P10 cross-reviewed the candidate `07dd9085` (Opus over the Fable phases, Fable
+over the Opus phases, both over the Sonnet docs and the P0 delta inventory): no user-facing defect;
+four low main-process items, one schema hardening gap, a keyboard focus loss after "Check again" and
+issue #327 (the Diagnostics acceleration line bypassing the eligible-probe rule, filed by the PR #308
+review against this branch) repaired with fail-before/pass-after tests; the audit probes re-run at the
+candidate pass every main-process case (22 / 2 superseded by design / 1 retired); HW3 performed live
+over CDP — EN/DE, light/dark, 880/1024/1280 px, the German rail at weight 600, a real Tab walk and
+Enter activation all passed; a synthetic moved-drive restart verified M2/M4/P7 end to end. Blocked
+legs (screen-reader announcements; a first-run, chat or model-load while mounted — no runtime here)
+carried into the follow-up issues. P11 closed the wave without a source change: follow-up
+issues #329–#334 (a real partial-offload log, the two-computer round trip, the blocked HW3 legs,
+hybrid / Apple Silicon hardware, the slow-media read cost, slow-USB sequencing) and #335 (temp-root
+hygiene in other suites), the record's issue and commit references filled, the changelog entry,
+the keyboard-focus repair re-verified live in the dev app. Merge is the owner's call; the branch
+stays._
+
 ## 2026-09-09 — the two 2026-09-05 dated entries retired verbatim (preamble budget)
 
 Moved out of `BUILD_STATE.md` on 2026-09-09 to keep the preamble inside its 200-line budget

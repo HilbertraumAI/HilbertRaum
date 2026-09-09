@@ -1259,7 +1259,7 @@ guess.
 | TH2 | fixed P8 `4baec2be` | `closePerformanceFixture()` tears down every DB/root/observer the performance test helper registered; a leak check showed zero growth across a targeted run. The other suites' ~2,500 leaked roots per full run (#335, 2026-09-06) are now recorded and removed by the harness itself — `tests/setup-temp-roots.ts` per file, `tests/global-temp-roots.ts` after the forks exit; design in `tests/helpers/temp-roots.ts`, rule in CONTRIBUTING.md. | `tests/helpers/performance-fixture.ts`; `tests/unit/temp-roots.test.ts` |
 | HW1 | verified 2026-09-07 (issue #330) | Physical encrypted-drive A→B→A move on two real computers (i9-14900K / RTX 3080 Ti and i7-8700 / GTX 1070 Ti, one exFAT SSD) for a fresh workspace AND an upgraded one created by 0.1.57 (keyed `lastBenchmark`, no history): new-computer background run on B, instant restore on A, the outgoing result backfilled, later samples update the headline and the matching entry only. Side findings are not persistence defects (§4). | `eval/results/hardware/330-round-trip-20260907/` (`00-protocol.md` + every report and log) |
 | HW2 | CLOSED 2026-09-08 (#329) | Same gap as T9, closed by the same capture: real partial-offload load logs from the pinned build now exist (20/33 and 18/33 on a hybrid laptop, 62/66 on an RTX 3090) and are committed as fixtures. | `apps/desktop/tests/fixtures/placement-b9849-*.txt`; `eval/results/hardware/` |
-| HW3 | performed P10 (live, CDP-driven, at `07dd9085`); the four blocked legs CLOSED 2026-09-09 (issue #331) | Passed in the dev app: EN/DE layout at 880/1024/1280 px in both themes with no horizontal overflow, the German rail label at font weight 600 on one line, the keyboard focus order (a real Tab walk in visual order, no trap) and Enter activation. The one failure it found — focus lost after an own run — is the HW3-focus row below (fixed P10). The four legs not exercisable on the review box (no screen reader, no runtime, a first run that finishes in ~120 ms) were performed 2026-09-09 on the E: stick with a moved-drive workspace and a real 14B: **chat-during-a-span and mounted-screen refresh PASSED; both live regions are SILENT under a screen reader (#436, #437) and an automatic run's step list never advances (#438)**. | `GermanSmoke.test.tsx` "PerformanceScreen renders German (PR #303 audit T6)"; `rail-labels.test.ts`; `PerformanceScreen.test.tsx` describe "PerformanceScreen: focus survives the run"; `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md` |
+| HW3 | performed P10 (live, CDP-driven, at `07dd9085`); the four blocked legs CLOSED 2026-09-09 (issue #331) | Passed in the dev app: EN/DE layout at 880/1024/1280 px in both themes with no horizontal overflow, the German rail label at font weight 600 on one line, the keyboard focus order (a real Tab walk in visual order, no trap) and Enter activation. The one failure it found — focus lost after an own run — is the HW3-focus row below (fixed P10). The four legs not exercisable on the review box (no screen reader, no runtime, a first run that finishes in ~120 ms) were performed 2026-09-09 on the E: stick with a moved-drive workspace and a real 14B: **chat-during-a-span and mounted-screen refresh PASSED; both live regions were SILENT under a screen reader (#436, #437 — code fixed 2026-09-10, by-ear re-verification still outstanding) and an automatic run's step list never advances (#438, open owner call)**. | `GermanSmoke.test.tsx` "PerformanceScreen renders German (PR #303 audit T6)"; `rail-labels.test.ts`; `PerformanceScreen.test.tsx` describe "PerformanceScreen: focus survives the run"; `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md` |
 | HW4 | follow-up issue #332 | Hybrid `[iGPU, dGPU]` Vulkan order and Apple Silicon unified memory: synthetic fixtures only. | — |
 | DR1 | fixed P5 `be177a34` | Chat/translation "on the card" rows now respect `gpuMode`, `gpuAutoDisabled` and the matching observed backend, not the hardware class alone. | `performance-gpu.test.ts` "gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — the hardware class is untouched"; "a matching start OBSERVED on the CPU backend puts the chat row on the processor and judges it against RAM" |
 | DR2 | fixed P5 `be177a34` | `ModelPlacement.devices` keeps every GPU row of the `device_info` block; `attributedGpuFigures` matches by device name, never the first row's. | `placement-parser.test.ts` "keeps every GPU row of a hybrid device_info block with its own compute buffer, by label (DR2)"; `performance-gpu.test.ts` "a hybrid log: the figures are the selected dGPU's, by name — never the first row's" |
@@ -1405,23 +1405,39 @@ commit references, and added the changelog entry.
   matching what was persisted.
 
   **Failed — three defects, filed separately.** Under Narrator, against a positive control that
-  proved live regions DO work in this window, **neither** live region on the screen is announced.
-  The progress steps are inserted already containing their content, and progress rides only on a
-  CSS class and an `aria-hidden` icon, so there is nothing to announce even once that is fixed
-  (#437). Worse, the FAILURE BANNER is silent too (#436): `ErrorBanner`'s always-mounted
-  `role="alert"` wrapper is defeated by the `Banner` nested inside it, whose `role="status"` is
+  proved live regions DO work in this window, **neither** live region on the screen was announced.
+  The progress steps were inserted already containing their content, and progress rode only on a
+  CSS class and an `aria-hidden` icon, so there was nothing to announce even once that was fixed
+  (#437). Worse, the FAILURE BANNER was silent too (#436): `ErrorBanner`'s always-mounted
+  `role="alert"` wrapper was defeated by the `Banner` nested inside it, whose `role="status"` is
   itself a live region mounted WITH its text — M-U1 reintroduced one level down, on a component
   11 screens and the workspace gate's #145 fix depend on. A control isolated the fix: an inner
   `aria-live="off"` does NOT help; the inner role has to go. And an automatic run's step list
   never advances, because progress is addressed to the window that pressed the button while the
   screen renders the list for any held span (#438).
+
+  **#436 and #437 fixed 2026-09-10** (`fix/436-437-live-region-announce`). `Banner`'s `role` prop
+  now takes `null` — no role at all — and `ErrorBanner` passes it, so its wrapper is the only live
+  region in the subtree; the same defect in `ModelsScreen`'s hand-rolled copy of that wrapper (two
+  more nested `role="status"` Banners, beyond the blast radius #436 stated) went with it. The step
+  list is mounted unconditionally and each step's state now lives in its accessible text — an
+  `aria-hidden` visible label beside an sr-only "<step>: <state>" twin, so an advance is a
+  whole-line text change rather than a CSS class — plus `aria-current="step"` on the active step.
+  A repo-wide guard (`tests/unit/live-region-nesting.test.ts`) parses every renderer `.tsx` and
+  fails on any live-region role nested inside another; it flags all three pre-fix sites.
+  **The acceptance is not complete:** both issues require re-verification BY EAR (a real failure
+  and a wrong-password unlock for #436; a real multi-second check for #437), and that needs a
+  screen reader on this box. What is pinned so far is the DOM, not the sound. #438 remains an
+  open owner call on the same subtree; the #437 fix is forward-compatible with either of its
+  options (under option 2 the items render on `ownActionInFlight` rather than `busy`).
 - **HW3-focus**: the keyboard-focus-after-a-run fix (`PerformanceScreen.test.tsx` "PerformanceScreen:
   focus survives the run") is pinned in jsdom and was re-verified live at P11 in the dev app
   built from `ab01e14b`: with "Check again" focused, a real Enter press ran the check (the
   "Checked" time advanced) and the active element was the "Check again" button again once the
   idle row returned — twice in a row. Announcements were audible-tested separately on
   2026-09-09 (HW3 above, issue #331): the focus behaviour is unaffected, but neither live region
-  on the screen is announced (#436, #437).
+  on the screen was announced (#436, #437 — both fixed 2026-09-10, by-ear re-verification still
+  outstanding; see HW3 above).
 - **HW4** (follow-up issue #332): a hybrid `[iGPU, dGPU]` Vulkan enumeration order and Apple
   Silicon `unified` memory. P5's device-pairing logic is exercised only by synthetic
   two-device fixtures.

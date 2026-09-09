@@ -1490,6 +1490,10 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     expect(screen.getByRole('region', { name: REGION })).toBe(region)
     expect(within(region).getByRole('alert')).toBe(alert)
     await waitFor(() => expect(alert).toHaveTextContent('the connection dropped'))
+    // #436: the panel keeps its own hand-rolled copy of the ErrorBanner wrapper, and it had the
+    // same defect — a nested Banner role="status" is a live region itself, so it swallowed the
+    // announcement. Nothing inside this alert may carry a live-region role.
+    expect(alert.querySelectorAll('[role], [aria-live]')).toHaveLength(0)
   })
 
   // ---- Refresh at the terminal transition -------------------------------------------------------

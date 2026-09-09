@@ -943,7 +943,14 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     )
   }
 
-  function steps(): JSX.Element {
+  /**
+   * The progress-step ITEMS. The <ul> that holds them is mounted unconditionally below — this
+   * returns only what goes inside it while a check runs (#437 cause 1: the region used to be
+   * created together with its <li>s, i.e. inserted already containing its content, which is the
+   * M-U1 anti-pattern every other live region in the renderer avoids; Narrator heard nothing
+   * across two real 14-second runs).
+   */
+  function stepItems(): JSX.Element[] {
     // The speed step only exists when a runtime is up; a run with no model shows it skipped.
     const speedLabel = runtimeModelId
       ? t('perf.step.speed', { model: modelName(runtimeModelId, models, t) })
@@ -955,19 +962,26 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
       done: ''
     }
     const firstOpen = STEP_ORDER.find((s) => !doneSteps.includes(s))
-    return (
-      <ul className="perf-steps" aria-live="polite">
-        {STEP_ORDER.map((step) => {
-          const state = doneSteps.includes(step) ? 'done' : step === firstOpen ? 'active' : 'todo'
-          return (
-            <li key={step} className={`perf-step perf-step-${state}`}>
-              <StepIcon state={state} />
-              <span>{labels[step]}</span>
-            </li>
-          )
-        })}
-      </ul>
-    )
+    return STEP_ORDER.map((step) => {
+      const state = doneSteps.includes(step) ? 'done' : step === firstOpen ? 'active' : 'todo'
+      return (
+        // #437 cause 2: progress used to be carried ONLY by the class and by StepIcon, which is
+        // aria-hidden — so even a correctly mounted region had no text change to announce. The
+        // state now lives in the accessible text. The visible label is aria-hidden and an sr-only
+        // twin carries "<step>: <state>", so the line is ONE accessible string that changes as a
+        // whole on every advance: assistive tech announces the step WITH its new state instead of
+        // a context-free "done". aria-current="step" additionally exposes the position as state.
+        <li
+          key={step}
+          className={`perf-step perf-step-${state}`}
+          aria-current={state === 'active' ? 'step' : undefined}
+        >
+          <StepIcon state={state} />
+          <span aria-hidden="true">{labels[step]}</span>
+          <span className="sr-only">{t(`perf.step.state.${state}`, { step: labels[step] })}</span>
+        </li>
+      )
+    })
   }
 
   const observed = snap?.observed
@@ -990,9 +1004,13 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
           </span>
         </div>
         {snap && bench && !snap.currentMachine && <p className="hint hint-lede">{t('perf.otherMachine')}</p>}
+        {/* The live region is mounted at all times — empty while idle (`.perf-steps:empty`
+            collapses it, so the idle layout is unchanged) and filled while a check runs, so the
+            steps arrive as a text change INSIDE a region that was already there (#437). Nothing
+            in here may carry a live-region role of its own — see #436. */}
+        <ul className="perf-steps" aria-live="polite">{busy ? stepItems() : null}</ul>
         {busy ? (
           <>
-            {steps()}
             <div className="actions perf-actions">
               <Button disabled>{t('perf.running')}</Button>
               <span className="hint">{t('perf.step.hint')}</span>

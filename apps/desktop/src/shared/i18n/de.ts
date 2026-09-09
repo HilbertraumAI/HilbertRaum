@@ -1999,6 +1999,10 @@ export const de: Record<keyof typeof en, string> = {
   'perf.step.speed': 'Generierungsgeschwindigkeit mit {model}',
   'perf.step.speedSkipped': 'Generierungsgeschwindigkeit (kein Modell läuft, übersprungen)',
   'perf.step.hint': 'Etwa eine halbe Minute. Du kannst die App weiter benutzen.',
+  // #437: der Schrittzustand steckt jetzt im Text, nicht nur in der CSS-Klasse.
+  'perf.step.state.done': '{step}: fertig',
+  'perf.step.state.active': '{step}: läuft',
+  'perf.step.state.todo': '{step}: wartet',
   'perf.observed.title': 'Während der Arbeit beobachtet',
   // Die Zeilen sind Sitzungs-Latches, die Lese-Messwerte dahinter werden aber zusätzlich in den
   // Benchmark-Datensätzen gespeichert (Laufwerkskachel oben) — L8.
