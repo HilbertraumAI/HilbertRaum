@@ -158,6 +158,19 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Chatting while a long document is being deep-indexed no longer slows down every reply.** The
+  deep index yields the model to your message and then waits before picking its work back up, so
+  an ordinary back-and-forth is not interrupted turn after turn. On most of the models the app
+  ships, the conversation has to be re-read from the beginning whenever something else uses the
+  model in between — that is a limitation of the local engine, not something the app can undo, so
+  the fix is to interrupt you far less often. Coming back after a longer break can still cost one
+  slower reply, once; and the indexing always gets its turn, so a document can never be left
+  without its deep index.
+- **Less RAM held for nothing while you chat.** On the model families where the local engine
+  cannot reuse a saved conversation anyway, the app now tells it not to keep that copy — it could
+  grow to several gigabytes of memory that was never read back. Models that can reuse it are
+  unchanged.
+
 - **Knowledge-pack questions that ask for a list or the largest, most or best-known items now
   find the list article more often.** Before searching, the app asks your local model for the
   question's key concepts and the likely title of a list article — one short extra model call

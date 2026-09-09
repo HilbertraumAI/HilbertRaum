@@ -104,6 +104,9 @@ describe('TranslationRuntime — launch + translate', () => {
     // One slot here is TRANSLATION_SLOT_ARGS' own decision, in the long form: the chat server's
     // `-np 1` (#319) never reaches this sidecar, exactly as `--jinja` never does.
     expect(args).not.toContain('-np ')
+    // #399 D5 likewise: --cache-ram is gated on the CHAT model's family in LlamaRuntime and never
+    // reaches this sidecar (TranslateGemma is a gemma family — the one that would have matched).
+    expect(args).not.toContain('--cache-ram')
     // Issue #42: default posture = GPU auto-offload, the chat rung-1 shape — NO device args
     // (b9849 defaults ngl=auto + fit=on; on a GPU-less machine this IS CPU mode).
     expect(args).not.toContain('--device')

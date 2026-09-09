@@ -1,4 +1,5 @@
 import type { ChatDepthMode } from '../../../shared/types'
+import { promptCacheServerArgs } from '../../../shared/prompt-cache-rules'
 import type {
   ChatMessage,
   HealthStatus,
@@ -60,10 +61,19 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
  * 24 GB card while keeping MTP. On the 8 GB card (leg 2) the four slots cost the 9B 440 MiB and the
  * fit missed a full offload by 133.
  *
- * Accepted cost (owner): with one slot a background job (categorisation, ZIM query expansion, a doc
- * task) evicts the chat conversation's KV prefix. llama-server's host-RAM prompt cache restores it
- * on a prefix match, so the cost is a restore, not a full re-prefill — bounded, and no in-app path
- * depends on parallel slots.
+ * Accepted cost (owner) — CORRECTED 2026-09-09 (issue #399). The original clause said the host-RAM
+ * prompt cache RESTORES an evicted prefix, so the cost was a restore rather than a full re-prefill.
+ * That measured false on 11 of our 14 chat models: recurrent state (the whole qwen3.5/qwen3.8 line)
+ * and a sliding window (all four gemma4 manifests) both close the restore path, so the server saves
+ * the conversation and then silently re-prefills it anyway. Three positive controls (dense qwen3,
+ * qwen3moe, mistral3) did restore, and `-np 2` re-prefilled token for token even into a slot nothing
+ * had ever touched — so no slot arrangement fixes it and the only lever is NOT EVICTING. The
+ * decision to run one slot still stands (nothing here is caused by `-np 1`; four slots lose the
+ * restore the same way). What changed instead: the model-slot arbiter waits before resuming a
+ * parked deep-index build (#399 D3(a)), and the unreadable cache copy is switched off for the
+ * affected families (#399 D5, `shared/prompt-cache-rules.ts`). Also measured: on a DOCUMENTS ask
+ * only the ~227-token system prefix is ever reused anyway, so the length-proportional cost belongs
+ * to the plain-chat path alone. Record: `model-benchmarks.md` §6.6 "2026-09-09 correction (#399)".
  */
 /**
  * `-lv 4` (log verbosity): the pinned build prints its load log (`load_tensors: offloaded X/Y
@@ -495,7 +505,12 @@ export class LlamaRuntime implements ModelRuntime {
       modelPath: opts.modelPath,
       contextTokens: opts.contextTokens,
       physicalBatchSize: Math.min(opts.contextTokens, CHAT_MAX_PHYSICAL_BATCH),
-      extraArgs: [...CHAT_SERVER_ARGS, ...(deps.extraArgs ?? [])],
+      // #399 D5: `--cache-ram 0`, but ONLY for the manifest families measured to lose
+      // llama-server's evicted-prefix restore — the rule and its measured basis are in
+      // `shared/prompt-cache-rules.ts`. It sits between the shared const and the ladder's rung
+      // args so a rung can still override anything it needs to (`--device none`), exactly as
+      // before; every unaffected and every unmeasured family adds nothing here.
+      extraArgs: [...CHAT_SERVER_ARGS, ...promptCacheServerArgs(opts.family), ...(deps.extraArgs ?? [])],
       onUnexpectedExit: deps.onUnexpectedExit,
       onStderrData: deps.onStderrData,
       spawn: deps.spawn,

@@ -156,6 +156,9 @@ describe('LlamaReranker', () => {
     expect(args).not.toContain('--jinja')
     expect(args).not.toContain('--reasoning-format')
     expect(args).not.toContain('-np ') // the chat server's one slot (#319) is chat-only too
+    // #399 D5: the family-gated prompt-cache switch is composed in LlamaRuntime, not here — this
+    // sidecar's host cache is untouched whatever family the rerank model belongs to.
+    expect(args).not.toContain('--cache-ram')
     await reranker.stop()
     expect(child.killed).toBe(true)
   })
