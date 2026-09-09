@@ -136,6 +136,14 @@ function AppShell(): JSX.Element {
   // "Ask selected documents" handoff: the Documents screen's selection,
   // applied to the next documents conversation the Chat screen creates.
   const [chatScope, setChatScope] = useState<string[] | null>(null)
+  // "Ask this pack" handoff (§11.16): the knowledge pack the next documents conversation
+  // answers from alone. Same one-shot discipline as `chatScope`; the two never coexist.
+  const [chatPackScope, setChatPackScope] = useState<string[] | null>(null)
+  // Which mode the Documents screen opens with (§11.16): plain 'documents' navigation opens the
+  // user's files; the 'documents:packs' deep link (Home's "Add packs", the chat picker's
+  // "Add packs…") opens the knowledge-pack panel. The screen's own header switch takes over
+  // once mounted.
+  const [documentsMode, setDocumentsMode] = useState<'documents' | 'packs'>('documents')
   // EP-1 P5 (plan §10): the conversation the Chat screen should open with — set ONLY by the
   // review screen's "Back to chat" so it returns to the ORIGINATING conversation. One-shot
   // by construction: every normal chat navigation (navigate below) clears it.
@@ -257,9 +265,11 @@ function AppShell(): JSX.Element {
     if (next.chatMode) {
       setChatMode(next.chatMode)
       setChatScope(null)
+      setChatPackScope(null)
       setChatConversation(null)
     }
     if (next.settingsTab) setSettingsTab(next.settingsTab)
+    if (next.documentsMode) setDocumentsMode(next.documentsMode)
     setScreen(next.screen)
   }
 
@@ -272,6 +282,18 @@ function AppShell(): JSX.Element {
   function askSelectedDocuments(documentIds: string[]): void {
     setChatMode('documents')
     setChatScope(documentIds.length > 0 ? documentIds : null)
+    setChatPackScope(null)
+    setChatConversation(null)
+    setScreen('chat')
+  }
+
+  // Documents screen (packs mode) → "Ask this pack" (§11.16): open Chat in documents mode with
+  // that pack as the next conversation's ONLY source. Same discipline as askSelectedDocuments —
+  // it bypasses navigate(), so it clears the review back-handoff and the document scope itself.
+  function askPack(packId: string): void {
+    setChatMode('documents')
+    setChatScope(null)
+    setChatPackScope([packId])
     setChatConversation(null)
     setScreen('chat')
   }
@@ -480,6 +502,7 @@ function AppShell(): JSX.Element {
                 onNavigate={navigate}
                 initialMode={chatMode}
                 initialScopeDocumentIds={chatScope}
+                initialScopePackIds={chatPackScope}
                 initialConversationId={chatConversation}
                 onOpenReview={openReview}
               />
@@ -494,7 +517,12 @@ function AppShell(): JSX.Element {
               />
             )}
             {screen === 'documents' && (
-              <DocumentsScreen onAskSelected={askSelectedDocuments} onNavigate={navigate} />
+              <DocumentsScreen
+                onAskSelected={askSelectedDocuments}
+                onAskPack={askPack}
+                onNavigate={navigate}
+                initialMode={documentsMode}
+              />
             )}
             {screen === 'translate' && <TranslateScreen onNavigate={navigate} />}
             {screen === 'images' && <ImagesScreen onNavigate={navigate} />}

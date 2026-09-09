@@ -29,7 +29,9 @@ beforeAll(() => {
 describe('resolveNavTarget — virtual targets + legacy aliases', () => {
   it('maps the eight real screens to themselves', () => {
     expect(resolveNavTarget('home')).toEqual({ screen: 'home' })
-    expect(resolveNavTarget('documents')).toEqual({ screen: 'documents' })
+    expect(resolveNavTarget('documents')).toEqual({ screen: 'documents', documentsMode: 'documents' })
+    // §11.16: the knowledge-pack panel is a MODE of Documents, reached by its own deep link.
+    expect(resolveNavTarget('documents:packs')).toEqual({ screen: 'documents', documentsMode: 'packs' })
     // Translate is a primary destination between Documents and Images (TranslateGemma plan §2 D6).
     expect(resolveNavTarget('translate')).toEqual({ screen: 'translate' })
     expect(resolveNavTarget('images')).toEqual({ screen: 'images' })

@@ -7,6 +7,7 @@ import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t } from '../../src/shared/i18n'
 import type { Conversation, Message, RuntimeStatus } from '../../src/shared/types'
+import type { KnowledgePack } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
 // Renderer tests for the chat screen's structural behaviors (Phase 25 layout, same
@@ -289,6 +290,50 @@ describe('ChatScreen — documents-scope multi-select picker (plan §13)', () =>
       expect(createConversation).toHaveBeenCalledWith({
         mode: 'documents',
         scope: { collectionIds: [], documentIds: ['d1'] },
+        collectionId: undefined
+      })
+    )
+  })
+
+  // §11.16 "Ask this pack": the pack alone — ticked, documents off — is the next conversation's
+  // scope, and the chip says so before any conversation exists.
+  it('applies the pending pack handoff (documents off) to the next documents conversation', async () => {
+    const user = userEvent.setup()
+    const wikipedia: KnowledgePack = {
+      id: 'p1',
+      title: 'Wikipedia (English)',
+      description: null,
+      language: 'eng',
+      zimDate: '2026-07-01',
+      articleCount: 100,
+      sizeBytes: 1024,
+      leaf: 'wikipedia_en.zim',
+      enabled: true,
+      available: true,
+      unavailableReason: null,
+      addedAt: '2026-09-01T00:00:00Z'
+    }
+    const created = conv({ id: 'c3', title: 'New chat', mode: 'documents' })
+    const createConversation = vi.fn(async () => created)
+    stubApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [indexedDoc('d1', 'contract.pdf')]),
+      listKnowledgePacks: vi.fn(async () => [wikipedia]),
+      createConversation
+    })
+    render(<ChatScreen onNavigate={() => {}} initialMode="documents" initialScopePackIds={['p1']} />)
+
+    // The handoff shows in the footer affordance: the pack, and the honest "documents off" tail.
+    expect(
+      await screen.findByRole('button', { name: /answering from: Pack: Wikipedia \(English\) · documents off/i })
+    ).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /new document q&a/i }))
+    await waitFor(() =>
+      expect(createConversation).toHaveBeenCalledWith({
+        mode: 'documents',
+        scope: { collectionIds: [], documentIds: [], packIds: ['p1'], documentsOff: true },
         collectionId: undefined
       })
     )

@@ -1532,10 +1532,20 @@ code, pre, kbd { font-family: var(--font-mono); }
 .docs-layout { display: grid; grid-template-columns: 220px 1fr; gap: 18px; align-items: start; }
 /* Collapsed sub-nav (§11.6): the rail is gone and the list takes the full width. */
 .docs-layout.rail-collapsed { grid-template-columns: 1fr; }
+/* Head (§11.16): the title beside the "My documents | Knowledge packs" segmented switch. */
+.docs-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
+.docs-head h1 { margin: 0; }
+/* Toolbar (§11.16): the name filter on the left, the quiet Refresh + bulk fixes + Import pair
+   on the right (one primary, last in the row). Wraps on a narrow window. */
+.docs-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
+.docs-toolbar-actions { margin-top: 0; }
+.docs-filter { position: relative; flex: 0 1 280px; min-width: 200px; }
+.docs-filter-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
+.docs-filter-input { padding-left: 32px; min-height: 36px; }
 .docs-main { min-width: 0; }
 .docs-rail { display: flex; flex-direction: column; gap: 1px; position: sticky; top: 0; }
 /* Panel header: quiet title + the "«" collapse handle (mirrors the chat sidebar head). */
-.docs-rail-head { display: flex; gap: 6px; align-items: center; justify-content: space-between; padding: 0 2px 2px; }
+.docs-rail-head { display: flex; gap: 6px; align-items: center; justify-content: flex-end; padding: 0 2px 2px; }
 .docs-rail-title { font-size: var(--text-xs); font-weight: 600; letter-spacing: 0.06em; text-transform: uppercase; color: var(--text-muted); }
 .docs-rail-collapse {
   background: transparent; border: 1px solid transparent; color: var(--text-muted);
@@ -1551,9 +1561,14 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Denser nav rows (§6 — ≥36px): a comfortable hit target with a hover highlight, uniform
    across all groups. */
 .docs-rail-item {
-  display: flex; align-items: center; min-height: 36px; text-align: left; background: none; border: none;
-  color: var(--text-muted); padding: 6px 10px; border-radius: 6px; font-size: 13px; cursor: pointer; width: 100%;
+  display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 36px; text-align: left;
+  background: none; border: none; color: var(--text-muted); padding: 6px 10px; border-radius: 6px; font-size: 13px;
+  cursor: pointer; width: 100%;
 }
+/* §11.16: every rail entry carries its document count (visual only — aria-hidden). */
+.docs-rail-label { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.docs-rail-count { font-size: var(--text-xs); color: var(--text-muted); font-weight: 400; flex-shrink: 0; }
+.docs-rail-new-project:disabled { cursor: not-allowed; opacity: 0.5; }
 .docs-rail-item:hover { background: var(--surface-hover); color: var(--text); }
 /* Active = a soft fill (the nav/history selection treatment, §11.6) + aria-current, NOT a ring
    (:focus-visible keeps the ring, so selection stays distinct from focus). */
@@ -2710,8 +2725,19 @@ code, pre, kbd { font-family: var(--font-mono); }
 .packs-card-reason { margin: 0; }
 .packs-card-desc { margin: 0; }
 .packs-card-meta { margin: 0; }
-.packs-card-actions { display: flex; gap: 8px; margin-top: 4px; }
-.packs-tools-hint { margin: 0; }
+.packs-card-actions { display: flex; gap: 8px; margin-top: 4px; align-items: center; }
+/* §11.16: the panel head — summary + lead on the left, Refresh + the primary on the right. */
+.packs-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.packs-head-text { flex: 1 1 360px; min-width: 0; }
+.packs-summary { margin: 0 0 2px; font-size: var(--text-base); line-height: var(--line-base); }
+.packs-head-actions { display: flex; align-items: center; gap: 10px; flex-shrink: 0; }
+/* §11.16: the first-run setup card (the tools-missing notice with a title and one primary). */
+.packs-setup { margin-top: 0; }
+.packs-setup-title { font-size: var(--text-lg); line-height: var(--line-lg); font-weight: 600; margin-bottom: 4px; }
+/* §11.16: the per-row Switch sits at the end of the head row; the "⋯" is always visible here
+   (a card, not a hover-revealed list row) and right-aligned. */
+.packs-card-head .switch { margin-left: auto; }
+.packs-card-menu { opacity: 1; margin-left: auto; }
 
 /* #382: the screen-level "Check all model files" action — the button, its consequence line
    and the in-place hashing bar, stacked as a quiet row rather than a Banner. */

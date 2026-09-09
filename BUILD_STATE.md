@@ -28,6 +28,16 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-09 — **Documents rail declutter + Knowledge packs as a mode of Documents (`feat/documents-rail-declutter-packs-mode`;
+record `docs/design-guidelines.md` §11.16):** the owner chose "Option A" of the two mockups (Option B — a "Knowledge" rail
+destination — is parked until pack quality is reliable). Renderer-only. Documents header: a "My documents | Knowledge packs"
+segmented switch (the rail's "Reference" group is gone; `documents:packs` deep link). The rail shows what exists: counts on every
+entry, ONE attention-driven "Needs attention" view (failed + stale) replacing the four diagnostic views, projects with an Unfiled
+row (or one "+ New project" row), the locations behind a remembered "More", a name filter in the toolbar, the lead only in the
+empty state. Packs panel: summary line, ONE Switch per pack, "Ask this pack" (Chat with that pack alone — `initialScopePackIds`,
+documents off), Remove behind "⋯", a setup card on first run, "Copy the library address" in the empty state. Entry points: Home's
+fourth readiness row, the scope picker's "Add packs…" when no pack is registered. Tests: DocumentsScreen (the §11.16 block),
+KnowledgePacks, HomeKnowledgePacks, GermanSmoke, InformationArchitecture. The two 2026-09-05 Performance-wave entries retired._
 _2026-09-09 — **#331 CLOSED — the four blocked HW3 acceptance legs performed** (`docs/331-hardware-acceptance-legs`;
 record `benchmark.md` §2 row HW3 + §4 HW3; evidence `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md`).
 A workspace created on a SECOND computer with the 14B active made leg 2 a real moved-drive `new-machine` run behind a 66 s model
@@ -156,23 +166,6 @@ hygiene in other suites), the record's issue and commit references filled, the c
 the keyboard-focus repair re-verified live in the dev app. Merge is the owner's call; the branch
 stays._
 
-_2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** the total-memory
-rule shipped here is **superseded** by the 2026-09-06 PR #308 audit amendment above (rule C on free memory; §6.6)._
-
-_2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
-third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
-the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
-Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
-tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
-`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
-cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
-`placementVerdict`), the session's observed figures (last
-answer via a `chat:speed` observer, last model start / file check via per-source read-speed
-latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
-check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
-`benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
-`docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
-storage + IPC). §5 item 22 tracks the residuals._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -195,7 +188,7 @@ budget), and the Phase 9b close-out (PR #282), Model library UX (PR #302) and #2
 entries on 2026-09-09 (preamble budget, making room for the knowledge-packs docs and #331
 HW3-acceptance entries) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
-"Skills — Sn handoff" resolve there._
+"Skills — Sn handoff" resolve there. The two closed 2026-09-05 Performance-wave entries (`feat/performance-screen`, `feat/vram-aware-picker`) followed on 2026-09-09 (preamble budget, making room for the §11.16 Documents-declutter entry)._
 
 ---
 ## 1. Current status

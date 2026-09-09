@@ -7,7 +7,7 @@ import {
   friendlyMimeLabel,
   isRetryableFailure,
   RAIL_COLLAPSED_KEY,
-  VIEWS_MORE_KEY,
+  LOCATIONS_MORE_KEY,
   __docRowRenderCounts
 } from '../../src/renderer/screens/DocumentsScreen'
 import { en, t as translate } from '../../src/shared/i18n'
@@ -66,12 +66,15 @@ describe('DocumentsScreen — organization', () => {
         doc({ id: 'd2', title: 'return.pdf', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] })
       ])
     })
+    window.localStorage.clear()
     render(<DocumentsScreen />)
-    // Rail sections are present.
-    expect(await screen.findByRole('button', { name: 'Library' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Tax 2025' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Generated' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Archived' })).toBeInTheDocument()
+    // Rail sections are present: the project, and the non-empty locations behind "More" (§11.16).
+    expect(await screen.findByRole('button', { name: 'Tax 2025' })).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'More' }))
+    expect(screen.getByRole('button', { name: 'Library' })).toBeInTheDocument()
+    // Empty locations are not offered.
+    expect(screen.queryByRole('button', { name: 'Generated' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Archived' })).not.toBeInTheDocument()
     // Both docs show under "All documents" (default section).
     expect(screen.getByText('policy.pdf')).toBeInTheDocument()
     expect(screen.getByText('return.pdf')).toBeInTheDocument()
@@ -127,12 +130,8 @@ describe('DocumentsScreen — organization', () => {
     })
     render(<DocumentsScreen />)
 
-    // "Failed imports" is a rare diagnostic view folded behind the Views "More" disclosure (§11.6).
-    await screen.findByRole('button', { name: 'Library' })
-    expect(screen.queryByRole('button', { name: 'Failed imports' })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'More' }))
-    // Failed imports → only the failed doc.
-    await user.click(await screen.findByRole('button', { name: 'Failed imports' }))
+    // "Needs attention" (§11.16) is the one diagnostic view — offered because a doc failed.
+    await user.click(await screen.findByRole('button', { name: 'Needs attention' }))
     expect(screen.getByText('broken.xyz')).toBeInTheDocument()
     expect(screen.queryByText('libonly.pdf')).not.toBeInTheDocument()
     expect(screen.queryByText('filed.pdf')).not.toBeInTheDocument()
@@ -165,9 +164,13 @@ describe('DocumentsScreen — organization', () => {
         })
       ])
     })
+    // The rail reads the remembered "More" state on mount — start closed so the click OPENS it.
+    window.localStorage.clear()
     render(<DocumentsScreen />)
 
-    // In the Generated view both generated docs show; exactly one is flagged stale.
+    // In the Generated view (a location behind "More", §11.16) both generated docs show; exactly
+    // one is flagged stale.
+    await user.click(await screen.findByRole('button', { name: 'More' }))
     await user.click(await screen.findByRole('button', { name: 'Generated' }))
     expect(screen.getByText('report.de.md')).toBeInTheDocument()
     expect(screen.getByText('memo.de.md')).toBeInTheDocument()
@@ -681,8 +684,6 @@ describe('DocumentsScreen', () => {
 
   it('"Retry all" on the Failed tab confirms first, then starts the bulk job with every failed id', async () => {
     const user = userEvent.setup()
-    // The Views "More" disclosure is remembered in localStorage (VIEWS_MORE_KEY) and leaks across
-    // tests in this file — start from the default (closed) so the "More" toggle reliably OPENS it.
     window.localStorage.clear()
     const failed = [
       doc({ id: 'd1', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 }),
@@ -695,11 +696,10 @@ describe('DocumentsScreen', () => {
     stubApi({ listDocuments, startReindexAll, getReindexAllJob })
     render(<DocumentsScreen />)
 
-    // The "Retry all" button lives ONLY on the Failed tab (a rare view behind "More").
-    await screen.findByRole('button', { name: 'Library' })
+    // The "Retry all" button lives ONLY in the "Needs attention" view (§11.16).
+    await screen.findByRole('button', { name: 'All documents' })
     expect(screen.queryByRole('button', { name: /retry all/i })).not.toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'More' }))
-    await user.click(await screen.findByRole('button', { name: 'Failed imports' }))
+    await user.click(screen.getByRole('button', { name: 'Needs attention' }))
 
     // Opens a ConfirmDialog — nothing runs until confirmed (M-U6).
     await user.click(await screen.findByRole('button', { name: /retry all \(2\)/i }))
@@ -1106,9 +1106,16 @@ describe('DocumentsScreen — action overflow + selection toolbar (§11.6)', () 
   })
 })
 
-// ---- §11.6 sub-nav regroup: four headed groups, "More" disclosure, active aria-current,
-//      collapsible panel ----------------------------------------------------------------
-describe('DocumentsScreen — sub-nav (section rail) regroup', () => {
+// ---- §11.16 sub-nav declutter: mode switch, counts, "Needs attention", projects, locations
+//      behind "More", the name filter, collapsible panel --------------------------------------
+describe('DocumentsScreen — sub-nav (section rail) declutter', () => {
+  beforeEach(() => {
+    try {
+      window.localStorage.clear()
+    } catch {
+      /* jsdom */
+    }
+  })
   afterEach(() => {
     try {
       window.localStorage.clear()
@@ -1117,30 +1124,46 @@ describe('DocumentsScreen — sub-nav (section rail) regroup', () => {
     }
   })
 
-  it('renders the four groups in order: All documents · Projects · Locations · Views', async () => {
+  it('renders the mode switch and the decluttered rail: All documents · Recently added · Projects · More', async () => {
     stubApi({
-      listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
-      listDocuments: vi.fn(async () => [doc({})])
+      listCollections: vi.fn(async () => [
+        coll({ id: 'lib', name: 'Library', type: 'library', builtin: true }),
+        coll({ id: 'tax', name: 'Tax 2025' })
+      ]),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', collections: [{ id: 'tax', name: 'Tax 2025', type: 'project', role: 'source' }] }),
+        doc({ id: 'd2', title: 'loose.pdf', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] })
+      ])
     })
     render(<DocumentsScreen />)
-    const all = await screen.findByRole('button', { name: 'All documents' })
+    // The header's segmented switch (the Chat header pattern): a radiogroup, My documents selected.
+    const group = await screen.findByRole('radiogroup', { name: 'Documents view' })
+    expect(within(group).getByRole('radio', { name: 'My documents' })).toHaveAttribute('aria-checked', 'true')
+    expect(within(group).getByRole('radio', { name: 'Knowledge packs' })).toHaveAttribute('aria-checked', 'false')
+    const all = screen.getByRole('button', { name: 'All documents' })
+    const recent = screen.getByRole('button', { name: 'Recently added' })
     const projects = screen.getByText('Projects')
-    const locations = screen.getByText('Locations')
-    const views = screen.getByText('Views')
-    // DOM order: All documents → Projects → Locations → Views (Node.DOCUMENT_POSITION_FOLLOWING = 4).
-    expect(all.compareDocumentPosition(projects) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(projects.compareDocumentPosition(locations) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    expect(locations.compareDocumentPosition(views) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
-    // The system buckets live under Locations (all four present as nav rows).
-    for (const name of ['Library', 'Temporary', 'Generated', 'Archived']) {
-      expect(screen.getByRole('button', { name })).toBeInTheDocument()
-    }
+    const more = screen.getByRole('button', { name: 'More' })
+    // DOM order: All documents → Recently added → Projects → More (Node.DOCUMENT_POSITION_FOLLOWING = 4).
+    expect(all.compareDocumentPosition(recent) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(recent.compareDocumentPosition(projects) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    expect(projects.compareDocumentPosition(more) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+    // Counts ride beside the entries (visual — aria-hidden, so the names stay the plain labels).
+    expect(all).toHaveTextContent('2')
+    expect(screen.getByRole('button', { name: 'Tax 2025' })).toHaveTextContent('1')
+    expect(screen.getByRole('button', { name: 'Unfiled' })).toHaveTextContent('1')
+    // No group headers other than Projects; nothing needs attention, so that entry is absent.
+    expect(screen.queryByText('Locations')).not.toBeInTheDocument()
+    expect(screen.queryByText('Views')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Needs attention' })).not.toBeInTheDocument()
+    // The lead paragraph teaches only in the empty state.
+    expect(screen.queryByText(/Import documents to ask questions/)).not.toBeInTheDocument()
   })
 
   it('the active item carries aria-current and uses the fill (not a ring); selection moves it', async () => {
     const user = userEvent.setup()
     stubApi({
-      listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
+      listCollections: vi.fn(async () => []),
       listDocuments: vi.fn(async () => [doc({})])
     })
     render(<DocumentsScreen />)
@@ -1148,55 +1171,153 @@ describe('DocumentsScreen — sub-nav (section rail) regroup', () => {
     const all = await screen.findByRole('button', { name: 'All documents' })
     expect(all).toHaveAttribute('aria-current', 'true')
     expect(all).toHaveClass('active')
-    // Selecting Library moves aria-current there; All documents drops it.
-    await user.click(screen.getByRole('button', { name: 'Library' }))
-    expect(screen.getByRole('button', { name: 'Library' })).toHaveAttribute('aria-current', 'true')
+    // Selecting Recently added moves aria-current there; All documents drops it.
+    await user.click(screen.getByRole('button', { name: 'Recently added' }))
+    expect(screen.getByRole('button', { name: 'Recently added' })).toHaveAttribute('aria-current', 'true')
     expect(screen.getByRole('button', { name: 'All documents' })).not.toHaveAttribute('aria-current')
   })
 
-  it('folds the rare views behind a "More" disclosure that toggles via keyboard with aria-expanded', async () => {
+  it('offers "Needs attention" only while something failed or is stale, with its count, and it filters to those', async () => {
     const user = userEvent.setup()
     stubApi({
       listCollections: vi.fn(async () => []),
-      // One large + one audio doc, so those rare views are non-empty (and thus offered).
       listDocuments: vi.fn(async () => [
-        doc({ id: 'd1', sizeBytes: 200 * 1024 * 1024 }),
-        doc({ id: 'd2', title: 'talk.mp3', mimeType: 'audio/mpeg' })
+        doc({ id: 'd1', title: 'fine.pdf' }),
+        doc({ id: 'd2', title: 'stale.pdf', staleEmbeddings: true }),
+        doc({ id: 'd3', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 })
       ])
     })
     render(<DocumentsScreen />)
-    // Common views always visible; the rare ones are hidden until "More" is expanded.
-    expect(await screen.findByRole('button', { name: 'Recently added' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Needs re-index' })).toBeInTheDocument()
-    const more = screen.getByRole('button', { name: 'More' })
+    const attention = await screen.findByRole('button', { name: 'Needs attention' })
+    expect(attention).toHaveTextContent('2')
+    await user.click(attention)
+    expect(screen.getByText('stale.pdf')).toBeInTheDocument()
+    expect(screen.getByText('broken.xyz')).toBeInTheDocument()
+    expect(screen.queryByText('fine.pdf')).not.toBeInTheDocument()
+  })
+
+  it('folds the locations behind a "More" disclosure (keyboard, aria-expanded, remembered); empty locations are hidden', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'lib', name: 'Library', type: 'library', builtin: true })]),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', collections: [{ id: 'lib', name: 'Library', type: 'library', role: 'source' }] }),
+        doc({ id: 'd2', title: 'note.md', lifecycle: 'archived' })
+      ])
+    })
+    render(<DocumentsScreen />)
+    const more = await screen.findByRole('button', { name: 'More' })
     expect(more).toHaveAttribute('aria-expanded', 'false')
-    expect(screen.queryByRole('button', { name: 'Large files' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Library' })).not.toBeInTheDocument()
     // Keyboard: focus + Enter expands.
     more.focus()
     await user.keyboard('{Enter}')
     expect(more).toHaveAttribute('aria-expanded', 'true')
-    expect(screen.getByRole('button', { name: 'Large files' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Audio' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Library' })).toHaveTextContent('1')
+    expect(screen.getByRole('button', { name: 'Archived' })).toHaveTextContent('1')
+    // Nothing is temporary or generated ⇒ those locations are not even offered.
+    expect(screen.queryByRole('button', { name: 'Temporary' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Generated' })).not.toBeInTheDocument()
     // The expanded state persists across sessions.
-    expect(window.localStorage.getItem(VIEWS_MORE_KEY)).toBe('1')
+    expect(window.localStorage.getItem(LOCATIONS_MORE_KEY)).toBe('1')
     // Space collapses it again.
     await user.keyboard(' ')
     expect(more).toHaveAttribute('aria-expanded', 'false')
-    expect(window.localStorage.getItem(VIEWS_MORE_KEY)).toBe('0')
+    expect(window.localStorage.getItem(LOCATIONS_MORE_KEY)).toBe('0')
   })
 
-  it('hides an empty rare view entirely (no Failed imports when nothing failed)', async () => {
+  it('with no project the rail shows one "+ New project" row; with a project, the header "+" and an Unfiled row', async () => {
+    const user = userEvent.setup()
+    const createCollection = vi.fn(async () => coll({ id: 'new', name: 'Lawsuit' }))
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({})]),
+      createCollection
+    })
+    const first = render(<DocumentsScreen />)
+    // Exactly one affordance, and it opens the create dialog.
+    const row = await screen.findByRole('button', { name: 'New project' })
+    expect(screen.getAllByRole('button', { name: 'New project' })).toHaveLength(1)
+    expect(screen.queryByText('Projects')).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Unfiled' })).not.toBeInTheDocument()
+    await user.click(row)
+    expect(await screen.findByLabelText('Project name')).toBeInTheDocument()
+    first.unmount()
+
+    stubApi({
+      listCollections: vi.fn(async () => [coll({ id: 'tax', name: 'Tax 2025' })]),
+      listDocuments: vi.fn(async () => [doc({})])
+    })
+    render(<DocumentsScreen />)
+    expect(await screen.findByText('Projects')).toBeInTheDocument()
+    expect(screen.getAllByRole('button', { name: 'New project' })).toHaveLength(1)
+    expect(screen.getByRole('button', { name: 'Unfiled' })).toHaveTextContent('1')
+  })
+
+  it('the name filter narrows the visible section and says so when nothing matches', async () => {
     const user = userEvent.setup()
     stubApi({
       listCollections: vi.fn(async () => []),
-      listDocuments: vi.fn(async () => [doc({ id: 'd1', sizeBytes: 200 * 1024 * 1024 })])
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'Lease 2026.pdf' }),
+        doc({ id: 'd2', title: 'Q3 audit notes.docx' })
+      ])
     })
     render(<DocumentsScreen />)
-    await user.click(await screen.findByRole('button', { name: 'More' }))
-    expect(screen.getByRole('button', { name: 'Large files' })).toBeInTheDocument()
-    // No failed / audio / scan docs ⇒ those rare views are not even offered.
-    expect(screen.queryByRole('button', { name: 'Failed imports' })).not.toBeInTheDocument()
-    expect(screen.queryByRole('button', { name: 'Audio' })).not.toBeInTheDocument()
+    await screen.findByText('Lease 2026.pdf')
+    const box = screen.getByRole('searchbox', { name: 'Filter documents by name' })
+    await user.type(box, 'lease')
+    expect(screen.getByText('Lease 2026.pdf')).toBeInTheDocument()
+    expect(screen.queryByText('Q3 audit notes.docx')).not.toBeInTheDocument()
+    // The rail counts are the section's, not the filter's.
+    expect(screen.getByRole('button', { name: 'All documents' })).toHaveTextContent('2')
+    await user.clear(box)
+    await user.type(box, 'zzz')
+    expect(screen.getByText('No documents match “zzz”.')).toBeInTheDocument()
+  })
+
+  it('the Knowledge packs mode replaces the rail and list with the packs panel; the empty state links to it', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => []),
+      getKnowledgePackStatus: vi.fn(async () => ({ toolsInstalled: true, refreshing: false, revision: 0 })),
+      listKnowledgePacks: vi.fn(async () => [])
+    })
+    render(
+      <ToastProvider>
+        <DocumentsScreen />
+      </ToastProvider>
+    )
+    // Empty state: the lead teaches, and the second line offers the other kind of source.
+    expect(await screen.findByText('No documents yet')).toBeInTheDocument()
+    expect(screen.getByText(/Import documents to ask questions/)).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: 'Knowledge packs' }))
+    expect(screen.getByRole('radio', { name: 'Knowledge packs' })).toHaveAttribute('aria-checked', 'true')
+    expect(await screen.findByText('No knowledge packs yet')).toBeInTheDocument()
+    // No document rail, no document toolbar in this mode.
+    expect(screen.queryByRole('button', { name: 'All documents' })).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Import files' })).not.toBeInTheDocument()
+    // …and back.
+    await user.click(screen.getByRole('radio', { name: 'My documents' }))
+    expect(await screen.findByText('No documents yet')).toBeInTheDocument()
+  })
+
+  it('initialMode="packs" opens the packs panel directly (the documents:packs deep link)', async () => {
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [doc({})]),
+      getKnowledgePackStatus: vi.fn(async () => ({ toolsInstalled: true, refreshing: false, revision: 0 })),
+      listKnowledgePacks: vi.fn(async () => [])
+    })
+    render(
+      <ToastProvider>
+        <DocumentsScreen initialMode="packs" />
+      </ToastProvider>
+    )
+    expect(await screen.findByText('No knowledge packs yet')).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: 'Knowledge packs' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.queryByText('contract.pdf')).not.toBeInTheDocument()
   })
 
   it('collapses and expands the whole sub-nav, remembering the state; collapsed → no rail', async () => {

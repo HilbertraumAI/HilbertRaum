@@ -146,14 +146,18 @@ describe('PacksPanel', () => {
       </I18nProvider>
     )
     expect(await screen.findByText('Klimawandel von Wikipedia')).toBeInTheDocument()
-    expect(screen.getByText('Enabled')).toBeInTheDocument()
+    // §11.16: both packs are enabled, so both switches read "Enabled" — the missing file is a
+    // badge BESIDE the switch, not a replacement for its state.
+    expect(screen.getAllByText('Enabled')).toHaveLength(2)
     expect(screen.getByText('File missing')).toBeInTheDocument()
     expect(screen.getAllByText(/4102 articles/).length).toBeGreaterThan(0)
     // #340 nit: the ISO 639-3 code is shown as a language NAME in the UI language, never raw.
     expect(screen.getAllByText(/German · 4102 articles/).length).toBe(2)
     expect(screen.queryByText(/\bdeu\b/)).toBeNull()
-    // #340 nit: an unavailable pack can be disabled, not only removed.
-    expect(screen.getByRole('button', { name: 'Disable Chemie von Wikipedia' })).toBeEnabled()
+    // #340 nit: an unavailable pack can be disabled, not only removed. §11.16: enablement is
+    // ONE switch per row (checked = enabled), named after the pack.
+    expect(screen.getByRole('switch', { name: 'Use Chemie von Wikipedia in chats' })).toBeEnabled()
+    expect(screen.getByRole('switch', { name: 'Use Chemie von Wikipedia in chats' })).toBeChecked()
   })
 
   // #340 nits: a row's buttons disable only while THAT row is busy — another row's toggle or
@@ -183,19 +187,19 @@ describe('PacksPanel', () => {
     // The unknown code echoes back as itself — no invented name.
     expect(screen.getByText(/^zzz · 4102 articles/)).toBeInTheDocument()
 
-    await user.click(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' }))
+    await user.click(screen.getByRole('switch', { name: 'Use Klimawandel von Wikipedia in chats' }))
     await waitFor(() => expect(setKnowledgePackEnabled).toHaveBeenCalledWith('uuid-climate', false))
-    // This row is working; the other row's buttons are untouched.
-    expect(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Remove Klimawandel von Wikipedia' })).toBeDisabled()
-    expect(screen.getByRole('button', { name: 'Disable Chemie von Wikipedia' })).toBeEnabled()
-    expect(screen.getByRole('button', { name: 'Remove Chemie von Wikipedia' })).toBeEnabled()
+    // This row is working; the other row's controls are untouched.
+    expect(screen.getByRole('switch', { name: 'Use Klimawandel von Wikipedia in chats' })).toBeDisabled()
+    expect(screen.getByRole('button', { name: 'More actions for Klimawandel von Wikipedia' })).toBeDisabled()
+    expect(screen.getByRole('switch', { name: 'Use Chemie von Wikipedia in chats' })).toBeEnabled()
+    expect(screen.getByRole('button', { name: 'More actions for Chemie von Wikipedia' })).toBeEnabled()
     release()
     await waitFor(() =>
-      expect(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' })).toBeEnabled()
+      expect(screen.getByRole('switch', { name: 'Use Klimawandel von Wikipedia in chats' })).toBeEnabled()
     )
-    // …and the unavailable pack's Disable really reaches the bridge.
-    await user.click(screen.getByRole('button', { name: 'Disable Chemie von Wikipedia' }))
+    // …and the unavailable pack's switch really reaches the bridge.
+    await user.click(screen.getByRole('switch', { name: 'Use Chemie von Wikipedia in chats' }))
     await waitFor(() => expect(setKnowledgePackEnabled).toHaveBeenCalledWith('uuid-gone', false))
     first.unmount()
 
@@ -651,9 +655,9 @@ describe('PacksPanel', () => {
         <PacksPanel />
       </I18nProvider>
     )
-    // #301 P6 (plan §9.23 (b)6): the button's accessible name now includes the pack title
-    // (`packs.removeNamed`) — the visible text is still the plain "Remove".
-    await user.click(await screen.findByRole('button', { name: 'Remove Klimawandel von Wikipedia' }))
+    // §11.16: Remove lives behind the row's "⋯" menu (named after the pack), then the confirm.
+    await user.click(await screen.findByRole('button', { name: 'More actions for Klimawandel von Wikipedia' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Remove' }))
     expect(await screen.findByText(/archive file on disk is not touched/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Remove pack' }))
     await waitFor(() => expect(removeKnowledgePack).toHaveBeenCalledWith('uuid-climate'))
@@ -854,9 +858,9 @@ describe('PacksPanel', () => {
     expect(within(list).getAllByRole('listitem')).toHaveLength(2)
   })
 
-  // #301 P6 (plan §9.23 (b)6): the per-row Enable/Disable/Remove buttons get an accessible
-  // name that includes the pack title — the VISIBLE text stays the plain verb.
-  it('names the per-row Enable/Disable/Remove buttons with the pack title', async () => {
+  // #301 P6 (plan §9.23 (b)6) / §11.16: the per-row switch and "⋯" menu get an accessible
+  // name that includes the pack title — the VISIBLE text stays the plain state word.
+  it('names the per-row switch and menu with the pack title', async () => {
     stubApi({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
       listKnowledgePacks: async () => [
@@ -870,15 +874,16 @@ describe('PacksPanel', () => {
       </I18nProvider>
     )
     await screen.findByText('Klimawandel von Wikipedia')
-    expect(screen.getByRole('button', { name: 'Disable Klimawandel von Wikipedia' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Enable Off pack' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Remove Klimawandel von Wikipedia' })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Remove Off pack' })).toBeInTheDocument()
-    // Visible text is unchanged — still the plain verb, never the pack title inline.
-    expect(screen.getAllByText('Remove')).toHaveLength(2)
+    expect(screen.getByRole('switch', { name: 'Use Klimawandel von Wikipedia in chats' })).toBeChecked()
+    expect(screen.getByRole('switch', { name: 'Use Off pack in chats' })).not.toBeChecked()
+    expect(screen.getByRole('button', { name: 'More actions for Klimawandel von Wikipedia' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'More actions for Off pack' })).toBeInTheDocument()
+    // Visible text is unchanged — the plain state word, never the pack title inline.
+    expect(screen.getByText('Enabled')).toBeInTheDocument()
+    expect(screen.getByText('Disabled')).toBeInTheDocument()
   })
 
-  it('names the per-row Enable/Disable/Remove buttons with the pack title in German', async () => {
+  it('names the per-row switch and menu with the pack title in German', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
     stubApi({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
@@ -894,13 +899,68 @@ describe('PacksPanel', () => {
     )
     await screen.findByText('Klimawandel von Wikipedia')
     expect(
-      screen.getByRole('button', { name: 'Klimawandel von Wikipedia deaktivieren' })
-    ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Anderes Paket aktivieren' })).toBeInTheDocument()
+      screen.getByRole('switch', { name: 'Klimawandel von Wikipedia in Chats nutzen' })
+    ).toBeChecked()
+    expect(screen.getByRole('switch', { name: 'Anderes Paket in Chats nutzen' })).not.toBeChecked()
     expect(
-      screen.getByRole('button', { name: 'Klimawandel von Wikipedia entfernen' })
+      screen.getByRole('button', { name: 'Weitere Aktionen für Klimawandel von Wikipedia' })
     ).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Anderes Paket entfernen' })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Weitere Aktionen für Anderes Paket' })).toBeInTheDocument()
+  })
+
+  // §11.16: the panel's summary line, and "Ask this pack" — offered only for a pack an ask would
+  // actually search (present, enabled, served, not a confirmed no-index archive).
+  it('shows the summary line and offers "Ask this pack" only for an askable pack', async () => {
+    const onAskPack = vi.fn()
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => [
+        pack({ sizeBytes: 2 * 1024 * 1024 * 1024 }),
+        pack({ id: 'p-off', title: 'Off pack', enabled: false, sizeBytes: 512 * 1024 * 1024 }),
+        pack({ id: 'p-noindex', title: 'No index', searchable: 'no', sizeBytes: null }),
+        pack({ id: 'p-gone', title: 'Gone pack', available: false, unavailableReason: 'missing', sizeBytes: 9 * 1024 * 1024 * 1024 })
+      ]
+    })
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <PacksPanel onAskPack={onAskPack} />
+      </I18nProvider>
+    )
+    await screen.findByText('Klimawandel von Wikipedia')
+    // 4 packs, 3 enabled; the size counts only the archives that are present (2 GB + 0.5 GB).
+    expect(screen.getByText('4 packs · 3 enabled · 2.5 GB on this drive')).toBeInTheDocument()
+    const asks = screen.getAllByRole('button', { name: 'Ask this pack' })
+    expect(asks).toHaveLength(4)
+    expect(asks[0]).toBeEnabled()
+    expect(asks[1]).toBeDisabled()
+    expect(asks[2]).toBeDisabled()
+    expect(asks[3]).toBeDisabled()
+    await user.click(asks[0])
+    expect(onAskPack).toHaveBeenCalledWith('uuid-climate')
+  })
+
+  it('renders no "Ask this pack" without the callback, and the empty state carries Add + the library address', async () => {
+    stubApi({
+      getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+      listKnowledgePacks: async () => []
+    })
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ToastProvider>
+          <PacksPanel />
+        </ToastProvider>
+      </I18nProvider>
+    )
+    expect(await screen.findByText('No knowledge packs yet')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Ask this pack' })).toBeNull()
+    // ONE primary "Add packs…" — in the empty state, not the head as well.
+    expect(screen.getAllByRole('button', { name: 'Add packs…' })).toHaveLength(1)
+    // user-event installs its own clipboard stub for the test — read the copy back through it.
+    await user.click(screen.getByRole('button', { name: 'Copy the library address' }))
+    expect(await navigator.clipboard.readText()).toBe('https://library.kiwix.org')
+    expect(await screen.findByText('Copied library.kiwix.org')).toBeInTheDocument()
   })
 })
 
@@ -1139,6 +1199,31 @@ describe('ScopePopover — knowledge packs', () => {
     await user.click(screen.getByRole('button'))
     expect(await screen.findByRole('checkbox', { name: /Library/ })).toBeInTheDocument()
     expect(screen.queryByRole('checkbox', { name: /Search my documents/ })).toBeNull()
+  })
+
+  // §11.16: with no pack registered the picker offers the way in instead of omitting the section.
+  it('with no pack registered and an onAddPacks callback, the picker shows the way in', async () => {
+    const onAddPacks = vi.fn()
+    stubApi({})
+    const user = userEvent.setup()
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[doc]}
+          collections={collections}
+          packs={[]}
+          scope={{ collectionIds: [], documentIds: [] }}
+          onChangeScope={() => {}}
+          onAddPacks={onAddPacks}
+        />
+      </I18nProvider>
+    )
+    await user.click(screen.getByRole('button'))
+    expect(await screen.findByText('No knowledge packs on this drive yet.')).toBeInTheDocument()
+    // Still no Documents toggle — there is nothing to turn documents off FOR.
+    expect(screen.queryByRole('checkbox', { name: /Search my documents/ })).toBeNull()
+    await user.click(screen.getByRole('button', { name: 'Add packs…' }))
+    expect(onAddPacks).toHaveBeenCalledTimes(1)
   })
 
   it('preserves packIds when an unrelated source is toggled (spread-preservation)', async () => {

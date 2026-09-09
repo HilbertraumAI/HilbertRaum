@@ -667,7 +667,7 @@ to ~36px with a uniform hover highlight; the **active** item uses the `--row-sel
 `aria-current`, NOT a ring (so selection stays distinct from `:focus-visible`). The **whole
 panel is collapsible** — a "«" handle hides it (the list then takes the full width) and a "»"
 handle re-opens it, both remembered in localStorage (`hilbertraum.docs.railCollapsed` /
-`…viewsMoreOpen`) — mirroring the chat `ConversationList` collapse pattern (§12.1) and resolving
+`…viewsMoreOpen`, renamed `…locationsMoreOpen` in §11.16) — mirroring the chat `ConversationList` collapse pattern (§12.1) and resolving
 the standing "sub-nav vs global-rail stacking" watch item: the second column is now dismissable,
 not permanent. **Files:** `renderer/screens/DocumentsScreen.tsx` (SectionRail rewrite, collapse
 state + "»" handle, suggestion removal), `renderer/styles.css` (`.docs-rail-head/-title/
@@ -1238,6 +1238,96 @@ from `EvidencePane`, a different component that never mounts `SourcesDisclosure`
 is structural rather than a flag — and the affordance is additionally gated on its optional
 callback, which only `ChatScreen` supplies. That is the card-level counterpart to the viewer's
 `canSave={false}`; both are pinned by tests.
+
+---
+
+### 11.16 Documents rail declutter + Knowledge packs as a mode of Documents — design record (IMPLEMENTED 2026-09-09)
+
+_A **renderer-only** pass over the Documents screen and the knowledge-packs panel: no IPC, schema
+or main-process change. The owner reviewed two mockups (canvas "HilbertRaum Documents Redesign"):
+**Option A**, below, keeps packs inside Documents; **Option B** — a "Knowledge" destination in
+the rail's Work group after Documents, single-word label in both locales, a Home "Ask Wikipedia"
+action — is **parked** until the feature's quality is reliable enough to earn a rail slot (§2
+records a rationale per rail item). Code/i18n comments cite this section as **§11.16**._
+
+**The problems (as found in the code):** the rail (`SectionRail.tsx`) rendered five headed
+groups — All documents · Projects · Locations · Views · Reference — for every user, empty or not:
+four uppercase headers at the same visual weight as their items, "No projects yet", four
+locations most users never fill, and knowledge packs as the LAST item under "Reference", a word
+used nowhere else (Chat, Home and the docs all say "Knowledge packs"). Picking it swapped the
+main pane but left the document rail standing. The screen stacked a title, a three-line lead and
+a toolbar before the first row, and had no name filter — which is why so many filter views
+existed. Nothing on Home or in the chat's scope picker led to packs when there were none.
+
+**Decisions (the facts they rest on):**
+1. **Packs are a peer of documents, not a filter — a segmented switch in the header.** "My
+   documents | Knowledge packs", the Chat header's `SegmentedControl` pattern (§3), one click
+   from the nav with no new rail item. The packs mode renders no rail and no document toolbar
+   (none of the document affordances apply to a pack). `'documents:packs'` is the virtual
+   navigation target (`navigation.ts`; plain `'documents'` opens My documents), so Home and the
+   chat picker can deep-link; the screen's `initialMode` prop seeds the switch.
+2. **The rail shows what the user has, not every bucket that could exist (§1.4 progressive
+   disclosure).** Every entry carries its count (visual, `aria-hidden` — the accessible name stays
+   the plain label). The four diagnostic views (Large files / Failed imports / Audio / Scanned)
+   collapsed into ONE **Needs attention** entry = failed imports ∪ stale embeddings, shown only
+   while its count is > 0 (or it is the current section): those are the two states the toolbar's
+   "Retry all" / "Re-index all" actually fix; size, audio and scans are not problems and earned no
+   entry. "Recently added" moved up (the everyday view). "Unfiled" lives inside Projects as the
+   last row, once a project exists; with no project the group is one quiet "+ New project" row
+   instead of a header, a hint and a "+". The four locations fold behind a remembered **More**
+   disclosure (`LOCATIONS_MORE_KEY`), each offered only while it holds something. The rail's
+   "Sections" title is gone (the "«" handle stays). `DocSection` lost the `large` / `audio` /
+   `ocr` / `failed` / `needsReindex` / `packs` kinds and gained `attention`.
+3. **A name filter replaces filter views.** A `type="search"` box in the toolbar narrows the
+   visible section by title (case-insensitive substring); an empty result says so with the query.
+   The toolbar reads filter · Refresh · bulk fixes · Import folder · **Import files** — one
+   primary, last. The lead paragraph shows only in the empty state (it teaches; once documents
+   exist the title and toolbar are enough), and the empty state gained one line + a ghost action
+   for the other kind of source ("Knowledge packs").
+4. **Per pack, enablement is ONE control.** The row showed an Enabled/Disabled badge AND an
+   Enable/Disable button saying the same thing; now a `Switch` (`role="switch"`, checked =
+   enabled) named after the pack ("Use {title} in chats" — the `ariaLabel` prop added to
+   `Switch` for exactly this: a bare state word repeated down a list is no name). The warning
+   badges (Missing / Different archive / No full-text index / Not served) and their visible
+   reason lines are unchanged (§11.15). Remove moved behind a per-row "⋯" menu (§3: destructive
+   actions in a menu, never a permanent button); the ConfirmDialog stays.
+5. **The bridge to where packs are used: "Ask this pack".** The panel had no path to the chat.
+   The action opens Chat in documents mode with that pack ticked and the document corpus OFF —
+   `App.askPack` → `ChatScreen.initialScopePackIds` → a pending scope
+   `{ packIds: [id], documentsOff: true }`, the same scope the picker's own "Search my documents"
+   untick produces, so the "Answering from" chip and the ask agree. Offered only for a pack an
+   ask would search (present, enabled, served, not a confirmed no-index archive).
+6. **First run is a setup card; the empty state carries the guidance.** The tools-missing
+   notice became a card with a title, the plain explanation and one primary Install (the consent
+   dialog itself is unchanged, #339 P8-2). The empty state names `library.kiwix.org`, says
+   "single-file .zim", carries the primary "Add packs…" (so the head shows only Refresh then —
+   one primary per view) and a ghost "Copy the library address": the app never opens a browser
+   from an offline surface, it puts the address on the clipboard and says so in a toast.
+7. **Entry points where packs are used.** Home's readiness card gains a fourth row (`book` glyph)
+   with three honest states — none registered ("Add packs" → `documents:packs`), registered but
+   none usable ("Open knowledge packs"), N ready — and no row at all while the packs are unknown
+   (older bridge, failed read: `Promise.resolve(window.api?.listKnowledgePacks?.())`). The chat
+   scope picker, which used to omit the packs section when the drive had none, shows "No knowledge
+   packs on this drive yet · Add packs…" — gated on the new optional `onAddPacks` callback so a
+   standalone mount stays byte-identical.
+
+**As built:** `screens/DocumentsScreen.tsx` (head + switch, mode, filter, rail counts,
+attention), `screens/documents/SectionRail.tsx` (rewritten), `screens/documents/PacksPanel.tsx`
+(head, setup card, empty state, Switch, Ask this pack, "⋯"), `screens/documents/types.ts`,
+`navigation.ts` (`documentsMode`), `App.tsx` (`askPack`, `documentsMode`), `ChatScreen.tsx`
+(`initialScopePackIds`, `onAddPacks`), `chat/ScopePopover.tsx`, `screens/HomeScreen.tsx`,
+`components/Switch.tsx` (`ariaLabel`), `components/Icon.tsx` (`book`, `search`), `styles.css`
+(`.docs-head`, `.docs-toolbar`, `.docs-filter`, `.docs-rail-count`, `.packs-head`, `.packs-setup`,
+`.packs-card-menu` — role tokens only), `i18n/en.ts` + `de.ts` (the retired `docs.smart.*` /
+`docs.section.locations|noProjects|sources|packs` / `packs.enable*|disable*|removeNamed|working`
+keys removed — the unused-key guard would otherwise flag them).
+
+**Verification:** `DocumentsScreen.test.tsx` (the §11.16 describe: switch, order, counts,
+attention, More + hidden empty locations, one "+ New project" row, the filter, mode switching,
+`initialMode`), `KnowledgePacks.test.tsx` (switch + "⋯" names EN/DE, summary line, "Ask this pack"
+eligibility, the empty state's copy action, the picker's "Add packs…"), `HomeKnowledgePacks.test.tsx`
+(the three row states + the absent row), `GermanSmoke.test.tsx`, `InformationArchitecture.test.tsx`
+(`documents:packs`), `i18n-unused-keys.test.ts`, `zim-ui-layout-rules.test.ts`.
 
 ---
 

@@ -1386,7 +1386,7 @@ worth naming so "everything stays on the drive" is not read as "nothing touches 
   suffix). The renderer writes only UI-preference `localStorage` keys there — the active language
   and a few collapsed/expanded panel states (`hilbertraum.uiLanguage`,
   `hilbertraum.chat.listCollapsed`, `hilbertraum.docs.railCollapsed`,
-  `hilbertraum.docs.viewsMoreOpen`; the set is pinned by `tests/unit/renderer-storage-keys.test.ts`)
+  `hilbertraum.docs.locationsMoreOpen`; the set is pinned by `tests/unit/renderer-storage-keys.test.ts`)
   — never document or chat content. When no prepared drive is found, the workspace itself falls
   back to this same folder (`PRIVACY.md` says so). Nothing here is cleared on lock: owner decision
   #231 keeps "document only" as the default and records clearing the profile on lock as the
