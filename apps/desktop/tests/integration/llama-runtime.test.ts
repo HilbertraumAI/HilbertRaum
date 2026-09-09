@@ -515,6 +515,82 @@ describe('answer-depth mode → request mapping (D4)', () => {
     expect(joined).toContain('--device none')
     await runtime.stop()
   })
+
+  // ---- #399 D5: the family-gated prompt-cache switch ----------------------------------
+  //
+  // On 11 of our 14 chat models llama-server writes the evicted conversation to its host-RAM
+  // prompt cache and can never read it back (recurrent state / sliding window — see
+  // shared/prompt-cache-rules.ts for the sweep). `--cache-ram 0` stops paying for a copy that is
+  // never used. CHAT_SERVER_ARGS is shared by EVERY chat model start on every machine, so these
+  // pin both halves: the flag appears for an affected family, and the argv of every other family
+  // is byte-identical to what it was before #399.
+
+  it('passes --cache-ram 0 for a family measured to lose the prompt-cache restore (#399 D5)', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const runtime = new LlamaRuntime(
+      { ...startOpts, modelId: 'qwen3.5-9b-ud-q4kxl', family: 'qwen3.5' },
+      {
+        binPath: '/bin/llama-server',
+        spawn,
+        fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+        findPort: async () => 51010,
+        healthIntervalMs: 1
+      }
+    )
+    await runtime.start()
+    const args = calls[0].args
+    expect(args.join(' ')).toContain('--cache-ram 0')
+    // Adjacent, in order, and not accidentally consuming another flag's value.
+    expect(args[args.indexOf('--cache-ram') + 1]).toBe('0')
+    // Everything the chat sidecar already got is still there, unmoved.
+    for (const a of CHAT_SERVER_ARGS) expect(args).toContain(a)
+    await runtime.stop()
+  })
+
+  it('adds nothing for an unaffected OR unmeasured family, and for a model with no family', async () => {
+    // 'qwen3' restored in the sweep; 'qwen3.6' was never started (#446) and defaults to cache-ON;
+    // no family at all is the same safe default. All three must produce the pre-#399 argv.
+    for (const family of ['qwen3', 'qwen3.6', undefined]) {
+      const { spawn, calls } = fakeSpawn()
+      const runtime = new LlamaRuntime(
+        { ...startOpts, family },
+        {
+          binPath: '/bin/llama-server',
+          spawn,
+          fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+          findPort: async () => 51011,
+          healthIntervalMs: 1
+        }
+      )
+      await runtime.start()
+      expect(calls[0].args).not.toContain('--cache-ram')
+      expect(calls[0].args).not.toContain('-cram')
+      await runtime.stop()
+    }
+  })
+
+  it('the prompt-cache flag never displaces a ladder rung arg (--device none still wins)', async () => {
+    // The rung's extraArgs are appended AFTER the cache flag, so rung 2 can still force CPU on an
+    // affected model — the ladder contract is unchanged by #399.
+    const { spawn, calls } = fakeSpawn()
+    const runtime = new LlamaRuntime(
+      { ...startOpts, family: 'gemma4' },
+      {
+        binPath: '/bin/llama-server',
+        spawn,
+        fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+        findPort: async () => 51012,
+        healthIntervalMs: 1,
+        extraArgs: ['--device', 'none']
+      }
+    )
+    await runtime.start()
+    const joined = calls[0].args.join(' ')
+    expect(joined).toContain('--cache-ram 0')
+    expect(joined).toContain('--device none')
+    expect(joined.indexOf('--cache-ram')).toBeLessThan(joined.indexOf('--device none'))
+    await runtime.stop()
+  })
 })
 
 // ---- Factory selector -----------------------------------------------------------

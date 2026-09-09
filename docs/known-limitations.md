@@ -2493,6 +2493,52 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   lands on the RTX, pinned as a fixture), so what stays open there is the SNAPSHOT's device
   pairing on a hybrid box that also has a budget device (#332).
 
+## The one chat slot and the prompt cache (#319 / #399 — [`model-benchmarks.md`](model-benchmarks.md) §6.6)
+
+The chat sidecar runs **one** server slot (`-np 1`, issue #319): the app is single-user and already
+serialises every lane that reaches it, and four slots cost card memory exactly where the fit decides
+between a full and a half offload. The consequence is that when something else takes the slot, the
+conversation's KV prefix is evicted — and on most of the models we ship, llama-server **cannot give
+it back**.
+
+- **On 11 of our 14 chat models an evicted chat prefix is re-prefilled from scratch, not restored**
+  (measured 2026-09-08/09, #399). llama-server saves the conversation to its host-RAM prompt cache
+  and then silently re-processes the whole prompt anyway. Two architectures lose the restore:
+  **recurrent state** — the whole `qwen3.5` line (`-2b`, `-4b`, `-9b`, `-35b-a3b`) and all three
+  `qwen3.8-27b` quants — and a **sliding window** — all four `gemma4` manifests (`e2b`, `e4b`,
+  `12b`, `26b-a4b`). That includes the **catalog-default 4B and the 9B**, i.e. the 8–12 GB tier
+  picks. Among ranked models only `ministral3-8b-instruct-2512-q4` keeps the restore; the dense
+  `qwen3-8b` and the `qwen3-30b-a3b` MoE keep it too, which is what makes this a measured
+  architecture split rather than an anecdote. **Not measured:** `qwen3.6-27b-q4` / `-q5` and
+  `granite-4.1-8b-q4` (#446 — almost certainly affected, treated as unaffected by the conservative
+  default), and the ZIM query expander's own call (#447). If llama.cpp PR #13194 lands
+  recurrent-state restore upstream, this whole entry becomes removable.
+- **What can actually evict a live conversation is narrower than it sounds.** `assertChatStreamReady`
+  makes categorisation, summary, translate, compare, OCR and every `modelLane` skill run **refuse**
+  a chat turn rather than take the slot from it. The one cooperative hand-back is the **yielding
+  deep-index build**, auto-enqueued when a document too large for the one-pass summary is ingested.
+  And a *documents* ask never had the history in the slot to lose: its retrieved-excerpt block
+  changes every turn, so only its ~227-token system prefix is ever reused. So the case that costs
+  real time is specific: **a long document was just added, and you are having a plain chat — not a
+  documents ask — while it indexes.**
+- **Residual after the 2026-09-09 fix: returning from a break costs ONE slow reply.** The arbiter
+  now waits 90 s after a chat turn before resuming a parked deep-index build, which removes the
+  per-turn churn — a conversation's own typing and reading gaps no longer hand the slot away turn
+  after turn. It does not remove the cost. A pause **longer** than 90 s still lets the build resume
+  and evict, so the first reply after that break re-prefills the conversation: once, not per turn.
+  Nor is the delay unbounded — a single park is deferred for at most 10 minutes, after which the
+  build resumes at the next release regardless. That cap is deliberate: a document that silently
+  never gets its deep index is a worse outcome than one slow reply. A steady chat every 30 s
+  therefore still pays a re-prefill roughly every 10 minutes.
+- **Behaviour change on affected models: llama-server's host prompt cache is switched off**
+  (`--cache-ram 0`, gated on the manifest's `family:` — `qwen3.5`, `qwen3.8`, `gemma4`). On those
+  models the cache was written on every hand-back (15–344 MiB per eviction, up to an 8 GiB host-RAM
+  default) and **never read**, so this gives that RAM back and costs nothing. Every other family —
+  **including a family nobody has measured** — keeps the cache on. That asymmetry is the point:
+  disabling it on an unaffected model would cost real restores, while leaving it on an affected one
+  merely continues a waste we can already name. Chat only; the embedder, reranker, translation and
+  vision sidecars do not inherit the chat args and are untouched.
+
 ## Speculative decoding (MTP — [`architecture.md`](architecture.md) "MTP speculative decoding" record)
 
 The measured speed-up (+38–45 % decode on the reference GPU) is deliberately narrow. All of these

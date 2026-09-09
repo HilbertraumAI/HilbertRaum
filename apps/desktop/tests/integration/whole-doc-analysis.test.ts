@@ -17,7 +17,11 @@ import { DocTaskManager } from '../../src/main/services/doctasks'
 import { ContextOverflowError } from '../../src/main/services/doctasks/errors'
 import { ChatRequestError } from '../../src/main/services/runtime/llama'
 import { buildTree } from '../../src/main/services/analysis/tree-build'
-import { ModelSlotArbiter } from '../../src/main/services/analysis/model-slot-arbiter'
+import {
+  ModelSlotArbiter,
+  RESUME_AFTER_CHAT_DELAY_MS,
+  type ModelSlotArbiterDeps
+} from '../../src/main/services/analysis/model-slot-arbiter'
 import {
   documentChunkCount,
   documentCoverage,
@@ -107,7 +111,46 @@ function scriptedRuntime(opts: { tokenDelayMs?: number } = {}): ScriptedRuntime 
   return rt
 }
 
-function makeManager(runtime: ModelRuntime | null, contextTokens = 4096): DocTaskManager {
+// #399 D3(a): a parked build resumes RESUME_AFTER_CHAT_DELAY_MS (90 s) after the last chat lets
+// go. No test can wait that out, so the one test that needs a resume drives an injected clock —
+// `advance()` is then the only thing that can wake the builder, which is exactly the assertion.
+interface FakeClock {
+  deps: ModelSlotArbiterDeps
+  advance: (ms: number) => void
+}
+function makeClock(): FakeClock {
+  let nowMs = 0
+  let seq = 0
+  const timers = new Map<number, { at: number; fn: () => void }>()
+  return {
+    deps: {
+      now: () => nowMs,
+      setTimer: (fn, ms) => {
+        const id = ++seq
+        timers.set(id, { at: nowMs + ms, fn })
+        return id
+      },
+      clearTimer: (h) => {
+        timers.delete(h as number)
+      }
+    },
+    advance: (ms) => {
+      nowMs += ms
+      for (const [id, e] of [...timers]) {
+        if (e.at <= nowMs) {
+          timers.delete(id)
+          e.fn()
+        }
+      }
+    }
+  }
+}
+
+function makeManager(
+  runtime: ModelRuntime | null,
+  contextTokens = 4096,
+  slotArbiterDeps?: ModelSlotArbiterDeps
+): DocTaskManager {
   return new DocTaskManager({
     getDb: () => db,
     getRuntime: () => runtime,
@@ -116,7 +159,8 @@ function makeManager(runtime: ModelRuntime | null, contextTokens = 4096): DocTas
     getContextTokens: () => contextTokens,
     getStoreDir: () => storeDir,
     getIngestionDeps: () => ({}),
-    beginDocumentWork: () => () => {}
+    beginDocumentWork: () => () => {},
+    slotArbiterDeps
   })
 }
 
@@ -568,7 +612,8 @@ describe('H10 yielding build handshake', () => {
   it('a chat slot request pauses the build, which then resumes in-session to ready', async () => {
     const id = await importWords(8000)
     const runtime = scriptedRuntime({ tokenDelayMs: 15 })
-    const m = makeManager(runtime, 1024)
+    const clock = makeClock()
+    const m = makeManager(runtime, 1024, clock.deps)
     const { jobId } = m.startDocTask({ kind: 'tree', documentIds: [id] })
 
     // Wait until the build is mid-flight (at least one node committed, not finished).
@@ -580,8 +625,14 @@ describe('H10 yielding build handshake', () => {
     const atPause = m.getDocTask(jobId)
     expect(atPause.state).toBe('running') // paused, NOT done/cancelled
 
-    // Releasing resumes the SAME build in-session — it reaches ready with no restart.
+    // Releasing ARMS the resume; the build must still be parked until the #399 D3(a) delay is up.
     release()
+    await new Promise((r) => setTimeout(r, 30))
+    expect(m.getDocTask(jobId).state).toBe('running') // still parked, not resumed
+    expect(m.isYieldingBuildActive()).toBe(true)
+
+    // Once it is up, the SAME build resumes in-session — it reaches ready with no restart.
+    clock.advance(RESUME_AFTER_CHAT_DELAY_MS)
     const s = await waitTerminal(m, jobId)
     expect(s.state).toBe('done')
     expect(treeStatus(id)).toBe('ready')

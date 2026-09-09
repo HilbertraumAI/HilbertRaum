@@ -3291,9 +3291,17 @@ layers at 30.4 tok/s into 66/66 at 51.0 by cutting the recurrent state from 1,79
 (#318 leg 1). It does **not** change the context window: `--ctx-size` is the total cache on both
 settings and each slot sees all of it (`n_ctx_slot = 8192` either way), so only the per-sequence
 recurrent term moved in the seven manifest cache estimates — the KV and Gemma's sliding-window
-caches are cell-sized and counted once. Accepted cost: a background job now evicts the chat
-conversation's KV prefix, which llama-server's host-RAM prompt cache restores on a prefix match.
-Record: `model-benchmarks.md` §6.6 "2026-09-07 amendment (#319)"; BUILD_STATE §5 item 22 (f)/(i).
+caches are cell-sized and counted once. Accepted cost, **corrected 2026-09-09 (#399)**: a
+background job evicts the chat conversation's KV prefix, and on 11 of the 14 chat models
+llama-server's host-RAM prompt cache does **not** restore it — recurrent state (the whole
+`qwen3.5`/`qwen3.8` line) and a sliding window (all four `gemma4` manifests) both close that path,
+so the server saves the conversation and silently re-prefills it anyway. Not caused by `-np 1`
+(four slots lose the restore the same way) and not fixable by any slot arrangement, so the fix is
+not to evict: the model-slot arbiter waits 90 s after a chat turn before resuming a parked
+deep-index build, capped at 10 minutes of deferral per park (D3(a)), and `--cache-ram 0` stops the
+unreadable copy being written for those families (D5, `shared/prompt-cache-rules.ts`).
+Record: `model-benchmarks.md` §6.6 "2026-09-07 amendment (#319)" and its "2026-09-09 correction
+(#399)"; BUILD_STATE §5 item 22 (f)/(i).
 Separately, whether `--fit` also puts layers on a hybrid laptop's iGPU — which the app
 never excludes with `--device` — was read from `common/fit.cpp` as "it spreads layers across every
 device `--list-devices` lists". **MEASURED FALSE on the pinned b9849 build (#318 leg 5, 2026-09-07;

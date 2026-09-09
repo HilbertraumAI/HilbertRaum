@@ -28,6 +28,22 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-09 — **#399 CLOSED — the §6.6 record corrected and both owner decisions landed** (`fix/399-prompt-cache-restore`;
+record `model-benchmarks.md` §6.6 "2026-09-09 correction (#399)", `known-limitations.md` "The one chat slot and the prompt
+cache"; evidence PR #445). The old accepted-cost clause said "both 27B quants are hybrid/recurrent, so the restore path is
+closed to them". Measured: **11 of 14 chat models** lose llama-server's host-cache restore — the whole `qwen3.5`/`qwen3.8`
+line (recurrent state) and all four `gemma4` manifests (SWA), **including the catalog-default 4B and the 9B**; three
+positive controls (dense `qwen3`, `qwen3moe`, `mistral3`) DID restore, which makes it a measured architecture split.
+**D3(a)** — the arbiter waits 90 s after a chat turn before resuming a parked deep-index build, capped at 10 min of
+deferral per park so a document can never silently miss its index (`model-slot-arbiter.ts`; the delay is on the BUILD's
+resume, never on `acquireForChat`, which chat awaits). **D5** — `--cache-ram 0` for those three families only
+(`shared/prompt-cache-rules.ts`); unmeasured families keep cache-ON, the safe direction. **D4 deferred**: leg B showed a
+documents ask keeps only its ~227-token system prefix with or without a helper, so the length-proportional cost belongs to
+the plain-CHAT path alone and a picker warning would overstate it. Residual: a break longer than the delay still costs ONE
+slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` never tested — must not be read as "measured and
+fine") and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
+prompt re-processing` appears only on MTP starts — the token count is the only honest read._
+
 _2026-09-09 — **#331 CLOSED — the four blocked HW3 acceptance legs performed** (`docs/331-hardware-acceptance-legs`;
 record `benchmark.md` §2 row HW3 + §4 HW3; evidence `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md`).
 A workspace created on a SECOND computer with the 14B active made leg 2 a real moved-drive `new-machine` run behind a 66 s model
@@ -156,23 +172,6 @@ hygiene in other suites), the record's issue and commit references filled, the c
 the keyboard-focus repair re-verified live in the dev app. Merge is the owner's call; the branch
 stays._
 
-_2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** the total-memory
-rule shipped here is **superseded** by the 2026-09-06 PR #308 audit amendment above (rule C on free memory; §6.6)._
-
-_2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
-third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
-the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
-Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
-tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
-`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
-cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
-`placementVerdict`), the session's observed figures (last
-answer via a `chat:speed` observer, last model start / file check via per-source read-speed
-latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
-check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
-`benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
-`docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
-storage + IPC). §5 item 22 tracks the residuals._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the

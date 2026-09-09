@@ -27,6 +27,34 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-09 — the two 2026-09-05 dated entries retired verbatim (preamble budget)
+
+Moved out of `BUILD_STATE.md` on 2026-09-09 to keep the preamble inside its 200-line budget
+(`repo-hygiene.test.ts`), making room for the #399 prompt-cache entry: the Graphics-memory-aware
+picker entry (whose total-memory rule was already superseded by the 2026-09-06 PR #308 audit
+amendment) and the Performance-wave entry. Both waves are closed and carry their durable records —
+`docs/model-benchmarks.md` §6.6 (rule C, the 2026-09-06 and 2026-09-07 amendments) and
+`docs/benchmark.md` "History per machine" / "Performance screen" plus its "Audit remediation
+record — PR #303"; residuals stay tracked in BUILD_STATE §5 item 22.
+
+_2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** the total-memory
+rule shipped here is **superseded** by the 2026-09-06 PR #308 audit amendment above (rule C on free memory; §6.6)._
+
+_2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
+third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
+the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
+Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
+tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
+`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
+cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
+`placementVerdict`), the session's observed figures (last
+answer via a `chat:speed` observer, last model start / file check via per-source read-speed
+latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
+check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
+`benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
+`docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
+storage + IPC). §5 item 22 tracks the residuals._
+
 ## 2026-09-09 — three closed dated entries retired verbatim (preamble budget)
 
 Moved out of `BUILD_STATE.md` on 2026-09-09 to keep the preamble inside its 200-line budget

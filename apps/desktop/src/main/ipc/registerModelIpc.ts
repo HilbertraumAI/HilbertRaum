@@ -275,7 +275,10 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     weightPaths: manifestFiles(ctx.paths.rootPath, found.manifest).map((f) => f.path),
     // #182: the manifest's opt-in, not a decision. The ladder gates it on the hardware it
     // actually finds and silently drops it when the machine cannot benefit.
-    speculativeDecoding: found.manifest.speculativeDecoding ?? null
+    speculativeDecoding: found.manifest.speculativeDecoding ?? null,
+    // #399 D5: the prompt-cache gate's only input. The manifest states the family; the RULE
+    // (which families lost the evicted-prefix restore, and why) lives in shared/prompt-cache-rules.
+    family: found.manifest.family
   })
   perfMark('runtime_ready', {
     modelId,

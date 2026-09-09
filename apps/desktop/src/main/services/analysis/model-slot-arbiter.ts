@@ -17,7 +17,8 @@
 //     `acquireForChat()`: it flags `pauseRequested` and AWAITS the builder's handoff (the
 //     builder reaching its yield point and parking). Only then does chat hold the slot.
 //   - When chat's stream ends it calls the release fn `acquireForChat()` returned, which
-//     resumes the parked builder (when the last concurrent chat is done).
+//     resumes the parked builder (when the last concurrent chat is done) — after a DELAY,
+//     see RESUME_AFTER_CHAT_DELAY_MS below.
 //
 // There is exactly one yielding build at a time (DocTaskManager runs one task), so the
 // arbiter tracks a single active build + a single parked reacquire.
@@ -28,6 +29,64 @@ export class SlotAbortedError extends Error {
     super(message)
     this.name = 'SlotAbortedError'
   }
+}
+
+/**
+ * How long a parked build waits after the LAST chat stream ends before it takes the slot back
+ * (issue #399, owner decision D3(a), 2026-09-09). Until this landed the builder resumed the
+ * instant `chatHolders` hit 0 — i.e. inside the few seconds between one reply finishing and the
+ * user typing the next one — so an ordinary conversation handed the slot away and took it back on
+ * EVERY turn.
+ *
+ * Why that is expensive, and why "not evicting" is the only available lever: on 11 of our 14 chat
+ * models an evicted chat prefix is **re-prefilled from scratch, not restored**. llama-server saves
+ * the conversation to its host-RAM prompt cache and then silently re-processes the whole prompt
+ * anyway — recurrent state (the whole `qwen3.5`/`qwen3.8` line) and a sliding window (all four
+ * `gemma4` manifests) both close the restore path, measured across fourteen models with three
+ * positive controls that DID restore. No slot arrangement fixes it (`-np 2` re-prefilled token for
+ * token, even into a slot nothing had ever touched), so the eviction itself is the only thing we
+ * control. Record + evidence: `docs/model-benchmarks.md` §6.6 "2026-09-09 correction (#399)".
+ *
+ * Why 90 s. The owner's range was 60–120 s; 90 s is its midpoint and the thing being covered is a
+ * conversation's own turn gap — reading a long answer and typing a follow-up sits comfortably
+ * inside it, while 120 s buys little more and delays the index for that much longer on every park.
+ *
+ * WHERE THE DELAY IS NOT: never on `acquireForChat()`. The chat path AWAITS that call, so a delay
+ * there would slow down every chat turn — a far worse bug than the one this fixes. A chat arriving
+ * while the resume timer is pending finds the builder still parked, cancels the timer and takes the
+ * slot immediately, exactly as before.
+ */
+export const RESUME_AFTER_CHAT_DELAY_MS = 90_000
+
+/**
+ * The starvation guarantee (#399 D3(a)). A naive "wait 90 s after every chat turn" lets a user who
+ * chats steadily every 30 s prevent the deep-index build from EVER resuming, and a document that
+ * silently never gets its deep index is a worse outcome than one slow reply.
+ *
+ * The guarantee, stated so a test can pin it: **the arbiter adds at most `MAX_PARK_DEFERRAL_MS` of
+ * delay to any single park.** The clock starts when the builder parks in `reacquire()`. While the
+ * park is younger than this cap, a release schedules the resume `RESUME_AFTER_CHAT_DELAY_MS` later
+ * and a new chat cancels it. Once the park is older, the very next release resumes the build
+ * IMMEDIATELY — exactly the pre-#399 behaviour — no matter how many deferrals preceded it.
+ *
+ * 10 minutes is ~6 consecutive deferrals at 90 s. Past that the user is in a sustained conversation
+ * rather than an ordinary turn gap, and the build's progress is worth one slow reply. So a steady
+ * chat pays a re-prefill roughly every 10 minutes instead of on every turn. Note the cap bounds the
+ * delay the ARBITER adds, not the wall clock: a chat that simply never releases the slot holds it
+ * for its own reasons, and the build physically cannot run while it does.
+ */
+export const MAX_PARK_DEFERRAL_MS = 600_000
+
+/** Opaque timer handle — the seam is injected so tests drive the delay without real sleeps. */
+type TimerHandle = unknown
+
+/** Test seams (#399): fake time in, no `setTimeout` in the unit tests. All optional. */
+export interface ModelSlotArbiterDeps {
+  resumeDelayMs?: number
+  maxParkDeferralMs?: number
+  setTimer?: (fn: () => void, ms: number) => TimerHandle
+  clearTimer?: (handle: TimerHandle) => void
+  now?: () => number
 }
 
 export class ModelSlotArbiter {
@@ -42,6 +101,24 @@ export class ModelSlotArbiter {
   private reacquireReject: ((err: Error) => void) | null = null
   /** How many chat streams currently hold the slot (resume the builder when this hits 0). */
   private chatHolders = 0
+  /** The pending post-chat resume timer, or null when none is armed (#399 D3(a)). */
+  private resumeTimer: TimerHandle | null = null
+  /** When the builder parked (`now()`), or null when it is not parked — the starvation clock. */
+  private parkedAt: number | null = null
+
+  private readonly resumeDelayMs: number
+  private readonly maxParkDeferralMs: number
+  private readonly setTimer: (fn: () => void, ms: number) => TimerHandle
+  private readonly clearTimer: (handle: TimerHandle) => void
+  private readonly now: () => number
+
+  constructor(deps: ModelSlotArbiterDeps = {}) {
+    this.resumeDelayMs = deps.resumeDelayMs ?? RESUME_AFTER_CHAT_DELAY_MS
+    this.maxParkDeferralMs = deps.maxParkDeferralMs ?? MAX_PARK_DEFERRAL_MS
+    this.setTimer = deps.setTimer ?? ((fn, ms) => setTimeout(fn, ms))
+    this.clearTimer = deps.clearTimer ?? ((h) => clearTimeout(h as ReturnType<typeof setTimeout>))
+    this.now = deps.now ?? (() => Date.now())
+  }
 
   /** True while a yielding build owns the slot — chat branches on this to pause vs refuse. */
   isBuildActive(): boolean {
@@ -61,6 +138,8 @@ export class ModelSlotArbiter {
     this.handoffWaiters = []
     this.reacquireResolve = null
     this.reacquireReject = null
+    this.cancelPendingResume()
+    this.parkedAt = null
   }
 
   /**
@@ -74,6 +153,9 @@ export class ModelSlotArbiter {
     this.pauseRequested = false
     this.reacquireResolve = null
     this.reacquireReject = null
+    // The build is gone; a resume timer aimed at it must not fire into a dead handshake.
+    this.cancelPendingResume()
+    this.parkedAt = null
     this.wakeHandoffWaiters()
   }
 
@@ -85,7 +167,10 @@ export class ModelSlotArbiter {
   /**
    * The builder parks here when `shouldYield()` is true: it hands the slot to the waiting
    * chat (resolving the handoff) and returns a Promise that resolves when chat releases
-   * the slot, or rejects with `SlotAbortedError` on cancel/lock/quit/model-switch.
+   * the slot — after `RESUME_AFTER_CHAT_DELAY_MS` (#399 D3(a)) — or rejects with
+   * `SlotAbortedError` on cancel/lock/quit/model-switch. `parkedAt` is stamped here: it is the
+   * start of the `MAX_PARK_DEFERRAL_MS` starvation clock, so the cap measures how long THIS park
+   * has been deferred, not how long the process has been running.
    */
   reacquire(jobId: string): Promise<void> {
     if (this.activeBuild !== jobId) {
@@ -93,6 +178,8 @@ export class ModelSlotArbiter {
       return Promise.resolve()
     }
     this.pauseRequested = false
+    this.cancelPendingResume()
+    this.parkedAt = this.now()
     this.wakeHandoffWaiters()
     return new Promise<void>((resolve, reject) => {
       this.reacquireResolve = resolve
@@ -117,6 +204,11 @@ export class ModelSlotArbiter {
     // Already stopped before we even ask — don't request a pause or take a holder slot.
     if (signal?.aborted) throw new SlotAbortedError('Chat slot acquire aborted')
     this.chatHolders += 1
+    // #399 D3(a): a new chat turn inside the post-chat window cancels the pending resume — this is
+    // the whole point of the delay, and it is why the conversation stops handing the slot away turn
+    // after turn. It costs this call NOTHING: the builder is still parked, so the fast path below
+    // hands the slot over synchronously. The delay is never on chat's own acquisition.
+    this.cancelPendingResume()
     // If the builder is ALREADY parked (a prior chat handed the slot off and the build is
     // waiting to resume), the slot is free RIGHT NOW — a second concurrent chat must NOT
     // wait for another handoff that will never come (the builder won't reach a new node
@@ -189,17 +281,47 @@ export class ModelSlotArbiter {
     const reject = this.reacquireReject
     this.reacquireResolve = null
     this.reacquireReject = null
+    // A build being torn down must not be woken by an in-flight resume timer.
+    this.cancelPendingResume()
+    this.parkedAt = null
     if (reject) reject(err)
   }
 
+  /**
+   * The last chat holder letting go is what used to resume the builder immediately. Since #399
+   * D3(a) it instead ARMS the resume for `RESUME_AFTER_CHAT_DELAY_MS`, unless this park has
+   * already been deferred past `MAX_PARK_DEFERRAL_MS` — the starvation guarantee — in which case
+   * the build resumes right now, exactly as it did before.
+   */
   private releaseOneChat(): void {
     if (this.chatHolders > 0) this.chatHolders -= 1
-    if (this.chatHolders === 0 && this.reacquireResolve) {
-      const resolve = this.reacquireResolve
-      this.reacquireResolve = null
-      this.reacquireReject = null
-      resolve()
+    if (this.chatHolders !== 0 || !this.reacquireResolve) return
+    const deferredFor = this.parkedAt === null ? 0 : this.now() - this.parkedAt
+    if (deferredFor >= this.maxParkDeferralMs) {
+      this.resumeParkedBuild()
+      return
     }
+    this.cancelPendingResume()
+    this.resumeTimer = this.setTimer(() => {
+      this.resumeTimer = null
+      this.resumeParkedBuild()
+    }, this.resumeDelayMs)
+  }
+
+  /** Wake the parked builder, if one is still parked and the slot is still free. */
+  private resumeParkedBuild(): void {
+    if (this.chatHolders !== 0 || !this.reacquireResolve) return
+    const resolve = this.reacquireResolve
+    this.reacquireResolve = null
+    this.reacquireReject = null
+    this.parkedAt = null
+    resolve()
+  }
+
+  private cancelPendingResume(): void {
+    if (this.resumeTimer === null) return
+    this.clearTimer(this.resumeTimer)
+    this.resumeTimer = null
   }
 
   private wakeHandoffWaiters(): void {

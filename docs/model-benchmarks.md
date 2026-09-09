@@ -957,13 +957,87 @@ in-app path depends on parallel slots. **The restore half of that cost MEASURED 
 (#391 leg 7, evidence `leg7-app-q5km-evicted-prefix.*`); the decision stands, the cost is larger
 than stated.** Consecutive turns in one conversation do reuse the prefix in the slot (22 tokens
 re-prefilled on turn 2 of 190 cached). But once another task takes the one slot, the server saves the
-conversation to the host cache and then refuses to load it back: `forcing full prompt re-processing
-due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see llama.cpp PR #13194)`.
-Both 27B quants are hybrid/recurrent, so the restore path is closed to them. Measured: a 435-token
-conversation, evicted by one turn in another conversation, re-prefilled **305 of 452 tokens** on
-return; only the 147-token system prefix survived, because it is common to every conversation and
-stays in the slot. The cost therefore scales with conversation length rather than being constant, and
-it is paid on every hand-back. Follow-up: #399. **What it does NOT change: the context window.**
+conversation to the host cache and then refuses to load it back. Measured: a 435-token conversation,
+evicted by one turn in another conversation, re-prefilled **305 of 452 tokens** on return; only the
+147-token system prefix survived, because it is common to every conversation and stays in the slot.
+
+**2026-09-09 correction (#399): the affected set is 11 of 14 chat models, not "both 27B quants".**
+The first version of this paragraph named only the two 27B quants as hybrid/recurrent. That reading
+was far too narrow. A fourteen-model architecture sweep on `i9-9900x-rtx-3090-24gb-128gb` — raw
+`llama-server`, the app's argv shape at `--ctx-size 8192 -np 1`, **no MTP**, every model fully
+offloaded, three requests per start (long conversation A → a short unrelated B takes the slot → back
+to A) — settles which architectures lose the restore. Evidence: PR #445,
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue399-arch-sweep-*`.
+
+**RE-PREFILLED — 11 models, two architectures.** The whole modern Qwen line by **recurrent state**:
+`qwen3.5-2b/-4b/-9b-ud-q4kxl`, `qwen3.5-35b-a3b-ud-q4kxl`, and all three `qwen3.8-27b` quants
+(`-q4`, `-ud-q4km`, `-ud-q5km`) — 1,488–1,492 of ~1,530–1,571 tokens re-processed on return, with
+only the 41–79-token shared system prefix surviving. And **all four Gemma 4 manifests** by **sliding
+window** (`n_swa` 512 or 1024): `gemma4-e2b`, `gemma4-e4b`, `gemma4-12b`, `gemma4-26b-a4b` — 1,471 of
+1,514, 43 kept. That includes **both 8–12 GB tier picks, the catalog-default 4B and the DIY 9B** —
+i.e. exactly the machines where re-prefilling a whole history is least affordable. The 27B Q5 control
+reproduces leg 7 token for token.
+
+**RESTORED — the three positive controls.** `qwen3-8b-instruct-q4` (arch `qwen3`),
+`qwen3-30b-a3b-q4` (`qwen3moe`) and `ministral3-8b-instruct-2512-q4` (`mistral3`) — no sliding
+window, no recurrent state — each re-prefilled only **14–21 tokens** of a ~1,470-token return prompt.
+So the restore mechanism works, the method detects it, and this is a **measured architecture split**,
+not an anecdote: recurrent state OR a sliding window closes the restore path; nothing else does.
+Among ranked models `ministral3-8b` is the only one that keeps it.
+
+**Which path actually pays the length-proportional cost — the plain CHAT path only (leg B).** A
+documents ask keeps only its **~227-token system prefix** on every turn, with or without a helper
+call: the retrieved-excerpt block changes between turns, so the prompt diverges immediately after the
+system prompt and the history was never being reused there in the first place (control, 2,371-token
+prompt, 2,144 prefilled, 227 kept, nothing touching the slot). RT-2's hoisting keeps the grounding
+rules inside that 227-token prefix, and that prefix is the whole of what in-slot reuse can save on
+that path — so an eviction's marginal cost on a documents ask is bounded by it, not by conversation
+length. `classifySkillPointer` also turns out to run only on the two trigger classes
+`services/analysis/classify.ts:65` pins, not "whenever there are skill candidates": an ordinary
+high-confidence documents ask made zero classifier calls in four attempts, and on a turn that does
+trigger it the cost is ~400 extra prefilled tokens (~1.4 s). The length-proportional cost is real but
+belongs to an ordinary **chat** conversation, where the prompt is append-only and in-slot reuse works
+(171 → 22 → 22). Neither helper runs on that path, and `assertChatStreamReady`
+(`ipc/chat-stream.ts:65-77`) makes every non-yielding lane refuse chat rather than take the slot — so
+the one thing that can evict a live chat is the **yielding deep-index build**. That is what narrowed
+the fix to D3(a).
+
+**No slot arrangement fixes this (leg C).** `-np 2` on the 27B Q5 fits (66/66, 2,676 MiB headroom
+left, so `MTP_VRAM_HEADROOM_MB` does not bite) but halves every conversation's window to 4,096
+(`--ctx-size` is the total cache) — and R3 is **identical token for token**, 1,492 of 1,571. The slot
+picker prefers prefix similarity (0.804, threshold 0.100 — the shared `BASE_SYSTEM_PROMPT`
+guarantees it) over an idle empty slot, and when A did land in the never-used slot the host-cache
+restore failed there too. On a recurrent/SWA model the state cannot be reconstructed from a saved
+prompt at all. **The only lever is not evicting**, and the saved copy is pure waste: 14.86–343.59 MiB
+written per eviction and never read.
+
+**Fixed 2026-09-09 (#399, owner decisions D3(a) + D5).** The arbiter no longer resumes a parked
+deep-index build the instant chat releases the slot — it waits `RESUME_AFTER_CHAT_DELAY_MS` (90 s,
+`services/analysis/model-slot-arbiter.ts`), so a conversation's own typing/reading gaps stop handing
+the slot away turn after turn; a `MAX_PARK_DEFERRAL_MS` (10 min) cap on a single park guarantees the
+build still runs. And `CHAT_SERVER_ARGS` gains `--cache-ram 0` for the affected families only
+(`shared/prompt-cache-rules.ts`, gated on the manifest's `family:` — `qwen3.5`, `qwen3.8`, `gemma4`),
+so the unreadable copy is no longer written; every other family, **including an unmeasured one**,
+keeps today's behaviour, because disabling the cache on an unaffected model would cost real restores
+while leaving it on merely continues the waste. Residual: a pause longer than the delay still lets
+the build resume and evict, so returning from a break costs ONE slow reply — once, not per turn. Both
+sides of the D5 gate were checked on hardware before it shipped — on `i7-8700-gtx-1070-ti-8gb-32gb`
+the app spawned `qwen3.5-9b-ud-q4kxl` WITH `--cache-ram 0` and `qwen3-14b-instruct-q4` without it
+(read from the OS process list, not from our own code), and the affected model still started fully
+offloaded, its 50.25 MiB recurrent state matching the sweep's 9B row exactly:
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/399-cache-ram-gate-smoke.md`.
+
+**A methodological warning for anyone reproducing this.** Do **not** grep for `forcing full prompt
+re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see llama.cpp
+PR #13194)`. That line appears only on **MTP** starts — it did not appear once in the whole
+fourteen-model sweep, not on the 27B Q5 control, not on any Gemma. Without MTP the server logs a
+confident `load: - found better prompt with f_keep = 0.990, sim = 0.983` and then silently re-prefills
+the whole prompt anyway. Grepping for `forcing full` gives the **opposite** answer; the TOKEN COUNT
+(`prompt eval time = … / N tokens` against `cached n_tokens`) is the only honest read. Still
+unmeasured: `qwen3.6-27b-q4` / `-q5` and `granite-4.1-8b-q4` (#446), and the ZIM query expander
+(#447). If llama.cpp PR #13194 lands recurrent-state restore upstream, both the delay and the D5
+switch become removable. Follow-up: #399 (closed by this work). **What it does NOT change: the
+context window.**
 `--ctx-size` is the TOTAL cache size on both settings and every slot sees all of it
 (`n_ctx_slot = 8192` either way; `kv_unified` goes true → false, `n_seq_max` 4 → 1). That is the
 whole reason only four of the seven cache terms moved — see point 4 above for the rule and the

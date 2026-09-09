@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { promptCacheServerArgs } from '../../src/shared/prompt-cache-rules'
 import { createHash } from 'node:crypto'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -556,6 +557,38 @@ describe('registerModelIpc', () => {
     // "did this manifest opt in?" question must never be answered by an undefined.
     await invoke(handlers, IPC.startRuntime, 'qwen3.8-27b-q6')
     expect(started[1].speculativeDecoding).toBeNull()
+  })
+
+  // Issue #399 D5: the manifest's `family:` has to REACH the runtime start options — it is the
+  // ONLY input to the prompt-cache gate (`shared/prompt-cache-rules.ts`), and a dropped field
+  // here would be invisible: the affected model would simply go on writing a host-cache copy
+  // llama-server can never read back, exactly as before the fix.
+  it('forwards the manifest family into the runtime start options (#399 D5)', async () => {
+    const started: Array<Record<string, unknown>> = []
+    const db = seededDb()
+    updateSettings(db, { developerMode: true })
+    const ctx = {
+      db,
+      manifestsDir: REPO_MANIFESTS,
+      paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
+      isDev: false,
+      runtime: {
+        start: async (o: Record<string, unknown>) => {
+          started.push(o)
+          return { running: true, modelId: String(o.modelId), port: null, healthy: true, message: 'ok' }
+        },
+        activeModelId: () => null
+      }
+    } as unknown as AppContext
+    reg(ctx)
+    // An AFFECTED family (recurrent state — the sweep's 27B control) …
+    await invoke(handlers, IPC.startRuntime, 'qwen3.8-27b-q4')
+    expect(started[0].family).toBe('qwen3.8')
+    expect(promptCacheServerArgs(started[0].family as string)).toEqual(['--cache-ram', '0'])
+    // … and one that restores, which must keep today's argv exactly.
+    await invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')
+    expect(started[1].family).toBe('qwen3')
+    expect(promptCacheServerArgs(started[1].family as string)).toEqual([])
   })
 
   it('refuses the mock fallback on a PACKAGED build with no policy.json (M-4 fail-closed)', async () => {
