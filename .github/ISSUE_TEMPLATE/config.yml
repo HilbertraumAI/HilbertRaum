@@ -1,0 +1,16 @@
+# A blank issue stays one click away: most issues here are filed by maintainers in a terse
+# house style, and a form must never stand between someone and a report they can already write.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability — report privately
+    url: https://github.com/HilbertraumAI/HilbertRaum/security/advisories/new
+    about: Do not open a public issue for an undisclosed vulnerability. See SECURITY.md — security@hilbertraum.ai is the other channel.
+  - name: Knowledge packs — the documentation
+    url: https://github.com/HilbertraumAI/HilbertRaum/blob/master/docs/knowledge-packs.md
+    about: Setup, the privacy posture, and every measured limit of the ZIM / offline-Wikipedia support.
+  - name: Troubleshooting
+    url: https://github.com/HilbertraumAI/HilbertRaum/blob/master/docs/troubleshooting.md
+    about: The common problems and their fixes — SmartScreen/Gatekeeper, models, the engine, packs, OCR.
+  - name: Accepted limitations
+    url: https://github.com/HilbertraumAI/HilbertRaum/blob/master/docs/known-limitations.md
+    about: The gaps we know about and have consciously accepted, each with the reasoning.
