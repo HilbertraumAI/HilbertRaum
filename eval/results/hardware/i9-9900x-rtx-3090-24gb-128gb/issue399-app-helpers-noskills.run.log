@@ -1,0 +1,79 @@
+workspace: unlocked
+skills installed: 9 (9 enabled)
+skills after [noskills]: 0 enabled -> (none)
+runtime: backend=gpu healthy=true model=qwen3.8-27b-ud-q5km
+tee log: <work>/logs/sidecar-162033-46403.log
+ARGV: ARGV: <runtime>/llama-server --host 127.0.0.1 --port 40717 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --spec-type draft-mtp --spec-draft-n-max 2
+settings contextTokens: 4096
+document: a8144ed8-6abe-4bed-b696-a8a694f42a09 status=indexed chunks=13 title=plant-handbook.txt
+active doc task after ingest: NONE
+tree/deep-index log lines: (none)
+
+=== conversation 1 (ordinary documents ask, twice) ===
+
+[C1 turn 1 (ordinary)] "What is checked with the small gauge above the tool bench?"
+  7 s, 1 model task(s) on the chat runtime:
+    task 6: prompt eval 4224.12 ms / 2591 tokens
+  answer (first 120 chars): Belt tension is checked with the small gauge that hangs on the hook above the tool bench [S1][S2][S3][S4].
+  skillOffer: none
+
+[C1 turn 2 (ordinary)] "And how often is the backup generator exercised?"
+  6 s, 1 model task(s) on the chat runtime:
+    task 22: prompt eval 3439.01 ms / 2144 tokens
+  answer (first 120 chars): The backup generator is exercised for twenty minutes on the last working day of the month [S1][S2][S3].
+  skillOffer: none
+
+=== conversation 2 (ordinary turn 1, classifier-trigger turn 2) ===
+
+[C2 turn 1 (ordinary)] "What is checked with the small gauge above the tool bench?"
+  6 s, 1 model task(s) on the chat runtime:
+    task 36: prompt eval 3516.12 ms / 2364 tokens
+  answer (first 120 chars): Belt tension is checked with the small gauge that hangs on the hook above the tool bench. [S1] [S2] [S3] [S4]
+  skillOffer: none
+
+[C2 turn 2 (aggregation-shaped)] "Group the amounts in these documents by category and sum each category."
+  7 s, 1 model task(s) on the chat runtime:
+    task 52: prompt eval 3533.33 ms / 2165 tokens
+  answer (first 120 chars): **Heads-up:** this looks like a question about the whole document, but this answer is based only on the most relevant se
+  skillOffer: none
+
+=== conversation 3 (ordinary turn 1, low-confidence-relevance turn 2) ===
+
+[C3 turn 1 (ordinary)] "What is checked with the small gauge above the tool bench?"
+  6 s, 1 model task(s) on the chat runtime:
+    task 83: prompt eval 3489.01 ms / 2364 tokens
+  answer (first 120 chars): Belt tension is checked with the small gauge that hangs on the hook above the tool bench [S1, S2, S3, S4].
+  skillOffer: none
+
+[C3 turn 2 (compare, no second doc)] "Compare this document with the other contract and list the differences."
+  8 s, 1 model task(s) on the chat runtime:
+    task 98: prompt eval 3848.69 ms / 2423 tokens
+  answer (first 120 chars): The provided excerpts only contain sections from a single document, the `plant-handbook.txt`. There is no "other contrac
+  skillOffer: none
+
+=== cached-token / forcing-full lines from the tee log ===
+  0.08.767.840 I slot   operator(): id  0 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)
+  0.08.990.191 I slot   operator(): id  0 | task 0 | cached n_tokens = 9, memory_seq_rm [9, end)
+  0.09.720.919 I slot   operator(): id  0 | task 6 | forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+  0.09.728.091 I slot   operator(): id  0 | task 6 | cached n_tokens = 0, memory_seq_rm [0, end)
+  0.10.305.484 I slot   operator(): id  0 | task 6 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.11.131.154 I slot   operator(): id  0 | task 6 | cached n_tokens = 543, memory_seq_rm [543, end)
+  0.13.891.179 I slot   operator(): id  0 | task 6 | cached n_tokens = 2587, memory_seq_rm [2587, end)
+  0.16.751.791 I slot   operator(): id  0 | task 22 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.17.047.221 I slot   operator(): id  0 | task 22 | cached n_tokens = 284, memory_seq_rm [284, end)
+  0.17.364.225 I slot   operator(): id  0 | task 22 | cached n_tokens = 323, memory_seq_rm [323, end)
+  0.20.086.359 I slot   operator(): id  0 | task 22 | cached n_tokens = 2367, memory_seq_rm [2367, end)
+  0.22.856.863 I slot   operator(): id  0 | task 36 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.23.796.527 I slot   operator(): id  0 | task 36 | cached n_tokens = 543, memory_seq_rm [543, end)
+  0.26.268.849 I slot   operator(): id  0 | task 36 | cached n_tokens = 2587, memory_seq_rm [2587, end)
+  0.29.062.620 I slot   operator(): id  0 | task 52 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.29.440.208 I slot   operator(): id  0 | task 52 | cached n_tokens = 288, memory_seq_rm [288, end)
+  0.29.770.102 I slot   operator(): id  0 | task 52 | cached n_tokens = 344, memory_seq_rm [344, end)
+  0.32.488.507 I slot   operator(): id  0 | task 52 | cached n_tokens = 2388, memory_seq_rm [2388, end)
+  0.36.282.369 I slot   operator(): id  0 | task 83 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.37.198.521 I slot   operator(): id  0 | task 83 | cached n_tokens = 543, memory_seq_rm [543, end)
+  0.39.668.246 I slot   operator(): id  0 | task 83 | cached n_tokens = 2587, memory_seq_rm [2587, end)
+  0.42.474.972 I slot   operator(): id  0 | task 98 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.42.854.785 I slot   operator(): id  0 | task 98 | cached n_tokens = 284, memory_seq_rm [284, end)
+  0.43.674.602 I slot   operator(): id  0 | task 98 | cached n_tokens = 602, memory_seq_rm [602, end)
+  0.46.219.616 I slot   operator(): id  0 | task 98 | cached n_tokens = 2646, memory_seq_rm [2646, end)

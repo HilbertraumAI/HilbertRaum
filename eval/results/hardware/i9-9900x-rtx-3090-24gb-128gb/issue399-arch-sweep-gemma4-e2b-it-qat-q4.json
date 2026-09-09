@@ -1,0 +1,123 @@
+{
+  "model": "<drive>/models/chat/gemma4-e2b-it-qat-q4.gguf",
+  "bin": "<runtime>/llama-server",
+  "argv": [
+    "<runtime>/llama-server",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8392",
+    "--model",
+    "<drive>/models/chat/gemma4-e2b-it-qat-q4.gguf",
+    "--ctx-size",
+    "8192",
+    "--threads",
+    "10",
+    "--batch-size",
+    "2048",
+    "--ubatch-size",
+    "2048",
+    "--jinja",
+    "--reasoning-format",
+    "deepseek",
+    "-lv",
+    "4",
+    "-np",
+    "1"
+  ],
+  "requests": [
+    {
+      "label": "R1 (conversation A, long)",
+      "http": 200,
+      "elapsedMs": 40149,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 1493,
+        "total_tokens": 1509,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 1493,
+        "prompt_ms": 39016.072,
+        "prompt_per_token_ms": 26.13266711319491,
+        "prompt_per_second": 38.26628164926495,
+        "predicted_n": 16,
+        "predicted_ms": 1114.177,
+        "predicted_per_token_ms": 69.6360625,
+        "predicted_per_second": 14.360375416114318
+      },
+      "content": ""
+    },
+    {
+      "label": "R2 (conversation B, short)",
+      "http": 200,
+      "elapsedMs": 423,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 64,
+        "total_tokens": 80,
+        "prompt_tokens_details": {
+          "cached_tokens": 43
+        }
+      },
+      "timings": {
+        "cache_n": 43,
+        "prompt_n": 21,
+        "prompt_ms": 158.495,
+        "prompt_per_token_ms": 7.547380952380952,
+        "prompt_per_second": 132.4962932584624,
+        "predicted_n": 16,
+        "predicted_ms": 243.972,
+        "predicted_per_token_ms": 15.24825,
+        "predicted_per_second": 65.58129621431968
+      },
+      "content": ""
+    },
+    {
+      "label": "R3 (back to conversation A)",
+      "http": 200,
+      "elapsedMs": 692,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 1514,
+        "total_tokens": 1530,
+        "prompt_tokens_details": {
+          "cached_tokens": 43
+        }
+      },
+      "timings": {
+        "cache_n": 43,
+        "prompt_n": 1471,
+        "prompt_ms": 529.967,
+        "prompt_per_token_ms": 0.3602766825288919,
+        "prompt_per_second": 2775.644521262645,
+        "predicted_n": 16,
+        "predicted_ms": 141.599,
+        "predicted_per_token_ms": 8.8499375,
+        "predicted_per_second": 112.99514827082113
+      },
+      "content": ""
+    }
+  ],
+  "promptEvals": [
+    {
+      "task": 0,
+      "ms": 39016.07,
+      "tokens": 1493
+    },
+    {
+      "task": 19,
+      "ms": 158.5,
+      "tokens": 21
+    },
+    {
+      "task": 38,
+      "ms": 529.97,
+      "tokens": 1471
+    }
+  ],
+  "stderrLines": 316
+}
