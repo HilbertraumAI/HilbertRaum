@@ -1,0 +1,87 @@
+0.01.861.879 I load: 0 unused tokens
+0.01.932.996 I load: printing all EOG tokens:
+0.01.933.000 I load:   - 248044 ('<|endoftext|>')
+0.01.933.002 I load:   - 248046 ('<|im_end|>')
+0.01.933.002 I load:   - 248063 ('<|fim_pad|>')
+0.01.933.003 I load:   - 248064 ('<|repo_name|>')
+0.01.933.003 I load:   - 248065 ('<|file_sep|>')
+0.01.933.725 I load: special tokens cache size = 33
+0.02.025.103 I load: token to piece cache size = 1.7581 MB
+0.02.025.148 I print_info: n_swa                 = 0
+0.02.025.149 I print_info: is_swa_any            = 0
+0.08.084.126 I llama_context: n_seq_max     = 2
+0.08.084.128 I llama_context: kv_unified    = false
+0.08.176.166 I llama_memory_recurrent:    Vulkan0 RS buffer size =   897.75 MiB
+0.08.176.220 I llama_memory_recurrent: size =  897.75 MiB (     2 cells,  64 layers,  2 seqs  2 rs_seq), R (f32):   33.75 MiB, S (f32):  864.00 MiB
+0.08.351.774 I llama_context: n_seq_max     = 2
+0.08.351.777 I llama_context: kv_unified    = false
+0.08.624.113 I srv    load_model: initializing, n_slots = 2, n_ctx_slot = 4096, kv_unified = 'false'
+0.08.718.238 I srv    load_model: prompt cache is enabled, size limit: 8192 MiB
+0.08.718.238 I srv    load_model: use `--cache-ram 0` to disable the prompt cache
+0.08.718.253 I srv          init: idle slots will be saved to prompt cache upon starting a new task
+0.10.235.608 I srv  get_availabl: updating prompt cache
+0.10.235.621 I srv          load:  - looking for better prompt, base f_keep = -1.000, sim = 0.000
+0.10.235.632 I srv        update:  - cache state: 0 prompts, 0.000 MiB (limits: 8192.000 MiB, 8192 tokens, 8589934592 est)
+0.10.235.646 I srv  get_availabl: prompt cache update took 0.04 ms
+0.10.235.851 I slot process_sing: id  0 | task -1 | saving idle slot to prompt cache
+0.10.235.882 I slot   operator(): id  1 | task 0 | new prompt, n_ctx_slot = 4096, n_keep = 0, task.n_tokens = 1546
+0.10.235.894 I slot   operator(): id  1 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)
+0.10.692.320 I slot   operator(): id  1 | task 0 | cached n_tokens = 79, memory_seq_rm [79, end)
+0.13.098.797 I slot   operator(): id  1 | task 0 | cached n_tokens = 1542, memory_seq_rm [1542, end)
+0.13.668.004 I slot print_timing: id  1 | task 0 | prompt eval time =    2935.54 ms /  1546 tokens (    1.90 ms per token,   526.65 tokens per second)
+0.13.668.009 I slot print_timing: id  1 | task 0 |        eval time =     496.56 ms /    16 tokens (   31.03 ms per token,    32.22 tokens per second)
+0.13.668.010 I slot print_timing: id  1 | task 0 |       total time =    3432.10 ms /  1562 tokens
+0.13.668.015 I slot print_timing: id  1 | task 0 |    graphs reused =          5
+0.13.668.019 I slot print_timing: id  1 | task 0 | draft acceptance = 0.90000 (    9 accepted /    10 generated), mean len =  2.80
+0.13.668.019 I slot print_timing: id  1 | task 0 |      acc per pos = (1.000, 0.800)
+0.15.701.260 I srv  get_availabl: updating prompt cache
+0.15.701.425 I srv   prompt_save:  - saving prompt with length 1561, total state size = 253.346 MiB (draft: 6.127 MiB)
+0.15.972.646 I srv          load:  - looking for better prompt, base f_keep = 0.053, sim = 0.804
+0.15.972.654 I srv        update:  - cache state: 1 prompts, 403.283 MiB (limits: 8192.000 MiB, 8192 tokens, 31709 est)
+0.15.972.656 I srv  get_availabl: prompt cache update took 271.39 ms
+0.15.972.738 I slot process_sing: id  0 | task -1 | saving idle slot to prompt cache
+0.15.972.746 I slot   operator(): id  1 | task 10 | new prompt, n_ctx_slot = 4096, n_keep = 0, task.n_tokens = 102
+0.16.009.283 I slot   operator(): id  1 | task 10 | cached n_tokens = 79, memory_seq_rm [79, end)
+0.16.471.340 I slot   operator(): id  1 | task 10 | cached n_tokens = 98, memory_seq_rm [98, end)
+0.16.969.207 I slot print_timing: id  1 | task 10 | prompt eval time =     586.25 ms /    23 tokens (   25.49 ms per token,    39.23 tokens per second)
+0.16.969.212 I slot print_timing: id  1 | task 10 |        eval time =     410.18 ms /    16 tokens (   25.64 ms per token,    39.01 tokens per second)
+0.16.969.213 I slot print_timing: id  1 | task 10 |       total time =     996.43 ms /    39 tokens
+0.16.969.214 I slot print_timing: id  1 | task 10 |    graphs reused =          9
+0.16.969.217 I slot print_timing: id  1 | task 10 | draft acceptance = 1.00000 (   10 accepted /    10 generated), mean len =  3.00
+0.16.969.217 I slot print_timing: id  1 | task 10 |      acc per pos = (1.000, 1.000)
+0.19.003.206 I srv  get_availabl: updating prompt cache
+0.19.003.210 I srv          load:  - looking for better prompt, base f_keep = -1.000, sim = 0.000
+0.19.003.214 I srv          load:  - found better prompt with f_keep = 0.990, sim = 0.983
+0.19.076.347 I srv        update:  - cache state: 0 prompts, 0.000 MiB (limits: 8192.000 MiB, 8192 tokens, 8589934592 est)
+0.19.076.352 I srv  get_availabl: prompt cache update took 73.14 ms
+0.19.076.427 I slot process_sing: id  1 | task -1 | saving idle slot to prompt cache
+0.19.076.481 I srv   prompt_save:  - saving prompt with length 117, total state size = 157.401 MiB (draft: 0.459 MiB)
+0.19.374.103 I srv        update:  - cache state: 1 prompts, 457.273 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+0.19.374.120 I slot   operator(): id  0 | task 18 | new prompt, n_ctx_slot = 4096, n_keep = 0, task.n_tokens = 1571
+0.19.411.521 I slot   operator(): id  0 | task 18 | cached n_tokens = 79, memory_seq_rm [79, end)
+0.21.730.936 I slot   operator(): id  0 | task 18 | cached n_tokens = 1550, memory_seq_rm [1550, end)
+0.22.007.491 I slot   operator(): id  0 | task 18 | cached n_tokens = 1567, memory_seq_rm [1567, end)
+0.22.512.263 I slot print_timing: id  0 | task 18 | prompt eval time =    2725.13 ms /  1492 tokens (    1.83 ms per token,   547.50 tokens per second)
+0.22.512.268 I slot print_timing: id  0 | task 18 |        eval time =     412.99 ms /    16 tokens (   25.81 ms per token,    38.74 tokens per second)
+0.22.512.268 I slot print_timing: id  0 | task 18 |       total time =    3138.12 ms /  1508 tokens
+0.22.512.269 I slot print_timing: id  0 | task 18 |    graphs reused =         13
+0.22.512.272 I slot print_timing: id  0 | task 18 | draft acceptance = 1.00000 (   10 accepted /    10 generated), mean len =  3.00
+0.22.512.272 I slot print_timing: id  0 | task 18 |      acc per pos = (1.000, 1.000)
+0.24.549.591 I srv  get_availabl: updating prompt cache
+0.24.550.059 I srv   prompt_save:  - saving prompt with length 1586, total state size = 255.007 MiB (draft: 6.226 MiB)
+0.24.917.126 I srv          load:  - looking for better prompt, base f_keep = 0.052, sim = 0.820
+0.24.917.135 I srv        update:  - cache state: 2 prompts, 1017.927 MiB (limits: 8192.000 MiB, 8192 tokens, 13705 est)
+0.24.917.141 I srv  get_availabl: prompt cache update took 367.55 ms
+0.24.917.257 I slot process_sing: id  1 | task -1 | saving idle slot to prompt cache
+0.24.917.335 I srv   prompt_save:  - saving prompt with length 117, total state size = 157.401 MiB (draft: 0.459 MiB)
+0.24.917.347 I slot   operator(): id  0 | task 27 | new prompt, n_ctx_slot = 4096, n_keep = 0, task.n_tokens = 100
+0.24.949.856 I slot   operator(): id  0 | task 27 | erased invalidated context checkpoint (pos_min = 1549, pos_max = 1549, n_tokens = 1550, n_swa = 0, pos_next = 79, size = 155.710 MiB)
+0.24.958.220 I slot   operator(): id  0 | task 27 | cached n_tokens = 79, memory_seq_rm [79, end)
+0.25.441.912 I slot   operator(): id  0 | task 27 | cached n_tokens = 96, memory_seq_rm [96, end)
+0.28.921.407 I slot print_timing: id  0 | task 27 | n_decoded =    100, tg =  29.49 t/s, tg_3s =  29.49 t/s
+0.29.412.023 I slot print_timing: id  0 | task 27 | prompt eval time =     613.01 ms /    21 tokens (   29.19 ms per token,    34.26 tokens per second)
+0.29.412.029 I slot print_timing: id  0 | task 27 |        eval time =    3881.64 ms /   117 tokens (   33.18 ms per token,    30.14 tokens per second)
+0.29.412.030 I slot print_timing: id  0 | task 27 |       total time =    4494.65 ms /   138 tokens
+0.29.412.030 I slot print_timing: id  0 | task 27 |    graphs reused =         64
+0.29.412.034 I slot print_timing: id  0 | task 27 | draft acceptance = 0.62500 (   65 accepted /   104 generated), mean len =  2.25
+0.29.412.034 I slot print_timing: id  0 | task 27 |      acc per pos = (0.731, 0.519)

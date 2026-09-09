@@ -1,0 +1,2 @@
+clocks.current.memory [MHz], clocks.current.sm [MHz], temperature.gpu, pstate, memory.used [MiB]
+405 MHz, 210 MHz, 41, P8, 596 MiB

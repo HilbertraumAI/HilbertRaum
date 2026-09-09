@@ -20,7 +20,7 @@
 //
 // Everything it writes: <stem>.stderr.log, <stem>.cache-lines.txt, <stem>.json, <stem>.run.log
 
-import { spawn } from 'node:child_process'
+import { spawn, execFileSync } from 'node:child_process'
 import { createWriteStream } from 'node:fs'
 import { writeFileSync, readFileSync } from 'node:fs'
 import { setTimeout as sleep } from 'node:timers/promises'
@@ -40,6 +40,12 @@ const NP = arg('np', '1')
 const THREADS = arg('threads', '10')
 const EXTRA = arg('extra', '').split(' ').filter(Boolean)
 const READY_TIMEOUT_S = Number(arg('ready-timeout', '900'))
+// Opt-in extras for leg C (both OFF by default, so the leg-A sweep behaviour is unchanged):
+//   --vram-csv <path>   sample nvidia-smi every second for the whole run
+//   --speed-tokens <n>  after R3, one more short-prompt request generating n tokens, for a
+//                       decode figure the 16-token cache requests cannot give
+const VRAM_CSV = arg('vram-csv')
+const SPEED_TOKENS = Number(arg('speed-tokens', '0'))
 
 // ------------------------------------------------------- the fixed prompts
 // Synthetic, deterministic, byte-stable across models (this repo is public: no real user
@@ -193,6 +199,27 @@ const ask = async (label, messages) => {
 
 const results = { model: MODEL, bin: BIN, argv: [BIN, ...args], requests: [] }
 
+// Optional VRAM / clock sampler (leg C). One row per second for the whole run.
+let vramTimer = null
+let vramStream = null
+if (VRAM_CSV) {
+  vramStream = createWriteStream(VRAM_CSV)
+  vramStream.write('iso,memory.used.MiB,memory.free.MiB,clocks.mem.MHz,clocks.sm.MHz,temperature.gpu,pstate\n')
+  const sample = () => {
+    try {
+      const q = 'memory.used,memory.free,clocks.mem,clocks.sm,temperature.gpu,pstate'
+      const row = execFileSync('nvidia-smi', [`--query-gpu=${q}`, '--format=csv,noheader,nounits'], {
+        encoding: 'utf8',
+      }).trim()
+      vramStream.write(`${new Date().toISOString()},${row.split(', ').join(',')}\n`)
+    } catch {
+      /* a sample that fails is skipped, never fatal */
+    }
+  }
+  sample()
+  vramTimer = setInterval(sample, 1000)
+}
+
 try {
   trace('waiting for /health ...')
   await waitReady()
@@ -224,6 +251,33 @@ try {
   const r3 = await ask('R3 (back to conversation A)', convA2)
   results.requests.push(r3)
 
+  // Optional decode-speed request (leg C): a short prompt, a real generation length. The
+  // three cache requests stop at 16 tokens, which is too short to read tok/s off.
+  if (SPEED_TOKENS > 0) {
+    await sleep(2000)
+    const started = Date.now()
+    const res = await fetch(`${base}/v1/chat/completions`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        messages: [
+          { role: 'system', content: SYSTEM },
+          { role: 'user', content: 'Write a short paragraph about how a water pump works.' },
+        ],
+        temperature: 0,
+        max_tokens: SPEED_TOKENS,
+        stream: false,
+      }),
+    })
+    const body = await res.json()
+    const t = body?.timings ?? {}
+    trace(
+      `SPEED  http=${res.status}  ${Date.now() - started} ms  predicted_n=${t.predicted_n}  ` +
+        `predicted_per_second=${t.predicted_per_second}  prompt_n=${t.prompt_n}`,
+    )
+    results.speed = { usage: body?.usage ?? {}, timings: t }
+  }
+
   // The prompt-cache bookkeeping for the last task is written when the next task starts or
   // the slot goes idle; give the server a moment so the capture holds it.
   await sleep(4000)
@@ -231,6 +285,8 @@ try {
   trace(`ERROR ${err?.stack ?? err}`)
   results.error = String(err?.message ?? err)
 } finally {
+  if (vramTimer) clearInterval(vramTimer)
+  if (vramStream) vramStream.end()
   trace('stopping server')
   server.kill('SIGINT')
   const deadline = Date.now() + 30_000

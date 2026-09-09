@@ -1,0 +1,123 @@
+{
+  "model": "<drive>/models/chat/ministral3-8b-instruct-2512-q4.gguf",
+  "bin": "<runtime>/llama-server",
+  "argv": [
+    "<runtime>/llama-server",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8391",
+    "--model",
+    "<drive>/models/chat/ministral3-8b-instruct-2512-q4.gguf",
+    "--ctx-size",
+    "8192",
+    "--threads",
+    "10",
+    "--batch-size",
+    "2048",
+    "--ubatch-size",
+    "2048",
+    "--jinja",
+    "--reasoning-format",
+    "deepseek",
+    "-lv",
+    "4",
+    "-np",
+    "1"
+  ],
+  "requests": [
+    {
+      "label": "R1 (conversation A, long)",
+      "http": 200,
+      "elapsedMs": 1030,
+      "usage": {
+        "completion_tokens": 11,
+        "prompt_tokens": 1447,
+        "total_tokens": 1458,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 1447,
+        "prompt_ms": 835.185,
+        "prompt_per_token_ms": 0.5771838286109191,
+        "prompt_per_second": 1732.5502732927434,
+        "predicted_n": 11,
+        "predicted_ms": 177.496,
+        "predicted_per_token_ms": 16.136,
+        "predicted_per_second": 61.973227565691616
+      },
+      "content": "A spare gasket set is counted every quarter."
+    },
+    {
+      "label": "R2 (conversation B, short)",
+      "http": 200,
+      "elapsedMs": 511,
+      "usage": {
+        "completion_tokens": 11,
+        "prompt_tokens": 55,
+        "total_tokens": 66,
+        "prompt_tokens_details": {
+          "cached_tokens": 41
+        }
+      },
+      "timings": {
+        "cache_n": 41,
+        "prompt_n": 14,
+        "prompt_ms": 168.188,
+        "prompt_per_token_ms": 12.013428571428571,
+        "prompt_per_second": 83.24018360406212,
+        "predicted_n": 11,
+        "predicted_ms": 187.46,
+        "predicted_per_token_ms": 17.041818181818183,
+        "predicted_per_second": 58.67918489277712
+      },
+      "content": "A barometer is used to measure atmospheric pressure."
+    },
+    {
+      "label": "R3 (back to conversation A)",
+      "http": 200,
+      "elapsedMs": 612,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 1471,
+        "total_tokens": 1487,
+        "prompt_tokens_details": {
+          "cached_tokens": 1457
+        }
+      },
+      "timings": {
+        "cache_n": 1457,
+        "prompt_n": 14,
+        "prompt_ms": 157.934,
+        "prompt_per_token_ms": 11.281,
+        "prompt_per_second": 88.64462370357239,
+        "predicted_n": 16,
+        "predicted_ms": 366.238,
+        "predicted_per_token_ms": 22.889875,
+        "predicted_per_second": 43.68743822323189
+      },
+      "content": "The **compressor room door** stays closed while the machine is running."
+    }
+  ],
+  "promptEvals": [
+    {
+      "task": 0,
+      "ms": 835.18,
+      "tokens": 1447
+    },
+    {
+      "task": 12,
+      "ms": 168.19,
+      "tokens": 14
+    },
+    {
+      "task": 24,
+      "ms": 157.93,
+      "tokens": 14
+    }
+  ],
+  "stderrLines": 271
+}
