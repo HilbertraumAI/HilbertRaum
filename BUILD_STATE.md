@@ -191,10 +191,9 @@ ledger `docs/architecture.md` §52), and the five 2026-09-04 Phase F entries (PR
 entries of the #290/#291 wave (PRs #295/#300/#297/#299) and Phase F PR 6 + close-out (#293, #292) on
 2026-09-05 at ZIM Phase 3a (preamble budget), and the ten ZIM knowledge-packs wave entries
 (Phases 0–6 + the 2026-09-04 MVP entry, PRs #304–#336) on 2026-09-06 at the P7 close-out (preamble
-budget), and the 2026-09-03 audit-2026-09-02 Phase 9b close-out entry (PR #282), the 2026-09-05
-Model library UX wave entry (PR #302) and the 2026-09-07 #286 save-a-code-block entry on 2026-09-09
-(preamble budget, making room for the knowledge-packs docs entry and the #331 HW3-acceptance
-entry) —
+budget), and the Phase 9b close-out (PR #282), Model library UX (PR #302) and #286 save-a-code-block
+entries on 2026-09-09 (preamble budget, making room for the knowledge-packs docs and #331
+HW3-acceptance entries) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
