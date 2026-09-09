@@ -1,0 +1,134 @@
+name: Knowledge pack problem (ZIM / offline Wikipedia)
+description: A ZIM archive will not register, cannot be ticked, is not searched, or an article will not open.
+title: "Knowledge packs: "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting. Knowledge packs sit on top of two upstream programs
+        (`kiwix-serve` / `kiwix-manage`) and a file we did not build, so the answer is often in
+        one of the measured limits already written down:
+        [`docs/knowledge-packs.md` §7](https://github.com/HilbertraumAI/HilbertRaum/blob/master/docs/knowledge-packs.md#7-edges-worth-knowing)
+        and the Knowledge-packs section of
+        [`docs/known-limitations.md`](https://github.com/HilbertraumAI/HilbertRaum/blob/master/docs/known-limitations.md).
+        If one of them matches, you do not need to file — but a limit that is wrong, or worse
+        than documented, is very much worth an issue.
+
+        **Please keep your data out of the report.** We do not want your document text, your
+        chat content, or a path with your name in it. The details below are enough.
+
+  - type: dropdown
+    id: symptom
+    attributes:
+      label: What happens?
+      options:
+        - The panel says the kiwix-tools are missing, or installing them fails
+        - Adding the pack fails (it never appears in the list)
+        - The pack is listed but cannot be ticked in a chat (greyed out)
+        - The pack is ticked but the answer says it was not searched
+        - The pack is searched but finds nothing it should have found
+        - An article will not open, is cut short, or shows the wrong text
+        - The panel or the list shows something wrong
+        - Something else
+    validations:
+      required: true
+
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What did you do, and what happened instead of what you expected?
+      description: |
+        Two or three sentences is plenty. Two things help more than anything else if you have
+        them: the exact reason text shown on the greyed-out pack in the sources picker, and the
+        "Knowledge packs:" line printed under the answer.
+      placeholder: |
+        I ticked the German Wikipedia pack and asked a question. The answer said the pack was
+        not searched. The picker shows it greyed out with "…".
+    validations:
+      required: true
+
+  - type: input
+    id: pack
+    attributes:
+      label: Which pack?
+      description: The file name, and where you got it (the library.kiwix.org title is ideal).
+      placeholder: wikipedia_de_all_nopic_2026-04.zim — library.kiwix.org
+    validations:
+      required: true
+
+  - type: input
+    id: size
+    attributes:
+      label: How big is the file?
+      placeholder: 14 GB
+    validations:
+      required: true
+
+  - type: dropdown
+    id: location
+    attributes:
+      label: Where does the file live?
+      options:
+        - In the drive's zim/ folder
+        - Somewhere else on the same drive
+        - On another drive, or elsewhere on the computer
+        - On a network share or a virtual/cloud-synced folder
+    validations:
+      required: true
+
+  - type: dropdown
+    id: os
+    attributes:
+      label: Operating system
+      options:
+        - Windows 11
+        - Windows 10
+        - macOS (Apple Silicon)
+        - macOS (Intel)
+        - Linux
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: HilbertRaum version
+      description: Settings → Diagnostics (advanced) → App & runtime shows it; "built from source at <commit>" is also fine.
+      placeholder: 0.1.59
+    validations:
+      required: true
+
+  - type: dropdown
+    id: tools
+    attributes:
+      label: How did the kiwix-tools get onto the drive?
+      options:
+        - The app installed them (Knowledge packs panel or AI Model screen)
+        - The fetch-runtime script (--family kiwix_tools)
+        - I unzipped the release by hand
+        - I do not know
+        - They are not installed
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: known-edges
+    attributes:
+      label: The usual suspects
+      description: Tick what you have confirmed. An unticked box is a fine answer — it just tells us where to look.
+      options:
+        - label: The archive is a single `.zim` file (not a multipart `.zimaa` / `.zimab` set)
+        - label: The path to the file contains only ASCII characters (no umlaut, accent or other non-ASCII character anywhere in it) — this one matters on Windows
+        - label: The pack does not show a "No full-text index" badge in the panel
+        - label: No other pack on this drive has the same file name in a different folder
+        - label: I checked the Knowledge-packs entries in `docs/known-limitations.md` and none of them describes this
+
+  - type: textarea
+    id: extra
+    attributes:
+      label: Anything else?
+      description: |
+        Optional. A screenshot of the panel or the sources picker is welcome — please crop out
+        anything private first. The Copy button on Settings → Diagnostics (advanced) → App &
+        runtime is safe to paste: it carries version, model and runtime facts, not your documents.
