@@ -2638,6 +2638,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 .perf-row-sub { grid-column: 1; grid-row: 2; font-size: var(--text-xs); line-height: var(--line-xs); color: var(--text-muted); overflow-wrap: anywhere; }
 .perf-row-side { grid-column: 2; grid-row: 1 / span 2; display: flex; align-items: center; gap: 6px; }
 .perf-steps { list-style: none; padding: 0; margin: 12px 0 0; display: flex; flex-direction: column; gap: 8px; }
+/* #437: the list is a live region and is therefore mounted even when idle (a region created
+   together with its content is not announced). Empty ⇒ no box at all, so the idle card looks
+   exactly as it did — never display:none on a non-empty one, which would drop it from the
+   accessibility tree along with the announcement. */
+.perf-steps:empty { display: none; }
 .perf-step { display: flex; align-items: flex-start; gap: 10px; font-size: var(--text-sm); line-height: var(--line-sm); }
 .perf-step-icon { width: 18px; height: 18px; flex-shrink: 0; }
 .perf-step-done .perf-step-icon { color: var(--success); }

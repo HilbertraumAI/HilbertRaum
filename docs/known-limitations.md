@@ -2473,12 +2473,19 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The silent re-check has no Home-screen notice yet.** The moved-drive re-check above runs with
   no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
   tracked in BUILD_STATE §5 item 22 (a).
-- **Nothing on this screen is announced to a screen reader** (verified by ear with Narrator on
-  2026-09-09, issue #331, against a positive control proving live regions do work in the app's
-  window). Two separate defects, neither fixed yet: the progress-step list is inserted already
-  containing its content AND carries progress only in a CSS class and an `aria-hidden` icon, so
-  a check is silent from start to finish (#437); and the failure banner is silent too (#436) —
-  which is NOT specific to this screen, see the entry below.
+- **Nothing on this screen was announced to a screen reader — FIXED 2026-09-10, by-ear
+  re-verification outstanding** (found by ear with Narrator on 2026-09-09, issue #331, against a
+  positive control proving live regions do work in the app's window). Two separate defects: the
+  progress-step list was inserted already containing its content AND carried progress only in a
+  CSS class and an `aria-hidden` icon, so a check was silent from start to finish (#437); and the
+  failure banner was silent too (#436) — not specific to this screen, see the Accessibility entry.
+  The step list is now mounted unconditionally (`.perf-steps:empty` keeps the idle layout) and
+  every step carries its state in its accessible text (an `aria-hidden` visible label plus an
+  sr-only "<step>: <state>" twin, so an advance is a whole-line text change) with
+  `aria-current="step"` on the active item. Pinned by `PerformanceScreen.test.tsx` describe
+  "the step list is announceable (#437)". **What is pinned is the DOM, not the sound:** both
+  issues ask for re-verification by ear during a real multi-second check, and that still needs a
+  screen reader on the hardware box.
 - **An automatic check shows a step list that never advances.** A first-run or moved-drive check
   is run by the main process, and progress steps are addressed only to the window that pressed
   the button — but the screen renders the list whenever the backend span is held (correct per
@@ -2611,18 +2618,26 @@ meter `.context-meter-track/-fill` joined later and carries no forced-colors rul
 because its value is never color-only — the numeric label carries the meaning), and verified
 the reduced-motion kill-switch.
 
-**NOT accepted — an open defect, recorded here so it is not mistaken for one of the acceptances
-below.** Verified by ear with Narrator on 2026-09-09 (issue #331), against a positive control
-that proved live regions do work in the app's own Electron window: **`ErrorBanner`'s message is
-never announced** (#436). The component exists to implement audit finding M-U1 — an always-mounted
-`role="alert" aria-live="assertive"` container whose text swaps inside it — but the `Banner`
-nested within it carries `role="status"`, which is itself a live region (implicit
-`aria-live="polite"`) and IS mounted with its text. The nearest live-region ancestor governs, so
-M-U1's anti-pattern is reintroduced one level down. This is the shared failure surface for **11
-screens**, and for `WorkspaceGate`'s wrong-password banner — the SH-2 / #145 fix — so a failed
-unlock is silent too. A control isolated the remedy: `aria-live="off"` on the inner element does
-NOT help; the inner live-region role has to go. The lesson generalises — **`role="status"` and
-`role="alert"` are both live regions, so nesting one inside the other silences the outer one.**
+**Was an open defect; FIXED 2026-09-10 (#436), kept here for the lesson.** Verified by ear with
+Narrator on 2026-09-09 (issue #331), against a positive control that proved live regions do work
+in the app's own Electron window: **`ErrorBanner`'s message was never announced**. The component
+exists to implement audit finding M-U1 — an always-mounted `role="alert" aria-live="assertive"`
+container whose text swaps inside it — but the `Banner` nested within it carried `role="status"`,
+which is itself a live region (implicit `aria-live="polite"`) and WAS mounted with its text. The
+nearest live-region ancestor governs, so M-U1's anti-pattern was reintroduced one level down. It
+was the shared failure surface for **11 screens**, and for `WorkspaceGate`'s wrong-password banner
+— the SH-2 / #145 fix — so a failed unlock was silent too. A control isolated the remedy:
+`aria-live="off"` on the inner element does NOT help; the inner live-region role has to go. The
+lesson generalises — **`role="status"` and `role="alert"` are both live regions, so nesting one
+inside the other silences the outer one.**
+
+  The fix: `Banner`'s `role` prop takes `null` (render no role), `ErrorBanner` passes it, and
+  `ModelsScreen`'s hand-rolled copy of the same wrapper — two more nested `role="status"` Banners,
+  outside the issue's stated blast radius — was corrected with it.
+  `tests/unit/live-region-nesting.test.ts` now parses every renderer `.tsx` and fails on any
+  live-region role nested inside another, so the shape cannot return unnoticed. **The by-ear
+  re-verification (Narrator, on a real failure and on a wrong-password unlock) is still
+  outstanding** — the DOM half is pinned, the audible half needs the hardware box.
 
 Accepted as-is, with reasons:
 

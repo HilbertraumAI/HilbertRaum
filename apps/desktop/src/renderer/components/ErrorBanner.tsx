@@ -8,6 +8,15 @@ import { englishTranslator, type Translator } from './translator'
 // missed by many screen readers. So the alert container is ALWAYS mounted; the visible
 // Banner mounts/unmounts inside it, and the message text swaps within the live region.
 // Mirrors the always-mounted Toast host live region.
+//
+// ⚠ role="status" IS A LIVE REGION (implicit aria-live="polite"), not merely a quieter label.
+// The first cut of this component nested <Banner role="status"> inside the wrapper, reasoning
+// that the wrapper should own the single ALERT role — which is true, and beside the point: the
+// nested status then became the nearest live-region ancestor of the message and was inserted
+// already containing it, reintroducing M-U1 one level down. Narrator (2026-09-09, #436) heard
+// NOTHING from it. aria-live="off" on the inner element does not rescue it either; the ROLE has
+// to go. So nothing inside .error-banner-region may carry a live-region role — pinned by
+// A11yAnnounce.test.tsx "no live-region role nests inside the wrapper".
 
 export interface ErrorBannerProps {
   /** Error text to announce + show. `null`/`''` renders an empty (but mounted) region. */
@@ -33,13 +42,13 @@ export function ErrorBanner({
 }: ErrorBannerProps): JSX.Element {
   const show = message != null && message !== ''
   return (
-    // The Banner already carries role="alert" for the error tone; the outer wrapper
-    // keeps a stable element in the tree across mounts so the swap is what AT hears.
+    // The outer wrapper keeps a stable element in the tree across mounts, so what AT hears
+    // is the text swapping inside a region that was already there.
     <div className="error-banner-region" role="alert" aria-live="assertive">
       {show && (
-        // Inner Banner is role="status" (not its own alert) — the wrapper owns the
-        // single live region so AT doesn't see two competing alert roles.
-        <Banner tone="error" role="status" onDismiss={onDismiss} t={t}>
+        // Inner Banner carries NO role: the wrapper above is the one and only live region in
+        // this subtree, so the message reads as a text change inside it (#436).
+        <Banner tone="error" role={null} onDismiss={onDismiss} t={t}>
           {message}
           {children}
         </Banner>

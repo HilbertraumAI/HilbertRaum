@@ -764,7 +764,9 @@ describe('PerformanceScreen: actions', () => {
     expect(api.runBenchmark).toHaveBeenCalledTimes(1)
     // Steps replace the tiles while the run is in flight.
     expect(screen.getByText('Hardware detected')).toBeInTheDocument()
-    expect(screen.getByText(/Generation speed with Qwen3\.5 9B/)).toBeInTheDocument()
+    // Two nodes now carry the speed label: the visible one and the sr-only twin that appends
+    // the step state (#437). Anchor the match so only the visible line satisfies it.
+    expect(screen.getByText(/Generation speed with Qwen3\.5 9B \(UD-Q4_K_XL\)$/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
     act(() => progress.forEach((cb) => cb('system')))
     expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
@@ -1739,5 +1741,122 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
     )
     expect(contextAt).toBe(liveAt + 1)
     expect(contextAt).toBeLessThan(savedAt)
+  })
+})
+
+// -------------------------------------------------------------------------------------------
+// #437 — the progress steps are actually announceable.
+//
+// Verified by ear with Narrator on 2026-09-09 (issue #331, HW3 leg 1): across two real runs of
+// 14.2 s and 14.4 s the screen said NOTHING. Two independent causes, both pinned here:
+//   1. the aria-live list was created together with its <li>s, i.e. inserted already containing
+//      its content — the M-U1 anti-pattern. A region has to be present BEFORE the text arrives.
+//   2. even mounted, its text never changed: progress lived only in the `perf-step-{state}`
+//      class and in StepIcon, which is aria-hidden. Nothing to announce.
+// These tests are the DOM half of the acceptance; the by-ear half cannot be automated.
+// -------------------------------------------------------------------------------------------
+describe('PerformanceScreen: the step list is announceable (#437)', () => {
+  const stepList = (): HTMLElement | null => document.querySelector('ul.perf-steps')
+
+  it('cause 1: the live region is mounted while idle, before any run', async () => {
+    install(snapshot())
+    mountScreen()
+    await screen.findByRole('button', { name: 'Check again' })
+    const idle = stepList()
+    expect(idle).not.toBeNull()
+    expect(idle).toHaveAttribute('aria-live', 'polite')
+    // Empty, so `.perf-steps:empty` collapses it and the idle card is visually unchanged.
+    expect(idle).toBeEmptyDOMElement()
+  })
+
+  it('cause 1: the steps arrive INSIDE the same region node, not with a fresh one', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const during = stepList()
+    // Same element instance as the idle one would be — identity is what makes it announceable.
+    expect(during).not.toBeNull()
+    expect(during?.querySelectorAll('li')).toHaveLength(3)
+    await act(async () => {
+      resolveRun(result())
+    })
+    await screen.findByRole('button', { name: 'Check again' })
+    // Back to idle: the region survives the run and empties, ready for the next one.
+    expect(stepList()).toBe(during)
+    expect(stepList()).toBeEmptyDOMElement()
+  })
+
+  it('cause 2: an advance changes the region text, not only a CSS class', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { progress } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const before = stepList()?.textContent ?? ''
+    expect(before).toContain('Hardware detected: in progress')
+    expect(before).toContain('Drive speed: waiting')
+
+    act(() => progress.forEach((cb) => cb('system')))
+
+    const after = stepList()?.textContent ?? ''
+    expect(after).not.toBe(before)
+    expect(after).toContain('Hardware detected: done')
+    expect(after).toContain('Drive speed: in progress')
+    await act(async () => {
+      resolveRun(result())
+    })
+  })
+
+  it('cause 2: the active step exposes aria-current, and only one step does', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { progress } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const current = (): HTMLElement[] => Array.from(document.querySelectorAll('.perf-steps [aria-current="step"]'))
+    expect(current()).toHaveLength(1)
+    expect(current()[0]?.textContent).toContain('Hardware detected')
+
+    act(() => progress.forEach((cb) => cb('system')))
+
+    expect(current()).toHaveLength(1)
+    expect(current()[0]?.textContent).toContain('Drive speed')
+    await act(async () => {
+      resolveRun(result())
+    })
+  })
+
+  it('the step line reads once: the visible label is hidden from AT, the sr-only twin carries it', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const li = screen.getByText('Hardware detected').closest('li')
+    // Visible copy is unchanged and unduplicated on screen; only its accessible twin adds state.
+    expect(screen.getByText('Hardware detected')).toHaveAttribute('aria-hidden', 'true')
+    expect(li?.querySelector('.sr-only')?.textContent).toBe('Hardware detected: in progress')
+    await act(async () => {
+      resolveRun(result())
+    })
+  })
+
+  it('#436 applies here too: no live-region role nests inside the step region', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    expect(stepList()?.querySelectorAll('[role], [aria-live]')).toHaveLength(0)
+    await act(async () => {
+      resolveRun(result())
+    })
   })
 })

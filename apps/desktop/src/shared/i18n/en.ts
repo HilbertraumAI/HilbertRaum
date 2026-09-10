@@ -2000,6 +2000,14 @@ export const en = {
   'perf.step.speed': 'Generation speed with {model}',
   'perf.step.speedSkipped': 'Generation speed (no model running, skipped)',
   'perf.step.hint': 'About half a minute. You can keep using the app.',
+  // #437: a step's progress used to live ONLY in a CSS class and an aria-hidden icon, so the
+  // live region's text never changed as the check advanced and a screen reader heard nothing
+  // after the list appeared. Each step now carries its state IN ITS TEXT — the whole line is
+  // one accessible string, so an advance is a text change with its own context ("Drive speed:
+  // in progress"), not a bare "in progress" detached from the step it belongs to.
+  'perf.step.state.done': '{step}: done',
+  'perf.step.state.active': '{step}: in progress',
+  'perf.step.state.todo': '{step}: waiting',
   'perf.observed.title': 'Observed while you worked',
   // The rows are session latches, but the READ samples behind them are also persisted into the
   // benchmark records (the Drive tile above shows them with their own source and date). The

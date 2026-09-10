@@ -5,6 +5,9 @@ import { englishTranslator, type Translator } from './translator'
 // text + optional action, optionally dismissible. Errors announce via role="alert";
 // everything else is a polite role="status". Never stacked at the top of a screen;
 // place a Banner next to the thing it talks about.
+//
+// A Banner rendered INSIDE an already-mounted live region (ErrorBanner, the ModelsScreen
+// download panel) must pass `role={null}` — see the role prop below and issue #436.
 
 export type BannerTone = 'info' | 'success' | 'warning' | 'error'
 
@@ -25,11 +28,16 @@ export interface BannerProps {
   /** Bound translate fn for the built-in dismiss label (i18n record §5 ⑤); English default. */
   t?: Translator
   /**
-   * Override the announce role. Defaults to `alert` for the error tone, `status`
-   * otherwise. ErrorBanner (audit M-U1) passes `status` so the always-mounted wrapper
-   * owns the single `role="alert"` live region instead of nesting two.
+   * Override the announce role. Defaults to `alert` for the error tone, `status` otherwise.
+   *
+   * `null` renders NO role attribute — the only correct value when this Banner is nested inside
+   * an already-mounted live region. `role="status"` is ITSELF a live region (implicit
+   * `aria-live="polite"`), so a nested `status` becomes the nearest live-region ancestor of the
+   * message AND is inserted already containing it — the very M-U1 anti-pattern the wrapper exists
+   * to prevent. Verified by ear with Narrator (#436): a nested `status` is silent, `aria-live="off"`
+   * on it does NOT rescue it, and only removing the role outright announces.
    */
-  role?: 'alert' | 'status'
+  role?: 'alert' | 'status' | null
 }
 
 export function Banner({
@@ -43,7 +51,8 @@ export function Banner({
   return (
     <div
       className={`banner banner-${tone}`}
-      role={role ?? (tone === 'error' ? 'alert' : 'status')}
+      // Prop omitted (`undefined`) ⇒ the tone default; an explicit `null` ⇒ no role at all.
+      role={role === null ? undefined : (role ?? (tone === 'error' ? 'alert' : 'status'))}
     >
       <span className="banner-icon" aria-hidden="true">
         {TONE_ICON[tone]}
