@@ -41,6 +41,13 @@ joins `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` (`shared/prompt-cache-rules.ts`), a
 positive control, and the concrete case for the cache-ON default. Control `qwen3.8-27b-ud-q5km` reproduced the sweep token for
 token (1,492 of 1,571, 79 kept). Trap held a fourth time: `forcing full` appears **0 times** in all four captures, including the
 two that re-prefilled. Every catalog `family:` now has a verdict; the default still governs the family added next._
+_2026-09-10 — **Build-chain advisories cleared: `fast-uri` 3.1.7, `browserslist` 4.28.9, `js-yaml` 4.3.2,
+`baseline-browser-mapping` 2.11.21** (PR #452, stacked on PR #451). All dev-scope, in-range, lockfile-only; browserslist brings
+its data chain with it. `npm audit` after this is **0 high / 0 critical** — only the deferred vitest chain remains. The four
+`fast-uri` CVEs all need an untrusted URI and the only consumer is `ajv` reading our own `electron-builder.yml` on the MANUAL
+package step (R2) — no exposure. The one that matters on a PUBLIC repo is `browserslist` CVE-2026-73088: `normalizeStats()` runs
+on every `browserslist()` call and auto-discovers `browserslist-stats.json` up the directory tree, so a contributor PR adding one
+file crashes every Babel/Vite build in CI. Build-availability only._
 _2026-09-10 — **`@xmldom/xmldom` 0.8.13 → 0.8.15 — the one dependency advisory that reached users** (PR #451,
 `fix/xmldom-parser-dos-0815`; record `security-model.md` BE-9 + the DOCX-parser paragraph under it, which carries the
 reachability analysis). Ten advisories: the four PARSER-side ones reach `parsers/docx.ts` → mammoth → `DOMParser` on an imported
