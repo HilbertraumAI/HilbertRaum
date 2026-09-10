@@ -41,20 +41,16 @@ joins `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` (`shared/prompt-cache-rules.ts`), a
 positive control, and the concrete case for the cache-ON default. Control `qwen3.8-27b-ud-q5km` reproduced the sweep token for
 token (1,492 of 1,571, 79 kept). Trap held a fourth time: `forcing full` appears **0 times** in all four captures, including the
 two that re-prefilled. Every catalog `family:` now has a verdict; the default still governs the family added next._
-_2026-09-10 — **`@xmldom/xmldom` 0.8.13 → 0.8.15 — the one dependency advisory that reached users** (PR-XMLDOM,
-`fix/xmldom-parser-dos-0815`; record `security-model.md` BE-9 + its DOCX-parser paragraph). Ten advisories, of which the four
-PARSER-side ones (quadratic attribute dedup, end-tag ReDoS, quadratic memory, quadratic malformed-input recovery) are reachable
-from `parsers/docx.ts` → `mammoth.extractRawText` → `DOMParser` on an imported `.docx`; the six serializer-side injection CVEs are
-not (nothing here calls `XMLSerializer` — the DOCX export path splices raw `<w:t>` bytes). Impact was a main-process freeze: the
-M-3 guard bounds inflated BYTES not TIME, and `parseTimeoutMs` is a `Promise.race` a synchronous parser never loses. Lockfile-only
-(mammoth's range is `^0.8.6`), 3 lines + the regenerated notices. **Two findings worth keeping.** (a) Dependabot's alert list is
-NOT the inventory: it had opened 1 of these 10 — and the 1 it opened was a serializer CVE, i.e. the only unreachable class —
-while local `npm audit` on the same advisory DB found all ten plus unalerted js-yaml/baseline-browser-mapping. Automated security
-fixes are OFF, there is no `.github/dependabot.yml`, and CI runs no `npm audit`, so nothing catches this on a PR. (b) A bare
-`npm install` rewrites ~28 unrelated `"peer": true` markers in `package-lock.json` — PRE-EXISTING drift, reproducible on a clean
-master with no version change, so dependency PRs should bump the lockfile surgically and keep the diff to the versions touched.
-Follow-ups: PR-DEVCHAIN (`chore/dev-chain-advisory-bumps`) for the build-only advisories; the vitest 3→4 major (`@vitest/mocker`
-CVE-2026-84373, unreachable here — no browser mode, no dev server) is DEFERRED and still needs an owner._
+_2026-09-10 — **`@xmldom/xmldom` 0.8.13 → 0.8.15 — the one dependency advisory that reached users** (PR #451,
+`fix/xmldom-parser-dos-0815`; record `security-model.md` BE-9 + the DOCX-parser paragraph under it, which carries the
+reachability analysis). Ten advisories: the four PARSER-side ones reach `parsers/docx.ts` → mammoth → `DOMParser` on an imported
+`.docx` and freeze the main process (M-3 bounds inflated BYTES not TIME; `parseTimeoutMs` is a `Promise.race` a synchronous
+parser never loses); the six serializer-side ones are unreachable. Lockfile-only, 3 lines + regenerated notices. **Two findings
+to keep:** (a) the Dependabot alert list is NOT the inventory — it had opened 1 of the 10 and that 1 was the unreachable class,
+while `npm audit` on the same DB found all ten plus unalerted js-yaml/baseline-browser-mapping; security updates are OFF, there
+is no `.github/dependabot.yml`, and CI runs no `npm audit`. (b) A bare `npm install` rewrites ~28 unrelated `"peer": true`
+markers — PRE-EXISTING drift (reproduces on a clean master with no version change), so bump dependency lockfiles surgically.
+Follow-up PR #452; the vitest 3→4 major (CVE-2026-84373, unreachable — no browser mode, no dev server) is DEFERRED, needs an owner._
 _2026-09-10 — **#436 + #437 CLOSED — the two silent live regions fixed** (`fix/436-437-live-region-announce`).
 **#436:** `role="status"` is a LIVE REGION (implicit `aria-live="polite"`), not a quieter label — so the `Banner` nested inside
 `ErrorBanner`'s always-mounted `role="alert"` wrapper became the nearest live-region ancestor of the message AND arrived already
