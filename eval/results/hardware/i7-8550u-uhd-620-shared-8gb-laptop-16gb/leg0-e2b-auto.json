@@ -1,0 +1,984 @@
+{
+  "hw_slug": "i7-8550u-uhd-620-shared-8gb-laptop-16gb",
+  "leg": "0",
+  "variant": "e2b-auto",
+  "model_id": "gemma4-e2b-it-qat-q4",
+  "model_file": "gemma4-e2b-it-qat-q4.gguf",
+  "model_bytes": 3349516256,
+  "runtime": "9849 (799fcc04a)",
+  "argv": "--host 127.0.0.1 --port 49717 --model <drive>\\models\\chat\\gemma4-e2b-it-qat-q4.gguf --ctx-size 8192 --threads 4 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1",
+  "extra_args": [],
+  "ctx": 8192,
+  "threads": 4,
+  "physical_batch": 2048,
+  "before": {
+    "list_devices": "Available devices:\r\n  Vulkan0: Intel(R) UHD Graphics 620 (8119 MiB, 7457 MiB free)",
+    "nvidia_smi": {
+      "used": 0
+    },
+    "desktop": "idle - HilbertRaum app closed, no dev server; Ollama idle service resident (30 MB), Edge resident",
+    "at": "2026-09-10T17:41:12.871Z"
+  },
+  "load_ms": 9250,
+  "after_load": {
+    "nvidia_smi": {
+      "used": 0
+    },
+    "list_devices": "Available devices:\r\n  Vulkan0: Intel(R) UHD Graphics 620 (8119 MiB, 7457 MiB free)",
+    "at": "2026-09-10T17:41:24.264Z"
+  },
+  "prompt_tokens": 2041,
+  "request_ms": 198307,
+  "tokens_predicted": 512,
+  "timings": {
+    "cache_n": 0,
+    "prompt_n": 2042,
+    "prompt_ms": 106832.886,
+    "prompt_per_token_ms": 52.31776983349657,
+    "prompt_per_second": 19.113964589517874,
+    "predicted_n": 512,
+    "predicted_ms": 91436.535,
+    "predicted_per_token_ms": 178.586982421875,
+    "predicted_per_second": 5.59951227373172
+  },
+  "peak_nvidia_smi": {
+    "t": 1789062084331,
+    "used": 0
+  },
+  "samples": [
+    {
+      "t": 1789062084331,
+      "used": 0
+    },
+    {
+      "t": 1789062085347,
+      "used": 0
+    },
+    {
+      "t": 1789062086348,
+      "used": 0
+    },
+    {
+      "t": 1789062087360,
+      "used": 0
+    },
+    {
+      "t": 1789062088362,
+      "used": 0
+    },
+    {
+      "t": 1789062089372,
+      "used": 0
+    },
+    {
+      "t": 1789062090388,
+      "used": 0
+    },
+    {
+      "t": 1789062091397,
+      "used": 0
+    },
+    {
+      "t": 1789062092401,
+      "used": 0
+    },
+    {
+      "t": 1789062093413,
+      "used": 0
+    },
+    {
+      "t": 1789062094415,
+      "used": 0
+    },
+    {
+      "t": 1789062095418,
+      "used": 0
+    },
+    {
+      "t": 1789062096423,
+      "used": 0
+    },
+    {
+      "t": 1789062097427,
+      "used": 0
+    },
+    {
+      "t": 1789062098427,
+      "used": 0
+    },
+    {
+      "t": 1789062099439,
+      "used": 0
+    },
+    {
+      "t": 1789062100441,
+      "used": 0
+    },
+    {
+      "t": 1789062101447,
+      "used": 0
+    },
+    {
+      "t": 1789062102450,
+      "used": 0
+    },
+    {
+      "t": 1789062103457,
+      "used": 0
+    },
+    {
+      "t": 1789062104472,
+      "used": 0
+    },
+    {
+      "t": 1789062105471,
+      "used": 0
+    },
+    {
+      "t": 1789062106473,
+      "used": 0
+    },
+    {
+      "t": 1789062107476,
+      "used": 0
+    },
+    {
+      "t": 1789062108480,
+      "used": 0
+    },
+    {
+      "t": 1789062109487,
+      "used": 0
+    },
+    {
+      "t": 1789062110488,
+      "used": 0
+    },
+    {
+      "t": 1789062111494,
+      "used": 0
+    },
+    {
+      "t": 1789062112509,
+      "used": 0
+    },
+    {
+      "t": 1789062113520,
+      "used": 0
+    },
+    {
+      "t": 1789062114535,
+      "used": 0
+    },
+    {
+      "t": 1789062115537,
+      "used": 0
+    },
+    {
+      "t": 1789062116549,
+      "used": 0
+    },
+    {
+      "t": 1789062117551,
+      "used": 0
+    },
+    {
+      "t": 1789062118566,
+      "used": 0
+    },
+    {
+      "t": 1789062119568,
+      "used": 0
+    },
+    {
+      "t": 1789062120580,
+      "used": 0
+    },
+    {
+      "t": 1789062121591,
+      "used": 0
+    },
+    {
+      "t": 1789062122599,
+      "used": 0
+    },
+    {
+      "t": 1789062123598,
+      "used": 0
+    },
+    {
+      "t": 1789062124600,
+      "used": 0
+    },
+    {
+      "t": 1789062125601,
+      "used": 0
+    },
+    {
+      "t": 1789062126603,
+      "used": 0
+    },
+    {
+      "t": 1789062127604,
+      "used": 0
+    },
+    {
+      "t": 1789062128615,
+      "used": 0
+    },
+    {
+      "t": 1789062129614,
+      "used": 0
+    },
+    {
+      "t": 1789062130617,
+      "used": 0
+    },
+    {
+      "t": 1789062131639,
+      "used": 0
+    },
+    {
+      "t": 1789062132645,
+      "used": 0
+    },
+    {
+      "t": 1789062133654,
+      "used": 0
+    },
+    {
+      "t": 1789062134663,
+      "used": 0
+    },
+    {
+      "t": 1789062135666,
+      "used": 0
+    },
+    {
+      "t": 1789062136689,
+      "used": 0
+    },
+    {
+      "t": 1789062137699,
+      "used": 0
+    },
+    {
+      "t": 1789062138704,
+      "used": 0
+    },
+    {
+      "t": 1789062139710,
+      "used": 0
+    },
+    {
+      "t": 1789062140721,
+      "used": 0
+    },
+    {
+      "t": 1789062141728,
+      "used": 0
+    },
+    {
+      "t": 1789062142745,
+      "used": 0
+    },
+    {
+      "t": 1789062143756,
+      "used": 0
+    },
+    {
+      "t": 1789062144763,
+      "used": 0
+    },
+    {
+      "t": 1789062145775,
+      "used": 0
+    },
+    {
+      "t": 1789062146779,
+      "used": 0
+    },
+    {
+      "t": 1789062147791,
+      "used": 0
+    },
+    {
+      "t": 1789062148795,
+      "used": 0
+    },
+    {
+      "t": 1789062149802,
+      "used": 0
+    },
+    {
+      "t": 1789062150810,
+      "used": 0
+    },
+    {
+      "t": 1789062151814,
+      "used": 0
+    },
+    {
+      "t": 1789062152814,
+      "used": 0
+    },
+    {
+      "t": 1789062153822,
+      "used": 0
+    },
+    {
+      "t": 1789062154828,
+      "used": 0
+    },
+    {
+      "t": 1789062155834,
+      "used": 0
+    },
+    {
+      "t": 1789062156845,
+      "used": 0
+    },
+    {
+      "t": 1789062157846,
+      "used": 0
+    },
+    {
+      "t": 1789062158855,
+      "used": 0
+    },
+    {
+      "t": 1789062159867,
+      "used": 0
+    },
+    {
+      "t": 1789062160876,
+      "used": 0
+    },
+    {
+      "t": 1789062161878,
+      "used": 0
+    },
+    {
+      "t": 1789062162885,
+      "used": 0
+    },
+    {
+      "t": 1789062163888,
+      "used": 0
+    },
+    {
+      "t": 1789062164888,
+      "used": 0
+    },
+    {
+      "t": 1789062165897,
+      "used": 0
+    },
+    {
+      "t": 1789062166906,
+      "used": 0
+    },
+    {
+      "t": 1789062167917,
+      "used": 0
+    },
+    {
+      "t": 1789062168928,
+      "used": 0
+    },
+    {
+      "t": 1789062169937,
+      "used": 0
+    },
+    {
+      "t": 1789062170947,
+      "used": 0
+    },
+    {
+      "t": 1789062171959,
+      "used": 0
+    },
+    {
+      "t": 1789062172967,
+      "used": 0
+    },
+    {
+      "t": 1789062173967,
+      "used": 0
+    },
+    {
+      "t": 1789062174976,
+      "used": 0
+    },
+    {
+      "t": 1789062175982,
+      "used": 0
+    },
+    {
+      "t": 1789062176992,
+      "used": 0
+    },
+    {
+      "t": 1789062178003,
+      "used": 0
+    },
+    {
+      "t": 1789062179015,
+      "used": 0
+    },
+    {
+      "t": 1789062180022,
+      "used": 0
+    },
+    {
+      "t": 1789062181032,
+      "used": 0
+    },
+    {
+      "t": 1789062182045,
+      "used": 0
+    },
+    {
+      "t": 1789062183056,
+      "used": 0
+    },
+    {
+      "t": 1789062184063,
+      "used": 0
+    },
+    {
+      "t": 1789062185068,
+      "used": 0
+    },
+    {
+      "t": 1789062186082,
+      "used": 0
+    },
+    {
+      "t": 1789062187084,
+      "used": 0
+    },
+    {
+      "t": 1789062188090,
+      "used": 0
+    },
+    {
+      "t": 1789062189100,
+      "used": 0
+    },
+    {
+      "t": 1789062190110,
+      "used": 0
+    },
+    {
+      "t": 1789062191119,
+      "used": 0
+    },
+    {
+      "t": 1789062192128,
+      "used": 0
+    },
+    {
+      "t": 1789062193131,
+      "used": 0
+    },
+    {
+      "t": 1789062194136,
+      "used": 0
+    },
+    {
+      "t": 1789062195148,
+      "used": 0
+    },
+    {
+      "t": 1789062196152,
+      "used": 0
+    },
+    {
+      "t": 1789062197167,
+      "used": 0
+    },
+    {
+      "t": 1789062198171,
+      "used": 0
+    },
+    {
+      "t": 1789062199174,
+      "used": 0
+    },
+    {
+      "t": 1789062200189,
+      "used": 0
+    },
+    {
+      "t": 1789062201202,
+      "used": 0
+    },
+    {
+      "t": 1789062202204,
+      "used": 0
+    },
+    {
+      "t": 1789062203215,
+      "used": 0
+    },
+    {
+      "t": 1789062204228,
+      "used": 0
+    },
+    {
+      "t": 1789062205230,
+      "used": 0
+    },
+    {
+      "t": 1789062206243,
+      "used": 0
+    },
+    {
+      "t": 1789062207250,
+      "used": 0
+    },
+    {
+      "t": 1789062208252,
+      "used": 0
+    },
+    {
+      "t": 1789062209262,
+      "used": 0
+    },
+    {
+      "t": 1789062210262,
+      "used": 0
+    },
+    {
+      "t": 1789062211270,
+      "used": 0
+    },
+    {
+      "t": 1789062212272,
+      "used": 0
+    },
+    {
+      "t": 1789062213275,
+      "used": 0
+    },
+    {
+      "t": 1789062214281,
+      "used": 0
+    },
+    {
+      "t": 1789062215290,
+      "used": 0
+    },
+    {
+      "t": 1789062216294,
+      "used": 0
+    },
+    {
+      "t": 1789062217301,
+      "used": 0
+    },
+    {
+      "t": 1789062218306,
+      "used": 0
+    },
+    {
+      "t": 1789062219317,
+      "used": 0
+    },
+    {
+      "t": 1789062220320,
+      "used": 0
+    },
+    {
+      "t": 1789062221335,
+      "used": 0
+    },
+    {
+      "t": 1789062222340,
+      "used": 0
+    },
+    {
+      "t": 1789062223340,
+      "used": 0
+    },
+    {
+      "t": 1789062224342,
+      "used": 0
+    },
+    {
+      "t": 1789062225347,
+      "used": 0
+    },
+    {
+      "t": 1789062226360,
+      "used": 0
+    },
+    {
+      "t": 1789062227364,
+      "used": 0
+    },
+    {
+      "t": 1789062228380,
+      "used": 0
+    },
+    {
+      "t": 1789062229394,
+      "used": 0
+    },
+    {
+      "t": 1789062230397,
+      "used": 0
+    },
+    {
+      "t": 1789062231403,
+      "used": 0
+    },
+    {
+      "t": 1789062232405,
+      "used": 0
+    },
+    {
+      "t": 1789062233409,
+      "used": 0
+    },
+    {
+      "t": 1789062234414,
+      "used": 0
+    },
+    {
+      "t": 1789062235427,
+      "used": 0
+    },
+    {
+      "t": 1789062236442,
+      "used": 0
+    },
+    {
+      "t": 1789062237447,
+      "used": 0
+    },
+    {
+      "t": 1789062238462,
+      "used": 0
+    },
+    {
+      "t": 1789062239474,
+      "used": 0
+    },
+    {
+      "t": 1789062240482,
+      "used": 0
+    },
+    {
+      "t": 1789062241483,
+      "used": 0
+    },
+    {
+      "t": 1789062242485,
+      "used": 0
+    },
+    {
+      "t": 1789062243487,
+      "used": 0
+    },
+    {
+      "t": 1789062244487,
+      "used": 0
+    },
+    {
+      "t": 1789062245502,
+      "used": 0
+    },
+    {
+      "t": 1789062246505,
+      "used": 0
+    },
+    {
+      "t": 1789062247508,
+      "used": 0
+    },
+    {
+      "t": 1789062248508,
+      "used": 0
+    },
+    {
+      "t": 1789062249514,
+      "used": 0
+    },
+    {
+      "t": 1789062250515,
+      "used": 0
+    },
+    {
+      "t": 1789062251518,
+      "used": 0
+    },
+    {
+      "t": 1789062252522,
+      "used": 0
+    },
+    {
+      "t": 1789062253536,
+      "used": 0
+    },
+    {
+      "t": 1789062254551,
+      "used": 0
+    },
+    {
+      "t": 1789062255557,
+      "used": 0
+    },
+    {
+      "t": 1789062256571,
+      "used": 0
+    },
+    {
+      "t": 1789062257585,
+      "used": 0
+    },
+    {
+      "t": 1789062258591,
+      "used": 0
+    },
+    {
+      "t": 1789062259592,
+      "used": 0
+    },
+    {
+      "t": 1789062260605,
+      "used": 0
+    },
+    {
+      "t": 1789062261609,
+      "used": 0
+    },
+    {
+      "t": 1789062262609,
+      "used": 0
+    },
+    {
+      "t": 1789062263624,
+      "used": 0
+    },
+    {
+      "t": 1789062264626,
+      "used": 0
+    },
+    {
+      "t": 1789062265628,
+      "used": 0
+    },
+    {
+      "t": 1789062266628,
+      "used": 0
+    },
+    {
+      "t": 1789062267632,
+      "used": 0
+    },
+    {
+      "t": 1789062268643,
+      "used": 0
+    },
+    {
+      "t": 1789062269658,
+      "used": 0
+    },
+    {
+      "t": 1789062270658,
+      "used": 0
+    },
+    {
+      "t": 1789062271663,
+      "used": 0
+    },
+    {
+      "t": 1789062272674,
+      "used": 0
+    },
+    {
+      "t": 1789062273674,
+      "used": 0
+    },
+    {
+      "t": 1789062274677,
+      "used": 0
+    },
+    {
+      "t": 1789062275691,
+      "used": 0
+    },
+    {
+      "t": 1789062276692,
+      "used": 0
+    },
+    {
+      "t": 1789062277707,
+      "used": 0
+    },
+    {
+      "t": 1789062278714,
+      "used": 0
+    },
+    {
+      "t": 1789062279715,
+      "used": 0
+    },
+    {
+      "t": 1789062280718,
+      "used": 0
+    },
+    {
+      "t": 1789062281729,
+      "used": 0
+    },
+    {
+      "t": 1789062282636,
+      "used": 0
+    }
+  ],
+  "after_stop": {
+    "nvidia_smi": {
+      "used": 0
+    },
+    "list_devices": "Available devices:\r\n  Vulkan0: Intel(R) UHD Graphics 620 (8119 MiB, 7457 MiB free)",
+    "exit": {
+      "code": null,
+      "sig": "SIGTERM"
+    }
+  },
+  "ignore_eos": true,
+  "prompt_text_in_log": false,
+  "request_errors": [],
+  "fit": {
+    "offloaded": [
+      "0.06.347.878 I load_tensors: offloaded 36/36 layers to GPU"
+    ],
+    "buffers": [
+      "0.06.347.886 I load_tensors:   CPU_Mapped model buffer size =  2152.50 MiB",
+      "0.06.347.889 I load_tensors:      Vulkan0 model buffer size =  1341.77 MiB",
+      "0.07.829.912 I llama_context: Vulkan_Host  output buffer size =     1.00 MiB",
+      "0.07.830.410 I llama_kv_cache:    Vulkan0 KV buffer size =    48.00 MiB",
+      "0.07.848.643 I llama_kv_cache:    Vulkan0 KV buffer size =    30.00 MiB",
+      "0.08.126.908 I sched_reserve:    Vulkan0 compute buffer size =   554.07 MiB",
+      "0.08.126.926 I sched_reserve: Vulkan_Host compute buffer size =   136.09 MiB"
+    ],
+    "kv": [
+      "0.02.268.882 I llama_model_loader: - kv  21:                  gemma4.rope.freq_base_swa f32              = 10000.000000",
+      "0.02.268.901 I llama_model_loader: - kv  30:            gemma4.attention.key_length_swa u32              = 256",
+      "0.02.268.902 I llama_model_loader: - kv  31:          gemma4.attention.value_length_swa u32              = 256",
+      "0.02.268.904 I llama_model_loader: - kv  33:            gemma4.rope.dimension_count_swa u32              = 256",
+      "0.03.582.900 I print_info: n_ctx_train           = 131072",
+      "0.03.582.948 I print_info: n_swa                 = 512",
+      "0.03.582.950 I print_info: is_swa_any            = 1",
+      "0.03.583.190 I print_info: freq_base_swa         = 10000.0",
+      "0.03.583.192 I print_info: freq_scale_swa        = 1",
+      "0.03.583.193 I print_info: n_embd_head_k_swa     = 256",
+      "0.03.583.195 I print_info: n_embd_head_v_swa     = 256",
+      "0.03.583.196 I print_info: n_rot_swa             = 256",
+      "0.03.583.198 I print_info: n_ctx_orig_yarn       = 131072",
+      "0.07.829.266 I llama_context: constructing llama_context",
+      "0.07.829.285 I llama_context: n_seq_max     = 1",
+      "0.07.829.286 I llama_context: n_ctx         = 8192",
+      "0.07.829.287 I llama_context: n_ctx_seq     = 8192",
+      "0.07.829.288 I llama_context: n_batch       = 2048",
+      "0.07.829.288 I llama_context: n_ubatch      = 2048",
+      "0.07.829.289 I llama_context: causal_attn   = 1",
+      "0.07.829.290 I llama_context: flash_attn    = auto",
+      "0.07.829.291 I llama_context: kv_unified    = false",
+      "0.07.829.295 I llama_context: freq_base     = 1000000.0",
+      "0.07.829.300 I llama_context: freq_scale    = 1",
+      "0.07.829.301 I llama_context: n_rs_seq      = 0",
+      "0.07.829.302 I llama_context: n_outputs_max = 1",
+      "0.07.829.303 I llama_context: n_ctx_seq (8192) < n_ctx_train (131072) -- the full capacity of the model will not be utilized",
+      "0.07.829.912 I llama_context: Vulkan_Host  output buffer size =     1.00 MiB",
+      "0.07.829.925 I llama_kv_cache_iswa: creating non-SWA KV cache, size = 8192 cells",
+      "0.07.845.999 I llama_kv_cache_iswa: creating     SWA KV cache, size = 2560 cells",
+      "0.08.949.833 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 8192, kv_unified = 'false'",
+      "0.08.950.053 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 8192",
+      "0.11.418.214 I slot   operator(): id  0 | task 0 | new prompt, n_ctx_slot = 8192, n_keep = 0, task.n_tokens = 2042",
+      "0.11.418.238 I slot   operator(): id  0 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)",
+      "0.12.028.968 I slot   operator(): id  0 | task 0 | cached n_tokens = 2038, memory_seq_rm [2038, end)"
+    ],
+    "fit": [
+      "# leg0-e2b-auto — argv: <drive>\\runtime\\llama.cpp\\win\\llama-server.exe --host 127.0.0.1 --port 49717 --model <drive>\\models\\chat\\gemma4-e2b-it-qat-q4.gguf --ctx-size 8192 --threads 4 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1",
+      "0.00.326.419 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.326.419 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+      "0.00.326.629 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.02.033.935 I common_params_fit_impl: projected to use 1973 MiB of device memory vs. 7448 MiB of free device memory",
+      "0.02.033.946 I common_params_fit_impl: will leave 5474 >= 1024 MiB of free device memory, no changes needed",
+      "0.02.033.956 I common_fit_params: successfully fit params to free device memory",
+      "0.02.033.965 I common_fit_params: fitting params to free memory took 1.69 seconds",
+      "0.08.949.833 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 8192, kv_unified = 'false'",
+      "0.08.950.794 I srv          init: idle slots will be saved to prompt cache upon starting a new task",
+      "0.09.029.407 I srv  update_slots: all slots are idle",
+      "3.29.688.049 I srv  update_slots: all slots are idle"
+    ],
+    "device": [
+      "0.00.304.943 I cmn  common_param: device_info:",
+      "0.00.306.801 I cmn  common_param:   - Vulkan0 : Intel(R) UHD Graphics 620 (8119 MiB, 7457 MiB free)",
+      "0.00.326.419 I cmn  common_init_: fitting params to device memory ...",
+      "0.00.326.629 I common_params_fit_impl: getting device memory data for initial parameters:",
+      "0.01.925.661 I common_memory_breakdown_print: |   - Vulkan0 (Intel(R) UHD Graphics 620) |  8119 = 7448 + (1973 =  1341 +      78 +     554) +       -1302 |",
+      "0.02.033.935 I common_params_fit_impl: projected to use 1973 MiB of device memory vs. 7448 MiB of free device memory",
+      "0.02.033.946 I common_params_fit_impl: will leave 5474 >= 1024 MiB of free device memory, no changes needed",
+      "0.02.033.956 I common_fit_params: successfully fit params to free device memory",
+      "0.02.886.503 I llama_prepare_model_devices: using device Vulkan0 (Intel(R) UHD Graphics 620) (unknown id) - 7448 MiB free",
+      "0.06.347.889 I load_tensors:      Vulkan0 model buffer size =  1341.77 MiB",
+      "0.07.830.410 I llama_kv_cache:    Vulkan0 KV buffer size =    48.00 MiB",
+      "0.07.848.643 I llama_kv_cache:    Vulkan0 KV buffer size =    30.00 MiB",
+      "0.08.126.908 I sched_reserve:    Vulkan0 compute buffer size =   554.07 MiB"
+    ]
+  },
+  "excerpt": [
+    "# leg0-e2b-auto — argv: <drive>\\runtime\\llama.cpp\\win\\llama-server.exe --host 127.0.0.1 --port 49717 --model <drive>\\models\\chat\\gemma4-e2b-it-qat-q4.gguf --ctx-size 8192 --threads 4 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1",
+    "0.00.304.943 I cmn  common_param: device_info:",
+    "0.00.326.419 I cmn  common_init_: fitting params to device memory ...",
+    "0.00.326.419 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)",
+    "0.00.326.629 I common_params_fit_impl: getting device memory data for initial parameters:",
+    "0.02.033.935 I common_params_fit_impl: projected to use 1973 MiB of device memory vs. 7448 MiB of free device memory",
+    "0.02.033.946 I common_params_fit_impl: will leave 5474 >= 1024 MiB of free device memory, no changes needed",
+    "0.02.033.956 I common_fit_params: successfully fit params to free device memory",
+    "0.02.033.965 I common_fit_params: fitting params to free memory took 1.69 seconds",
+    "0.02.268.882 I llama_model_loader: - kv  21:                  gemma4.rope.freq_base_swa f32              = 10000.000000",
+    "0.02.268.901 I llama_model_loader: - kv  30:            gemma4.attention.key_length_swa u32              = 256",
+    "0.02.268.902 I llama_model_loader: - kv  31:          gemma4.attention.value_length_swa u32              = 256",
+    "0.02.268.904 I llama_model_loader: - kv  33:            gemma4.rope.dimension_count_swa u32              = 256",
+    "0.02.886.503 I llama_prepare_model_devices: using device Vulkan0 (Intel(R) UHD Graphics 620) (unknown id) - 7448 MiB free",
+    "0.03.582.900 I print_info: n_ctx_train           = 131072",
+    "0.03.582.948 I print_info: n_swa                 = 512",
+    "0.03.582.950 I print_info: is_swa_any            = 1",
+    "0.03.583.190 I print_info: freq_base_swa         = 10000.0",
+    "0.03.583.192 I print_info: freq_scale_swa        = 1",
+    "0.03.583.193 I print_info: n_embd_head_k_swa     = 256",
+    "0.03.583.195 I print_info: n_embd_head_v_swa     = 256",
+    "0.03.583.196 I print_info: n_rot_swa             = 256",
+    "0.03.583.198 I print_info: n_ctx_orig_yarn       = 131072",
+    "0.03.583.232 I load_tensors: loading model tensors, this can take a while... (mmap = true, direct_io = false)",
+    "0.06.347.862 I load_tensors: offloading output layer to GPU",
+    "0.06.347.877 I load_tensors: offloading 34 repeating layers to GPU",
+    "0.06.347.878 I load_tensors: offloaded 36/36 layers to GPU",
+    "0.06.347.886 I load_tensors:   CPU_Mapped model buffer size =  2152.50 MiB",
+    "0.06.347.889 I load_tensors:      Vulkan0 model buffer size =  1341.77 MiB",
+    "0.07.829.286 I llama_context: n_ctx         = 8192",
+    "0.07.829.287 I llama_context: n_ctx_seq     = 8192",
+    "0.07.829.291 I llama_context: kv_unified    = false",
+    "0.07.829.303 I llama_context: n_ctx_seq (8192) < n_ctx_train (131072) -- the full capacity of the model will not be utilized",
+    "0.07.829.912 I llama_context: Vulkan_Host  output buffer size =     1.00 MiB",
+    "0.07.829.925 I llama_kv_cache_iswa: creating non-SWA KV cache, size = 8192 cells",
+    "0.07.830.410 I llama_kv_cache:    Vulkan0 KV buffer size =    48.00 MiB",
+    "0.07.845.999 I llama_kv_cache_iswa: creating     SWA KV cache, size = 2560 cells",
+    "0.07.848.643 I llama_kv_cache:    Vulkan0 KV buffer size =    30.00 MiB",
+    "0.08.126.908 I sched_reserve:    Vulkan0 compute buffer size =   554.07 MiB",
+    "0.08.126.926 I sched_reserve: Vulkan_Host compute buffer size =   136.09 MiB",
+    "0.08.949.833 I srv    load_model: initializing, n_slots = 1, n_ctx_slot = 8192, kv_unified = 'false'",
+    "0.08.950.053 I slot   load_model: id  0 | task -1 | new slot, n_ctx = 8192",
+    "0.08.950.794 I srv          init: idle slots will be saved to prompt cache upon starting a new task",
+    "0.09.029.407 I srv  update_slots: all slots are idle",
+    "0.11.418.214 I slot   operator(): id  0 | task 0 | new prompt, n_ctx_slot = 8192, n_keep = 0, task.n_tokens = 2042",
+    "3.29.688.049 I srv  update_slots: all slots are idle"
+  ],
+  "app_report": null
+}
