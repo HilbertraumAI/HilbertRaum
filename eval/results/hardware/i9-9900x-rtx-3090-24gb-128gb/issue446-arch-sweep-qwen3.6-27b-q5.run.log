@@ -1,0 +1,11 @@
+2026-09-10T08:55:33.607Z bin      <runtime>/llama-server
+2026-09-10T08:55:33.608Z model    <drive>/models/chat/qwen3.6-27b-q5.gguf
+2026-09-10T08:55:33.608Z ctx      8192  np 1  threads 10  extra []
+2026-09-10T08:55:33.608Z argv     <runtime>/llama-server --host 127.0.0.1 --port 8448 --model <drive>/models/chat/qwen3.6-27b-q5.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1
+2026-09-10T08:55:33.612Z waiting for /health ...
+2026-09-10T08:55:42.109Z server ready
+2026-09-10T08:55:46.038Z R1 (conversation A, long)  http=200  2927 ms  prompt_tokens=1508  completion_tokens=16  prompt_ms=2432.144  prompt_n=1508  cache_n=0
+2026-09-10T08:55:49.701Z R2 (conversation B, short)  http=200  1663 ms  prompt_tokens=64  completion_tokens=16  prompt_ms=595.87  prompt_n=23  cache_n=41
+2026-09-10T08:55:54.984Z R3 (back to conversation A)  http=200  3282 ms  prompt_tokens=1529  completion_tokens=16  prompt_ms=2414.531  prompt_n=1488  cache_n=41
+2026-09-10T08:55:58.986Z stopping server
+2026-09-10T08:55:59.584Z server exited code=0 signal=null

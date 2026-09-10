@@ -516,10 +516,10 @@ describe('answer-depth mode → request mapping (D4)', () => {
     await runtime.stop()
   })
 
-  // ---- #399 D5: the family-gated prompt-cache switch ----------------------------------
+  // ---- #399 D5 (+ #446): the family-gated prompt-cache switch --------------------------
   //
-  // On 11 of our 14 chat models llama-server writes the evicted conversation to its host-RAM
-  // prompt cache and can never read it back (recurrent state / sliding window — see
+  // On 13 of our 17 measured chat models llama-server writes the evicted conversation to its
+  // host-RAM prompt cache and can never read it back (recurrent state / sliding window — see
   // shared/prompt-cache-rules.ts for the sweep). `--cache-ram 0` stops paying for a copy that is
   // never used. CHAT_SERVER_ARGS is shared by EVERY chat model start on every machine, so these
   // pin both halves: the flag appears for an affected family, and the argv of every other family
@@ -548,9 +548,12 @@ describe('answer-depth mode → request mapping (D4)', () => {
   })
 
   it('adds nothing for an unaffected OR unmeasured family, and for a model with no family', async () => {
-    // 'qwen3' restored in the sweep; 'qwen3.6' was never started (#446) and defaults to cache-ON;
-    // no family at all is the same safe default. All three must produce the pre-#399 argv.
-    for (const family of ['qwen3', 'qwen3.6', undefined]) {
+    // 'qwen3' and 'granite' restored in the sweep (granite measured by #446); 'llama9' is not a
+    // family in the catalog at all, so it stands for the family added NEXT, which defaults to
+    // cache-ON until someone measures it; no family at all is the same safe default. All four must
+    // produce the pre-#399 argv. ('qwen3.6' used to be the unmeasured example here — #446 measured
+    // it and it turned out AFFECTED, so it would no longer test the default it was standing for.)
+    for (const family of ['qwen3', 'granite', 'llama9', undefined]) {
       const { spawn, calls } = fakeSpawn()
       const runtime = new LlamaRuntime(
         { ...startOpts, family },

@@ -28,6 +28,19 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-10 — **#446 CLOSED — the three untested chat entries measured; `qwen3.6` joins the rule, `granite` does not**
+(`eval/446-untested-families-sweep`; record `model-benchmarks.md` §6.6 "2026-09-10 addition (#446)",
+`known-limitations.md` "The one chat slot and the prompt cache"; evidence
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue446-arch-sweep-*`). The #399 sweep skipped these three for logistics:
+both `qwen3.6-27b` quants were broken symlinks into the eval drive deleted 2026-09-04, `granite-4.1-8b-q4` was never on the rig.
+Weights re-fetched and verified against manifest `sha256` **and** `size_bytes`, then run through the **unchanged** leg-A driver,
+same pinned b9849 (`799fcc04a`), no MTP, all fully offloaded. **`qwen3.6` RE-PREFILLED** — both quants report arch `qwen35` with a
+149.62 MiB recurrent state over 64 layers and re-prefill **1,488 of 1,529** tokens, keeping only the 41-token system prefix; it
+joins `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` (`shared/prompt-cache-rules.ts`), affected set now **13 of 17 measured models**.
+**`granite` RESTORED** — arch `granite`, `n_swa` 0, no recurrent state, **22 of 1,414** re-prefilled with 1,392 kept; a fourth
+positive control, and the concrete case for the cache-ON default. Control `qwen3.8-27b-ud-q5km` reproduced the sweep token for
+token (1,492 of 1,571, 79 kept). Trap held a fourth time: `forcing full` appears **0 times** in all four captures, including the
+two that re-prefilled. Every catalog `family:` now has a verdict; the default still governs the family added next._
 _2026-09-10 — **#436 + #437 CLOSED — the two silent live regions fixed** (`fix/436-437-live-region-announce`).
 **#436:** `role="status"` is a LIVE REGION (implicit `aria-live="polite"`), not a quieter label — so the `Banner` nested inside
 `ErrorBanner`'s always-mounted `role="alert"` wrapper became the nearest live-region ancestor of the message AND arrived already
@@ -60,8 +73,8 @@ resume, never on `acquireForChat`, which chat awaits). **D5** — `--cache-ram 0
 (`shared/prompt-cache-rules.ts`); unmeasured families keep cache-ON, the safe direction. **D4 deferred**: leg B showed a
 documents ask keeps only its ~227-token system prefix with or without a helper, so the length-proportional cost belongs to
 the plain-CHAT path alone and a picker warning would overstate it. Residual: a break longer than the delay still costs ONE
-slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` never tested — must not be read as "measured and
-fine") and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
+slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` never tested — CLOSED 2026-09-10, see that entry)
+and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
 prompt re-processing` appears only on MTP starts — the token count is the only honest read._
 
 _2026-09-09 — **#331 CLOSED — the four blocked HW3 acceptance legs performed** (`docs/331-hardware-acceptance-legs`;

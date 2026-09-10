@@ -1038,10 +1038,10 @@ fourteen-model sweep, not on the 27B Q5 control, not on any Gemma. Without MTP t
 confident `load: - found better prompt with f_keep = 0.990, sim = 0.983` and then silently re-prefills
 the whole prompt anyway. Grepping for `forcing full` gives the **opposite** answer; the TOKEN COUNT
 (`prompt eval time = … / N tokens` against `cached n_tokens`) is the only honest read. Still
-unmeasured: `qwen3.6-27b-q4` / `-q5` and `granite-4.1-8b-q4` (#446), and the ZIM query expander
-(#447). If llama.cpp PR #13194 lands recurrent-state restore upstream, both the delay and the D5
-switch become removable. Follow-up: #399 (closed by this work). **What it does NOT change: the
-context window.**
+unmeasured: the ZIM query expander (#447) — the three chat entries this paragraph used to list are
+measured, see the 2026-09-10 addition below. If llama.cpp PR #13194 lands recurrent-state restore
+upstream, both the delay and the D5 switch become removable. Follow-up: #399 (closed by this work).
+**What it does NOT change: the context window.**
 `--ctx-size` is the TOTAL cache size on both settings and every slot sees all of it
 (`n_ctx_slot = 8192` either way; `kv_unified` goes true → false, `n_seq_max` 4 → 1). That is the
 whole reason only four of the seven cache terms moved — see point 4 above for the rule and the
@@ -1051,6 +1051,37 @@ is the safe direction (the guard refuses a rung it could have run, never the rev
 verdicts it was calibrated to reproduce — Q4/Q5 clear a 24 GB card, Q6_K does not — are unchanged.
 Evidence: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg1-np-1.*` against
 `leg7-baseline-q5km.*`; finding 4 below is the measurement this decision was waiting for.
+
+**2026-09-10 addition (#446): the three entries the sweep could not start, measured — `qwen3.6`
+loses the restore, `granite` keeps it.** The #399 sweep left three catalog entries untested for
+reasons of logistics, not judgement: `qwen3.6-27b-q4` and `-q5` were broken symlinks into the eval
+drive deleted 2026-09-04, and `granite-4.1-8b-q4` was not on the rig. Under the conservative D5
+default all three were treated as unaffected, which was safe but left the record ambiguous — the
+standing risk being that "never tested" quietly reads as "measured and fine". All three weights were
+fetched, verified against the manifest's `sha256` **and** `size_bytes`, and run through the
+**unchanged** leg-A driver on the same machine and the same pinned binary, no MTP. Evidence:
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue446-arch-sweep-*`.
+
+| model | arch | n_swa | recurrent state | layers | R3 prefilled | kept | verdict |
+|---|---|---|---|---|---|---|---|
+| `qwen3.6-27b-q4` | qwen35 | 0 | 149.62 MiB (64 layers) | 65/65 | **1488 of 1529** | 41 | **RE-PREFILLED** |
+| `qwen3.6-27b-q5` | qwen35 | 0 | 149.62 MiB (64 layers) | 65/65 | **1488 of 1529** | 41 | **RE-PREFILLED** |
+| `granite-4.1-8b-q4` | granite | 0 | none | 41/41 | **22 of 1414** | 1392 | **RESTORED** |
+| `qwen3.8-27b-ud-q5km` (control) | qwen35 | 0 | 149.62 MiB (64 layers) | 66/66 | **1492 of 1571** | 79 | **RE-PREFILLED** |
+
+The control reproduced the sweep **token for token** (1,492 of 1,571, 79 kept), so the rows above
+belong in the same table as the fourteen. **`qwen3.6` is affected because it reports arch `qwen35`
+with a 149.62 MiB recurrent state** — the expectation from its lineage happened to be right, but the
+architecture line is what decided it, and both quants are identical in every column. `--cache-ram 0`
+therefore extends to the `qwen3.6` family (`shared/prompt-cache-rules.ts`), making the affected set
+**13 of 17 measured models**. **`granite` restored** — no sliding window, no recurrent state, 22 of
+1,414 tokens re-prefilled, and the 217.517 MiB it saved on the hand-back was actually read back. It
+becomes the fourth positive control beside `qwen3`, `qwen3moe` and `mistral3`, and it is the
+concrete case for keeping the cache-ON default: the family nobody had an opinion about is the one
+that would have lost real restores. Every `family:` in the catalog now has a verdict; the default
+still governs the family added next. The `forcing full` trap held a fourth time — that line appears
+**0 times** in all four captures, including the two `qwen3.6` runs, which instead logged a confident
+`found better prompt with f_keep = 0.989, sim = 0.985` before re-prefilling 1,488 tokens.
 
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
