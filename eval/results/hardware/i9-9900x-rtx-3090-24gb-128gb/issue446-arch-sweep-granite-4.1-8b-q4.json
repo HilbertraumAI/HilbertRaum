@@ -1,0 +1,123 @@
+{
+  "model": "<drive>/models/chat/granite-4.1-8b-q4.gguf",
+  "bin": "<runtime>/llama-server",
+  "argv": [
+    "<runtime>/llama-server",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8446",
+    "--model",
+    "<drive>/models/chat/granite-4.1-8b-q4.gguf",
+    "--ctx-size",
+    "8192",
+    "--threads",
+    "10",
+    "--batch-size",
+    "2048",
+    "--ubatch-size",
+    "2048",
+    "--jinja",
+    "--reasoning-format",
+    "deepseek",
+    "-lv",
+    "4",
+    "-np",
+    "1"
+  ],
+  "requests": [
+    {
+      "label": "R1 (conversation A, long)",
+      "http": 200,
+      "elapsedMs": 1060,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 1377,
+        "total_tokens": 1393,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 1377,
+        "prompt_ms": 760.18,
+        "prompt_per_token_ms": 0.5520551924473492,
+        "prompt_per_second": 1811.4130863742798,
+        "predicted_n": 16,
+        "predicted_ms": 268.88,
+        "predicted_per_token_ms": 16.805,
+        "predicted_per_second": 59.506099375185954
+      },
+      "content": "A spare gasket set is kept in the grey cabinet beside the workshop door and"
+    },
+    {
+      "label": "R2 (conversation B, short)",
+      "http": 200,
+      "elapsedMs": 579,
+      "usage": {
+        "completion_tokens": 11,
+        "prompt_tokens": 62,
+        "total_tokens": 73,
+        "prompt_tokens_details": {
+          "cached_tokens": 44
+        }
+      },
+      "timings": {
+        "cache_n": 44,
+        "prompt_n": 18,
+        "prompt_ms": 174.669,
+        "prompt_per_token_ms": 9.703833333333334,
+        "prompt_per_second": 103.05205846486783,
+        "predicted_n": 11,
+        "predicted_ms": 246.268,
+        "predicted_per_token_ms": 22.388,
+        "predicted_per_second": 44.66678577809541
+      },
+      "content": "A barometer is used to measure atmospheric pressure."
+    },
+    {
+      "label": "R3 (back to conversation A)",
+      "http": 200,
+      "elapsedMs": 576,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 1414,
+        "total_tokens": 1430,
+        "prompt_tokens_details": {
+          "cached_tokens": 1392
+        }
+      },
+      "timings": {
+        "cache_n": 1392,
+        "prompt_n": 22,
+        "prompt_ms": 189.85,
+        "prompt_per_token_ms": 8.629545454545454,
+        "prompt_per_second": 115.88095865156704,
+        "predicted_n": 16,
+        "predicted_ms": 291.117,
+        "predicted_per_token_ms": 18.1948125,
+        "predicted_per_second": 54.96072026023901
+      },
+      "content": "The compressor room door stays closed while the machine is running to keep the noise contained"
+    }
+  ],
+  "promptEvals": [
+    {
+      "task": 0,
+      "ms": 760.18,
+      "tokens": 1377
+    },
+    {
+      "task": 18,
+      "ms": 174.67,
+      "tokens": 18
+    },
+    {
+      "task": 30,
+      "ms": 189.85,
+      "tokens": 22
+    }
+  ],
+  "stderrLines": 269
+}

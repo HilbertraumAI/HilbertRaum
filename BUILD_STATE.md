@@ -28,6 +28,36 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-10 — **#446 CLOSED — the three untested chat entries measured; `qwen3.6` joins the rule, `granite` does not**
+(`eval/446-untested-families-sweep`; record `model-benchmarks.md` §6.6 "2026-09-10 addition (#446)",
+`known-limitations.md` "The one chat slot and the prompt cache"; evidence
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue446-arch-sweep-*`). The #399 sweep skipped these three for logistics:
+both `qwen3.6-27b` quants were broken symlinks into the eval drive deleted 2026-09-04, `granite-4.1-8b-q4` was never on the rig.
+Weights re-fetched and verified against manifest `sha256` **and** `size_bytes`, then run through the **unchanged** leg-A driver,
+same pinned b9849 (`799fcc04a`), no MTP, all fully offloaded. **`qwen3.6` RE-PREFILLED** — both quants report arch `qwen35` with a
+149.62 MiB recurrent state over 64 layers and re-prefill **1,488 of 1,529** tokens, keeping only the 41-token system prefix; it
+joins `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` (`shared/prompt-cache-rules.ts`), affected set now **13 of 17 measured models**.
+**`granite` RESTORED** — arch `granite`, `n_swa` 0, no recurrent state, **22 of 1,414** re-prefilled with 1,392 kept; a fourth
+positive control, and the concrete case for the cache-ON default. Control `qwen3.8-27b-ud-q5km` reproduced the sweep token for
+token (1,492 of 1,571, 79 kept). Trap held a fourth time: `forcing full` appears **0 times** in all four captures, including the
+two that re-prefilled. Every catalog `family:` now has a verdict; the default still governs the family added next._
+_2026-09-10 — **Build-chain advisories cleared: `fast-uri` 3.1.7, `browserslist` 4.28.9, `js-yaml` 4.3.2,
+`baseline-browser-mapping` 2.11.21** (PR #452, stacked on PR #451). All dev-scope, in-range, lockfile-only; browserslist brings
+its data chain with it. `npm audit` after this is **0 high / 0 critical** — only the deferred vitest chain remains. The four
+`fast-uri` CVEs all need an untrusted URI and the only consumer is `ajv` reading our own `electron-builder.yml` on the MANUAL
+package step (R2) — no exposure. The one that matters on a PUBLIC repo is `browserslist` CVE-2026-73088: `normalizeStats()` runs
+on every `browserslist()` call and auto-discovers `browserslist-stats.json` up the directory tree, so a contributor PR adding one
+file crashes every Babel/Vite build in CI. Build-availability only._
+_2026-09-10 — **`@xmldom/xmldom` 0.8.13 → 0.8.15 — the one dependency advisory that reached users** (PR #451,
+`fix/xmldom-parser-dos-0815`; record `security-model.md` BE-9 + the DOCX-parser paragraph under it, which carries the
+reachability analysis). Ten advisories: the four PARSER-side ones reach `parsers/docx.ts` → mammoth → `DOMParser` on an imported
+`.docx` and freeze the main process (M-3 bounds inflated BYTES not TIME; `parseTimeoutMs` is a `Promise.race` a synchronous
+parser never loses); the six serializer-side ones are unreachable. Lockfile-only, 3 lines + regenerated notices. **Two findings
+to keep:** (a) the Dependabot alert list is NOT the inventory — it had opened 1 of the 10 and that 1 was the unreachable class,
+while `npm audit` on the same DB found all ten plus unalerted js-yaml/baseline-browser-mapping; security updates are OFF, there
+is no `.github/dependabot.yml`, and CI runs no `npm audit`. (b) A bare `npm install` rewrites ~28 unrelated `"peer": true`
+markers — PRE-EXISTING drift (reproduces on a clean master with no version change), so bump dependency lockfiles surgically.
+Follow-up PR #452; the vitest 3→4 major (CVE-2026-84373, unreachable — no browser mode, no dev server) is DEFERRED, needs an owner._
 _2026-09-10 — **#436 + #437 CLOSED — the two silent live regions fixed** (`fix/436-437-live-region-announce`).
 **#436:** `role="status"` is a LIVE REGION (implicit `aria-live="polite"`), not a quieter label — so the `Banner` nested inside
 `ErrorBanner`'s always-mounted `role="alert"` wrapper became the nearest live-region ancestor of the message AND arrived already
@@ -60,8 +90,8 @@ resume, never on `acquireForChat`, which chat awaits). **D5** — `--cache-ram 0
 (`shared/prompt-cache-rules.ts`); unmeasured families keep cache-ON, the safe direction. **D4 deferred**: leg B showed a
 documents ask keeps only its ~227-token system prefix with or without a helper, so the length-proportional cost belongs to
 the plain-CHAT path alone and a picker warning would overstate it. Residual: a break longer than the delay still costs ONE
-slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` never tested — must not be read as "measured and
-fine") and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
+slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` never tested — CLOSED 2026-09-10, see that entry)
+and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
 prompt re-processing` appears only on MTP starts — the token count is the only honest read._
 
 _2026-09-09 — **#331 CLOSED — the four blocked HW3 acceptance legs performed** (`docs/331-hardware-acceptance-legs`;
