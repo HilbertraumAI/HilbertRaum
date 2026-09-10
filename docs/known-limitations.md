@@ -2508,18 +2508,19 @@ between a full and a half offload. The consequence is that when something else t
 conversation's KV prefix is evicted — and on most of the models we ship, llama-server **cannot give
 it back**.
 
-- **On 11 of our 14 chat models an evicted chat prefix is re-prefilled from scratch, not restored**
-  (measured 2026-09-08/09, #399). llama-server saves the conversation to its host-RAM prompt cache
-  and then silently re-processes the whole prompt anyway. Two architectures lose the restore:
-  **recurrent state** — the whole `qwen3.5` line (`-2b`, `-4b`, `-9b`, `-35b-a3b`) and all three
-  `qwen3.8-27b` quants — and a **sliding window** — all four `gemma4` manifests (`e2b`, `e4b`,
-  `12b`, `26b-a4b`). That includes the **catalog-default 4B and the 9B**, i.e. the 8–12 GB tier
-  picks. Among ranked models only `ministral3-8b-instruct-2512-q4` keeps the restore; the dense
-  `qwen3-8b` and the `qwen3-30b-a3b` MoE keep it too, which is what makes this a measured
-  architecture split rather than an anecdote. **Not measured:** `qwen3.6-27b-q4` / `-q5` and
-  `granite-4.1-8b-q4` (#446 — almost certainly affected, treated as unaffected by the conservative
-  default), and the ZIM query expander's own call (#447). If llama.cpp PR #13194 lands
-  recurrent-state restore upstream, this whole entry becomes removable.
+- **On 13 of our 17 measured chat models an evicted chat prefix is re-prefilled from scratch, not
+  restored** (measured 2026-09-08/09, #399; extended 2026-09-10, #446). llama-server saves the
+  conversation to its host-RAM prompt cache and then silently re-processes the whole prompt anyway.
+  Two architectures lose the restore: **recurrent state** — the whole `qwen3.5` line (`-2b`, `-4b`,
+  `-9b`, `-35b-a3b`), both `qwen3.6-27b` quants and all three `qwen3.8-27b` quants — and a **sliding
+  window** — all four `gemma4` manifests (`e2b`, `e4b`, `12b`, `26b-a4b`). That includes the
+  **catalog-default 4B and the 9B**, i.e. the 8–12 GB tier picks. Among ranked models only
+  `ministral3-8b-instruct-2512-q4` keeps the restore; the dense `qwen3-8b`, the `qwen3-30b-a3b` MoE
+  and `granite-4.1-8b-q4` keep it too, which is what makes this a measured architecture split rather
+  than an anecdote. **Not measured:** the ZIM query expander's own call (#447) — every chat family in
+  the catalog now has a verdict, `qwen3.6` (affected) and `granite` (unaffected) being the last two,
+  measured under #446. If llama.cpp PR #13194 lands recurrent-state restore upstream, this whole
+  entry becomes removable.
 - **What can actually evict a live conversation is narrower than it sounds.** `assertChatStreamReady`
   makes categorisation, summary, translate, compare, OCR and every `modelLane` skill run **refuse**
   a chat turn rather than take the slot from it. The one cooperative hand-back is the **yielding
@@ -2538,13 +2539,15 @@ it back**.
   never gets its deep index is a worse outcome than one slow reply. A steady chat every 30 s
   therefore still pays a re-prefill roughly every 10 minutes.
 - **Behaviour change on affected models: llama-server's host prompt cache is switched off**
-  (`--cache-ram 0`, gated on the manifest's `family:` — `qwen3.5`, `qwen3.8`, `gemma4`). On those
-  models the cache was written on every hand-back (15–344 MiB per eviction, up to an 8 GiB host-RAM
-  default) and **never read**, so this gives that RAM back and costs nothing. Every other family —
-  **including a family nobody has measured** — keeps the cache on. That asymmetry is the point:
-  disabling it on an unaffected model would cost real restores, while leaving it on an affected one
-  merely continues a waste we can already name. Chat only; the embedder, reranker, translation and
-  vision sidecars do not inherit the chat args and are untouched.
+  (`--cache-ram 0`, gated on the manifest's `family:` — `qwen3.5`, `qwen3.6`, `qwen3.8`, `gemma4`).
+  On those models the cache was written on every hand-back (15–344 MiB per eviction, up to an 8 GiB
+  host-RAM default) and **never read**, so this gives that RAM back and costs nothing. Every other
+  family — **including a family nobody has measured** — keeps the cache on. That asymmetry is the
+  point: disabling it on an unaffected model would cost real restores, while leaving it on an
+  affected one merely continues a waste we can already name. `granite-4.1-8b-q4` is what that
+  caution is for: it was the entry expected to be a formality and it turned out to restore. Chat
+  only; the embedder, reranker, translation and vision sidecars do not inherit the chat args and are
+  untouched.
 
 ## Speculative decoding (MTP — [`architecture.md`](architecture.md) "MTP speculative decoding" record)
 
