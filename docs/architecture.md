@@ -3385,7 +3385,10 @@ threshold fell to 2,271 MiB, and the floor was KEPT because the E2B is the ONLY 
 fits the budget such a card actually produces (≈ 3,328 MiB — its ~4,096 total less the 768 MiB idle
 reserve measured on every card in the project; the 4B's 3,838 does not fit it), so admitting it would
 star the smallest model at every RAM size with no 4 GB measurement anywhere in the project to justify
-the demotion. Reasoning and evidence: `model-benchmarks.md` §6.6 N8 ("Why 5,120 — RESTATED").
+the demotion. **Closed 2026-09-11 (owner, #413): kept without one.** The project owns no 4 GB card,
+and keeping the floor is the side that corrects itself (a crawl on the RAM pick steps the ★ down,
+§6.5), while a lowered floor would pin the E2B with no step back up. Reasoning and evidence:
+`model-benchmarks.md` §6.6 N8 ("Why 5,120 — RESTATED", "Decided 2026-09-11").
 
 **UI:** Settings toggle ("Uses your graphics card to speed up responses when available…"),
 Diagnostics Acceleration + runtime-build lines, compatibility-mode notice + "Try GPU again",

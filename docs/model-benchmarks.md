@@ -774,7 +774,8 @@ rests on what the star would actually do at the budget such a card produces rath
 fitting. That budget figure was itself corrected 2026-09-10 (#413): the 2026-09-08 text said
 ~3,900 MiB free, which no probed card supports — on the 768 MiB idle reserve measured on every card
 in this project it is ≈ 3,328, below the 4B's 3,838, so the E2B is alone at BOTH budget forms and
-the argument is intact. The N8 note carries the reserve table.
+the argument is intact. The N8 note carries the reserve table. Closed 2026-09-11 (owner, #413): the
+floor stays without a 4 GB measurement; N8 "Decided 2026-09-11" carries the reason.
 
 **Hardware verification (issue #318, 2026-09-07) — the 6, 8, 12 and 24 GB rows are VERIFIED on
 real starts; the 20 GB row stays predicted.** When this section was written (G3) no model could be
@@ -1172,10 +1173,23 @@ the free figure and the no-free-figure total − 1,024 = 3,072 — still collaps
 cost of a lowering stays pinned on both forms in `committed-catalog.test.ts` either way, and that
 test now asserts the 3,328 form beside them.
 
-*What would reopen it.* A real 4 GB card measured on the §6.6 protocol: the E2B fully offloaded on
-that card against the RAM pick partially offloaded, on a 16 GB and a 32 GB machine. If the card wins
-those, the floor comes down the way it came down for 6 GB. Until then it stays where the measured
-cards put it. Two things such a card settles before it runs a single benchmark, and both are cheap:
+*Decided 2026-09-11 (owner, #413): the floor STAYS, and without a 4 GB measurement.* The project
+owns no 4 GB card and will not buy one, so the question is closed on the asymmetry between the two
+ways of being wrong instead of being held open for a leg nobody will run. Keeping the floor is the
+side that corrects itself. The floor never moves PLACEMENT (leg 4's E2B went 36/36 onto a card the
+gate of the day refused), so a 4 GB-card machine gets the RAM pick, partially offloaded onto that
+card anyway, and if that start measures below `SLOW_PICK_TOKENS_PER_SECOND` the §6.5 step-down
+(`applySpeedSignal` on the RAM path, `models.ts`; pinned by `committed-catalog.test.ts` "steps each
+tier down one band on a right-sized crawl") moves the ★ one ranked tier down on that user's own
+measurement. Lowering the floor has no such correction: the ★ would sit on the E2B at every RAM
+size, and nothing steps a pick UP when a small model runs fast, so a 32 GB machine would stay on the
+smallest ranked model for good. The accepted residual: on such a machine a RAM pick that runs at or
+above the crawl gate stays the ★ even where the E2B, fully offloaded, might be faster.
+
+*What would reopen it.* A 4 GB card measured on the §6.6 protocol, by anyone who has one: the E2B
+fully offloaded on that card against the RAM pick partially offloaded, on a 16 GB and a 32 GB
+machine. If the card wins those, the floor comes down the way it came down for 6 GB. Two things such
+a card settles before it runs a single benchmark, and both are cheap:
 what it reports as its TOTAL, and what it reports FREE with a desktop on it. **The total is what a
 lowering would have to be set from, and 4,096 is not it** — reported totals do not track nominal
 capacity, and the four measured cards split in both directions: 3080 Ti 12,084 for a nominal 12,288

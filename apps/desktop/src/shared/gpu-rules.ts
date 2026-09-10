@@ -58,7 +58,13 @@ export type GpuDeviceLike = Pick<GpuDevice, 'name' | 'totalMb'>
  * Both budget forms — the probe's free figure and the no-free-figure total − 1,024 = 3,072 — still
  * collapse to the E2B alone, and both are pinned in `committed-catalog.test.ts`.
  *
- * What reopens it: a real 4 GB card measured on the protocol. Note for whoever runs it that 4,096 is
+ * Decided 2026-09-11 (owner, #413): the floor stays, with NO 4 GB measurement planned (the project
+ * owns no such card). Keeping it is the side that corrects itself: the floor never moves placement,
+ * so a 4 GB-card machine gets the RAM pick partly offloaded onto its card, and a crawl on that pick
+ * steps the ★ down (§6.5, `applySpeedSignal`). A lowered floor would pin the E2B at every RAM size,
+ * and nothing steps a pick back up.
+ *
+ * What reopens it: a 4 GB card measured on the protocol, by anyone who has one. Note that 4,096 is
  * NOT the floor value to lower to — reported totals do not track nominal capacity and the four
  * measured cards split both ways (3080 Ti 12,084 of 12,288 and 3060 Laptop 5,994 of 6,144, against
  * 1070 Ti 8,273 of 8,192 and 3090 24,822 of 24,576, the latter two summing a second BAR heap).

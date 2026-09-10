@@ -569,8 +569,10 @@ describe('committed catalog — §6.6 rule C graphics-memory pick (PR #308 audit
   // 4,096 − 768 = 3,328, which the 4B does NOT clear. All THREE forms are asserted below: 3,072
   // (no free figure), 3,328 (the measured reserve — the one a real card would produce) and 3,900
   // (the fixture, kept so the one form that would weaken the argument stays visible rather than
-  // being quietly dropped). The floor is unchanged; lowering it is still an owner call and still
-  // wants a real 4 GB card on the §6.6 protocol.
+  // being quietly dropped). The floor is unchanged, and since 2026-09-11 (#413) that is DECIDED
+  // without a 4 GB measurement: keeping it self-corrects through the §6.5 step-down, a lowered
+  // floor would not (§6.6 N8 "Decided 2026-09-11"). Reopen only on a real 4 GB card measured on
+  // the §6.6 protocol.
   it('a 4 GB card: the smallest-ranked-model argument holds at both budget forms a real one produces (#321, #391, #413)', () => {
     const chat = committedManifests().filter((m) => m.role === 'chat')
     const fits = (budget: number) =>
