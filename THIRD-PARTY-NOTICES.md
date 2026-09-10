@@ -74,7 +74,7 @@ node scripts/generate-third-party-notices.mjs
 @types/unist@2.0.11
 @types/unist@3.0.3
 @ungap/structured-clone@1.3.1
-@xmldom/xmldom@0.8.13
+@xmldom/xmldom@0.8.15
 argparse@1.0.10
 aria-hidden@1.2.6
 bail@2.0.2
@@ -1735,7 +1735,7 @@ OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION WITH THE USE OR
 PERFORMANCE OF THIS SOFTWARE.
 ```
 
-### @xmldom/xmldom@0.8.13
+### @xmldom/xmldom@0.8.15
 
 - License: MIT
 - Repository: git://github.com/xmldom/xmldom
