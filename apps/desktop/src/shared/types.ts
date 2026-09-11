@@ -2351,7 +2351,10 @@ export const MAX_BENCHMARK_HISTORY = 8
 /**
  * The step the running benchmark is on (`EVENTS.benchmarkProgress`): the Performance screen
  * shows the steps as they complete instead of one opaque "Running…" button. 'speed' is
- * skipped entirely (no event) when no runtime is up.
+ * skipped entirely (no event) when no runtime is up. Addressed to the window that invoked
+ * `benchmark:run`, so a run started anywhere else (first-run, moved-drive, another window)
+ * produces none — the screen shows one background line for those rather than a list it could
+ * never advance (#438).
  */
 export type BenchmarkProgressStep = 'system' | 'drive' | 'speed' | 'done'
 

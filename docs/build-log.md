@@ -50,6 +50,29 @@ on the card anyway; 24 GB: Q4 66/66, Q5 62/66 under rung 1a yet 66/66 with `-np 
 Intel-first hybrid do not exist in the project → predicted by inference. Record + six findings: `model-benchmarks.md`
 §6.6 "Hardware verification"; evidence `eval/results/hardware/<slug>/`; routed to #319/#320/#321/#329/#332; §5 item 22 (e)–(k)._
 
+## 2026-09-12 — the two 2026-09-07 models/runtime entries retired verbatim (preamble budget)
+
+_Moved out of `BUILD_STATE.md` while making room for the #438 entry. Both waves are closed: the
+#372 model-load latch and the #310/#312/#313/#314/#315 models-runtime fix wave (PR #371). The
+wave's still-open residuals stay live in `BUILD_STATE.md` §5 item 23; the durable records are the
+GPU record §5.2/§5.4 in `docs/architecture.md`._
+
+_2026-09-07 — **#372 (the #312 follow-up; `fix/372-model-load-latch`):** a model the ladder blamed is latched for the session
+(`factory.ts` module state beside the #182 latch): its next start spawns no rung, re-fires the model-named notice and lands on the
+mock at once — no repeated 180 s health timeouts. With acceleration off / auto-disabled (no GPU rung to compare against) every rung
+failing now names the model too; `gpuAutoDisabled` is never written on that path. Only a `failureSignature` class latches (never a
+bind race or an unrecognised shape). Clearing rule: "Verify checksum" on the model, a completed download of it, a chat-engine install
+(every latch), an app restart — not "Try GPU again". Record: GPU record §5.2 "#372" paragraph + §5.4 table; user-guide, known-limitations,
+CHANGELOG. Tests: `runtime-ladder.test.ts` "#372" (16 cases + the `ctx.onModelInstalled` source pin), `core-model-ipc`, `engine-consent-ipc`, `gpu-ipc`._
+_2026-09-07 — **Models/runtime fix wave (#310, #312, #313, #314, #315; `fix/310-315-models-runtime-wave`, one PR):**
+#310 a manifest declares every required weight file (`files:`, validator fail-closed incl. shard-set completeness; one enumeration
+`manifestFiles()` feeds install state, verify, byte totals, prefetch, planner, both verify/fetch scripts; sidecar roles need every
+file present); #312 the ladder holds a rung-1 failure until a forced-CPU rung answers — same failure class on every rung blames the
+MODEL (nothing persisted, `runtime:notice` names it), a CPU rung starting persists as before (GPU record §5.2); #313 family options
+follow view + task, a kept selection is marked, family-only reset; #314 `downloads:list`/`downloads:dismiss` re-attach a download after
+a renderer reload, dismissal lives in main memory; #315 findBy assertions, baseline staleness test, 17 dead keys deleted. Owner rulings
+taken on the plan defaults (PR body). Suite: master 421 files / 6,815 tests → 422 / 6,930 (85 skipped); typecheck + build green; the zim-packs T14 case flaked once under full load (green alone, untouched here). Residuals: §5 item 23._
+
 ## 2026-09-10 — the three 2026-09-06 entries retired verbatim (preamble budget)
 
 _Moved out of `BUILD_STATE.md` while making room for the #436/#437 accessibility entry. All three

@@ -1037,10 +1037,69 @@ a probe that FAILED while something was busy (the stop that killed the stream) r
 the PROBES are complete: it precedes the persist and the occupancy release, so it is not the
 idle signal — the terminal `performance:changed` after both is. The IPC handler forwards the
 steps to the requesting window only, as `benchmark:progress`, and the screen shows a step
-list instead of an opaque "Running…" button. The first-run path passes no callback. The drive
+list instead of an opaque "Running…" button. The first-run path passes no callback — so the
+step list is shown for a run THIS window started, and any other run (first-run, moved-drive,
+another window) gets a single "Checking this computer in the background." line in the same live
+region instead of a list nothing could advance (#438; see "An automatic run's step list" below).
+The drive
 step is labelled **"Drive speed"**, not "Drive write speed" (PR #303 audit N5): the step's write
 probe is one input, and the tile the user reads next to it reports MB/s *read* — naming the step
 after the write leg contradicted the figure it leads to.
+
+### An automatic run's step list (#438, owner decision 2026-09-12)
+
+Found by #331 leg 2 on the E: stick: a moved-drive check ran for 13.7 s with the Performance
+screen mounted, the step list frozen on step 1 for the whole run, then gone. A manual "Erneut
+prüfen" advanced normally in the same session — the contrast case.
+
+**Cause: two correct decisions multiplying.** Progress is emitted only from the `benchmark:run`
+IPC handler and addressed to `event.sender`, the window that invoked it; the automatic scheduler
+calls `runAndPersistBenchmark(ctx)` with no callback at all. The screen meanwhile renders the list
+on `busy`, which follows the BACKEND span (`snap.running`), not "a run this window started" —
+deliberately so, per audit **M1**: merging the two locked the screen into "Running…" for a foreign
+run and never let it out. So the list was shown for a run whose progress can never arrive.
+
+**Options weighed.** (1) Broadcast the steps to every window and have the scheduler pass a
+callback. (2) Show the steps only for an own action, and give any other run one honest line.
+(3) Carry the completed steps in `PerformanceSnapshot`, so the screen reconstructs them on any
+mount.
+
+**Decided: (2).** (1) was rejected as a HALF-fix, on a fact the issue's own framing missed: the
+automatic check fires about a minute after unlock, once the model start settles, so the common
+path is the user arriving on Performance **mid-run** — and a late-joining window has already
+missed the earlier one-shot messages. It would render "Hardware detected: in progress · Drive
+speed: waiting · Generation speed: done", which is worse than frozen. The cheap patch — a step
+marks every earlier one done — is barred by the **L3** honesty rule: a step is reported only when
+it SUCCEEDED, so back-filling would claim a skipped drive probe had passed. (3) fixes the
+late-join case properly and stays the option if per-step detail for automatic runs is ever
+wanted; it was not worth a shared-shape change plus a push per step for a case nobody reported.
+
+**As built.** `showOwnSteps = ownActionInFlight || doneSteps.length > 0` gates the items; any
+other held span renders one `<li>` carrying `perf.running.background` ("Checking this computer in
+the background." / "Dieser Computer wird im Hintergrund geprüft."). Three things that look
+incidental and are not:
+
+- The line goes **inside** the always-mounted `.perf-steps` live region of #437, not beside it.
+  An empty region would have left the automatic check silent to a screen reader — a regression
+  against #437 rather than a neutral subtraction. Inside it, the line is a text change in a region
+  that was already there, which is what makes it audible. It carries no live-region role of its
+  own (#436).
+- `doneSteps.length > 0` is the second term because `ownActionInFlight` is cleared in the action's
+  `finally`, one snapshot read BEFORE `backendRunning` catches up; on the flag alone the region
+  would blink to the background line at the tail of the user's own run.
+- A foreign run cannot fake that term: it delivers no steps, and `applySnapshot` clears whatever
+  an earlier own run left as the span is taken — which is what makes `doneSteps` a sound "these
+  steps are MINE" marker.
+
+**The IPC contract is unchanged** — steps still go to the requesting window only. This is a
+renderer-side decision about what to DRAW for a run that has none. Pinned by
+`PerformanceScreen.test.tsx` "M1 + #438: an external run shows as running with the background
+line, never the last run's steps", "#438: the background line sits IN the step region, so an
+automatic check is still announced" and "#438: at the tail of our own run the list stays ours,
+never blinking to the background line".
+
+**Residual:** an automatic check reports no per-step detail, and the outstanding by-ear leg now
+has this line to hear as well.
 
 ### The Diagnostics benchmark card — a support artifact (§5 item 22 (b), owner decision 2026-09-08)
 
@@ -1259,7 +1318,7 @@ guess.
 | TH2 | fixed P8 `4baec2be` | `closePerformanceFixture()` tears down every DB/root/observer the performance test helper registered; a leak check showed zero growth across a targeted run. The other suites' ~2,500 leaked roots per full run (#335, 2026-09-06) are now recorded and removed by the harness itself — `tests/setup-temp-roots.ts` per file, `tests/global-temp-roots.ts` after the forks exit; design in `tests/helpers/temp-roots.ts`, rule in CONTRIBUTING.md. | `tests/helpers/performance-fixture.ts`; `tests/unit/temp-roots.test.ts` |
 | HW1 | verified 2026-09-07 (issue #330) | Physical encrypted-drive A→B→A move on two real computers (i9-14900K / RTX 3080 Ti and i7-8700 / GTX 1070 Ti, one exFAT SSD) for a fresh workspace AND an upgraded one created by 0.1.57 (keyed `lastBenchmark`, no history): new-computer background run on B, instant restore on A, the outgoing result backfilled, later samples update the headline and the matching entry only. Side findings are not persistence defects (§4). | `eval/results/hardware/330-round-trip-20260907/` (`00-protocol.md` + every report and log) |
 | HW2 | CLOSED 2026-09-08 (#329) | Same gap as T9, closed by the same capture: real partial-offload load logs from the pinned build now exist (20/33 and 18/33 on a hybrid laptop, 62/66 on an RTX 3090) and are committed as fixtures. | `apps/desktop/tests/fixtures/placement-b9849-*.txt`; `eval/results/hardware/` |
-| HW3 | performed P10 (live, CDP-driven, at `07dd9085`); the four blocked legs CLOSED 2026-09-09 (issue #331) | Passed in the dev app: EN/DE layout at 880/1024/1280 px in both themes with no horizontal overflow, the German rail label at font weight 600 on one line, the keyboard focus order (a real Tab walk in visual order, no trap) and Enter activation. The one failure it found — focus lost after an own run — is the HW3-focus row below (fixed P10). The four legs not exercisable on the review box (no screen reader, no runtime, a first run that finishes in ~120 ms) were performed 2026-09-09 on the E: stick with a moved-drive workspace and a real 14B: **chat-during-a-span and mounted-screen refresh PASSED; both live regions were SILENT under a screen reader (#436, #437 — code fixed 2026-09-10, by-ear re-verification still outstanding) and an automatic run's step list never advances (#438, open owner call)**. | `GermanSmoke.test.tsx` "PerformanceScreen renders German (PR #303 audit T6)"; `rail-labels.test.ts`; `PerformanceScreen.test.tsx` describe "PerformanceScreen: focus survives the run"; `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md` |
+| HW3 | performed P10 (live, CDP-driven, at `07dd9085`); the four blocked legs CLOSED 2026-09-09 (issue #331) | Passed in the dev app: EN/DE layout at 880/1024/1280 px in both themes with no horizontal overflow, the German rail label at font weight 600 on one line, the keyboard focus order (a real Tab walk in visual order, no trap) and Enter activation. The one failure it found — focus lost after an own run — is the HW3-focus row below (fixed P10). The four legs not exercisable on the review box (no screen reader, no runtime, a first run that finishes in ~120 ms) were performed 2026-09-09 on the E: stick with a moved-drive workspace and a real 14B: **chat-during-a-span and mounted-screen refresh PASSED; both live regions were SILENT under a screen reader (#436, #437 — code fixed 2026-09-10, by-ear re-verification still outstanding) and an automatic run's step list never advances (#438 — decided and fixed 2026-09-12, owner call for option 2: the step list belongs to a run this window started, any other run gets one announced background line; record "An automatic run's step list" above)**. | `GermanSmoke.test.tsx` "PerformanceScreen renders German (PR #303 audit T6)"; `rail-labels.test.ts`; `PerformanceScreen.test.tsx` describe "PerformanceScreen: focus survives the run"; `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md` |
 | HW4 | follow-up issue #332 | Hybrid `[iGPU, dGPU]` Vulkan order and Apple Silicon unified memory: synthetic fixtures only. | — |
 | DR1 | fixed P5 `be177a34` | Chat/translation "on the card" rows now respect `gpuMode`, `gpuAutoDisabled` and the matching observed backend, not the hardware class alone. | `performance-gpu.test.ts` "gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — the hardware class is untouched"; "a matching start OBSERVED on the CPU backend puts the chat row on the processor and judges it against RAM" |
 | DR2 | fixed P5 `be177a34` | `ModelPlacement.devices` keeps every GPU row of the `device_info` block; `attributedGpuFigures` matches by device name, never the first row's. | `placement-parser.test.ts` "keeps every GPU row of a hybrid device_info block with its own compute buffer, by label (DR2)"; `performance-gpu.test.ts` "a hybrid log: the figures are the selected dGPU's, by name — never the first row's" |
@@ -1427,9 +1486,12 @@ commit references, and added the changelog entry.
   fails on any live-region role nested inside another; it flags all three pre-fix sites.
   **The acceptance is not complete:** both issues require re-verification BY EAR (a real failure
   and a wrong-password unlock for #436; a real multi-second check for #437), and that needs a
-  screen reader on this box. What is pinned so far is the DOM, not the sound. #438 remains an
-  open owner call on the same subtree; the #437 fix is forward-compatible with either of its
-  options (under option 2 the items render on `ownActionInFlight` rather than `busy`).
+  screen reader on this box. What is pinned so far is the DOM, not the sound.
+
+  **#438 decided and fixed 2026-09-12 (owner call, option 2).** Design record: "An automatic run's
+  step list" under "Performance screen" above. It lands on the same subtree, so its by-ear leg
+  folds into the one session #436/#437 still owe — the automatic check now SAYS something where it
+  previously said nothing, and that line is what the session has to hear.
 - **HW3-focus**: the keyboard-focus-after-a-run fix (`PerformanceScreen.test.tsx` "PerformanceScreen:
   focus survives the run") is pinned in jsdom and was re-verified live at P11 in the dev app
   built from `ab01e14b`: with "Check again" focused, a real Enter press ran the check (the

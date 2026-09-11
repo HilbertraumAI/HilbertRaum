@@ -973,7 +973,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
     expect(screen.getByText(/Runs Qwen3\.5 9B/)).toBeInTheDocument()
   })
 
-  it('M1: an external run shows as running with no steps ticked, never the last run’s', async () => {
+  it('M1 + #438: an external run shows as running with the background line, never the last run’s steps', async () => {
     let resolveRun: (r: BenchmarkResult) => void = () => {}
     const { api, progress, pushes } = install(snapshot(), {
       runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
@@ -986,11 +986,46 @@ describe('PerformanceScreen: the pushed refresh', () => {
       resolveRun(result())
     })
     await screen.findByRole('button', { name: 'Check again' })
-    // Someone else takes the lane: this window gets no steps for that run, so it shows none.
+    // Someone else takes the lane. Main addresses progress to the window that invoked the run, so
+    // this window is never sent that run's steps and a step list could only sit frozen on step 1
+    // (#438, measured at 13.7 s on a real moved-drive check). The region carries one honest line
+    // instead — and nothing of our own finished run survives into it.
     api.getPerformance.mockResolvedValue(snapshot({ running: true }))
     await pushChanged(pushes)
     expect(await screen.findByRole('button', { name: 'Running…' })).toBeDisabled()
-    expect(screen.getByText('Hardware detected').closest('li')?.className).not.toContain('perf-step-done')
+    expect(screen.getByText('Checking this computer in the background.')).toBeInTheDocument()
+    expect(screen.queryByText('Hardware detected')).not.toBeInTheDocument()
+  })
+
+  it('#438: the background line sits IN the step region, so an automatic check is still announced', async () => {
+    install(snapshot({ running: true }))
+    renderScreen()
+    // The region is the always-mounted <ul> of #437: the line arrives as a text change inside a
+    // region that was already there, which is what makes it audible. An empty region would have
+    // left the automatic check silent — the cost this option would otherwise have carried.
+    const region = (await screen.findByText('Checking this computer in the background.')).closest('ul')
+    expect(region).toHaveClass('perf-steps')
+    expect(region).toHaveAttribute('aria-live', 'polite')
+  })
+
+  it('#438: at the tail of our own run the list stays ours, never blinking to the background line', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { api, progress, pushes } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    act(() => progress.forEach((cb) => cb('system')))
+    // The backend still holds the span when the invoke resolves and `ownActionInFlight` drops —
+    // exactly the window in which that flag ALONE would have handed the region to the background
+    // line for a run the user is watching their own steps on.
+    api.getPerformance.mockResolvedValue(snapshot({ running: true }))
+    await pushChanged(pushes)
+    await act(async () => {
+      resolveRun(result())
+    })
+    expect(screen.queryByText('Checking this computer in the background.')).not.toBeInTheDocument()
+    expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
   })
 
   it('the push announcing our OWN run does not un-tick the steps it already reported', async () => {
@@ -1519,10 +1554,17 @@ describe('PerformanceScreen: labels that match what is measured', () => {
   })
 
   it('N5: the drive step is "Drive speed", not "Drive write speed" beside a tile reading MB/s read', async () => {
-    install(snapshot({ running: true }))
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    install(snapshot(), { runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r))) })
     renderScreen()
-    expect(await screen.findByText('Drive speed')).toBeInTheDocument()
+    // The step list belongs to a run THIS window started (#438), so press the button rather than
+    // borrowing a foreign `running: true` span — that now shows the one-line background state.
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    expect(screen.getByText('Drive speed')).toBeInTheDocument()
     expect(screen.queryByText(/write speed/i)).not.toBeInTheDocument()
+    await act(async () => {
+      resolveRun(result())
+    })
   })
 })
 

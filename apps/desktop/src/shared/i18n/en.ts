@@ -2000,6 +2000,11 @@ export const en = {
   'perf.step.speed': 'Generation speed with {model}',
   'perf.step.speedSkipped': 'Generation speed (no model running, skipped)',
   'perf.step.hint': 'About half a minute. You can keep using the app.',
+  // #438: a check the app started by itself (first run, or this drive arriving on a different
+  // computer) sends its steps to nobody, so the screen cannot show them advancing. It says this
+  // instead of a step list frozen on step 1 — and because it lands in the same live region the
+  // steps use, an automatic check is still ANNOUNCED rather than silently under way.
+  'perf.running.background': 'Checking this computer in the background.',
   // #437: a step's progress used to live ONLY in a CSS class and an aria-hidden icon, so the
   // live region's text never changed as the check advanced and a screen reader heard nothing
   // after the list appeared. Each step now carries its state IN ITS TEXT — the whole line is

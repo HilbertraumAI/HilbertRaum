@@ -48,6 +48,16 @@ own 3 s `DF_PROBE_TIMEOUT_MS` lost its race on a starved runner so the list arti
 `articleTimeoutMs`) stops the expansion cases racing that 3 s timer, verified by setting it to 1 ms and watching exactly those 6 cases fail.
 Timing PROOFS are deliberately excluded from the helper (`fts-rowid-sync` 500 ms #84; `zim-arm:672`, which exists to exclude the 15 s default).
 Acceptance ("green on a first push over a week") is judged from real traffic._
+_2026-09-12 — **#438 CLOSED — the automatic check's frozen step list; owner call taken on option 2**
+(`fix/438-automatic-check-step-list`; record `benchmark.md` "An automatic run's step list", which carries the three options and
+the reasoning). Two CORRECT decisions multiplied: progress is addressed to the window that invoked `benchmark:run` (the automatic
+scheduler passes none) while the screen drew the list for any held BACKEND span (audit M1) — so #331 leg 2's moved-drive check sat
+frozen on step 1 for 13.7 s. The list now belongs to a run THIS window started; every other span renders one line,
+`perf.running.background`, **inside the same live region**, so an automatic check is announced rather than silent (an empty region
+would have regressed #437). Option 1 (broadcast) was rejected as a HALF-fix — the common path is the user arriving MID-RUN, and a
+late-joining window has already missed the one-shot steps. IPC contract UNCHANGED. Residuals: no per-step detail for an automatic
+run (option 3, the steps carried in `PerformanceSnapshot`, stays available), and the by-ear leg #436/#437 owe now has this line._
+_2026-09-11 — **#413 CLOSED — `USABLE_VRAM_MB` stays 5,120, decided without a 4 GB measurement** (`docs/413-keep-usable-vram-floor`; record
 `model-benchmarks.md` §6.6 N8 "Decided 2026-09-11", §5 item 22 (e)(1)). The project owns no 4 GB card and will not buy one. Keeping the floor
 self-corrects (placement ignores it; a crawl on the RAM pick steps the ★ down, §6.5); lowering it would pin the E2B with no step back up. Docs only._
 _2026-09-10 — **#446 CLOSED — the three untested chat entries measured; `qwen3.6` joins the rule, `granite` does not**
@@ -155,21 +165,6 @@ so 1,000 ms stands, not 1,500; 60 real article opens through the shipped client 
 0 + 0 at 19.9 ms/open**. Suite 423 files / 7,065 (+14 legs). Evidence: `ai_drive-archive/zim-wave-2026-09/evidence/range-fix-2026-09-08/`.
 The three closed ZIM wave entries (#301 / the follow-up wave / the open-issues wave) are retired verbatim to `docs/build-log.md`
 "2026-09-08 — the three closed ZIM knowledge-pack wave entries"; §5 item 21 holds what is still open (all of it the owner's)._
-_2026-09-07 — **#372 (the #312 follow-up; `fix/372-model-load-latch`):** a model the ladder blamed is latched for the session
-(`factory.ts` module state beside the #182 latch): its next start spawns no rung, re-fires the model-named notice and lands on the
-mock at once — no repeated 180 s health timeouts. With acceleration off / auto-disabled (no GPU rung to compare against) every rung
-failing now names the model too; `gpuAutoDisabled` is never written on that path. Only a `failureSignature` class latches (never a
-bind race or an unrecognised shape). Clearing rule: "Verify checksum" on the model, a completed download of it, a chat-engine install
-(every latch), an app restart — not "Try GPU again". Record: GPU record §5.2 "#372" paragraph + §5.4 table; user-guide, known-limitations,
-CHANGELOG. Tests: `runtime-ladder.test.ts` "#372" (16 cases + the `ctx.onModelInstalled` source pin), `core-model-ipc`, `engine-consent-ipc`, `gpu-ipc`._
-_2026-09-07 — **Models/runtime fix wave (#310, #312, #313, #314, #315; `fix/310-315-models-runtime-wave`, one PR):**
-#310 a manifest declares every required weight file (`files:`, validator fail-closed incl. shard-set completeness; one enumeration
-`manifestFiles()` feeds install state, verify, byte totals, prefetch, planner, both verify/fetch scripts; sidecar roles need every
-file present); #312 the ladder holds a rung-1 failure until a forced-CPU rung answers — same failure class on every rung blames the
-MODEL (nothing persisted, `runtime:notice` names it), a CPU rung starting persists as before (GPU record §5.2); #313 family options
-follow view + task, a kept selection is marked, family-only reset; #314 `downloads:list`/`downloads:dismiss` re-attach a download after
-a renderer reload, dismissal lives in main memory; #315 findBy assertions, baseline staleness test, 17 dead keys deleted. Owner rulings
-taken on the plan defaults (PR body). Suite: master 421 files / 6,815 tests → 422 / 6,930 (85 skipped); typecheck + build green; the zim-packs T14 case flaked once under full load (green alone, untouched here). Residuals: §5 item 23._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -193,7 +188,10 @@ entries on 2026-09-09 (preamble budget, making room for the knowledge-packs docs
 HW3-acceptance entries), and the three closed 2026-09-06 entries (the #303 follow-up wave, the PR #308
 audit remediation, the PR #303 audit remediation) on 2026-09-10 (preamble budget, making room for the
 #436/#437 accessibility entry), and the two oldest closed entries (#333 manifest-read cost, #318
-hardware session) on 2026-09-12 (preamble budget, making room for the #458 CI entry) —
+hardware session) on 2026-09-12 (preamble budget, making room for the #458 CI entry), and the two
+closed 2026-09-07 models/runtime entries (#372, and the #310/#312/#313/#314/#315 wave of PR #371 —
+its residuals stay live in §5 item 23) on 2026-09-12 (preamble budget, making room for the #438
+entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 

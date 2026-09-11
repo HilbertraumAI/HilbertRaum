@@ -29,8 +29,11 @@ import type {
 // "Performance screen"). Four cards — "This computer", "Observed while you worked", "Models on
 // this computer", "Other computers":
 //   1. "This computer": the hardware check's answer as a verdict line + four tiles (speed,
-//      memory, graphics memory, drive) and the one action, "Check again". While a check runs, the steps show
-//      as they land (EVENTS.benchmarkProgress) instead of an opaque "Running…" button. The model
+//      memory, graphics memory, drive) and the one action, "Check again". While a check THIS
+//      window started runs, the steps show as they land (EVENTS.benchmarkProgress) instead of an
+//      opaque "Running…" button; a check the window did not start says so in one line instead
+//      (#438 — main addresses the steps to the window that asked, so there are none to drive a
+//      list with, and a list that cannot advance is worse than no list). The model
 //      the verdict and the "Start … and measure" offer name is `snapshot.recommendation` — the
 //      LIVE pick the AI Model screen stars; the result's saved pick is history, labelled
 //      "Recommended at the time of the check" where it differs.
@@ -398,9 +401,11 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     // run as readily as into one.
     setSnap(next)
     // A run this window did not start has no steps here (main sends `benchmark:progress` to the
-    // requesting window only), so it shows the running state with none ticked rather than
-    // inventing them. Our own run cleared them at the click and its first step can land before
-    // this snapshot does — re-clearing under our own run would un-tick it.
+    // requesting window only), so the card shows the one-line background state instead of a step
+    // list nothing can advance (#438). Clearing on the edge still matters: it is what makes
+    // `doneSteps` a reliable "these steps are MINE" marker for the render below. Our own run
+    // cleared them at the click and its first step can land before this snapshot does —
+    // re-clearing under our own run would un-tick it.
     if (next.running && !backendRunningRef.current && !ownActionRef.current) setDoneSteps([])
     backendRunningRef.current = next.running
   }, [])
@@ -563,6 +568,19 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   const backendRunning = snap?.running ?? false
   /** What the card shows as busy: a run anywhere on this machine, or this window's own action. */
   const busy = backendRunning || ownActionInFlight
+  /**
+   * Whether the step list is OURS to drive (#438). Progress is addressed to the window that
+   * invoked `benchmark:run`, so only a run this window started ever produces steps; for every
+   * other run — the first-run path, the moved-drive check, another window — the list could never
+   * advance, and one was observed frozen on step 1 for a whole 13.7 s check (#331 leg 2).
+   *
+   * `doneSteps.length > 0` is the second term rather than `ownActionInFlight` alone because the
+   * flag is cleared in the action's `finally`, one snapshot read BEFORE `backendRunning` catches
+   * up — without it the list would blink to the background line at the tail of our own run. A
+   * foreign run cannot fake the term: it delivers no steps, and `applySnapshot` clears whatever
+   * an earlier own run left as the span is taken.
+   */
+  const showOwnSteps = ownActionInFlight || doneSteps.length > 0
 
   // Keyboard focus across the busy swap (HW3; design-guidelines §6). The busy branch renders a
   // DIFFERENT subtree — the steps list plus a disabled "Running…" button — so the action button
@@ -945,10 +963,11 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
 
   /**
    * The progress-step ITEMS. The <ul> that holds them is mounted unconditionally below — this
-   * returns only what goes inside it while a check runs (#437 cause 1: the region used to be
-   * created together with its <li>s, i.e. inserted already containing its content, which is the
-   * M-U1 anti-pattern every other live region in the renderer avoids; Narrator heard nothing
-   * across two real 14-second runs).
+   * returns only what goes inside it while a check THIS WINDOW STARTED runs (#437 cause 1: the
+   * region used to be created together with its <li>s, i.e. inserted already containing its
+   * content, which is the M-U1 anti-pattern every other live region in the renderer avoids;
+   * Narrator heard nothing across two real 14-second runs). A run this window did not start gets
+   * the single background line instead — see `showOwnSteps` (#438).
    */
   function stepItems(): JSX.Element[] {
     // The speed step only exists when a runtime is up; a run with no model shows it skipped.
@@ -1007,8 +1026,16 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
         {/* The live region is mounted at all times — empty while idle (`.perf-steps:empty`
             collapses it, so the idle layout is unchanged) and filled while a check runs, so the
             steps arrive as a text change INSIDE a region that was already there (#437). Nothing
-            in here may carry a live-region role of its own — see #436. */}
-        <ul className="perf-steps" aria-live="polite">{busy ? stepItems() : null}</ul>
+            in here may carry a live-region role of its own — see #436.
+
+            Two fillings, never both (#438). Our own run gets the advancing step list. Any other
+            run — first-run, moved-drive, another window — gets ONE line saying a check is under
+            way: it is the honest thing to show for a run whose progress this window is never
+            sent, and it keeps the automatic check announced rather than silent, which an empty
+            region would have made it. */}
+        <ul className="perf-steps" aria-live="polite">
+          {showOwnSteps ? stepItems() : busy ? <li className="perf-step">{t('perf.running.background')}</li> : null}
+        </ul>
         {busy ? (
           <>
             <div className="actions perf-actions">

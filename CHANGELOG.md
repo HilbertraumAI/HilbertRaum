@@ -241,6 +241,14 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A check that starts on its own now says so, instead of showing a progress list that never
+  moves.** The app checks what your computer can do by itself the first time, and again whenever
+  the drive is plugged into a different computer. On the Performance screen that check used to
+  appear as the same three-step list you get from a check you start yourself — except that it
+  never advanced: it sat on the first step for the whole check (about fourteen seconds on a real
+  drive) and then vanished. The screen now says "Checking this computer in the background." for a
+  check it did not start, and a screen reader reads that out. A check you start yourself still
+  shows each step as it completes.
 - **List questions against knowledge packs now work on slower computers too.** When you ask a
   pack something like "which countries emit the most CO2", the app first asks your local model
   what a list article about it would be called. That step was given six seconds, which turned out
