@@ -867,6 +867,36 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    the check. Harmless to every verdict in this section: read speed is an input to neither
    `liveChatRecommendation` nor `classifyProfile`.
 
+**2026-09-11 addition (the integrated class measured: the UHD 620 laptop, no leg; PR #454).** The
+two integrated-only laptops above confirmed the naming rule but had never STARTED a model, so the
+class had no speed figure of its own. The UHD 620 machine now has one. `gemma4-e2b-it-qat-q4` — the
+model the picker recommends there, and one never started on that machine before — measured **5.600
+tok/s** decode on the app's own argv (prefill 19.1) and **6.826** under `--device none` (22.4),
+against `qwen3.5-9b-ud-q4kxl` at **1.723** and **2.488**; ctx 8192, `--threads 4`, 512 tokens behind
+a ~2,000-token prefill, every start repeated.
+
+- **Auto-offload is SLOWER on both models and both axes** — decode −18.0 % (E2B) and −30.7 % (9B),
+  prefill −14.8 % and −12.4 % — and on shared memory it costs host RAM instead of saving it: the
+  9B's auto start peaked 2,056.8 MiB above its processor start, leaving 41 MiB free, and loaded in
+  28.77 s against 9.86. This CORRECTS BUILD_STATE §5 item 21 (e), which recorded prefill parity
+  (56 vs 57 t/s) and a 45 % decode loss for this machine: the direction of the decode loss holds,
+  the parity claim does not, and neither magnitude nor the absolutes reproduce.
+- **llama.cpp uses the UHD 620 unasked** — 36/36 and 33/33 layers, `Vulkan0` model buffers of
+  1,341.77 and 5,133.63 MiB — so the never-`--device` rule of item 22 (j) shows on the integrated
+  class what finding 1 shows on hybrids: the naming rule governs the ★ and the tile basis, never
+  placement. `VK_EXT_memory_budget` on this Intel driver reports heap `usage = 0` throughout,
+  including while Vulkan0 held 5.1 GiB of weights, so the heap counter cannot detect iGPU
+  allocation here — only the buffer lines can.
+- **The first Vulkan start of each model pays a one-off shader compile** (E2B auto 4.465 cold vs
+  5.600 warm, byte-identical placement), so the figures above are the warm runs and the cold ones
+  are committed as `*-run1`.
+
+Qualifier carried from the session: AC throughout, but the Windows power mode was "Best power
+efficiency", left as the operator had it — every absolute above is a floor, and all six starts
+shared the setting, so the comparisons between them are unaffected. Evidence:
+`eval/results/hardware/i7-8550u-uhd-620-shared-8gb-laptop-16gb/02-e2b.comment.md` and the per-start
+JSON, redacted `-lv 4` logs and RSS samples beside it.
+
 **Hardware confirmation (issue #391, 2026-09-08): the 24 GB row re-measured under the app's own
 post-#386 launch, and it holds.** Leg 7's confirming start was run on the same rig from the APP
 (not the harness), on a build carrying #386 + #387 + #390, so the rung is production's own choice;
