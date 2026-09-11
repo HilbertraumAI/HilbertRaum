@@ -1921,7 +1921,15 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
         expect(timedOut.every((o) => o.status === 'failed')).toBe(true)
         expect(notStarted).toHaveLength(3)
         expect(notStarted.every((o) => o.status === 'skipped')).toBe(true)
-        expect(new Set(t15Searches).size).toBe(2) // only the two in-flight packs were asked
+        // Only the in-flight packs were asked — at most `concurrency`, and never one the
+        // deadline skipped. NOT `toBe(2)`: that assumed both in-flight searches had also
+        // REACHED the fixture inside the 150 ms budget, which is a property of the runner,
+        // not of the code. On a loaded CI worker (windows-latest 22.x, 2026-09-10) the
+        // deadline fired before either request went out and the case failed at 0, while every
+        // outcome above was correct. The guarantee is the bound and the exclusion.
+        const timedOutIds = new Set(timedOut.map((o) => o.packId))
+        expect(new Set(t15Searches).size).toBeLessThanOrEqual(2)
+        for (const asked of new Set(t15Searches)) expect(timedOutIds.has(asked)).toBe(true)
         t15Hold = null
       } finally {
         await h.close()
