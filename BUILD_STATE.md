@@ -28,6 +28,12 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-12 — **#458 OPEN (1 of 3) — windows CI: `hookTimeout` is now CI-aware** (`fix/458-ci-hook-timeout`; record `packaging.md` "Continuous
+integration (CI)"; decision + full evidence in the issue comment). **Five** windows flakes, not three, and #457 did not end them; `testTimeout`
+widened to 60 s on CI long ago but `hookTimeout` never did (vitest's 10 s default, 6× tighter) and **2 of the 5 were hook timeouts** — structural,
+not slow setup: 3 forks + main fill a 4-core runner. Decision = **shard the windows legs**; dropping a node version rejected (22.x is the `engines`
+floor AND carries 4 of 5), temp-root churn rejected on measurement (~1.5 s/run; refiled as hygiene — 99/129 `openDatabase()` suites never close).
+Next: (2) shard 2× + **shard-aware `FullSuiteGuard`** (`--shard` leaves `isFullRun` true → it fails every sharded run; a folder split silently DISABLES it). (3) the **29 hand-rolled `Date.now()` poll bounds across 16 files** + `zim-arm.test.ts:672` — never widen with the vitest budget._
 _2026-09-11 — **#413 CLOSED — `USABLE_VRAM_MB` stays 5,120, decided without a 4 GB measurement** (`docs/413-keep-usable-vram-floor`; record
 `model-benchmarks.md` §6.6 N8 "Decided 2026-09-11", §5 item 22 (e)(1)). The project owns no 4 GB card and will not buy one. Keeping the floor
 self-corrects (placement ignores it; a crawl on the RAM pick steps the ★ down, §6.5); lowering it would pin the E2B with no step back up. Docs only._

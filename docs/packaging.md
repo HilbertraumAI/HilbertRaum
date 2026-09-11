@@ -606,6 +606,29 @@ a compromised action repo inject code into CI; full-audit 2026-07-10 SC-1). This
 telemetry/analytics, and performs no network egress beyond the registry install (the "no cloud /
 no telemetry" hard rule governs the shipped app at runtime).
 
+**The windows legs run at their time budget, and the vitest budgets are CI-aware because of it
+(#458).** On the same commit the ubuntu legs finish in ~5 min and the windows legs in 10–14; the
+`npm test` step is 483–542 s of that, while install + typecheck + build is only ~90 s, so the test
+step *is* the leg. The excess is concentrated in the tests themselves (2.2× ubuntu, measured
+per-phase), not in collection or setup (1.05–1.35×): vitest runs `availableParallelism() - 1`
+forks, so on a 4-core runner three forks plus the main process fill the machine before Defender
+and the runner agent take their share, and Windows file operations cost more per call. Run-to-run
+variance on a shared runner then decides the outcome — the same suite measured 486 s green and
+694/802 s on the runs that failed. Any fork can be descheduled for 10+ seconds, and whichever
+file is unlucky fails a run that no code change could have broken.
+Both vitest budgets therefore widen on CI (`vitest.config.ts`, GitHub Actions sets `CI=true`):
+`testTimeout` 15 s → 60 s, and since #458 `hookTimeout` likewise — before that it sat on vitest's
+10 s default, six times tighter than the tests, and two of the five windows flakes investigated in
+#458 were hook timeouts rather than test timeouts. Neither widening loosens any evidence: timing
+PROOFS live in explicit assertions (the FTS 500 ms bound, #84), never in a vitest budget, and a
+hook is setup. Locally both stay at 15 s so a real hang still fails fast at the desk.
+**A hand-rolled wall-clock bound does NOT widen with them** — a `Date.now() - start > N` poll
+guard, a fixture's own `waitFor` default, or a child-process `timeout` is invisible to vitest's
+config, so each one needs its own CI headroom (`doctasks-translation.test.ts` says so at its
+30 s hang detector). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
+far concurrent work got inside it; the latter is a property of the runner, not of the code (#457,
+#389).
+
 **What CI does NOT cover — the manual `HILBERTRAUM_*` matrix stays a separate human gate.** A green
 CI run says **nothing** about the real-`spawn` / real-binary / real-weights surface: that is the
 `HILBERTRAUM_*` manual harness matrix below (audit M-A5), which is env-gated and skips in CI. CI is

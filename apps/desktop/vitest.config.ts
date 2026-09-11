@@ -63,6 +63,29 @@ export default defineConfig({
     // This loosens no evidence: timing PROOFS in this suite live in explicit
     // assertions (e.g. the FTS 500 ms bound, #84), never in the vitest budget.
     // Locally the tight 15 s stays, catching real hangs fast at the desk.
-    testTimeout: process.env.CI ? 60_000 : 15_000
+    testTimeout: process.env.CI ? 60_000 : 15_000,
+    // Hooks get the SAME budget as tests, for the same reason and on the same evidence.
+    // Until #458 this line did not exist, so `beforeEach`/`afterEach`/`beforeAll` ran on
+    // vitest's 10 s default — SIX TIMES LESS headroom than the tests above, on the one
+    // platform the comment above says is starved. Two of the five windows flakes in #458 were
+    // hook timeouts, not test timeouts: `performance-gpu` (run 34655007954) and
+    // `doctasks-translation` (run 34543501694), both `Hook timed out in 10000ms`.
+    //
+    // Those hooks are not slow. `performance-gpu`'s is five synchronous resets; 10 s on that is
+    // a fork that got no CPU, which no amount of hook optimisation fixes: vitest runs
+    // `availableParallelism() - 1` forks, so on a 4-core runner three forks plus the main
+    // process fill the machine before Defender and the runner agent take their share.
+    //
+    // The 10 s default was already known to be too tight here and patched ONE hook at a time —
+    // `tests/setup-temp-roots.ts` carries its own `TEARDOWN_TIMEOUT_MS` (120 s) citing run
+    // 34033122353. This generalises that fix instead of waiting for each hook to be bitten;
+    // 129 suites open a sqlite DB (99 of them never close it, #460) and many do that plus
+    // `mkdtempSync` inside a hook, as do the fixture teardowns that close DBs and remove roots.
+    //
+    // This loosens no evidence, exactly as for `testTimeout`: a hook is SETUP, never a timing
+    // proof — the suite's timing proofs live in explicit assertions (the FTS 500 ms bound, #84),
+    // and nothing asserts a hook timeout. Locally the tight 15 s stays, so a real hang at the
+    // desk still fails fast.
+    hookTimeout: process.env.CI ? 60_000 : 15_000
   }
 })
