@@ -42,9 +42,11 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.{ts,tsx}'],
     // Issue #335: `setup-temp-roots.ts` records every `hilbertraum-*` / `hr-*` root a file mints
-    // under the OS temp dir and removes them in that file's `afterAll`; `global-temp-roots.ts`
-    // sweeps, after the forks exit, the roots an open sqlite handle kept locked on Windows.
-    // See tests/helpers/temp-roots.ts. Before this, a full run leaked ~2,500 roots.
+    // under the OS temp dir and removes them in that file's `afterAll` — after closing the sqlite
+    // handles the file left open, which lock their roots on Windows (#460); `global-temp-roots.ts`
+    // sweeps, after the forks exit, whatever still could not be removed. See
+    // tests/helpers/temp-roots.ts and tests/helpers/sqlite-handles.ts. Before #335 a full run leaked
+    // ~2,500 roots; before #460 ~1,500 of them per windows run reached the sweep.
     setupFiles: ['./tests/setup.ts', './tests/setup-temp-roots.ts'],
     globalSetup: ['./tests/global-temp-roots.ts'],
     globals: true,
@@ -91,8 +93,8 @@ export default defineConfig({
     // The 10 s default was already known to be too tight here and patched ONE hook at a time —
     // `tests/setup-temp-roots.ts` carries its own `TEARDOWN_TIMEOUT_MS` (120 s) citing run
     // 34033122353. This generalises that fix instead of waiting for each hook to be bitten;
-    // 129 suites open a sqlite DB (99 of them never close it, #460) and many do that plus
-    // `mkdtempSync` inside a hook, as do the fixture teardowns that close DBs and remove roots.
+    // 129 suites open a sqlite DB (most leave it for the harness to close, #460) and many do that
+    // plus `mkdtempSync` inside a hook, as do the fixture teardowns that close DBs and remove roots.
     //
     // This loosens no evidence, exactly as for `testTimeout`: a hook is SETUP, never a timing
     // proof — the suite's timing proofs live in explicit assertions (the FTS 500 ms bound, #84),
