@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
-import { FullSuiteGuard, listTestFiles } from './tests/full-suite-guard'
+import { FullSuiteGuard, listTestFiles, parseShard, shardTestFiles } from './tests/full-suite-guard'
 
 // Default environment is node (the bulk of the suite tests main-process services). Renderer
 // component tests opt into jsdom per-file with a `// @vitest-environment jsdom` docblock and
@@ -10,9 +10,21 @@ import { FullSuiteGuard, listTestFiles } from './tests/full-suite-guard'
 // run: vitest's argv after the `run` subcommand is flags-only for a full run, so any positional
 // (a path/name filter via `npm test -- tests/unit`) means "subset" and disables the guard. The
 // gate fails safe — an unrecognised invocation disables the guard rather than false-failing.
+//
+// A SHARDED run (#458 step 2: the windows legs are split) is still a full run, just divided,
+// so the guard stays on and narrows to the shard's expected subset — `shardTestFiles`
+// reproduces vitest's own split. Without that it would demand all 449 files from a job that
+// correctly collected half, failing every sharded run.
+//
+// `--shard 1/2` (space form) puts its VALUE in argv looking exactly like a path filter, which
+// would switch the guard off instead of narrowing it — silently, the one failure mode this
+// file cannot tolerate. So the positional check skips a `--shard` value. CI uses the `=` form.
 const runArgs = process.argv.slice(process.argv.indexOf('run') + 1)
-const isFullRun = process.argv.includes('run') && !runArgs.some((a) => !a.startsWith('-'))
-const expectedFiles = isFullRun ? listTestFiles(__dirname, resolve(__dirname, 'tests')) : null
+const shard = parseShard(runArgs)
+const positionals = runArgs.filter((a, i) => !a.startsWith('-') && runArgs[i - 1] !== '--shard')
+const isFullRun = process.argv.includes('run') && positionals.length === 0
+const allTestFiles = isFullRun ? listTestFiles(__dirname, resolve(__dirname, 'tests')) : null
+const expectedFiles = allTestFiles && shard ? shardTestFiles(allTestFiles, shard) : allTestFiles
 
 export default defineConfig({
   resolve: {

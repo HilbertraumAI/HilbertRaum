@@ -28,12 +28,18 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
-_2026-09-12 — **#458 OPEN (1 of 3) — windows CI: `hookTimeout` is now CI-aware** (`fix/458-ci-hook-timeout`; record `packaging.md` "Continuous
-integration (CI)"; decision + full evidence in the issue comment). **Five** windows flakes, not three, and #457 did not end them; `testTimeout`
-widened to 60 s on CI long ago but `hookTimeout` never did (vitest's 10 s default, 6× tighter) and **2 of the 5 were hook timeouts** — structural,
-not slow setup: 3 forks + main fill a 4-core runner. Decision = **shard the windows legs**; dropping a node version rejected (22.x is the `engines`
-floor AND carries 4 of 5), temp-root churn rejected on measurement (~1.5 s/run; refiled as hygiene — 99/129 `openDatabase()` suites never close).
-Next: (2) shard 2× + **shard-aware `FullSuiteGuard`** (`--shard` leaves `isFullRun` true → it fails every sharded run; a folder split silently DISABLES it). (3) the **29 hand-rolled `Date.now()` poll bounds across 16 files** + `zim-arm.test.ts:672` — never widen with the vitest budget._
+_2026-09-12 — **#458 OPEN (2 of 3 done) — the windows CI legs: CI-aware `hookTimeout`, then sharded** (`fix/458-ci-hook-timeout` PR #461;
+`fix/458-shard-windows-legs`; record `packaging.md` "Continuous integration (CI)"; decision + full evidence in the issue comment).
+Investigated: **five** windows flakes, not three, and #457 did not end them; windows 22.x carried 4 of 5. **(1)** `testTimeout` widened to 60 s
+on CI long ago but `hookTimeout` never did (vitest's 10 s default, 6× tighter) and **2 of the 5 were hook timeouts** — structural, not slow
+setup: 3 forks + main fill a 4-core runner. **(2)** Each windows leg is now two `--shard` jobs (6 legs; ubuntu stays WHOLE so one leg per node
+version still sees cross-file interference). `FullSuiteGuard` is shard-aware or it fails every sharded run — and a folder split would silently
+DISABLE it instead. The split is hashed over `/` + the **posix** path (vitest resolves with pathe): a native-`resolve` reproduction agreed with a
+real run on 109 of 225 files, i.e. chance — caught by running the shards, now pinned with sha1 vectors. Rejected: dropping a node version (22.x
+is the `engines` floor AND carried 4 of 5); temp-root churn on measurement (~1.5 s/run — refiled as **#460**, 99/129 `openDatabase()` suites
+never close). Sharding halves EXPOSURE, not crowding — the budgets buy tolerance. Next: **(3)** the **29 hand-rolled `Date.now()` poll bounds
+across 16 files** + `zim-arm.test.ts:672`; a hand-rolled bound never widens with the vitest budget. Acceptance ("green on a first push, sampled
+over a week") is judged after (2) lands, not from one green run._
 _2026-09-11 — **#413 CLOSED — `USABLE_VRAM_MB` stays 5,120, decided without a 4 GB measurement** (`docs/413-keep-usable-vram-floor`; record
 `model-benchmarks.md` §6.6 N8 "Decided 2026-09-11", §5 item 22 (e)(1)). The project owns no 4 GB card and will not buy one. Keeping the floor
 self-corrects (placement ignores it; a crawl on the RAM pick steps the ★ down, §6.5); lowering it would pin the E2B with no step back up. Docs only._
@@ -130,15 +136,6 @@ repo About text + `zim`/`kiwix`/`wikipedia`/`offline` topics, a v0.1.60 release 
 `[Unreleased]`; v0.1.59 predates the wave), a first screenshot, the org profile README. The follow-up PR #441 adds the repo's
 first `.github/ISSUE_TEMPLATE/`: a knowledge-pack report form asking for the facts that decide those reports, and a `config.yml`
 that keeps blank issues one click away and routes vulnerabilities to the private advisory channel._
-_2026-09-09 — **#333 CLOSED — measured, no cache** (instrumented on `perf/333-manifest-read-instrumentation`, PR #431; record
-`benchmark.md` §4 **I5** + Perf marks "`discover_manifests` / `performance_get` — the #333 pair"; evidence
-`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/manifest-read-333-measurement.txt`): on the drive, cold (eject/replug ×3:
-90.3 / 75.6 / 92.2 ms) and end to end through the app (20 reads: median **27 ms**, scan 18 of it, ~9 ms settings + detectSystem).
-Owner decision: acceptable as measured. A cache saves 18 ms on a pushed screen, would not have touched the 116 ms tail (that read's
-scan was 15 ms — the rest was the settings read contending with the benchmark's drive probe), and the screen is a minority caller
-(66 scans vs 20 reads). Corrections on record: the old ~100 ms was the INTERNAL disk while the launchers point
-`HILBERTRAUM_MANIFESTS_DIR` at the drive's copy; the cost is CPU (82 % parse+validate) not media; and the app has ONE window, so the
-per-chat-answer exposure is smaller than the pre-measurement analysis claimed. Instrumentation kept._
 _2026-09-08 — **#339 Range-first article reads (`fix/339-range-first-article-read`), record `rag-design.md` §17 **D-Z22**:**
 every `/raw` article request (and the redirect hop) now carries `Range: bytes=0-`, which libkiwix serves through its 16 KiB
 callback reader instead of the one-buffer path that carries the win-x86_64 cut-short defect — so the app stops TRIGGERING an
@@ -151,11 +148,6 @@ so 1,000 ms stands, not 1,500; 60 real article opens through the shipped client 
 0 + 0 at 19.9 ms/open**. Suite 423 files / 7,065 (+14 legs). Evidence: `ai_drive-archive/zim-wave-2026-09/evidence/range-fix-2026-09-08/`.
 The three closed ZIM wave entries (#301 / the follow-up wave / the open-issues wave) are retired verbatim to `docs/build-log.md`
 "2026-09-08 — the three closed ZIM knowledge-pack wave entries"; §5 item 21 holds what is still open (all of it the owner's)._
-_2026-09-07 — **#318 hardware session CLOSED (`docs/318-hardware-verification`):** six machines, legs 1–5 + 7 with
-the app's own argv; every §6.6 verdict held (8 GB: 9B 31/33 → 4B ★; 12 GB: Gemma 49/49; sub-gate 6 GB laptop: E2B 36/36
-on the card anyway; 24 GB: Q4 66/66, Q5 62/66 under rung 1a yet 66/66 with `-np 1` or MTP off). Leg 6 (20 GB) and an
-Intel-first hybrid do not exist in the project → predicted by inference. Record + six findings: `model-benchmarks.md`
-§6.6 "Hardware verification"; evidence `eval/results/hardware/<slug>/`; routed to #319/#320/#321/#329/#332; §5 item 22 (e)–(k)._
 _2026-09-07 — **#372 (the #312 follow-up; `fix/372-model-load-latch`):** a model the ladder blamed is latched for the session
 (`factory.ts` module state beside the #182 latch): its next start spawns no rung, re-fires the model-named notice and lands on the
 mock at once — no repeated 180 s health timeouts. With acceleration off / auto-disabled (no GPU rung to compare against) every rung
@@ -193,7 +185,8 @@ budget), and the Phase 9b close-out (PR #282), Model library UX (PR #302) and #2
 entries on 2026-09-09 (preamble budget, making room for the knowledge-packs docs and #331
 HW3-acceptance entries), and the three closed 2026-09-06 entries (the #303 follow-up wave, the PR #308
 audit remediation, the PR #303 audit remediation) on 2026-09-10 (preamble budget, making room for the
-#436/#437 accessibility entry) —
+#436/#437 accessibility entry), and the two oldest closed entries (#333 manifest-read cost, #318
+hardware session) on 2026-09-12 (preamble budget, making room for the #458 CI entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 

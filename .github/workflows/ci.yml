@@ -49,20 +49,52 @@ env:
 
 jobs:
   build-and-test:
-    name: build-and-test
+    # Explicit per-leg name, because the legs are no longer a plain OS x node cross-product
+    # (see the matrix below) and the auto-generated names would read
+    # "(windows-latest, 22.x, --shard=1/2)".
+    name: build-and-test (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
     strategy:
       # Report every leg even if one fails — the ci-success gate below aggregates them
       # (a matrix job's `result` is success only when ALL legs succeeded).
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        # BOTH ends of the supported range, because both were previously untested claims
-        # (AUD-26): 22.x is the `engines.node >=22.12` floor the app promises to run on
-        # (raised from 22.5 by Electron 43, wave DEP-4), 24.x is what every release leg builds
-        # AND runs the full suite under. CI gating only one of them leaves the other a
-        # declaration nothing exercises.
-        node: ['22.x', '24.x']
+        # Spelled out with `include` only, because the legs are deliberately ASYMMETRIC: the
+        # windows legs are SHARDED, the ubuntu ones are not (#458 step 2).
+        #
+        # BOTH ends of the supported range are gated on both platforms, because both were
+        # previously untested claims (AUD-26): 22.x is the `engines.node >=22.12` floor the app
+        # promises to run on (raised from 22.5 by Electron 43, wave DEP-4), 24.x is what every
+        # release leg builds AND runs the full suite under. CI gating only one of them leaves
+        # the other a declaration nothing exercises.
+        #
+        # WHY THE WINDOWS LEGS ARE SPLIT (#458). The `npm test` step was 483–542 s of a 10–14
+        # min windows leg while the ubuntu legs finished in ~5 min with room to spare, so the
+        # windows legs ran AT their time budget: the same suite on one tree measured 486 s green
+        # and 694/802 s on the runs that failed, and whichever file was unlucky on a starved
+        # worker failed a run no code change could have broken (five flakes in two days, each
+        # costing a full re-run). Two shards halve the wall clock, and with it the window in
+        # which a noisy neighbour can hit. Runner minutes are free on a public repo, so the
+        # extra jobs cost nothing but queue time. See docs/packaging.md, the CI section.
+        #
+        # Sharding halves EXPOSURE, not crowding: each shard still runs `availableParallelism()
+        # - 1` forks on a 4-core runner. Widening the vitest budgets (step 1, `hookTimeout` /
+        # `testTimeout`) is what buys tolerance; these two changes address different halves.
+        #
+        # WHY UBUNTU STAYS WHOLE — not just cost. One leg per node version still runs all 449
+        # files in a SINGLE vitest process, so cross-file interference (shared module state, a
+        # leaked global, an ordering dependency) keeps a leg that can see it. A fully sharded
+        # matrix would partition that surface away on every leg at once.
+        #
+        # Adding or renaming a leg is safe: `ci-success` below is the only required check and
+        # aggregates whatever legs exist. NEVER mark a leg's own name required.
+        include:
+          - { label: 'ubuntu 22.x',           os: ubuntu-latest,  node: '22.x' }
+          - { label: 'ubuntu 24.x',           os: ubuntu-latest,  node: '24.x' }
+          - { label: 'windows 22.x, 1 of 2',  os: windows-latest, node: '22.x', shard: '--shard=1/2' }
+          - { label: 'windows 22.x, 2 of 2',  os: windows-latest, node: '22.x', shard: '--shard=2/2' }
+          - { label: 'windows 24.x, 1 of 2',  os: windows-latest, node: '24.x', shard: '--shard=1/2' }
+          - { label: 'windows 24.x, 2 of 2',  os: windows-latest, node: '24.x', shard: '--shard=2/2' }
 
     steps:
       - name: Checkout
@@ -97,13 +129,23 @@ jobs:
       - name: Build
         run: npm run build
 
+      # `matrix.shard` is `--shard=i/2` on the windows legs and UNSET (empty) on the ubuntu
+      # ones, which run the whole suite. `npm test --` with nothing after it forwards nothing,
+      # so one step serves both shapes.
+      #
+      # The suite's anti-false-green reporter is shard-aware (tests/full-suite-guard.ts): it
+      # narrows to the shard's expected subset by reproducing vitest's own split, so a dropped
+      # file still hard-fails whichever shard owned it. Do NOT "shard" by passing a path
+      # (`npm test -- tests/unit`) — a positional reads as a filter and switches that guard
+      # off silently, which is the one failure mode it exists to prevent.
       - name: Test
-        run: npm test
+        run: npm test -- ${{ matrix.shard }}
 
   # Single stable gate to mark as the branch-protection required status check. The matrix legs
-  # publish as "build-and-test (ubuntu-latest, 22.x)" / "(windows-latest, 24.x)" / … — names that
-  # shift whenever the OS labels or the Node list change; "ci-success" does not, so it stays
-  # matched in branch protection. Never add a leg's own name as a required check.
+  # publish as "build-and-test (ubuntu 22.x)" / "(windows 24.x, 1 of 2)" / … — names that shift
+  # whenever the OS labels, the Node list or the SHARD COUNT change (#458 step 2 renamed all six
+  # of them); "ci-success" does not, so it stays matched in branch protection. Never add a leg's
+  # own name as a required check.
   ci-success:
     name: ci-success
     runs-on: ubuntu-latest
