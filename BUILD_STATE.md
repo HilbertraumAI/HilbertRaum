@@ -28,7 +28,7 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
-_2026-09-12 — **#458 OPEN (2 of 3 done) — the windows CI legs: CI-aware `hookTimeout`, then sharded** (`fix/458-ci-hook-timeout` PR #461;
+_2026-09-12 — **#458 (3 of 3 done, acceptance pending) — the windows CI legs: budgets, sharding, timing asserts** (`fix/458-ci-hook-timeout` PR #461;
 `fix/458-shard-windows-legs` PR #462; record `packaging.md` "Continuous integration (CI)"; decision + full evidence in the issue comment).
 Investigated: **five** windows flakes, not three, and #457 did not end them; windows 22.x carried 4 of 5. **(1)** `testTimeout` widened to 60 s
 on CI long ago but `hookTimeout` never did (vitest's 10 s default, 6× tighter) and **2 of the 5 were hook timeouts** — structural, not slow
@@ -41,10 +41,13 @@ and all six legs ran 449 files, merely looking slow (run 34660709148). Both now 
 suites never close). **Measured once the flag really landed (run 34662589439): windows Test step 483–542 s → 221–239 s, job 10–13 min → 5.3–5.7,
 critical path 13.3 → 5.7 min — windows is no longer the long pole.** It BEATS a halving (per-file cost 2.22 → 1.65/1.99 s; both shards together
 816 s vs 997 s), so "halves exposure, not crowding" was too strong — pressure per runner eases too, plausibly #460's accumulation halved. A
-SIXTH flake appeared on master post-(1) — `zim-arm.test.ts` `collectPackCandidates` asserting the exact list AND ORDER of concurrent suggest
-requests (run 34659678616): not a timeout, squarely (3)'s class. Next: **(3)** the **29 hand-rolled `Date.now()` poll bounds across 16 files** +
-`zim-arm.test.ts:672` and that ordering assert. Acceptance ("green on a first push over a week") is judged from real traffic._
-_2026-09-11 — **#413 CLOSED — `USABLE_VRAM_MB` stays 5,120, decided without a 4 GB measurement** (`docs/413-keep-usable-vram-floor`; record
+SIXTH flake appeared on master post-(1) — `zim-arm.test.ts` `collectPackCandidates` L3-b (run 34659678616): NOT the assertion's fault, the arm's
+own 3 s `DF_PROBE_TIMEOUT_MS` lost its race on a starved runner so the list article was never read. **(3) DONE**: the **29 hand-rolled
+`Date.now()` bounds across 16 files** + both fixture `waitFor` defaults now go through `tests/helpers/hang-budget.ts` (4× on CI — the
+`testTimeout` ratio — capped at 45 s so a detector still fires inside the 60 s budget); and a `probeTimeoutMs` SEAM (mirroring
+`articleTimeoutMs`) stops the expansion cases racing that 3 s timer, verified by setting it to 1 ms and watching exactly those 6 cases fail.
+Timing PROOFS are deliberately excluded from the helper (`fts-rowid-sync` 500 ms #84; `zim-arm:672`, which exists to exclude the 15 s default).
+Acceptance ("green on a first push over a week") is judged from real traffic._
 `model-benchmarks.md` §6.6 N8 "Decided 2026-09-11", §5 item 22 (e)(1)). The project owns no 4 GB card and will not buy one. Keeping the floor
 self-corrects (placement ignores it; a crawl on the RAM pick steps the ★ down, §6.5); lowering it would pin the E2B with no step back up. Docs only._
 _2026-09-10 — **#446 CLOSED — the three untested chat entries measured; `qwen3.6` joins the rule, `granite` does not**

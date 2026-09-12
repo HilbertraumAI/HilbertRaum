@@ -44,6 +44,7 @@ import {
 import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../src/main/ipc/registerEngineIpc'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // In-app engine (llama.cpp sidecar) downloader: the gates (a closed gate never reaches the
 // network seam), the verify-before-trust flow (placeholder honesty, mismatch discard), the
@@ -132,7 +133,7 @@ async function runToEnd(mgr: EngineDownloadManager, jobId: string): Promise<Engi
   for (;;) {
     const job = mgr.get(jobId)
     if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
-    if (Date.now() - start > 5000) throw new Error('engine job never finished')
+    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('engine job never finished')
     await new Promise((r) => setTimeout(r, 5))
   }
 }
@@ -345,7 +346,7 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
   ): Promise<void> {
     const start = Date.now()
     while (mgr.get(jobId).status !== status) {
-      if (Date.now() - start > 5000) throw new Error(`job never reached ${status}`)
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error(`job never reached ${status}`)
       await new Promise((r) => setTimeout(r, 2))
     }
   }
@@ -459,7 +460,7 @@ describe('extraction bounds + concurrency (F-33)', () => {
   ): Promise<void> {
     const start = Date.now()
     while (mgr.get(jobId).status !== status) {
-      if (Date.now() - start > 5000) throw new Error(`job never reached ${status}`)
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error(`job never reached ${status}`)
       await new Promise((r) => setTimeout(r, 2))
     }
   }
@@ -483,7 +484,7 @@ describe('extraction bounds + concurrency (F-33)', () => {
     // gate). TS-1 rule: gate on the observable state the assertion needs.
     const entered = Date.now()
     while (sawSignal === undefined) {
-      if (Date.now() - entered > 5000) throw new Error('extractor never entered')
+      if (Date.now() - entered > hangBudgetMs(5000)) throw new Error('extractor never entered')
       await new Promise((r) => setTimeout(r, 2))
     }
     expect(sawSignal).toBeDefined() // the extractor received the job's abort signal…
@@ -515,7 +516,7 @@ describe('extraction bounds + concurrency (F-33)', () => {
     releaseExtract()
     const freeBy = Date.now()
     while (mgr.activeJob() !== null) {
-      if (Date.now() - freeBy > 5000) throw new Error('slot never freed after run() settled')
+      if (Date.now() - freeBy > hangBudgetMs(5000)) throw new Error('slot never freed after run() settled')
       await new Promise((r) => setTimeout(r, 5))
     }
     expect(mgr.get(started.jobId).status).toBe('cancelled')
@@ -776,7 +777,7 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['kiwix_tools'] })
     const start = Date.now()
     while (mgr.get(started.jobId).status !== 'extracting') {
-      if (Date.now() - start > 5000) throw new Error('never extracting')
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('never extracting')
       await new Promise((r) => setTimeout(r, 2))
     }
     mgr.cancel(started.jobId)
@@ -789,7 +790,7 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     // The master CI run after the merge caught exactly that race on ubuntu-22.x.
     const settleStart = Date.now()
     while (mgr.activeJob() !== null) {
-      if (Date.now() - settleStart > 5000) throw new Error('the cancelled run never settled')
+      if (Date.now() - settleStart > hangBudgetMs(5000)) throw new Error('the cancelled run never settled')
       await new Promise((r) => setTimeout(r, 2))
     }
     expect(existsSync(runtimeMarkerPath(KIWIX_DIR(rootPath)))).toBe(false)

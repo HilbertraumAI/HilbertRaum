@@ -110,6 +110,19 @@ export interface CollectPackCandidatesOptions {
    */
   articleTimeoutMs?: number
   /**
+   * The budget for the small JSON probes — the document-frequency `/search` totals and the
+   * `/suggest` title lookup (`DF_PROBE_TIMEOUT_MS`, 3 s). Test seam only; production never
+   * sets it.
+   *
+   * #458 step 3: without this the expansion tests raced a REAL 3 s timer against a local stub.
+   * On a starved windows CI runner that timer won — the title lookup was abandoned, the list
+   * article was never read, and `rawReads` came back holding only the plain reads while the
+   * assertion expected the expansion's too (run 34659678616, `collectPackCandidates` L3-b).
+   * The assertions there are about WHICH articles get read, not about latency, so the honest
+   * fix is to stop making them depend on a wall-clock race they never meant to test.
+   */
+  probeTimeoutMs?: number
+  /**
    * #340 L3-b (D-Z20): the ask's query expander — ONE local-model call per ask, before any pack
    * is searched; its concepts feed one extra `/search` and its list title one `/suggest` per
    * pack, whose articles are fetched in ADDITION to the plain search's. Absent or resolving null
@@ -282,7 +295,7 @@ export async function collectPackCandidates(
       try {
         // A title lookup is one small JSON: it gets the probe budget (`DF_PROBE_TIMEOUT_MS`), not
         // the client's 15 s default — the same argument as the #353 probes.
-        const lookup = { timeoutMs: DF_PROBE_TIMEOUT_MS }
+        const lookup = { timeoutMs: opts.probeTimeoutMs ?? DF_PROBE_TIMEOUT_MS }
         let rows = await suggestTitles(port, servedName, expansion.listTitle, EXPANSION_TITLE_ROWS, signal, lookup)
         // The title index is PREFIX-only (R-6): a model title one word too long or inflected at
         // its end ("… nach CO2-Emissionen" against "… nach CO2-Emission pro Kopf", measured
@@ -346,7 +359,7 @@ export async function collectPackCandidates(
         try {
           for (const term of probeTerms) {
             const total = await searchPackTotal(port, pack.id, term, signal, {
-              timeoutMs: DF_PROBE_TIMEOUT_MS
+              timeoutMs: opts.probeTimeoutMs ?? DF_PROBE_TIMEOUT_MS
             })
             if (total !== null) df.set(term, total)
           }

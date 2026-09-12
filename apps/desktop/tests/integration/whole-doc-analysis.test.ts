@@ -29,6 +29,7 @@ import {
   reachableLeafChunkIds
 } from '../../src/main/services/analysis/coverage'
 import { t } from '../../src/shared/i18n'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import type {
   ChatMessage,
   ModelRuntime,
@@ -170,14 +171,14 @@ async function waitTerminal(m: DocTaskManager, jobId: string): Promise<AnyStatus
   for (;;) {
     const s = m.getDocTask(jobId)
     if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s
-    if (Date.now() - start > 10_000) throw new Error(`task never finished: ${s.state}`)
+    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task never finished: ${s.state}`)
     await new Promise((r) => setTimeout(r, 5))
   }
 }
 async function waitFor(pred: () => boolean, label = 'condition'): Promise<void> {
   const start = Date.now()
   while (!pred()) {
-    if (Date.now() - start > 10_000) throw new Error(`timed out waiting for ${label}`)
+    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`timed out waiting for ${label}`)
     await new Promise((r) => setTimeout(r, 5))
   }
 }

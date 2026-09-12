@@ -141,6 +141,7 @@ import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { makeScanOnlyPdf } from '../helpers/fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -1636,7 +1637,7 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
     for (;;) {
       const s = manager.getDocTask(jobId)
       if (['done', 'failed', 'cancelled'].includes(s.state)) return s.state
-      if (Date.now() - start > 30_000) throw new Error(`task never finished: ${s.state}`)
+      if (Date.now() - start > hangBudgetMs(30_000)) throw new Error(`task never finished: ${s.state}`)
       await new Promise((r) => setTimeout(r, 10))
     }
   }

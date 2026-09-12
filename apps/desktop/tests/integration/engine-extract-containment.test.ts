@@ -20,6 +20,7 @@ import {
 import { llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
 import { runtimeMarkerPath, type FetchFn } from '../../src/main/services/assets'
 import type { EngineDownloadJob } from '../../src/shared/types'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // SEC-2 (full-audit 2026-07-12): the in-app engine extractor relies on the OS tar's implicit
 // refusal of `..` members; its residual soft spot was a SYMLINK member resolving outside the
@@ -188,7 +189,7 @@ async function runToEnd(mgr: EngineDownloadManager, jobId: string): Promise<Engi
   for (;;) {
     const job = mgr.get(jobId)
     if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
-    if (Date.now() - start > 5000) throw new Error('engine job never finished')
+    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('engine job never finished')
     await new Promise((r) => setTimeout(r, 5))
   }
 }

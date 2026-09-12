@@ -22,6 +22,7 @@ import { ModelSlotArbiter } from '../../src/main/services/analysis/model-slot-ar
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { EXTRACT_RECORD_TYPES, type RetrievalScope } from '../../src/shared/types'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 
@@ -125,7 +126,7 @@ async function waitTerminal(m: DocTaskManager, jobId: string): Promise<AnyStatus
   for (;;) {
     const s = m.getDocTask(jobId)
     if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s
-    if (Date.now() - start > 10_000) throw new Error(`task never finished: ${s.state}`)
+    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task never finished: ${s.state}`)
     await new Promise((r) => setTimeout(r, 5))
   }
 }

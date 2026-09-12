@@ -684,6 +684,31 @@ config, so each one needs its own CI headroom (`doctasks-translation.test.ts` sa
 far concurrent work got inside it; the latter is a property of the runner, not of the code (#457,
 #389).
 
+**Hand-rolled wall-clock bounds are CI-aware via one helper (#458 step 3).** The paragraph above
+warned that a `Date.now() - start > N` guard does not widen with `testTimeout`; the suite's
+**29** such bounds across 16 files, plus the two fixture `waitFor` defaults, now all go through
+[`tests/helpers/hang-budget.ts`](../apps/desktop/tests/helpers/hang-budget.ts):
+`hangBudgetMs(5_000)` stays 5 s at a desk and becomes 20 s on CI. The multiplier is 4× — exactly
+the ratio `testTimeout` already uses (15 s → 60 s) — capped at 45 s so a widened detector still
+fires *inside* the 60 s CI test budget and you keep its named error instead of a bare
+`Test timed out`. Every one of those bounds is a **hang detector**, not a measurement: exceeding
+it means "it never finished", never "it was slow".
+
+**What must NOT go through it:** a bound that is itself the evidence. `fts-rowid-sync`'s 500 ms
+(#84) and `zim-arm`'s `elapsedMs < 10_000` are timing PROOFS — the second exists to exclude the
+client's 15 s default, so widening it would stop it discriminating. Those are marked as
+deliberate exceptions in place.
+
+**When a test depends on a budget inside the PRODUCT, add a seam instead of loosening the
+assertion.** The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run
+`34659678616`): the arm's title lookup and document-frequency probes ran against a real 3 s
+`DF_PROBE_TIMEOUT_MS`, and on a starved runner that timer won — the list article was never read,
+so `rawReads` came back holding only the plain reads. The assertion was about *which articles get
+read*, not latency, so the fix was a `probeTimeoutMs` test seam (mirroring the existing
+`articleTimeoutMs`) that the expansion cases pass, while the #353 cases that *prove* the short
+budget fires keep the real default. Verified by setting the seam to 1 ms: exactly those six
+expansion cases fail, which is what makes the seam's wiring provable rather than assumed.
+
 **What CI does NOT cover — the manual `HILBERTRAUM_*` matrix stays a separate human gate.** A green
 CI run says **nothing** about the real-`spawn` / real-binary / real-weights surface: that is the
 `HILBERTRAUM_*` manual harness matrix below (audit M-A5), which is env-gated and skips in CI. CI is
