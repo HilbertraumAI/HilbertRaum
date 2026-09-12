@@ -23,6 +23,7 @@ import type {
   RuntimeChatOptions
 } from '../../src/main/services/runtime'
 import { readStoredDocumentText } from '../../src/main/services/ingestion'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Phase 4 (whole-document-analysis plan §4.3, H4/H5/H8, L6) — the SYMMETRIC both-trees
 // compare and lazy node embeddings. CI posture: mock runtime + mock embedder, zero network.
@@ -127,7 +128,7 @@ async function waitTerminal(manager: DocTaskManager, jobId: string): Promise<str
   for (;;) {
     const s = manager.getDocTask(jobId)
     if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s.state
-    if (Date.now() - start > 15_000) throw new Error(`task ${jobId} never finished: ${s.state}`)
+    if (Date.now() - start > hangBudgetMs(15_000)) throw new Error(`task ${jobId} never finished: ${s.state}`)
     await new Promise((r) => setTimeout(r, 10))
   }
 }

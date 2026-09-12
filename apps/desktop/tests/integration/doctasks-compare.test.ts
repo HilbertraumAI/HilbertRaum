@@ -31,6 +31,7 @@ import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
 import type { AuditEventType } from '../../src/shared/types'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { Embedder } from '../../src/main/services/embeddings'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import type {
   ChatMessage,
   ModelRuntime,
@@ -168,7 +169,7 @@ async function waitTerminal(
     if (status.state === 'done' || status.state === 'failed' || status.state === 'cancelled') {
       return status
     }
-    if (Date.now() - start > 10_000) throw new Error(`task ${jobId} never finished: ${status.state}`)
+    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task ${jobId} never finished: ${status.state}`)
     await new Promise((r) => setTimeout(r, 10))
   }
 }
@@ -525,7 +526,7 @@ describe('cancellation persists nothing', () => {
     const { jobId } = manager.startDocTask({ kind: 'compare', documentIds: [a, b] })
     const start = Date.now()
     while (manager.getDocTask(jobId).state !== 'running' || runtime.calls.length === 0) {
-      if (Date.now() - start > 5000) throw new Error('task never started')
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('task never started')
       await new Promise((r) => setTimeout(r, 5))
     }
     manager.cancelDocTask(jobId)

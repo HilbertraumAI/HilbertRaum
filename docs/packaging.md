@@ -558,10 +558,26 @@ matching; never mark an individual leg required.
 *at* their budget and any unlucky file failed a run no code change could have broken — five such
 flakes in two days, each costing a full re-run. Two shards halve the wall clock and with it the
 window a noisy neighbour can hit; runner minutes are free on a public repo, so the extra jobs cost
-only queue time. Note what sharding does **not** do: it halves *exposure*, not *crowding* — each
-shard still runs `availableParallelism() - 1` forks on a 4-core runner, so the CI-aware
-`testTimeout`/`hookTimeout` above remain what buys *tolerance*. The two changes address different
-halves of the same problem. **Ubuntu stays whole for a reason beyond cost:** one leg per Node
+only queue time.
+
+**What it actually bought, measured** (run `34662589439` — the first run in which the shard flag
+really reached vitest; see the forwarding note below for why the earlier ones did not):
+
+| | before | after |
+| --- | --- | --- |
+| windows `Test` step | 483–542 s | **221–239 s** |
+| windows job | 10–13 min | **5.3–5.7 min** |
+| critical path | windows, 13.3 min | **5.7 min** — windows is no longer the long pole (ubuntu 4.9–5.3 min) |
+
+The gain **beats** a halving, because per-file overheads fall too: per-file test cost went
+2.22 s → 1.65/1.99 s, and the two shards together spend *less* total test time than the single
+unsharded run (816 s vs 997 s). So the earlier framing here — "sharding halves *exposure*, not
+*crowding*" — was too strong: pressure per runner genuinely eases, plausibly because each runner
+now accumulates only half the leaked sqlite handles and locked temp roots of #460 (correlation,
+not a proven cause). What remains true is that each shard runs the same
+`availableParallelism() - 1` forks, so the CI-aware `testTimeout`/`hookTimeout` above are still
+what buy *tolerance* when a fork is starved; the two changes address different halves of the
+problem. **Ubuntu stays whole for a reason beyond cost:** one leg per Node
 version still runs all 449 files in a *single* vitest process, so cross-file interference (shared
 module state, a leaked global, an ordering dependency) keeps a leg that can still see it; a fully
 sharded matrix would partition that surface away everywhere at once.
@@ -667,6 +683,44 @@ config, so each one needs its own CI headroom (`doctasks-translation.test.ts` sa
 30 s hang detector). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
 far concurrent work got inside it; the latter is a property of the runner, not of the code (#457,
 #389).
+
+**Hand-rolled wall-clock bounds are CI-aware via one helper (#458 step 3).** The paragraph above
+warned that a `Date.now() - start > N` guard does not widen with `testTimeout`; the suite's
+**29** such bounds across 16 files, plus the two fixture `waitFor` defaults, now all go through
+[`tests/helpers/hang-budget.ts`](../apps/desktop/tests/helpers/hang-budget.ts):
+`hangBudgetMs(5_000)` stays 5 s at a desk and becomes 20 s on CI. The multiplier is 4× — exactly
+the ratio `testTimeout` already uses (15 s → 60 s) — capped at 45 s so a widened detector still
+fires *inside* the 60 s CI test budget and you keep its named error instead of a bare
+`Test timed out`. Every one of those bounds is a **hang detector**, not a measurement: exceeding
+it means "it never finished", never "it was slow".
+
+**What must NOT go through it:** a bound that is itself the evidence. `fts-rowid-sync`'s 500 ms
+(#84) and `zim-arm`'s `elapsedMs < 10_000` are timing PROOFS — the second exists to exclude the
+client's 15 s default, so widening it would stop it discriminating. Those are marked as
+deliberate exceptions in place.
+
+**When a test depends on a budget inside the PRODUCT, add a seam instead of loosening the
+assertion.** The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run
+`34659678616`): the arm's title lookup and document-frequency probes ran against a real 3 s
+`DF_PROBE_TIMEOUT_MS`, and on a starved runner that timer won — the list article was never read,
+so `rawReads` came back holding only the plain reads. The assertion was about *which articles get
+read*, not latency, so the fix was a `probeTimeoutMs` test seam (mirroring the existing
+`articleTimeoutMs`) that the expansion cases pass, while the #353 cases that *prove* the short
+budget fires keep the real default. Verified by setting the seam to 1 ms: exactly those six
+expansion cases fail, which is what makes the seam's wiring provable rather than assumed.
+
+**There are TWO shapes of hand-rolled bound, and the counted one is nastier.** The first sweep
+caught only `Date.now() - start > N`. CI then failed `vision-security.test.ts` (run
+`34664328086`) on the other shape — a loop bounded by ITERATION COUNT:
+`for (let i = 0; i < 200; i++) { if (cond) break; await sleep(5) }`. That is a 1 s detector
+hard-coded in disguise, and worse than the wall-clock form in two ways: it does not widen on CI
+**and it falls through silently**, leaving the next assertion to fail with something opaque —
+here `expected [] to have a length of 1`, which says nothing about the event that never arrived.
+The suite's **16** counted loops across 7 files now use `hangPolls(n, stepMs)`, which applies the
+same 4×/45 s contract in steps. Where a counted loop can fall through, prefer failing by name
+after it (`vision-security`'s `waitForDoneEvent` is the pattern); `waitForTerminal` in the same
+file already did. **When adding a poll loop, bound it in wall-clock terms through one of these
+two helpers and make its exhaustion an error, never a `break` into the next assertion.**
 
 **What CI does NOT cover — the manual `HILBERTRAUM_*` matrix stays a separate human gate.** A green
 CI run says **nothing** about the real-`spawn` / real-binary / real-weights surface: that is the

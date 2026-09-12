@@ -37,6 +37,7 @@ import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -126,7 +127,7 @@ async function pollTerminal(jobId: string): Promise<DocTaskStatus> {
     if (status.state === 'done' || status.state === 'failed' || status.state === 'cancelled') {
       return status
     }
-    if (Date.now() - start > 5000) throw new Error('task never finished')
+    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('task never finished')
     await new Promise((r) => setTimeout(r, 10))
   }
 }

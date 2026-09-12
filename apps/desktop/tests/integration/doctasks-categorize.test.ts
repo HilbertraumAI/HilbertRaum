@@ -9,6 +9,7 @@ import { BANK_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/ban
 import { buildToolRunner, toSkillToolAudit } from '../../src/main/services/skills/tool-runs'
 import { DocTaskManager, type DocTaskDeps } from '../../src/main/services/doctasks'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Phase 33 — the `categorize` document task (the bank-statement LLM categorizer's lane). CI posture:
 // zero model, zero network — a scripted runtime (or none, for the deterministic fallback). Covers:
@@ -94,7 +95,7 @@ async function waitTerminal(mgr: DocTaskManager, jobId: string): Promise<ReturnT
   for (;;) {
     const s = mgr.getDocTask(jobId)
     if (s.state === 'done' || s.state === 'failed' || s.state === 'cancelled') return s
-    if (Date.now() - start > 10_000) throw new Error(`task ${jobId} never finished: ${s.state}`)
+    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task ${jobId} never finished: ${s.state}`)
     await new Promise((r) => setTimeout(r, 10))
   }
 }

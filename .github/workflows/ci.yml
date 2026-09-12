@@ -77,9 +77,16 @@ jobs:
         # which a noisy neighbour can hit. Runner minutes are free on a public repo, so the
         # extra jobs cost nothing but queue time. See docs/packaging.md, the CI section.
         #
-        # Sharding halves EXPOSURE, not crowding: each shard still runs `availableParallelism()
-        # - 1` forks on a 4-core runner. Widening the vitest budgets (step 1, `hookTimeout` /
-        # `testTimeout`) is what buys tolerance; these two changes address different halves.
+        # MEASURED, once the shard flag actually reached vitest (run 34662589439): the windows
+        # Test step fell from 483–542 s to 221–239 s and the job from 10–13 min to 5.3–5.7 min,
+        # so windows is no longer the critical path (ubuntu: 4.9–5.3 min). The gain BEATS a
+        # halving because per-file overheads drop too: per-file test cost went 2.22 s → 1.65/
+        # 1.99 s, and both shards together cost LESS total test time than the one unsharded run
+        # (816 s vs 997 s). So sharding does not only halve exposure — pressure per runner
+        # genuinely eases (plausibly the #460 handle/temp-root accumulation, halved per runner;
+        # correlation, not proven cause). Widening the vitest budgets (step 1, `hookTimeout` /
+        # `testTimeout`) is still what buys TOLERANCE against a starved fork; each shard runs
+        # the same `availableParallelism() - 1` forks.
         #
         # WHY UBUNTU STAYS WHOLE — not just cost. One leg per node version still runs all 449
         # files in a SINGLE vitest process, so cross-file interference (shared module state, a

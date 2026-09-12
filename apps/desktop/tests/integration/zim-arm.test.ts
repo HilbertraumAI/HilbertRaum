@@ -666,8 +666,12 @@ describe('collectPackCandidates', () => {
       reason: null,
       found: 0
     })
-    // Comfortably above DF_PROBE_TIMEOUT_MS (scheduling slack) and comfortably below the
-    // client's old 15 s default — proves the SHORT budget fired, not the long one.
+    // A TIMING PROOF — deliberately NOT widened by `hangBudgetMs` (#458 step 3). Its whole job
+    // is to exclude the client's 15 s default (`DEFAULT_TIMEOUT_MS`, zim/client.ts), so a wider
+    // bound would stop discriminating and a CI-scaled one would mean nothing. The margin is
+    // 3 s (the probe) → 10 s (here) → 15 s (the default). If this ever flakes on a starved
+    // runner, the fix is to SHRINK what is measured — pass a short `probeTimeoutMs`, the seam
+    // the expansion cases now use — never to raise this number toward 15 s.
     expect(elapsedMs).toBeGreaterThanOrEqual(DF_PROBE_TIMEOUT_MS)
     expect(elapsedMs).toBeLessThan(10_000)
   }, 15_000)
@@ -1017,6 +1021,12 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
     expandSearches.length = 0
     suggestRequests.length = 0
   }
+  // The expansion cases assert WHICH articles get read, never latency — so they must not race
+  // the real 3 s `DF_PROBE_TIMEOUT_MS` against a local stub. On a starved windows runner that
+  // timer won and the list article was simply never read (#458, run 34659678616). The #353
+  // cases that PROVE the short budget fires deliberately do NOT pass this and keep the default.
+  const PROBE_BUDGET_MS = 30_000
+
   const plainReads = ['Kohlekraftwerk', 'Kohleausstieg']
 
   it('#340 L3-b: the expansion runs ONCE per ask; its title-index and concept articles are fetched FIRST and in addition to the plain hits; a duplicate is fetched once; a list article keeps more chunks', async () => {
@@ -1027,7 +1037,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
       expect(q).toBe(QUESTION)
       return EXPANSION
     }
-    const { candidates, outcomes } = await collectPackCandidates(port, packs, QUESTION, undefined, names, { expand })
+    const { candidates, outcomes } = await collectPackCandidates(port, packs, QUESTION, undefined, names, { probeTimeoutMs: PROBE_BUDGET_MS, expand })
     expect(calls).toBe(1)
     expect(suggestRequests).toEqual([{ content: 'book-pack-expand', term: 'Liste der größten Kohlekraftwerke' }])
     expect(expandSearches).toEqual(['größten Kohlekraftwerke Welt', 'Konzept Suche'])
@@ -1052,12 +1062,12 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
     expect(suggestRequests).toEqual([])
     expect(expandSearches).toEqual(['größten Kohlekraftwerke Welt'])
     reset()
-    const nulled = await collectPackCandidates(port, packs, QUESTION, undefined, names, { expand: async () => null })
+    const nulled = await collectPackCandidates(port, packs, QUESTION, undefined, names, { probeTimeoutMs: PROBE_BUDGET_MS, expand: async () => null })
     expect(rawReads).toEqual(plainReads)
     expect(suggestRequests).toEqual([])
     expect(nulled).toEqual(none)
     reset()
-    const threw = await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+    const threw = await collectPackCandidates(port, packs, QUESTION, undefined, names, { probeTimeoutMs: PROBE_BUDGET_MS,
       expand: async () => {
         throw new Error('runtime exploded')
       }
@@ -1077,7 +1087,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
       throw err
     }
     await expect(
-      collectPackCandidates(port, packs, QUESTION, ctrl.signal, names, { expand })
+      collectPackCandidates(port, packs, QUESTION, ctrl.signal, names, { probeTimeoutMs: PROBE_BUDGET_MS, expand })
     ).rejects.toMatchObject({ name: 'AbortError' })
     expect(expandSearches).toEqual([])
     expect(rawReads).toEqual([])
@@ -1085,7 +1095,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
 
   it('#340 L3-b: a list title the prefix index does not know is retried once, one word shorter', async () => {
     reset()
-    await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+    await collectPackCandidates(port, packs, QUESTION, undefined, names, { probeTimeoutMs: PROBE_BUDGET_MS,
       expand: async () => ({ concepts: [], listTitle: 'Liste der größten Kohlekraftwerke Welt' })
     })
     expect(suggestRequests).toEqual([
@@ -1097,7 +1107,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
 
   it('#340 L3-b: the shorter fallback prefix is broader — its rows are ranked by the dropped word, the right list article first', async () => {
     reset()
-    await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+    await collectPackCandidates(port, packs, QUESTION, undefined, names, { probeTimeoutMs: PROBE_BUDGET_MS,
       expand: async () => ({ concepts: [], listTitle: 'Liste der größten Kohlekraftwerke der Erde' })
     })
     expect(suggestRequests.map((r) => r.term)).toEqual(['Liste der größten Kohlekraftwerke der Erde', 'Liste der größten Kohlekraftwerke der'])
@@ -1107,7 +1117,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
 
   it('#340 L3-b: a failing title index costs only the title hit — the concept hit and the plain hits still arrive', async () => {
     reset()
-    const { candidates } = await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+    const { candidates } = await collectPackCandidates(port, packs, QUESTION, undefined, names, { probeTimeoutMs: PROBE_BUDGET_MS,
       expand: async () => ({ concepts: ['Konzept', 'Suche'], listTitle: 'Liste kaputt' })
     })
     expect(suggestRequests).toEqual([{ content: 'book-pack-expand', term: 'Liste kaputt' }])
@@ -1117,7 +1127,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
 
   it('#340 L3-b: the expansion adds at most EXPANSION_ARTICLES_PER_PACK articles, the plain ARTICLES_PER_PACK bound is untouched, and without a served name the title index is not asked', async () => {
     reset()
-    await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+    await collectPackCandidates(port, packs, QUESTION, undefined, names, { probeTimeoutMs: PROBE_BUDGET_MS,
       expand: async () => ({ concepts: ['Drei', 'Treffer'], listTitle: 'Liste der größten Kohlekraftwerke' })
     })
     // list article + 'Kraftwerk A' = the two expansion fetches; B and C are never read; the
@@ -1127,7 +1137,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
     reset()
     // No served-name map (a caller without the published library): the title index needs the
     // served name, so only the concept query runs.
-    await collectPackCandidates(port, packs, QUESTION, undefined, undefined, { expand: async () => EXPANSION })
+    await collectPackCandidates(port, packs, QUESTION, undefined, undefined, { probeTimeoutMs: PROBE_BUDGET_MS, expand: async () => EXPANSION })
     expect(suggestRequests).toEqual([])
     expect(rawReads).toEqual(['Kraftwerk Tuoketuo', ...plainReads])
   })
@@ -1149,7 +1159,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
       QUESTION,
       deadline.signal,
       names,
-      { expand, askSignal: ask.signal }
+      { probeTimeoutMs: PROBE_BUDGET_MS, expand, askSignal: ask.signal }
     )
     expect(candidates).toEqual([])
     expect(outcomes.map((o) => [o.packId, o.status, o.reason])).toEqual([
@@ -1163,7 +1173,7 @@ describe('collectPackCandidates — #340 L3-b query expansion (D-Z20)', () => {
   it('#340 L3-b: on a three-pack ask the expansion takes at most half the pack quota, so the plain hits are still read', async () => {
     reset()
     const three = [...packs, { id: 'pack-climate', title: 'Klimawandel' }, { id: 'pack-mixed', title: 'Gemischt' }]
-    const { candidates, outcomes } = await collectPackCandidates(port, three, QUESTION, undefined, names, {
+    const { candidates, outcomes } = await collectPackCandidates(port, three, QUESTION, undefined, names, { probeTimeoutMs: PROBE_BUDGET_MS,
       expand: async () => EXPANSION
     })
     // quota per pack = floor(24 / 3) = 8 → the expansion may hold 4 of it: the list article is

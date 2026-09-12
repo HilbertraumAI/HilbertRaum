@@ -52,6 +52,7 @@ import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { t } from '../../src/shared/i18n'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Phase 34 — the translation document task (wave-3 plan §7, decisions D27 + D36), REROUTED at
 // TG-3 (translategemma plan §2 D3/D9): translation runs on the TranslateGemma SIDECAR (a
@@ -209,7 +210,7 @@ async function waitTerminal(
     // failed 3 of 4 runs at ~10.16 s with "never finished: running" — the foreign task was
     // still legitimately translating. Same class as #84/#97/#101 and the local-api wave fix:
     // vitest's CI testTimeout budget does NOT widen a hand-rolled poll bound like this one.
-    if (Date.now() - start > 30_000) throw new Error(`task ${jobId} never finished: ${status.state}`)
+    if (Date.now() - start > hangBudgetMs(30_000)) throw new Error(`task ${jobId} never finished: ${status.state}`)
     await new Promise((r) => setTimeout(r, 10))
   }
 }
@@ -867,7 +868,7 @@ describe('cancellation persists nothing', () => {
     // Wait until it is actually translating, then cancel.
     const start = Date.now()
     while (manager.getDocTask(jobId).state !== 'running' || translator.calls.length === 0) {
-      if (Date.now() - start > 5000) throw new Error('task never started')
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('task never started')
       await new Promise((r) => setTimeout(r, 5))
     }
     manager.cancelDocTask(jobId)
@@ -899,7 +900,7 @@ describe('lifecycle flush (TA-1: lock/quit cancel the running task AND the queue
     // Wait until A is actually running and B is still queued behind it.
     const start = Date.now()
     while (manager.getDocTask(first.jobId).state !== 'running' || translator.calls.length === 0) {
-      if (Date.now() - start > 5000) throw new Error('task A never started')
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('task A never started')
       await new Promise((r) => setTimeout(r, 5))
     }
     expect(manager.getDocTask(second.jobId).state).toBe('queued')
@@ -946,7 +947,7 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     const start = Date.now()
     const before = translator.calls.length
     while (manager.getDocTask(jobId).state !== 'running' || translator.calls.length === before) {
-      if (Date.now() - start > 5000) throw new Error(`task ${jobId} never started running`)
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error(`task ${jobId} never started running`)
       await new Promise((r) => setTimeout(r, 5))
     }
   }
@@ -1194,7 +1195,7 @@ describe('busy-document guard covers the freshly created output document', () =>
     const start = Date.now()
     let outputId: string | null = null
     while (!outputId) {
-      if (Date.now() - start > 5000) throw new Error('output document never appeared')
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('output document never appeared')
       outputId = listDocuments(db).find((d) => d.id !== docId)?.id ?? null
       if (!outputId) await new Promise((r) => setTimeout(r, 5))
     }
