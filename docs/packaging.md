@@ -582,6 +582,17 @@ version still runs all 449 files in a *single* vitest process, so cross-file int
 module state, a leaked global, an ordering dependency) keeps a leg that can still see it; a fully
 sharded matrix would partition that surface away everywhere at once.
 
+**#460 has since been fixed (2026-09-13): the leaked handles and locked roots above no longer
+accumulate.** The per-file test teardown (`tests/setup-temp-roots.ts`) now closes every
+`node:sqlite` handle a test file left open — 1,709 of the 2,306 a full run opens, across 120 files
+— *before* it removes that file's temp roots, so on Windows the post-run sweep went from ~1,500
+roots per run to **1**, and that one is the harness's own `temp-roots.test.ts` exercising the
+deferral on purpose (design: `tests/helpers/sqlite-handles.ts`). Locally it bought no speed worth
+quoting (201 → 189 s, within noise), as #458 predicted: this is hygiene, not a CI-budget lever.
+**What to look for on a run:** the `temp roots: N deferred root(s)` line at the end of the `Test`
+step reads `1` on the ubuntu legs and on whichever windows shard owns `temp-roots.test.ts`, and is
+absent on the other shard. A higher count is a new leak — worth a look, not a re-run.
+
 **The collection guard is shard-aware — and must stay that way.** `tests/full-suite-guard.ts`
 asserts vitest actually collected every file it should, which is what makes a silently dropped
 suite fail instead of passing by not running. A shard legitimately collects half, so the guard

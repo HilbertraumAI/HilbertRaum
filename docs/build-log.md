@@ -27,6 +27,27 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-13 — the oldest closed dated entry retired verbatim (#339 — preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-13 to make room for the #460 test-harness entry (the
+preamble was at 198 of its 200-line budget; the retention rule is "MOVE, don't raise"). The work is
+shipped and its durable record lives on in `rag-design.md` §17 **D-Z22**; what is still open from the
+ZIM wave is `BUILD_STATE.md` §5 item 21. Citations of the form "BUILD_STATE 2026-09-08 entry" for the
+Range-first article reads resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-08 — **#339 Range-first article reads (`fix/339-range-first-article-read`), record `rag-design.md` §17 **D-Z22**:**
+every `/raw` article request (and the redirect hop) now carries `Range: bytes=0-`, which libkiwix serves through its 16 KiB
+callback reader instead of the one-buffer path that carries the win-x86_64 cut-short defect — so the app stops TRIGGERING an
+upstream bug it cannot fix. `kiwixGet` gained a `headers` option, a bytes-level core and an inter-chunk idle timer
+(`ARTICLE_READ_IDLE_MS` = 1,000, `KiwixTimeoutError.kind`); a stall that left a prefix is RESUMED with `Range: bytes=<received>-`,
+accepted only against an exact `Content-Range`, joined as bytes before the UTF-8 decode, never chained. The 4 s × 3 retry stays as
+the safety net; `MAX_SELECTED_PACKS`, the ask deadline, the arm, the viewer and the other routes are untouched. **Measured on the
+K: Kit drive (USB), pinned 3.8.1:** 880 Range reads 0 bad vs 70/600 plain short; max inter-chunk gap **17.8 ms** (24.6 on NVMe) —
+so 1,000 ms stands, not 1,500; 60 real article opens through the shipped client **13 retries + 1 article lost at 953.8 ms/open →
+0 + 0 at 19.9 ms/open**. Suite 423 files / 7,065 (+14 legs). Evidence: `ai_drive-archive/zim-wave-2026-09/evidence/range-fix-2026-09-08/`.
+The three closed ZIM wave entries (#301 / the follow-up wave / the open-issues wave) are retired verbatim to `docs/build-log.md`
+"2026-09-08 — the three closed ZIM knowledge-pack wave entries"; §5 item 21 holds what is still open (all of it the owner's)._
+
 ## 2026-09-12 — the two oldest closed dated entries retired verbatim (#333, #318 — preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-09-12 to make room for the #458 CI entries (the preamble was

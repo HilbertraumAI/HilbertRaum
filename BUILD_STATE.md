@@ -28,6 +28,15 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-13 — **#460 fixed (acceptance: the CI legs print `1 deferred root`) — the harness closes the sqlite handles test files leave open**
+(`fix/460-sqlite-handles`; record `packaging.md` "Continuous integration (CI)", design in `tests/helpers/sqlite-handles.ts`). Counted at runtime,
+not by grep: **120 files** leave **1,709 of 2,306** handles open (the issue's static 99 missed the vault-opened ones). `tests/setup-temp-roots.ts`
+now replaces `DatabaseSync` on the `node:sqlite` CJS module object with a recording subclass — `db.ts` and every raw-handle test read it off that
+object, so one property catches every handle — and closes them in its `afterAll` BEFORE root removal. Full suite on Windows: **deferred roots
+1,515 → 1** (that 1 is `temp-roots.test.ts` exercising the deferral), zero `database is not open`, no new failure. The order holds only under
+vitest's default `sequence.hooks: 'stack'`, pinned by a guard verified to FAIL under `'list'`. Loading `node:sqlite` in every fork added ~180
+ExperimentalWarning lines (268 → 449), so that one warning is swallowed during the harness's own load (now 0). Hygiene, not speed (#458).
+Not this change: the known `zim-client` 8 MiB `read ECONNRESET` load flake failed all 3 attempts in 2 of 3 local full runs (3/3 alone)._
 _2026-09-12 — **#458 (3 of 3 done, acceptance pending) — the windows CI legs: budgets, sharding, timing asserts** (`fix/458-ci-hook-timeout` PR #461;
 `fix/458-shard-windows-legs` PR #462; record `packaging.md` "Continuous integration (CI)"; decision + full evidence in the issue comment).
 Investigated: **five** windows flakes, not three, and #457 did not end them; windows 22.x carried 4 of 5. **(1)** `testTimeout` widened to 60 s
@@ -153,18 +162,6 @@ repo About text + `zim`/`kiwix`/`wikipedia`/`offline` topics, a v0.1.60 release 
 `[Unreleased]`; v0.1.59 predates the wave), a first screenshot, the org profile README. The follow-up PR #441 adds the repo's
 first `.github/ISSUE_TEMPLATE/`: a knowledge-pack report form asking for the facts that decide those reports, and a `config.yml`
 that keeps blank issues one click away and routes vulnerabilities to the private advisory channel._
-_2026-09-08 — **#339 Range-first article reads (`fix/339-range-first-article-read`), record `rag-design.md` §17 **D-Z22**:**
-every `/raw` article request (and the redirect hop) now carries `Range: bytes=0-`, which libkiwix serves through its 16 KiB
-callback reader instead of the one-buffer path that carries the win-x86_64 cut-short defect — so the app stops TRIGGERING an
-upstream bug it cannot fix. `kiwixGet` gained a `headers` option, a bytes-level core and an inter-chunk idle timer
-(`ARTICLE_READ_IDLE_MS` = 1,000, `KiwixTimeoutError.kind`); a stall that left a prefix is RESUMED with `Range: bytes=<received>-`,
-accepted only against an exact `Content-Range`, joined as bytes before the UTF-8 decode, never chained. The 4 s × 3 retry stays as
-the safety net; `MAX_SELECTED_PACKS`, the ask deadline, the arm, the viewer and the other routes are untouched. **Measured on the
-K: Kit drive (USB), pinned 3.8.1:** 880 Range reads 0 bad vs 70/600 plain short; max inter-chunk gap **17.8 ms** (24.6 on NVMe) —
-so 1,000 ms stands, not 1,500; 60 real article opens through the shipped client **13 retries + 1 article lost at 953.8 ms/open →
-0 + 0 at 19.9 ms/open**. Suite 423 files / 7,065 (+14 legs). Evidence: `ai_drive-archive/zim-wave-2026-09/evidence/range-fix-2026-09-08/`.
-The three closed ZIM wave entries (#301 / the follow-up wave / the open-issues wave) are retired verbatim to `docs/build-log.md`
-"2026-09-08 — the three closed ZIM knowledge-pack wave entries"; §5 item 21 holds what is still open (all of it the owner's)._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -191,7 +188,8 @@ audit remediation, the PR #303 audit remediation) on 2026-09-10 (preamble budget
 hardware session) on 2026-09-12 (preamble budget, making room for the #458 CI entry), and the two
 closed 2026-09-07 models/runtime entries (#372, and the #310/#312/#313/#314/#315 wave of PR #371 —
 its residuals stay live in §5 item 23) on 2026-09-12 (preamble budget, making room for the #438
-entry) —
+entry), and the #339 Range-first article-reads entry on 2026-09-13 (preamble budget, making room for
+the #460 test-harness entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 

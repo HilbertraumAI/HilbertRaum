@@ -1,6 +1,8 @@
 // Vitest setup (issue #335), applied to every test file after `tests/setup.ts`: the temp-root
 // hygiene the Performance fixture does for its own suites (`performance-fixture.ts`, TH2),
 // applied by the harness to every file — see `tests/helpers/temp-roots.ts` for the design.
+// Issue #460 extends it to the sqlite handles those roots hold — see
+// `tests/helpers/sqlite-handles.ts`.
 //
 // The `mkdtemp` family is wrapped on the CommonJS `fs` object and the ESM live bindings are
 // re-synced (`syncBuiltinESMExports`), so a test file's `import { mkdtempSync } from 'node:fs'`
@@ -10,6 +12,7 @@
 import fs from 'node:fs'
 import { syncBuiltinESMExports } from 'node:module'
 import { afterAll } from 'vitest'
+import { closeTrackedHandles, installSqliteHandleTracking, nodeSqlite } from './helpers/sqlite-handles'
 import { cleanupRecordedRoots, recordTempRoot } from './helpers/temp-roots'
 
 type MkdtempSync = typeof fs.mkdtempSync
@@ -51,16 +54,33 @@ if (!marker[PATCHED]) {
   syncBuiltinESMExports()
 }
 
-// One teardown per file: remove what this file minted; what cannot be removed (an open sqlite
-// handle on Windows) is deferred to the post-run sweep in `tests/global-temp-roots.ts`. Never
-// throws, never fails a green suite.
+// Issue #460: record every `DatabaseSync` this fork constructs — a test's own `openDatabase` or
+// `new DatabaseSync`, a helper's, and the ones production code opens under test (the vault's) —
+// so the teardown below can close what the file left open. `db.ts` and the tests read the class
+// off the CommonJS module object this replaces (the helper says why that catches every handle);
+// the re-sync covers an ESM importer too.
+const sqlite = nodeSqlite()
+if (sqlite && installSqliteHandleTracking(sqlite)) syncBuiltinESMExports()
+
+// One teardown per file. It first CLOSES every sqlite handle the file left open (#460): on
+// Windows an open handle locks its file, so before this almost every root failed to be removed
+// here — ~1,500 per run went to the deferred list, and a root that genuinely could not be
+// cleaned was indistinguishable from the routine case. Then it removes what this file minted;
+// what still cannot be removed is deferred to the post-run sweep in `tests/global-temp-roots.ts`.
+// Never throws, never fails a green suite.
 //
-// ONE attempt per root here, no in-hook retry: a handle the suite never closed does not clear
-// in 25 ms, and a second recursive delete of a locked root only doubles the cost — on a starved
-// windows CI runner that tripped vitest's 10 s hook budget (run 34033122353, a suite holding a
-// sqlite handle per test). The sweep after the forks exit is the retry. The hook also carries
-// its own generous timeout: cleanup may be slow, it must never fail a green suite.
+// It never closes a DB a suite's own teardown still needs: vitest's default `sequence.hooks`
+// ('stack') runs after-hooks in REVERSE registration order and this setup file registers first,
+// so a test file's own `afterAll` runs before this one (`tests/unit/sqlite-handles.test.ts` pins
+// that order).
+//
+// ONE attempt per root here, no in-hook retry: a locked root does not clear in 25 ms, and a
+// second recursive delete of it only doubles the cost — on a starved windows CI runner that
+// tripped vitest's 10 s hook budget (run 34033122353, a suite holding a sqlite handle per test).
+// The sweep after the forks exit is the retry. The hook also carries its own generous timeout:
+// cleanup may be slow, it must never fail a green suite.
 const TEARDOWN_TIMEOUT_MS = 120_000
 afterAll(async () => {
+  if (sqlite) closeTrackedHandles(sqlite)
   await cleanupRecordedRoots({ attempts: 1 })
 }, TEARDOWN_TIMEOUT_MS)
