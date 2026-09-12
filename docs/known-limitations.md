@@ -2486,11 +2486,22 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   "the step list is announceable (#437)". **What is pinned is the DOM, not the sound:** both
   issues ask for re-verification by ear during a real multi-second check, and that still needs a
   screen reader on the hardware box.
-- **An automatic check shows a step list that never advances.** A first-run or moved-drive check
-  is run by the main process, and progress steps are addressed only to the window that pressed
-  the button — but the screen renders the list whenever the backend span is held (correct per
-  audit M1). So a moved-drive check sits frozen on step 1 for its whole duration (measured:
-  13.7 s) and then disappears. A manual check does advance. Tracked as #438.
+- **An automatic check reports itself in one line, not as steps — FIXED 2026-09-12 (#438).** A
+  first-run or moved-drive check is run by the main process, and progress steps are addressed only
+  to the window that invoked `benchmark:run` — but the screen used to render the step list
+  whenever the backend span was held (correct per audit M1), so a moved-drive check sat frozen on
+  step 1 for its whole duration (measured: 13.7 s) and then disappeared. Both halves were
+  deliberate; the frozen list was their product. The step list now belongs to a run THIS window
+  started; any other run — first-run, moved-drive, another window — gets one line, "Checking this
+  computer in the background.", in the same live region, so it is still announced rather than
+  silent. **The residual, accepted:** an automatic check reports no per-step detail at all. The
+  alternative (broadcasting the steps) was rejected as a half-fix — the common path for a
+  moved-drive check is the user arriving on the screen mid-run, and a late-joining window has
+  missed the earlier one-shot messages, so it would show "Hardware detected: in progress" beside
+  "Generation speed: done". Back-filling the earlier steps was refused outright: the L3 rule is
+  that a step is reported only when it SUCCEEDED, so it would claim a skipped drive probe had
+  passed. Carrying the steps in `PerformanceSnapshot` would fix the late-join case properly and
+  stays the option if per-step detail is ever wanted for automatic runs.
 - **Remaining hardware acceptance not yet performed:** the hybrid iGPU+dGPU device-order check
   and Apple Silicon unified-memory behaviour. Two items left this list: the two-computer round
   trip on an encrypted drive, including an upgraded workspace with no history yet, was verified

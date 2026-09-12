@@ -717,7 +717,9 @@ head's own weights + KV.
   the injected `effectiveRead`.
 - **`ipc/registerBenchmarkIpc.ts`** — `runBenchmark()` (`benchmark:run`); runs it, persists to
   `settings.lastBenchmark` + `settings.benchmarkHistory`, returns the result, and streams
-  `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window — a step only when it
+  `benchmark:progress` (`BenchmarkProgressStep`) to the requesting window (so the Performance
+  screen draws a step list only for a run IT started; any other held span gets one announced
+  background line instead — #438, `benchmark.md` "An automatic run's step list") — a step only when it
   succeeded (`'drive'` only on a successful probe, `'speed'` only on an obtained reading,
   `'done'` always, and `'done'` PRECEDES the persist and the occupancy release). `performance:get`
   returns the `PerformanceSnapshot` the Performance screen renders (`current`,

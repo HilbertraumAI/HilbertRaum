@@ -1999,6 +1999,9 @@ export const de: Record<keyof typeof en, string> = {
   'perf.step.speed': 'Generierungsgeschwindigkeit mit {model}',
   'perf.step.speedSkipped': 'Generierungsgeschwindigkeit (kein Modell läuft, übersprungen)',
   'perf.step.hint': 'Etwa eine halbe Minute. Du kannst die App weiter benutzen.',
+  // #438: eine von der App selbst gestartete Prüfung sendet ihre Schritte an niemanden — statt
+  // einer auf Schritt 1 eingefrorenen Liste diese eine Zeile, in derselben Live-Region.
+  'perf.running.background': 'Dieser Computer wird im Hintergrund geprüft.',
   // #437: der Schrittzustand steckt jetzt im Text, nicht nur in der CSS-Klasse.
   'perf.step.state.done': '{step}: fertig',
   'perf.step.state.active': '{step}: läuft',
