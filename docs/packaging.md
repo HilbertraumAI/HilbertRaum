@@ -558,10 +558,26 @@ matching; never mark an individual leg required.
 *at* their budget and any unlucky file failed a run no code change could have broken — five such
 flakes in two days, each costing a full re-run. Two shards halve the wall clock and with it the
 window a noisy neighbour can hit; runner minutes are free on a public repo, so the extra jobs cost
-only queue time. Note what sharding does **not** do: it halves *exposure*, not *crowding* — each
-shard still runs `availableParallelism() - 1` forks on a 4-core runner, so the CI-aware
-`testTimeout`/`hookTimeout` above remain what buys *tolerance*. The two changes address different
-halves of the same problem. **Ubuntu stays whole for a reason beyond cost:** one leg per Node
+only queue time.
+
+**What it actually bought, measured** (run `34662589439` — the first run in which the shard flag
+really reached vitest; see the forwarding note below for why the earlier ones did not):
+
+| | before | after |
+| --- | --- | --- |
+| windows `Test` step | 483–542 s | **221–239 s** |
+| windows job | 10–13 min | **5.3–5.7 min** |
+| critical path | windows, 13.3 min | **5.7 min** — windows is no longer the long pole (ubuntu 4.9–5.3 min) |
+
+The gain **beats** a halving, because per-file overheads fall too: per-file test cost went
+2.22 s → 1.65/1.99 s, and the two shards together spend *less* total test time than the single
+unsharded run (816 s vs 997 s). So the earlier framing here — "sharding halves *exposure*, not
+*crowding*" — was too strong: pressure per runner genuinely eases, plausibly because each runner
+now accumulates only half the leaked sqlite handles and locked temp roots of #460 (correlation,
+not a proven cause). What remains true is that each shard runs the same
+`availableParallelism() - 1` forks, so the CI-aware `testTimeout`/`hookTimeout` above are still
+what buy *tolerance* when a fork is starved; the two changes address different halves of the
+problem. **Ubuntu stays whole for a reason beyond cost:** one leg per Node
 version still runs all 449 files in a *single* vitest process, so cross-file interference (shared
 module state, a leaked global, an ordering dependency) keeps a leg that can still see it; a fully
 sharded matrix would partition that surface away everywhere at once.

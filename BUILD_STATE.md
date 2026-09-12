@@ -38,9 +38,12 @@ DISABLE it instead. TWO silent failures found by MEASURING, not reasoning: the s
 with pathe), so a native-`resolve` reproduction agreed with a real run on 109 of 225 files (chance) while every property test passed; and the
 first sharded CI run **did nothing at all** — the root `test` script forwarded to the workspace without a `--`, so npm ate `--shard` as a config
 and all six legs ran 449 files, merely looking slow (run 34660709148). Both now pinned (sha1 vectors; the trailing `--`). Rejected: dropping a
-node version (22.x is the `engines` floor AND carried 4 of 5); temp-root churn on measurement (~1.5 s/run — **#460**, 99/129 `openDatabase()`
-suites never close). Sharding halves EXPOSURE, not crowding — the budgets buy tolerance. Next: **(3)** the **29 hand-rolled `Date.now()` poll
-bounds across 16 files** + `zim-arm.test.ts:672`. Acceptance ("green on a first push over a week") is judged from real traffic after (2)._
+suites never close). **Measured once the flag really landed (run 34662589439): windows Test step 483–542 s → 221–239 s, job 10–13 min → 5.3–5.7,
+critical path 13.3 → 5.7 min — windows is no longer the long pole.** It BEATS a halving (per-file cost 2.22 → 1.65/1.99 s; both shards together
+816 s vs 997 s), so "halves exposure, not crowding" was too strong — pressure per runner eases too, plausibly #460's accumulation halved. A
+SIXTH flake appeared on master post-(1) — `zim-arm.test.ts` `collectPackCandidates` asserting the exact list AND ORDER of concurrent suggest
+requests (run 34659678616): not a timeout, squarely (3)'s class. Next: **(3)** the **29 hand-rolled `Date.now()` poll bounds across 16 files** +
+`zim-arm.test.ts:672` and that ordering assert. Acceptance ("green on a first push over a week") is judged from real traffic._
 _2026-09-11 — **#413 CLOSED — `USABLE_VRAM_MB` stays 5,120, decided without a 4 GB measurement** (`docs/413-keep-usable-vram-floor`; record
 `model-benchmarks.md` §6.6 N8 "Decided 2026-09-11", §5 item 22 (e)(1)). The project owns no 4 GB card and will not buy one. Keeping the floor
 self-corrects (placement ignores it; a crawl on the RAM pick steps the ★ down, §6.5); lowering it would pin the E2B with no step back up. Docs only._
