@@ -130,8 +130,16 @@ jobs:
         run: npm run build
 
       # `matrix.shard` is `--shard=i/2` on the windows legs and UNSET (empty) on the ubuntu
-      # ones, which run the whole suite. `npm test --` with nothing after it forwards nothing,
-      # so one step serves both shapes.
+      # ones, which run the whole suite. An empty expansion contributes NO argv element, so one
+      # step serves both shapes — verified, because an empty string WOULD have read as a path
+      # filter and silently switched the collection guard off on the ubuntu legs.
+      #
+      # This must stay `npm test`, and the root `test` script must keep its trailing `--`.
+      # THE FIRST SHARDED RUN SILENTLY DID NOTHING because of that: the root script forwards to
+      # the workspace (`npm run test --workspace apps/desktop`), and without a `--` the inner
+      # `npm run` ate `--shard=1/2` as an npm config ("npm warn Unknown cli config"), so all six
+      # legs ran the whole 449-file suite and merely looked slow. A POSITIONAL survives two npm
+      # layers; a FLAG does not. Run 34660709148 is the evidence — every leg reported "(449)".
       #
       # The suite's anti-false-green reporter is shard-aware (tests/full-suite-guard.ts): it
       # narrows to the shard's expected subset by reproducing vitest's own split, so a dropped

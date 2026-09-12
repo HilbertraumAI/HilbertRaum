@@ -586,6 +586,17 @@ traps, both already paid for:
   Fixed sha1 vectors in `tests/unit/full-suite-guard.test.ts` pin the hashed string so the
   mistake cannot return unnoticed on a machine where `sep === '/'`.
 
+**Passing a flag through `npm test` needs the root script's trailing `--` (#458).** The root
+`test` script forwards to the workspace — `npm run test --workspace apps/desktop --` — and that
+trailing `--` is load-bearing. A **positional** survives two npm layers (`npm test -- tests/unit`
+has always worked), but a **flag** does not: without the `--`, the inner `npm run` swallows
+`--shard=1/2` as an npm config and only prints `npm warn Unknown cli config "--shard"`. The first
+sharded CI run hit exactly this and **silently did nothing** — all six legs ran the whole 449-file
+suite and merely looked slow (run `34660709148`; every leg reported `(449)`). Nothing failed,
+because the guard was correctly enforcing all 449 and all 449 had run. When adding a CI leg that
+passes vitest a flag, check the leg's `Test Files` line really shows the reduced count, and treat
+an `Unknown cli config` warning in a run log as an error.
+
 **Why both Node majors, and why the explicit pinned-npm install (AUD-26).** The two versions are the
 two ends of what the repo *claims*, and each was previously an unexercised claim: `22.x` is the
 `engines.node >= 22.12` floor the app promises to run on (raised from 22.5 by Electron 43 — wave
