@@ -40,3 +40,18 @@ export function hangBudgetMs(localMs: number): number {
   if (!process.env.CI) return localMs
   return Math.min(localMs * CI_FACTOR, CI_CEILING_MS)
 }
+
+/**
+ * The same widening for a poll loop bounded by ITERATION COUNT rather than wall clock —
+ * `for (let i = 0; i < hangPolls(200); i++)`. Pass the loop's own sleep so the 45 s cap still
+ * lands on real time: 200 polls of 5 ms is a 1 s detector, and on CI becomes a 4 s one.
+ *
+ * This shape is the NASTIER of the two and was missed by the first sweep of #458 step 3 —
+ * CI found it (`vision-security.test.ts`, run 34664328086). A counted loop does not merely
+ * stay narrow on CI, it **falls through silently**: no named error, just the next assertion
+ * failing with something opaque like `expected [] to have a length of 1`. Prefer failing
+ * loudly after the loop where the surrounding test makes that practical.
+ */
+export function hangPolls(iterations: number, stepMs: number): number {
+  return Math.max(1, Math.round(hangBudgetMs(iterations * stepMs) / stepMs))
+}

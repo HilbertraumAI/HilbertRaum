@@ -32,6 +32,7 @@ import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
 import type { GpuDevice } from '../../src/shared/types'
+import { hangPolls } from '../helpers/hang-budget'
 
 // Phase 15 start ladder (architecture.md GPU record §5.2). Zero binaries, zero GPUs:
 // everything runs through the injected makeLlama/makeMock/probe seams.
@@ -247,7 +248,7 @@ function deferred<T>(): { promise: Promise<T>; resolve: (v: T) => void } {
 
 /** Resolve once `cond` holds (micro/macro-task polling; injected budgets keep this fast). */
 async function until(cond: () => boolean): Promise<void> {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < hangPolls(200, 1); i++) {
     if (cond()) return
     await new Promise((r) => setTimeout(r, 1))
   }

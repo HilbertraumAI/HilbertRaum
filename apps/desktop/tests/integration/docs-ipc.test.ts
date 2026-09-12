@@ -141,7 +141,7 @@ import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { makeScanOnlyPdf } from '../helpers/fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, hangPolls } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -190,7 +190,7 @@ async function runImport(paths: string[], options?: ImportOptions): Promise<Impo
   // T-7 (Chat & Documents audit 2026-07-07): a generous non-racy ceiling (was 200×5ms ≈ 1s) —
   // the loop settles well before this; the higher bound only removes headroom flakiness on a
   // busy CI box, it never gates a passing run.
-  for (let i = 0; i < 400; i++) {
+  for (let i = 0; i < hangPolls(400, 5); i++) {
     const { result: s } = await invoke(handlers, IPC.getImportJob, job.jobId)
     if ((s as ImportJobStatus).done) break
     await new Promise((r) => setTimeout(r, 5))
@@ -591,7 +591,7 @@ describe('registerDocsIpc', () => {
     const { result: imp } = await invoke(handlers, IPC.importDocuments, [file])
     const jobId = (imp as ImportJob).jobId
     let status: ImportJobStatus | undefined
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < hangPolls(200, 5); i++) {
       status = (await invoke(handlers, IPC.getImportJob, jobId)).result as ImportJobStatus
       if (status.done) break
       await new Promise((r) => setTimeout(r, 5))
@@ -1293,7 +1293,7 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     expect(count).toBe(6)
 
     // Drive to completion so the lease/loop unwind cleanly, then confirm every row indexed.
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < hangPolls(200, 5); i++) {
       const { result: s } = await invoke(handlers, IPC.getImportJob, job.jobId)
       if ((s as ImportJobStatus).done) break
       await new Promise((r) => setTimeout(r, 5))
@@ -1398,7 +1398,7 @@ describe('registerDocsIpc — Session 6 backend performance (DB-4…DB-7)', () =
     // gated one → it is evicted → getImportJob returns synthetic done:true → this reddens.
 
     release() // let the gated embed resolve, then drain so the loop/lease unwind cleanly
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < hangPolls(200, 5); i++) {
       const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
       if (s.done) break
       await new Promise((r) => setTimeout(r, 5))
@@ -1472,7 +1472,7 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
 
     // Release + drain so the loop/lease unwind cleanly (no leak into the next test).
     release()
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < hangPolls(400, 5); i++) {
       const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
       if (s.done) break
       await new Promise((r) => setTimeout(r, 5))
@@ -1584,7 +1584,7 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
     // Drive to done via getImportJob (it needs NO unlock, unlike listDocuments) since the workspace
     // locks itself mid-job.
     let status: ImportJobStatus = { jobId: job.jobId, total: 2, completed: 0, failed: 0, done: false }
-    for (let i = 0; i < 400; i++) {
+    for (let i = 0; i < hangPolls(400, 5); i++) {
       status = (await invoke(handlers, IPC.getImportJob, job.jobId)).result as ImportJobStatus
       if (status.done) break
       await new Promise((r) => setTimeout(r, 5))
@@ -1914,7 +1914,7 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
     )
 
     release()
-    for (let i = 0; i < 200; i++) {
+    for (let i = 0; i < hangPolls(200, 5); i++) {
       const s = (await invoke(handlers, IPC.getImportJob, gated.jobId)).result as ImportJobStatus
       if (s.done) break
       await new Promise((r) => setTimeout(r, 5))

@@ -709,6 +709,19 @@ read*, not latency, so the fix was a `probeTimeoutMs` test seam (mirroring the e
 budget fires keep the real default. Verified by setting the seam to 1 ms: exactly those six
 expansion cases fail, which is what makes the seam's wiring provable rather than assumed.
 
+**There are TWO shapes of hand-rolled bound, and the counted one is nastier.** The first sweep
+caught only `Date.now() - start > N`. CI then failed `vision-security.test.ts` (run
+`34664328086`) on the other shape — a loop bounded by ITERATION COUNT:
+`for (let i = 0; i < 200; i++) { if (cond) break; await sleep(5) }`. That is a 1 s detector
+hard-coded in disguise, and worse than the wall-clock form in two ways: it does not widen on CI
+**and it falls through silently**, leaving the next assertion to fail with something opaque —
+here `expected [] to have a length of 1`, which says nothing about the event that never arrived.
+The suite's **16** counted loops across 7 files now use `hangPolls(n, stepMs)`, which applies the
+same 4×/45 s contract in steps. Where a counted loop can fall through, prefer failing by name
+after it (`vision-security`'s `waitForDoneEvent` is the pattern); `waitForTerminal` in the same
+file already did. **When adding a poll loop, bound it in wall-clock terms through one of these
+two helpers and make its exhaustion an error, never a `break` into the next assertion.**
+
 **What CI does NOT cover — the manual `HILBERTRAUM_*` matrix stays a separate human gate.** A green
 CI run says **nothing** about the real-`spawn` / real-binary / real-weights surface: that is the
 `HILBERTRAUM_*` manual harness matrix below (audit M-A5), which is env-gated and skips in CI. CI is
