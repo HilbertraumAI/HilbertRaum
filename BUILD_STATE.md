@@ -29,17 +29,18 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 _2026-09-12 — **#458 OPEN (2 of 3 done) — the windows CI legs: CI-aware `hookTimeout`, then sharded** (`fix/458-ci-hook-timeout` PR #461;
-`fix/458-shard-windows-legs`; record `packaging.md` "Continuous integration (CI)"; decision + full evidence in the issue comment).
+`fix/458-shard-windows-legs` PR #462; record `packaging.md` "Continuous integration (CI)"; decision + full evidence in the issue comment).
 Investigated: **five** windows flakes, not three, and #457 did not end them; windows 22.x carried 4 of 5. **(1)** `testTimeout` widened to 60 s
 on CI long ago but `hookTimeout` never did (vitest's 10 s default, 6× tighter) and **2 of the 5 were hook timeouts** — structural, not slow
 setup: 3 forks + main fill a 4-core runner. **(2)** Each windows leg is now two `--shard` jobs (6 legs; ubuntu stays WHOLE so one leg per node
 version still sees cross-file interference). `FullSuiteGuard` is shard-aware or it fails every sharded run — and a folder split would silently
-DISABLE it instead. The split is hashed over `/` + the **posix** path (vitest resolves with pathe): a native-`resolve` reproduction agreed with a
-real run on 109 of 225 files, i.e. chance — caught by running the shards, now pinned with sha1 vectors. Rejected: dropping a node version (22.x
-is the `engines` floor AND carried 4 of 5); temp-root churn on measurement (~1.5 s/run — refiled as **#460**, 99/129 `openDatabase()` suites
-never close). Sharding halves EXPOSURE, not crowding — the budgets buy tolerance. Next: **(3)** the **29 hand-rolled `Date.now()` poll bounds
-across 16 files** + `zim-arm.test.ts:672`; a hand-rolled bound never widens with the vitest budget. Acceptance ("green on a first push, sampled
-over a week") is judged after (2) lands, not from one green run._
+DISABLE it instead. TWO silent failures found by MEASURING, not reasoning: the split is hashed over `/` + the **posix** path (vitest resolves
+with pathe), so a native-`resolve` reproduction agreed with a real run on 109 of 225 files (chance) while every property test passed; and the
+first sharded CI run **did nothing at all** — the root `test` script forwarded to the workspace without a `--`, so npm ate `--shard` as a config
+and all six legs ran 449 files, merely looking slow (run 34660709148). Both now pinned (sha1 vectors; the trailing `--`). Rejected: dropping a
+node version (22.x is the `engines` floor AND carried 4 of 5); temp-root churn on measurement (~1.5 s/run — **#460**, 99/129 `openDatabase()`
+suites never close). Sharding halves EXPOSURE, not crowding — the budgets buy tolerance. Next: **(3)** the **29 hand-rolled `Date.now()` poll
+bounds across 16 files** + `zim-arm.test.ts:672`. Acceptance ("green on a first push over a week") is judged from real traffic after (2)._
 _2026-09-11 — **#413 CLOSED — `USABLE_VRAM_MB` stays 5,120, decided without a 4 GB measurement** (`docs/413-keep-usable-vram-floor`; record
 `model-benchmarks.md` §6.6 N8 "Decided 2026-09-11", §5 item 22 (e)(1)). The project owns no 4 GB card and will not buy one. Keeping the floor
 self-corrects (placement ignores it; a crawl on the RAM pick steps the ★ down, §6.5); lowering it would pin the E2B with no step back up. Docs only._
