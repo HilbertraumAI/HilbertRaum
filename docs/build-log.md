@@ -27,6 +27,29 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-12 — the two oldest closed dated entries retired verbatim (#333, #318 — preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-12 to make room for the #458 CI entries (the preamble was
+at its 200-line budget; the retention rule is "MOVE, don't raise"). Both rounds are CLOSED and their
+durable records live on: #333 in `benchmark.md` §4 **I5**, #318 in `model-benchmarks.md` §6.6
+"Hardware verification". Citations of the form "BUILD_STATE 2026-09-09 entry" / "2026-09-07 entry"
+for these two resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-09 — **#333 CLOSED — measured, no cache** (instrumented on `perf/333-manifest-read-instrumentation`, PR #431; record
+`benchmark.md` §4 **I5** + Perf marks "`discover_manifests` / `performance_get` — the #333 pair"; evidence
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/manifest-read-333-measurement.txt`): on the drive, cold (eject/replug ×3:
+90.3 / 75.6 / 92.2 ms) and end to end through the app (20 reads: median **27 ms**, scan 18 of it, ~9 ms settings + detectSystem).
+Owner decision: acceptable as measured. A cache saves 18 ms on a pushed screen, would not have touched the 116 ms tail (that read's
+scan was 15 ms — the rest was the settings read contending with the benchmark's drive probe), and the screen is a minority caller
+(66 scans vs 20 reads). Corrections on record: the old ~100 ms was the INTERNAL disk while the launchers point
+`HILBERTRAUM_MANIFESTS_DIR` at the drive's copy; the cost is CPU (82 % parse+validate) not media; and the app has ONE window, so the
+per-chat-answer exposure is smaller than the pre-measurement analysis claimed. Instrumentation kept._
+_2026-09-07 — **#318 hardware session CLOSED (`docs/318-hardware-verification`):** six machines, legs 1–5 + 7 with
+the app's own argv; every §6.6 verdict held (8 GB: 9B 31/33 → 4B ★; 12 GB: Gemma 49/49; sub-gate 6 GB laptop: E2B 36/36
+on the card anyway; 24 GB: Q4 66/66, Q5 62/66 under rung 1a yet 66/66 with `-np 1` or MTP off). Leg 6 (20 GB) and an
+Intel-first hybrid do not exist in the project → predicted by inference. Record + six findings: `model-benchmarks.md`
+§6.6 "Hardware verification"; evidence `eval/results/hardware/<slug>/`; routed to #319/#320/#321/#329/#332; §5 item 22 (e)–(k)._
+
 ## 2026-09-10 — the three 2026-09-06 entries retired verbatim (preamble budget)
 
 _Moved out of `BUILD_STATE.md` while making room for the #436/#437 accessibility entry. All three

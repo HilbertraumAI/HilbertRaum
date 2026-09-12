@@ -541,15 +541,50 @@ second-laptop continuity check.
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the **exact pre-release command
 chain** — `npm ci` → `npm run typecheck` → `npm run build` → `npm test` — on every pull request
-and on pushes to `master`, across a matrix of **`ubuntu-latest` and `windows-latest`** (Windows is
+and on pushes to `master`, on **`ubuntu-latest` and `windows-latest`** (Windows is
 first-class for this project) × **Node `22.x` and `24.x`**. It is the machine
 backstop the audit asked for (TEST-N1): before CI, the suite was green only by author discipline,
 and the repo's own anti-false-green check ([`tests/full-suite-guard.ts`](../apps/desktop/tests/full-suite-guard.ts))
-only mattered if something ran it. CI runs the four matrix legs (`build-and-test
-(ubuntu-latest, 22.x)` / `(windows-latest, 24.x)` / …) plus a tiny **`ci-success`** aggregate job
-that passes only when **every** leg passes — mark **`ci-success`** the **required status check** on
-`master`. Its name is stable even if the matrix labels change later, so branch protection never
-silently stops matching; never mark an individual leg required.
+only mattered if something ran it. The legs are **deliberately asymmetric since #458**: each
+windows leg is **split into two `--shard` jobs**, the ubuntu legs run the whole suite. So six legs
+(`build-and-test (ubuntu 22.x)` / `(windows 24.x, 1 of 2)` / …) plus a tiny **`ci-success`**
+aggregate job that passes only when **every** leg passes — mark **`ci-success`** the **required
+status check** on `master`. Its name is stable even when the matrix labels, the Node list or the
+shard count change (#458 renamed all six legs), so branch protection never silently stops
+matching; never mark an individual leg required.
+
+**Why the windows legs are sharded and the ubuntu ones are not (#458).** The `npm test` step was
+483–542 s of a 10–14 min windows leg against ~5 min for a whole ubuntu leg, so the windows legs ran
+*at* their budget and any unlucky file failed a run no code change could have broken — five such
+flakes in two days, each costing a full re-run. Two shards halve the wall clock and with it the
+window a noisy neighbour can hit; runner minutes are free on a public repo, so the extra jobs cost
+only queue time. Note what sharding does **not** do: it halves *exposure*, not *crowding* — each
+shard still runs `availableParallelism() - 1` forks on a 4-core runner, so the CI-aware
+`testTimeout`/`hookTimeout` above remain what buys *tolerance*. The two changes address different
+halves of the same problem. **Ubuntu stays whole for a reason beyond cost:** one leg per Node
+version still runs all 449 files in a *single* vitest process, so cross-file interference (shared
+module state, a leaked global, an ordering dependency) keeps a leg that can still see it; a fully
+sharded matrix would partition that surface away everywhere at once.
+
+**The collection guard is shard-aware — and must stay that way.** `tests/full-suite-guard.ts`
+asserts vitest actually collected every file it should, which is what makes a silently dropped
+suite fail instead of passing by not running. A shard legitimately collects half, so the guard
+reproduces **vitest's own split** (`shardTestFiles`) and asserts the shard's expected subset; the
+union of the shards is still every file, so a dropped file fails whichever shard owned it. Two
+traps, both already paid for:
+
+- **Never "shard" by passing a path** (`npm test -- tests/unit`). A positional argument reads as a
+  filter, so the guard switches itself **off silently** — retiring the exact protection it exists
+  for, with no signal. `--shard` is a flag, so the guard stays on and merely narrows. The space
+  form `--shard 1/2` puts its value in argv looking like a path, which the config now skips
+  explicitly; CI uses `--shard=1/2`.
+- **The split is hashed over `/` + the POSIX root-relative path** — vitest resolves paths with
+  `pathe`, which normalises away from `\`, so the assignment is identical on every platform.
+  Reproducing it with node's native `path.resolve` type-checks and looks equivalent but hashes
+  `\tests\unit\x.test.ts` on Windows and assigns a different half: the first implementation here
+  did exactly that and agreed with a real `--shard=1/2` run on 109 of 225 files, i.e. chance.
+  Fixed sha1 vectors in `tests/unit/full-suite-guard.test.ts` pin the hashed string so the
+  mistake cannot return unnoticed on a machine where `sep === '/'`.
 
 **Why both Node majors, and why the explicit pinned-npm install (AUD-26).** The two versions are the
 two ends of what the repo *claims*, and each was previously an unexercised claim: `22.x` is the
@@ -606,22 +641,15 @@ a compromised action repo inject code into CI; full-audit 2026-07-10 SC-1). This
 telemetry/analytics, and performs no network egress beyond the registry install (the "no cloud /
 no telemetry" hard rule governs the shipped app at runtime).
 
-**The windows legs run at their time budget, and the vitest budgets are CI-aware because of it
-(#458).** On the same commit the ubuntu legs finish in ~5 min and the windows legs in 10–14; the
-`npm test` step is 483–542 s of that, while install + typecheck + build is only ~90 s, so the test
-step *is* the leg. The excess is concentrated in the tests themselves (2.2× ubuntu, measured
-per-phase), not in collection or setup (1.05–1.35×): vitest runs `availableParallelism() - 1`
-forks, so on a 4-core runner three forks plus the main process fill the machine before Defender
-and the runner agent take their share, and Windows file operations cost more per call. Run-to-run
-variance on a shared runner then decides the outcome — the same suite measured 486 s green and
-694/802 s on the runs that failed. Any fork can be descheduled for 10+ seconds, and whichever
-file is unlucky fails a run that no code change could have broken.
-Both vitest budgets therefore widen on CI (`vitest.config.ts`, GitHub Actions sets `CI=true`):
-`testTimeout` 15 s → 60 s, and since #458 `hookTimeout` likewise — before that it sat on vitest's
-10 s default, six times tighter than the tests, and two of the five windows flakes investigated in
-#458 were hook timeouts rather than test timeouts. Neither widening loosens any evidence: timing
-PROOFS live in explicit assertions (the FTS 500 ms bound, #84), never in a vitest budget, and a
-hook is setup. Locally both stay at 15 s so a real hang still fails fast at the desk.
+**Both vitest budgets are CI-aware, for the starvation described above (#458).** A fork on a
+saturated runner can be descheduled for 10+ seconds, so whichever file is unlucky fails a run no
+code change could have broken. The budgets therefore widen on CI (`vitest.config.ts`; GitHub
+Actions sets `CI=true`): `testTimeout` 15 s → 60 s, and since #458 `hookTimeout` likewise — before
+that it sat on vitest's 10 s default, six times tighter than the tests, and two of the five windows
+flakes investigated in #458 were hook timeouts rather than test timeouts. Neither widening loosens
+any evidence: timing PROOFS live in explicit assertions (the FTS 500 ms bound, #84), never in a
+vitest budget, and a hook is setup, not proof. Locally both stay at 15 s so a real hang still
+fails fast at the desk.
 **A hand-rolled wall-clock bound does NOT widen with them** — a `Date.now() - start > N` poll
 guard, a fixture's own `waitFor` default, or a child-process `timeout` is invisible to vitest's
 config, so each one needs its own CI headroom (`doctasks-translation.test.ts` says so at its
