@@ -28,6 +28,13 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-13 — **#467 fixed — the `zim-client` 8 MiB `read ECONNRESET` was the FIXTURE's server-side close, not a slow transfer**
+(`fix/467-zim-client-reset`; record `rag-design.md` §17 D-Z22 "Also absorbed"). Reproduced outside vitest (14 of 30, idle-priority load): the
+client asks `Connection: close`, the fixture closed ~1 ms after its last write, and a CPU-starved Windows reader then never gets the queued
+tail — it stops ~0.4 % short and the OS resets at **~19 s, every time** (the 2026-09-05 15 s timeout and ~19 s reset were this). From 256 KB
+up; 4–64 KB 0 of 80; client-closes-first 0 of 50. Fix: the ceiling answers are keep-alive with `keepAliveTimeout` 0, `retry: 2` dropped, plus an
+assert the server never closed first (FAILS on an idle box with the line removed). Under load after: 26 of 26 ceiling legs, ≤ 111 ms. Production
+`/raw` absorbs it (1 s idle + resume, 24/24 starved 1 MiB reads at ~1.1 s); kiwix-serve's own close is unmeasured._
 _2026-09-13 — **#460 fixed (acceptance: the CI legs print `1 deferred root`) — the harness closes the sqlite handles test files leave open**
 (`fix/460-sqlite-handles`; record `packaging.md` "Continuous integration (CI)", design in `tests/helpers/sqlite-handles.ts`). Counted at runtime,
 not by grep: **120 files** leave **1,709 of 2,306** handles open (the issue's static 99 missed the vault-opened ones). `tests/setup-temp-roots.ts`
@@ -135,22 +142,6 @@ slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` neve
 and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
 prompt re-processing` appears only on MTP starts — the token count is the only honest read._
 
-_2026-09-09 — **#331 CLOSED — the four blocked HW3 acceptance legs performed** (`docs/331-hardware-acceptance-legs`;
-record `benchmark.md` §2 row HW3 + §4 HW3; evidence `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md`).
-A workspace created on a SECOND computer with the 14B active made leg 2 a real moved-drive `new-machine` run behind a 66 s model
-start — the review box's ~120 ms first run reproduced here first, and a FRESH workspace would not have helped either
-(`activeModelId` starts null, so nothing precedes the check). **Passed:** the moved-drive check observed window-open → completion
-(13.7 s), transitioning with no navigation; a foreground chat inside a benchmark span (both M1 halves — a chat never masquerades as
-a span nor hides one; the ~130–270 ms overlap is structural, `modelBusy` is re-checked inside the speed leg); a model load
-(120.3 MB/s) and a full file verification (85.5 s forced re-hash, 242 s cold `#382`/`#420` pass) each refreshing rows and tiles in
-place, matching what persisted. **Three defects filed:** under Narrator — against a positive control proving live regions DO work in
-the app's window — NEITHER live region is announced. **#436** is the serious one: `ErrorBanner`'s always-mounted `role="alert"` is
-defeated by the `Banner` nested inside it, whose `role="status"` is itself a live region mounted WITH its text (M-U1 one level
-down), affecting 11 screens + the gate's #145 wrong-password banner; a control fixed the remedy — inner `aria-live="off"` does NOT
-work, the inner role must go. **#437** the step region (inserted with content AND progress carried only by a CSS class +
-`aria-hidden` icon). **#438** an automatic run's step list never advances (progress is addressed to the invoking window; the screen
-renders the list for any held span, correct per M1). Lesson to keep: `role="status"` and `role="alert"` are both live regions —
-nesting one inside the other silences the outer. Docs: `benchmark.md`, `known-limitations.md` (Performance + Accessibility)._
 _2026-09-09 — **Knowledge packs get a public face (`docs/knowledge-packs.md` + README section; docs-only,
 `docs/knowledge-packs-readme-and-page`):** the feature shipped but the repo did not say so — one README bullet (#5 of 10,
 linking nowhere) and user-guide §7b, reachable only through "walkthrough of every screen". New canonical page
@@ -189,7 +180,8 @@ hardware session) on 2026-09-12 (preamble budget, making room for the #458 CI en
 closed 2026-09-07 models/runtime entries (#372, and the #310/#312/#313/#314/#315 wave of PR #371 —
 its residuals stay live in §5 item 23) on 2026-09-12 (preamble budget, making room for the #438
 entry), and the #339 Range-first article-reads entry on 2026-09-13 (preamble budget, making room for
-the #460 test-harness entry) —
+the #460 test-harness entry), and the closed #331 HW3-acceptance entry on 2026-09-13 (preamble budget,
+making room for the #467 test-fixture entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 

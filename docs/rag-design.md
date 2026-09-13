@@ -3081,7 +3081,17 @@ offline article viewer. Files are registered in place, never copied.
   untouched, so the safety net stays. **What did NOT change:** `MAX_SELECTED_PACKS`, the ask
   deadline, `ARTICLE_READ_TIMEOUT_MS`, `ARTICLE_READ_ATTEMPTS`, the arm's chunking, the viewer,
   the request guard, `probeSearchable`, and the `/search` / `/suggest` / health-probe routes —
-  which still send no `Range` header at all (pinned by a test leg). The log line
+  which still send no `Range` header at all (pinned by a test leg). **Also absorbed — measured
+  2026-09-13 (#467), and not kiwix-serve's defect:** on Windows, when a loopback server closes
+  right after its last write while the READER is CPU-starved, the tail queued behind the reader is
+  never delivered — the read stops ~0.4 % short and Windows resets the connection ~19 s later
+  (`read ECONNRESET`). Measured with a node:http server, in-process and as its own normal-priority
+  process, under one idle-priority busy loop per CPU: 256 KB–8 MiB bodies failed 25–70 % of reads,
+  4–64 KB bodies 0 of 80, and with the CLIENT closing the connection instead 0 of 50. Through
+  `fetchArticleHtml` it is only a stall: the idle timer fires after 1 s and the resume fetches the
+  tail — 24 of 24 starved 1 MiB reads recovered at ~1.1 s each, while a plain `kiwixGet` failed 8 of
+  8. NOT measured: whether kiwix-serve's own close triggers it. The `/search`, `/suggest` and
+  health-probe answers are normally a few KB, below every size that failed. The log line
   `kiwix-serve cut a knowledge-pack article read short — retrying` gained `kind` and `resume` and
   still carries no path and no serving name (finding L1). Tests: the `zim-client.test.ts` describe
   "fetchArticleHtml reads /raw Range-first and resumes a stall (#339, rag-design §17 D-Z22)" —

@@ -27,6 +27,33 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-13 — a closed dated entry retired verbatim (#331 — preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-13 to make room for the #467 test-fixture entry (the
+preamble was at 196 of its 200-line budget; the retention rule is "MOVE, don't raise"). Not the oldest
+entry: the 2026-09-09 knowledge-packs entry below it still carries owner-side items it says are
+tracked nowhere else, so it stays. #331 is closed, the three defects it filed (#436, #437, #438) are
+closed, and its durable record lives on in `benchmark.md` §2 row HW3 + §4 HW3. Citations of the form
+"BUILD_STATE 2026-09-09 entry" for the HW3 acceptance legs resolve here. Text below is byte-identical
+to what was removed.
+
+_2026-09-09 — **#331 CLOSED — the four blocked HW3 acceptance legs performed** (`docs/331-hardware-acceptance-legs`;
+record `benchmark.md` §2 row HW3 + §4 HW3; evidence `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md`).
+A workspace created on a SECOND computer with the 14B active made leg 2 a real moved-drive `new-machine` run behind a 66 s model
+start — the review box's ~120 ms first run reproduced here first, and a FRESH workspace would not have helped either
+(`activeModelId` starts null, so nothing precedes the check). **Passed:** the moved-drive check observed window-open → completion
+(13.7 s), transitioning with no navigation; a foreground chat inside a benchmark span (both M1 halves — a chat never masquerades as
+a span nor hides one; the ~130–270 ms overlap is structural, `modelBusy` is re-checked inside the speed leg); a model load
+(120.3 MB/s) and a full file verification (85.5 s forced re-hash, 242 s cold `#382`/`#420` pass) each refreshing rows and tiles in
+place, matching what persisted. **Three defects filed:** under Narrator — against a positive control proving live regions DO work in
+the app's window — NEITHER live region is announced. **#436** is the serious one: `ErrorBanner`'s always-mounted `role="alert"` is
+defeated by the `Banner` nested inside it, whose `role="status"` is itself a live region mounted WITH its text (M-U1 one level
+down), affecting 11 screens + the gate's #145 wrong-password banner; a control fixed the remedy — inner `aria-live="off"` does NOT
+work, the inner role must go. **#437** the step region (inserted with content AND progress carried only by a CSS class +
+`aria-hidden` icon). **#438** an automatic run's step list never advances (progress is addressed to the invoking window; the screen
+renders the list for any held span, correct per M1). Lesson to keep: `role="status"` and `role="alert"` are both live regions —
+nesting one inside the other silences the outer. Docs: `benchmark.md`, `known-limitations.md` (Performance + Accessibility)._
+
 ## 2026-09-13 — the oldest closed dated entry retired verbatim (#339 — preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-09-13 to make room for the #460 test-harness entry (the
