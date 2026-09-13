@@ -1,26 +1,28 @@
 import { describe, it, expect } from 'vitest'
 import {
-  EXPAND_MAX_TOKENS,
-  EXPAND_MAX_TERMS,
-  EXPAND_MAX_TERM_CHARS,
-  EXPAND_RESPONSE_SCHEMA,
-  EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC,
-  EXPAND_TIMEOUT_MS,
-  buildExpansionMessages,
+  PLAN_MAX_QUERIES,
+  PLAN_MAX_STRING_CHARS,
+  PLAN_MAX_TERMS,
+  PLAN_MAX_TITLES,
+  PLAN_MAX_TOKENS,
+  PLAN_RESPONSE_SCHEMA,
+  PLAN_TIMEOUT_MS,
+  buildPlanMessages,
   makeQueryExpander,
-  parseExpansion
+  parsePlan
 } from '../../src/main/services/zim/expand'
 import { EXTERNAL_RETRIEVAL_DEADLINE_MS } from '../../src/main/services/zim/arm'
 import { MockRuntime } from '../../src/main/services/runtime/mock'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
-// #340 L3-b (D-Z20) — the question → concept expansion the knowledge-pack arm calls once per ask.
-// The contract under test: `parseExpansion` sanitises a model reply against the SAME content-word
-// / stop-word / frame-word rules `query-rewrite.ts` uses for the plain pattern (so an expansion can
-// never re-introduce a word the plain rewrite would have stripped); `makeQueryExpander` wraps ONE
-// grammar-constrained, temperature-0 call with its own wall-clock bound and degrades to null on
-// every failure except the ask's own abort, which is rethrown — mirroring `classify.ts`'s
-// `classifySkillPointer` (issue #80), the precedent module for this shape.
+// Phase 4 PR-A (`docs/rag-design.md` §17 "Discovery port") — the search PLAN the knowledge-pack
+// arm's discovery routes are built around: `parsePlan` defensively parses a model reply into
+// route F's `{titles, queries, terms}` shape (`prototype.mjs`'s own `interpret()` parse:
+// malformed JSON or a non-object degrades to an EMPTY plan, never null, never throws);
+// `makeQueryExpander` wraps ONE grammar-constrained, temperature-0 call with its own wall-clock
+// bound and degrades the WHOLE CALL to null on every failure except the ask's own abort, which
+// is rethrown — mirroring the expander this replaces and `classify.ts`'s `classifySkillPointer`
+// (issue #80), the precedent module for this shape.
 
 interface ScriptedRuntime extends ModelRuntime {
   calls: number
@@ -28,8 +30,8 @@ interface ScriptedRuntime extends ModelRuntime {
   messages: ChatMessage[][]
 }
 
-/** A runtime that replies with a fixed token list (default: one valid JSON expansion). */
-function scripted(replies: string[] = ['{"concepts":["Vulkanismus"],"listTitle":""}']): ScriptedRuntime {
+/** A runtime that replies with a fixed token list (default: one valid JSON plan). */
+function scripted(replies: string[] = ['{"titles":["Vulkanismus"],"queries":[],"terms":[]}']): ScriptedRuntime {
   const rt: ScriptedRuntime = {
     modelId: 'scripted',
     calls: 0,
@@ -51,196 +53,141 @@ function scripted(replies: string[] = ['{"concepts":["Vulkanismus"],"listTitle":
   return rt
 }
 
-/** Collect a `ModelRuntime`'s full streamed reply for a question, so a test can feed the REAL
- *  mock reply text into `parseExpansion` rather than a hand-typed stand-in. */
-async function collect(runtime: ModelRuntime, question: string): Promise<string> {
-  let text = ''
-  for await (const token of runtime.chatStream(buildExpansionMessages(question))) text += token
-  return text
-}
-
-describe('parseExpansion — sanitising the model reply', () => {
-  it('a well-formed reply yields concepts + listTitle', () => {
-    const result = parseExpansion(
-      '{"concepts":["Vulkanismus","Wattenmeer"],"listTitle":"Liste der Vulkane"}',
-      'Was ist das?'
+describe('parsePlan — defensively parsing the model reply (route F interpret() semantics)', () => {
+  it('a well-formed reply yields titles + queries + terms', () => {
+    const result = parsePlan(
+      '{"titles":["Vulkanismus","Wattenmeer"],"queries":["Vulkan Ausbruch"],"terms":["Höhe","Lage"]}'
     )
-    expect(result).toEqual({ concepts: ['Vulkanismus', 'Wattenmeer'], listTitle: 'Liste der Vulkane' })
+    expect(result).toEqual({
+      titles: ['Vulkanismus', 'Wattenmeer'],
+      queries: ['Vulkan Ausbruch'],
+      terms: ['Höhe', 'Lage']
+    })
   })
 
   it('a <think> block before the JSON is stripped (chat.ts stripThinkBlocks)', () => {
-    const result = parseExpansion(
-      '<think>the user wants a list of volcanoes</think>{"concepts":["Vulkanismus"],"listTitle":""}',
-      'Was ist das?'
-    )
-    expect(result).toEqual({ concepts: ['Vulkanismus'], listTitle: null })
+    const result = parsePlan('<think>the user wants volcanoes</think>{"titles":["Vulkanismus"],"queries":[],"terms":[]}')
+    expect(result).toEqual({ titles: ['Vulkanismus'], queries: [], terms: [] })
   })
 
-  it('function and frame words never survive, standalone', () => {
-    // "die" (function word), "welche" (function word), "Rolle" (frame word) — none is a content
-    // word by query-rewrite.ts's own lists, so parseExpansion drops all three regardless of the
-    // question, leaving nothing: the whole reply degrades to null.
-    const result = parseExpansion('{"concepts":["die","welche","Rolle"],"listTitle":""}', 'Was ist das?')
-    expect(result).toBeNull()
+  it('malformed JSON degrades to an EMPTY plan — never null, never throws', () => {
+    expect(parsePlan('not json at all')).toEqual({ titles: [], queries: [], terms: [] })
+    expect(parsePlan('{"titles": [oops}')).toEqual({ titles: [], queries: [], terms: [] })
+    expect(parsePlan('')).toEqual({ titles: [], queries: [], terms: [] })
   })
 
-  it('a word already in the plain pattern is dropped case-insensitively; a frame word is dropped regardless', () => {
-    // Question's plain pattern (searchPattern) keeps "Länder stoßen meisten CO2" ("welche"/"am"/
-    // "aus" strip as function words). "Länder" duplicates the pattern (case-insensitive) and is
-    // dropped; "CO2-Emission" is new vocabulary and survives. "Liste" is ALSO offered by the model
-    // here, but query-rewrite.ts's FRAME_WORDS list (shared via `isContentWord`) treats "liste" as
-    // a German frame word ("zeige, liste, nenne …") — it is filtered at the content-word stage,
-    // before the pattern-overlap check ever runs, so it never survives either. See the report for
-    // this discrepancy against the task's worked example.
-    const question = 'Welche Länder stoßen am meisten CO2 aus?'
-    const result = parseExpansion('{"concepts":["Länder","CO2-Emission","Liste"],"listTitle":""}', question)
-    expect(result).toEqual({ concepts: ['CO2-Emission'], listTitle: null })
+  it('non-object JSON ([], "x", 42) all yield an empty plan', () => {
+    expect(parsePlan('[]')).toEqual({ titles: [], queries: [], terms: [] })
+    expect(parsePlan('"x"')).toEqual({ titles: [], queries: [], terms: [] })
+    expect(parsePlan('42')).toEqual({ titles: [], queries: [], terms: [] })
   })
 
-  it('duplicate concepts are dropped, case-insensitively, keeping the first occurrence', () => {
-    const result = parseExpansion(
-      '{"concepts":["Vulkanismus","vulkanismus","VULKANISMUS"],"listTitle":""}',
-      'Was ist das?'
-    )
-    expect(result).toEqual({ concepts: ['Vulkanismus'], listTitle: null })
+  it('a missing field degrades to [] for that field only', () => {
+    expect(parsePlan('{"titles":["A"]}')).toEqual({ titles: ['A'], queries: [], terms: [] })
+    expect(parsePlan('{"queries":["a b"],"terms":["c"]}')).toEqual({ titles: [], queries: ['a b'], terms: ['c'] })
   })
 
-  it('multi-word strings are tokenised per-word: frame and stop words inside them still drop', () => {
-    // "Liste" (frame word) and "der" (stop word) both drop out of the single multi-word item;
-    // "Länder" is a content word and, for THIS question, is not already in the plain pattern.
-    const result = parseExpansion('{"concepts":["Liste der Länder"],"listTitle":""}', 'Was sind Volkswirtschaften?')
-    expect(result).toEqual({ concepts: ['Länder'], listTitle: null })
+  it('non-string entries are dropped; valid string entries among them still survive', () => {
+    const result = parsePlan(JSON.stringify({ titles: [123, { a: 1 }, null, 'Vulkanismus'], queries: [], terms: [] }))
+    expect(result.titles).toEqual(['Vulkanismus'])
   })
 
-  it('the term cap keeps the first EXPAND_MAX_TERMS distinct valid words, in order', () => {
-    const eight = [
-      'Fotosynthese',
-      'Quantenmechanik',
-      'Bibliothek',
-      'Vulkanismus',
-      'Handelsabkommen',
-      'Wattenmeer',
-      'Seidenstraße',
-      'Klimaanlage'
-    ]
-    const result = parseExpansion(JSON.stringify({ concepts: eight, listTitle: '' }), 'Was ist das?')
-    expect(EXPAND_MAX_TERMS).toBe(6)
-    expect(result?.concepts).toEqual(eight.slice(0, EXPAND_MAX_TERMS))
+  it('each field is capped at its own PLAN_MAX_* count, keeping the first entries in order', () => {
+    const titles = ['A', 'B', 'C', 'D', 'E']
+    const queries = ['q1', 'q2', 'q3']
+    const terms = ['t1', 't2', 't3', 't4', 't5', 't6', 't7']
+    const result = parsePlan(JSON.stringify({ titles, queries, terms }))
+    expect(PLAN_MAX_TITLES).toBe(3)
+    expect(PLAN_MAX_QUERIES).toBe(2)
+    expect(PLAN_MAX_TERMS).toBe(5)
+    expect(result.titles).toEqual(titles.slice(0, PLAN_MAX_TITLES))
+    expect(result.queries).toEqual(queries.slice(0, PLAN_MAX_QUERIES))
+    expect(result.terms).toEqual(terms.slice(0, PLAN_MAX_TERMS))
   })
 
-  it('a term longer than EXPAND_MAX_TERM_CHARS is dropped whole, never cut to fit', () => {
-    const tooLong = 'a'.repeat(EXPAND_MAX_TERM_CHARS + 1)
-    const result = parseExpansion(
-      JSON.stringify({ concepts: [tooLong], listTitle: 'Liste der Beispiele' }),
-      'Was ist das?'
-    )
-    expect(tooLong.length).toBe(41)
-    expect(result?.concepts).toEqual([])
-    // Not truncated to EXPAND_MAX_TERM_CHARS — dropped outright.
-    expect(result?.concepts).not.toContain(tooLong.slice(0, EXPAND_MAX_TERM_CHARS))
-    expect(result?.listTitle).toBe('Liste der Beispiele')
+  it('a string longer than PLAN_MAX_STRING_CHARS is dropped whole, never cut to fit (route F: x.length<=140)', () => {
+    expect(PLAN_MAX_STRING_CHARS).toBe(140)
+    const tooLong = 'a'.repeat(PLAN_MAX_STRING_CHARS + 1)
+    const result = parsePlan(JSON.stringify({ titles: [tooLong, 'Kork'], queries: [], terms: [] }))
+    expect(result.titles).toEqual(['Kork'])
   })
 
-  it('listTitle is trimmed and inner whitespace collapsed', () => {
-    const result = parseExpansion(
-      JSON.stringify({ concepts: [], listTitle: '  Liste   der   Flüsse  ' }),
-      'Was ist das?'
-    )
-    expect(result?.listTitle).toBe('Liste der Flüsse')
+  it('an empty or whitespace-only string is dropped', () => {
+    const result = parsePlan(JSON.stringify({ titles: ['', '   ', 'Kork'], queries: [], terms: [] }))
+    expect(result.titles).toEqual(['Kork'])
   })
 
-  it('an empty listTitle yields null', () => {
-    const result = parseExpansion(
-      JSON.stringify({ concepts: ['Vulkanismus'], listTitle: '' }),
-      'Was ist das?'
-    )
-    expect(result?.listTitle).toBeNull()
+  it('entries are trimmed', () => {
+    const result = parsePlan(JSON.stringify({ titles: ['  Kork  '], queries: [], terms: [] }))
+    expect(result.titles).toEqual(['Kork'])
   })
 
-  it('a listTitle over EXPAND_MAX_TITLE_CHARS (81) yields null', () => {
-    const title = `${'a'.repeat(80)} b` // 82 chars total, well past the 80-char cap
-    const result = parseExpansion(JSON.stringify({ concepts: ['Vulkanismus'], listTitle: title }), 'Was ist das?')
-    expect(title.length).toBeGreaterThanOrEqual(81)
-    expect(result?.listTitle).toBeNull()
+  it('does NOT filter plan strings against the plain pattern\'s content-word lists (unlike the expander this replaces) — a plan title/query is used directly', () => {
+    // "Liste" is a FRAME word for the plain `/search` pattern rewrite (query-rewrite.ts), but a
+    // plan title naming a real "Liste der …" article must survive unfiltered.
+    const result = parsePlan(JSON.stringify({ titles: ['Liste der Vulkane'], queries: ['Liste Vulkane'], terms: [] }))
+    expect(result.titles).toEqual(['Liste der Vulkane'])
+    expect(result.queries).toEqual(['Liste Vulkane'])
   })
 
-  it('a digits-only listTitle yields null (no letter)', () => {
-    const result = parseExpansion(
-      JSON.stringify({ concepts: ['Vulkanismus'], listTitle: '1234567890' }),
-      'Was ist das?'
-    )
-    expect(result?.listTitle).toBeNull()
-  })
-
-  it('non-object JSON ([], "x", 42) all yield null', () => {
-    expect(parseExpansion('[]', 'Was ist das?')).toBeNull()
-    expect(parseExpansion('"x"', 'Was ist das?')).toBeNull()
-    expect(parseExpansion('42', 'Was ist das?')).toBeNull()
-  })
-
-  it('non-JSON prose — the mock runtime\'s own reply — yields null', async () => {
+  it('non-JSON prose — the mock runtime\'s own reply — yields an empty plan', async () => {
     const mock = new MockRuntime({ modelId: 'mock-model', modelPath: 'x', contextTokens: 4096 })
     await mock.start()
-    const text = await collect(mock, 'Welche Länder stoßen am meisten CO2 aus?')
-    expect(parseExpansion(text, 'Welche Länder stoßen am meisten CO2 aus?')).toBeNull()
-  })
-
-  it('an all-empty reply ({ concepts: [], listTitle: "" }) yields null', () => {
-    expect(parseExpansion('{"concepts":[],"listTitle":""}', 'Was ist das?')).toBeNull()
-  })
-
-  it('non-string concept entries are ignored; valid string entries among them still survive', () => {
-    const result = parseExpansion(
-      JSON.stringify({ concepts: [123, { a: 1 }, null, 'Vulkanismus'], listTitle: '' }),
-      'Was ist das?'
-    )
-    expect(result).toEqual({ concepts: ['Vulkanismus'], listTitle: null })
+    let text = ''
+    for await (const token of mock.chatStream(buildPlanMessages('Welche Länder stoßen am meisten CO2 aus?'))) {
+      text += token
+    }
+    expect(parsePlan(text)).toEqual({ titles: [], queries: [], terms: [] })
   })
 })
 
-describe('buildExpansionMessages — the per-call prompt', () => {
-  it('is two messages: a system message naming JSON and both fields, and the question verbatim', () => {
+describe('buildPlanMessages — the per-call prompt', () => {
+  it('is two messages: a system message naming JSON and all three fields, and the question verbatim', () => {
     const question = 'Welche Länder stoßen am meisten CO2 aus?'
-    const messages = buildExpansionMessages(question)
+    const messages = buildPlanMessages(question)
     expect(messages).toHaveLength(2)
     const [system, user] = messages
     expect(system.role).toBe('system')
     expect(system.content).toContain('JSON')
-    expect(system.content).toContain('concepts')
-    expect(system.content).toContain('listTitle')
+    expect(system.content).toContain('titles')
+    expect(system.content).toContain('queries')
+    expect(system.content).toContain('terms')
+    // Deliberately NOT a hardcoded target language (route F hardcodes German — its one archive
+    // IS German Wikipedia; the product's packs are any language, see the file header).
+    expect(system.content).toContain('language of the question')
     expect(user.role).toBe('user')
     expect(user.content).toBe(question)
   })
 })
 
-describe('makeQueryExpander — the one bounded call', () => {
-  it('returns null (no expander) when the runtime is null or undefined', () => {
+describe('makeQueryExpander — the one bounded planner call', () => {
+  it('returns null (no planner) when the runtime is null or undefined', () => {
     expect(makeQueryExpander(null)).toBeNull()
     expect(makeQueryExpander(undefined)).toBeNull()
   })
 
   it('parses a JSON reply streamed in pieces and pins the call shape', async () => {
-    const rt = scripted(['{"concepts":["Vulkan', 'ismus"],"list', 'Title":""}'])
+    const rt = scripted(['{"titles":["Vulkan', 'ismus"],"querie', 's":[],"terms":[]}'])
     const expander = makeQueryExpander(rt)
     expect(expander).not.toBeNull()
     const result = await expander!('Was ist das?')
-    expect(result).toEqual({ concepts: ['Vulkanismus'], listTitle: null })
+    expect(result).toEqual({ titles: ['Vulkanismus'], queries: [], terms: [] })
     expect(rt.calls).toBe(1)
     const o = rt.options[0]
     expect(o?.mode).toBe('fast')
     expect(o?.temperature).toBe(0)
-    expect(o?.maxTokens).toBe(EXPAND_MAX_TOKENS)
-    expect(o?.responseSchema).toBe(EXPAND_RESPONSE_SCHEMA)
+    expect(o?.maxTokens).toBe(PLAN_MAX_TOKENS)
+    expect(o?.responseSchema).toBe(PLAN_RESPONSE_SCHEMA)
     expect(o?.signal).toBeDefined()
   })
 
-  it('a prose reply (no JSON) resolves null', async () => {
+  it('a prose reply (no JSON) resolves the empty plan, not null — the call itself succeeded', async () => {
     const rt = scripted(['sorry, no structured output here'])
     const expander = makeQueryExpander(rt)
-    expect(await expander!('Was ist das?')).toBeNull()
+    expect(await expander!('Was ist das?')).toEqual({ titles: [], queries: [], terms: [] })
   })
 
-  it('a throwing runtime resolves null', async () => {
+  it('a throwing runtime resolves null (the CALL failed)', async () => {
     const throwing: ModelRuntime = {
       ...scripted(),
       // eslint-disable-next-line require-yield
@@ -252,7 +199,7 @@ describe('makeQueryExpander — the one bounded call', () => {
     expect(await expander!('Was ist das?')).toBeNull()
   })
 
-  it('a runtime that never ends is cut off by the injected timeout: null, well under 4s, its signal aborted', async () => {
+  it('a runtime that never ends is cut off by the injected timeout: null, well under the real bound, its signal aborted', async () => {
     let sawAbort = false
     const hanging: ModelRuntime = {
       ...scripted(),
@@ -273,17 +220,17 @@ describe('makeQueryExpander — the one bounded call', () => {
     const t0 = Date.now()
     const result = await expander!('Was ist das?')
     expect(result).toBeNull()
-    expect(Date.now() - t0).toBeLessThan(3_000) // well under EXPAND_TIMEOUT_MS (6000ms)
+    expect(Date.now() - t0).toBeLessThan(3_000)
     expect(sawAbort).toBe(true)
   })
 
-  it('a reply longer than EXPAND_MAX_TOKENS * 8 chars resolves null (runaway output dropped)', async () => {
+  it('a reply longer than PLAN_MAX_TOKENS * 8 chars resolves null (runaway output dropped)', async () => {
     const runaway: ModelRuntime = {
       ...scripted(),
       async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
         for (;;) {
           if (options?.signal?.aborted) return
-          yield 'x'.repeat(EXPAND_MAX_TOKENS * 8 + 1)
+          yield 'x'.repeat(PLAN_MAX_TOKENS * 8 + 1)
         }
       }
     }
@@ -305,54 +252,39 @@ describe('makeQueryExpander — the one bounded call', () => {
     const midAbort: ModelRuntime = {
       ...scripted(),
       async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
-        yield '{"concepts":'
+        yield '{"titles":'
         ctrl.abort()
         if (options?.signal?.aborted) return
-        yield '["Vulkanismus"],"listTitle":""}'
+        yield '["Vulkanismus"],"queries":[],"terms":[]}'
       }
     }
     const expander = makeQueryExpander(midAbort)
     await expect(expander!('Was ist das?', ctrl.signal)).rejects.toMatchObject({ name: 'AbortError' })
   })
 
-  it('MOCK INVARIANT: under the real MockRuntime the expansion always degrades to null', async () => {
+  it('MOCK INVARIANT: under the real MockRuntime the planner call resolves the empty plan (its reply is never JSON)', async () => {
     const mock = new MockRuntime({ modelId: 'mock-model', modelPath: 'x', contextTokens: 4096 })
     await mock.start()
     const expander = makeQueryExpander(mock)
-    expect(await expander!('Welche Länder stoßen am meisten CO2 aus?')).toBeNull()
+    expect(await expander!('Welche Länder stoßen am meisten CO2 aus?')).toEqual({
+      titles: [],
+      queries: [],
+      terms: []
+    })
   })
 })
 
-// #423 — the wall-clock bound and the output-token cap are ONE decision, not two. Measured
-// 2026-09-08 on the i9-14900K (evidence `zim-wave-2026-09/evidence/cold-expand-2026-09-08/`):
-// 92-96 % of an expansion call is decode, so the bound is an affordable-OUTPUT budget, and the
-// pairing it replaced (6 s against 96 tokens) could not admit a maximum-length reply on any
-// configuration measured — including the fastest CPU the project has. These pin the pairing, so
-// an edit to either constant has to face the other instead of drifting past it.
-describe('the expansion bound and the token cap stay one decision (#423)', () => {
-  /** The longest reply seen across the three measured configurations, in output tokens. */
-  const LONGEST_MEASURED_REPLY_TOKENS = 64
-  /** Prefilling the 215-token system prompt, at the slow end of the measurements (0.65-1.24 s). */
-  const PREFILL_ALLOWANCE_MS = 1_300
-
-  it('affords the longest reply measured at the slowest decode rate measured', () => {
-    const needed =
-      (LONGEST_MEASURED_REPLY_TOKENS / EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC) * 1_000 + PREFILL_ALLOWANCE_MS
-    expect(EXPAND_TIMEOUT_MS).toBeGreaterThanOrEqual(needed)
-  })
-
-  it("affords the WHOLE token cap from a rate below the reference machine's own", () => {
-    // The rate at which a maximum-length reply just fits. It has to sit under the 10.3 tok/s the
-    // i9-14900K measured, or the cap is again a figure the bound can never admit anywhere.
-    const rateForFullCap = EXPAND_MAX_TOKENS / ((EXPAND_TIMEOUT_MS - PREFILL_ALLOWANCE_MS) / 1_000)
-    expect(rateForFullCap).toBeLessThan(10)
-  })
-
-  it("leaves the packs at least a third of the arm's per-ask deadline", () => {
-    // The expansion runs BEFORE any pack is searched, so its bound is taken straight out of the
-    // packs' share of `EXTERNAL_RETRIEVAL_DEADLINE_MS` on exactly the machines where it is slow.
-    expect(EXTERNAL_RETRIEVAL_DEADLINE_MS - EXPAND_TIMEOUT_MS).toBeGreaterThanOrEqual(
+// The planner's wall-clock bound is UNCHANGED from the expander it replaces (#423) — still one
+// call per ask, still inside the arm's per-ask deadline, still leaving the packs a share of it.
+describe('the planner bound stays inside the arm\'s per-ask deadline (#423, unchanged by the discovery port)', () => {
+  it('leaves the packs at least a third of the deadline', () => {
+    expect(EXTERNAL_RETRIEVAL_DEADLINE_MS - PLAN_TIMEOUT_MS).toBeGreaterThanOrEqual(
       EXTERNAL_RETRIEVAL_DEADLINE_MS / 3
     )
+  })
+
+  it('PLAN_TIMEOUT_MS is unchanged at 12 s and PLAN_MAX_TOKENS matches route F\'s interpret() (220)', () => {
+    expect(PLAN_TIMEOUT_MS).toBe(12_000)
+    expect(PLAN_MAX_TOKENS).toBe(220)
   })
 })

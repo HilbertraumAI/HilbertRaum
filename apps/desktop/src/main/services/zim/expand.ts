@@ -1,172 +1,159 @@
 import type { JsonSchema } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import { stripThinkBlocks } from '../chat'
-import { TOKEN_RE, isContentWord, searchPattern } from './query-rewrite'
 
-// The question → concept expansion for the knowledge-pack arm (#340 L3-b; rag-design §17 D-Z20).
+// The question -> search PLAN for the knowledge-pack arm (#340 L3-b originally; ported to
+// route F's discovery semantics at Phase 4 PR-A — `docs/rag-design.md` §17 "Discovery port
+// (Phase 4 PR-A)"). One call per ask, exactly as the expander it replaces.
 //
 // WHY. Xapian ANDs the question's words, and a list or superlative question ("Welche Länder
 // stoßen am meisten CO2 aus?") names none of the words the answering article is indexed under
-// ("Liste der Länder nach CO2-Emission"). Measured on the real climate pack (2026-09-06): the
-// stripped question found the list article in 2 of 6 such questions through the arm; a
-// concept-expanded query found it in 4 of 6; the title index asked with a synthesised "Liste …"
-// prefix in 6 of 6. The only thing on the drive that can write those words is the local chat
-// model, so — the owner's ruling of 2026-09-07, option (a) — EVERY pack-scoped ask spends one
-// short call on it before the search.
+// ("Liste der Länder nach CO2-Emission"); a compound noun the question uses often does not
+// match the archive's own title spelling either. The measured research programme (steps 0.6,
+// 1a-i, 1c, 1g) found that a short, schema-constrained model call that proposes CANDIDATE
+// article titles, full-text queries and relation terms — never an answer, never a guessed
+// fact — recovers most of this gap; 1c additionally measured that turning the call off
+// roughly HALVES article-stage hits on English questions, so it stays unconditionally on.
 //
 // WHAT. `makeQueryExpander(runtime)` returns a function the arm calls ONCE per ask (never per
-// pack): a two-message prompt, thinking off (`mode: 'fast'`), temperature 0, a hard output cap,
-// a grammar-constrained JSON reply (`responseSchema`, the D55 machinery the skill classifier
-// uses) and its own wall-clock bound INSIDE the arm's per-ask deadline. `parseExpansion` then
-// sanitises the reply: only tokens the rewrite itself would keep (no function or frame words),
-// nothing the plain pattern already carries, a term cap and a length cap; the list title trimmed
-// and capped. Every failure — no runtime, a reply that is not JSON (the mock runtime ignores the
-// schema, so mock/dev always exercises this path), a timeout, a runaway reply — resolves null and
-// the arm searches exactly as it did before this module existed. The ONE exception is the ask's
-// own cancellation, which is rethrown: a cancellation is never a fallback (#301 P4, T09).
+// pack, and memoised across the one admitted retry — `index.ts`): a two-message prompt,
+// thinking off (`mode: 'fast'`), temperature 0, `PLAN_MAX_TOKENS` output cap, a
+// grammar-constrained JSON reply (`PLAN_RESPONSE_SCHEMA`) and its own wall-clock bound
+// (`PLAN_TIMEOUT_MS`) inside the arm's per-ask deadline. `parsePlan` then defensively parses
+// the reply — malformed JSON or a non-object degrades to an EMPTY plan (every field `[]`),
+// mirroring `prototype.mjs`'s own `interpret()`; a plan field is otherwise a plain string-typed,
+// length- and count-capped array, with NO further content-word filtering (unlike the expander
+// this replaces): a plan title is a title CANDIDATE for `/suggest`, and a plan query is an FTS
+// query in its own right, so filtering it against the plain pattern's stop/frame-word lists
+// would defeat the point of asking the model for search vocabulary in the first place.
 //
-// The expansion only ever ADDS candidates (arm.ts): the plain pattern still runs and its hits
-// are kept; the reranker and the prompt still see the original question.
+// Every CALL failure — no runtime, a timeout, a runaway reply, a transport error — resolves
+// null (arm.ts then discovers using only the plan-independent routes: the head-noun rule and
+// the plain `searchPattern` rewrite). The ONE exception is the ask's own cancellation, which
+// is rethrown: a cancellation is never a fallback (#301 P4, T09).
+//
+// Deliberately UNCHANGED from route F: this keeps the prompt in "the language of the
+// question" (route F's own prompt hardcodes German, because route F's one archive IS German
+// Wikipedia) — the product's knowledge packs are ANY language a user adds
+// (`docs/knowledge-packs.md`: "Wikipedia in about a hundred languages"), so hardcoding a
+// target language would regress every non-German pack. See the PR body / report.md
+// "Deviations" for the measured cost of this choice on the (German-only) acceptance corpus's
+// English-question half.
 
-/** What the model contributed for one question. */
-export interface QueryExpansion {
-  /** Extra content words for ONE additional full-text search (joined with spaces). */
-  concepts: string[]
-  /** The title a list article answering the question would carry, for the title index. */
-  listTitle: string | null
+/** What the model contributed for one question — route F's `plan` shape (`prototype.mjs`
+ *  `planSchema`/`interpret()`), not the `{concepts,listTitle}` shape this replaces. */
+export interface SearchPlan {
+  /** Up to `PLAN_MAX_TITLES` candidate article titles or genuine aliases, for `/suggest`. */
+  titles: string[]
+  /** Up to `PLAN_MAX_QUERIES` full-text search queries (2-4 important words each). */
+  queries: string[]
+  /** Up to `PLAN_MAX_TERMS` relation/attribute terms the question asks about. */
+  terms: string[]
 }
 
-/** One call per ask; resolves null on any failure except the ask's own abort (rethrown). */
-export type QueryExpander = (question: string, signal?: AbortSignal) => Promise<QueryExpansion | null>
+/** One call per ask; resolves null on any failure except the ask's own abort (rethrown). A
+ *  non-null resolution is always a well-formed (possibly all-empty) {@link SearchPlan} —
+ *  `parsePlan` never returns null itself, matching `prototype.mjs`'s `interpret()`. */
+export type QueryExpander = (question: string, signal?: AbortSignal) => Promise<SearchPlan | null>
 
 /**
- * Wall-clock bound on the expansion (ms). It runs inside the arm's `EXTERNAL_RETRIEVAL_DEADLINE_MS`
- * BEFORE any pack is searched, so past this bound the request is aborted and the plain search
- * proceeds — one slow model must never eat the packs' whole budget.
- *
- * The bound has to afford the OUTPUT, not the prompt. Measured 2026-09-08 on the i9-14900K with
- * the default 4B chat model at `-ngl 0`, reading llama.cpp's own `timings` (#423): the 215-token
- * system prompt prefills in 0.17–0.26 s, and the reply — 26–63 tokens at 10.3–12.6 tok/s — is
- * 92–96 % of the call. Wall time is therefore linear in reply length, and the question, not the
- * model's warmth, decides it: the two list questions that emit 62–63 tokens cost 5.6–6.0 s warm,
- * the one that emits 26 costs 2.4 s. The same seven questions on the same box with `-t 2` (a
- * stand-in for a slower processor) cost 4.4–10.2 s at 6.7–8.8 tok/s.
- *
- * The old 6 s could not afford {@link EXPAND_MAX_TOKENS} on ANY of those machines — 96 tokens
- * needs 8.5 s at the fastest rate measured — so the two constants contradicted each other, and
- * the warm maximum on the reference machine already sat 3 % under the bound. Twelve seconds
- * affords every reply measured (63 tokens at the slowest rate, 6.7 tok/s, plus its prefill:
- * ~10.5 s) and affords the full cap from ~8.5 tok/s up. It does NOT afford the cap at the very
- * slow end — that would need ~15 s of the arm's twenty, which the packs cannot spare.
- *
- * The cost of the change is paid only where the call is slow: a fast machine's calls finish in
- * 2–6 s exactly as before, and the packs keep eight of the arm's twenty in the worst case. That
- * is the D-Z20 ruling's own trade (quality over a few seconds of CPU), applied to the machines
- * where the expansion was silently off before — `zim-expand.test.ts` pins the two constants
- * against each other so they cannot drift apart again.
+ * Wall-clock bound on the planner call (ms) — UNCHANGED from the expander this replaces
+ * (#423): it runs inside the arm's `EXTERNAL_RETRIEVAL_DEADLINE_MS` BEFORE any pack is
+ * searched, so past this bound the request is aborted and discovery proceeds without a plan.
+ * `zim-expand.test.ts` keeps pinning this against `EXTERNAL_RETRIEVAL_DEADLINE_MS`.
  */
-export const EXPAND_TIMEOUT_MS = 12_000
-/** Output-token budget: six short words plus a title plus JSON framing. */
-export const EXPAND_MAX_TOKENS = 96
-/**
- * The decode rate {@link EXPAND_TIMEOUT_MS} is derived from (output tokens per second), and the
- * slowest measured on any configuration (#423, 2026-09-08: `-t 2` on the i9-14900K; the same box
- * unrestricted does 10.3–12.6, its RTX 3080 Ti 186–193). Record only — nothing reads it at
- * runtime; `zim-expand.test.ts` uses it to keep the bound and the token cap consistent.
- */
-export const EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7
-/** Concept terms kept from the reply, at most. */
-export const EXPAND_MAX_TERMS = 6
-/** Longest single concept term / list title kept (chars); anything longer is dropped, not cut. */
-export const EXPAND_MAX_TERM_CHARS = 40
-export const EXPAND_MAX_TITLE_CHARS = 80
+export const PLAN_TIMEOUT_MS = 12_000
+/** Output-token budget — route F's own `interpret()` call uses `maxTokens: 220`; the reply is
+ *  three short arrays of German-or-question-language strings plus JSON framing. */
+export const PLAN_MAX_TOKENS = 220
+export const PLAN_MAX_TITLES = 3
+export const PLAN_MAX_QUERIES = 2
+export const PLAN_MAX_TERMS = 5
+/** Longest single plan string kept (route F's own `interpret()` parse: `x.length<=140`).
+ *  Anything longer is dropped, not cut. */
+export const PLAN_MAX_STRING_CHARS = 140
 /** Defensive char cap over the token budget: a runtime that ignores `maxTokens` is cut off. */
-const OUTPUT_CHAR_CAP = EXPAND_MAX_TOKENS * 8
+const OUTPUT_CHAR_CAP = PLAN_MAX_TOKENS * 8
 
-export const EXPAND_RESPONSE_SCHEMA: JsonSchema = {
+export const PLAN_RESPONSE_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['concepts', 'listTitle'],
+  required: ['titles', 'queries', 'terms'],
   properties: {
-    concepts: { type: 'array', items: { type: 'string', maxLength: EXPAND_MAX_TERM_CHARS }, maxItems: EXPAND_MAX_TERMS },
-    listTitle: { type: 'string', maxLength: EXPAND_MAX_TITLE_CHARS }
+    titles: { type: 'array', items: { type: 'string' }, maxItems: PLAN_MAX_TITLES },
+    queries: { type: 'array', items: { type: 'string' }, maxItems: PLAN_MAX_QUERIES },
+    terms: { type: 'array', items: { type: 'string' }, maxItems: PLAN_MAX_TERMS }
   }
 }
 
 /**
- * The per-call messages. English instructions (the pinned chat models follow them in either
- * language); the question is CONTENT and rides in the user turn only — it is never logged. The
- * prompt describes the JSON shape as well as constraining it (llama.cpp's grammar guarantees the
- * shape, the description improves the choice of words).
+ * The per-call messages — route F's `interpret()` system prompt (`prototype.mjs`), adapted
+ * only to keep the product's existing "in the language of the question" framing instead of a
+ * hardcoded target language (see the file header). The question is CONTENT and rides in the
+ * user turn only — it is never logged.
  */
-export function buildExpansionMessages(question: string): ChatMessage[] {
+export function buildPlanMessages(question: string): ChatMessage[] {
   return [
     {
       role: 'system',
       content:
-        'You write search terms for the full-text index of an offline encyclopedia (Wikipedia). ' +
-        'The index finds an article only when EVERY term occurs in it, so choose words that appear ' +
-        'in the article that answers the question, in the language of the question. Reply with JSON ' +
-        'only: {"concepts": [...], "listTitle": "..."}. "concepts": up to six single words — the ' +
-        'topic and the things such an article is about (nouns, names, technical terms); never ' +
-        'question words, never sentences. "listTitle": when the question asks for a list, a ranking, ' +
-        'or the largest / most / highest / best-known items of a kind, the exact title a Wikipedia ' +
-        'LIST article about it would have, in the language of the question (a German question gets a ' +
-        'German title such as "Liste der Länder nach CO2-Emission", an English one "List of tallest ' +
-        'buildings"); otherwise an empty string.'
+        'Prepare a short Wikipedia search plan, not an answer, in the language of the question. ' +
+        'Infer the intended subject from the original question and its conversation history. ' +
+        'titles: up to three likely article titles or genuine aliases, in the language of the ' +
+        'question; queries: up to two concise full-text search queries of 2-4 important words, ' +
+        'in the language of the question, targeting all requested relations; terms: up to five ' +
+        'relation/attribute terms, in the language of the question. Preserve entity distinctions, ' +
+        'negations, dates, units and exclusions. Do not invent a private fact or supply guessed ' +
+        'answer facts as search terms. Terms are only the attributes actually asked about, never ' +
+        'proposed numeric answers, names of possible answers, or extra facts. An announced future ' +
+        'event may already be documented. Return JSON only.'
     },
     { role: 'user', content: question }
   ]
 }
 
 /**
- * Sanitise the model's reply against the plain pattern the arm will search anyway. Pure.
- *   - `concepts`: tokenised by the rewrite's own token rule; a token is kept only when it is a
- *     content word by the rewrite's lists, not already in the plain pattern (case-insensitive),
- *     unique, and at most `EXPAND_MAX_TERM_CHARS` long; at most `EXPAND_MAX_TERMS` kept in order.
- *   - `listTitle`: trimmed, must hold a letter and fit `EXPAND_MAX_TITLE_CHARS`, else null.
- * Null when neither survives, when the text is not a JSON object, or on any other shape.
+ * Defensively parse the model's reply into a {@link SearchPlan} — route F's own `interpret()`
+ * parse (`prototype.mjs`): malformed JSON, a non-object, or a missing/non-array field degrades
+ * that field (or the whole plan) to `[]`, never throws, never returns null. Each field is
+ * filtered to string entries of at most `PLAN_MAX_STRING_CHARS` and capped to its own count.
+ * Deliberately NOT filtered against the plain pattern's content-word lists (unlike the
+ * expander this replaces): a plan title/query is used directly by `/suggest` and `/search`,
+ * not merged into the plain rewrite's own term list.
  */
-export function parseExpansion(text: string, question: string): QueryExpansion | null {
+export function parsePlan(text: string): SearchPlan {
+  const empty: SearchPlan = { titles: [], queries: [], terms: [] }
   let parsed: unknown
   try {
     parsed = JSON.parse(stripThinkBlocks(text).trim())
   } catch {
-    return null
+    return empty
   }
-  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return null
-  const raw = parsed as { concepts?: unknown; listTitle?: unknown }
-  const plain = new Set(searchPattern(question).terms.map((t) => t.toLowerCase()))
-  const concepts: string[] = []
-  const seen = new Set<string>()
-  if (Array.isArray(raw.concepts)) {
-    for (const item of raw.concepts) {
+  if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return empty
+  const raw = parsed as Record<string, unknown>
+  const field = (key: 'titles' | 'queries' | 'terms', max: number): string[] => {
+    const value = raw[key]
+    if (!Array.isArray(value)) return []
+    const out: string[] = []
+    for (const item of value) {
       if (typeof item !== 'string') continue
-      for (const m of item.matchAll(TOKEN_RE)) {
-        const token = m[0].replace(/-+$/, '')
-        const key = token.toLowerCase()
-        if (token === '' || token.length > EXPAND_MAX_TERM_CHARS) continue
-        if (!isContentWord(token) || plain.has(key) || seen.has(key)) continue
-        seen.add(key)
-        concepts.push(token)
-        if (concepts.length >= EXPAND_MAX_TERMS) break
-      }
-      if (concepts.length >= EXPAND_MAX_TERMS) break
+      const trimmed = item.trim()
+      if (trimmed.length === 0 || trimmed.length > PLAN_MAX_STRING_CHARS) continue
+      out.push(trimmed)
+      if (out.length >= max) break
     }
+    return out
   }
-  let listTitle: string | null = null
-  if (typeof raw.listTitle === 'string') {
-    const title = raw.listTitle.replace(/\s+/g, ' ').trim()
-    if (title.length > 0 && title.length <= EXPAND_MAX_TITLE_CHARS && /\p{L}/u.test(title)) listTitle = title
+  return {
+    titles: field('titles', PLAN_MAX_TITLES),
+    queries: field('queries', PLAN_MAX_QUERIES),
+    terms: field('terms', PLAN_MAX_TERMS)
   }
-  if (concepts.length === 0 && listTitle === null) return null
-  return { concepts, listTitle }
 }
 
 /**
- * Build the expander over the turn's runtime, or null when there is no runtime (the arm then
- * skips the step entirely — zero model calls). Single-shot, never retried: a second call would
- * double the cost of exactly the questions this is meant to keep cheap.
+ * Build the planner over the turn's runtime, or null when there is no runtime (the arm then
+ * discovers using only the plan-independent routes). Single-shot, never retried.
  */
 export function makeQueryExpander(
   runtime: ModelRuntime | null | undefined,
@@ -179,16 +166,16 @@ export function makeQueryExpander(
     const inner = new AbortController()
     const onOuterAbort = (): void => inner.abort()
     signal?.addEventListener('abort', onOuterAbort)
-    const timer = setTimeout(() => inner.abort(), opts.timeoutMs ?? EXPAND_TIMEOUT_MS)
+    const timer = setTimeout(() => inner.abort(), opts.timeoutMs ?? PLAN_TIMEOUT_MS)
     try {
       let text = ''
-      const stream = runtime.chatStream(buildExpansionMessages(question), {
+      const stream = runtime.chatStream(buildPlanMessages(question), {
         signal: inner.signal,
         mode: 'fast',
-        maxTokens: EXPAND_MAX_TOKENS,
+        maxTokens: PLAN_MAX_TOKENS,
         temperature: 0,
-        responseSchema: EXPAND_RESPONSE_SCHEMA,
-        responseSchemaName: 'pack_query_expansion'
+        responseSchema: PLAN_RESPONSE_SCHEMA,
+        responseSchemaName: 'zim_search_plan'
       })
       for await (const token of stream) {
         if (inner.signal.aborted) break
@@ -196,8 +183,8 @@ export function makeQueryExpander(
         if (text.length > OUTPUT_CHAR_CAP) return null // a runaway reply is dropped, never accumulated
       }
       if (signal?.aborted) throw abortError() // the ASK was cancelled: never a fallback
-      if (inner.signal.aborted) return null // the time bound: the plain search proceeds
-      return parseExpansion(text, question)
+      if (inner.signal.aborted) return null // the time bound: discovery proceeds without a plan
+      return parsePlan(text)
     } catch (err) {
       if (signal?.aborted) throw isAbortLike(err) ? err : abortError()
       return null // a dead runtime, a transport error, anything else: silent degrade
@@ -213,7 +200,7 @@ function isAbortLike(err: unknown): boolean {
 }
 
 function abortError(): Error {
-  const err = new Error('The knowledge-pack expansion was cancelled')
+  const err = new Error('The knowledge-pack search plan was cancelled')
   err.name = 'AbortError'
   return err
 }
