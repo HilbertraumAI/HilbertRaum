@@ -66,6 +66,9 @@ const SUGGEST_FIXTURES: Record<string, { status: number; body: string } | 'park'
 }
 /** Mirrors client.ts MAX_BODY_BYTES (8 MiB) — kept literal here so the test pins the shipped ceiling. */
 const CEILING_BYTES = 8 * 1024 * 1024
+/** One entry per finished body-ceiling response: had the SERVER already begun closing the
+ *  connection when its response finished? Must be false — see the fixture (#467). */
+const ceilingServerClosedFirst: Array<Promise<boolean>> = []
 /** Every request the fixture server received — used to prove the L5 contract rejects a
  *  hazardous key BEFORE any HTTP request (#301 P5, finding L5). */
 let requestCount = 0
@@ -200,8 +203,20 @@ beforeAll(async () => {
     // Body-ceiling fixtures (PR #294 review INFO / plan T01): kiwixGet rejects a body of
     // MORE than 8 MiB and accepts one of exactly 8 MiB. Streamed in 1 MiB writes so the
     // ceiling is hit mid-stream, the way a pathological entry would arrive.
+    //
+    // #467: the CLIENT closes these connections, never the server. The client asks for
+    // `Connection: close`, so a default answer closes the server's socket the moment its last
+    // write is handed to the kernel. Under CPU starvation on Windows the tail of a body queued
+    // behind a lagging reader is then never delivered — the read stops ~0.4 % short and Windows
+    // resets the connection ~19 s later (`read ECONNRESET`). Measured from 256 KB up; 64 KB and
+    // below never did. Answering keep-alive (with no keep-alive timer) leaves the close to the
+    // client, which only closes once it has read what it wanted — 0 of 30 under the same load.
     if (req.url?.startsWith('/big') || req.url?.startsWith('/atceiling')) {
       const total = CEILING_BYTES + (req.url.startsWith('/big') ? 1 : 0)
+      res.shouldKeepAlive = true
+      ceilingServerClosedFirst.push(
+        new Promise((resolve) => res.once('finish', () => resolve(req.socket.writableEnded)))
+      )
       res.writeHead(200, { 'content-type': 'text/html' })
       const piece = Buffer.alloc(1024 * 1024, 0x78)
       let sent = 0
@@ -322,6 +337,9 @@ beforeAll(async () => {
     res.writeHead(200)
     res.end('ok')
   })
+  // Only the body-ceiling answers are keep-alive (#467); 0 disables the idle timer that would
+  // otherwise close their socket server-side after 5 s — the very close the fixture avoids.
+  server.keepAliveTimeout = 0
   await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve))
   port = (server.address() as AddressInfo).port
   // A real ephemeral port that is then CLOSED: a connection to it is refused by the OS, which
@@ -398,25 +416,26 @@ describe('kiwixGet', () => {
     await expect(pending).rejects.toThrow()
   })
 
-  // The two 8 MiB legs move real bytes over loopback: ~0.2 s alone, but under a full-suite fork
-  // load on Windows they have failed on their own in otherwise green runs (2026-09-05: one
-  // 15 s timeout, then one `read ECONNRESET` at ~19 s on the at-ceiling leg while the build
-  // and typecheck ran alongside; both pass 10/10 alone every time). The loopback transfer
-  // itself is what the environment starves, so they carry a generous budget AND one retry —
-  // the assertions are unchanged and a genuine ceiling regression fails every attempt.
+  // The two 8 MiB legs move real bytes over loopback: well under a second even under load, so
+  // the budget is headroom for a starved fork, not a rescue. They used to carry `retry: 2` too,
+  // for a `read ECONNRESET` blamed on the transfer being slow; it was the fixture's server-side
+  // close instead (#467, see the fixture), so there is nothing left for a retry to absorb.
   const BIG_BODY_BUDGET_MS = 60_000
-  const BIG_BODY_TEST = { timeout: BIG_BODY_BUDGET_MS, retry: 2 }
   it('rejects a body over the 8 MiB ceiling mid-stream (T01, review INFO)', async () => {
     await expect(kiwixGet(port, '/big', { timeoutMs: BIG_BODY_BUDGET_MS })).rejects.toThrow(
       /exceeded 8388608 bytes/
     )
-  }, BIG_BODY_TEST)
+  }, BIG_BODY_BUDGET_MS)
 
   it('accepts a body of exactly 8 MiB (the ceiling is strict-greater)', async () => {
+    ceilingServerClosedFirst.length = 0
     const res = await kiwixGet(port, '/atceiling', { timeoutMs: BIG_BODY_BUDGET_MS })
     expect(res.status).toBe(200)
     expect(res.body.length).toBe(CEILING_BYTES)
-  }, BIG_BODY_TEST)
+    // The fixture's precondition (#467), checked on every run rather than only under load: had
+    // the server closed first, this leg would pass on an idle box and reset on a busy one.
+    expect(await Promise.all(ceilingServerClosedFirst)).toEqual([false])
+  }, BIG_BODY_BUDGET_MS)
 })
 
 describe('parseSearchXml / searchPack', () => {
