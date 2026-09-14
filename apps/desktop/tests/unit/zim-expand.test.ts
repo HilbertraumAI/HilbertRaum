@@ -5,6 +5,7 @@ import {
   PLAN_MAX_TITLES,
   PLAN_MAX_TOKENS,
   PLAN_RESPONSE_SCHEMA,
+  PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC,
   PLAN_TIMEOUT_MS,
   buildPlanMessages,
   makeQueryExpander,
@@ -293,10 +294,43 @@ describe('the planner bound stays inside the arm\'s per-ask deadline (#423, unch
   })
 })
 
-// F1 (review 2026-09-14): PLAN_MAX_TOKENS sits at a PROVISIONAL 220 through this commit only so
-// run M can measure the untruncated planner-reply-length distribution on core200 (`docs/
-// rag-design.md` §17 F1 record). It is not yet a design pin — the #423 pairing this branch owes
-// (`PLAN_TIMEOUT_MS` and `PLAN_MAX_TOKENS`/`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC` constraining
-// each other, mirroring master's `EXPAND_TIMEOUT_MS`/`EXPAND_MAX_TOKENS`/
-// `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC`) is restored in the cap-decision commit that follows
-// run M, once the cap is set by the ruled formula from the measured p99.
+// F1 cap decision (review 2026-09-14, ruled formula) — restores the #423 pairing this branch had
+// silently voided: the bound and the token cap staying ONE decision, never drifting apart. Run M
+// measured `completion_tokens` for all 200 core200 planner calls (GPU, `feat/zim-discovery-port`
+// + the F1-F9 fixes, `terms` already dropped): p99 = 99 tokens, 0 truncated at the 220-token
+// ceiling run M measured under (`docs/rag-design.md` §17 F1 record;
+// `steps/4-2-product-pr-discovery-redo/artifacts/planner-length-core200.json`). Formula:
+// `cap = min(104, smallest multiple of 8 >= p99 + 8)` => `min(104, 112) = 104`. p99 (99) sits in
+// the ruling's 72-104 branch: pin 1 is restored on the measured p99 but at the REFERENCE CPU rate
+// (10.3 tok/s, #423's i9-14900K `-ngl 0` figure) rather than the slowest `-t 2` stand-in (6.7
+// tok/s) — at 6.7 tok/s a 99-token reply needs ~16 s, past PLAN_TIMEOUT_MS, so the `-t 2` tier is
+// no longer afforded by the bound at this cap (the CPU legs quantify the resulting exposure;
+// `docs/known-limitations.md`'s twelve-second paragraph carries the measured figure).
+describe('the planner bound and the token cap stay one decision (#423, F1 cap decision 2026-09-14)', () => {
+  /** Run M's measured p99 over 200 core200 planner calls (GPU) — the reply length pin 1 affords. */
+  const MEASURED_P99_REPLY_TOKENS = 99
+  /** #423's reference CPU rate (i9-14900K, `-ngl 0`, unrestricted) — NOT the slowest `-t 2`
+   *  stand-in (`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC`): the 72-104 cap-decision branch affords
+   *  the measured p99 at this rate only, per the ruling. */
+  const REFERENCE_CPU_RATE_TOK_PER_SEC = 10.3
+  /** Prefilling the ~200-token system prompt, at the slow end of the #423 measurements. */
+  const PREFILL_ALLOWANCE_MS = 1_300
+
+  it('affords the measured p99 reply at the reference CPU rate (the 72-104 cap-decision branch — the -t 2 stand-in is no longer afforded, by ruling)', () => {
+    const needed =
+      (MEASURED_P99_REPLY_TOKENS / REFERENCE_CPU_RATE_TOK_PER_SEC) * 1_000 + PREFILL_ALLOWANCE_MS
+    expect(PLAN_TIMEOUT_MS).toBeGreaterThanOrEqual(needed)
+  })
+
+  it("affords the WHOLE token cap from a rate below the reference machine's own", () => {
+    // The rate at which a maximum-length reply just fits. It has to sit under the 10.3 tok/s the
+    // i9-14900K measured, or the cap is again a figure the bound can never admit anywhere.
+    const rateForFullCap = PLAN_MAX_TOKENS / ((PLAN_TIMEOUT_MS - PREFILL_ALLOWANCE_MS) / 1_000)
+    expect(rateForFullCap).toBeLessThan(10)
+  })
+
+  it('PLAN_MAX_TOKENS is the cap decision\'s formula result (104) and PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC records the #423 rate it and pin 2 are checked against (6.7)', () => {
+    expect(PLAN_MAX_TOKENS).toBe(104)
+    expect(PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC).toBe(6.7)
+  })
+})

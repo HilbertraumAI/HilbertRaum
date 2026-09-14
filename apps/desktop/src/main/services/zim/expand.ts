@@ -80,19 +80,29 @@ export type QueryExpander = (question: string, signal?: AbortSignal) => Promise<
  */
 export const PLAN_TIMEOUT_MS = 12_000
 /**
- * Output-token budget. PROVISIONAL at 220 (route F's own `interpret()` `maxTokens`) — F1 (review
- * 2026-09-14): this was raised 96 -> 220 from the expander it replaces while `PLAN_TIMEOUT_MS`
- * stayed unchanged, and the two tests that pinned the bound and the cap against each other were
- * deleted, so no CPU decode rate this project has ever measured could afford a maximum-length
- * reply inside 12 s. Left at 220 here only long enough to run the harness's untruncated
- * planner-length measurement (`docs/rag-design.md` §17 F1 record); the shipped value is set by
- * the ruled formula from that measurement's p99 (`cap = min(104, smallest multiple of 8 >= p99 +
- * 8)`), restored together with {@link PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC} and the two pins
- * `zim-expand.test.ts` carries once more.
+ * Output-token budget — F1's cap decision (review 2026-09-14, ruled formula): run M measured
+ * `completion_tokens` for all 200 `core200` planner calls (GPU, `feat/zim-discovery-port`
+ * `7c6f6504` + the F1-F9 fixes, `terms` already dropped from the schema/prompt) —
+ * min/p50/p90/p95/p99 (p99 = 99)/max, 0 truncated at the provisional 220-token ceiling
+ * (`docs/rag-design.md` §17 F1 record; `steps/4-2-.../artifacts/planner-length-core200.json`).
+ * `cap = min(104, smallest multiple of 8 >= p99 + 8) = min(104, 112) = 104`. p99 (99) sits in the
+ * ruling's 72–104 branch, so pin 1 below is restored at the measured p99 but at the REFERENCE CPU
+ * rate (10.3 tok/s, #423's i9-14900K `-ngl 0` figure), not the slowest `-t 2` stand-in (6.7 tok/s)
+ * — at 6.7 tok/s a p99-length reply needs ~16 s, past `PLAN_TIMEOUT_MS`, so the `-t 2` tier is no
+ * longer afforded by the bound at this cap (the accepted cost of route F's larger schema over the
+ * `{concepts,listTitle}` expander's 96-token cap; quantified by the CPU legs, `docs/rag-design.md`
+ * §17 and `docs/known-limitations.md`'s twelve-second paragraph).
  */
-export const PLAN_MAX_TOKENS = 220
+export const PLAN_MAX_TOKENS = 104
 export const PLAN_MAX_TITLES = 3
 export const PLAN_MAX_QUERIES = 2
+/**
+ * The decode rate {@link PLAN_TIMEOUT_MS} is derived from (output tokens per second) for pin 2
+ * below — the slowest measured on any configuration (#423, 2026-09-08: `-t 2` on the i9-14900K).
+ * Record only — nothing reads it at runtime; `zim-expand.test.ts` uses it to keep the bound and
+ * the token cap consistent, mirroring master's `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC`.
+ */
+export const PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7
 /** Longest single plan string kept (route F's own `interpret()` parse: `x.length<=140`).
  *  Anything longer is dropped, not cut. */
 export const PLAN_MAX_STRING_CHARS = 140
