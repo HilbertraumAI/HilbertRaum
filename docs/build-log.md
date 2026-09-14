@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-14 — BUILD_STATE §5 item 21 (f)–(h) retired verbatim (Phase 4 PR-A line-neutral edit)
+
+Retired from `BUILD_STATE.md` §5 item 21 on 2026-09-14 to keep the section at its 500-line budget
+while adding the Phase 4 PR-A discovery-port entry (item 21 (m)): three already-collapsed,
+one-line, fully CLOSED sub-items, each with its own durable record elsewhere (rag-design D-Z3,
+D-Z10/D-Z17, known-limitations), drained line-for-line so §5 stays net-neutral. No other §5 item
+cites "(f)", "(g)" or "(h)" of item 21 (checked repo-wide). Text below is byte-identical to what
+was removed.
+
+    (f) **D2 parser hardware gate — CLOSED (re-ruled P1b).** Gate = per-slice main-thread stall ≤5 ms on the i7-8550U; cooperative slicing shipped, `DEFAULT_SLICE_WORK` = 16 Ki, T02-c recorded (laptop leg 3); P7 re-check via the 14900K P-core ÷ 3 proxy. Record: rag-design D-Z3.
+    (g) **R-1 CLOSED at P8-1 for an in-app install** (both binaries hashed in the marker); a hand-placed bundle still resolves `skip-legacy` by design. Record: rag-design D-Z10, D-Z17.
+    (h) **R-7 — CLOSED with recorded limits (P3b).** Record: known-limitations `zim-transient/` bullet.
+
 ## 2026-09-13 — a closed dated entry retired verbatim (#331 — preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-09-13 to make room for the #467 test-fixture entry (the

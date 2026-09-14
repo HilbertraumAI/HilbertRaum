@@ -3575,3 +3575,140 @@ files, the i18n catalogs and their tests) belongs to an OLDER, unrelated working
 spec, the Skills plan, the image-understanding plan, the context-compaction and translation
 plans — and resolves through that paper's own legend (this file's EP-1 record above; the Skills
 and image-understanding design records in `architecture.md`), **not** through this table.
+
+### Discovery port (Phase 4 PR-A, 2026-09-14) — parked, one floor short, awaiting an owner ruling
+
+**What it is.** The ZIM research programme's step 4-i measured the shipped arm fetching the
+gold article for 32 of 200 core200 questions against its own "route F" research harness's 166,
+losing overwhelmingly at the article-FETCH stage (not candidate admission or packing). This PR
+(`feat/zim-discovery-port`) ports route F's discovery semantics into the shipped arm:
+
+- **The planner** (`expand.ts`, formerly the `{concepts, listTitle}` expander) now asks the
+  turn's chat model for route F's plan schema — up to 3 title candidates, 2 full-text queries,
+  5 relation/attribute terms, JSON-schema constrained, `max_tokens: 220` — one call per ask,
+  unconditionally on (the product already spent one model call per ask on the expander it
+  replaces). Its output degrades to an EMPTY plan (never null) on malformed JSON, matching route
+  F's own `interpret()`; the wrapping call itself still resolves null on any transport failure
+  except the ask's own abort, exactly as the expander it replaces did.
+- **Title reads** (`arm.ts` STAGE 2): for each plan title, one `/suggest` lookup with the SAME
+  exact-or-prefix admission predicate route F's `discover()` uses (`norm(hit)===norm(title)`,
+  a `"title ("`-prefixed disambiguator, or — for a multi-word title — its rank-0 hit
+  unconditionally), then an immediate fetch of the admitted hit.
+- **The head-noun rule** (`head-noun.ts`, new file): step 1a-i's frozen candidate-generation
+  rule (`head-noun-rule.mjs`), ported verbatim in behaviour — hyphen split, inflection strip,
+  prefix strip with the Fugenelement shortcut — probed via `/suggest`, accepting the first
+  EXACT match. Runs FIRST (before plan titles), up to 2 successful reads, at most 12 total
+  `/suggest` probes across every candidate word tried. Unconditional on language (the arm has
+  no per-question language signal at this layer); on a non-German question it simply tends to
+  find fewer or no candidates.
+- **FTS queries** (`arm.ts` STAGE 3): the plan's own queries (≤2), plus the existing
+  `searchPattern` rewrite as the LAST query. The rank-1 hit of each query is read immediately;
+  every hit (of every rank, from both the title-suggest and FTS routes) feeds one shared
+  aggregate-score pool, drained twice for up to 2 more unseen candidates each time ("both
+  top-2 passes kept") — once after the title stage, once after FTS.
+- **`admitArticle`** (`admit.ts`, new file): route F's topic-conflict gate, ported as a pure
+  function (the equipment/biology, fiction/biology, planet/mythology, vertebrate/diving-gear
+  and human-anatomy/heraldry heuristics) — never a claim of relevance, only that nothing here
+  rules an admitted article out. The research harness's own resolver-identity precondition
+  (`archiveId`/`archiveVersion`/`canonical`/`htmlSha`) was NOT ported — the product's
+  `ZimArticle` (`html.ts`) carries no such fields; it was an integrity check on the research
+  harness's resolver cache, not part of the topic-conflict semantics.
+- **A per-pack read budget**: ≤12 article fetches, ≤8 admitted articles (route F's own
+  `discover()` defaults are 14 / 8 for its ONE archive; this arm applies the pair PER PACK — a
+  documented adaptation, see "Deliberately different from route F" below).
+
+**Unchanged**: `html.ts`/`chunker.ts` (article → segments → chunks), `MAX_EXTERNAL_CANDIDATES`
+(24), `packQuota`/`allocateCandidates` (fair cross-pack admission — a LIST-shaped article's own
+share is additionally capped at half the pack's quota so it cannot starve other admitted
+articles on a small multi-pack quota, generalising the old `expansionCap`), the grounded
+prompt, `retrieve()`'s rerank/interleave/dedup/trim path, the reranker selector itself, every
+user-facing setting. The #353 document-frequency retry ladder (`narrowByFrequency`,
+`DF_PROBE_MAX_TERMS`) is REMOVED: its only caller, the old single-pattern-with-retry search, is
+gone, superseded by the plan's own multi-query FTS.
+
+**Deliberately different from route F** (documented adaptations, not oversights):
+
+1. **The planner prompt keeps "in the language of the question"**, not route F's hardcoded
+   German. Route F's one archive IS German Wikipedia, so hardcoding the target language there
+   is correct; the product's knowledge packs are ANY language a user adds
+   (`docs/knowledge-packs.md`: "Wikipedia in about a hundred languages"). Hardcoding German
+   would regress every non-German pack. Step 1c measured that this planner call is NOT
+   decorative for English questions against a German archive — turning it off collapses
+   `anyArticle` on `MEAS49-en` from 43 to 23 — but also that the model's own German lexical gap
+   (not a prompt defect) is why an isolated single-term translation call did not clear 1a-i's
+   bundle-entry bar. Keeping the shipped "match the question's language" framing accepts a
+   real, measured cost on this PR's (German-only) acceptance corpus's English-question half in
+   exchange for correctness on every other pack language.
+2. **The read budget (12 reads / 8 admitted) is applied PER PACK**, not globally per ask.
+   Route F's `discover()` bounds ONE archive per question; the product can have several packs
+   selected for one ask. Every acceptance measurement in this PR uses a single pack, so the
+   distinction never affects the numbers reported here.
+3. **`plan.terms` is parsed but not consumed.** Route F feeds `plan.terms` into its BM25-style
+   pool-scoring token set and its recovery-query fallback — machinery this arm does not have
+   (chunk selection here is `overlapScore` against `queryTerms(question)`, unchanged by this
+   port). A DEV49 iteration DID try wiring `plan.terms` into `overlapScore`'s term set (mirroring
+   route F's own `tokens(standalone(c)+' '+(plan?.terms??[]).join(' '))`), specifically to try to
+   close the `anyCandidate` shortfall (below): it left `anyCandidate` on DEV49 unchanged (45/100
+   both ways) and slightly worsened `anyPacked`/`allPacked` (25→23, 15→13), so it was reverted.
+   The code on this branch does not consume `plan.terms`.
+
+**Acceptance (core200, no rerank unless noted; DEV49 iterated on, MEAS49 reported once).**
+Reproduction of 4-i's M1 no-rerank row on core200, pre-port: **exact match**, 0 deviation on all
+four co-primaries (tolerance was ±2) — `anyArticle` 32, `allArticle` 24, `anyCandidate` 25,
+`allPacked` 6.
+
+| Population | Config | n | anyArticle | allArticle | anyCandidate | allCandidate | anyPacked | allPacked |
+|---|---|---|---|---|---|---|---|---|
+| core200 | before (baseline) | 200 | 32 | 24 | 25 | 18 | 10 | 6 |
+| core200 | **after (this port)** | 200 | **120** | 89 | **79** | 49 | 43 | **27** |
+| core200 | route F | 200 | 166 | 157 | — (anyPool 135) | — | — (anyPack 106) | 64 |
+| DEV49 | after | 100 | 64 | 48 | 45 | 28 | 25 | 15 |
+| DEV49 | route F | 100 | 83 | 77 | — (anyPool 70) | — | — (anyPack 54) | 34 |
+| MEAS49 | after | 100 | 56 | 41 | 34 | 21 | 18 | 12 |
+| MEAS49 | route F | 100 | 83 | 80 | — (anyPool 65) | — | — (anyPack 52) | 30 |
+
+By language (core200, after): de `anyArticle` 93/100 (was 27/100), `allPacked` 21/100 (was
+5/100); en `anyArticle` 27/100 (was 5/100), `allPacked` 6/100 (was 1/100) — a large gain on
+both languages despite the planner keeping "the question's language" rather than route F's
+hardcoded German (adaptation 1 above).
+
+**Floors** (Frozen Parameters, core200): `anyArticle ≥ 96` — **120, PASS** (+24 over floor);
+`anyCandidate ≥ 80` — **79, FAIL by exactly 1**; `allPacked (no rerank) ≥ 6` — **27, PASS**; arm
+wall-clock p90 excluding the planner call ≤ 2,500 ms — **269 ms, PASS**; planner call p90 ≤
+3,000 ms — **884 ms, PASS**. Four of five floors clear with wide margins; `anyCandidate` misses
+by one question (98.75% of target).
+
+**Root cause of the `anyCandidate` shortfall.** Of the 41 core200 questions where the gold
+article was fetched (`anyArticle`) but no gold reference block reached the candidate set
+(`anyCandidate` false), **all 41** have the gold article's own title present among the FINAL
+admitted candidates (verified programmatically by normalised title match) — the article was
+correctly discovered, read and admitted, and did contribute chunks. The loss is entirely in
+*which* of that article's chunks `overlapScore`/`chunkSegments` keeps — the chunker and its
+term-overlap picker are explicitly unchanged by this port (Frozen Parameters), and no
+discovery-side change (this PR's whole scope) can move a metric whose shortfall is already
+downstream of a correctly-discovered, correctly-admitted article.
+
+**Decision: BLOCKED, per the brief's pre-registered Endpoint and decision rule** — the PR is not
+opened. Two DEV49 iterations were run (the baseline port, and the `plan.terms` experiment
+above); the second's negative, precisely-diagnosed result closes off the one discovery-side
+lever that could plausibly have helped, so further iteration would not be a genuine attempt.
+The owner decides whether to lower the `anyCandidate` floor given this diagnosis (a chunk-
+selection-stage limitation orthogonal to the discovery quality this PR set out to fix), or to
+scope a chunk-selection follow-up before re-measuring. The branch (`feat/zim-discovery-port`,
+commit `6657f16864aee2af03d8f9b56dfe7cfe34b78ba9`) is otherwise complete: full apps/desktop
+suite green, build green, ready to open as a PR once the floor question is resolved.
+
+**If/when this PR merges, PR-B** makes the CPU rerank scope conditional on the hardware profile
+(GPU, or ≥8 CPU threads), per 4-i's pre-registered fallback — no bounded rerank scope
+(`T24`/`T48`/`ALL`) met both the ≤10 s p90 latency bar and the `MEAS49 allPack` quality-parity
+bar (within 2 of `ALL`'s 56).
+
+**Open questions for the next step:**
+
+- Whether to lower the `anyCandidate` floor (see Decision above), or scope a chunk-selection
+  follow-up (out of THIS PR's five-item Frozen Parameters) before re-measuring.
+- STAGE 2's multi-word title admission (`title.includes(' ') && hidx === 0`) admits the rank-0
+  `/suggest` hit UNCONDITIONALLY, regardless of actual similarity to the plan title asked for —
+  the downstream `admit.ts` gate only screens for topic-conflict, never for "is this the right
+  article." Route F's own measured pipeline behaves the same way; whether to tighten it is a
+  quality/complexity trade a reviewer can weigh with real traffic.
