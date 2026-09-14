@@ -706,9 +706,10 @@ fires *inside* the 60 s CI test budget and you keep its named error instead of a
 it means "it never finished", never "it was slow".
 
 **What must NOT go through it:** a bound that is itself the evidence. `fts-rowid-sync`'s 500 ms
-(#84) and `zim-arm`'s `elapsedMs < 10_000` are timing PROOFS — the second exists to exclude the
-client's 15 s default, so widening it would stop it discriminating. Those are marked as
-deliberate exceptions in place.
+(#84) and `zim-arm`'s `elapsedMs < 1_500` (the `probeTimeoutMs` seam behavioural test, below) are
+timing PROOFS — the second exists to show a slow `/suggest` is cut off at the SEAM's bound, not
+the server's, so widening it would stop it discriminating. Those are marked as deliberate
+exceptions in place.
 
 **When a test depends on a budget inside the PRODUCT, add a seam instead of loosening the
 assertion.** The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run
@@ -719,6 +720,14 @@ read*, not latency, so the fix was a `probeTimeoutMs` test seam (mirroring the e
 `articleTimeoutMs`) that the expansion cases pass, while the #353 cases that *prove* the short
 budget fires keep the real default. Verified by setting the seam to 1 ms: exactly those six
 expansion cases fail, which is what makes the seam's wiring provable rather than assumed.
+**SUPERSEDED 2026-09-14 by the §17 discovery port (Phase 4 PR-A):** the #353 document-frequency
+ladder this paragraph's expansion cases exercised (`DF_PROBE_MAX_TERMS`, `DF_PROBE_TIMEOUT_MS`,
+`narrowByFrequency`) was removed with the L3-b `{concepts,listTitle}` expander it belonged to;
+`probeTimeoutMs` itself survives (now gating the discovery port's own title-index `/suggest`
+lookups, `PROBE_TIMEOUT_MS = 3_000`) and is proven the same way — `zim-arm.test.ts` "a /suggest
+lookup held well past PROBE_TIMEOUT_MS is cut off at the probeTimeoutMs seam, not the server"
+(review 2026-09-14, test gap 3): a fixture holds a `/suggest` response 2,000 ms and the seam set
+to 50 ms still returns in well under 1,500 ms.
 
 **There are TWO shapes of hand-rolled bound, and the counted one is nastier.** The first sweep
 caught only `Date.now() - start > N`. CI then failed `vision-security.test.ts` (run

@@ -2392,7 +2392,11 @@ offline article viewer. Files are registered in place, never copied.
   GLOBAL admitted-candidate bound; for N eligible packs (N ≤ `MAX_SELECTED_PACKS = 12`)
   each gets a provisional quota `floor(24/N)` plus one extra for the first `24 mod N`
   packs in `title COLLATE NOCASE, id` order — an UPPER bound on how much a pack fetches
-  (≤ `ARTICLES_PER_PACK = 5` articles, ≤ `CHUNKS_PER_ARTICLE = 4` chunks each), not a
+  (on master: ≤ `ARTICLES_PER_PACK = 5` articles; since the §17 discovery port (Phase 4 PR-A,
+  2026-09-14), `ARTICLES_PER_PACK` no longer exists — a pack's own discovery pass is bounded
+  instead by `DISCOVERY_MAX_READS_PER_PACK = 12` reads / `DISCOVERY_MAX_ADMITTED_PER_PACK = 8`
+  admitted articles, §17 — each ≤ `CHUNKS_PER_ARTICLE = 4` chunks (`LIST_ARTICLE_CHUNKS = 8` for
+  a LIST-shaped article, unconditionally, on both trees)), not a
   guaranteed minimum. Admission happens only after every pack has SETTLED: round-robin,
   one candidate per pack per round in pack order, until 24 are admitted or every pack is
   exhausted — a short/empty/failed pack's unused share reclaims to the others (bounded by
@@ -2838,7 +2842,16 @@ offline article viewer. Files are registered in place, never copied.
   `ModelsScreen.test.tsx` (the two surfaces, the required acknowledgement, the gate-off reason).
   Record of the UI: design-guidelines §11.15 "P8-2 consent surfaces".
 
-  **2026-09-06 amendment, #353 — the document-frequency ladder.** The length-based `retry`
+  **2026-09-06 amendment, #353 — the document-frequency ladder — SUPERSEDED 2026-09-14 by §17
+  "Discovery port (Phase 4 PR-A)".** The whole paragraph below describes `narrowByFrequency`,
+  `DF_PROBE_MAX_TERMS` and `DF_PROBE_TIMEOUT_MS` as SHIPPED; the discovery port removed all
+  three (its only caller, the old single-pattern-with-retry search, was replaced by the plan's
+  own multi-query FTS, which does not retry a zero-hit pattern by term frequency) and this
+  record was never amended at the time — kept verbatim below for its historical measurement,
+  not as a description of current behaviour. The LENGTH-based `retry` this paragraph's opening
+  sentence refers to is NOT gone — the discovery port's F2 fix (§17) restored it, gated exactly
+  as `arm.ts:340` gated it on master (zero hits from the pattern query, `rewrite.retry` non-null).
+  The length-based `retry`
   cannot help a pattern whose kept terms are ALL already `RETRY_MIN_TERM_CHARS` or longer: a
   single pack-rare or misspelled five-plus-character word (`"eigenschaftn"`) still ANDs the
   query to zero, and libzim 9.4.0's Xapian parser has no boolean flag to drop one term
@@ -2880,7 +2893,16 @@ offline article viewer. Files are registered in place, never copied.
   (17 ms), the invented word `"qzxvwtrkp"` → 0 (15 ms); the quality fixture still hit 9/9.
 
 - **D-Z20 — question → concept expansion (#340 L3-b, owner ruling 2026-09-07, option (a)
-  "always").** L3-b was left MEASURED-not-built at the open-issues wave close (see "Deliberately
+  "always") — SUPERSEDED 2026-09-14 by §17 "Discovery port (Phase 4 PR-A)".** The `{concepts,
+  listTitle}` expander this whole record describes (`EXPAND_MAX_TOKENS = 96`,
+  `EXPANSION_ARTICLES_PER_PACK = 2`, `parseExpansion` sanitising against `isContentWord`) was
+  REPLACED by the discovery port's planner (`expand.ts`'s `{titles, queries}` `SearchPlan`,
+  route F's own plan shape minus `terms` — §17 F1) — this whole `services/zim/expand.ts` module
+  now means something different from what the paragraphs below describe. Kept verbatim below for
+  its historical measurement record (the #423 amendment's decode-cost findings, in particular,
+  are still the basis §17 F1's planner-length measurement extends), not as a description of
+  current behaviour; see §17 for what ships now. L3-b was left MEASURED-not-built at the
+  open-issues wave close (see "Deliberately
   not built" below, K: climate pack, 2026-09-06): raw question 0/6 of the list-shaped fixture
   questions (`quality-questions-de.json` `group: list`), the shipped rewrite (D-Z18) 2/6, a
   hand-written concept-expanded query 4/6, `/suggest` asked with a synthesised "Liste …" prefix
@@ -2938,7 +2960,15 @@ offline article viewer. Files are registered in place, never copied.
   calls finish in 2–6 s and never reach the bound). `zim-expand.test.ts` now pins the bound, the
   token cap and `EXTERNAL_RETRIEVAL_DEADLINE_MS` against each other so they cannot drift apart
   again, and `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7` records the rate they are derived
-  from. NOT claimed: no re-run of the list-group fixture was needed for the constant (the lever's
+  from. **This guarantee — the bound and the token cap staying ONE decision, never drifting apart
+  — is what the discovery port's F1 finding (2026-09-14) found silently voided**: `PLAN_MAX_TOKENS`
+  was raised 96 → 220 while `PLAN_TIMEOUT_MS` stayed 12 s and these two pins were deleted with no
+  replacement, so on every CPU decode rate this project has ever measured the planner could no
+  longer emit its own cap. F1's fix restores the SAME shape on the new names
+  (`PLAN_TIMEOUT_MS`/`PLAN_MAX_TOKENS`/`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC`), with the cap set
+  from a fresh measurement (run M, `core200`, 2026-09-14) rather than reused from this one — see
+  §17 F1 for the measured p99, the cap and which pin branch applied. NOT claimed: no re-run of the
+  list-group fixture was needed for the constant (the lever's
   quality is D-Z20's own 5/6 measurement, which this only makes reachable more often), and the
   slow end is one thread-restricted stand-in on one box, not a second machine.**
   `parseExpansion` then sanitises the reply against
@@ -3171,8 +3201,11 @@ searchability columns + key, `classifyPackSelection` and `packTitles`, D-Z11/D-Z
 (the owned `zim-transient/` dir; containment-checked, link-refusing cleanup, D-Z11),
 `session.ts` (the post-unlock reconciliation kickoff, the `maybeStartLocalApi` shape,
 D-Z11), `arm.ts` (allocation, bounded concurrency, the per-ask deadline and per-pack
-outcomes — D-Z4, P4), `expand.ts` (question → concept expansion for the pack arm — D-Z20,
-#340 L3-b), `save-article.ts` ("Save article to my documents" — the title rule, the Markdown
+outcomes — D-Z4, P4; the discovery-port routes since §17 Phase 4 PR-A, 2026-09-14),
+`expand.ts` (on master: question → concept expansion for the pack arm — D-Z20, #340 L3-b; on
+`feat/zim-discovery-port`: the question → search PLAN planner since §17 Phase 4 PR-A),
+`admit.ts` and `head-noun.ts` (new since §17 Phase 4 PR-A: the topic-conflict admission gate
+and the ported 1a-i head-noun candidate rule), `save-article.ts` ("Save article to my documents" — the title rule, the Markdown
 render, the import-path materialise, the duplicate lookup — D-Z21, #340 Tier-2), `index.ts` (`ZimService` facade on
 `AppContext.zim` — the revision/generation allocator, the FIFO build/teardown/start chain
 and the published tuple, D-Z10; the operation registry and admission-epoch checks, the
@@ -3274,7 +3307,15 @@ the follow-up wave through `packs:status.excluded` (D-Z16, #340); the per-answer
 `not-served` row still says "not searched: name collision with another pack".
 
 **Owner rulings of 2026-09-06 (#339 / #340, the open-issues wave) — what is deliberately NOT
-built, and why.** *L2* — `ARTICLES_PER_PACK` stays 5 for every pack: the measured failures of
+built, and why.** *L2* (and its 2026-09-08 revisit below) — **the CONSTANT `ARTICLES_PER_PACK`
+no longer exists on `feat/zim-discovery-port`** (§17 "Discovery port", Phase 4 PR-A,
+2026-09-14): the discovery port replaced the whole per-pack fetch shape this ruling reasoned
+about with a read/admitted budget (`DISCOVERY_MAX_READS_PER_PACK = 12` /
+`DISCOVERY_MAX_ADMITTED_PER_PACK = 8`, §17), and `ARTICLES_PER_PACK`'s own pinning test
+(`zim-arm.test.ts` "the shipped per-pack article cap") was deleted with it. The ruling and its
+measurement below are kept verbatim as the historical record of WHY 5 was the right number for
+the constant that existed at the time — they no longer describe what ships on the branch. On
+master, unchanged: `ARTICLES_PER_PACK` stays 5 for every pack: the measured failures of
 the list shape were not helped by hits 6–10, and one selected pack already gets the whole
 24-candidate quota, so a longer page only adds `/raw` reads on the stall-prone route (D-Z13).
 
@@ -3576,55 +3617,100 @@ spec, the Skills plan, the image-understanding plan, the context-compaction and 
 plans — and resolves through that paper's own legend (this file's EP-1 record above; the Skills
 and image-understanding design records in `architecture.md`), **not** through this table.
 
-### Discovery port (Phase 4 PR-A, 2026-09-14) — parked, one floor short, awaiting an owner ruling
+### Discovery port (Phase 4 PR-A, 2026-09-14, redone 2026-09-14 as step 4-2) — every floor holds, PR opened
 
 **What it is.** The ZIM research programme's step 4-i measured the shipped arm fetching the
 gold article for 32 of 200 core200 questions against its own "route F" research harness's 166,
 losing overwhelmingly at the article-FETCH stage (not candidate admission or packing). This PR
-(`feat/zim-discovery-port`) ports route F's discovery semantics into the shipped arm:
+(`feat/zim-discovery-port`) ports route F's discovery semantics into the shipped arm. The first
+pass (step 4) was BLOCKED one question short of the `anyCandidate` floor and, independently, an
+Opus code review found nine defects (F1–F9) — three invisible in the acceptance numbers because
+every step-4 run used the GPU. This record now describes the REDONE port (step 4-2): F1–F9
+(F6 dropped by owner ruling) fixed, the planner's token cap set by a fresh measurement instead
+of assumed, `core200` re-measured once, every floor held, and the reranker-for-the-record and
+CPU-exposure legs run. Both step 4's `anyCandidate`-floor question and every review finding are
+therefore CLOSED by this record; nothing here is still open except the two design questions at
+the end.
 
-- **The planner** (`expand.ts`, formerly the `{concepts, listTitle}` expander) now asks the
-  turn's chat model for route F's plan schema — up to 3 title candidates, 2 full-text queries,
-  5 relation/attribute terms, JSON-schema constrained, `max_tokens: 220` — one call per ask,
-  unconditionally on (the product already spent one model call per ask on the expander it
-  replaces). Its output degrades to an EMPTY plan (never null) on malformed JSON, matching route
-  F's own `interpret()`; the wrapping call itself still resolves null on any transport failure
-  except the ask's own abort, exactly as the expander it replaces did.
+- **The planner** (`expand.ts`, formerly the `{concepts, listTitle}` expander) asks the turn's
+  chat model for route F's plan schema minus `terms` — up to 3 title candidates, 2 full-text
+  queries, JSON-schema constrained — one call per ask, unconditionally on. **F1 (review
+  2026-09-14):** route F's own `terms` array was dropped from the schema and the prompt (never
+  consumed — see deviation 3 below); `PLAN_MAX_TOKENS` is set by a fresh measurement (see "The
+  cap decision" below), not by assumption, and the two pins that keep it and `PLAN_TIMEOUT_MS`
+  one decision are restored. Its output degrades to an EMPTY plan (never null) on malformed
+  JSON, matching route F's own `interpret()`; the wrapping call itself still resolves null on
+  any transport failure except the ask's own abort. **F7 (question-only):** the prompt no
+  longer references "conversation history" — neither this call nor the admission gate below is
+  ever given any at this layer (`buildPlanMessages` sends only the bare question;
+  `registerRagIpc.ts` hands the arm only the current turn's text), so route F's history clause
+  was dead text.
 - **Title reads** (`arm.ts` STAGE 2): for each plan title, one `/suggest` lookup with the SAME
   exact-or-prefix admission predicate route F's `discover()` uses (`norm(hit)===norm(title)`,
   a `"title ("`-prefixed disambiguator, or — for a multi-word title — its rank-0 hit
   unconditionally), then an immediate fetch of the admitted hit.
-- **The head-noun rule** (`head-noun.ts`, new file): step 1a-i's frozen candidate-generation
-  rule (`head-noun-rule.mjs`), ported verbatim in behaviour — hyphen split, inflection strip,
-  prefix strip with the Fugenelement shortcut — probed via `/suggest`, accepting the first
-  EXACT match. Runs FIRST (before plan titles), up to 2 successful reads, at most 12 total
-  `/suggest` probes across every candidate word tried. Unconditional on language (the arm has
-  no per-question language signal at this layer); on a non-German question it simply tends to
-  find fewer or no candidates.
-- **FTS queries** (`arm.ts` STAGE 3): the plan's own queries (≤2), plus the existing
-  `searchPattern` rewrite as the LAST query. The rank-1 hit of each query is read immediately;
-  every hit (of every rank, from both the title-suggest and FTS routes) feeds one shared
-  aggregate-score pool, drained twice for up to 2 more unseen candidates each time ("both
-  top-2 passes kept") — once after the title stage, once after FTS.
-- **`admitArticle`** (`admit.ts`, new file): route F's topic-conflict gate, ported as a pure
-  function (the equipment/biology, fiction/biology, planet/mythology, vertebrate/diving-gear
-  and human-anatomy/heraldry heuristics) — never a claim of relevance, only that nothing here
-  rules an admitted article out. The research harness's own resolver-identity precondition
-  (`archiveId`/`archiveVersion`/`canonical`/`htmlSha`) was NOT ported — the product's
-  `ZimArticle` (`html.ts`) carries no such fields; it was an integrity check on the research
-  harness's resolver cache, not part of the topic-conflict semantics.
+- **The head-noun rule** (`head-noun.ts`): step 1a-i's frozen candidate-generation rule
+  (`head-noun-rule.mjs`), ported verbatim in behaviour — hyphen split, inflection strip, prefix
+  strip with the Fugenelement shortcut — probed via `/suggest`, accepting the first EXACT
+  match. Runs FIRST (before plan titles), at most 12 total `/suggest` probes across every
+  candidate word tried. **F4 (review 2026-09-14):** the two-read cap now counts ACCEPTANCES (a
+  confirmed `/suggest` match), matching the frozen 1a-i patch's own unconditional `issued++` —
+  a read that 404s, duplicates an already-admitted title, or fails the admission gate still
+  spends its slot. The pre-fix code counted ADMISSIONS instead, so a run of accepted-but-never-
+  admitted candidates could consume the ENTIRE 12-read per-pack budget before a single plan
+  title or FTS query was tried (demonstrated: 7 reads on one question against the cap of 2).
+  Unconditional on language (the arm has no per-question language signal at this layer); on a
+  non-German question it simply tends to find fewer or no candidates.
+- **FTS queries** (`arm.ts` STAGE 3): the plan's own queries, plus the existing `searchPattern`
+  rewrite as the LAST query. The rank-1 hit of each query is read immediately (every hit, of
+  every rank, feeds one shared aggregate-score pool, drained twice for up to 2 more unseen
+  candidates each time). **F2 (review 2026-09-14):** two restorations from master's own no-plan
+  fallback, gated exactly as master gated them — never on every ask. (1) The #340 L3 length
+  retry: when the PATTERN query itself finds zero hits, retry once with `rewrite.retry` (the
+  kept terms of five or more characters) if one exists — master's own trigger (`arm.ts:340` on
+  master). (2) The five-read no-plan reach: when the planner produced no titles and no queries
+  at all, the single pattern query is the ask's ENTIRE discovery reach, so every hit it returns
+  (up to `FTS_HITS_PER_QUERY` = 5, matching master's `ARTICLES_PER_PACK`) is read, not just its
+  rank-1 hit — the pre-fix code reached only 1 + `FTS_TOP_UNSEEN_PASS` (= 3) articles on a
+  plan-less ask, one short of master's own reach on the same fixture
+  (`zim-regressions.test.ts` T15, `n=1`).
+- **`admitArticle`** (`admit.ts`): route F's topic-conflict gate, ported as a pure function (the
+  equipment/biology, fiction/biology, planet/mythology, vertebrate/diving-gear and
+  human-anatomy/heraldry heuristics) — never a claim of relevance, only that nothing here rules
+  an admitted article out. **F3 (review 2026-09-14, HIGH):** the gate now takes TWO windows
+  instead of one — route F's own lead (the first two PROSE segments) feeds the
+  title/fiction/topic-conflict-pair checks exactly as `prototype.mjs` does, and the FULL
+  segment list feeds ONLY the `explicitBiology` escape hatch. The pre-fix code fed both from
+  one bounded window (the arm's first ~20 segments / ~4,000 chars) — wider than route F's lead
+  for the trap, narrower than route F's whole-article scan for the escape hatch — and was
+  demonstrated (real cephalopod article, "Populärkultur" section) to reject gold articles route
+  F admits. **F5 (review 2026-09-14):** the gate's `tokens()` (feeding the
+  `explicit-different-sense` lexical-overlap escape) now uses `retrieval-v3.mjs`'s own ~50-word
+  research stop set, not `query-rewrite.ts`'s much larger ~340-word product list — the larger
+  list made the escape MISS more often (fewer surviving question tokens to match), which is
+  stricter than route F, not a harmless reuse. The research harness's own resolver-identity
+  precondition (`archiveId`/`archiveVersion`/`canonical`/`htmlSha`) was still NOT ported — the
+  product's `ZimArticle` (`html.ts`) carries no such fields.
 - **A per-pack read budget**: ≤12 article fetches, ≤8 admitted articles (route F's own
   `discover()` defaults are 14 / 8 for its ONE archive; this arm applies the pair PER PACK — a
   documented adaptation, see "Deliberately different from route F" below).
+- **F6 (LIST-article chunk cap) — DROPPED from this PR by owner ruling.** An earlier version of
+  this port additionally capped a LIST article's own chunk share at `Math.ceil(quota/2)` for
+  multi-pack fairness; reverted — a LIST article gets `LIST_ARTICLE_CHUNKS` unconditionally, as
+  on master.
+- **F8 — dangling citations left by the removals, fixed:** `docs/packaging.md`'s and
+  `tests/helpers/hang-budget.ts`'s citations of the deleted `DF_PROBE_TIMEOUT_MS` timing proof
+  now cite the new `PROBE_TIMEOUT_MS` behavioural test instead (review test gap 3, below);
+  `query-rewrite.ts`'s header no longer claims a sharing relationship with `expand.ts` that no
+  longer exists (it is shared with `admit.ts`'s `tokens()` instead, F5 above).
 
 **Unchanged**: `html.ts`/`chunker.ts` (article → segments → chunks), `MAX_EXTERNAL_CANDIDATES`
-(24), `packQuota`/`allocateCandidates` (fair cross-pack admission — a LIST-shaped article's own
-share is additionally capped at half the pack's quota so it cannot starve other admitted
-articles on a small multi-pack quota, generalising the old `expansionCap`), the grounded
+(24), `packQuota`/`allocateCandidates`, `CHUNKS_PER_ARTICLE`/`LIST_ARTICLE_CHUNKS`, the grounded
 prompt, `retrieve()`'s rerank/interleave/dedup/trim path, the reranker selector itself, every
 user-facing setting. The #353 document-frequency retry ladder (`narrowByFrequency`,
-`DF_PROBE_MAX_TERMS`) is REMOVED: its only caller, the old single-pattern-with-retry search, is
-gone, superseded by the plan's own multi-query FTS.
+`DF_PROBE_MAX_TERMS`) stays REMOVED: its only caller, the old single-pattern-with-retry search,
+is gone, superseded by the plan's own multi-query FTS (F2 restores the LENGTH-based retry only,
+never the frequency ladder).
 
 **Deliberately different from route F** (documented adaptations, not oversights):
 
@@ -3643,72 +3729,117 @@ gone, superseded by the plan's own multi-query FTS.
    Route F's `discover()` bounds ONE archive per question; the product can have several packs
    selected for one ask. Every acceptance measurement in this PR uses a single pack, so the
    distinction never affects the numbers reported here.
-3. **`plan.terms` is parsed but not consumed.** Route F feeds `plan.terms` into its BM25-style
-   pool-scoring token set and its recovery-query fallback — machinery this arm does not have
-   (chunk selection here is `overlapScore` against `queryTerms(question)`, unchanged by this
-   port). A DEV49 iteration DID try wiring `plan.terms` into `overlapScore`'s term set (mirroring
-   route F's own `tokens(standalone(c)+' '+(plan?.terms??[]).join(' '))`), specifically to try to
-   close the `anyCandidate` shortfall (below): it left `anyCandidate` on DEV49 unchanged (45/100
-   both ways) and slightly worsened `anyPacked`/`allPacked` (25→23, 15→13), so it was reverted.
-   The code on this branch does not consume `plan.terms`.
+3. **`plan.terms` is DROPPED, not merely unconsumed (F1 part 1).** Step 4's port parsed
+   `plan.terms` (route F's relation/attribute terms) but never consumed it; a DEV49 iteration
+   tried wiring it into `overlapScore`'s term set (mirroring route F's own
+   `tokens(standalone(c)+' '+(plan?.terms??[]).join(' '))`) specifically to try to close the
+   `anyCandidate` shortfall then open: it left `anyCandidate` on DEV49 unchanged (45/100 both
+   ways) and slightly worsened `anyPacked`/`allPacked` (25→23, 15→13), so it was reverted. Step
+   4-2's review found the unused field itself was pure output-token cost on every planner call
+   — exactly the budget the cap decision below is measured against — so it, its schema entry
+   and its prompt sentence are now removed outright rather than left parsed-but-idle.
+4. **Three route F mechanisms remain NOT ported, unchanged from step 4 and still brief-scoped:**
+   `titleCandidates()` (quoted phrases, capitalised n-grams, pattern terms feeding the title
+   route beyond the plan's own ≤3 titles), the disambiguation-page link-following route, and
+   the `observableGap`-triggered neighbour-link recovery pass. The product's arm has no
+   disambiguation signal and runs the planner unconditionally rather than gated on
+   `en`/history/`observableGap`, so none of these three has an equivalent to hang off; adding
+   them is out of this PR's discovery-semantics scope.
 
-**Acceptance (core200, no rerank unless noted; DEV49 iterated on, MEAS49 reported once).**
-Reproduction of 4-i's M1 no-rerank row on core200, pre-port: **exact match**, 0 deviation on all
-four co-primaries (tolerance was ±2) — `anyArticle` 32, `allArticle` 24, `anyCandidate` 25,
-`allPacked` 6.
+**The cap decision (F1, ruling (a)).** Run M measured `usage.completion_tokens` for all 200
+`core200` planner calls (GPU, `feat/zim-discovery-port` with F2–F9 already fixed, `terms`
+already dropped, `PLAN_MAX_TOKENS` left at a provisional 220 so the distribution was observed
+untruncated — 0 replies hit the ceiling): **p99 = 99 tokens**
+(`steps/4-2-product-pr-discovery-redo/artifacts/planner-length-core200.json`). Ruled formula:
+`cap = min(104, smallest multiple of 8 ≥ p99 + 8) = min(104, 112) = 104`. p99 (99) falls in the
+ruling's 72–104 branch: pin 1 (`zim-expand.test.ts`) is restored on the measured p99 but at the
+REFERENCE CPU rate (10.3 tok/s, #423's i9-14900K `-ngl 0` figure) rather than the slowest `-t 2`
+stand-in (6.7 tok/s) — at 6.7 tok/s a 99-token reply needs ~16 s, past `PLAN_TIMEOUT_MS`, so
+**the `-t 2` tier is no longer afforded by the bound at this cap** (`docs/known-limitations.md`'s
+twelve-second paragraph carries the measured exposure). `PLAN_MAX_TOKENS`: 220 (provisional) →
+**104**. `PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7` and pin 2 (`cap / 10.7 s < 10 tok/s`) are
+restored verbatim, mirroring master's own `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC`/pin shape.
+
+**Acceptance (core200, no rerank unless noted; run A is the ONE acceptance read for this PR).**
+Reproduction of 4-i's M1 no-rerank row on core200, pre-port (step 4, unchanged by step 4-2):
+**exact match**, 0 deviation on all four co-primaries — `anyArticle` 32, `allArticle` 24,
+`anyCandidate` 25, `allPacked` 6.
 
 | Population | Config | n | anyArticle | allArticle | anyCandidate | allCandidate | anyPacked | allPacked |
 |---|---|---|---|---|---|---|---|---|
-| core200 | before (baseline) | 200 | 32 | 24 | 25 | 18 | 10 | 6 |
-| core200 | **after (this port)** | 200 | **120** | 89 | **79** | 49 | 43 | **27** |
+| core200 | before (step 4 after-run, blocked) | 200 | 120 | 89 | **79** | 49 | 43 | 27 |
+| core200 | run M (informational, GPU, cap 220 provisional) | 200 | 120 | 89 | 81 | 49 | 42 | 26 |
+| core200 | **run A (after, this redo)** | 200 | **120** | 89 | **81** | 49 | 42 | **26** |
 | core200 | route F | 200 | 166 | 157 | — (anyPool 135) | — | — (anyPack 106) | 64 |
-| DEV49 | after | 100 | 64 | 48 | 45 | 28 | 25 | 15 |
+| DEV49 | run A | 100 | 64 | 47 | 45 | 27 | 25 | 15 |
 | DEV49 | route F | 100 | 83 | 77 | — (anyPool 70) | — | — (anyPack 54) | 34 |
-| MEAS49 | after | 100 | 56 | 41 | 34 | 21 | 18 | 12 |
+| MEAS49 | run A | 100 | 56 | 42 | **36** | 22 | 17 | 11 |
 | MEAS49 | route F | 100 | 83 | 80 | — (anyPool 65) | — | — (anyPack 52) | 30 |
 
-By language (core200, after): de `anyArticle` 93/100 (was 27/100), `allPacked` 21/100 (was
-5/100); en `anyArticle` 27/100 (was 5/100), `allPacked` 6/100 (was 1/100) — a large gain on
-both languages despite the planner keeping "the question's language" rather than route F's
-hardcoded German (adaptation 1 above).
+Full table, by-language breakdown and the latency detail: `steps/4-2-product-pr-discovery-redo/
+artifacts/acceptance-table-2.md`. By language (core200, run A): de `anyArticle` 93/100,
+`anyCandidate` 70/100 (was 68/100), `allPacked` 20/100; en `anyArticle` 27/100, `anyCandidate`
+11/100 (unchanged), `allPacked` 6/100 — the whole core200 `anyCandidate` gain (79→81) is a
+German-side, MEAS49-only effect (34→36; DEV49's `anyCandidate` is unchanged at 45).
 
-**Floors** (Frozen Parameters, core200): `anyArticle ≥ 96` — **120, PASS** (+24 over floor);
-`anyCandidate ≥ 80` — **79, FAIL by exactly 1**; `allPacked (no rerank) ≥ 6` — **27, PASS**; arm
-wall-clock p90 excluding the planner call ≤ 2,500 ms — **269 ms, PASS**; planner call p90 ≤
-3,000 ms — **884 ms, PASS**. Four of five floors clear with wide margins; `anyCandidate` misses
-by one question (98.75% of target).
+**Floors** (Frozen Parameters, core200, run A): `anyArticle ≥ 96` — **120, PASS** (+24 over
+floor); `anyCandidate ≥ 80` — **81, PASS** (+1 over floor, closing step 4's miss); `allPacked (no
+rerank) ≥ 6` — **26, PASS** (+20 over floor); arm wall-clock p90 excluding the planner call ≤
+2,500 ms — **92.5 ms, PASS**; planner call p90 ≤ 3,000 ms — **589.9 ms, PASS** (well under step
+4's 884.3 ms — `PLAN_MAX_TOKENS` 104 vs the undisclosed 220 F1 found). **Every floor holds.**
 
-**Root cause of the `anyCandidate` shortfall.** Of the 41 core200 questions where the gold
-article was fetched (`anyArticle`) but no gold reference block reached the candidate set
-(`anyCandidate` false), **all 41** have the gold article's own title present among the FINAL
-admitted candidates (verified programmatically by normalised title match) — the article was
-correctly discovered, read and admitted, and did contribute chunks. The loss is entirely in
-*which* of that article's chunks `overlapScore`/`chunkSegments` keeps — the chunker and its
-term-overlap picker are explicitly unchanged by this port (Frozen Parameters), and no
-discovery-side change (this PR's whole scope) can move a metric whose shortfall is already
-downstream of a correctly-discovered, correctly-admitted article.
+**Root cause of step 4's `anyCandidate` shortfall — CLOSED by F3/F5, not by a chunk-selection
+change.** Step 4 diagnosed all 41 core200 `anyArticle ∧ ¬anyCandidate` gap ids as the gold
+article being correctly discovered, read AND admitted, with the loss entirely in which chunks
+`overlapScore`/`chunkSegments` kept — a stage this PR's Frozen Parameters leave unchanged in
+both step 4 and this redo, and still unchanged. F3 and F5 are pure ADMISSION fixes (they widen
+what the gate accepts; they cannot touch the chunker), so the reviewer's own prediction
+("F3 and F4 in particular can only improve the numbers") is confirmed by the ±2 net movement:
+`anyCandidate` closed the floor from underneath — some step-4 gap ids had a SECOND gold article
+the narrower, pre-fix gate was wrongly rejecting — not from the chunk-selection side.
+`allCandidate` is unchanged (49→49): no gap id recovered ALL its gold blocks from this fix alone.
 
-**Decision: BLOCKED, per the brief's pre-registered Endpoint and decision rule** — the PR is not
-opened. Two DEV49 iterations were run (the baseline port, and the `plan.terms` experiment
-above); the second's negative, precisely-diagnosed result closes off the one discovery-side
-lever that could plausibly have helped, so further iteration would not be a genuine attempt.
-The owner decides whether to lower the `anyCandidate` floor given this diagnosis (a chunk-
-selection-stage limitation orthogonal to the discovery quality this PR set out to fix), or to
-scope a chunk-selection follow-up before re-measuring. The branch (`feat/zim-discovery-port`,
-commit `6657f16864aee2af03d8f9b56dfe7cfe34b78ba9`) is otherwise complete: full apps/desktop
-suite green, build green, ready to open as a PR once the floor question is resolved.
+**Reranker-for-the-record leg** (informational, not a floor): run A's captured candidates
+replayed through `retrieve()` with the shipped CPU reranker (`--device none`, 4 threads,
+matching 4-i's own M1 rerank config) — mean 13.4 s / p90 22.2 s per question, reproducing 4-i's
+own 13.1 s / 25.0 s figure closely. `anyArticle`/`anyCandidate`/`allCandidate` are
+BYTE-IDENTICAL to the no-rerank row at every population (confirming the reranker sits
+downstream of `collectPackCandidates` and cannot move them); `allPacked` nearly doubles
+(core200 26 → **47**) — full table `steps/4-2-product-pr-discovery-redo/artifacts/
+acceptance-rerank.json`.
+
+**CPU non-regression floor** (pre-registered: branch planner null-or-empty rate ≤ master
+expander null-or-empty rate, at each of `-t 32` / `-t 2`, same 50 seeded `core200` questions,
+`--device none -ngl 0`, rerank off): at **32 threads**, branch **0/50 (0%)** vs master **4/50
+(8%)** — PASS; at **2 threads**, branch **1/50 (2%)** vs master **4/50 (8%)** — PASS. Both
+configurations hold with margin; master's own 8% null-or-empty rate is unchanged across thread
+counts (its shorter, ~31-token replies rarely approach `EXPAND_TIMEOUT_MS` even at `-t 2` —
+these are mostly genuine empty expansions, not timeouts), while the branch's larger, ~71-token
+planner replies show the `-t 2` cap decision exposure directly (2% vs 0% at full threads) without
+ever exceeding master's own rate. Full per-question detail:
+`steps/4-2-product-pr-discovery-redo/artifacts/cpu-legs.json`.
+
+**Decision: every floor holds, per the brief's pre-registered Endpoint and decision rule — the
+draft PR is opened.** F1–F9 (F6 dropped) are all resolved: F1 by the measured cap decision, F2–F5
+and F7–F8 by the code/test fixes above, F9 by this record's own head-commit citation. The branch
+(`feat/zim-discovery-port`) is complete: full `apps/desktop` suite green (7192 tests, 427 files),
+typecheck clean, ready to open as a draft PR. The code state this record describes is commit
+`637ca6fb` (the last commit before this docs update); the docs/BUILD_STATE commit and the PR's
+own head follow it.
 
 **If/when this PR merges, PR-B** makes the CPU rerank scope conditional on the hardware profile
 (GPU, or ≥8 CPU threads), per 4-i's pre-registered fallback — no bounded rerank scope
 (`T24`/`T48`/`ALL`) met both the ≤10 s p90 latency bar and the `MEAS49 allPack` quality-parity
-bar (within 2 of `ALL`'s 56).
+bar (within 2 of `ALL`'s 56). PR-B is minted by the orchestrator after PR-A merges.
 
-**Open questions for the next step:**
+**Open questions for PR-B / the human reviewer** (neither blocks PR-A; both are unchanged from
+step 4's report):
 
-- Whether to lower the `anyCandidate` floor (see Decision above), or scope a chunk-selection
-  follow-up (out of THIS PR's five-item Frozen Parameters) before re-measuring.
 - STAGE 2's multi-word title admission (`title.includes(' ') && hidx === 0`) admits the rank-0
   `/suggest` hit UNCONDITIONALLY, regardless of actual similarity to the plan title asked for —
   the downstream `admit.ts` gate only screens for topic-conflict, never for "is this the right
   article." Route F's own measured pipeline behaves the same way; whether to tighten it is a
   quality/complexity trade a reviewer can weigh with real traffic.
+- Whether to port `titleCandidates()`, the disambiguation route or the neighbour-link recovery
+  pass (deviation 4 above) — all three are brief-scoped out of both step 4 and this redo, and
+  none was needed to clear the acceptance floors.
