@@ -107,16 +107,26 @@ describe('admitArticle — explicit-literary-topic-without-requested-biological-
   })
 
   describe('the two windows (F3) — the trap sees only the LEAD, the biology escape hatch sees the WIDE text', () => {
-    // Both cases reproduce the Opus review's demonstration (2026-09-14): a real cephalopod
-    // article with a "Populärkultur"/culture section — the exact shape `explicitBiology` exists
-    // to rescue. An earlier port fed both predicates from one bounded window (the arm's first
-    // ~20 segments / ~4,000 chars): wider than route F's two-prose-block lead for the trap, and
-    // narrower than route F's whole-article scan for the escape hatch — so both cases below
-    // demonstrably lost the gold article on that one-window port.
+    // Both cases below reproduce the FIRST Opus review's demonstration (2026-09-14): a real
+    // cephalopod article with a "Populärkultur"/culture section — the exact shape
+    // `explicitBiology` exists to rescue. An earlier port fed both predicates from one bounded
+    // window (the arm's first ~20 segments / ~4,000 chars): wider than route F's two-prose-block
+    // lead for the trap, and narrower than route F's whole-article scan for the escape hatch —
+    // so both cases below demonstrably lost the gold article on that one-window port.
+    //
+    // NEITHER case below is the first review's own "CASE A" (biological evidence absent
+    // EVERYWHERE, so the article is rescued only if the trap itself never fires) — both hand
+    // `admitArticle` biological evidence somewhere in `wide` and so exercise the ESCAPE HATCH
+    // mechanism (unit-level, hand-fed windows), never the trap's own window in isolation. The
+    // SECOND Opus review (N1) found that the true "no evidence anywhere" shape still disagrees
+    // with route F on the real, arm-built windows (`arm.ts`'s `leadText` is `segments.slice(0,
+    // 2)`, section- not paragraph-granular — see `admit.ts`'s own header) — pending the owner's
+    // ruling; neither this file's unit fixtures nor the arm-level end-to-end test below exercise
+    // that exact shape.
     const QUESTION = 'Wie funktioniert das Herz eines Oktopus?'
     const TITLE = 'Kraken'
 
-    it('CASE A — explicit biological evidence sits OUTSIDE the two-prose-block lead but well inside a ~20-segment/4,000-char window: admitted (route F reads the WHOLE article for this predicate)', () => {
+    it('escape-hatch window 1 — explicit biological evidence sits OUTSIDE the two-prose-block lead but well inside a ~20-segment/4,000-char window: admitted (route F reads the WHOLE article for this predicate; NOT the first review\'s "no evidence anywhere" CASE A — see the describe-block header)', () => {
       const lead =
         'Die Kraken sind eine Ordnung der Kopffuesser. Sie besitzen acht Arme und leben in allen Weltmeeren.'
       const wide =
@@ -128,7 +138,7 @@ describe('admitArticle — explicit-literary-topic-without-requested-biological-
       expect(result.admitted).toBe(true)
     })
 
-    it('CASE B — explicit biological evidence sits FAR past any bounded window (block 27+): still admitted, because the escape hatch is fed the WIDE (whole-article) text with no cap', () => {
+    it('escape-hatch window 2 — explicit biological evidence sits FAR past any bounded window (block 27+): still admitted, because the escape hatch is fed the WIDE (whole-article) text with no cap', () => {
       const lead =
         'Die Kraken sind eine Ordnung der Kopffuesser. Sie besitzen acht Arme und leben in allen Weltmeeren.'
       const farAway =

@@ -2805,12 +2805,17 @@ reports and phase plans were working papers; their full text lives in git histor
   fast desktop processor (32 threads) with the bundled 4B model and no graphics card: about six
   and a half to eight seconds. On a graphics card the same questions take about half a second.
   On a much more thread-constrained processor (a two-thread stand-in for a slow machine) they
-  take seven to twelve seconds, and 2 of 50 measured questions on that configuration ran the
-  full twelve seconds without a usable reply — the plan step is more likely to run out of time
-  on such a machine than the shorter question-plan it replaced, an accepted cost of asking for
-  richer search vocabulary (measured against a like-for-like comparison on the SAME
+  take seven to twelve seconds, and **1 of 50** measured questions on that configuration (2%)
+  ran the full twelve seconds without a usable reply — the plan step is more likely to run out
+  of time on such a machine than the shorter question-plan it replaced, an accepted cost of
+  asking for richer search vocabulary (measured against a like-for-like comparison on the SAME
   configurations: the plan step's own "no usable reply" rate never exceeded the older step's,
-  either at full threads or at two). A question whose answer is spread across an article's
+  either at full threads or at two). Separately, on the FASTEST machine measured (a graphics
+  card), the model's reply is cut off, not just slow, for about 1 question in 200: the plan's
+  length cap is a whole-number multiple of 8 tokens and the longest reply measured landed one
+  token past it, so that one reply (and any as long) is truncated and treated the same as no
+  reply — the plan step still falls back cleanly, it just does so slightly more often than a
+  looser cap would have. A question whose answer is spread across an article's
   individual rows, rather than named on the page itself, can still miss; and on a machine slow
   enough that the call runs past twelve seconds, the question falls back to the plain search
   with no title/query step — the answer is still grounded and still cites what it used, it is

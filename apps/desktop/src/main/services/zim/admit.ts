@@ -27,6 +27,22 @@ import { norm } from './head-noun'
 // inside AND past that window). `admitArticle` now takes the narrow lead and the wide body
 // text as two separate arguments so a caller cannot collapse them back into one by accident.
 //
+// RESIDUAL (F3/N1, second review 2026-09-14) — the SIGNATURE is fixed but the PRODUCTION path
+// still hands it a wider lead than route F's. `arm.ts` builds `leadText` from
+// `article.segments.slice(0, 2)`, and a product segment is not a prose block: `html.ts`'s
+// converter flushes a segment only at a HEADING, never at a paragraph, so `segments[0]` is the
+// whole intro and `segments[1]` is the whole FIRST SECTION (heading text included) — wider than
+// route F's two-paragraph lead, because the product's segmentation has no prose/heading block
+// kind to filter on at this layer the way route F's `blocks` array does. Concretely: a
+// fiction-flavoured FIRST section (no biological evidence anywhere in the article) is still
+// refused here where route F admits it — verified end to end (real HTML → segments → this
+// gate). PENDING THE OWNER'S RULING: narrow `arm.ts`'s `leadText` to `slice(0, 1)` (the intro
+// only — still a superset of route F's lead, but no longer swallows the first section; a
+// one-line change that can only WIDEN admission, so no floor can fall) with a further
+// acceptance read, or accept this residual as the cost of the per-pack budget's own step-4-2
+// acceptance-read limit. Either way, `admitArticle` itself is not where the gap lives — it is
+// faithful to route F for whatever windows it is handed; the gap is in what `arm.ts` hands it.
+//
 // STOP-WORD UNIVERSE (F5, review 2026-09-14). `tokens()` below is `retrieval-v3.mjs`'s own
 // ~50-word `stop` set and token rule (`[\p{L}\p{N}]+`, length > 2), ported for THIS predicate
 // only — not `query-rewrite.ts`'s ~340-word STOP_WORDS + FRAME_WORDS, which is a much larger

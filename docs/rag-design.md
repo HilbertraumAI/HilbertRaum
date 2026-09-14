@@ -3677,14 +3677,25 @@ the end.
 - **`admitArticle`** (`admit.ts`): route F's topic-conflict gate, ported as a pure function (the
   equipment/biology, fiction/biology, planet/mythology, vertebrate/diving-gear and
   human-anatomy/heraldry heuristics) — never a claim of relevance, only that nothing here rules
-  an admitted article out. **F3 (review 2026-09-14, HIGH):** the gate now takes TWO windows
-  instead of one — route F's own lead (the first two PROSE segments) feeds the
-  title/fiction/topic-conflict-pair checks exactly as `prototype.mjs` does, and the FULL
-  segment list feeds ONLY the `explicitBiology` escape hatch. The pre-fix code fed both from
-  one bounded window (the arm's first ~20 segments / ~4,000 chars) — wider than route F's lead
-  for the trap, narrower than route F's whole-article scan for the escape hatch — and was
+  an admitted article out. **F3 (review 2026-09-14, HIGH):** the gate's SIGNATURE now takes TWO
+  windows instead of one — a narrow lead feeds the title/fiction/topic-conflict-pair checks, and
+  the FULL segment list feeds ONLY the `explicitBiology` escape hatch. The pre-fix code fed both
+  from one bounded window (the arm's first ~20 segments / ~4,000 chars) — wider than route F's
+  lead for the trap, narrower than route F's whole-article scan for the escape hatch — and was
   demonstrated (real cephalopod article, "Populärkultur" section) to reject gold articles route
-  F admits. **F5 (review 2026-09-14):** the gate's `tokens()` (feeding the
+  F admits; the escape hatch's fix is verified end to end and closes that case (CASE B).
+  **Residual, N1 (second review 2026-09-14), PENDING THE OWNER'S RULING:** the production
+  `leadText` is `arm.ts`'s `article.segments.slice(0, 2)`, and a product segment is a whole
+  SECTION, not a prose paragraph (`html.ts` flushes a segment only at a heading — there is no
+  prose/heading block *kind* to filter on at this layer the way route F's `blocks` array has),
+  so the lead is really "intro + first section", wider than route F's two-paragraph lead. A
+  fiction-flavoured FIRST section with no biological evidence anywhere in the article (the first
+  review's own CASE A) is therefore still refused here where route F admits it — end-to-end
+  verified, not a fixture artifact. Two options are open: narrow `arm.ts`'s `leadText` to
+  `slice(0, 1)` (the intro only; a one-line change that can only WIDEN admission, so no floor
+  can fall) with a further `core200` acceptance read, or accept the residual as the cost of this
+  step's own one-acceptance-read limit. `admit.ts`'s own header carries the same disclosure.
+  **F5 (review 2026-09-14):** the gate's `tokens()` (feeding the
   `explicit-different-sense` lexical-overlap escape) now uses `retrieval-v3.mjs`'s own ~50-word
   research stop set, not `query-rewrite.ts`'s much larger ~340-word product list — the larger
   list made the escape MISS more often (fewer surviving question tokens to match), which is
@@ -3702,7 +3713,10 @@ the end.
   `tests/helpers/hang-budget.ts`'s citations of the deleted `DF_PROBE_TIMEOUT_MS` timing proof
   now cite the new `PROBE_TIMEOUT_MS` behavioural test instead (review test gap 3, below);
   `query-rewrite.ts`'s header no longer claims a sharing relationship with `expand.ts` that no
-  longer exists (it is shared with `admit.ts`'s `tokens()` instead, F5 above).
+  longer exists — `isContentWord`'s only remaining consumer is `head-noun.ts`
+  (review 2 finding N2). `admit.ts`'s own `tokens()` is NOT that same rule reused: it
+  deliberately builds its own, smaller `ADMIT_STOP_WORDS` (F5 above) rather than importing
+  `isContentWord`, so the two content-word notions are separate by design, not shared.
 
 **Unchanged**: `html.ts`/`chunker.ts` (article → segments → chunks), `MAX_EXTERNAL_CANDIDATES`
 (24), `packQuota`/`allocateCandidates`, `CHUNKS_PER_ARTICLE`/`LIST_ARTICLE_CHUNKS`, the grounded
@@ -3759,6 +3773,19 @@ stand-in (6.7 tok/s) — at 6.7 tok/s a 99-token reply needs ~16 s, past `PLAN_T
 twelve-second paragraph carries the measured exposure). `PLAN_MAX_TOKENS`: 220 (provisional) →
 **104**. `PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7` and pin 2 (`cap / 10.7 s < 10 tok/s`) are
 restored verbatim, mirroring master's own `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC`/pin shape.
+
+**The cap sits one token below run M's own measured max (review 2, N4).** Run M's `completion_
+tokens` distribution tops out at **105** (`planner-length-core200.json`'s histogram, bin
+`104-111: 1`) — one of the 200 core200 calls ran one token past the ruled cap of 104. That reply
+(and any as long) is now cut off by `PLAN_MAX_TOKENS` at `finish_reason: "length"`; `parsePlan`
+cannot parse the truncated JSON and degrades to the empty plan (`expand.ts`), so the ask falls
+onto the no-plan path — the SAME restored five-read reach F2 gives every other plan-less ask, not
+a new failure mode. This is a direct, ruled consequence of the cap formula (`≤ 104` was the
+ruling's own ceiling), not a deviation from it: it costs 0.5% of core200 planner calls (1/200)
+their plan, degrading safely. The "0 replies truncated" language above is about run M's own
+provisional 220-token ceiling under which the distribution was MEASURED, not about the shipped
+104-token cap the measurement then produced — the two are easy to conflate and are kept distinct
+here on purpose.
 
 **Acceptance (core200, no rerank unless noted; run A is the ONE acceptance read for this PR).**
 Reproduction of 4-i's M1 no-rerank row on core200, pre-port (step 4, unchanged by step 4-2):

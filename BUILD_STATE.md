@@ -155,7 +155,7 @@ first `.github/ISSUE_TEMPLATE/`: a knowledge-pack report form asking for the fac
 that keeps blank issues one click away and routes vulnerabilities to the private advisory channel._
 
 _2026-09-14 — **Phase 4 PR-A discovery port, step 4-2 redo: draft PR opened, every floor holds**
-(`feat/zim-discovery-port`). Fixed the second Opus review's F1–F9 (F6 dropped): `PLAN_MAX_TOKENS`
+(`feat/zim-discovery-port`). Fixed the first Opus review's F1–F9 (F6 dropped): `PLAN_MAX_TOKENS`
 set to 104 from a measured core200 p99 of 99 tokens (not assumed); the admission gate takes two
 windows; the head-noun read cap counts acceptances; the #340 length retry and the five-read
 no-plan reach are restored. core200 `anyCandidate` 79→81/200 (now clears its floor); every
