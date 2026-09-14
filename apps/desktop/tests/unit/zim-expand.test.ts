@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import {
   PLAN_MAX_QUERIES,
   PLAN_MAX_STRING_CHARS,
-  PLAN_MAX_TERMS,
   PLAN_MAX_TITLES,
   PLAN_MAX_TOKENS,
   PLAN_RESPONSE_SCHEMA,
@@ -16,8 +15,9 @@ import { MockRuntime } from '../../src/main/services/runtime/mock'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
 // Phase 4 PR-A (`docs/rag-design.md` §17 "Discovery port") — the search PLAN the knowledge-pack
-// arm's discovery routes are built around: `parsePlan` defensively parses a model reply into
-// route F's `{titles, queries, terms}` shape (`prototype.mjs`'s own `interpret()` parse:
+// arm's discovery routes are built around: `parsePlan` defensively parses a model reply into a
+// `{titles, queries}` shape (route F's own `{titles, queries, terms}` minus `terms`, dropped by
+// F1 part 1 — see the file header of `expand.ts`; `prototype.mjs`'s own `interpret()` parse:
 // malformed JSON or a non-object degrades to an EMPTY plan, never null, never throws);
 // `makeQueryExpander` wraps ONE grammar-constrained, temperature-0 call with its own wall-clock
 // bound and degrades the WHOLE CALL to null on every failure except the ask's own abort, which
@@ -31,7 +31,7 @@ interface ScriptedRuntime extends ModelRuntime {
 }
 
 /** A runtime that replies with a fixed token list (default: one valid JSON plan). */
-function scripted(replies: string[] = ['{"titles":["Vulkanismus"],"queries":[],"terms":[]}']): ScriptedRuntime {
+function scripted(replies: string[] = ['{"titles":["Vulkanismus"],"queries":[]}']): ScriptedRuntime {
   const rt: ScriptedRuntime = {
     modelId: 'scripted',
     calls: 0,
@@ -53,79 +53,78 @@ function scripted(replies: string[] = ['{"titles":["Vulkanismus"],"queries":[],"
   return rt
 }
 
-describe('parsePlan — defensively parsing the model reply (route F interpret() semantics)', () => {
-  it('a well-formed reply yields titles + queries + terms', () => {
-    const result = parsePlan(
-      '{"titles":["Vulkanismus","Wattenmeer"],"queries":["Vulkan Ausbruch"],"terms":["Höhe","Lage"]}'
-    )
+describe('parsePlan — defensively parsing the model reply (route F interpret() semantics, minus terms — F1 part 1)', () => {
+  it('a well-formed reply yields titles + queries', () => {
+    const result = parsePlan('{"titles":["Vulkanismus","Wattenmeer"],"queries":["Vulkan Ausbruch"]}')
     expect(result).toEqual({
       titles: ['Vulkanismus', 'Wattenmeer'],
-      queries: ['Vulkan Ausbruch'],
-      terms: ['Höhe', 'Lage']
+      queries: ['Vulkan Ausbruch']
     })
   })
 
   it('a <think> block before the JSON is stripped (chat.ts stripThinkBlocks)', () => {
-    const result = parsePlan('<think>the user wants volcanoes</think>{"titles":["Vulkanismus"],"queries":[],"terms":[]}')
-    expect(result).toEqual({ titles: ['Vulkanismus'], queries: [], terms: [] })
+    const result = parsePlan('<think>the user wants volcanoes</think>{"titles":["Vulkanismus"],"queries":[]}')
+    expect(result).toEqual({ titles: ['Vulkanismus'], queries: [] })
+  })
+
+  it('a "terms" field in the reply is simply ignored — the schema no longer requests it (F1 part 1)', () => {
+    const result = parsePlan('{"titles":["Vulkanismus"],"queries":[],"terms":["Höhe","Lage"]}')
+    expect(result).toEqual({ titles: ['Vulkanismus'], queries: [] })
   })
 
   it('malformed JSON degrades to an EMPTY plan — never null, never throws', () => {
-    expect(parsePlan('not json at all')).toEqual({ titles: [], queries: [], terms: [] })
-    expect(parsePlan('{"titles": [oops}')).toEqual({ titles: [], queries: [], terms: [] })
-    expect(parsePlan('')).toEqual({ titles: [], queries: [], terms: [] })
+    expect(parsePlan('not json at all')).toEqual({ titles: [], queries: [] })
+    expect(parsePlan('{"titles": [oops}')).toEqual({ titles: [], queries: [] })
+    expect(parsePlan('')).toEqual({ titles: [], queries: [] })
   })
 
   it('non-object JSON ([], "x", 42) all yield an empty plan', () => {
-    expect(parsePlan('[]')).toEqual({ titles: [], queries: [], terms: [] })
-    expect(parsePlan('"x"')).toEqual({ titles: [], queries: [], terms: [] })
-    expect(parsePlan('42')).toEqual({ titles: [], queries: [], terms: [] })
+    expect(parsePlan('[]')).toEqual({ titles: [], queries: [] })
+    expect(parsePlan('"x"')).toEqual({ titles: [], queries: [] })
+    expect(parsePlan('42')).toEqual({ titles: [], queries: [] })
   })
 
   it('a missing field degrades to [] for that field only', () => {
-    expect(parsePlan('{"titles":["A"]}')).toEqual({ titles: ['A'], queries: [], terms: [] })
-    expect(parsePlan('{"queries":["a b"],"terms":["c"]}')).toEqual({ titles: [], queries: ['a b'], terms: ['c'] })
+    expect(parsePlan('{"titles":["A"]}')).toEqual({ titles: ['A'], queries: [] })
+    expect(parsePlan('{"queries":["a b"]}')).toEqual({ titles: [], queries: ['a b'] })
   })
 
   it('non-string entries are dropped; valid string entries among them still survive', () => {
-    const result = parsePlan(JSON.stringify({ titles: [123, { a: 1 }, null, 'Vulkanismus'], queries: [], terms: [] }))
+    const result = parsePlan(JSON.stringify({ titles: [123, { a: 1 }, null, 'Vulkanismus'], queries: [] }))
     expect(result.titles).toEqual(['Vulkanismus'])
   })
 
   it('each field is capped at its own PLAN_MAX_* count, keeping the first entries in order', () => {
     const titles = ['A', 'B', 'C', 'D', 'E']
     const queries = ['q1', 'q2', 'q3']
-    const terms = ['t1', 't2', 't3', 't4', 't5', 't6', 't7']
-    const result = parsePlan(JSON.stringify({ titles, queries, terms }))
+    const result = parsePlan(JSON.stringify({ titles, queries }))
     expect(PLAN_MAX_TITLES).toBe(3)
     expect(PLAN_MAX_QUERIES).toBe(2)
-    expect(PLAN_MAX_TERMS).toBe(5)
     expect(result.titles).toEqual(titles.slice(0, PLAN_MAX_TITLES))
     expect(result.queries).toEqual(queries.slice(0, PLAN_MAX_QUERIES))
-    expect(result.terms).toEqual(terms.slice(0, PLAN_MAX_TERMS))
   })
 
   it('a string longer than PLAN_MAX_STRING_CHARS is dropped whole, never cut to fit (route F: x.length<=140)', () => {
     expect(PLAN_MAX_STRING_CHARS).toBe(140)
     const tooLong = 'a'.repeat(PLAN_MAX_STRING_CHARS + 1)
-    const result = parsePlan(JSON.stringify({ titles: [tooLong, 'Kork'], queries: [], terms: [] }))
+    const result = parsePlan(JSON.stringify({ titles: [tooLong, 'Kork'], queries: [] }))
     expect(result.titles).toEqual(['Kork'])
   })
 
   it('an empty or whitespace-only string is dropped', () => {
-    const result = parsePlan(JSON.stringify({ titles: ['', '   ', 'Kork'], queries: [], terms: [] }))
+    const result = parsePlan(JSON.stringify({ titles: ['', '   ', 'Kork'], queries: [] }))
     expect(result.titles).toEqual(['Kork'])
   })
 
   it('entries are trimmed', () => {
-    const result = parsePlan(JSON.stringify({ titles: ['  Kork  '], queries: [], terms: [] }))
+    const result = parsePlan(JSON.stringify({ titles: ['  Kork  '], queries: [] }))
     expect(result.titles).toEqual(['Kork'])
   })
 
   it('does NOT filter plan strings against the plain pattern\'s content-word lists (unlike the expander this replaces) — a plan title/query is used directly', () => {
     // "Liste" is a FRAME word for the plain `/search` pattern rewrite (query-rewrite.ts), but a
     // plan title naming a real "Liste der …" article must survive unfiltered.
-    const result = parsePlan(JSON.stringify({ titles: ['Liste der Vulkane'], queries: ['Liste Vulkane'], terms: [] }))
+    const result = parsePlan(JSON.stringify({ titles: ['Liste der Vulkane'], queries: ['Liste Vulkane'] }))
     expect(result.titles).toEqual(['Liste der Vulkane'])
     expect(result.queries).toEqual(['Liste Vulkane'])
   })
@@ -137,12 +136,12 @@ describe('parsePlan — defensively parsing the model reply (route F interpret()
     for await (const token of mock.chatStream(buildPlanMessages('Welche Länder stoßen am meisten CO2 aus?'))) {
       text += token
     }
-    expect(parsePlan(text)).toEqual({ titles: [], queries: [], terms: [] })
+    expect(parsePlan(text)).toEqual({ titles: [], queries: [] })
   })
 })
 
 describe('buildPlanMessages — the per-call prompt', () => {
-  it('is two messages: a system message naming JSON and all three fields, and the question verbatim', () => {
+  it('is two messages: a system message naming JSON and both fields, and the question verbatim', () => {
     const question = 'Welche Länder stoßen am meisten CO2 aus?'
     const messages = buildPlanMessages(question)
     expect(messages).toHaveLength(2)
@@ -151,7 +150,14 @@ describe('buildPlanMessages — the per-call prompt', () => {
     expect(system.content).toContain('JSON')
     expect(system.content).toContain('titles')
     expect(system.content).toContain('queries')
-    expect(system.content).toContain('terms')
+    // F1 part 1 (review 2026-09-14): route F's own "terms" field/sentence is dropped — never
+    // consumed, pure output-token cost. See the file header of `expand.ts`. (The prompt still
+    // legitimately says "search terms" in prose, so check for the field-listing shape instead.)
+    expect(system.content).not.toContain('relation/attribute terms')
+    expect(system.content).not.toMatch(/\bterms:\s/)
+    // F7 (review 2026-09-14): the prompt never mentions history — the arm never has any at this
+    // layer, so route F's "and its conversation history" clause was dead text.
+    expect(system.content).not.toContain('history')
     // Deliberately NOT a hardcoded target language (route F hardcodes German — its one archive
     // IS German Wikipedia; the product's packs are any language, see the file header).
     expect(system.content).toContain('language of the question')
@@ -167,11 +173,11 @@ describe('makeQueryExpander — the one bounded planner call', () => {
   })
 
   it('parses a JSON reply streamed in pieces and pins the call shape', async () => {
-    const rt = scripted(['{"titles":["Vulkan', 'ismus"],"querie', 's":[],"terms":[]}'])
+    const rt = scripted(['{"titles":["Vulkan', 'ismus"],"querie', 's":[]}'])
     const expander = makeQueryExpander(rt)
     expect(expander).not.toBeNull()
     const result = await expander!('Was ist das?')
-    expect(result).toEqual({ titles: ['Vulkanismus'], queries: [], terms: [] })
+    expect(result).toEqual({ titles: ['Vulkanismus'], queries: [] })
     expect(rt.calls).toBe(1)
     const o = rt.options[0]
     expect(o?.mode).toBe('fast')
@@ -184,7 +190,7 @@ describe('makeQueryExpander — the one bounded planner call', () => {
   it('a prose reply (no JSON) resolves the empty plan, not null — the call itself succeeded', async () => {
     const rt = scripted(['sorry, no structured output here'])
     const expander = makeQueryExpander(rt)
-    expect(await expander!('Was ist das?')).toEqual({ titles: [], queries: [], terms: [] })
+    expect(await expander!('Was ist das?')).toEqual({ titles: [], queries: [] })
   })
 
   it('a throwing runtime resolves null (the CALL failed)', async () => {
@@ -255,7 +261,7 @@ describe('makeQueryExpander — the one bounded planner call', () => {
         yield '{"titles":'
         ctrl.abort()
         if (options?.signal?.aborted) return
-        yield '["Vulkanismus"],"queries":[],"terms":[]}'
+        yield '["Vulkanismus"],"queries":[]}'
       }
     }
     const expander = makeQueryExpander(midAbort)
@@ -268,8 +274,7 @@ describe('makeQueryExpander — the one bounded planner call', () => {
     const expander = makeQueryExpander(mock)
     expect(await expander!('Welche Länder stoßen am meisten CO2 aus?')).toEqual({
       titles: [],
-      queries: [],
-      terms: []
+      queries: []
     })
   })
 })
@@ -283,8 +288,15 @@ describe('the planner bound stays inside the arm\'s per-ask deadline (#423, unch
     )
   })
 
-  it('PLAN_TIMEOUT_MS is unchanged at 12 s and PLAN_MAX_TOKENS matches route F\'s interpret() (220)', () => {
+  it('PLAN_TIMEOUT_MS is unchanged at 12 s', () => {
     expect(PLAN_TIMEOUT_MS).toBe(12_000)
-    expect(PLAN_MAX_TOKENS).toBe(220)
   })
 })
+
+// F1 (review 2026-09-14): PLAN_MAX_TOKENS sits at a PROVISIONAL 220 through this commit only so
+// run M can measure the untruncated planner-reply-length distribution on core200 (`docs/
+// rag-design.md` §17 F1 record). It is not yet a design pin — the #423 pairing this branch owes
+// (`PLAN_TIMEOUT_MS` and `PLAN_MAX_TOKENS`/`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC` constraining
+// each other, mirroring master's `EXPAND_TIMEOUT_MS`/`EXPAND_MAX_TOKENS`/
+// `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC`) is restored in the cap-decision commit that follows
+// run M, once the cap is set by the ruled formula from the measured p99.

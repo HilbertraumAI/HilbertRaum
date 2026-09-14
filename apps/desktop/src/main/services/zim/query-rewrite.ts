@@ -96,8 +96,11 @@ export interface SearchRewrite {
 export const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}-]*/gu
 
 /** True for a token the rewrite would KEEP — neither a function word nor a question-frame word.
- *  Shared with the #340 L3-b expansion (`expand.ts`), which sanitises the model's words with the
- *  same lists so an expansion can never re-introduce a word the plain pattern strips. */
+ *  Shared with `admit.ts`'s own `tokens()` (Phase 4 PR-A discovery port), which reuses this same
+ *  content-word rule for the admission gate's lexical-overlap escape rather than inventing a
+ *  second notion of "content word" (`docs/rag-design.md` §17 F5). The #340 L3-b expander this
+ *  module used to share a sanitising pass with was replaced by the discovery port's planner
+ *  (`expand.ts`), which no longer imports from here. */
 export function isContentWord(token: string): boolean {
   const key = token.toLowerCase()
   return !STOP_WORDS.has(key) && !FRAME_WORDS.has(key)

@@ -82,8 +82,11 @@ const LIST_TITLE_RE = /^(Liste |List of )/
  *  one archive — see the file header for why this arm applies the pair per pack instead). */
 export const DISCOVERY_MAX_READS_PER_PACK = 12
 export const DISCOVERY_MAX_ADMITTED_PER_PACK = 8
-/** Head-noun reads: at most this many SUCCESSFUL reads, and at most this many total `/suggest`
- *  probes across every candidate word tried (route F's 1a-i patch, ported verbatim). */
+/** Head-noun reads: at most this many ACCEPTED `/suggest` matches issued to `readHit` (F4, review
+ *  2026-09-14: counts acceptances, not admissions — a read that 404s, duplicates, or fails the
+ *  gate still spends its slot, exactly like the frozen 1a-i patch's unconditional `issued++`),
+ *  and at most this many total `/suggest` probes across every candidate word tried (route F's
+ *  1a-i patch, ported verbatim). */
 export const HEAD_NOUN_MAX_READS = 2
 export const HEAD_NOUN_MAX_TOTAL_PROBES = 12
 export const HEAD_NOUN_MAX_PROBES_PER_WORD = 6
@@ -287,7 +290,7 @@ export async function collectPackCandidates(
   // signal. Null/empty (no runtime, a non-JSON reply, the time bound, any failure) ⇒ discovery
   // proceeds with the plan-independent routes only; the ask's own abort propagates like every
   // other cancellation.
-  let plan: SearchPlan = { titles: [], queries: [], terms: [] }
+  let plan: SearchPlan = { titles: [], queries: [] }
   if (opts.expand) {
     try {
       const resolved = await opts.expand(question, signal)
@@ -367,22 +370,26 @@ export async function collectPackCandidates(
         return
       }
       fetchedOk++
-      // The admission gate (`admit.ts`) sees a bounded slice of the body — enough to catch the
-      // topic-conflict signal without scanning an arbitrarily large article.
-      const bodyText = article.segments
-        .slice(0, 20)
+      // The admission gate (`admit.ts`) sees TWO windows (F3): the narrow LEAD — route F's own
+      // first two prose segments — for the title/fiction/topic-conflict-pair checks, and the
+      // WIDE full segment text for the `explicitBiology` escape hatch only, so that rescue
+      // predicate keeps route F's whole-article reach instead of being bounded by the same
+      // window as the trap it exists to escape.
+      const leadText = article.segments
+        .slice(0, 2)
         .map((s) => s.text)
         .join(' ')
-        .slice(0, 4_000)
-      const admission = admitArticle(question, article.title ?? hit.title, bodyText, route)
+      const wideText = article.segments.map((s) => s.text).join(' ')
+      const admission = admitArticle(question, article.title ?? hit.title, leadText, wideText, route)
       if (!admission.admitted) return
       if (article.title !== null && admittedArticles.some((a) => a.article.title === article.title)) return
       admittedArticles.push({ article, hit })
     }
 
     try {
-      // STAGE 1 — head-noun reads (the ported 1a-i rule): up to `HEAD_NOUN_MAX_READS`
-      // successful reads, at most `HEAD_NOUN_MAX_TOTAL_PROBES` `/suggest` probes in total across
+      // STAGE 1 — head-noun reads (the ported 1a-i rule): up to `HEAD_NOUN_MAX_READS` accepted
+      // `/suggest` matches issued to `readHit` (F4 — accepted, not admitted; see the constant's
+      // own doc comment), at most `HEAD_NOUN_MAX_TOTAL_PROBES` `/suggest` probes in total across
       // every candidate word tried. Runs BEFORE the plan titles, exactly like route F's patch.
       if (expected !== undefined) {
         const words = germanCapitalizedNounTokens(question)
@@ -400,9 +407,14 @@ export async function collectPackCandidates(
           })
           totalProbes += res.probes
           if (res.accepted) {
-            const before = admittedArticles.length
+            // F4 (review 2026-09-14): counts ACCEPTANCES (a confirmed /suggest match), exactly
+            // like the frozen 1a-i patch (`prototype-a1.diff`: unconditional `issued++`), not
+            // ADMISSIONS. A read that 404s, duplicates an already-admitted title, or fails the
+            // gate still spends one of the two head-noun read slots — it must, or a run of such
+            // reads can consume the whole per-pack budget before a single plan title or FTS
+            // query is tried (demonstrated: 7 reads on one question against the cap of 2).
+            issued++
             await readHit(res.accepted, 'head-noun')
-            if (admittedArticles.length > before) issued++
           }
         }
       }
@@ -444,19 +456,47 @@ export async function collectPackCandidates(
       // STAGE 3 — full-text queries: the plan's own queries, then the plain pattern rewrite
       // LAST. The rank-1 hit of each query is read immediately; every hit (every rank) feeds
       // the same aggregate score pool.
+      //
+      // F2 (review 2026-09-14): two restorations from master's own no-plan fallback, gated
+      // exactly as master gated them — never on every ask.
+      //   (1) the #340 L3 length retry: when the PATTERN query itself (never a plan query)
+      //       finds zero hits, retry once with `rewrite.retry` (the kept terms of five or more
+      //       characters) if one exists — master's own trigger (`arm.ts:340` on master). A
+      //       failed retry fails soft, keeping the honest zero from the primary query; it is
+      //       not folded into `searchAttempts`/`searchFailures`, which track the primary query.
+      //   (2) the five-read no-plan reach: when the planner produced no titles and no queries
+      //       at all, the single pattern query IS the ask's entire discovery reach, so every hit
+      //       it returns (up to `FTS_HITS_PER_QUERY`, matching master's `ARTICLES_PER_PACK` = 5)
+      //       is read here, not just its rank-1 hit — otherwise a plan-less ask on this branch
+      //       reaches only 1 + FTS_TOP_UNSEEN_PASS (= 3) articles where master reached 5.
+      const noPlan = plan.titles.length === 0 && plan.queries.length === 0
       const queries = uniqueStrings([...plan.queries, rewrite.pattern])
       for (const q of queries) {
         searchAttempts++
         let hits: KiwixSearchHit[] = []
+        let searched = false
         try {
           hits = await searchPack(port, pack.id, q, FTS_HITS_PER_QUERY, signal)
+          searched = true
         } catch (err) {
           if (aborted()) throw new PackAbort(err)
           searchFailures++
           hits = []
         }
+        if (searched && hits.length === 0 && q === rewrite.pattern && rewrite.retry !== null) {
+          try {
+            hits = await searchPack(port, pack.id, rewrite.retry, FTS_HITS_PER_QUERY, signal)
+          } catch (err) {
+            if (aborted()) throw new PackAbort(err)
+            // Fail-soft: keep the honest zero the primary query already reported.
+          }
+        }
         hits.forEach((h, i) => addScore(h, i))
-        if (hits[0]) await readHit(hits[0], 'fts')
+        if (noPlan) {
+          for (const h of hits) await readHit(h, 'fts')
+        } else if (hits[0]) {
+          await readHit(hits[0], 'fts')
+        }
       }
 
       // STAGE 3b — the second top-2-by-aggregate-score pass, now over the FULL pool (title/
@@ -496,20 +536,17 @@ export async function collectPackCandidates(
 
     // Build this pack's candidates from the admitted articles, in discovery order — unchanged
     // chunking semantics (`html.ts`/`chunker.ts`): chunk, keep the query-overlap top slice
-    // (more for a LIST article), bounded by the pack's own fair-share quota. A LIST article's
-    // own share is additionally capped at half the pack's quota (never below CHUNKS_PER_ARTICLE,
-    // never above LIST_ARTICLE_CHUNKS) — on a small multi-pack quota this keeps one list-shaped
-    // article from filling the whole pack and starving every OTHER admitted article's chunks
-    // (the old expansion-vs-plain split enforced the same fairness with `expansionCap`; this is
-    // its generalisation now that discovery no longer distinguishes a source's route). On a
-    // single, large-quota pack — every acceptance measurement in this PR — the cap never binds
-    // (`Math.ceil(quota / 2)` already exceeds `LIST_ARTICLE_CHUNKS`).
-    const listCap = Math.min(LIST_ARTICLE_CHUNKS, Math.max(CHUNKS_PER_ARTICLE, Math.ceil(item.quota / 2)))
+    // (more for a LIST article: `LIST_ARTICLE_CHUNKS`, as on master), bounded by the pack's own
+    // fair-share quota. F6 (review 2026-09-14, dropped from this PR per the owner's ruling): an
+    // earlier version of this port additionally capped a LIST article's own share at
+    // `Math.ceil(quota / 2)` for multi-pack fairness — a real, unmeasured, untested multi-pack
+    // behaviour change outside this PR's scope (a LIST article always received the full
+    // `LIST_ARTICLE_CHUNKS` on master); reverted here, LIST_ARTICLE_CHUNKS restored unconditionally.
     for (const { article, hit } of admittedArticles) {
       if (item.candidates.length >= item.quota) break
       const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
       const title = article.title ?? hit.title
-      const wanted = LIST_TITLE_RE.test(title) ? listCap : CHUNKS_PER_ARTICLE
+      const wanted = LIST_TITLE_RE.test(title) ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
       const scored = chunks
         .map((c, i) => ({ c, i, overlap: overlapScore(c.text, terms) }))
         .sort((a, b) => b.overlap - a.overlap || a.i - b.i)

@@ -11,9 +11,9 @@ import { stripThinkBlocks } from '../chat'
 // ("Liste der Länder nach CO2-Emission"); a compound noun the question uses often does not
 // match the archive's own title spelling either. The measured research programme (steps 0.6,
 // 1a-i, 1c, 1g) found that a short, schema-constrained model call that proposes CANDIDATE
-// article titles, full-text queries and relation terms — never an answer, never a guessed
-// fact — recovers most of this gap; 1c additionally measured that turning the call off
-// roughly HALVES article-stage hits on English questions, so it stays unconditionally on.
+// article titles and full-text queries — never an answer, never a guessed fact — recovers most
+// of this gap; 1c additionally measured that turning the call off roughly HALVES article-stage
+// hits on English questions, so it stays unconditionally on.
 //
 // WHAT. `makeQueryExpander(runtime)` returns a function the arm calls ONCE per ask (never per
 // pack, and memoised across the one admitted retry — `index.ts`): a two-message prompt,
@@ -27,6 +27,11 @@ import { stripThinkBlocks } from '../chat'
 // query in its own right, so filtering it against the plain pattern's stop/frame-word lists
 // would defeat the point of asking the model for search vocabulary in the first place.
 //
+// F1 part 1 (review 2026-09-14): route F's own `terms` array (relation/attribute terms) is
+// DROPPED from the schema and the prompt — the arm never consumed it (a DEV49 iteration tried
+// wiring it into the chunk-overlap picker and measured no improvement), and it was pure
+// output-token cost on every planner call. See `docs/rag-design.md` §17 for the disclosure.
+//
 // Every CALL failure — no runtime, a timeout, a runaway reply, a transport error — resolves
 // null (arm.ts then discovers using only the plan-independent routes: the head-noun rule and
 // the plain `searchPattern` rewrite). The ONE exception is the ask's own cancellation, which
@@ -39,16 +44,27 @@ import { stripThinkBlocks } from '../chat'
 // target language would regress every non-German pack. See `docs/rag-design.md` §17 "Discovery
 // port (Phase 4 PR-A)" for the measured cost of this choice on the (German-only) acceptance
 // corpus's English-question half.
+//
+// F7 (review 2026-09-14, question-only): route F's prompt asks the model to "infer the intended
+// subject from the original question and its conversation history", but neither this call nor
+// `admit.ts`'s gate is ever given history at this layer (`buildPlanMessages` sends only the bare
+// question; `registerRagIpc.ts` hands the arm only the current turn's text) — the "conversation
+// history" clause was dead text in the prompt and is removed.
 
 /** What the model contributed for one question — route F's `plan` shape (`prototype.mjs`
- *  `planSchema`/`interpret()`), not the `{concepts,listTitle}` shape this replaces. */
+ *  `planSchema`/`interpret()`), not the `{concepts,listTitle}` shape this replaces.
+ *
+ *  F1 part 1 (review 2026-09-14): route F's own `terms` array is DROPPED here — a deliberate
+ *  deviation from route F, disclosed in `docs/rag-design.md` §17. Nothing in this arm ever
+ *  consumed `plan.terms` (a DEV49 iteration tried wiring it into the chunk-overlap picker and
+ *  measured no improvement — `steps/4-product-pr-discovery/report.md` deviation 4), and it was
+ *  one of the three fields the planner had to spend its output-token budget producing on every
+ *  ask, which is exactly the budget F1's cap decision is measured against. */
 export interface SearchPlan {
   /** Up to `PLAN_MAX_TITLES` candidate article titles or genuine aliases, for `/suggest`. */
   titles: string[]
   /** Up to `PLAN_MAX_QUERIES` full-text search queries (2-4 important words each). */
   queries: string[]
-  /** Up to `PLAN_MAX_TERMS` relation/attribute terms the question asks about. */
-  terms: string[]
 }
 
 /** One call per ask; resolves null on any failure except the ask's own abort (rethrown). A
@@ -63,12 +79,20 @@ export type QueryExpander = (question: string, signal?: AbortSignal) => Promise<
  * `zim-expand.test.ts` keeps pinning this against `EXTERNAL_RETRIEVAL_DEADLINE_MS`.
  */
 export const PLAN_TIMEOUT_MS = 12_000
-/** Output-token budget — route F's own `interpret()` call uses `maxTokens: 220`; the reply is
- *  three short arrays of German-or-question-language strings plus JSON framing. */
+/**
+ * Output-token budget. PROVISIONAL at 220 (route F's own `interpret()` `maxTokens`) — F1 (review
+ * 2026-09-14): this was raised 96 -> 220 from the expander it replaces while `PLAN_TIMEOUT_MS`
+ * stayed unchanged, and the two tests that pinned the bound and the cap against each other were
+ * deleted, so no CPU decode rate this project has ever measured could afford a maximum-length
+ * reply inside 12 s. Left at 220 here only long enough to run the harness's untruncated
+ * planner-length measurement (`docs/rag-design.md` §17 F1 record); the shipped value is set by
+ * the ruled formula from that measurement's p99 (`cap = min(104, smallest multiple of 8 >= p99 +
+ * 8)`), restored together with {@link PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC} and the two pins
+ * `zim-expand.test.ts` carries once more.
+ */
 export const PLAN_MAX_TOKENS = 220
 export const PLAN_MAX_TITLES = 3
 export const PLAN_MAX_QUERIES = 2
-export const PLAN_MAX_TERMS = 5
 /** Longest single plan string kept (route F's own `interpret()` parse: `x.length<=140`).
  *  Anything longer is dropped, not cut. */
 export const PLAN_MAX_STRING_CHARS = 140
@@ -78,11 +102,10 @@ const OUTPUT_CHAR_CAP = PLAN_MAX_TOKENS * 8
 export const PLAN_RESPONSE_SCHEMA: JsonSchema = {
   type: 'object',
   additionalProperties: false,
-  required: ['titles', 'queries', 'terms'],
+  required: ['titles', 'queries'],
   properties: {
     titles: { type: 'array', items: { type: 'string' }, maxItems: PLAN_MAX_TITLES },
-    queries: { type: 'array', items: { type: 'string' }, maxItems: PLAN_MAX_QUERIES },
-    terms: { type: 'array', items: { type: 'string' }, maxItems: PLAN_MAX_TERMS }
+    queries: { type: 'array', items: { type: 'string' }, maxItems: PLAN_MAX_QUERIES }
   }
 }
 
@@ -98,15 +121,13 @@ export function buildPlanMessages(question: string): ChatMessage[] {
       role: 'system',
       content:
         'Prepare a short Wikipedia search plan, not an answer, in the language of the question. ' +
-        'Infer the intended subject from the original question and its conversation history. ' +
+        'Infer the intended subject from the original question. ' +
         'titles: up to three likely article titles or genuine aliases, in the language of the ' +
         'question; queries: up to two concise full-text search queries of 2-4 important words, ' +
-        'in the language of the question, targeting all requested relations; terms: up to five ' +
-        'relation/attribute terms, in the language of the question. Preserve entity distinctions, ' +
-        'negations, dates, units and exclusions. Do not invent a private fact or supply guessed ' +
-        'answer facts as search terms. Terms are only the attributes actually asked about, never ' +
-        'proposed numeric answers, names of possible answers, or extra facts. An announced future ' +
-        'event may already be documented. Return JSON only.'
+        'in the language of the question, targeting all requested relations. Preserve entity ' +
+        'distinctions, negations, dates, units and exclusions. Do not invent a private fact or ' +
+        'supply guessed answer facts as search terms. An announced future event may already be ' +
+        'documented. Return JSON only.'
     },
     { role: 'user', content: question }
   ]
@@ -122,7 +143,7 @@ export function buildPlanMessages(question: string): ChatMessage[] {
  * not merged into the plain rewrite's own term list.
  */
 export function parsePlan(text: string): SearchPlan {
-  const empty: SearchPlan = { titles: [], queries: [], terms: [] }
+  const empty: SearchPlan = { titles: [], queries: [] }
   let parsed: unknown
   try {
     parsed = JSON.parse(stripThinkBlocks(text).trim())
@@ -131,7 +152,7 @@ export function parsePlan(text: string): SearchPlan {
   }
   if (typeof parsed !== 'object' || parsed === null || Array.isArray(parsed)) return empty
   const raw = parsed as Record<string, unknown>
-  const field = (key: 'titles' | 'queries' | 'terms', max: number): string[] => {
+  const field = (key: 'titles' | 'queries', max: number): string[] => {
     const value = raw[key]
     if (!Array.isArray(value)) return []
     const out: string[] = []
@@ -146,8 +167,7 @@ export function parsePlan(text: string): SearchPlan {
   }
   return {
     titles: field('titles', PLAN_MAX_TITLES),
-    queries: field('queries', PLAN_MAX_QUERIES),
-    terms: field('terms', PLAN_MAX_TERMS)
+    queries: field('queries', PLAN_MAX_QUERIES)
   }
 }
 

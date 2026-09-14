@@ -65,6 +65,21 @@ function bigArticleHtml(): string {
   ])
   return articleHtml('Grossartikel', sections)
 }
+
+/** F3 (review 2026-09-14) — a "…(Roman)"-titled article (title alone trips the fiction trap)
+ *  with 24 neutral filler sections BEFORE a "Biologie" section carrying `explicitBiology`
+ *  evidence: segment index ~25, well past the two-segment LEAD and past the old bounded
+ *  20-segment window. `evidence` false omits that section entirely (nothing to rescue it). */
+function romanArticleHtml(title: string, evidence: boolean): string {
+  const sections: Array<[string, string]> = Array.from({ length: 24 }, (_, i) => [
+    `Abschnitt ${i}`,
+    `Ein neutraler Abschnitt ohne Bezug zum gesuchten Thema, Nummer ${i}.`
+  ])
+  if (evidence) {
+    sections.push(['Biologie', 'Der Blutkreislauf wird von einem Systemherz und zwei Kiemenherzen angetrieben.'])
+  }
+  return articleHtml(title, sections)
+}
 /** Set by the fake sidecar once the big article's body has been written. */
 let bigArticleServed = false
 /** Every `/search` pattern the fixture server received, in order (#340 L3). Scoped to
@@ -153,8 +168,22 @@ beforeAll(async () => {
         res.end(searchXml(`book-${book}`, titles))
         return
       }
+      // F2 (review 2026-09-14) — the #340 L3 zero-hit length retry: the FULL pattern finds
+      // nothing, the narrower `retry` pattern (kept terms of 5+ chars only) finds one hit.
+      if (book === 'pack-f2-retry') {
+        const titles = pattern === 'Kohleausstieg' ? ['Kohleausstieg'] : []
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(searchXml(`book-${book}`, titles))
+        return
+      }
+      // F3 integration fixture, PROBE_TIMEOUT_MS fixture — isolate to the plan-title route.
+      if (book === 'pack-f3' || book === 'pack-slow-probe') {
+        res.writeHead(200, { 'content-type': 'application/xml' })
+        res.end(searchXml(`book-${book}`, []))
+        return
+      }
       // FTS never finds anything for this book — isolates the head-noun route (below).
-      if (book === 'pack-headnoun' || book === 'pack-headnoun2') {
+      if (book === 'pack-headnoun' || book === 'pack-headnoun2' || book === 'pack-headnoun3') {
         res.writeHead(200, { 'content-type': 'application/xml' })
         res.end(searchXml(`book-${book}`, []))
         return
@@ -222,6 +251,14 @@ beforeAll(async () => {
         res.end(JSON.stringify([{ value: 'Objekte (Begriff)', kind: 'path', path: 'Objekte_(Begriff)' }]))
         return
       }
+      // F4 (review 2026-09-14) — ACCEPTED but never ADMITTED: 'Ersto' and 'Zweito' both confirm
+      // EXACTLY via /suggest (so resolveHeadNoun accepts them), but their /raw reads 404 below.
+      // 'Dritto' would confirm too, but must never even be probed once the budget is spent.
+      if (content === 'book-pack-headnoun3' && (term === 'Ersto' || term === 'Zweito' || term === 'Dritto')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ value: term, kind: 'path', path: term }]))
+        return
+      }
       // Phase 4 PR-A read-budget legs — every `T<n>` candidate resolves via `/suggest`.
       if ((content === 'book-pack-budget-reads' || content === 'book-pack-budget-admit') && /^T\d+$/.test(term)) {
         res.writeHead(200, { 'content-type': 'application/json' })
@@ -232,6 +269,24 @@ beforeAll(async () => {
       if ((content === 'book-pack-budget-reads' || content === 'book-pack-budget-admit') && /^T\d+$/.test(term)) {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify([{ value: term, kind: 'path', path: term }]))
+        return
+      }
+      // F3 integration fixture (review 2026-09-14, test gap 2) — two "…(Roman)" plan titles,
+      // both exact-match their own /suggest term.
+      if (content === 'book-pack-f3' && (term === 'Kraken (Roman)' || term === 'Tintenfisch (Roman)')) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ value: term, kind: 'path', path: term.replace(/ /g, '_') }]))
+        return
+      }
+      // PROBE_TIMEOUT_MS behavioural test (review 2026-09-14, test gap 3): a /suggest response
+      // held well past any sane probe bound. A real answer eventually arrives (so a caller that
+      // does NOT respect the `probeTimeoutMs` seam would still pass, slowly) — the seam is what
+      // proves the client gives up at ITS bound rather than the server's.
+      if (content === 'book-pack-slow-probe' && term === 'Verzoegert') {
+        setTimeout(() => {
+          res.writeHead(200, { 'content-type': 'application/json' })
+          res.end(JSON.stringify([{ value: 'Verzoegert', kind: 'path', path: 'Verzoegert' }]))
+        }, 2_000)
         return
       }
       res.writeHead(404)
@@ -282,6 +337,23 @@ beforeAll(async () => {
       if (article === 'Kaputt') {
         res.writeHead(500)
         res.end('boom')
+        return
+      }
+      // F4 (review 2026-09-14): 'Ersto' and 'Zweito' both confirm EXACTLY via /suggest (an
+      // ACCEPTED head-noun candidate) but vanish at fetch time — never ADMITTED.
+      if (article === 'Ersto' || article === 'Zweito') {
+        res.writeHead(404)
+        res.end()
+        return
+      }
+      // F3 integration fixture (test gap 2): the biological evidence sits in the LAST section,
+      // segment index ~25 — well past the two-segment LEAD and the old bounded 20-segment window.
+      if (article === 'Kraken (Roman)') {
+        sendArticle(romanArticleHtml(article, true))
+        return
+      }
+      if (article === 'Tintenfisch (Roman)') {
+        sendArticle(romanArticleHtml(article, false))
         return
       }
       // One article big enough to need several converter slices (P1b), so an ask that is
@@ -788,12 +860,12 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
     suggestRequests.length = 0
     searchPatterns.length = 0
   }
-  const emptyPlan = (): SearchPlan => ({ titles: [], queries: [], terms: [] })
+  const emptyPlan = (): SearchPlan => ({ titles: [], queries: [] })
 
   describe('the planner (search plan)', () => {
     const packs = [{ id: 'pack-plan', title: 'Kraftwerke von Wikipedia' }]
     const names = new Map([['pack-plan', 'book-pack-plan']])
-    const PLAN: SearchPlan = { titles: [LIST_ARTICLE], queries: [PLAN_QUERY], terms: [] }
+    const PLAN: SearchPlan = { titles: [LIST_ARTICLE], queries: [PLAN_QUERY] }
 
     it('the plan runs ONCE per ask; its title (via /suggest, exact match) and query hits are read, plus the plain pattern rewrite LAST; a list article keeps more chunks', async () => {
       reset()
@@ -863,7 +935,7 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
     it('a failing title suggest costs only that title — the FTS routes still run', async () => {
       reset()
       const { candidates } = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
-        expand: async () => ({ titles: ['Liste kaputt'], queries: [PLAN_QUERY], terms: [] })
+        expand: async () => ({ titles: ['Liste kaputt'], queries: [PLAN_QUERY] })
       })
       expect(suggestRequests).toContainEqual({ content: 'book-pack-plan', term: 'Liste kaputt' })
       expect(rawReads).toEqual([PLAN_QUERY_HIT, 'Kohlekraftwerk', 'Kohleausstieg'])
@@ -889,7 +961,7 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
     it('a multi-word plan title admits its rank-0 /suggest hit even when the hit is a COMPLETELY unrelated article (route F\'s own predicate, ported byte-identical)', async () => {
       reset()
       const { candidates } = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
-        expand: async () => ({ titles: ['Ganz Anderes Thema'], queries: [], terms: [] })
+        expand: async () => ({ titles: ['Ganz Anderes Thema'], queries: [] })
       })
       expect(suggestRequests).toContainEqual({ content: 'book-pack-plan', term: 'Ganz Anderes Thema' })
       expect(rawReads).toContain('Voll Unrelated Artikel')
@@ -922,6 +994,63 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       ])
       expect(searchPatterns).toEqual([])
       expect(rawReads).toEqual([])
+    })
+  })
+
+  // F2 (review 2026-09-14): the #340 L3 zero-hit length retry, restored — master's own trigger
+  // (`arm.ts:340` on master), gated to the PATTERN query only and only on a genuine zero-hit
+  // search, never run on every ask. `zim-regressions.test.ts` T15's `emptySearches` leg (and the
+  // `sends the plain pattern rewrite` test above) both use questions whose `rewrite.retry` is
+  // null by construction (every kept term is already >= 5 chars) — this is the leg where it
+  // isn't, so the retry actually fires.
+  describe('the zero-hit length retry (F2)', () => {
+    it('retries once with the narrower `retry` pattern when the full pattern finds nothing, and reads what it finds', async () => {
+      reset()
+      const packs = [{ id: 'pack-f2-retry', title: 'Energie von Wikipedia' }]
+      const { candidates } = await collectPackCandidates(
+        port,
+        packs,
+        'Was ist Kohleausstieg und Erde?', // pattern: "Kohleausstieg Erde"; retry: "Kohleausstieg"
+        undefined,
+        undefined,
+        { expand: async () => ({ titles: [], queries: [] }) }
+      )
+      expect(searchPatterns).toEqual(['Kohleausstieg Erde', 'Kohleausstieg'])
+      expect(rawReads).toEqual(['Kohleausstieg'])
+      expect(candidates.some((c) => c.sourceTitle === 'Kohleausstieg')).toBe(true)
+    })
+  })
+
+  // F3 (review 2026-09-14, test gap 2): "nothing drives the arm's real `bodyText` construction
+  // through the gate" — the CASE A/B fixtures in `zim-admit.test.ts` call `admitArticle`
+  // directly with hand-built windows; this drives the REAL fetch -> segments -> arm's own
+  // lead/wide construction -> `admitArticle` path end to end, through `collectPackCandidates`.
+  describe('the admission gate sees the arm\'s REAL two windows (F3, end to end)', () => {
+    const packs = [{ id: 'pack-f3', title: 'Meerestiere von Wikipedia' }]
+    const names = new Map([['pack-f3', 'book-pack-f3']])
+    const QUESTION = 'Wie funktioniert das Herz eines Oktopus?' // biology signal: "Herz" + "Oktopus"
+
+    it('admits a "…(Roman)"-titled article (title alone trips the fiction trap) whose ONLY biological evidence sits ~25 segments deep — the wide window has no cap', async () => {
+      reset()
+      const { candidates, outcomes } = await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+        expand: async () => ({ titles: ['Kraken (Roman)'], queries: [] })
+      })
+      expect(rawReads).toEqual(['Kraken (Roman)'])
+      expect(candidates.some((c) => c.sourceTitle === 'Kraken (Roman)')).toBe(true)
+      // "admitted" here is a CHUNK count (`allocateCandidates` operates on chunk-level
+      // candidates), so it is > 0 once the one admitted article contributes its chunks.
+      expect(outcomes[0]).toMatchObject({ packId: 'pack-f3', status: 'searched', reason: null })
+      expect(outcomes[0]!.admitted).toBeGreaterThan(0)
+    })
+
+    it('refuses the SAME fiction-flavoured shape when NO biological evidence exists anywhere in the article', async () => {
+      reset()
+      const { candidates, outcomes } = await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+        expand: async () => ({ titles: ['Tintenfisch (Roman)'], queries: [] })
+      })
+      expect(rawReads).toEqual(['Tintenfisch (Roman)']) // fetched, then refused by the gate
+      expect(candidates).toEqual([])
+      expect(outcomes[0]).toMatchObject({ packId: 'pack-f3', admitted: 0, found: 0 })
     })
   })
 
@@ -988,6 +1117,34 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       expect(candidates).toEqual([])
       expect(outcomes[0]).toMatchObject({ packId: 'pack-headnoun2', status: 'searched', reason: null, found: 0 })
     })
+
+    // F4 (review 2026-09-14, test gap 1): `issued` must count ACCEPTANCES (a confirmed /suggest
+    // match), not ADMISSIONS — a read that 404s still spent one of the two head-noun slots. Two
+    // words ("Erstos", "Zweitos") both confirm EXACTLY via /suggest but 404 at fetch, so neither
+    // is ever admitted; a THIRD word ("Drittos") would ALSO confirm exactly (proven by the same
+    // fixture accepting its stripped form on request), but must never even be PROBED once the
+    // two-read budget is spent — with the pre-fix code (`issued++` gated on admission) all three
+    // words would be probed and read, since nothing was ever admitted to trip the counter.
+    it('a head-noun candidate ACCEPTED via /suggest but never ADMITTED (404 at fetch) still spends its read slot — the cap stops discovery before a third, resolvable word is even probed', async () => {
+      reset()
+      const packs = [{ id: 'pack-headnoun3', title: 'Zahlwoerter von Wikipedia' }]
+      const names = new Map([['pack-headnoun3', 'book-pack-headnoun3']])
+      const { candidates, outcomes } = await collectPackCandidates(
+        port,
+        packs,
+        'Was sind Erstos und Zweitos und Drittos?',
+        undefined,
+        names,
+        { expand: async () => emptyPlan() }
+      )
+      expect(suggestRequests).toContainEqual({ content: 'book-pack-headnoun3', term: 'Ersto' })
+      expect(suggestRequests).toContainEqual({ content: 'book-pack-headnoun3', term: 'Zweito' })
+      // The budget-exhausting proof: the third, equally resolvable word is never even asked.
+      expect(suggestRequests.some((r) => r.content === 'book-pack-headnoun3' && r.term === 'Dritto')).toBe(false)
+      expect(rawReads).toEqual(['Ersto', 'Zweito'])
+      expect(candidates).toEqual([])
+      expect(outcomes[0]).toMatchObject({ packId: 'pack-headnoun3', status: 'failed', reason: 'read-failed' })
+    })
   })
 
   describe('the per-pack read budget', () => {
@@ -998,7 +1155,7 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       const packs = [{ id: 'pack-budget-reads', title: 'Budget reads' }]
       const names = new Map([['pack-budget-reads', 'book-pack-budget-reads']])
       const { candidates, outcomes } = await collectPackCandidates(port, packs, 'wie viel kostet das?', undefined, names, {
-        expand: async () => ({ titles, queries: [], terms: [] })
+        expand: async () => ({ titles, queries: [] })
       })
       expect(rawReads).toHaveLength(DISCOVERY_MAX_READS_PER_PACK)
       expect(candidates).toEqual([])
@@ -1015,7 +1172,7 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       const packs = [{ id: 'pack-budget-admit', title: 'Budget admits' }]
       const names = new Map([['pack-budget-admit', 'book-pack-budget-admit']])
       const { outcomes } = await collectPackCandidates(port, packs, 'wie viel kostet das?', undefined, names, {
-        expand: async () => ({ titles, queries: [], terms: [] })
+        expand: async () => ({ titles, queries: [] })
       })
       expect(rawReads).toHaveLength(DISCOVERY_MAX_ADMITTED_PER_PACK)
       expect(outcomes[0]).toMatchObject({ packId: 'pack-budget-admit', status: 'searched', reason: null })
@@ -1045,6 +1202,35 @@ describe('the discovery read budget and pass sizes (Phase 4 PR-A)', () => {
     // The read cap stays above the admitted cap: an admission-gate-heavy question (many reads,
     // few admits) must still be able to try up to the full read budget.
     expect(DISCOVERY_MAX_READS_PER_PACK).toBeGreaterThan(DISCOVERY_MAX_ADMITTED_PER_PACK)
+  })
+
+  // Review 2026-09-14, test gap 3: `PROBE_TIMEOUT_MS` (and its `probeTimeoutMs` test seam) had
+  // no BEHAVIOURAL test — only its value was pinned above. A slow `/suggest` sitting out the
+  // client's 15 s default under the arm's single 20 s per-ask deadline would starve every pack
+  // still waiting its turn at `PACK_SEARCH_CONCURRENCY`; this proves the seam actually cuts a
+  // slow probe off at ITS bound, not the server's, and that discovery still completes cleanly —
+  // no hang, no throw, just no hit for that title (`docs/packaging.md`'s own `probeTimeoutMs`
+  // seam record for this exact shape).
+  it('a /suggest lookup held well past PROBE_TIMEOUT_MS is cut off at the probeTimeoutMs seam, not the server — discovery completes without that title\'s hit', async () => {
+    rawReads.length = 0
+    const packs = [{ id: 'pack-slow-probe', title: 'Langsam' }]
+    const names = new Map([['pack-slow-probe', 'book-pack-slow-probe']])
+    const t0 = Date.now()
+    const { candidates, outcomes } = await collectPackCandidates(
+      port,
+      packs,
+      'Was bedeutet das?',
+      undefined,
+      names,
+      { expand: async () => ({ titles: ['Verzoegert'], queries: [] }), probeTimeoutMs: 50 }
+    )
+    const elapsedMs = Date.now() - t0
+    // The seam's bound (50 ms), never the fixture's 2,000 ms delay, decided this.
+    expect(elapsedMs).toBeLessThan(1_500)
+    expect(rawReads).not.toContain('Verzoegert')
+    expect(candidates.every((c) => c.sourceTitle !== 'Verzoegert')).toBe(true)
+    // No hang, no throw: the pack still settles cleanly (a zero-hit search, nothing to admit).
+    expect(outcomes[0]).toMatchObject({ packId: 'pack-slow-probe', status: 'searched', reason: null, found: 0 })
   })
 })
 

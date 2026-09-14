@@ -56,7 +56,6 @@ import { t, tCount as tCountShared } from '../../src/shared/i18n'
 import type { I18n } from '../../src/renderer/i18n'
 import {
   FTS_HITS_PER_QUERY,
-  FTS_TOP_UNSEEN_PASS,
   MAX_EXTERNAL_CANDIDATES,
   collectPackCandidates,
   packQuota,
@@ -1753,10 +1752,14 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       if (n >= 3) expect(candidates, `N = ${n}`).toHaveLength(MAX_EXTERNAL_CANDIDATES)
       // A single pack is bounded by the discovery routes' own reach, not by the 24-candidate
       // ceiling: with no plan, discovery here is FTS-only (no plan titles, and this fixture
-      // answers no `/suggest` route, so the head-noun probes never accept anything) — the
-      // rank-1 hit of the one query, plus `FTS_TOP_UNSEEN_PASS` more by aggregate score.
+      // answers no `/suggest` route, so the head-noun probes never accept anything). F2 (review
+      // 2026-09-14): restored master's own no-plan reach — with NO titles and NO queries at all,
+      // the single pattern query IS the ask's entire discovery reach, so every hit it returns is
+      // read (up to `FTS_HITS_PER_QUERY`, matching master's `ARTICLES_PER_PACK` = 5), not just
+      // its rank-1 hit plus a top-2-unseen pass (which would only reach 1 + FTS_TOP_UNSEEN_PASS
+      // = 3, one short of master's own no-plan reach on this exact fixture).
       if (n === 1) {
-        expect(t15Requests.filter((r) => r.startsWith('/raw/'))).toHaveLength(1 + FTS_TOP_UNSEEN_PASS)
+        expect(t15Requests.filter((r) => r.startsWith('/raw/'))).toHaveLength(FTS_HITS_PER_QUERY)
       }
     }
 
