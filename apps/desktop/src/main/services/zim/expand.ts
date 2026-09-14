@@ -36,9 +36,9 @@ import { stripThinkBlocks } from '../chat'
 // question" (route F's own prompt hardcodes German, because route F's one archive IS German
 // Wikipedia) — the product's knowledge packs are ANY language a user adds
 // (`docs/knowledge-packs.md`: "Wikipedia in about a hundred languages"), so hardcoding a
-// target language would regress every non-German pack. See the PR body / report.md
-// "Deviations" for the measured cost of this choice on the (German-only) acceptance corpus's
-// English-question half.
+// target language would regress every non-German pack. See `docs/rag-design.md` §17 "Discovery
+// port (Phase 4 PR-A)" for the measured cost of this choice on the (German-only) acceptance
+// corpus's English-question half.
 
 /** What the model contributed for one question — route F's `plan` shape (`prototype.mjs`
  *  `planSchema`/`interpret()`), not the `{concepts,listTitle}` shape this replaces. */

@@ -22,22 +22,17 @@
 // semantics one short generic word can still zero a query, and one extra ~100 ms request is
 // cheaper than a "not found" the archive would have answered.
 //
-// #353 amendment. The length-based `retry` cannot help a pattern whose terms are ALL already
-// `RETRY_MIN_TERM_CHARS` or longer — a single pack-rare or misspelled five-plus-character word
-// (e.g. "eigenschaftn") still ANDs the query to zero, and no boolean flag exists to drop it
-// deliberately (libzim 9.4.0's Xapian query parser, see above). `narrowByFrequency` is the pure
-// decision at the bottom of that last-resort ladder: given each term's own archive-wide hit
-// COUNT (`arm.ts` probes it via `client.ts` `searchPackTotal`, `pageLength=1`, up to
-// `DF_PROBE_MAX_TERMS` of them — every term beyond that cap is simply never probed and is KEPT,
-// same as any other term `narrowByFrequency` was not told a count for), it picks the one term
-// most likely responsible and returns the pattern without it — or null when there is nothing
-// left to try or nothing worth dropping. A probe that THROWS (a non-200, a timeout) abandons the
-// whole ladder before `narrowByFrequency` is even called — it never turns into an "unknown"
-// entry — so the only terms that can be genuinely "unknown" to it are ones past the cap or ones
-// whose own probe resolved with no parseable total. `docs/rag-design.md` §17 D-Z18 carries the
-// amendment record. `searchPattern` reports `terms`/`retryTerms` alongside `pattern`/`retry` so
-// the ladder probes the TOKENS Xapian actually saw, never a naive re-split of the pattern string
-// (which would probe raw punctuation for a fallback like "Was ist das?").
+// #353 amendment (historical). A #353 document-frequency ladder once sat downstream of the
+// length-based `retry` here (`narrowByFrequency`, probed via `client.ts` `searchPackTotal`) for
+// the case where a pattern's terms were ALL already `RETRY_MIN_TERM_CHARS` or longer. Phase 4
+// PR-A's discovery port (`docs/rag-design.md` §17 "Discovery port (Phase 4 PR-A)") replaced
+// `arm.ts`'s single-pattern-with-retry search with route F's multi-query FTS (the plan's own
+// queries plus this module's `pattern` as the last query), which does not retry a zero-hit
+// pattern by term frequency — the ladder's only caller — so `narrowByFrequency` and
+// `DF_PROBE_MAX_TERMS` were removed with it. `searchPattern` still reports `terms`/`retryTerms`
+// alongside `pattern`/`retry` (the length-based retry stays available as a general utility),
+// so the ladder's own probes, if ever revived, would still probe the TOKENS Xapian actually
+// saw, never a naive re-split of the pattern string.
 
 /** German + English function words (articles, pronouns, prepositions, auxiliaries, …). */
 const STOP_WORDS = new Set<string>(
@@ -127,46 +122,3 @@ export function searchPattern(question: string): SearchRewrite {
   return { pattern, terms: kept, retry, retryTerms: retry !== null ? longer : [], rewritten: pattern !== raw }
 }
 
-/** How many of the last pattern's terms the #353 document-frequency ladder probes, at most — a
- *  bound on requests (one per term, sequential), not a claim that a longer pattern is rare. */
-export const DF_PROBE_MAX_TERMS = 6
-
-/**
- * #353: which term the document-frequency ladder should drop, given each term's archive-wide
- * hit COUNT (`df`, from `client.ts` `searchPackTotal`, `pageLength=1`). A term ABSENT from `df`
- * — never sent because it was past the `DF_PROBE_MAX_TERMS` cap, or its own probe resolved with
- * no parseable total — is KEPT and never treated as the lowest: dropping a term we know nothing
- * about could just as easily remove the one word that mattered. (A probe that THROWS — a
- * non-200, a timeout — abandons the whole ladder before this function is ever called; it is not
- * how a term ends up "absent" here.)
- *
- * Rule: drop every term whose df is exactly 0 (Xapian's AND can never find it — a typo or a
- * word truly absent from the archive); when no term has df 0, drop the SINGLE lowest-df term
- * instead (the rarest-but-present word is the next best guess for what emptied the query), ties
- * broken by dropping the LAST such term in encounter order — a subject word usually leads a
- * German or English question, so keeping the earliest survivor favours the subject.
- *
- * Returns null when fewer than one term would remain, or when nothing qualified to drop (no
- * term has df 0 AND no term has a known df at all).
- */
-export function narrowByFrequency(terms: readonly string[], df: ReadonlyMap<string, number>): string | null {
-  const zero = terms.filter((t) => df.get(t) === 0)
-  let survivors: string[]
-  if (zero.length > 0) {
-    survivors = terms.filter((t) => df.get(t) !== 0)
-  } else {
-    let lowestIndex = -1
-    let lowest = Infinity
-    for (let i = 0; i < terms.length; i++) {
-      const d = df.get(terms[i]!)
-      if (d === undefined) continue
-      if (d <= lowest) {
-        lowest = d
-        lowestIndex = i
-      }
-    }
-    if (lowestIndex === -1) return null // no term has a known df: nothing qualifies to drop
-    survivors = terms.filter((_, i) => i !== lowestIndex)
-  }
-  return survivors.length >= 1 ? survivors.join(' ') : null
-}

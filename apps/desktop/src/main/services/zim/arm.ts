@@ -40,7 +40,8 @@ import { searchPattern } from './query-rewrite'
 // the ask's own signal as `opts.askSignal`. That pair is what lets this module tell a
 // CANCELLATION (the user's, or a lock) from the DEADLINE.
 //
-// PER-PACK budget (a documented adaptation, see report.md "Deviations"): route F's `discover()`
+// PER-PACK budget (a documented adaptation — `docs/rag-design.md` §17 "Discovery port (Phase 4
+// PR-A)"): route F's `discover()`
 // bounds ONE archive per question (≤14 reads / ≤8 admitted articles); the product can have
 // several packs selected for one ask, so the budget below is applied PER PACK, mirroring how
 // `packQuota` already scoped fetching per pack before this port. A single-pack ask — every
@@ -214,8 +215,12 @@ export function withinReadBudget(reads: number, admitted: number, limits: ReadBu
   return reads < limits.maxReads && admitted < limits.maxAdmitted
 }
 
-/** One aggregate-scored discovery candidate — fed by both the title/head-noun suggest hits and
- *  the FTS hits, exactly like route F's shared `candidates` map (`prototype.mjs` `add()`). */
+/** One aggregate-scored discovery candidate — fed by the plan-title suggest hits and the FTS
+ *  hits, exactly like route F's shared `candidates` map (`prototype.mjs` `add()`). NEVER fed by
+ *  the head-noun rule (STAGE 1, below): the frozen 1a-i patch (`prototype-a1.diff`) reads its
+ *  accepted candidate directly and logs it to its own trace, but never calls `add()` either —
+ *  a head-noun hit (accepted or a near-miss `/suggest` row that did not confirm exactly) never
+ *  entered route F's shared pool, so this port does not either. */
 interface ScoredHit {
   hit: KiwixSearchHit
   score: number
@@ -491,12 +496,20 @@ export async function collectPackCandidates(
 
     // Build this pack's candidates from the admitted articles, in discovery order — unchanged
     // chunking semantics (`html.ts`/`chunker.ts`): chunk, keep the query-overlap top slice
-    // (more for a LIST article), bounded by the pack's own fair-share quota.
+    // (more for a LIST article), bounded by the pack's own fair-share quota. A LIST article's
+    // own share is additionally capped at half the pack's quota (never below CHUNKS_PER_ARTICLE,
+    // never above LIST_ARTICLE_CHUNKS) — on a small multi-pack quota this keeps one list-shaped
+    // article from filling the whole pack and starving every OTHER admitted article's chunks
+    // (the old expansion-vs-plain split enforced the same fairness with `expansionCap`; this is
+    // its generalisation now that discovery no longer distinguishes a source's route). On a
+    // single, large-quota pack — every acceptance measurement in this PR — the cap never binds
+    // (`Math.ceil(quota / 2)` already exceeds `LIST_ARTICLE_CHUNKS`).
+    const listCap = Math.min(LIST_ARTICLE_CHUNKS, Math.max(CHUNKS_PER_ARTICLE, Math.ceil(item.quota / 2)))
     for (const { article, hit } of admittedArticles) {
       if (item.candidates.length >= item.quota) break
       const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
       const title = article.title ?? hit.title
-      const wanted = LIST_TITLE_RE.test(title) ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
+      const wanted = LIST_TITLE_RE.test(title) ? listCap : CHUNKS_PER_ARTICLE
       const scored = chunks
         .map((c, i) => ({ c, i, overlap: overlapScore(c.text, terms) }))
         .sort((a, b) => b.overlap - a.overlap || a.i - b.i)

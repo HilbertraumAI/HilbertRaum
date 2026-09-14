@@ -1,13 +1,17 @@
 import { suggestTitles, type KiwixSearchHit } from './client'
-import { isContentWord } from './query-rewrite'
+import { TOKEN_RE, isContentWord } from './query-rewrite'
 
 // The head-noun candidate rule (step 1a-i "A1", frozen `head-noun-rule.mjs`, ported here
 // verbatim in behaviour) — Phase 4 PR-A, `docs/rag-design.md` §17 "Discovery port (Phase 4
 // PR-A)". A German compound noun's HEAD is usually its rightmost component
 // ("Gezeitenberg" -> "Gezeiten", "Tischtennisball" -> "Tischtennis"): when the exact
 // question-noun does not resolve, trying the head alone against the title index catches a
-// title the full compound never matches. German only (see `germanCapitalizedNounTokens`) —
-// the compound-splitting/inflection heuristics below assume German morphology.
+// title the full compound never matches. The candidate WORDS come from
+// `germanCapitalizedNounTokens`, which runs unconditionally (the arm has no per-question
+// language signal to gate on) — the compound-splitting/inflection rules below assume German
+// morphology, so on a non-German question this simply tends to find fewer/no candidates
+// (most non-German words fail every rule and degrade to no probe at all, see `candidates()`),
+// never something actively wrong.
 
 const SUFFIXES = ['en', 'es', 's', 'n'] // longest first; ties keep this listed order
 const FUGEN = new Set(['s', 'n', 'e'])
@@ -80,11 +84,12 @@ export function candidates(w: string): string[] {
   return out
 }
 
-/** Capitalised noun tokens of a German question, in question order: tokens starting with an
- *  uppercase Unicode letter, length > 2, and not a stop/frame word (German declarative and
- *  interrogative sentences capitalise every common noun, so this approximates "noun token"
- *  without a POS tagger). */
-const TOKEN_RE = /[\p{L}\p{N}][\p{L}\p{N}-]*/gu
+/** Capitalised noun tokens of a question, in question order: tokens starting with an uppercase
+ *  Unicode letter, length > 2, and not a stop/frame word (German declarative and interrogative
+ *  sentences capitalise every common noun, so this approximates "noun token" without a POS
+ *  tagger on German text; on other languages it degrades to ordinary proper-noun capture, which
+ *  is harmless — the arm has no language signal at this layer to gate on, so this runs for
+ *  every question regardless of language, exactly like the plain pattern rewrite it sits beside). */
 export function germanCapitalizedNounTokens(question: string): string[] {
   const out: string[] = []
   const seen = new Set<string>()

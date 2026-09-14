@@ -154,7 +154,7 @@ beforeAll(async () => {
         return
       }
       // FTS never finds anything for this book — isolates the head-noun route (below).
-      if (book === 'pack-headnoun') {
+      if (book === 'pack-headnoun' || book === 'pack-headnoun2') {
         res.writeHead(200, { 'content-type': 'application/xml' })
         res.end(searchXml(`book-${book}`, []))
         return
@@ -198,12 +198,34 @@ beforeAll(async () => {
         res.end('boom')
         return
       }
+      // A multi-word plan title whose rank-0 /suggest hit is a COMPLETELY unrelated article —
+      // route F's own predicate (`multiWord && hidx===0`) admits it anyway, byte-identical.
+      if (content === 'book-pack-plan' && term === 'Ganz Anderes Thema') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ value: 'Voll Unrelated Artikel', kind: 'path', path: 'Voll_Unrelated_Artikel' }]))
+        return
+      }
       // Phase 4 PR-A STAGE 1 — the head-noun rule's candidates (see the arm test below: the
       // LONGEST matching suffix wins, so "Bikes" -> "Bik", not "Bike").
       if (content === 'book-pack-headnoun' && (term === 'Testo' || term === 'Bik')) {
         const article = term === 'Testo' ? 'Testo' : 'Bik'
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify([{ value: article, kind: 'path', path: article }]))
+        return
+      }
+      // A head-noun NEAR MISS — a real /suggest hit exists but is not an exact match, so
+      // `resolveHeadNoun` does not accept it. Used to prove head-noun hits never enter the
+      // aggregate score pool (unlike title/FTS hits): if they did, this hit would surface via
+      // a later top-2-unseen pass even though it was never accepted.
+      if (content === 'book-pack-headnoun2' && term === 'Obje') {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ value: 'Objekte (Begriff)', kind: 'path', path: 'Objekte_(Begriff)' }]))
+        return
+      }
+      // Phase 4 PR-A read-budget legs — every `T<n>` candidate resolves via `/suggest`.
+      if ((content === 'book-pack-budget-reads' || content === 'book-pack-budget-admit') && /^T\d+$/.test(term)) {
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify([{ value: term, kind: 'path', path: term }]))
         return
       }
       // Phase 4 PR-A read-budget legs — every `T<n>` candidate resolves via `/suggest`.
@@ -855,6 +877,25 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       expect(rawReads).toEqual([PLAN_QUERY_HIT, 'Kohlekraftwerk', 'Kohleausstieg'])
     })
 
+    // Orchestrator verification finding, ruled PLAUSIBLE-NOT-A-DEFECT: for a MULTI-WORD plan
+    // title, `discover()`'s own admission predicate treats the rank-0 `/suggest` hit as a match
+    // UNCONDITIONALLY (`title.includes(' ') && hidx === 0`), regardless of how similar the hit
+    // actually is to the title asked for — byte-identical to `prototype.mjs`'s own condition.
+    // Kept as ported (fidelity to the measured harness is the brief's criterion, not a design
+    // preference introduced here); this test pins the behaviour explicitly rather than leaving
+    // it implicit. See report.md "Open questions for the next step" — PR-B's review should
+    // decide whether this is worth tightening, given the downstream `admit.ts` gate only
+    // screens for topic-conflict, never for "is this actually the right article".
+    it('a multi-word plan title admits its rank-0 /suggest hit even when the hit is a COMPLETELY unrelated article (route F\'s own predicate, ported byte-identical)', async () => {
+      reset()
+      const { candidates } = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
+        expand: async () => ({ titles: ['Ganz Anderes Thema'], queries: [], terms: [] })
+      })
+      expect(suggestRequests).toContainEqual({ content: 'book-pack-plan', term: 'Ganz Anderes Thema' })
+      expect(rawReads).toContain('Voll Unrelated Artikel')
+      expect(candidates.some((c) => c.sourceTitle === 'Voll Unrelated Artikel')).toBe(true)
+    })
+
     it('the per-ask DEADLINE elapsing during the planner call is an outcome, never a cancellation — every pack settles deadline, nothing is searched', async () => {
       reset()
       const deadline = new AbortController()
@@ -916,6 +957,36 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       reset()
       await collectPackCandidates(port, packs, QUESTION, undefined, undefined, { expand: async () => emptyPlan() })
       expect(suggestRequests).toEqual([])
+    })
+
+    // Orchestrator verification finding: does a head-noun probe's HIT feed the aggregate score
+    // pool the title/FTS routes share (so a later top-2-unseen pass could read it even when it
+    // was never "accepted")? Checked against the frozen research artifact,
+    // `steps/1a-i-title-grounding/artifacts/harness/prototype-a1.diff`: the A1 patch reads its
+    // OWN accepted candidate directly (`await read(target,'head-noun')`) and logs the attempt to
+    // `headNoun.log` — it never calls `add()`, route F's shared-pool sink, for ANY head-noun
+    // result, accepted or not. This port matches that: STAGE 1 never calls `addScore`. This test
+    // pins it with a genuine near miss — a real `/suggest` hit exists (so there is something a
+    // buggy future edit COULD score) but is not an exact match, so `resolveHeadNoun` refuses it;
+    // with FTS returning nothing for this pack, the ONLY way the hit could ever be read is via a
+    // top-2-unseen pass finding it in the pool — which must never happen.
+    it('a head-noun NEAR MISS (a real /suggest hit that does not confirm exactly) is never fed into the score pool, so it is never read via a later top-2-unseen pass', async () => {
+      reset()
+      const nearMissPacks = [{ id: 'pack-headnoun2', title: 'Objekte von Wikipedia' }]
+      const nearMissNames = new Map([['pack-headnoun2', 'book-pack-headnoun2']])
+      const { candidates, outcomes } = await collectPackCandidates(
+        port,
+        nearMissPacks,
+        'Was sind Objekte?', // -> head-noun candidate "Obje" (see zim-head-noun.test.ts)
+        undefined,
+        nearMissNames,
+        { expand: async () => emptyPlan() }
+      )
+      expect(suggestRequests).toContainEqual({ content: 'book-pack-headnoun2', term: 'Obje' })
+      // The near-miss hit was FOUND but never read, from any route.
+      expect(rawReads).toEqual([])
+      expect(candidates).toEqual([])
+      expect(outcomes[0]).toMatchObject({ packId: 'pack-headnoun2', status: 'searched', reason: null, found: 0 })
     })
   })
 

@@ -358,8 +358,7 @@ export async function searchPack(
 /**
  * Parse the OpenSearch `<opensearch:totalResults>` count a `format=xml` search response
  * carries — the archive-wide hit count for the pattern, independent of the `pageLength` asked
- * for. Null when the element is absent or its content does not parse as a non-negative integer
- * (#353 document-frequency ladder — the ladder treats "unknown" and "absent" the same way).
+ * for. Null when the element is absent or its content does not parse as a non-negative integer.
  */
 export function parseSearchTotal(xml: string): number | null {
   const m = /<opensearch:totalResults>([^<]*)<\/opensearch:totalResults>/.exec(xml)
@@ -369,19 +368,20 @@ export function parseSearchTotal(xml: string): number | null {
 /**
  * The archive-wide hit COUNT for one term, via the same `/search` route as `searchPack` with
  * `pageLength=1` — the smallest page that still makes kiwix-serve compute and report the total.
- * This is the document-frequency PROBE the #353 ladder uses to narrow a pattern that found
- * nothing (`arm.ts` `runPack`, `query-rewrite.ts` `narrowByFrequency`). Same failure contract as
- * `searchPack`: throws on a non-200 status OR a timeout; resolves `null` when the response lacks
- * (or does not parse) `<opensearch:totalResults>`.
+ * Originally the document-frequency probe the #353 ladder used to narrow a zero-hit pattern
+ * (removed at Phase 4 PR-A along with its only caller, `arm.ts`'s old single-pattern-with-retry
+ * search — `docs/rag-design.md` §17 "Discovery port (Phase 4 PR-A)"); kept as a general
+ * archive-wide-count client function (used by the `zim-real.test.ts` manual smoke). Same
+ * failure contract as `searchPack`: throws on a non-200 status OR a timeout; resolves `null`
+ * when the response lacks (or does not parse) `<opensearch:totalResults>`.
  */
 export async function searchPackTotal(
   port: number,
   bookUuid: string,
   pattern: string,
   signal?: AbortSignal,
-  /** The probe's own per-request timeout (`arm.ts` `DF_PROBE_TIMEOUT_MS`) — deliberately
-   *  shorter than `DEFAULT_TIMEOUT_MS`, so one stalled probe cannot sit out the client's whole
-   *  15 s default under the arm's single 20 s per-ask deadline. Production always sets it. */
+  /** The probe's own per-request timeout — deliberately shorter than `DEFAULT_TIMEOUT_MS` for a
+   *  caller that fires several of these in a tight per-ask budget. Test seam otherwise. */
   opts: { timeoutMs?: number } = {}
 ): Promise<number | null> {
   const path =
