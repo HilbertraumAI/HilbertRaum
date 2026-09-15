@@ -27,21 +27,35 @@ import { norm } from './head-noun'
 // inside AND past that window). `admitArticle` now takes the narrow lead and the wide body
 // text as two separate arguments so a caller cannot collapse them back into one by accident.
 //
-// RESIDUAL (F3/N1, second review 2026-09-14) — the SIGNATURE is fixed but the PRODUCTION path
-// still hands it a wider lead than route F's. `arm.ts` builds `leadText` from
-// `article.segments.slice(0, 2)`, and a product segment is not a prose block: `html.ts`'s
+// RESOLVED (F3/N1, resolved step 4-3, 2026-09-15) — the SIGNATURE was already fixed (F3) but the
+// PRODUCTION path handed it a wider lead than route F's: `arm.ts` built `leadText` from
+// `article.segments.slice(0, 2)`, and a product segment is not a prose block — `html.ts`'s
 // converter flushes a segment only at a HEADING, never at a paragraph, so `segments[0]` is the
-// whole intro and `segments[1]` is the whole FIRST SECTION (heading text included) — wider than
-// route F's two-paragraph lead, because the product's segmentation has no prose/heading block
-// kind to filter on at this layer the way route F's `blocks` array does. Concretely: a
-// fiction-flavoured FIRST section (no biological evidence anywhere in the article) is still
-// refused here where route F admits it — verified end to end (real HTML → segments → this
-// gate). PENDING THE OWNER'S RULING: narrow `arm.ts`'s `leadText` to `slice(0, 1)` (the intro
-// only — still a superset of route F's lead, but no longer swallows the first section; a
-// one-line change that can only WIDEN admission, so no floor can fall) with a further
-// acceptance read, or accept this residual as the cost of the per-pack budget's own step-4-2
-// acceptance-read limit. Either way, `admitArticle` itself is not where the gap lives — it is
-// faithful to route F for whatever windows it is handed; the gap is in what `arm.ts` hands it.
+// whole intro and `segments[1]` was the whole FIRST SECTION (heading text included), wider than
+// route F's two-paragraph lead. Concretely: a fiction-flavoured FIRST section (no biological
+// evidence anywhere in the article) was refused here where route F admits it — verified end to
+// end (real HTML → segments → this gate; `zim-arm.test.ts`'s CASE A end-to-end test). The
+// owner's ruling (Wave 3 ruling (b)) narrowed `arm.ts`'s `leadText` to `slice(0, 1)` — the intro
+// segment only. The second review's monotonicity assumption about this narrowing is wrong in
+// general and is struck (not reproduced here): this file's `explicit-different-sense` pairs
+// read `lex(lead, tokens(q)) < 2` (below), and a SHORTER lead leaves FEWER question tokens in
+// view, so it can also REFUSE an article a longer lead admitted (see `zim-admit.test.ts`'s
+// non-monotone-path fixture). On `core200` the reach
+// was enumerable ahead of the read (the biology/fiction trap matches 0 of 200 questions on this
+// gate's own normaliser; the pairs' "wanted" side matches only three questions, H174/H175/
+// H176) and was MEASURED, not assumed: run A2 (step 4-3's acceptance read) found ZERO funnel
+// movement anywhere on core200 — 0 of 200 ids differ from run A, and none of H174/H175/H176's
+// fetched titles has its admission decision change under either lead window (every floor holds,
+// unchanged from run A; see `steps/4-3-product-pr-n1-resolution/artifacts/acceptance-table-3.md`
+// and `h174-h175-h176.json`). `slice(0, 1)` is STILL not route F's own lead in either direction:
+// a single-paragraph intro is narrower than route F's two-paragraph lead (the port can
+// over-admit where route F refuses — the fiction marker sitting in the first section's first
+// paragraph would be outside this trap's window but inside route F's own two-block lead), and an
+// intro of three or more paragraphs is wider (the port can still refuse where route F admits).
+// `admitArticle` itself was never where the gap lived — it is faithful to route F for whatever
+// windows it is handed; the residual, in both directions, is in what `arm.ts` hands it, and is
+// accepted as the cost of the per-pack budget's own acceptance-read limits (PR-B, the reranker
+// scope change, does not touch this gate).
 //
 // STOP-WORD UNIVERSE (F5, review 2026-09-14). `tokens()` below is `retrieval-v3.mjs`'s own
 // ~50-word `stop` set and token rule (`[\p{L}\p{N}]+`, length > 2), ported for THIS predicate
@@ -101,11 +115,15 @@ function lex(text: string, terms: readonly string[]): number {
 
 /**
  * Decide whether a fetched article is admitted for one question, given the question, the
- * article's title, and TWO windows of its body text (F3): `leadText` — route F's own lead, the
- * first two PROSE segments only — feeds the title/fiction/topic-conflict-pair checks exactly as
- * `prototype.mjs` does, and `wideText` — the full segment list, or as much of it as the caller
- * has (route F scans the whole article) — feeds ONLY the `explicitBiology` escape hatch, so it
- * can rescue an article the narrow trap would otherwise refuse. Pure; never touches the network.
+ * article's title, and TWO windows of its body text (F3): `leadText` — feeds the
+ * title/fiction/topic-conflict-pair checks exactly as `prototype.mjs` does with route F's own
+ * lead (the first two PROSE segments only) — and `wideText` — the full segment list, or as much
+ * of it as the caller has (route F scans the whole article) — feeds ONLY the `explicitBiology`
+ * escape hatch, so it can rescue an article the narrow trap would otherwise refuse. The
+ * PRODUCTION caller (`arm.ts`) does not hand this function route F's own lead: since N1
+ * (resolved step 4-3) it hands the intro segment only (`slice(0, 1)`), a window that is neither
+ * a subset nor a superset of route F's two-paragraph lead — see the file header's RESOLVED
+ * (F3/N1) note for both directions of the residual. Pure; never touches the network.
  */
 export function admitArticle(
   question: string,

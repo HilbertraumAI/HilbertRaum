@@ -260,8 +260,8 @@ describe('admitArticle — explicit-different-sense (topic-conflict pairs)', () 
     expect(result.admitted).toBe(true)
   })
 
-  // N1 amendment (i), step 4-3: the second review's "can only widen admission, so no floor can
-  // fall" is wrong in general. The `explicit-different-sense` pairs read `lex(lead,
+  // N1 amendment (i), step 4-3: the second review's monotonicity assumption about a shorter
+  // lead is wrong in general. The `explicit-different-sense` pairs read `lex(lead,
   // tokens(q)) < 2` (the lexical-overlap escape): a SHORTER lead can leave FEWER question
   // tokens in view, so it can turn an admitted article into a refused one — the reverse of
   // the CASE A direction above. Invented text throughout (never a gold title).

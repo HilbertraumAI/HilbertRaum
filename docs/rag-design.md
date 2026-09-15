@@ -3684,17 +3684,31 @@ the end.
   lead for the trap, narrower than route F's whole-article scan for the escape hatch — and was
   demonstrated (real cephalopod article, "Populärkultur" section) to reject gold articles route
   F admits; the escape hatch's fix is verified end to end and closes that case (CASE B).
-  **Residual, N1 (second review 2026-09-14), PENDING THE OWNER'S RULING:** the production
-  `leadText` is `arm.ts`'s `article.segments.slice(0, 2)`, and a product segment is a whole
-  SECTION, not a prose paragraph (`html.ts` flushes a segment only at a heading — there is no
-  prose/heading block *kind* to filter on at this layer the way route F's `blocks` array has),
-  so the lead is really "intro + first section", wider than route F's two-paragraph lead. A
-  fiction-flavoured FIRST section with no biological evidence anywhere in the article (the first
-  review's own CASE A) is therefore still refused here where route F admits it — end-to-end
-  verified, not a fixture artifact. Two options are open: narrow `arm.ts`'s `leadText` to
-  `slice(0, 1)` (the intro only; a one-line change that can only WIDEN admission, so no floor
-  can fall) with a further `core200` acceptance read, or accept the residual as the cost of this
-  step's own one-acceptance-read limit. `admit.ts`'s own header carries the same disclosure.
+  **N1, resolved step 4-3 (2026-09-15; Wave 3 ruling (b)):** the production `leadText` was
+  `arm.ts`'s `article.segments.slice(0, 2)`, and a product segment is a whole SECTION, not a
+  prose paragraph (`html.ts` flushes a segment only at a heading — there is no prose/heading
+  block *kind* to filter on at this layer the way route F's `blocks` array has), so the lead was
+  really "intro + first section", wider than route F's two-paragraph lead. A fiction-flavoured
+  FIRST section with no biological evidence anywhere in the article (the first review's own
+  CASE A) was therefore refused here where route F admits it — end-to-end verified, not a
+  fixture artifact (`zim-arm.test.ts`'s CASE A end-to-end test, confirmed RED at `dd85f361` and
+  GREEN after the fix). The owner ruled: narrow `arm.ts`'s `leadText` to `slice(0, 1)` (the intro
+  segment only). The second review's monotonicity assumption about this narrowing is wrong in
+  general and is struck (not reproduced here): `admit.ts`'s
+  `explicit-different-sense` pairs read `lex(lead, tokens(q)) < 2`, so a SHORTER lead can also
+  REFUSE an article a longer one admitted (`zim-admit.test.ts`'s non-monotone-path fixture). On
+  `core200` the reach was enumerable ahead of the read (the biology/fiction trap matches 0 of 200
+  questions on the gate's own normaliser; the pairs' "wanted" side matches only H174/H175/H176)
+  and was **measured**, not assumed: run A2 found **zero funnel movement** anywhere on core200 —
+  0 of 200 ids differ from run A (`anyArticle` 120, `anyCandidate` 81, `allPacked` 26, all
+  unchanged), and none of H174/H175/H176's fetched titles has its admission decision change
+  under either lead window (`steps/4-3-product-pr-n1-resolution/artifacts/acceptance-table-3.md`,
+  `h174-h175-h176.json`). Every floor holds, unchanged from run A. `slice(0, 1)` is **still not**
+  route F's own lead in either direction: a single-paragraph intro is narrower than route F's
+  two-paragraph lead (the port can over-admit where route F refuses), and an intro of three or
+  more paragraphs is wider (the port can still refuse where route F admits) — accepted as the
+  cost of the per-pack budget's own acceptance-read limits. `admit.ts`'s own header carries the
+  same disclosure.
   **F5 (review 2026-09-14):** the gate's `tokens()` (feeding the
   `explicit-different-sense` lexical-overlap escape) now uses `retrieval-v3.mjs`'s own ~50-word
   research stop set, not `query-rewrite.ts`'s much larger ~340-word product list — the larger
@@ -3819,12 +3833,18 @@ rerank) ≥ 6` — **26, PASS** (+20 over floor); arm wall-clock p90 excluding t
 change.** Step 4 diagnosed all 41 core200 `anyArticle ∧ ¬anyCandidate` gap ids as the gold
 article being correctly discovered, read AND admitted, with the loss entirely in which chunks
 `overlapScore`/`chunkSegments` kept — a stage this PR's Frozen Parameters leave unchanged in
-both step 4 and this redo, and still unchanged. F3 and F5 are pure ADMISSION fixes (they widen
-what the gate accepts; they cannot touch the chunker), so the reviewer's own prediction
-("F3 and F4 in particular can only improve the numbers") is confirmed by the ±2 net movement:
-`anyCandidate` closed the floor from underneath — some step-4 gap ids had a SECOND gold article
-the narrower, pre-fix gate was wrongly rejecting — not from the chunk-selection side.
-`allCandidate` is unchanged (49→49): no gap id recovered ALL its gold blocks from this fix alone.
+both step 4 and this redo, and still unchanged. On THIS diagnosis, F3 and F5 happened to only
+widen what the gate accepted (neither touches the chunker), so `anyCandidate` closed the floor
+from underneath — some step-4 gap ids had a SECOND gold article the narrower, pre-fix gate was
+wrongly rejecting — not from the chunk-selection side; `allCandidate` is unchanged (49→49): no
+gap id recovered ALL its gold blocks from this fix alone. The reviewer's own broader prediction
+("F3 and F4 in particular can only *improve* the numbers") is **not** a general rule about
+admission-gate changes, and step 4-3's N1 resolution is the counter-case in the code: `admit.ts`'s
+`explicit-different-sense` pairs read `lex(lead, tokens(q)) < 2`, so narrowing the lead a gate
+sees can leave fewer question tokens in view and REFUSE an article a wider lead admitted — the
+direction runs opposite to F3/F5's here. N1's own `core200` read measured zero movement in
+practice (see F3's bullet above), but that is a measured result for one specific narrowing on one
+specific population, not evidence that admission-gate edits are safe by construction.
 
 **Reranker-for-the-record leg** (informational, not a floor): run A's captured candidates
 replayed through `retrieve()` with the shipped CPU reranker (`--device none`, 4 threads,
@@ -3849,9 +3869,11 @@ ever exceeding master's own rate. Full per-question detail:
 **Decision: every floor holds, per the brief's pre-registered Endpoint and decision rule — the
 draft PR is opened.** F1–F9 (F6 dropped) are all resolved: F1 by the measured cap decision, F2–F5
 and F7–F8 by the code/test fixes above, F9 by this record's own head-commit citation. The branch
-(`feat/zim-discovery-port`) is complete: full `apps/desktop` suite green (7192 tests, 427 files),
-typecheck clean, ready to open as a draft PR. The code state this record describes is commit
-`637ca6fb` (the last commit before this docs update); the docs/BUILD_STATE commit and the PR's
+(`feat/zim-discovery-port`) is complete: full `apps/desktop` suite green (7196 tests, 427 files),
+typecheck clean. **N1 is resolved as of step 4-3** (2026-09-15) — see F3's bullet above and
+`steps/4-3-product-pr-n1-resolution/report.md` for the acceptance read, the attribution and the
+scoped Opus re-check. The code state this record describes is commit `6266778c` (the N1 fix +
+tests commit, the last commit before this docs update); the docs/BUILD_STATE commit and the PR's
 own head follow it.
 
 **If/when this PR merges, PR-B** makes the CPU rerank scope conditional on the hardware profile

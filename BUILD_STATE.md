@@ -154,12 +154,15 @@ repo About text + `zim`/`kiwix`/`wikipedia`/`offline` topics, a v0.1.60 release 
 first `.github/ISSUE_TEMPLATE/`: a knowledge-pack report form asking for the facts that decide those reports, and a `config.yml`
 that keeps blank issues one click away and routes vulnerabilities to the private advisory channel._
 
-_2026-09-14 — **Phase 4 PR-A discovery port, step 4-2 redo: draft PR opened, every floor holds**
-(`feat/zim-discovery-port`). Fixed the first Opus review's F1–F9 (F6 dropped): `PLAN_MAX_TOKENS`
-set to 104 from a measured core200 p99 of 99 tokens (not assumed); the admission gate takes two
-windows; the head-noun read cap counts acceptances; the #340 length retry and the five-read
-no-plan reach are restored. core200 `anyCandidate` 79→81/200 (now clears its floor); every
-acceptance and CPU-non-regression floor holds. Record `rag-design.md` §17; §5 item 21 (m)._
+_2026-09-14/15 — **Phase 4 PR-A discovery port, step 4-2 redo + step 4-3 N1 resolution: draft PR
+#469, every floor holds** (`feat/zim-discovery-port`). Step 4-2 fixed the first Opus review's
+F1–F9 (F6 dropped): `PLAN_MAX_TOKENS` set to 104 from a measured core200 p99 of 99 tokens (not
+assumed); the admission gate takes two windows; the head-noun read cap counts acceptances; the
+#340 length retry and the five-read no-plan reach are restored. core200 `anyCandidate` 79→81/200
+(now clears its floor); every acceptance and CPU-non-regression floor holds. Step 4-3 (2026-09-15)
+resolved the second review's N1: `arm.ts`'s lead narrowed to the intro segment (`slice(0, 1)`),
+the CASE A end-to-end test added, run A2 read once — zero funnel movement measured on core200
+(0/200 ids differ), every floor still holds. Record `rag-design.md` §17; §5 item 21 (m)._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
