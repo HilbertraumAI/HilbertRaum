@@ -35,6 +35,7 @@ import {
   type PackCandidateList
 } from '../../src/main/services/zim/arm'
 import type { SearchPlan } from '../../src/main/services/zim/expand'
+import { zimArticleToSegmentsAsync } from '../../src/main/services/zim/html'
 
 // The ZIM retrieval arm end-to-end against a fake kiwix-serve (real sockets — the
 // node:http transport is load-bearing, see client.ts), and the retrieve() seam:
@@ -79,6 +80,30 @@ function romanArticleHtml(title: string, evidence: boolean): string {
     sections.push(['Biologie', 'Der Blutkreislauf wird von einem Systemherz und zwei Kiemenherzen angetrieben.'])
   }
   return articleHtml(title, sections)
+}
+/** N1 (second review, step 4-3) — the first review's CASE A **verbatim**: an intro (no
+ *  heading, TWO paragraphs) followed by ONE section, "Kraken in der Kultur" (two more
+ *  paragraphs) — exactly two segments, no biological evidence ANYWHERE (unlike
+ *  `romanArticleHtml`, which always carries a rescuing "Biologie" section or omits it
+ *  entirely past segment ~25). The spellings "Kopffuesser"/"praegte"/"beruehmt" are literal
+ *  (not the umlaut forms): `norm()` (NFKD + strip combining marks) turns "ü"/"ß" into
+ *  "u"/"ss", which would make "Kopffüßer" collide with `explicitBiology`'s "kopffusser" — the
+ *  literal "ue"/"ae" spellings keep the escape hatch from firing by accident. */
+function caseAArticleHtml(): string {
+  return (
+    '<!DOCTYPE html><html lang="de"><head><title>Kraken</title></head><body>' +
+    '<h1>Kraken</h1>' +
+    '<section data-mw-section-id="0">' +
+    '<p>Die Kraken sind eine Ordnung der Kopffuesser.</p>' +
+    '<p>Sie besitzen acht Arme und leben in allen Weltmeeren.</p>' +
+    '</section>' +
+    '<section data-mw-section-id="1">' +
+    '<div class="mw-heading mw-heading2"><h2 id="s0">Kraken in der Kultur</h2></div>' +
+    '<p>Der Spielfilm um einen Riesenkraken praegte das Bild des Tieres.</p>' +
+    '<p>Ein Roman von Jules Verne machte ihn beruehmt.</p>' +
+    '</section>' +
+    '</body></html>'
+  )
 }
 /** Set by the fake sidecar once the big article's body has been written. */
 let bigArticleServed = false
@@ -272,8 +297,12 @@ beforeAll(async () => {
         return
       }
       // F3 integration fixture (review 2026-09-14, test gap 2) — two "…(Roman)" plan titles,
-      // both exact-match their own /suggest term.
-      if (content === 'book-pack-f3' && (term === 'Kraken (Roman)' || term === 'Tintenfisch (Roman)')) {
+      // both exact-match their own /suggest term. N1 (step 4-3) adds a third: "Kraken" itself
+      // (the CASE A shape, no "(Roman)" title suffix).
+      if (
+        content === 'book-pack-f3' &&
+        (term === 'Kraken (Roman)' || term === 'Tintenfisch (Roman)' || term === 'Kraken')
+      ) {
         res.writeHead(200, { 'content-type': 'application/json' })
         res.end(JSON.stringify([{ value: term, kind: 'path', path: term.replace(/ /g, '_') }]))
         return
@@ -354,6 +383,12 @@ beforeAll(async () => {
       }
       if (article === 'Tintenfisch (Roman)') {
         sendArticle(romanArticleHtml(article, false))
+        return
+      }
+      // N1 (second review, step 4-3) — the CASE A shape itself: two segments, no biological
+      // evidence anywhere, driven through the arm's REAL leadText/wideText construction.
+      if (article === 'Kraken') {
+        sendArticle(caseAArticleHtml())
         return
       }
       // One article big enough to need several converter slices (P1b), so an ask that is
@@ -1051,6 +1086,41 @@ describe('collectPackCandidates — Phase 4 PR-A discovery port', () => {
       expect(rawReads).toEqual(['Tintenfisch (Roman)']) // fetched, then refused by the gate
       expect(candidates).toEqual([])
       expect(outcomes[0]).toMatchObject({ packId: 'pack-f3', admitted: 0, found: 0 })
+    })
+
+    // N1 (second review): the true "no evidence anywhere" CASE A, driven through the arm's
+    // REAL bodyText path (real HTML -> segments -> the arm's own leadText/wideText
+    // construction -> admitArticle) rather than hand-fed windows. At `dd85f361` `leadText` is
+    // `article.segments.slice(0, 2)`, so the lead swallows the whole "Kraken in der Kultur"
+    // section (fiction marker "Roman"/"Spielfilm"), and with no `explicitBiology` evidence
+    // anywhere the article is refused (`explicit-literary-topic-without-requested-biological-
+    // evidence`) — this test is RED at that commit. After the one-line narrowing to
+    // `slice(0, 1)` the lead is the intro only, the fiction marker sits outside it, and the
+    // article is admitted — GREEN. See `artifacts/test-red-green.txt` for both runs' output.
+    it('N1 (second review, step 4-3) — the CASE A shape end to end: NO biological evidence anywhere; admitted once the lead narrows to the intro segment only', async () => {
+      reset()
+      // First: the fixture itself has the CASE A shape — exactly two segments, the review's
+      // texts verbatim (title "Kraken" comes from the page's own <h1>, asserted below via the
+      // admitted candidate's sourceTitle).
+      const parsed = await zimArticleToSegmentsAsync(caseAArticleHtml())
+      expect(parsed.title).toBe('Kraken')
+      expect(parsed.segments).toHaveLength(2)
+      expect(parsed.segments[0]?.text).toBe(
+        'Die Kraken sind eine Ordnung der Kopffuesser.\n\nSie besitzen acht Arme und leben in allen Weltmeeren.'
+      )
+      expect(parsed.segments[1]?.text).toBe(
+        'Kraken in der Kultur\n\nDer Spielfilm um einen Riesenkraken praegte das Bild des Tieres.\n\n' +
+          'Ein Roman von Jules Verne machte ihn beruehmt.'
+      )
+
+      // Then: driven through the arm's real discovery + admission path, the article is admitted.
+      const { candidates, outcomes } = await collectPackCandidates(port, packs, QUESTION, undefined, names, {
+        expand: async () => ({ titles: ['Kraken'], queries: [] })
+      })
+      expect(rawReads).toEqual(['Kraken'])
+      expect(candidates.some((c) => c.sourceTitle === 'Kraken')).toBe(true)
+      expect(outcomes[0]).toMatchObject({ packId: 'pack-f3', status: 'searched', reason: null })
+      expect(outcomes[0]!.admitted).toBeGreaterThan(0)
     })
   })
 

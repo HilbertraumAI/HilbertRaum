@@ -370,13 +370,19 @@ export async function collectPackCandidates(
         return
       }
       fetchedOk++
-      // The admission gate (`admit.ts`) sees TWO windows (F3): the narrow LEAD — route F's own
-      // first two prose segments — for the title/fiction/topic-conflict-pair checks, and the
-      // WIDE full segment text for the `explicitBiology` escape hatch only, so that rescue
-      // predicate keeps route F's whole-article reach instead of being bounded by the same
-      // window as the trap it exists to escape.
+      // The admission gate (`admit.ts`) sees TWO windows (F3): the narrow LEAD for the
+      // title/fiction/topic-conflict-pair checks, and the WIDE full segment text for the
+      // `explicitBiology` escape hatch only, so that rescue predicate keeps route F's
+      // whole-article reach instead of being bounded by the same window as the trap it exists
+      // to escape. N1 (second review, resolved step 4-3): the lead is `segments.slice(0, 1)` —
+      // the intro segment only (`html.ts` flushes a segment at a HEADING, never a paragraph, so
+      // `segments[0]` is every paragraph before the first heading). This is still NOT route F's
+      // own lead (`prototype.mjs`'s first two PROSE blocks): a single-paragraph intro is
+      // narrower than route F's two-paragraph lead (the port can over-admit where route F
+      // refuses), and an intro of three or more paragraphs is wider (the port can refuse where
+      // route F admits) — see `admit.ts`'s header for both directions, spelled out.
       const leadText = article.segments
-        .slice(0, 2)
+        .slice(0, 1)
         .map((s) => s.text)
         .join(' ')
       const wideText = article.segments.map((s) => s.text).join(' ')

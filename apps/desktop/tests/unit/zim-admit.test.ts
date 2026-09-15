@@ -168,6 +168,39 @@ describe('admitArticle — explicit-literary-topic-without-requested-biological-
       })
     })
   })
+
+  describe('the true CASE A (N1, second review, resolved by step 4-3) — no biological evidence anywhere: a SHORTER lead rescues what a LONGER one traps', () => {
+    // The first review's CASE A verbatim: `segments[0]` (the intro) and `segments[1]` (the
+    // "Kraken in der Kultur" section) as the real arm-level converter emits them (see
+    // `zim-arm.test.ts`'s end-to-end fixture for the same texts driven through real HTML).
+    // Unlike the escape-hatch fixtures above, `wide` never carries `explicitBiology` evidence
+    // — there is none anywhere in this article, so the trap's own window is what decides.
+    const QUESTION = 'Wie funktioniert das Herz eines Oktopus?'
+    const TITLE = 'Kraken'
+    const segment0 = 'Die Kraken sind eine Ordnung der Kopffuesser. Sie besitzen acht Arme und leben in allen Weltmeeren.'
+    const segment1 =
+      'Kraken in der Kultur. Der Spielfilm um einen Riesenkraken praegte das Bild des Tieres. ' +
+      'Ein Roman von Jules Verne machte ihn beruehmt.'
+    const wide = `${segment0} ${segment1}` // unchanged by N1 — only the LEAD narrows
+
+    it('lead = segments[0] only (the narrowed, post-N1 window): admitted — the fiction marker sits outside the lead', () => {
+      const result = admitArticle(QUESTION, TITLE, segment0, wide, 'fts')
+      expect(result).toEqual({
+        admitted: true,
+        reason: 'no-explicit-topic-conflict; not-a-semantic-certificate',
+        route: 'fts'
+      })
+    })
+
+    it('lead = segments[0] + segments[1] (the pre-N1 window, `dd85f361`): refused — the trap sees the fiction marker and nothing rescues it', () => {
+      const result = admitArticle(QUESTION, TITLE, `${segment0} ${segment1}`, wide, 'fts')
+      expect(result).toEqual({
+        admitted: false,
+        reason: 'explicit-literary-topic-without-requested-biological-evidence',
+        route: 'fts'
+      })
+    })
+  })
 })
 
 describe('admitArticle — explicit-different-sense (topic-conflict pairs)', () => {
@@ -225,6 +258,25 @@ describe('admitArticle — explicit-different-sense (topic-conflict pairs)', () 
       'fts'
     )
     expect(result.admitted).toBe(true)
+  })
+
+  // N1 amendment (i), step 4-3: the second review's "can only widen admission, so no floor can
+  // fall" is wrong in general. The `explicit-different-sense` pairs read `lex(lead,
+  // tokens(q)) < 2` (the lexical-overlap escape): a SHORTER lead can leave FEWER question
+  // tokens in view, so it can turn an admitted article into a refused one — the reverse of
+  // the CASE A direction above. Invented text throughout (never a gold title).
+  it('a shorter lead can also REFUSE: pair 1 (planet/rotation vs mythology) — the two-segment lead shares 2+ question tokens (admitted), the intro alone shares fewer than 2 (refused)', () => {
+    const question = 'Wie ist die Rotation des Planeten?' // tokens(q) = {rotation, planeten}
+    const title = 'Mythologie der Antike' // "wanted" side never tested here; "wrong" side: mytholog
+    const introOnly = 'Die Mythologie beschreibt Goetter und Sagen verschiedener Kulturen.'
+    const section = 'Mythologische Rotation und Planeten in alten Erzaehlungen.'
+    const twoSegmentLead = `${introOnly} ${section}`
+
+    const withTwoSegmentLead = admitArticle(question, title, twoSegmentLead, twoSegmentLead, 'fts')
+    expect(withTwoSegmentLead.admitted).toBe(true) // lex(lead, tokens(q)) = 2 ("rotation","planeten") -> escape fires
+
+    const withIntroOnly = admitArticle(question, title, introOnly, introOnly, 'fts')
+    expect(withIntroOnly).toEqual({ admitted: false, reason: 'explicit-different-sense', route: 'fts' }) // lex = 0
   })
 })
 
