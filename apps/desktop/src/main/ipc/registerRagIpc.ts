@@ -53,9 +53,35 @@ import { isAggregationShaped, routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
+import { resolveRerankProfile, rerankScopeFor, type RerankScope } from '../services/rag/rerank-profile'
+import { eligibleDevicesFor, machineKey } from '../services/performance'
+import { detectSystem } from '../services/benchmark'
+import { defaultThreadCount } from '../services/runtime/sidecar'
+import type { AppSettings } from '../../shared/types'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
 import type { Db } from '../services/db'
+
+/**
+ * Step 4-4 (Wave 4 ruling (a)): this ask's knowledge-pack candidate scope, resolved from the
+ * SAME hardware-profile rule the reranker sidecar's device posture uses
+ * (`rag/rerank-profile.ts`) — so a GPU machine's ask sees `GPU_RERANK_SCOPE` candidates exactly
+ * when the sidecar it is about to call is about to start on the GPU, never a mismatch. Absent a
+ * reranker, `rerankScopeFor` always returns `'capped'` — a wide lexical pool with no
+ * cross-encoder would flood the interleave and the `topKFinal` trim.
+ */
+function resolveAskCandidateScope(settings: AppSettings, rerankerAvailable: boolean): RerankScope {
+  const here = machineKey(detectSystem())
+  const input = {
+    gpuMode: settings.gpuMode,
+    gpuAutoDisabled: settings.gpuAutoDisabled,
+    probeDevices: eligibleDevicesFor(settings, here),
+    threads: defaultThreadCount(),
+    rerankerAvailable,
+    wideScopeOptIn: settings.ragRerankWideScope
+  }
+  return rerankScopeFor(resolveRerankProfile(input), input)
+}
 
 /** Does any in-scope document have precomputed structured-extract data (a `__scan__` marker)?
  *  Gates the router's coverage-extract branch — without it we cannot honestly claim a complete
@@ -194,7 +220,11 @@ export function registerRagIpc(ctx: AppContext): void {
         throw new Error(tMain('main.chat.skillUnavailable'))
       }
 
-      const settings = ragSettingsFrom(getSettings(ctx.db))
+      const rawSettings = getSettings(ctx.db)
+      const settings = ragSettingsFrom(rawSettings)
+      // Step 4-4: resolved once per ask, from the SAME settings snapshot `settings` above came
+      // from — reused at the single `externalArm` wiring point below.
+      const candidateScope = resolveAskCandidateScope(rawSettings, ctx.reranker != null)
 
       // Resolve the conversation's composite scope (plan §10.1 / D1): the UNION of the
       // selected collections (Library / projects), specific docs, and chat attachments.
@@ -773,7 +803,14 @@ export function registerRagIpc(ctx: AppContext): void {
             // #340 L3-b (D-Z20, owner ruling 2026-09-07 "always"): the arm expands the question
             // through the turn's own runtime — one short, bounded, grammar-constrained call per
             // pack-scoped ask, before the search; any failure falls back to the plain pattern.
-            externalArm: ctx.zim?.makeArm(ctx.db, scope.packIds, { expand: makeQueryExpander(runtime) }) ?? null,
+            // Step 4-4 (ruling (a)): `candidateScope` widens what the arm admits on a `gpu`/
+            // opted-in `cpu-hi` machine; absent reranker or `default` profile it is `'capped'`,
+            // byte-identical to today.
+            externalArm:
+              ctx.zim?.makeArm(ctx.db, scope.packIds, {
+                expand: makeQueryExpander(runtime),
+                candidateScope
+              }) ?? null,
             // The turn's skill: its fence rides in the grounded user turn; the assistant row is
             // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
             skill,

@@ -1318,6 +1318,12 @@ export const en = {
   'settings.performance.gpuHint':
     'Uses your graphics card to speed up responses when available. Turn off only if you ' +
     'notice stability problems — everything keeps working either way.',
+  // Step 4-4 (Wave 4 ruling (a)): the cpu-hi rerank profile's opt-in. No number in the copy —
+  // the exact thread threshold is an internal tuning constant, not a user-facing figure.
+  'settings.performance.rerankWideScope': 'Rerank more knowledge-pack passages',
+  'settings.performance.rerankWideScopeHint':
+    'Slower per question. Used only on a computer with enough processor threads and the ' +
+    'reranker installed; a computer with a usable graphics card reranks every passage already.',
   'settings.performance.autoStart': 'Load the selected model automatically when the app starts',
   'settings.performance.autoStartHint':
     'On by default. The model selected on the AI Model screen is loaded in the background at ' +

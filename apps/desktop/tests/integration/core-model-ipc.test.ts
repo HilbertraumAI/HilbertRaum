@@ -233,6 +233,62 @@ describe('registerCoreIpc', () => {
     const { result } = await invoke(handlers, IPC.updateSettings, { theme: 'dark' })
     expect((result as AppSettings).theme).toBe('dark')
   })
+
+  // Step 4-4 (Wave 4 ruling (a)): a GPU settings change stops the reranker sidecar (suspend,
+  // never the permanent stop()) so its NEXT start re-evaluates the device posture instead of
+  // keeping a stale one for the rest of the session — a REAL flip only (BE-1 discipline).
+  describe('updateSettings stops the reranker on a REAL gpuMode/gpuAutoDisabled flip (step 4-4)', () => {
+    function ctxWithFakeReranker(): { ctx: AppContext; suspend: ReturnType<typeof vi.fn> } {
+      const suspend = vi.fn(async () => undefined)
+      const ctx = {
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        db: seededDb(),
+        workspace: { isUnlocked: () => true },
+        reranker: { id: 'fake', rerank: async () => [], suspend }
+      } as unknown as AppContext
+      registerCoreIpc(ctx)
+      return { ctx, suspend }
+    }
+
+    it('gpuMode auto -> off suspends the sidecar', async () => {
+      const { suspend } = ctxWithFakeReranker()
+      await invoke(handlers, IPC.updateSettings, { gpuMode: 'off' })
+      expect(suspend).toHaveBeenCalledTimes(1)
+    })
+
+    it('gpuMode set to its CURRENT value (no real flip) does not suspend', async () => {
+      const { suspend } = ctxWithFakeReranker()
+      await invoke(handlers, IPC.updateSettings, { gpuMode: 'auto' }) // default is already 'auto'
+      expect(suspend).not.toHaveBeenCalled()
+    })
+
+    it('gpuAutoDisabled false -> true suspends the sidecar', async () => {
+      const { suspend } = ctxWithFakeReranker()
+      await invoke(handlers, IPC.updateSettings, { gpuAutoDisabled: true })
+      expect(suspend).toHaveBeenCalledTimes(1)
+    })
+
+    it('an unrelated settings key never suspends the sidecar', async () => {
+      const { suspend } = ctxWithFakeReranker()
+      await invoke(handlers, IPC.updateSettings, { theme: 'dark' })
+      expect(suspend).not.toHaveBeenCalled()
+    })
+
+    it('no reranker composed (null) never throws', async () => {
+      const suspend = vi.fn()
+      const ctx = {
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        db: seededDb(),
+        workspace: { isUnlocked: () => true },
+        reranker: null
+      } as unknown as AppContext
+      registerCoreIpc(ctx)
+      await expect(invoke(handlers, IPC.updateSettings, { gpuMode: 'off' })).resolves.toBeTruthy()
+      expect(suspend).not.toHaveBeenCalled()
+    })
+  })
 })
 
 describe('registerModelIpc', () => {

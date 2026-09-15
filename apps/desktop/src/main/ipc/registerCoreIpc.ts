@@ -154,7 +154,25 @@ export function registerCoreIpc(ctx: AppContext): void {
     // alone would log phantom enable/disable events for rejected-junk or same-value
     // patches, polluting the exported audit trail's forensic value.
     const localApiBefore = 'localApiEnabled' in patch ? getSettings(ctx.db).localApiEnabled : null
+    // Step 4-4 (Wave 4 ruling (a)): same REAL-flip discipline, for the reranker's device
+    // posture — a GPU settings change stops the sidecar (suspend, never the permanent stop())
+    // so its NEXT start re-evaluates `rerankerDevicePosture` instead of keeping a stale posture
+    // for the rest of the session.
+    const gpuBefore =
+      'gpuMode' in patch || 'gpuAutoDisabled' in patch
+        ? (({ gpuMode, gpuAutoDisabled }) => ({ gpuMode, gpuAutoDisabled }))(getSettings(ctx.db))
+        : null
     const result = updateSettings(ctx.db, patch)
+    if (
+      gpuBefore &&
+      (result.gpuMode !== gpuBefore.gpuMode || result.gpuAutoDisabled !== gpuBefore.gpuAutoDisabled)
+    ) {
+      void ctx.reranker?.suspend?.().catch((err: unknown) => {
+        log.warn('Reranker sidecar suspend after a GPU settings change failed', {
+          error: err instanceof Error ? err.message : String(err)
+        })
+      })
+    }
     // Keep the main-side cached UI language in step with the setting (D-L3) — the
     // post-validation value, so junk patches can't move it.
     if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)

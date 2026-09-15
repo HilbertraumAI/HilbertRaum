@@ -182,6 +182,15 @@ function GeneralTab(): JSX.Element {
           label={t('settings.performance.gpu')}
         />
         <p className="hint">{t('settings.performance.gpuHint')}</p>
+        {/* Step 4-4 (Wave 4 ruling (a)): the cpu-hi rerank profile's opt-in. No effect on the
+            gpu/default profiles (the hint says so) — the label/hint stay generic rather than
+            naming a thread count the user cannot see or change here. */}
+        <Switch
+          checked={settings.ragRerankWideScope}
+          onChange={(on) => void patch({ ragRerankWideScope: on })}
+          label={t('settings.performance.rerankWideScope')}
+        />
+        <p className="hint">{t('settings.performance.rerankWideScopeHint')}</p>
         <Switch
           checked={settings.autoStartActiveModel}
           onChange={(on) => void patch({ autoStartActiveModel: on })}

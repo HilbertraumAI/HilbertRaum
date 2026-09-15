@@ -26,16 +26,21 @@ import {
   MAX_EXTERNAL_CANDIDATES,
   PROBE_TIMEOUT_MS,
   allocateCandidates,
+  chunksForScope,
   collectPackCandidates,
   overlapScore,
   packQuota,
+  perArticleBudget,
   queryTerms,
+  totalCandidateCapFor,
   withinReadBudget,
   type ExternalCandidate,
   type PackCandidateList
 } from '../../src/main/services/zim/arm'
+import type { RerankScope } from '../../src/main/services/rag/rerank-profile'
 import type { SearchPlan } from '../../src/main/services/zim/expand'
 import { zimArticleToSegmentsAsync } from '../../src/main/services/zim/html'
+import { CHUNK_DEFAULTS, chunkSegments } from '../../src/main/services/ingestion/chunker'
 
 // The ZIM retrieval arm end-to-end against a fake kiwix-serve (real sockets — the
 // node:http transport is load-bearing, see client.ts), and the retrieve() seam:
@@ -687,6 +692,121 @@ describe('queryTerms / overlapScore', () => {
     expect(terms.filter((t) => t === 'treibhausgas')).toHaveLength(1) // distinct
     expect(overlapScore('Treibhausgas aus CO2-Quellen', terms)).toBe(2)
     expect(overlapScore('nichts davon', terms)).toBe(0)
+  })
+})
+
+// Step 4-4 (Wave 4 ruling (a), Phase 2 ruling (d)) — the candidate SCOPE per hardware profile.
+// `perArticleBudget`/`totalCandidateCapFor`/`chunksForScope` are the pure widening
+// `rag/rerank-profile.ts`'s `rerankScopeFor` selects between; `capped`'s own numbers are pinned
+// above (every pre-existing `collectPackCandidates`/`allocateCandidates`/`packQuota` test in this
+// file calls them with NO scope/cap argument and stays green, unmodified — the regression pin
+// ruling (a) asks for).
+describe('candidate scope (step 4-4)', () => {
+  const SCOPES: RerankScope[] = ['capped', 'top48', 'top96', 'all']
+
+  it('perArticleBudget doubles/quadruples the per-article slice; totalCandidateCapFor the pack-quota cap; all is unbounded', () => {
+    expect(perArticleBudget('capped', false)).toBe(CHUNKS_PER_ARTICLE)
+    expect(perArticleBudget('capped', true)).toBe(LIST_ARTICLE_CHUNKS)
+    expect(perArticleBudget('top48', false)).toBe(CHUNKS_PER_ARTICLE * 2)
+    expect(perArticleBudget('top48', true)).toBe(LIST_ARTICLE_CHUNKS * 2)
+    expect(perArticleBudget('top96', false)).toBe(CHUNKS_PER_ARTICLE * 4)
+    expect(perArticleBudget('top96', true)).toBe(LIST_ARTICLE_CHUNKS * 4)
+    expect(perArticleBudget('all', false)).toBe(Number.POSITIVE_INFINITY)
+    expect(perArticleBudget('all', true)).toBe(Number.POSITIVE_INFINITY)
+
+    expect(totalCandidateCapFor('capped')).toBe(MAX_EXTERNAL_CANDIDATES)
+    expect(totalCandidateCapFor('top48')).toBe(MAX_EXTERNAL_CANDIDATES * 2)
+    expect(totalCandidateCapFor('top96')).toBe(MAX_EXTERNAL_CANDIDATES * 4)
+    expect(totalCandidateCapFor('all')).toBe(Number.POSITIVE_INFINITY)
+  })
+
+  it('chunksForScope orders overlap-desc/index-asc and slices to the per-article budget, for a non-list article', () => {
+    // 50 synthetic chunks, DEscending index so overlap-desc/index-asc tie-break order is provable.
+    const chunks = Array.from({ length: 50 }, (_, i) => ({ index: i, overlap: 50 - i, text: `c${i}` }))
+    for (const scope of SCOPES) {
+      const picked = chunksForScope(chunks, scope, false)
+      expect(picked.length).toBe(Math.min(chunks.length, perArticleBudget(scope, false)))
+      // Overlap-desc: chunk 0 (overlap 50, the highest) is always first when anything is picked.
+      expect(picked[0]!.index).toBe(0)
+      // Every picked chunk's overlap is >= every NOT-picked chunk's overlap (a true top-N slice).
+      const pickedIdx = new Set(picked.map((c) => c.index))
+      const minPickedOverlap = Math.min(...picked.map((c) => c.overlap))
+      for (const c of chunks) {
+        if (!pickedIdx.has(c.index)) expect(c.overlap).toBeLessThanOrEqual(minPickedOverlap)
+      }
+    }
+  })
+
+  it('the superset property: capped ⊆ top48 ⊆ top96 ⊆ all, by chunk index, for both a normal and a list article', () => {
+    const chunks = Array.from({ length: 40 }, (_, i) => ({ index: i, overlap: Math.random(), text: `c${i}` }))
+    for (const isList of [false, true]) {
+      const byScope = new Map(SCOPES.map((s) => [s, new Set(chunksForScope(chunks, s, isList).map((c) => c.index))]))
+      const capped = byScope.get('capped')!
+      const top48 = byScope.get('top48')!
+      const top96 = byScope.get('top96')!
+      const all = byScope.get('all')!
+      for (const i of capped) expect(top48.has(i)).toBe(true)
+      for (const i of top48) expect(top96.has(i)).toBe(true)
+      for (const i of top96) expect(all.has(i)).toBe(true)
+      expect(all.size).toBe(chunks.length) // all = every chunk, nothing dropped
+    }
+  })
+
+  it('packQuota/allocateCandidates with an explicit cap match totalCandidateCapFor for a wider scope, and default to MAX_EXTERNAL_CANDIDATES unchanged', () => {
+    const n = 3
+    // Byte-identical to the no-cap-argument call (the regression pin): default cap === MAX_EXTERNAL_CANDIDATES.
+    const defaultQuotas = Array.from({ length: n }, (_, i) => packQuota(i, n))
+    const cappedQuotas = Array.from({ length: n }, (_, i) => packQuota(i, n, totalCandidateCapFor('capped')))
+    expect(cappedQuotas).toEqual(defaultQuotas)
+    expect(cappedQuotas.reduce((a, b) => a + b, 0)).toBe(MAX_EXTERNAL_CANDIDATES)
+
+    const top48Cap = totalCandidateCapFor('top48')
+    const top48Quotas = Array.from({ length: n }, (_, i) => packQuota(i, n, top48Cap))
+    expect(top48Quotas.reduce((a, b) => a + b, 0)).toBe(top48Cap)
+    expect(top48Cap).toBe(MAX_EXTERNAL_CANDIDATES * 2)
+
+    // allocateCandidates admits up to the cap when every pack has enough candidates, for 'all' too.
+    const longPacks = Array.from({ length: n }, (_, i) => ({
+      packId: `p${i}`,
+      candidates: Array.from({ length: 100 }, (_, j) => archiveCandidate(j, `pack ${i} chunk ${j}`))
+    }))
+    expect(allocateCandidates(longPacks, totalCandidateCapFor('all')).admitted).toHaveLength(300)
+    expect(allocateCandidates(longPacks, totalCandidateCapFor('capped')).admitted).toHaveLength(MAX_EXTERNAL_CANDIDATES)
+  })
+
+  it('with no reranker provisioned every profile stays capped (Frozen parameters: a wide lexical pool needs a cross-encoder)', () => {
+    // This is `rerankScopeFor`'s own contract (rerank-profile.test.ts); pinned here too as the
+    // product-terms restatement: `collectPackCandidates` never widens on its own — the CALLER
+    // (registerRagIpc.ts) must not pass a wide `candidateScope` when `rerankerAvailable` is false.
+    // No `collectPackCandidates` behaviour changes here; this test documents the contract boundary.
+    expect(perArticleBudget('capped', false)).toBeLessThan(perArticleBudget('top48', false))
+  })
+
+  it('end to end: candidateScope "all" yields EVERY chunk of an admitted list article, not just its capped slice', async () => {
+    // Reuses the pack-plan fixture (`describe('collectPackCandidates — Phase 4 PR-A discovery
+    // port')` above): a plan whose title is the LIST_ARTICLE, chunked to more than
+    // LIST_ARTICLE_CHUNKS pieces (asserted there: `outcomes[0].found > LIST_ARTICLE_CHUNKS`).
+    const packs = [{ id: 'pack-plan', title: 'Kraftwerke von Wikipedia' }]
+    const names = new Map([['pack-plan', 'book-pack-plan']])
+    const PLAN: SearchPlan = { titles: [LIST_ARTICLE], queries: [PLAN_QUERY] }
+    const expand = async (): Promise<SearchPlan> => PLAN
+
+    // The independently-computed full chunk count of the list article, via the SAME chunker the
+    // arm uses — never a re-implementation of `collectPackCandidates`'s own count.
+    const article = await zimArticleToSegmentsAsync(listArticleHtml())
+    const totalListChunks = chunkSegments(article.segments, CHUNK_DEFAULTS).length
+    expect(totalListChunks).toBeGreaterThan(LIST_ARTICLE_CHUNKS) // the fixture's own premise
+
+    const { candidates: capped } = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, { expand })
+    const cappedList = capped.filter((c) => c.sourceTitle === LIST_ARTICLE)
+    expect(cappedList.length).toBe(LIST_ARTICLE_CHUNKS) // "with no option yields today's list"
+
+    const { candidates: all } = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
+      expand,
+      candidateScope: 'all'
+    })
+    const allList = all.filter((c) => c.sourceTitle === LIST_ARTICLE)
+    expect(allList.length).toBe(totalListChunks) // "yields every chunk of the admitted article"
   })
 })
 

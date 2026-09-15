@@ -293,6 +293,15 @@ export interface AppSettings {
   /** Drop hits below this cosine similarity (0 = keep all non-negative hits). */
   ragMinSimilarity: number
   /**
+   * The `cpu-hi` rerank profile's opt-in (step 4-4, Wave 4 ruling (a)): rerank a wider
+   * knowledge-pack candidate pool (`top48`) on a machine with no usable GPU but at least
+   * `CPU_HI_MIN_THREADS` processor threads. Default OFF — the wider pool costs real per-question
+   * latency (`rag/rerank-profile.ts`'s own header). Has NO effect on the `gpu` profile (every
+   * fetched block is reranked there regardless) or the `default` profile (too few threads for
+   * the wider pool to be offered at all).
+   */
+  ragRerankWideScope: boolean
+  /**
    * Last hardware benchmark result, or null if never run. The persisted profile
    * (`lastBenchmark.profile`) drives model recommendation + `AppStatus.hardwareProfile`.
    */
@@ -439,6 +448,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragTopKFinal: 6,
   ragMaxContextTokens: 2500,
   ragMinSimilarity: 0,
+  // Opt-in (step 4-4): off by default — the wider `cpu-hi` rerank pool costs real latency.
+  ragRerankWideScope: false,
   lastBenchmark: null,
   benchmarkHistory: [],
   modelPlacements: {},

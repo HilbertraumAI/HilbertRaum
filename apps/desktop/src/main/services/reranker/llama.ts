@@ -8,6 +8,8 @@ import {
 } from '../runtime/sidecar'
 import { maxInputApproxTokens } from '../runtime/context-budget'
 import { truncateToApproxTokens, CHUNK_DEFAULTS } from '../ingestion/chunker'
+import { GPU_RERANK_SCOPE, type RerankerDevice } from '../rag/rerank-profile'
+import { log } from '../logging'
 
 // Real on-device reranker (rag-design §11). The THIRD `LlamaServer`
 // composition (after the chat runtime and the E5 embedder): the SAME shipped b9585
@@ -23,6 +25,15 @@ import { truncateToApproxTokens, CHUNK_DEFAULTS } from '../ingestion/chunker'
 // deps, loopback only, lazy-started on first rerank() and reused; stop() kills it
 // (wired into will-quit AND workspace lock — the sidecar's memory holds recent queries
 // and chunk text).
+//
+// Step 4-4 (Wave 4 ruling (a)): device posture — CPU-pinned on the `cpu-hi` and `default`
+// rerank profiles (byte-identical to before this step: `--device none`), on the GPU on the
+// `gpu` profile (`llama-server`'s default `ngl`-auto + `--fit`, the SAME rung-1 semantics the
+// chat runtime uses — NEVER `-ngl`; `--device none` stays the only device argument the app
+// ever passes). Resolved lazily, at the START a cold sidecar takes (`opts.devicePosture`,
+// injected from `compose-services.ts`) — not at construction — so a `gpuMode`/`gpuAutoDisabled`
+// settings change (which stops this sidecar so its NEXT start re-evaluates) is honoured without
+// an app restart. Absent `devicePosture` ⇒ `'cpu'`, today's behaviour.
 
 const DEFAULT_CONTEXT_TOKENS = 2048
 /**
@@ -69,6 +80,13 @@ export interface LlamaRerankerOptions extends LlamaRerankerDeps {
   modelPath: string
   contextTokens?: number
   requestTimeoutMs?: number
+  /**
+   * Step 4-4: which device THIS start should use — read once per cold start (never per
+   * `rerank()` call), so a settings change only takes effect after the sidecar's next start.
+   * Absent ⇒ `'cpu'` (today's behaviour, byte-identical). Tests fake it; production's default
+   * (wired in `compose-services.ts`) resolves the profile from the live settings snapshot.
+   */
+  devicePosture?: () => RerankerDevice
 }
 
 interface RerankResponse {
@@ -170,15 +188,22 @@ export class LlamaReranker implements Reranker {
       const abort = new AbortController()
       this.startAbort = abort
       const contextTokens = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
+      // Step 4-4: resolved ONCE for this cold start, never re-read mid-session — a settings
+      // change stops this sidecar (`compose-services.ts`/main wiring) so the NEXT start picks up
+      // the new posture instead.
+      const posture: RerankerDevice = this.opts.devicePosture?.() ?? 'cpu'
       const server = new LlamaServer({
         binPath: this.opts.binPath,
         modelPath: this.opts.modelPath,
         contextTokens,
         // `--rerank` switches llama-server to embedding mode + RANK pooling and enables
         // /v1/rerank (b9585 common/arg.cpp L2964–2971 — the one flag is the whole
-        // switch). `--device none` PINS the reranker to CPU, exactly like the E5
-        // embedder (architecture.md GPU record §7): a sub-1B scorer gains little from a GPU and
-        // must never contend for VRAM with the chat model.
+        // switch). On the `cpu`/`default` posture `--device none` PINS the reranker to CPU,
+        // exactly like the E5 embedder (architecture.md GPU record §7): a sub-1B scorer gains
+        // little from a GPU and must never contend for VRAM with the chat model. On the `gpu`
+        // posture (step 4-4, a usable card and no reason not to use it) `--device` is OMITTED —
+        // llama-server's own default (`ngl` auto + `--fit`), never `-ngl`: `--device none` stays
+        // the only device argument this app ever passes anywhere.
         //
         // `--batch-size`/`--ubatch-size` = the context: in embedding/rerank mode
         // llama-server FORCES n_batch = n_ubatch and defaults them to 512 (b9585 logs
@@ -190,11 +215,10 @@ export class LlamaReranker implements Reranker {
         // process. increase the physical batch size"), which would silently drop every
         // rerank pass back to the fused order on real-length chunks. Sizing the physical
         // batch to the context guarantees any in-context input decodes in one ubatch (a
-        // single rerank input cannot exceed n_ctx anyway).
+        // single rerank input cannot exceed n_ctx anyway). Unaffected by the posture.
         extraArgs: [
           '--rerank',
-          '--device',
-          'none',
+          ...(posture === 'cpu' ? ['--device', 'none'] : []),
           '--batch-size',
           String(contextTokens),
           '--ubatch-size',
@@ -216,6 +240,13 @@ export class LlamaReranker implements Reranker {
         .then(() => {
           this.server = server
           this.emitResidencyChange()
+          // Step 4-4: which posture (and, on `gpu`, the run-L-selected scope constant — the
+          // per-ask scope itself depends on the opt-in setting too, which this module never
+          // reads) this start actually took.
+          log.info('Reranker sidecar started', {
+            posture,
+            scope: posture === 'gpu' ? GPU_RERANK_SCOPE : undefined
+          })
         })
         .catch((err) => {
           const error = err instanceof Error ? err : new Error(String(err))

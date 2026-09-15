@@ -163,6 +163,73 @@ describe('LlamaReranker', () => {
     expect(child.killed).toBe(true)
   })
 
+  // Step 4-4 (Wave 4 ruling (a)): the device posture, via the injected `devicePosture` callback.
+  describe('device posture (step 4-4)', () => {
+    it('"gpu" posture omits --device and -ngl, and keeps --rerank/--batch-size/--ubatch-size', async () => {
+      const { spawn, calls } = fakeSpawn()
+      const reranker = new LlamaReranker({
+        ...base,
+        spawn,
+        fetchImpl: rerankFetch([1]),
+        devicePosture: () => 'gpu'
+      })
+      await reranker.rerank('q', ['d'])
+      const argv = calls[0].args.join(' ')
+      expect(argv).toContain('--rerank')
+      expect(argv).not.toContain('--device')
+      expect(argv).not.toContain('-ngl')
+      expect(argv).toContain('--batch-size 2048')
+      expect(argv).toContain('--ubatch-size 2048')
+      await reranker.stop()
+    })
+
+    it('the callback is consulted at START, not at construction — a "cpu" answer at construction time that flips before the first rerank() is honoured', async () => {
+      const { spawn, calls } = fakeSpawn()
+      let posture: 'gpu' | 'cpu' = 'cpu'
+      const reranker = new LlamaReranker({
+        ...base,
+        spawn,
+        fetchImpl: rerankFetch([1]),
+        devicePosture: () => posture
+      })
+      expect(calls.length).toBe(0) // not constructed with any args yet — lazy
+      posture = 'gpu' // flips BEFORE the first rerank() call reaches ensureStarted()
+      await reranker.rerank('q', ['d'])
+      expect(calls[0].args).not.toContain('--device')
+      await reranker.stop()
+    })
+
+    it('absent devicePosture defaults to "cpu" (today\'s behaviour, byte-identical)', async () => {
+      const { spawn, calls } = fakeSpawn()
+      const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch([1]) })
+      await reranker.rerank('q', ['d'])
+      expect(calls[0].args).toContain('--device')
+      expect(calls[0].args).toContain('none')
+      await reranker.stop()
+    })
+
+    it('a posture change stops the sidecar (suspend) so its NEXT start re-evaluates — the caller\'s job, pinned here at the sidecar level', async () => {
+      const { spawn, calls } = fakeSpawn()
+      let posture: 'gpu' | 'cpu' = 'cpu'
+      const reranker = new LlamaReranker({
+        ...base,
+        spawn,
+        fetchImpl: rerankFetch([1]),
+        devicePosture: () => posture
+      })
+      await reranker.rerank('q', ['d'])
+      expect(calls[0].args).toContain('--device') // started cpu
+      // The settings-change wiring calls suspend() (never the permanent stop()) so a lazy
+      // restart is still possible; simulated here directly at the sidecar level.
+      await reranker.suspend()
+      posture = 'gpu'
+      await reranker.rerank('q2', ['d2'])
+      expect(calls.length).toBe(2) // re-spawned
+      expect(calls[1].args).not.toContain('--device') // the NEW start re-evaluated to gpu
+      await reranker.stop()
+    })
+  })
+
   it('truncates query and documents to the approx-token budget before sending', async () => {
     const recorded: Array<{ query: string; documents: string[] }> = []
     const reranker = new LlamaReranker({

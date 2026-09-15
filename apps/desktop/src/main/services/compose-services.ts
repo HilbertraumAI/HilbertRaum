@@ -59,6 +59,12 @@ export interface ComposeServicesDeps {
    * re-discovers, because it reacts to a download that just CHANGED the drive layout.
    */
   discovered?: DiscoveredManifest[]
+  /**
+   * Step 4-4 (Wave 4 ruling (a)): which device the reranker sidecar's NEXT cold start should
+   * use — injected into `createLlamaReranker`, consulted lazily on first `rerank()`, never at
+   * construction. Absent ⇒ `'cpu'` (today's behaviour, byte-identical to before this step).
+   */
+  rerankerDevicePosture?: () => 'gpu' | 'cpu'
 }
 
 /**
@@ -113,7 +119,8 @@ export function composeServices({
   rootPath,
   manifestsDir,
   isDev = false,
-  gpu
+  gpu,
+  rerankerDevicePosture
 }: ComposeServicesDeps): AvailabilityServices {
   // PF-4 (full-audit 2026-07-10): ONE manifest walk + YAML parse serves every role resolution
   // of this composition pass — initBackend runs it synchronously before the window exists, and
@@ -140,12 +147,14 @@ export function composeServices({
     }
   })
   // The retrieval reranker — selected only when binary + reranker GGUF exist (null
-  // otherwise; retrieval then keeps today's ordering byte-identical).
+  // otherwise; retrieval then keeps today's ordering byte-identical). Step 4-4:
+  // `rerankerDevicePosture` is consulted by the sidecar itself, lazily, on its next cold start.
   const reranker = createSelectedReranker({
     rootPath,
     isDev,
     model: resolveModelByRole(manifestsDir, rootPath, 'reranker', { discovered }),
-    onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason })
+    onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason }),
+    devicePosture: rerankerDevicePosture
   })
   // The audio transcriber — the whisper.cpp CLI; selected only when binary + GGML weights
   // exist (null otherwise; audio imports fail per-file with the download-the-model copy).

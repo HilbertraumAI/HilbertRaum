@@ -1353,6 +1353,13 @@ export const de: Record<keyof typeof en, string> = {
     'Nutzt deine Grafikkarte, um Antworten zu beschleunigen, wenn sie verfügbar ist. ' +
     'Schalte das nur aus, wenn dir Stabilitätsprobleme auffallen — alles funktioniert so ' +
     'oder so weiter.',
+  // Schritt 4-4 (Wave-4-Entscheidung (a)): Opt-in des „cpu-hi“-Rerank-Profils. Keine Zahl im
+  // Text — die genaue Thread-Schwelle ist eine interne Feineinstellung, keine Nutzerangabe.
+  'settings.performance.rerankWideScope': 'Mehr Passagen aus Wissenspaketen neu bewerten',
+  'settings.performance.rerankWideScopeHint':
+    'Langsamer pro Frage. Nur auf einem Computer mit ausreichend Prozessor-Threads und ' +
+    'installiertem Modell zur Neubewertung nutzbar; ein Computer mit nutzbarer Grafikkarte ' +
+    'bewertet ohnehin bereits jede Passage neu.',
   'settings.performance.autoStart':
     'Das ausgewählte Modell beim Start der App automatisch laden',
   'settings.performance.autoStartHint':

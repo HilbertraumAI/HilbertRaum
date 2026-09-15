@@ -1,5 +1,6 @@
 import type { KnowledgePackOutcome } from '../../../shared/types'
 import type { ExternalRetrievalOutput, RetrievedChunk } from '../rag'
+import type { RerankScope } from '../rag/rerank-profile'
 import { admitArticle } from './admit'
 import { CHUNK_DEFAULTS, chunkSegments } from '../ingestion/chunker'
 import { germanCapitalizedNounTokens, norm, resolveHeadNoun } from './head-noun'
@@ -78,6 +79,62 @@ export const PROBE_TIMEOUT_MS = 3_000
 export const LIST_ARTICLE_CHUNKS = 8
 const LIST_TITLE_RE = /^(Liste |List of )/
 
+// Phase 4 PR-B (step 4-4, ruling (a)): the candidate SCOPE per hardware profile
+// (`rag/rerank-profile.ts`) is a pure widening of the SAME per-article overlap-pick construction
+// `capped` (today, unchanged) already does — never a re-implementation. `top48`/`top96` double/
+// quadruple both the per-article slice and the total pack-quota cap; `all` (the bgeP recipe)
+// drops both bounds entirely (every chunk of every admitted article, no per-article slice, no
+// total cap — the pack quota does not bind). `top48` is therefore a SUPERSET of `capped` (the
+// same articles in the same order, each article's top-4/top-8 ⊆ its top-8/top-16), `top96` a
+// superset of `top48`, and `all` a superset of `top96` — pinned in `zim-arm.test.ts`.
+/** Per-article chunk budget for a scope (Frozen parameters, step 4-4). `Infinity` for `all` —
+ *  `Array.prototype.slice(0, Infinity)` returns the whole array, so no special-casing is needed
+ *  where this feeds a `.slice()`. */
+export function perArticleBudget(scope: RerankScope, isList: boolean): number {
+  const base = isList ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
+  switch (scope) {
+    case 'capped':
+      return base
+    case 'top48':
+      return base * 2
+    case 'top96':
+      return base * 4
+    case 'all':
+      return Number.POSITIVE_INFINITY
+  }
+}
+/** Total admitted-candidate cap for a scope (Frozen parameters, step 4-4) — what `packQuota`
+ *  and `allocateCandidates` bound against instead of the bare `MAX_EXTERNAL_CANDIDATES`
+ *  constant. `Infinity` for `all` (the pack quota does not bind; `Math.floor(Infinity / n)` is
+ *  `Infinity`, so `packQuota` needs no special-casing either). */
+export function totalCandidateCapFor(scope: RerankScope): number {
+  switch (scope) {
+    case 'capped':
+      return MAX_EXTERNAL_CANDIDATES
+    case 'top48':
+      return MAX_EXTERNAL_CANDIDATES * 2
+    case 'top96':
+      return MAX_EXTERNAL_CANDIDATES * 4
+    case 'all':
+      return Number.POSITIVE_INFINITY
+  }
+}
+/**
+ * The pure per-article selection itself (run L, step 4-4, calls this OFFLINE on captured
+ * per-pack material to derive `top96`/`top48`/`capped` from the SAME `all`-scope capture — never
+ * a separate re-implementation of the picker). `chunks` is one article's chunks in NATURAL
+ * (chunker) order, each already scored by `overlapScore`; the result is overlap-desc, index-asc,
+ * exactly as `capped` orders them today, sliced to the scope's `perArticleBudget`.
+ */
+export function chunksForScope<T extends { index: number; overlap: number }>(
+  chunks: readonly T[],
+  scope: RerankScope,
+  isList: boolean
+): T[] {
+  const wanted = perArticleBudget(scope, isList)
+  return [...chunks].sort((a, b) => b.overlap - a.overlap || a.index - b.index).slice(0, wanted)
+}
+
 /** Per-pack read budget (Phase 4 PR-A; route F's own `discover()` defaults are 14 / 8 for its
  *  one archive — see the file header for why this arm applies the pair per pack instead). */
 export const DISCOVERY_MAX_READS_PER_PACK = 12
@@ -133,6 +190,12 @@ export interface CollectPackCandidatesOptions {
    * pattern rewrite). Its abort is the ask's abort (rethrown).
    */
   expand?: QueryExpander
+  /**
+   * The candidate scope for this ask (step 4-4, `rag/rerank-profile.ts`'s `rerankScopeFor`):
+   * how many chunks per admitted article, and how many in total, `allocateCandidates` may admit.
+   * Absent ⇒ `'capped'` — today's behaviour, byte-identical to every existing caller and test.
+   */
+  candidateScope?: RerankScope
 }
 
 /** One pack's produced candidates, in the pack's own rank order (search hit order). */
@@ -148,14 +211,19 @@ export interface CandidateAllocation {
 }
 
 /**
- * The provisional per-pack fetch quota (plan §9.21 (c)3): `floor(24 / N)` plus one for the
- * first `24 mod N` packs IN PACK ORDER. It bounds how many CHUNKS a pack contributes, not what
- * is admitted: the round-robin below reclaims a short pack's share for the others.
+ * The provisional per-pack fetch quota (plan §9.21 (c)3): `floor(cap / N)` plus one for the
+ * first `cap mod N` packs IN PACK ORDER. It bounds how many CHUNKS a pack contributes, not what
+ * is admitted: the round-robin below reclaims a short pack's share for the others. `cap`
+ * defaults to `MAX_EXTERNAL_CANDIDATES` (today's `capped` scope, byte-identical to every
+ * existing caller); step 4-4 passes `totalCandidateCapFor(scope)` for a wider scope.
  */
-export function packQuota(index: number, total: number): number {
+export function packQuota(index: number, total: number, cap: number = MAX_EXTERNAL_CANDIDATES): number {
   if (total <= 0) return 0
-  const base = Math.floor(MAX_EXTERNAL_CANDIDATES / total)
-  return base + (index < MAX_EXTERNAL_CANDIDATES % total ? 1 : 0)
+  const base = Math.floor(cap / total)
+  // `all` passes `cap = Infinity`: `Infinity % total` is `NaN` (never `> index`), so the "+1 for
+  // the first `cap mod N` packs" term is always 0 here — harmless, since `base` is already
+  // `Infinity` and `Infinity + 0 === Infinity + 1`.
+  return base + (index < cap % total ? 1 : 0)
 }
 
 /**
@@ -166,8 +234,15 @@ export function packQuota(index: number, total: number): number {
  * Pure and completion-order independent BY CONSTRUCTION: it reads a list built from the pack
  * order the caller was handed, never the order in which the packs happened to finish, so the
  * same per-pack material always yields the same admitted set.
+ *
+ * `cap` defaults to `MAX_EXTERNAL_CANDIDATES` (today's `capped` scope, byte-identical to every
+ * existing caller); step 4-4 passes `totalCandidateCapFor(scope)` — `Infinity` for `all`, so the
+ * loop below runs until every pack's cursor is exhausted instead of stopping at a fixed count.
  */
-export function allocateCandidates(perPack: readonly PackCandidateList[]): CandidateAllocation {
+export function allocateCandidates(
+  perPack: readonly PackCandidateList[],
+  cap: number = MAX_EXTERNAL_CANDIDATES
+): CandidateAllocation {
   const admitted: ExternalCandidate[] = []
   const admittedPerPack = new Map<string, number>()
   for (const pack of perPack) {
@@ -175,10 +250,10 @@ export function allocateCandidates(perPack: readonly PackCandidateList[]): Candi
   }
   const cursors = perPack.map(() => 0)
   let progressed = true
-  while (admitted.length < MAX_EXTERNAL_CANDIDATES && progressed) {
+  while (admitted.length < cap && progressed) {
     progressed = false
     for (let i = 0; i < perPack.length; i++) {
-      if (admitted.length >= MAX_EXTERNAL_CANDIDATES) break
+      if (admitted.length >= cap) break
       const list = perPack[i]!.candidates
       const cursor = cursors[i]!
       if (cursor >= list.length) continue
@@ -265,9 +340,13 @@ export async function collectPackCandidates(
   opts: CollectPackCandidatesOptions = {}
 ): Promise<ExternalRetrievalOutput> {
   const terms = queryTerms(question)
+  // Step 4-4 (ruling (a)): the scope for THIS ask, resolved once and applied to every pack —
+  // absent ⇒ 'capped', so every existing caller keeps today's exact quota/slice.
+  const scope: RerankScope = opts.candidateScope ?? 'capped'
+  const cap = totalCandidateCapFor(scope)
   const work: PackWork[] = packs.map((pack, i) => ({
     pack,
-    quota: packQuota(i, packs.length),
+    quota: packQuota(i, packs.length, cap),
     started: false,
     settled: false,
     settlement: 'searched',
@@ -541,23 +620,25 @@ export async function collectPackCandidates(
     item.settled = true
 
     // Build this pack's candidates from the admitted articles, in discovery order — unchanged
-    // chunking semantics (`html.ts`/`chunker.ts`): chunk, keep the query-overlap top slice
-    // (more for a LIST article: `LIST_ARTICLE_CHUNKS`, as on master), bounded by the pack's own
-    // fair-share quota. F6 (review 2026-09-14, dropped from this PR per the owner's ruling): an
-    // earlier version of this port additionally capped a LIST article's own share at
-    // `Math.ceil(quota / 2)` for multi-pack fairness — a real, unmeasured, untested multi-pack
-    // behaviour change outside this PR's scope (a LIST article always received the full
-    // `LIST_ARTICLE_CHUNKS` on master); reverted here, LIST_ARTICLE_CHUNKS restored unconditionally.
+    // chunking semantics (`html.ts`/`chunker.ts`): chunk, keep the query-overlap top slice for
+    // this ask's SCOPE (step 4-4: `capped` = today's `LIST_ARTICLE_CHUNKS`/`CHUNKS_PER_ARTICLE`
+    // per article, unchanged; `top48`/`top96` widen it; `all` drops the slice entirely), bounded
+    // by the pack's own fair-share quota (`totalCandidateCapFor(scope)`-derived, `Infinity` for
+    // `all` — the pack quota does not bind then). F6 (review 2026-09-14, dropped from this PR
+    // per the owner's ruling): an earlier version of this port additionally capped a LIST
+    // article's own share at `Math.ceil(quota / 2)` for multi-pack fairness — a real,
+    // unmeasured, untested multi-pack behaviour change outside this PR's scope (a LIST article
+    // always received the full per-scope budget on master); reverted here, restored unconditionally.
     for (const { article, hit } of admittedArticles) {
       if (item.candidates.length >= item.quota) break
       const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
       const title = article.title ?? hit.title
-      const wanted = LIST_TITLE_RE.test(title) ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
-      const scored = chunks
-        .map((c, i) => ({ c, i, overlap: overlapScore(c.text, terms) }))
-        .sort((a, b) => b.overlap - a.overlap || a.i - b.i)
-        .slice(0, wanted)
-      for (const { c, i, overlap } of scored) {
+      const scored = chunksForScope(
+        chunks.map((c, i) => ({ c, index: i, overlap: overlapScore(c.text, terms) })),
+        scope,
+        LIST_TITLE_RE.test(title)
+      )
+      for (const { c, index: i, overlap } of scored) {
         item.candidates.push({
           chunkId: `zim:${pack.id}:${hit.articlePath}#${i}`,
           documentId: `zim:${pack.id}`,
@@ -600,7 +681,8 @@ export async function collectPackCandidates(
   }
 
   const allocation = allocateCandidates(
-    work.map((item) => ({ packId: item.pack.id, candidates: item.candidates }))
+    work.map((item) => ({ packId: item.pack.id, candidates: item.candidates })),
+    cap
   )
   const outcomes: KnowledgePackOutcome[] = work.map((item) => {
     const base = {

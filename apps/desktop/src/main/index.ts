@@ -59,8 +59,9 @@ import {
 } from './ipc/registerBenchmarkIpc'
 import { notifyPerformanceChanged } from './ipc/performance-notify'
 import { setAnswerSpeedObserver } from './ipc/chat-stream'
-import { machineKey } from './services/performance'
+import { eligibleDevicesFor, machineKey } from './services/performance'
 import { detectSystem } from './services/benchmark'
+import { resolveRerankProfile, rerankerDeviceFor } from './services/rag/rerank-profile'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
@@ -71,7 +72,7 @@ import {
   createSelectingRuntimeFactory,
   createSpeculativeCrashAutoFallback
 } from './services/runtime/factory'
-import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
+import { defaultThreadCount, killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
 import type { KnowledgePacksChangedEvent } from '../shared/types'
@@ -367,6 +368,32 @@ function initBackend(): void {
     getGpuMode: () => readGpuSetting((s) => s.gpuMode, 'auto' as const),
     getGpuAutoDisabled: () => readGpuSetting((s) => s.gpuAutoDisabled, false)
   }
+  // Step 4-4 (Wave 4 ruling (a)): the reranker sidecar's device posture, consulted lazily by
+  // `LlamaReranker` on its next cold start (never per `rerank()` call) — reads the SAME settings
+  // `resolveAskCandidateScope` (`registerRagIpc.ts`) reads, via the SAME hardware-profile rule,
+  // so a GPU machine's ask and the sidecar it calls never disagree about the profile. A locked
+  // workspace falls back to `default` (never GPU) — the sidecar starts post-unlock in practice.
+  const rerankerDevicePosture = (): 'gpu' | 'cpu' => {
+    const here = machineKey(detectSystem())
+    const settings = (() => {
+      try {
+        return getSettings(workspace.requireDb())
+      } catch {
+        return null
+      }
+    })()
+    const profile = resolveRerankProfile({
+      gpuMode: settings?.gpuMode ?? 'auto',
+      gpuAutoDisabled: settings?.gpuAutoDisabled ?? false,
+      probeDevices: settings ? eligibleDevicesFor(settings, here) : [],
+      threads: defaultThreadCount(),
+      // Unused by `rerankerDeviceFor`/this half of the decision — the candidate-scope half
+      // (`registerRagIpc.ts`) reads the real values for these two.
+      rerankerAvailable: true,
+      wideScopeOptIn: false
+    })
+    return rerankerDeviceFor(profile)
+  }
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
@@ -448,7 +475,10 @@ function initBackend(): void {
     isDev,
     // Issue #42: the translation sidecar honours the same gpuMode/gpuAutoDisabled the chat
     // ladder reads (read per cold start — a Settings flip needs no restart).
-    gpu: gpuSignals
+    gpu: gpuSignals,
+    // Step 4-4: read per cold start too — a settings change stops the sidecar (below) so its
+    // next start re-evaluates.
+    rerankerDevicePosture
   })
   // Packaged-mode OCR execution probe (#232): one bounded worker start, released on success.
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
