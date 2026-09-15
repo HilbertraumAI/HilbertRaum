@@ -273,7 +273,7 @@ describe.runIf(gate.requested)('ZIM knowledge packs against real kiwix-tools', (
           if (expand) {
             const e0 = performance.now()
             const ex = await expand(q.question)
-            note = ` [expansion ${(performance.now() - e0).toFixed(0)} ms: ${ex ? `concepts=${ex.concepts.join(' ')}; listTitle=${ex.listTitle ?? '—'}` : 'null'}]`
+            note = ` [plan ${(performance.now() - e0).toFixed(0)} ms: ${ex ? `titles=${ex.titles.join('|')}; queries=${ex.queries.join('|')}` : 'null'}]`
           }
           const { candidates: found } = await arm!(q.question)
           const titles = [...new Set(found.map((c) => c.sourceTitle))].slice(0, 5)

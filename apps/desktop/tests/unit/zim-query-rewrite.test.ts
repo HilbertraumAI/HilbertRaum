@@ -1,9 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import {
-  RETRY_MIN_TERM_CHARS,
-  narrowByFrequency,
-  searchPattern
-} from '../../src/main/services/zim/query-rewrite'
+import { RETRY_MIN_TERM_CHARS, searchPattern } from '../../src/main/services/zim/query-rewrite'
 
 // #340 L3 (rag-design §17 D-Z18): the question → `/search` pattern rewrite. Xapian ANDs every
 // word the archive's stopper does not drop, and the pinned German Wikipedia archives stop next
@@ -91,71 +87,7 @@ describe('searchPattern (#340 L3, D-Z18)', () => {
   })
 })
 
-describe('narrowByFrequency (#353 document-frequency ladder)', () => {
-  it('drops every zero-df term when at least one exists, keeping the rest', () => {
-    const df = new Map([
-      ['a', 0],
-      ['b', 0],
-      ['c', 5]
-    ])
-    expect(narrowByFrequency(['a', 'b', 'c'], df)).toBe('c')
-  })
-
-  it('drops the one zero-df term among otherwise-known terms', () => {
-    const df = new Map([
-      ['a', 12],
-      ['b', 0],
-      ['c', 40]
-    ])
-    expect(narrowByFrequency(['a', 'b', 'c'], df)).toBe('a c')
-  })
-
-  it('drops the single lowest-df term when no term has df 0', () => {
-    const df = new Map([
-      ['a', 5],
-      ['b', 2],
-      ['c', 8]
-    ])
-    expect(narrowByFrequency(['a', 'b', 'c'], df)).toBe('a c')
-  })
-
-  it('breaks a lowest-df tie by dropping the LAST such term, so an earlier subject word survives', () => {
-    const df = new Map([
-      ['a', 3],
-      ['b', 5],
-      ['c', 3]
-    ])
-    expect(narrowByFrequency(['a', 'b', 'c'], df)).toBe('a b')
-  })
-
-  it('keeps a term with no df entry at all — an absent probe is never treated as the lowest', () => {
-    const df = new Map([['a', 5]]) // 'b' and 'c' were never probed (past the cap, say)
-    expect(narrowByFrequency(['a', 'b', 'c'], df)).toBe('b c')
-  })
-
-  it('drops every term when every one has df 0: nothing survives, so null', () => {
-    const df = new Map([
-      ['a', 0],
-      ['b', 0]
-    ])
-    expect(narrowByFrequency(['a', 'b'], df)).toBeNull()
-  })
-
-  it('ignores a df entry for a term that is not in the list', () => {
-    const df = new Map([
-      ['a', 5],
-      ['b', 2],
-      ['c', 99] // never asked about — must not influence the decision
-    ])
-    expect(narrowByFrequency(['a', 'b'], df)).toBe('a')
-  })
-
-  it('returns null for a single term: dropping it would leave nothing to search', () => {
-    expect(narrowByFrequency(['a'], new Map([['a', 5]]))).toBeNull()
-    expect(narrowByFrequency(['a'], new Map([['a', 0]]))).toBeNull()
-  })
-
-  it('returns null when nothing qualifies to drop — every term unknown', () => {
-    expect(narrowByFrequency(['a', 'b'], new Map())).toBeNull()
-  })
-})
+// The #353 document-frequency ladder (`narrowByFrequency`, `DF_PROBE_MAX_TERMS`) was removed at
+// Phase 4 PR-A: its only caller, `arm.ts`'s single-pattern-with-retry search, was replaced by
+// route F's multi-query FTS (`docs/rag-design.md` §17 "Discovery port (Phase 4 PR-A)"), which
+// does not retry a zero-hit pattern by term frequency. See git history for the removed suite.

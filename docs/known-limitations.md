@@ -2793,22 +2793,34 @@ reports and phase plans were working papers; their full text lives in git histor
   a short or empty pack's unused share goes to the others — and at most two packs are
   searched at a time, under a twenty-second limit for the whole question (a pack cut off
   mid-search is reported as "failed: timed out", one never reached in time as "not
-  searched: out of time for this question"). The pack server ANDs every word of the search pattern, so the app sends only the question's content words (function and question-frame words stripped, `rag-design.md` §17 D-Z18), retries once with fewer words when nothing is found, and — when even that finds nothing — checks how common each remaining word is in that archive, drops every word that is entirely absent from it (or, if none is, just the rarest one), and tries once more (§17 D-Z18 amendment, #353); a question whose remaining content words never co-occur in one article can still miss. None of this considers language: a German question against an
+  searched: out of time for this question"). The pack server ANDs every word of the search pattern, so the app sends only the question's content words (function and question-frame words stripped, `rag-design.md` §17 D-Z18); if that alone finds nothing at all, it retries ONCE with a narrower version of the same words (five letters or longer only, when that differs from the first try). A question whose remaining content words never co-occur in one article can still miss. None of this considers language: a German question against an
   English pack simply scores poorly; the reranker sorts it out when present, and without
-  one, expect occasional off-language chunks. Aggregation or superlative questions ("which
-  scientists are famous Austrians") get one extra step before the search: the app asks the
-  local model for the concepts and the likely list-article title (one short model call per
-  pack question), which finds the list article in the cases we measured. **What that step
-  costs is set by how long the model's answer is, not by how long the app has been running.**
-  Measured on a fast desktop processor with the bundled 4B model and no graphics card: two and
-  a half to six seconds, and the longest-answering questions land at the top of that range every
-  time. The same questions on a graphics card take under half a second; on a slower processor
-  they take four to ten. A question whose answer is spread across an
-  article's individual rows, rather than named on the page itself, can still miss; and on a
-  machine slow enough that the call runs past twelve seconds, the question falls back to
-  the plain search with no list-title step — the answer is still grounded and still cites what
-  it used, it is just the plain search's articles. That fallback also costs the question those
-  twelve seconds before any pack is searched, out of the twenty the whole question is allowed. Every ticked pack gets one line in the
+  one, expect occasional off-language chunks. EVERY pack-scoped question (not only aggregation
+  or superlative ones) gets one extra step before the search: the app asks the local model for
+  a short search plan — up to three candidate article titles and two full-text search queries,
+  never an answer, never a guessed fact — which recovers most of the cases where the question's
+  own words don't match the answering article's title or index entry (a list or superlative
+  question is the clearest example, but any question benefits). **What that step costs is set
+  by how long the model's answer is, not by how long the app has been running.** Measured on a
+  fast desktop processor (32 threads) with the bundled 4B model and no graphics card: about six
+  and a half to eight seconds. On a graphics card the same questions take about half a second.
+  On a much more thread-constrained processor (a two-thread stand-in for a slow machine) they
+  take seven to twelve seconds, and **1 of 50** measured questions on that configuration (2%)
+  ran the full twelve seconds without a usable reply — the plan step is more likely to run out
+  of time on such a machine than the shorter question-plan it replaced, an accepted cost of
+  asking for richer search vocabulary (measured against a like-for-like comparison on the SAME
+  configurations: the plan step's own "no usable reply" rate never exceeded the older step's,
+  either at full threads or at two). Separately, on the FASTEST machine measured (a graphics
+  card), the model's reply is cut off, not just slow, for about 1 question in 200: the plan's
+  length cap is a whole-number multiple of 8 tokens and the longest reply measured landed one
+  token past it, so that one reply (and any as long) is truncated and treated the same as no
+  reply — the plan step still falls back cleanly, it just does so slightly more often than a
+  looser cap would have. A question whose answer is spread across an article's
+  individual rows, rather than named on the page itself, can still miss; and on a machine slow
+  enough that the call runs past twelve seconds, the question falls back to the plain search
+  with no title/query step — the answer is still grounded and still cites what it used, it is
+  just the plain search's articles. That fallback also costs the question those twelve seconds
+  before any pack is searched, out of the twenty the whole question is allowed. Every ticked pack gets one line in the
   "Knowledge packs:" note under the answer — searched (and how much it contributed) or
   not searched/failed with a short reason — even on an answer that cites nothing at all;
   an older answer, from before this note existed, says "outcome not recorded" instead.

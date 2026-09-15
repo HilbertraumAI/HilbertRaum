@@ -457,7 +457,7 @@ describe('parseSearchXml / searchPack', () => {
   })
 })
 
-describe('parseSearchTotal / searchPackTotal (#353 document-frequency ladder)', () => {
+describe('parseSearchTotal / searchPackTotal (the archive-wide hit-count client — the #353 ladder that once called it is gone, this stays general-purpose)', () => {
   it('parses the opensearch:totalResults element', () => {
     expect(parseSearchTotal(SEARCH_XML)).toBe(301)
   })
