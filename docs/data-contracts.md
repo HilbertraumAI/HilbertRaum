@@ -2106,3 +2106,14 @@ only — the entry path and both titles are content and never ride it. New plain
 `'article-save'` (`services/ingestion/plaintext-ops.ts`) tracks the `.parse.md` transient the
 save writes before handing it to `createQueuedDocument` → `processDocument`, so a lock/quit
 mid-save sweeps it like any other in-flight plaintext.
+
+**Step 4-4 (Phase 4 PR-B, Wave 4 ruling (a)):** `AppSettings` gains `ragRerankWideScope: boolean`
+(default `false`, the generic `typeof` write gate — no special-case needed, same as
+`chatCompactionEnabled`/`localApiEnabled`) — the `cpu-hi` rerank hardware profile's opt-in
+(`rag/rerank-profile.ts`'s `rerankScopeFor`: reranks the wider `top48` knowledge-pack candidate
+pool on a machine with no usable GPU but at least `CPU_HI_MIN_THREADS` processor threads; no
+effect on the `gpu` profile, which reranks `GPU_RERANK_SCOPE` regardless, or the `default`
+profile). Surfaced as a `Switch` in `SettingsScreen.tsx`'s performance card beside the GPU
+toggle; no new IPC channel (rides the existing `getSettings`/`updateSettings` pair). No shape
+change to `ExternalCandidate`/`RetrievedChunk`/`Citation` — the scope widens WHICH chunks the
+arm admits, never their fields.

@@ -3355,6 +3355,18 @@ chat model and a second process exposed to driver flakiness during ingestion, wh
 fails a whole document. Revisit only if a larger embedding model lands. This is also the
 codebase's permanent, tested forced-CPU spawn example.
 
+**The reranker no longer shares this permanent pin (step 4-4, `rag-design.md` §17 PR-B record).**
+Until Phase 4 PR-B, `LlamaReranker` cited this SAME section for the identical reasoning ("a
+sub-1B scorer gains little from a GPU and must never contend for VRAM with the chat model") —
+both sidecars were permanently `--device none`. PR-B splits them: the reranker's device posture
+now follows the rerank hardware profile (`rag/rerank-profile.ts`) — CPU-pinned (`--device none`,
+byte-identical to before) on the `cpu-hi` and `default` profiles, on the GPU (no `--device`
+argument at all — llama-server's own `ngl`-auto + `--fit`, the same rung-1 semantics the chat
+runtime uses) on the `gpu` profile. `--device none` stays the only device argument the app EVER
+passes anywhere (never `-ngl`); the embedder above is unaffected and remains permanently
+CPU-pinned. See `reranker/llama.ts`'s own header for the exact launch-argument construction and
+`rag-design.md` §17 for the profile rule, run L's selection and run A3's acceptance floors.
+
 ### §8 Expectations, profile bump, UI copy
 
 | Hardware | CPU baseline | With GPU |

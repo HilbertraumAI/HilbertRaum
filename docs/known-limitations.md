@@ -816,7 +816,31 @@ password recovery — are documented in
   the reranker is provisioned. Bounded by the candidate cap (≤ 2×`topKInitial`) + word-truncation
   budgets (the tuning levers); the reranker stays an opt-in (provision-the-GGUF) feature, never
   bundled by default. The `HILBERTRAUM_RAG_QUALITY` run is the evidence it earns the cost
-  (rag-design §12.3).
+  (rag-design §12.3). **The rerank hardware-profile rule (step 4-4, `rag-design.md` §17 PR-B
+  record) follows from this cost:** on a usable GPU the reranker sees every fetched knowledge-pack
+  block essentially for free (run L, 2026-09-15: GPU `all`-scope rerank p90 2.67 s for a mean 118
+  documents, max 410); on a CPU-only machine the wider `top48` opt-in (`ragRerankWideScope`)
+  **ships disabled for everyone** — run L measured its rerank p90 at 25.3 s at 8 threads and 29.1 s
+  at 16 threads (16 threads was NOT faster than 8 on this measurement), both roughly 2.3–2.7× the
+  10.8 s bound the ruling set, so `CPU_HI_MIN_THREADS` is frozen at `Infinity` and the `cpu-hi`
+  profile is unreachable by any real machine until a future re-measurement lowers it. Every
+  CPU-only machine keeps today's `capped` scope regardless of thread count.
+- **The reranker sidecar's VRAM share beside the chat model on a small usable card is
+  UNMEASURED (step 4-4).** On the `gpu` rerank profile the sidecar launches with no `--device`
+  argument (llama-server's own `ngl`-auto + `--fit`), the same as the chat runtime's rung-1 — but
+  unlike the chat runtime, no fit-margin measurement exists yet for a card near the 5,120 MiB
+  usable floor (`USABLE_VRAM_MB`) running the reranker ALONGSIDE a resident chat model. A fit that
+  cannot find enough contiguous VRAM spills to host memory rather than failing (the same behaviour
+  a partially-offloaded chat model shows); the resulting latency of that spilled case is not on
+  file. Revisit with a measurement on a ~5–6 GiB card once one is available to the project (the
+  same "no 4 GB card owned" gap `architecture.md`'s `USABLE_VRAM_MB` record already discloses).
+- **The `all` rerank scope's failure fallback is degraded but bounded, not measured under load
+  (step 4-4).** A rerank call over every fetched block (up to several hundred documents, run L
+  measured a max of 410) is still bounded by the reranker's existing `DEFAULT_REQUEST_TIMEOUT_MS`
+  (120 s) and `retrieve()`'s existing catch path (the fused order is kept, then the interleave) —
+  no new fallback code was added for step 4-4. Whether a 120 s timeout is ever reached in practice
+  on the `gpu` profile is unmeasured (run L's largest observed call was 5.2 s); a future report
+  should record it if a real-world case approaches the bound.
 - **The embedder/reranker failed-start latch is for a PERMANENT fault only — a transient port-bind
   race no longer arms it (arch GPU record §5.5b).** Each
   sidecar latches a failed start so it doesn't re-await the full health timeout on every call. That

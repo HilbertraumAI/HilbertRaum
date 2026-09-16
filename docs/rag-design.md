@@ -3876,13 +3876,90 @@ scoped Opus re-check. The code state this record describes is commit `6266778c` 
 tests commit, the last commit before this docs update); the docs/BUILD_STATE commit and the PR's
 own head follow it.
 
-**If/when this PR merges, PR-B** makes the CPU rerank scope conditional on the hardware profile
-(GPU, or ≥8 CPU threads), per 4-i's pre-registered fallback — no bounded rerank scope
-(`T24`/`T48`/`ALL`) met both the ≤10 s p90 latency bar and the `MEAS49 allPack` quality-parity
-bar (within 2 of `ALL`'s 56). PR-B is minted by the orchestrator after PR-A merges.
+**PR-B (Phase 4 PR-B, step 4-4, Wave 4 ruling (a)) — the rerank scope per hardware profile.**
+Minted after PR-A merged (`8f66e7d3`); branch `feat/zim-rerank-profiles`, PR #470. Three
+profiles, resolved by one pure function (`rag/rerank-profile.ts`) from the app's existing GPU
+probe/settings and the runtime's configured thread count — no RAM tier, no model size, no
+benchmark:
+
+- **`gpu`** — a usable GPU (`gpuMode: 'auto'`, not `gpuAutoDisabled`, `gpuUsefulForProfile` finds
+  a card ≥ `USABLE_VRAM_MB`): the reranker sees `GPU_RERANK_SCOPE` and rerank is on by default,
+  the sidecar's `--rerank` launch OMITS `--device none` (llama-server's own `ngl`-auto + `--fit`,
+  never `-ngl`).
+- **`cpu-hi`** — no usable GPU, but the runtime's thread count is at least `CPU_HI_MIN_THREADS`:
+  `top48` (a superset of `capped`: the same per-article overlap-pick construction, doubled) is
+  available as the `ragRerankWideScope` opt-in (default OFF), the sidecar stays `--device none`.
+- **`default`** — neither: unchanged, `capped` scope, CPU sidecar.
+
+A scope wider than `capped` is used only when a reranker is provisioned (`rerankerAvailable`) —
+absent one every profile is `capped`, byte-identical to before this PR. The candidate scope is
+resolved once per ask (`registerRagIpc.ts` → `zim/arm.ts`'s `candidateScope`); the device posture
+is resolved lazily on the reranker sidecar's next cold start (`reranker/llama.ts`'s
+`devicePosture` callback), so a `gpuMode`/`gpuAutoDisabled` settings change stops the sidecar
+(`suspend()`, never the permanent `stop()`) and its next start re-evaluates.
+
+**Run L (2026-09-15, a development latency read on the 50-id `cpu50.json` set, never `core200`;
+`artifacts/scope-selection.json`, `artifacts/run-l-latency.json`):** one lock hold — the GPU
+planner captured each id's `all`-scope candidates once (the per-pack material `top96`/`top48`
+were derived OFFLINE from, via the branch's own exported `chunksForScope`, never a
+re-implementation), then the GPU reranker timed `all`/`top96`/`top48` per id, then the CPU
+reranker timed `top48` at 8 and 16 threads. Bound: 10,848 ms (4-i M1's shipped CPU rerank median
+per question). GPU p90 by scope — `all` **2,671 ms**, `top96` 1,128 ms, `top48` 693 ms (n=43
+calls each; docs mean 118/55/33, max 410/96/48) — every GPU scope clears the bound with wide
+margin, so **`GPU_RERANK_SCOPE = 'all'`** (matches the predicted value, no miss). CPU top48 p90 —
+**8 threads 25,317 ms, 16 threads 29,101 ms** (16 threads was NOT faster than 8 here) — both miss
+the bound by roughly 2.3–2.7×, so **`CPU_HI_MIN_THREADS = Infinity`, a MISS at both thread
+counts** against the predicted 8 threads at 9.06 s (4-i's M2 prediction pooled a LEXICAL top-48
+over route-F blocks, never the product's own wider `top48` construction measured here). A run-L
+selection miss is not a floor miss (the ruled fallback ships: the `cpu-hi` profile is
+unreachable by any finite thread count — `threads >= Infinity` is false for every real
+machine — and the `ragRerankWideScope` opt-in has no effect for anyone until a future
+re-measurement lowers the constant). The GPU sidecar's captured stderr never explicitly
+mentioned "Vulkan"/"offload" text (`run-l-latency.json`'s `vulkanEvidence` — the load banner was
+evidently not in the 4,000-char tail by the time it was read); the TIMING evidence is decisive
+instead — GPU `all` (up to 410 documents) finished in a p90 of 2.7 s where CPU `top48` (≤ 48
+documents) took a p90 of 25.3 s on the SAME hardware in the SAME session, two orders of magnitude
+apart, which is not explicable by CPU execution.
+
+**Run A3 (2026-09-15/16, the one authorised `core200` acceptance read per profile; each profile
+read exactly once):**
+
+- **`default`** (rerank forced off, `capped` scope, planner on the GPU as run A2): **id-level
+  diff of 0/200 against run A2 — PASS.** The offline, informational replay (run A2's captured
+  candidates through this branch's `retrieve()` with `reranker = null`) also matched
+  byte-identically on 200/200 (`replay-a2-through-branch.json`), isolating the code path from
+  planner variance.
+- **`gpu`** (planner + reranker both on the GPU, scope `all`): **every floor PASSES, with wide
+  margin.** `allPacked` **78/200** (floor ≥ 45; beside 26 no-rerank, 47 capped-rerank — the wider
+  pool nearly DOUBLES the capped-rerank record's gain, not merely holds it), `anyPacked`
+  **111/200** (beside 42, 79), `anyCandidate` **116/200** (floor ≥ 80), `anyArticle` **120/200**
+  (floor ≥ 96), arm p90 excluding planner and rerank **173 ms** (floor ≤ 2,500 ms), rerank p90
+  **2,358 ms** (floor ≤ 10,848 ms), planner p90 **605 ms** (floor ≤ 3,000 ms). By population:
+  DEV49 `allPacked` 40/100, MEAS49 38/100. The GPU sanity row — run A's captured (capped-scope)
+  candidates replayed through the branch's `retrieve()` with the GPU-postured reranker — measured
+  `allPacked` **47/200**, IDENTICAL to 4-2's own CPU-rerank record of 47 with **0 differing ids**
+  (`sanity-capped-gpu-vs-47.json`): the capped path reproduces the record exactly on the GPU.
+- **`cpu-hi`** (planner + reranker both `--device none` at 8 threads — run L's selection, forced
+  since the real constant disables the profile; scope `top48` forced on): `allPacked` **63/200 —
+  PASS** (floor ≥ 45; beside 26, 47 — also a real gain over the capped-rerank record), but rerank
+  p90 **25,206 ms — MISS** against the ≤ 10,848 ms floor (mean 15,257 ms, max 55,911 ms, n=181
+  calls) — confirmatory of run L's own prediction on the same hardware, not a surprise from this
+  read. **Per the Endpoint's no-waiver rule this is a floor miss; `artifacts/gap-diagnosis.json`
+  lists the 20 slowest calls with their document counts.** The miss lands entirely in a code path
+  the shipped constant already disables for every real machine (`CPU_HI_MIN_THREADS = Infinity`
+  from run L) — no live user is affected — but the ruled acceptance floor for the FORCED read
+  still misses, so this step proposes `blocked`, with the owner ruling on the number in hand.
+
+Full per-profile tables: `steps/4-4-product-pr-rerank-profiles/artifacts/acceptance-table-a3.md`,
+`acceptance-a3-{default,gpu,cpu}.json`. **Decision: `default` and `gpu` hold every floor;
+`cpu-hi` holds its quality floor but misses its rerank-latency floor in a code path already
+unreachable in production — step 4-4 proposes `blocked`, pending the owner's ruling with the
+figure in hand, per the brief's no-waiver Endpoint rule.** The code state this record describes
+is commit `c4c926bf` (run L's constants-freeze commit, the last commit before this docs update);
+the docs/BUILD_STATE commit and the PR's own head follow it.
 
 **Open questions for PR-B / the human reviewer** (neither blocks PR-A; both are unchanged from
-step 4's report):
+step 4's report; PR-B does not address either):
 
 - STAGE 2's multi-word title admission (`title.includes(' ') && hidx === 0`) admits the rank-0
   `/suggest` hit UNCONDITIONALLY, regardless of actual similarity to the plan title asked for —
