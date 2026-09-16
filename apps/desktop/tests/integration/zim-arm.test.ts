@@ -16,6 +16,7 @@ import {
 import type { Reranker } from '../../src/main/services/reranker'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
 import {
+  ALL_SCOPE_MAX_DOCS,
   CHUNKS_PER_ARTICLE,
   DISCOVERY_MAX_ADMITTED_PER_PACK,
   DISCOVERY_MAX_READS_PER_PACK,
@@ -704,20 +705,27 @@ describe('queryTerms / overlapScore', () => {
 describe('candidate scope (step 4-4)', () => {
   const SCOPES: RerankScope[] = ['capped', 'top48', 'top96', 'all']
 
-  it('perArticleBudget doubles/quadruples the per-article slice; totalCandidateCapFor the pack-quota cap; all is unbounded', () => {
+  it('perArticleBudget doubles/quadruples the per-article slice; totalCandidateCapFor the pack-quota cap; all\'s PER-ARTICLE budget stays unbounded (step 4-5 ruling (e)(ii) caps only the TOTAL)', () => {
     expect(perArticleBudget('capped', false)).toBe(CHUNKS_PER_ARTICLE)
     expect(perArticleBudget('capped', true)).toBe(LIST_ARTICLE_CHUNKS)
     expect(perArticleBudget('top48', false)).toBe(CHUNKS_PER_ARTICLE * 2)
     expect(perArticleBudget('top48', true)).toBe(LIST_ARTICLE_CHUNKS * 2)
     expect(perArticleBudget('top96', false)).toBe(CHUNKS_PER_ARTICLE * 4)
     expect(perArticleBudget('top96', true)).toBe(LIST_ARTICLE_CHUNKS * 4)
+    // Unchanged by step 4-5: 'all' is still "every chunk of every admitted article" per article.
     expect(perArticleBudget('all', false)).toBe(Number.POSITIVE_INFINITY)
     expect(perArticleBudget('all', true)).toBe(Number.POSITIVE_INFINITY)
 
     expect(totalCandidateCapFor('capped')).toBe(MAX_EXTERNAL_CANDIDATES)
     expect(totalCandidateCapFor('top48')).toBe(MAX_EXTERNAL_CANDIDATES * 2)
     expect(totalCandidateCapFor('top96')).toBe(MAX_EXTERNAL_CANDIDATES * 4)
-    expect(totalCandidateCapFor('all')).toBe(Number.POSITIVE_INFINITY)
+    // Step 4-5 (ruling (e)(ii), B3/B7/B20): 'all' is no longer literally unbounded in TOTAL — run
+    // L2 sets `ALL_SCOPE_MAX_DOCS`, the per-call document ceiling `totalCandidateCapFor('all')`
+    // now returns (192 by the pre-registered miss default, until run L2's read selects the
+    // actual value; see the constant's own doc comment).
+    expect(totalCandidateCapFor('all')).toBe(ALL_SCOPE_MAX_DOCS)
+    expect(totalCandidateCapFor('all')).toBeGreaterThanOrEqual(192)
+    expect(totalCandidateCapFor('all')).toBeLessThan(Number.POSITIVE_INFINITY)
   })
 
   it('chunksForScope orders overlap-desc/index-asc and slices to the per-article budget, for a non-list article', () => {
@@ -834,12 +842,19 @@ describe('candidate scope (step 4-4)', () => {
     expect(top48Quotas.reduce((a, b) => a + b, 0)).toBe(top48Cap)
     expect(top48Cap).toBe(MAX_EXTERNAL_CANDIDATES * 2)
 
-    // allocateCandidates admits up to the cap when every pack has enough candidates, for 'all' too.
+    // allocateCandidates admits up to the cap when every pack has enough candidates.
+    // Step 4-5 (ruling (e)(ii)): 'all' is no longer literally unbounded, so this pins the SAME
+    // round-robin-admits-up-to-the-cap behaviour against whatever finite `ALL_SCOPE_MAX_DOCS`
+    // is (run L2's selection), rather than assuming every pack's full 100 candidates are
+    // admitted. With 3 packs × 100 candidates = 300 available, the admitted count is
+    // min(300, the cap) either way — this stays meaningful whether run L2 selects 192, 256,
+    // 384 or 512 (or keeps the 192 miss default).
     const longPacks = Array.from({ length: n }, (_, i) => ({
       packId: `p${i}`,
       candidates: Array.from({ length: 100 }, (_, j) => archiveCandidate(j, `pack ${i} chunk ${j}`))
     }))
-    expect(allocateCandidates(longPacks, totalCandidateCapFor('all')).admitted).toHaveLength(300)
+    const allCap = totalCandidateCapFor('all')
+    expect(allocateCandidates(longPacks, allCap).admitted).toHaveLength(Math.min(300, allCap))
     expect(allocateCandidates(longPacks, totalCandidateCapFor('capped')).admitted).toHaveLength(MAX_EXTERNAL_CANDIDATES)
   })
 
@@ -887,6 +902,39 @@ describe('candidate scope (step 4-4)', () => {
     })
     const allList = all.filter((c) => c.sourceTitle === LIST_ARTICLE)
     expect(allList.length).toBe(totalListChunks) // "yields every chunk of the admitted article"
+  })
+
+  // Step 4-5 (ruling (e)(i), B3/B7): `collectPackCandidates` itself always computes the `capped`
+  // companion selection beside the ask's own scope — this pins the SEAM `retrieve()`'s fallback
+  // reads, directly at the arm, not only through the higher-level `retrieve()` fixtures.
+  it('collectPackCandidates always returns a cappedCandidates field, computed from the SAME material (step 4-5, ruling (e)(i))', async () => {
+    const packs = [{ id: 'pack-plan', title: 'Kraftwerke von Wikipedia' }]
+    const names = new Map([['pack-plan', 'book-pack-plan']])
+    const PLAN: SearchPlan = { titles: [LIST_ARTICLE], queries: [PLAN_QUERY] }
+    const expand = async (): Promise<SearchPlan> => PLAN
+
+    // On an EXPLICIT 'capped' ask, cappedCandidates is value-identical to candidates (same
+    // function, same material, same scope both times).
+    const cappedAsk = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
+      expand,
+      candidateScope: 'capped'
+    })
+    expect(cappedAsk.cappedCandidates).toBeDefined()
+    expect(cappedAsk.cappedCandidates!.map((c) => c.chunkId)).toEqual(cappedAsk.candidates.map((c) => c.chunkId))
+
+    // On the 'all' ask, cappedCandidates is a STRICT SUBSET (never the whole wide pool) — the
+    // list article's full chunk count for `candidates`, its LIST_ARTICLE_CHUNKS slice for
+    // cappedCandidates — and every capped id is one of the wide ids (the superset property).
+    const allAsk = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
+      expand,
+      candidateScope: 'all'
+    })
+    const allListChunks = allAsk.candidates.filter((c) => c.sourceTitle === LIST_ARTICLE)
+    const cappedListChunks = allAsk.cappedCandidates!.filter((c) => c.sourceTitle === LIST_ARTICLE)
+    expect(cappedListChunks.length).toBe(LIST_ARTICLE_CHUNKS)
+    expect(cappedListChunks.length).toBeLessThan(allListChunks.length)
+    const wideIds = new Set(allAsk.candidates.map((c) => c.chunkId))
+    for (const c of allAsk.cappedCandidates!) expect(wideIds.has(c.chunkId)).toBe(true)
   })
 })
 
@@ -939,6 +987,15 @@ function testArm(...candidates: Array<ReturnType<typeof archiveCandidate>>): Ext
   return { candidates, outcomes: [] }
 }
 
+/** Like `testArm`, but also supplies the arm's `capped`-scope companion selection (step 4-5,
+ *  ruling (e)(i)/B3) — the fallback `retrieve()` restricts to on a rerank-call failure. */
+function testArmWithCapped(
+  candidates: Array<ReturnType<typeof archiveCandidate>>,
+  cappedCandidates: Array<ReturnType<typeof archiveCandidate>>
+): ExternalRetrievalOutput {
+  return { candidates, outcomes: [], cappedCandidates }
+}
+
 describe('retrieve() with an external arm', () => {
   it('interleaves document and archive candidates without a reranker and builds archive citations', async () => {
     const db = freshDb()
@@ -984,6 +1041,106 @@ describe('retrieve() with an external arm', () => {
     const r = await retrieve(db, embedder, 'Methan', SETTINGS, null, fakeReranker, undefined, async () => testArm(archiveCandidate(0, 'Methan aus der Landwirtschaft.')))
     expect(r.chunks[0]?.sourceKind).toBe('archive')
     expect(r.chunks[0]?.label).toBe('S1')
+  })
+
+  // Step 4-5 (ruling (e)(i), B3 with B7/B20 — scoped Opus review of step 4-4): a rerank-call
+  // failure must restrict the external candidates to the arm's `capped` companion selection,
+  // never interleave the WHOLE wide pool — measured (4-4's own gpu-profile no-rerank column)
+  // landing BELOW the no-arm/`capped` baseline (22/33/116 vs 26/42/142), not merely failing to
+  // help. The four properties below are ruling (e)(i)'s own list, pinned directly.
+  describe('the non-regressive rerank-failure fallback (step 4-5, ruling (e)(i))', () => {
+    it('property 1: on the capped scope the field is the identity — the fallback path is byte-identical to today', async () => {
+      const db = freshDb()
+      const embedder = new MockEmbedder()
+      await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
+      const cappedArm = [archiveCandidate(0, 'Methan aus der Landwirtschaft ist ein Treibhausgas.')]
+      const throwingReranker: Reranker = { id: 'fake-throwing-reranker', async rerank() { throw new Error('sidecar down') } } as Reranker
+      // A `capped`-scope arm's OWN `cappedCandidates` is value-identical to its `candidates`
+      // (arm.ts computes both from the same material under the same 'capped' scope) — never a
+      // different, smaller list.
+      const withField = await retrieve(db, embedder, 'Methan', SETTINGS, null, throwingReranker, undefined, async () =>
+        testArmWithCapped(cappedArm, cappedArm)
+      )
+      // An arm that supplies NO cappedCandidates field (every pre-4-5 arm, `testArm`) behaves
+      // exactly the same — the field's absence is the "byte-identical to today" case.
+      const withoutField = await retrieve(db, embedder, 'Methan', SETTINGS, null, throwingReranker, undefined, async () =>
+        testArm(...cappedArm)
+      )
+      expect(withField.chunks.map((c) => c.chunkId)).toEqual(withoutField.chunks.map((c) => c.chunkId))
+      expect(withField.chunks.some((c) => c.sourceKind === 'archive')).toBe(true)
+    })
+
+    it('property 2: a wide-scope arm + a THROWING reranker restricts the external candidates to EXACTLY the capped set — set equality and order, not a count', async () => {
+      const db = freshDb()
+      const embedder = new MockEmbedder()
+      await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
+      const wide = [
+        archiveCandidate(0, 'Methan A aus der Landwirtschaft.'),
+        archiveCandidate(1, 'Methan B aus der Landwirtschaft.'),
+        archiveCandidate(2, 'Methan C aus der Landwirtschaft.'),
+        archiveCandidate(3, 'Methan D aus der Landwirtschaft.')
+      ]
+      // A strict, order-preserving SUBSET — never the whole wide pool (the wide scope's own
+      // candidates and its capped companion differ on purpose, as `all`/`capped` genuinely do).
+      const capped = [wide[1]!, wide[3]!]
+      const throwingReranker: Reranker = { id: 'fake-throwing-reranker', async rerank() { throw new Error('sidecar down') } } as Reranker
+      const r = await retrieve(db, embedder, 'Methan', SETTINGS, null, throwingReranker, undefined, async () =>
+        testArmWithCapped(wide, capped)
+      )
+      const archiveChunkIds = r.chunks.filter((c) => c.sourceKind === 'archive').map((c) => c.chunkId)
+      expect(archiveChunkIds).toEqual(capped.map((c) => c.chunkId)) // exactly these two, in this order
+      expect(archiveChunkIds).not.toContain(wide[0]!.chunkId)
+      expect(archiveChunkIds).not.toContain(wide[2]!.chunkId)
+    })
+
+    it('property 3: an ABORTED ask still throws through a throwing reranker + a wide-scope arm — the fallback never swallows a cancellation (T09)', async () => {
+      const db = freshDb()
+      const embedder = new MockEmbedder()
+      await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
+      const wide = [archiveCandidate(0, 'Methan aus der Landwirtschaft.'), archiveCandidate(1, 'Methan wieder.')]
+      const controller = new AbortController()
+      const abortingReranker: Reranker = {
+        id: 'fake-aborting-reranker',
+        async rerank() {
+          controller.abort()
+          const err = new Error('The ask was cancelled')
+          err.name = 'AbortError'
+          throw err
+        }
+      } as Reranker
+      await expect(
+        retrieve(
+          db,
+          embedder,
+          'Methan',
+          SETTINGS,
+          null,
+          abortingReranker,
+          controller.signal,
+          async () => testArmWithCapped(wide, [wide[0]!])
+        )
+      ).rejects.toMatchObject({ name: 'AbortError' })
+    })
+
+    it('property 4: after a SUCCESSFUL rerank the fallback is dead — relevance decides, the capped restriction never applies', async () => {
+      const db = freshDb()
+      const embedder = new MockEmbedder()
+      await seedDocument(db, embedder, 'notes.txt', ['Ein Dokument über etwas anderes.'])
+      const wide = [archiveCandidate(0, 'Methan A.'), archiveCandidate(1, 'Methan B (the winner).')]
+      // The capped companion deliberately excludes the reranker's actual winner — if the
+      // fallback wrongly applied after a SUCCESSFUL rerank, the winner would vanish.
+      const capped = [wide[0]!]
+      const rankingReranker: Reranker = {
+        async rerank(_q, docs) {
+          return docs.map((text, index) => ({ index, score: text.includes('winner') ? 10 : 0 }))
+        }
+      } as Reranker
+      const r = await retrieve(db, embedder, 'Methan', SETTINGS, null, rankingReranker, undefined, async () =>
+        testArmWithCapped(wide, capped)
+      )
+      expect(r.chunks[0]?.sourceKind).toBe('archive')
+      expect(r.chunks[0]?.chunkId).toBe(wide[1]!.chunkId) // the excluded-from-capped winner survives
+    })
   })
 
   // Re-based by P4 (#301, plan §9.21 (a)3, ruling D4) onto the EXPLICIT flag. The live-demo fix

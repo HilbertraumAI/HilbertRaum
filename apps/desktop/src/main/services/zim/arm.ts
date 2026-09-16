@@ -110,10 +110,25 @@ export function perArticleBudget(scope: RerankScope, isList: boolean): number {
       return Number.POSITIVE_INFINITY
   }
 }
-/** Total admitted-candidate cap for a scope (Frozen parameters, step 4-4) — what `packQuota`
- *  and `allocateCandidates` bound against instead of the bare `MAX_EXTERNAL_CANDIDATES`
- *  constant. `Infinity` for `all` (the pack quota does not bind; `Math.floor(Infinity / n)` is
- *  `Infinity`, so `packQuota` needs no special-casing either). */
+/**
+ * Per-call document ceiling for the `all` scope (step 4-5, ruling (e)(ii); B3 with B7/B20).
+ * `all` stays "every chunk of every admitted article" — `perArticleBudget('all', …)` is
+ * UNCHANGED, still `Number.POSITIVE_INFINITY` — but the TOTAL a single rerank call may see is
+ * now bounded, because run L (step 4-4) measured the unbounded pool producing a 755-document
+ * call at 10,774 ms, 74 ms under this PR's own 10,848 ms bound, on a SINGLE pack; a multi-pack
+ * ask (up to `MAX_SELECTED_PACKS` = 12, `shared/types.ts`) has no such margin.
+ *
+ * Set by run L2 (a two-pack development latency read on the `cpu50` set,
+ * `programme-state/steps/4-5-product-pr-rerank-profiles-2/artifacts/scope-selection-2.json`).
+ * Pre-registered selection rule: the largest of {192, 256, 384, 512} whose two-pack rerank p90
+ * is at or under the 10,848 ms bound (4-i M1's shipped CPU rerank median per question), else
+ * 192 with the miss reported. `192` here is the PREDICTED/floor value pending that read.
+ */
+export const ALL_SCOPE_MAX_DOCS = 192
+
+/** Total admitted-candidate cap for a scope (Frozen parameters, step 4-4; `all` capped by
+ *  step 4-5 ruling (e)(ii)) — what `packQuota` and `allocateCandidates` bound against instead
+ *  of the bare `MAX_EXTERNAL_CANDIDATES` constant. */
 export function totalCandidateCapFor(scope: RerankScope): number {
   switch (scope) {
     case 'capped':
@@ -123,7 +138,7 @@ export function totalCandidateCapFor(scope: RerankScope): number {
     case 'top96':
       return MAX_EXTERNAL_CANDIDATES * 4
     case 'all':
-      return Number.POSITIVE_INFINITY
+      return ALL_SCOPE_MAX_DOCS
   }
 }
 /**
@@ -280,12 +295,22 @@ type PackSettlement = 'searched' | 'search-failed' | 'read-failed'
 interface PackWork {
   pack: ArmPack
   quota: number
+  /**
+   * Step 4-5 (ruling (e)(i), B3/B7): this pack's OWN quota under the `capped` scope, computed
+   * alongside `quota` regardless of the ask's actual scope — the companion selection a
+   * rerank-call failure restricts to, rebuilt from the SAME admitted articles (never a second
+   * discovery/fetch pass).
+   */
+  cappedQuota: number
   /** A worker picked this pack up (so a deadline hitting now is a `timeout`, not a `deadline`). */
   started: boolean
   /** The pack ran to its own end (its outcome is `settlement`, whatever happens afterwards). */
   settled: boolean
   settlement: PackSettlement
   candidates: ExternalCandidate[]
+  /** Step 4-5 (ruling (e)(i)): the SAME articles' `capped`-scope selection, built beside
+   *  `candidates` in the loop below. */
+  cappedCandidates: ExternalCandidate[]
 }
 
 /** Read-budget accounting (Phase 4 PR-A) — pure, so it is unit-testable in isolation from any
@@ -351,13 +376,20 @@ export async function collectPackCandidates(
   // absent ⇒ 'capped', so every existing caller keeps today's exact quota/slice.
   const scope: RerankScope = opts.candidateScope ?? 'capped'
   const cap = totalCandidateCapFor(scope)
+  // Step 4-5 (ruling (e)(i)): the SAME `capped` cap/quota, computed unconditionally beside the
+  // ask's own — cheap (no extra network read, just a second `chunksForScope`/`allocateCandidates`
+  // pass over already-fetched material) and needed on EVERY ask, not only a wide one, so a
+  // rerank-call failure always has a same-material fallback to restrict to.
+  const cappedCap = totalCandidateCapFor('capped')
   const work: PackWork[] = packs.map((pack, i) => ({
     pack,
     quota: packQuota(i, packs.length, cap),
+    cappedQuota: packQuota(i, packs.length, cappedCap),
     started: false,
     settled: false,
     settlement: 'searched',
-    candidates: []
+    candidates: [],
+    cappedCandidates: []
   }))
 
   /** The first abort a request or a conversion raised — rethrown verbatim for a cancellation. */
@@ -637,28 +669,41 @@ export async function collectPackCandidates(
     // unmeasured, untested multi-pack behaviour change outside this PR's scope (a LIST article
     // always received the full per-scope budget on master); reverted here, restored unconditionally.
     for (const { article, hit } of admittedArticles) {
-      if (item.candidates.length >= item.quota) break
+      const moreMain = item.candidates.length < item.quota
+      const moreCapped = item.cappedCandidates.length < item.cappedQuota
+      if (!moreMain && !moreCapped) break
       const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
       const title = article.title ?? hit.title
-      const scored = chunksForScope(
-        chunks.map((c, i) => ({ c, index: i, overlap: overlapScore(c.text, terms) })),
-        scope,
-        isListArticleTitle(title)
-      )
-      for (const { c, index: i, overlap } of scored) {
-        item.candidates.push({
-          chunkId: `zim:${pack.id}:${hit.articlePath}#${i}`,
-          documentId: `zim:${pack.id}`,
-          text: c.text,
-          sourceTitle: title,
-          pageNumber: null,
-          sectionLabel: c.sectionLabel ?? null,
-          score: overlap,
-          sourceKind: 'archive',
-          packId: pack.id,
-          archiveTitle: pack.title,
-          articlePath: hit.articlePath
-        })
+      const isList = isListArticleTitle(title)
+      const mapped = chunks.map((c, i) => ({ c, index: i, overlap: overlapScore(c.text, terms) }))
+      const makeCandidate = (i: number, c: (typeof mapped)[number]['c'], overlap: number): ExternalCandidate => ({
+        chunkId: `zim:${pack.id}:${hit.articlePath}#${i}`,
+        documentId: `zim:${pack.id}`,
+        text: c.text,
+        sourceTitle: title,
+        pageNumber: null,
+        sectionLabel: c.sectionLabel ?? null,
+        score: overlap,
+        sourceKind: 'archive',
+        packId: pack.id,
+        archiveTitle: pack.title,
+        articlePath: hit.articlePath
+      })
+      if (moreMain) {
+        const scored = chunksForScope(mapped, scope, isList)
+        for (const { c, index: i, overlap } of scored) {
+          item.candidates.push(makeCandidate(i, c, overlap))
+        }
+      }
+      // Step 4-5 (ruling (e)(i), B3/B7): the SAME article's `capped` selection, from the
+      // IDENTICAL chunk/overlap material (`mapped`) — never a re-derivation, never a second
+      // fetch. `retrieve()`'s `!reranked` branch (`rag/index.ts`) restricts to this instead of
+      // the whole wide pool on a rerank-call failure.
+      if (moreCapped) {
+        const cappedScored = chunksForScope(mapped, 'capped', isList)
+        for (const { c, index: i, overlap } of cappedScored) {
+          item.cappedCandidates.push(makeCandidate(i, c, overlap))
+        }
       }
     }
   }
@@ -691,6 +736,14 @@ export async function collectPackCandidates(
     work.map((item) => ({ packId: item.pack.id, candidates: item.candidates })),
     cap
   )
+  // Step 4-5 (ruling (e)(i)): the SAME admission function, over the `capped`-scope companion
+  // lists built alongside `candidates` above — the fallback `retrieve()` restricts to on a
+  // rerank-call failure. On an already-`capped` ask this is value-identical to `allocation`
+  // (same function, same per-article material, same 'capped' scope both times).
+  const cappedAllocation = allocateCandidates(
+    work.map((item) => ({ packId: item.pack.id, candidates: item.cappedCandidates })),
+    cappedCap
+  )
   const outcomes: KnowledgePackOutcome[] = work.map((item) => {
     const base = {
       packId: item.pack.id,
@@ -709,7 +762,7 @@ export async function collectPackCandidates(
     }
     return { ...base, status: 'failed' as const, reason: item.settlement }
   })
-  return { candidates: allocation.admitted, outcomes }
+  return { candidates: allocation.admitted, outcomes, cappedCandidates: cappedAllocation.admitted }
 }
 
 /** True when the abort came from the ask itself (a cancellation) rather than the deadline. */
