@@ -116,9 +116,11 @@ export function meetsThreadThreshold(threads: number, minThreads: number): boole
 /**
  * The candidate scope for a resolved profile. A scope wider than `capped` is used ONLY when a
  * reranker is provisioned: with no reranker every profile is `capped`. The `gpu` acceptance
- * read's own no-rerank column (the `all` scope through `retrieve()`'s no-rerank interleave, the
- * exact configuration a rerank-call failure falls back to) measured WHY: `allPacked` 26→22 and
- * `anyPacked` 42→33 against the `capped`/no-rerank baseline — a wide lexical pool with no
+ * read's own no-rerank column (the `all` scope through `retrieve()`'s no-rerank interleave — the
+ * configuration an ABSENT reranker produces, `rerankerAvailable: false`; a rerank-call FAILURE is
+ * restricted to the `capped` companion instead, since step 4-5 ruling (e)(i), `zim/arm.ts`'s
+ * `cappedCandidates`) measured WHY the absent-reranker fallback stays `capped`: `allPacked` 26→22
+ * and `anyPacked` 42→33 against the `capped`/no-rerank baseline — a wide lexical pool with no
  * cross-encoder does not merely fail to help, it packs FEWER gold blocks than today's narrower
  * pool (see `docs/known-limitations.md`'s fallback-cost bullet and `docs/rag-design.md` §17 for
  * the full table). This is a measured cost, not a hypothetical.

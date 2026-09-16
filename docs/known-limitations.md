@@ -840,9 +840,11 @@ password recovery — are documented in
   (ample headroom for both models at once), so the acceptance read run under this gate confirms
   no regression THERE but cannot confirm the gate correctly reads a genuinely tight card — the
   5–6 GiB laptop class `architecture.md`'s `USABLE_VRAM_MB` record already discusses. See step
-  4-5's `hardware-leg.json` for whether a suitable machine was reached to close this directly; if
-  not, the gate ships on the ARITHMETIC alone (the same estimator the picker and the fit budget
-  already use elsewhere, not a new one invented for this gate) until one is.
+  4-5's `hardware-leg.json`: **no such machine was reached in this session** (`available: false`),
+  so the gate ships on the ARITHMETIC alone (the same estimator the picker and the fit budget
+  already use elsewhere, not a new one invented for this gate) plus `rerank-profile.test.ts`'s
+  fixtures (real device/manifest figures, including the #318 RTX 3060 Laptop's own `totalMb`) —
+  not yet confirmed by a live small-card run.
 - **The `all` rerank scope is capped, and a rerank-call failure now falls back to TODAY's
   baseline instead of landing below it — both measured, neither asserted (step 4-4's finding,
   step 4-5's fix).** Step 4-4 shipped `all` with no per-call document ceiling and no dedicated

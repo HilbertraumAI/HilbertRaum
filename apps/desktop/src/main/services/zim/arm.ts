@@ -263,9 +263,13 @@ export interface CandidateAllocation {
 export function packQuota(index: number, total: number, cap: number = MAX_EXTERNAL_CANDIDATES): number {
   if (total <= 0) return 0
   const base = Math.floor(cap / total)
-  // `all` passes `cap = Infinity`: `Infinity % total` is `NaN` (never `> index`), so the "+1 for
-  // the first `cap mod N` packs" term is always 0 here — harmless, since `base` is already
-  // `Infinity` and `Infinity + 0 === Infinity + 1`.
+  // Step 4-5 (ruling (e)(ii)): `all` no longer passes `cap = Infinity` — `totalCandidateCapFor('all')`
+  // is `ALL_SCOPE_MAX_DOCS` (512), a genuine finite cap, so this "+1 for the first `cap mod N`
+  // packs" term DOES fire under `all` now (e.g. 512 / 12 packs → `512 % 12 = 8`, so the first
+  // eight packs get one extra), exactly like every other finite-cap scope — the non-uniform-quota
+  // case 4-4's B10 flagged. Only an explicit `Number.POSITIVE_INFINITY` (the run-L2 measurement
+  // seam, `totalCandidateCapOverride`) still hits the `NaN`/always-0 case this comment used to
+  // describe unconditionally.
   return base + (index < cap % total ? 1 : 0)
 }
 
@@ -279,8 +283,11 @@ export function packQuota(index: number, total: number, cap: number = MAX_EXTERN
  * same per-pack material always yields the same admitted set.
  *
  * `cap` defaults to `MAX_EXTERNAL_CANDIDATES` (today's `capped` scope, byte-identical to every
- * existing caller); step 4-4 passes `totalCandidateCapFor(scope)` — `Infinity` for `all`, so the
- * loop below runs until every pack's cursor is exhausted instead of stopping at a fixed count.
+ * existing caller); step 4-4 passes `totalCandidateCapFor(scope)`, which step 4-5 (ruling
+ * (e)(ii)) made finite for EVERY scope including `all` (`ALL_SCOPE_MAX_DOCS`, 512) — the loop
+ * below now always stops at a fixed count. Only the measurement-only `totalCandidateCapOverride`
+ * seam (run L2) can still pass `Number.POSITIVE_INFINITY`, in which case the loop runs until
+ * every pack's cursor is exhausted instead.
  */
 export function allocateCandidates(
   perPack: readonly PackCandidateList[],
@@ -685,8 +692,9 @@ export async function collectPackCandidates(
     // chunking semantics (`html.ts`/`chunker.ts`): chunk, keep the query-overlap top slice for
     // this ask's SCOPE (step 4-4: `capped` = today's `LIST_ARTICLE_CHUNKS`/`CHUNKS_PER_ARTICLE`
     // per article, unchanged; `top48`/`top96` widen it; `all` drops the slice entirely), bounded
-    // by the pack's own fair-share quota (`totalCandidateCapFor(scope)`-derived, `Infinity` for
-    // `all` — the pack quota does not bind then). F6 (review 2026-09-14, dropped from this PR
+    // by the pack's own fair-share quota (`totalCandidateCapFor(scope)`-derived — `ALL_SCOPE_MAX_DOCS`
+    // (512) for `all` since step 4-5 ruling (e)(ii): the pack quota DOES bind under `all` now,
+    // same as every other scope). F6 (review 2026-09-14, dropped from this PR
     // per the owner's ruling): an earlier version of this port additionally capped a LIST
     // article's own share at `Math.ceil(quota / 2)` for multi-pack fairness — a real,
     // unmeasured, untested multi-pack behaviour change outside this PR's scope (a LIST article

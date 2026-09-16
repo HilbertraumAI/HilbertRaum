@@ -63,13 +63,20 @@ import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './ch
 import type { Db } from '../services/db'
 
 /**
- * This ask's knowledge-pack candidate scope, resolved from the SAME hardware-profile rule the
- * reranker sidecar's device posture uses (`rag/rerank-profile.ts`) — so a GPU machine's ask sees
- * `GPU_RERANK_SCOPE` candidates exactly when the sidecar it is about to call is about to start
- * on the GPU, never a mismatch. Absent a reranker (`rerankerAvailable: false`), `rerankScopeFor`
- * always returns `'capped'` — a MEASURED requirement, not just a defensive default: the `gpu`
- * profile's own no-rerank column (the `all` scope through the no-rerank interleave, exactly what
- * a rerank-call failure falls back to) packed FEWER gold blocks than today's `capped`/no-rerank
+ * This ask's knowledge-pack candidate scope, resolved from `resolveRerankProfile`'s hardware
+ * profile (`rag/rerank-profile.ts`) — a GPU machine's ask sees `GPU_RERANK_SCOPE` candidates
+ * whenever the profile resolves `gpu`. Step 4-5 (ruling (d), B2) re-sourced the reranker
+ * sidecar's own device POSTURE onto a separate, headroom-gated check (`rerankerDeviceFor`) and
+ * deliberately left this scope classification alone — so on a small card where the chat model
+ * leaves too little headroom, the profile can still resolve `gpu` (and therefore this wide
+ * scope) while the sidecar itself starts `--device none` (CPU posture): the scope this function
+ * returns and the sidecar's actual posture CAN mismatch. Flagged by the scoped Opus review of
+ * step 4-5 (finding C1) as unmeasured and undisclosed; open for the owner to rule on, not fixed
+ * here. Absent a reranker (`rerankerAvailable: false`), `rerankScopeFor` always returns
+ * `'capped'` — a MEASURED requirement, not just a defensive default: the `gpu` profile's own
+ * no-rerank column (the `all` scope through the no-rerank interleave — the configuration an
+ * ABSENT reranker produces; a rerank-call FAILURE is restricted to the `capped` companion
+ * instead, since step 4-5 ruling (e)(i)) packed FEWER gold blocks than today's `capped`/no-rerank
  * baseline (`allPacked` 26→22, `anyPacked` 42→33 — see `docs/known-limitations.md`'s
  * fallback-cost bullet and `docs/rag-design.md` §17). Exported for
  * `tests/unit/rerank-profile-wiring.test.ts` — the one production call site this function has.

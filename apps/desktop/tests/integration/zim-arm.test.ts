@@ -745,12 +745,19 @@ describe('candidate scope (step 4-4)', () => {
     }
   })
 
-  it('the superset property: capped ⊆ top48 ⊆ top96 ⊆ all, by chunk index, for both a normal and a list article (fixed overlaps, including ties)', () => {
+  it('the superset property AT THE PER-ARTICLE chunksForScope LAYER: capped ⊆ top48 ⊆ top96 ⊆ all, by chunk index, for both a normal and a list article (fixed overlaps, including ties)', () => {
     // B10 (scoped Opus review, step 4-4): FIXED, hand-written overlaps — including genuine ties
     // (the case `index asc` tie-breaking exists for, which `Math.random()` essentially never
     // produces) — so this fixture is reproducible and a failure is re-runnable. Overlap pattern:
     // a strictly-descending run (0..29 tied in pairs: 39,39,38,38,...) then a flat tail of zeros,
     // so every scope's cut point lands inside a tie at least once.
+    //
+    // D5 (scoped Opus review, step 4-5): this holds UNCONDITIONALLY at this layer only, because
+    // `chunksForScope` never applies the cross-pack TOTAL admission cap — `all` here is simply
+    // "every chunk of this one article", which trivially contains every other scope's slice. The
+    // COMPOSED admission (`collectPackCandidates`'s article loop + `allocateCandidates`, which DOES
+    // apply `totalCandidateCapFor(scope)`) is a different question — `top96 ⊆ all` can break there
+    // once the finite `all` ceiling binds; see the composed-level tests below.
     const chunks = Array.from({ length: 40 }, (_, i) => ({
       index: i,
       overlap: i < 30 ? 39 - Math.floor(i / 2) : 0, // pairs tie: (0,1)->39, (2,3)->38, ...; 30..39 -> 0
@@ -802,7 +809,17 @@ describe('candidate scope (step 4-4)', () => {
     return new Set(admitted.map((c) => c.chunkId))
   }
 
-  it('the superset property holds on the COMPOSED admission output (packQuota + the article loop + allocateCandidates), not only the per-article slice', () => {
+  // D5 (scoped Opus review, step 4-5): `capped ⊆ top48 ⊆ top96` is a genuine, unconditional
+  // property of the composed admission (verified below AND by a sweep over pack-count ×
+  // chunks-per-article × article-count configurations — zero breaks). `top96 ⊆ all` is NOT: once
+  // `totalCandidateCapFor('all')` (`ALL_SCOPE_MAX_DOCS`, 512, step 4-5 ruling (e)(ii)) actually
+  // binds, `all`'s per-pack FETCHING quota (`packQuota`) can be smaller than `top96`'s for a
+  // later-discovered article, dropping that article's `top96` members entirely — see the
+  // dedicated breaking-fixture test directly below for the smallest reachable case (measured, not
+  // hypothetical: 43 configurations break it in the sweep). The two fixtures THIS test uses stay
+  // well under 512 total candidates, so the `all` ceiling never binds here and `top96 ⊆ all`
+  // holds for them — that is what this test actually proves, not a universal guarantee.
+  it('capped ⊆ top48 ⊆ top96 holds on the COMPOSED admission output (packQuota + the article loop + allocateCandidates); top96 ⊆ all holds too ON THESE FIXTURES, which do not bind the all-scope ceiling', () => {
     const tiedChunks = (n: number): Array<{ index: number; overlap: number }> =>
       Array.from({ length: n }, (_, i) => ({ index: i, overlap: Math.floor((n - i) / 2) })) // ties every pair
     const fixtures: Array<ReadonlyArray<ReadonlyArray<{ isList: boolean; chunks: Array<{ index: number; overlap: number }> }>>> = [
@@ -827,6 +844,36 @@ describe('candidate scope (step 4-4)', () => {
       for (const id of top48) expect(top96.has(id)).toBe(true)
       for (const id of top96) expect(all.has(id)).toBe(true)
     }
+  })
+
+  it('D5 (scoped Opus review, step 4-5): top96 ⊆ all is NOT a universal property once the all-scope ceiling binds — the smallest reachable break (1 pack, 6 admitted articles of 100 chunks each)', () => {
+    // Measured directly against the branch's own composeAdmitted (the same helper the test above
+    // uses, never a re-implementation): under `top96` each article contributes at most 16 chunks
+    // (`perArticleBudget('top96', false)`), so the 96-item budget reaches six articles; under
+    // `all` each article contributes every one of its 100 chunks, so the 512-item ceiling is
+    // exhausted inside the first five articles, and article six's own top-96 members — which DID
+    // make it into the `top96` admission — fall off the end of `all`'s. `capped ⊆ top48 ⊆ top96`
+    // stays intact throughout (asserted below): this is specifically a `top96`-vs-`all` break, not
+    // a weakening of the chain the brief protected.
+    const tiedChunks = (n: number): Array<{ index: number; overlap: number }> =>
+      Array.from({ length: n }, (_, i) => ({ index: i, overlap: Math.floor((n - i) / 2) }))
+    const packsArticles = [Array.from({ length: 6 }, () => ({ isList: false, chunks: tiedChunks(100) }))]
+    const byScope = new Map(SCOPES.map((s) => [s, composeAdmitted(packsArticles, s)]))
+    const capped = byScope.get('capped')!
+    const top48 = byScope.get('top48')!
+    const top96 = byScope.get('top96')!
+    const all = byScope.get('all')!
+
+    // The chain the brief protected: still intact.
+    for (const id of capped) expect(top48.has(id)).toBe(true)
+    for (const id of top48) expect(top96.has(id)).toBe(true)
+
+    // The relation that breaks: measured exactly, not merely "not guaranteed".
+    expect(all.size).toBe(ALL_SCOPE_MAX_DOCS) // the ceiling genuinely binds on this fixture
+    expect(top96.size).toBe(96)
+    const missingFromAll = [...top96].filter((id) => !all.has(id))
+    expect(missingFromAll.length).toBe(4)
+    expect(missingFromAll.sort()).toEqual(['p0:a5:c12', 'p0:a5:c13', 'p0:a5:c14', 'p0:a5:c15'])
   })
 
   it('packQuota/allocateCandidates with an explicit cap match totalCandidateCapFor for a wider scope, and default to MAX_EXTERNAL_CANDIDATES unchanged', () => {
@@ -935,6 +982,18 @@ describe('candidate scope (step 4-4)', () => {
     expect(cappedListChunks.length).toBeLessThan(allListChunks.length)
     const wideIds = new Set(allAsk.candidates.map((c) => c.chunkId))
     for (const c of allAsk.cappedCandidates!) expect(wideIds.has(c.chunkId)).toBe(true)
+
+    // D8 (scoped Opus review, step 4-5): ruling (e)(i) property (2) names an EQUALITY, not just
+    // subset-ness — "the external candidates reaching the dedup/trim are exactly the set a
+    // capped-scope arm produces over the SAME material". The assertions above pin only that the
+    // 'all' ask's cappedCandidates is A subset of its own wide candidates; they do not pin that it
+    // is THE SAME set a genuinely separate 'capped' ask produces. Pin the PRODUCER directly, with
+    // a real second call (never a hand-built list):
+    const cappedOnlyAsk = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
+      expand,
+      candidateScope: 'capped'
+    })
+    expect(allAsk.cappedCandidates!.map((c) => c.chunkId)).toEqual(cappedOnlyAsk.candidates.map((c) => c.chunkId))
   })
 
   // Step 4-5 (run L2, ruling (e)(ii)): the measurement-only override that lets run L2 capture

@@ -4091,6 +4091,16 @@ this step resolves exactly those three.
   "Search my documents" toggle-off both use), silently exempting it from the fix; found the same
   way, fixed, and pinned by a dedicated "packs-only" property test (property 5) no existing test
   configuration could have caught (every property 1–4 test seeds a document).
+  **Measured relation (scoped Opus review of step 4-5, finding D5):** the finite ceiling breaks
+  `top96 ⊆ all` as a universal property of the COMPOSED admission — a sweep over pack-count ×
+  chunks-per-article × article-count configurations found 43 breaking cases, the smallest
+  reachable being 1 pack × 6 admitted articles × 100 chunks/article (`top96`'s 6th article
+  contributes chunks `all`'s 512-item ceiling has already exhausted five articles before reaching
+  — 4 of `top96`'s 96 ids absent from `all`, pinned in `zim-arm.test.ts`). `capped ⊆ top48 ⊆
+  top96` is unaffected — zero breaks across the same sweep. No user-visible consequence follows
+  (the scopes are never compared at run time in production; `top96` is reachable only from the
+  disabled `cpu-hi` profile), and the existing superset pin was retitled to state exactly what it
+  proves rather than implying an unconditional chain.
 
 **The one further authorised `core200` acceptance read (ruling (f), 2026-09-16):**
 
@@ -4112,9 +4122,14 @@ this step resolves exactly those three.
   planner and rerank **167 ms** (floor ≤ 2,500 ms), rerank p90 **2,381 ms** (floor ≤ 10,848 ms),
   planner p90 **618 ms** (floor ≤ 3,000 ms). The GPU sanity row — run A's captured (capped-scope)
   candidates replayed through the branch's `retrieve()` with the GPU-postured reranker —
-  measured `allPacked` **47/200**, matching 4-2's own CPU-rerank record exactly, with **0**
-  differing ids this time (step 4-4's own replay drifted on 3, from F16-on-Vulkan-vs-CPU rank
-  noise; `sanity-capped-gpu-2.json`).
+  measured `allPacked` **47/200**, matching 4-2's own CPU-rerank record exactly, with **0** ids
+  changing the `allPacked` VERDICT (the same measure step 4-4 also reported 0 on;
+  `differingIds` in this script is `allIds.filter(id => gpuAllPacked[id] !== cpuRefAllPacked[id])`
+  — a verdict diff, not a chunk-sequence one). Comparing `final_rerank` chunk SEQUENCES instead
+  (the like-for-like measure step 4-4's B8 used) still finds F16-on-Vulkan rank drift on the SAME
+  **3 of 200 ids — `H036`, `H057`, `H082`** — unchanged from step 4-4; this step did not measure
+  or close that drift (`sanity-capped-gpu-2.json`; correction per the scoped Opus review of step
+  4-5, finding D1).
 
 **Decision: both profiles hold every floor — no floor waived, no read repeated.** `cpu-hi` was
 not re-read (ships disabled per Wave 4 ruling (a); step 4-5's brief forbids re-reading it). The

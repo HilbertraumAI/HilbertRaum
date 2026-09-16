@@ -3387,8 +3387,11 @@ question is re-sourced. **Disclosed limit:** the project's 12 GiB measurement ma
 Ti) has ample headroom for both models at once, so on it the new gate behaves identically to
 step 4-4's — the step's acceptance read confirms no regression there, but cannot validate the
 gate on the small-card path the gate exists for (a 5–6 GiB card where the chat model alone may
-leave too little room for the reranker too). See `docs/known-limitations.md` and step 4-5's own
-`hardware-leg.json` for whether a suitable machine was reachable to close this gap directly.
+leave too little room for the reranker too). **No such machine was reachable from step 4-5's
+session** (`hardware-leg.json`, `available: false`); the insufficient-headroom branch is covered
+only by `rerank-profile.test.ts`'s fixtures (real device/manifest figures, including the #318 RTX
+3060 Laptop's own `totalMb`), not by a live run — see `docs/known-limitations.md` for the same
+gap. A live small-card leg remains open.
 
 ### §8 Expectations, profile bump, UI copy
 
