@@ -936,6 +936,48 @@ describe('candidate scope (step 4-4)', () => {
     const wideIds = new Set(allAsk.candidates.map((c) => c.chunkId))
     for (const c of allAsk.cappedCandidates!) expect(wideIds.has(c.chunkId)).toBe(true)
   })
+
+  // Step 4-5 (run L2, ruling (e)(ii)): the measurement-only override that lets run L2 capture
+  // the genuinely UNCAPPED `all` candidate list even after `ALL_SCOPE_MAX_DOCS` ships finite —
+  // see the option's own doc comment on `CollectPackCandidatesOptions`.
+  it('totalCandidateCapOverride replaces the scope\'s own total cap for one call; absent is byte-identical to today (the measurement seam, step 4-5)', async () => {
+    const packs = [{ id: 'pack-plan', title: 'Kraftwerke von Wikipedia' }]
+    const names = new Map([['pack-plan', 'book-pack-plan']])
+    const PLAN: SearchPlan = { titles: [LIST_ARTICLE], queries: [PLAN_QUERY] }
+    const expand = async (): Promise<SearchPlan> => PLAN
+
+    const withoutOverride = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
+      expand,
+      candidateScope: 'all'
+    })
+    // Absent -> exactly totalCandidateCapFor('all') (ALL_SCOPE_MAX_DOCS), unchanged.
+    expect(withoutOverride.candidates.length).toBeLessThanOrEqual(totalCandidateCapFor('all'))
+
+    // A tiny override (1) caps the SAME ask far below ALL_SCOPE_MAX_DOCS.
+    const tinyOverride = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
+      expand,
+      candidateScope: 'all',
+      totalCandidateCapOverride: 1
+    })
+    expect(tinyOverride.candidates.length).toBe(1)
+
+    // Number.POSITIVE_INFINITY reproduces run L's own "uncapped" capture (every chunk of every
+    // admitted article, no total cap) -- pin: at least as many candidates as the (finite,
+    // already-capped) default call, and equal to the list article's own full chunk count when
+    // that count alone would already exceed a small cap.
+    const uncapped = await collectPackCandidates(port, packs, PLAN_QUESTION, undefined, names, {
+      expand,
+      candidateScope: 'all',
+      totalCandidateCapOverride: Number.POSITIVE_INFINITY
+    })
+    expect(uncapped.candidates.length).toBeGreaterThanOrEqual(withoutOverride.candidates.length)
+
+    // The capped companion selection (ruling (e)(i)) is UNAFFECTED by this override -- always
+    // totalCandidateCapFor('capped'), on every one of the three calls above.
+    for (const result of [withoutOverride, tinyOverride, uncapped]) {
+      expect(result.cappedCandidates!.length).toBeLessThanOrEqual(totalCandidateCapFor('capped'))
+    }
+  })
 })
 
 // ---- the retrieve() seam ----------------------------------------------------------

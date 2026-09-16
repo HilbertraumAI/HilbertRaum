@@ -1981,4 +1981,33 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       }
     }
   }, 60_000)
+
+  // Step 4-5 (ruling (e)(i), B3/B7 — scoped Opus review of step 4-4): `collectPackCandidates`
+  // always computes a `cappedCandidates` companion selection, but `runArm` used to reconstruct
+  // its own return object and drop it — the ONE production wiring (`registerRagIpc.ts`'s
+  // `externalArm: ctx.zim?.makeArm(...)`) would then never see it, making `retrieve()`'s
+  // non-regressive rerank-failure fallback dead code for every real ask despite every unit test
+  // (which stubs the arm directly) passing green. This exercises the REAL service end to end —
+  // no hand-made arm result anywhere — the same gap class T15's own header comment (four lines
+  // up) exists to close for the admission/fairness contract.
+  it("step 4-5 (ruling (e)(i)): makeArm/runArm forward collectPackCandidates' cappedCandidates end to end — the production wiring the non-regressive fallback depends on", async () => {
+    const h = t15Service()
+    try {
+      t15Reset()
+      const packId = await h.addPack('cap-forward.zim')
+      t15Behaviour.set(packId, 'long') // addPack defaults 'short'; 'long' gives a multi-chunk article
+      const arm = h.svc.makeArm(h.db, [packId], { candidateScope: 'all' })
+      expect(arm).not.toBeNull()
+      const result = await arm!(QUESTION, undefined)
+      expect(result.cappedCandidates).toBeDefined()
+      expect(result.cappedCandidates!.length).toBeGreaterThan(0)
+      // The superset property (B10's own pin, restated at this seam): every capped id is one of
+      // the wide ids, and the capped set is never larger than the wide one.
+      expect(result.cappedCandidates!.length).toBeLessThanOrEqual(result.candidates.length)
+      const wideIds = new Set(result.candidates.map((c) => c.chunkId))
+      for (const c of result.cappedCandidates!) expect(wideIds.has(c.chunkId)).toBe(true)
+    } finally {
+      await h.close()
+    }
+  })
 })

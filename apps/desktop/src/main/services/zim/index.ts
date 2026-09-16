@@ -1469,7 +1469,15 @@ export class ZimService {
             candidateScope
           }
         )
-        return { candidates: produced.candidates, outcomes: [...outcomes, ...produced.outcomes] }
+        // Step 4-5 (ruling (e)(i), B3/B7): `cappedCandidates` must reach `retrieve()` unchanged
+        // — it is what the `!reranked` fallback restricts to on a rerank-call failure. Dropping
+        // it here (as this line did before) would make the fallback fix in `rag/index.ts` dead
+        // code for every real ask, since `retrieve()` sees only what THIS function returns.
+        return {
+          candidates: produced.candidates,
+          outcomes: [...outcomes, ...produced.outcomes],
+          cappedCandidates: produced.cappedCandidates
+        }
       })
       // Before the CONTENT return: a lock that landed during the fetches must not hand
       // archive text back into the prompt of a session that is closing.

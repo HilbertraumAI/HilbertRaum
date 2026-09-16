@@ -218,6 +218,19 @@ export interface CollectPackCandidatesOptions {
    * Absent ⇒ `'capped'` — today's behaviour, byte-identical to every existing caller and test.
    */
   candidateScope?: RerankScope
+  /**
+   * Step 4-5 (run L2, ruling (e)(ii)): overrides `totalCandidateCapFor(candidateScope)` for
+   * THIS call's total admission cap — measurement/test seam only, mirroring
+   * `articleTimeoutMs`/`probeTimeoutMs` above; production never sets it. Needed because run L2
+   * must capture the genuinely UNCAPPED `all` candidate list (per id, per pack) to derive every
+   * ceiling {192, 256, 384, 512} offline from ONE capture; once `ALL_SCOPE_MAX_DOCS` ships
+   * finite (this step), an ordinary `candidateScope: 'all'` call truncates at that value, which
+   * would make every WIDER cell derived from it measure identically to the narrowest one — a
+   * methodologically unsound "the wider cell always clears the bound" result. The `capped`
+   * companion selection (`cappedCandidates`, ruling (e)(i)) is UNAFFECTED: it always uses
+   * `totalCandidateCapFor('capped')`, never this override.
+   */
+  totalCandidateCapOverride?: number
 }
 
 /** One pack's produced candidates, in the pack's own rank order (search hit order). */
@@ -375,7 +388,9 @@ export async function collectPackCandidates(
   // Step 4-4 (ruling (a)): the scope for THIS ask, resolved once and applied to every pack —
   // absent ⇒ 'capped', so every existing caller keeps today's exact quota/slice.
   const scope: RerankScope = opts.candidateScope ?? 'capped'
-  const cap = totalCandidateCapFor(scope)
+  // Step 4-5 (run L2 measurement seam): opts.totalCandidateCapOverride, when set, replaces the
+  // scope's own cap for this call only — see the option's own doc comment.
+  const cap = opts.totalCandidateCapOverride ?? totalCandidateCapFor(scope)
   // Step 4-5 (ruling (e)(i)): the SAME `capped` cap/quota, computed unconditionally beside the
   // ask's own — cheap (no extra network read, just a second `chunksForScope`/`allocateCandidates`
   // pass over already-fetched material) and needed on EVERY ask, not only a wide one, so a
