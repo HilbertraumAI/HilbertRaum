@@ -1183,6 +1183,37 @@ describe('retrieve() with an external arm', () => {
       expect(r.chunks[0]?.sourceKind).toBe('archive')
       expect(r.chunks[0]?.chunkId).toBe(wide[1]!.chunkId) // the excluded-from-capped winner survives
     })
+
+    // Found during step 4-5's own acceptance read (a packs-only 'gpu'-profile hold, exactly
+    // this scope): the ORIGINAL guard on this branch was `candidates.length > externalCount`,
+    // which is false precisely when there are NO document candidates at all
+    // (`candidates.length === externalCount`, e.g. `noDocuments: true` — no seedDocument call
+    // below) — skipping the whole restriction and leaving the WIDE pool untouched. Every
+    // property 1-4 test above seeds a document, so none of them could have caught this; this
+    // is the packs-only counterpart of property 2.
+    it('property 5: a packs-only ask (NO document candidates at all) still restricts to the capped set on a THROWING reranker', async () => {
+      const db = freshDb()
+      const embedder = new MockEmbedder()
+      // No seedDocument call: candidates.length === externalCount exactly, the case the guard
+      // above used to skip.
+      const wide = [
+        archiveCandidate(0, 'Methan A aus der Landwirtschaft.'),
+        archiveCandidate(1, 'Methan B aus der Landwirtschaft.'),
+        archiveCandidate(2, 'Methan C aus der Landwirtschaft.'),
+        archiveCandidate(3, 'Methan D aus der Landwirtschaft.')
+      ]
+      const capped = [wide[1]!, wide[3]!]
+      const throwingReranker: Reranker = { id: 'fake-throwing-reranker-packs-only', async rerank() { throw new Error('sidecar down') } } as Reranker
+      const scope = { packIds: ['pack-1'], collectionIds: null, documentIds: null, noDocuments: true as const }
+      const r = await retrieve(db, embedder, 'Methan', SETTINGS, scope, throwingReranker, undefined, async () =>
+        testArmWithCapped(wide, capped)
+      )
+      expect(r.chunks.every((c) => c.sourceKind === 'archive')).toBe(true) // no documents in scope at all
+      const archiveChunkIds = r.chunks.map((c) => c.chunkId)
+      expect(archiveChunkIds).toEqual(capped.map((c) => c.chunkId)) // exactly these two, in this order
+      expect(archiveChunkIds).not.toContain(wide[0]!.chunkId)
+      expect(archiveChunkIds).not.toContain(wide[2]!.chunkId)
+    })
   })
 
   // Re-based by P4 (#301, plan §9.21 (a)3, ruling D4) onto the EXPLICIT flag. The live-demo fix
