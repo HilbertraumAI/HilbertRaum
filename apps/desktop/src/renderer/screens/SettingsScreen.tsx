@@ -19,6 +19,7 @@ import { SkillsTab } from './settings/SkillsTab'
 import type { SettingsTab } from '../navigation'
 import type { MessageKey, UiLanguageSetting } from '@shared/i18n'
 import type { AppSettings, ThemeSetting } from '@shared/types'
+import { CPU_HI_MIN_THREADS } from '@shared/rerank-rules'
 
 // Settings (guidelines §2): one utility destination with four tabs.
 // "General" = the everyday settings; "Privacy & data" and "Diagnostics (advanced)"
@@ -184,13 +185,25 @@ function GeneralTab(): JSX.Element {
         <p className="hint">{t('settings.performance.gpuHint')}</p>
         {/* Step 4-4 (Wave 4 ruling (a)): the cpu-hi rerank profile's opt-in. No effect on the
             gpu/default profiles (the hint says so) — the label/hint stay generic rather than
-            naming a thread count the user cannot see or change here. */}
-        <Switch
-          checked={settings.ragRerankWideScope}
-          onChange={(on) => void patch({ ragRerankWideScope: on })}
-          label={t('settings.performance.rerankWideScope')}
-        />
-        <p className="hint">{t('settings.performance.rerankWideScopeHint')}</p>
+            naming a thread count the user cannot see or change here.
+            Step 4-5 (ruling (c), B1): render this control only while the cpu-hi profile is
+            actually REACHABLE (`Number.isFinite(CPU_HI_MIN_THREADS)`) — run L froze the
+            constant at `Infinity` (a miss at both measured thread counts), so today the switch
+            would tell the user something false about their machine: that a setting exists here
+            which does something. The setting key, its write gate, the
+            `resolveAskCandidateScope` plumbing and the `top48` scope are untouched — a future
+            re-measurement that lowers the constant back to a finite value re-enables the
+            control by that one change alone. */}
+        {Number.isFinite(CPU_HI_MIN_THREADS) && (
+          <>
+            <Switch
+              checked={settings.ragRerankWideScope}
+              onChange={(on) => void patch({ ragRerankWideScope: on })}
+              label={t('settings.performance.rerankWideScope')}
+            />
+            <p className="hint">{t('settings.performance.rerankWideScopeHint')}</p>
+          </>
+        )}
         <Switch
           checked={settings.autoStartActiveModel}
           onChange={(on) => void patch({ autoStartActiveModel: on })}

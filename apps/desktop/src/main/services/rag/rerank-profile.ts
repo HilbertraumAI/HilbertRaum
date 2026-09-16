@@ -1,5 +1,6 @@
 import { gpuUsefulForProfile } from '../../../shared/gpu-rules'
 import type { GpuDevice } from '../../../shared/types'
+import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 
 // Phase 4 PR-B (step 4-4, Wave 4 ruling (a) — `programme-state/steps/G1-bundle-selection/
 // rulings-wave4.md`): the rerank *scope* (how many knowledge-pack chunks the reranker sees)
@@ -66,22 +67,18 @@ export interface RerankProfileInput {
 export const GPU_RERANK_SCOPE: Exclude<RerankScope, 'capped'> = 'all'
 
 /**
- * FROZEN by run L (step 4-4, 2026-09-15) — same artifacts. Pre-registered selection rule: the
- * smallest of {8, 16} whose `top48` rerank p90 is at or under the 10,848 ms bound, else
- * `Infinity` (the opt-in ships disabled). Selected: **`Infinity` — a MISS at both thread
- * counts** (8 threads: p90 25,317 ms; 16 threads: p90 29,101 ms, n=43 calls each — both roughly
- * 2.3–2.7× the bound, and 16 threads measured no faster than 8 here). Against the predicted 8
- * threads at 9.06 s: 4-i's M2 prediction pooled a LEXICAL top-48 over route-F blocks, never the
- * product's own wider `top48` construction (a superset of `capped`, which itself can exceed the
- * pooled figure's document count) measured here — the miss is reported, not worked around.
- * The `cpu-hi` profile is therefore UNREACHABLE by any finite thread count
- * (`threads >= Infinity` is false for every real machine) — every CPU-only machine resolves
- * `default` regardless of its thread count, and the `ragRerankWideScope` opt-in has no effect
- * for anyone until a future re-measurement lowers this back to a finite value. A run-L selection
- * miss is NOT a floor miss (Endpoint) — the ruled fallback ships and the miss is recorded here
- * and in `docs/known-limitations.md`.
+ * FROZEN by run L (step 4-4, 2026-09-15) — same artifacts; MISS at both {8, 16} threads (see
+ * `shared/rerank-rules.ts` for the full derivation and the frozen value). Re-exported under its
+ * historical name here (the `shared/performance-rules.ts` precedent) so every existing
+ * `rerank-profile.ts` import site is unchanged; step 4-5 (ruling (c)) also lets
+ * `SettingsScreen.tsx` (renderer) import it directly from the shared module — this file itself
+ * stays free of `node:`/`electron` imports, but a renderer component must not reach into
+ * `main/services/*` across the project's own renderer/main build boundary (electron-vite's
+ * renderer target has no polyfill for `node:fs` et al — see `main/services/models.ts`'s
+ * imports — so a pure MAIN-only module is not automatically renderer-safe by transitive
+ * closure; `shared/*` is the only side both may import).
  */
-export const CPU_HI_MIN_THREADS: number = Infinity
+export { CPU_HI_MIN_THREADS }
 
 /**
  * The hardware profile for one settings snapshot (Frozen parameters). `gpu` iff GPU auto-mode
