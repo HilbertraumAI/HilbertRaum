@@ -4013,3 +4013,117 @@ step 4's report; PR-B does not address either):
 - Whether to port `titleCandidates()`, the disambiguation route or the neighbour-link recovery
   pass (deviation 4 above) — all three are brief-scoped out of both step 4 and this redo, and
   none was needed to clear the acceptance floors.
+
+**Step 4-5 (Wave 5 rulings (c)–(f)) — PR-B continued: the scoped Opus review's three behaviour
+findings.** Same branch, same worktree, same draft PR #470, continuing from step 4-4's head
+`253daf2f`. The review left three findings only the owner could rule on; the owner ruled, and
+this step resolves exactly those three.
+
+- **B1 (ruling (c)) — the `ragRerankWideScope` switch no longer renders while it is inert.**
+  `CPU_HI_MIN_THREADS` is frozen at `Infinity` (run L's own miss), so the `cpu-hi` profile the
+  switch opts into is unreachable by any real machine — showing the control told the user a
+  setting existed here that did something. `SettingsScreen.tsx` now renders it only when
+  `Number.isFinite(CPU_HI_MIN_THREADS)`; the constant moved to a new `shared/rerank-rules.ts`
+  (re-exported from `rerank-profile.ts` under its historical name, the `shared/
+  performance-rules.ts` precedent) so the renderer can import it without pulling
+  `main/services/models.ts`'s `node:fs` et al into the browser bundle. The setting key, its
+  write gate, the `resolveAskCandidateScope` plumbing and the `top48` scope are untouched — a
+  future re-measurement re-enables the control by changing this one constant.
+- **B2 (ruling (d)) — the reranker's GPU posture is gated on provable headroom, not the
+  profile-bump predicate.** `gpuUsefulForProfile` (the profile bump — some probed device at or
+  above `USABLE_VRAM_MB`) never decided PLACEMENT and said nothing about room for a SECOND
+  resident model beside the chat model; on the 12 GiB measurement machine that distinction never
+  showed, but the predicate was still answering the wrong question. `rerankerDeviceFor`
+  (`rag/rerank-profile.ts`) now takes the budget device's free memory
+  (`graphicsBudgetMib(primaryUsefulDevice(probeDevices))`) minus the active chat model's own
+  placement estimate (`estimateGraphicsNeedMib`, the SAME estimator the picker and the fit
+  budget already use), and compares the remainder against the reranker's own estimated need
+  under that estimator — `RERANKER_HEADROOM_FLOOR_MIB ≈ 2,808.2 MiB` (≈ 2.8 GiB), derived from
+  the shipped `bge-reranker-v2-m3` manifest (1.16 GB on disk, no host-mapped figure, the 0.5 GiB
+  context-cache default) and frozen as a constant (this module must stay free of `node:`/
+  `electron` imports for the renderer boundary above, so the estimator itself runs at the
+  impure seam in `main/index.ts`, never inside this pure module). An unknown or empty probe, no
+  useful device, no budget figure, no active chat model or an unresolvable manifest all mean
+  `'cpu'`. `gpuUsefulForProfile` keeps every other job (the profile bump, the Models ★, the
+  graphics tile, `memoryClassOf`); only the posture question is re-sourced. See
+  `architecture.md` GPU record §7 for the full derivation and the small-card disclosure.
+- **B3 with B7/B20 (ruling (e)) — the wide scope is capped, and its failure mode no longer lands
+  below today's baseline.** Two parts. (i) `totalCandidateCapFor('all')` now returns
+  `ALL_SCOPE_MAX_DOCS` instead of `Infinity` — the per-article budget stays `Infinity`
+  (`perArticleBudget`, unchanged: `all` is still "every chunk of every admitted article"), but
+  the TOTAL a single rerank call may see is bounded. Run L2 (2026-09-16, a two-pack development
+  latency read on the `cpu50` set — `wikipedia_de_all_nopic_2026-01.zim` +
+  `wikipedia_de_climate-change_nopic_2026-07.zim`, rootPath `K:/`) captured the genuinely
+  uncapped two-pack candidate list per id (mean 115.8 documents, p90 260, max 553 — beside run
+  A3 gpu's single-pack distribution, mean 98.1, p90 193, max 755), then timed one GPU
+  `rerank()` call per id per cell in {192, 256, 384, 512}, each cell's document set reconstructed
+  OFFLINE from that one capture via the branch's own exported `packQuota`/`allocateCandidates`.
+  Every cell cleared the 10,848 ms bound with wide margin — p90 by cell **192 → 2,251 ms, 256 →
+  2,763 ms, 384 → 2,870 ms, 512 → 2,816 ms** (n=43 calls each; the uncapped cell itself → 3,007
+  ms) — so the pre-registered rule (the largest cell whose p90 clears the bound) selected
+  **`ALL_SCOPE_MAX_DOCS = 512`, no miss**. The acceptance read's own worst case — the SAME
+  `H132` that produced step 4-4's 755-document/10,774 ms call — now caps at 512 documents and
+  reranks in 7,857 ms. (ii) `collectPackCandidates` now always computes a `capped`-scope
+  companion selection from the SAME per-article material (never a second discovery/fetch pass),
+  returned as `ExternalRetrievalOutput.cappedCandidates`; `retrieve()`'s `!reranked` branch
+  restricts the external side to it instead of the whole wide pool before the round-robin
+  interleave. Measured, not asserted (the standard this same finding demanded of step 4-4):
+  replaying the `gpu` acceptance read's own captures through `retrieve()` with a reranker stub
+  whose `rerank()` throws on every call scores `allPacked` **26**, `anyPacked` **42**,
+  `goldSpanInPacket` **142** — an EXACT match to run A2's baseline, not merely "at or above" it
+  (`fallback-measured.json`, beside step 4-4's own measured 22/33/116). A rerank timeout, crash
+  or failed start now costs only the upside, never the floor.
+  Two deviations disclosed in full: (a) `ALL_SCOPE_MAX_DOCS` shipping finite (step 4-5's own
+  commit 9) BEFORE run L2 ran (commit 10, per the brief's own commit ordering) would have
+  truncated run L2's "uncapped" capture at that same value, making every wider cell measure
+  identically to the narrowest one — a measurement seam,
+  `CollectPackCandidatesOptions.totalCandidateCapOverride` (mirroring the existing
+  `articleTimeoutMs`/`probeTimeoutMs` test seams; production never sets it), lets run L2's
+  capture bypass the cap for that one call. (b) `ZimService.runArm` originally reconstructed its
+  own return object from `collectPackCandidates`'s output and DROPPED `cappedCandidates` —
+  `registerRagIpc.ts`'s only production wiring goes through `runArm`, so the fallback fix above
+  was dead code for every real ask until this was found (during this step's own pre-check of the
+  fallback-measured figure, before writing it) and fixed, with a new end-to-end test driving the
+  real `ZimService`/`makeArm`/`runArm` chain — no existing test exercised this seam, since every
+  property test stubs the arm directly. (c) the restriction's own guard originally read
+  `candidates.length > externalCount`, false exactly on a packs-only ask (`noDocuments: true` —
+  zero document candidates, exactly the scope this step's own acceptance harness and a real
+  "Search my documents" toggle-off both use), silently exempting it from the fix; found the same
+  way, fixed, and pinned by a dedicated "packs-only" property test (property 5) no existing test
+  configuration could have caught (every property 1–4 test seeds a document).
+
+**The one further authorised `core200` acceptance read (ruling (f), 2026-09-16):**
+
+- **`default`** (rerank forced off, `capped` scope, planner on the GPU): **id-level diff of
+  0/200 against run A2 — PASS.** Reproduces run A2's `noRerank.core200` funnel EXACTLY
+  (anyArticle 120, allArticle 89, anyCandidate 81, allCandidate 49, anyPacked 42, allPacked 26).
+  The offline, informational replay (run A2's captured candidates through this branch's
+  `retrieve()` with `reranker = null`) also matched byte-identically on 200/200
+  (`replay-a2-through-branch-2.json`).
+- **`gpu`** (planner + reranker both on the GPU; the reranker's posture resolved through the NEW
+  headroom gate, live, on this machine — `probeDevices` an RTX 3080 Ti at totalMb 12,084/freeMb
+  11,316, `budgetMib` 11,316, the active 4B chat model's `chatModelNeedMib` 3,837.4,
+  `RERANKER_HEADROOM_FLOOR_MIB` 2,808.2, `remainderMib` 7,478.6, verdict `'gpu'`; scope `'all'`
+  at the run-L2-selected ceiling `512`): **every floor PASSES, matching step 4-4's own figures
+  exactly** — `allPacked` **78/200** (floor ≥ 45; beside 26 no-rerank, 47 capped-rerank, 78 is
+  step 4-4's own wide-scope figure, unchanged since the ceiling never bound on this population),
+  `anyPacked` **111/200** (beside 42, 79), `anyCandidate` **116/200** (floor ≥ 80, beside run
+  A2's 81), `anyArticle` **120/200** (floor ≥ 96, exactly run A2's own 120), arm p90 excluding
+  planner and rerank **167 ms** (floor ≤ 2,500 ms), rerank p90 **2,381 ms** (floor ≤ 10,848 ms),
+  planner p90 **618 ms** (floor ≤ 3,000 ms). The GPU sanity row — run A's captured (capped-scope)
+  candidates replayed through the branch's `retrieve()` with the GPU-postured reranker —
+  measured `allPacked` **47/200**, matching 4-2's own CPU-rerank record exactly, with **0**
+  differing ids this time (step 4-4's own replay drifted on 3, from F16-on-Vulkan-vs-CPU rank
+  noise; `sanity-capped-gpu-2.json`).
+
+**Decision: both profiles hold every floor — no floor waived, no read repeated.** `cpu-hi` was
+not re-read (ships disabled per Wave 4 ruling (a); step 4-5's brief forbids re-reading it). The
+hardware leg (ruling (f): drive one rerank on a 5–6 GiB usable card, if reachable) was not
+reachable from this session — this session's only hardware is the 12 GiB measurement machine,
+which has ample headroom for both models at once and therefore exercises only the
+provable-headroom branch of the gate; the insufficient-headroom branch is covered by
+`rerank-profile.test.ts`'s fixtures (real device/manifest figures, including the #318 RTX 3060
+Laptop's own totalMb) but not by a live run (`hardware-leg.json`, `docs/known-limitations.md`).
+Full artifacts: `steps/4-5-product-pr-rerank-profiles-2/artifacts/{run-l2-latency.json,
+scope-selection-2.json,acceptance-a4.json,acceptance-a4-{default,gpu}.json,
+fallback-measured.json,hardware-leg.json}`.

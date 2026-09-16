@@ -827,35 +827,50 @@ password recovery — are documented in
   10.8 s bound the ruling set, so `CPU_HI_MIN_THREADS` is frozen at `Infinity` and the `cpu-hi`
   profile is unreachable by any real machine until a future re-measurement lowers it. Every
   CPU-only machine keeps today's `capped` scope regardless of thread count.
-- **The reranker sidecar's VRAM share beside the chat model on a small usable card is
-  UNMEASURED (step 4-4).** On the `gpu` rerank profile the sidecar launches with no `--device`
-  argument (llama-server's own `ngl`-auto + `--fit`), the same as the chat runtime's rung-1 — but
-  unlike the chat runtime, no fit-margin measurement exists yet for a card near the 5,120 MiB
-  usable floor (`USABLE_VRAM_MB`) running the reranker ALONGSIDE a resident chat model. A fit that
-  cannot find enough contiguous VRAM spills to host memory rather than failing (the same behaviour
-  a partially-offloaded chat model shows); the resulting latency of that spilled case is not on
-  file. Revisit with a measurement on a ~5–6 GiB card once one is available to the project (the
-  same "no 4 GB card owned" gap `architecture.md`'s `USABLE_VRAM_MB` record already discloses).
-- **The `all` rerank scope's failure fallback is bounded in latency but WORSE than today's
-  baseline in quality — both measured, neither hypothetical (step 4-4).** A rerank call over
-  every fetched block is bounded by the reranker's existing `DEFAULT_REQUEST_TIMEOUT_MS` (120 s)
-  and `retrieve()`'s existing catch path (the fused order is kept, then the no-rerank interleave)
-  — no new fallback code was added for step 4-4. The largest call actually observed is run A3's
-  `gpu` acceptance read's own `H132`: **755 documents in a single call at 10,774 ms** — 74 ms
-  under this profile's own ≤ 10,848 ms rerank-latency floor, on a 12 GiB dedicated card, with
-  exactly one knowledge pack selected (development read L's max was smaller — 410 documents,
-  5.2 s — because it never spent a lock hold on `core200`; A3's later, larger read is the figure
-  to cite). An ask that selects more than one pack (up to `MAX_SELECTED_PACKS = 12`) was never
-  measured and scales the document count roughly linearly, so this bound is not exercised at
-  anywhere near its worst case by this step's reads. **The QUALITY of the fallback itself, when
-  it fires (or when the interleave runs directly, with no reranker provisioned), is measured
-  below today's status quo:** the `gpu` acceptance read's own no-rerank column — the `all` scope
-  through `retrieve()`'s no-rerank interleave, exactly what a rerank-call failure or an absent
-  reranker produces — packed FEWER gold blocks than the shipped `capped`/no-rerank baseline:
-  `allPacked` 26→**22**, `anyPacked` 42→**33** (`refBlockPacked` 2→3 — the one metric in
-  the column that improved; `goldSpanInPacket` 142→116). A reader
-  relying on "bounded" to mean "safe" should know the bound is on latency only; on quality, this
-  fallback is measured worse than doing nothing.
+- **The reranker's GPU posture is now gated on provable headroom, but the gate itself is
+  UNVALIDATED on the small-card hardware it exists for (step 4-5, Wave 5 ruling (d)).** Step 4-4
+  launched the reranker with no `--device` argument (llama-server's own `ngl`-auto + `--fit`)
+  whenever `gpuUsefulForProfile` found any usable card — a predicate that never checked whether
+  there was room for a SECOND resident model beside the chat model. Step 4-5 replaces that check:
+  `rerankerDeviceFor` (`rag/rerank-profile.ts`) now requires the budget device's free memory,
+  minus the active chat model's own placement estimate, to clear the reranker's own estimated
+  need (≈ 2.8 GiB, `RERANKER_HEADROOM_FLOOR_MIB`) before choosing the GPU posture — an unknown
+  probe, no useful device, no budget figure, no active model or an unresolvable manifest all mean
+  CPU. **What this does NOT close:** the project's only measurement machine is a 12 GiB card
+  (ample headroom for both models at once), so the acceptance read run under this gate confirms
+  no regression THERE but cannot confirm the gate correctly reads a genuinely tight card — the
+  5–6 GiB laptop class `architecture.md`'s `USABLE_VRAM_MB` record already discusses. See step
+  4-5's `hardware-leg.json` for whether a suitable machine was reached to close this directly; if
+  not, the gate ships on the ARITHMETIC alone (the same estimator the picker and the fit budget
+  already use elsewhere, not a new one invented for this gate) until one is.
+- **The `all` rerank scope is capped, and a rerank-call failure now falls back to TODAY's
+  baseline instead of landing below it — both measured, neither asserted (step 4-4's finding,
+  step 4-5's fix).** Step 4-4 shipped `all` with no per-call document ceiling and no dedicated
+  fallback: a rerank-call failure kept `retrieve()`'s existing catch path (the fused order, then
+  the no-rerank interleave) over the WHOLE wide, un-cross-encoded pool. Measured cost: the
+  `gpu` acceptance read's own no-rerank column packed FEWER gold blocks than the shipped
+  `capped`/no-rerank baseline — `allPacked` 26→**22**, `anyPacked` 42→**33**, `goldSpanInPacket`
+  142→**116** — a wide lexical pool with no working cross-encoder was measured WORSE than
+  shipping no rerank at all, the reason `rerankScopeFor` always returns `'capped'` with no
+  reranker provisioned. Step 4-5 (Wave 5 ruling (e), B3 with B7/B20) fixes both halves: (1)
+  `ALL_SCOPE_MAX_DOCS` bounds the TOTAL a single rerank call may see — run L2 (a two-pack
+  development latency read) selected **512** (every cell in {192,256,384,512} cleared the
+  10,848 ms bound with wide margin: p90 by cell 2,251/2,763/2,870/2,816 ms; the genuinely
+  uncapped two-pack distribution itself — mean 115.8 documents, p90 260, max 553 — measured p90
+  3,007 ms); the acceptance read's own worst case, the SAME `H132` that produced a 755-document/
+  10,774 ms call in step 4-4, now caps at 512 documents and reranks in 7,857 ms. (2) the arm now
+  always computes a `capped`-scope companion selection from the SAME material, and `retrieve()`'s
+  fallback restricts to it instead of the wide pool. **Measured, not assumed** (the standard
+  this same finding demanded of step 4-4): replaying the `gpu` acceptance read's own captures
+  through the fixed `retrieve()` with a reranker stub whose `rerank()` throws on every call
+  scores `allPacked` **26**, `anyPacked` **42**, `goldSpanInPacket` **142** — an EXACT match to
+  the baseline, not merely "at or above" it (`fallback-measured.json`). A rerank timeout, crash
+  or failed start now costs only the upside, never the floor. One real fix-of-a-fix along the
+  way: the restriction's own guard originally skipped a packs-only ask (`noDocuments: true` —
+  zero document candidates, exactly the scope both the acceptance harness and a real "Search my
+  documents" toggle-off use) entirely, leaving it on the unrestricted wide pool; caught by
+  re-measuring this same figure before writing it, fixed, and pinned by a dedicated test (no
+  existing property test had `noDocuments: true`, so none could have caught it).
 - **The embedder/reranker failed-start latch is for a PERMANENT fault only — a transient port-bind
   race no longer arms it (arch GPU record §5.5b).** Each
   sidecar latches a failed start so it doesn't re-await the full health timeout on every call. That

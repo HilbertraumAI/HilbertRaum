@@ -3367,6 +3367,29 @@ passes anywhere (never `-ngl`); the embedder above is unaffected and remains per
 CPU-pinned. See `reranker/llama.ts`'s own header for the exact launch-argument construction and
 `rag-design.md` §17 for the profile rule, run L's selection and run A3's acceptance floors.
 
+**The posture is gated on PROVABLE HEADROOM, not the profile bump (step 4-5, Wave 5 ruling (d),
+`rag-design.md` §17 PR-B record continued).** The scoped Opus review of step 4-4 found that
+gating the reranker's GPU posture on `gpuUsefulForProfile` (the profile-bump predicate above —
+some probed device at or above `USABLE_VRAM_MB`) answers the wrong question: that predicate is
+deliberately conservative in ONE direction (never bumps a model recommendation too high) and, by
+its own doc comment, never decides placement — it says nothing about whether there is room for a
+SECOND resident model beside the chat model already loaded. `rerankerDeviceFor`
+(`rag/rerank-profile.ts`) now takes the budget device's free-memory figure
+(`graphicsBudgetMib(primaryUsefulDevice(probeDevices))`) minus the active chat model's own
+placement estimate (`estimateGraphicsNeedMib`, the same estimator §8's picker and the fit budget
+use), and compares the remainder against the reranker's own estimated need under that same
+estimator (≈ 2.8 GiB, derived from the shipped `bge-reranker-v2-m3` manifest and frozen as
+`RERANKER_HEADROOM_FLOOR_MIB`). An unknown or empty probe, no useful device, no budget figure, no
+active chat model, or an unresolvable manifest all mean `'cpu'` — a machine cannot earn the GPU
+posture by failing to report. `gpuUsefulForProfile` keeps every other job it has (the profile
+bump above, the Models ★, the graphics tile, `memoryClassOf`); only the reranker's own posture
+question is re-sourced. **Disclosed limit:** the project's 12 GiB measurement machine (RTX 3080
+Ti) has ample headroom for both models at once, so on it the new gate behaves identically to
+step 4-4's — the step's acceptance read confirms no regression there, but cannot validate the
+gate on the small-card path the gate exists for (a 5–6 GiB card where the chat model alone may
+leave too little room for the reranker too). See `docs/known-limitations.md` and step 4-5's own
+`hardware-leg.json` for whether a suitable machine was reachable to close this gap directly.
+
 ### §8 Expectations, profile bump, UI copy
 
 | Hardware | CPU baseline | With GPU |
