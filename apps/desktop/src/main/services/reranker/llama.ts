@@ -105,6 +105,13 @@ export class LlamaReranker implements Reranker {
   isLoaded(): boolean {
     return this.server !== null
   }
+
+  /** The sidecar's captured stderr tail (diagnostics; '' before any start or once stopped).
+   *  Step 4-4: run L and run A3 read this to confirm a `gpu` posture start actually offloaded
+   *  to a device rather than falling back / spilling to host memory. */
+  stderrTail(): string {
+    return this.server?.redactedTail() ?? ''
+  }
   private starting: Promise<void> | null = null
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false

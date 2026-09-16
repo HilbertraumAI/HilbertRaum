@@ -48,23 +48,34 @@ export interface RerankProfileInput {
 }
 
 /**
- * Set by run L (step 4-4) before any run A3 phase — a development latency read on the 50-id
- * `cpu50.json` set (never `core200`), pre-registered selection rule (Frozen parameters):
- * `GPU_RERANK_SCOPE` = the widest of {`all`, `top96`, `top48`} whose rerank p90 is at or under
- * today's shipped CPU rerank median per question (4-i M1, 10,848 ms), else `top48` with the miss
- * reported. Until run L has run, this constant carries the PREDICTED value (`'all'` — 4-i's
- * bgeP recipe reranks the bundle's own ALL scope in seconds on the GPU, 1g p90 2.87 s). The
- * run-L commit replaces this with the selection and cites `artifacts/scope-selection.json`.
+ * FROZEN by run L (step 4-4, 2026-09-15) — `artifacts/scope-selection.json`,
+ * `artifacts/run-l-latency.json` (the `cpu50.json` 50-id set, one lock hold, GPU planner + GPU
+ * reranker legs). Pre-registered selection rule (Frozen parameters): the widest of {`all`,
+ * `top96`, `top48`} whose rerank p90 is at or under today's shipped CPU rerank median per
+ * question (4-i M1, 10,848 ms). Selected: **`'all'`** (p90 2,671 ms, n=43 calls; `top96`
+ * 1,128 ms, `top48` 693 ms — every GPU scope clears the bound with wide margin) — matches the
+ * predicted value (4-i's bgeP recipe reranks the bundle's own ALL scope in seconds on the GPU,
+ * 1g p90 2.87 s). No miss.
  */
 export const GPU_RERANK_SCOPE: Exclude<RerankScope, 'capped'> = 'all'
 
 /**
- * Set by run L: the smallest of {8, 16} whose `top48` rerank p90 is at or under the same
- * 10,848 ms bound, else `Infinity` (the opt-in ships disabled, the miss reported). Until run L
- * has run, this constant carries the PREDICTED value (4-i M2 predicts 8 threads at p90 9.06 s).
- * The run-L commit replaces this with the selection and cites `artifacts/scope-selection.json`.
+ * FROZEN by run L (step 4-4, 2026-09-15) — same artifacts. Pre-registered selection rule: the
+ * smallest of {8, 16} whose `top48` rerank p90 is at or under the 10,848 ms bound, else
+ * `Infinity` (the opt-in ships disabled). Selected: **`Infinity` — a MISS at both thread
+ * counts** (8 threads: p90 25,317 ms; 16 threads: p90 29,101 ms, n=43 calls each — both roughly
+ * 2.3–2.7× the bound, and 16 threads measured no faster than 8 here). Against the predicted 8
+ * threads at 9.06 s: 4-i's M2 prediction pooled a LEXICAL top-48 over route-F blocks, never the
+ * product's own wider `top48` construction (a superset of `capped`, which itself can exceed the
+ * pooled figure's document count) measured here — the miss is reported, not worked around.
+ * The `cpu-hi` profile is therefore UNREACHABLE by any finite thread count
+ * (`threads >= Infinity` is false for every real machine) — every CPU-only machine resolves
+ * `default` regardless of its thread count, and the `ragRerankWideScope` opt-in has no effect
+ * for anyone until a future re-measurement lowers this back to a finite value. A run-L selection
+ * miss is NOT a floor miss (Endpoint) — the ruled fallback ships and the miss is recorded here
+ * and in `docs/known-limitations.md`.
  */
-export const CPU_HI_MIN_THREADS: number = 8
+export const CPU_HI_MIN_THREADS: number = Infinity
 
 /**
  * The hardware profile for one settings snapshot (Frozen parameters). `gpu` iff GPU auto-mode

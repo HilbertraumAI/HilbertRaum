@@ -78,6 +78,12 @@ export const PROBE_TIMEOUT_MS = 3_000
  */
 export const LIST_ARTICLE_CHUNKS = 8
 const LIST_TITLE_RE = /^(Liste |List of )/
+/** Exported so an offline reconstruction (step 4-4, run L: deriving `top96`/`top48`/`capped`
+ *  from an `all`-scope capture) can classify a captured article's title exactly as the live
+ *  admission path does, never a re-implementation of the pattern. */
+export function isListArticleTitle(title: string): boolean {
+  return LIST_TITLE_RE.test(title)
+}
 
 // Phase 4 PR-B (step 4-4, ruling (a)): the candidate SCOPE per hardware profile
 // (`rag/rerank-profile.ts`) is a pure widening of the SAME per-article overlap-pick construction

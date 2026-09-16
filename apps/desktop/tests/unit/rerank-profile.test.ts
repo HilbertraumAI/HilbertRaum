@@ -15,6 +15,15 @@ import type { GpuDevice } from '../../src/shared/types'
 // (`reranker/llama.ts` via `compose-services.ts`) both read, so the two can never disagree
 // about which profile a settings snapshot resolves to. Every fixture below is a full
 // `RerankProfileInput` so a change to the interface fails the fixture, not a silent `undefined`.
+//
+// Run L (2026-09-15, `artifacts/scope-selection.json`) froze `CPU_HI_MIN_THREADS` at `Infinity`
+// (a MISS at both 8 and 16 threads — see the constant's own doc comment): the `cpu-hi` PROFILE
+// is therefore unreachable by any finite thread count today. The fixtures below split
+// accordingly: `resolveRerankProfile` fixtures use finite, realistic thread counts and expect
+// `default` wherever the pre-run-L brief would have expected `cpu-hi`; the `cpu-hi` BRANCH of
+// `rerankScopeFor`/`rerankerDeviceFor` is still exercised directly, with the profile forced —
+// exactly how run A3's `--profile=cpu-hi` acceptance read (and a future re-measurement that
+// lowers the constant back to a finite value) uses these functions.
 
 const RTX_3080_TI: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 const IRIS_XE: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16384, freeMb: 16000 }
@@ -40,23 +49,15 @@ describe('resolveRerankProfile / rerankScopeFor / rerankerDeviceFor', () => {
     expect(rerankerDeviceFor(profile)).toBe('gpu')
   })
 
-  it('cpu-hi: no usable card, threads at the threshold, opt-in ON → top48, cpu device', () => {
-    const i = input({ probeDevices: [], threads: CPU_HI_MIN_THREADS, wideScopeOptIn: true })
-    const profile = resolveRerankProfile(i)
-    expect(profile).toBe('cpu-hi')
-    expect(rerankScopeFor(profile, i)).toBe('top48')
-    expect(rerankerDeviceFor(profile)).toBe('cpu')
+  it('the cpu-hi BRANCH (forced profile, as run A3\'s --profile=cpu-hi and a future re-measurement would use it): opt-in ON → top48, cpu device; opt-in OFF → capped', () => {
+    const onInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: true })
+    expect(rerankScopeFor('cpu-hi', onInput)).toBe('top48')
+    expect(rerankerDeviceFor('cpu-hi')).toBe('cpu')
+    const offInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: false })
+    expect(rerankScopeFor('cpu-hi', offInput)).toBe('capped')
   })
 
-  it('cpu-hi: the SAME machine with the opt-in OFF stays capped (default off — no effect until opted in)', () => {
-    const i = input({ probeDevices: [], threads: CPU_HI_MIN_THREADS, wideScopeOptIn: false })
-    const profile = resolveRerankProfile(i)
-    expect(profile).toBe('cpu-hi')
-    expect(rerankScopeFor(profile, i)).toBe('capped')
-    expect(rerankerDeviceFor(profile)).toBe('cpu')
-  })
-
-  it('default: no usable card, below the thread threshold → capped, cpu device', () => {
+  it('default: no usable card, a realistic thread count → capped, cpu device (cpu-hi is unreachable — CPU_HI_MIN_THREADS is Infinity)', () => {
     const i = input({ probeDevices: [], threads: 4 })
     const profile = resolveRerankProfile(i)
     expect(profile).toBe('default')
@@ -64,42 +65,43 @@ describe('resolveRerankProfile / rerankScopeFor / rerankerDeviceFor', () => {
     expect(rerankerDeviceFor(profile)).toBe('cpu')
   })
 
-  it('gpuMode "off" with a usable card present → never gpu', () => {
+  it('no finite thread count reaches cpu-hi today (CPU_HI_MIN_THREADS = Infinity, run L\'s miss) — even a very high count resolves default', () => {
+    for (const threads of [8, 16, 64, 128, Number.MAX_SAFE_INTEGER]) {
+      const i = input({ probeDevices: [], threads })
+      expect(resolveRerankProfile(i)).toBe('default')
+    }
+    expect(CPU_HI_MIN_THREADS).toBe(Infinity)
+  })
+
+  it('gpuMode "off" with a usable card present → never gpu (resolves default: cpu-hi is unreachable)', () => {
     const i = input({ probeDevices: [RTX_3080_TI], gpuMode: 'off', threads: 16 })
     expect(resolveRerankProfile(i)).not.toBe('gpu')
-    expect(resolveRerankProfile(i)).toBe('cpu-hi')
+    expect(resolveRerankProfile(i)).toBe('default')
   })
 
-  it('gpuAutoDisabled with a usable card present → never gpu', () => {
+  it('gpuAutoDisabled with a usable card present → never gpu (resolves default: cpu-hi is unreachable)', () => {
     const i = input({ probeDevices: [RTX_3080_TI], gpuMode: 'auto', gpuAutoDisabled: true, threads: 16 })
     expect(resolveRerankProfile(i)).not.toBe('gpu')
-    expect(resolveRerankProfile(i)).toBe('cpu-hi')
+    expect(resolveRerankProfile(i)).toBe('default')
   })
 
-  it('probe null (unknown — never "no device", never "usable") with threads 16 → cpu-hi, never gpu', () => {
+  it('probe null (unknown — never "no device", never "usable") → never gpu, whatever the thread count', () => {
     const i = input({ probeDevices: null, gpuMode: 'auto', gpuAutoDisabled: false, threads: 16 })
-    expect(resolveRerankProfile(i)).toBe('cpu-hi')
+    expect(resolveRerankProfile(i)).not.toBe('gpu')
   })
 
   it('an integrated-only probe never counts as usable → not gpu', () => {
     const i = input({ probeDevices: [IRIS_XE], gpuMode: 'auto', gpuAutoDisabled: false, threads: 16 })
     expect(resolveRerankProfile(i)).not.toBe('gpu')
-    expect(resolveRerankProfile(i)).toBe('cpu-hi')
   })
 
-  it('rerankerAvailable false → capped on every profile, regardless of hardware', () => {
+  it('rerankerAvailable false → capped on every profile, regardless of hardware (checked before any profile branch)', () => {
     const gpuInput = input({ probeDevices: [RTX_3080_TI], threads: 16, rerankerAvailable: false })
-    const cpuHiInput = input({ probeDevices: [], threads: CPU_HI_MIN_THREADS, wideScopeOptIn: true, rerankerAvailable: false })
     const defaultInput = input({ probeDevices: [], threads: 4, rerankerAvailable: false })
     expect(rerankScopeFor(resolveRerankProfile(gpuInput), gpuInput)).toBe('capped')
-    expect(rerankScopeFor(resolveRerankProfile(cpuHiInput), cpuHiInput)).toBe('capped')
     expect(rerankScopeFor(resolveRerankProfile(defaultInput), defaultInput)).toBe('capped')
-  })
-
-  it('the thread boundary: CPU_HI_MIN_THREADS - 1 → default, CPU_HI_MIN_THREADS → cpu-hi', () => {
-    const below = input({ probeDevices: [], threads: CPU_HI_MIN_THREADS - 1 })
-    const at = input({ probeDevices: [], threads: CPU_HI_MIN_THREADS })
-    expect(resolveRerankProfile(below)).toBe('default')
-    expect(resolveRerankProfile(at)).toBe('cpu-hi')
+    // The cpu-hi branch itself, forced (unreachable via resolveRerankProfile today, but the
+    // function must still fail safe to capped with no reranker provisioned).
+    expect(rerankScopeFor('cpu-hi', { ...defaultInput, wideScopeOptIn: true, rerankerAvailable: false })).toBe('capped')
   })
 })
