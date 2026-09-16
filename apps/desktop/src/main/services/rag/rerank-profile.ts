@@ -1,25 +1,27 @@
-import { gpuUsefulForProfile } from '../../../shared/gpu-rules'
+import { gpuUsefulForProfile, primaryUsefulDevice } from '../../../shared/gpu-rules'
 import type { GpuDevice } from '../../../shared/types'
 import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 
 // Phase 4 PR-B (step 4-4, Wave 4 ruling (a) — `programme-state/steps/G1-bundle-selection/
-// rulings-wave4.md`): the rerank *scope* (how many knowledge-pack chunks the reranker sees)
-// and its *device posture* (CPU/GPU) follow a hardware profile. This module is the ONE place
-// that decides the profile and what it implies — pure, no `node:`/`electron` imports, so the
-// per-ask candidate-scope wiring (`registerRagIpc.ts` → `zim/arm.ts`) and the sidecar's
-// lazy-start device posture (`reranker/llama.ts` via `compose-services.ts`) can never disagree
-// about which profile a given settings snapshot resolves to. Mirrors `shared/gpu-rules.ts`'s
-// "one definition" style (PR #303 audit M8/N3).
+// rulings-wave4.md`; step 4-5, Wave 5 rulings (c)-(f)): the rerank *scope* (how many
+// knowledge-pack chunks the reranker sees) follows a hardware profile; its *device posture*
+// (CPU/GPU) follows a SEPARATE headroom gate (`rerankerDeviceFor`, step 4-5). This module is
+// the ONE place that decides both — pure, no `node:`/`electron` imports, so the per-ask
+// candidate-scope wiring (`registerRagIpc.ts` → `zim/arm.ts`) and the sidecar's lazy-start
+// device posture (`reranker/llama.ts` via `compose-services.ts`) can never disagree. Mirrors
+// `shared/gpu-rules.ts`'s "one definition" style (PR #303 audit M8/N3).
 //
-// The three profiles (Phase 2 ruling (d), restated by Wave 4 ruling (a)):
+// The three SCOPE profiles (Phase 2 ruling (d), restated by Wave 4 ruling (a)):
 //   - `gpu`     — a usable GPU is available (the app's own `gpuMode`/`gpuAutoDisabled`/probe
 //                 rule, `isUsefulDevice`): the reranker sees every fetched block
-//                 (`GPU_RERANK_SCOPE`) and rerank is on by default, the sidecar on the GPU.
+//                 (`GPU_RERANK_SCOPE`) and rerank is on by default.
 //   - `cpu-hi`  — no usable GPU, but the runtime's configured thread count is at least
 //                 `CPU_HI_MIN_THREADS`: `top48` is available as an OPT-IN setting (default
-//                 off), the sidecar stays on the CPU.
-//   - `default` — neither of the above: unchanged (today's `capped` scope, CPU sidecar).
-// Nothing else enters the decision (no RAM tier, no model size, no benchmark).
+//                 off; step 4-5 ruling (c) hides the control while the constant is `Infinity`).
+//   - `default` — neither of the above: unchanged (today's `capped` scope).
+// Nothing else enters the SCOPE decision (no RAM tier, no model size, no benchmark). The
+// DEVICE POSTURE is no longer read off this classification (step 4-5, ruling (d)): see
+// `rerankerDeviceFor`'s own doc comment.
 
 export type RerankProfile = 'gpu' | 'cpu-hi' | 'default'
 export type RerankScope = 'all' | 'top96' | 'top48' | 'capped'
@@ -128,8 +130,83 @@ export function rerankScopeFor(profile: RerankProfile, input: RerankProfileInput
   return 'capped'
 }
 
-/** The reranker sidecar's device posture for a resolved profile — `gpu` only on the `gpu`
- *  profile, `cpu` (today's byte-identical launch) on every other one. */
-export function rerankerDeviceFor(profile: RerankProfile): RerankerDevice {
-  return profile === 'gpu' ? 'gpu' : 'cpu'
+/**
+ * Step 4-5 (ruling (d), B2): what `rerankerDeviceFor` needs to gate the reranker sidecar's
+ * device posture on PROVABLE HEADROOM, never on `gpuUsefulForProfile`'s profile-bump predicate
+ * (that predicate is measured only against a 5 GiB usable-card floor and says nothing about
+ * room for a SECOND resident model beside the chat model — see the function's own doc comment
+ * for why master's "must never contend for VRAM with the chat model" pin demanded this).
+ * `budgetMib` and `chatModelNeedMib` are computed by the impure CALLER (`main/index.ts`'s
+ * `rerankerDevicePosture`, which already imports `main/services/models.ts`'s
+ * `graphicsBudgetMib`/`estimateGraphicsNeedMib`) and handed in as plain numbers so this module
+ * stays free of `node:`/`electron` imports (see `CPU_HI_MIN_THREADS`'s doc comment on why that
+ * matters for the renderer boundary) — "prefer computing it from the manifest at the seam".
+ */
+export interface RerankerHeadroomInput {
+  /**
+   * The eligible probe's device list, gated by `gpuMode`/`gpuAutoDisabled` at the call site
+   * exactly as `RerankProfileInput.probeDevices` is (an empty/null list here already means "GPU
+   * is off, auto-disabled, or unprobed" — this function applies no separate gpuMode check).
+   * `null` = unknown, and per the #380 semantics an unknown probe never earns `gpu`.
+   */
+  probeDevices: GpuDevice[] | null
+  /**
+   * `graphicsBudgetMib(primaryUsefulDevice(probeDevices))` — the budget device's free-memory
+   * figure (or `totalMb − GRAPHICS_IDLE_ALLOWANCE_MIB` with no free figure), computed by the
+   * caller. `null` when the probe carries no total/free figure at all (never provable).
+   */
+  budgetMib: number | null
+  /**
+   * `estimateGraphicsNeedMib(manifest)` for `settings.activeModelId`'s manifest — the app's own
+   * placement estimate for the active chat model, computed by the caller with the SAME
+   * estimator the picker and the fit budget use. `null` with no active chat model or an
+   * unresolvable manifest (never provable).
+   */
+  chatModelNeedMib: number | null
+}
+
+/**
+ * The reranker's own estimated graphics need (MiB) under `estimateGraphicsNeedMib`, computed
+ * over the shipped reranker manifest (`model-manifests/reranker/bge-reranker-v2-m3.yaml`:
+ * `size_on_disk_gb: 1.16`, no `host_mapped_weights_mib`, no `estimated_context_cache_gib` → the
+ * 0.5 GiB default):
+ *
+ *     weightsMib(1.16 GB) = 1.16e9 / 1024² ≈ 1,106.262 MiB
+ *     onCard               = 1,106.262 − 0 (no host-mapped figure)
+ *     estimate             = onCard × 1.15 + 0.5×1,024 + 1,024 (the fit margin)
+ *                          ≈ 2,808.2015380859375 MiB   (≈ 2.8 GiB, as ruling (d) states)
+ *
+ * FROZEN as a constant rather than computed at this seam (see `RerankerHeadroomInput`'s doc
+ * comment): `estimateGraphicsNeedMib` lives in `main/services/models.ts`, which this module
+ * must not import. Pinned by a test computing the same formula over the manifest's own
+ * published fields, so a future edit to the manifest is caught rather than silently drifting
+ * this floor. This is the "conservative floor" ruling (d) asks for — the posture is `'gpu'`
+ * only when the remainder (budget minus the chat model's placement) is at or above it.
+ */
+export const RERANKER_HEADROOM_FLOOR_MIB = 2808.2015380859375
+
+/**
+ * The reranker sidecar's device posture (step 4-5, ruling (d), B2): `'gpu'` iff (1) the probe
+ * names a useful budget device (`primaryUsefulDevice` — the SAME rule `selectBudgetDevice`
+ * uses, never `gpuUsefulForProfile`'s coarser bump predicate) AND (2) the budget device's
+ * headroom is PROVABLE (`budgetMib`/`chatModelNeedMib` both known) AND (3) the remainder after
+ * the active chat model's placement is at or above `RERANKER_HEADROOM_FLOOR_MIB`. `'cpu'`
+ * whenever any of the three fails to hold — a machine cannot earn the GPU posture by failing to
+ * report (ruling (d)): an unknown/empty probe, no useful device, no budget figure, no active
+ * chat model, and an unresolvable manifest all mean `'cpu'`, exactly like an insufficient
+ * remainder.
+ *
+ * `resolveRerankProfile`'s `'gpu' | 'cpu-hi' | 'default'` classification (and therefore
+ * `rerankScopeFor`, the candidate-scope half of the decision) is UNCHANGED by this — only the
+ * device-posture half is re-sourced, per ruling (d): "`gpuUsefulForProfile` stops deciding this
+ * question."
+ */
+export function rerankerDeviceFor(input: RerankerHeadroomInput): RerankerDevice {
+  if (!Array.isArray(input.probeDevices) || primaryUsefulDevice(input.probeDevices) == null) {
+    return 'cpu'
+  }
+  if (input.budgetMib == null || !Number.isFinite(input.budgetMib)) return 'cpu'
+  if (input.chatModelNeedMib == null || !Number.isFinite(input.chatModelNeedMib)) return 'cpu'
+  const remainderMib = input.budgetMib - input.chatModelNeedMib
+  return remainderMib >= RERANKER_HEADROOM_FLOOR_MIB ? 'gpu' : 'cpu'
 }

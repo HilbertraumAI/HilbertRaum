@@ -1,13 +1,18 @@
 import { describe, it, expect } from 'vitest'
+import { join } from 'node:path'
 import {
   CPU_HI_MIN_THREADS,
   GPU_RERANK_SCOPE,
+  RERANKER_HEADROOM_FLOOR_MIB,
   meetsThreadThreshold,
   resolveRerankProfile,
   rerankScopeFor,
   rerankerDeviceFor,
-  type RerankProfileInput
+  type RerankProfileInput,
+  type RerankerHeadroomInput
 } from '../../src/main/services/rag/rerank-profile'
+import { discoverManifests, estimateGraphicsNeedMib, graphicsBudgetMib } from '../../src/main/services/models'
+import type { ModelManifest } from '../../src/shared/manifest'
 import type { GpuDevice } from '../../src/shared/types'
 
 // Phase 4 PR-B (step 4-4, Wave 4 ruling (a)). `resolveRerankProfile`/`rerankScopeFor`/
@@ -29,6 +34,20 @@ import type { GpuDevice } from '../../src/shared/types'
 const RTX_3080_TI: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 const IRIS_XE: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', totalMb: 16384, freeMb: 16000 }
 
+// step 4-5 (ruling (d), B2): the shipped manifests the headroom gate's fixtures are measured
+// against — the SAME files `main/index.ts`'s `rerankerDevicePosture` seam resolves at runtime,
+// loaded here (never hand-duplicated) so a manifest edit is caught by drift, not silently missed.
+const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
+function manifestById(id: string): ModelManifest {
+  const found = discoverManifests(MANIFESTS_DIR)
+    .manifests.map((m) => m.manifest)
+    .find((m) => m.id === id)
+  if (!found) throw new Error(`missing manifest ${id}`)
+  return found
+}
+const CHAT_4B_MANIFEST = manifestById('qwen3.5-4b-ud-q4kxl')
+const RERANKER_MANIFEST = manifestById('bge-reranker-v2-m3-f16')
+
 function input(overrides: Partial<RerankProfileInput>): RerankProfileInput {
   return {
     gpuMode: 'auto',
@@ -41,13 +60,12 @@ function input(overrides: Partial<RerankProfileInput>): RerankProfileInput {
   }
 }
 
-describe('resolveRerankProfile / rerankScopeFor / rerankerDeviceFor', () => {
-  it('gpu: a usable card, auto mode, not auto-disabled → gpu profile, GPU_RERANK_SCOPE, gpu device', () => {
+describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDeviceFor (step 4-5" below)', () => {
+  it('gpu: a usable card, auto mode, not auto-disabled → gpu profile, GPU_RERANK_SCOPE', () => {
     const i = input({ probeDevices: [RTX_3080_TI], gpuMode: 'auto', gpuAutoDisabled: false, threads: 16 })
     const profile = resolveRerankProfile(i)
     expect(profile).toBe('gpu')
     expect(rerankScopeFor(profile, i)).toBe(GPU_RERANK_SCOPE)
-    expect(rerankerDeviceFor(profile)).toBe('gpu')
   })
 
   // Run L froze this by NAME (Frozen parameters: "pinned by name, updated in the run-L commit").
@@ -69,20 +87,18 @@ describe('resolveRerankProfile / rerankScopeFor / rerankerDeviceFor', () => {
     expect(meetsThreadThreshold(4, CPU_HI_MIN_THREADS)).toBe(false) // the real, frozen (Infinity) threshold
   })
 
-  it('the cpu-hi BRANCH (forced profile, as run A3\'s --profile=cpu-hi and a future re-measurement would use it): opt-in ON → top48, cpu device; opt-in OFF → capped', () => {
+  it('the cpu-hi BRANCH (forced profile, as run A3\'s --profile=cpu-hi and a future re-measurement would use it): opt-in ON → top48; opt-in OFF → capped', () => {
     const onInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: true })
     expect(rerankScopeFor('cpu-hi', onInput)).toBe('top48')
-    expect(rerankerDeviceFor('cpu-hi')).toBe('cpu')
     const offInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: false })
     expect(rerankScopeFor('cpu-hi', offInput)).toBe('capped')
   })
 
-  it('default: no usable card, a realistic thread count → capped, cpu device (cpu-hi is unreachable — CPU_HI_MIN_THREADS is Infinity)', () => {
+  it('default: no usable card, a realistic thread count → capped (cpu-hi is unreachable — CPU_HI_MIN_THREADS is Infinity)', () => {
     const i = input({ probeDevices: [], threads: 4 })
     const profile = resolveRerankProfile(i)
     expect(profile).toBe('default')
     expect(rerankScopeFor(profile, i)).toBe('capped')
-    expect(rerankerDeviceFor(profile)).toBe('cpu')
   })
 
   it('no finite thread count reaches cpu-hi today (CPU_HI_MIN_THREADS = Infinity, run L\'s miss) — even a very high count resolves default', () => {
@@ -123,5 +139,82 @@ describe('resolveRerankProfile / rerankScopeFor / rerankerDeviceFor', () => {
     // The cpu-hi branch itself, forced (unreachable via resolveRerankProfile today, but the
     // function must still fail safe to capped with no reranker provisioned).
     expect(rerankScopeFor('cpu-hi', { ...defaultInput, wideScopeOptIn: true, rerankerAvailable: false })).toBe('capped')
+  })
+})
+
+// Step 4-5 (ruling (d), B2, scoped Opus review of step 4-4): the reranker's device POSTURE is no
+// longer read off `resolveRerankProfile`'s classification — it is gated on PROVABLE HEADROOM on
+// the budget device, independent of `gpuUsefulForProfile`'s profile-bump predicate (which is
+// measured only against the 5 GiB usable-card floor and says nothing about room for a SECOND
+// resident model beside the chat model). The three fixtures below are named by machine, per the
+// brief: (i) the measurement machine (provable headroom), (ii) the #318 RTX 3060 Laptop
+// (insufficient headroom — this is the "small card" `docs/known-limitations.md` now discloses
+// the gate cannot be validated on this project's own hardware), (iii) unknown in three different
+// ways. Every fixture loads the REAL shipped manifests (`model-manifests/chat/qwen3.5-4b-ud-
+// q4kxl.yaml`, `model-manifests/reranker/bge-reranker-v2-m3.yaml`) through the SAME
+// `estimateGraphicsNeedMib`/`graphicsBudgetMib` the production seam (`main/index.ts`'s
+// `rerankerDevicePosture`) calls — never a hand-duplicated number — so a manifest edit that
+// silently moves the threshold is caught here, not missed.
+describe('rerankerDeviceFor (step 4-5, ruling (d) — the headroom gate, B2)', () => {
+  // The RTX 3060 Laptop of the #318 hardware session (model-benchmarks.md §6.6 / gpu-rules.ts's
+  // own doc comment): reports ONE 5,994 MiB device-local heap, no `freeMb` in that record — the
+  // `committed-catalog.test.ts` "noFree" idiom (`GpuDevice` itself declares `freeMb: number`
+  // required; real probe data can still omit it, which `graphicsBudgetMib` handles at runtime).
+  const RTX_3060_LAPTOP = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994 } as GpuDevice
+
+  function headroom(overrides: Partial<RerankerHeadroomInput> = {}): RerankerHeadroomInput {
+    return { probeDevices: [], budgetMib: null, chatModelNeedMib: null, ...overrides }
+  }
+
+  it('the reranker floor is the manifest\'s OWN estimateGraphicsNeedMib figure (~2.8 GiB), pinned by value', () => {
+    const computed = estimateGraphicsNeedMib(RERANKER_MANIFEST)
+    expect(RERANKER_HEADROOM_FLOOR_MIB).toBeCloseTo(computed, 6)
+    expect(RERANKER_HEADROOM_FLOOR_MIB).toBeCloseTo(2808.2015380859375, 6)
+    expect(RERANKER_HEADROOM_FLOOR_MIB / 1024).toBeCloseTo(2.74, 1) // "≈ 2.8 GiB", ruling (d)
+  })
+
+  it('(i) provable headroom — the measurement machine (RTX 3080 Ti, the shipped 4B chat model active) → gpu', () => {
+    const budgetMib = graphicsBudgetMib(RTX_3080_TI)
+    const chatModelNeedMib = estimateGraphicsNeedMib(CHAT_4B_MANIFEST)
+    // Recorded per ruling (d): the computed headroom figures for this fixture.
+    expect(budgetMib).toBe(11511) // the probe's own freeMb — used verbatim
+    expect(chatModelNeedMib).toBeCloseTo(3837.397345214844, 6)
+    expect(budgetMib! - chatModelNeedMib!).toBeGreaterThanOrEqual(RERANKER_HEADROOM_FLOOR_MIB)
+    expect(rerankerDeviceFor(headroom({ probeDevices: [RTX_3080_TI], budgetMib, chatModelNeedMib }))).toBe('gpu')
+  })
+
+  it('(ii) insufficient headroom — the #318 RTX 3060 Laptop (no freeMb, the shipped 4B chat model active) → cpu', () => {
+    const budgetMib = graphicsBudgetMib(RTX_3060_LAPTOP)
+    const chatModelNeedMib = estimateGraphicsNeedMib(CHAT_4B_MANIFEST)
+    // Recorded per ruling (d): no probed freeMb, so the budget falls back to totalMb minus the
+    // idle-desktop allowance (`GRAPHICS_IDLE_ALLOWANCE_MIB`, 1,024) — 5,994 − 1,024 = 4,970.
+    expect(budgetMib).toBe(5994 - 1024)
+    expect(budgetMib! - chatModelNeedMib!).toBeLessThan(RERANKER_HEADROOM_FLOOR_MIB)
+    expect(rerankerDeviceFor(headroom({ probeDevices: [RTX_3060_LAPTOP], budgetMib, chatModelNeedMib }))).toBe('cpu')
+  })
+
+  it('(iii) unknown, three ways — a null probe, an eligible probe with no useful device, and no active chat model → cpu in each', () => {
+    const budgetMib = graphicsBudgetMib(RTX_3080_TI)
+    const chatModelNeedMib = estimateGraphicsNeedMib(CHAT_4B_MANIFEST)
+    // A null probe (the #380 semantics: unknown, never "usable").
+    expect(rerankerDeviceFor(headroom({ probeDevices: null, budgetMib, chatModelNeedMib }))).toBe('cpu')
+    // An eligible probe, but no device passes isUsefulDevice (an integrated-only machine).
+    expect(
+      rerankerDeviceFor(
+        headroom({ probeDevices: [IRIS_XE], budgetMib: graphicsBudgetMib(IRIS_XE), chatModelNeedMib })
+      )
+    ).toBe('cpu')
+    // No active chat model / an unresolvable manifest -> chatModelNeedMib is null.
+    expect(
+      rerankerDeviceFor(headroom({ probeDevices: [RTX_3080_TI], budgetMib, chatModelNeedMib: null }))
+    ).toBe('cpu')
+  })
+
+  it('an empty probeDevices list (the caller\'s gpuMode-off/auto-disabled gate) is "not provable" too, whatever the figures', () => {
+    // main/index.ts's rerankerDevicePosture passes `probeDevices: null` when gpuMode is 'off' or
+    // gpuAutoDisabled — this pins that the pure function ALSO refuses an empty array (a probe
+    // that came back with literally no devices), not only null, so a caller that passes `[]`
+    // instead of `null` cannot accidentally earn `gpu` on huge budget/need numbers.
+    expect(rerankerDeviceFor(headroom({ probeDevices: [], budgetMib: 999_999, chatModelNeedMib: 1 }))).toBe('cpu')
   })
 })
