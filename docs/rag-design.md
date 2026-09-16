@@ -3969,8 +3969,9 @@ read exactly once):**
   **The fallback's measured quality cost:** the same `gpu` read's own no-rerank column (the `all`
   scope through `retrieve()`'s no-rerank interleave — precisely the configuration a rerank-call
   failure falls back to) measured `allPacked` **22** and `anyPacked` **33**, BELOW run A2's
-  `capped`/no-rerank baseline of 26/42 (`refBlockPacked` unchanged at 3). A wide lexical pool with
-  no working cross-encoder is not merely unhelpful, it is worse than shipping no rerank at all —
+  `capped`/no-rerank baseline of 26/42 (`refBlockPacked` 2→3 — the one metric in the column that
+  improved; `goldSpanInPacket` 142→116). A wide lexical pool with no working cross-encoder is not
+  merely unhelpful, it is worse than shipping no rerank at all —
   the measured reason `rerankScopeFor` always returns `'capped'` with no reranker provisioned.
 - **`cpu-hi`** (planner + reranker both `--device none` at 8 threads — run L's selection, forced
   since the real constant disables the profile; scope `top48` forced on): `allPacked` **63/200 —
@@ -3995,9 +3996,11 @@ Full per-profile tables: `steps/4-4-product-pr-rerank-profiles/artifacts/accepta
 `acceptance-a3-{default,gpu,cpu}.json`. **Decision: `default` and `gpu` hold every floor;
 `cpu-hi` holds its quality floor but misses its rerank-latency floor in a code path already
 unreachable in production — step 4-4 proposes `blocked`, pending the owner's ruling with the
-figure in hand, per the brief's no-waiver Endpoint rule.** The code state this record describes
-is commit `c4c926bf` (run L's constants-freeze commit, the last commit before this docs update);
-the docs/BUILD_STATE commit and the PR's own head follow it.
+figure in hand, per the brief's no-waiver Endpoint rule.** The code state this record
+describes is commit `007e7074` (the docs+tests commit that followed the run L / run A3 measured
+head `717dc313`; its production-code changes are behaviour-neutral — see the step's Opus
+re-check). The PR's own head follows it with further docs-only, likewise behaviour-neutral
+commits.
 
 **Open questions for PR-B / the human reviewer** (neither blocks PR-A; both are unchanged from
 step 4's report; PR-B does not address either):

@@ -852,7 +852,8 @@ password recovery — are documented in
   below today's status quo:** the `gpu` acceptance read's own no-rerank column — the `all` scope
   through `retrieve()`'s no-rerank interleave, exactly what a rerank-call failure or an absent
   reranker produces — packed FEWER gold blocks than the shipped `capped`/no-rerank baseline:
-  `allPacked` 26→**22**, `anyPacked` 42→**33** (`refBlockPacked` unchanged at 3). A reader
+  `allPacked` 26→**22**, `anyPacked` 42→**33** (`refBlockPacked` 2→3 — the one metric in
+  the column that improved; `goldSpanInPacket` 142→116). A reader
   relying on "bounded" to mean "safe" should know the bound is on latency only; on quality, this
   fallback is measured worse than doing nothing.
 - **The embedder/reranker failed-start latch is for a PERMANENT fault only — a transient port-bind
