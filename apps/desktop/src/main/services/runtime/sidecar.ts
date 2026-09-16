@@ -712,9 +712,9 @@ export class LlamaServer {
   /** The captured stderr for tail-derived sinks: flushes the held-back carry (so the
    *  final — usually most important — line is never missing) and applies the generic
    *  api-key pattern once, at read time. Exact-key removal already happened at the drain.
-   *  Public (step 4-4): read-only diagnostics — a caller (e.g. `LlamaReranker.stderrTail()`)
-   *  can confirm what a start actually logged (device offload, a fit spill) without this class
-   *  growing a bespoke event for every such question. */
+   *  Public: read-only diagnostics — a caller (e.g. `LlamaReranker.stderrTail()`) can confirm
+   *  what a start actually logged (device offload, a fit spill) without this class growing a
+   *  bespoke event for every such question. Diagnostics-only; no in-repo caller today. */
   redactedTail(): string {
     return redactSidecarSecrets(this.stderrTail + this.stderrCarry, this.apiKey)
   }

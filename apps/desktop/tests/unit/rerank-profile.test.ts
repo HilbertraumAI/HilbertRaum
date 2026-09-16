@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   CPU_HI_MIN_THREADS,
   GPU_RERANK_SCOPE,
+  meetsThreadThreshold,
   resolveRerankProfile,
   rerankScopeFor,
   rerankerDeviceFor,
@@ -47,6 +48,25 @@ describe('resolveRerankProfile / rerankScopeFor / rerankerDeviceFor', () => {
     expect(profile).toBe('gpu')
     expect(rerankScopeFor(profile, i)).toBe(GPU_RERANK_SCOPE)
     expect(rerankerDeviceFor(profile)).toBe('gpu')
+  })
+
+  // Run L froze this by NAME (Frozen parameters: "pinned by name, updated in the run-L commit").
+  // `rerankScopeFor(profile, i)).toBe(GPU_RERANK_SCOPE)` above is true for ANY value the constant
+  // takes (it compares the function's own output against the constant), so it does not, on its
+  // own, catch a future edit to the constant's VALUE — this pins the value itself.
+  it('GPU_RERANK_SCOPE is frozen at \'all\' (run L, 2026-09-15) — changing this invalidates run A3\'s gpu-profile acceptance read', () => {
+    expect(GPU_RERANK_SCOPE).toBe('all')
+  })
+
+  // B12: the `threads >= CPU_HI_MIN_THREADS` comparator, exercised in BOTH directions via the
+  // extracted helper — `resolveRerankProfile` alone cannot observe the `true` branch today
+  // (`CPU_HI_MIN_THREADS` is `Infinity`), so a comparator inversion (`>` vs `>=`) would otherwise
+  // be invisible until a future re-measurement lowers the constant.
+  it('meetsThreadThreshold: the comparator is inclusive (>=), exercised at, above and below an injected threshold', () => {
+    expect(meetsThreadThreshold(8, 8)).toBe(true) // at the threshold
+    expect(meetsThreadThreshold(16, 8)).toBe(true) // above it
+    expect(meetsThreadThreshold(7, 8)).toBe(false) // below it
+    expect(meetsThreadThreshold(4, CPU_HI_MIN_THREADS)).toBe(false) // the real, frozen (Infinity) threshold
   })
 
   it('the cpu-hi BRANCH (forced profile, as run A3\'s --profile=cpu-hi and a future re-measurement would use it): opt-in ON → top48, cpu device; opt-in OFF → capped', () => {

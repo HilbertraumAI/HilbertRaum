@@ -31,7 +31,13 @@ export interface RerankProfileInput {
    * The eligible probe's device list (`eligibleGpuProbe(settings.gpuProbe, machineKey)?.devices`,
    * or the session-cached probe's answer when one is in hand). `null` = unknown / no probe —
    * the #380 semantics: never "no usable device", but never "usable" either, so an unknown
-   * probe never resolves to `gpu`.
+   * probe never resolves to `gpu`. This function itself preserves the distinction
+   * (`Array.isArray` below); today's two production call sites (`registerRagIpc.ts`,
+   * `main/index.ts`) both read `probeDevices` via `performance.ts`'s `eligibleDevicesFor`, which
+   * returns `[]` rather than `null` for "no probe" — so `null` currently reaches only the
+   * fixtures in `rerank-profile.test.ts`, never a real ask. No behaviour difference today (`[]`
+   * and `null` both fail the `gpu` check), but a future rule that DOES distinguish "unknown" from
+   * "known, no usable device" would need one or both call sites to pass the real `null` through.
    */
   probeDevices: GpuDevice[] | null
   /**
@@ -93,14 +99,30 @@ export function resolveRerankProfile(input: RerankProfileInput): RerankProfile {
   ) {
     return 'gpu'
   }
-  if (input.threads >= CPU_HI_MIN_THREADS) return 'cpu-hi'
+  if (meetsThreadThreshold(input.threads, CPU_HI_MIN_THREADS)) return 'cpu-hi'
   return 'default'
 }
 
 /**
+ * The `cpu-hi` branch's own comparator, extracted so a test can exercise BOTH directions (a
+ * count under vs at/over a threshold) without a finite `CPU_HI_MIN_THREADS` existing in
+ * production — today it is `Infinity` (see the constant's own doc comment), so
+ * `resolveRerankProfile` alone can never observe the `true` branch at any real thread count.
+ * Diagnostics/testability only; identical to the inline comparison it replaces.
+ */
+export function meetsThreadThreshold(threads: number, minThreads: number): boolean {
+  return threads >= minThreads
+}
+
+/**
  * The candidate scope for a resolved profile. A scope wider than `capped` is used ONLY when a
- * reranker is provisioned: with no reranker every profile is `capped`, because a wide lexical
- * pool with no cross-encoder would flood the interleave and the `topKFinal` trim.
+ * reranker is provisioned: with no reranker every profile is `capped`. The `gpu` acceptance
+ * read's own no-rerank column (the `all` scope through `retrieve()`'s no-rerank interleave, the
+ * exact configuration a rerank-call failure falls back to) measured WHY: `allPacked` 26→22 and
+ * `anyPacked` 42→33 against the `capped`/no-rerank baseline — a wide lexical pool with no
+ * cross-encoder does not merely fail to help, it packs FEWER gold blocks than today's narrower
+ * pool (see `docs/known-limitations.md`'s fallback-cost bullet and `docs/rag-design.md` §17 for
+ * the full table). This is a measured cost, not a hypothetical.
  */
 export function rerankScopeFor(profile: RerankProfile, input: RerankProfileInput): RerankScope {
   if (!input.rerankerAvailable) return 'capped'

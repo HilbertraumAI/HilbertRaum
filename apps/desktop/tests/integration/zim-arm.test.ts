@@ -737,8 +737,17 @@ describe('candidate scope (step 4-4)', () => {
     }
   })
 
-  it('the superset property: capped ⊆ top48 ⊆ top96 ⊆ all, by chunk index, for both a normal and a list article', () => {
-    const chunks = Array.from({ length: 40 }, (_, i) => ({ index: i, overlap: Math.random(), text: `c${i}` }))
+  it('the superset property: capped ⊆ top48 ⊆ top96 ⊆ all, by chunk index, for both a normal and a list article (fixed overlaps, including ties)', () => {
+    // B10 (scoped Opus review, step 4-4): FIXED, hand-written overlaps — including genuine ties
+    // (the case `index asc` tie-breaking exists for, which `Math.random()` essentially never
+    // produces) — so this fixture is reproducible and a failure is re-runnable. Overlap pattern:
+    // a strictly-descending run (0..29 tied in pairs: 39,39,38,38,...) then a flat tail of zeros,
+    // so every scope's cut point lands inside a tie at least once.
+    const chunks = Array.from({ length: 40 }, (_, i) => ({
+      index: i,
+      overlap: i < 30 ? 39 - Math.floor(i / 2) : 0, // pairs tie: (0,1)->39, (2,3)->38, ...; 30..39 -> 0
+      text: `c${i}`
+    }))
     for (const isList of [false, true]) {
       const byScope = new Map(SCOPES.map((s) => [s, new Set(chunksForScope(chunks, s, isList).map((c) => c.index))]))
       const capped = byScope.get('capped')!
@@ -749,6 +758,66 @@ describe('candidate scope (step 4-4)', () => {
       for (const i of top48) expect(top96.has(i)).toBe(true)
       for (const i of top96) expect(all.has(i)).toBe(true)
       expect(all.size).toBe(chunks.length) // all = every chunk, nothing dropped
+      // A tie is genuinely exercised: index-asc must have been the tie-break, not incidental.
+      expect(new Set(chunks.map((c) => c.overlap)).size).toBeLessThan(chunks.length)
+    }
+  })
+
+  // B10 (scoped Opus review, step 4-4): the property above is pinned only at the `chunksForScope`
+  // level, where it is near-tautological (every scope is a prefix of the same total order). The
+  // layer where it could actually break is the COMPOSITION `collectPackCandidates` performs: the
+  // article loop's `if (item.candidates.length >= item.quota) break` (arm.ts), the per-pack
+  // `packQuota(i, N, cap)` (NOT uniformly doubling — e.g. at N=5, pack 3 gets 5 under `capped`
+  // and 9, not 10, under `top48`), and `allocateCandidates`'s round-robin reclaim. This test
+  // replicates that composition, verbatim, over two FIXED multi-pack/multi-article fixtures (one
+  // with a list article) using the branch's own exported `chunksForScope`/`packQuota`/
+  // `allocateCandidates` — never a re-implementation of the picker — and asserts the superset
+  // property on the ADMITTED output, not just the per-article slice.
+  function composeAdmitted(
+    packsArticles: ReadonlyArray<ReadonlyArray<{ isList: boolean; chunks: Array<{ index: number; overlap: number }> }>>,
+    scope: RerankScope
+  ): Set<string> {
+    const cap = totalCandidateCapFor(scope)
+    const perPack = packsArticles.map((articles, packIdx) => {
+      const quota = packQuota(packIdx, packsArticles.length, cap)
+      const candidates: ExternalCandidate[] = []
+      for (const [articleIdx, article] of articles.entries()) {
+        if (candidates.length >= quota) break
+        const picked = chunksForScope(article.chunks, scope, article.isList)
+        for (const c of picked) {
+          candidates.push({ ...archiveCandidate(0, ''), chunkId: `p${packIdx}:a${articleIdx}:c${c.index}` })
+        }
+      }
+      return { packId: `p${packIdx}`, candidates }
+    })
+    const { admitted } = allocateCandidates(perPack, cap)
+    return new Set(admitted.map((c) => c.chunkId))
+  }
+
+  it('the superset property holds on the COMPOSED admission output (packQuota + the article loop + allocateCandidates), not only the per-article slice', () => {
+    const tiedChunks = (n: number): Array<{ index: number; overlap: number }> =>
+      Array.from({ length: n }, (_, i) => ({ index: i, overlap: Math.floor((n - i) / 2) })) // ties every pair
+    const fixtures: Array<ReadonlyArray<ReadonlyArray<{ isList: boolean; chunks: Array<{ index: number; overlap: number }> }>>> = [
+      // Fixture 1: 3 packs, uneven article counts, one list article, tied overlaps.
+      [
+        [{ isList: false, chunks: tiedChunks(20) }, { isList: true, chunks: tiedChunks(30) }],
+        [{ isList: false, chunks: tiedChunks(10) }],
+        [{ isList: false, chunks: tiedChunks(50) }, { isList: false, chunks: tiedChunks(6) }, { isList: false, chunks: tiedChunks(6) }]
+      ],
+      // Fixture 2: 5 packs (packQuota's "+1 for the first `cap mod N`" term actually fires),
+      // each with one small article — the case B10 names explicitly (N=5, cap doubling is not
+      // uniform: floor(24/5)=4 r4 under capped, floor(48/5)=9 r3 under top48).
+      Array.from({ length: 5 }, () => [{ isList: false, chunks: tiedChunks(12) }])
+    ]
+    for (const packsArticles of fixtures) {
+      const byScope = new Map(SCOPES.map((s) => [s, composeAdmitted(packsArticles, s)]))
+      const capped = byScope.get('capped')!
+      const top48 = byScope.get('top48')!
+      const top96 = byScope.get('top96')!
+      const all = byScope.get('all')!
+      for (const id of capped) expect(top48.has(id)).toBe(true)
+      for (const id of top48) expect(top96.has(id)).toBe(true)
+      for (const id of top96) expect(all.has(id)).toBe(true)
     }
   })
 
@@ -774,12 +843,23 @@ describe('candidate scope (step 4-4)', () => {
     expect(allocateCandidates(longPacks, totalCandidateCapFor('capped')).admitted).toHaveLength(MAX_EXTERNAL_CANDIDATES)
   })
 
-  it('with no reranker provisioned every profile stays capped (Frozen parameters: a wide lexical pool needs a cross-encoder)', () => {
-    // This is `rerankScopeFor`'s own contract (rerank-profile.test.ts); pinned here too as the
-    // product-terms restatement: `collectPackCandidates` never widens on its own — the CALLER
-    // (registerRagIpc.ts) must not pass a wide `candidateScope` when `rerankerAvailable` is false.
-    // No `collectPackCandidates` behaviour changes here; this test documents the contract boundary.
-    expect(perArticleBudget('capped', false)).toBeLessThan(perArticleBudget('top48', false))
+  // B11 (scoped Opus review, step 4-4): the test this replaces was titled after a
+  // reranker-availability contract but its body (`perArticleBudget('capped', false) <
+  // perArticleBudget('top48', false)`) checked neither `rerankerAvailable` nor `collectPackCandidates`
+  // — it would pass on an implementation that ignored `rerankerAvailable` entirely. That real
+  // contract IS pinned, in `rerank-profile.test.ts`'s "rerankerAvailable false -> capped on every
+  // profile" case (`rerankScopeFor` refuses a wide scope with no reranker BEFORE reading the
+  // profile). What THIS file can meaningfully pin instead is `collectPackCandidates`'s own
+  // absent-option default: that omitting `candidateScope` really does mean `'capped'`, not a
+  // scope that silently drifted.
+  it('collectPackCandidates with no candidateScope option is byte-identical to an explicit candidateScope: "capped" (the absent-option default really is capped)', async () => {
+    const packs = [{ id: 'pack-climate', title: 'Klimawandel von Wikipedia' }]
+    const question = 'Wie entsteht Treibhausgas in der Landwirtschaft?'
+    const { candidates: implicit } = await collectPackCandidates(port, packs, question)
+    const { candidates: explicit } = await collectPackCandidates(port, packs, question, undefined, undefined, {
+      candidateScope: 'capped'
+    })
+    expect(implicit.map((c) => c.chunkId)).toEqual(explicit.map((c) => c.chunkId))
   })
 
   it('end to end: candidateScope "all" yields EVERY chunk of an admitted list article, not just its capped slice', async () => {

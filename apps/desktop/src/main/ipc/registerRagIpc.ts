@@ -63,14 +63,18 @@ import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './ch
 import type { Db } from '../services/db'
 
 /**
- * Step 4-4 (Wave 4 ruling (a)): this ask's knowledge-pack candidate scope, resolved from the
- * SAME hardware-profile rule the reranker sidecar's device posture uses
- * (`rag/rerank-profile.ts`) — so a GPU machine's ask sees `GPU_RERANK_SCOPE` candidates exactly
- * when the sidecar it is about to call is about to start on the GPU, never a mismatch. Absent a
- * reranker, `rerankScopeFor` always returns `'capped'` — a wide lexical pool with no
- * cross-encoder would flood the interleave and the `topKFinal` trim.
+ * This ask's knowledge-pack candidate scope, resolved from the SAME hardware-profile rule the
+ * reranker sidecar's device posture uses (`rag/rerank-profile.ts`) — so a GPU machine's ask sees
+ * `GPU_RERANK_SCOPE` candidates exactly when the sidecar it is about to call is about to start
+ * on the GPU, never a mismatch. Absent a reranker (`rerankerAvailable: false`), `rerankScopeFor`
+ * always returns `'capped'` — a MEASURED requirement, not just a defensive default: the `gpu`
+ * profile's own no-rerank column (the `all` scope through the no-rerank interleave, exactly what
+ * a rerank-call failure falls back to) packed FEWER gold blocks than today's `capped`/no-rerank
+ * baseline (`allPacked` 26→22, `anyPacked` 42→33 — see `docs/known-limitations.md`'s
+ * fallback-cost bullet and `docs/rag-design.md` §17). Exported for
+ * `tests/unit/rerank-profile-wiring.test.ts` — the one production call site this function has.
  */
-function resolveAskCandidateScope(settings: AppSettings, rerankerAvailable: boolean): RerankScope {
+export function resolveAskCandidateScope(settings: AppSettings, rerankerAvailable: boolean): RerankScope {
   const here = machineKey(detectSystem())
   const input = {
     gpuMode: settings.gpuMode,

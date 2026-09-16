@@ -2051,7 +2051,9 @@ size>:<mtime>` — a 404, a timeout, a malformed body or a response observed acr
 change never confirms "no"; a confirmed-no pack is skipped by an ask but stays readable.
 Each ask allocates at most `MAX_SELECTED_PACKS = 12` packs' worth of work: up to
 `MAX_EXTERNAL_CANDIDATES = 24` candidates admitted round-robin in title order after every
-pack settles, at most `PACK_SEARCH_CONCURRENCY = 2` packs searched at once, under one
+pack settles **on the `capped` scope** (step 4-4's default; the `gpu` profile's `all` scope and
+the `cpu-hi` opt-in's `top48` lift this cap — `rag-design.md` §17 PR-B record), at most
+`PACK_SEARCH_CONCURRENCY = 2` packs searched at once, under one
 `EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000` ms deadline shared with the request guard's one
 retry. `classifyPackSelection` (`zim/packs.ts`) classifies every selected pack id BEFORE
 any eligibility filter, so a missing tools bundle or an all-unavailable selection cannot

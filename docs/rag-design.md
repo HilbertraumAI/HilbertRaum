@@ -2154,7 +2154,8 @@ offline article viewer. Files are registered in place, never copied.
   is the "LINEAR FORWARD SCANNER — complexity record" header comment in that file, PR #294
   review H1. Sections → heading `sectionLabel`s, mw-ref sups dropped, `<math alttext>`
   LaTeX kept, tables/figures dropped) → the SAME `chunkSegments` chunker → top-4
-  chunks/article by query-term overlap, ≤24 candidates total.
+  chunks/article by query-term overlap, ≤24 candidates total on the `capped` scope (step 4-4's
+  default; the `gpu`/`cpu-hi` hardware profiles widen this — §17 PR-B record).
 
   **Truncation / budget contract.** The converter takes `{ maxChars?, maxWork? }`
   (defaults 1 MiB / 4×`maxChars`) and never throws: a cut reports
@@ -2389,15 +2390,18 @@ offline article viewer. Files are registered in place, never copied.
   is NEVER converted into a fallback or an outcome — it propagates out of `retrieve()`
   unchanged.
   **Fair allocation (P4, 2026-09-06; review M8).** `MAX_EXTERNAL_CANDIDATES = 24` stays the
-  GLOBAL admitted-candidate bound; for N eligible packs (N ≤ `MAX_SELECTED_PACKS = 12`)
+  GLOBAL admitted-candidate bound **on the `capped` scope** (step 4-4's default; the `gpu`
+  profile's `all` scope drops this bound entirely and the `cpu-hi` opt-in's `top48` doubles it —
+  `totalCandidateCapFor`, §17 PR-B record); for N eligible packs (N ≤ `MAX_SELECTED_PACKS = 12`)
   each gets a provisional quota `floor(24/N)` plus one extra for the first `24 mod N`
   packs in `title COLLATE NOCASE, id` order — an UPPER bound on how much a pack fetches
   (on master: ≤ `ARTICLES_PER_PACK = 5` articles; since the §17 discovery port (Phase 4 PR-A,
   2026-09-14), `ARTICLES_PER_PACK` no longer exists — a pack's own discovery pass is bounded
   instead by `DISCOVERY_MAX_READS_PER_PACK = 12` reads / `DISCOVERY_MAX_ADMITTED_PER_PACK = 8`
   admitted articles, §17 — each ≤ `CHUNKS_PER_ARTICLE = 4` chunks (`LIST_ARTICLE_CHUNKS = 8` for
-  a LIST-shaped article, unconditionally, on both trees)), not a
-  guaranteed minimum. Admission happens only after every pack has SETTLED: round-robin,
+  a LIST-shaped article, unconditionally, on both trees) **on the `capped` scope** (`top48`/
+  `top96` double/quadruple this per-article slice too, `all` drops it — `perArticleBudget`, §17)),
+  not a guaranteed minimum. Admission happens only after every pack has SETTLED: round-robin,
   one candidate per pack per round in pack order, until 24 are admitted or every pack is
   exhausted — a short/empty/failed pack's unused share reclaims to the others (bounded by
   what they already fetched; a reclaim never triggers a further fetch), and a
@@ -3916,10 +3920,15 @@ unreachable by any finite thread count — `threads >= Infinity` is false for ev
 machine — and the `ragRerankWideScope` opt-in has no effect for anyone until a future
 re-measurement lowers the constant). The GPU sidecar's captured stderr never explicitly
 mentioned "Vulkan"/"offload" text (`run-l-latency.json`'s `vulkanEvidence` — the load banner was
-evidently not in the 4,000-char tail by the time it was read); the TIMING evidence is decisive
-instead — GPU `all` (up to 410 documents) finished in a p90 of 2.7 s where CPU `top48` (≤ 48
-documents) took a p90 of 25.3 s on the SAME hardware in the SAME session, two orders of magnitude
-apart, which is not explicable by CPU execution.
+evidently not in the 4,000-char tail by the time it was read: the tail was captured after one
+warm-up call, which had already rolled the window past the load banner to slot-lifecycle lines —
+reading it immediately after the health check, before any warm-up, or raising the tail cap, would
+close this for a future re-measurement); the TIMING evidence is decisive instead — GPU `all` (up
+to 410 documents) finished in a p90 of 2.7 s where CPU `top48` (≤ 48 documents) took a p90 of
+25.3 s on the SAME hardware in the SAME session — **roughly 9.5× on the raw p90, and ~33× per
+document** (2.7 s / 118 docs vs 25.3 s / 33.5 docs) — not two orders of magnitude, but still not
+explicable by CPU execution: no CPU-side variable in this step changed by anything like that
+factor.
 
 **Run A3 (2026-09-15/16, the one authorised `core200` acceptance read per profile; each profile
 read exactly once):**
@@ -3930,21 +3939,53 @@ read exactly once):**
   byte-identically on 200/200 (`replay-a2-through-branch.json`), isolating the code path from
   planner variance.
 - **`gpu`** (planner + reranker both on the GPU, scope `all`): **every floor PASSES, with wide
-  margin.** `allPacked` **78/200** (floor ≥ 45; beside 26 no-rerank, 47 capped-rerank — the wider
-  pool nearly DOUBLES the capped-rerank record's gain, not merely holds it), `anyPacked`
-  **111/200** (beside 42, 79), `anyCandidate` **116/200** (floor ≥ 80), `anyArticle` **120/200**
-  (floor ≥ 96), arm p90 excluding planner and rerank **173 ms** (floor ≤ 2,500 ms), rerank p90
-  **2,358 ms** (floor ≤ 10,848 ms), planner p90 **605 ms** (floor ≤ 3,000 ms). By population:
-  DEV49 `allPacked` 40/100, MEAS49 38/100. The GPU sanity row — run A's captured (capped-scope)
-  candidates replayed through the branch's `retrieve()` with the GPU-postured reranker — measured
-  `allPacked` **47/200**, IDENTICAL to 4-2's own CPU-rerank record of 47 with **0 differing ids**
-  (`sanity-capped-gpu-vs-47.json`): the capped path reproduces the record exactly on the GPU.
+  margin.** `allPacked` **78/200** (floor ≥ 45; beside 26 no-rerank, 47 capped-rerank — 78/47 is
+  1.66×; the gain OVER the 26 no-rerank baseline is 52 against the capped-rerank record's own 21,
+  i.e. 2.5× the baseline gain), `anyPacked` **111/200** (beside 42, 79), `anyCandidate`
+  **116/200** (floor ≥ 80 — **beside run A2's 81**: this is a genuine MOVEMENT, not incidental
+  headroom; see the premise note below), `allCandidate` **93/200** (beside run A2's 49),
+  `anyArticle` **120/200** (floor ≥ 96, exactly run A2's own 120 — unaffected, as the scope's
+  position downstream of article admission predicts), arm p90 excluding planner and rerank
+  **173 ms** (floor ≤ 2,500 ms), rerank p90 **2,358 ms** (floor ≤ 10,848 ms), planner p90
+  **605 ms** (floor ≤ 3,000 ms). By population: DEV49 `allPacked` 40/100, MEAS49 38/100.
+  **The `anyCandidate ≥ 80` floor's premise no longer holds for this profile.** 4-2's record set
+  the floor just under run A2's 81 on the stated premise that the reranker "cannot move
+  `anyCandidate`/`allCandidate` (upstream of `retrieve()`, unchanged from the no-rerank row)" —
+  true for a reranker sitting downstream of a FIXED candidate set. PR-B's scope widening sits
+  UPSTREAM of the reranker, in `collectPackCandidates` itself, so it is not bound by that premise
+  and, measured here, it moved `anyCandidate` 81→116 and `allCandidate` 49→93: the wider slice
+  surfaces gold blocks the top-4-per-article cut discarded before they ever reached the reranker.
+  The floor still binds and still passes — but as a check that the wider pool does not LOSE
+  candidates, not as the "reranker cannot move this" check it was originally read against.
+  The GPU sanity row — run A's captured (capped-scope) candidates replayed through the branch's
+  `retrieve()` with the GPU-postured reranker — measured `allPacked` **47/200**, matching 4-2's
+  own CPU-rerank record's FIGURE exactly (47 = 47, 0 ids change the `allPacked` verdict:
+  `sanity-capped-gpu-vs-47.json`). Comparing the actual final-six chunk sequences (not just the
+  verdict) shows F16-on-Vulkan-vs-CPU rank drift on **3 of 200 ids** — `H036` and `H057` swap two
+  adjacent ranks (the same chunks, reordered), and `H082` swaps a DIFFERENT chunk into the final
+  six (`Bi_Sheng#2` on the GPU replay against `Bi_Sheng_(Mondkrater)#2` on the CPU reference) —
+  exactly the "a difference of a question or two … from device numerics" the brief anticipated;
+  the capped path reproduces the record's figure exactly, with this small, disclosed drift.
+  **The fallback's measured quality cost:** the same `gpu` read's own no-rerank column (the `all`
+  scope through `retrieve()`'s no-rerank interleave — precisely the configuration a rerank-call
+  failure falls back to) measured `allPacked` **22** and `anyPacked` **33**, BELOW run A2's
+  `capped`/no-rerank baseline of 26/42 (`refBlockPacked` unchanged at 3). A wide lexical pool with
+  no working cross-encoder is not merely unhelpful, it is worse than shipping no rerank at all —
+  the measured reason `rerankScopeFor` always returns `'capped'` with no reranker provisioned.
 - **`cpu-hi`** (planner + reranker both `--device none` at 8 threads — run L's selection, forced
   since the real constant disables the profile; scope `top48` forced on): `allPacked` **63/200 —
   PASS** (floor ≥ 45; beside 26, 47 — also a real gain over the capped-rerank record), but rerank
   p90 **25,206 ms — MISS** against the ≤ 10,848 ms floor (mean 15,257 ms, max 55,911 ms, n=181
   calls) — confirmatory of run L's own prediction on the same hardware, not a surprise from this
-  read. **Per the Endpoint's no-waiver rule this is a floor miss; `artifacts/gap-diagnosis.json`
+  read. **This comparison is indicative, not controlled:** the `cpu-hi` hold ran the PLANNER on
+  the CPU too (`--device none -ngl 0 -t 8`, matching run L's own configuration), so its upstream
+  funnel differs from every other read in this record — `anyArticle` **115** (against 120 on
+  every GPU-planner read), `allArticle` 84 (against 89), `anyCandidate` 93. `allPacked` 63 is
+  therefore the joint effect of the wider `top48` scope AND a different (CPU) plan, read against
+  a capped-rerank record (47) taken with a GPU planner — not a same-plan comparison. The direction
+  is almost certainly still right (63 > 47 despite a WORSE upstream funnel makes the scope's own
+  contribution look, if anything, understated), but the two numbers are not like-for-like.
+  **Per the Endpoint's no-waiver rule this is a floor miss; `artifacts/gap-diagnosis.json`
   lists the 20 slowest calls with their document counts.** The miss lands entirely in a code path
   the shipped constant already disables for every real machine (`CPU_HI_MIN_THREADS = Infinity`
   from run L) — no live user is affected — but the ruled acceptance floor for the FORCED read

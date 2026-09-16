@@ -106,9 +106,10 @@ export class LlamaReranker implements Reranker {
     return this.server !== null
   }
 
-  /** The sidecar's captured stderr tail (diagnostics; '' before any start or once stopped).
-   *  Step 4-4: run L and run A3 read this to confirm a `gpu` posture start actually offloaded
-   *  to a device rather than falling back / spilling to host memory. */
+  /** The sidecar's captured stderr tail (diagnostics; '' before any start or once stopped) — a
+   *  passthrough to `LlamaServer.redactedTail()`, so a caller can confirm what a `gpu`-posture
+   *  start actually logged (device offload, a fit spill) without this class growing a bespoke
+   *  event for every such question. Diagnostics-only; no in-repo caller today. */
   stderrTail(): string {
     return this.server?.redactedTail() ?? ''
   }

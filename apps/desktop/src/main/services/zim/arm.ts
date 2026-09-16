@@ -78,9 +78,10 @@ export const PROBE_TIMEOUT_MS = 3_000
  */
 export const LIST_ARTICLE_CHUNKS = 8
 const LIST_TITLE_RE = /^(Liste |List of )/
-/** Exported so an offline reconstruction (step 4-4, run L: deriving `top96`/`top48`/`capped`
- *  from an `all`-scope capture) can classify a captured article's title exactly as the live
- *  admission path does, never a re-implementation of the pattern. */
+/** The one definition of "this is a list article" — used below and exported so an offline
+ *  reconstruction of the widened scopes from a captured `all`-scope pack (deriving
+ *  `top96`/`top48`/`capped` without re-running discovery) can classify a captured title exactly
+ *  as this module does, never a second copy of the pattern. */
 export function isListArticleTitle(title: string): boolean {
   return LIST_TITLE_RE.test(title)
 }
@@ -642,7 +643,7 @@ export async function collectPackCandidates(
       const scored = chunksForScope(
         chunks.map((c, i) => ({ c, index: i, overlap: overlapScore(c.text, terms) })),
         scope,
-        LIST_TITLE_RE.test(title)
+        isListArticleTitle(title)
       )
       for (const { c, index: i, overlap } of scored) {
         item.candidates.push({

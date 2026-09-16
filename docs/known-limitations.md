@@ -813,8 +813,10 @@ password recovery — are documented in
 - **Reranker latency on CPU is significant (MEASURED): ≈ 24.7 s worst case** for a 12-candidate
   batch at the full truncation budget on a CPU-pinned i7-1185G7 (~2 s/candidate;
   `HILBERTRAUM_RERANK_SMOKE`, 2026-06-10) — a documents query visibly lengthens on a low-end laptop when
-  the reranker is provisioned. Bounded by the candidate cap (≤ 2×`topKInitial`) + word-truncation
-  budgets (the tuning levers); the reranker stays an opt-in (provision-the-GGUF) feature, never
+  the reranker is provisioned. Bounded, on the `capped` scope (step 4-4's default; see the
+  profile rule immediately below for the `gpu`/`cpu-hi` widenings), by the candidate cap
+  (≤ 2×`topKInitial`) + word-truncation budgets (the tuning levers); the reranker stays an
+  opt-in (provision-the-GGUF) feature, never
   bundled by default. The `HILBERTRAUM_RAG_QUALITY` run is the evidence it earns the cost
   (rag-design §12.3). **The rerank hardware-profile rule (step 4-4, `rag-design.md` §17 PR-B
   record) follows from this cost:** on a usable GPU the reranker sees every fetched knowledge-pack
@@ -834,13 +836,25 @@ password recovery — are documented in
   a partially-offloaded chat model shows); the resulting latency of that spilled case is not on
   file. Revisit with a measurement on a ~5–6 GiB card once one is available to the project (the
   same "no 4 GB card owned" gap `architecture.md`'s `USABLE_VRAM_MB` record already discloses).
-- **The `all` rerank scope's failure fallback is degraded but bounded, not measured under load
-  (step 4-4).** A rerank call over every fetched block (up to several hundred documents, run L
-  measured a max of 410) is still bounded by the reranker's existing `DEFAULT_REQUEST_TIMEOUT_MS`
-  (120 s) and `retrieve()`'s existing catch path (the fused order is kept, then the interleave) —
-  no new fallback code was added for step 4-4. Whether a 120 s timeout is ever reached in practice
-  on the `gpu` profile is unmeasured (run L's largest observed call was 5.2 s); a future report
-  should record it if a real-world case approaches the bound.
+- **The `all` rerank scope's failure fallback is bounded in latency but WORSE than today's
+  baseline in quality — both measured, neither hypothetical (step 4-4).** A rerank call over
+  every fetched block is bounded by the reranker's existing `DEFAULT_REQUEST_TIMEOUT_MS` (120 s)
+  and `retrieve()`'s existing catch path (the fused order is kept, then the no-rerank interleave)
+  — no new fallback code was added for step 4-4. The largest call actually observed is run A3's
+  `gpu` acceptance read's own `H132`: **755 documents in a single call at 10,774 ms** — 74 ms
+  under this profile's own ≤ 10,848 ms rerank-latency floor, on a 12 GiB dedicated card, with
+  exactly one knowledge pack selected (development read L's max was smaller — 410 documents,
+  5.2 s — because it never spent a lock hold on `core200`; A3's later, larger read is the figure
+  to cite). An ask that selects more than one pack (up to `MAX_SELECTED_PACKS = 12`) was never
+  measured and scales the document count roughly linearly, so this bound is not exercised at
+  anywhere near its worst case by this step's reads. **The QUALITY of the fallback itself, when
+  it fires (or when the interleave runs directly, with no reranker provisioned), is measured
+  below today's status quo:** the `gpu` acceptance read's own no-rerank column — the `all` scope
+  through `retrieve()`'s no-rerank interleave, exactly what a rerank-call failure or an absent
+  reranker produces — packed FEWER gold blocks than the shipped `capped`/no-rerank baseline:
+  `allPacked` 26→**22**, `anyPacked` 42→**33** (`refBlockPacked` unchanged at 3). A reader
+  relying on "bounded" to mean "safe" should know the bound is on latency only; on quality, this
+  fallback is measured worse than doing nothing.
 - **The embedder/reranker failed-start latch is for a PERMANENT fault only — a transient port-bind
   race no longer arms it (arch GPU record §5.5b).** Each
   sidecar latches a failed start so it doesn't re-await the full health timeout on every call. That
