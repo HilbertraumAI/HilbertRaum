@@ -118,13 +118,21 @@ export function perArticleBudget(scope: RerankScope, isList: boolean): number {
  * call at 10,774 ms, 74 ms under this PR's own 10,848 ms bound, on a SINGLE pack; a multi-pack
  * ask (up to `MAX_SELECTED_PACKS` = 12, `shared/types.ts`) has no such margin.
  *
- * Set by run L2 (a two-pack development latency read on the `cpu50` set,
- * `programme-state/steps/4-5-product-pr-rerank-profiles-2/artifacts/scope-selection-2.json`).
- * Pre-registered selection rule: the largest of {192, 256, 384, 512} whose two-pack rerank p90
- * is at or under the 10,848 ms bound (4-i M1's shipped CPU rerank median per question), else
- * 192 with the miss reported. `192` here is the PREDICTED/floor value pending that read.
+ * FROZEN by run L2 (step 4-5, 2026-09-16) — a two-pack development latency read on the
+ * `cpu50` set (`wikipedia_de_all_nopic_2026-01.zim` + `wikipedia_de_climate-change_nopic_
+ * 2026-07.zim`), `programme-state/steps/4-5-product-pr-rerank-profiles-2/artifacts/
+ * scope-selection-2.json` + `run-l2-latency.json`. Pre-registered selection rule: the largest
+ * of {192, 256, 384, 512} whose two-pack rerank p90 is at or under the 10,848 ms bound (4-i
+ * M1's shipped CPU rerank median per question), else 192 with the miss reported. Selected:
+ * **512 — no miss** (p90 by cell: 192 → 2,251 ms, 256 → 2,763 ms, 384 → 2,870 ms, 512 →
+ * 2,816 ms; n=43 calls each; the genuinely uncapped two-pack distribution itself — mean 115.8
+ * documents, p90 260, max 553 — measured p90 3,007 ms, also comfortably under the bound). Every
+ * cell cleared with wide margin on this measurement's document-count distribution, so the
+ * widest predefined cell wins; a future pack combination producing materially larger per-call
+ * counts (run L's own single-pack worst case was 755 documents at 10,774 ms) is the case this
+ * ceiling exists to bound.
  */
-export const ALL_SCOPE_MAX_DOCS = 192
+export const ALL_SCOPE_MAX_DOCS = 512
 
 /** Total admitted-candidate cap for a scope (Frozen parameters, step 4-4; `all` capped by
  *  step 4-5 ruling (e)(ii)) — what `packQuota` and `allocateCandidates` bound against instead

@@ -719,12 +719,12 @@ describe('candidate scope (step 4-4)', () => {
     expect(totalCandidateCapFor('capped')).toBe(MAX_EXTERNAL_CANDIDATES)
     expect(totalCandidateCapFor('top48')).toBe(MAX_EXTERNAL_CANDIDATES * 2)
     expect(totalCandidateCapFor('top96')).toBe(MAX_EXTERNAL_CANDIDATES * 4)
-    // Step 4-5 (ruling (e)(ii), B3/B7/B20): 'all' is no longer literally unbounded in TOTAL — run
-    // L2 sets `ALL_SCOPE_MAX_DOCS`, the per-call document ceiling `totalCandidateCapFor('all')`
-    // now returns (192 by the pre-registered miss default, until run L2's read selects the
-    // actual value; see the constant's own doc comment).
+    // Step 4-5 (ruling (e)(ii), B3/B7/B20): 'all' is no longer literally unbounded in TOTAL —
+    // run L2 selected `ALL_SCOPE_MAX_DOCS = 512` (no miss; see the constant's own doc comment
+    // for the per-cell p90s), the per-call document ceiling `totalCandidateCapFor('all')` now
+    // returns.
     expect(totalCandidateCapFor('all')).toBe(ALL_SCOPE_MAX_DOCS)
-    expect(totalCandidateCapFor('all')).toBeGreaterThanOrEqual(192)
+    expect(totalCandidateCapFor('all')).toBe(512)
     expect(totalCandidateCapFor('all')).toBeLessThan(Number.POSITIVE_INFINITY)
   })
 
