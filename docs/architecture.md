@@ -3404,27 +3404,64 @@ posture is always `cpu` by construction, so a general "posture cpu ⇒ capped" r
 killed its `top48` opt-in — a dedicated regression-guard test pins this). The posture itself is
 computed by ONE shared helper (`main/services/rag/device-posture.ts`) that both the sidecar's own
 `rerankerDevicePosture` seam and the per-ask `resolveAskCandidateScope` call, so the two cannot
-disagree for a given settings snapshot. The coupling was proven a no-op on the measurement machine
+disagree for a given settings AND occupancy snapshot (Wave 8, step 4-8, below, adds occupancy to
+what "the same snapshot" means). The coupling was proven a no-op on the measurement machine
 (its recorded posture is `gpu`, remainder 7,478.6 MiB) before landing, offline, with no new
 acceptance read. The small-card disclosure above is unchanged by this: the gate still ships on the
 arithmetic alone, unconfirmed by a live small-card run — what changed is that a small card now
 also gets the fast, bounded `capped` scope instead of a 512-document wide scope run through a CPU
 reranker.
 
-**Step 4-7 (Wave 7 ruling (a)) closes the remaining drift window: a posture-moving settings
-change now suspends the sidecar too.** The scoped Opus review of step 4-6 found that the shared
-helper above guarantees the sidecar and the per-ask scope compute the SAME posture from the SAME
-inputs, but not at the same MOMENT: the sidecar resolved its posture once per cold start and held
-it for the session, the ask re-resolved on every ask, and only a `gpuMode`/`gpuAutoDisabled` flip
-suspended the resident sidecar — an `activeModelId` change (which also feeds the posture, through
-`chatModelNeedMib`) suspended nothing, reopening the wide-scope/CPU-reranker combination through a
-drift window (measured concretely on the project's own GTX 1070 Ti — finding C2). `activeModelId`
-now joins the suspend trigger, fired from all three settings-writing channels (`settings:update`,
-`models:select`, `models:use`) through one shared predicate, so the sidecar's posture follows its
-inputs, not only the GPU flags. This is not an absolute guarantee for every ask: `suspend()` is
-fire-and-forget, so an ask landing mid-teardown hits the sidecar's `tearingDown` guard, its
-`rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates` fallback returns the capped
-selection — that one residual window resolves toward the safe, bounded scope, never the wide one.
+**Step 4-7 (Wave 7 ruling (a)) closed a drift window across settings snapshots: a posture-moving
+settings change suspends the sidecar too, as an early release.** The scoped Opus review of step
+4-6 found that the shared helper above guarantees the sidecar and the per-ask scope compute the
+SAME posture from the SAME inputs, but not at the same MOMENT: the sidecar resolved its posture
+once per cold start and held it for the session, the ask re-resolved on every ask, and only a
+`gpuMode`/`gpuAutoDisabled` flip suspended the resident sidecar — an `activeModelId` change (which
+also fed the posture at the time, through `chatModelNeedMib`) suspended nothing, reopening the
+wide-scope/CPU-reranker combination through a drift window (measured concretely on the project's
+own GTX 1070 Ti — finding C2). `activeModelId` joined the suspend trigger, fired from all three
+settings-writing channels (`settings:update`, `models:select`, `models:use`) through one shared
+predicate. That event-time suspend is a head start, not the correctness guarantee — see step 4-8
+below for what actually makes the posture correct at every moment.
+
+**Step 4-8 (Wave 8 rulings (a)-(d)) resolved a THIRD gap, finding C3 (scoped Opus review of step
+4-7): `activeModelId` was never a safe posture input to begin with.** It is a proxy for "the chat
+model that will be loaded", true only once `models:use`'s multi-GB weight hash and load finish —
+and false for the WHOLE window before that. A down-switch on the project's own measured GTX 1070
+Ti (`{totalMb: 8273, freeMb: 7504}`: the 9B running at posture `cpu`, switching to the 4B) could
+cold-start the reranker on the GPU beside the still-resident, still-running OLD chat model, for as
+long as the checksum hash took (minutes on a cold per-workspace cache). Option B′, the fix: the
+posture's chat-model input is now the RUNTIME's COMMITTED model (`RuntimeManager.activeModelId()`,
+`main/services/rag/device-posture.ts`), never the setting, and never a fallback to it — during the
+hash window the committed model is still the OLD one, so the posture is correct by construction,
+not by a suspend's timing. A null committed model, a chat-model start in flight, a chat-model start
+PENDING (a per-call counter in `startModelRuntime` covering the window it spends awaiting the
+reranker's own single-flight suspend before the load, placed between the RAM gate and the shutdown
+re-check so the existing shutdown/lock/epoch ordering is unchanged), or a GPU-posture translation
+sidecar occupying the card (loading, resident, or mid-teardown — `deviceStatus().live` alone misses
+all three stages) each force `cpu`. What makes the posture correct at every MOMENT, not only at a
+suspend-covered event, is the reranker's own use-time re-check (Q): `rerank()` resolves its posture
+fresh before starting/joining/reusing the sidecar, and again after every await inside it, so a
+resident sidecar recorded under a stale posture is restarted before serving a request — under four
+race rules (never join a teardown it did not start; after its own awaited teardown, refuse if its
+own signal aborted or another caller also wanted a teardown during that pass; at most one restart
+per call; a start-abort not caused by the call's own signal is a non-abort error, landing on Wave 5
+ruling (e)(i)'s capped fallback instead of ending the ask). A CPU-posture request above a computed
+ceiling (`2 × ragTopKInitial + totalCandidateCapFor(rerankScopeFor(profile, input, 'cpu'))` — 48 at
+the defaults, 72 under the `top48` opt-in) is refused before any start, for the same reason G
+existed conceptually since Wave 6: a wide set must never reach a CPU cross-encoder. The sidecar's
+teardown is now single-flight (an overlapping `suspend()`/`stop()` shares one pass — the
+translation runtime's own M5 pattern, ported) and recovers from a dead handle after one unexpected
+mid-session exit (the translation runtime's M1 pattern; a second exit in the same session latches
+like a genuine load fault). Wave 7's three event-time suspends stay as early release — a head
+start before the very next `rerank()` would have resolved the new posture on its own — not what
+makes the posture correct any more; Q is. Residuals (translation's own cold-start/teardown
+occupancy cost to the reranker, the gate's manifest-only chat-model estimate, other GPU consumers
+and a stale probe, and a GPU-posture failure disabling reranking for the session) are disclosed in
+`docs/known-limitations.md`, not fixed — follow-up issues cover a GPU→CPU demotion path, an
+app-wide VRAM arbiter, the E5 embedder's own pre-existing (unrelated) teardown overlap, and the
+Performance card summary line's omission of a resident reranker.
 
 ### §8 Expectations, profile bump, UI copy
 

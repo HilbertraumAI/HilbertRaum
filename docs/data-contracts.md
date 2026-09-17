@@ -773,9 +773,12 @@ head's own weights + KV.
   same answer `pickerMemoryFor` gives the Models ★); `ResidentModelRow.device` is where a row
   runs under the CURRENT configuration (`'cpu'` for chat/translation under a `cpu` class — no
   usable card, GPU off / auto-disabled — or when the matching observed start was on the CPU
-  backend, or the translation sidecar's posture is `--device none`); `totals.ramAllMb` is
-  class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the observed chat spill +
-  the live translation spill on `discrete`; the full sum on `unified`, compared against the
+  backend, or the translation sidecar's posture is `--device none`; **Wave 8 ruling (a)**: for
+  the reranker role, `'gpu'`/`'cpu'` follows its own headroom gate against the RUNTIME's
+  committed chat model, never `settings.activeModelId` — see `rag/device-posture.ts`);
+  `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
+  observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
+  reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
   unified budget) and `totals.bothOnCard` requires both rows on the card with observed layers.
   The verdict is asked for the EFFECTIVE class (the next start's, and `cpu` when the observed
   start was CPU). Two `placement` fields were added by

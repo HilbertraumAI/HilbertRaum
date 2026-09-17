@@ -301,9 +301,13 @@ you start it here once more.
 **Models on this computer.** A card listing every model the app can hold — chat, translation,
 images, document search (its ranking and index models), and voice — one row each, so you can see
 what is actually using the graphics card right now versus what always runs on the processor by
-design (document search, voice and images, always). A row reads **loaded** only once
-that service is actually running and ready, not while it is still starting. Two totals sit below
-the rows: the card total (what is resident on the graphics card, against its memory) and the
+design (voice and images, always; document search's index model too). Document search's ranking
+model (the reranker) is the exception: it follows its own graphics-card headroom check against
+the model you are chatting with, so its row can say either "graphics card" or "processor"
+depending on this computer and what else is loaded — never "by design". A row reads **loaded**
+only once that service is actually running and ready, not while it is still starting. Two totals
+sit below the rows: the card total (what chat and translation are resident on the graphics card
+for, against its memory — a graphics-card ranking model is not part of this total) and the
 processor total (what loading everything at once would take from RAM).
 
 **Observed while you worked.** Three rows fill in from ordinary use, with no separate check: your

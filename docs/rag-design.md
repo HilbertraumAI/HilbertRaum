@@ -4281,3 +4281,92 @@ the five-row truth table is identical to `truth-table.json`. **The harness check
 reranker instances directly, bypassing the settings-driven posture/scope machinery entirely — so
 no acceptance path can cross a suspend mid-run. Full artifacts:
 `steps/4-7-product-pr-rerank-profiles-4/artifacts/{no-op-proof-2.json,harness-model-switch-check.json,channels.json,d10-sites.json}`.
+
+**Step 4-8 (Wave 8 rulings (a)-(d), same PR, same branch) — C3 resolved: the posture's chat-model
+input is now the runtime's COMMITTED model, never `activeModelId`; the posture class is completed
+by construction (Q, G, T); the sidecar's lifecycle is hardened; the Performance screen stops
+misreporting the reranker's device.** The scoped Opus review of step 4-7 (finding C3) showed that
+`activeModelId` was never a safe posture input: it is a proxy for "the chat model that will be
+loaded", true only once `models:use`'s multi-GB weight hash and subsequent load finish, and false
+for the ENTIRE window before that. On the project's own measured GTX 1070 Ti a 9B → 4B switch
+during that window could cold-start the reranker on the GPU beside the still-resident 9B — the
+exact VRAM contention the headroom gate exists to prevent. Option B′: `resolveRerankerDevicePosture`
+(`main/services/rag/device-posture.ts`) now takes an `occupancy` snapshot — `committedModelId`
+(`RuntimeManager.activeModelId()`, never the setting), `chatStartBusy` (a chat start in flight, via
+`status().startingModelId`, or PENDING, via a new per-call counter in `startModelRuntime`), and
+`translationOccupied` (a GPU-posture translation sidecar loading, resident, or mid-teardown) — and
+returns `cpu` whenever any of these is absent or busy, checked BEFORE the manifest lookup. The
+pending counter's `try`/`finally` begins immediately after its increment (never a function-wide
+one, which would go negative on a gate-refused start) and sits between the RAM gate and the
+shutdown re-check in `startModelRuntime`, so AUD-03/CODE-3's ordering is unchanged.
+
+**Q (the use-time re-check, `reranker/llama.ts`'s `resolveServer`).** `rerank()` resolves its
+posture fresh in the SAME synchronous section that starts, joins or reuses the sidecar, and again
+after every await inside it — never a second, later read for the actual cold-start args. A
+resident or starting sidecar recorded under a different posture is restarted, under four race
+rules verified against two independent adversarial probes of the real class before this step
+began: (i) never join a teardown this call did not start (refuse instead — the existing F19
+behaviour); (ii) after its own awaited teardown, refuse if its own signal aborted or if ANY other
+caller also requested a teardown during that pass (the pass's own `requesterCount`, held on a
+per-pass object — not a field the shared promise's `finally` clears, which a probe showed reads 0
+by the time an awaiting requester resumes); (iii) at most one restart per call; (iv) a start-abort
+NOT caused by the call's own signal is rethrown as a non-abort error, landing the ask on Wave 5
+ruling (e)(i)'s capped fallback instead of ending it — a lock still ends the ask correctly, because
+its own signal is aborted first.
+
+**G (the CPU request ceiling).** On the `cpu` posture, `rerank()` refuses a request bigger than
+`2 × ragTopKInitial + totalCandidateCapFor(rerankScopeFor(profile, input, 'cpu'))` (48 at the
+defaults, 72 under the `top48` opt-in) — computed from settings with the EXISTING pure functions,
+applied fresh on every call (so re-applied after any await), thrown before any start so it never
+arms `startFailed`. Because an absent ceiling callback must admit everything (what keeps the
+acceptance harness inert), an omitted wire is made impossible one level up: `composeServices`'s
+`rerankerDevicePosture`/`rerankerRequestCeiling` options are REQUIRED (an intersection type, so the
+shared base `composeTranslator` also takes stays untouched), built by one exported factory
+(`createRerankerCallbacks`) whose four dependencies are all required, and `resolveAskCandidateScope`'s
+occupancy parameter is required at the ask site — each proven with a `@ts-expect-error` case that
+fails `npm run typecheck` if the wire is ever made optional again (the analysis's own finding,
+NF-1: a composition test reaching only `compose-services.ts` → `reranker/factory.ts` cannot see an
+omission at `main/index.ts` or the ask site).
+
+**T (translation occupancy).** The translation runtime gains one read-only `gpuOccupied()`
+accessor covering all four stages a GPU-posture ('auto') sidecar can occupy the card in — loading
+(before `deviceStatus().live` can see it), resident, hard teardown, and idle teardown (a soft
+timeout kill) — a forced-CPU sidecar never occupies it. The posture closure reads `ctx.translator`
+live through a getter (never captured), because `onModelInstalled` re-composes it mid-session.
+
+**Lifecycle hardening (`reranker/llama.ts` only), the translation runtime's own M5/M1 patterns
+ported.** Single-flight teardown: every overlapping `suspend()`/`stop()`/Q-restart shares ONE
+teardown pass; a counter in its place was rejected (a second caller would resolve at once, so an
+awaited suspend before a chat-model load could return while the GPU process is still exiting).
+Dead-handle recovery: an unexpected mid-session exit (never a teardown-initiated one — `stop()`
+arms `stopping` before the kill) drops the handle so the next `rerank()` cold-starts with a
+freshly resolved posture; a second exit in the same session latches like the existing
+failed-start latch.
+
+**The Performance screen (ruling (d)).** One optional read-only `devicePosture()` member on
+`Reranker` (the `isLoaded?` pattern; the interface's required members untouched) reports the
+resident sidecar's actual posture, or the posture a cold start would take now when nothing is
+resident; a `Reranker` without it reports `cpu`. The reranker row reads this instead of a
+hard-coded `'cpu'`; its copy stops calling a `cpu` reranker "by design" (reusing the EXISTING
+"processor" key, no catalogue change); `loadedAtOnceMb` stops counting a `gpu`-posture reranker row
+against processor memory on `discrete` (its own gate only resolves `gpu` when the whole placement
+fits, and no partial-offload split is tracked for it, so it contributes 0 like a chat/translation
+row with no measured spill); the card summary line stays chat + translation, disclosed as a
+residual rather than changed.
+
+**No frozen surface moved:** `rerankerDeviceFor` stays pure and unchanged; `rerankScopeFor`'s table
+and Wave 6 ruling (a)'s coupling are unchanged (the five-row truth table is byte-identical); every
+frozen constant, every shared-type shape, and the `Reranker` interface's required members are
+unchanged. Wave 7's three event-time suspends stay, as early release — not the correctness
+guarantee any more; Q is. The no-op proof holds offline, with no runtime lock and no `core200`
+read: the replayed A4 snapshot (committed 4B, no occupancy, the recorded probe) resolves `gpu`/
+`all`, byte-identical to step 4-7's own read, AND shows the setting alone no longer decides (a null
+committed model, a different committed model, and each occupancy input alone each move the
+posture as they should). The acceptance harness (`product-harness.mjs`) has every new option
+absent from its construction path — inert by default — and its constant injected posture, single
+teardown call, and crash-free run make Q, single-flight teardown and exit handling inert on its
+own call pattern. Residuals (translation's cold-start/teardown cost to the reranker, the gate's
+manifest-only chat-model estimate, other GPU consumers and a stale probe, and a GPU failure
+disabling reranking for the session) are disclosed in `known-limitations.md`, not fixed. Full
+artifacts:
+`steps/4-8-product-pr-rerank-profiles-5/artifacts/{no-op-proof-3.json,harness-inertness-check.json,posture-writers.json,required-wiring-proof.json,posture-cost.json,follow-up-issues.md}`.
