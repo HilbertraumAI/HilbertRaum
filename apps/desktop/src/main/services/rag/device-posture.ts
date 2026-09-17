@@ -20,12 +20,16 @@ import { rerankerDeviceFor, type RerankerDevice } from './rerank-profile'
  * posture for the whole session and only a `gpuMode`/`gpuAutoDisabled` flip suspended it, so an
  * `activeModelId` change (which also feeds this helper, through `chatModelNeedMib`) could move
  * the posture without suspending anything. Resolved by step 4-7 (Wave 7 ruling (a)):
- * `rerankerPostureInputsChanged` below suspends the sidecar on a REAL change to any of this
- * helper's settings inputs, from all three settings-writing channels, so the NEXT `rerank()`
- * re-resolves instead of holding a stale posture. The one residual window is the fire-and-forget
- * teardown itself: an ask landing mid-suspend hits the sidecar's `tearingDown` guard, its
- * `rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates` fallback returns the
- * capped selection — the window resolves toward the safe, bounded scope, never the wide one.
+ * `rerankerPostureInputsChanged` below suspends the sidecar on a REAL change to `gpuMode`,
+ * `gpuAutoDisabled` or `activeModelId`, when the change arrives through the three
+ * settings-writing channels that carry `activeModelId` (`settings:update`, `models:select`,
+ * `models:use`), so the NEXT `rerank()` re-resolves instead of holding a stale posture.
+ * `gpuAutoDisabled` also moves through two further seams this fix does NOT cover (`tryGpuAgain`,
+ * `main/index.ts`'s `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see
+ * `channels.json`. The one residual window in the covered case is the fire-and-forget teardown
+ * itself: an ask landing mid-suspend hits the sidecar's `tearingDown` guard, its `rerank()` call
+ * fails, and Wave 5 ruling (e)(i)'s `cappedCandidates` fallback returns the capped selection —
+ * the window resolves toward the safe, bounded scope, never the wide one.
  *
  * Impure (reads `settings.gpuProbe`/`activeModelId`, resolves a manifest off disk) — lives here,
  * outside `rag/rerank-profile.ts`, which must stay free of `node:`/`electron` imports for the
@@ -60,13 +64,19 @@ export function resolveRerankerDevicePosture(
 
 /**
  * Wave 7 ruling (a) (step 4-7, resolving the scoped Opus review of step 4-6's finding C2) — the
- * settings keys `resolveRerankerDevicePosture` above actually reads: the `gpuMode`/
- * `gpuAutoDisabled` gate and `activeModelId` (through `chatModelNeedMib`). Exported so every
- * settings-writing seam that might invalidate the resident sidecar's posture can decide, from
- * ONE list, whether reading a "before" snapshot is worth it (the REAL-flip discipline needs it
- * only when a write might touch one of these). `activeEmbeddingModelId` is deliberately absent —
- * it is not a posture input (the embedder is a separate slot the reranker's placement estimate
- * never contends with) and must never trigger a suspend.
+ * settings keys the suspend trigger below WATCHES, per ruling (a)'s own two-input formulation:
+ * the `gpuMode`/`gpuAutoDisabled` gate and `activeModelId` (through `chatModelNeedMib`). This is
+ * NOT the complete list of everything `resolveRerankerDevicePosture` above reads — that function
+ * also reads `settings.gpuProbe` (via `eligibleDevicesFor` → `primaryUsefulDevice` →
+ * `graphicsBudgetMib`, feeding `budgetMib`), a real posture input this list deliberately omits:
+ * ruling (a) scopes option (A) to `gpuMode`/`gpuAutoDisabled`/`activeModelId` only, and `gpuProbe`
+ * is a known, pre-existing, out-of-scope residual (see `channels.json` id 4 — a re-probe recording
+ * a different `freeMb` can move the resolved posture without suspending anything, undisturbed by
+ * this step). Exported so every settings-writing seam this step covers can decide, from ONE list,
+ * whether reading a "before" snapshot is worth it (the REAL-flip discipline needs it only when a
+ * write might touch one of these three). `activeEmbeddingModelId` is deliberately absent — it is
+ * not a posture input (the embedder is a separate slot the reranker's placement estimate never
+ * contends with) and must never trigger a suspend.
  */
 export const RERANKER_POSTURE_SETTINGS_KEYS: ReadonlyArray<keyof AppSettings> = [
   'gpuMode',

@@ -8,7 +8,9 @@ import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 // (CPU/GPU) follows a SEPARATE headroom gate (`rerankerDeviceFor`, step 4-5). This module is
 // the ONE place that decides both — pure, no `node:`/`electron` imports, so the per-ask
 // candidate-scope wiring (`registerRagIpc.ts` → `zim/arm.ts`) and the sidecar's lazy-start
-// device posture (`reranker/llama.ts` via `compose-services.ts`) can never disagree. Mirrors
+// device posture (`reranker/llama.ts` via `compose-services.ts`) cannot disagree FOR A GIVEN
+// SETTINGS SNAPSHOT (see this file's own "Wave 6 ruling (c)" paragraph below for the shared
+// helper, the step-4-7 suspend fix and the one residual teardown window). Mirrors
 // `shared/gpu-rules.ts`'s "one definition" style (PR #303 audit M8/N3).
 //
 // The three SCOPE profiles (Phase 2 ruling (d), restated by Wave 4 ruling (a)):
@@ -30,12 +32,16 @@ import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 // posture helper that feeds this (`main/services/rag/device-posture.ts`, Wave 6 ruling (c)) is
 // the ONE place both the sidecar's own posture and this per-ask scope are computed, so the two
 // cannot disagree FOR A GIVEN SETTINGS SNAPSHOT — and, since step 4-7 (Wave 7 ruling (a)), a
-// posture-moving settings change now suspends the sidecar too (all three settings-writing
-// channels), so its NEXT `rerank()` re-resolves the new posture instead of holding the old one.
-// The one residual window is the fire-and-forget teardown itself: an ask landing mid-suspend
-// hits the `tearingDown` guard, the `rerank()` call fails, and Wave 5 ruling (e)(i)'s
-// `cappedCandidates` fallback returns the capped selection — the window resolves toward the
-// safe, bounded scope, never the wide one.
+// posture-moving settings change (`gpuMode`, `gpuAutoDisabled` or `activeModelId`) now suspends
+// the sidecar too when it arrives through the three settings-writing channels that carry
+// `activeModelId` (`settings:update`, `models:select`, `models:use`), so its NEXT `rerank()`
+// re-resolves the new posture instead of holding the old one. `gpuAutoDisabled` also moves
+// through two further seams this fix does NOT cover (`tryGpuAgain`, `main/index.ts`'s
+// `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see `channels.json`.
+// The one residual window in the covered case is the fire-and-forget teardown itself: an ask
+// landing mid-suspend hits the `tearingDown` guard, the `rerank()` call fails, and Wave 5 ruling
+// (e)(i)'s `cappedCandidates` fallback returns the capped selection — the window resolves toward
+// the safe, bounded scope, never the wide one.
 
 export type RerankProfile = 'gpu' | 'cpu-hi' | 'default'
 export type RerankScope = 'all' | 'top96' | 'top48' | 'capped'

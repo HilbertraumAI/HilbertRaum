@@ -81,13 +81,16 @@ import type { Db } from '../services/db'
  * capture the always-`cpu`-postured `cpu-hi` branch and kill its `top48` opt-in; see
  * `rerankScopeFor`'s own doc comment). The scope this function returns and the sidecar's actual
  * posture cannot disagree FOR A GIVEN SETTINGS SNAPSHOT, and — since step 4-7 (Wave 7 ruling
- * (a)) — a posture-moving settings change (`gpuMode`, `gpuAutoDisabled` or `activeModelId`, from
- * any of the three settings-writing channels) now suspends the sidecar too, so its NEXT
- * `rerank()` re-resolves the new posture instead of holding the old one. The one residual window
- * is the fire-and-forget teardown itself: an ask landing mid-suspend hits the sidecar's
- * `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates`
- * fallback returns the capped selection — the window resolves toward the safe, bounded scope,
- * never the wide one. Absent a reranker (`rerankerAvailable: false`), `rerankScopeFor`
+ * (a)) — a posture-moving settings change (`gpuMode`, `gpuAutoDisabled` or `activeModelId`) now
+ * suspends the sidecar too when it arrives through the three settings-writing channels that carry
+ * `activeModelId` (`settings:update`, `models:select`, `models:use`), so its NEXT `rerank()`
+ * re-resolves the new posture instead of holding the old one. `gpuAutoDisabled` also moves
+ * through two further seams this fix does NOT cover (`tryGpuAgain`, `persistGpuFailure`) —
+ * reported, not fixed, for a separate owner ruling; see `channels.json`. The one residual window
+ * in the covered case is the fire-and-forget teardown itself: an ask landing mid-suspend hits the
+ * sidecar's `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling (e)(i)'s
+ * `cappedCandidates` fallback returns the capped selection — the window resolves toward the safe,
+ * bounded scope, never the wide one. Absent a reranker (`rerankerAvailable: false`), `rerankScopeFor`
  * always returns `'capped'` — a MEASURED requirement, not just a defensive default: the `gpu`
  * profile's own no-rerank column (the `all` scope through the no-rerank interleave — the
  * configuration an ABSENT reranker produces; a rerank-call FAILURE is restricted to the `capped`

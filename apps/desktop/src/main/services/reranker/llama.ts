@@ -190,7 +190,7 @@ export class LlamaReranker implements Reranker {
     if (this.stopped) throw new Error('Reranker is stopped (app is shutting down)')
     // F19: refuse to spawn while a teardown (lock/quit) is in progress — a sidecar started here
     // would survive the lock. The `suspend()` analogue of the `stopped` guard for `stop()`.
-    if (this.tearingDown) throw new Error('Reranker is suspending (workspace is locking)')
+    if (this.tearingDown) throw new Error('Reranker is suspending (workspace is locking, or a posture-affecting settings change)')
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
@@ -289,7 +289,7 @@ export class LlamaReranker implements Reranker {
     // server we'd return — re-check rather than hand back a sidecar that's being / about to be
     // stopped (mirrors the top-of-function guards).
     if (this.stopped) throw new Error('Reranker is stopped (app is shutting down)')
-    if (this.tearingDown) throw new Error('Reranker is suspending (workspace is locking)')
+    if (this.tearingDown) throw new Error('Reranker is suspending (workspace is locking, or a posture-affecting settings change)')
     if (!this.server) throw new Error('Rerank server failed to start')
     return this.server
   }

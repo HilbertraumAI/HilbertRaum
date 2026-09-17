@@ -380,12 +380,15 @@ function initBackend(): void {
   // `registerRagIpc.ts`'s `resolveAskCandidateScope` call — `resolveRerankerDevicePosture`
   // (`services/rag/device-posture.ts`) — so the two cannot disagree FOR A GIVEN SETTINGS
   // SNAPSHOT. Since step 4-7 (Wave 7 ruling (a)), a posture-moving settings change (gpuMode,
-  // gpuAutoDisabled or activeModelId, from any of the three settings-writing channels) also
-  // suspends the sidecar, so the NEXT `rerank()` re-resolves the new posture rather than holding
-  // the old one; the one residual window is the fire-and-forget teardown itself, where an ask
-  // landing mid-suspend hits the `tearingDown` guard and Wave 5 ruling (e)(i)'s
-  // `cappedCandidates` fallback resolves it toward the safe, capped scope. This closure keeps
-  // only what is specific to THIS call site: the settings fetch with its locked-workspace
+  // gpuAutoDisabled or activeModelId) also suspends the sidecar when it arrives through the
+  // three settings-writing channels that carry activeModelId (settings:update, models:select,
+  // models:use), so the NEXT `rerank()` re-resolves the new posture rather than holding the old
+  // one. gpuAutoDisabled also moves through two further seams this fix does NOT cover
+  // (tryGpuAgain, persistGpuFailure) — reported, not fixed, for a separate owner ruling; see
+  // `channels.json`. The one residual window in the covered case is the fire-and-forget teardown
+  // itself, where an ask landing mid-suspend hits the `tearingDown` guard and Wave 5 ruling
+  // (e)(i)'s `cappedCandidates` fallback resolves it toward the safe, capped scope. This closure
+  // keeps only what is specific to THIS call site: the settings fetch with its locked-workspace
   // fallback.
   const rerankerDevicePosture = (): 'gpu' | 'cpu' => {
     const settings = (() => {

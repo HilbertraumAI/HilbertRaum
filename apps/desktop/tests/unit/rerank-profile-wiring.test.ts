@@ -63,8 +63,10 @@ describe('resolveAskCandidateScope (registerRagIpc.ts)', () => {
 })
 
 // Wave 6 ruling (c) (scoped Opus review of step 4-5, finding C1): ONE shared posture helper must
-// feed BOTH `main/index.ts`'s `rerankerDevicePosture` seam and this function, so the two can
-// never disagree. `main/index.ts`'s seam is, after the fix, nothing but a DB-fetch wrapper around
+// feed BOTH `main/index.ts`'s `rerankerDevicePosture` seam and this function, so the two cannot
+// disagree FOR A GIVEN SETTINGS SNAPSHOT (step 4-7, Wave 7 ruling (a), closes the remaining
+// drift window across settings snapshots -- see `rag/device-posture.ts`'s own doc comment for
+// the suspend fix and its one residual teardown window). `main/index.ts`'s seam is, after the fix, nothing but a DB-fetch wrapper around
 // `resolveRerankerDevicePosture(settings, manifestsDir)` (see that closure's own comment) — so
 // calling the shared helper directly here stands in for that seam, and driving
 // `resolveAskCandidateScope` from the EXACT SAME (settings, manifestsDir) fixture proves the two
