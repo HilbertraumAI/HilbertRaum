@@ -60,12 +60,39 @@ export interface ComposeServicesDeps {
    */
   discovered?: DiscoveredManifest[]
   /**
-   * Step 4-4 (Wave 4 ruling (a)): which device the reranker sidecar's NEXT cold start should
-   * use — injected into `createLlamaReranker`, consulted lazily on first `rerank()`, never at
-   * construction. Absent ⇒ `'cpu'` (today's behaviour, byte-identical to before this step).
+   * Step 4-4 (Wave 4 ruling (a)), Wave 8 ruling (a)/(b)(Q) (step 4-8): which device the reranker
+   * sidecar should use — consulted by `rerank()` before starting/joining/reusing the sidecar,
+   * and again after every await inside it (never once per cold start any more). Optional on
+   * THIS base type only because `composeTranslator` shares it and never touches the reranker;
+   * `composeServices`'s own signature below REQUIRES it (`ComposeServicesRerankerDeps`) — Wave 8
+   * NF-1, the analysis's finding that an optional wire here is exactly how a posture input
+   * silently goes missing. The ONE production caller (`main/index.ts`) builds it with the
+   * exported `createRerankerCallbacks` factory (`rag/device-posture.ts`), never inline. Tests
+   * that construct a reranker directly (`createLlamaReranker`, bypassing `composeServices`) are
+   * unaffected — that option stays optional there too, which is what keeps the acceptance
+   * harness inert by default (ruling (f)).
    */
   rerankerDevicePosture?: () => 'gpu' | 'cpu'
+  /**
+   * Wave 8 ruling (b)(G): the CPU posture's per-call request ceiling. Optional on this base type
+   * for the same `composeTranslator`-sharing reason as `rerankerDevicePosture` above;
+   * `composeServices`'s own signature requires it. Absent at the `LlamaReranker` level (a direct
+   * construction, e.g. the acceptance harness or a manual smoke) admits every request —
+   * additive, never a behaviour change there.
+   */
+  rerankerRequestCeiling?: () => number
 }
+
+/**
+ * Wave 8 ruling (b)(G)/NF-1: the two reranker callbacks, REQUIRED specifically on
+ * `composeServices`'s own parameter type (below) — never on the shared `ComposeServicesDeps`
+ * base, which `composeTranslator` also takes and never touches the reranker. An intersection,
+ * not a widened base interface, so `composeTranslator`'s existing callers are untouched and a
+ * composition test can prove `composeServices` alone refuses a missing wire
+ * (`// @ts-expect-error`).
+ */
+export type ComposeServicesArgs = ComposeServicesDeps &
+  Required<Pick<ComposeServicesDeps, 'rerankerDevicePosture' | 'rerankerRequestCeiling'>>
 
 /**
  * Build (or re-build) JUST the translation sidecar selection from the current drive layout.
@@ -120,8 +147,9 @@ export function composeServices({
   manifestsDir,
   isDev = false,
   gpu,
-  rerankerDevicePosture
-}: ComposeServicesDeps): AvailabilityServices {
+  rerankerDevicePosture,
+  rerankerRequestCeiling
+}: ComposeServicesArgs): AvailabilityServices {
   // PF-4 (full-audit 2026-07-10): ONE manifest walk + YAML parse serves every role resolution
   // of this composition pass — initBackend runs it synchronously before the window exists, and
   // each `resolveModelByRole` call used to re-walk the dir. Scoped to THIS call, NOT a module
@@ -147,14 +175,16 @@ export function composeServices({
     }
   })
   // The retrieval reranker — selected only when binary + reranker GGUF exist (null
-  // otherwise; retrieval then keeps today's ordering byte-identical). Step 4-4:
-  // `rerankerDevicePosture` is consulted by the sidecar itself, lazily, on its next cold start.
+  // otherwise; retrieval then keeps today's ordering byte-identical). `rerankerDevicePosture`
+  // is consulted by `rerank()` on every call (Wave 8 ruling (b)(Q)); `rerankerRequestCeiling`
+  // gates the CPU posture's request size (Wave 8 ruling (b)(G)).
   const reranker = createSelectedReranker({
     rootPath,
     isDev,
     model: resolveModelByRole(manifestsDir, rootPath, 'reranker', { discovered }),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason }),
-    devicePosture: rerankerDevicePosture
+    devicePosture: rerankerDevicePosture,
+    requestCeiling: rerankerRequestCeiling
   })
   // The audio transcriber — the whisper.cpp CLI; selected only when binary + GGML weights
   // exist (null otherwise; audio imports fail per-file with the download-the-model copy).

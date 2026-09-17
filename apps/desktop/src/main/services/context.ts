@@ -17,6 +17,7 @@ import type { TrustedSenders } from '../ipc/guarded-handle'
 import type { TranslateJobService } from './translation/jobs'
 import type { LocalApiServer } from './local-api/server'
 import type { PlaintextOpsRegistry } from './ingestion/plaintext-ops'
+import type { PendingModelSwitchCounter } from './rag/device-posture'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -182,4 +183,14 @@ export interface AppContext {
    * so partial test contexts stay valid; must never throw (the manager guards regardless).
    */
   onModelInstalled?: (modelId: string) => void
+  /**
+   * Wave 8 ruling (a): the per-call counter of `startModelRuntime` calls presently awaiting the
+   * reranker's single-flight suspend after committing to a REAL model switch — shared between
+   * `registerModelIpc.ts` (which increments/decrements it) and the reranker's posture/scope
+   * resolution (which reads only its count, via `snapshotRerankerOccupancy`). One instance per
+   * app session, created in `main/index.ts`. Optional so partial test contexts stay valid; the
+   * ask-site and posture-factory call sites both fall back to a fresh, always-zero counter when
+   * absent, equivalent to "no model switch pending".
+   */
+  pendingModelSwitches?: PendingModelSwitchCounter
 }

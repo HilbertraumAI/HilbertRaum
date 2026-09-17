@@ -8,10 +8,12 @@ import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 // (CPU/GPU) follows a SEPARATE headroom gate (`rerankerDeviceFor`, step 4-5). This module is
 // the ONE place that decides both — pure, no `node:`/`electron` imports, so the per-ask
 // candidate-scope wiring (`registerRagIpc.ts` → `zim/arm.ts`) and the sidecar's lazy-start
-// device posture (`reranker/llama.ts` via `compose-services.ts`) cannot disagree FOR A GIVEN
-// SETTINGS SNAPSHOT (see this file's own "Wave 6 ruling (c)" paragraph below for the shared
-// helper, the step-4-7 suspend fix and the one residual teardown window). Mirrors
-// `shared/gpu-rules.ts`'s "one definition" style (PR #303 audit M8/N3).
+// device posture (`reranker/llama.ts` via `compose-services.ts`) cannot disagree, because both
+// reach these functions through the ONE shared helper (`main/services/rag/device-posture.ts`,
+// Wave 6 ruling (c)) with the SAME settings AND the SAME occupancy snapshot for a given call
+// (see this file's own "Wave 6 ruling (c)" paragraph below for the helper, and Wave 8 ruling (a)
+// for what "occupancy" now means). Mirrors `shared/gpu-rules.ts`'s "one definition" style
+// (PR #303 audit M8/N3).
 //
 // The three SCOPE profiles (Phase 2 ruling (d), restated by Wave 4 ruling (a)):
 //   - `gpu`     — a usable GPU is available (the app's own `gpuMode`/`gpuAutoDisabled`/probe
@@ -31,17 +33,24 @@ import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 // `top48` opt-in; see `rerankScopeFor`'s own doc comment for the full reasoning). The shared
 // posture helper that feeds this (`main/services/rag/device-posture.ts`, Wave 6 ruling (c)) is
 // the ONE place both the sidecar's own posture and this per-ask scope are computed, so the two
-// cannot disagree FOR A GIVEN SETTINGS SNAPSHOT — and, since step 4-7 (Wave 7 ruling (a)), a
-// posture-moving settings change (`gpuMode`, `gpuAutoDisabled` or `activeModelId`) now suspends
-// the sidecar too when it arrives through the three settings-writing channels that carry
-// `activeModelId` (`settings:update`, `models:select`, `models:use`), so its NEXT `rerank()`
-// re-resolves the new posture instead of holding the old one. `gpuAutoDisabled` also moves
-// through two further seams this fix does NOT cover (`tryGpuAgain`, `main/index.ts`'s
+// cannot disagree. Step 4-7 (Wave 7 ruling (a)) added an EVENT-TIME suspend on every
+// settings-writing channel that touches `activeModelId` (`settings:update`, `models:select`,
+// `models:use`) or `gpuMode`/`gpuAutoDisabled`, so a resident sidecar's NEXT `rerank()` would
+// re-resolve promptly rather than waiting for its own use-time check to notice. `gpuAutoDisabled`
+// also moves through two further seams no suspend covers (`tryGpuAgain`, `main/index.ts`'s
 // `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see `channels.json`.
-// The one residual window in the covered case is the fire-and-forget teardown itself: an ask
-// landing mid-suspend hits the `tearingDown` guard, the `rerank()` call fails, and Wave 5 ruling
-// (e)(i)'s `cappedCandidates` fallback returns the capped selection — the window resolves toward
-// the safe, bounded scope, never the wide one.
+// Step 4-8 (Wave 8 ruling (a)) found that `activeModelId` was never a safe posture input in the
+// first place — it is a proxy for "the chat model that will be loaded", true only once
+// `models:use`'s multi-GB weight hash and load finish, and false for the whole window before
+// that. The helper's chat-model input is now the RUNTIME's COMMITTED model
+// (`RuntimeManager.activeModelId()`), never the setting; a chat start in flight or pending, or a
+// GPU-posture translation occupant, also forces `cpu` (ruling (a), ruling (b)(T)). What actually
+// keeps the sidecar's posture and this scope from disagreeing at every MOMENT, not only at a
+// suspend-covered event, is the reranker's own use-time re-check (`reranker/llama.ts`'s
+// `resolveServer`, ruling (b)(Q)) — Wave 7's event-time suspends are early release, not the
+// guarantee. A resolveServer restart that cannot proceed safely lands on Wave 5 ruling (e)(i)'s
+// `cappedCandidates` fallback, never a wide scope on a CPU sidecar and never an ended ask (ruling
+// (b)(Q)'s four race rules).
 
 export type RerankProfile = 'gpu' | 'cpu-hi' | 'default'
 export type RerankScope = 'all' | 'top96' | 'top48' | 'capped'

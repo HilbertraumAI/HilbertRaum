@@ -54,7 +54,12 @@ import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { resolveRerankProfile, rerankScopeFor, type RerankScope } from '../services/rag/rerank-profile'
-import { resolveRerankerDevicePosture } from '../services/rag/device-posture'
+import {
+  resolveRerankerDevicePosture,
+  snapshotRerankerOccupancy,
+  createPendingModelSwitchCounter,
+  type RerankerOccupancySnapshot
+} from '../services/rag/device-posture'
 import { eligibleDevicesFor, machineKey } from '../services/performance'
 import { detectSystem } from '../services/benchmark'
 import { defaultThreadCount } from '../services/runtime/sidecar'
@@ -80,17 +85,22 @@ import type { Db } from '../services/db'
  * resolved posture is `cpu` — never a general "posture cpu ⇒ capped" rule (that would also
  * capture the always-`cpu`-postured `cpu-hi` branch and kill its `top48` opt-in; see
  * `rerankScopeFor`'s own doc comment). The scope this function returns and the sidecar's actual
- * posture cannot disagree FOR A GIVEN SETTINGS SNAPSHOT, and — since step 4-7 (Wave 7 ruling
- * (a)) — a posture-moving settings change (`gpuMode`, `gpuAutoDisabled` or `activeModelId`) now
- * suspends the sidecar too when it arrives through the three settings-writing channels that carry
- * `activeModelId` (`settings:update`, `models:select`, `models:use`), so its NEXT `rerank()`
- * re-resolves the new posture instead of holding the old one. `gpuAutoDisabled` also moves
- * through two further seams this fix does NOT cover (`tryGpuAgain`, `persistGpuFailure`) —
- * reported, not fixed, for a separate owner ruling; see `channels.json`. The one residual window
- * in the covered case is the fire-and-forget teardown itself: an ask landing mid-suspend hits the
- * sidecar's `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling (e)(i)'s
- * `cappedCandidates` fallback returns the capped selection — the window resolves toward the safe,
- * bounded scope, never the wide one. Absent a reranker (`rerankerAvailable: false`), `rerankScopeFor`
+ * posture cannot disagree, because both are resolved through the SAME shared helper with the
+ * SAME settings AND occupancy snapshot for a given call (Wave 8 ruling (a) below re-sourced the
+ * posture's chat-model input from `settings.activeModelId` onto the runtime's COMMITTED model —
+ * a proxy that used to be false for the whole `models:use` hash + load window — plus the
+ * in-flight/pending chat-start state and the translator's occupancy; see
+ * `rag/device-posture.ts`'s own doc comment for the full history). Step 4-7 (Wave 7 ruling (a))
+ * added an event-time suspend on every settings-writing channel that touches `activeModelId`
+ * (`settings:update`, `models:select`, `models:use`) or `gpuMode`/`gpuAutoDisabled`, so a
+ * resident sidecar's NEXT `rerank()` would re-resolve promptly — early release, not the
+ * guarantee. `gpuAutoDisabled` also moves through two further seams no suspend covers
+ * (`tryGpuAgain`, `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see
+ * `channels.json`. What actually keeps the two from disagreeing at every MOMENT is the
+ * reranker's own use-time re-check (`reranker/llama.ts`'s `resolveServer`, Wave 8 ruling (b)(Q)):
+ * a restart that cannot proceed safely lands on Wave 5 ruling (e)(i)'s `cappedCandidates`
+ * fallback, never a wide scope on a CPU sidecar and never an ended ask. Absent a reranker
+ * (`rerankerAvailable: false`), `rerankScopeFor`
  * always returns `'capped'` — a MEASURED requirement, not just a defensive default: the `gpu`
  * profile's own no-rerank column (the `all` scope through the no-rerank interleave — the
  * configuration an ABSENT reranker produces; a rerank-call FAILURE is restricted to the `capped`
@@ -98,11 +108,21 @@ import type { Db } from '../services/db'
  * `capped`/no-rerank baseline (`allPacked` 26→22, `anyPacked` 42→33 — see
  * `docs/known-limitations.md`'s fallback-cost bullet and `docs/rag-design.md` §17). Exported for
  * `tests/unit/rerank-profile-wiring.test.ts` — the one production call site this function has.
+ *
+ * `occupancy` (Wave 8 ruling (a)/(b)(G)/NF-1) is a REQUIRED parameter, not optional: the resolved
+ * posture depends on the committed chat model and its in-flight/pending state and the
+ * translator's occupancy, never `settings.activeModelId` — an optional parameter defaulting to
+ * "no occupancy" would silently readmit wide scopes on a small card the instant a caller forgot
+ * to pass it. The one production call site (below) builds it from `ctx.runtime`/`ctx.translator`
+ * and the pending-switch counter, the SAME snapshot shape `main/index.ts`'s posture callback
+ * factory builds (`rag/device-posture.ts`'s `createRerankerCallbacks`), so the sidecar's own
+ * posture and this per-ask scope cannot disagree for a given call.
  */
 export function resolveAskCandidateScope(
   settings: AppSettings,
   rerankerAvailable: boolean,
-  manifestsDir: string | null
+  manifestsDir: string | null,
+  occupancy: RerankerOccupancySnapshot
 ): RerankScope {
   const here = machineKey(detectSystem())
   const input = {
@@ -113,7 +133,7 @@ export function resolveAskCandidateScope(
     rerankerAvailable,
     wideScopeOptIn: settings.ragRerankWideScope
   }
-  const posture = resolveRerankerDevicePosture(settings, manifestsDir)
+  const posture = resolveRerankerDevicePosture(settings, manifestsDir, occupancy)
   return rerankScopeFor(resolveRerankProfile(input), input, posture)
 }
 
@@ -259,7 +279,22 @@ export function registerRagIpc(ctx: AppContext): void {
       // Step 4-4: resolved once per ask, from the SAME settings snapshot `settings` above came
       // from — reused at the single `externalArm` wiring point below. `ctx.manifestsDir` (Wave 6
       // ruling (c)) lets the posture half reach `findManifestById`/`estimateGraphicsNeedMib`.
-      const candidateScope = resolveAskCandidateScope(rawSettings, ctx.reranker != null, ctx.manifestsDir)
+      // Wave 8 ruling (a)/NF-1: `occupancy` is REQUIRED — built by the SAME
+      // `snapshotRerankerOccupancy` helper `main/index.ts`'s posture-callback factory uses, off
+      // the SAME `ctx.runtime`/`ctx.translator`, so this per-ask scope and the sidecar's own
+      // posture cannot disagree for this call. `ctx.pendingModelSwitches` is optional only so a
+      // partial test context stays valid; a fresh (always-zero) counter is equivalent to "no
+      // model switch pending" for a context that never wires one.
+      const candidateScope = resolveAskCandidateScope(
+        rawSettings,
+        ctx.reranker != null,
+        ctx.manifestsDir,
+        snapshotRerankerOccupancy(
+          ctx.runtime,
+          ctx.pendingModelSwitches ?? createPendingModelSwitchCounter(),
+          () => ctx.translator ?? null
+        )
+      )
 
       // Resolve the conversation's composite scope (plan §10.1 / D1): the UNION of the
       // selected collections (Library / projects), specific docs, and chat attachments.

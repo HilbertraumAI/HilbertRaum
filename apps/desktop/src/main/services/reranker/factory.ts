@@ -30,11 +30,18 @@ export interface RerankerSelectionDeps {
   makeReranker?: (model: RerankerModelInfo, binPath: string) => Reranker
   onSelect?: (kind: 'llama' | 'none', reason: string) => void
   /**
-   * Step 4-4 (Wave 4 ruling (a)): which device the sidecar's NEXT cold start should use,
-   * consulted lazily by `LlamaReranker` itself — never here (construction is cheap and spawns
-   * nothing). Absent ⇒ `'cpu'` (today's behaviour, byte-identical).
+   * Step 4-4 (Wave 4 ruling (a)); Wave 8 ruling (b)(Q): which device the sidecar should use,
+   * consulted by `LlamaReranker.rerank()` on every call — never here (construction is cheap and
+   * spawns nothing). Absent ⇒ `'cpu'` (today's behaviour, byte-identical).
    */
   devicePosture?: () => 'gpu' | 'cpu'
+  /**
+   * Wave 8 ruling (b)(G): the CPU posture's per-call request ceiling, consulted by
+   * `LlamaReranker.rerank()` on every call. Absent ⇒ every request is admitted (byte-identical
+   * to before this step, and what keeps a direct construction — the acceptance harness, a
+   * manual smoke — inert by default).
+   */
+  requestCeiling?: () => number
 }
 
 /**
@@ -50,7 +57,8 @@ export function createSelectedReranker(deps: RerankerSelectionDeps): Reranker | 
         binPath,
         modelPath: model.modelPath,
         contextTokens: model.contextTokens,
-        devicePosture: deps.devicePosture
+        devicePosture: deps.devicePosture,
+        cpuRequestCeiling: deps.requestCeiling
       }))
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — a mock reranker would

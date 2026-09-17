@@ -69,4 +69,13 @@ export interface Translator {
    * Returns the unsubscribe.
    */
   onResidencyChange?(cb: () => void): () => void
+  /**
+   * Wave 8 ruling (b)(T): true while a GPU-posture ('auto') sidecar is loading (before
+   * `deviceStatus().live` can see it — `server` is set only after `start()` resolves healthy),
+   * resident, or still being torn down (hard or idle). A forced-CPU sidecar never occupies the
+   * card. Read-only; the reranker's headroom gate consults it so a GPU rerank never cold-starts
+   * beside a translation sidecar the gate cannot see yet. Optional — fakes without it read as
+   * unoccupied (today's behaviour: the reranker's gate never blocked on translation before this).
+   */
+  gpuOccupied?(): boolean
 }

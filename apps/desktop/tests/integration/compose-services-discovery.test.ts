@@ -63,7 +63,15 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
   it('walks the manifests dir exactly ONCE for all role resolutions', () => {
     const { root, manifestsDir } = tempDrive()
     discoverCalls.mockClear()
-    const services = composeServices({ rootPath: root, manifestsDir })
+    // Wave 8 ruling (b)(G)/NF-1: composeServices's two reranker callbacks are now required —
+    // no sidecar binary is provisioned in this fixture, so their values never matter, only that
+    // the wire compiles and is threaded through (proven functionally in reranker.test.ts).
+    const services = composeServices({
+      rootPath: root,
+      manifestsDir,
+      rerankerDevicePosture: () => 'cpu',
+      rerankerRequestCeiling: () => Infinity
+    })
     expect(discoverCalls).toHaveBeenCalledTimes(1)
     expect(discoverCalls).toHaveBeenCalledWith(manifestsDir)
     // Behavior identical: with no sidecar binaries provisioned, the selections are what the
@@ -84,7 +92,12 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
   it('a null manifests dir walks nothing and still composes the fallbacks', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-compose-discovery-'))
     discoverCalls.mockClear()
-    const services = composeServices({ rootPath: root, manifestsDir: null })
+    const services = composeServices({
+      rootPath: root,
+      manifestsDir: null,
+      rerankerDevicePosture: () => 'cpu',
+      rerankerRequestCeiling: () => Infinity
+    })
     expect(discoverCalls).not.toHaveBeenCalled()
     expect(services.embedder).toBeTruthy()
     expect(services.reranker).toBeNull()

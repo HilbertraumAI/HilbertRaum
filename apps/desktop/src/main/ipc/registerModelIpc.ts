@@ -234,6 +234,36 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     )
   }
 
+  // Wave 8 ruling (a) (step 4-8, resolving the scoped Opus review of step 4-7's finding C3): a
+  // REAL committed switch (the model this call will load differs from what is actually running,
+  // `ctx.runtime.activeModelId()` — never `settings.activeModelId`, which this exact hash window
+  // is why C3 existed) increments the pending-switch counter, awaits the reranker's single-flight
+  // suspend (`reranker/llama.ts`'s `suspend()`, Wave 8 ruling (c)(i)), then decrements in a
+  // `finally` whose `try` begins IMMEDIATELY after the increment — never a function-wide
+  // `finally`, which would also decrement for a start refused by an EARLIER gate (the unknown-id
+  // or non-chat-role guard above, the install gate, or the RAM gate just above) and drive the
+  // counter negative. The counter is what makes `rag/device-posture.ts`'s posture resolver read
+  // `cpu` for the brief, synchronous-modulo-this-await stretch between here and `ctx.runtime.start`
+  // below (`main/index.ts`'s `createRerankerCallbacks`) — placed AFTER the install/RAM gates and
+  // BEFORE the shutdown re-check so the shutdown, lock and epoch re-checks below still IMMEDIATELY
+  // precede `ctx.runtime.start` (AUD-03 and CODE-3 unchanged: nothing async is added between the
+  // last re-check and the start call). A failing `suspend()` must not strand the counter or block
+  // the start — caught and logged exactly like the existing event-time suspend hooks
+  // (`suspendRerankerIfActiveModelChanged` below).
+  if (ctx.runtime.activeModelId() !== modelId) {
+    ctx.pendingModelSwitches?.increment()
+    try {
+      await ctx.reranker?.suspend?.().catch((err: unknown) => {
+        log.warn('Reranker sidecar suspend before a committed model switch failed', {
+          modelId,
+          error: err instanceof Error ? err.message : String(err)
+        })
+      })
+    } finally {
+      ctx.pendingModelSwitches?.decrement()
+    }
+  }
+
   // CODE-3 (full-audit 2026-07-11): the multi-GB weight hash above (`computeInstallState`)
   // is the long pre-start window a quit can begin inside — re-check the manager's shutdown
   // latch before touching the runtime, so a background auto-start racing `performShutdown`

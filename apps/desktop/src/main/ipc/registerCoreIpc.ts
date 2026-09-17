@@ -156,15 +156,20 @@ export function registerCoreIpc(ctx: AppContext): void {
     // patches, polluting the exported audit trail's forensic value.
     const localApiBefore = 'localApiEnabled' in patch ? getSettings(ctx.db).localApiEnabled : null
     // Step 4-4 (Wave 4 ruling (a)) / step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped
-    // Opus review of step 4-6's finding C2): same REAL-flip discipline, now for every settings
-    // key that feeds the reranker's device posture — the gpuMode/gpuAutoDisabled gate AND
-    // activeModelId (through chatModelNeedMib). A change to any of them suspends the sidecar
-    // (never the permanent stop()) so its NEXT rerank() lazily restarts and re-evaluates
-    // `resolveRerankerDevicePosture` instead of holding a stale posture for the rest of the
-    // session. `activeEmbeddingModelId` is not a posture input and never triggers this
-    // (`RERANKER_POSTURE_SETTINGS_KEYS`). `rerankerPostureInputsChanged` is the ONE shared
-    // predicate `registerModelIpc.ts`'s `models:select`/`models:use` call too, from all three
-    // channels this fix must cover — never three independent copies of the condition.
+    // Opus review of step 4-6's finding C2): same REAL-flip discipline, now for the
+    // gpuMode/gpuAutoDisabled gate and activeModelId — the settings keys Wave 7 ruling (a)
+    // named. A change to any of them suspends the sidecar (never the permanent stop()) as an
+    // EARLY release, so its NEXT rerank() gets a head start on re-evaluating the posture rather
+    // than waiting for its own use-time check to notice. Since Wave 8 ruling (a), the sidecar's
+    // posture no longer reads `activeModelId` at all (it reads the runtime's COMMITTED model,
+    // `rag/device-posture.ts`) — this hook's `activeModelId` branch is a proxy signal that a
+    // switch was requested, not a read of a posture input; the reranker's own use-time re-check
+    // (`reranker/llama.ts`'s `resolveServer`, Wave 8 ruling (b)(Q)) is what actually keeps the
+    // posture correct at every moment. `activeEmbeddingModelId` is not a posture-adjacent signal
+    // and never triggers this (`RERANKER_POSTURE_SETTINGS_KEYS`). `rerankerPostureInputsChanged`
+    // is the ONE shared predicate `registerModelIpc.ts`'s `models:select`/`models:use` call too,
+    // from all three channels this fix must cover — never three independent copies of the
+    // condition.
     const postureBefore = RERANKER_POSTURE_SETTINGS_KEYS.some((k) => k in patch)
       ? (({ gpuMode, gpuAutoDisabled, activeModelId }) => ({ gpuMode, gpuAutoDisabled, activeModelId }))(
           getSettings(ctx.db)

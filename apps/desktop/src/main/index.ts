@@ -61,7 +61,7 @@ import { notifyPerformanceChanged } from './ipc/performance-notify'
 import { setAnswerSpeedObserver } from './ipc/chat-stream'
 import { machineKey } from './services/performance'
 import { detectSystem } from './services/benchmark'
-import { resolveRerankerDevicePosture } from './services/rag/device-posture'
+import { createRerankerCallbacks, createPendingModelSwitchCounter } from './services/rag/device-posture'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
@@ -368,38 +368,12 @@ function initBackend(): void {
     getGpuMode: () => readGpuSetting((s) => s.gpuMode, 'auto' as const),
     getGpuAutoDisabled: () => readGpuSetting((s) => s.gpuAutoDisabled, false)
   }
-  // Step 4-5 (ruling (d), B2): the reranker sidecar's device posture, consulted lazily by
-  // `LlamaReranker` on its next cold start (never per `rerank()` call) — gated on PROVABLE
-  // HEADROOM on the budget device (never `gpuUsefulForProfile`'s profile-bump predicate, which
-  // says nothing about room for a SECOND resident model beside the chat model). A locked
-  // workspace falls back to `cpu` (no settings, no active-model manifest) — the sidecar starts
-  // post-unlock in practice, once a start can read the real figures.
-  // Wave 6 ruling (c): the resolution itself (the gpuMode/gpuAutoDisabled gate, the probe →
-  // budget-device → budget-figure chain, the active chat model's placement estimate, and the
-  // pure `rerankerDeviceFor` verdict) now lives in the ONE shared helper both this seam and
-  // `registerRagIpc.ts`'s `resolveAskCandidateScope` call — `resolveRerankerDevicePosture`
-  // (`services/rag/device-posture.ts`) — so the two cannot disagree FOR A GIVEN SETTINGS
-  // SNAPSHOT. Since step 4-7 (Wave 7 ruling (a)), a posture-moving settings change (gpuMode,
-  // gpuAutoDisabled or activeModelId) also suspends the sidecar when it arrives through the
-  // three settings-writing channels that carry activeModelId (settings:update, models:select,
-  // models:use), so the NEXT `rerank()` re-resolves the new posture rather than holding the old
-  // one. gpuAutoDisabled also moves through two further seams this fix does NOT cover
-  // (tryGpuAgain, persistGpuFailure) — reported, not fixed, for a separate owner ruling; see
-  // `channels.json`. The one residual window in the covered case is the fire-and-forget teardown
-  // itself, where an ask landing mid-suspend hits the `tearingDown` guard and Wave 5 ruling
-  // (e)(i)'s `cappedCandidates` fallback resolves it toward the safe, capped scope. This closure
-  // keeps only what is specific to THIS call site: the settings fetch with its locked-workspace
-  // fallback.
-  const rerankerDevicePosture = (): 'gpu' | 'cpu' => {
-    const settings = (() => {
-      try {
-        return getSettings(workspace.requireDb())
-      } catch {
-        return null
-      }
-    })()
-    return resolveRerankerDevicePosture(settings, manifestsDir)
-  }
+  // Wave 8 ruling (a) (step 4-8): the per-call counter of `startModelRuntime` calls presently
+  // awaiting the reranker's single-flight suspend after a REAL committed model switch — created
+  // here (one per session) so it can be shared between `registerModelIpc.ts` (increments it)
+  // and the posture-callback factory below (reads only its count). See its own doc comment
+  // (`rag/device-posture.ts`) for why it is a counter, never a boolean.
+  const pendingModelSwitches = createPendingModelSwitchCounter()
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
@@ -471,6 +445,28 @@ function initBackend(): void {
     })
   )
   runtimeRef = runtime
+  // Wave 8 rulings (a), (b)(G), (b)(T), NF-1 (step 4-8): the reranker's device-posture and
+  // CPU-request-ceiling callbacks, built from ONE set of dependencies by the exported factory
+  // (`rag/device-posture.ts`) so a composition test can target the factory itself rather than
+  // trusting that `composeServices` alone proves the wires are never silently dropped.
+  // `getTranslator` reads `ctx.translator` LIVE (never captured): `onModelInstalled` below
+  // re-composes it, and a closure that captured the startup value would consult a
+  // permanently-null or stale instance once a mid-session download lands (B4, the Wave 8
+  // analysis). `getSettings` keeps the SAME locked-workspace fallback (→ null) the old inline
+  // posture closure used.
+  const { devicePosture: rerankerDevicePosture, requestCeiling: rerankerRequestCeiling } = createRerankerCallbacks({
+    runtimeManager: runtime,
+    pendingModelSwitches,
+    getTranslator: () => ctx?.translator ?? null,
+    getSettings: () => {
+      try {
+        return getSettings(workspace.requireDb())
+      } catch {
+        return null
+      }
+    },
+    manifestsDir
+  })
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
   // wiring above stays inline because of its late-bound crash handler.
@@ -482,9 +478,10 @@ function initBackend(): void {
     // Issue #42: the translation sidecar honours the same gpuMode/gpuAutoDisabled the chat
     // ladder reads (read per cold start — a Settings flip needs no restart).
     gpu: gpuSignals,
-    // Step 4-4: read per cold start too — a settings change stops the sidecar (below) so its
-    // next start re-evaluates.
-    rerankerDevicePosture
+    // Wave 8 rulings (a)/(b)(Q)/(b)(G): consulted by `rerank()` on every call, never once per
+    // cold start any more (see `createRerankerCallbacks`'s doc comment above).
+    rerankerDevicePosture,
+    rerankerRequestCeiling
   })
   // Packaged-mode OCR execution probe (#232): one bounded worker start, released on success.
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
@@ -615,7 +612,10 @@ function initBackend(): void {
     docTasks,
     plaintextOps,
     zimOps,
-    skills
+    skills,
+    // Wave 8 ruling (a): shared with `registerModelIpc.ts` (increments/decrements it) and the
+    // posture-callback factory above (reads only its count).
+    pendingModelSwitches
   }
   // Knowledge packs (ZIM wave): registry + lazy kiwix-serve sidecar. Built here — not inside
   // registerZimIpc — so the quit teardown reaches it via `ctx.zim`. Spawns nothing until the
