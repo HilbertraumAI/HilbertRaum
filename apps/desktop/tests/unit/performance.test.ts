@@ -542,6 +542,20 @@ describe('loadedAtOnceMb', () => {
     expect(loadedAtOnceMb({ memoryClass: 'unified', rows, verdict: { ...estimate, budgetMb: 36_864 } })).toBe(everythingMb)
   })
 
+  // Wave 8 ruling (d)/NF-3 (step 4-8): a `'gpu'`-posture reranker row is no longer counted
+  // against the processor's memory on `discrete` — its own headroom gate only ever resolves
+  // `'gpu'` when the WHOLE placement fits with margin, and no partial-offload split is tracked
+  // for it the way chat/translation report one, so it contributes 0 (matching a chat/translation
+  // row with no measured spill), never its full size.
+  it('discrete: a gpu-posture reranker row contributes 0, not its full size', () => {
+    const rerankerOnGpu = rows.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const } : r))
+    // pinnedMb no longer includes the reranker's 1.1 GB.
+    const pinnedWithoutReranker = (3.0 + 0.2 + 0.5) * 1024
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: rerankerOnGpu, verdict: estimate })).toBe(
+      Math.round(pinnedWithoutReranker + translationSpillMb)
+    )
+  })
+
   it('null when no row has a size', () => {
     expect(loadedAtOnceMb({ memoryClass: 'cpu', rows: [row({ role: 'chat', modelId: null, sizeOnDiskGb: null })], verdict: estimate })).toBeNull()
     expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: [], verdict: estimate })).toBeNull()

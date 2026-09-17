@@ -2510,8 +2510,11 @@ export interface ResidentModelRow {
   /**
    * 'gpu' = would auto-fit onto the graphics card as things stand: chat and translation on a
    * machine with a usable card, GPU acceleration not switched off or auto-disabled, and no
-   * observation saying otherwise (PR #303 audit DR1 — the memory class alone used to decide).
-   * 'cpu' = runs on the processor: pinned by design (images, document search, voice), or
+   * observation saying otherwise (PR #303 audit DR1 — the memory class alone used to decide);
+   * document search's reranker when its own headroom gate proves room beside the committed chat
+   * model (Wave 8 ruling (a), `rag/device-posture.ts`). 'cpu' = runs on the processor: pinned by
+   * design (images, voice), because the reranker's headroom gate could not prove room for it (or
+   * a chat-model start/translation occupant made headroom unprovable for that moment), or
    * because the configuration forces it (`gpuMode: 'off'`, `gpuAutoDisabled`, the translation
    * sidecar's `--device none` posture), or because the matching observed start landed there.
    */
@@ -2649,13 +2652,15 @@ export interface PerformanceSnapshot {
     totals: {
       /**
        * What everything loadable at once would take from the PROCESSOR's memory, MiB
-       * (`loadedAtOnceMb` in `services/performance.ts`; PR #303 audit DR5, owner ruling):
-       * on the `cpu` class every row's size; on `discrete` the rows that run on the processor
-       * plus the active model's OBSERVED partial-offload spill and the live translation
+       * (`loadedAtOnceMb` in `services/performance.ts`; PR #303 audit DR5, owner ruling; Wave 8
+       * ruling (d)): on the `cpu` class every row's size; on `discrete` the rows that run on the
+       * processor plus the active model's OBSERVED partial-offload spill, the live translation
        * sidecar's spill (size × the share of layers off the card — a not-live or all-on-card
-       * translation contributes 0); on `unified` the full sum (one pool — the copy says
-       * "memory", not "RAM", and the pill compares against the unified budget). null when
-       * nothing is installed.
+       * translation contributes 0), and a `'gpu'`-posture reranker row (contributes 0: its own
+       * headroom gate only resolves `'gpu'` when the whole placement fits, and no partial-offload
+       * split is tracked for it); on `unified` the full sum (one pool — the copy says "memory",
+       * not "RAM", and the pill compares against the unified budget). null when nothing is
+       * installed.
        */
       ramAllMb: number | null
       /**

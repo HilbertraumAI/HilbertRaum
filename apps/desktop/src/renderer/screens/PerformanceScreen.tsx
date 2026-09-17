@@ -893,10 +893,15 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const againstGb = againstMb != null ? fmt1(againstMb / 1024, lang) : null
     const sumGb = p.totals.ramAllMb != null ? fmt1(p.totals.ramAllMb / 1024, lang) : null
     const tooMuch = p.totals.ramAllMb != null && againstMb != null && p.totals.ramAllMb > againstMb
-    /** Where a row runs, in words: the pinned roles say "by design"; chat and translation on
-     *  the processor are there because of the machine or the configuration, and say just that. */
+    /** Where a row runs, in words: the pinned roles (vision, embeddings, transcriber) say "by
+     *  design"; chat and translation on the processor are there because of the machine or the
+     *  configuration, and say just that. Wave 8 ruling (d): the reranker joins that plain
+     *  "processor" wording too — its `cpu` posture is a headroom-gated outcome (this machine's
+     *  card, or the chat model's placement), never a fixed design choice, so calling it "by
+     *  design" was false the moment the posture could be `'gpu'`. Reuses the EXISTING
+     *  `perf.models.device.processor` key — no catalogue key changes. */
     const deviceCopy = (r: ResidentModelRow): string =>
-      r.device === 'cpu' && (r.role === 'chat' || r.role === 'translation')
+      r.device === 'cpu' && (r.role === 'chat' || r.role === 'translation' || r.role === 'reranker')
         ? t('perf.models.device.processor')
         : t(`perf.models.device.${r.device}`)
     return (
