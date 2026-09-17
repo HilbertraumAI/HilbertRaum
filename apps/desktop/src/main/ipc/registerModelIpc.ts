@@ -37,6 +37,10 @@ import { getSettings, updateSettings } from '../services/settings'
 import { nextStartMemoryFor, type NextStartMemory } from '../services/performance'
 import { notifyPerformanceChanged } from './performance-notify'
 import {
+  rerankerPostureInputsChanged,
+  type RerankerPostureSnapshot
+} from '../services/rag/device-posture'
+import {
   latestEffectiveRead,
   preferCandidate,
   setEffectiveReadObserver,
@@ -450,6 +454,30 @@ export async function maybeAutoStartActiveModel(ctx: AppContext): Promise<void> 
 }
 
 /**
+ * Wave 7 rulings (a)/(c) (step 4-7, resolving the scoped Opus review of step 4-6's finding C2):
+ * `models:select` and `models:use` both reach `activeModelId` through `selectModel` →
+ * `updateSettings` (`services/models.ts`), bypassing `registerCoreIpc.ts`'s `settings:update`
+ * handler — and its suspend hook — entirely. Both IPC handlers below call this so the decision is
+ * made through the SAME shared predicate that handler uses (`rerankerPostureInputsChanged`,
+ * `rag/device-posture.ts`), never a third independent copy of the condition. `before` must be
+ * read off `getSettings` BEFORE `selectModel` runs (the REAL-flip discipline); only
+ * `activeModelId` can move through this path (`selectModel` never touches `gpuMode`/
+ * `gpuAutoDisabled`), so `after` reuses `before`'s GPU fields verbatim.
+ */
+function suspendRerankerIfActiveModelChanged(
+  ctx: AppContext,
+  before: RerankerPostureSnapshot,
+  afterActiveModelId: string | null
+): void {
+  if (!rerankerPostureInputsChanged(before, { ...before, activeModelId: afterActiveModelId })) return
+  void ctx.reranker?.suspend?.().catch((err: unknown) => {
+    log.warn('Reranker sidecar suspend after an active-model change failed', {
+      error: err instanceof Error ? err.message : String(err)
+    })
+  })
+}
+
+/**
  * In-flight DISPLAY-side verification passes, keyed by the run id the renderer minted and
  * passed to `listModels` (#420) — the `inFlightStreams` pattern, with `cancelModelVerify`
  * playing the part of `chat:stop`. Module scope, like `inFlightStreams`, so the registry
@@ -566,10 +594,13 @@ export function registerModelIpc(ctx: AppContext): void {
     requireUnlocked()
     if (!ctx.manifestsDir) throw new Error(tMain('main.models.noManifests'))
     log.info('Select model', { modelId })
+    // Wave 7 ruling (a)/(c) (step 4-7): read the posture's inputs BEFORE selectModel's write.
+    const { gpuMode, gpuAutoDisabled, activeModelId } = getSettings(ctx.db)
     const result = selectModel(ctx.db, ctx.manifestsDir, modelId)
     ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
     // The Performance snapshot keys its "Your model" block on the active slots.
     notifyPerformanceChanged()
+    suspendRerankerIfActiveModelChanged(ctx, { gpuMode, gpuAutoDisabled, activeModelId }, result.activeModelId)
     return result
   })
 
@@ -638,9 +669,12 @@ export function registerModelIpc(ctx: AppContext): void {
     // Select first so a refresh mid-load reflects the choice on the Active badge; selectModel
     // persists the active slot + emits its own `model_selected` audit event.
     log.info('Use model (select + start)', { modelId })
-    selectModel(ctx.db, ctx.manifestsDir, modelId)
+    // Wave 7 ruling (a)/(c) (step 4-7): same channel as models:select above.
+    const { gpuMode, gpuAutoDisabled, activeModelId } = getSettings(ctx.db)
+    const selected = selectModel(ctx.db, ctx.manifestsDir, modelId)
     ctx.audit?.('model_selected', `Model selected: ${modelId}`, { modelId })
     notifyPerformanceChanged()
+    suspendRerankerIfActiveModelChanged(ctx, { gpuMode, gpuAutoDisabled, activeModelId }, selected.activeModelId)
 
     // Mirror startRuntime: free the runtime slot from any yielding deep-index build before the
     // start tears down / replaces llama-server.

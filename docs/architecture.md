@@ -3403,12 +3403,28 @@ returns `capped` when the posture is `cpu`; `cpu-hi` and `default` are unaffecte
 posture is always `cpu` by construction, so a general "posture cpu ⇒ capped" rule would have
 killed its `top48` opt-in — a dedicated regression-guard test pins this). The posture itself is
 computed by ONE shared helper (`main/services/rag/device-posture.ts`) that both the sidecar's own
-`rerankerDevicePosture` seam and the per-ask `resolveAskCandidateScope` call, so the two can never
-disagree. The coupling was proven a no-op on the measurement machine (its recorded posture is
-`gpu`, remainder 7,478.6 MiB) before landing, offline, with no new acceptance read. The small-card
-disclosure above is unchanged by this: the gate still ships on the arithmetic alone, unconfirmed
-by a live small-card run — what changed is that a small card now also gets the fast, bounded
-`capped` scope instead of a 512-document wide scope run through a CPU reranker.
+`rerankerDevicePosture` seam and the per-ask `resolveAskCandidateScope` call, so the two cannot
+disagree for a given settings snapshot. The coupling was proven a no-op on the measurement machine
+(its recorded posture is `gpu`, remainder 7,478.6 MiB) before landing, offline, with no new
+acceptance read. The small-card disclosure above is unchanged by this: the gate still ships on the
+arithmetic alone, unconfirmed by a live small-card run — what changed is that a small card now
+also gets the fast, bounded `capped` scope instead of a 512-document wide scope run through a CPU
+reranker.
+
+**Step 4-7 (Wave 7 ruling (a)) closes the remaining drift window: a posture-moving settings
+change now suspends the sidecar too.** The scoped Opus review of step 4-6 found that the shared
+helper above guarantees the sidecar and the per-ask scope compute the SAME posture from the SAME
+inputs, but not at the same MOMENT: the sidecar resolved its posture once per cold start and held
+it for the session, the ask re-resolved on every ask, and only a `gpuMode`/`gpuAutoDisabled` flip
+suspended the resident sidecar — an `activeModelId` change (which also feeds the posture, through
+`chatModelNeedMib`) suspended nothing, reopening the wide-scope/CPU-reranker combination through a
+drift window (measured concretely on the project's own GTX 1070 Ti — finding C2). `activeModelId`
+now joins the suspend trigger, fired from all three settings-writing channels (`settings:update`,
+`models:select`, `models:use`) through one shared predicate, so the sidecar's posture follows its
+inputs, not only the GPU flags. This is not an absolute guarantee for every ask: `suspend()` is
+fire-and-forget, so an ask landing mid-teardown hits the sidecar's `tearingDown` guard, its
+`rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates` fallback returns the capped
+selection — that one residual window resolves toward the safe, bounded scope, never the wide one.
 
 ### §8 Expectations, profile bump, UI copy
 

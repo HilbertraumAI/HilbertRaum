@@ -29,7 +29,13 @@ import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 // `top48` opt-in; see `rerankScopeFor`'s own doc comment for the full reasoning). The shared
 // posture helper that feeds this (`main/services/rag/device-posture.ts`, Wave 6 ruling (c)) is
 // the ONE place both the sidecar's own posture and this per-ask scope are computed, so the two
-// can never disagree.
+// cannot disagree FOR A GIVEN SETTINGS SNAPSHOT — and, since step 4-7 (Wave 7 ruling (a)), a
+// posture-moving settings change now suspends the sidecar too (all three settings-writing
+// channels), so its NEXT `rerank()` re-resolves the new posture instead of holding the old one.
+// The one residual window is the fire-and-forget teardown itself: an ask landing mid-suspend
+// hits the `tearingDown` guard, the `rerank()` call fails, and Wave 5 ruling (e)(i)'s
+// `cappedCandidates` fallback returns the capped selection — the window resolves toward the
+// safe, bounded scope, never the wide one.
 
 export type RerankProfile = 'gpu' | 'cpu-hi' | 'default'
 export type RerankScope = 'all' | 'top96' | 'top48' | 'capped'

@@ -14,6 +14,7 @@ import { machineRamGb } from '../services/models'
 import { log, readLogTail, readLogFull } from '../services/logging'
 import { saveTextExport } from './save-export'
 import { notifyPerformanceChanged, PERFORMANCE_SETTINGS_KEYS } from './performance-notify'
+import { RERANKER_POSTURE_SETTINGS_KEYS, rerankerPostureInputsChanged } from '../services/rag/device-posture'
 
 import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
 
@@ -154,21 +155,25 @@ export function registerCoreIpc(ctx: AppContext): void {
     // alone would log phantom enable/disable events for rejected-junk or same-value
     // patches, polluting the exported audit trail's forensic value.
     const localApiBefore = 'localApiEnabled' in patch ? getSettings(ctx.db).localApiEnabled : null
-    // Step 4-4 (Wave 4 ruling (a)): same REAL-flip discipline, for the reranker's device
-    // posture — a GPU settings change stops the sidecar (suspend, never the permanent stop())
-    // so its NEXT start re-evaluates `rerankerDevicePosture` instead of keeping a stale posture
-    // for the rest of the session.
-    const gpuBefore =
-      'gpuMode' in patch || 'gpuAutoDisabled' in patch
-        ? (({ gpuMode, gpuAutoDisabled }) => ({ gpuMode, gpuAutoDisabled }))(getSettings(ctx.db))
-        : null
+    // Step 4-4 (Wave 4 ruling (a)) / step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped
+    // Opus review of step 4-6's finding C2): same REAL-flip discipline, now for every settings
+    // key that feeds the reranker's device posture — the gpuMode/gpuAutoDisabled gate AND
+    // activeModelId (through chatModelNeedMib). A change to any of them suspends the sidecar
+    // (never the permanent stop()) so its NEXT rerank() lazily restarts and re-evaluates
+    // `resolveRerankerDevicePosture` instead of holding a stale posture for the rest of the
+    // session. `activeEmbeddingModelId` is not a posture input and never triggers this
+    // (`RERANKER_POSTURE_SETTINGS_KEYS`). `rerankerPostureInputsChanged` is the ONE shared
+    // predicate `registerModelIpc.ts`'s `models:select`/`models:use` call too, from all three
+    // channels this fix must cover — never three independent copies of the condition.
+    const postureBefore = RERANKER_POSTURE_SETTINGS_KEYS.some((k) => k in patch)
+      ? (({ gpuMode, gpuAutoDisabled, activeModelId }) => ({ gpuMode, gpuAutoDisabled, activeModelId }))(
+          getSettings(ctx.db)
+        )
+      : null
     const result = updateSettings(ctx.db, patch)
-    if (
-      gpuBefore &&
-      (result.gpuMode !== gpuBefore.gpuMode || result.gpuAutoDisabled !== gpuBefore.gpuAutoDisabled)
-    ) {
+    if (postureBefore && rerankerPostureInputsChanged(postureBefore, result)) {
       void ctx.reranker?.suspend?.().catch((err: unknown) => {
-        log.warn('Reranker sidecar suspend after a GPU settings change failed', {
+        log.warn('Reranker sidecar suspend after a posture-affecting settings change failed', {
           error: err instanceof Error ? err.message : String(err)
         })
       })

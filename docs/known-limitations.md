@@ -861,7 +861,27 @@ password recovery — are documented in
   manifests) to reach the shared posture helper — measured 26.2 ms first call / 11.5 ms warm p50
   on local NVMe over the repo's 35 manifest files; negligible against a multi-second ask, and
   directed by Wave 6 ruling (c) itself, but new and worth naming since `models.ts` already flags
-  this call as a real read on slow portable-drive media (#333).
+  this call as a real read on slow portable-drive media (#333). **Scoped Opus review of step 4-6,
+  finding C2, resolved by step 4-7 (Wave 7 ruling (a)):** the shared helper above guarantees the
+  sidecar and the per-ask scope compute the SAME posture from the SAME inputs, but not at the
+  same MOMENT — the sidecar resolved its posture once per cold start and held it for the session,
+  the ask re-resolved on every ask, and only a `gpuMode`/`gpuAutoDisabled` flip suspended the
+  resident sidecar, never an `activeModelId` change (though `activeModelId` also feeds the
+  posture, through `chatModelNeedMib`). Reachable concretely on the project's own measured GTX
+  1070 Ti (`{totalMb: 8273, freeMb: 7504}`, #391 leg 2): starting on the 9B chat model (this
+  card's own starred recommendation) gives posture `cpu`; switching down to the 4B — an ordinary
+  Models-screen action — moves the posture to `gpu` with nothing to suspend the sidecar, so the
+  next ask could resolve the wide `all` scope while the sidecar stayed resident on the CPU — C1's
+  combination again, through a drift window. Step 4-7 adds `activeModelId` to the suspend trigger,
+  fired from all three settings-writing channels (`settings:update`, `models:select`,
+  `models:use`) through one shared predicate (`rerankerPostureInputsChanged`,
+  `rag/device-posture.ts`); `activeEmbeddingModelId` is explicitly not a posture input and never
+  triggers it. **The honest residual:** this is not an absolute guarantee for every ask in
+  flight — `suspend()` is fire-and-forget, so an ask landing mid-teardown hits the sidecar's
+  `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates`
+  fallback returns the capped selection instead; that one residual window resolves toward the
+  safe, bounded scope, never the wide one. The small-card posture branch itself remains
+  unvalidated on real hardware, as above.
 - **The `all` rerank scope is capped, and a rerank-call failure now falls back to TODAY's
   baseline instead of landing below it — both measured, neither asserted (step 4-4's finding,
   step 4-5's fix).** Step 4-4 shipped `all` with no per-call document ceiling and no dedicated

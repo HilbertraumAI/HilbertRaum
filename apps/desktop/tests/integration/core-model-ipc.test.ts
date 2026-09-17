@@ -1,6 +1,7 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
 import { promptCacheServerArgs } from '../../src/shared/prompt-cache-rules'
 import { createHash } from 'node:crypto'
+import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -56,10 +57,13 @@ import { checksumCacheStats, clearChecksumCache, primeChecksum } from '../../src
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
-import type { AppSettings, AppStatus, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
+import type { AppSettings, AppStatus, GpuDevice, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { t } from '../../src/shared/i18n'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { LlamaReranker } from '../../src/main/services/reranker/llama'
+import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import { resolveRerankerDevicePosture } from '../../src/main/services/rag/device-posture'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const REPO_MANIFESTS = join(process.cwd(), '..', '..', 'model-manifests')
@@ -237,7 +241,11 @@ describe('registerCoreIpc', () => {
   // Step 4-4 (Wave 4 ruling (a)): a GPU settings change stops the reranker sidecar (suspend,
   // never the permanent stop()) so its NEXT start re-evaluates the device posture instead of
   // keeping a stale one for the rest of the session — a REAL flip only (BE-1 discipline).
-  describe('updateSettings stops the reranker on a REAL gpuMode/gpuAutoDisabled flip (step 4-4)', () => {
+  // Step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped Opus review of step 4-6's finding
+  // C2): `activeModelId` joins gpuMode/gpuAutoDisabled as a posture input this SAME handler
+  // watches, through the ONE shared predicate `rerankerPostureInputsChanged`
+  // (`rag/device-posture.ts`) — `activeEmbeddingModelId` deliberately does not.
+  describe('updateSettings stops the reranker on a REAL gpuMode/gpuAutoDisabled/activeModelId flip (step 4-4; step 4-7 adds activeModelId)', () => {
     function ctxWithFakeReranker(): { ctx: AppContext; suspend: ReturnType<typeof vi.fn> } {
       const suspend = vi.fn(async () => undefined)
       const ctx = {
@@ -272,6 +280,32 @@ describe('registerCoreIpc', () => {
     it('an unrelated settings key never suspends the sidecar', async () => {
       const { suspend } = ctxWithFakeReranker()
       await invoke(handlers, IPC.updateSettings, { theme: 'dark' })
+      expect(suspend).not.toHaveBeenCalled()
+    })
+
+    // Step 4-7, channel 1 of 3 (settings:update) — Wave 7 ruling (a): activeModelId feeds the
+    // posture through chatModelNeedMib, so a REAL change to it must suspend the sidecar exactly
+    // like a gpuMode/gpuAutoDisabled flip already does.
+    it('activeModelId set to a NEW value (a REAL flip) suspends the sidecar (Wave 7 ruling (a): activeModelId joins the posture inputs)', async () => {
+      const { suspend } = ctxWithFakeReranker() // default activeModelId is null
+      await invoke(handlers, IPC.updateSettings, { activeModelId: 'qwen3-4b-instruct-q4' })
+      expect(suspend).toHaveBeenCalledTimes(1)
+    })
+
+    it('activeModelId set to its CURRENT value (no real flip) does not suspend', async () => {
+      const { ctx, suspend } = ctxWithFakeReranker()
+      updateSettings(ctx.db, { activeModelId: 'qwen3-4b-instruct-q4' })
+      suspend.mockClear() // clear the setup write's own effect before the assertion
+      await invoke(handlers, IPC.updateSettings, { activeModelId: 'qwen3-4b-instruct-q4' })
+      expect(suspend).not.toHaveBeenCalled()
+    })
+
+    // Step 4-7, group 2 (the non-posture negative) — Wave 7 ruling (a) is explicit:
+    // activeEmbeddingModelId is NOT a posture input (the embedder never contends with the
+    // reranker's own placement estimate) and must never trigger a suspend, even on a real flip.
+    it('activeEmbeddingModelId set to a NEW value (a REAL flip) does NOT suspend the sidecar — it is not a posture input (Wave 7 ruling (a))', async () => {
+      const { suspend } = ctxWithFakeReranker() // default activeEmbeddingModelId is null
+      await invoke(handlers, IPC.updateSettings, { activeEmbeddingModelId: 'multilingual-e5-small-q8' })
       expect(suspend).not.toHaveBeenCalled()
     })
 
@@ -1105,6 +1139,189 @@ describe('registerModelIpc', () => {
       // The upfront role guard runs before selectModel — the chat slot is untouched (no embeddings
       // slot side effect either).
       expect(getSettings(db).activeModelId).toBeNull()
+    })
+  })
+
+  // Step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped Opus review of step 4-6's finding
+  // C2): `models:select` and `models:use` both reach `activeModelId` through `selectModel` ->
+  // `updateSettings` (`services/models.ts`), bypassing `registerCoreIpc.ts`'s `settings:update`
+  // handler (and its suspend hook) entirely — so each of these two channels must make the SAME
+  // REAL-flip suspend decision on its own, through the SAME shared predicate
+  // (`rerankerPostureInputsChanged`, `rag/device-posture.ts`), never a third independent copy.
+  describe('models:select / models:use suspend the reranker on a REAL activeModelId change (step 4-7, Wave 7 rulings (a), (c))', () => {
+    it('models:select with a chat model id suspends the sidecar (channel 2 of 3)', async () => {
+      const suspend = vi.fn(async () => undefined)
+      const ctx = {
+        db: seededDb(),
+        manifestsDir: REPO_MANIFESTS,
+        reranker: { id: 'fake', rerank: async () => [], suspend }
+      } as unknown as AppContext
+      reg(ctx)
+      await invoke(handlers, IPC.selectModel, 'qwen3-4b-instruct-q4')
+      expect(suspend).toHaveBeenCalledTimes(1)
+    })
+
+    it('models:select with the SAME chat model id already active (no real flip) does not suspend', async () => {
+      const suspend = vi.fn(async () => undefined)
+      const db = seededDb()
+      updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+      const ctx = {
+        db,
+        manifestsDir: REPO_MANIFESTS,
+        reranker: { id: 'fake', rerank: async () => [], suspend }
+      } as unknown as AppContext
+      reg(ctx)
+      await invoke(handlers, IPC.selectModel, 'qwen3-4b-instruct-q4')
+      expect(suspend).not.toHaveBeenCalled()
+    })
+
+    // The channel that actually WRITES activeEmbeddingModelId: selecting an embeddings model
+    // must not suspend the sidecar either (Wave 7 ruling (a): not a posture input), and the chat
+    // slot (the actual posture input) is provably untouched by this selection.
+    it('models:select with an embeddings model id writes activeEmbeddingModelId, never activeModelId, and does NOT suspend the sidecar', async () => {
+      const suspend = vi.fn(async () => undefined)
+      const db = seededDb()
+      const ctx = {
+        db,
+        manifestsDir: REPO_MANIFESTS,
+        reranker: { id: 'fake', rerank: async () => [], suspend }
+      } as unknown as AppContext
+      reg(ctx)
+      await invoke(handlers, IPC.selectModel, 'multilingual-e5-small-q8')
+      expect(getSettings(db).activeEmbeddingModelId).toBe('multilingual-e5-small-q8')
+      expect(getSettings(db).activeModelId).toBeNull()
+      expect(suspend).not.toHaveBeenCalled()
+    })
+
+    it('models:use (select + start) suspends the sidecar (channel 3 of 3)', async () => {
+      const suspend = vi.fn(async () => undefined)
+      const ctx = {
+        db: seededDb(),
+        manifestsDir: REPO_MANIFESTS,
+        paths: noWeightPaths(),
+        isDev: true,
+        reranker: { id: 'fake', rerank: async () => [], suspend },
+        runtime: {
+          start: async () => ({ running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }),
+          activeModelId: () => null
+        }
+      } as unknown as AppContext
+      reg(ctx)
+      await invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4')
+      expect(suspend).toHaveBeenCalledTimes(1)
+    })
+
+    it('models:use with the SAME chat model id already active (no real flip) does not suspend', async () => {
+      const suspend = vi.fn(async () => undefined)
+      const db = seededDb()
+      updateSettings(db, { activeModelId: 'qwen3-4b-instruct-q4' })
+      const ctx = {
+        db,
+        manifestsDir: REPO_MANIFESTS,
+        paths: noWeightPaths(),
+        isDev: true,
+        reranker: { id: 'fake', rerank: async () => [], suspend },
+        runtime: {
+          start: async () => ({ running: true, modelId: 'qwen3-4b-instruct-q4', port: null, healthy: true, message: 'ok' }),
+          activeModelId: () => null
+        }
+      } as unknown as AppContext
+      reg(ctx)
+      await invoke(handlers, IPC.useModel, 'qwen3-4b-instruct-q4')
+      expect(suspend).not.toHaveBeenCalled()
+    })
+
+    // Group 4 (ruling (c)'s end-to-end requirement): a REAL LlamaReranker, wired to the SAME
+    // shared posture helper `main/index.ts`'s own seam uses (`resolveRerankerDevicePosture`),
+    // proves the caller's job that `reranker.test.ts`'s sidecar-level test explicitly leaves out
+    // (that test flips a hand-held `posture` variable directly; this one drives the REAL headroom
+    // gate off a REAL settings write reaching a REAL manifest, through the actual IPC handler).
+    // Fixture: the project's own measured GTX 1070 Ti (#391 leg 2, {totalMb: 8273, freeMb: 7504}
+    // — cited in the scoped Opus review of step 4-6, finding C2). Active model
+    // qwen3.5-9b-ud-q4kxl needs ~7284.1 MiB (remainder 219.9 < the 2808.2 MiB floor) => posture
+    // 'cpu'; switching to qwen3.5-4b-ud-q4kxl needs ~3837.4 MiB (remainder 3666.6 >= the floor)
+    // => posture 'gpu' — the exact C2 repro, now fixed.
+    it('end to end: models:select suspends the sidecar, and the NEXT rerank() lazily restarts and resolves the NEW posture (not merely a restart)', async () => {
+      class FakeChild extends EventEmitter implements ChildProcessLike {
+        pid = 9
+        killed = false
+        kill(): boolean {
+          this.killed = true
+          queueMicrotask(() => this.emit('exit', 0, null))
+          return true
+        }
+      }
+      const calls: Array<{ args: string[] }> = []
+      const spawn = (_c: string, args: string[]): ChildProcessLike => {
+        calls.push({ args })
+        return new FakeChild()
+      }
+      const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+        const u = String(url)
+        if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+        if (u.endsWith('/v1/rerank')) {
+          const body = JSON.parse(String(init?.body)) as { documents: string[] }
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({ results: body.documents.map((_d, index) => ({ index, relevance_score: 0 })) })
+          } as Response
+        }
+        throw new Error(`unexpected url ${u}`)
+      }) as typeof fetch
+
+      const db = seededDb()
+      const GTX_1070_TI: GpuDevice = {
+        id: 'Vulkan0',
+        name: 'NVIDIA GeForce GTX 1070 Ti',
+        totalMb: 8273,
+        freeMb: 7504
+      }
+      updateSettings(db, {
+        gpuMode: 'auto',
+        gpuAutoDisabled: false,
+        gpuProbe: { devices: [GTX_1070_TI], probedAt: new Date().toISOString() },
+        activeModelId: 'qwen3.5-9b-ud-q4kxl'
+      })
+      // Mirrors main/index.ts's own `rerankerDevicePosture` seam: read fresh, every cold start.
+      const devicePosture = vi.fn(() => resolveRerankerDevicePosture(getSettings(db), REPO_MANIFESTS))
+      const reranker = new LlamaReranker({
+        id: 'bge-reranker-v2-m3-f16',
+        binPath: '/bin/llama-server',
+        modelPath: '/models/reranker.gguf',
+        findPort: async () => 53100,
+        healthIntervalMs: 1,
+        spawn,
+        fetchImpl,
+        devicePosture
+      })
+      const ctx = { db, manifestsDir: REPO_MANIFESTS, reranker } as unknown as AppContext
+      reg(ctx)
+
+      await reranker.rerank('q', ['d']) // cold start #1
+      expect(devicePosture).toHaveBeenCalledTimes(1)
+      expect(devicePosture.mock.results[0]!.value).toBe('cpu') // T0: 9B active, remainder < floor
+      expect(calls[0]!.args).toContain('--device') // started CPU-pinned
+
+      // Capture the real suspend() promise: the production handler fires it fire-and-forget
+      // (`void ctx.reranker?.suspend?.().catch(...)`), so the test must await it separately.
+      let suspended: Promise<void> | null = null
+      const realSuspend = reranker.suspend.bind(reranker)
+      reranker.suspend = () => {
+        suspended = realSuspend()
+        return suspended
+      }
+      await invoke(handlers, IPC.selectModel, 'qwen3.5-4b-ud-q4kxl') // channel 2, a REAL flip
+      expect(suspended).not.toBeNull()
+      await suspended
+      expect(reranker.isLoaded()).toBe(false) // the teardown actually completed
+
+      await reranker.rerank('q2', ['d2']) // the NEXT rerank() — must lazily restart
+      expect(calls.length).toBe(2) // re-spawned, not reused
+      expect(devicePosture).toHaveBeenCalledTimes(2) // re-READ, not merely a restart
+      expect(devicePosture.mock.results[1]!.value).toBe('gpu') // T2: 4B active, remainder >= floor
+      expect(calls[1]!.args).not.toContain('--device') // the NEW start actually used the NEW posture
+      await reranker.stop()
     })
   })
 })

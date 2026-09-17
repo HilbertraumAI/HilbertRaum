@@ -32,8 +32,9 @@ import { log } from '../logging'
 // chat runtime uses — NEVER `-ngl`; `--device none` stays the only device argument the app
 // ever passes). Resolved lazily, at the START a cold sidecar takes (`opts.devicePosture`,
 // injected from `compose-services.ts`) — not at construction — so a `gpuMode`/`gpuAutoDisabled`
-// settings change (which stops this sidecar so its NEXT start re-evaluates) is honoured without
-// an app restart. Absent `devicePosture` ⇒ `'cpu'`, today's behaviour.
+// OR `activeModelId` settings change (step 4-7, Wave 7 ruling (a); any of the three
+// settings-writing channels — which stops this sidecar so its NEXT start re-evaluates) is
+// honoured without an app restart. Absent `devicePosture` ⇒ `'cpu'`, today's behaviour.
 
 const DEFAULT_CONTEXT_TOKENS = 2048
 /**
@@ -196,9 +197,17 @@ export class LlamaReranker implements Reranker {
       const abort = new AbortController()
       this.startAbort = abort
       const contextTokens = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
-      // Step 4-4: resolved ONCE for this cold start, never re-read mid-session — a settings
-      // change stops this sidecar (`compose-services.ts`/main wiring) so the NEXT start picks up
-      // the new posture instead.
+      // Step 4-4: resolved ONCE for this cold start, never re-read mid-session. Step 4-7 (Wave 7
+      // ruling (a)) widens WHICH settings changes suspend this sidecar so this cold start
+      // actually happens promptly: a `gpuMode`/`gpuAutoDisabled` flip always did
+      // (`compose-services.ts`/main wiring); an `activeModelId` change now does too, from all
+      // three settings-writing channels (`settings:update`, `models:select`, `models:use`), so
+      // the NEXT start picks up the new posture instead of holding a stale one indefinitely. This
+      // is not an absolute guarantee for every ask in flight: `suspend()` is fire-and-forget, so
+      // an ask that reaches `ensureStarted()` mid-teardown hits the `tearingDown` guard below and
+      // its `rerank()` call fails — Wave 5 ruling (e)(i)'s `cappedCandidates` fallback then
+      // returns the capped selection, resolving that one window toward the safe, bounded scope,
+      // never the wide one.
       const posture: RerankerDevice = this.opts.devicePosture?.() ?? 'cpu'
       const server = new LlamaServer({
         binPath: this.opts.binPath,

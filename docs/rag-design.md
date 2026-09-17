@@ -4179,7 +4179,9 @@ gpuMode/gpuAutoDisabled gate → `eligibleDevicesFor` → `primaryUsefulDevice` 
 `rerankerDeviceFor` (unchanged, pure) that `main/index.ts`'s `rerankerDevicePosture` used alone
 before. Both `main/index.ts`'s seam and `registerRagIpc.ts`'s `resolveAskCandidateScope` (which
 now also takes `manifestsDir`, threaded from `AppContext.manifestsDir`) call this ONE function, so
-the two can never disagree. `rerankScopeFor` gained a required third `posture` parameter,
+the two cannot disagree for a given settings snapshot (step 4-7, Wave 7 ruling (a), closes the
+remaining drift window across settings snapshots — see below). `rerankScopeFor` gained a required
+third `posture` parameter,
 consulted ONLY on the `gpu` branch (`posture === 'cpu' ? 'capped' : GPU_RERANK_SCOPE`); `cpu-hi`
 and `default` ignore it entirely, which is what the regression-guard test proves: a `vi.doMock` of
 `shared/rerank-rules` + a scoped dynamic re-import genuinely lowers `CPU_HI_MIN_THREADS` to a
@@ -4217,3 +4219,65 @@ Fixed in this step's OWN harness copy only (`steps/4-6-.../artifacts/harness/pro
 this section, `architecture.md` GPU record §7, `known-limitations.md`. The small-card path itself
 remains unvalidated on real hardware (no such machine was reachable from step 4-5's session) —
 that residual is unchanged by this step, which is offline and runs no acceptance read.
+
+**Step 4-7 (Wave 7 rulings (a), (c), (d), same PR, same branch) — C2 resolved: a posture-moving
+settings change now suspends the sidecar, from all three settings-writing channels.** The scoped
+Opus review of step 4-6 (finding C2) showed that the shared posture helper above guarantees the
+sidecar and the per-ask scope compute the SAME posture from the SAME inputs, but not at the same
+MOMENT: the sidecar resolved its posture once per cold start and held it for the session
+(`reranker/llama.ts`), the ask re-resolved on every ask, and the only thing that suspended the
+resident sidecar was a `gpuMode`/`gpuAutoDisabled` flip (`registerCoreIpc.ts`) — not an
+`activeModelId` change, even though `activeModelId` also feeds the posture (through
+`chatModelNeedMib`). Reachable concretely on the project's own measured GTX 1070 Ti (`{totalMb:
+8273, freeMb: 7504}`, #391 leg 2): starting on the 9B chat model (this card's own starred
+recommendation) gives posture `cpu` (remainder 219.9 MiB below the 2,808.2 MiB floor), the sidecar
+cold-starts CPU-pinned and stays resident; switching down to the 4B — an ordinary Models-screen
+action — moves the posture to `gpu` (remainder 3,666.6 MiB, above the floor) with nothing to
+suspend the sidecar, so the next ask resolves the wide `all` scope while the sidecar is still
+actually running on the CPU. The owner ruled (Wave 7 ruling (a)) this resolved by option (A):
+`activeModelId` joins `gpuMode`/`gpuAutoDisabled` as a posture input the sidecar's suspend trigger
+watches.
+
+Implementation (ruling (c)): ONE shared main-process predicate, `rerankerPostureInputsChanged`
+(`main/services/rag/device-posture.ts`, beside `resolveRerankerDevicePosture` above), answers
+"does this settings change invalidate the resident reranker's posture?" by comparing the actual
+`gpuMode`/`gpuAutoDisabled`/`activeModelId` values before and after a write — the same REAL-flip
+discipline the existing `gpuMode`/`gpuAutoDisabled` hook already used, now generalised rather than
+copied. Called from all three channels the ruling names: `registerCoreIpc.ts`'s `settings:update`
+handler (generalised in place) and both of `registerModelIpc.ts`'s `selectModel` call sites
+(`models:select`, `models:use`), which reach `activeModelId` through `services/models.ts`'s
+`selectModel` → `updateSettings`, bypassing `settings:update`'s own hook entirely — the same three
+channels `notifyPerformanceChanged()` already fans out to. Every call site calls `suspend()`,
+never `stop()`, fire-and-forget with the existing `.catch` + `log.warn` shape.
+`activeEmbeddingModelId` is explicitly NOT a posture input and never triggers this.
+`resolveRerankerDevicePosture` and `rerankerDeviceFor` are unchanged; `rerankScopeFor`'s Wave 6
+coupling is unchanged; no frozen constant moved.
+
+Four required tests, all green (`tests/integration/core-model-ipc.test.ts`): a model switch
+through each of the three channels suspends the sidecar; a settings change touching no posture
+input — including `activeEmbeddingModelId` on a real flip — does not; the existing
+`gpuMode`/`gpuAutoDisabled` behaviour (including the REAL-flip negative) is unchanged; and, end to
+end, a REAL `LlamaReranker` wired to the REAL `resolveRerankerDevicePosture` helper proves that
+after a channel suspends it, the NEXT `rerank()` lazily restarts AND resolves the NEW posture
+(the 1070 Ti fixture above, `cpu` → `gpu`) — not merely that a restart happened.
+
+**D10 settled, non-absolutely.** After this fix the sidecar and the per-ask scope still cannot be
+said to "never disagree" in the absolute: `suspend()` is fire-and-forget, so an ask landing
+mid-teardown hits the sidecar's `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling
+(e)(i)'s `cappedCandidates` fallback returns the capped selection instead — that one residual
+window resolves toward the safe, bounded scope, never the wide one. Every "can never disagree"
+site this review and its predecessor named — this section, `architecture.md` GPU record §7,
+`known-limitations.md`, `registerRagIpc.ts`, `rerank-profile.ts`, `main/index.ts`,
+`device-posture.ts`, and the load-bearing `reranker/llama.ts` cold-start comment the earlier
+review did not name — now says so.
+
+**The re-established no-op proof (ruling (e)) holds, offline, with no runtime lock.** Repeating
+step 4-6's proof at the new head: the resolved posture is `gpu`, the resolved scope is `all`,
+unchanged, cross-checked byte-for-byte against `run-summary-a4-gpu.json`'s recorded gate figures;
+the five-row truth table is identical to `truth-table.json`. **The harness check (ruling (e), part
+2):** none of the product's real headless entry points (`tests/manual/zim-real.test.ts`,
+`tests/manual/rerank-smoke.test.ts`, `tests/manual/model-eval.test.ts`) ever reads or writes
+`settings.activeModelId` or calls `selectModel`/`updateSettings` — each constructs its runtime/
+reranker instances directly, bypassing the settings-driven posture/scope machinery entirely — so
+no acceptance path can cross a suspend mid-run. Full artifacts:
+`steps/4-7-product-pr-rerank-profiles-4/artifacts/{no-op-proof-2.json,harness-model-switch-check.json,channels.json,d10-sites.json}`.
