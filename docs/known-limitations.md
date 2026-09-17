@@ -855,7 +855,13 @@ password recovery — are documented in
   the gate ships on the ARITHMETIC alone (the same estimator the picker and the fit budget already
   use elsewhere, not a new one invented for this gate) plus `rerank-profile.test.ts`'s fixtures
   (real device/manifest figures, including the #318 RTX 3060 Laptop's own `totalMb`) — not yet
-  confirmed by a live small-card run.
+  confirmed by a live small-card run. **Scoped Opus review of step 4-6, observation O1:**
+  `resolveAskCandidateScope` now does one small, uncached synchronous filesystem read per ask
+  (`findManifestById` → `discoverManifests`, a directory walk + YAML parse over the model
+  manifests) to reach the shared posture helper — measured 26.2 ms first call / 11.5 ms warm p50
+  on local NVMe over the repo's 35 manifest files; negligible against a multi-second ask, and
+  directed by Wave 6 ruling (c) itself, but new and worth naming since `models.ts` already flags
+  this call as a real read on slow portable-drive media (#333).
 - **The `all` rerank scope is capped, and a rerank-call failure now falls back to TODAY's
   baseline instead of landing below it — both measured, neither asserted (step 4-4's finding,
   step 4-5's fix).** Step 4-4 shipped `all` with no per-call document ceiling and no dedicated
