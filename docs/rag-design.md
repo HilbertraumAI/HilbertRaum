@@ -4181,8 +4181,14 @@ before. Both `main/index.ts`'s seam and `registerRagIpc.ts`'s `resolveAskCandida
 now also takes `manifestsDir`, threaded from `AppContext.manifestsDir`) call this ONE function, so
 the two can never disagree. `rerankScopeFor` gained a required third `posture` parameter,
 consulted ONLY on the `gpu` branch (`posture === 'cpu' ? 'capped' : GPU_RERANK_SCOPE`); `cpu-hi`
-and `default` ignore it entirely, which is what the regression-guard test proves (a finite,
-injected `CPU_HI_MIN_THREADS` still reaches `top48` under `cpu` posture). Four required tests, all
+and `default` ignore it entirely, which is what the regression-guard test proves: a `vi.doMock` of
+`shared/rerank-rules` + a scoped dynamic re-import genuinely lowers `CPU_HI_MIN_THREADS` to a
+finite value for that one test only (the file's other tests keep the real, statically-imported
+`Infinity`), so `resolveRerankProfile` actually resolves `cpu-hi` — not forced as a string literal
+— and `top48` still survives under `cpu` posture. (Scoped Opus review of step 4-6, finding D12: an
+earlier version of this test injected the finite threshold only into `meetsThreadThreshold` while
+forcing the `cpu-hi` profile string, so no finite constant ever reached `resolveRerankProfile`;
+strengthened to genuinely exercise it, per the review's preferred fix.) Four required tests, all
 green: the coupling both directions, the regression guard, `default` unchanged on both postures,
 and the two call sites proven to resolve the SAME posture from the SAME settings snapshot
 (`tests/unit/rerank-profile.test.ts`, `tests/unit/rerank-profile-wiring.test.ts`).

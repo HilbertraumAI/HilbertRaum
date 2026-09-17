@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { join } from 'node:path'
 import {
   CPU_HI_MIN_THREADS,
@@ -113,20 +113,42 @@ describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDe
   // capture `cpu-hi`, whose posture is ALWAYS `cpu` by construction — no usable GPU, so
   // `rerankerDeviceFor`'s first gate refuses it — and would permanently kill the `top48` opt-in
   // Wave 5 ruling (c) preserved behind `CPU_HI_MIN_THREADS`). `CPU_HI_MIN_THREADS` itself stays
-  // `Infinity` (unchanged — run L's shipped-disabled miss); a FINITE threshold is injected the
-  // same way `meetsThreadThreshold`'s own test above does, standing in for a future
-  // re-measurement that lowers the shipped constant and makes `resolveRerankProfile` reach
-  // `cpu-hi` for real.
-  it('Wave 6 ruling (a) — the regression guard: with a finite CPU_HI_MIN_THREADS the cpu-hi opt-in still reaches top48 despite its cpu posture (proves the coupling is scoped to the gpu branch, not a general "posture cpu ⇒ capped" rule)', () => {
-    const injectedThreshold = 8
-    expect(meetsThreadThreshold(8, injectedThreshold)).toBe(true) // would select cpu-hi at this threshold
-    const onInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: true })
-    expect(rerankScopeFor('cpu-hi', onInput, 'cpu')).toBe('top48')
-    const offInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: false })
-    expect(rerankScopeFor('cpu-hi', offInput, 'cpu')).toBe('capped')
-    // Posture 'gpu' is unreachable in production for cpu-hi (no usable GPU by construction) but
-    // must not throw, and must not change the outcome either — the branch never reads posture.
-    expect(rerankScopeFor('cpu-hi', onInput, 'gpu')).toBe('top48')
+  // `Infinity` at the top-level import every OTHER test in this file uses (unchanged — run L's
+  // shipped-disabled miss).
+  //
+  // Scoped Opus review of step 4-6, finding D12: an earlier version of this test injected a
+  // finite threshold into `meetsThreadThreshold` directly but forced the `cpu-hi` profile as a
+  // string literal, so no finite `CPU_HI_MIN_THREADS` ever reached `resolveRerankProfile` — the
+  // test's own name overstated what it proved. This version genuinely lowers the constant, via a
+  // `vi.doMock` of `shared/rerank-rules` + a fresh dynamic import of `rerank-profile.ts` scoped to
+  // THIS test only (`vi.resetModules()` before and after — the file's top-level, statically
+  // imported bindings, used by every other test here, are untouched: they were already resolved
+  // before this test body runs, against the real, unmocked module). `resolveRerankProfile` is
+  // then asked to resolve the profile for real, not forced, standing in for a future
+  // re-measurement that lowers the shipped constant.
+  it('Wave 6 ruling (a) — the regression guard: with a genuinely finite CPU_HI_MIN_THREADS (module-mocked) the cpu-hi PROFILE actually resolves, and its opt-in still reaches top48 despite its cpu posture (proves the coupling is scoped to the gpu branch, not a general "posture cpu ⇒ capped" rule)', async () => {
+    vi.resetModules()
+    vi.doMock('../../src/shared/rerank-rules', () => ({ CPU_HI_MIN_THREADS: 8 }))
+    try {
+      const mod = await import('../../src/main/services/rag/rerank-profile')
+      expect(mod.CPU_HI_MIN_THREADS).toBe(8) // the mock genuinely took — not Infinity
+      expect(mod.CPU_HI_MIN_THREADS).not.toBe(CPU_HI_MIN_THREADS) // differs from the real, shipped constant
+
+      const onInput: RerankProfileInput = { ...input({ probeDevices: [], threads: 8, wideScopeOptIn: true }) }
+      const profile = mod.resolveRerankProfile(onInput)
+      expect(profile).toBe('cpu-hi') // resolved for REAL — not forced as a string literal
+
+      expect(mod.rerankScopeFor(profile, onInput, 'cpu')).toBe('top48')
+      const offInput: RerankProfileInput = { ...input({ probeDevices: [], threads: 8, wideScopeOptIn: false }) }
+      expect(mod.resolveRerankProfile(offInput)).toBe('cpu-hi')
+      expect(mod.rerankScopeFor('cpu-hi', offInput, 'cpu')).toBe('capped')
+      // Posture 'gpu' is unreachable in production for cpu-hi (no usable GPU by construction) but
+      // must not throw, and must not change the outcome either — the branch never reads posture.
+      expect(mod.rerankScopeFor('cpu-hi', onInput, 'gpu')).toBe('top48')
+    } finally {
+      vi.doUnmock('../../src/shared/rerank-rules')
+      vi.resetModules()
+    }
   })
 
   it('default: no usable card, a realistic thread count → capped (cpu-hi is unreachable — CPU_HI_MIN_THREADS is Infinity)', () => {

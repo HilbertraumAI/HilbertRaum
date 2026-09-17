@@ -166,11 +166,14 @@ export function rerankScopeFor(
  * (that predicate is measured only against a 5 GiB usable-card floor and says nothing about
  * room for a SECOND resident model beside the chat model — see the function's own doc comment
  * for why master's "must never contend for VRAM with the chat model" pin demanded this).
- * `budgetMib` and `chatModelNeedMib` are computed by the impure CALLER (`main/index.ts`'s
- * `rerankerDevicePosture`, which already imports `main/services/models.ts`'s
- * `graphicsBudgetMib`/`estimateGraphicsNeedMib`) and handed in as plain numbers so this module
- * stays free of `node:`/`electron` imports (see `CPU_HI_MIN_THREADS`'s doc comment on why that
- * matters for the renderer boundary) — "prefer computing it from the manifest at the seam".
+ * `budgetMib` and `chatModelNeedMib` are computed by the impure CALLER — since Wave 6 ruling (c)
+ * (step 4-6), the ONE shared helper `resolveRerankerDevicePosture`
+ * (`main/services/rag/device-posture.ts`, which imports `main/services/models.ts`'s
+ * `graphicsBudgetMib`/`estimateGraphicsNeedMib`), which both `main/index.ts`'s
+ * `rerankerDevicePosture` seam and `registerRagIpc.ts`'s `resolveAskCandidateScope` reach through
+ * — and handed in as plain numbers so this module stays free of `node:`/`electron` imports (see
+ * `CPU_HI_MIN_THREADS`'s doc comment on why that matters for the renderer boundary) — "prefer
+ * computing it from the manifest at the seam".
  */
 export interface RerankerHeadroomInput {
   /**
