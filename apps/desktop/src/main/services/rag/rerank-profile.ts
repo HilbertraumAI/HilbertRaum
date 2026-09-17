@@ -21,7 +21,15 @@ import { CPU_HI_MIN_THREADS } from '../../../shared/rerank-rules'
 //   - `default` — neither of the above: unchanged (today's `capped` scope).
 // Nothing else enters the SCOPE decision (no RAM tier, no model size, no benchmark). The
 // DEVICE POSTURE is no longer read off this classification (step 4-5, ruling (d)): see
-// `rerankerDeviceFor`'s own doc comment.
+// `rerankerDeviceFor`'s own doc comment. Wave 6 ruling (a) (step 4-6, `programme-state/steps/
+// G1-bundle-selection/rulings-wave6.md`) COUPLES the two, narrowly: `rerankScopeFor` now takes
+// the resolved posture and, on the `gpu` PROFILE branch only, a `cpu` posture forces scope
+// `capped` (never `all`) — `cpu-hi` and `default` are UNCHANGED (`cpu-hi`'s posture is always
+// `cpu` by construction, so a general "posture cpu ⇒ capped" rule would have silently killed its
+// `top48` opt-in; see `rerankScopeFor`'s own doc comment for the full reasoning). The shared
+// posture helper that feeds this (`main/services/rag/device-posture.ts`, Wave 6 ruling (c)) is
+// the ONE place both the sidecar's own posture and this per-ask scope are computed, so the two
+// can never disagree.
 
 export type RerankProfile = 'gpu' | 'cpu-hi' | 'default'
 export type RerankScope = 'all' | 'top96' | 'top48' | 'capped'
@@ -124,10 +132,30 @@ export function meetsThreadThreshold(threads: number, minThreads: number): boole
  * cross-encoder does not merely fail to help, it packs FEWER gold blocks than today's narrower
  * pool (see `docs/known-limitations.md`'s fallback-cost bullet and `docs/rag-design.md` §17 for
  * the full table). This is a measured cost, not a hypothetical.
+ *
+ * `posture` (Wave 6 ruling (a) — the scoped Opus review of step 4-5's finding C1): the resolved
+ * reranker DEVICE posture (`rerankerDeviceFor`, computed by the caller through the shared
+ * `resolveRerankerDevicePosture` helper, `main/services/rag/device-posture.ts`), consulted ONLY
+ * on the `gpu` PROFILE branch. `gpu` profile + `cpu` posture ⇒ `capped`: the small-card class
+ * where the chat model leaves too little headroom for the reranker resolves profile `gpu` (the
+ * cheaper `gpuUsefulForProfile` bump, unchanged) but posture `cpu` (the headroom gate, step 4-5
+ * ruling (d)) — before this coupling that combination served up to `ALL_SCOPE_MAX_DOCS` (512)
+ * documents to a CPU reranker with no per-call cap of its own, a path run L's own CPU figures
+ * (`top48` at 48 documents: p90 25,317 / 29,101 ms) show would routinely exceed
+ * `DEFAULT_REQUEST_TIMEOUT_MS` (120 s, `reranker/llama.ts`). Deliberately narrow: this is a
+ * property of the `gpu` BRANCH only, never a general "posture `cpu` ⇒ `capped`" precondition —
+ * `cpu-hi`'s posture is ALWAYS `cpu` by construction (no usable GPU), so a general rule would
+ * also capture it and permanently kill the `top48` opt-in Wave 5 ruling (c) preserved behind
+ * `CPU_HI_MIN_THREADS`. The landing scope for the coupled case is `capped`, not `top48` —
+ * `top48` on CPU is exactly the measurement that made `cpu-hi` ship disabled (Wave 4 ruling (a)).
  */
-export function rerankScopeFor(profile: RerankProfile, input: RerankProfileInput): RerankScope {
+export function rerankScopeFor(
+  profile: RerankProfile,
+  input: RerankProfileInput,
+  posture: RerankerDevice
+): RerankScope {
   if (!input.rerankerAvailable) return 'capped'
-  if (profile === 'gpu') return GPU_RERANK_SCOPE
+  if (profile === 'gpu') return posture === 'cpu' ? 'capped' : GPU_RERANK_SCOPE
   if (profile === 'cpu-hi') return input.wideScopeOptIn ? 'top48' : 'capped'
   return 'capped'
 }

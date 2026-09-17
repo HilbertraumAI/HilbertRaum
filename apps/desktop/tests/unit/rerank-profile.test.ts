@@ -61,19 +61,33 @@ function input(overrides: Partial<RerankProfileInput>): RerankProfileInput {
 }
 
 describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDeviceFor (step 4-5" below)', () => {
-  it('gpu: a usable card, auto mode, not auto-disabled → gpu profile, GPU_RERANK_SCOPE', () => {
+  it('gpu: a usable card, auto mode, not auto-disabled → gpu profile, GPU_RERANK_SCOPE (posture gpu — the provable-headroom machine, unchanged)', () => {
     const i = input({ probeDevices: [RTX_3080_TI], gpuMode: 'auto', gpuAutoDisabled: false, threads: 16 })
     const profile = resolveRerankProfile(i)
     expect(profile).toBe('gpu')
-    expect(rerankScopeFor(profile, i)).toBe(GPU_RERANK_SCOPE)
+    expect(rerankScopeFor(profile, i, 'gpu')).toBe(GPU_RERANK_SCOPE)
   })
 
   // Run L froze this by NAME (Frozen parameters: "pinned by name, updated in the run-L commit").
-  // `rerankScopeFor(profile, i)).toBe(GPU_RERANK_SCOPE)` above is true for ANY value the constant
-  // takes (it compares the function's own output against the constant), so it does not, on its
-  // own, catch a future edit to the constant's VALUE — this pins the value itself.
+  // `rerankScopeFor(profile, i, 'gpu')).toBe(GPU_RERANK_SCOPE)` above is true for ANY value the
+  // constant takes (it compares the function's own output against the constant), so it does not,
+  // on its own, catch a future edit to the constant's VALUE — this pins the value itself.
   it('GPU_RERANK_SCOPE is frozen at \'all\' (run L, 2026-09-15) — changing this invalidates run A3\'s gpu-profile acceptance read', () => {
     expect(GPU_RERANK_SCOPE).toBe('all')
+  })
+
+  // Wave 6 ruling (a) (scoped Opus review of step 4-5, finding C1): the coupling, required in
+  // BOTH directions by ruling (c) — `gpu` profile + `gpu` posture → `all`; `gpu` profile + `cpu`
+  // posture → `capped`. The small-card fixture is (ii) below (#318 RTX 3060 Laptop): a usable
+  // card for the PROFILE bump (`gpuUsefulForProfile`, ≥ `USABLE_VRAM_MB`) but, per that same
+  // fixture in the `rerankerDeviceFor` suite below, insufficient headroom for the POSTURE gate —
+  // exactly the combination C1 named.
+  it('Wave 6 ruling (a) — the coupling, both directions: gpu profile + gpu posture → all; gpu profile + cpu posture → capped', () => {
+    const i = input({ probeDevices: [RTX_3080_TI], gpuMode: 'auto', gpuAutoDisabled: false, threads: 16 })
+    const profile = resolveRerankProfile(i)
+    expect(profile).toBe('gpu')
+    expect(rerankScopeFor(profile, i, 'gpu')).toBe(GPU_RERANK_SCOPE)
+    expect(rerankScopeFor(profile, i, 'cpu')).toBe('capped')
   })
 
   // B12: the `threads >= CPU_HI_MIN_THREADS` comparator, exercised in BOTH directions via the
@@ -87,18 +101,49 @@ describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDe
     expect(meetsThreadThreshold(4, CPU_HI_MIN_THREADS)).toBe(false) // the real, frozen (Infinity) threshold
   })
 
-  it('the cpu-hi BRANCH (forced profile, as run A3\'s --profile=cpu-hi and a future re-measurement would use it): opt-in ON → top48; opt-in OFF → capped', () => {
+  it('the cpu-hi BRANCH (forced profile, as run A3\'s --profile=cpu-hi and a future re-measurement would use it): opt-in ON → top48; opt-in OFF → capped (posture cpu — cpu-hi\'s only reachable posture)', () => {
     const onInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: true })
-    expect(rerankScopeFor('cpu-hi', onInput)).toBe('top48')
+    expect(rerankScopeFor('cpu-hi', onInput, 'cpu')).toBe('top48')
     const offInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: false })
-    expect(rerankScopeFor('cpu-hi', offInput)).toBe('capped')
+    expect(rerankScopeFor('cpu-hi', offInput, 'cpu')).toBe('capped')
+  })
+
+  // Wave 6 ruling (a)/(c) — the REGRESSION GUARD: the coupling must be a property of the `gpu`
+  // BRANCH only, never the general rule "posture cpu ⇒ capped" (that general rule would also
+  // capture `cpu-hi`, whose posture is ALWAYS `cpu` by construction — no usable GPU, so
+  // `rerankerDeviceFor`'s first gate refuses it — and would permanently kill the `top48` opt-in
+  // Wave 5 ruling (c) preserved behind `CPU_HI_MIN_THREADS`). `CPU_HI_MIN_THREADS` itself stays
+  // `Infinity` (unchanged — run L's shipped-disabled miss); a FINITE threshold is injected the
+  // same way `meetsThreadThreshold`'s own test above does, standing in for a future
+  // re-measurement that lowers the shipped constant and makes `resolveRerankProfile` reach
+  // `cpu-hi` for real.
+  it('Wave 6 ruling (a) — the regression guard: with a finite CPU_HI_MIN_THREADS the cpu-hi opt-in still reaches top48 despite its cpu posture (proves the coupling is scoped to the gpu branch, not a general "posture cpu ⇒ capped" rule)', () => {
+    const injectedThreshold = 8
+    expect(meetsThreadThreshold(8, injectedThreshold)).toBe(true) // would select cpu-hi at this threshold
+    const onInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: true })
+    expect(rerankScopeFor('cpu-hi', onInput, 'cpu')).toBe('top48')
+    const offInput = input({ probeDevices: [], threads: 8, wideScopeOptIn: false })
+    expect(rerankScopeFor('cpu-hi', offInput, 'cpu')).toBe('capped')
+    // Posture 'gpu' is unreachable in production for cpu-hi (no usable GPU by construction) but
+    // must not throw, and must not change the outcome either — the branch never reads posture.
+    expect(rerankScopeFor('cpu-hi', onInput, 'gpu')).toBe('top48')
   })
 
   it('default: no usable card, a realistic thread count → capped (cpu-hi is unreachable — CPU_HI_MIN_THREADS is Infinity)', () => {
     const i = input({ probeDevices: [], threads: 4 })
     const profile = resolveRerankProfile(i)
     expect(profile).toBe('default')
-    expect(rerankScopeFor(profile, i)).toBe('capped')
+    expect(rerankScopeFor(profile, i, 'cpu')).toBe('capped')
+  })
+
+  // Wave 6 ruling (a) — the `default` profile is explicitly UNCHANGED by the coupling, on EITHER
+  // posture (the truth table's row for `default`: `capped` regardless).
+  it('Wave 6 ruling (a) — default profile unchanged on both postures (the coupling touches only the gpu branch)', () => {
+    const i = input({ probeDevices: [], threads: 4 })
+    const profile = resolveRerankProfile(i)
+    expect(profile).toBe('default')
+    expect(rerankScopeFor(profile, i, 'cpu')).toBe('capped')
+    expect(rerankScopeFor(profile, i, 'gpu')).toBe('capped')
   })
 
   it('no finite thread count reaches cpu-hi today (CPU_HI_MIN_THREADS = Infinity, run L\'s miss) — even a very high count resolves default', () => {
@@ -131,14 +176,17 @@ describe('resolveRerankProfile / rerankScopeFor (device posture: see "rerankerDe
     expect(resolveRerankProfile(i)).not.toBe('gpu')
   })
 
-  it('rerankerAvailable false → capped on every profile, regardless of hardware (checked before any profile branch)', () => {
+  it('rerankerAvailable false → capped on every profile, regardless of hardware or posture (checked before any profile/posture branch)', () => {
     const gpuInput = input({ probeDevices: [RTX_3080_TI], threads: 16, rerankerAvailable: false })
     const defaultInput = input({ probeDevices: [], threads: 4, rerankerAvailable: false })
-    expect(rerankScopeFor(resolveRerankProfile(gpuInput), gpuInput)).toBe('capped')
-    expect(rerankScopeFor(resolveRerankProfile(defaultInput), defaultInput)).toBe('capped')
+    expect(rerankScopeFor(resolveRerankProfile(gpuInput), gpuInput, 'gpu')).toBe('capped')
+    expect(rerankScopeFor(resolveRerankProfile(gpuInput), gpuInput, 'cpu')).toBe('capped')
+    expect(rerankScopeFor(resolveRerankProfile(defaultInput), defaultInput, 'cpu')).toBe('capped')
     // The cpu-hi branch itself, forced (unreachable via resolveRerankProfile today, but the
     // function must still fail safe to capped with no reranker provisioned).
-    expect(rerankScopeFor('cpu-hi', { ...defaultInput, wideScopeOptIn: true, rerankerAvailable: false })).toBe('capped')
+    expect(
+      rerankScopeFor('cpu-hi', { ...defaultInput, wideScopeOptIn: true, rerankerAvailable: false }, 'cpu')
+    ).toBe('capped')
   })
 })
 

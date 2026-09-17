@@ -3393,6 +3393,23 @@ only by `rerank-profile.test.ts`'s fixtures (real device/manifest figures, inclu
 3060 Laptop's own `totalMb`), not by a live run — see `docs/known-limitations.md` for the same
 gap. A live small-card leg remains open.
 
+**The posture gate now also determines the candidate scope on the `gpu` profile (step 4-6, Wave 6
+ruling (a), `rag-design.md` §17 PR-B record continued).** Step 4-5 deliberately left
+`resolveRerankProfile`'s scope classification alone when it re-sourced the posture, which meant a
+small-card machine could resolve profile `gpu` — and therefore the wide `GPU_RERANK_SCOPE`, up to
+`ALL_SCOPE_MAX_DOCS` = 512 documents — while the sidecar it was about to call correctly started
+`--device none`. `rerankScopeFor` now takes the resolved posture and, on the `gpu` branch only,
+returns `capped` when the posture is `cpu`; `cpu-hi` and `default` are unaffected (`cpu-hi`'s
+posture is always `cpu` by construction, so a general "posture cpu ⇒ capped" rule would have
+killed its `top48` opt-in — a dedicated regression-guard test pins this). The posture itself is
+computed by ONE shared helper (`main/services/rag/device-posture.ts`) that both the sidecar's own
+`rerankerDevicePosture` seam and the per-ask `resolveAskCandidateScope` call, so the two can never
+disagree. The coupling was proven a no-op on the measurement machine (its recorded posture is
+`gpu`, remainder 7,478.6 MiB) before landing, offline, with no new acceptance read. The small-card
+disclosure above is unchanged by this: the gate still ships on the arithmetic alone, unconfirmed
+by a live small-card run — what changed is that a small card now also gets the fast, bounded
+`capped` scope instead of a 512-document wide scope run through a CPU reranker.
+
 ### §8 Expectations, profile bump, UI copy
 
 | Hardware | CPU baseline | With GPU |

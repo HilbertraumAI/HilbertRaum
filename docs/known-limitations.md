@@ -827,24 +827,35 @@ password recovery — are documented in
   10.8 s bound the ruling set, so `CPU_HI_MIN_THREADS` is frozen at `Infinity` and the `cpu-hi`
   profile is unreachable by any real machine until a future re-measurement lowers it. Every
   CPU-only machine keeps today's `capped` scope regardless of thread count.
-- **The reranker's GPU posture is now gated on provable headroom, but the gate itself is
-  UNVALIDATED on the small-card hardware it exists for (step 4-5, Wave 5 ruling (d)).** Step 4-4
-  launched the reranker with no `--device` argument (llama-server's own `ngl`-auto + `--fit`)
-  whenever `gpuUsefulForProfile` found any usable card — a predicate that never checked whether
-  there was room for a SECOND resident model beside the chat model. Step 4-5 replaces that check:
-  `rerankerDeviceFor` (`rag/rerank-profile.ts`) now requires the budget device's free memory,
-  minus the active chat model's own placement estimate, to clear the reranker's own estimated
-  need (≈ 2.8 GiB, `RERANKER_HEADROOM_FLOOR_MIB`) before choosing the GPU posture — an unknown
-  probe, no useful device, no budget figure, no active model or an unresolvable manifest all mean
-  CPU. **What this does NOT close:** the project's only measurement machine is a 12 GiB card
-  (ample headroom for both models at once), so the acceptance read run under this gate confirms
-  no regression THERE but cannot confirm the gate correctly reads a genuinely tight card — the
-  5–6 GiB laptop class `architecture.md`'s `USABLE_VRAM_MB` record already discusses. See step
-  4-5's `hardware-leg.json`: **no such machine was reached in this session** (`available: false`),
-  so the gate ships on the ARITHMETIC alone (the same estimator the picker and the fit budget
-  already use elsewhere, not a new one invented for this gate) plus `rerank-profile.test.ts`'s
-  fixtures (real device/manifest figures, including the #318 RTX 3060 Laptop's own `totalMb`) —
-  not yet confirmed by a live small-card run.
+- **The reranker's GPU posture is gated on provable headroom, AND a small card now gets the fast,
+  bounded scope instead of a 512-document wide scope run through a CPU reranker (step 4-5, Wave 5
+  ruling (d); step 4-6, Wave 6 ruling (a)) — but the gate itself is still UNVALIDATED on the
+  small-card hardware it exists for.** Step 4-4 launched the reranker with no `--device` argument
+  (llama-server's own `ngl`-auto + `--fit`) whenever `gpuUsefulForProfile` found any usable card —
+  a predicate that never checked whether there was room for a SECOND resident model beside the
+  chat model. Step 4-5 replaced that check: `rerankerDeviceFor` (`rag/rerank-profile.ts`) now
+  requires the budget device's free memory, minus the active chat model's own placement estimate,
+  to clear the reranker's own estimated need (≈ 2.8 GiB, `RERANKER_HEADROOM_FLOOR_MIB`) before
+  choosing the GPU posture — an unknown probe, no useful device, no budget figure, no active model
+  or an unresolvable manifest all mean CPU. Step 4-5 deliberately left the candidate SCOPE alone
+  when it did this, which left a gap the scoped Opus review caught (finding C1): a small card
+  could still resolve the `gpu` PROFILE (and therefore up to 512 documents in one rerank call)
+  while the sidecar it was about to call correctly started on the CPU — a combination that, per
+  run L's own CPU figures (`top48` at 48 documents: p90 25,317 / 29,101 ms), would routinely
+  exceed the 120 s request timeout. **Step 4-6 (Wave 6 ruling (a)) closes that gap:** the resolved
+  posture now feeds the scope decision too, through one shared helper both the sidecar and the
+  per-ask scope call — `gpu` profile + `cpu` posture now resolves `capped` (today's bounded,
+  ~12.9 s p90 scope), never the wide, unbounded one; `cpu-hi` and `default` are unaffected. Proven
+  a no-op on the project's own measurement machine before landing (its posture stays `gpu`, so its
+  scope stays `all`, unchanged). **What this does NOT close:** the project's only measurement
+  machine is a 12 GiB card (ample headroom for both models at once), so no acceptance read has
+  ever exercised the gate's `cpu`-posture branch live — the 5–6 GiB laptop class
+  `architecture.md`'s `USABLE_VRAM_MB` record already discusses. See step 4-5's
+  `hardware-leg.json`: **no such machine was reached in this session** (`available: false`), so
+  the gate ships on the ARITHMETIC alone (the same estimator the picker and the fit budget already
+  use elsewhere, not a new one invented for this gate) plus `rerank-profile.test.ts`'s fixtures
+  (real device/manifest figures, including the #318 RTX 3060 Laptop's own `totalMb`) — not yet
+  confirmed by a live small-card run.
 - **The `all` rerank scope is capped, and a rerank-call failure now falls back to TODAY's
   baseline instead of landing below it — both measured, neither asserted (step 4-4's finding,
   step 4-5's fix).** Step 4-4 shipped `all` with no per-call document ceiling and no dedicated

@@ -54,6 +54,7 @@ import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
 import { resolveRerankProfile, rerankScopeFor, type RerankScope } from '../services/rag/rerank-profile'
+import { resolveRerankerDevicePosture } from '../services/rag/device-posture'
 import { eligibleDevicesFor, machineKey } from '../services/performance'
 import { detectSystem } from '../services/benchmark'
 import { defaultThreadCount } from '../services/runtime/sidecar'
@@ -65,23 +66,34 @@ import type { Db } from '../services/db'
 /**
  * This ask's knowledge-pack candidate scope, resolved from `resolveRerankProfile`'s hardware
  * profile (`rag/rerank-profile.ts`) — a GPU machine's ask sees `GPU_RERANK_SCOPE` candidates
- * whenever the profile resolves `gpu`. Step 4-5 (ruling (d), B2) re-sourced the reranker
+ * whenever the profile resolves `gpu` AND the reranker sidecar's own device posture resolves
+ * `gpu` too (Wave 6 ruling (a) below). Step 4-5 (ruling (d), B2) re-sourced the reranker
  * sidecar's own device POSTURE onto a separate, headroom-gated check (`rerankerDeviceFor`) and
  * deliberately left this scope classification alone — so on a small card where the chat model
  * leaves too little headroom, the profile can still resolve `gpu` (and therefore this wide
  * scope) while the sidecar itself starts `--device none` (CPU posture): the scope this function
  * returns and the sidecar's actual posture CAN mismatch. Flagged by the scoped Opus review of
- * step 4-5 (finding C1) as unmeasured and undisclosed; open for the owner to rule on, not fixed
- * here. Absent a reranker (`rerankerAvailable: false`), `rerankScopeFor` always returns
- * `'capped'` — a MEASURED requirement, not just a defensive default: the `gpu` profile's own
- * no-rerank column (the `all` scope through the no-rerank interleave — the configuration an
- * ABSENT reranker produces; a rerank-call FAILURE is restricted to the `capped` companion
- * instead, since step 4-5 ruling (e)(i)) packed FEWER gold blocks than today's `capped`/no-rerank
- * baseline (`allPacked` 26→22, `anyPacked` 42→33 — see `docs/known-limitations.md`'s
- * fallback-cost bullet and `docs/rag-design.md` §17). Exported for
+ * step 4-5 (finding C1) as unmeasured and undisclosed; **resolved by Wave 6 ruling (a) (step
+ * 4-6)**: the posture is now resolved through the SAME shared helper the sidecar itself uses
+ * (`resolveRerankerDevicePosture`, `main/services/rag/device-posture.ts` — Wave 6 ruling (c)) and
+ * threaded into `rerankScopeFor`, which forces `capped` on the `gpu` profile whenever the
+ * resolved posture is `cpu` — never a general "posture cpu ⇒ capped" rule (that would also
+ * capture the always-`cpu`-postured `cpu-hi` branch and kill its `top48` opt-in; see
+ * `rerankScopeFor`'s own doc comment). The scope this function returns and the sidecar's actual
+ * posture can no longer mismatch. Absent a reranker (`rerankerAvailable: false`), `rerankScopeFor`
+ * always returns `'capped'` — a MEASURED requirement, not just a defensive default: the `gpu`
+ * profile's own no-rerank column (the `all` scope through the no-rerank interleave — the
+ * configuration an ABSENT reranker produces; a rerank-call FAILURE is restricted to the `capped`
+ * companion instead, since step 4-5 ruling (e)(i)) packed FEWER gold blocks than today's
+ * `capped`/no-rerank baseline (`allPacked` 26→22, `anyPacked` 42→33 — see
+ * `docs/known-limitations.md`'s fallback-cost bullet and `docs/rag-design.md` §17). Exported for
  * `tests/unit/rerank-profile-wiring.test.ts` — the one production call site this function has.
  */
-export function resolveAskCandidateScope(settings: AppSettings, rerankerAvailable: boolean): RerankScope {
+export function resolveAskCandidateScope(
+  settings: AppSettings,
+  rerankerAvailable: boolean,
+  manifestsDir: string | null
+): RerankScope {
   const here = machineKey(detectSystem())
   const input = {
     gpuMode: settings.gpuMode,
@@ -91,7 +103,8 @@ export function resolveAskCandidateScope(settings: AppSettings, rerankerAvailabl
     rerankerAvailable,
     wideScopeOptIn: settings.ragRerankWideScope
   }
-  return rerankScopeFor(resolveRerankProfile(input), input)
+  const posture = resolveRerankerDevicePosture(settings, manifestsDir)
+  return rerankScopeFor(resolveRerankProfile(input), input, posture)
 }
 
 /** Does any in-scope document have precomputed structured-extract data (a `__scan__` marker)?
@@ -234,8 +247,9 @@ export function registerRagIpc(ctx: AppContext): void {
       const rawSettings = getSettings(ctx.db)
       const settings = ragSettingsFrom(rawSettings)
       // Step 4-4: resolved once per ask, from the SAME settings snapshot `settings` above came
-      // from — reused at the single `externalArm` wiring point below.
-      const candidateScope = resolveAskCandidateScope(rawSettings, ctx.reranker != null)
+      // from — reused at the single `externalArm` wiring point below. `ctx.manifestsDir` (Wave 6
+      // ruling (c)) lets the posture half reach `findManifestById`/`estimateGraphicsNeedMib`.
+      const candidateScope = resolveAskCandidateScope(rawSettings, ctx.reranker != null, ctx.manifestsDir)
 
       // Resolve the conversation's composite scope (plan §10.1 / D1): the UNION of the
       // selected collections (Library / projects), specific docs, and chat attachments.

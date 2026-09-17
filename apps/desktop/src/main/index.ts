@@ -59,10 +59,9 @@ import {
 } from './ipc/registerBenchmarkIpc'
 import { notifyPerformanceChanged } from './ipc/performance-notify'
 import { setAnswerSpeedObserver } from './ipc/chat-stream'
-import { eligibleDevicesFor, machineKey } from './services/performance'
+import { machineKey } from './services/performance'
 import { detectSystem } from './services/benchmark'
-import { rerankerDeviceFor } from './services/rag/rerank-profile'
-import { primaryUsefulDevice } from '../shared/gpu-rules'
+import { resolveRerankerDevicePosture } from './services/rag/device-posture'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
@@ -78,13 +77,7 @@ import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
 import type { KnowledgePacksChangedEvent } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
-import {
-  estimateGraphicsNeedMib,
-  findManifestById,
-  graphicsBudgetMib,
-  launchContextTokens,
-  resolveManifestsDir
-} from './services/models'
+import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
 import { composeServices, composeTranslator, shouldReplaceTranslator } from './services/compose-services'
@@ -381,8 +374,13 @@ function initBackend(): void {
   // says nothing about room for a SECOND resident model beside the chat model). A locked
   // workspace falls back to `cpu` (no settings, no active-model manifest) — the sidecar starts
   // post-unlock in practice, once a start can read the real figures.
+  // Wave 6 ruling (c): the resolution itself (the gpuMode/gpuAutoDisabled gate, the probe →
+  // budget-device → budget-figure chain, the active chat model's placement estimate, and the
+  // pure `rerankerDeviceFor` verdict) now lives in the ONE shared helper both this seam and
+  // `registerRagIpc.ts`'s `resolveAskCandidateScope` call — `resolveRerankerDevicePosture`
+  // (`services/rag/device-posture.ts`) — so the two can never disagree. This closure keeps only
+  // what is specific to THIS call site: the settings fetch with its locked-workspace fallback.
   const rerankerDevicePosture = (): 'gpu' | 'cpu' => {
-    const here = machineKey(detectSystem())
     const settings = (() => {
       try {
         return getSettings(workspace.requireDb())
@@ -390,19 +388,7 @@ function initBackend(): void {
         return null
       }
     })()
-    // The SAME gpuMode/gpuAutoDisabled gate `resolveRerankProfile` applies for scope (the user
-    // turned GPU off, or the crash ladder auto-disabled it): neither the reranker nor the chat
-    // model may use the card then, whatever the probe says. `eligibleDevicesFor` itself does not
-    // read these two flags (it only filters by machine-key eligibility), so the gate is applied
-    // here rather than inside the pure `rerankerDeviceFor` (which treats an empty/null list as
-    // "not provable" either way).
-    const gpuAllowed = settings != null && settings.gpuMode === 'auto' && !settings.gpuAutoDisabled
-    const probeDevices = gpuAllowed ? eligibleDevicesFor(settings, here) : null
-    const budgetDevice = Array.isArray(probeDevices) ? primaryUsefulDevice(probeDevices) : null
-    const budgetMib = graphicsBudgetMib(budgetDevice)
-    const activeManifest = findManifestById(manifestsDir, settings?.activeModelId ?? null)
-    const chatModelNeedMib = activeManifest ? estimateGraphicsNeedMib(activeManifest) : null
-    return rerankerDeviceFor({ probeDevices, budgetMib, chatModelNeedMib })
+    return resolveRerankerDevicePosture(settings, manifestsDir)
   }
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({

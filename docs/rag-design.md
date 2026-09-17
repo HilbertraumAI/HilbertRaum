@@ -4142,3 +4142,72 @@ Laptop's own totalMb) but not by a live run (`hardware-leg.json`, `docs/known-li
 Full artifacts: `steps/4-5-product-pr-rerank-profiles-2/artifacts/{run-l2-latency.json,
 scope-selection-2.json,acceptance-a4.json,acceptance-a4-{default,gpu}.json,
 fallback-measured.json,hardware-leg.json}`.
+
+**Step 4-6 (Wave 6 ruling (a), same PR, same branch) — C1 resolved: the candidate scope now
+follows the reranker's own device posture on the `gpu` profile.** The scoped Opus review of step
+4-5 (finding C1) found that Wave 5 ruling (d) deliberately re-sourced only the sidecar's POSTURE
+onto the headroom gate and left `resolveRerankProfile`'s scope classification alone — so a
+machine could resolve profile `gpu` (and therefore `GPU_RERANK_SCOPE`, up to `ALL_SCOPE_MAX_DOCS`
+= 512 documents) while the sidecar correctly started `--device none`. The owner's Wave 6 ruling
+(a), verbatim:
+
+> **C1 is resolved by coupling the scope to the posture, in the narrow formulation.** When the
+> resolved rerank profile is `gpu` **and** the resolved reranker device posture is `cpu`, the
+> candidate scope is `capped`. The `cpu-hi` opt-in and the `default` profile are **unchanged** —
+> the coupling must not be implemented as the general rule "posture `cpu` ⇒ `capped`", which would
+> also capture the `cpu-hi` branch (by construction it has no usable GPU, so its posture is always
+> `cpu`) and would permanently kill the `top48` opt-in that Wave 5 ruling (c) preserved behind one
+> constant. The landing scope is `capped`, not `top48`: `top48` on CPU is what run L measured at
+> p90 25,317 / 29,101 ms, the measurement that made `cpu-hi` ship disabled.
+
+The truth table, resolved from the shipped functions (`artifacts/truth-table.json`, all five rows
+match the ruling exactly):
+
+| profile | posture | scope | note |
+|---|---|---|---|
+| `gpu` | `gpu` | `all` | unchanged; the measurement machine and every machine with provable headroom |
+| `gpu` | `cpu` | **`capped`** | **the fix** |
+| `cpu-hi` | `cpu` | `top48` iff the opt-in is on, else `capped` | unchanged; the regression guard exists for exactly this row |
+| `cpu-hi` | `gpu` | `top48` iff the opt-in is on, else `capped` | unreachable in production (no usable GPU ⇒ no `gpu` posture) but must not throw |
+| `default` | either | `capped` | unchanged |
+
+Implementation (ruling (c)): ONE shared main-process helper, `resolveRerankerDevicePosture`
+(`main/services/rag/device-posture.ts` — impure, outside `rag/rerank-profile.ts` so that module
+stays free of `node:`/`electron` imports for the renderer boundary), replicates the exact
+gpuMode/gpuAutoDisabled gate → `eligibleDevicesFor` → `primaryUsefulDevice` →
+`graphicsBudgetMib` chain → `findManifestById`/`estimateGraphicsNeedMib` chat-model placement →
+`rerankerDeviceFor` (unchanged, pure) that `main/index.ts`'s `rerankerDevicePosture` used alone
+before. Both `main/index.ts`'s seam and `registerRagIpc.ts`'s `resolveAskCandidateScope` (which
+now also takes `manifestsDir`, threaded from `AppContext.manifestsDir`) call this ONE function, so
+the two can never disagree. `rerankScopeFor` gained a required third `posture` parameter,
+consulted ONLY on the `gpu` branch (`posture === 'cpu' ? 'capped' : GPU_RERANK_SCOPE`); `cpu-hi`
+and `default` ignore it entirely, which is what the regression-guard test proves (a finite,
+injected `CPU_HI_MIN_THREADS` still reaches `top48` under `cpu` posture). Four required tests, all
+green: the coupling both directions, the regression guard, `default` unchanged on both postures,
+and the two call sites proven to resolve the SAME posture from the SAME settings snapshot
+(`tests/unit/rerank-profile.test.ts`, `tests/unit/rerank-profile-wiring.test.ts`).
+
+**The no-op proof (ruling (d)), offline, no runtime lock, no inference.** This step may not invoke
+`llama-server.exe` in any form (the only mechanism for a LIVE GPU probe, `probeGpuDevices`, spawns
+it), so the proof replays `run-summary-a4-gpu.json`'s recorded gate inputs (a real live probe step
+4-5's authorised run A4 captured on this same machine) through the branch's own new functions, as
+a labelled FIXTURE proof (`artifacts/no-op-proof.json`). Resolved posture `gpu`, resolved scope
+`all` — byte-identical to the recorded `verdict`/`candidateScope`, and every gate figure matches
+the file exactly (`budgetMib` 11,316, `chatModelNeedMib` 3,837.397345214844, `floorMib`
+2,808.2015380859375, `remainderMib` 7,478.602654785156). The coupling is confirmed a no-op on the
+measurement machine: step 4-5's acceptance figures continue to describe the shipped code.
+
+**The harness check (ruling (e)).** `product-harness.mjs`'s `--profile=gpu` branch resolved
+`candidateScope` via `rerankScopeFor('gpu', {...})` BEFORE resolving `devicePosture` and with no
+posture argument — correct at step 4-5's head (no posture parameter existed), but a silent
+divergence at this step's head: the missing third argument evaluates as `undefined`,
+`undefined === 'cpu'` is `false`, so the branch would always return `GPU_RERANK_SCOPE` regardless
+of the live-resolved posture, exactly reproducing the C1 combination on a future small-card read.
+Fixed in this step's OWN harness copy only (`steps/4-6-.../artifacts/harness/product-harness.mjs`
+— step 4-5's frozen copy is untouched): resolve `devicePosture` first, then pass it into
+`rerankScopeFor`. Full analysis: `artifacts/harness-posture-check.json`.
+
+**Docs updated in place**, the C1 disclosure becoming the resolved rule rather than a caveat:
+this section, `architecture.md` GPU record §7, `known-limitations.md`. The small-card path itself
+remains unvalidated on real hardware (no such machine was reachable from step 4-5's session) —
+that residual is unchanged by this step, which is offline and runs no acceptance read.
