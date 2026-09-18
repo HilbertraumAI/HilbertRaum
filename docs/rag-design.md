@@ -4472,11 +4472,47 @@ still reach the packet-eligible text, keyed
 `Physikalisch — Dichte: gemessen: 19,32 g/cm³ (20 °C); berechnet: 19,302 g/cm³` and
 `Physikalisch — Schmelzpunkt: 1337,33 K (1064,18 °C)`. A disclosed residual (owner's call, not
 fixed here): a classless image+caption layout table can still clear both the class and structural
-drop tests (`docs/known-limitations.md`). The acceptance funnel, the `tables32` delivery result
-(whose harness-side "table-derived unit" identification was itself replaced pre-read, after a
-text-pattern version produced a false positive, with the same re-conversion/line-multiset method
-the cost check uses) and the Gold demonstration's live leg are pending the one authorised
-`core200` read (PR still open, floors pre-registered before that read — see the PR body). Full
-artifacts: `steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline.json,freeze-4l.txt,
-freeze-4l.superseded-1.txt,freeze-4l.superseded-2.txt,freeze-4l.superseded-3.txt,
-freeze-4l.superseded-4.txt,freeze-4l.superseded-5.txt}`.
+drop tests (`docs/known-limitations.md`).
+
+**The one authorised `core200` acceptance read (2026-09-18) — every PR-B floor holds, the
+`tables32` delivery thresholds MISS on a scoring-method defect, the Gold demonstration confirms
+delivery directly.** All six PR-B floors PASS: `allPacked` 77 (≥45), `anyCandidate` 116 (≥80),
+`anyArticle` 120 (≥96), and all three latency floors inside bound — beside 4-k-a's own
+pre-existing master funnel (`anyArticle` 120, `anyCandidate` 116, `allPacked` 78), the funnel is
+effectively unchanged now that table units compete in the same candidate pool. The `tables32`
+delivery thresholds (T-cand ≥26/32, T-packet ≥16/32) both read **0/32** under the pre-registered
+harness-side "table-derived unit" identification script — traced to a scoring-method defect found
+only after the read, not a delivery failure: that script decides a captured candidate/packet unit
+is table-derived by checking that every one of the unit's own newline-delimited lines is a line
+the table-emitting conversion introduces, but the product's own chunking/packing step
+(`chunkSegments` → `collectPackCandidates`, `zim/arm.ts`) joins a segment's per-row lines into one
+line before the harness ever captures it — confirmed structurally (zero of 6,267 captured
+candidate/packet units across the `tables32` population contain a literal newline, though the raw,
+pre-chunking segment for the same content does) and directly, by diffing one raw segment against
+its own captured candidate. Because the check can only pass on a table so short it collapses to a
+single introduced line, it returns "not table-derived" for essentially every genuine multi-row
+table, independent of whether delivery occurred. Two pieces of evidence, neither part of the
+scored result, indicate the underlying delivery does clear both thresholds: the same slot-value
+match with the table-derived filter removed (not a corrected score — it does not distinguish a
+table hit from a prose hit) finds 31/32 candidate-level and 30/32 packet-level hits, and the Gold
+demonstration below reaches both target values directly. Per protocol, the identification script
+is left exactly as frozen (no code, product or scoring, changes after the read); the frozen
+result — MISS on both thresholds — is what is reported, and PR-B stays `blocked` for the owner to
+rule (most likely: authorise a scoring-only fix, re-scored from this same read's existing
+captures, never a second `core200` read).
+
+**The Gold demonstration, live.** The question "Wie hoch sind Dichte und Schmelzpunkt von Gold?"
+(confirmed by token-Jaccard < 0.19 against every bank question, so it is not one of them) did not
+itself resolve the "Gold" article title through discovery for this phrasing — a discovery-level
+outcome, unrelated to table delivery — but both target values still reached the packet as citable
+units through OTHER articles' own newly-delivered tables: density **19,32 g/cm³** via the
+"Metalle" article's cross-element property table, melting point **1064,18 °C** via the "ITS-90"
+article's fixed-point table, each with a real citation the product would show. The shipped path
+generated a correct, correctly cited answer from them. This is itself a direct, unplanned
+demonstration of table delivery reaching the packet for values the shipped code used to drop
+entirely.
+
+Full artifacts: `steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline.json,
+gold-demo.json,acceptance-4l.json,tables32-delivery.json,gap-diagnosis-4l.json,
+id-diff-4l-default.json,freeze-4l.txt,freeze-4l.superseded-1.txt,freeze-4l.superseded-2.txt,
+freeze-4l.superseded-3.txt,freeze-4l.superseded-4.txt,freeze-4l.superseded-5.txt}`.

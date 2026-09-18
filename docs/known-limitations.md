@@ -3050,7 +3050,15 @@ reports and phase plans were working papers; their full text lives in git histor
   budget (typically a nested table's own inlined content, close to that same shared cap)
   is truncated to what remains and kept rather than dropped whole, so a table is never
   reduced to markers over zero data rows when some of its content was in budget; the kept
-  prefix can still end mid-value, not at a natural word or pair boundary. Row/column
+  prefix can still end mid-value, not at a natural word or pair boundary, and that cut
+  carries no line-level mark of its own — today's size thresholds happen to keep a
+  mid-number cut unreachable in delivered text, but that is an undocumented coupling
+  between two constants, not a guarantee, and a future change to either one could ship a
+  truncated value with no visible marker on that line. A cut landing inside the one emitted
+  line of a single-row (or otherwise fully-consumed) table can also leave the "rows shown"
+  marker reading as if every source row were present, even though most of that row's text
+  was cut — the cut is disclosed on the line itself, but not echoed into the row count.
+  Neither is fixed here. Row/column
   iteration is bounded on three independent axes
   (`TABLE_MAX_COLUMNS`, `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`, alongside the
   existing `TABLE_MAX_SOURCE_ROWS`), not merely by "typical tables are small": a table
