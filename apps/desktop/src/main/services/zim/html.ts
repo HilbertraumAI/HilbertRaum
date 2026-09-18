@@ -37,8 +37,10 @@ import {
 // structural test drops a table with no header cell and no real tabular content; everything
 // else is parsed into a bounded grid (rowspan/colspan expanded, multi-row and mid-table
 // headers rebound, captions kept once) and serialised into one or more retrievable segments,
-// capped so a large table cannot explode the unit count or the scan (`tables.ts`'s own header
-// note has the table-scoped superscript/subscript convention, added in a follow-up commit).
+// capped so a large table cannot explode the unit count or the scan. Superscripts/subscripts
+// are kept readable (`g/cm^3`, `10^6`) inside table-derived text only; prose keeps today's
+// flattening unchanged (`m<sup>2</sup>` → `m2`) — a pre-registered, reported, out-of-scope
+// difference, not an oversight (see the PR and `docs/known-limitations.md`).
 //
 // ---------------------------------------------------------------------------------------
 // LINEAR FORWARD SCANNER — complexity record (PR #294 review H1)

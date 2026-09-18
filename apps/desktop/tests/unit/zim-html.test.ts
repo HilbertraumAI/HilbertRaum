@@ -170,10 +170,10 @@ describe('zimArticleToSegments — table delivery', () => {
       '<table>' +
       '<tr><th colspan="2">Eigenschaften</th></tr>' +
       '<tr><th>Dichte</th><th>Schmelzpunkt</th></tr>' +
-      '<tr><td>19,32 g/cm3</td><td>1064,18 &#176;C</td></tr>' +
+      '<tr><td>19,32 g/cm<sup>3</sup></td><td>1064,18 &#176;C</td></tr>' +
       '</table>'
     const text = textOf(html)
-    expect(text).toContain('Dichte: 19,32 g/cm3; Schmelzpunkt: 1064,18 °C')
+    expect(text).toContain('Dichte: 19,32 g/cm^3; Schmelzpunkt: 1064,18 °C')
     // The specific defect this replaces: the group header repeated onto every covered cell
     // ("Eigenschaften: Dichte | Eigenschaften: 19,32 g/cm3 | ...").
     expect(text).not.toContain('Eigenschaften')
@@ -230,6 +230,20 @@ describe('zimArticleToSegments — table delivery', () => {
     const text = textOf(html)
     expect(text).toContain('two-col-a')
     expect(text).toContain('two-col-b')
+  })
+
+  it('preserves superscripts/subscripts readably inside table-derived text only', () => {
+    const html =
+      '<table><tr><th>Metric</th><th>Value</th></tr>' +
+      '<tr><td>Density</td><td>19,32 g/cm<sup>3</sup></td></tr>' +
+      '<tr><td>Formula</td><td>10<sup>6</sup></td></tr>' +
+      '<tr><td>Compound</td><td>H<sub>2</sub>O</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('g/cm^3')
+    expect(text).toContain('10^6')
+    expect(text).toContain('H_2O')
+    expect(text).not.toContain('g/cm3')
+    expect(text).not.toMatch(/\b106\b/)
   })
 
   it('still drops an <sup class="mw-ref"> citation bracket inside a table cell', () => {
@@ -294,6 +308,27 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(() => zimArticleToSegments('<table><tr><th>h<td>x')).not.toThrow()
   })
 
+  it('the table segment renders sensibly through the same section-mapping readArticle (zim/index.ts) uses', () => {
+    // Mirrors readArticle's own transform: the heading is rendered as the section label, so
+    // its duplicate first line is dropped from the segment text. The table now appears in the
+    // viewer/saved article, same as the packer sees it: readable text, no leftover markup.
+    const html =
+      '<h1>T</h1><section><div class="mw-heading mw-heading2"><h2>Facts</h2></div>' +
+      '<p>Intro.</p><table><tr><th>Name</th><th>Value</th></tr>' +
+      '<tr><td>Density</td><td>19,32 g/cm<sup>3</sup></td></tr></table></section>'
+    const article = zimArticleToSegments(html)
+    const sections = article.segments.map((s) => {
+      let text = s.text
+      if (s.sectionLabel && text.startsWith(s.sectionLabel)) {
+        text = text.slice(s.sectionLabel.length).replace(/^\n+/, '')
+      }
+      return { label: s.sectionLabel ?? null, text }
+    })
+    const tableSection = sections.find((s) => s.text.includes('Density'))
+    expect(tableSection).toBeTruthy()
+    expect(tableSection?.text).not.toMatch(/<[a-z]/i)
+    expect(tableSection?.text).toContain('g/cm^3')
+  })
 })
 
 // ---------------------------------------------------------------------------------------

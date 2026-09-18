@@ -24,9 +24,9 @@ import { attrValue, decodeEntities, tidyWhole } from './html'
 //    from being repeated on every cell it covers: a narrower header below it always wins for
 //    the columns it actually labels, and the group label is used only where nothing narrower
 //    exists -- and either way it becomes a *key*, never text pasted onto the cell's value.
-//  - `<sup class="mw-ref">` citation brackets are dropped, same as prose, everywhere in the
-//    table. An ordinary superscript/subscript's own readable convention (`g/cm^3`, `10^6`)
-//    is a follow-up commit; for now it flattens the same way prose does today.
+//  - Superscripts/subscripts are preserved as `^value` / `_value` (so `g/cm<sup>3</sup>` reads
+//    `g/cm^3` and `10<sup>6</sup>` reads `10^6`), but only inside table-derived text -- prose
+//    conversion is unchanged. `<sup class="mw-ref">` citation brackets are still dropped.
 
 /** rowspan/colspan caps -- precedent from the research prototype, not a spec mandate. */
 export const TABLE_MAX_ROWSPAN = 40
@@ -161,14 +161,22 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
 
     if (name === 'sup') {
       // <sup class="mw-ref"> citation brackets stay dropped, same as prose (html.ts's
-      // supSkipDepth) -- everywhere, not just in prose. An ordinary <sup> is left transparent
-      // here; the table-scoped superscript/subscript convention lands in a follow-up commit.
+      // supSkipDepth). An ordinary <sup> gets the table-scoped readable convention: a literal
+      // `^` immediately before its own text, so `g/cm<sup>3</sup>` reads `g/cm^3` and
+      // `10<sup>6</sup>` reads `10^6` -- never flattened to `g/cm3` / `106`. Prose keeps
+      // today's flattening unchanged (out of scope — docs/known-limitations.md).
       if (!isClose && !selfClosing) {
         const cls = attrValue(attrs, 'class') ?? ''
         if (REF_SUP_CLASS_RE.test(cls)) refSkipDepth += 1
+        else appendLiteral('^')
       } else if (isClose && refSkipDepth > 0) {
         refSkipDepth -= 1
       }
+      continue
+    }
+    if (name === 'sub') {
+      // Same convention, `_value` (e.g. `H<sub>2</sub>O` reads `H_2O`).
+      if (!isClose && !selfClosing) appendLiteral('_')
       continue
     }
     if (name === 'caption') {
