@@ -3040,3 +3040,23 @@ reports and phase plans were working papers; their full text lives in git histor
   deliberately NOT used — a path prefix in argv is readable by any local process, so it
   would be obscurity, not authentication (residual R-8, a documented unused option).
   Revisited only if upstream kiwix-serve adds authentication.
+- **Table delivery (issue #478) leaves a few residuals.** A cut table (row/char/segment
+  caps) does not say what a cut row itself contained, only how many rows were shown
+  out of how many source rows — the `[Rows 1-k of N source rows shown]` marker names
+  the gap, never fills it. The layout/navbox classifier is class-based (`navbox`,
+  `vertical-navbox`, `metadata`, `ambox`, `toc`, `sistersitebox`) and can misjudge an
+  unlisted layout convention, or a genuinely tabular one that happens to reuse a listed
+  class name; the structural test (no header cell, no real tabular content) is a
+  backstop, not a guarantee. A nested table's own further-nested tables are inlined
+  down to a fixed safety-valve depth (8); deeper nesting is dropped, unchanged from the
+  feature's first design. The superscript/subscript readable convention (`g/cm^3`,
+  `10^6`) applies inside table-derived text only — prose keeps today's flattening
+  (`m<sup>2</sup>` → `m2`) unchanged, a deliberate scoping decision (moving prose text
+  too would blur what the funnel change is attributable to), reported, not fixed here.
+  A single article whose entire content is one enormous kept table is parsed by
+  `tables.ts` in one synchronous pass (unlike the surrounding scanner, it is not
+  cooperatively sliced), so the P1b ≤5 ms per-slice bound can be exceeded for that
+  pathological shape; ordinary articles are unaffected (`TABLE_MAX_SOURCE_ROWS` bounds
+  rows, and typical tables are small). Five `tables32` ids (H016, H062, H076, H158 en,
+  H181 de) are discovery losses this change cannot fix — their gold article never
+  reaches the candidate pool at all, on any arm.

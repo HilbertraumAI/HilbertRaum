@@ -4370,3 +4370,31 @@ manifest-only chat-model estimate, other GPU consumers and a stale probe, and a 
 disabling reranking for the session) are disclosed in `known-limitations.md`, not fixed. Full
 artifacts:
 `steps/4-8-product-pr-rerank-profiles-5/artifacts/{no-op-proof-3.json,harness-inertness-check.json,posture-writers.json,required-wiring-proof.json,posture-cost.json,follow-up-issues.md}`.
+
+**Table delivery (issue #478, open PR) — `html.ts` no longer drops every `<table>`.** A table
+used to disappear at parse time (`SKIP_SUBTREE`), so an infobox or data table's fact was never
+merely unranked, it was never retrievable at all. `tables.ts` now owns table geometry: a
+class-based classifier (`navbox`, `vertical-navbox`, `metadata`, `ambox`, `toc`,
+`sistersitebox`) and a structural test (no header cell and no real tabular content) still drop
+layout/navigation tables unchanged; everything else is parsed into a bounded grid (rowspan/
+colspan expanded and capped) and serialised as one line per data row, `key: value; key: value`,
+keyed by the NEAREST header row above it — a header row is never itself emitted as data, which
+is what stops a spanning header from being glued onto every cell it covers (a narrower header
+below always wins for the columns it labels; the same mechanism handles a multi-row header and
+a mid-table header rebind, both being just "the nearest all-header row above"). A NESTED table
+is INLINED into its parent cell (one compact string, emitted exactly once), not dropped: real
+Wikipedia infoboxes commonly nest the actual data table one level inside a layout wrapper (the
+chemical-element infobox is exactly this shape), confirmed against the live German "Gold"
+article, whose density/melting-point row lives in such a nested table. Superscripts/subscripts
+read `^value`/`_value` inside table-derived text only (`g/cm^3`, `10^6`), never flattened;
+`<sup class="mw-ref">` citation brackets stay dropped everywhere. Row/char/segment caps
+(`TABLE_MAX_SOURCE_ROWS`, `TABLE_SEGMENT_MAX_CHARS`, `TABLE_MAX_SEGMENTS`) stop a large table
+from exploding the unit count, with a `[Rows 1-k of N source rows shown]` marker when a cap
+cuts. No `ExtractedSegment` shape change. Offline, over the 152-file reference corpus: units per
+article rose from a mean of 23.6 to 27.4; parse work is essentially unchanged (+0.2%); the
+non-table invariant (a line-multiset diff — a per-segment text-pattern check was tried first and
+rejected after a real false positive, disclosed in `compute-cost-4l.mjs`'s own header) holds on
+152/152 files. The acceptance funnel, the `tables32` delivery result and the Gold demonstration's
+live leg are pending the one authorised `core200` read (PR still open, floors pre-registered
+before that read — see the PR body). Full artifacts:
+`steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline.json,freeze-4l.txt}`.

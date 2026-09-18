@@ -28,6 +28,14 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-18 — **Table delivery (issue #478, draft PR #479, `feat/zim-deliver-tables`) — IN
+PROGRESS.** `html.ts` no longer drops every `<table>` (`SKIP_SUBTREE`) — a class-based classifier
+plus a structural test still drop layout/navbox tables, everything else is parsed into a bounded
+grid and delivered as retrievable "key: value" units (`tables.ts`, design in `rag-design.md` §17
+"Table delivery"). Nested tables are inlined (found via the live "Gold" article: a chemical-
+element infobox nests its real property table one level deep). Offline legs done (cost, the
+non-table invariant, the Gold demonstration's offline leg); the `core200` acceptance read is
+blocked behind the shared runtime lock (`3-gen` held it at hand-off) — PR not yet ready._
 _2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
 `feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
 "Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
