@@ -37,6 +37,16 @@ import { attrValue, decodeEntities, tidyWhole } from './html'
 //    the real infobox shape a section-grouping header row (e.g. "Physikalisch") sits above a
 //    run of `<th>label</th><td>value</td>` rows: the section label must not overwrite every
 //    row's own, more specific label.
+//  - A `colspan > 1` header cell keys AT MOST ONE LINE PER ROW, never one per covered cell: it
+//    is a GROUP LABEL. The German-Wikipedia "Gold" infobox labels its rows with plain `<td>`
+//    cells (not `<th>`) under a `<th colspan="2">Physikalisch</th>` group heading, so a row's
+//    own leading cell is never a header and the group text used to become the literal per-cell
+//    key of BOTH covered columns on every row (issue #478). When a data row has no narrower
+//    header of its own and none of its covered columns has a genuine (non-group) key either, it
+//    is rendered as a group record instead: a 2-column table reads its first cell as the row's
+//    own label ("Physikalisch — Dichte: 19,32 g/cm³ …"); any other column count joins the cells
+//    un-keyed under the one group label, never inventing `Column N` names for columns that were
+//    never headed (see `tableToRecordLines`).
 //  - Superscripts/subscripts are preserved as `^value` / `_value` (so `g/cm<sup>3</sup>` reads
 //    `g/cm^3` and `10<sup>6</sup>` reads `10^6`), but only inside table-derived text -- prose
 //    conversion is unchanged. `<sup class="mw-ref">` citation brackets are still dropped, and an
@@ -454,6 +464,14 @@ function buildGrid(table: RetainedTable): { grid: (TableCell | undefined)[][]; n
   return { grid, numCols, gridTruncated, cellsPlaced: placed }
 }
 
+/** A resolved column key, tagged with whether it came from a header cell spanning more than
+ *  one column. `isGroup` cells never become a per-cell key (issue #478): a spanning header is a
+ *  GROUP LABEL, not the name of each column it happens to cover. */
+interface ColumnKey {
+  text: string
+  isGroup: boolean
+}
+
 /**
  * One line per data row: `key: value; key: value`. Header rows never become a data line (that
  * is what keeps a spanning header from being repeated on every cell): they only seed the keys
@@ -464,31 +482,85 @@ function buildGrid(table: RetainedTable): { grid: (TableCell | undefined)[][]; n
  * supply a key for the same column: it is the more specific label (see the module header note
  * on why this order, not the reviewer's literal suggestion, is required for a real infobox that
  * mixes a section-grouping header row with per-row `<th>` labels).
+ *
+ * A `colspan > 1` header cell (`isGroup`, above) is never glued onto a covered column as its own
+ * per-cell key -- that is the exact defect it replaces (a real German-Wikipedia infobox labels
+ * its rows with plain `<td>` cells under a `<th colspan="2">` group heading, so the group text
+ * used to become BOTH columns' key, on every row: "Physikalisch: Dichte; Physikalisch: 19,32
+ * g/cm3 …", issue #478). When a row has no narrower header of its own (`rowHeaderText` is null)
+ * and none of its covered columns has a genuine (non-group) key either, the row is rendered as a
+ * GROUP RECORD instead: for a table shaped as exactly two columns, the first cell is the row's
+ * own label ("Physikalisch — Dichte: 19,32 g/cm³ …"); for any other column count the cells are
+ * joined un-keyed under the one group label, rather than inventing `Column N` names for columns
+ * that were never headed at all ("Physikalisch: A; B; C"). The group label is looked up once per
+ * row (never once per cell), and is omitted from the line entirely when no group header covers
+ * the row (a plain headerless table degrades to the same label/value or unkeyed-join form, with
+ * no label prefix). A row that DOES have its own leading header, or whose covered columns already
+ * carry a genuine per-column header, is unaffected -- both keep exactly today's per-cell keying.
  */
 export function tableToRecordLines(table: RetainedTable): { lines: string[]; gridTruncated: boolean; cellsPlaced: number } {
   const { grid, numCols, gridTruncated: capTruncated, cellsPlaced } = buildGrid(table)
   const lines: string[] = []
-  const columnKeys: (string | null)[] = new Array(numCols).fill(null)
+  const columnKeys: (ColumnKey | null)[] = new Array(numCols).fill(null)
   let totalChars = 0
   let contentCapped = false
+
+  const chargeLine = (line: string): boolean => {
+    if (totalChars + line.length > TABLE_MAX_RAW_CHARS) {
+      contentCapped = true
+      return false
+    }
+    lines.push(line)
+    totalChars += line.length
+    return true
+  }
 
   for (let r = 0; r < grid.length; r += 1) {
     if (contentCapped) break
     const sourceRow = table.rows[r]
     if (isAllHeaderRow(sourceRow)) {
       for (let c = 0; c < numCols; c += 1) {
-        const text = grid[r]?.[c]?.text.trim()
-        if (text) columnKeys[c] = text
+        const cell = grid[r]?.[c]
+        const text = cell?.text.trim()
+        if (text) columnKeys[c] = { text, isGroup: (cell?.columns ?? 1) > 1 }
       }
       continue
     }
     const rowHeader = rowHeaderText(sourceRow)
     const skipCols = rowHeader !== null ? leadingHeaderSpan(grid[r]!) : 0
+
+    if (rowHeader === null) {
+      const coveredCols: number[] = []
+      for (let c = skipCols; c < numCols; c += 1) {
+        if ((grid[r]![c]?.text ?? '').trim()) coveredCols.push(c)
+      }
+      const hasGenuineKey = coveredCols.some((c) => columnKeys[c] !== null && !columnKeys[c]!.isGroup)
+      if (coveredCols.length > 0 && !hasGenuineKey) {
+        const groupKey = coveredCols.map((c) => columnKeys[c]).find((k) => k?.isGroup)
+        const groupLabel = groupKey ? groupKey.text : null
+        let line: string
+        if (numCols === 2 && coveredCols.length === 2) {
+          const label = grid[r]![coveredCols[0]!]!.text.trim()
+          const value = grid[r]![coveredCols[1]!]!.text.trim()
+          line = groupLabel ? `${groupLabel} — ${label}: ${value}` : `${label}: ${value}`
+        } else {
+          const values = coveredCols.map((c) => grid[r]![c]!.text.trim())
+          line = groupLabel ? `${groupLabel}: ${values.join('; ')}` : values.join('; ')
+        }
+        chargeLine(line)
+        continue
+      }
+    }
+
     const parts: string[] = []
     for (let c = skipCols; c < numCols; c += 1) {
       const value = grid[r]![c]?.text ?? ''
       if (!value.trim()) continue // N2: a ragged row's empty trailing pair carries no information
-      const key = rowHeader ?? columnKeys[c] ?? `Column ${c + 1}`
+      const colKey = columnKeys[c]
+      // A group-sourced key never becomes a literal per-cell key (see above), even in this
+      // mixed fallback (some covered columns genuinely headed, this one is not): it falls back
+      // to `Column N` exactly as an unheaded column always has.
+      const key = rowHeader ?? (colKey && !colKey.isGroup ? colKey.text : null) ?? `Column ${c + 1}`
       const pair = `${key}: ${value}`
       if (totalChars + pair.length > TABLE_MAX_RAW_CHARS) {
         contentCapped = true

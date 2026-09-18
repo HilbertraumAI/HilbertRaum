@@ -398,6 +398,69 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(text).not.toContain('Physikalisch: 19,32')
   })
 
+  // -------------------------------------------------------------------------------------
+  // A spanning group header over PLAIN `<td>` label/value rows (no `<th>` of the row's own at
+  // all) -- the real German-Wikipedia "Gold" infobox shape, and the defect a pre-read review
+  // found on this feature's own flagship demonstration: the group header was glued onto BOTH
+  // covered columns as their literal per-cell key on every row ("Physikalisch: Dichte;
+  // Physikalisch: 19,32 g/cm3 …", issue #478). Two groups, to pin that the group label rebinds
+  // per group and is never carried over into the next one.
+  // -------------------------------------------------------------------------------------
+  it('a spanning <th colspan=2> group header over plain <td>/<td> rows keys each row once, ' +
+    'as "Group — Label: Value", never repeated onto both cells', () => {
+    const html =
+      '<table>' +
+      '<tr><th colspan="2">Physikalisch</th></tr>' +
+      '<tr><td>Dichte</td><td>gemessen: 19,32 g/cm<sup>3</sup> (20 &#176;C); berechnet: 19,302 g/cm<sup>3</sup></td></tr>' +
+      '<tr><td>Schmelzpunkt</td><td>1337,33 K (1064,18 &#176;C)</td></tr>' +
+      '<tr><th colspan="2">Chemisch</th></tr>' +
+      '<tr><td>Symbol</td><td>Au</td></tr>' +
+      '</table>'
+    const text = textOf(html)
+    expect(text).toContain('Physikalisch — Dichte: gemessen: 19,32 g/cm^3 (20 °C); berechnet: 19,302 g/cm^3')
+    expect(text).toContain('Physikalisch — Schmelzpunkt: 1337,33 K (1064,18 °C)')
+    expect(text).toContain('Chemisch — Symbol: Au')
+    // The defect this replaces, on the exact reproducing values: the group name must never be
+    // glued onto BOTH covered cells of the same row.
+    expect(text).not.toContain('Physikalisch: Dichte')
+    expect(text).not.toContain('Physikalisch: gemessen')
+    expect(text).not.toContain('Physikalisch: Schmelzpunkt')
+    expect(text).not.toContain('Physikalisch: 1337,33')
+    // No output line contains its own group label twice.
+    for (const line of text.split('\n')) {
+      const hits = line.split('Physikalisch').length - 1
+      expect(hits).toBeLessThanOrEqual(1)
+    }
+    // The label rebinds per group: "Chemisch" never leaks onto the "Physikalisch" rows and
+    // vice versa.
+    expect(text).not.toContain('Chemisch — Dichte')
+    expect(text).not.toContain('Physikalisch — Symbol')
+  })
+
+  it('a spanning group header over a row with MORE than two cells and no narrower headers ' +
+    'joins the cells un-keyed under the one group label, instead of inventing "Column N"', () => {
+    const html =
+      '<table>' +
+      '<tr><th colspan="3">Measurements</th></tr>' +
+      '<tr><td>A</td><td>B</td><td>C</td></tr>' +
+      '</table>'
+    const text = textOf(html)
+    expect(text).toBe('Measurements: A; B; C')
+    expect(text).not.toContain('Column 1')
+    expect(text).not.toContain('Column 2')
+    expect(text).not.toContain('Column 3')
+    // The group label appears exactly once, not once per covered column.
+    expect(text.split('Measurements').length - 1).toBe(1)
+  })
+
+  it('regression: a real per-column header row (narrow, one column each) still keys each ' +
+    'column individually -- the group-record rule only applies when no covered column has a ' +
+    'genuine (non-group) header of its own', () => {
+    const html =
+      '<table><tr><th>Name</th><th>Value</th></tr><tr><td>Density</td><td>19.3</td></tr></table>'
+    expect(textOf(html)).toBe('Name: Density; Value: 19.3')
+  })
+
   it('the article.html infobox row (a real fixture, not a synthetic one) is keyed exactly, ' +
     'not "Column 1: ... Column 2: ..." (pins the exact rendering shape, not just presence)', () => {
     const fixtureText = zimArticleToSegments(FIXTURE).segments.map((s) => s.text).join('\n\n')
