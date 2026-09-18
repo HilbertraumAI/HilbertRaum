@@ -941,9 +941,11 @@ describe('PacksPanel', () => {
   })
 
   it('renders no "Ask this pack" without the callback, and the empty state carries Add + the library address', async () => {
+    const copyToClipboard = vi.fn(async (_text: string) => true)
     stubApi({
       getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
-      listKnowledgePacks: async () => []
+      listKnowledgePacks: async () => [],
+      copyToClipboard
     })
     const user = userEvent.setup()
     render(
@@ -957,10 +959,36 @@ describe('PacksPanel', () => {
     expect(screen.queryByRole('button', { name: 'Ask this pack' })).toBeNull()
     // ONE primary "Add packs…" — in the empty state, not the head as well.
     expect(screen.getAllByRole('button', { name: 'Add packs…' })).toHaveLength(1)
-    // user-event installs its own clipboard stub for the test — read the copy back through it.
+    // The copy goes through MAIN (`clipboard:write`), never `navigator.clipboard`: user-event
+    // installs a working stub of the latter, so asserting on it would pass in the test and
+    // still fail in the file://-loaded renderer (the "Zwischenablage" error, preload/index.ts).
+    const writeText = vi.spyOn(navigator.clipboard, 'writeText')
     await user.click(screen.getByRole('button', { name: 'Copy the library address' }))
-    expect(await navigator.clipboard.readText()).toBe('https://library.kiwix.org')
+    expect(copyToClipboard).toHaveBeenCalledWith('https://library.kiwix.org')
+    expect(writeText).not.toHaveBeenCalled()
     expect(await screen.findByText('Copied library.kiwix.org')).toBeInTheDocument()
+  })
+
+  it('a refused or failing clipboard write still names the library address', async () => {
+    for (const copyToClipboard of [async () => false, async () => Promise.reject(new Error('ipc'))]) {
+      stubApi({
+        getKnowledgePackStatus: async () => ({ toolsInstalled: true, refreshing: false, revision: 0 }),
+        listKnowledgePacks: async () => [],
+        copyToClipboard
+      })
+      const user = userEvent.setup()
+      const view = render(
+        <I18nProvider>
+          <ToastProvider>
+            <PacksPanel />
+          </ToastProvider>
+        </I18nProvider>
+      )
+      await user.click(await screen.findByRole('button', { name: 'Copy the library address' }))
+      expect(await screen.findByText('Could not copy — the address is library.kiwix.org')).toBeInTheDocument()
+      expect(screen.queryByText('Copied library.kiwix.org')).toBeNull()
+      view.unmount()
+    }
   })
 })
 

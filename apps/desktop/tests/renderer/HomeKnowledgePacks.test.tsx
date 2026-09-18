@@ -49,7 +49,13 @@ afterEach(cleanup)
 
 describe('HomeScreen — knowledge packs readiness row (§11.16)', () => {
   it('says how many packs are ready when at least one is present and enabled', async () => {
-    stubs(async () => [pack(), pack({ id: 'p2', enabled: false }), pack({ id: 'p3', available: false })])
+    stubs(async () => [
+      pack(),
+      pack({ id: 'p2', enabled: false }),
+      pack({ id: 'p3', available: false }),
+      // A confirmed no-full-text-index archive is not askable in the panel, so Home must not count it.
+      pack({ id: 'p4', searchable: 'no' })
+    ])
     render(<HomeScreen onNavigate={() => {}} />)
     expect(await screen.findByText('1 knowledge pack ready to ask')).toBeInTheDocument()
     expect(screen.getByText('Knowledge packs')).toBeInTheDocument()
@@ -66,13 +72,19 @@ describe('HomeScreen — knowledge packs readiness row (§11.16)', () => {
     expect(onNavigate).toHaveBeenCalledWith('documents:packs')
   })
 
-  it('says none is enabled when packs exist but none is usable, and opens the panel', async () => {
+  it('says none is ready when packs exist but none is usable, and opens the panel', async () => {
     const onNavigate = vi.fn()
-    stubs(async () => [pack({ enabled: false })])
+    // Every way a registered pack can be unusable: switched off, file missing (still ENABLED —
+    // why the copy says "ready", not "enabled"), and no full-text index.
+    stubs(async () => [
+      pack({ enabled: false }),
+      pack({ id: 'p2', available: false }),
+      pack({ id: 'p3', searchable: 'no' })
+    ])
     const user = userEvent.setup()
     render(<HomeScreen onNavigate={onNavigate} />)
-    expect(await screen.findByText(/No pack is enabled/)).toBeInTheDocument()
-    expect(screen.getByText('None enabled')).toBeInTheDocument()
+    expect(await screen.findByText(/No pack is ready to ask/)).toBeInTheDocument()
+    expect(screen.getByText('None ready')).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Open knowledge packs' }))
     expect(onNavigate).toHaveBeenCalledWith('documents:packs')
   })

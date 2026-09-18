@@ -263,10 +263,14 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   // §11.16: the knowledge packs as a fourth readiness row — the offline Wikipedia is a source
   // like the documents, so Home says whether one is ready and offers the way in when none is.
   // Three states: no pack registered (add), packs registered but none usable (open the panel),
-  // at least one present AND enabled (ready). Hidden entirely while the packs are unknown.
+  // at least one ready. Hidden entirely while the packs are unknown. "Ready" is the panel's
+  // "Ask this pack" eligibility as far as a list row can know it — present, enabled, and not a
+  // confirmed no-full-text-index archive (a collision loser is a `packs:status` fact Home does
+  // not fetch) — so Home never counts a pack the panel itself refuses to ask. The none-ready
+  // copy says "ready", not "enabled": an enabled pack whose file is missing lands here too.
   const packsRow: ReadinessRowProps | null = (() => {
     if (packs == null) return null
-    const ready = packs.filter((p) => p.available && p.enabled).length
+    const ready = packs.filter((p) => p.available && p.enabled && p.searchable !== 'no').length
     if (packs.length === 0) {
       return {
         icon: 'book',
@@ -288,10 +292,10 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       return {
         icon: 'book',
         label: t('home.packs.label'),
-        value: t('home.packs.noneEnabled'),
+        value: t('home.packs.noneReady'),
         badge: (
           <Badge tone="neutral" icon="○">
-            {t('home.packs.badgeNoneEnabled')}
+            {t('home.packs.badgeNoneReady')}
           </Badge>
         ),
         action: (

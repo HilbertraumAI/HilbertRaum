@@ -115,7 +115,7 @@ Home answers "is everything ready?" at a glance:
   when there are none.
 - **Knowledge packs** — how many offline reference packs (an offline Wikipedia, §7b) are ready
   to ask, with an **Add packs** shortcut when there are none and **Open knowledge packs** when
-  none is switched on.
+  none is ready (switched off, its file missing, or an archive without a full-text index).
 
 **Start chatting** is the one big button — everything else is a quiet shortcut. If the
 drive is read-only, low on space, or slow, a friendly note appears here too; it never

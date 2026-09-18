@@ -1309,10 +1309,15 @@ existed. Nothing on Home or in the chat's scope picker led to packs when there w
    dialog itself is unchanged, #339 P8-2). The empty state names `library.kiwix.org`, says
    "single-file .zim", carries the primary "Add packs…" (so the head shows only Refresh then —
    one primary per view) and a ghost "Copy the library address": the app never opens a browser
-   from an offline surface, it puts the address on the clipboard and says so in a toast.
+   from an offline surface, it puts the address on the clipboard and says so in a toast. The write
+   goes through MAIN (`window.api.copyToClipboard` → `clipboard:write`) like every other copy in the
+   app — `navigator.clipboard` is unreliable in the file://-loaded renderer — and a refused write
+   names the address in the toast instead.
 7. **Entry points where packs are used.** Home's readiness card gains a fourth row (`book` glyph)
    with three honest states — none registered ("Add packs" → `documents:packs`), registered but
-   none usable ("Open knowledge packs"), N ready — and no row at all while the packs are unknown
+   none usable ("Open knowledge packs" — the copy says none is *ready*, not none is *enabled*: an
+   enabled pack whose file is missing lands here too), N ready (present, enabled, not a confirmed
+   no-index archive — the panel's "Ask this pack" eligibility as far as a list row knows it) — and no row at all while the packs are unknown
    (older bridge, failed read: `Promise.resolve(window.api?.listKnowledgePacks?.())`). The chat
    scope picker, which used to omit the packs section when the drive had none, shows "No knowledge
    packs on this drive yet · Add packs…" — gated on the new optional `onAddPacks` callback so a

@@ -4092,8 +4092,11 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
 Renderer-untrusted inputs are sanitized at the boundary (`sanitizeDestination` ⇒ Library fallback;
 `safeIdArray`). Every channel mirrors 1:1 in `preload/index.ts`. **Smart views** (§7.6) are query-time
 predicates via the shared `matchesSmartView` (`shared/types.ts`) — Generated/Unfiled/Recently added/
-Needs re-index/Large/Failed/Audio/OCR — kept in lockstep between the rail and `docs:list`; they are
-**not stored collections and not pickable retrieval scopes** in v1.
+Needs re-index/Large/Failed/Audio/OCR — one predicate shared by the rail and `docs:list`, so the two
+cannot disagree; they are **not stored collections and not pickable retrieval scopes** in v1. Since
+`design-guidelines.md` §11.16 (2026-09) the rail surfaces only Recently added, Unfiled and **Needs
+attention** (composed in the renderer as Failed ∪ Needs re-index); Large/Audio/OCR remain valid
+`docs:list` filters with no rail entry.
 
 ### §6 Generated provenance (Phase D, structured)
 
