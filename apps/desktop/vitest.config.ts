@@ -26,6 +26,10 @@ const isFullRun = process.argv.includes('run') && positionals.length === 0
 const allTestFiles = isFullRun ? listTestFiles(__dirname, resolve(__dirname, 'tests')) : null
 const expectedFiles = allTestFiles && shard ? shardTestFiles(allTestFiles, shard) : allTestFiles
 
+// See `poolOptions` below (#458 residual).
+const capWindowsCiForks = Boolean(process.env.CI) && process.platform === 'win32'
+if (capWindowsCiForks) console.log('[vitest.config] windows CI leg: forks capped at 2 (#458)')
+
 export default defineConfig({
   resolve: {
     alias: {
@@ -57,6 +61,22 @@ export default defineConfig({
     // that don't share cleanly across worker threads. The FullSuiteGuard above is the hard
     // backstop for any load-induced fork drop.
     pool: 'forks',
+    // #458 residual — ONE FORK FEWER on the windows CI legs. vitest's default is
+    // `availableParallelism() - 1`: three forks plus the main process on a 4-core runner, i.e.
+    // the machine is full before Defender and the runner agent take their share. Everything
+    // above buys TOLERANCE for a starved fork; nothing above helps the MAIN process, and the
+    // failure that survived steps 1-3 is the main process going unanswered: a fork's
+    // `onTaskUpdate` RPC to it times out at birpc's hardcoded 60 s (vitest 3.2.6 exposes no
+    // knob), and the run exits 1 with every test green — 3 of the 4 first-push reds in the
+    // week after the fixes landed (runs 34723764047, 35038224383, 35335961954; the 4th, run
+    // 35099769260, was a fork starved the same way — see `testBudgetMs`). Those runs show four
+    // whole-runner output gaps of 16-45 s where a healthy shard shows at most one: a noisy
+    // host, which the suite cannot fix, but it CAN stop filling every core so a degraded
+    // runner keeps one for the process that has to answer. Ubuntu and the desk are left
+    // alone — neither has ever shown the failure, and the cap costs wall clock.
+    // The line it prints is the run-log evidence that the cap applied: step 2's first sharded
+    // run silently did nothing, so a lever on these legs is not trusted until the log shows it.
+    poolOptions: capWindowsCiForks ? { forks: { maxForks: 2 } } : undefined,
     // The full parallel suite on a loaded machine starves the heavy integration/
     // renderer tests of CPU and trips vitest's 5 s default timeout (historically
     // 1–2 flakes per run, a different test each time; all pass in isolation). 3×

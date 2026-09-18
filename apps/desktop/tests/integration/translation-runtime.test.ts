@@ -8,6 +8,7 @@ import {
 } from '../../src/main/services/translation/runtime'
 import { createSelectedTranslator } from '../../src/main/services/translation/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // TG-2 fake-server tests for the real TranslationRuntime (plan §4 TG-2): launch args (NO --jinja,
 // --ctx-size 4096, --parallel 1), the raw /completion streaming + stop/temperature, abort
@@ -991,7 +992,7 @@ describe('#159 (BE-1) — teardown aborts an in-flight cold start', () => {
     await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
     expect(children.length).toBe(2) // a FRESH child (lazy restart), not the killed one
     await rt.stop()
-  }, 15_000)
+  }, testBudgetMs(15_000))
 
   it('stop() (quit) during a hung lazy start resolves promptly and stays permanently stopped', async () => {
     const { spawn, children } = fakeSpawn()
@@ -1017,7 +1018,7 @@ describe('#159 (BE-1) — teardown aborts an in-flight cold start', () => {
     state.hang = false
     await expect(rt.translate(translateOpts)).rejects.toThrow(/stopped/)
     expect(children.length).toBe(1)
-  }, 15_000)
+  }, testBudgetMs(15_000))
 
   it('an aborted GPU-attempt start never falls to the CPU rung mid-teardown (no ~10 GB cold load to tear straight down)', async () => {
     const { spawn, calls, children } = fakeSpawn()
@@ -1039,7 +1040,7 @@ describe('#159 (BE-1) — teardown aborts an in-flight cold start', () => {
     expect(calls.length).toBe(1)
     expect(calls[0].args.join(' ')).not.toContain('--device')
     await rt.stop()
-  }, 15_000)
+  }, testBudgetMs(15_000))
 })
 
 // ---- #163 (T-3): the per-request timeout WIRING — generation, not just classification ----

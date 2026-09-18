@@ -141,7 +141,7 @@ import type { OcrEngine } from '../../src/main/services/ocr'
 import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { makeScanOnlyPdf } from '../helpers/fixtures'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
-import { hangBudgetMs, hangPolls } from '../helpers/hang-budget'
+import { hangBudgetMs, hangPolls, testBudgetMs } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -1631,6 +1631,12 @@ describe('registerDocsIpc — Session 7 guard preconditions & lock-mid-job (T-3/
 // 60 s timeout, and waitTerminal's liveness bound is 30 s so a genuinely hung task still
 // fails first with the informative per-task error. Every assertion is semantic — none is
 // a timing bound — so the wider budget loosens nothing the test proves.
+//
+// #458 residual (run 35099769260): that literal 60 s later BECAME the CI default, so on CI
+// this test had no extra room at all — it spent 64 s in setup on a runner that froze twice
+// (24 s + 18 s of no output from any process) and timed out before the OCR was even queued.
+// The timed-out body then ran on into the next test's handlers, hence the misleading
+// `Unknown document` rejection in that log. The budget is now `testBudgetMs` (CI-aware).
 describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
   async function waitTerminal(manager: DocTaskManager, jobId: string): Promise<string> {
     const start = Date.now()
@@ -1696,7 +1702,7 @@ describe('doc-task admission vs. in-flight ingestion (BE-1)', () => {
     // After the re-index settles, the redo admits and completes normally (no over-eager guard).
     const redo = manager.startDocTask({ kind: 'ocr', documentIds: [info.id] })
     expect(await waitTerminal(manager, redo.jobId)).toBe('done')
-  }, 60_000)
+  }, testBudgetMs(60_000))
 })
 
 // ---- #158 (DT-3): the auto deep-index offer vs the import loop's `processing` window ------
@@ -1756,7 +1762,7 @@ describe('auto deep-index enqueue at import with a runtime up (#158 / DT-3)', ()
     // Hygiene: don't leak the enqueued build past the test.
     manager.cancelAllDocTasks()
     await manager.awaitActiveTaskSettled()
-  }, 60_000)
+  }, testBudgetMs(60_000))
 })
 
 // ---- Issue #90: export the stored ORIGINAL bytes (docs:exportOriginal) --------------------

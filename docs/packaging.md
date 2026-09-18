@@ -574,8 +574,9 @@ The gain **beats** a halving, because per-file overheads fall too: per-file test
 unsharded run (816 s vs 997 s). So the earlier framing here — "sharding halves *exposure*, not
 *crowding*" — was too strong: pressure per runner genuinely eases, plausibly because each runner
 now accumulates only half the leaked sqlite handles and locked temp roots of #460 (correlation,
-not a proven cause). What remains true is that each shard runs the same
-`availableParallelism() - 1` forks, so the CI-aware `testTimeout`/`hookTimeout` above are still
+not a proven cause). Each shard at first still ran vitest's default `availableParallelism() - 1`
+forks — three, plus the main process, on a 4-core runner (now capped at two on these legs; see
+"The windows CI legs run one fork fewer" below) — so the CI-aware `testTimeout`/`hookTimeout` above are still
 what buy *tolerance* when a fork is starved; the two changes address different halves of the
 problem. **Ubuntu stays whole for a reason beyond cost:** one leg per Node
 version still runs all 449 files in a *single* vitest process, so cross-file interference (shared
@@ -710,6 +711,34 @@ it means "it never finished", never "it was slow".
 timing PROOFS — the second exists to show a slow `/suggest` is cut off at the SEAM's bound, not
 the server's, so widening it would stop it discriminating. Those are marked as deliberate
 exceptions in place.
+
+**A literal per-test timeout does not widen either — `testBudgetMs` (#458 residual).** The third
+shape of the same trap: `it('…', fn, 60_000)` *replaces* the config's `testTimeout`, so it is as
+blind to `CI=true` as a hand-rolled bound. Every such literal in the suite was written to give a
+heavy test *more* room than the default, and each silently became the opposite when the CI default
+rose to 60 s: `docs-ipc` BE-1's `60_000` (4× the desk default, on purpose) was exactly the CI
+default — no extra room on the one platform it was added for — and the renderer suites'
+`8000`/`10000` (wider than vitest's old 5 s) are 6–7× *tighter* than what an unannotated test gets
+on CI. BE-1 paid for it in run `35099769260`: 64 s in setup on a runner that froze twice (24 s +
+18 s with no output from any process), timed out before its OCR was queued; the timed-out body then
+ran on into the next test's handlers, which is why that log shows a misleading `Unknown document`
+rejection. The 50 literals ≤ 60 s across 10 files now read `testBudgetMs(n)`: unchanged at a desk,
+on CI 4× and never under the CI default. When adding a per-test timeout, use it.
+
+**The windows CI legs run one fork fewer (#458 residual).** Everything above buys tolerance for a
+starved *fork*. The failure that survived it is the *main* process going unanswered: a fork's
+`onTaskUpdate` RPC times out at birpc's hardcoded 60 s (vitest 3.2.6 has no knob for it) and the
+run exits 1 with **every test green** — 3 of the 4 first-push reds in the week after steps 1–3
+landed (27 of 31 first attempts green, against ~74 % before the wave; runs `34723764047`,
+`35038224383`, `35335961954` — always a `1 of 2` shard, on both Node versions). Those logs show
+four whole-runner output gaps of 16–45 s where a healthy shard shows at most one: a noisy host.
+The suite cannot fix the host, but it can stop filling every core, so `vitest.config.ts` sets
+`poolOptions.forks.maxForks: 2` when `CI` is set on `win32` — ubuntu and the desk keep the
+default. **What to look for on a run:** the Test step of a windows leg prints
+`[vitest.config] windows CI leg: forks capped at 2 (#458)`; if that line is missing the cap did not
+apply (step 2's first sharded run silently did nothing, so no lever on these legs is trusted
+without its log line). A red whose only error is `Timeout calling "onTaskUpdate"` after this is
+new information — record it on the issue rather than re-running by reflex.
 
 **When a test depends on a budget inside the PRODUCT, add a seam instead of loosening the
 assertion.** The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run

@@ -18,6 +18,7 @@ import {
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { PrivacyPolicy } from '../../src/shared/types'
 import type { KdfParams } from '../../src/main/services/security/crypto'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // full-audit 2026-07-12 SEC-1 — a DocumentCipher captured BEFORE "Lock now" must fail closed
 // when invoked AFTER lock() zeroed the vault key. Previously `documentCipher()` closed over the
@@ -141,7 +142,7 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
     expect(() => cipher!.decryptFile(encBefore, join(dir, 'out.txt'))).toThrow(/locked/i)
     expect(() => cipher!.decryptFileAsync(encBefore, join(dir, 'out.txt'))).toThrow(/locked/i)
     expect(existsSync(join(dir, 'out.txt'))).toBe(false)
-  }, 60_000)
+  }, testBudgetMs(60_000))
 
   it('a cipher captured across lock → unlock reads the LIVE key again (per-invocation read)', () => {
     const vp = freshVault()
@@ -163,7 +164,7 @@ describe('documentCipher across lock() (full-audit 2026-07-12 SEC-1)', () => {
     ctl.documentCipher()!.decryptFile(enc, back) // decrypts under a FRESH capture too
     expect(readFileSync(back, 'utf8')).toBe(SECRET_TEXT)
     ctl.lock()
-  }, 60_000)
+  }, testBudgetMs(60_000))
 })
 
 describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)', () => {
@@ -200,7 +201,7 @@ describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)
       expect(existsSync(out)).toBe(false)
     }
     expect(leftovers).toEqual([]) // the guard threw BEFORE anything was written
-  }, 60_000)
+  }, testBudgetMs(60_000))
 
   it('an ordinary unlocked import still writes a real-key sidecar (happy path unchanged)', async () => {
     const vp = freshVault()
@@ -226,5 +227,5 @@ describe('lock landing mid-import (full-audit 2026-07-12 SEC-1, drained prepare)
     expect(readFileSync(back, 'utf8')).toBe(SECRET_TEXT)
     expect(() => decryptFile(join(store, stored[0]), join(srcDir, 'zk.txt'), ZERO_KEY)).toThrow()
     ctl.lock()
-  }, 60_000)
+  }, testBudgetMs(60_000))
 })

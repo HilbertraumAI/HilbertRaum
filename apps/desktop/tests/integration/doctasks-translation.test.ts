@@ -52,7 +52,7 @@ import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { t } from '../../src/shared/i18n'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 
 // Phase 34 — the translation document task (wave-3 plan §7, decisions D27 + D36), REROUTED at
 // TG-3 (translategemma plan §2 D3/D9): translation runs on the TranslateGemma SIDECAR (a
@@ -1024,7 +1024,7 @@ describe('targeted cancel + active-task read (FA-3: F-6 stale cancel, F-3 reload
     // watched it fail 3 of 5 full-suite runs on a loaded 16 GB machine (a run stretching to 312 s
     // vs the usual ~140 s). Nothing is loosened: the cancel semantics are asserted above by
     // explicit expect()s, and waitTerminal's own 30 s bound still catches a genuine hang first.
-  }, 60_000)
+  }, testBudgetMs(60_000))
 
   it('a targeted exact-id cancel hits the running task; the no-arg fallback still works (old-caller parity)', async () => {
     const a = await importDoc(600, 'a.txt')

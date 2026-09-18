@@ -25,6 +25,7 @@ import { ZimService, type ZimAdmission } from '../../src/main/services/zim'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { malformedZimFixture, packUuid, writeZimFixture } from '../helpers/zim-header'
 import { ServeFakeChild, serveGate } from '../helpers/zim-fakes'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // Registry over a REAL temp database (the collections-ipc harness precedent). The kiwix-manage
 // seam is faked — but since #301 P3b the fake READS THE FIXTURE'S HEADER and emits
@@ -975,5 +976,5 @@ describe('T14 — refreshable searchability (#301 P4, finding M7)', () => {
         await quiet.close()
       }
     }
-  }, 30_000)
+  }, testBudgetMs(30_000))
 })

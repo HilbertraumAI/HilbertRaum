@@ -56,3 +56,27 @@ export function hangBudgetMs(localMs: number): number {
 export function hangPolls(iterations: number, stepMs: number): number {
   return Math.max(1, Math.round(hangBudgetMs(iterations * stepMs) / stepMs))
 }
+
+/** The CI `testTimeout` in `vitest.config.ts` — the floor no per-test budget may sit under. */
+const CI_TEST_TIMEOUT_MS = 60_000
+
+/**
+ * The same widening for an explicit PER-TEST timeout — `it('…', async () => {…}, testBudgetMs(60_000))`.
+ *
+ * The third shape of the trap, and the one that outlived #458 step 3 (run 35099769260): a
+ * literal per-test timeout REPLACES the config's `testTimeout`, so it never widens on CI either.
+ * Every one in the suite was written to give a heavy test MORE room than the default — and once
+ * the CI default rose to 60 s, each silently became the opposite. `docs-ipc` BE-1's `60_000`
+ * (4x the desk default, by design) was exactly the CI default, i.e. no extra room on the one
+ * platform it was added for; it timed out in setup on a runner that froze for 24 s + 18 s. The
+ * renderer suites' `8000`/`10000` were wider than vitest's old 5 s default and are now 6-7x
+ * TIGHTER than what an unannotated test gets on CI.
+ *
+ * So: unchanged locally; on CI the same 4x as `testTimeout`, and never under the CI default —
+ * an explicit budget must not leave a test with less room than having none. No ceiling: nothing
+ * wraps a test budget the way a test budget wraps a hang detector.
+ */
+export function testBudgetMs(localMs: number): number {
+  if (!process.env.CI) return localMs
+  return Math.max(localMs * CI_FACTOR, CI_TEST_TIMEOUT_MS)
+}

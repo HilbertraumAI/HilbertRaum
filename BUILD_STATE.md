@@ -74,7 +74,9 @@ own 3 s `DF_PROBE_TIMEOUT_MS` lost its race on a starved runner so the list arti
 `testTimeout` ratio — capped at 45 s so a detector still fires inside the 60 s budget); and a `probeTimeoutMs` SEAM (mirroring
 `articleTimeoutMs`) stops the expansion cases racing that 3 s timer, verified by setting it to 1 ms and watching exactly those 6 cases fail.
 Timing PROOFS are deliberately excluded from the helper (`fts-rowid-sync` 500 ms #84; `zim-arm:672`, which exists to exclude the 15 s default).
-Acceptance ("green on a first push over a week") is judged from real traffic._
+**Week sampled (2026-09-12 → 09-18): 27 of 31 first attempts green (pre-wave ~74%).** 3 reds = vitest's hardcoded 60 s `onTaskUpdate` RPC (MAIN
+process starved, every test green); 1 = `docs-ipc` BE-1, whose literal `60_000` per-test timeout had BECOME the CI default. **(4)** windows CI
+forks capped 3 → 2, and the 50 literal per-test timeouts ≤ 60 s go through `testBudgetMs` (`fix/458-residual-starvation`). Acceptance re-sampled after (4)._
 _2026-09-12 — **#438 CLOSED — the automatic check's frozen step list; owner call taken on option 2**
 (`fix/438-automatic-check-step-list`; record `benchmark.md` "An automatic run's step list", which carries the three options and
 the reasoning). Two CORRECT decisions multiplied: progress is addressed to the window that invoked `benchmark:run` (the automatic
