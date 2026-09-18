@@ -198,16 +198,15 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getAllByRole('button', { name: t('de', 'docs.import.files') }).length
     ).toBeGreaterThan(0)
-    // The regrouped section rail (§11.6) renders its German group headers + labels: the
-    // Projects + Locations + Views headers, the system buckets under Locations, and the
-    // common smart views (always visible).
-    expect(screen.getByText(t('de', 'docs.section.projects'))).toBeInTheDocument()
-    expect(screen.getByText(t('de', 'docs.section.locations'))).toBeInTheDocument()
-    expect(screen.getByText(t('de', 'docs.smart.heading'))).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: t('de', 'docs.section.library') })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: t('de', 'docs.section.generated') })).toBeInTheDocument()
+    // The decluttered section rail (§11.16) renders its German labels: the header's mode
+    // switch, All documents, Recently added, and — with no project yet — the one "+ New
+    // project" row (empty locations stay hidden, so no "More").
+    expect(screen.getByRole('radio', { name: t('de', 'docs.mode.documents') })).toBeInTheDocument()
+    expect(screen.getByRole('radio', { name: t('de', 'docs.mode.packs') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.section.all') })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: t('de', 'docs.smart.recentlyAdded') })).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: t('de', 'docs.smart.unfiled') })).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: t('de', 'docs.section.newProject') })).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: t('de', 'docs.smart.more') })).toBeNull()
   })
 
   it('DocumentsScreen renders the German deep-index action + coverage meter (whole-document-analysis §5.2)', async () => {

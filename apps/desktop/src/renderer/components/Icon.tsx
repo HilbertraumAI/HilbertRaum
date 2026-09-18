@@ -23,6 +23,8 @@ export type IconName =
   | 'refresh'
   | 'puzzle'
   | 'gauge'
+  | 'book'
+  | 'search'
 
 export interface IconProps extends Omit<SVGProps<SVGSVGElement>, 'name'> {
   name: IconName
@@ -206,6 +208,28 @@ const GLYPHS: Record<IconName, Glyph> = {
   // Open padlock — the body box is identical to `lock`; only the shackle differs: it
   // attaches at the LEFT post and swings up and over, ending in the air on the right
   // (open). The honest "downloads allowed" state of the ambient privacy indicator.
+  // Open book (Lucide "book-open" idiom) — knowledge packs, the offline reference archives
+  // (Home's readiness row, §11.16). 24-grid, 1.65 stroke like the set; tracks currentColor.
+  book: {
+    body: (
+      <>
+        <path d="M4 5.5A1.5 1.5 0 0 1 5.5 4H11a2 2 0 0 1 2 2v14a1.5 1.5 0 0 0-1.5-1.5H4Z" />
+        <path d="M20 5.5A1.5 1.5 0 0 0 18.5 4H13a2 2 0 0 0-2 2v14a1.5 1.5 0 0 1 1.5-1.5H20Z" />
+      </>
+    )
+  },
+
+  // Magnifier (Feather idiom) — the Documents toolbar's name filter (§11.16). 24-grid, 1.65
+  // stroke like the set; tracks currentColor.
+  search: {
+    body: (
+      <>
+        <circle cx="11" cy="11" r="6.5" />
+        <path d="m20 20-4.4-4.4" />
+      </>
+    )
+  },
+
   'lock-open': {
     body: (
       <>

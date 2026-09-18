@@ -4,6 +4,8 @@
 // for is a VIRTUAL target resolved here:
 //   - 'performance'            → the Performance screen (2026-09 performance wave)
 //   - 'ask-documents'          → Chat screen opened in documents mode
+//   - 'documents:packs'        → Documents screen opened in its Knowledge-packs mode (§11.16 —
+//     the header's "My documents | Knowledge packs" switch; plain 'documents' opens My documents)
 //   - 'settings:privacy'       → Settings, "Privacy & data" tab
 //   - 'settings:diagnostics'   → Settings, "Diagnostics (advanced)" tab
 //   - 'settings:skills' / 'skills' → Settings, "Skills" tab (rail rework 2026-09-05: Skills
@@ -37,12 +39,18 @@ export interface NavResolution {
   settingsTab?: SettingsTab
   /** Set when the target picks the Chat screen's composer mode. */
   chatMode?: 'chat' | 'documents'
+  /** Set when the target picks the Documents screen's mode (plain 'documents' = My documents). */
+  documentsMode?: 'documents' | 'packs'
 }
 
 export function resolveNavTarget(target: string): NavResolution {
   switch (target) {
     case 'ask-documents':
       return { screen: 'chat', chatMode: 'documents' }
+    case 'documents':
+      return { screen: 'documents', documentsMode: 'documents' }
+    case 'documents:packs':
+      return { screen: 'documents', documentsMode: 'packs' }
     case 'chat':
       return { screen: 'chat', chatMode: 'chat' }
     case 'settings':
@@ -57,7 +65,6 @@ export function resolveNavTarget(target: string): NavResolution {
     case 'skills':
       return { screen: 'settings', settingsTab: 'skills' }
     case 'home':
-    case 'documents':
     case 'translate':
     case 'images':
     case 'models':

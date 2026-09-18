@@ -27,6 +27,32 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-18 — the oldest closed dated entry retired verbatim (#399 — preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-18 to make room for the §11.16 Documents-declutter entry
+(PR #444; the preamble was at its 200-line budget; the retention rule is "MOVE, don't raise"). Of the
+two oldest entries, the 2026-09-09 knowledge-packs entry still carries owner-side items it says are
+tracked nowhere else, so it stays. #399 is closed; its follow-ups are tracked as issues (#446 closed,
+#447 open), and its durable record lives on in `model-benchmarks.md` §6.6 "2026-09-09 correction
+(#399)" and `known-limitations.md` "The one chat slot and the prompt cache". Citations of the form
+"BUILD_STATE 2026-09-09 entry" for #399 resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-09 — **#399 CLOSED — the §6.6 record corrected and both owner decisions landed** (`fix/399-prompt-cache-restore`;
+record `model-benchmarks.md` §6.6 "2026-09-09 correction (#399)", `known-limitations.md` "The one chat slot and the prompt
+cache"; evidence PR #445). The old accepted-cost clause said "both 27B quants are hybrid/recurrent, so the restore path is
+closed to them". Measured: **11 of 14 chat models** lose llama-server's host-cache restore — the whole `qwen3.5`/`qwen3.8`
+line (recurrent state) and all four `gemma4` manifests (SWA), **including the catalog-default 4B and the 9B**; three
+positive controls (dense `qwen3`, `qwen3moe`, `mistral3`) DID restore, which makes it a measured architecture split.
+**D3(a)** — the arbiter waits 90 s after a chat turn before resuming a parked deep-index build, capped at 10 min of
+deferral per park so a document can never silently miss its index (`model-slot-arbiter.ts`; the delay is on the BUILD's
+resume, never on `acquireForChat`, which chat awaits). **D5** — `--cache-ram 0` for those three families only
+(`shared/prompt-cache-rules.ts`); unmeasured families keep cache-ON, the safe direction. **D4 deferred**: leg B showed a
+documents ask keeps only its ~227-token system prefix with or without a helper, so the length-proportional cost belongs to
+the plain-CHAT path alone and a picker warning would overstate it. Residual: a break longer than the delay still costs ONE
+slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` never tested — CLOSED 2026-09-10, see that entry)
+and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
+prompt re-processing` appears only on MTP starts — the token count is the only honest read._
+
 ## 2026-09-14 — BUILD_STATE §5 item 21 (f)–(h) retired verbatim (Phase 4 PR-A line-neutral edit)
 
 Retired from `BUILD_STATE.md` §5 item 21 on 2026-09-14 to keep the section at its 500-line budget

@@ -178,6 +178,12 @@ interface Props {
   /** Retrieval scope for the NEXT documents conversation ("Ask these documents"). */
   initialScopeDocumentIds?: string[] | null
   /**
+   * "Ask this pack" (§11.16): the knowledge pack(s) the NEXT documents conversation answers from
+   * ALONE — ticked, with the document corpus off (`documentsOff`). Takes precedence over a
+   * document selection; App clears both on every plain chat navigation.
+   */
+  initialScopePackIds?: string[] | null
+  /**
    * EP-1 P5 (plan §10): the conversation to open with — the review screen's "Back to chat"
    * passes the review's originating conversation. Verified against the loaded list on
    * mount; a deleted/unknown id degrades to the plain chat-home landing.
@@ -195,6 +201,7 @@ export function ChatScreen({
   onNavigate,
   initialMode,
   initialScopeDocumentIds,
+  initialScopePackIds,
   initialConversationId,
   onOpenReview
 }: Props): JSX.Element {
@@ -310,9 +317,13 @@ export function ChatScreen({
   // created it owns the scope (`scope_v2_json`) and this clears. Seeded from the Documents
   // screen's "Ask these documents" handoff (a specific-doc selection).
   const [pendingScope, setPendingScope] = useState<DocumentScope | null>(
-    initialScopeDocumentIds && initialScopeDocumentIds.length > 0
-      ? { collectionIds: [], documentIds: initialScopeDocumentIds }
-      : null
+    initialScopePackIds && initialScopePackIds.length > 0
+      ? // §11.16 "Ask this pack": the pack alone — ticked, documents off (the scope the picker's
+        // own "Search my documents" untick produces, so the chip and the ask agree).
+        { collectionIds: [], documentIds: [], packIds: initialScopePackIds, documentsOff: true }
+      : initialScopeDocumentIds && initialScopeDocumentIds.length > 0
+        ? { collectionIds: [], documentIds: initialScopeDocumentIds }
+        : null
   )
   // CH-1 (frontend audit 2026-08-09): optimistic scope for an EXISTING conversation while its
   // `setConversationScope` + `refreshConversations` round trips are in flight. The popover
@@ -2539,6 +2550,7 @@ export function ChatScreen({
                     disabled={busyStreaming}
                     onChangeScope={(next) => void onChangeScope(next)}
                     onAddDocuments={() => onNavigate('documents')}
+                    onAddPacks={() => onNavigate('documents:packs')}
                     attachments={attachments}
                     pendingAttachmentNames={
                       pendingImport && pendingImport.convId === activeId ? pendingImport.fileNames : []

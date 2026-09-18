@@ -28,6 +28,17 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
+`feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
+"Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
+reliable). Documents header: a "My documents | Knowledge packs" switch (`documents:packs` deep link; the rail's "Reference"
+group is gone). Rail: counts, ONE "Needs attention" view (failed ∪ stale) replacing the four diagnostic views, Unfiled inside
+Projects, locations behind a remembered "More", a name filter. Packs panel: one Switch per pack, "Ask this pack", Remove
+behind "⋯", setup card, "Copy the library address". Entry points: Home's fourth readiness row, the scope picker's "Add
+packs…". Written 2026-09-09, brought up to master 2026-09-18 (83 commits) with three review fixes: the library-address copy
+goes through MAIN (`copyToClipboard`) — it used `navigator.clipboard`, which the PR's test passed only via user-event's stub;
+Home counts a pack "ready" by the panel's ask eligibility (not a no-index archive) and says "none ready", not "none enabled";
+`architecture.md`'s smart-views note. The closed #399 entry retired for the preamble budget._
 _2026-09-13 — **#467 fixed — the `zim-client` 8 MiB `read ECONNRESET` was the FIXTURE's server-side close, not a slow transfer**
 (`fix/467-zim-client-reset`; record `rag-design.md` §17 D-Z22 "Also absorbed"). Reproduced outside vitest (14 of 30, idle-priority load): the
 client asks `Connection: close`, the fixture closed ~1 ms after its last write, and a CPU-starved Windows reader then never gets the queued
@@ -126,22 +137,6 @@ subtree; this fix is forward-compatible with either of its options — under opt
 instead of `busy`, a one-condition change, not a rework. Docs: `benchmark.md` §2 row HW3 + §4, `known-limitations.md`
 (Performance + Accessibility), `design-guidelines.md` §6 error announcements._
 
-_2026-09-09 — **#399 CLOSED — the §6.6 record corrected and both owner decisions landed** (`fix/399-prompt-cache-restore`;
-record `model-benchmarks.md` §6.6 "2026-09-09 correction (#399)", `known-limitations.md` "The one chat slot and the prompt
-cache"; evidence PR #445). The old accepted-cost clause said "both 27B quants are hybrid/recurrent, so the restore path is
-closed to them". Measured: **11 of 14 chat models** lose llama-server's host-cache restore — the whole `qwen3.5`/`qwen3.8`
-line (recurrent state) and all four `gemma4` manifests (SWA), **including the catalog-default 4B and the 9B**; three
-positive controls (dense `qwen3`, `qwen3moe`, `mistral3`) DID restore, which makes it a measured architecture split.
-**D3(a)** — the arbiter waits 90 s after a chat turn before resuming a parked deep-index build, capped at 10 min of
-deferral per park so a document can never silently miss its index (`model-slot-arbiter.ts`; the delay is on the BUILD's
-resume, never on `acquireForChat`, which chat awaits). **D5** — `--cache-ram 0` for those three families only
-(`shared/prompt-cache-rules.ts`); unmeasured families keep cache-ON, the safe direction. **D4 deferred**: leg B showed a
-documents ask keeps only its ~227-token system prefix with or without a helper, so the length-proportional cost belongs to
-the plain-CHAT path alone and a picker warning would overstate it. Residual: a break longer than the delay still costs ONE
-slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` never tested — CLOSED 2026-09-10, see that entry)
-and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
-prompt re-processing` appears only on MTP starts — the token count is the only honest read._
-
 _2026-09-09 — **Knowledge packs get a public face (`docs/knowledge-packs.md` + README section; docs-only,
 `docs/knowledge-packs-readme-and-page`):** the feature shipped but the repo did not say so — one README bullet (#5 of 10,
 linking nowhere) and user-guide §7b, reachable only through "walkthrough of every screen". New canonical page
@@ -193,7 +188,8 @@ closed 2026-09-07 models/runtime entries (#372, and the #310/#312/#313/#314/#315
 its residuals stay live in §5 item 23) on 2026-09-12 (preamble budget, making room for the #438
 entry), and the #339 Range-first article-reads entry on 2026-09-13 (preamble budget, making room for
 the #460 test-harness entry), and the closed #331 HW3-acceptance entry on 2026-09-13 (preamble budget,
-making room for the #467 test-fixture entry) —
+making room for the #467 test-fixture entry), and the closed #399 prompt-cache entry on 2026-09-18
+(preamble budget, making room for the §11.16 Documents-declutter entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 

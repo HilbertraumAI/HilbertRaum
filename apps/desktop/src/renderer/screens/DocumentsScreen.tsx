@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Badge, Banner, Button, Chip, ConfirmDialog, EmptyState, ErrorBanner, Icon, Modal, Progress, Spinner, useToast, type BadgeTone } from '../components'
+import { Badge, Banner, Button, Chip, ConfirmDialog, EmptyState, ErrorBanner, Icon, Modal, Progress, SegmentedControl, Spinner, useToast, type BadgeTone } from '../components'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
   Collection,
@@ -56,10 +56,15 @@ import {
   formatSize,
   provenanceLine
 } from './documents/format'
-import { RAIL_COLLAPSED_KEY, type DocSection, type RareViewKind } from './documents/types'
+import {
+  RAIL_COLLAPSED_KEY,
+  type DocSection,
+  type DocumentsMode,
+  type RailCounts
+} from './documents/types'
 
 export { friendlyMimeLabel, isRetryableFailure, __docRowRenderCounts } from './documents/format'
-export { RAIL_COLLAPSED_KEY, VIEWS_MORE_KEY } from './documents/types'
+export { RAIL_COLLAPSED_KEY, LOCATIONS_MORE_KEY } from './documents/types'
 
 // F-31 (audit 2026-07-16): during a bulk import (or a re-index-all) files settle on almost every 400 ms
 // poll tick, and the completion-triggered `refresh()` re-runs the registered PF-5 whole-library
@@ -115,8 +120,19 @@ const PREVIEW_PAGE_SIZE = 50
 interface Props {
   /** "Ask these documents" (spec §10.4): open Chat scoped to the selection. */
   onAskSelected?: (documentIds: string[]) => void
+  /**
+   * "Ask this pack" (§11.16): open Chat in documents mode answering from ONE knowledge pack
+   * alone (the pack ticked, the document corpus off). Absent ⇒ the packs panel hides the action.
+   */
+  onAskPack?: (packId: string) => void
   /** Deep links out of this screen (TG-3: the translate model-missing state → 'models'). */
   onNavigate?: (target: string) => void
+  /**
+   * Which mode to open in (§11.16): the user's own files (default) or the knowledge-pack panel —
+   * App resolves `'documents:packs'` deep links (Home's "Add packs", the chat picker's
+   * "Add packs…") to `'packs'`. The header's segmented switch moves between them afterwards.
+   */
+  initialMode?: DocumentsMode
 }
 
 // DOC-7 (#150): the row-translate modal's remembered language pair now lives in the SHARED
@@ -140,18 +156,22 @@ function inSection(d: DocumentInfo, section: DocSection): boolean {
     case 'generated':
     case 'archived':
     case 'unfiled':
-    case 'needsReindex':
-    case 'large':
-    case 'failed':
-    case 'audio':
-    case 'ocr':
       return matchesSmartView(d, section.kind)
+    case 'attention':
+      // §11.16: the one diagnostic view — failed imports + stale embeddings, the two states
+      // the toolbar's "Retry all" / "Re-index all" actually fix.
+      return matchesSmartView(d, 'failed') || matchesSmartView(d, 'needsReindex')
     default:
       return true
   }
 }
 
-export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.Element {
+/** Whether a document needs the user's attention (the rail's "Needs attention" count, §11.16). */
+function needsAttention(d: DocumentInfo): boolean {
+  return matchesSmartView(d, 'failed') || matchesSmartView(d, 'needsReindex')
+}
+
+export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialMode }: Props = {}): JSX.Element {
   const { t, tCount, lang } = useT()
   const showToast = useToast()
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
@@ -210,6 +230,11 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   // Document-organization (plan §12): the section rail selection + the collections list.
   const [collections, setCollections] = useState<Collection[]>([])
   const [section, setSection] = useState<DocSection>({ kind: 'all' })
+  // §11.16: the screen's mode — the user's own files, or the knowledge-pack panel. Session
+  // state only (a deep link seeds it; the header switch moves it); never persisted.
+  const [mode, setMode] = useState<DocumentsMode>(initialMode ?? 'documents')
+  // §11.16: the toolbar's name filter — a query-time narrowing of the visible section.
+  const [filter, setFilter] = useState('')
   // Sub-nav (section rail) collapse, remembered across sessions (localStorage — a UI
   // preference, NOT user data, so it may live outside the encrypted workspace). Mirrors the
   // chat ConversationList collapse pattern (§11.6). Collapsed ⇒ the list takes the full width.
@@ -820,10 +845,13 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       section.kind === 'project'
         ? docs.filter((d) => (d.collections ?? []).some((c) => c.id === section.id))
         : docs.filter((d) => inSection(d, section))
+    // §11.16: the name filter narrows the section (a case-insensitive substring of the title).
+    const query = filter.trim().toLocaleLowerCase()
+    const narrowed = query ? sectioned.filter((d) => d.title.toLocaleLowerCase().includes(query)) : sectioned
     return section.kind === 'recent'
-      ? [...sectioned].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
-      : sectioned
-  }, [docs, section])
+      ? [...narrowed].sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0))
+      : narrowed
+  }, [docs, section, filter])
 
   // PERF-2 (= PERF-5 Part B; full-audit-2026-06-29 follow-up, Phase 4) — window the documents list
   // so the live DOM (and the per-row Radix `DropdownMenu.Root` state machines) stop growing linearly
@@ -881,15 +909,30 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
   const windowed = scrollEl != null && scrollEl.clientHeight > 0
   const virtualRows = rowVirtualizer.getVirtualItems()
 
-  // Rail counts for the rare diagnostic views — one bucketing pass over docs instead of the four
-  // independent `docs.filter` passes the render body used to run (FE-2).
-  const rareCounts = useMemo(() => {
-    const counts = { large: 0, failed: 0, audio: 0, ocr: 0 }
+  // Rail counts (§11.16) — one bucketing pass over docs instead of one `docs.filter` per rail
+  // entry (FE-2). Every entry shows its count; an empty location / a zero attention count hides
+  // the entry (the rail shows what the user has).
+  const railCounts = useMemo((): RailCounts => {
+    const counts: RailCounts = {
+      all: docs?.length ?? 0,
+      attention: 0,
+      unfiled: 0,
+      library: 0,
+      temporary: 0,
+      generated: 0,
+      archived: 0,
+      projects: {}
+    }
     for (const d of docs ?? []) {
-      if (matchesSmartView(d, 'large')) counts.large++
-      if (matchesSmartView(d, 'failed')) counts.failed++
-      if (matchesSmartView(d, 'audio')) counts.audio++
-      if (matchesSmartView(d, 'ocr')) counts.ocr++
+      if (needsAttention(d)) counts.attention++
+      if (matchesSmartView(d, 'unfiled')) counts.unfiled++
+      if (inSection(d, { kind: 'library' })) counts.library++
+      if (inSection(d, { kind: 'temporary' })) counts.temporary++
+      if (matchesSmartView(d, 'generated')) counts.generated++
+      if (matchesSmartView(d, 'archived')) counts.archived++
+      for (const c of d.collections ?? []) {
+        if (c.type === 'project') counts.projects[c.id] = (counts.projects[c.id] ?? 0) + 1
+      }
     }
     return counts
   }, [docs])
@@ -1137,9 +1180,27 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
 
   return (
     <div className="screen docs-screen">
-      <h1>{t('docs.title')}</h1>
-      <p className="lead">{t('docs.lead')}</p>
+      {/* Head (§11.16): the title and the mode switch — "My documents | Knowledge packs", the
+          Chat header's segmented-control pattern. A pack is not a document: the packs mode
+          renders the management panel with no rail and no document affordances. */}
+      <div className="docs-head">
+        <h1>{t('docs.title')}</h1>
+        <SegmentedControl<DocumentsMode>
+          ariaLabel={t('docs.mode.aria')}
+          value={mode}
+          onChange={setMode}
+          options={[
+            { value: 'documents', label: t('docs.mode.documents') },
+            { value: 'packs', label: t('docs.mode.packs') }
+          ]}
+        />
+      </div>
+      {/* The lead paragraph teaches; once documents exist the title and toolbar are enough. */}
+      {mode === 'documents' && empty && <p className="lead">{t('docs.lead')}</p>}
 
+      {mode === 'packs' ? (
+        <PacksPanel onAskPack={onAskPack} />
+      ) : (
       <div className={`docs-layout ${railCollapsed ? 'rail-collapsed' : ''}`}>
         {!railCollapsed && (
           <SectionRail
@@ -1147,7 +1208,7 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
             onSelect={setSection}
             activeProjects={activeProjects}
             archivedProjects={archivedProjects}
-            rareCounts={rareCounts}
+            counts={railCounts}
             busy={busy !== null}
             onCollapse={() => setRailCollapsedPersistent(true)}
             onNewProject={() => setProjectModal({ mode: 'create', name: '' })}
@@ -1172,30 +1233,26 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
         </button>
       )}
 
-      {section.kind === 'packs' ? (
-        /* Knowledge packs (ZIM wave): the management panel replaces the document toolbar +
-           list wholesale (a pack is not a document; none of the doc affordances apply). */
-        <PacksPanel />
-      ) : (
-        <>
+      <>
 
-      {/* Toolbar: Import files (Primary) + Import folder (Secondary) carry the screen;
-          Refresh is a quiet icon button (§6/Task 7). Multi-document operations live in the
-          selection toolbar below, not here, so the toolbar stays uncluttered. When the list
-          is empty the EmptyState carries the primary action instead. */}
+      {/* Toolbar (§11.16): the name filter on the left; on the right the quiet Refresh icon,
+          the bulk fixes when they apply, Import folder (Secondary) and Import files (Primary)
+          — one primary, at the end of the row. Multi-document operations live in the selection
+          toolbar below, not here. When the list is empty the EmptyState carries the primary. */}
       {!empty && (
-        <div className="actions">
-          {/* DR-5: gate Import on ANY busy op (`busy !== null`), not just `'import'` — a bulk
-              re-index (`busy === 'reindex-all'`) shares the single `busy` scalar, so an import
-              started during it would fight state. Main-side job exclusivity is the real backstop;
-              this is the honest affordance. The LABEL still keys on `'import'` so only an actual
-              import shows "Importing…". */}
-          <Button variant="primary" disabled={busy !== null} onClick={() => void onImport('files')}>
-            {busy === 'import' ? t('docs.import.busy') : t('docs.import.files')}
-          </Button>
-          <Button disabled={busy !== null} onClick={() => void onImport('folder')}>
-            {t('docs.import.folder')}
-          </Button>
+        <div className="docs-toolbar">
+          <div className="docs-filter">
+            <Icon name="search" size={16} className="docs-filter-icon" />
+            <input
+              type="search"
+              className="text-input docs-filter-input"
+              value={filter}
+              aria-label={t('docs.filter.aria')}
+              placeholder={t('docs.filter.placeholder')}
+              onChange={(e) => setFilter(e.target.value)}
+            />
+          </div>
+          <div className="actions docs-toolbar-actions">
           <button
             type="button"
             className="icon-btn"
@@ -1222,9 +1279,9 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
                 : t('docs.reindexAll', { count: staleDocs.length })}
             </Button>
           )}
-          {/* Retry every failed import in one go, shown only on the Failed tab. Each row still
-              has its own re-index, but on a tab full of failures one click beats N. */}
-          {section.kind === 'failed' && failedDocs.length > 1 && (
+          {/* Retry every failed import in one go, shown only in the "Needs attention" view. Each
+              row still has its own re-index, but on a view full of failures one click beats N. */}
+          {section.kind === 'attention' && failedDocs.length > 1 && (
             <Button
               size="sm"
               disabled={busy !== null || anyActive}
@@ -1236,6 +1293,18 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
                 : t('docs.retryAllFailed', { count: failedDocs.length })}
             </Button>
           )}
+          <Button disabled={busy !== null} onClick={() => void onImport('folder')}>
+            {t('docs.import.folder')}
+          </Button>
+          {/* DR-5: gate Import on ANY busy op (`busy !== null`), not just `'import'` — a bulk
+              re-index (`busy === 'reindex-all'`) shares the single `busy` scalar, so an import
+              started during it would fight state. Main-side job exclusivity is the real backstop;
+              this is the honest affordance. The LABEL still keys on `'import'` so only an actual
+              import shows "Importing…". */}
+          <Button variant="primary" disabled={busy !== null} onClick={() => void onImport('files')}>
+            {busy === 'import' ? t('docs.import.busy') : t('docs.import.files')}
+          </Button>
+          </div>
         </div>
       )}
 
@@ -1347,7 +1416,14 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       {empty && (
         <EmptyState
           title={t('docs.empty.title')}
-          line={t('docs.empty.line')}
+          line={
+            <>
+              {t('docs.empty.line')}
+              {/* §11.16: the other kind of source this screen manages, one quiet line. */}
+              <br />
+              {t('docs.empty.packsLine')}
+            </>
+          }
           action={
             <>
               <Button variant="primary" disabled={busy !== null} onClick={() => void onImport('files')}>
@@ -1356,13 +1432,18 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
               <Button disabled={busy !== null} onClick={() => void onImport('folder')}>
                 {t('docs.import.folder')}
               </Button>
+              <Button variant="ghost" onClick={() => setMode('packs')}>
+                {t('docs.empty.packsAction')}
+              </Button>
             </>
           }
         />
       )}
 
       {docs != null && docs.length > 0 && visibleDocs.length === 0 && (
-        <p className="hint">{t('docs.empty.section')}</p>
+        <p className="hint">
+          {filter.trim() ? t('docs.filter.noMatch', { query: filter.trim() }) : t('docs.empty.section')}
+        </p>
       )}
 
       {/* Reading column (§11.6 refinement): the list is capped to a ~1000px max-width, left-
@@ -1398,9 +1479,9 @@ export function DocumentsScreen({ onAskSelected, onNavigate }: Props = {}): JSX.
       )}
       </div>{/* /doc-list */}
       </>
-      )}
         </div>
-      </div>{/* /docs-layout */}
+      </div>
+      )}{/* /docs-layout */}
 
       {/* Create / rename a project (plan §12.3). */}
       {projectModal && (

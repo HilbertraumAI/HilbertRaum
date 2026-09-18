@@ -43,6 +43,12 @@ interface ScopePopoverProps {
    * unavailable pack (file missing) is shown but not tickable - honest state.
    */
   packs?: KnowledgePack[]
+  /**
+   * §11.16: jump to the Documents screen's Knowledge-packs mode — with NO pack registered the
+   * picker shows the way in ("Add packs…") instead of omitting the section. Absent ⇒ the
+   * packless popover stays byte-identical (a standalone mount, older call sites).
+   */
+  onAddPacks?: () => void
 }
 
 /** Stable empty-id list for a null scope (PF-7d) — a fresh `[]` per render would bust the memos. */
@@ -134,7 +140,8 @@ export function ScopePopover({
   onAddDocuments,
   attachments = [],
   pendingAttachmentNames = [],
-  packs = []
+  packs = [],
+  onAddPacks
 }: ScopePopoverProps): JSX.Element {
   const { t, tCount } = useT()
   const [showDocs, setShowDocs] = useState(false)
@@ -451,6 +458,22 @@ export function ScopePopover({
                   <span className="scope-source-name">{t('chat.scope.packRemoved')}</span>
                 </label>
               ))}
+            </div>
+          )}
+          {/* §11.16: no pack on this drive — say so and offer the way in (the Documents screen's
+              Knowledge-packs mode), the same quiet add-line idiom as "Specific documents…". */}
+          {packs.length === 0 && removedPackIds.length === 0 && onAddPacks && (
+            <div className="scope-sources scope-packs scope-packs-empty">
+              <p className="popover-line">{t('chat.scope.packsTitle')}</p>
+              <p className="popover-line hint">{t('chat.scope.noPacks')}</p>
+              <button
+                type="button"
+                className="popover-line popover-line-add scope-specific-toggle"
+                disabled={disabled}
+                onClick={onAddPacks}
+              >
+                {t('chat.scope.addPacks')}
+              </button>
             </div>
           )}
 

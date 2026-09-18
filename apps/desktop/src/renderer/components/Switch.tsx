@@ -13,9 +13,15 @@ export interface SwitchProps {
   /** Visible, clickable label. */
   label: ReactNode
   disabled?: boolean
+  /**
+   * An accessible name that says WHICH thing the switch controls when the visible label is a
+   * bare state word repeated down a list ("Enabled" ×N — §11.16, the knowledge-pack rows): it
+   * replaces the label as the name; the label stays visible and clickable.
+   */
+  ariaLabel?: string
 }
 
-export function Switch({ checked, onChange, label, disabled }: SwitchProps): JSX.Element {
+export function Switch({ checked, onChange, label, disabled, ariaLabel }: SwitchProps): JSX.Element {
   return (
     <label className="switch">
       <input
@@ -24,6 +30,7 @@ export function Switch({ checked, onChange, label, disabled }: SwitchProps): JSX
         className="switch-input"
         checked={checked}
         disabled={disabled}
+        aria-label={ariaLabel}
         onChange={(e) => onChange(e.target.checked)}
       />
       <span className="switch-track" aria-hidden="true">
