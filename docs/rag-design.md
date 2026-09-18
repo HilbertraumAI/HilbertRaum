@@ -4391,7 +4391,19 @@ row further above when both could apply — the more specific label, the same "n
 multi-row headers already use, needed for a real infobox where a section-grouping header row
 (e.g. "Physikalisch") sits above a run of per-row `<th>label</th><td>value</td>` rows. A header
 row is never itself emitted as data, which is what stops a spanning header from being glued onto
-every cell it covers. A NESTED table is INLINED into its parent cell (one compact string, emitted
+every cell it covers as a data LINE — but a header cell spanning more than one column is a
+further case a pre-read gate finding caught on the live "Gold" article itself: its infobox rows
+label themselves with a plain `<td>` (not a `<th>`) under an outer `<th colspan="2">Physikalisch
+</th>` group heading, so no row ever reaches rule (1) and the group text was reaching rule (2)'s
+per-column cache for BOTH covered columns, becoming the literal key of every row
+(`Physikalisch: Dichte; Physikalisch: 19,32 g/cm3 …`). A `colspan > 1` header cell is now tagged
+as a GROUP LABEL and looked up at most once per ROW, never once per covered cell: when a data row
+has no leading header of its own and none of its covered columns has a genuine (non-group) key
+either, it renders as a group record instead — a 2-column table reads its first cell as the row's
+own label (`Physikalisch — Dichte: gemessen: 19,32 g/cm³ (20 °C); berechnet: 19,302 g/cm³`, the
+verbatim delivered text on the live article today), any other column count joins the row's cells
+un-keyed under the one group label rather than inventing `Column N` names for columns that were
+never headed. A NESTED table is INLINED into its parent cell (one compact string, emitted
 exactly once), not dropped: real Wikipedia infoboxes commonly nest the actual data table one
 level inside a layout wrapper (the chemical-element infobox is exactly this shape), confirmed
 against the live German "Gold" article, whose density/melting-point row lives in such a nested
@@ -4410,14 +4422,19 @@ table's size caps were omitted" for columns/grid/span cuts. The grid-expansion a
 cost is charged into the same `work` counter the linear-scanner bound is measured against
 (`html.ts`'s complexity record documents the additive, input-independent bound this adds). No
 `ExtractedSegment` shape change. Offline, over the 152-file reference corpus (re-measured after
-the fixes above): units per article rose from a mean of 23.6 to 27.4; parse work is essentially
-unchanged; the non-table invariant (a line-multiset diff — a per-segment text-pattern check was
-tried first and rejected after a real false positive) holds on 152/152 files. A disclosed residual
-(owner's call, not fixed here): a classless image+caption layout table can still clear both the
-class and structural drop tests (`docs/known-limitations.md`). The acceptance funnel, the
-`tables32` delivery result (whose harness-side "table-derived unit" identification was itself
-replaced pre-read, after a text-pattern version produced a false positive, with the same
-re-conversion/line-multiset method the cost check uses) and the Gold demonstration's live leg are
-pending the one authorised `core200` read (PR still open, floors pre-registered before that read
-— see the PR body). Full artifacts:
-`steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline.json,freeze-4l.txt}`.
+two pre-read Opus review fix passes, the second of which is the group-label fix above): units per
+article rose from a mean of 23.6 to 27.4; parse work is essentially unchanged; the non-table
+invariant (a line-multiset diff — a per-segment text-pattern check was tried first and rejected
+after a real false positive) holds on 152/152 files. The Gold demonstration's OFFLINE leg (the
+real "Gold" article through both converters, no retrieval/ranking involved) confirms the fix on
+the live article: density and melting point both still reach the packet-eligible text, now keyed
+`Physikalisch — Dichte: gemessen: 19,32 g/cm³ (20 °C); berechnet: 19,302 g/cm³` and
+`Physikalisch — Schmelzpunkt: 1337,33 K (1064,18 °C)`. A disclosed residual (owner's call, not
+fixed here): a classless image+caption layout table can still clear both the class and structural
+drop tests (`docs/known-limitations.md`). The acceptance funnel, the `tables32` delivery result
+(whose harness-side "table-derived unit" identification was itself replaced pre-read, after a
+text-pattern version produced a false positive, with the same re-conversion/line-multiset method
+the cost check uses) and the Gold demonstration's live leg are pending the one authorised
+`core200` read (PR still open, floors pre-registered before that read — see the PR body). Full
+artifacts: `steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline.json,freeze-4l.txt,
+freeze-4l.superseded-1.txt,freeze-4l.superseded-2.txt}`.
