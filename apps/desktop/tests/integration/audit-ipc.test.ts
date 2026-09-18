@@ -74,6 +74,7 @@ import type {
   WorkspaceActionResult
 } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -244,7 +245,7 @@ function eventTypes(db: Db): string[] {
 async function pollUntil(check: () => Promise<boolean>, what: string): Promise<void> {
   const start = Date.now()
   while (!(await check())) {
-    if (Date.now() - start > 5000) throw new Error(`timed out waiting for ${what}`)
+    if (Date.now() - start > hangBudgetMs(5000)) throw new Error(`timed out waiting for ${what}`)
     await new Promise((r) => setTimeout(r, 10))
   }
 }

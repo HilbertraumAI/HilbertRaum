@@ -14,6 +14,7 @@ import { machineRamGb } from '../services/models'
 import { log, readLogTail, readLogFull } from '../services/logging'
 import { saveTextExport } from './save-export'
 import { notifyPerformanceChanged, PERFORMANCE_SETTINGS_KEYS } from './performance-notify'
+import { RERANKER_POSTURE_SETTINGS_KEYS, rerankerPostureInputsChanged } from '../services/rag/device-posture'
 
 import type { AppSettings, AppStatus, PolicyStatus, PreflightResult } from '../../shared/types'
 
@@ -154,7 +155,34 @@ export function registerCoreIpc(ctx: AppContext): void {
     // alone would log phantom enable/disable events for rejected-junk or same-value
     // patches, polluting the exported audit trail's forensic value.
     const localApiBefore = 'localApiEnabled' in patch ? getSettings(ctx.db).localApiEnabled : null
+    // Step 4-4 (Wave 4 ruling (a)) / step 4-7 (Wave 7 rulings (a), (c) — resolving the scoped
+    // Opus review of step 4-6's finding C2): same REAL-flip discipline, now for the
+    // gpuMode/gpuAutoDisabled gate and activeModelId — the settings keys Wave 7 ruling (a)
+    // named. A change to any of them suspends the sidecar (never the permanent stop()) as an
+    // EARLY release, so its NEXT rerank() gets a head start on re-evaluating the posture rather
+    // than waiting for its own use-time check to notice. Since Wave 8 ruling (a), the sidecar's
+    // posture no longer reads `activeModelId` at all (it reads the runtime's COMMITTED model,
+    // `rag/device-posture.ts`) — this hook's `activeModelId` branch is a proxy signal that a
+    // switch was requested, not a read of a posture input; the reranker's own use-time re-check
+    // (`reranker/llama.ts`'s `resolveServer`, Wave 8 ruling (b)(Q)) is what actually keeps the
+    // posture correct at every moment. `activeEmbeddingModelId` is not a posture-adjacent signal
+    // and never triggers this (`RERANKER_POSTURE_SETTINGS_KEYS`). `rerankerPostureInputsChanged`
+    // is the ONE shared predicate `registerModelIpc.ts`'s `models:select`/`models:use` call too,
+    // from all three channels this fix must cover — never three independent copies of the
+    // condition.
+    const postureBefore = RERANKER_POSTURE_SETTINGS_KEYS.some((k) => k in patch)
+      ? (({ gpuMode, gpuAutoDisabled, activeModelId }) => ({ gpuMode, gpuAutoDisabled, activeModelId }))(
+          getSettings(ctx.db)
+        )
+      : null
     const result = updateSettings(ctx.db, patch)
+    if (postureBefore && rerankerPostureInputsChanged(postureBefore, result)) {
+      void ctx.reranker?.suspend?.().catch((err: unknown) => {
+        log.warn('Reranker sidecar suspend after a posture-affecting settings change failed', {
+          error: err instanceof Error ? err.message : String(err)
+        })
+      })
+    }
     // Keep the main-side cached UI language in step with the setting (D-L3) — the
     // post-validation value, so junk patches can't move it.
     if ('uiLanguage' in patch) applyUiLanguageSetting(result.uiLanguage)

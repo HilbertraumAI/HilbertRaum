@@ -364,11 +364,13 @@ export function placementVerdict(input: PlacementVerdictInput): PlacementVerdict
  *
  *  - `cpu` class: every row runs from RAM — the plain sum.
  *  - `discrete`: the rows that run on the processor (pinned by design, or `'cpu'` by
- *    configuration/observation) at full size, plus what the card-resident rows spill: the
- *    active model's OBSERVED partial-offload spill (`verdict.spillMb`, the CPU-side model +
+ *    configuration/observation/headroom) at full size, plus what the card-resident rows spill:
+ *    the active model's OBSERVED partial-offload spill (`verdict.spillMb`, the CPU-side model +
  *    cache bytes of a measured partial start; an estimate, a full offload and an unknown split
- *    contribute 0) and the translation sidecar's live spill (size × the share of layers off the
- *    card, from its reported split; not live, no split, or every layer on the card → 0).
+ *    contribute 0), the translation sidecar's live spill (size × the share of layers off the
+ *    card, from its reported split; not live, no split, or every layer on the card → 0), and a
+ *    `'gpu'`-posture reranker row (Wave 8 ruling (d)/NF-3: its own headroom gate only resolves
+ *    `'gpu'` when the whole placement fits, and no split is tracked for it, so it contributes 0).
  *  - `unified`: one pool, so the full sum — the copy says "memory" and the pill compares
  *    against the unified budget, not RAM.
  *
@@ -395,6 +397,14 @@ export function loadedAtOnceMb(input: {
           ? Math.min(1, row.gpuLayers / row.totalLayers)
           : null
       mb = onCard == null ? 0 : sizeMb * (1 - onCard)
+    } else if (row.role === 'reranker') {
+      // Wave 8 ruling (d)/NF-3 (the Wave 8 analysis): a `gpu`-posture reranker row is no longer
+      // counted against the processor's memory. Its own headroom gate (`RERANKER_HEADROOM_FLOOR_MIB`,
+      // `rag/rerank-profile.ts`) only ever resolves `'gpu'` when the WHOLE placement fits with
+      // margin, and no per-row layer split is tracked for it the way chat/translation report a
+      // partial-offload spill — so a card-resident reranker contributes 0, exactly like a
+      // chat/translation row with no measured spill.
+      mb = 0
     } else {
       mb = sizeMb
     }

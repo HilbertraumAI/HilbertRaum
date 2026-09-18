@@ -1,0 +1,335 @@
+Plant operations handbook (synthetic sample)
+
+This document is a synthetic sample written for a measurement run. It describes an imaginary
+plant and contains no real operational data.
+
+Shift handover
+
+The handover is the only moment at which responsibility for the plant changes hands.
+
+001. The maintenance crew records every valve reading in the shift ledger before the handover.
+002. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+003. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+004. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+005. The calibration weights live in a padded case and must never be handled without cotton gloves.
+006. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+007. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+008. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+009. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+010. A second operator confirms every manual override and signs the corresponding line in the ledger.
+011. The compressor room door stays closed while the machine is running to keep the noise contained.
+012. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+013. Any reading outside the printed range is repeated once before it is written into the record.
+014. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+015. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+016. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+017. The maintenance crew records every valve reading in the shift ledger before the handover.
+018. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+019. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+020. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+021. The calibration weights live in a padded case and must never be handled without cotton gloves.
+022. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+023. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+024. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+025. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+026. A second operator confirms every manual override and signs the corresponding line in the ledger.
+027. The compressor room door stays closed while the machine is running to keep the noise contained.
+028. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+029. Any reading outside the printed range is repeated once before it is written into the record.
+030. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+031. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+032. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+033. The maintenance crew records every valve reading in the shift ledger before the handover.
+034. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+035. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+036. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+037. The calibration weights live in a padded case and must never be handled without cotton gloves.
+038. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+039. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+040. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+041. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+042. A second operator confirms every manual override and signs the corresponding line in the ledger.
+043. The compressor room door stays closed while the machine is running to keep the noise contained.
+044. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+045. Any reading outside the printed range is repeated once before it is written into the record.
+046. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+047. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+048. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+Routine inspection
+
+Routine inspection is planned work: it is scheduled, it is signed for, and it is never skipped.
+
+049. The maintenance crew records every valve reading in the shift ledger before the handover.
+050. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+051. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+052. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+053. The calibration weights live in a padded case and must never be handled without cotton gloves.
+054. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+055. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+056. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+057. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+058. A second operator confirms every manual override and signs the corresponding line in the ledger.
+059. The compressor room door stays closed while the machine is running to keep the noise contained.
+060. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+061. Any reading outside the printed range is repeated once before it is written into the record.
+062. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+063. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+064. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+065. The maintenance crew records every valve reading in the shift ledger before the handover.
+066. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+067. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+068. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+069. The calibration weights live in a padded case and must never be handled without cotton gloves.
+070. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+071. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+072. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+073. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+074. A second operator confirms every manual override and signs the corresponding line in the ledger.
+075. The compressor room door stays closed while the machine is running to keep the noise contained.
+076. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+077. Any reading outside the printed range is repeated once before it is written into the record.
+078. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+079. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+080. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+081. The maintenance crew records every valve reading in the shift ledger before the handover.
+082. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+083. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+084. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+085. The calibration weights live in a padded case and must never be handled without cotton gloves.
+086. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+087. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+088. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+089. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+090. A second operator confirms every manual override and signs the corresponding line in the ledger.
+091. The compressor room door stays closed while the machine is running to keep the noise contained.
+092. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+093. Any reading outside the printed range is repeated once before it is written into the record.
+094. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+095. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+096. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+Consumables and spares
+
+Consumable stock is counted so that a missing part is discovered on a quiet day, not during a fault.
+
+097. The maintenance crew records every valve reading in the shift ledger before the handover.
+098. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+099. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+100. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+101. The calibration weights live in a padded case and must never be handled without cotton gloves.
+102. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+103. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+104. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+105. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+106. A second operator confirms every manual override and signs the corresponding line in the ledger.
+107. The compressor room door stays closed while the machine is running to keep the noise contained.
+108. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+109. Any reading outside the printed range is repeated once before it is written into the record.
+110. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+111. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+112. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+113. The maintenance crew records every valve reading in the shift ledger before the handover.
+114. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+115. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+116. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+117. The calibration weights live in a padded case and must never be handled without cotton gloves.
+118. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+119. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+120. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+121. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+122. A second operator confirms every manual override and signs the corresponding line in the ledger.
+123. The compressor room door stays closed while the machine is running to keep the noise contained.
+124. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+125. Any reading outside the printed range is repeated once before it is written into the record.
+126. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+127. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+128. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+129. The maintenance crew records every valve reading in the shift ledger before the handover.
+130. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+131. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+132. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+133. The calibration weights live in a padded case and must never be handled without cotton gloves.
+134. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+135. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+136. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+137. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+138. A second operator confirms every manual override and signs the corresponding line in the ledger.
+139. The compressor room door stays closed while the machine is running to keep the noise contained.
+140. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+141. Any reading outside the printed range is repeated once before it is written into the record.
+142. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+143. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+144. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+Readings and records
+
+A reading that is not written down did not happen, and a record without a signature is not a record.
+
+145. The maintenance crew records every valve reading in the shift ledger before the handover.
+146. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+147. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+148. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+149. The calibration weights live in a padded case and must never be handled without cotton gloves.
+150. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+151. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+152. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+153. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+154. A second operator confirms every manual override and signs the corresponding line in the ledger.
+155. The compressor room door stays closed while the machine is running to keep the noise contained.
+156. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+157. Any reading outside the printed range is repeated once before it is written into the record.
+158. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+159. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+160. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+161. The maintenance crew records every valve reading in the shift ledger before the handover.
+162. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+163. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+164. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+165. The calibration weights live in a padded case and must never be handled without cotton gloves.
+166. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+167. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+168. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+169. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+170. A second operator confirms every manual override and signs the corresponding line in the ledger.
+171. The compressor room door stays closed while the machine is running to keep the noise contained.
+172. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+173. Any reading outside the printed range is repeated once before it is written into the record.
+174. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+175. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+176. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+177. The maintenance crew records every valve reading in the shift ledger before the handover.
+178. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+179. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+180. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+181. The calibration weights live in a padded case and must never be handled without cotton gloves.
+182. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+183. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+184. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+185. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+186. A second operator confirms every manual override and signs the corresponding line in the ledger.
+187. The compressor room door stays closed while the machine is running to keep the noise contained.
+188. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+189. Any reading outside the printed range is repeated once before it is written into the record.
+190. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+191. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+192. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+Safety equipment
+
+Safety equipment is checked on a fixed round so that no item depends on somebody remembering it.
+
+193. The maintenance crew records every valve reading in the shift ledger before the handover.
+194. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+195. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+196. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+197. The calibration weights live in a padded case and must never be handled without cotton gloves.
+198. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+199. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+200. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+201. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+202. A second operator confirms every manual override and signs the corresponding line in the ledger.
+203. The compressor room door stays closed while the machine is running to keep the noise contained.
+204. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+205. Any reading outside the printed range is repeated once before it is written into the record.
+206. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+207. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+208. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+209. The maintenance crew records every valve reading in the shift ledger before the handover.
+210. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+211. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+212. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+213. The calibration weights live in a padded case and must never be handled without cotton gloves.
+214. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+215. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+216. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+217. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+218. A second operator confirms every manual override and signs the corresponding line in the ledger.
+219. The compressor room door stays closed while the machine is running to keep the noise contained.
+220. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+221. Any reading outside the printed range is repeated once before it is written into the record.
+222. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+223. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+224. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+225. The maintenance crew records every valve reading in the shift ledger before the handover.
+226. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+227. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+228. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+229. The calibration weights live in a padded case and must never be handled without cotton gloves.
+230. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+231. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+232. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+233. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+234. A second operator confirms every manual override and signs the corresponding line in the ledger.
+235. The compressor room door stays closed while the machine is running to keep the noise contained.
+236. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+237. Any reading outside the printed range is repeated once before it is written into the record.
+238. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+239. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+240. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+Water and cooling
+
+The cooling circuit is the slowest system on site and the one that punishes a late reaction hardest.
+
+241. The maintenance crew records every valve reading in the shift ledger before the handover.
+242. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+243. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+244. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+245. The calibration weights live in a padded case and must never be handled without cotton gloves.
+246. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+247. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+248. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+249. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+250. A second operator confirms every manual override and signs the corresponding line in the ledger.
+251. The compressor room door stays closed while the machine is running to keep the noise contained.
+252. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+253. Any reading outside the printed range is repeated once before it is written into the record.
+254. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+255. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+256. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+257. The maintenance crew records every valve reading in the shift ledger before the handover.
+258. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+259. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+260. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+261. The calibration weights live in a padded case and must never be handled without cotton gloves.
+262. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+263. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+264. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+265. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+266. A second operator confirms every manual override and signs the corresponding line in the ledger.
+267. The compressor room door stays closed while the machine is running to keep the noise contained.
+268. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+269. Any reading outside the printed range is repeated once before it is written into the record.
+270. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+271. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+272. The backup generator is exercised for twenty minutes on the last working day of the month.
+
+273. The maintenance crew records every valve reading in the shift ledger before the handover.
+274. Pump seven runs at a steady pressure of four bar and is inspected on the first Monday of each month.
+275. The east corridor lamps are replaced in pairs so that the illumination stays even along the walkway.
+276. A spare gasket set is kept in the grey cabinet beside the workshop door and is counted every quarter.
+277. The calibration weights live in a padded case and must never be handled without cotton gloves.
+278. Storage tank four is drained slowly to avoid a pressure drop in the connected return line.
+279. The night shift logs ambient temperature at midnight, at three, and again at six in the morning.
+280. Filter cartridges are rinsed in clean water, dried on the rack, and only then returned to service.
+281. The intake grille is brushed clear of leaves whenever the differential reading exceeds twelve units.
+282. A second operator confirms every manual override and signs the corresponding line in the ledger.
+283. The compressor room door stays closed while the machine is running to keep the noise contained.
+284. Belt tension is checked with the small gauge that hangs on the hook above the tool bench.
+285. Any reading outside the printed range is repeated once before it is written into the record.
+286. The spill kit is stored at the corridor junction and its seal is inspected during every walkaround.
+287. Cooling water is sampled weekly and the sample bottles are labelled with the date and the point of draw.
+288. The backup generator is exercised for twenty minutes on the last working day of the month.
+

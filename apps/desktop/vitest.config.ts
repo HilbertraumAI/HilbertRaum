@@ -1,6 +1,6 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
-import { FullSuiteGuard, listTestFiles } from './tests/full-suite-guard'
+import { FullSuiteGuard, listTestFiles, parseShard, shardTestFiles } from './tests/full-suite-guard'
 
 // Default environment is node (the bulk of the suite tests main-process services). Renderer
 // component tests opt into jsdom per-file with a `// @vitest-environment jsdom` docblock and
@@ -10,9 +10,21 @@ import { FullSuiteGuard, listTestFiles } from './tests/full-suite-guard'
 // run: vitest's argv after the `run` subcommand is flags-only for a full run, so any positional
 // (a path/name filter via `npm test -- tests/unit`) means "subset" and disables the guard. The
 // gate fails safe — an unrecognised invocation disables the guard rather than false-failing.
+//
+// A SHARDED run (#458 step 2: the windows legs are split) is still a full run, just divided,
+// so the guard stays on and narrows to the shard's expected subset — `shardTestFiles`
+// reproduces vitest's own split. Without that it would demand all 449 files from a job that
+// correctly collected half, failing every sharded run.
+//
+// `--shard 1/2` (space form) puts its VALUE in argv looking exactly like a path filter, which
+// would switch the guard off instead of narrowing it — silently, the one failure mode this
+// file cannot tolerate. So the positional check skips a `--shard` value. CI uses the `=` form.
 const runArgs = process.argv.slice(process.argv.indexOf('run') + 1)
-const isFullRun = process.argv.includes('run') && !runArgs.some((a) => !a.startsWith('-'))
-const expectedFiles = isFullRun ? listTestFiles(__dirname, resolve(__dirname, 'tests')) : null
+const shard = parseShard(runArgs)
+const positionals = runArgs.filter((a, i) => !a.startsWith('-') && runArgs[i - 1] !== '--shard')
+const isFullRun = process.argv.includes('run') && positionals.length === 0
+const allTestFiles = isFullRun ? listTestFiles(__dirname, resolve(__dirname, 'tests')) : null
+const expectedFiles = allTestFiles && shard ? shardTestFiles(allTestFiles, shard) : allTestFiles
 
 export default defineConfig({
   resolve: {
@@ -30,9 +42,11 @@ export default defineConfig({
     environment: 'node',
     include: ['tests/**/*.test.{ts,tsx}'],
     // Issue #335: `setup-temp-roots.ts` records every `hilbertraum-*` / `hr-*` root a file mints
-    // under the OS temp dir and removes them in that file's `afterAll`; `global-temp-roots.ts`
-    // sweeps, after the forks exit, the roots an open sqlite handle kept locked on Windows.
-    // See tests/helpers/temp-roots.ts. Before this, a full run leaked ~2,500 roots.
+    // under the OS temp dir and removes them in that file's `afterAll` — after closing the sqlite
+    // handles the file left open, which lock their roots on Windows (#460); `global-temp-roots.ts`
+    // sweeps, after the forks exit, whatever still could not be removed. See
+    // tests/helpers/temp-roots.ts and tests/helpers/sqlite-handles.ts. Before #335 a full run leaked
+    // ~2,500 roots; before #460 ~1,500 of them per windows run reached the sweep.
     setupFiles: ['./tests/setup.ts', './tests/setup-temp-roots.ts'],
     globalSetup: ['./tests/global-temp-roots.ts'],
     globals: true,
@@ -63,6 +77,29 @@ export default defineConfig({
     // This loosens no evidence: timing PROOFS in this suite live in explicit
     // assertions (e.g. the FTS 500 ms bound, #84), never in the vitest budget.
     // Locally the tight 15 s stays, catching real hangs fast at the desk.
-    testTimeout: process.env.CI ? 60_000 : 15_000
+    testTimeout: process.env.CI ? 60_000 : 15_000,
+    // Hooks get the SAME budget as tests, for the same reason and on the same evidence.
+    // Until #458 this line did not exist, so `beforeEach`/`afterEach`/`beforeAll` ran on
+    // vitest's 10 s default — SIX TIMES LESS headroom than the tests above, on the one
+    // platform the comment above says is starved. Two of the five windows flakes in #458 were
+    // hook timeouts, not test timeouts: `performance-gpu` (run 34655007954) and
+    // `doctasks-translation` (run 34543501694), both `Hook timed out in 10000ms`.
+    //
+    // Those hooks are not slow. `performance-gpu`'s is five synchronous resets; 10 s on that is
+    // a fork that got no CPU, which no amount of hook optimisation fixes: vitest runs
+    // `availableParallelism() - 1` forks, so on a 4-core runner three forks plus the main
+    // process fill the machine before Defender and the runner agent take their share.
+    //
+    // The 10 s default was already known to be too tight here and patched ONE hook at a time —
+    // `tests/setup-temp-roots.ts` carries its own `TEARDOWN_TIMEOUT_MS` (120 s) citing run
+    // 34033122353. This generalises that fix instead of waiting for each hook to be bitten;
+    // 129 suites open a sqlite DB (most leave it for the harness to close, #460) and many do that
+    // plus `mkdtempSync` inside a hook, as do the fixture teardowns that close DBs and remove roots.
+    //
+    // This loosens no evidence, exactly as for `testTimeout`: a hook is SETUP, never a timing
+    // proof — the suite's timing proofs live in explicit assertions (the FTS 500 ms bound, #84),
+    // and nothing asserts a hook timeout. Locally the tight 15 s stays, so a real hang at the
+    // desk still fails fast.
+    hookTimeout: process.env.CI ? 60_000 : 15_000
   }
 })

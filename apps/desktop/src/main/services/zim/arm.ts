@@ -1,49 +1,53 @@
 import type { KnowledgePackOutcome } from '../../../shared/types'
 import type { ExternalRetrievalOutput, RetrievedChunk } from '../rag'
+import type { RerankScope } from '../rag/rerank-profile'
+import { admitArticle } from './admit'
 import { CHUNK_DEFAULTS, chunkSegments } from '../ingestion/chunker'
+import { germanCapitalizedNounTokens, norm, resolveHeadNoun } from './head-noun'
 import { log } from '../logging'
-import { fetchArticleHtml, searchPack, searchPackTotal, suggestTitles, type KiwixSearchHit } from './client'
-import type { QueryExpander } from './expand'
-import { zimArticleToSegmentsAsync } from './html'
-import { DF_PROBE_MAX_TERMS, narrowByFrequency, searchPattern } from './query-rewrite'
+import { fetchArticleHtml, searchPack, suggestTitles, type KiwixSearchHit } from './client'
+import type { QueryExpander, SearchPlan } from './expand'
+import { zimArticleToSegmentsAsync, type ZimArticle } from './html'
+import { searchPattern } from './query-rewrite'
 
 // Query-time candidate production for the ZIM retrieval arm (knowledge packs).
-// Per pack: Xapian full-text search (the archive's own index — the keyword stage we
-// did not have to build) → fetch the top articles' raw HTML → segments → the SAME
-// chunker documents go through → keep each article's few most query-relevant chunks.
-// No embeddings, no persistence: the reranker downstream is what turns Xapian recall
-// into precision (rag-design ZIM record; spike 2026-08-22 measured 82–165 ms for
-// search + 5 article fetches end-to-end).
 //
-// FAIRNESS, CONCURRENCY, DEADLINE (#301 P4, finding M8; plan §9.21 (c)). The pre-P4 arm
-// walked the packs in DB order and stopped at the first 24 candidates, so pack A exhausted
-// the budget and pack C was never even searched (reproduced: 24 = 20 A + 4 B). Now:
+// Phase 4 PR-A (`docs/rag-design.md` §17 "Discovery port (Phase 4 PR-A)") ported route F's
+// discovery semantics from the ZIM research programme into this arm: a planner that proposes
+// title/query/term candidates (`expand.ts`), title reads through `/suggest` (both the plan's
+// own titles and the ported 1a-i head-noun rule), full-text queries from the plan plus the
+// plain pattern rewrite, a per-pack read budget, and the ported topic-conflict admission gate
+// (`admit.ts`). Per pack: discover a small set of ADMITTED articles this way, then fetch their
+// raw HTML → segments → the SAME chunker documents go through → keep each article's few most
+// query-relevant chunks — exactly as before. No embeddings, no persistence: the reranker
+// downstream is what turns recall into precision.
 //
-//   1. the packs arrive in ONE deterministic order (`retrievablePacks` orders by
-//      `title COLLATE NOCASE, id`), and every decision below is taken in THAT order —
-//      never in completion order, so a slow pack cannot change the result;
-//   2. each pack gets a provisional quota `q_i` (`packQuota`) that only bounds ITS FETCHING:
-//      articles are fetched in hit order until the pack holds `q_i` candidates (at most
-//      `ARTICLES_PER_PACK` articles, at most `CHUNKS_PER_ARTICLE` chunks per article);
-//   3. at most `PACK_SEARCH_CONCURRENCY` packs are searched at a time, each worker doing one
-//      pack's search then fetches then conversions sequentially under the signal it was handed;
-//   4. ADMISSION happens only after every pack settled (`allocateCandidates`): round-robin in
-//      pack order, one candidate per pack per round in the pack's own rank order, until
-//      `MAX_EXTERNAL_CANDIDATES` are admitted or every pack is exhausted. A short, empty or
-//      failed pack's slots are RECLAIMED by the others (bounded by what they already fetched —
-//      a reclaim never triggers a further request), and a pack that finished last still gets
-//      its best hit in front of another pack's second-best.
+// FAIRNESS, CONCURRENCY, DEADLINE (#301 P4, finding M8; plan §9.21 (c)) — UNCHANGED by the
+// discovery port. The packs arrive in ONE deterministic order (`retrievablePacks` orders by
+// `title COLLATE NOCASE, id`), and every decision below is taken in THAT order:
+//
+//   1. each pack gets a provisional quota `q_i` (`packQuota`) that bounds how many CHUNKS it
+//      may contribute — the article SET a pack fetches now comes from its own discovery pass,
+//      but the chunk-building loop below still stops once the pack's quota is full;
+//   2. at most `PACK_SEARCH_CONCURRENCY` packs are searched at a time, each worker doing one
+//      pack's whole discovery-and-fetch sequentially under the signal it was handed;
+//   3. ADMISSION happens only after every pack settled (`allocateCandidates`): round-robin in
+//      pack order, one candidate per pack per round, until `MAX_EXTERNAL_CANDIDATES` are
+//      admitted or every pack is exhausted. A short, empty or failed pack's slots are RECLAIMED
+//      by the others.
 //
 // The per-ask DEADLINE is NOT created here: `ZimService.runArm` combines the ask signal with
-// `EXTERNAL_RETRIEVAL_DEADLINE_MS` once per ask (outside the request guard, so the one admitted
-// retry inherits the remaining time) and hands the combined signal in, together with the ask's
-// own signal as `opts.askSignal`. That pair is what lets this module tell a CANCELLATION (the
-// user's, or a lock) from the DEADLINE: a cancellation rethrows the `AbortError` and reports
-// nothing, while the deadline keeps everything already assembled and reports `timeout` for the
-// pack that was in flight and `deadline` for the packs never started.
+// `EXTERNAL_RETRIEVAL_DEADLINE_MS` once per ask and hands the combined signal in, together with
+// the ask's own signal as `opts.askSignal`. That pair is what lets this module tell a
+// CANCELLATION (the user's, or a lock) from the DEADLINE.
+//
+// PER-PACK budget (a documented adaptation — `docs/rag-design.md` §17 "Discovery port (Phase 4
+// PR-A)"): route F's `discover()`
+// bounds ONE archive per question (≤14 reads / ≤8 admitted articles); the product can have
+// several packs selected for one ask, so the budget below is applied PER PACK, mirroring how
+// `packQuota` already scoped fetching per pack before this port. A single-pack ask — every
+// acceptance measurement in this PR — is unaffected by the distinction.
 
-/** Top articles fetched per pack per question (an UPPER bound, not a quota). */
-export const ARTICLES_PER_PACK = 5
 /** Chunks kept per article (query-term overlap picks them; the reranker re-scores). */
 export const CHUNKS_PER_ARTICLE = 4
 /** Global candidate ceiling across all packs — mirrors the document arm's 2x topKInitial scale. */
@@ -59,24 +63,13 @@ export const PACK_SEARCH_CONCURRENCY = 2
  */
 export const EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000
 /**
- * The per-probe timeout for the #353 document-frequency ladder (`client.ts` `searchPackTotal`).
- * NEW for this stage — it does not change `EXTERNAL_RETRIEVAL_DEADLINE_MS` or any existing
- * `/search` or `/raw` timeout. A probe asks for one small number; letting it sit out the
- * client's 15 s default (`DEFAULT_TIMEOUT_MS`) under the arm's single 20 s per-ask deadline
- * would let one stalled probe starve every pack still waiting for its turn at
- * `PACK_SEARCH_CONCURRENCY`, so probes get a short budget of their own instead.
+ * The per-probe timeout for a small JSON lookup — the planner's title-index calls
+ * (`/suggest`, both the plan's own titles and the head-noun rule's probes). Deliberately
+ * shorter than the client's 15 s default (`DEFAULT_TIMEOUT_MS`): a probe asks for one small
+ * answer, and letting one sit out the default under the arm's single 20 s per-ask deadline
+ * would starve every pack still waiting for its turn at `PACK_SEARCH_CONCURRENCY`.
  */
-export const DF_PROBE_TIMEOUT_MS = 3_000
-/**
- * #340 L3-b (D-Z20): how many articles the EXPANSION may add per pack on top of the plain
- * search's `ARTICLES_PER_PACK` — the title-index hit and the concept query's top hit. NEW
- * constants; `ARTICLES_PER_PACK` keeps its value and its role (the plain search's bound). The
- * expansion's articles are fetched FIRST so the plain cap can never starve them, and the pack
- * quota still bounds the total.
- */
-export const EXPANSION_ARTICLES_PER_PACK = 2
-/** How many title-index rows the expansion asks `/suggest` for. */
-export const EXPANSION_TITLE_ROWS = 3
+export const PROBE_TIMEOUT_MS = 3_000
 /**
  * Chunks kept from a LIST article (`Liste der …`, `List of …`), instead of `CHUNKS_PER_ARTICLE`:
  * the name rows of a list carry none of the question's words, so the overlap picker would keep
@@ -85,6 +78,112 @@ export const EXPANSION_TITLE_ROWS = 3
  */
 export const LIST_ARTICLE_CHUNKS = 8
 const LIST_TITLE_RE = /^(Liste |List of )/
+/** The one definition of "this is a list article" — used below and exported so an offline
+ *  reconstruction of the widened scopes from a captured `all`-scope pack (deriving
+ *  `top96`/`top48`/`capped` without re-running discovery) can classify a captured title exactly
+ *  as this module does, never a second copy of the pattern. */
+export function isListArticleTitle(title: string): boolean {
+  return LIST_TITLE_RE.test(title)
+}
+
+// Phase 4 PR-B (step 4-4, ruling (a)): the candidate SCOPE per hardware profile
+// (`rag/rerank-profile.ts`) is a pure widening of the SAME per-article overlap-pick construction
+// `capped` (today, unchanged) already does — never a re-implementation. `top48`/`top96` double/
+// quadruple both the per-article slice and the total pack-quota cap; `all` (the bgeP recipe)
+// drops both bounds entirely (every chunk of every admitted article, no per-article slice, no
+// total cap — the pack quota does not bind). `top48` is therefore a SUPERSET of `capped` (the
+// same articles in the same order, each article's top-4/top-8 ⊆ its top-8/top-16), `top96` a
+// superset of `top48`, and `all` a superset of `top96` — pinned in `zim-arm.test.ts`.
+/** Per-article chunk budget for a scope (Frozen parameters, step 4-4). `Infinity` for `all` —
+ *  `Array.prototype.slice(0, Infinity)` returns the whole array, so no special-casing is needed
+ *  where this feeds a `.slice()`. */
+export function perArticleBudget(scope: RerankScope, isList: boolean): number {
+  const base = isList ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
+  switch (scope) {
+    case 'capped':
+      return base
+    case 'top48':
+      return base * 2
+    case 'top96':
+      return base * 4
+    case 'all':
+      return Number.POSITIVE_INFINITY
+  }
+}
+/**
+ * Per-call document ceiling for the `all` scope (step 4-5, ruling (e)(ii); B3 with B7/B20).
+ * `all` stays "every chunk of every admitted article" — `perArticleBudget('all', …)` is
+ * UNCHANGED, still `Number.POSITIVE_INFINITY` — but the TOTAL a single rerank call may see is
+ * now bounded, because run L (step 4-4) measured the unbounded pool producing a 755-document
+ * call at 10,774 ms, 74 ms under this PR's own 10,848 ms bound, on a SINGLE pack; a multi-pack
+ * ask (up to `MAX_SELECTED_PACKS` = 12, `shared/types.ts`) has no such margin.
+ *
+ * FROZEN by run L2 (step 4-5, 2026-09-16) — a two-pack development latency read on the
+ * `cpu50` set (`wikipedia_de_all_nopic_2026-01.zim` + `wikipedia_de_climate-change_nopic_
+ * 2026-07.zim`), `programme-state/steps/4-5-product-pr-rerank-profiles-2/artifacts/
+ * scope-selection-2.json` + `run-l2-latency.json`. Pre-registered selection rule: the largest
+ * of {192, 256, 384, 512} whose two-pack rerank p90 is at or under the 10,848 ms bound (4-i
+ * M1's shipped CPU rerank median per question), else 192 with the miss reported. Selected:
+ * **512 — no miss** (p90 by cell: 192 → 2,251 ms, 256 → 2,763 ms, 384 → 2,870 ms, 512 →
+ * 2,816 ms; n=43 calls each; the genuinely uncapped two-pack distribution itself — mean 115.8
+ * documents, p90 260, max 553 — measured p90 3,007 ms, also comfortably under the bound). Every
+ * cell cleared with wide margin on this measurement's document-count distribution, so the
+ * widest predefined cell wins; a future pack combination producing materially larger per-call
+ * counts (run L's own single-pack worst case was 755 documents at 10,774 ms) is the case this
+ * ceiling exists to bound.
+ */
+export const ALL_SCOPE_MAX_DOCS = 512
+
+/** Total admitted-candidate cap for a scope (Frozen parameters, step 4-4; `all` capped by
+ *  step 4-5 ruling (e)(ii)) — what `packQuota` and `allocateCandidates` bound against instead
+ *  of the bare `MAX_EXTERNAL_CANDIDATES` constant. */
+export function totalCandidateCapFor(scope: RerankScope): number {
+  switch (scope) {
+    case 'capped':
+      return MAX_EXTERNAL_CANDIDATES
+    case 'top48':
+      return MAX_EXTERNAL_CANDIDATES * 2
+    case 'top96':
+      return MAX_EXTERNAL_CANDIDATES * 4
+    case 'all':
+      return ALL_SCOPE_MAX_DOCS
+  }
+}
+/**
+ * The pure per-article selection itself (run L, step 4-4, calls this OFFLINE on captured
+ * per-pack material to derive `top96`/`top48`/`capped` from the SAME `all`-scope capture — never
+ * a separate re-implementation of the picker). `chunks` is one article's chunks in NATURAL
+ * (chunker) order, each already scored by `overlapScore`; the result is overlap-desc, index-asc,
+ * exactly as `capped` orders them today, sliced to the scope's `perArticleBudget`.
+ */
+export function chunksForScope<T extends { index: number; overlap: number }>(
+  chunks: readonly T[],
+  scope: RerankScope,
+  isList: boolean
+): T[] {
+  const wanted = perArticleBudget(scope, isList)
+  return [...chunks].sort((a, b) => b.overlap - a.overlap || a.index - b.index).slice(0, wanted)
+}
+
+/** Per-pack read budget (Phase 4 PR-A; route F's own `discover()` defaults are 14 / 8 for its
+ *  one archive — see the file header for why this arm applies the pair per pack instead). */
+export const DISCOVERY_MAX_READS_PER_PACK = 12
+export const DISCOVERY_MAX_ADMITTED_PER_PACK = 8
+/** Head-noun reads: at most this many ACCEPTED `/suggest` matches issued to `readHit` (F4, review
+ *  2026-09-14: counts acceptances, not admissions — a read that 404s, duplicates, or fails the
+ *  gate still spends its slot, exactly like the frozen 1a-i patch's unconditional `issued++`),
+ *  and at most this many total `/suggest` probes across every candidate word tried (route F's
+ *  1a-i patch, ported verbatim). */
+export const HEAD_NOUN_MAX_READS = 2
+export const HEAD_NOUN_MAX_TOTAL_PROBES = 12
+export const HEAD_NOUN_MAX_PROBES_PER_WORD = 6
+/** `/suggest` rows requested for one plan title (route F: `suggestTitles(..., title, 4, ...)`). */
+export const TITLE_SUGGEST_ROWS = 4
+/** `/search` rows requested for one FTS query (route F: `searchPack(..., q, 5, ...)`). */
+export const FTS_HITS_PER_QUERY = 5
+/** The "up to 2 more unseen candidates by aggregate score" pass — run twice (after the
+ *  title/head-noun stage and again after the FTS stage, "both top-2 passes kept"). */
+export const FTS_TOP_UNSEEN_PASS = 2
 
 export interface ArmPack {
   /** knowledge_packs.id (ZIM UUID) — the books.id search filter. */
@@ -110,12 +209,36 @@ export interface CollectPackCandidatesOptions {
    */
   articleTimeoutMs?: number
   /**
-   * #340 L3-b (D-Z20): the ask's query expander — ONE local-model call per ask, before any pack
-   * is searched; its concepts feed one extra `/search` and its list title one `/suggest` per
-   * pack, whose articles are fetched in ADDITION to the plain search's. Absent or resolving null
-   * ⇒ the arm runs exactly as before. Its abort is the ask's abort (rethrown).
+   * The budget for the small JSON probes — the title-index `/suggest` lookups (plan titles and
+   * the head-noun rule), `PROBE_TIMEOUT_MS`. Test seam only; production never sets it.
+   */
+  probeTimeoutMs?: number
+  /**
+   * The ask's search planner — ONE local-model call per ask, before any pack is searched; its
+   * titles/queries/terms feed the discovery routes below. Absent or resolving null ⇒ discovery
+   * still runs, using only the plan-independent routes (the head-noun rule and the plain
+   * pattern rewrite). Its abort is the ask's abort (rethrown).
    */
   expand?: QueryExpander
+  /**
+   * The candidate scope for this ask (step 4-4, `rag/rerank-profile.ts`'s `rerankScopeFor`):
+   * how many chunks per admitted article, and how many in total, `allocateCandidates` may admit.
+   * Absent ⇒ `'capped'` — today's behaviour, byte-identical to every existing caller and test.
+   */
+  candidateScope?: RerankScope
+  /**
+   * Step 4-5 (run L2, ruling (e)(ii)): overrides `totalCandidateCapFor(candidateScope)` for
+   * THIS call's total admission cap — measurement/test seam only, mirroring
+   * `articleTimeoutMs`/`probeTimeoutMs` above; production never sets it. Needed because run L2
+   * must capture the genuinely UNCAPPED `all` candidate list (per id, per pack) to derive every
+   * ceiling {192, 256, 384, 512} offline from ONE capture; once `ALL_SCOPE_MAX_DOCS` ships
+   * finite (this step), an ordinary `candidateScope: 'all'` call truncates at that value, which
+   * would make every WIDER cell derived from it measure identically to the narrowest one — a
+   * methodologically unsound "the wider cell always clears the bound" result. The `capped`
+   * companion selection (`cappedCandidates`, ruling (e)(i)) is UNAFFECTED: it always uses
+   * `totalCandidateCapFor('capped')`, never this override.
+   */
+  totalCandidateCapOverride?: number
 }
 
 /** One pack's produced candidates, in the pack's own rank order (search hit order). */
@@ -131,14 +254,23 @@ export interface CandidateAllocation {
 }
 
 /**
- * The provisional per-pack fetch quota (plan §9.21 (c)3): `floor(24 / N)` plus one for the
- * first `24 mod N` packs IN PACK ORDER. It bounds how much a pack FETCHES, not what it is
- * admitted: the round-robin below reclaims a short pack's share for the others.
+ * The provisional per-pack fetch quota (plan §9.21 (c)3): `floor(cap / N)` plus one for the
+ * first `cap mod N` packs IN PACK ORDER. It bounds how many CHUNKS a pack contributes, not what
+ * is admitted: the round-robin below reclaims a short pack's share for the others. `cap`
+ * defaults to `MAX_EXTERNAL_CANDIDATES` (today's `capped` scope, byte-identical to every
+ * existing caller); step 4-4 passes `totalCandidateCapFor(scope)` for a wider scope.
  */
-export function packQuota(index: number, total: number): number {
+export function packQuota(index: number, total: number, cap: number = MAX_EXTERNAL_CANDIDATES): number {
   if (total <= 0) return 0
-  const base = Math.floor(MAX_EXTERNAL_CANDIDATES / total)
-  return base + (index < MAX_EXTERNAL_CANDIDATES % total ? 1 : 0)
+  const base = Math.floor(cap / total)
+  // Step 4-5 (ruling (e)(ii)): `all` no longer passes `cap = Infinity` — `totalCandidateCapFor('all')`
+  // is `ALL_SCOPE_MAX_DOCS` (512), a genuine finite cap, so this "+1 for the first `cap mod N`
+  // packs" term DOES fire under `all` now (e.g. 512 / 12 packs → `512 % 12 = 8`, so the first
+  // eight packs get one extra), exactly like every other finite-cap scope — the non-uniform-quota
+  // case 4-4's B10 flagged. Only an explicit `Number.POSITIVE_INFINITY` (the run-L2 measurement
+  // seam, `totalCandidateCapOverride`) still hits the `NaN`/always-0 case this comment used to
+  // describe unconditionally.
+  return base + (index < cap % total ? 1 : 0)
 }
 
 /**
@@ -149,8 +281,18 @@ export function packQuota(index: number, total: number): number {
  * Pure and completion-order independent BY CONSTRUCTION: it reads a list built from the pack
  * order the caller was handed, never the order in which the packs happened to finish, so the
  * same per-pack material always yields the same admitted set.
+ *
+ * `cap` defaults to `MAX_EXTERNAL_CANDIDATES` (today's `capped` scope, byte-identical to every
+ * existing caller); step 4-4 passes `totalCandidateCapFor(scope)`, which step 4-5 (ruling
+ * (e)(ii)) made finite for EVERY scope including `all` (`ALL_SCOPE_MAX_DOCS`, 512) — the loop
+ * below now always stops at a fixed count. Only the measurement-only `totalCandidateCapOverride`
+ * seam (run L2) can still pass `Number.POSITIVE_INFINITY`, in which case the loop runs until
+ * every pack's cursor is exhausted instead.
  */
-export function allocateCandidates(perPack: readonly PackCandidateList[]): CandidateAllocation {
+export function allocateCandidates(
+  perPack: readonly PackCandidateList[],
+  cap: number = MAX_EXTERNAL_CANDIDATES
+): CandidateAllocation {
   const admitted: ExternalCandidate[] = []
   const admittedPerPack = new Map<string, number>()
   for (const pack of perPack) {
@@ -158,10 +300,10 @@ export function allocateCandidates(perPack: readonly PackCandidateList[]): Candi
   }
   const cursors = perPack.map(() => 0)
   let progressed = true
-  while (admitted.length < MAX_EXTERNAL_CANDIDATES && progressed) {
+  while (admitted.length < cap && progressed) {
     progressed = false
     for (let i = 0; i < perPack.length; i++) {
-      if (admitted.length >= MAX_EXTERNAL_CANDIDATES) break
+      if (admitted.length >= cap) break
       const list = perPack[i]!.candidates
       const cursor = cursors[i]!
       if (cursor >= list.length) continue
@@ -175,18 +317,69 @@ export function allocateCandidates(perPack: readonly PackCandidateList[]): Candi
   return { admitted, admittedPerPack }
 }
 
-/** How one pack's search ended, before admission was computed. */
+/** How one pack's discovery ended, before admission was computed. */
 type PackSettlement = 'searched' | 'search-failed' | 'read-failed'
 
 interface PackWork {
   pack: ArmPack
   quota: number
+  /**
+   * Step 4-5 (ruling (e)(i), B3/B7): this pack's OWN quota under the `capped` scope, computed
+   * alongside `quota` regardless of the ask's actual scope — the companion selection a
+   * rerank-call failure restricts to, rebuilt from the SAME admitted articles (never a second
+   * discovery/fetch pass).
+   */
+  cappedQuota: number
   /** A worker picked this pack up (so a deadline hitting now is a `timeout`, not a `deadline`). */
   started: boolean
   /** The pack ran to its own end (its outcome is `settlement`, whatever happens afterwards). */
   settled: boolean
   settlement: PackSettlement
   candidates: ExternalCandidate[]
+  /** Step 4-5 (ruling (e)(i)): the SAME articles' `capped`-scope selection, built beside
+   *  `candidates` in the loop below. */
+  cappedCandidates: ExternalCandidate[]
+}
+
+/** Read-budget accounting (Phase 4 PR-A) — pure, so it is unit-testable in isolation from any
+ *  transport. A read is admitted only while BOTH the read count and the admitted-article count
+ *  are under their limits; every route (head-noun, title, alias, fts) shares one instance of
+ *  this per pack. */
+export interface ReadBudgetLimits {
+  maxReads: number
+  maxAdmitted: number
+}
+export function withinReadBudget(reads: number, admitted: number, limits: ReadBudgetLimits): boolean {
+  return reads < limits.maxReads && admitted < limits.maxAdmitted
+}
+
+/** One aggregate-scored discovery candidate — fed by the plan-title suggest hits and the FTS
+ *  hits, exactly like route F's shared `candidates` map (`prototype.mjs` `add()`). NEVER fed by
+ *  the head-noun rule (STAGE 1, below): the frozen 1a-i patch (`prototype-a1.diff`) reads its
+ *  accepted candidate directly and logs it to its own trace, but never calls `add()` either —
+ *  a head-noun hit (accepted or a near-miss `/suggest` row that did not confirm exactly) never
+ *  entered route F's shared pool, so this port does not either. */
+interface ScoredHit {
+  hit: KiwixSearchHit
+  score: number
+}
+
+/** Distinct, non-empty strings, first occurrence kept. */
+function uniqueStrings(values: readonly string[]): string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const v of values) {
+    if (v.length === 0 || seen.has(v)) continue
+    seen.add(v)
+    out.push(v)
+  }
+  return out
+}
+
+/** Thrown internally by one pack's discovery to unwind every stage at once on the ask's own
+ *  abort — never on an ordinary transport failure, which every route degrades on its own. */
+class PackAbort {
+  constructor(readonly err: unknown) {}
 }
 
 /**
@@ -207,13 +400,26 @@ export async function collectPackCandidates(
   opts: CollectPackCandidatesOptions = {}
 ): Promise<ExternalRetrievalOutput> {
   const terms = queryTerms(question)
+  // Step 4-4 (ruling (a)): the scope for THIS ask, resolved once and applied to every pack —
+  // absent ⇒ 'capped', so every existing caller keeps today's exact quota/slice.
+  const scope: RerankScope = opts.candidateScope ?? 'capped'
+  // Step 4-5 (run L2 measurement seam): opts.totalCandidateCapOverride, when set, replaces the
+  // scope's own cap for this call only — see the option's own doc comment.
+  const cap = opts.totalCandidateCapOverride ?? totalCandidateCapFor(scope)
+  // Step 4-5 (ruling (e)(i)): the SAME `capped` cap/quota, computed unconditionally beside the
+  // ask's own — cheap (no extra network read, just a second `chunksForScope`/`allocateCandidates`
+  // pass over already-fetched material) and needed on EVERY ask, not only a wide one, so a
+  // rerank-call failure always has a same-material fallback to restrict to.
+  const cappedCap = totalCandidateCapFor('capped')
   const work: PackWork[] = packs.map((pack, i) => ({
     pack,
-    quota: packQuota(i, packs.length),
+    quota: packQuota(i, packs.length, cap),
+    cappedQuota: packQuota(i, packs.length, cappedCap),
     started: false,
     settled: false,
     settlement: 'searched',
-    candidates: []
+    candidates: [],
+    cappedCandidates: []
   }))
 
   /** The first abort a request or a conversion raised — rethrown verbatim for a cancellation. */
@@ -223,262 +429,318 @@ export async function collectPackCandidates(
     if (abortFailure === undefined) abortFailure = err
   }
 
-  // #340 L3 (D-Z18) + #353: Xapian ANDs every word of the pattern, so the question's function
-  // and frame words are stripped before the search; the ORIGINAL question stays the reranker's
-  // query and the chunk picker's `terms`. Three stages, each tried only when the one before it
-  // found nothing:
-  //   1. the stripped `pattern`;
-  //   2. once, the narrower `retry` (the kept terms of five or more characters) when it differs;
-  //   3. the #353 document-frequency LADDER — stage 2's length threshold cannot help a pattern
-  //      whose every term is already that long (a rare or misspelled five-plus-character word).
-  //      When the last pattern tried still has two or more terms (`rewrite.terms` / `retryTerms`
-  //      — the tokens Xapian actually saw, never a re-split of the pattern string), probe up to
-  //      `DF_PROBE_MAX_TERMS` of them for their own archive-wide hit count (`searchPackTotal`,
-  //      pageLength=1, `DF_PROBE_TIMEOUT_MS` each, sequentially) and narrow the FULL term list —
-  //      not just the probed prefix, so a pattern longer than the cap keeps its untouched tail —
-  //      with `narrowByFrequency`, then search once more when it returns a pattern. A probe (or
-  //      the narrowed search) failing ends the ladder without a verdict: stages 1–2 already
-  //      answered honestly at zero, so the pack stays `searched` with 0 found rather than
-  //      `search-failed` (`docs/rag-design.md` §17 D-Z18 amendment).
+  // The plain pattern rewrite (#340 L3, D-Z18): Xapian ANDs every word of the pattern, so the
+  // question's function and frame words are stripped before it is used as the LAST FTS query
+  // below — the ORIGINAL question stays the reranker's query and the chunk picker's `terms`.
   const rewrite = searchPattern(question)
 
-  // #340 L3-b (D-Z20): ONE model call per ask, before any pack is searched, under the same
-  // signal. Null (no runtime, a non-JSON reply, the time bound, any failure) ⇒ the plain arm;
-  // the ask's own abort propagates like every other cancellation.
-  let expansion: Awaited<ReturnType<QueryExpander>> = null
+  // The ask's search plan — ONE model call, before any pack is searched, under the same
+  // signal. Null/empty (no runtime, a non-JSON reply, the time bound, any failure) ⇒ discovery
+  // proceeds with the plan-independent routes only; the ask's own abort propagates like every
+  // other cancellation.
+  let plan: SearchPlan = { titles: [], queries: [] }
   if (opts.expand) {
     try {
-      expansion = await opts.expand(question, signal)
+      const resolved = await opts.expand(question, signal)
+      if (resolved) plan = resolved
     } catch (err) {
-      // The expander cannot tell the two aborts apart, so the arm does it here (review finding,
-      // 2026-09-07): the ASK's cancellation is rethrown like every other cancellation; the per-ask
-      // DEADLINE elapsing mid-expansion degrades — no expansion, the workers no-op under the
-      // fired signal, and every pack settles `deadline` exactly as it did before this stage.
       const cancelled = opts.askSignal ? opts.askSignal.aborted : aborted()
       if (cancelled) throw err
-      expansion = null
+      // else: keep the default empty plan and continue exactly as if no planner existed.
     }
   }
 
-  /**
-   * The expansion's own hits for one pack, in fetch order: the title index first (the exact
-   * list article, when the model named one), then the concept query's hits. Each source fails
-   * soft on its own (the other source and the plain search are unaffected); an abort is the
-   * caller's to classify. Only hits the plain search did NOT already return are kept.
-   */
-  async function expansionHits(pack: ArmPack, plain: readonly KiwixSearchHit[]): Promise<KiwixSearchHit[]> {
-    if (!expansion) return []
-    const seen = new Set(plain.map((h) => h.articlePath))
-    const out: KiwixSearchHit[] = []
-    const add = (rows: KiwixSearchHit[]): void => {
-      for (const row of rows) {
-        if (seen.has(row.articlePath)) continue
-        seen.add(row.articlePath)
-        out.push(row)
-      }
-    }
-    const servedName = names?.get(pack.id)
-    if (expansion.listTitle !== null && servedName !== undefined) {
-      try {
-        // A title lookup is one small JSON: it gets the probe budget (`DF_PROBE_TIMEOUT_MS`), not
-        // the client's 15 s default — the same argument as the #353 probes.
-        const lookup = { timeoutMs: DF_PROBE_TIMEOUT_MS }
-        let rows = await suggestTitles(port, servedName, expansion.listTitle, EXPANSION_TITLE_ROWS, signal, lookup)
-        // The title index is PREFIX-only (R-6): a model title one word too long or inflected at
-        // its end ("… nach CO2-Emissionen" against "… nach CO2-Emission pro Kopf", measured
-        // 2026-09-07) matches nothing, so one shorter prefix — the title minus its last word —
-        // is tried once when the full title found nothing. One extra request, never more.
-        const words = expansion.listTitle.split(' ')
-        if (rows.length === 0 && words.length >= 3) {
-          // The shorter prefix is broader, so its rows are RANKED by how much of the dropped
-          // word they carry ("… nach Pro-Kopf-Emissionen" → the "… pro Kopf" row before "…
-          // nach Waldfläche"); a row sharing nothing keeps its index order, never dropped.
-          const tail = words[words.length - 1]!.toLowerCase().split('-').filter((t) => t.length >= 3)
-          const score = (title: string): number => {
-            const lower = title.toLowerCase()
-            return tail.filter((t) => lower.includes(t)).length
-          }
-          rows = (await suggestTitles(port, servedName, words.slice(0, -1).join(' '), EXPANSION_TITLE_ROWS * 2, signal, lookup))
-            .map((row, index) => ({ row, index, score: score(row.title) }))
-            .sort((a, b) => b.score - a.score || a.index - b.index)
-            .map((r) => r.row)
-        }
-        add(rows)
-      } catch (err) {
-        if (aborted()) throw err
-      }
-    }
-    if (expansion.concepts.length > 0) {
-      try {
-        add(await searchPack(port, pack.id, expansion.concepts.join(' '), ARTICLES_PER_PACK, signal))
-      } catch (err) {
-        if (aborted()) throw err
-      }
-    }
-    return out
-  }
-
+  /** One pack's whole discovery-and-fetch pass (Phase 4 PR-A). */
   async function runPack(item: PackWork): Promise<void> {
     const { pack } = item
-    let hits
-    let lastTerms = rewrite.terms
-    try {
-      hits = await searchPack(port, pack.id, rewrite.pattern, ARTICLES_PER_PACK, signal)
-      if (hits.length === 0 && rewrite.retry !== null) {
-        lastTerms = rewrite.retryTerms
-        hits = await searchPack(port, pack.id, rewrite.retry, ARTICLES_PER_PACK, signal)
-      }
-    } catch (err) {
-      if (aborted()) return noteAbort(err)
-      // Non-200 (a 404 included — ambiguous, never a capability verdict) or a network error.
-      item.settlement = 'search-failed'
-      item.settled = true
-      return
-    }
-    if (hits.length === 0) {
-      const patternTerms = lastTerms
-      // Empty exactly when the last pattern tried was the raw-question fallback (no kept
-      // terms) — this also skips a single-term pattern, which `narrowByFrequency` could never
-      // narrow anyway.
-      if (patternTerms.length >= 2) {
-        const probeTerms = patternTerms.slice(0, DF_PROBE_MAX_TERMS)
-        const df = new Map<string, number>()
-        try {
-          for (const term of probeTerms) {
-            const total = await searchPackTotal(port, pack.id, term, signal, {
-              timeoutMs: DF_PROBE_TIMEOUT_MS
-            })
-            if (total !== null) df.set(term, total)
-          }
-          // The FULL term list, not just `probeTerms`: a term past the cap was never probed,
-          // so it has no `df` entry and `narrowByFrequency` keeps it — exactly like any other
-          // unprobed term, never silently dropped.
-          const narrowed = narrowByFrequency(patternTerms, df)
-          if (narrowed !== null) {
-            hits = await searchPack(port, pack.id, narrowed, ARTICLES_PER_PACK, signal)
-          }
-        } catch (err) {
-          if (aborted()) return noteAbort(err)
-          // Fail-soft (see the stage-3 comment above): keep the honest zero from stages 1–2.
-        }
-      }
-    }
-    // #340 L3-b: the expansion's articles come FIRST and count against their own small cap, so
-    // the plain search's `ARTICLES_PER_PACK` can never starve the one list article the whole
-    // stage exists to reach; the plain hits follow, bounded exactly as before.
-    let extra: KiwixSearchHit[] = []
-    try {
-      extra = await expansionHits(pack, hits)
-    } catch (err) {
-      if (aborted()) return noteAbort(err)
-    }
-    const queue: Array<{ hit: KiwixSearchHit; fromExpansion: boolean }> = [
-      ...extra.slice(0, EXPANSION_ARTICLES_PER_PACK).map((hit) => ({ hit, fromExpansion: true })),
-      ...hits.map((hit) => ({ hit, fromExpansion: false }))
-    ]
-    // The expansion's chunks take at most HALF the pack's quota (review finding, 2026-09-07):
-    // on a multi-pack ask the quota is small (12 for two packs, 8 for three), and one list
-    // article at `LIST_ARTICLE_CHUNKS` fetched first would otherwise fill it before a single
-    // plain hit was read. Half keeps the plain search's hits in every ask.
-    const expansionCap = Math.ceil(item.quota / 2)
-    let expansionChunks = 0
-    let attempted = 0
-    let read = 0
-    /** Plain hits skipped because the response's `urlId` was not the name we serve this pack
-     *  under (#429) — a route disagreement, never "nothing relevant". */
+    // The published serving map (`Published.names`, #301 P3b/L4) is the route authority for
+    // /suggest (which needs a name to query against) and the mismatch guard below.
+    const expected = names?.get(pack.id)
+
+    const seenTargets = new Set<string>()
+    const scorePool = new Map<string, ScoredHit>()
+    const admittedArticles: Array<{ article: ZimArticle; hit: KiwixSearchHit }> = []
+    let reads = 0
+    let fetchAttempts = 0
+    let fetchedOk = 0
+    /** Hits refused because the response's `urlId` was not the name we serve this pack under
+     *  (#429) — a route disagreement, never "nothing relevant". */
     let mismatched = 0
-    for (const { hit, fromExpansion } of queue) {
-      // Article requests are DERIVED FROM NEED (plan §9.21 (c)3): once the pack holds its
-      // provisional quota, the remaining hits are not fetched at all.
-      if (item.candidates.length >= item.quota) break
-      if (!fromExpansion && attempted >= ARTICLES_PER_PACK) break
-      if (fromExpansion && expansionChunks >= expansionCap) continue
-      // The published serving map (`Published.names`, #301 P3b/L4) is the route authority. A
-      // hit whose parsed `urlId` is not the name this pack is served under is SKIPPED —
-      // defensive within one generation: the search was filtered by `books.id`, so a
-      // disagreeing link would mean the response describes a book we did not ask about, and
-      // fetching it would label another archive's text with this pack's title.
-      const expected = names?.get(pack.id)
-      if (expected !== undefined && hit.urlId !== expected) {
-        // #429: this used to `continue` silently, and a pack whose EVERY hit disagreed then
-        // settled `searched` with nothing found — "this archive had nothing to say", the one
-        // reading a user cannot act on and a developer cannot diagnose. Counted instead, and
-        // the settlement below treats an all-disagreement pack as unreadable, which it is.
-        if (!fromExpansion) mismatched++
-        continue
+    let searchAttempts = 0
+    let searchFailures = 0
+
+    const addScore = (hit: KiwixSearchHit, rank: number, bonus = 0): void => {
+      const existing = scorePool.get(hit.articlePath)
+      if (existing) existing.score += 1 / (rank + 1) + bonus
+      else scorePool.set(hit.articlePath, { hit, score: 1 / (rank + 1) + bonus })
+    }
+    const topUnseen = (n: number): KiwixSearchHit[] =>
+      [...scorePool.values()]
+        .filter((e) => !seenTargets.has(e.hit.articlePath))
+        .sort((a, b) => b.score - a.score)
+        .slice(0, n)
+        .map((e) => e.hit)
+
+    /** One candidate read: fetch, convert, admit. Bounded by the read budget and de-duplicated
+     *  by target; a route disagreement (#429) is refused before any request is made. */
+    async function readHit(hit: KiwixSearchHit, route: string): Promise<void> {
+      if (!withinReadBudget(reads, admittedArticles.length, {
+        maxReads: DISCOVERY_MAX_READS_PER_PACK,
+        maxAdmitted: DISCOVERY_MAX_ADMITTED_PER_PACK
+      })) {
+        return
       }
-      if (!fromExpansion) attempted++
+      if (seenTargets.has(hit.articlePath)) return
+      seenTargets.add(hit.articlePath)
+      if (expected !== undefined && hit.urlId !== expected) {
+        mismatched++
+        return
+      }
+      reads++
+      fetchAttempts++
       let html: string | null
       try {
         html = await fetchArticleHtml(port, expected ?? hit.urlId, hit.articlePath, signal, {
           timeoutMs: opts.articleTimeoutMs
         })
       } catch (err) {
-        if (aborted()) return noteAbort(err)
-        continue
+        if (aborted()) throw new PackAbort(err)
+        return
       }
-      if (html === null) continue // 404: the entry vanished between search and fetch
-      // `attempted`/`read` describe the PLAIN hits only, so the `read-failed` verdict below keeps
-      // its meaning ("the pack's search hits were unreadable") whatever the expansion read.
-      if (!fromExpansion) read++
+      if (html === null) return // 404: the entry vanished between search and fetch
       // Cooperatively sliced (P1b): the main thread is handed back between slices and the
-      // signal is honoured at every slice boundary. An abort here is the ask's or the
-      // deadline's and is classified below; any other converter failure costs this ONE
-      // article, never the pack's outcome and never the other packs'.
-      let article
+      // signal is honoured at every slice boundary.
+      let article: ZimArticle
       try {
         article = await zimArticleToSegmentsAsync(html, { signal })
       } catch (err) {
-        if (aborted()) return noteAbort(err)
-        continue
+        if (aborted()) throw new PackAbort(err)
+        return
       }
-      const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
-      const title = article.title ?? hit.title
-      // A LIST article keeps more chunks (D-Z20): its name rows never overlap the question.
-      const wanted = LIST_TITLE_RE.test(title) ? LIST_ARTICLE_CHUNKS : CHUNKS_PER_ARTICLE
-      const keep = fromExpansion ? Math.min(wanted, expansionCap - expansionChunks) : wanted
-      const scored = chunks
-        .map((c, i) => ({ c, i, overlap: overlapScore(c.text, terms) }))
-        .sort((a, b) => b.overlap - a.overlap || a.i - b.i)
-        .slice(0, keep)
-      if (fromExpansion) expansionChunks += scored.length
-      for (const { c, i, overlap } of scored) {
-        item.candidates.push({
-          chunkId: `zim:${pack.id}:${hit.articlePath}#${i}`,
-          documentId: `zim:${pack.id}`,
-          text: c.text,
-          sourceTitle: article.title ?? hit.title,
-          pageNumber: null,
-          sectionLabel: c.sectionLabel ?? null,
-          score: overlap,
-          sourceKind: 'archive',
-          packId: pack.id,
-          archiveTitle: pack.title,
-          articlePath: hit.articlePath
-        })
-      }
+      fetchedOk++
+      // The admission gate (`admit.ts`) sees TWO windows (F3): the narrow LEAD for the
+      // title/fiction/topic-conflict-pair checks, and the WIDE full segment text for the
+      // `explicitBiology` escape hatch only, so that rescue predicate keeps route F's
+      // whole-article reach instead of being bounded by the same window as the trap it exists
+      // to escape. N1 (second review, resolved step 4-3): the lead is `segments.slice(0, 1)` —
+      // the intro segment only (`html.ts` flushes a segment at a HEADING, never a paragraph, so
+      // `segments[0]` is every paragraph before the first heading). This is still NOT route F's
+      // own lead (`prototype.mjs`'s first two PROSE blocks): a single-paragraph intro is
+      // narrower than route F's two-paragraph lead (the port can over-admit where route F
+      // refuses), and an intro of three or more paragraphs is wider (the port can refuse where
+      // route F admits) — see `admit.ts`'s header for both directions, spelled out.
+      const leadText = article.segments
+        .slice(0, 1)
+        .map((s) => s.text)
+        .join(' ')
+      const wideText = article.segments.map((s) => s.text).join(' ')
+      const admission = admitArticle(question, article.title ?? hit.title, leadText, wideText, route)
+      if (!admission.admitted) return
+      if (article.title !== null && admittedArticles.some((a) => a.article.title === article.title)) return
+      admittedArticles.push({ article, hit })
     }
-    // Hits existed and none of them could be read: a materially different state from
-    // "searched, nothing relevant" — the pack IS searchable, its articles were not readable.
-    // Two ways to get there, one verdict (#429): every fetch failed or 404'd (`attempted > 0 &&
-    // read === 0`), or every hit was refused before the fetch because the served library and the
-    // search response disagree about this pack's name (`attempted === 0 && mismatched > 0`).
-    // The second is a defect on our side, not the archive's, so it is also logged — with the
-    // pack id and the two NAMES, which are route identifiers, never a path (the sentinel rule).
-    if (attempted === 0 && mismatched > 0) {
+
+    try {
+      // STAGE 1 — head-noun reads (the ported 1a-i rule): up to `HEAD_NOUN_MAX_READS` accepted
+      // `/suggest` matches issued to `readHit` (F4 — accepted, not admitted; see the constant's
+      // own doc comment), at most `HEAD_NOUN_MAX_TOTAL_PROBES` `/suggest` probes in total across
+      // every candidate word tried. Runs BEFORE the plan titles, exactly like route F's patch.
+      if (expected !== undefined) {
+        const words = germanCapitalizedNounTokens(question)
+        let issued = 0
+        let totalProbes = 0
+        for (const w of words) {
+          if (issued >= HEAD_NOUN_MAX_READS || totalProbes >= HEAD_NOUN_MAX_TOTAL_PROBES) break
+          const probeBudget = Math.min(HEAD_NOUN_MAX_PROBES_PER_WORD, HEAD_NOUN_MAX_TOTAL_PROBES - totalProbes)
+          if (probeBudget <= 0) break
+          const res = await resolveHeadNoun(port, expected, w, signal, {
+            maxProbes: probeBudget,
+            timeoutMs: opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS
+          }).catch((err) => {
+            throw new PackAbort(err) // resolveHeadNoun only ever rejects on the ask's own abort
+          })
+          totalProbes += res.probes
+          if (res.accepted) {
+            // F4 (review 2026-09-14): counts ACCEPTANCES (a confirmed /suggest match), exactly
+            // like the frozen 1a-i patch (`prototype-a1.diff`: unconditional `issued++`), not
+            // ADMISSIONS. A read that 404s, duplicates an already-admitted title, or fails the
+            // gate still spends one of the two head-noun read slots — it must, or a run of such
+            // reads can consume the whole per-pack budget before a single plan title or FTS
+            // query is tried (demonstrated: 7 reads on one question against the cap of 2).
+            issued++
+            await readHit(res.accepted, 'head-noun')
+          }
+        }
+      }
+
+      // STAGE 2 — plan titles: a `/suggest` lookup per title, admission exact-or-prefix (the
+      // same predicate route F's `discover()` uses), then an immediate fetch of the first
+      // admitted hit. Every matching hit (not just the fetched one) feeds the aggregate score
+      // pool the next pass drains.
+      if (expected !== undefined) {
+        for (const title of plan.titles) {
+          let hits: KiwixSearchHit[] = []
+          try {
+            hits = await suggestTitles(port, expected, title, TITLE_SUGGEST_ROWS, signal, {
+              timeoutMs: opts.probeTimeoutMs ?? PROBE_TIMEOUT_MS
+            })
+          } catch (err) {
+            if (aborted()) throw new PackAbort(err)
+            hits = []
+          }
+          const target = norm(title)
+          const multiWord = title.includes(' ')
+          let admittedHit: KiwixSearchHit | null = null
+          hits.forEach((h, hidx) => {
+            const matches =
+              norm(h.title) === target || norm(h.title).startsWith(`${target} (`) || (multiWord && hidx === 0)
+            if (!matches) return
+            addScore(h, hidx, multiWord ? 2 : 0.2)
+            if (admittedHit === null) admittedHit = h
+          })
+          if (admittedHit !== null) await readHit(admittedHit, 'title')
+        }
+      }
+
+      // STAGE 2b — up to `FTS_TOP_UNSEEN_PASS` more unseen candidates by aggregate score, drawn
+      // from whatever the head-noun and title-suggest routes scored so far ("both top-2 passes
+      // kept" — this is the first of the two).
+      for (const hit of topUnseen(FTS_TOP_UNSEEN_PASS)) await readHit(hit, 'alias')
+
+      // STAGE 3 — full-text queries: the plan's own queries, then the plain pattern rewrite
+      // LAST. The rank-1 hit of each query is read immediately; every hit (every rank) feeds
+      // the same aggregate score pool.
+      //
+      // F2 (review 2026-09-14): two restorations from master's own no-plan fallback, gated
+      // exactly as master gated them — never on every ask.
+      //   (1) the #340 L3 length retry: when the PATTERN query itself (never a plan query)
+      //       finds zero hits, retry once with `rewrite.retry` (the kept terms of five or more
+      //       characters) if one exists — master's own trigger (`arm.ts:340` on master). A
+      //       failed retry fails soft, keeping the honest zero from the primary query; it is
+      //       not folded into `searchAttempts`/`searchFailures`, which track the primary query.
+      //   (2) the five-read no-plan reach: when the planner produced no titles and no queries
+      //       at all, the single pattern query IS the ask's entire discovery reach, so every hit
+      //       it returns (up to `FTS_HITS_PER_QUERY`, matching master's `ARTICLES_PER_PACK` = 5)
+      //       is read here, not just its rank-1 hit — otherwise a plan-less ask on this branch
+      //       reaches only 1 + FTS_TOP_UNSEEN_PASS (= 3) articles where master reached 5.
+      const noPlan = plan.titles.length === 0 && plan.queries.length === 0
+      const queries = uniqueStrings([...plan.queries, rewrite.pattern])
+      for (const q of queries) {
+        searchAttempts++
+        let hits: KiwixSearchHit[] = []
+        let searched = false
+        try {
+          hits = await searchPack(port, pack.id, q, FTS_HITS_PER_QUERY, signal)
+          searched = true
+        } catch (err) {
+          if (aborted()) throw new PackAbort(err)
+          searchFailures++
+          hits = []
+        }
+        if (searched && hits.length === 0 && q === rewrite.pattern && rewrite.retry !== null) {
+          try {
+            hits = await searchPack(port, pack.id, rewrite.retry, FTS_HITS_PER_QUERY, signal)
+          } catch (err) {
+            if (aborted()) throw new PackAbort(err)
+            // Fail-soft: keep the honest zero the primary query already reported.
+          }
+        }
+        hits.forEach((h, i) => addScore(h, i))
+        if (noPlan) {
+          for (const h of hits) await readHit(h, 'fts')
+        } else if (hits[0]) {
+          await readHit(hits[0], 'fts')
+        }
+      }
+
+      // STAGE 3b — the second top-2-by-aggregate-score pass, now over the FULL pool (title/
+      // head-noun suggests AND every FTS hit) — "both top-2 passes kept".
+      for (const hit of topUnseen(FTS_TOP_UNSEEN_PASS)) await readHit(hit, 'fts')
+    } catch (err) {
+      if (err instanceof PackAbort) {
+        noteAbort(err.err)
+        return
+      }
+      throw err
+    }
+
+    // #429: a pack whose every hit disagreed about its own serving name settles `read-failed`,
+    // never a silent "searched, nothing found" — logged with the pack id and the two NAMES
+    // (route identifiers, never a path — the sentinel rule).
+    if (fetchAttempts === 0 && mismatched > 0) {
       log.warn('Knowledge pack served under a name its own search results do not use', {
         packId: pack.id,
-        servedAs: names?.get(pack.id) ?? null,
+        servedAs: expected ?? null,
         hitsSkipped: mismatched
       })
     }
-    item.settlement =
-      (attempted > 0 && read === 0) || (attempted === 0 && mismatched > 0) ? 'read-failed' : 'searched'
+
+    item.settlement = admittedArticles.length > 0
+      ? 'searched'
+      : fetchAttempts > 0
+        ? fetchedOk === 0
+          ? 'read-failed'
+          : 'searched'
+        : mismatched > 0
+          ? 'read-failed'
+          : searchAttempts > 0 && searchFailures === searchAttempts
+            ? 'search-failed'
+            : 'searched'
     item.settled = true
+
+    // Build this pack's candidates from the admitted articles, in discovery order — unchanged
+    // chunking semantics (`html.ts`/`chunker.ts`): chunk, keep the query-overlap top slice for
+    // this ask's SCOPE (step 4-4: `capped` = today's `LIST_ARTICLE_CHUNKS`/`CHUNKS_PER_ARTICLE`
+    // per article, unchanged; `top48`/`top96` widen it; `all` drops the slice entirely), bounded
+    // by the pack's own fair-share quota (`totalCandidateCapFor(scope)`-derived — `ALL_SCOPE_MAX_DOCS`
+    // (512) for `all` since step 4-5 ruling (e)(ii): the pack quota DOES bind under `all` now,
+    // same as every other scope). F6 (review 2026-09-14, dropped from this PR
+    // per the owner's ruling): an earlier version of this port additionally capped a LIST
+    // article's own share at `Math.ceil(quota / 2)` for multi-pack fairness — a real,
+    // unmeasured, untested multi-pack behaviour change outside this PR's scope (a LIST article
+    // always received the full per-scope budget on master); reverted here, restored unconditionally.
+    for (const { article, hit } of admittedArticles) {
+      const moreMain = item.candidates.length < item.quota
+      const moreCapped = item.cappedCandidates.length < item.cappedQuota
+      if (!moreMain && !moreCapped) break
+      const chunks = chunkSegments(article.segments, CHUNK_DEFAULTS)
+      const title = article.title ?? hit.title
+      const isList = isListArticleTitle(title)
+      const mapped = chunks.map((c, i) => ({ c, index: i, overlap: overlapScore(c.text, terms) }))
+      const makeCandidate = (i: number, c: (typeof mapped)[number]['c'], overlap: number): ExternalCandidate => ({
+        chunkId: `zim:${pack.id}:${hit.articlePath}#${i}`,
+        documentId: `zim:${pack.id}`,
+        text: c.text,
+        sourceTitle: title,
+        pageNumber: null,
+        sectionLabel: c.sectionLabel ?? null,
+        score: overlap,
+        sourceKind: 'archive',
+        packId: pack.id,
+        archiveTitle: pack.title,
+        articlePath: hit.articlePath
+      })
+      if (moreMain) {
+        const scored = chunksForScope(mapped, scope, isList)
+        for (const { c, index: i, overlap } of scored) {
+          item.candidates.push(makeCandidate(i, c, overlap))
+        }
+      }
+      // Step 4-5 (ruling (e)(i), B3/B7): the SAME article's `capped` selection, from the
+      // IDENTICAL chunk/overlap material (`mapped`) — never a re-derivation, never a second
+      // fetch. `retrieve()`'s `!reranked` branch (`rag/index.ts`) restricts to this instead of
+      // the whole wide pool on a rerank-call failure.
+      if (moreCapped) {
+        const cappedScored = chunksForScope(mapped, 'capped', isList)
+        for (const { c, index: i, overlap } of cappedScored) {
+          item.cappedCandidates.push(makeCandidate(i, c, overlap))
+        }
+      }
+    }
   }
 
   // A pool of `PACK_SEARCH_CONCURRENCY` workers over the ordered queue. Each worker takes the
-  // next pack and does its search, fetches and conversions sequentially, so at most two packs
+  // next pack and does its whole discovery-and-fetch pass sequentially, so at most two packs
   // are ever in flight, whatever the pack count.
   let next = 0
   const worker = async (): Promise<void> => {
@@ -502,7 +764,16 @@ export async function collectPackCandidates(
   }
 
   const allocation = allocateCandidates(
-    work.map((item) => ({ packId: item.pack.id, candidates: item.candidates }))
+    work.map((item) => ({ packId: item.pack.id, candidates: item.candidates })),
+    cap
+  )
+  // Step 4-5 (ruling (e)(i)): the SAME admission function, over the `capped`-scope companion
+  // lists built alongside `candidates` above — the fallback `retrieve()` restricts to on a
+  // rerank-call failure. On an already-`capped` ask this is value-identical to `allocation`
+  // (same function, same per-article material, same 'capped' scope both times).
+  const cappedAllocation = allocateCandidates(
+    work.map((item) => ({ packId: item.pack.id, candidates: item.cappedCandidates })),
+    cappedCap
   )
   const outcomes: KnowledgePackOutcome[] = work.map((item) => {
     const base = {
@@ -522,7 +793,7 @@ export async function collectPackCandidates(
     }
     return { ...base, status: 'failed' as const, reason: item.settlement }
   })
-  return { candidates: allocation.admitted, outcomes }
+  return { candidates: allocation.admitted, outcomes, cappedCandidates: cappedAllocation.admitted }
 }
 
 /** True when the abort came from the ask itself (a cancellation) rather than the deadline. */

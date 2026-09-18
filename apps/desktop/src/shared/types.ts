@@ -293,6 +293,15 @@ export interface AppSettings {
   /** Drop hits below this cosine similarity (0 = keep all non-negative hits). */
   ragMinSimilarity: number
   /**
+   * The `cpu-hi` rerank profile's opt-in (step 4-4, Wave 4 ruling (a)): rerank a wider
+   * knowledge-pack candidate pool (`top48`) on a machine with no usable GPU but at least
+   * `CPU_HI_MIN_THREADS` processor threads. Default OFF — the wider pool costs real per-question
+   * latency (`rag/rerank-profile.ts`'s own header). Has NO effect on the `gpu` profile (every
+   * fetched block is reranked there regardless) or the `default` profile (too few threads for
+   * the wider pool to be offered at all).
+   */
+  ragRerankWideScope: boolean
+  /**
    * Last hardware benchmark result, or null if never run. The persisted profile
    * (`lastBenchmark.profile`) drives model recommendation + `AppStatus.hardwareProfile`.
    */
@@ -439,6 +448,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   ragTopKFinal: 6,
   ragMaxContextTokens: 2500,
   ragMinSimilarity: 0,
+  // Opt-in (step 4-4): off by default — the wider `cpu-hi` rerank pool costs real latency.
+  ragRerankWideScope: false,
   lastBenchmark: null,
   benchmarkHistory: [],
   modelPlacements: {},
@@ -2351,7 +2362,10 @@ export const MAX_BENCHMARK_HISTORY = 8
 /**
  * The step the running benchmark is on (`EVENTS.benchmarkProgress`): the Performance screen
  * shows the steps as they complete instead of one opaque "Running…" button. 'speed' is
- * skipped entirely (no event) when no runtime is up.
+ * skipped entirely (no event) when no runtime is up. Addressed to the window that invoked
+ * `benchmark:run`, so a run started anywhere else (first-run, moved-drive, another window)
+ * produces none — the screen shows one background line for those rather than a list it could
+ * never advance (#438).
  */
 export type BenchmarkProgressStep = 'system' | 'drive' | 'speed' | 'done'
 
@@ -2496,8 +2510,11 @@ export interface ResidentModelRow {
   /**
    * 'gpu' = would auto-fit onto the graphics card as things stand: chat and translation on a
    * machine with a usable card, GPU acceleration not switched off or auto-disabled, and no
-   * observation saying otherwise (PR #303 audit DR1 — the memory class alone used to decide).
-   * 'cpu' = runs on the processor: pinned by design (images, document search, voice), or
+   * observation saying otherwise (PR #303 audit DR1 — the memory class alone used to decide);
+   * document search's reranker when its own headroom gate proves room beside the committed chat
+   * model (Wave 8 ruling (a), `rag/device-posture.ts`). 'cpu' = runs on the processor: pinned by
+   * design (images, voice), because the reranker's headroom gate could not prove room for it (or
+   * a chat-model start/translation occupant made headroom unprovable for that moment), or
    * because the configuration forces it (`gpuMode: 'off'`, `gpuAutoDisabled`, the translation
    * sidecar's `--device none` posture), or because the matching observed start landed there.
    */
@@ -2635,13 +2652,15 @@ export interface PerformanceSnapshot {
     totals: {
       /**
        * What everything loadable at once would take from the PROCESSOR's memory, MiB
-       * (`loadedAtOnceMb` in `services/performance.ts`; PR #303 audit DR5, owner ruling):
-       * on the `cpu` class every row's size; on `discrete` the rows that run on the processor
-       * plus the active model's OBSERVED partial-offload spill and the live translation
+       * (`loadedAtOnceMb` in `services/performance.ts`; PR #303 audit DR5, owner ruling; Wave 8
+       * ruling (d)): on the `cpu` class every row's size; on `discrete` the rows that run on the
+       * processor plus the active model's OBSERVED partial-offload spill, the live translation
        * sidecar's spill (size × the share of layers off the card — a not-live or all-on-card
-       * translation contributes 0); on `unified` the full sum (one pool — the copy says
-       * "memory", not "RAM", and the pill compares against the unified budget). null when
-       * nothing is installed.
+       * translation contributes 0), and a `'gpu'`-posture reranker row (contributes 0: its own
+       * headroom gate only resolves `'gpu'` when the whole placement fits, and no partial-offload
+       * split is tracked for it); on `unified` the full sum (one pool — the copy says "memory",
+       * not "RAM", and the pill compares against the unified budget). null when nothing is
+       * installed.
        */
       ramAllMb: number | null
       /**

@@ -683,8 +683,12 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(screen.getByText(/Document search \(ranking\)/)).toBeInTheDocument()
     expect(screen.getByText(/Document search \(index\)/)).toBeInTheDocument()
     expect(screen.getByText('Voice')).toBeInTheDocument()
-    // Pinned roles say so, in words; the CLI says it runs only while working.
-    expect(screen.getAllByText(/processor, by design/).length).toBe(4)
+    // Pinned roles say so, in words; the CLI says it runs only while working. Wave 8 ruling (e)
+    // amendment: the reranker's `cpu` fixture row (`device: 'cpu'`, line ~111 above) used to be
+    // the fourth "by design" row before this step — Wave 8 ruling (d) makes a `cpu` reranker
+    // read plain "processor" instead (its posture is headroom-gated, not a fixed design choice),
+    // so three roles now say "by design": vision, the index embedder and voice.
+    expect(screen.getAllByText(/processor, by design/).length).toBe(3)
     expect(screen.getByText(/runs only while working/)).toBeInTheDocument()
     expect(screen.getAllByText(/unloads when idle/).length).toBe(2)
     expect(screen.getAllByText('loaded now').length).toBe(3)
@@ -727,8 +731,11 @@ describe('PerformanceScreen: models on this computer', () => {
     )
     renderScreen()
     await screen.findByText('Models on this computer')
-    expect(screen.getAllByText(/^processor · /)).toHaveLength(2)
-    expect(screen.getAllByText(/processor, by design/)).toHaveLength(4)
+    // Wave 8 ruling (e) amendment: the fixture's reranker row is ALSO `device: 'cpu'` (line
+    // ~111), so its row-sub line now starts with plain "processor · " too (ruling (d)) — three
+    // rows, not two — and only three roles (not four) say "by design".
+    expect(screen.getAllByText(/^processor · /)).toHaveLength(3)
+    expect(screen.getAllByText(/processor, by design/)).toHaveLength(3)
     expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
     expect(screen.getByText(/Will run on the processor from RAM \(15\.7 GB\)/)).toBeInTheDocument()
   })
@@ -764,7 +771,9 @@ describe('PerformanceScreen: actions', () => {
     expect(api.runBenchmark).toHaveBeenCalledTimes(1)
     // Steps replace the tiles while the run is in flight.
     expect(screen.getByText('Hardware detected')).toBeInTheDocument()
-    expect(screen.getByText(/Generation speed with Qwen3\.5 9B/)).toBeInTheDocument()
+    // Two nodes now carry the speed label: the visible one and the sr-only twin that appends
+    // the step state (#437). Anchor the match so only the visible line satisfies it.
+    expect(screen.getByText(/Generation speed with Qwen3\.5 9B \(UD-Q4_K_XL\)$/)).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Running…' })).toBeDisabled()
     act(() => progress.forEach((cb) => cb('system')))
     expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
@@ -971,7 +980,7 @@ describe('PerformanceScreen: the pushed refresh', () => {
     expect(screen.getByText(/Runs Qwen3\.5 9B/)).toBeInTheDocument()
   })
 
-  it('M1: an external run shows as running with no steps ticked, never the last run’s', async () => {
+  it('M1 + #438: an external run shows as running with the background line, never the last run’s steps', async () => {
     let resolveRun: (r: BenchmarkResult) => void = () => {}
     const { api, progress, pushes } = install(snapshot(), {
       runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
@@ -984,11 +993,46 @@ describe('PerformanceScreen: the pushed refresh', () => {
       resolveRun(result())
     })
     await screen.findByRole('button', { name: 'Check again' })
-    // Someone else takes the lane: this window gets no steps for that run, so it shows none.
+    // Someone else takes the lane. Main addresses progress to the window that invoked the run, so
+    // this window is never sent that run's steps and a step list could only sit frozen on step 1
+    // (#438, measured at 13.7 s on a real moved-drive check). The region carries one honest line
+    // instead — and nothing of our own finished run survives into it.
     api.getPerformance.mockResolvedValue(snapshot({ running: true }))
     await pushChanged(pushes)
     expect(await screen.findByRole('button', { name: 'Running…' })).toBeDisabled()
-    expect(screen.getByText('Hardware detected').closest('li')?.className).not.toContain('perf-step-done')
+    expect(screen.getByText('Checking this computer in the background.')).toBeInTheDocument()
+    expect(screen.queryByText('Hardware detected')).not.toBeInTheDocument()
+  })
+
+  it('#438: the background line sits IN the step region, so an automatic check is still announced', async () => {
+    install(snapshot({ running: true }))
+    renderScreen()
+    // The region is the always-mounted <ul> of #437: the line arrives as a text change inside a
+    // region that was already there, which is what makes it audible. An empty region would have
+    // left the automatic check silent — the cost this option would otherwise have carried.
+    const region = (await screen.findByText('Checking this computer in the background.')).closest('ul')
+    expect(region).toHaveClass('perf-steps')
+    expect(region).toHaveAttribute('aria-live', 'polite')
+  })
+
+  it('#438: at the tail of our own run the list stays ours, never blinking to the background line', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { api, progress, pushes } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    act(() => progress.forEach((cb) => cb('system')))
+    // The backend still holds the span when the invoke resolves and `ownActionInFlight` drops —
+    // exactly the window in which that flag ALONE would have handed the region to the background
+    // line for a run the user is watching their own steps on.
+    api.getPerformance.mockResolvedValue(snapshot({ running: true }))
+    await pushChanged(pushes)
+    await act(async () => {
+      resolveRun(result())
+    })
+    expect(screen.queryByText('Checking this computer in the background.')).not.toBeInTheDocument()
+    expect(screen.getByText('Hardware detected').closest('li')?.className).toContain('perf-step-done')
   })
 
   it('the push announcing our OWN run does not un-tick the steps it already reported', async () => {
@@ -1517,10 +1561,17 @@ describe('PerformanceScreen: labels that match what is measured', () => {
   })
 
   it('N5: the drive step is "Drive speed", not "Drive write speed" beside a tile reading MB/s read', async () => {
-    install(snapshot({ running: true }))
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    install(snapshot(), { runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r))) })
     renderScreen()
-    expect(await screen.findByText('Drive speed')).toBeInTheDocument()
+    // The step list belongs to a run THIS window started (#438), so press the button rather than
+    // borrowing a foreign `running: true` span — that now shows the one-line background state.
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    expect(screen.getByText('Drive speed')).toBeInTheDocument()
     expect(screen.queryByText(/write speed/i)).not.toBeInTheDocument()
+    await act(async () => {
+      resolveRun(result())
+    })
   })
 })
 
@@ -1739,5 +1790,122 @@ describe('PerformanceScreen: whose recommendation the report names (#381)', () =
     )
     expect(contextAt).toBe(liveAt + 1)
     expect(contextAt).toBeLessThan(savedAt)
+  })
+})
+
+// -------------------------------------------------------------------------------------------
+// #437 — the progress steps are actually announceable.
+//
+// Verified by ear with Narrator on 2026-09-09 (issue #331, HW3 leg 1): across two real runs of
+// 14.2 s and 14.4 s the screen said NOTHING. Two independent causes, both pinned here:
+//   1. the aria-live list was created together with its <li>s, i.e. inserted already containing
+//      its content — the M-U1 anti-pattern. A region has to be present BEFORE the text arrives.
+//   2. even mounted, its text never changed: progress lived only in the `perf-step-{state}`
+//      class and in StepIcon, which is aria-hidden. Nothing to announce.
+// These tests are the DOM half of the acceptance; the by-ear half cannot be automated.
+// -------------------------------------------------------------------------------------------
+describe('PerformanceScreen: the step list is announceable (#437)', () => {
+  const stepList = (): HTMLElement | null => document.querySelector('ul.perf-steps')
+
+  it('cause 1: the live region is mounted while idle, before any run', async () => {
+    install(snapshot())
+    mountScreen()
+    await screen.findByRole('button', { name: 'Check again' })
+    const idle = stepList()
+    expect(idle).not.toBeNull()
+    expect(idle).toHaveAttribute('aria-live', 'polite')
+    // Empty, so `.perf-steps:empty` collapses it and the idle card is visually unchanged.
+    expect(idle).toBeEmptyDOMElement()
+  })
+
+  it('cause 1: the steps arrive INSIDE the same region node, not with a fresh one', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const during = stepList()
+    // Same element instance as the idle one would be — identity is what makes it announceable.
+    expect(during).not.toBeNull()
+    expect(during?.querySelectorAll('li')).toHaveLength(3)
+    await act(async () => {
+      resolveRun(result())
+    })
+    await screen.findByRole('button', { name: 'Check again' })
+    // Back to idle: the region survives the run and empties, ready for the next one.
+    expect(stepList()).toBe(during)
+    expect(stepList()).toBeEmptyDOMElement()
+  })
+
+  it('cause 2: an advance changes the region text, not only a CSS class', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { progress } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const before = stepList()?.textContent ?? ''
+    expect(before).toContain('Hardware detected: in progress')
+    expect(before).toContain('Drive speed: waiting')
+
+    act(() => progress.forEach((cb) => cb('system')))
+
+    const after = stepList()?.textContent ?? ''
+    expect(after).not.toBe(before)
+    expect(after).toContain('Hardware detected: done')
+    expect(after).toContain('Drive speed: in progress')
+    await act(async () => {
+      resolveRun(result())
+    })
+  })
+
+  it('cause 2: the active step exposes aria-current, and only one step does', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    const { progress } = install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const current = (): HTMLElement[] => Array.from(document.querySelectorAll('.perf-steps [aria-current="step"]'))
+    expect(current()).toHaveLength(1)
+    expect(current()[0]?.textContent).toContain('Hardware detected')
+
+    act(() => progress.forEach((cb) => cb('system')))
+
+    expect(current()).toHaveLength(1)
+    expect(current()[0]?.textContent).toContain('Drive speed')
+    await act(async () => {
+      resolveRun(result())
+    })
+  })
+
+  it('the step line reads once: the visible label is hidden from AT, the sr-only twin carries it', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    const li = screen.getByText('Hardware detected').closest('li')
+    // Visible copy is unchanged and unduplicated on screen; only its accessible twin adds state.
+    expect(screen.getByText('Hardware detected')).toHaveAttribute('aria-hidden', 'true')
+    expect(li?.querySelector('.sr-only')?.textContent).toBe('Hardware detected: in progress')
+    await act(async () => {
+      resolveRun(result())
+    })
+  })
+
+  it('#436 applies here too: no live-region role nests inside the step region', async () => {
+    let resolveRun: (r: BenchmarkResult) => void = () => {}
+    install(snapshot(), {
+      runBenchmark: vi.fn(() => new Promise<BenchmarkResult>((r) => (resolveRun = r)))
+    })
+    mountScreen()
+    await userEvent.click(await screen.findByRole('button', { name: 'Check again' }))
+    expect(stepList()?.querySelectorAll('[role], [aria-live]')).toHaveLength(0)
+    await act(async () => {
+      resolveRun(result())
+    })
   })
 })

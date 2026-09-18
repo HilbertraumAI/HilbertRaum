@@ -25,6 +25,7 @@ import {
 } from '../../src/main/services/doctasks'
 import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
 import type { AuditEventType } from '../../src/shared/types'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import type {
   ChatMessage,
   ModelRuntime,
@@ -147,7 +148,7 @@ async function waitTerminal(manager: DocTaskManager, jobId: string): Promise<Ret
     if (status.state === 'done' || status.state === 'failed' || status.state === 'cancelled') {
       return status
     }
-    if (Date.now() - start > 10_000) throw new Error(`task ${jobId} never finished: ${status.state}`)
+    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task ${jobId} never finished: ${status.state}`)
     await new Promise((r) => setTimeout(r, 10))
   }
 }

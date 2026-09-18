@@ -1,0 +1,93 @@
+workspace: unlocked
+skills installed: 9 (9 enabled)
+skills after [skills]: 9 enabled -> app:bank-statement, app:contract-brief, app:deadline-obligation-finder, app:document-edit, app:document-redaction, app:invoice, app:meeting-protocol, app:share-safe-review, app:what-changed
+runtime: backend=gpu healthy=true model=qwen3.8-27b-ud-q5km
+tee log: <work>/logs/sidecar-161846-43321.log
+ARGV: ARGV: <runtime>/llama-server --host 127.0.0.1 --port 38989 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --spec-type draft-mtp --spec-draft-n-max 2
+settings contextTokens: 4096
+document: a8144ed8-6abe-4bed-b696-a8a694f42a09 status=indexed chunks=13 title=plant-handbook.txt
+active doc task after ingest: NONE
+tree/deep-index log lines: (none)
+
+=== conversation 1 (ordinary documents ask, twice) ===
+
+[C1 turn 1 (ordinary)] "What is checked with the small gauge above the tool bench?"
+  7 s, 1 model task(s) on the chat runtime:
+    task 6: prompt eval 4136.42 ms / 2591 tokens
+  answer (first 120 chars): Belt tension is checked with the small gauge that hangs on the hook above the tool bench [S1] [S2] [S3] [S4].
+  skillOffer: none
+
+[C1 turn 2 (ordinary)] "And how often is the backup generator exercised?"
+  6 s, 1 model task(s) on the chat runtime:
+    task 23: prompt eval 3438.17 ms / 2147 tokens
+  answer (first 120 chars): The backup generator is exercised for twenty minutes on the last working day of the month [S1] [S2] [S3].
+  skillOffer: none
+
+=== conversation 2 (ordinary turn 1, classifier-trigger turn 2) ===
+
+[C2 turn 1 (ordinary)] "What is checked with the small gauge above the tool bench?"
+  6 s, 1 model task(s) on the chat runtime:
+    task 38: prompt eval 3534.42 ms / 2364 tokens
+  answer (first 120 chars): Belt tension is checked with the small gauge that hangs on the hook above the tool bench. [S1]
+  skillOffer: none
+
+[C2 turn 2 (aggregation-shaped)] "Group the amounts in these documents by category and sum each category."
+  9 s, 2 model task(s) on the chat runtime:
+    task 50: prompt eval 1073.16 ms / 191 tokens
+    task 56: prompt eval 4005.22 ms / 2380 tokens
+  answer (first 120 chars): **Heads-up:** this looks like a question about the whole document, but this answer is based only on the most relevant se
+  skillOffer: none
+
+=== conversation 3 (ordinary turn 1, low-confidence-relevance turn 2) ===
+
+[C3 turn 1 (ordinary)] "What is checked with the small gauge above the tool bench?"
+  6 s, 1 model task(s) on the chat runtime:
+    task 86: prompt eval 3459.29 ms / 2364 tokens
+  answer (first 120 chars): Belt tension is checked with the small gauge that hangs on the hook above the tool bench. [S1]
+  skillOffer: none
+
+[C3 turn 2 (compare, no second doc)] "Compare this document with the other contract and list the differences."
+  9 s, 2 model task(s) on the chat runtime:
+    task 98: prompt eval 1050.08 ms / 171 tokens
+    task 104: prompt eval 4323.71 ms / 2642 tokens
+  answer (first 120 chars): The provided excerpts do not contain enough information to answer this question. All excerpts are from the same file, "p
+  skillOffer: none
+
+=== cached-token / forcing-full lines from the tee log ===
+  0.11.112.889 I slot   operator(): id  0 | task 0 | cached n_tokens = 0, memory_seq_rm [0, end)
+  0.11.336.462 I slot   operator(): id  0 | task 0 | cached n_tokens = 9, memory_seq_rm [9, end)
+  0.17.251.299 I slot   operator(): id  0 | task 6 | forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+  0.17.259.192 I slot   operator(): id  0 | task 6 | cached n_tokens = 0, memory_seq_rm [0, end)
+  0.17.839.969 I slot   operator(): id  0 | task 6 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.18.651.569 I slot   operator(): id  0 | task 6 | cached n_tokens = 543, memory_seq_rm [543, end)
+  0.21.331.289 I slot   operator(): id  0 | task 6 | cached n_tokens = 2587, memory_seq_rm [2587, end)
+  0.24.237.562 I slot   operator(): id  0 | task 23 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.24.544.091 I slot   operator(): id  0 | task 23 | cached n_tokens = 287, memory_seq_rm [287, end)
+  0.24.854.573 I slot   operator(): id  0 | task 23 | cached n_tokens = 326, memory_seq_rm [326, end)
+  0.27.568.153 I slot   operator(): id  0 | task 23 | cached n_tokens = 2370, memory_seq_rm [2370, end)
+  0.30.425.050 I slot   operator(): id  0 | task 38 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.31.409.729 I slot   operator(): id  0 | task 38 | cached n_tokens = 543, memory_seq_rm [543, end)
+  0.33.849.701 I slot   operator(): id  0 | task 38 | cached n_tokens = 2587, memory_seq_rm [2587, end)
+  0.36.343.108 I slot   operator(): id  0 | task 50 | forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+  0.36.358.582 I slot   operator(): id  0 | task 50 | cached n_tokens = 0, memory_seq_rm [0, end)
+  0.37.026.114 I slot   operator(): id  0 | task 50 | cached n_tokens = 163, memory_seq_rm [163, end)
+  0.37.324.398 I slot   operator(): id  0 | task 50 | cached n_tokens = 187, memory_seq_rm [187, end)
+  0.37.830.977 I slot   operator(): id  0 | task 56 | forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+  0.37.840.795 I slot   operator(): id  0 | task 56 | cached n_tokens = 0, memory_seq_rm [0, end)
+  0.38.398.850 I slot   operator(): id  0 | task 56 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.38.716.006 I slot   operator(): id  0 | task 56 | cached n_tokens = 276, memory_seq_rm [276, end)
+  0.39.039.511 I slot   operator(): id  0 | task 56 | cached n_tokens = 332, memory_seq_rm [332, end)
+  0.41.761.485 I slot   operator(): id  0 | task 56 | cached n_tokens = 2376, memory_seq_rm [2376, end)
+  0.45.472.599 I slot   operator(): id  0 | task 86 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.46.420.523 I slot   operator(): id  0 | task 86 | cached n_tokens = 543, memory_seq_rm [543, end)
+  0.48.815.820 I slot   operator(): id  0 | task 86 | cached n_tokens = 2587, memory_seq_rm [2587, end)
+  0.51.399.448 I slot   operator(): id  0 | task 98 | forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+  0.51.419.221 I slot   operator(): id  0 | task 98 | cached n_tokens = 0, memory_seq_rm [0, end)
+  0.52.051.735 I slot   operator(): id  0 | task 98 | cached n_tokens = 144, memory_seq_rm [144, end)
+  0.52.360.451 I slot   operator(): id  0 | task 98 | cached n_tokens = 167, memory_seq_rm [167, end)
+  0.52.853.216 I slot   operator(): id  0 | task 104 | forcing full prompt re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see https://github.com/ggml-org/llama.cpp/pull/13194#issuecomment-2868343055)
+  0.52.859.944 I slot   operator(): id  0 | task 104 | cached n_tokens = 0, memory_seq_rm [0, end)
+  0.53.422.230 I slot   operator(): id  0 | task 104 | cached n_tokens = 227, memory_seq_rm [227, end)
+  0.53.745.258 I slot   operator(): id  0 | task 104 | cached n_tokens = 276, memory_seq_rm [276, end)
+  0.54.560.378 I slot   operator(): id  0 | task 104 | cached n_tokens = 594, memory_seq_rm [594, end)
+  0.57.112.149 I slot   operator(): id  0 | task 104 | cached n_tokens = 2638, memory_seq_rm [2638, end)

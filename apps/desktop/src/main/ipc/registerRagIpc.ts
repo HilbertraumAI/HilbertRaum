@@ -53,9 +53,89 @@ import { isAggregationShaped, routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
+import { resolveRerankProfile, rerankScopeFor, type RerankScope } from '../services/rag/rerank-profile'
+import {
+  resolveRerankerDevicePosture,
+  snapshotRerankerOccupancy,
+  createPendingModelSwitchCounter,
+  type RerankerOccupancySnapshot
+} from '../services/rag/device-posture'
+import { eligibleDevicesFor, machineKey } from '../services/performance'
+import { detectSystem } from '../services/benchmark'
+import { defaultThreadCount } from '../services/runtime/sidecar'
+import type { AppSettings } from '../../shared/types'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
 import type { Db } from '../services/db'
+
+/**
+ * This ask's knowledge-pack candidate scope, resolved from `resolveRerankProfile`'s hardware
+ * profile (`rag/rerank-profile.ts`) — a GPU machine's ask sees `GPU_RERANK_SCOPE` candidates
+ * whenever the profile resolves `gpu` AND the reranker sidecar's own device posture resolves
+ * `gpu` too (Wave 6 ruling (a) below). Step 4-5 (ruling (d), B2) re-sourced the reranker
+ * sidecar's own device POSTURE onto a separate, headroom-gated check (`rerankerDeviceFor`) and
+ * deliberately left this scope classification alone — so on a small card where the chat model
+ * leaves too little headroom, the profile can still resolve `gpu` (and therefore this wide
+ * scope) while the sidecar itself starts `--device none` (CPU posture): the scope this function
+ * returns and the sidecar's actual posture CAN mismatch. Flagged by the scoped Opus review of
+ * step 4-5 (finding C1) as unmeasured and undisclosed; **resolved by Wave 6 ruling (a) (step
+ * 4-6)**: the posture is now resolved through the SAME shared helper the sidecar itself uses
+ * (`resolveRerankerDevicePosture`, `main/services/rag/device-posture.ts` — Wave 6 ruling (c)) and
+ * threaded into `rerankScopeFor`, which forces `capped` on the `gpu` profile whenever the
+ * resolved posture is `cpu` — never a general "posture cpu ⇒ capped" rule (that would also
+ * capture the always-`cpu`-postured `cpu-hi` branch and kill its `top48` opt-in; see
+ * `rerankScopeFor`'s own doc comment). The scope this function returns and the sidecar's actual
+ * posture cannot disagree, because both are resolved through the SAME shared helper with the
+ * SAME settings AND occupancy snapshot for a given call (Wave 8 ruling (a) below re-sourced the
+ * posture's chat-model input from `settings.activeModelId` onto the runtime's COMMITTED model —
+ * a proxy that used to be false for the whole `models:use` hash + load window — plus the
+ * in-flight/pending chat-start state and the translator's occupancy; see
+ * `rag/device-posture.ts`'s own doc comment for the full history). Step 4-7 (Wave 7 ruling (a))
+ * added an event-time suspend on every settings-writing channel that touches `activeModelId`
+ * (`settings:update`, `models:select`, `models:use`) or `gpuMode`/`gpuAutoDisabled`, so a
+ * resident sidecar's NEXT `rerank()` would re-resolve promptly — early release, not the
+ * guarantee. `gpuAutoDisabled` also moves through two further seams no suspend covers
+ * (`tryGpuAgain`, `persistGpuFailure`) — reported, not fixed, for a separate owner ruling; see
+ * `channels.json`. What actually keeps the two from disagreeing at every MOMENT is the
+ * reranker's own use-time re-check (`reranker/llama.ts`'s `resolveServer`, Wave 8 ruling (b)(Q)):
+ * a restart that cannot proceed safely lands on Wave 5 ruling (e)(i)'s `cappedCandidates`
+ * fallback, never a wide scope on a CPU sidecar and never an ended ask. Absent a reranker
+ * (`rerankerAvailable: false`), `rerankScopeFor`
+ * always returns `'capped'` — a MEASURED requirement, not just a defensive default: the `gpu`
+ * profile's own no-rerank column (the `all` scope through the no-rerank interleave — the
+ * configuration an ABSENT reranker produces; a rerank-call FAILURE is restricted to the `capped`
+ * companion instead, since step 4-5 ruling (e)(i)) packed FEWER gold blocks than today's
+ * `capped`/no-rerank baseline (`allPacked` 26→22, `anyPacked` 42→33 — see
+ * `docs/known-limitations.md`'s fallback-cost bullet and `docs/rag-design.md` §17). Exported for
+ * `tests/unit/rerank-profile-wiring.test.ts` — the one production call site this function has.
+ *
+ * `occupancy` (Wave 8 ruling (a)/(b)(G)/NF-1) is a REQUIRED parameter, not optional: the resolved
+ * posture depends on the committed chat model and its in-flight/pending state and the
+ * translator's occupancy, never `settings.activeModelId` — an optional parameter defaulting to
+ * "no occupancy" would silently readmit wide scopes on a small card the instant a caller forgot
+ * to pass it. The one production call site (below) builds it from `ctx.runtime`/`ctx.translator`
+ * and the pending-switch counter, the SAME snapshot shape `main/index.ts`'s posture callback
+ * factory builds (`rag/device-posture.ts`'s `createRerankerCallbacks`), so the sidecar's own
+ * posture and this per-ask scope cannot disagree for a given call.
+ */
+export function resolveAskCandidateScope(
+  settings: AppSettings,
+  rerankerAvailable: boolean,
+  manifestsDir: string | null,
+  occupancy: RerankerOccupancySnapshot
+): RerankScope {
+  const here = machineKey(detectSystem())
+  const input = {
+    gpuMode: settings.gpuMode,
+    gpuAutoDisabled: settings.gpuAutoDisabled,
+    probeDevices: eligibleDevicesFor(settings, here),
+    threads: defaultThreadCount(),
+    rerankerAvailable,
+    wideScopeOptIn: settings.ragRerankWideScope
+  }
+  const posture = resolveRerankerDevicePosture(settings, manifestsDir, occupancy)
+  return rerankScopeFor(resolveRerankProfile(input), input, posture)
+}
 
 /** Does any in-scope document have precomputed structured-extract data (a `__scan__` marker)?
  *  Gates the router's coverage-extract branch — without it we cannot honestly claim a complete
@@ -194,7 +274,27 @@ export function registerRagIpc(ctx: AppContext): void {
         throw new Error(tMain('main.chat.skillUnavailable'))
       }
 
-      const settings = ragSettingsFrom(getSettings(ctx.db))
+      const rawSettings = getSettings(ctx.db)
+      const settings = ragSettingsFrom(rawSettings)
+      // Step 4-4: resolved once per ask, from the SAME settings snapshot `settings` above came
+      // from — reused at the single `externalArm` wiring point below. `ctx.manifestsDir` (Wave 6
+      // ruling (c)) lets the posture half reach `findManifestById`/`estimateGraphicsNeedMib`.
+      // Wave 8 ruling (a)/NF-1: `occupancy` is REQUIRED — built by the SAME
+      // `snapshotRerankerOccupancy` helper `main/index.ts`'s posture-callback factory uses, off
+      // the SAME `ctx.runtime`/`ctx.translator`, so this per-ask scope and the sidecar's own
+      // posture cannot disagree for this call. `ctx.pendingModelSwitches` is optional only so a
+      // partial test context stays valid; a fresh (always-zero) counter is equivalent to "no
+      // model switch pending" for a context that never wires one.
+      const candidateScope = resolveAskCandidateScope(
+        rawSettings,
+        ctx.reranker != null,
+        ctx.manifestsDir,
+        snapshotRerankerOccupancy(
+          ctx.runtime,
+          ctx.pendingModelSwitches ?? createPendingModelSwitchCounter(),
+          () => ctx.translator ?? null
+        )
+      )
 
       // Resolve the conversation's composite scope (plan §10.1 / D1): the UNION of the
       // selected collections (Library / projects), specific docs, and chat attachments.
@@ -773,7 +873,14 @@ export function registerRagIpc(ctx: AppContext): void {
             // #340 L3-b (D-Z20, owner ruling 2026-09-07 "always"): the arm expands the question
             // through the turn's own runtime — one short, bounded, grammar-constrained call per
             // pack-scoped ask, before the search; any failure falls back to the plain pattern.
-            externalArm: ctx.zim?.makeArm(ctx.db, scope.packIds, { expand: makeQueryExpander(runtime) }) ?? null,
+            // Step 4-4 (ruling (a)): `candidateScope` widens what the arm admits on a `gpu`/
+            // opted-in `cpu-hi` machine; absent reranker or `default` profile it is `'capped'`,
+            // byte-identical to today.
+            externalArm:
+              ctx.zim?.makeArm(ctx.db, scope.packIds, {
+                expand: makeQueryExpander(runtime),
+                candidateScope
+              }) ?? null,
             // The turn's skill: its fence rides in the grounded user turn; the assistant row is
             // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
             skill,

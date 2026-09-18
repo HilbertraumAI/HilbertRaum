@@ -57,6 +57,7 @@ import { getSettings } from '../../src/main/services/settings'
 import type { ModelPrefetch, PrefetchOutcome } from '../../src/main/services/runtime/prefetch'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { GpuDevice, ModelPlacement } from '../../src/shared/types'
+import { hangPolls } from '../helpers/hang-budget'
 import {
   closePerformanceFixture,
   ctxWith,
@@ -190,7 +191,7 @@ function ladderHarness(config: {
 
 /** Resolve once `cond` holds — polled on observable state, never a fixed sleep. */
 async function until(cond: () => boolean): Promise<void> {
-  for (let i = 0; i < 500; i++) {
+  for (let i = 0; i < hangPolls(500, 1); i++) {
     if (cond()) return
     await new Promise((r) => setTimeout(r, 1))
   }

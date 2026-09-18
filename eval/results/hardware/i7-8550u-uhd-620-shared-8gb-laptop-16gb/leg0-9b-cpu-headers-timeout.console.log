@@ -1,0 +1,14 @@
+[pre] nvidia-smi {"used":0}
+[pre] list-devices
+Available devices:
+  Vulkan0: Intel(R) UHD Graphics 620 (8119 MiB, 7457 MiB free)
+[argv] --host 127.0.0.1 --port 50548 --model <drive>\models\chat\qwen3.5-9b-ud-q4kxl.gguf --ctx-size 8192 --threads 4 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --device none
+[loaded] 16637 ms; nvidia-smi {"used":0}
+[loaded] list-devices while loaded
+Available devices:
+  Vulkan0: Intel(R) UHD Graphics 620 (8119 MiB, 7457 MiB free)
+[prompt] 107 tok/paragraph × 19 → 2015 tokens
+[request-error] http://127.0.0.1:50548/completion try 1: UND_ERR_HEADERS_TIMEOUT
+[request-error] http://127.0.0.1:50548/completion try 2: UND_ERR_HEADERS_TIMEOUT
+
+[killed]

@@ -234,6 +234,29 @@ describe('settings write gate — object-valued size cap + array rejection (CODE
 
 // ---- Local API settings (local-api wave P2) ---------------------------------------------
 
+describe('ragRerankWideScope (step 4-4, Wave 4 ruling (a) — the cpu-hi rerank profile opt-in)', () => {
+  it('defaults OFF', () => {
+    const db = freshDb()
+    expect(getSettings(db).ragRerankWideScope).toBe(false)
+  })
+
+  it('round-trips true and back to false', () => {
+    const db = freshDb()
+    expect(updateSettings(db, { ragRerankWideScope: true }).ragRerankWideScope).toBe(true)
+    expect(updateSettings(db, { ragRerankWideScope: false }).ragRerankWideScope).toBe(false)
+  })
+
+  it('rejects a non-boolean value (the generic typeof gate); null never clobbers a non-null default', () => {
+    type JunkPatch = Record<string, unknown>
+    const db = freshDb()
+    updateSettings(db, { ragRerankWideScope: true })
+    updateSettings(db, { ragRerankWideScope: 'yes' } as JunkPatch)
+    expect(getSettings(db).ragRerankWideScope).toBe(true) // junk dropped, prior value kept
+    updateSettings(db, { ragRerankWideScope: null } as JunkPatch)
+    expect(getSettings(db).ragRerankWideScope).toBe(true) // null is not accepted for a non-null default
+  })
+})
+
 describe('local API settings (local-api P2)', () => {
   it('defaults: OFF, port 4980, token required (D3/D4)', () => {
     const db = freshDb()

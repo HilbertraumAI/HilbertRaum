@@ -18,6 +18,7 @@ import {
 } from '../../src/main/services/read-speed'
 import { validateManifest, type ModelManifest } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Phase 18 — the in-app model downloader (architecture.md "In-app model downloader"). Everything
 // runs through the INJECTED fake fetch: the suite makes zero real network calls, and the
@@ -161,7 +162,7 @@ function routedFetch(routes: Record<string, string>): { fetch: FetchFn; urls: st
 async function waitFor(cond: () => boolean, ms = 5000): Promise<void> {
   const start = Date.now()
   while (!cond()) {
-    if (Date.now() - start > ms) throw new Error('waitFor timed out')
+    if (Date.now() - start > hangBudgetMs(ms)) throw new Error('waitFor timed out')
     await new Promise((r) => setTimeout(r, 10))
   }
 }

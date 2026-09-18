@@ -14,6 +14,7 @@ import {
   maybeStartLocalApi
 } from '../../src/main/services/local-api/lifecycle'
 import type { AppContext } from '../../src/main/services/context'
+import { hangPolls } from '../helpers/hang-budget'
 
 // Local-API lifecycle pins (local-api wave P3): DEFAULT OFF means a fresh workspace opens
 // ZERO listeners (the outbound-only test gap — the policy suite pins outbound calls, this
@@ -58,7 +59,7 @@ function makeCtx(opts?: { unlocked?: boolean; policyJson?: string; isDev?: boole
 
 async function settle(): Promise<void> {
   // maybeStartLocalApi is fire-and-forget; give its start() a few ticks to bind.
-  for (let i = 0; i < 20; i++) await new Promise((r) => setTimeout(r, 5))
+  for (let i = 0; i < hangPolls(20, 5); i++) await new Promise((r) => setTimeout(r, 5))
 }
 
 describe('local API lifecycle (P3 wiring)', () => {

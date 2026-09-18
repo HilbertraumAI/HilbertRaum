@@ -33,6 +33,7 @@ import { IPC, STREAM } from '../../src/shared/ipc'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { hangPolls } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -116,13 +117,29 @@ const sentinelReq = (): ImageAnalyzeRequest => ({
 })
 
 async function waitForTerminal(jobId: string): Promise<ImageJob> {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < hangPolls(200, 5); i++) {
     const { result } = await invoke(handlers, IPC.imageGetJob, jobId)
     const job = result as ImageJob
     if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') return job
     await new Promise((r) => setTimeout(r, 5))
   }
   throw new Error('vision job never reached a terminal state')
+}
+
+/**
+ * Persistence is async: wait for the streamed done event before inspecting the rows.
+ *
+ * Throws BY NAME rather than falling through. The counted loop this replaces did the latter,
+ * so when it ran out on a starved CI worker the next assertion failed with an opaque
+ * `expected [] to have a length of 1` instead of saying what had not happened (#458, run
+ * 34664328086). Its budget is `hangPolls`, so it widens on CI like every other detector.
+ */
+async function waitForDoneEvent(event: { sender: { send: { mock: { calls: unknown[][] } } } }, jobId: string): Promise<void> {
+  for (let i = 0; i < hangPolls(200, 5); i++) {
+    if (event.sender.send.mock.calls.some((c: unknown[]) => c[0] === STREAM.imgDone(jobId))) return
+    await new Promise((r) => setTimeout(r, 5))
+  }
+  throw new Error(`vision-security: the streamed done event for ${jobId} never arrived`)
 }
 
 let logCalls: string[]
@@ -356,10 +373,7 @@ describe('vision security sentinel', () => {
     expect(done.state).toBe('done')
     // F-12 (audit 2026-07-16): the encrypted store is async, so the .enc sidecar (and the shred of the
     // plaintext temp) land only after the streamed done EVENT fires — wait for it before the disk check.
-    for (let i = 0; i < 200; i++) {
-      if (event.sender.send.mock.calls.some((c: unknown[]) => c[0] === STREAM.imgDone(initial.jobId))) break
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await waitForDoneEvent(event, initial.jobId)
 
     expect(ocrSpy).not.toHaveBeenCalled() // no OCR engine ever built on the vision path
     expect(existsSync(join(root, 'documents'))).toBe(false) // never the documents pipeline
@@ -470,10 +484,7 @@ describe('vision security sentinel', () => {
     const done = await waitForTerminal(initial.jobId)
     expect(done.state).toBe('done')
     // Persistence is async — wait for the streamed done event before inspecting the rows.
-    for (let i = 0; i < 200; i++) {
-      if (event.sender.send.mock.calls.some((c: unknown[]) => c[0] === STREAM.imgDone(initial.jobId))) break
-      await new Promise((r) => setTimeout(r, 5))
-    }
+    await waitForDoneEvent(event, initial.jobId)
 
     const list = (await invoke(handlers, IPC.imageListSessions)).result as Array<{
       id: string

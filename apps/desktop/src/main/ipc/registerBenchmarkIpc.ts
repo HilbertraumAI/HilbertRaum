@@ -1014,8 +1014,11 @@ function buildPlacement(
   const observedMismatch =
     mine && !matchesConfig(mine) ? { contextTokens: mine.contextTokens, backend: mine.backend, at: mine.at } : null
   // Every model the app can hold (benchmark.md "Models on this computer"): chat and translation
-  // auto-fit onto the card; images, document search and voice are pinned to the processor by
-  // design (contention immunity; vision/runtime.ts, embeddings/e5.ts, reranker/llama.ts).
+  // auto-fit onto the card; images and voice are pinned to the processor by design (contention
+  // immunity; vision/runtime.ts, embeddings/e5.ts — the embedder half of "document search" is
+  // pinned too). The reranker half of document search instead follows its own headroom-gated
+  // device posture (Wave 8 ruling (a), reranker/llama.ts, rag/device-posture.ts) — read below
+  // through the `Reranker` interface's optional `devicePosture()` member, never hard-coded.
   // Liveness comes from each service's own handle; whisper is a CLI that runs only while
   // transcribing.
   //
@@ -1068,7 +1071,10 @@ function buildPlacement(
       role: 'reranker',
       modelId: byRole('reranker')?.id ?? null,
       sizeOnDiskGb: gib(byRole('reranker')),
-      device: 'cpu',
+      // Wave 8 ruling (d): the resident sidecar's ACTUAL posture, or — when nothing is resident
+      // — the posture a cold start would take now (`Reranker.devicePosture()`, the `isLoaded?`
+      // pattern). A `Reranker` without that optional member reports `'cpu'` here.
+      device: ctx.reranker?.devicePosture?.() ?? 'cpu',
       loaded: ctx.reranker?.isLoaded?.() ?? false,
       lifetime: 'session',
       gpuLayers: null,

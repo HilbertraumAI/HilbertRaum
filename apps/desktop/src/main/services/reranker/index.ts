@@ -1,3 +1,5 @@
+import type { RerankerDevice } from '../rag/rerank-profile'
+
 // Reranker contract (rag-design §11; fills the spec §3.3 'reranker' manifest
 // role). A cross-encoder scores (query, document) pairs jointly —
 // strictly more signal than the bi-encoder cosine the vector index ranks by — and
@@ -34,6 +36,14 @@ export interface Reranker {
   rerank(query: string, documents: string[], opts?: RerankOptions): Promise<RerankedHit[]>
   /** Optional: is the sidecar resident right now? (Performance screen.) */
   isLoaded?(): boolean
+  /**
+   * Optional (Wave 8 ruling (d), the `isLoaded?` pattern): the resident sidecar's ACTUAL device
+   * posture, or — when nothing is resident — the posture a cold start would take right now (the
+   * Performance screen's reranker row reads this instead of a hard-coded `'cpu'`). A `Reranker`
+   * without this member (a test fake, or any other implementation) reports `'cpu'` at the call
+   * site — no shape or required-member change.
+   */
+  devicePosture?(): RerankerDevice
   /** Optional (PR #303 P3): subscribe to `isLoaded()` flips; returns the unsubscribe. */
   onResidencyChange?(cb: () => void): () => void
   /** Release the backing sidecar PERMANENTLY. Called on `will-quit`. */

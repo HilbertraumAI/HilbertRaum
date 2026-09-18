@@ -305,7 +305,14 @@ The current dark palette survives as the dark theme (lightly tuned per §4.3).
 - **Error announcements (#151 D-5).** Error slots use the shared always-mounted `ErrorBanner`
   (`components/ErrorBanner.tsx`), never the raw `{error && <Banner tone="error">…}` idiom —
   a freshly inserted pre-filled alert is missed by many screen readers (M-U1); the mounted
-  region announces the FIRST failure too. Render-error containment is the shared
+  region announces the FIRST failure too. **`role="status"` is itself a live region** (implicit
+  `aria-live="polite"`), so NOTHING inside an always-mounted region may carry `role="status"`
+  or `role="alert"`: the nearest live-region ancestor governs, and a nested one is inserted
+  already holding its text, which reintroduces M-U1 one level down. `ErrorBanner` shipped that
+  way and was silent under Narrator for every screen that used it (#436); `aria-live="off"` on
+  the inner element does NOT rescue it — the role has to go, so `Banner` takes `role={null}`
+  when nested. Pinned by `tests/unit/live-region-nesting.test.ts`, which fails on any nested
+  live-region role anywhere in the renderer. Render-error containment is the shared
   `ErrorBoundary` (per-screen, keyed by destination; the nav rail lives outside it).
 - **Password entry.** The shared `PasswordField` (+ `PasswordStrengthMeter`) — show/hide
   toggle, paste and password managers allowed (WCAG 3.3.8), advisory-only strength. Used by

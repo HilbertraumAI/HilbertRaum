@@ -541,15 +541,88 @@ second-laptop continuity check.
 
 [`.github/workflows/ci.yml`](../.github/workflows/ci.yml) runs the **exact pre-release command
 chain** — `npm ci` → `npm run typecheck` → `npm run build` → `npm test` — on every pull request
-and on pushes to `master`, across a matrix of **`ubuntu-latest` and `windows-latest`** (Windows is
+and on pushes to `master`, on **`ubuntu-latest` and `windows-latest`** (Windows is
 first-class for this project) × **Node `22.x` and `24.x`**. It is the machine
 backstop the audit asked for (TEST-N1): before CI, the suite was green only by author discipline,
 and the repo's own anti-false-green check ([`tests/full-suite-guard.ts`](../apps/desktop/tests/full-suite-guard.ts))
-only mattered if something ran it. CI runs the four matrix legs (`build-and-test
-(ubuntu-latest, 22.x)` / `(windows-latest, 24.x)` / …) plus a tiny **`ci-success`** aggregate job
-that passes only when **every** leg passes — mark **`ci-success`** the **required status check** on
-`master`. Its name is stable even if the matrix labels change later, so branch protection never
-silently stops matching; never mark an individual leg required.
+only mattered if something ran it. The legs are **deliberately asymmetric since #458**: each
+windows leg is **split into two `--shard` jobs**, the ubuntu legs run the whole suite. So six legs
+(`build-and-test (ubuntu 22.x)` / `(windows 24.x, 1 of 2)` / …) plus a tiny **`ci-success`**
+aggregate job that passes only when **every** leg passes — mark **`ci-success`** the **required
+status check** on `master`. Its name is stable even when the matrix labels, the Node list or the
+shard count change (#458 renamed all six legs), so branch protection never silently stops
+matching; never mark an individual leg required.
+
+**Why the windows legs are sharded and the ubuntu ones are not (#458).** The `npm test` step was
+483–542 s of a 10–14 min windows leg against ~5 min for a whole ubuntu leg, so the windows legs ran
+*at* their budget and any unlucky file failed a run no code change could have broken — five such
+flakes in two days, each costing a full re-run. Two shards halve the wall clock and with it the
+window a noisy neighbour can hit; runner minutes are free on a public repo, so the extra jobs cost
+only queue time.
+
+**What it actually bought, measured** (run `34662589439` — the first run in which the shard flag
+really reached vitest; see the forwarding note below for why the earlier ones did not):
+
+| | before | after |
+| --- | --- | --- |
+| windows `Test` step | 483–542 s | **221–239 s** |
+| windows job | 10–13 min | **5.3–5.7 min** |
+| critical path | windows, 13.3 min | **5.7 min** — windows is no longer the long pole (ubuntu 4.9–5.3 min) |
+
+The gain **beats** a halving, because per-file overheads fall too: per-file test cost went
+2.22 s → 1.65/1.99 s, and the two shards together spend *less* total test time than the single
+unsharded run (816 s vs 997 s). So the earlier framing here — "sharding halves *exposure*, not
+*crowding*" — was too strong: pressure per runner genuinely eases, plausibly because each runner
+now accumulates only half the leaked sqlite handles and locked temp roots of #460 (correlation,
+not a proven cause). What remains true is that each shard runs the same
+`availableParallelism() - 1` forks, so the CI-aware `testTimeout`/`hookTimeout` above are still
+what buy *tolerance* when a fork is starved; the two changes address different halves of the
+problem. **Ubuntu stays whole for a reason beyond cost:** one leg per Node
+version still runs all 449 files in a *single* vitest process, so cross-file interference (shared
+module state, a leaked global, an ordering dependency) keeps a leg that can still see it; a fully
+sharded matrix would partition that surface away everywhere at once.
+
+**#460 has since been fixed (2026-09-13): the leaked handles and locked roots above no longer
+accumulate.** The per-file test teardown (`tests/setup-temp-roots.ts`) now closes every
+`node:sqlite` handle a test file left open — 1,709 of the 2,306 a full run opens, across 120 files
+— *before* it removes that file's temp roots, so on Windows the post-run sweep went from ~1,500
+roots per run to **1**, and that one is the harness's own `temp-roots.test.ts` exercising the
+deferral on purpose (design: `tests/helpers/sqlite-handles.ts`). Locally it bought no speed worth
+quoting (201 → 189 s, within noise), as #458 predicted: this is hygiene, not a CI-budget lever.
+**What to look for on a run:** the `temp roots: N deferred root(s)` line at the end of the `Test`
+step reads `1` on the ubuntu legs and on whichever windows shard owns `temp-roots.test.ts`, and is
+absent on the other shard. A higher count is a new leak — worth a look, not a re-run.
+
+**The collection guard is shard-aware — and must stay that way.** `tests/full-suite-guard.ts`
+asserts vitest actually collected every file it should, which is what makes a silently dropped
+suite fail instead of passing by not running. A shard legitimately collects half, so the guard
+reproduces **vitest's own split** (`shardTestFiles`) and asserts the shard's expected subset; the
+union of the shards is still every file, so a dropped file fails whichever shard owned it. Two
+traps, both already paid for:
+
+- **Never "shard" by passing a path** (`npm test -- tests/unit`). A positional argument reads as a
+  filter, so the guard switches itself **off silently** — retiring the exact protection it exists
+  for, with no signal. `--shard` is a flag, so the guard stays on and merely narrows. The space
+  form `--shard 1/2` puts its value in argv looking like a path, which the config now skips
+  explicitly; CI uses `--shard=1/2`.
+- **The split is hashed over `/` + the POSIX root-relative path** — vitest resolves paths with
+  `pathe`, which normalises away from `\`, so the assignment is identical on every platform.
+  Reproducing it with node's native `path.resolve` type-checks and looks equivalent but hashes
+  `\tests\unit\x.test.ts` on Windows and assigns a different half: the first implementation here
+  did exactly that and agreed with a real `--shard=1/2` run on 109 of 225 files, i.e. chance.
+  Fixed sha1 vectors in `tests/unit/full-suite-guard.test.ts` pin the hashed string so the
+  mistake cannot return unnoticed on a machine where `sep === '/'`.
+
+**Passing a flag through `npm test` needs the root script's trailing `--` (#458).** The root
+`test` script forwards to the workspace — `npm run test --workspace apps/desktop --` — and that
+trailing `--` is load-bearing. A **positional** survives two npm layers (`npm test -- tests/unit`
+has always worked), but a **flag** does not: without the `--`, the inner `npm run` swallows
+`--shard=1/2` as an npm config and only prints `npm warn Unknown cli config "--shard"`. The first
+sharded CI run hit exactly this and **silently did nothing** — all six legs ran the whole 449-file
+suite and merely looked slow (run `34660709148`; every leg reported `(449)`). Nothing failed,
+because the guard was correctly enforcing all 449 and all 449 had run. When adding a CI leg that
+passes vitest a flag, check the leg's `Test Files` line really shows the reduced count, and treat
+an `Unknown cli config` warning in a run log as an error.
 
 **Why both Node majors, and why the explicit pinned-npm install (AUD-26).** The two versions are the
 two ends of what the repo *claims*, and each was previously an unexercised claim: `22.x` is the
@@ -605,6 +678,69 @@ commit SHAs** with a `# vX.Y.Z` comment (the `cla.yml` idiom — a movable tag l
 a compromised action repo inject code into CI; full-audit 2026-07-10 SC-1). This is **dev infrastructure only** — it ships nothing to users, adds no
 telemetry/analytics, and performs no network egress beyond the registry install (the "no cloud /
 no telemetry" hard rule governs the shipped app at runtime).
+
+**Both vitest budgets are CI-aware, for the starvation described above (#458).** A fork on a
+saturated runner can be descheduled for 10+ seconds, so whichever file is unlucky fails a run no
+code change could have broken. The budgets therefore widen on CI (`vitest.config.ts`; GitHub
+Actions sets `CI=true`): `testTimeout` 15 s → 60 s, and since #458 `hookTimeout` likewise — before
+that it sat on vitest's 10 s default, six times tighter than the tests, and two of the five windows
+flakes investigated in #458 were hook timeouts rather than test timeouts. Neither widening loosens
+any evidence: timing PROOFS live in explicit assertions (the FTS 500 ms bound, #84), never in a
+vitest budget, and a hook is setup, not proof. Locally both stay at 15 s so a real hang still
+fails fast at the desk.
+**A hand-rolled wall-clock bound does NOT widen with them** — a `Date.now() - start > N` poll
+guard, a fixture's own `waitFor` default, or a child-process `timeout` is invisible to vitest's
+config, so each one needs its own CI headroom (`doctasks-translation.test.ts` says so at its
+30 s hang detector). Prefer asserting what a deadline GUARANTEES (a bound, an exclusion) over how
+far concurrent work got inside it; the latter is a property of the runner, not of the code (#457,
+#389).
+
+**Hand-rolled wall-clock bounds are CI-aware via one helper (#458 step 3).** The paragraph above
+warned that a `Date.now() - start > N` guard does not widen with `testTimeout`; the suite's
+**29** such bounds across 16 files, plus the two fixture `waitFor` defaults, now all go through
+[`tests/helpers/hang-budget.ts`](../apps/desktop/tests/helpers/hang-budget.ts):
+`hangBudgetMs(5_000)` stays 5 s at a desk and becomes 20 s on CI. The multiplier is 4× — exactly
+the ratio `testTimeout` already uses (15 s → 60 s) — capped at 45 s so a widened detector still
+fires *inside* the 60 s CI test budget and you keep its named error instead of a bare
+`Test timed out`. Every one of those bounds is a **hang detector**, not a measurement: exceeding
+it means "it never finished", never "it was slow".
+
+**What must NOT go through it:** a bound that is itself the evidence. `fts-rowid-sync`'s 500 ms
+(#84) and `zim-arm`'s `elapsedMs < 1_500` (the `probeTimeoutMs` seam behavioural test, below) are
+timing PROOFS — the second exists to show a slow `/suggest` is cut off at the SEAM's bound, not
+the server's, so widening it would stop it discriminating. Those are marked as deliberate
+exceptions in place.
+
+**When a test depends on a budget inside the PRODUCT, add a seam instead of loosening the
+assertion.** The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run
+`34659678616`): the arm's title lookup and document-frequency probes ran against a real 3 s
+`DF_PROBE_TIMEOUT_MS`, and on a starved runner that timer won — the list article was never read,
+so `rawReads` came back holding only the plain reads. The assertion was about *which articles get
+read*, not latency, so the fix was a `probeTimeoutMs` test seam (mirroring the existing
+`articleTimeoutMs`) that the expansion cases pass, while the #353 cases that *prove* the short
+budget fires keep the real default. Verified by setting the seam to 1 ms: exactly those six
+expansion cases fail, which is what makes the seam's wiring provable rather than assumed.
+**SUPERSEDED 2026-09-14 by the §17 discovery port (Phase 4 PR-A):** the #353 document-frequency
+ladder this paragraph's expansion cases exercised (`DF_PROBE_MAX_TERMS`, `DF_PROBE_TIMEOUT_MS`,
+`narrowByFrequency`) was removed with the L3-b `{concepts,listTitle}` expander it belonged to;
+`probeTimeoutMs` itself survives (now gating the discovery port's own title-index `/suggest`
+lookups, `PROBE_TIMEOUT_MS = 3_000`) and is proven the same way — `zim-arm.test.ts` "a /suggest
+lookup held well past PROBE_TIMEOUT_MS is cut off at the probeTimeoutMs seam, not the server"
+(review 2026-09-14, test gap 3): a fixture holds a `/suggest` response 2,000 ms and the seam set
+to 50 ms still returns in well under 1,500 ms.
+
+**There are TWO shapes of hand-rolled bound, and the counted one is nastier.** The first sweep
+caught only `Date.now() - start > N`. CI then failed `vision-security.test.ts` (run
+`34664328086`) on the other shape — a loop bounded by ITERATION COUNT:
+`for (let i = 0; i < 200; i++) { if (cond) break; await sleep(5) }`. That is a 1 s detector
+hard-coded in disguise, and worse than the wall-clock form in two ways: it does not widen on CI
+**and it falls through silently**, leaving the next assertion to fail with something opaque —
+here `expected [] to have a length of 1`, which says nothing about the event that never arrived.
+The suite's **16** counted loops across 7 files now use `hangPolls(n, stepMs)`, which applies the
+same 4×/45 s contract in steps. Where a counted loop can fall through, prefer failing by name
+after it (`vision-security`'s `waitForDoneEvent` is the pattern); `waitForTerminal` in the same
+file already did. **When adding a poll loop, bound it in wall-clock terms through one of these
+two helpers and make its exhaustion an error, never a `break` into the next assertion.**
 
 **What CI does NOT cover — the manual `HILBERTRAUM_*` matrix stays a separate human gate.** A green
 CI run says **nothing** about the real-`spawn` / real-binary / real-weights surface: that is the

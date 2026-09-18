@@ -20,7 +20,7 @@ import type { IngestionDeps } from '../ingestion'
 import type { OcrEngine } from '../ocr'
 import type { RasterizePdf } from '../ocr/rasterizer'
 import type { AuditRecorder } from '../audit'
-import type { ModelSlotArbiter } from '../analysis/model-slot-arbiter'
+import type { ModelSlotArbiter, ModelSlotArbiterDeps } from '../analysis/model-slot-arbiter'
 
 /** Injected seams so the engine is testable without Electron and the IPC layer. */
 export interface DocTaskDeps {
@@ -109,6 +109,14 @@ export interface DocTaskDeps {
    * nothing else changes.
    */
   beginOccupancy?: () => () => void
+  /**
+   * Overrides for the model-slot arbiter's post-chat resume delay (#399 D3(a)) — the ONLY
+   * reason this exists is that the delay is 90 seconds of wall clock, which no test can wait
+   * out. Tests inject a fake clock + timer here so the pause/resume contract is still exercised
+   * end to end through this manager. Absent/unwired ⇒ the shipped 90 s / 10 min constants, so
+   * partial test deps stay valid. Production never sets it.
+   */
+  slotArbiterDeps?: ModelSlotArbiterDeps
   audit?: AuditRecorder
 }
 

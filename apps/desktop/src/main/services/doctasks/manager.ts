@@ -126,11 +126,15 @@ export class DocTaskManager {
    * The single model-slot owner for a YIELDING tree build (plan §4.1, H9/H10). Only a
    * running `tree` build registers with it; chat uses it to pause+hand-off, never to race.
    */
-  private readonly arbiter = new ModelSlotArbiter()
+  private readonly arbiter: ModelSlotArbiter
   /** The narrow orchestration handle handed to each per-kind handler (DX-1). */
   private readonly ctx: DocTaskCtx
 
   constructor(private readonly deps: DocTaskDeps) {
+    // #399 D3(a): the resume delay is a 90 s wall-clock wait in production; `slotArbiterDeps`
+    // is the test-only fake-clock seam (see DocTaskDeps). Assigned here rather than as a field
+    // initializer because it reads `deps`.
+    this.arbiter = new ModelSlotArbiter(deps.slotArbiterDeps)
     this.ctx = {
       deps,
       arbiter: this.arbiter,

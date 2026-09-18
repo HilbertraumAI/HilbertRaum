@@ -154,10 +154,26 @@ the **OCR rasterizer's hidden window** — which renders untrusted PDF bytes and
 WebContents that proves both events are registered and a remote redirect is prevented.
 
 **Pinned parser libraries carry no update channel (ocr-audit 2026-07-18 BE-9).** pdfjs
-(main process and the hidden OCR window) and tesseract.js parse untrusted bytes from
-imported PDFs/images and are pinned only via the lockfile — review upstream advisories for
-both each release; the offline posture means there is no auto-update channel to catch a
-disclosed vulnerability between releases.
+(main process and the hidden OCR window), tesseract.js, and **mammoth — with its transitive
+`@xmldom/xmldom`** — parse untrusted bytes from imported PDFs/images/DOCX and are pinned only
+via the lockfile — review upstream advisories for all of them each release; the offline posture
+means there is no auto-update channel to catch a disclosed vulnerability between releases.
+The DOCX pair was missing from this list until the 0.8.15 bump, which is exactly how ten xmldom
+advisories went unwatched.
+
+**Why the DOCX parser needs that watch specifically.** The ingestion caps bound *bytes*,
+not *time*: the M-3 zip-bomb guard checks the DECLARED inflated size, and `parseWithLimits`'
+`parseTimeoutMs` is a `Promise.race` that a **synchronous** parser can never lose — mammoth
+ignores the abort signal (`services/ingestion/index.ts`), and document parsing runs on the
+**main process** with no worker. So a super-linear parse inside xmldom is an unbounded
+main-process freeze, not a caught timeout. That is not hypothetical: xmldom 0.8.13 carried four
+such advisories (quadratic attribute dedup CVE-2026-83613, end-tag ReDoS CVE-2026-83619,
+quadratic memory, quadratic malformed-input recovery), each reachable from `parsers/docx.ts` →
+`mammoth.extractRawText` → `DOMParser` on an imported `.docx`. The 0.8.15 bump closes them; the
+STRUCTURAL exposure remains, so a future advisory in this class is a release blocker, not a
+dev-chain nuisance. (The same version's six *serializer*-side injection CVEs were unreachable —
+nothing in mammoth or this app calls `XMLSerializer`; the DOCX export path in
+`services/export/docx-rewrite.ts` splices raw `<w:t>` bytes and never builds a DOM.)
 
 ### Voice dictation data path (Phase 37, decision D30)
 The composer mic records **in the renderer** (`getUserMedia` → `MediaRecorder`), resamples to

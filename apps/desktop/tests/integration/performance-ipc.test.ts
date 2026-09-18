@@ -366,6 +366,8 @@ describe('buildPerformanceSnapshot', () => {
     expect(tr).toMatchObject({ loaded: true, lifetime: 'idle', gpuLayers: 20, totalLayers: 49 })
     expect(tr?.modelId).toBeTruthy()
     expect(rows.find((r) => r.role === 'vision')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'idle' })
+    // A fake without the optional `devicePosture` member reports 'cpu' (Wave 8 ruling (d), the
+    // `isLoaded?` pattern's own default) -- unchanged from before this step.
     expect(rows.find((r) => r.role === 'reranker')).toMatchObject({ device: 'cpu', loaded: true, lifetime: 'session' })
     expect(rows.find((r) => r.role === 'embeddings')).toMatchObject({ device: 'cpu', loaded: true })
     expect(rows.find((r) => r.role === 'transcriber')).toMatchObject({ device: 'cpu', loaded: false, lifetime: 'per-use' })
@@ -378,6 +380,28 @@ describe('buildPerformanceSnapshot', () => {
     // probe-less class is `unified` and the old `memoryClass !== 'cpu'` form would have demanded
     // `true` for a model that is not even loaded.
     expect(snap.placement.totals.bothOnCard).toBe(false)
+  })
+
+  // Wave 8 ruling (d) (step 4-8): the reranker row reads the OPTIONAL `devicePosture()` member
+  // when a real Reranker provides it — no hard-coded 'cpu' any more.
+  it('reranker row reads devicePosture() when the Reranker provides it', () => {
+    const root = freshRoot()
+    const db = seededDb(root)
+    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: 'qwen3.5-9b-ud-q4kxl' })
+    const ctx = ctxWith(root, db, {
+      manifestsDir: join(__dirname, '..', '..', '..', '..', 'model-manifests'),
+      runtime: {
+        occupancy: new ModelOccupancy(),
+        active: () => ({ modelId: 'qwen3.5-9b-ud-q4kxl' }),
+        status: () => runningStatus('qwen3.5-9b-ud-q4kxl')
+      },
+      translator: { deviceStatus: () => ({ device: 'auto', gpuLayers: 20, totalLayers: 49, live: true }) },
+      vision: { isLoaded: () => false },
+      reranker: { isLoaded: () => true, devicePosture: () => 'gpu' },
+      embedder: { isLoaded: () => true }
+    })
+    const snap = buildPerformanceSnapshot(ctx)
+    expect(snap.placement.models.find((r) => r.role === 'reranker')).toMatchObject({ device: 'gpu', loaded: true })
   })
 
   it('carries the LIVE recommendation, built from the same inputs the listModels handler feeds buildModelList', () => {

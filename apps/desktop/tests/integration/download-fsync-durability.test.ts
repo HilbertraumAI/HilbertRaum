@@ -33,6 +33,7 @@ const { validateManifest } = await import('../../src/shared/manifest')
 import type { FetchFn } from '../../src/main/services/assets'
 import type { ModelManifest } from '../../src/shared/manifest'
 import type { DownloadJob } from '../../src/shared/types'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const spies = {
   openSync: vi.mocked(openSync),
@@ -88,7 +89,7 @@ async function waitForTerminal(mgr: InstanceType<typeof DownloadManager>, jobId:
   for (;;) {
     const job = mgr.get(jobId)
     if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
-    if (Date.now() - start > 5000) throw new Error('download never finished')
+    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('download never finished')
     await new Promise((r) => setTimeout(r, 5))
   }
 }

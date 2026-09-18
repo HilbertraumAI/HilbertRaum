@@ -1361,6 +1361,13 @@ export const de: Record<keyof typeof en, string> = {
     'Nutzt deine Grafikkarte, um Antworten zu beschleunigen, wenn sie verfügbar ist. ' +
     'Schalte das nur aus, wenn dir Stabilitätsprobleme auffallen — alles funktioniert so ' +
     'oder so weiter.',
+  // Schritt 4-4 (Wave-4-Entscheidung (a)): Opt-in des „cpu-hi“-Rerank-Profils. Keine Zahl im
+  // Text — die genaue Thread-Schwelle ist eine interne Feineinstellung, keine Nutzerangabe.
+  'settings.performance.rerankWideScope': 'Mehr Passagen aus Wissenspaketen neu bewerten',
+  'settings.performance.rerankWideScopeHint':
+    'Langsamer pro Frage. Nur auf einem Computer mit ausreichend Prozessor-Threads und ' +
+    'installiertem Modell zur Neubewertung nutzbar; ein Computer mit nutzbarer Grafikkarte ' +
+    'bewertet ohnehin bereits jede Passage neu.',
   'settings.performance.autoStart':
     'Das ausgewählte Modell beim Start der App automatisch laden',
   'settings.performance.autoStartHint':
@@ -2007,6 +2014,13 @@ export const de: Record<keyof typeof en, string> = {
   'perf.step.speed': 'Generierungsgeschwindigkeit mit {model}',
   'perf.step.speedSkipped': 'Generierungsgeschwindigkeit (kein Modell läuft, übersprungen)',
   'perf.step.hint': 'Etwa eine halbe Minute. Du kannst die App weiter benutzen.',
+  // #438: eine von der App selbst gestartete Prüfung sendet ihre Schritte an niemanden — statt
+  // einer auf Schritt 1 eingefrorenen Liste diese eine Zeile, in derselben Live-Region.
+  'perf.running.background': 'Dieser Computer wird im Hintergrund geprüft.',
+  // #437: der Schrittzustand steckt jetzt im Text, nicht nur in der CSS-Klasse.
+  'perf.step.state.done': '{step}: fertig',
+  'perf.step.state.active': '{step}: läuft',
+  'perf.step.state.todo': '{step}: wartet',
   'perf.observed.title': 'Während der Arbeit beobachtet',
   // Die Zeilen sind Sitzungs-Latches, die Lese-Messwerte dahinter werden aber zusätzlich in den
   // Benchmark-Datensätzen gespeichert (Laufwerkskachel oben) — L8.

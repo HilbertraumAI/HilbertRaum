@@ -55,7 +55,7 @@ import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
 import { t, tCount as tCountShared } from '../../src/shared/i18n'
 import type { I18n } from '../../src/renderer/i18n'
 import {
-  ARTICLES_PER_PACK,
+  FTS_HITS_PER_QUERY,
   MAX_EXTERNAL_CANDIDATES,
   collectPackCandidates,
   packQuota,
@@ -1606,7 +1606,7 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
               ? []
               : behaviour === 'short'
                 ? [`${book} Artikel 0`]
-                : Array.from({ length: ARTICLES_PER_PACK }, (_, i) => `${book} Artikel ${i}`)
+                : Array.from({ length: FTS_HITS_PER_QUERY }, (_, i) => `${book} Artikel ${i}`)
           res.writeHead(200, { 'content-type': 'application/xml' })
           res.end(searchXml(t15Names.get(book) ?? `book-${book}`, titles))
         }
@@ -1750,9 +1750,16 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       }
       // With more material than budget, the budget is spent to the last slot.
       if (n >= 3) expect(candidates, `N = ${n}`).toHaveLength(MAX_EXTERNAL_CANDIDATES)
-      // A single pack is bounded by ARTICLES_PER_PACK, not by the 24-candidate ceiling.
+      // A single pack is bounded by the discovery routes' own reach, not by the 24-candidate
+      // ceiling: with no plan, discovery here is FTS-only (no plan titles, and this fixture
+      // answers no `/suggest` route, so the head-noun probes never accept anything). F2 (review
+      // 2026-09-14): restored master's own no-plan reach — with NO titles and NO queries at all,
+      // the single pattern query IS the ask's entire discovery reach, so every hit it returns is
+      // read (up to `FTS_HITS_PER_QUERY`, matching master's `ARTICLES_PER_PACK` = 5), not just
+      // its rank-1 hit plus a top-2-unseen pass (which would only reach 1 + FTS_TOP_UNSEEN_PASS
+      // = 3, one short of master's own no-plan reach on this exact fixture).
       if (n === 1) {
-        expect(t15Requests.filter((r) => r.startsWith('/raw/'))).toHaveLength(ARTICLES_PER_PACK)
+        expect(t15Requests.filter((r) => r.startsWith('/raw/'))).toHaveLength(FTS_HITS_PER_QUERY)
       }
     }
 
@@ -1783,15 +1790,14 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       )
       // The failed and empty packs were still ASKED — participation is not silently skipped.
       expect(t15Searches.sort()).toEqual(packs.map((p) => p.id).sort())
-      // #353 review fix 4: the empty pack's zero-hit, two-term pattern also runs the
-      // document-frequency ladder — pin the exact probe count instead of relying on this
-      // fixture never emitting `opensearch:totalResults` (which is what keeps both probes
-      // "unknown" and the pack's outcome honestly at zero, asserted above).
+      // The empty pack's zero-hit query is a single, honest `/search` (no `pageLength=1`
+      // document-frequency ladder — Phase 4 PR-A ports route F's plan-driven multi-query
+      // discovery in its place, which does not retry a zero-hit pattern by frequency).
       const emptyPackId = packs[3]!.id
-      const emptyProbes = t15Requests.filter(
-        (r) => r.startsWith('/search') && r.includes(`books.id=${emptyPackId}`) && r.endsWith('pageLength=1')
+      const emptySearches = t15Requests.filter(
+        (r) => r.startsWith('/search') && r.includes(`books.id=${emptyPackId}`)
       )
-      expect(emptyProbes).toHaveLength(2) // 'Treibhausgas' and 'Landwirtschaft', sequentially
+      expect(emptySearches).toHaveLength(1)
     }
 
     // ---- (3) VARIED COMPLETION ORDER + CONCURRENCY ≤ 2 + THE LATE BEST HIT --------------
@@ -1921,7 +1927,15 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
         expect(timedOut.every((o) => o.status === 'failed')).toBe(true)
         expect(notStarted).toHaveLength(3)
         expect(notStarted.every((o) => o.status === 'skipped')).toBe(true)
-        expect(new Set(t15Searches).size).toBe(2) // only the two in-flight packs were asked
+        // Only the in-flight packs were asked — at most `concurrency`, and never one the
+        // deadline skipped. NOT `toBe(2)`: that assumed both in-flight searches had also
+        // REACHED the fixture inside the 150 ms budget, which is a property of the runner,
+        // not of the code. On a loaded CI worker (windows-latest 22.x, 2026-09-10) the
+        // deadline fired before either request went out and the case failed at 0, while every
+        // outcome above was correct. The guarantee is the bound and the exclusion.
+        const timedOutIds = new Set(timedOut.map((o) => o.packId))
+        expect(new Set(t15Searches).size).toBeLessThanOrEqual(2)
+        for (const asked of new Set(t15Searches)) expect(timedOutIds.has(asked)).toBe(true)
         t15Hold = null
       } finally {
         await h.close()
@@ -1967,4 +1981,33 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
       }
     }
   }, 60_000)
+
+  // Step 4-5 (ruling (e)(i), B3/B7 — scoped Opus review of step 4-4): `collectPackCandidates`
+  // always computes a `cappedCandidates` companion selection, but `runArm` used to reconstruct
+  // its own return object and drop it — the ONE production wiring (`registerRagIpc.ts`'s
+  // `externalArm: ctx.zim?.makeArm(...)`) would then never see it, making `retrieve()`'s
+  // non-regressive rerank-failure fallback dead code for every real ask despite every unit test
+  // (which stubs the arm directly) passing green. This exercises the REAL service end to end —
+  // no hand-made arm result anywhere — the same gap class T15's own header comment (four lines
+  // up) exists to close for the admission/fairness contract.
+  it("step 4-5 (ruling (e)(i)): makeArm/runArm forward collectPackCandidates' cappedCandidates end to end — the production wiring the non-regressive fallback depends on", async () => {
+    const h = t15Service()
+    try {
+      t15Reset()
+      const packId = await h.addPack('cap-forward.zim')
+      t15Behaviour.set(packId, 'long') // addPack defaults 'short'; 'long' gives a multi-chunk article
+      const arm = h.svc.makeArm(h.db, [packId], { candidateScope: 'all' })
+      expect(arm).not.toBeNull()
+      const result = await arm!(QUESTION, undefined)
+      expect(result.cappedCandidates).toBeDefined()
+      expect(result.cappedCandidates!.length).toBeGreaterThan(0)
+      // The superset property (B10's own pin, restated at this seam): every capped id is one of
+      // the wide ids, and the capped set is never larger than the wide one.
+      expect(result.cappedCandidates!.length).toBeLessThanOrEqual(result.candidates.length)
+      const wideIds = new Set(result.candidates.map((c) => c.chunkId))
+      for (const c of result.cappedCandidates!) expect(wideIds.has(c.chunkId)).toBe(true)
+    } finally {
+      await h.close()
+    }
+  })
 })

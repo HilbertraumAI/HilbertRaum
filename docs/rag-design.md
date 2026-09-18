@@ -2154,7 +2154,8 @@ offline article viewer. Files are registered in place, never copied.
   is the "LINEAR FORWARD SCANNER — complexity record" header comment in that file, PR #294
   review H1. Sections → heading `sectionLabel`s, mw-ref sups dropped, `<math alttext>`
   LaTeX kept, tables/figures dropped) → the SAME `chunkSegments` chunker → top-4
-  chunks/article by query-term overlap, ≤24 candidates total.
+  chunks/article by query-term overlap, ≤24 candidates total on the `capped` scope (step 4-4's
+  default; the `gpu`/`cpu-hi` hardware profiles widen this — §17 PR-B record).
 
   **Truncation / budget contract.** The converter takes `{ maxChars?, maxWork? }`
   (defaults 1 MiB / 4×`maxChars`) and never throws: a cut reports
@@ -2389,11 +2390,18 @@ offline article viewer. Files are registered in place, never copied.
   is NEVER converted into a fallback or an outcome — it propagates out of `retrieve()`
   unchanged.
   **Fair allocation (P4, 2026-09-06; review M8).** `MAX_EXTERNAL_CANDIDATES = 24` stays the
-  GLOBAL admitted-candidate bound; for N eligible packs (N ≤ `MAX_SELECTED_PACKS = 12`)
+  GLOBAL admitted-candidate bound **on the `capped` scope** (step 4-4's default; the `gpu`
+  profile's `all` scope drops this bound entirely and the `cpu-hi` opt-in's `top48` doubles it —
+  `totalCandidateCapFor`, §17 PR-B record); for N eligible packs (N ≤ `MAX_SELECTED_PACKS = 12`)
   each gets a provisional quota `floor(24/N)` plus one extra for the first `24 mod N`
   packs in `title COLLATE NOCASE, id` order — an UPPER bound on how much a pack fetches
-  (≤ `ARTICLES_PER_PACK = 5` articles, ≤ `CHUNKS_PER_ARTICLE = 4` chunks each), not a
-  guaranteed minimum. Admission happens only after every pack has SETTLED: round-robin,
+  (on master: ≤ `ARTICLES_PER_PACK = 5` articles; since the §17 discovery port (Phase 4 PR-A,
+  2026-09-14), `ARTICLES_PER_PACK` no longer exists — a pack's own discovery pass is bounded
+  instead by `DISCOVERY_MAX_READS_PER_PACK = 12` reads / `DISCOVERY_MAX_ADMITTED_PER_PACK = 8`
+  admitted articles, §17 — each ≤ `CHUNKS_PER_ARTICLE = 4` chunks (`LIST_ARTICLE_CHUNKS = 8` for
+  a LIST-shaped article, unconditionally, on both trees) **on the `capped` scope** (`top48`/
+  `top96` double/quadruple this per-article slice too, `all` drops it — `perArticleBudget`, §17)),
+  not a guaranteed minimum. Admission happens only after every pack has SETTLED: round-robin,
   one candidate per pack per round in pack order, until 24 are admitted or every pack is
   exhausted — a short/empty/failed pack's unused share reclaims to the others (bounded by
   what they already fetched; a reclaim never triggers a further fetch), and a
@@ -2838,7 +2846,16 @@ offline article viewer. Files are registered in place, never copied.
   `ModelsScreen.test.tsx` (the two surfaces, the required acknowledgement, the gate-off reason).
   Record of the UI: design-guidelines §11.15 "P8-2 consent surfaces".
 
-  **2026-09-06 amendment, #353 — the document-frequency ladder.** The length-based `retry`
+  **2026-09-06 amendment, #353 — the document-frequency ladder — SUPERSEDED 2026-09-14 by §17
+  "Discovery port (Phase 4 PR-A)".** The whole paragraph below describes `narrowByFrequency`,
+  `DF_PROBE_MAX_TERMS` and `DF_PROBE_TIMEOUT_MS` as SHIPPED; the discovery port removed all
+  three (its only caller, the old single-pattern-with-retry search, was replaced by the plan's
+  own multi-query FTS, which does not retry a zero-hit pattern by term frequency) and this
+  record was never amended at the time — kept verbatim below for its historical measurement,
+  not as a description of current behaviour. The LENGTH-based `retry` this paragraph's opening
+  sentence refers to is NOT gone — the discovery port's F2 fix (§17) restored it, gated exactly
+  as `arm.ts:340` gated it on master (zero hits from the pattern query, `rewrite.retry` non-null).
+  The length-based `retry`
   cannot help a pattern whose kept terms are ALL already `RETRY_MIN_TERM_CHARS` or longer: a
   single pack-rare or misspelled five-plus-character word (`"eigenschaftn"`) still ANDs the
   query to zero, and libzim 9.4.0's Xapian parser has no boolean flag to drop one term
@@ -2880,7 +2897,16 @@ offline article viewer. Files are registered in place, never copied.
   (17 ms), the invented word `"qzxvwtrkp"` → 0 (15 ms); the quality fixture still hit 9/9.
 
 - **D-Z20 — question → concept expansion (#340 L3-b, owner ruling 2026-09-07, option (a)
-  "always").** L3-b was left MEASURED-not-built at the open-issues wave close (see "Deliberately
+  "always") — SUPERSEDED 2026-09-14 by §17 "Discovery port (Phase 4 PR-A)".** The `{concepts,
+  listTitle}` expander this whole record describes (`EXPAND_MAX_TOKENS = 96`,
+  `EXPANSION_ARTICLES_PER_PACK = 2`, `parseExpansion` sanitising against `isContentWord`) was
+  REPLACED by the discovery port's planner (`expand.ts`'s `{titles, queries}` `SearchPlan`,
+  route F's own plan shape minus `terms` — §17 F1) — this whole `services/zim/expand.ts` module
+  now means something different from what the paragraphs below describe. Kept verbatim below for
+  its historical measurement record (the #423 amendment's decode-cost findings, in particular,
+  are still the basis §17 F1's planner-length measurement extends), not as a description of
+  current behaviour; see §17 for what ships now. L3-b was left MEASURED-not-built at the
+  open-issues wave close (see "Deliberately
   not built" below, K: climate pack, 2026-09-06): raw question 0/6 of the list-shaped fixture
   questions (`quality-questions-de.json` `group: list`), the shipped rewrite (D-Z18) 2/6, a
   hand-written concept-expanded query 4/6, `/suggest` asked with a synthesised "Liste …" prefix
@@ -2938,7 +2964,15 @@ offline article viewer. Files are registered in place, never copied.
   calls finish in 2–6 s and never reach the bound). `zim-expand.test.ts` now pins the bound, the
   token cap and `EXTERNAL_RETRIEVAL_DEADLINE_MS` against each other so they cannot drift apart
   again, and `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7` records the rate they are derived
-  from. NOT claimed: no re-run of the list-group fixture was needed for the constant (the lever's
+  from. **This guarantee — the bound and the token cap staying ONE decision, never drifting apart
+  — is what the discovery port's F1 finding (2026-09-14) found silently voided**: `PLAN_MAX_TOKENS`
+  was raised 96 → 220 while `PLAN_TIMEOUT_MS` stayed 12 s and these two pins were deleted with no
+  replacement, so on every CPU decode rate this project has ever measured the planner could no
+  longer emit its own cap. F1's fix restores the SAME shape on the new names
+  (`PLAN_TIMEOUT_MS`/`PLAN_MAX_TOKENS`/`PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC`), with the cap set
+  from a fresh measurement (run M, `core200`, 2026-09-14) rather than reused from this one — see
+  §17 F1 for the measured p99, the cap and which pin branch applied. NOT claimed: no re-run of the
+  list-group fixture was needed for the constant (the lever's
   quality is D-Z20's own 5/6 measurement, which this only makes reachable more often), and the
   slow end is one thread-restricted stand-in on one box, not a second machine.**
   `parseExpansion` then sanitises the reply against
@@ -3081,7 +3115,17 @@ offline article viewer. Files are registered in place, never copied.
   untouched, so the safety net stays. **What did NOT change:** `MAX_SELECTED_PACKS`, the ask
   deadline, `ARTICLE_READ_TIMEOUT_MS`, `ARTICLE_READ_ATTEMPTS`, the arm's chunking, the viewer,
   the request guard, `probeSearchable`, and the `/search` / `/suggest` / health-probe routes —
-  which still send no `Range` header at all (pinned by a test leg). The log line
+  which still send no `Range` header at all (pinned by a test leg). **Also absorbed — measured
+  2026-09-13 (#467), and not kiwix-serve's defect:** on Windows, when a loopback server closes
+  right after its last write while the READER is CPU-starved, the tail queued behind the reader is
+  never delivered — the read stops ~0.4 % short and Windows resets the connection ~19 s later
+  (`read ECONNRESET`). Measured with a node:http server, in-process and as its own normal-priority
+  process, under one idle-priority busy loop per CPU: 256 KB–8 MiB bodies failed 25–70 % of reads,
+  4–64 KB bodies 0 of 80, and with the CLIENT closing the connection instead 0 of 50. Through
+  `fetchArticleHtml` it is only a stall: the idle timer fires after 1 s and the resume fetches the
+  tail — 24 of 24 starved 1 MiB reads recovered at ~1.1 s each, while a plain `kiwixGet` failed 8 of
+  8. NOT measured: whether kiwix-serve's own close triggers it. The `/search`, `/suggest` and
+  health-probe answers are normally a few KB, below every size that failed. The log line
   `kiwix-serve cut a knowledge-pack article read short — retrying` gained `kind` and `resume` and
   still carries no path and no serving name (finding L1). Tests: the `zim-client.test.ts` describe
   "fetchArticleHtml reads /raw Range-first and resumes a stall (#339, rag-design §17 D-Z22)" —
@@ -3161,8 +3205,11 @@ searchability columns + key, `classifyPackSelection` and `packTitles`, D-Z11/D-Z
 (the owned `zim-transient/` dir; containment-checked, link-refusing cleanup, D-Z11),
 `session.ts` (the post-unlock reconciliation kickoff, the `maybeStartLocalApi` shape,
 D-Z11), `arm.ts` (allocation, bounded concurrency, the per-ask deadline and per-pack
-outcomes — D-Z4, P4), `expand.ts` (question → concept expansion for the pack arm — D-Z20,
-#340 L3-b), `save-article.ts` ("Save article to my documents" — the title rule, the Markdown
+outcomes — D-Z4, P4; the discovery-port routes since §17 Phase 4 PR-A, 2026-09-14),
+`expand.ts` (on master: question → concept expansion for the pack arm — D-Z20, #340 L3-b; on
+`feat/zim-discovery-port`: the question → search PLAN planner since §17 Phase 4 PR-A),
+`admit.ts` and `head-noun.ts` (new since §17 Phase 4 PR-A: the topic-conflict admission gate
+and the ported 1a-i head-noun candidate rule), `save-article.ts` ("Save article to my documents" — the title rule, the Markdown
 render, the import-path materialise, the duplicate lookup — D-Z21, #340 Tier-2), `index.ts` (`ZimService` facade on
 `AppContext.zim` — the revision/generation allocator, the FIFO build/teardown/start chain
 and the published tuple, D-Z10; the operation registry and admission-epoch checks, the
@@ -3264,7 +3311,15 @@ the follow-up wave through `packs:status.excluded` (D-Z16, #340); the per-answer
 `not-served` row still says "not searched: name collision with another pack".
 
 **Owner rulings of 2026-09-06 (#339 / #340, the open-issues wave) — what is deliberately NOT
-built, and why.** *L2* — `ARTICLES_PER_PACK` stays 5 for every pack: the measured failures of
+built, and why.** *L2* (and its 2026-09-08 revisit below) — **the CONSTANT `ARTICLES_PER_PACK`
+no longer exists on `feat/zim-discovery-port`** (§17 "Discovery port", Phase 4 PR-A,
+2026-09-14): the discovery port replaced the whole per-pack fetch shape this ruling reasoned
+about with a read/admitted budget (`DISCOVERY_MAX_READS_PER_PACK = 12` /
+`DISCOVERY_MAX_ADMITTED_PER_PACK = 8`, §17), and `ARTICLES_PER_PACK`'s own pinning test
+(`zim-arm.test.ts` "the shipped per-pack article cap") was deleted with it. The ruling and its
+measurement below are kept verbatim as the historical record of WHY 5 was the right number for
+the constant that existed at the time — they no longer describe what ships on the branch. On
+master, unchanged: `ARTICLES_PER_PACK` stays 5 for every pack: the measured failures of
 the list shape were not helped by hits 6–10, and one selected pack already gets the whole
 24-candidate quota, so a longer page only adds `/raw` reads on the stall-prone route (D-Z13).
 
@@ -3565,3 +3620,753 @@ files, the i18n catalogs and their tests) belongs to an OLDER, unrelated working
 spec, the Skills plan, the image-understanding plan, the context-compaction and translation
 plans — and resolves through that paper's own legend (this file's EP-1 record above; the Skills
 and image-understanding design records in `architecture.md`), **not** through this table.
+
+### Discovery port (Phase 4 PR-A, 2026-09-14, redone 2026-09-14 as step 4-2) — every floor holds, PR opened
+
+**What it is.** The ZIM research programme's step 4-i measured the shipped arm fetching the
+gold article for 32 of 200 core200 questions against its own "route F" research harness's 166,
+losing overwhelmingly at the article-FETCH stage (not candidate admission or packing). This PR
+(`feat/zim-discovery-port`) ports route F's discovery semantics into the shipped arm. The first
+pass (step 4) was BLOCKED one question short of the `anyCandidate` floor and, independently, an
+Opus code review found nine defects (F1–F9) — three invisible in the acceptance numbers because
+every step-4 run used the GPU. This record now describes the REDONE port (step 4-2): F1–F9
+(F6 dropped by owner ruling) fixed, the planner's token cap set by a fresh measurement instead
+of assumed, `core200` re-measured once, every floor held, and the reranker-for-the-record and
+CPU-exposure legs run. Both step 4's `anyCandidate`-floor question and every review finding are
+therefore CLOSED by this record; nothing here is still open except the two design questions at
+the end.
+
+- **The planner** (`expand.ts`, formerly the `{concepts, listTitle}` expander) asks the turn's
+  chat model for route F's plan schema minus `terms` — up to 3 title candidates, 2 full-text
+  queries, JSON-schema constrained — one call per ask, unconditionally on. **F1 (review
+  2026-09-14):** route F's own `terms` array was dropped from the schema and the prompt (never
+  consumed — see deviation 3 below); `PLAN_MAX_TOKENS` is set by a fresh measurement (see "The
+  cap decision" below), not by assumption, and the two pins that keep it and `PLAN_TIMEOUT_MS`
+  one decision are restored. Its output degrades to an EMPTY plan (never null) on malformed
+  JSON, matching route F's own `interpret()`; the wrapping call itself still resolves null on
+  any transport failure except the ask's own abort. **F7 (question-only):** the prompt no
+  longer references "conversation history" — neither this call nor the admission gate below is
+  ever given any at this layer (`buildPlanMessages` sends only the bare question;
+  `registerRagIpc.ts` hands the arm only the current turn's text), so route F's history clause
+  was dead text.
+- **Title reads** (`arm.ts` STAGE 2): for each plan title, one `/suggest` lookup with the SAME
+  exact-or-prefix admission predicate route F's `discover()` uses (`norm(hit)===norm(title)`,
+  a `"title ("`-prefixed disambiguator, or — for a multi-word title — its rank-0 hit
+  unconditionally), then an immediate fetch of the admitted hit.
+- **The head-noun rule** (`head-noun.ts`): step 1a-i's frozen candidate-generation rule
+  (`head-noun-rule.mjs`), ported verbatim in behaviour — hyphen split, inflection strip, prefix
+  strip with the Fugenelement shortcut — probed via `/suggest`, accepting the first EXACT
+  match. Runs FIRST (before plan titles), at most 12 total `/suggest` probes across every
+  candidate word tried. **F4 (review 2026-09-14):** the two-read cap now counts ACCEPTANCES (a
+  confirmed `/suggest` match), matching the frozen 1a-i patch's own unconditional `issued++` —
+  a read that 404s, duplicates an already-admitted title, or fails the admission gate still
+  spends its slot. The pre-fix code counted ADMISSIONS instead, so a run of accepted-but-never-
+  admitted candidates could consume the ENTIRE 12-read per-pack budget before a single plan
+  title or FTS query was tried (demonstrated: 7 reads on one question against the cap of 2).
+  Unconditional on language (the arm has no per-question language signal at this layer); on a
+  non-German question it simply tends to find fewer or no candidates.
+- **FTS queries** (`arm.ts` STAGE 3): the plan's own queries, plus the existing `searchPattern`
+  rewrite as the LAST query. The rank-1 hit of each query is read immediately (every hit, of
+  every rank, feeds one shared aggregate-score pool, drained twice for up to 2 more unseen
+  candidates each time). **F2 (review 2026-09-14):** two restorations from master's own no-plan
+  fallback, gated exactly as master gated them — never on every ask. (1) The #340 L3 length
+  retry: when the PATTERN query itself finds zero hits, retry once with `rewrite.retry` (the
+  kept terms of five or more characters) if one exists — master's own trigger (`arm.ts:340` on
+  master). (2) The five-read no-plan reach: when the planner produced no titles and no queries
+  at all, the single pattern query is the ask's ENTIRE discovery reach, so every hit it returns
+  (up to `FTS_HITS_PER_QUERY` = 5, matching master's `ARTICLES_PER_PACK`) is read, not just its
+  rank-1 hit — the pre-fix code reached only 1 + `FTS_TOP_UNSEEN_PASS` (= 3) articles on a
+  plan-less ask, one short of master's own reach on the same fixture
+  (`zim-regressions.test.ts` T15, `n=1`).
+- **`admitArticle`** (`admit.ts`): route F's topic-conflict gate, ported as a pure function (the
+  equipment/biology, fiction/biology, planet/mythology, vertebrate/diving-gear and
+  human-anatomy/heraldry heuristics) — never a claim of relevance, only that nothing here rules
+  an admitted article out. **F3 (review 2026-09-14, HIGH):** the gate's SIGNATURE now takes TWO
+  windows instead of one — a narrow lead feeds the title/fiction/topic-conflict-pair checks, and
+  the FULL segment list feeds ONLY the `explicitBiology` escape hatch. The pre-fix code fed both
+  from one bounded window (the arm's first ~20 segments / ~4,000 chars) — wider than route F's
+  lead for the trap, narrower than route F's whole-article scan for the escape hatch — and was
+  demonstrated (real cephalopod article, "Populärkultur" section) to reject gold articles route
+  F admits; the escape hatch's fix is verified end to end and closes that case (CASE B).
+  **N1, resolved step 4-3 (2026-09-15; Wave 3 ruling (b)):** the production `leadText` was
+  `arm.ts`'s `article.segments.slice(0, 2)`, and a product segment is a whole SECTION, not a
+  prose paragraph (`html.ts` flushes a segment only at a heading — there is no prose/heading
+  block *kind* to filter on at this layer the way route F's `blocks` array has), so the lead was
+  really "intro + first section", wider than route F's two-paragraph lead. A fiction-flavoured
+  FIRST section with no biological evidence anywhere in the article (the first review's own
+  CASE A) was therefore refused here where route F admits it — end-to-end verified, not a
+  fixture artifact (`zim-arm.test.ts`'s CASE A end-to-end test, confirmed RED at `dd85f361` and
+  GREEN after the fix). The owner ruled: narrow `arm.ts`'s `leadText` to `slice(0, 1)` (the intro
+  segment only). The second review's monotonicity assumption about this narrowing is wrong in
+  general and is struck (not reproduced here): `admit.ts`'s
+  `explicit-different-sense` pairs read `lex(lead, tokens(q)) < 2`, so a SHORTER lead can also
+  REFUSE an article a longer one admitted (`zim-admit.test.ts`'s non-monotone-path fixture). On
+  `core200` the reach was enumerable ahead of the read (the biology/fiction trap matches 0 of 200
+  questions on the gate's own normaliser; the pairs' "wanted" side matches only H174/H175/H176)
+  and was **measured**, not assumed: run A2 found **zero funnel movement** anywhere on core200 —
+  0 of 200 ids differ from run A (`anyArticle` 120, `anyCandidate` 81, `allPacked` 26, all
+  unchanged), and none of H174/H175/H176's fetched titles has its admission decision change
+  under either lead window (`steps/4-3-product-pr-n1-resolution/artifacts/acceptance-table-3.md`,
+  `h174-h175-h176.json`). Every floor holds, unchanged from run A. `slice(0, 1)` is **still not**
+  route F's own lead in either direction: a single-paragraph intro is narrower than route F's
+  two-paragraph lead (the port can over-admit where route F refuses), and an intro of three or
+  more paragraphs is wider (the port can still refuse where route F admits) — accepted as the
+  cost of the per-pack budget's own acceptance-read limits. `admit.ts`'s own header carries the
+  same disclosure.
+  **F5 (review 2026-09-14):** the gate's `tokens()` (feeding the
+  `explicit-different-sense` lexical-overlap escape) now uses `retrieval-v3.mjs`'s own ~50-word
+  research stop set, not `query-rewrite.ts`'s much larger ~340-word product list — the larger
+  list made the escape MISS more often (fewer surviving question tokens to match), which is
+  stricter than route F, not a harmless reuse. The research harness's own resolver-identity
+  precondition (`archiveId`/`archiveVersion`/`canonical`/`htmlSha`) was still NOT ported — the
+  product's `ZimArticle` (`html.ts`) carries no such fields.
+- **A per-pack read budget**: ≤12 article fetches, ≤8 admitted articles (route F's own
+  `discover()` defaults are 14 / 8 for its ONE archive; this arm applies the pair PER PACK — a
+  documented adaptation, see "Deliberately different from route F" below).
+- **F6 (LIST-article chunk cap) — DROPPED from this PR by owner ruling.** An earlier version of
+  this port additionally capped a LIST article's own chunk share at `Math.ceil(quota/2)` for
+  multi-pack fairness; reverted — a LIST article gets `LIST_ARTICLE_CHUNKS` unconditionally, as
+  on master.
+- **F8 — dangling citations left by the removals, fixed:** `docs/packaging.md`'s and
+  `tests/helpers/hang-budget.ts`'s citations of the deleted `DF_PROBE_TIMEOUT_MS` timing proof
+  now cite the new `PROBE_TIMEOUT_MS` behavioural test instead (review test gap 3, below);
+  `query-rewrite.ts`'s header no longer claims a sharing relationship with `expand.ts` that no
+  longer exists — `isContentWord`'s only remaining consumer is `head-noun.ts`
+  (review 2 finding N2). `admit.ts`'s own `tokens()` is NOT that same rule reused: it
+  deliberately builds its own, smaller `ADMIT_STOP_WORDS` (F5 above) rather than importing
+  `isContentWord`, so the two content-word notions are separate by design, not shared.
+
+**Unchanged**: `html.ts`/`chunker.ts` (article → segments → chunks), `MAX_EXTERNAL_CANDIDATES`
+(24), `packQuota`/`allocateCandidates`, `CHUNKS_PER_ARTICLE`/`LIST_ARTICLE_CHUNKS`, the grounded
+prompt, `retrieve()`'s rerank/interleave/dedup/trim path, the reranker selector itself, every
+user-facing setting. The #353 document-frequency retry ladder (`narrowByFrequency`,
+`DF_PROBE_MAX_TERMS`) stays REMOVED: its only caller, the old single-pattern-with-retry search,
+is gone, superseded by the plan's own multi-query FTS (F2 restores the LENGTH-based retry only,
+never the frequency ladder).
+
+**Deliberately different from route F** (documented adaptations, not oversights):
+
+1. **The planner prompt keeps "in the language of the question"**, not route F's hardcoded
+   German. Route F's one archive IS German Wikipedia, so hardcoding the target language there
+   is correct; the product's knowledge packs are ANY language a user adds
+   (`docs/knowledge-packs.md`: "Wikipedia in about a hundred languages"). Hardcoding German
+   would regress every non-German pack. Step 1c measured that this planner call is NOT
+   decorative for English questions against a German archive — turning it off collapses
+   `anyArticle` on `MEAS49-en` from 43 to 23 — but also that the model's own German lexical gap
+   (not a prompt defect) is why an isolated single-term translation call did not clear 1a-i's
+   bundle-entry bar. Keeping the shipped "match the question's language" framing accepts a
+   real, measured cost on this PR's (German-only) acceptance corpus's English-question half in
+   exchange for correctness on every other pack language.
+2. **The read budget (12 reads / 8 admitted) is applied PER PACK**, not globally per ask.
+   Route F's `discover()` bounds ONE archive per question; the product can have several packs
+   selected for one ask. Every acceptance measurement in this PR uses a single pack, so the
+   distinction never affects the numbers reported here.
+3. **`plan.terms` is DROPPED, not merely unconsumed (F1 part 1).** Step 4's port parsed
+   `plan.terms` (route F's relation/attribute terms) but never consumed it; a DEV49 iteration
+   tried wiring it into `overlapScore`'s term set (mirroring route F's own
+   `tokens(standalone(c)+' '+(plan?.terms??[]).join(' '))`) specifically to try to close the
+   `anyCandidate` shortfall then open: it left `anyCandidate` on DEV49 unchanged (45/100 both
+   ways) and slightly worsened `anyPacked`/`allPacked` (25→23, 15→13), so it was reverted. Step
+   4-2's review found the unused field itself was pure output-token cost on every planner call
+   — exactly the budget the cap decision below is measured against — so it, its schema entry
+   and its prompt sentence are now removed outright rather than left parsed-but-idle.
+4. **Three route F mechanisms remain NOT ported, unchanged from step 4 and still brief-scoped:**
+   `titleCandidates()` (quoted phrases, capitalised n-grams, pattern terms feeding the title
+   route beyond the plan's own ≤3 titles), the disambiguation-page link-following route, and
+   the `observableGap`-triggered neighbour-link recovery pass. The product's arm has no
+   disambiguation signal and runs the planner unconditionally rather than gated on
+   `en`/history/`observableGap`, so none of these three has an equivalent to hang off; adding
+   them is out of this PR's discovery-semantics scope.
+
+**The cap decision (F1, ruling (a)).** Run M measured `usage.completion_tokens` for all 200
+`core200` planner calls (GPU, `feat/zim-discovery-port` with F2–F9 already fixed, `terms`
+already dropped, `PLAN_MAX_TOKENS` left at a provisional 220 so the distribution was observed
+untruncated — 0 replies hit the ceiling): **p99 = 99 tokens**
+(`steps/4-2-product-pr-discovery-redo/artifacts/planner-length-core200.json`). Ruled formula:
+`cap = min(104, smallest multiple of 8 ≥ p99 + 8) = min(104, 112) = 104`. p99 (99) falls in the
+ruling's 72–104 branch: pin 1 (`zim-expand.test.ts`) is restored on the measured p99 but at the
+REFERENCE CPU rate (10.3 tok/s, #423's i9-14900K `-ngl 0` figure) rather than the slowest `-t 2`
+stand-in (6.7 tok/s) — at 6.7 tok/s a 99-token reply needs ~16 s, past `PLAN_TIMEOUT_MS`, so
+**the `-t 2` tier is no longer afforded by the bound at this cap** (`docs/known-limitations.md`'s
+twelve-second paragraph carries the measured exposure). `PLAN_MAX_TOKENS`: 220 (provisional) →
+**104**. `PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC = 6.7` and pin 2 (`cap / 10.7 s < 10 tok/s`) are
+restored verbatim, mirroring master's own `EXPAND_SLOWEST_MEASURED_TOKENS_PER_SEC`/pin shape.
+
+**The cap sits one token below run M's own measured max (review 2, N4).** Run M's `completion_
+tokens` distribution tops out at **105** (`planner-length-core200.json`'s histogram, bin
+`104-111: 1`) — one of the 200 core200 calls ran one token past the ruled cap of 104. That reply
+(and any as long) is now cut off by `PLAN_MAX_TOKENS` at `finish_reason: "length"`; `parsePlan`
+cannot parse the truncated JSON and degrades to the empty plan (`expand.ts`), so the ask falls
+onto the no-plan path — the SAME restored five-read reach F2 gives every other plan-less ask, not
+a new failure mode. This is a direct, ruled consequence of the cap formula (`≤ 104` was the
+ruling's own ceiling), not a deviation from it: it costs 0.5% of core200 planner calls (1/200)
+their plan, degrading safely. The "0 replies truncated" language above is about run M's own
+provisional 220-token ceiling under which the distribution was MEASURED, not about the shipped
+104-token cap the measurement then produced — the two are easy to conflate and are kept distinct
+here on purpose.
+
+**Acceptance (core200, no rerank unless noted; run A is the ONE acceptance read for this PR).**
+Reproduction of 4-i's M1 no-rerank row on core200, pre-port (step 4, unchanged by step 4-2):
+**exact match**, 0 deviation on all four co-primaries — `anyArticle` 32, `allArticle` 24,
+`anyCandidate` 25, `allPacked` 6.
+
+| Population | Config | n | anyArticle | allArticle | anyCandidate | allCandidate | anyPacked | allPacked |
+|---|---|---|---|---|---|---|---|---|
+| core200 | before (step 4 after-run, blocked) | 200 | 120 | 89 | **79** | 49 | 43 | 27 |
+| core200 | run M (informational, GPU, cap 220 provisional) | 200 | 120 | 89 | 81 | 49 | 42 | 26 |
+| core200 | **run A (after, this redo)** | 200 | **120** | 89 | **81** | 49 | 42 | **26** |
+| core200 | route F | 200 | 166 | 157 | — (anyPool 135) | — | — (anyPack 106) | 64 |
+| DEV49 | run A | 100 | 64 | 47 | 45 | 27 | 25 | 15 |
+| DEV49 | route F | 100 | 83 | 77 | — (anyPool 70) | — | — (anyPack 54) | 34 |
+| MEAS49 | run A | 100 | 56 | 42 | **36** | 22 | 17 | 11 |
+| MEAS49 | route F | 100 | 83 | 80 | — (anyPool 65) | — | — (anyPack 52) | 30 |
+
+Full table, by-language breakdown and the latency detail: `steps/4-2-product-pr-discovery-redo/
+artifacts/acceptance-table-2.md`. By language (core200, run A): de `anyArticle` 93/100,
+`anyCandidate` 70/100 (was 68/100), `allPacked` 20/100; en `anyArticle` 27/100, `anyCandidate`
+11/100 (unchanged), `allPacked` 6/100 — the whole core200 `anyCandidate` gain (79→81) is a
+German-side, MEAS49-only effect (34→36; DEV49's `anyCandidate` is unchanged at 45).
+
+**Floors** (Frozen Parameters, core200, run A): `anyArticle ≥ 96` — **120, PASS** (+24 over
+floor); `anyCandidate ≥ 80` — **81, PASS** (+1 over floor, closing step 4's miss); `allPacked (no
+rerank) ≥ 6` — **26, PASS** (+20 over floor); arm wall-clock p90 excluding the planner call ≤
+2,500 ms — **92.5 ms, PASS**; planner call p90 ≤ 3,000 ms — **589.9 ms, PASS** (well under step
+4's 884.3 ms — `PLAN_MAX_TOKENS` 104 vs the undisclosed 220 F1 found). **Every floor holds.**
+
+**Root cause of step 4's `anyCandidate` shortfall — CLOSED by F3/F5, not by a chunk-selection
+change.** Step 4 diagnosed all 41 core200 `anyArticle ∧ ¬anyCandidate` gap ids as the gold
+article being correctly discovered, read AND admitted, with the loss entirely in which chunks
+`overlapScore`/`chunkSegments` kept — a stage this PR's Frozen Parameters leave unchanged in
+both step 4 and this redo, and still unchanged. On THIS diagnosis, F3 and F5 happened to only
+widen what the gate accepted (neither touches the chunker), so `anyCandidate` closed the floor
+from underneath — some step-4 gap ids had a SECOND gold article the narrower, pre-fix gate was
+wrongly rejecting — not from the chunk-selection side; `allCandidate` is unchanged (49→49): no
+gap id recovered ALL its gold blocks from this fix alone. The reviewer's own broader prediction
+("F3 and F4 in particular can only *improve* the numbers") is **not** a general rule about
+admission-gate changes, and step 4-3's N1 resolution is the counter-case in the code: `admit.ts`'s
+`explicit-different-sense` pairs read `lex(lead, tokens(q)) < 2`, so narrowing the lead a gate
+sees can leave fewer question tokens in view and REFUSE an article a wider lead admitted — the
+direction runs opposite to F3/F5's here. N1's own `core200` read measured zero movement in
+practice (see F3's bullet above), but that is a measured result for one specific narrowing on one
+specific population, not evidence that admission-gate edits are safe by construction.
+
+**Reranker-for-the-record leg** (informational, not a floor): run A's captured candidates
+replayed through `retrieve()` with the shipped CPU reranker (`--device none`, 4 threads,
+matching 4-i's own M1 rerank config) — mean 13.4 s / p90 22.2 s per question, reproducing 4-i's
+own 13.1 s / 25.0 s figure closely. `anyArticle`/`anyCandidate`/`allCandidate` are
+BYTE-IDENTICAL to the no-rerank row at every population (confirming the reranker sits
+downstream of `collectPackCandidates` and cannot move them); `allPacked` nearly doubles
+(core200 26 → **47**) — full table `steps/4-2-product-pr-discovery-redo/artifacts/
+acceptance-rerank.json`.
+
+**CPU non-regression floor** (pre-registered: branch planner null-or-empty rate ≤ master
+expander null-or-empty rate, at each of `-t 32` / `-t 2`, same 50 seeded `core200` questions,
+`--device none -ngl 0`, rerank off): at **32 threads**, branch **0/50 (0%)** vs master **4/50
+(8%)** — PASS; at **2 threads**, branch **1/50 (2%)** vs master **4/50 (8%)** — PASS. Both
+configurations hold with margin; master's own 8% null-or-empty rate is unchanged across thread
+counts (its shorter, ~31-token replies rarely approach `EXPAND_TIMEOUT_MS` even at `-t 2` —
+these are mostly genuine empty expansions, not timeouts), while the branch's larger, ~71-token
+planner replies show the `-t 2` cap decision exposure directly (2% vs 0% at full threads) without
+ever exceeding master's own rate. Full per-question detail:
+`steps/4-2-product-pr-discovery-redo/artifacts/cpu-legs.json`.
+
+**Decision: every floor holds, per the brief's pre-registered Endpoint and decision rule — the
+draft PR is opened.** F1–F9 (F6 dropped) are all resolved: F1 by the measured cap decision, F2–F5
+and F7–F8 by the code/test fixes above, F9 by this record's own head-commit citation. The branch
+(`feat/zim-discovery-port`) is complete: full `apps/desktop` suite green (7196 tests, 427 files),
+typecheck clean. **N1 is resolved as of step 4-3** (2026-09-15) — see F3's bullet above and
+`steps/4-3-product-pr-n1-resolution/report.md` for the acceptance read, the attribution and the
+scoped Opus re-check. The code state this record describes is commit `6266778c` (the N1 fix +
+tests commit, the last commit before this docs update); the docs/BUILD_STATE commit and the PR's
+own head follow it.
+
+**PR-B (Phase 4 PR-B, step 4-4, Wave 4 ruling (a)) — the rerank scope per hardware profile.**
+Minted after PR-A merged (`8f66e7d3`); branch `feat/zim-rerank-profiles`, PR #470. Three
+profiles, resolved by one pure function (`rag/rerank-profile.ts`) from the app's existing GPU
+probe/settings and the runtime's configured thread count — no RAM tier, no model size, no
+benchmark:
+
+- **`gpu`** — a usable GPU (`gpuMode: 'auto'`, not `gpuAutoDisabled`, `gpuUsefulForProfile` finds
+  a card ≥ `USABLE_VRAM_MB`): the reranker sees `GPU_RERANK_SCOPE` and rerank is on by default,
+  the sidecar's `--rerank` launch OMITS `--device none` (llama-server's own `ngl`-auto + `--fit`,
+  never `-ngl`).
+- **`cpu-hi`** — no usable GPU, but the runtime's thread count is at least `CPU_HI_MIN_THREADS`:
+  `top48` (a superset of `capped`: the same per-article overlap-pick construction, doubled) is
+  available as the `ragRerankWideScope` opt-in (default OFF), the sidecar stays `--device none`.
+- **`default`** — neither: unchanged, `capped` scope, CPU sidecar.
+
+A scope wider than `capped` is used only when a reranker is provisioned (`rerankerAvailable`) —
+absent one every profile is `capped`, byte-identical to before this PR. The candidate scope is
+resolved once per ask (`registerRagIpc.ts` → `zim/arm.ts`'s `candidateScope`); the device posture
+is resolved lazily on the reranker sidecar's next cold start (`reranker/llama.ts`'s
+`devicePosture` callback), so a `gpuMode`/`gpuAutoDisabled` settings change stops the sidecar
+(`suspend()`, never the permanent `stop()`) and its next start re-evaluates.
+
+**Run L (2026-09-15, a development latency read on the 50-id `cpu50.json` set, never `core200`;
+`artifacts/scope-selection.json`, `artifacts/run-l-latency.json`):** one lock hold — the GPU
+planner captured each id's `all`-scope candidates once (the per-pack material `top96`/`top48`
+were derived OFFLINE from, via the branch's own exported `chunksForScope`, never a
+re-implementation), then the GPU reranker timed `all`/`top96`/`top48` per id, then the CPU
+reranker timed `top48` at 8 and 16 threads. Bound: 10,848 ms (4-i M1's shipped CPU rerank median
+per question). GPU p90 by scope — `all` **2,671 ms**, `top96` 1,128 ms, `top48` 693 ms (n=43
+calls each; docs mean 118/55/33, max 410/96/48) — every GPU scope clears the bound with wide
+margin, so **`GPU_RERANK_SCOPE = 'all'`** (matches the predicted value, no miss). CPU top48 p90 —
+**8 threads 25,317 ms, 16 threads 29,101 ms** (16 threads was NOT faster than 8 here) — both miss
+the bound by roughly 2.3–2.7×, so **`CPU_HI_MIN_THREADS = Infinity`, a MISS at both thread
+counts** against the predicted 8 threads at 9.06 s (4-i's M2 prediction pooled a LEXICAL top-48
+over route-F blocks, never the product's own wider `top48` construction measured here). A run-L
+selection miss is not a floor miss (the ruled fallback ships: the `cpu-hi` profile is
+unreachable by any finite thread count — `threads >= Infinity` is false for every real
+machine — and the `ragRerankWideScope` opt-in has no effect for anyone until a future
+re-measurement lowers the constant). The GPU sidecar's captured stderr never explicitly
+mentioned "Vulkan"/"offload" text (`run-l-latency.json`'s `vulkanEvidence` — the load banner was
+evidently not in the 4,000-char tail by the time it was read: the tail was captured after one
+warm-up call, which had already rolled the window past the load banner to slot-lifecycle lines —
+reading it immediately after the health check, before any warm-up, or raising the tail cap, would
+close this for a future re-measurement); the TIMING evidence is decisive instead — GPU `all` (up
+to 410 documents) finished in a p90 of 2.7 s where CPU `top48` (≤ 48 documents) took a p90 of
+25.3 s on the SAME hardware in the SAME session — **roughly 9.5× on the raw p90, and ~33× per
+document** (2.7 s / 118 docs vs 25.3 s / 33.5 docs) — not two orders of magnitude, but still not
+explicable by CPU execution: no CPU-side variable in this step changed by anything like that
+factor.
+
+**Run A3 (2026-09-15/16, the one authorised `core200` acceptance read per profile; each profile
+read exactly once):**
+
+- **`default`** (rerank forced off, `capped` scope, planner on the GPU as run A2): **id-level
+  diff of 0/200 against run A2 — PASS.** The offline, informational replay (run A2's captured
+  candidates through this branch's `retrieve()` with `reranker = null`) also matched
+  byte-identically on 200/200 (`replay-a2-through-branch.json`), isolating the code path from
+  planner variance.
+- **`gpu`** (planner + reranker both on the GPU, scope `all`): **every floor PASSES, with wide
+  margin.** `allPacked` **78/200** (floor ≥ 45; beside 26 no-rerank, 47 capped-rerank — 78/47 is
+  1.66×; the gain OVER the 26 no-rerank baseline is 52 against the capped-rerank record's own 21,
+  i.e. 2.5× the baseline gain), `anyPacked` **111/200** (beside 42, 79), `anyCandidate`
+  **116/200** (floor ≥ 80 — **beside run A2's 81**: this is a genuine MOVEMENT, not incidental
+  headroom; see the premise note below), `allCandidate` **93/200** (beside run A2's 49),
+  `anyArticle` **120/200** (floor ≥ 96, exactly run A2's own 120 — unaffected, as the scope's
+  position downstream of article admission predicts), arm p90 excluding planner and rerank
+  **173 ms** (floor ≤ 2,500 ms), rerank p90 **2,358 ms** (floor ≤ 10,848 ms), planner p90
+  **605 ms** (floor ≤ 3,000 ms). By population: DEV49 `allPacked` 40/100, MEAS49 38/100.
+  **The `anyCandidate ≥ 80` floor's premise no longer holds for this profile.** 4-2's record set
+  the floor just under run A2's 81 on the stated premise that the reranker "cannot move
+  `anyCandidate`/`allCandidate` (upstream of `retrieve()`, unchanged from the no-rerank row)" —
+  true for a reranker sitting downstream of a FIXED candidate set. PR-B's scope widening sits
+  UPSTREAM of the reranker, in `collectPackCandidates` itself, so it is not bound by that premise
+  and, measured here, it moved `anyCandidate` 81→116 and `allCandidate` 49→93: the wider slice
+  surfaces gold blocks the top-4-per-article cut discarded before they ever reached the reranker.
+  The floor still binds and still passes — but as a check that the wider pool does not LOSE
+  candidates, not as the "reranker cannot move this" check it was originally read against.
+  The GPU sanity row — run A's captured (capped-scope) candidates replayed through the branch's
+  `retrieve()` with the GPU-postured reranker — measured `allPacked` **47/200**, matching 4-2's
+  own CPU-rerank record's FIGURE exactly (47 = 47, 0 ids change the `allPacked` verdict:
+  `sanity-capped-gpu-vs-47.json`). Comparing the actual final-six chunk sequences (not just the
+  verdict) shows F16-on-Vulkan-vs-CPU rank drift on **3 of 200 ids** — `H036` and `H057` swap two
+  adjacent ranks (the same chunks, reordered), and `H082` swaps a DIFFERENT chunk into the final
+  six (`Bi_Sheng#2` on the GPU replay against `Bi_Sheng_(Mondkrater)#2` on the CPU reference) —
+  exactly the "a difference of a question or two … from device numerics" the brief anticipated;
+  the capped path reproduces the record's figure exactly, with this small, disclosed drift.
+  **The fallback's measured quality cost:** the same `gpu` read's own no-rerank column (the `all`
+  scope through `retrieve()`'s no-rerank interleave — precisely the configuration a rerank-call
+  failure falls back to) measured `allPacked` **22** and `anyPacked` **33**, BELOW run A2's
+  `capped`/no-rerank baseline of 26/42 (`refBlockPacked` 2→3 — the one metric in the column that
+  improved; `goldSpanInPacket` 142→116). A wide lexical pool with no working cross-encoder is not
+  merely unhelpful, it is worse than shipping no rerank at all —
+  the measured reason `rerankScopeFor` always returns `'capped'` with no reranker provisioned.
+- **`cpu-hi`** (planner + reranker both `--device none` at 8 threads — run L's selection, forced
+  since the real constant disables the profile; scope `top48` forced on): `allPacked` **63/200 —
+  PASS** (floor ≥ 45; beside 26, 47 — also a real gain over the capped-rerank record), but rerank
+  p90 **25,206 ms — MISS** against the ≤ 10,848 ms floor (mean 15,257 ms, max 55,911 ms, n=181
+  calls) — confirmatory of run L's own prediction on the same hardware, not a surprise from this
+  read. **This comparison is indicative, not controlled:** the `cpu-hi` hold ran the PLANNER on
+  the CPU too (`--device none -ngl 0 -t 8`, matching run L's own configuration), so its upstream
+  funnel differs from every other read in this record — `anyArticle` **115** (against 120 on
+  every GPU-planner read), `allArticle` 84 (against 89), `anyCandidate` 93. `allPacked` 63 is
+  therefore the joint effect of the wider `top48` scope AND a different (CPU) plan, read against
+  a capped-rerank record (47) taken with a GPU planner — not a same-plan comparison. The direction
+  is almost certainly still right (63 > 47 despite a WORSE upstream funnel makes the scope's own
+  contribution look, if anything, understated), but the two numbers are not like-for-like.
+  **Per the Endpoint's no-waiver rule this is a floor miss; `artifacts/gap-diagnosis.json`
+  lists the 20 slowest calls with their document counts.** The miss lands entirely in a code path
+  the shipped constant already disables for every real machine (`CPU_HI_MIN_THREADS = Infinity`
+  from run L) — no live user is affected — but the ruled acceptance floor for the FORCED read
+  still misses, so this step proposes `blocked`, with the owner ruling on the number in hand.
+
+Full per-profile tables: `steps/4-4-product-pr-rerank-profiles/artifacts/acceptance-table-a3.md`,
+`acceptance-a3-{default,gpu,cpu}.json`. **Decision: `default` and `gpu` hold every floor;
+`cpu-hi` holds its quality floor but misses its rerank-latency floor in a code path already
+unreachable in production — step 4-4 proposes `blocked`, pending the owner's ruling with the
+figure in hand, per the brief's no-waiver Endpoint rule.** The code state this record
+describes is commit `007e7074` (the docs+tests commit that followed the run L / run A3 measured
+head `717dc313`; its production-code changes are behaviour-neutral — see the step's Opus
+re-check). The PR's own head follows it with further docs-only, likewise behaviour-neutral
+commits.
+
+**Open questions for PR-B / the human reviewer** (neither blocks PR-A; both are unchanged from
+step 4's report; PR-B does not address either):
+
+- STAGE 2's multi-word title admission (`title.includes(' ') && hidx === 0`) admits the rank-0
+  `/suggest` hit UNCONDITIONALLY, regardless of actual similarity to the plan title asked for —
+  the downstream `admit.ts` gate only screens for topic-conflict, never for "is this the right
+  article." Route F's own measured pipeline behaves the same way; whether to tighten it is a
+  quality/complexity trade a reviewer can weigh with real traffic.
+- Whether to port `titleCandidates()`, the disambiguation route or the neighbour-link recovery
+  pass (deviation 4 above) — all three are brief-scoped out of both step 4 and this redo, and
+  none was needed to clear the acceptance floors.
+
+**Step 4-5 (Wave 5 rulings (c)–(f)) — PR-B continued: the scoped Opus review's three behaviour
+findings.** Same branch, same worktree, same draft PR #470, continuing from step 4-4's head
+`253daf2f`. The review left three findings only the owner could rule on; the owner ruled, and
+this step resolves exactly those three.
+
+- **B1 (ruling (c)) — the `ragRerankWideScope` switch no longer renders while it is inert.**
+  `CPU_HI_MIN_THREADS` is frozen at `Infinity` (run L's own miss), so the `cpu-hi` profile the
+  switch opts into is unreachable by any real machine — showing the control told the user a
+  setting existed here that did something. `SettingsScreen.tsx` now renders it only when
+  `Number.isFinite(CPU_HI_MIN_THREADS)`; the constant moved to a new `shared/rerank-rules.ts`
+  (re-exported from `rerank-profile.ts` under its historical name, the `shared/
+  performance-rules.ts` precedent) so the renderer can import it without pulling
+  `main/services/models.ts`'s `node:fs` et al into the browser bundle. The setting key, its
+  write gate, the `resolveAskCandidateScope` plumbing and the `top48` scope are untouched — a
+  future re-measurement re-enables the control by changing this one constant.
+- **B2 (ruling (d)) — the reranker's GPU posture is gated on provable headroom, not the
+  profile-bump predicate.** `gpuUsefulForProfile` (the profile bump — some probed device at or
+  above `USABLE_VRAM_MB`) never decided PLACEMENT and said nothing about room for a SECOND
+  resident model beside the chat model; on the 12 GiB measurement machine that distinction never
+  showed, but the predicate was still answering the wrong question. `rerankerDeviceFor`
+  (`rag/rerank-profile.ts`) now takes the budget device's free memory
+  (`graphicsBudgetMib(primaryUsefulDevice(probeDevices))`) minus the active chat model's own
+  placement estimate (`estimateGraphicsNeedMib`, the SAME estimator the picker and the fit
+  budget already use), and compares the remainder against the reranker's own estimated need
+  under that estimator — `RERANKER_HEADROOM_FLOOR_MIB ≈ 2,808.2 MiB` (≈ 2.8 GiB), derived from
+  the shipped `bge-reranker-v2-m3` manifest (1.16 GB on disk, no host-mapped figure, the 0.5 GiB
+  context-cache default) and frozen as a constant (this module must stay free of `node:`/
+  `electron` imports for the renderer boundary above, so the estimator itself runs at the
+  impure seam in `main/index.ts`, never inside this pure module). An unknown or empty probe, no
+  useful device, no budget figure, no active chat model or an unresolvable manifest all mean
+  `'cpu'`. `gpuUsefulForProfile` keeps every other job (the profile bump, the Models ★, the
+  graphics tile, `memoryClassOf`); only the posture question is re-sourced. See
+  `architecture.md` GPU record §7 for the full derivation and the small-card disclosure.
+- **B3 with B7/B20 (ruling (e)) — the wide scope is capped, and its failure mode no longer lands
+  below today's baseline.** Two parts. (i) `totalCandidateCapFor('all')` now returns
+  `ALL_SCOPE_MAX_DOCS` instead of `Infinity` — the per-article budget stays `Infinity`
+  (`perArticleBudget`, unchanged: `all` is still "every chunk of every admitted article"), but
+  the TOTAL a single rerank call may see is bounded. Run L2 (2026-09-16, a two-pack development
+  latency read on the `cpu50` set — `wikipedia_de_all_nopic_2026-01.zim` +
+  `wikipedia_de_climate-change_nopic_2026-07.zim`, rootPath `K:/`) captured the genuinely
+  uncapped two-pack candidate list per id (mean 115.8 documents, p90 260, max 553 — beside run
+  A3 gpu's single-pack distribution, mean 98.1, p90 193, max 755), then timed one GPU
+  `rerank()` call per id per cell in {192, 256, 384, 512}, each cell's document set reconstructed
+  OFFLINE from that one capture via the branch's own exported `packQuota`/`allocateCandidates`.
+  Every cell cleared the 10,848 ms bound with wide margin — p90 by cell **192 → 2,251 ms, 256 →
+  2,763 ms, 384 → 2,870 ms, 512 → 2,816 ms** (n=43 calls each; the uncapped cell itself → 3,007
+  ms) — so the pre-registered rule (the largest cell whose p90 clears the bound) selected
+  **`ALL_SCOPE_MAX_DOCS = 512`, no miss**. The acceptance read's own worst case — the SAME
+  `H132` that produced step 4-4's 755-document/10,774 ms call — now caps at 512 documents and
+  reranks in 7,857 ms. (ii) `collectPackCandidates` now always computes a `capped`-scope
+  companion selection from the SAME per-article material (never a second discovery/fetch pass),
+  returned as `ExternalRetrievalOutput.cappedCandidates`; `retrieve()`'s `!reranked` branch
+  restricts the external side to it instead of the whole wide pool before the round-robin
+  interleave. Measured, not asserted (the standard this same finding demanded of step 4-4):
+  replaying the `gpu` acceptance read's own captures through `retrieve()` with a reranker stub
+  whose `rerank()` throws on every call scores `allPacked` **26**, `anyPacked` **42**,
+  `goldSpanInPacket` **142** — an EXACT match to run A2's baseline, not merely "at or above" it
+  (`fallback-measured.json`, beside step 4-4's own measured 22/33/116). A rerank timeout, crash
+  or failed start now costs only the upside, never the floor.
+  Two deviations disclosed in full: (a) `ALL_SCOPE_MAX_DOCS` shipping finite (step 4-5's own
+  commit 9) BEFORE run L2 ran (commit 10, per the brief's own commit ordering) would have
+  truncated run L2's "uncapped" capture at that same value, making every wider cell measure
+  identically to the narrowest one — a measurement seam,
+  `CollectPackCandidatesOptions.totalCandidateCapOverride` (mirroring the existing
+  `articleTimeoutMs`/`probeTimeoutMs` test seams; production never sets it), lets run L2's
+  capture bypass the cap for that one call. (b) `ZimService.runArm` originally reconstructed its
+  own return object from `collectPackCandidates`'s output and DROPPED `cappedCandidates` —
+  `registerRagIpc.ts`'s only production wiring goes through `runArm`, so the fallback fix above
+  was dead code for every real ask until this was found (during this step's own pre-check of the
+  fallback-measured figure, before writing it) and fixed, with a new end-to-end test driving the
+  real `ZimService`/`makeArm`/`runArm` chain — no existing test exercised this seam, since every
+  property test stubs the arm directly. (c) the restriction's own guard originally read
+  `candidates.length > externalCount`, false exactly on a packs-only ask (`noDocuments: true` —
+  zero document candidates, exactly the scope this step's own acceptance harness and a real
+  "Search my documents" toggle-off both use), silently exempting it from the fix; found the same
+  way, fixed, and pinned by a dedicated "packs-only" property test (property 5) no existing test
+  configuration could have caught (every property 1–4 test seeds a document).
+  **Measured relation (scoped Opus review of step 4-5, finding D5):** the finite ceiling breaks
+  `top96 ⊆ all` as a universal property of the COMPOSED admission — a sweep over pack-count ×
+  chunks-per-article × article-count configurations found 43 breaking cases, the smallest
+  reachable being 1 pack × 6 admitted articles × 100 chunks/article (`top96`'s 6th article
+  contributes chunks `all`'s 512-item ceiling has already exhausted five articles before reaching
+  — 4 of `top96`'s 96 ids absent from `all`, pinned in `zim-arm.test.ts`). `capped ⊆ top48 ⊆
+  top96` is unaffected — zero breaks across the same sweep. No user-visible consequence follows
+  (the scopes are never compared at run time in production; `top96` is reachable only from the
+  disabled `cpu-hi` profile), and the existing superset pin was retitled to state exactly what it
+  proves rather than implying an unconditional chain.
+
+**The one further authorised `core200` acceptance read (ruling (f), 2026-09-16):**
+
+- **`default`** (rerank forced off, `capped` scope, planner on the GPU): **id-level diff of
+  0/200 against run A2 — PASS.** Reproduces run A2's `noRerank.core200` funnel EXACTLY
+  (anyArticle 120, allArticle 89, anyCandidate 81, allCandidate 49, anyPacked 42, allPacked 26).
+  The offline, informational replay (run A2's captured candidates through this branch's
+  `retrieve()` with `reranker = null`) also matched byte-identically on 200/200
+  (`replay-a2-through-branch-2.json`).
+- **`gpu`** (planner + reranker both on the GPU; the reranker's posture resolved through the NEW
+  headroom gate, live, on this machine — `probeDevices` an RTX 3080 Ti at totalMb 12,084/freeMb
+  11,316, `budgetMib` 11,316, the active 4B chat model's `chatModelNeedMib` 3,837.4,
+  `RERANKER_HEADROOM_FLOOR_MIB` 2,808.2, `remainderMib` 7,478.6, verdict `'gpu'`; scope `'all'`
+  at the run-L2-selected ceiling `512`): **every floor PASSES, matching step 4-4's own figures
+  exactly** — `allPacked` **78/200** (floor ≥ 45; beside 26 no-rerank, 47 capped-rerank, 78 is
+  step 4-4's own wide-scope figure, unchanged since the ceiling never bound on this population),
+  `anyPacked` **111/200** (beside 42, 79), `anyCandidate` **116/200** (floor ≥ 80, beside run
+  A2's 81), `anyArticle` **120/200** (floor ≥ 96, exactly run A2's own 120), arm p90 excluding
+  planner and rerank **167 ms** (floor ≤ 2,500 ms), rerank p90 **2,381 ms** (floor ≤ 10,848 ms),
+  planner p90 **618 ms** (floor ≤ 3,000 ms). The GPU sanity row — run A's captured (capped-scope)
+  candidates replayed through the branch's `retrieve()` with the GPU-postured reranker —
+  measured `allPacked` **47/200**, matching 4-2's own CPU-rerank record exactly, with **0** ids
+  changing the `allPacked` VERDICT (the same measure step 4-4 also reported 0 on;
+  `differingIds` in this script is `allIds.filter(id => gpuAllPacked[id] !== cpuRefAllPacked[id])`
+  — a verdict diff, not a chunk-sequence one). Comparing `final_rerank` chunk SEQUENCES instead
+  (the like-for-like measure step 4-4's B8 used) still finds F16-on-Vulkan rank drift on the SAME
+  **3 of 200 ids — `H036`, `H057`, `H082`** — unchanged from step 4-4; this step did not measure
+  or close that drift (`sanity-capped-gpu-2.json`; correction per the scoped Opus review of step
+  4-5, finding D1).
+
+**Decision: both profiles hold every floor — no floor waived, no read repeated.** `cpu-hi` was
+not re-read (ships disabled per Wave 4 ruling (a); step 4-5's brief forbids re-reading it). The
+hardware leg (ruling (f): drive one rerank on a 5–6 GiB usable card, if reachable) was not
+reachable from this session — this session's only hardware is the 12 GiB measurement machine,
+which has ample headroom for both models at once and therefore exercises only the
+provable-headroom branch of the gate; the insufficient-headroom branch is covered by
+`rerank-profile.test.ts`'s fixtures (real device/manifest figures, including the #318 RTX 3060
+Laptop's own totalMb) but not by a live run (`hardware-leg.json`, `docs/known-limitations.md`).
+Full artifacts: `steps/4-5-product-pr-rerank-profiles-2/artifacts/{run-l2-latency.json,
+scope-selection-2.json,acceptance-a4.json,acceptance-a4-{default,gpu}.json,
+fallback-measured.json,hardware-leg.json}`.
+
+**Step 4-6 (Wave 6 ruling (a), same PR, same branch) — C1 resolved: the candidate scope now
+follows the reranker's own device posture on the `gpu` profile.** The scoped Opus review of step
+4-5 (finding C1) found that Wave 5 ruling (d) deliberately re-sourced only the sidecar's POSTURE
+onto the headroom gate and left `resolveRerankProfile`'s scope classification alone — so a
+machine could resolve profile `gpu` (and therefore `GPU_RERANK_SCOPE`, up to `ALL_SCOPE_MAX_DOCS`
+= 512 documents) while the sidecar correctly started `--device none`. The owner's Wave 6 ruling
+(a), verbatim:
+
+> **C1 is resolved by coupling the scope to the posture, in the narrow formulation.** When the
+> resolved rerank profile is `gpu` **and** the resolved reranker device posture is `cpu`, the
+> candidate scope is `capped`. The `cpu-hi` opt-in and the `default` profile are **unchanged** —
+> the coupling must not be implemented as the general rule "posture `cpu` ⇒ `capped`", which would
+> also capture the `cpu-hi` branch (by construction it has no usable GPU, so its posture is always
+> `cpu`) and would permanently kill the `top48` opt-in that Wave 5 ruling (c) preserved behind one
+> constant. The landing scope is `capped`, not `top48`: `top48` on CPU is what run L measured at
+> p90 25,317 / 29,101 ms, the measurement that made `cpu-hi` ship disabled.
+
+The truth table, resolved from the shipped functions (`artifacts/truth-table.json`, all five rows
+match the ruling exactly):
+
+| profile | posture | scope | note |
+|---|---|---|---|
+| `gpu` | `gpu` | `all` | unchanged; the measurement machine and every machine with provable headroom |
+| `gpu` | `cpu` | **`capped`** | **the fix** |
+| `cpu-hi` | `cpu` | `top48` iff the opt-in is on, else `capped` | unchanged; the regression guard exists for exactly this row |
+| `cpu-hi` | `gpu` | `top48` iff the opt-in is on, else `capped` | unreachable in production (no usable GPU ⇒ no `gpu` posture) but must not throw |
+| `default` | either | `capped` | unchanged |
+
+Implementation (ruling (c)): ONE shared main-process helper, `resolveRerankerDevicePosture`
+(`main/services/rag/device-posture.ts` — impure, outside `rag/rerank-profile.ts` so that module
+stays free of `node:`/`electron` imports for the renderer boundary), replicates the exact
+gpuMode/gpuAutoDisabled gate → `eligibleDevicesFor` → `primaryUsefulDevice` →
+`graphicsBudgetMib` chain → `findManifestById`/`estimateGraphicsNeedMib` chat-model placement →
+`rerankerDeviceFor` (unchanged, pure) that `main/index.ts`'s `rerankerDevicePosture` used alone
+before. Both `main/index.ts`'s seam and `registerRagIpc.ts`'s `resolveAskCandidateScope` (which
+now also takes `manifestsDir`, threaded from `AppContext.manifestsDir`) call this ONE function, so
+the two cannot disagree for a given settings snapshot (step 4-7, Wave 7 ruling (a), closes the
+remaining drift window across settings snapshots — see below). `rerankScopeFor` gained a required
+third `posture` parameter,
+consulted ONLY on the `gpu` branch (`posture === 'cpu' ? 'capped' : GPU_RERANK_SCOPE`); `cpu-hi`
+and `default` ignore it entirely, which is what the regression-guard test proves: a `vi.doMock` of
+`shared/rerank-rules` + a scoped dynamic re-import genuinely lowers `CPU_HI_MIN_THREADS` to a
+finite value for that one test only (the file's other tests keep the real, statically-imported
+`Infinity`), so `resolveRerankProfile` actually resolves `cpu-hi` — not forced as a string literal
+— and `top48` still survives under `cpu` posture. (Scoped Opus review of step 4-6, finding D12: an
+earlier version of this test injected the finite threshold only into `meetsThreadThreshold` while
+forcing the `cpu-hi` profile string, so no finite constant ever reached `resolveRerankProfile`;
+strengthened to genuinely exercise it, per the review's preferred fix.) Four required tests, all
+green: the coupling both directions, the regression guard, `default` unchanged on both postures,
+and the two call sites proven to resolve the SAME posture from the SAME settings snapshot
+(`tests/unit/rerank-profile.test.ts`, `tests/unit/rerank-profile-wiring.test.ts`).
+
+**The no-op proof (ruling (d)), offline, no runtime lock, no inference.** This step may not invoke
+`llama-server.exe` in any form (the only mechanism for a LIVE GPU probe, `probeGpuDevices`, spawns
+it), so the proof replays `run-summary-a4-gpu.json`'s recorded gate inputs (a real live probe step
+4-5's authorised run A4 captured on this same machine) through the branch's own new functions, as
+a labelled FIXTURE proof (`artifacts/no-op-proof.json`). Resolved posture `gpu`, resolved scope
+`all` — byte-identical to the recorded `verdict`/`candidateScope`, and every gate figure matches
+the file exactly (`budgetMib` 11,316, `chatModelNeedMib` 3,837.397345214844, `floorMib`
+2,808.2015380859375, `remainderMib` 7,478.602654785156). The coupling is confirmed a no-op on the
+measurement machine: step 4-5's acceptance figures continue to describe the shipped code.
+
+**The harness check (ruling (e)).** `product-harness.mjs`'s `--profile=gpu` branch resolved
+`candidateScope` via `rerankScopeFor('gpu', {...})` BEFORE resolving `devicePosture` and with no
+posture argument — correct at step 4-5's head (no posture parameter existed), but a silent
+divergence at this step's head: the missing third argument evaluates as `undefined`,
+`undefined === 'cpu'` is `false`, so the branch would always return `GPU_RERANK_SCOPE` regardless
+of the live-resolved posture, exactly reproducing the C1 combination on a future small-card read.
+Fixed in this step's OWN harness copy only (`steps/4-6-.../artifacts/harness/product-harness.mjs`
+— step 4-5's frozen copy is untouched): resolve `devicePosture` first, then pass it into
+`rerankScopeFor`. Full analysis: `artifacts/harness-posture-check.json`.
+
+**Docs updated in place**, the C1 disclosure becoming the resolved rule rather than a caveat:
+this section, `architecture.md` GPU record §7, `known-limitations.md`. The small-card path itself
+remains unvalidated on real hardware (no such machine was reachable from step 4-5's session) —
+that residual is unchanged by this step, which is offline and runs no acceptance read.
+
+**Step 4-7 (Wave 7 rulings (a), (c), (d), same PR, same branch) — C2 resolved: a posture-moving
+settings change now suspends the sidecar, from all three settings-writing channels.** The scoped
+Opus review of step 4-6 (finding C2) showed that the shared posture helper above guarantees the
+sidecar and the per-ask scope compute the SAME posture from the SAME inputs, but not at the same
+MOMENT: the sidecar resolved its posture once per cold start and held it for the session
+(`reranker/llama.ts`), the ask re-resolved on every ask, and the only thing that suspended the
+resident sidecar was a `gpuMode`/`gpuAutoDisabled` flip (`registerCoreIpc.ts`) — not an
+`activeModelId` change, even though `activeModelId` also feeds the posture (through
+`chatModelNeedMib`). Reachable concretely on the project's own measured GTX 1070 Ti (`{totalMb:
+8273, freeMb: 7504}`, #391 leg 2): starting on the 9B chat model (this card's own starred
+recommendation) gives posture `cpu` (remainder 219.9 MiB below the 2,808.2 MiB floor), the sidecar
+cold-starts CPU-pinned and stays resident; switching down to the 4B — an ordinary Models-screen
+action — moves the posture to `gpu` (remainder 3,666.6 MiB, above the floor) with nothing to
+suspend the sidecar, so the next ask resolves the wide `all` scope while the sidecar is still
+actually running on the CPU. The owner ruled (Wave 7 ruling (a)) this resolved by option (A):
+`activeModelId` joins `gpuMode`/`gpuAutoDisabled` as a posture input the sidecar's suspend trigger
+watches.
+
+Implementation (ruling (c)): ONE shared main-process predicate, `rerankerPostureInputsChanged`
+(`main/services/rag/device-posture.ts`, beside `resolveRerankerDevicePosture` above), answers
+"does this settings change invalidate the resident reranker's posture?" by comparing the actual
+`gpuMode`/`gpuAutoDisabled`/`activeModelId` values before and after a write — the same REAL-flip
+discipline the existing `gpuMode`/`gpuAutoDisabled` hook already used, now generalised rather than
+copied. Called from all three channels the ruling names: `registerCoreIpc.ts`'s `settings:update`
+handler (generalised in place) and both of `registerModelIpc.ts`'s `selectModel` call sites
+(`models:select`, `models:use`), which reach `activeModelId` through `services/models.ts`'s
+`selectModel` → `updateSettings`, bypassing `settings:update`'s own hook entirely — the same three
+channels `notifyPerformanceChanged()` already fans out to. Every call site calls `suspend()`,
+never `stop()`, fire-and-forget with the existing `.catch` + `log.warn` shape.
+`activeEmbeddingModelId` is explicitly NOT a posture input and never triggers this.
+`resolveRerankerDevicePosture` and `rerankerDeviceFor` are unchanged; `rerankScopeFor`'s Wave 6
+coupling is unchanged; no frozen constant moved.
+
+Four required tests, all green (`tests/integration/core-model-ipc.test.ts`): a model switch
+through each of the three channels suspends the sidecar; a settings change touching no posture
+input — including `activeEmbeddingModelId` on a real flip — does not; the existing
+`gpuMode`/`gpuAutoDisabled` behaviour (including the REAL-flip negative) is unchanged; and, end to
+end, a REAL `LlamaReranker` wired to the REAL `resolveRerankerDevicePosture` helper proves that
+after a channel suspends it, the NEXT `rerank()` lazily restarts AND resolves the NEW posture
+(the 1070 Ti fixture above, `cpu` → `gpu`) — not merely that a restart happened.
+
+**D10 settled, non-absolutely.** After this fix the sidecar and the per-ask scope still cannot be
+said to "never disagree" in the absolute: `suspend()` is fire-and-forget, so an ask landing
+mid-teardown hits the sidecar's `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling
+(e)(i)'s `cappedCandidates` fallback returns the capped selection instead — that one residual
+window resolves toward the safe, bounded scope, never the wide one. Every "can never disagree"
+site this review and its predecessor named — this section, `architecture.md` GPU record §7,
+`known-limitations.md`, `registerRagIpc.ts`, `rerank-profile.ts`, `main/index.ts`,
+`device-posture.ts`, and the load-bearing `reranker/llama.ts` cold-start comment the earlier
+review did not name — now says so.
+
+**The re-established no-op proof (ruling (e)) holds, offline, with no runtime lock.** Repeating
+step 4-6's proof at the new head: the resolved posture is `gpu`, the resolved scope is `all`,
+unchanged, cross-checked byte-for-byte against `run-summary-a4-gpu.json`'s recorded gate figures;
+the five-row truth table is identical to `truth-table.json`. **The harness check (ruling (e), part
+2):** none of the product's real headless entry points (`tests/manual/zim-real.test.ts`,
+`tests/manual/rerank-smoke.test.ts`, `tests/manual/model-eval.test.ts`) ever reads or writes
+`settings.activeModelId` or calls `selectModel`/`updateSettings` — each constructs its runtime/
+reranker instances directly, bypassing the settings-driven posture/scope machinery entirely — so
+no acceptance path can cross a suspend mid-run. Full artifacts:
+`steps/4-7-product-pr-rerank-profiles-4/artifacts/{no-op-proof-2.json,harness-model-switch-check.json,channels.json,d10-sites.json}`.
+
+**Step 4-8 (Wave 8 rulings (a)-(d), same PR, same branch) — C3 resolved: the posture's chat-model
+input is now the runtime's COMMITTED model, never `activeModelId`; the posture class is completed
+by construction (Q, G, T); the sidecar's lifecycle is hardened; the Performance screen stops
+misreporting the reranker's device.** The scoped Opus review of step 4-7 (finding C3) showed that
+`activeModelId` was never a safe posture input: it is a proxy for "the chat model that will be
+loaded", true only once `models:use`'s multi-GB weight hash and subsequent load finish, and false
+for the ENTIRE window before that. On the project's own measured GTX 1070 Ti a 9B → 4B switch
+during that window could cold-start the reranker on the GPU beside the still-resident 9B — the
+exact VRAM contention the headroom gate exists to prevent. Option B′: `resolveRerankerDevicePosture`
+(`main/services/rag/device-posture.ts`) now takes an `occupancy` snapshot — `committedModelId`
+(`RuntimeManager.activeModelId()`, never the setting), `chatStartBusy` (a chat start in flight, via
+`status().startingModelId`, or PENDING, via a new per-call counter in `startModelRuntime`), and
+`translationOccupied` (a GPU-posture translation sidecar loading, resident, or mid-teardown) — and
+returns `cpu` whenever any of these is absent or busy, checked BEFORE the manifest lookup. The
+pending counter's `try`/`finally` begins immediately after its increment (never a function-wide
+one, which would go negative on a gate-refused start) and sits between the RAM gate and the
+shutdown re-check in `startModelRuntime`, so AUD-03/CODE-3's ordering is unchanged.
+
+**Q (the use-time re-check, `reranker/llama.ts`'s `resolveServer`).** `rerank()` resolves its
+posture fresh in the SAME synchronous section that starts, joins or reuses the sidecar, and again
+after every await inside it — never a second, later read for the actual cold-start args. A
+resident or starting sidecar recorded under a different posture is restarted, under four race
+rules verified against two independent adversarial probes of the real class before this step
+began: (i) never join a teardown this call did not start (refuse instead — the existing F19
+behaviour); (ii) after its own awaited teardown, refuse if its own signal aborted or if ANY other
+caller also requested a teardown during that pass (the pass's own `requesterCount`, held on a
+per-pass object — not a field the shared promise's `finally` clears, which a probe showed reads 0
+by the time an awaiting requester resumes); (iii) at most one restart per call; (iv) a start-abort
+NOT caused by the call's own signal is rethrown as a non-abort error, landing the ask on Wave 5
+ruling (e)(i)'s capped fallback instead of ending it — a lock still ends the ask correctly, because
+its own signal is aborted first.
+
+**G (the CPU request ceiling).** On the `cpu` posture, `rerank()` refuses a request bigger than
+`2 × ragTopKInitial + totalCandidateCapFor(rerankScopeFor(profile, input, 'cpu'))` (48 at the
+defaults, 72 under the `top48` opt-in) — computed from settings with the EXISTING pure functions,
+applied fresh on every call (so re-applied after any await), thrown before any start so it never
+arms `startFailed`. Because an absent ceiling callback must admit everything (what keeps the
+acceptance harness inert), an omitted wire is made impossible one level up: `composeServices`'s
+`rerankerDevicePosture`/`rerankerRequestCeiling` options are REQUIRED (an intersection type, so the
+shared base `composeTranslator` also takes stays untouched), built by one exported factory
+(`createRerankerCallbacks`) whose four dependencies are all required, and `resolveAskCandidateScope`'s
+occupancy parameter is required at the ask site — each proven with a `@ts-expect-error` case that
+fails `npm run typecheck` if the wire is ever made optional again (the analysis's own finding,
+NF-1: a composition test reaching only `compose-services.ts` → `reranker/factory.ts` cannot see an
+omission at `main/index.ts` or the ask site).
+
+**T (translation occupancy).** The translation runtime gains one read-only `gpuOccupied()`
+accessor covering all four stages a GPU-posture ('auto') sidecar can occupy the card in — loading
+(before `deviceStatus().live` can see it), resident, hard teardown, and idle teardown (a soft
+timeout kill) — a forced-CPU sidecar never occupies it. The posture closure reads `ctx.translator`
+live through a getter (never captured), because `onModelInstalled` re-composes it mid-session.
+
+**Lifecycle hardening (`reranker/llama.ts` only), the translation runtime's own M5/M1 patterns
+ported.** Single-flight teardown: every overlapping `suspend()`/`stop()`/Q-restart shares ONE
+teardown pass; a counter in its place was rejected (a second caller would resolve at once, so an
+awaited suspend before a chat-model load could return while the GPU process is still exiting).
+Dead-handle recovery: an unexpected mid-session exit (never a teardown-initiated one — `stop()`
+arms `stopping` before the kill) drops the handle so the next `rerank()` cold-starts with a
+freshly resolved posture; a second exit in the same session latches like the existing
+failed-start latch.
+
+**The Performance screen (ruling (d)).** One optional read-only `devicePosture()` member on
+`Reranker` (the `isLoaded?` pattern; the interface's required members untouched) reports the
+resident sidecar's actual posture, or the posture a cold start would take now when nothing is
+resident; a `Reranker` without it reports `cpu`. The reranker row reads this instead of a
+hard-coded `'cpu'`; its copy stops calling a `cpu` reranker "by design" (reusing the EXISTING
+"processor" key, no catalogue change); `loadedAtOnceMb` stops counting a `gpu`-posture reranker row
+against processor memory on `discrete` (its own gate only resolves `gpu` when the whole placement
+fits, and no partial-offload split is tracked for it, so it contributes 0 like a chat/translation
+row with no measured spill); the card summary line stays chat + translation, disclosed as a
+residual rather than changed.
+
+**No frozen surface moved:** `rerankerDeviceFor` stays pure and unchanged; `rerankScopeFor`'s table
+and Wave 6 ruling (a)'s coupling are unchanged (the five-row truth table is byte-identical); every
+frozen constant, every shared-type shape, and the `Reranker` interface's required members are
+unchanged. Wave 7's three event-time suspends stay, as early release — not the correctness
+guarantee any more; Q is. The no-op proof holds offline, with no runtime lock and no `core200`
+read: the replayed A4 snapshot (committed 4B, no occupancy, the recorded probe) resolves `gpu`/
+`all`, byte-identical to step 4-7's own read, AND shows the setting alone no longer decides (a null
+committed model, a different committed model, and each occupancy input alone each move the
+posture as they should). The acceptance harness (`product-harness.mjs`) has every new option
+absent from its construction path — inert by default — and its constant injected posture, single
+teardown call, and crash-free run make Q, single-flight teardown and exit handling inert on its
+own call pattern. Residuals (translation's cold-start/teardown cost to the reranker, the gate's
+manifest-only chat-model estimate, other GPU consumers and a stale probe, and a GPU failure
+disabling reranking for the session) are disclosed in `known-limitations.md`, not fixed. Full
+artifacts:
+`steps/4-8-product-pr-rerank-profiles-5/artifacts/{no-op-proof-3.json,harness-inertness-check.json,posture-writers.json,required-wiring-proof.json,posture-cost.json,follow-up-issues.md}`.

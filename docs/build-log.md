@@ -27,6 +27,233 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-18 — the oldest closed dated entry retired verbatim (#399 — preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-18 to make room for the §11.16 Documents-declutter entry
+(PR #444; the preamble was at its 200-line budget; the retention rule is "MOVE, don't raise"). Of the
+two oldest entries, the 2026-09-09 knowledge-packs entry still carries owner-side items it says are
+tracked nowhere else, so it stays. #399 is closed; its follow-ups are tracked as issues (#446 closed,
+#447 open), and its durable record lives on in `model-benchmarks.md` §6.6 "2026-09-09 correction
+(#399)" and `known-limitations.md` "The one chat slot and the prompt cache". Citations of the form
+"BUILD_STATE 2026-09-09 entry" for #399 resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-09 — **#399 CLOSED — the §6.6 record corrected and both owner decisions landed** (`fix/399-prompt-cache-restore`;
+record `model-benchmarks.md` §6.6 "2026-09-09 correction (#399)", `known-limitations.md` "The one chat slot and the prompt
+cache"; evidence PR #445). The old accepted-cost clause said "both 27B quants are hybrid/recurrent, so the restore path is
+closed to them". Measured: **11 of 14 chat models** lose llama-server's host-cache restore — the whole `qwen3.5`/`qwen3.8`
+line (recurrent state) and all four `gemma4` manifests (SWA), **including the catalog-default 4B and the 9B**; three
+positive controls (dense `qwen3`, `qwen3moe`, `mistral3`) DID restore, which makes it a measured architecture split.
+**D3(a)** — the arbiter waits 90 s after a chat turn before resuming a parked deep-index build, capped at 10 min of
+deferral per park so a document can never silently miss its index (`model-slot-arbiter.ts`; the delay is on the BUILD's
+resume, never on `acquireForChat`, which chat awaits). **D5** — `--cache-ram 0` for those three families only
+(`shared/prompt-cache-rules.ts`); unmeasured families keep cache-ON, the safe direction. **D4 deferred**: leg B showed a
+documents ask keeps only its ~227-token system prefix with or without a helper, so the length-proportional cost belongs to
+the plain-CHAT path alone and a picker warning would overstate it. Residual: a break longer than the delay still costs ONE
+slow reply, once. Follow-ups **#446** (`qwen3.6-27b` ×2 + `granite-4.1-8b` never tested — CLOSED 2026-09-10, see that entry)
+and **#447** (the ZIM query expander is bounded by inference, not measurement). Trap for reproducers: `forcing full
+prompt re-processing` appears only on MTP starts — the token count is the only honest read._
+
+## 2026-09-14 — BUILD_STATE §5 item 21 (f)–(h) retired verbatim (Phase 4 PR-A line-neutral edit)
+
+Retired from `BUILD_STATE.md` §5 item 21 on 2026-09-14 to keep the section at its 500-line budget
+while adding the Phase 4 PR-A discovery-port entry (item 21 (m)): three already-collapsed,
+one-line, fully CLOSED sub-items, each with its own durable record elsewhere (rag-design D-Z3,
+D-Z10/D-Z17, known-limitations), drained line-for-line so §5 stays net-neutral. No other §5 item
+cites "(f)", "(g)" or "(h)" of item 21 (checked repo-wide). Text below is byte-identical to what
+was removed.
+
+    (f) **D2 parser hardware gate — CLOSED (re-ruled P1b).** Gate = per-slice main-thread stall ≤5 ms on the i7-8550U; cooperative slicing shipped, `DEFAULT_SLICE_WORK` = 16 Ki, T02-c recorded (laptop leg 3); P7 re-check via the 14900K P-core ÷ 3 proxy. Record: rag-design D-Z3.
+    (g) **R-1 CLOSED at P8-1 for an in-app install** (both binaries hashed in the marker); a hand-placed bundle still resolves `skip-legacy` by design. Record: rag-design D-Z10, D-Z17.
+    (h) **R-7 — CLOSED with recorded limits (P3b).** Record: known-limitations `zim-transient/` bullet.
+
+## 2026-09-13 — a closed dated entry retired verbatim (#331 — preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-13 to make room for the #467 test-fixture entry (the
+preamble was at 196 of its 200-line budget; the retention rule is "MOVE, don't raise"). Not the oldest
+entry: the 2026-09-09 knowledge-packs entry below it still carries owner-side items it says are
+tracked nowhere else, so it stays. #331 is closed, the three defects it filed (#436, #437, #438) are
+closed, and its durable record lives on in `benchmark.md` §2 row HW3 + §4 HW3. Citations of the form
+"BUILD_STATE 2026-09-09 entry" for the HW3 acceptance legs resolve here. Text below is byte-identical
+to what was removed.
+
+_2026-09-09 — **#331 CLOSED — the four blocked HW3 acceptance legs performed** (`docs/331-hardware-acceptance-legs`;
+record `benchmark.md` §2 row HW3 + §4 HW3; evidence `eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/331-hw3-acceptance-legs.md`).
+A workspace created on a SECOND computer with the 14B active made leg 2 a real moved-drive `new-machine` run behind a 66 s model
+start — the review box's ~120 ms first run reproduced here first, and a FRESH workspace would not have helped either
+(`activeModelId` starts null, so nothing precedes the check). **Passed:** the moved-drive check observed window-open → completion
+(13.7 s), transitioning with no navigation; a foreground chat inside a benchmark span (both M1 halves — a chat never masquerades as
+a span nor hides one; the ~130–270 ms overlap is structural, `modelBusy` is re-checked inside the speed leg); a model load
+(120.3 MB/s) and a full file verification (85.5 s forced re-hash, 242 s cold `#382`/`#420` pass) each refreshing rows and tiles in
+place, matching what persisted. **Three defects filed:** under Narrator — against a positive control proving live regions DO work in
+the app's window — NEITHER live region is announced. **#436** is the serious one: `ErrorBanner`'s always-mounted `role="alert"` is
+defeated by the `Banner` nested inside it, whose `role="status"` is itself a live region mounted WITH its text (M-U1 one level
+down), affecting 11 screens + the gate's #145 wrong-password banner; a control fixed the remedy — inner `aria-live="off"` does NOT
+work, the inner role must go. **#437** the step region (inserted with content AND progress carried only by a CSS class +
+`aria-hidden` icon). **#438** an automatic run's step list never advances (progress is addressed to the invoking window; the screen
+renders the list for any held span, correct per M1). Lesson to keep: `role="status"` and `role="alert"` are both live regions —
+nesting one inside the other silences the outer. Docs: `benchmark.md`, `known-limitations.md` (Performance + Accessibility)._
+
+## 2026-09-13 — the oldest closed dated entry retired verbatim (#339 — preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-13 to make room for the #460 test-harness entry (the
+preamble was at 198 of its 200-line budget; the retention rule is "MOVE, don't raise"). The work is
+shipped and its durable record lives on in `rag-design.md` §17 **D-Z22**; what is still open from the
+ZIM wave is `BUILD_STATE.md` §5 item 21. Citations of the form "BUILD_STATE 2026-09-08 entry" for the
+Range-first article reads resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-08 — **#339 Range-first article reads (`fix/339-range-first-article-read`), record `rag-design.md` §17 **D-Z22**:**
+every `/raw` article request (and the redirect hop) now carries `Range: bytes=0-`, which libkiwix serves through its 16 KiB
+callback reader instead of the one-buffer path that carries the win-x86_64 cut-short defect — so the app stops TRIGGERING an
+upstream bug it cannot fix. `kiwixGet` gained a `headers` option, a bytes-level core and an inter-chunk idle timer
+(`ARTICLE_READ_IDLE_MS` = 1,000, `KiwixTimeoutError.kind`); a stall that left a prefix is RESUMED with `Range: bytes=<received>-`,
+accepted only against an exact `Content-Range`, joined as bytes before the UTF-8 decode, never chained. The 4 s × 3 retry stays as
+the safety net; `MAX_SELECTED_PACKS`, the ask deadline, the arm, the viewer and the other routes are untouched. **Measured on the
+K: Kit drive (USB), pinned 3.8.1:** 880 Range reads 0 bad vs 70/600 plain short; max inter-chunk gap **17.8 ms** (24.6 on NVMe) —
+so 1,000 ms stands, not 1,500; 60 real article opens through the shipped client **13 retries + 1 article lost at 953.8 ms/open →
+0 + 0 at 19.9 ms/open**. Suite 423 files / 7,065 (+14 legs). Evidence: `ai_drive-archive/zim-wave-2026-09/evidence/range-fix-2026-09-08/`.
+The three closed ZIM wave entries (#301 / the follow-up wave / the open-issues wave) are retired verbatim to `docs/build-log.md`
+"2026-09-08 — the three closed ZIM knowledge-pack wave entries"; §5 item 21 holds what is still open (all of it the owner's)._
+
+## 2026-09-12 — the two oldest closed dated entries retired verbatim (#333, #318 — preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-12 to make room for the #458 CI entries (the preamble was
+at its 200-line budget; the retention rule is "MOVE, don't raise"). Both rounds are CLOSED and their
+durable records live on: #333 in `benchmark.md` §4 **I5**, #318 in `model-benchmarks.md` §6.6
+"Hardware verification". Citations of the form "BUILD_STATE 2026-09-09 entry" / "2026-09-07 entry"
+for these two resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-09 — **#333 CLOSED — measured, no cache** (instrumented on `perf/333-manifest-read-instrumentation`, PR #431; record
+`benchmark.md` §4 **I5** + Perf marks "`discover_manifests` / `performance_get` — the #333 pair"; evidence
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/manifest-read-333-measurement.txt`): on the drive, cold (eject/replug ×3:
+90.3 / 75.6 / 92.2 ms) and end to end through the app (20 reads: median **27 ms**, scan 18 of it, ~9 ms settings + detectSystem).
+Owner decision: acceptable as measured. A cache saves 18 ms on a pushed screen, would not have touched the 116 ms tail (that read's
+scan was 15 ms — the rest was the settings read contending with the benchmark's drive probe), and the screen is a minority caller
+(66 scans vs 20 reads). Corrections on record: the old ~100 ms was the INTERNAL disk while the launchers point
+`HILBERTRAUM_MANIFESTS_DIR` at the drive's copy; the cost is CPU (82 % parse+validate) not media; and the app has ONE window, so the
+per-chat-answer exposure is smaller than the pre-measurement analysis claimed. Instrumentation kept._
+_2026-09-07 — **#318 hardware session CLOSED (`docs/318-hardware-verification`):** six machines, legs 1–5 + 7 with
+the app's own argv; every §6.6 verdict held (8 GB: 9B 31/33 → 4B ★; 12 GB: Gemma 49/49; sub-gate 6 GB laptop: E2B 36/36
+on the card anyway; 24 GB: Q4 66/66, Q5 62/66 under rung 1a yet 66/66 with `-np 1` or MTP off). Leg 6 (20 GB) and an
+Intel-first hybrid do not exist in the project → predicted by inference. Record + six findings: `model-benchmarks.md`
+§6.6 "Hardware verification"; evidence `eval/results/hardware/<slug>/`; routed to #319/#320/#321/#329/#332; §5 item 22 (e)–(k)._
+
+## 2026-09-12 — the two 2026-09-07 models/runtime entries retired verbatim (preamble budget)
+
+_Moved out of `BUILD_STATE.md` while making room for the #438 entry. Both waves are closed: the
+#372 model-load latch and the #310/#312/#313/#314/#315 models-runtime fix wave (PR #371). The
+wave's still-open residuals stay live in `BUILD_STATE.md` §5 item 23; the durable records are the
+GPU record §5.2/§5.4 in `docs/architecture.md`._
+
+_2026-09-07 — **#372 (the #312 follow-up; `fix/372-model-load-latch`):** a model the ladder blamed is latched for the session
+(`factory.ts` module state beside the #182 latch): its next start spawns no rung, re-fires the model-named notice and lands on the
+mock at once — no repeated 180 s health timeouts. With acceleration off / auto-disabled (no GPU rung to compare against) every rung
+failing now names the model too; `gpuAutoDisabled` is never written on that path. Only a `failureSignature` class latches (never a
+bind race or an unrecognised shape). Clearing rule: "Verify checksum" on the model, a completed download of it, a chat-engine install
+(every latch), an app restart — not "Try GPU again". Record: GPU record §5.2 "#372" paragraph + §5.4 table; user-guide, known-limitations,
+CHANGELOG. Tests: `runtime-ladder.test.ts` "#372" (16 cases + the `ctx.onModelInstalled` source pin), `core-model-ipc`, `engine-consent-ipc`, `gpu-ipc`._
+_2026-09-07 — **Models/runtime fix wave (#310, #312, #313, #314, #315; `fix/310-315-models-runtime-wave`, one PR):**
+#310 a manifest declares every required weight file (`files:`, validator fail-closed incl. shard-set completeness; one enumeration
+`manifestFiles()` feeds install state, verify, byte totals, prefetch, planner, both verify/fetch scripts; sidecar roles need every
+file present); #312 the ladder holds a rung-1 failure until a forced-CPU rung answers — same failure class on every rung blames the
+MODEL (nothing persisted, `runtime:notice` names it), a CPU rung starting persists as before (GPU record §5.2); #313 family options
+follow view + task, a kept selection is marked, family-only reset; #314 `downloads:list`/`downloads:dismiss` re-attach a download after
+a renderer reload, dismissal lives in main memory; #315 findBy assertions, baseline staleness test, 17 dead keys deleted. Owner rulings
+taken on the plan defaults (PR body). Suite: master 421 files / 6,815 tests → 422 / 6,930 (85 skipped); typecheck + build green; the zim-packs T14 case flaked once under full load (green alone, untouched here). Residuals: §5 item 23._
+
+## 2026-09-10 — the three 2026-09-06 entries retired verbatim (preamble budget)
+
+_Moved out of `BUILD_STATE.md` while making room for the #436/#437 accessibility entry. All three
+waves are closed: the #303 follow-up wave, the PR #308 audit remediation, and the PR #303 audit
+remediation. Their durable records live in `docs/benchmark.md` and `docs/model-benchmarks.md` §6.5/§6.6._
+
+_2026-09-06 — **Follow-up wave on `feat/performance-screen` (#303), one commit per issue, ledger `tmp/followups-303-ledger.md`:**
+#325 closed `4293f95f` (GPU-off tile never falls back to a recorded card; Copy report carries the live pick; "Running on the graphics card right now." line — visual unverified);
+#323 closed `b0b26eec` (a completed chat-engine install re-runs the probe refresh when this machine's eligible probe is empty); #335 closed `6f1bcde1` (the harness records and removes every suite's temp root; ~2,500 leaked roots per run → 0); #322 closed — `speedIdentity` + the one-directional gate in `speedSignalFor` (a sample counts for a next start no faster than the measured path; §6.5 2026-09-06 amendment, owner-confirmed on review of the first draft)._
+
+_2026-09-06 — **PR #308 audit remediation (`feat/vram-aware-picker`, stacked on #303):** R1–R6 closed —
+P1 sync (`7aae2716`), P2 budget device + next-start class (`81661c69`), P2a empty-probe persistence
+(`8cb4422d`), P3 rule C on the free-memory budget + per-model cache term (`bf9a09b0`), P4 live
+Performance recommendation (`a468f6e1`), P5 records (`e4b762e9`); base re-merged as #303 landed (the
+second merge unified #303 P5's `gpu-rules` with this wave's helper). Decisions 1–11 adopted; record
+`model-benchmarks.md` §6.6 (2026-09-06 amendment) + §6.5; **owner sign-off given 2026-09-06** in the PR
+review. #318 hardware legs (not a gate); (h)–(k) → #320 / #319 / #320 / #321 (all: keep, measure first);
+#324 omitted; #326 → strictly ranked card-path fallback; residuals #322, #323, #325; #327 fixed by #303._
+
+_2026-09-06 — **PR #303 audit remediation on `feat/performance-screen` (master `ddd704ad` merged in
+first; one commit per phase, CI green on each; working ledger `tmp/pr-303-fix-plan-ledger.md`,
+untracked; durable record → `docs/benchmark.md` at P9).** P1 pinned the M7 `_Host` and L7
+empty-reading fixes of `ce741533`, removed the `skills.title` orphan, archived §5 item 20. P2 repaired
+M2/M4/M6/L2 together (`services/benchmark-persistence.ts`: identity before source ranking under G3,
+outgoing-result backfill, commit-time re-resolution, samples to both destinations). P3 made the screen
+pushed, never polled (`performance:changed` after every mutation incl. runtime and sidecar residency;
+`running` = the held span; observed rows = session latches; honest `drive`/`speed` steps; the renderer
+splits backend running from its own action) — the dev launch smoke caught and fixed a StrictMode
+double-mount defect and measured `performance:get` ≈ 100 ms (I5). P4 validates `lastBenchmark`,
+`benchmarkHistory`, `modelPlacements` on read and write (`shared/benchmark-schema.ts`; the legacy
+profile-only record survives unkeyed), resolves the displayed context with `launchContextTokens`, and
+counts a placement as measured only when its context/backend match the configuration. P5 made one
+machine-eligible GPU source (`gpuProbe.machineKey`, `shared/gpu-rules.ts`, paired name + memory,
+configuration-aware resident rows, class-aware RAM total, free/working figures by device; a CI-only
+same-millisecond sample clash was fixed by an injectable read-speed clock). P6 carried the speed basis
+into the report and rows, fixed the first-start / per-drive / observed-unknown / N4 / N5 copy, named
+the fit margin from `shared/performance-rules.ts`, added the German smoke and the display-device labels. P7 sequenced the first-run / moved-drive
+measurement behind the auto-start (L1/SD2, G5): `prepareFirstBenchmark` does the cheap seed /
+backfill / restore before `maybeAutoStartActiveModel` (now awaitable), `scheduleFirstBenchmark` waits
+for the start to settle under a 120 s bound and otherwise keeps one continuation, re-checks admission
+/ epoch / shutdown / busy / "already current" before running, allows one automatic attempt per unlock
+epoch, and the run refuses to persist into a session that locked or re-opened meanwhile. P8 closed the test gaps (T7/T8/T11/TH1/TH2): the history-order assertion names both
+identities, a source-text + behavioural pin covers the answer-speed observer wiring, the 300 ms sleep
+became an await on P7's outcome, one shared teardown closes the fixture's DBs and removes its temp
+roots (2,683 leaked roots from earlier runs cleared), and a ladder-to-placement wiring test drives
+the real rung factory with a fake sidecar's stderr (one parser per attempt; the persister writes,
+skips while locked, and survives a throwing observer). P9 wrote the durable record — `docs/benchmark.md` "Audit remediation record — PR #303"
+§1–§5 (decisions, a 63-row disposition matrix, the design as built, what is not verified, a §-anchor
+legend) — plus user-guide §5a "Performance", the privacy inventories in `PRIVACY.md` /
+`security-model.md`, the known-limitations block, the `architecture.md` supersession notes, and the
+DR11 host-conditional assertion turned into a fixed expectation. P10 cross-reviewed the candidate `07dd9085` (Opus over the Fable phases, Fable
+over the Opus phases, both over the Sonnet docs and the P0 delta inventory): no user-facing defect;
+four low main-process items, one schema hardening gap, a keyboard focus loss after "Check again" and
+issue #327 (the Diagnostics acceleration line bypassing the eligible-probe rule, filed by the PR #308
+review against this branch) repaired with fail-before/pass-after tests; the audit probes re-run at the
+candidate pass every main-process case (22 / 2 superseded by design / 1 retired); HW3 performed live
+over CDP — EN/DE, light/dark, 880/1024/1280 px, the German rail at weight 600, a real Tab walk and
+Enter activation all passed; a synthetic moved-drive restart verified M2/M4/P7 end to end. Blocked
+legs (screen-reader announcements; a first-run, chat or model-load while mounted — no runtime here)
+carried into the follow-up issues. P11 closed the wave without a source change: follow-up
+issues #329–#334 (a real partial-offload log, the two-computer round trip, the blocked HW3 legs,
+hybrid / Apple Silicon hardware, the slow-media read cost, slow-USB sequencing) and #335 (temp-root
+hygiene in other suites), the record's issue and commit references filled, the changelog entry,
+the keyboard-focus repair re-verified live in the dev app. Merge is the owner's call; the branch
+stays._
+
+## 2026-09-09 — the two 2026-09-05 dated entries retired verbatim (preamble budget)
+
+Moved out of `BUILD_STATE.md` on 2026-09-09 to keep the preamble inside its 200-line budget
+(`repo-hygiene.test.ts`), making room for the #399 prompt-cache entry: the Graphics-memory-aware
+picker entry (whose total-memory rule was already superseded by the 2026-09-06 PR #308 audit
+amendment) and the Performance-wave entry. Both waves are closed and carry their durable records —
+`docs/model-benchmarks.md` §6.6 (rule C, the 2026-09-06 and 2026-09-07 amendments) and
+`docs/benchmark.md` "History per machine" / "Performance screen" plus its "Audit remediation
+record — PR #303"; residuals stay tracked in BUILD_STATE §5 item 22.
+
+_2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** the total-memory
+rule shipped here is **superseded** by the 2026-09-06 PR #308 audit amendment above (rule C on free memory; §6.6)._
+
+_2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
+third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
+the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
+Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
+tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
+`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
+cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
+`placementVerdict`), the session's observed figures (last
+answer via a `chat:speed` observer, last model start / file check via per-source read-speed
+latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
+check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
+`benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
+`docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
+storage + IPC). §5 item 22 tracks the residuals._
+
 ## 2026-09-09 — three closed dated entries retired verbatim (preamble budget)
 
 Moved out of `BUILD_STATE.md` on 2026-09-09 to keep the preamble inside its 200-line budget
@@ -46,23 +273,6 @@ verbatim bytes (no BOM, via `saveBinaryExport`) — renderer-supplied content ov
 audit records ids/bytes/extension only, never the text or path. Record: `security-model.md`
 "Code-block save boundary"; docs: user-guide §6, `data-contracts.md`, `design-guidelines.md`, `PRIVACY.md`, `CHANGELOG.md`._
 
-_2026-09-05: **Graphics-memory-aware picker (`feat/vram-aware-picker`, stacked on #303):** the total-memory
-rule shipped here is **superseded** by the 2026-09-06 PR #308 audit amendment above (rule C on free memory; §6.6)._
-
-_2026-09-05: **Performance wave (`feat/performance-screen`): the hardware check moves from the
-third card of Settings › Diagnostics to a primary rail destination, "Performance". Rail rework in
-the same branch (owner decision): three groups (Chat · Documents · Translate · Images ‖ AI Model ·
-Performance ‖ Settings), Home behind the brand mark (lit on Home), Skills back into Settings as a
-tab (`skills` target resolves there); design-guidelines §2 rewritten.** Verdict + four rated tiles (speed, RAM, VRAM via
-`BenchmarkResult.gpuVramMb`, drive) and the "Your model" row (memory class discrete / unified /
-cpu, the chat ladder's placement parser over llama.cpp's load log, `settings.modelPlacements`,
-`placementVerdict`), the session's observed figures (last
-answer via a `chat:speed` observer, last model start / file check via per-source read-speed
-latches), and one result per computer (`settings.benchmarkHistory`, `machineKey`). The moved-drive
-check in `maybeRunFirstBenchmark` restores a known machine's result or benchmarks a new one;
-`benchmark:progress` streams the run's steps. Diagnostics keeps the raw table. Records:
-`docs/benchmark.md` "History per machine" / "Performance screen", data-contracts (settings
-storage + IPC). §5 item 22 tracks the residuals._
 _2026-09-05 — **Model library UX fix wave (PR #302, `feat/model-library-ux`), ready for merge
 (owner squash-merge; keep the branch):** searchable On this drive / Browse views, task/family
 filters and expandable quantization groups (`docs/design-guidelines.md` §15, user-guide §5/§6);

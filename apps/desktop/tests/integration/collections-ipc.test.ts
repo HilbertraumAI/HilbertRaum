@@ -34,6 +34,7 @@ import type { AppContext } from '../../src/main/services/context'
 import type { Collection, Conversation, DocumentInfo, ImportJob, ImportJobStatus, Message } from '../../src/shared/types'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -102,7 +103,7 @@ async function importIndexed(ctx: AppContext, filePath: string): Promise<string>
   while (true) {
     const { result: s } = await invoke(handlers, IPC.getImportJob, job.jobId)
     if ((s as ImportJobStatus).done) break
-    if (Date.now() - start > 5000) throw new Error('import timed out')
+    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('import timed out')
     await new Promise((r) => setTimeout(r, 10))
   }
   return job.documentIds[0]

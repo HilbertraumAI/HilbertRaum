@@ -27,6 +27,7 @@ import { seedSettings, updateSettings } from '../../src/main/services/settings'
 import type { DownloadJob } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -122,7 +123,7 @@ async function waitForTerminal(jobId: string): Promise<DownloadJob> {
     const { result } = await invoke(handlers, IPC.getDownloadJob, jobId)
     const job = result as DownloadJob
     if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
-    if (Date.now() - start > 5000) throw new Error('download job never finished')
+    if (Date.now() - start > hangBudgetMs(5000)) throw new Error('download job never finished')
     await new Promise((r) => setTimeout(r, 10))
   }
 }
@@ -237,7 +238,7 @@ describe('downloads:list / downloads:dismiss (renderer-reload recovery, #314)', 
     for (;;) {
       const job = manager.get(jobId)
       if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') return job
-      if (Date.now() - start > 5000) throw new Error('download job never finished')
+      if (Date.now() - start > hangBudgetMs(5000)) throw new Error('download job never finished')
       await new Promise((r) => setTimeout(r, 5))
     }
   }

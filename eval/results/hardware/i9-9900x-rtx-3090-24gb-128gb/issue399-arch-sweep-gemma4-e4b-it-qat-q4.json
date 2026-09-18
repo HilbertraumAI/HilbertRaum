@@ -1,0 +1,123 @@
+{
+  "model": "<drive>/models/chat/gemma4-e4b-it-qat-q4.gguf",
+  "bin": "<runtime>/llama-server",
+  "argv": [
+    "<runtime>/llama-server",
+    "--host",
+    "127.0.0.1",
+    "--port",
+    "8391",
+    "--model",
+    "<drive>/models/chat/gemma4-e4b-it-qat-q4.gguf",
+    "--ctx-size",
+    "8192",
+    "--threads",
+    "10",
+    "--batch-size",
+    "2048",
+    "--ubatch-size",
+    "2048",
+    "--jinja",
+    "--reasoning-format",
+    "deepseek",
+    "-lv",
+    "4",
+    "-np",
+    "1"
+  ],
+  "requests": [
+    {
+      "label": "R1 (conversation A, long)",
+      "http": 200,
+      "elapsedMs": 856,
+      "usage": {
+        "completion_tokens": 16,
+        "prompt_tokens": 1493,
+        "total_tokens": 1509,
+        "prompt_tokens_details": {
+          "cached_tokens": 0
+        }
+      },
+      "timings": {
+        "cache_n": 0,
+        "prompt_n": 1493,
+        "prompt_ms": 618.192,
+        "prompt_per_token_ms": 0.41406028131279304,
+        "prompt_per_second": 2415.1072805859667,
+        "predicted_n": 16,
+        "predicted_ms": 221.314,
+        "predicted_per_token_ms": 13.832125,
+        "predicted_per_second": 72.29547159239813
+      },
+      "content": ""
+    },
+    {
+      "label": "R2 (conversation B, short)",
+      "http": 200,
+      "elapsedMs": 426,
+      "usage": {
+        "completion_tokens": 10,
+        "prompt_tokens": 64,
+        "total_tokens": 74,
+        "prompt_tokens_details": {
+          "cached_tokens": 43
+        }
+      },
+      "timings": {
+        "cache_n": 43,
+        "prompt_n": 21,
+        "prompt_ms": 195.387,
+        "prompt_per_token_ms": 9.304142857142857,
+        "prompt_per_second": 107.47900320901596,
+        "predicted_n": 10,
+        "predicted_ms": 192.988,
+        "predicted_per_token_ms": 19.2988,
+        "predicted_per_second": 51.81669326590254
+      },
+      "content": "A barometer is used to measure atmospheric pressure."
+    },
+    {
+      "label": "R3 (back to conversation A)",
+      "http": 200,
+      "elapsedMs": 956,
+      "usage": {
+        "completion_tokens": 13,
+        "prompt_tokens": 1514,
+        "total_tokens": 1527,
+        "prompt_tokens_details": {
+          "cached_tokens": 43
+        }
+      },
+      "timings": {
+        "cache_n": 43,
+        "prompt_n": 1471,
+        "prompt_ms": 756.869,
+        "prompt_per_token_ms": 0.5145268524813053,
+        "prompt_per_second": 1943.5331609565194,
+        "predicted_n": 13,
+        "predicted_ms": 165.265,
+        "predicted_per_token_ms": 12.712692307692306,
+        "predicted_per_second": 78.66154358152059
+      },
+      "content": "The compressor room door stays closed while the machine is running."
+    }
+  ],
+  "promptEvals": [
+    {
+      "task": 0,
+      "ms": 618.19,
+      "tokens": 1493
+    },
+    {
+      "task": 19,
+      "ms": 195.39,
+      "tokens": 21
+    },
+    {
+      "task": 32,
+      "ms": 756.87,
+      "tokens": 1471
+    }
+  ],
+  "stderrLines": 314
+}

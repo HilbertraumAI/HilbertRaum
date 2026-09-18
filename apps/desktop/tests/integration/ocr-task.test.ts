@@ -29,6 +29,7 @@ import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
 import type { AuditEventType } from '../../src/shared/types'
 import { makeScanOnlyPdf, TINY_PNG } from '../helpers/fixtures'
 import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import {
   IMAGE_NEEDS_OCR_MESSAGE,
   IMAGE_OCR_UNAVAILABLE_MESSAGE
@@ -120,7 +121,7 @@ async function waitTerminal(manager: DocTaskManager, jobId: string) {
   for (;;) {
     const status = manager.getDocTask(jobId)
     if (['done', 'failed', 'cancelled'].includes(status.state)) return status
-    if (Date.now() - start > 10_000) throw new Error(`task never finished: ${status.state}`)
+    if (Date.now() - start > hangBudgetMs(10_000)) throw new Error(`task never finished: ${status.state}`)
     await new Promise((r) => setTimeout(r, 10))
   }
 }

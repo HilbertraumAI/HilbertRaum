@@ -3,6 +3,7 @@ import net from 'node:net'
 import { RuntimeManager, type RuntimeChatOptions } from '../../src/main/services/runtime'
 import { LocalApiServer, PortInUseError } from '../../src/main/services/local-api/server'
 import { manualSource, type ManualSource } from '../helpers/manual-stream'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // LocalApiServer integration pins (local-api wave P3): a REAL listener on an ephemeral
 // port, driven over real HTTP, against a real RuntimeManager (gated mock runtimes). The
@@ -632,7 +633,7 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
 async function waitFor(check: () => boolean, timeoutMs = 3_000): Promise<void> {
   const start = Date.now()
   while (!check()) {
-    if (Date.now() - start > timeoutMs) throw new Error('waitFor timed out')
+    if (Date.now() - start > hangBudgetMs(timeoutMs)) throw new Error('waitFor timed out')
     await new Promise((r) => setTimeout(r, 10))
   }
 }

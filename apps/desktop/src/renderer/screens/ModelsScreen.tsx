@@ -1415,16 +1415,18 @@ export function ModelsScreen(): JSX.Element {
           {!panelRowRendered && <strong>{panelName}</strong>}
           {/* ONE always-mounted alert node for the whole panel lifetime: empty while the download
               runs, filled on the terminal transition. Same wrapper shape as ErrorBanner (audit
-              M-U1) — a live region that only appears at failure is not reliably announced. */}
+              M-U1) — a live region that only appears at failure is not reliably announced.
+              The Banners inside pass role={null}: role="status" is itself a live region, and a
+              nested one swallows the announcement (#436). Nothing in here may carry a role. */}
           <div className="error-banner-region" role="alert" aria-live="assertive">
             {panelJob.status === 'failed' && (
-              <Banner tone="error" role="status">
+              <Banner tone="error" role={null}>
                 <p>{t('models.download.failed', { name: panelName })}</p>
                 {panelJob.error && <p>{panelJob.error}</p>}
               </Banner>
             )}
             {panelJob.status === 'done' && panelJob.unverified && (
-              <Banner tone="warning" role="status">
+              <Banner tone="warning" role={null}>
                 {t('models.download.unverifiedBefore')}
                 <code>verify-models --generate</code>
                 {t('models.download.unverifiedAfter')}

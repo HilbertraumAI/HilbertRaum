@@ -198,13 +198,16 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     const laptop = fixture({ probeReturns: [RTX4050_LAPTOP] })
     const benchLaptop = await runAndPersistBenchmark(laptop.ctx)
     expect(pickerMemoryFor(getSettings(laptop.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 5153 })
-    expect(benchLaptop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 4,410 MiB fits 5,153
+    expect(benchLaptop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 3,838 MiB fits 5,153 (4,410 when #321 decided this)
     expect(benchLaptop.gpu).toBe(RTX4050_LAPTOP.name)
     expect(benchLaptop.gpuVramMb).toBe(5921)
     expect(await liveStar(laptop.ctx)).toBe(CARD8_PICK)
 
     // A 4 GB card is still under the gate: no budget device, the RAM pick, no graphics figure.
-    // Nothing ranked fits its 3,900 MiB free anyway, so rule C would hand it back regardless.
+    // GTX1650's `freeMb: 3900` is a FIXTURE, not a reading — no 4 GB card has ever been probed,
+    // and every card that has idles ~768 MiB down, which puts a real one nearer 3,328 (#413).
+    // At 3,328 the E2B (2,271) is the only ranked model that fits and the 4B (3,838) is not, which
+    // is the N8 argument for the gate. What decides THIS case is the gate itself, not the fit.
     const small = fixture({ probeReturns: [GTX1650] })
     const benchSmall = await runAndPersistBenchmark(small.ctx)
     expect(pickerMemoryFor(getSettings(small.ctx.db))).toEqual({ memoryClass: 'cpu', graphicsBudgetMb: null })
@@ -215,7 +218,7 @@ describe('picker seams: the budget device decides on both consumers (decision 9)
     const desktop = fixture({ probeReturns: [RTX2060] })
     const benchDesktop = await runAndPersistBenchmark(desktop.ctx)
     expect(pickerMemoryFor(getSettings(desktop.ctx.db))).toEqual({ memoryClass: 'discrete', graphicsBudgetMb: 5136 })
-    expect(benchDesktop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 4,410 MiB fits 5,136
+    expect(benchDesktop.recommendedModelId).toBe(CARD8_PICK) // the 4B: 3,838 MiB fits 5,136 (4,410 when #321 decided this)
     expect(benchDesktop.gpu).toBe(RTX2060.name)
     expect(benchDesktop.gpuVramMb).toBe(6144)
     expect(await liveStar(desktop.ctx)).toBe(CARD8_PICK)

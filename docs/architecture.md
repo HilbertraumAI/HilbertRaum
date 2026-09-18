@@ -3291,9 +3291,17 @@ layers at 30.4 tok/s into 66/66 at 51.0 by cutting the recurrent state from 1,79
 (#318 leg 1). It does **not** change the context window: `--ctx-size` is the total cache on both
 settings and each slot sees all of it (`n_ctx_slot = 8192` either way), so only the per-sequence
 recurrent term moved in the seven manifest cache estimates — the KV and Gemma's sliding-window
-caches are cell-sized and counted once. Accepted cost: a background job now evicts the chat
-conversation's KV prefix, which llama-server's host-RAM prompt cache restores on a prefix match.
-Record: `model-benchmarks.md` §6.6 "2026-09-07 amendment (#319)"; BUILD_STATE §5 item 22 (f)/(i).
+caches are cell-sized and counted once. Accepted cost, **corrected 2026-09-09 (#399)**: a
+background job evicts the chat conversation's KV prefix, and on 11 of the 14 chat models
+llama-server's host-RAM prompt cache does **not** restore it — recurrent state (the whole
+`qwen3.5`/`qwen3.8` line) and a sliding window (all four `gemma4` manifests) both close that path,
+so the server saves the conversation and silently re-prefills it anyway. Not caused by `-np 1`
+(four slots lose the restore the same way) and not fixable by any slot arrangement, so the fix is
+not to evict: the model-slot arbiter waits 90 s after a chat turn before resuming a parked
+deep-index build, capped at 10 minutes of deferral per park (D3(a)), and `--cache-ram 0` stops the
+unreadable copy being written for those families (D5, `shared/prompt-cache-rules.ts`).
+Record: `model-benchmarks.md` §6.6 "2026-09-07 amendment (#319)" and its "2026-09-09 correction
+(#399)"; BUILD_STATE §5 item 22 (f)/(i).
 Separately, whether `--fit` also puts layers on a hybrid laptop's iGPU — which the app
 never excludes with `--device` — was read from `common/fit.cpp` as "it spreads layers across every
 device `--list-devices` lists". **MEASURED FALSE on the pinned b9849 build (#318 leg 5, 2026-09-07;
@@ -3347,6 +3355,114 @@ chat model and a second process exposed to driver flakiness during ingestion, wh
 fails a whole document. Revisit only if a larger embedding model lands. This is also the
 codebase's permanent, tested forced-CPU spawn example.
 
+**The reranker no longer shares this permanent pin (step 4-4, `rag-design.md` §17 PR-B record).**
+Until Phase 4 PR-B, `LlamaReranker` cited this SAME section for the identical reasoning ("a
+sub-1B scorer gains little from a GPU and must never contend for VRAM with the chat model") —
+both sidecars were permanently `--device none`. PR-B splits them: the reranker's device posture
+now follows the rerank hardware profile (`rag/rerank-profile.ts`) — CPU-pinned (`--device none`,
+byte-identical to before) on the `cpu-hi` and `default` profiles, on the GPU (no `--device`
+argument at all — llama-server's own `ngl`-auto + `--fit`, the same rung-1 semantics the chat
+runtime uses) on the `gpu` profile. `--device none` stays the only device argument the app EVER
+passes anywhere (never `-ngl`); the embedder above is unaffected and remains permanently
+CPU-pinned. See `reranker/llama.ts`'s own header for the exact launch-argument construction and
+`rag-design.md` §17 for the profile rule, run L's selection and run A3's acceptance floors.
+
+**The posture is gated on PROVABLE HEADROOM, not the profile bump (step 4-5, Wave 5 ruling (d),
+`rag-design.md` §17 PR-B record continued).** The scoped Opus review of step 4-4 found that
+gating the reranker's GPU posture on `gpuUsefulForProfile` (the profile-bump predicate above —
+some probed device at or above `USABLE_VRAM_MB`) answers the wrong question: that predicate is
+deliberately conservative in ONE direction (never bumps a model recommendation too high) and, by
+its own doc comment, never decides placement — it says nothing about whether there is room for a
+SECOND resident model beside the chat model already loaded. `rerankerDeviceFor`
+(`rag/rerank-profile.ts`) now takes the budget device's free-memory figure
+(`graphicsBudgetMib(primaryUsefulDevice(probeDevices))`) minus the active chat model's own
+placement estimate (`estimateGraphicsNeedMib`, the same estimator §8's picker and the fit budget
+use), and compares the remainder against the reranker's own estimated need under that same
+estimator (≈ 2.8 GiB, derived from the shipped `bge-reranker-v2-m3` manifest and frozen as
+`RERANKER_HEADROOM_FLOOR_MIB`). An unknown or empty probe, no useful device, no budget figure, no
+active chat model, or an unresolvable manifest all mean `'cpu'` — a machine cannot earn the GPU
+posture by failing to report. `gpuUsefulForProfile` keeps every other job it has (the profile
+bump above, the Models ★, the graphics tile, `memoryClassOf`); only the reranker's own posture
+question is re-sourced. **Disclosed limit:** the project's 12 GiB measurement machine (RTX 3080
+Ti) has ample headroom for both models at once, so on it the new gate behaves identically to
+step 4-4's — the step's acceptance read confirms no regression there, but cannot validate the
+gate on the small-card path the gate exists for (a 5–6 GiB card where the chat model alone may
+leave too little room for the reranker too). **No such machine was reachable from step 4-5's
+session** (`hardware-leg.json`, `available: false`); the insufficient-headroom branch is covered
+only by `rerank-profile.test.ts`'s fixtures (real device/manifest figures, including the #318 RTX
+3060 Laptop's own `totalMb`), not by a live run — see `docs/known-limitations.md` for the same
+gap. A live small-card leg remains open.
+
+**The posture gate now also determines the candidate scope on the `gpu` profile (step 4-6, Wave 6
+ruling (a), `rag-design.md` §17 PR-B record continued).** Step 4-5 deliberately left
+`resolveRerankProfile`'s scope classification alone when it re-sourced the posture, which meant a
+small-card machine could resolve profile `gpu` — and therefore the wide `GPU_RERANK_SCOPE`, up to
+`ALL_SCOPE_MAX_DOCS` = 512 documents — while the sidecar it was about to call correctly started
+`--device none`. `rerankScopeFor` now takes the resolved posture and, on the `gpu` branch only,
+returns `capped` when the posture is `cpu`; `cpu-hi` and `default` are unaffected (`cpu-hi`'s
+posture is always `cpu` by construction, so a general "posture cpu ⇒ capped" rule would have
+killed its `top48` opt-in — a dedicated regression-guard test pins this). The posture itself is
+computed by ONE shared helper (`main/services/rag/device-posture.ts`) that both the sidecar's own
+`rerankerDevicePosture` seam and the per-ask `resolveAskCandidateScope` call, so the two cannot
+disagree for a given settings AND occupancy snapshot (Wave 8, step 4-8, below, adds occupancy to
+what "the same snapshot" means). The coupling was proven a no-op on the measurement machine
+(its recorded posture is `gpu`, remainder 7,478.6 MiB) before landing, offline, with no new
+acceptance read. The small-card disclosure above is unchanged by this: the gate still ships on the
+arithmetic alone, unconfirmed by a live small-card run — what changed is that a small card now
+also gets the fast, bounded `capped` scope instead of a 512-document wide scope run through a CPU
+reranker.
+
+**Step 4-7 (Wave 7 ruling (a)) closed a drift window across settings snapshots: a posture-moving
+settings change suspends the sidecar too, as an early release.** The scoped Opus review of step
+4-6 found that the shared helper above guarantees the sidecar and the per-ask scope compute the
+SAME posture from the SAME inputs, but not at the same MOMENT: the sidecar resolved its posture
+once per cold start and held it for the session, the ask re-resolved on every ask, and only a
+`gpuMode`/`gpuAutoDisabled` flip suspended the resident sidecar — an `activeModelId` change (which
+also fed the posture at the time, through `chatModelNeedMib`) suspended nothing, reopening the
+wide-scope/CPU-reranker combination through a drift window (measured concretely on the project's
+own GTX 1070 Ti — finding C2). `activeModelId` joined the suspend trigger, fired from all three
+settings-writing channels (`settings:update`, `models:select`, `models:use`) through one shared
+predicate. That event-time suspend is a head start, not the correctness guarantee — see step 4-8
+below for what actually makes the posture correct at every moment.
+
+**Step 4-8 (Wave 8 rulings (a)-(d)) resolved a THIRD gap, finding C3 (scoped Opus review of step
+4-7): `activeModelId` was never a safe posture input to begin with.** It is a proxy for "the chat
+model that will be loaded", true only once `models:use`'s multi-GB weight hash and load finish —
+and false for the WHOLE window before that. A down-switch on the project's own measured GTX 1070
+Ti (`{totalMb: 8273, freeMb: 7504}`: the 9B running at posture `cpu`, switching to the 4B) could
+cold-start the reranker on the GPU beside the still-resident, still-running OLD chat model, for as
+long as the checksum hash took (minutes on a cold per-workspace cache). Option B′, the fix: the
+posture's chat-model input is now the RUNTIME's COMMITTED model (`RuntimeManager.activeModelId()`,
+`main/services/rag/device-posture.ts`), never the setting, and never a fallback to it — during the
+hash window the committed model is still the OLD one, so the posture is correct by construction,
+not by a suspend's timing. A null committed model, a chat-model start in flight, a chat-model start
+PENDING (a per-call counter in `startModelRuntime` covering the window it spends awaiting the
+reranker's own single-flight suspend before the load, placed between the RAM gate and the shutdown
+re-check so the existing shutdown/lock/epoch ordering is unchanged), or a GPU-posture translation
+sidecar occupying the card (loading, resident, or mid-teardown — `deviceStatus().live` alone misses
+all three stages) each force `cpu`. What makes the posture correct at every MOMENT, not only at a
+suspend-covered event, is the reranker's own use-time re-check (Q): `rerank()` resolves its posture
+fresh before starting/joining/reusing the sidecar, and again after every await inside it, so a
+resident sidecar recorded under a stale posture is restarted before serving a request — under four
+race rules (never join a teardown it did not start; after its own awaited teardown, refuse if its
+own signal aborted or another caller also wanted a teardown during that pass; at most one restart
+per call; a start-abort not caused by the call's own signal is a non-abort error, landing on Wave 5
+ruling (e)(i)'s capped fallback instead of ending the ask). A CPU-posture request above a computed
+ceiling (`2 × ragTopKInitial + totalCandidateCapFor(rerankScopeFor(profile, input, 'cpu'))` — 48 at
+the defaults, 72 under the `top48` opt-in) is refused before any start, for the same reason G
+existed conceptually since Wave 6: a wide set must never reach a CPU cross-encoder. The sidecar's
+teardown is now single-flight (an overlapping `suspend()`/`stop()` shares one pass — the
+translation runtime's own M5 pattern, ported) and recovers from a dead handle after one unexpected
+mid-session exit (the translation runtime's M1 pattern; a second exit in the same session latches
+like a genuine load fault). Wave 7's three event-time suspends stay as early release — a head
+start before the very next `rerank()` would have resolved the new posture on its own — not what
+makes the posture correct any more; Q is. Residuals (translation's own cold-start/teardown
+occupancy cost to the reranker, the gate's manifest-only chat-model estimate, other GPU consumers
+and a stale probe, and a GPU-posture failure disabling reranking for the session) are disclosed in
+`docs/known-limitations.md`, not fixed — follow-up issues cover a GPU→CPU demotion path, an
+app-wide VRAM arbiter, the E5 embedder's own pre-existing (unrelated) teardown overlap, and the
+Performance card summary line's omission of a resident reranker.
+
 ### §8 Expectations, profile bump, UI copy
 
 | Hardware | CPU baseline | With GPU |
@@ -3371,11 +3487,16 @@ has measured reports below 6,144 on Vulkan — GTX 1660 SUPER 5,746, RTX 4050 La
 Laptop 5,994 — so the most common 6 GB configuration was classed `cpu` and starred a model it
 cannot accelerate (the 9B measured 18/33 layers at 5.2 tok/s on such a card). Lowering the floor
 moves the bump one step up on those laptops, which is the accepted cost; 4 GB cards stay out — and
-since 2026-09-08 they stay out on a RESTATED reason (owner decision on #321): the original "nothing
-ranked fits a 4 GB card anyway" went void when the E2B's threshold fell to 2,271 MiB, and the floor was KEPT because the
-E2B is the ONLY ranked model that fits such a card, so admitting it would star the smallest model at
-every RAM size with no 4 GB measurement anywhere in the project to justify the demotion. Reasoning
-and evidence: `model-benchmarks.md` §6.6 N8 ("Why 5,120 — RESTATED").
+since 2026-09-08 they stay out on a RESTATED reason (owner decision on #321, its arithmetic corrected
+2026-09-10 by #413): the original "nothing ranked fits a 4 GB card anyway" went void when the E2B's
+threshold fell to 2,271 MiB, and the floor was KEPT because the E2B is the ONLY ranked model that
+fits the budget such a card actually produces (≈ 3,328 MiB — its ~4,096 total less the 768 MiB idle
+reserve measured on every card in the project; the 4B's 3,838 does not fit it), so admitting it would
+star the smallest model at every RAM size with no 4 GB measurement anywhere in the project to justify
+the demotion. **Closed 2026-09-11 (owner, #413): kept without one.** The project owns no 4 GB card,
+and keeping the floor is the side that corrects itself (a crawl on the RAM pick steps the ★ down,
+§6.5), while a lowered floor would pin the E2B with no step back up. Reasoning and evidence:
+`model-benchmarks.md` §6.6 N8 ("Why 5,120 — RESTATED", "Decided 2026-09-11").
 
 **UI:** Settings toggle ("Uses your graphics card to speed up responses when available…"),
 Diagnostics Acceleration + runtime-build lines, compatibility-mode notice + "Try GPU again",

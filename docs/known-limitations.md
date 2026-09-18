@@ -813,10 +813,161 @@ password recovery — are documented in
 - **Reranker latency on CPU is significant (MEASURED): ≈ 24.7 s worst case** for a 12-candidate
   batch at the full truncation budget on a CPU-pinned i7-1185G7 (~2 s/candidate;
   `HILBERTRAUM_RERANK_SMOKE`, 2026-06-10) — a documents query visibly lengthens on a low-end laptop when
-  the reranker is provisioned. Bounded by the candidate cap (≤ 2×`topKInitial`) + word-truncation
-  budgets (the tuning levers); the reranker stays an opt-in (provision-the-GGUF) feature, never
+  the reranker is provisioned. Bounded, on the `capped` scope (step 4-4's default; see the
+  profile rule immediately below for the `gpu`/`cpu-hi` widenings), by the candidate cap
+  (≤ 2×`topKInitial`) + word-truncation budgets (the tuning levers); the reranker stays an
+  opt-in (provision-the-GGUF) feature, never
   bundled by default. The `HILBERTRAUM_RAG_QUALITY` run is the evidence it earns the cost
-  (rag-design §12.3).
+  (rag-design §12.3). **The rerank hardware-profile rule (step 4-4, `rag-design.md` §17 PR-B
+  record) follows from this cost:** on a usable GPU the reranker sees every fetched knowledge-pack
+  block essentially for free (run L, 2026-09-15: GPU `all`-scope rerank p90 2.67 s for a mean 118
+  documents, max 410); on a CPU-only machine the wider `top48` opt-in (`ragRerankWideScope`)
+  **ships disabled for everyone** — run L measured its rerank p90 at 25.3 s at 8 threads and 29.1 s
+  at 16 threads (16 threads was NOT faster than 8 on this measurement), both roughly 2.3–2.7× the
+  10.8 s bound the ruling set, so `CPU_HI_MIN_THREADS` is frozen at `Infinity` and the `cpu-hi`
+  profile is unreachable by any real machine until a future re-measurement lowers it. Every
+  CPU-only machine keeps today's `capped` scope regardless of thread count.
+- **The reranker's GPU posture is gated on provable headroom, AND a small card now gets the fast,
+  bounded scope instead of a 512-document wide scope run through a CPU reranker (step 4-5, Wave 5
+  ruling (d); step 4-6, Wave 6 ruling (a)) — but the gate itself is still UNVALIDATED on the
+  small-card hardware it exists for.** Step 4-4 launched the reranker with no `--device` argument
+  (llama-server's own `ngl`-auto + `--fit`) whenever `gpuUsefulForProfile` found any usable card —
+  a predicate that never checked whether there was room for a SECOND resident model beside the
+  chat model. Step 4-5 replaced that check: `rerankerDeviceFor` (`rag/rerank-profile.ts`) now
+  requires the budget device's free memory, minus the active chat model's own placement estimate,
+  to clear the reranker's own estimated need (≈ 2.8 GiB, `RERANKER_HEADROOM_FLOOR_MIB`) before
+  choosing the GPU posture — an unknown probe, no useful device, no budget figure, no active model
+  or an unresolvable manifest all mean CPU. Step 4-5 deliberately left the candidate SCOPE alone
+  when it did this, which left a gap the scoped Opus review caught (finding C1): a small card
+  could still resolve the `gpu` PROFILE (and therefore up to 512 documents in one rerank call)
+  while the sidecar it was about to call correctly started on the CPU — a combination that, per
+  run L's own CPU figures (`top48` at 48 documents: p90 25,317 / 29,101 ms), would routinely
+  exceed the 120 s request timeout. **Step 4-6 (Wave 6 ruling (a)) closes that gap:** the resolved
+  posture now feeds the scope decision too, through one shared helper both the sidecar and the
+  per-ask scope call — `gpu` profile + `cpu` posture now resolves `capped` (today's bounded,
+  ~12.9 s p90 scope), never the wide, unbounded one; `cpu-hi` and `default` are unaffected. Proven
+  a no-op on the project's own measurement machine before landing (its posture stays `gpu`, so its
+  scope stays `all`, unchanged). **What this does NOT close:** the project's only measurement
+  machine is a 12 GiB card (ample headroom for both models at once), so no acceptance read has
+  ever exercised the gate's `cpu`-posture branch live — the 5–6 GiB laptop class
+  `architecture.md`'s `USABLE_VRAM_MB` record already discusses. See step 4-5's
+  `hardware-leg.json`: **no such machine was reached in this session** (`available: false`), so
+  the gate ships on the ARITHMETIC alone (the same estimator the picker and the fit budget already
+  use elsewhere, not a new one invented for this gate) plus `rerank-profile.test.ts`'s fixtures
+  (real device/manifest figures, including the #318 RTX 3060 Laptop's own `totalMb`) — not yet
+  confirmed by a live small-card run. **Scoped Opus review of step 4-6, observation O1:**
+  `resolveAskCandidateScope` now does one small, uncached synchronous filesystem read per ask
+  (`findManifestById` → `discoverManifests`, a directory walk + YAML parse over the model
+  manifests) to reach the shared posture helper — measured 26.2 ms first call / 11.5 ms warm p50
+  on local NVMe over the repo's 35 manifest files; negligible against a multi-second ask, and
+  directed by Wave 6 ruling (c) itself, but new and worth naming since `models.ts` already flags
+  this call as a real read on slow portable-drive media (#333). **Scoped Opus review of step 4-6,
+  finding C2, resolved by step 4-7 (Wave 7 ruling (a)):** the shared helper above guarantees the
+  sidecar and the per-ask scope compute the SAME posture from the SAME inputs, but not at the
+  same MOMENT — the sidecar resolved its posture once per cold start and held it for the session,
+  the ask re-resolved on every ask, and only a `gpuMode`/`gpuAutoDisabled` flip suspended the
+  resident sidecar, never an `activeModelId` change (though `activeModelId` also feeds the
+  posture, through `chatModelNeedMib`). Reachable concretely on the project's own measured GTX
+  1070 Ti (`{totalMb: 8273, freeMb: 7504}`, #391 leg 2): starting on the 9B chat model (this
+  card's own starred recommendation) gives posture `cpu`; switching down to the 4B — an ordinary
+  Models-screen action — moves the posture to `gpu` with nothing to suspend the sidecar, so the
+  next ask could resolve the wide `all` scope while the sidecar stayed resident on the CPU — C1's
+  combination again, through a drift window. Step 4-7 adds `activeModelId` to the suspend trigger,
+  fired from all three settings-writing channels (`settings:update`, `models:select`,
+  `models:use`) through one shared predicate (`rerankerPostureInputsChanged`,
+  `rag/device-posture.ts`); `activeEmbeddingModelId` is explicitly not a posture input and never
+  triggers it. **The honest residual:** this is not an absolute guarantee for every ask in
+  flight — `suspend()` is fire-and-forget, so an ask landing mid-teardown hits the sidecar's
+  `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates`
+  fallback returns the capped selection instead; that one residual window resolves toward the
+  safe, bounded scope, never the wide one. The small-card posture branch itself remains
+  unvalidated on real hardware, as above.
+- **Scoped Opus review of step 4-7, finding C3, RESOLVED by step 4-8 (Wave 8 ruling (a)):**
+  `activeModelId` was never a safe posture input in the first place — it is a proxy for "the chat
+  model that will be loaded", true only once `models:use`'s multi-GB weight hash and load finish,
+  and false for the whole window before that (the file's own comment calls this "the long
+  pre-start window", minutes on a cold checksum cache). Step 4-7's event-time suspend fired at the
+  START of that window, on the OLD model, then held the posture for the entire hash + load — so a
+  down-switch (e.g. the project's own measured GTX 1070 Ti, `{totalMb: 8273, freeMb: 7504}`: the
+  9B running at posture `cpu`, switching to the 4B) could cold-start the reranker on the GPU beside
+  the still-resident, still-running OLD (larger) chat model. The posture's chat-model input is now
+  the RUNTIME's COMMITTED model (`RuntimeManager.activeModelId()`), never the setting — during the
+  hash window the committed model is still the OLD one, so the posture stays correct throughout by
+  construction, not by a suspend's timing. A chat-model start in flight or PENDING (a per-call
+  counter in `startModelRuntime`, covering the window it spends awaiting the reranker's own
+  single-flight suspend before the load) also forces `cpu`, closing the narrow gap between the
+  commit and the load itself. What makes this hold at every MOMENT, not just at a suspend-covered
+  event, is the reranker's own use-time re-check: it resolves its posture fresh before every
+  `rerank()` call (and again after any await inside one), so a resident sidecar recorded under a
+  stale posture is restarted before serving a request, under race rules that never join a teardown
+  they did not start, never restart twice in one call, and never let another caller's abort end an
+  ask that should instead fall back to the capped, bounded selection. Six residuals remain,
+  disclosed rather than fixed:
+  - **r1 (translation occupancy):** a GPU-posture translation sidecar occupies the card while
+    loading and while tearing down (hard or idle), not only while resident — the reranker's gate
+    now sees all four stages, so a GPU rerank never cold-starts beside an unbudgeted translation
+    occupant, but this is translation's own `--fit` auto-offload policy doing the same thing it
+    already does beside the chat model on master; nothing new to this step.
+  - **r2 (the gate's manifest-only chat-model estimate):** unchanged from the note above —
+    `estimateGraphicsNeedMib` reads the manifest only, so raising the launched context window
+    increases the chat model's real VRAM use without moving any posture input.
+  - **r3 (other GPU consumers, a stale probe, and NVIDIA/Windows' constant `freeMb`):** unchanged
+    from Wave 5 ruling (d)'s own disclosure above — other applications' GPU use is invisible to the
+    gate, a stored probe can go stale between refreshes, and on NVIDIA/Windows the reported free
+    memory does not reliably track what the app itself has already loaded.
+  - **r4 (a GPU cold-start failure, or a second unexpected crash, disables reranking for the
+    session):** the reranker sidecar now drops a dead handle after one unexpected mid-session exit
+    (a driver reset, VRAM/RAM exhaustion) so the next rerank cold-starts fresh with a freshly
+    resolved posture — but a SECOND unexpected exit in the same session, or a genuine GPU cold-start
+    failure, still latches reranking off for the rest of the session (the existing failed-start
+    latch policy, unchanged). There is no GPU→CPU demotion path; a follow-up issue proposes one.
+  - **The Performance card summary line omits a GPU-resident reranker:** the line stays "chat +
+    translation" (unchanged shape); a reranker resident on the graphics card (now visible in its
+    own row) is not folded into that summary total. A follow-up issue proposes fixing or
+    disclosing this directly in the UI copy.
+  - **T's declared cost (Phase 2 ruling (d)):** a GPU-posture translation sidecar can cost the
+    reranker at most two cold starts per translation episode — one on the first ask while
+    translation occupies the card, one on the first ask after it idles out 120 s later. This is a
+    declared deviation from Phase 2 ruling (d)'s literal per-question latency bound for those two
+    asks; it is the same KIND of cost master's first ask already pays once per session (a cold
+    start). The cold start's own duration is not recorded by any existing measurement artifact
+    (`run-summary-a4-gpu.json`'s gate has no timing field; `m2-latency.json` records rerank request
+    latency, never a cold-start duration) and this step runs no inference, so it is stated as
+    unmeasured rather than invented; a behaviour-neutral memo of the manifest read itself was
+    measured at 15.5 ms warm p50 on the drive layout (`K:`), well under the 50 ms threshold that
+    would have required one, so none was added.
+
+  No 5–8 GiB card was available in this session either (Wave 8 ruling (i)'s hardware leg is
+  optional and not blocking): the small-card branch and the fail-vs-spill question above remain
+  unvalidated on real hardware, unchanged from step 4-7's own disclosure.
+- **The `all` rerank scope is capped, and a rerank-call failure now falls back to TODAY's
+  baseline instead of landing below it — both measured, neither asserted (step 4-4's finding,
+  step 4-5's fix).** Step 4-4 shipped `all` with no per-call document ceiling and no dedicated
+  fallback: a rerank-call failure kept `retrieve()`'s existing catch path (the fused order, then
+  the no-rerank interleave) over the WHOLE wide, un-cross-encoded pool. Measured cost: the
+  `gpu` acceptance read's own no-rerank column packed FEWER gold blocks than the shipped
+  `capped`/no-rerank baseline — `allPacked` 26→**22**, `anyPacked` 42→**33**, `goldSpanInPacket`
+  142→**116** — a wide lexical pool with no working cross-encoder was measured WORSE than
+  shipping no rerank at all, the reason `rerankScopeFor` always returns `'capped'` with no
+  reranker provisioned. Step 4-5 (Wave 5 ruling (e), B3 with B7/B20) fixes both halves: (1)
+  `ALL_SCOPE_MAX_DOCS` bounds the TOTAL a single rerank call may see — run L2 (a two-pack
+  development latency read) selected **512** (every cell in {192,256,384,512} cleared the
+  10,848 ms bound with wide margin: p90 by cell 2,251/2,763/2,870/2,816 ms; the genuinely
+  uncapped two-pack distribution itself — mean 115.8 documents, p90 260, max 553 — measured p90
+  3,007 ms); the acceptance read's own worst case, the SAME `H132` that produced a 755-document/
+  10,774 ms call in step 4-4, now caps at 512 documents and reranks in 7,857 ms. (2) the arm now
+  always computes a `capped`-scope companion selection from the SAME material, and `retrieve()`'s
+  fallback restricts to it instead of the wide pool. **Measured, not assumed** (the standard
+  this same finding demanded of step 4-4): replaying the `gpu` acceptance read's own captures
+  through the fixed `retrieve()` with a reranker stub whose `rerank()` throws on every call
+  scores `allPacked` **26**, `anyPacked` **42**, `goldSpanInPacket` **142** — an EXACT match to
+  the baseline, not merely "at or above" it (`fallback-measured.json`). A rerank timeout, crash
+  or failed start now costs only the upside, never the floor. One real fix-of-a-fix along the
+  way: the restriction's own guard originally skipped a packs-only ask (`noDocuments: true` —
+  zero document candidates, exactly the scope both the acceptance harness and a real "Search my
+  documents" toggle-off use) entirely, leaving it on the unrestricted wide pool; caught by
+  re-measuring this same figure before writing it, fixed, and pinned by a dedicated test (no
+  existing property test had `noDocuments: true`, so none could have caught it).
 - **The embedder/reranker failed-start latch is for a PERMANENT fault only — a transient port-bind
   race no longer arms it (arch GPU record §5.5b).** Each
   sidecar latches a failed start so it doesn't re-await the full health timeout on every call. That
@@ -2473,17 +2624,35 @@ All of these are decided scope, not oversights; the design record's §7 carries 
 - **The silent re-check has no Home-screen notice yet.** The moved-drive re-check above runs with
   no visible sign beyond Performance itself refreshing; a Home notice while it is pending is
   tracked in BUILD_STATE §5 item 22 (a).
-- **Nothing on this screen is announced to a screen reader** (verified by ear with Narrator on
-  2026-09-09, issue #331, against a positive control proving live regions do work in the app's
-  window). Two separate defects, neither fixed yet: the progress-step list is inserted already
-  containing its content AND carries progress only in a CSS class and an `aria-hidden` icon, so
-  a check is silent from start to finish (#437); and the failure banner is silent too (#436) —
-  which is NOT specific to this screen, see the entry below.
-- **An automatic check shows a step list that never advances.** A first-run or moved-drive check
-  is run by the main process, and progress steps are addressed only to the window that pressed
-  the button — but the screen renders the list whenever the backend span is held (correct per
-  audit M1). So a moved-drive check sits frozen on step 1 for its whole duration (measured:
-  13.7 s) and then disappears. A manual check does advance. Tracked as #438.
+- **Nothing on this screen was announced to a screen reader — FIXED 2026-09-10, by-ear
+  re-verification outstanding** (found by ear with Narrator on 2026-09-09, issue #331, against a
+  positive control proving live regions do work in the app's window). Two separate defects: the
+  progress-step list was inserted already containing its content AND carried progress only in a
+  CSS class and an `aria-hidden` icon, so a check was silent from start to finish (#437); and the
+  failure banner was silent too (#436) — not specific to this screen, see the Accessibility entry.
+  The step list is now mounted unconditionally (`.perf-steps:empty` keeps the idle layout) and
+  every step carries its state in its accessible text (an `aria-hidden` visible label plus an
+  sr-only "<step>: <state>" twin, so an advance is a whole-line text change) with
+  `aria-current="step"` on the active item. Pinned by `PerformanceScreen.test.tsx` describe
+  "the step list is announceable (#437)". **What is pinned is the DOM, not the sound:** both
+  issues ask for re-verification by ear during a real multi-second check, and that still needs a
+  screen reader on the hardware box.
+- **An automatic check reports itself in one line, not as steps — FIXED 2026-09-12 (#438).** A
+  first-run or moved-drive check is run by the main process, and progress steps are addressed only
+  to the window that invoked `benchmark:run` — but the screen used to render the step list
+  whenever the backend span was held (correct per audit M1), so a moved-drive check sat frozen on
+  step 1 for its whole duration (measured: 13.7 s) and then disappeared. Both halves were
+  deliberate; the frozen list was their product. The step list now belongs to a run THIS window
+  started; any other run — first-run, moved-drive, another window — gets one line, "Checking this
+  computer in the background.", in the same live region, so it is still announced rather than
+  silent. **The residual, accepted:** an automatic check reports no per-step detail at all. The
+  alternative (broadcasting the steps) was rejected as a half-fix — the common path for a
+  moved-drive check is the user arriving on the screen mid-run, and a late-joining window has
+  missed the earlier one-shot messages, so it would show "Hardware detected: in progress" beside
+  "Generation speed: done". Back-filling the earlier steps was refused outright: the L3 rule is
+  that a step is reported only when it SUCCEEDED, so it would claim a skipped drive probe had
+  passed. Carrying the steps in `PerformanceSnapshot` would fix the late-join case properly and
+  stays the option if per-step detail is ever wanted for automatic runs.
 - **Remaining hardware acceptance not yet performed:** the hybrid iGPU+dGPU device-order check
   and Apple Silicon unified-memory behaviour. Two items left this list: the two-computer round
   trip on an encrypted drive, including an upgraded workspace with no history yet, was verified
@@ -2492,6 +2661,55 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   now witnessed by a real log (a Radeon iGPU listed first in `device_info` while every buffer
   lands on the RTX, pinned as a fixture), so what stays open there is the SNAPSHOT's device
   pairing on a hybrid box that also has a budget device (#332).
+
+## The one chat slot and the prompt cache (#319 / #399 — [`model-benchmarks.md`](model-benchmarks.md) §6.6)
+
+The chat sidecar runs **one** server slot (`-np 1`, issue #319): the app is single-user and already
+serialises every lane that reaches it, and four slots cost card memory exactly where the fit decides
+between a full and a half offload. The consequence is that when something else takes the slot, the
+conversation's KV prefix is evicted — and on most of the models we ship, llama-server **cannot give
+it back**.
+
+- **On 13 of our 17 measured chat models an evicted chat prefix is re-prefilled from scratch, not
+  restored** (measured 2026-09-08/09, #399; extended 2026-09-10, #446). llama-server saves the
+  conversation to its host-RAM prompt cache and then silently re-processes the whole prompt anyway.
+  Two architectures lose the restore: **recurrent state** — the whole `qwen3.5` line (`-2b`, `-4b`,
+  `-9b`, `-35b-a3b`), both `qwen3.6-27b` quants and all three `qwen3.8-27b` quants — and a **sliding
+  window** — all four `gemma4` manifests (`e2b`, `e4b`, `12b`, `26b-a4b`). That includes the
+  **catalog-default 4B and the 9B**, i.e. the 8–12 GB tier picks. Among ranked models only
+  `ministral3-8b-instruct-2512-q4` keeps the restore; the dense `qwen3-8b`, the `qwen3-30b-a3b` MoE
+  and `granite-4.1-8b-q4` keep it too, which is what makes this a measured architecture split rather
+  than an anecdote. **Not measured:** the ZIM query expander's own call (#447) — every chat family in
+  the catalog now has a verdict, `qwen3.6` (affected) and `granite` (unaffected) being the last two,
+  measured under #446. If llama.cpp PR #13194 lands recurrent-state restore upstream, this whole
+  entry becomes removable.
+- **What can actually evict a live conversation is narrower than it sounds.** `assertChatStreamReady`
+  makes categorisation, summary, translate, compare, OCR and every `modelLane` skill run **refuse**
+  a chat turn rather than take the slot from it. The one cooperative hand-back is the **yielding
+  deep-index build**, auto-enqueued when a document too large for the one-pass summary is ingested.
+  And a *documents* ask never had the history in the slot to lose: its retrieved-excerpt block
+  changes every turn, so only its ~227-token system prefix is ever reused. So the case that costs
+  real time is specific: **a long document was just added, and you are having a plain chat — not a
+  documents ask — while it indexes.**
+- **Residual after the 2026-09-09 fix: returning from a break costs ONE slow reply.** The arbiter
+  now waits 90 s after a chat turn before resuming a parked deep-index build, which removes the
+  per-turn churn — a conversation's own typing and reading gaps no longer hand the slot away turn
+  after turn. It does not remove the cost. A pause **longer** than 90 s still lets the build resume
+  and evict, so the first reply after that break re-prefills the conversation: once, not per turn.
+  Nor is the delay unbounded — a single park is deferred for at most 10 minutes, after which the
+  build resumes at the next release regardless. That cap is deliberate: a document that silently
+  never gets its deep index is a worse outcome than one slow reply. A steady chat every 30 s
+  therefore still pays a re-prefill roughly every 10 minutes.
+- **Behaviour change on affected models: llama-server's host prompt cache is switched off**
+  (`--cache-ram 0`, gated on the manifest's `family:` — `qwen3.5`, `qwen3.6`, `qwen3.8`, `gemma4`).
+  On those models the cache was written on every hand-back (15–344 MiB per eviction, up to an 8 GiB
+  host-RAM default) and **never read**, so this gives that RAM back and costs nothing. Every other
+  family — **including a family nobody has measured** — keeps the cache on. That asymmetry is the
+  point: disabling it on an unaffected model would cost real restores, while leaving it on an
+  affected one merely continues a waste we can already name. `granite-4.1-8b-q4` is what that
+  caution is for: it was the entry expected to be a formality and it turned out to restore. Chat
+  only; the embedder, reranker, translation and vision sidecars do not inherit the chat args and are
+  untouched.
 
 ## Speculative decoding (MTP — [`architecture.md`](architecture.md) "MTP speculative decoding" record)
 
@@ -2565,18 +2783,26 @@ meter `.context-meter-track/-fill` joined later and carries no forced-colors rul
 because its value is never color-only — the numeric label carries the meaning), and verified
 the reduced-motion kill-switch.
 
-**NOT accepted — an open defect, recorded here so it is not mistaken for one of the acceptances
-below.** Verified by ear with Narrator on 2026-09-09 (issue #331), against a positive control
-that proved live regions do work in the app's own Electron window: **`ErrorBanner`'s message is
-never announced** (#436). The component exists to implement audit finding M-U1 — an always-mounted
-`role="alert" aria-live="assertive"` container whose text swaps inside it — but the `Banner`
-nested within it carries `role="status"`, which is itself a live region (implicit
-`aria-live="polite"`) and IS mounted with its text. The nearest live-region ancestor governs, so
-M-U1's anti-pattern is reintroduced one level down. This is the shared failure surface for **11
-screens**, and for `WorkspaceGate`'s wrong-password banner — the SH-2 / #145 fix — so a failed
-unlock is silent too. A control isolated the remedy: `aria-live="off"` on the inner element does
-NOT help; the inner live-region role has to go. The lesson generalises — **`role="status"` and
-`role="alert"` are both live regions, so nesting one inside the other silences the outer one.**
+**Was an open defect; FIXED 2026-09-10 (#436), kept here for the lesson.** Verified by ear with
+Narrator on 2026-09-09 (issue #331), against a positive control that proved live regions do work
+in the app's own Electron window: **`ErrorBanner`'s message was never announced**. The component
+exists to implement audit finding M-U1 — an always-mounted `role="alert" aria-live="assertive"`
+container whose text swaps inside it — but the `Banner` nested within it carried `role="status"`,
+which is itself a live region (implicit `aria-live="polite"`) and WAS mounted with its text. The
+nearest live-region ancestor governs, so M-U1's anti-pattern was reintroduced one level down. It
+was the shared failure surface for **11 screens**, and for `WorkspaceGate`'s wrong-password banner
+— the SH-2 / #145 fix — so a failed unlock was silent too. A control isolated the remedy:
+`aria-live="off"` on the inner element does NOT help; the inner live-region role has to go. The
+lesson generalises — **`role="status"` and `role="alert"` are both live regions, so nesting one
+inside the other silences the outer one.**
+
+  The fix: `Banner`'s `role` prop takes `null` (render no role), `ErrorBanner` passes it, and
+  `ModelsScreen`'s hand-rolled copy of the same wrapper — two more nested `role="status"` Banners,
+  outside the issue's stated blast radius — was corrected with it.
+  `tests/unit/live-region-nesting.test.ts` now parses every renderer `.tsx` and fails on any
+  live-region role nested inside another, so the shape cannot return unnoticed. **The by-ear
+  re-verification (Narrator, on a real failure and on a wrong-password unlock) is still
+  outstanding** — the DOM half is pinned, the audible half needs the hardware box.
 
 Accepted as-is, with reasons:
 
@@ -2718,22 +2944,34 @@ reports and phase plans were working papers; their full text lives in git histor
   a short or empty pack's unused share goes to the others — and at most two packs are
   searched at a time, under a twenty-second limit for the whole question (a pack cut off
   mid-search is reported as "failed: timed out", one never reached in time as "not
-  searched: out of time for this question"). The pack server ANDs every word of the search pattern, so the app sends only the question's content words (function and question-frame words stripped, `rag-design.md` §17 D-Z18), retries once with fewer words when nothing is found, and — when even that finds nothing — checks how common each remaining word is in that archive, drops every word that is entirely absent from it (or, if none is, just the rarest one), and tries once more (§17 D-Z18 amendment, #353); a question whose remaining content words never co-occur in one article can still miss. None of this considers language: a German question against an
+  searched: out of time for this question"). The pack server ANDs every word of the search pattern, so the app sends only the question's content words (function and question-frame words stripped, `rag-design.md` §17 D-Z18); if that alone finds nothing at all, it retries ONCE with a narrower version of the same words (five letters or longer only, when that differs from the first try). A question whose remaining content words never co-occur in one article can still miss. None of this considers language: a German question against an
   English pack simply scores poorly; the reranker sorts it out when present, and without
-  one, expect occasional off-language chunks. Aggregation or superlative questions ("which
-  scientists are famous Austrians") get one extra step before the search: the app asks the
-  local model for the concepts and the likely list-article title (one short model call per
-  pack question), which finds the list article in the cases we measured. **What that step
-  costs is set by how long the model's answer is, not by how long the app has been running.**
-  Measured on a fast desktop processor with the bundled 4B model and no graphics card: two and
-  a half to six seconds, and the longest-answering questions land at the top of that range every
-  time. The same questions on a graphics card take under half a second; on a slower processor
-  they take four to ten. A question whose answer is spread across an
-  article's individual rows, rather than named on the page itself, can still miss; and on a
-  machine slow enough that the call runs past twelve seconds, the question falls back to
-  the plain search with no list-title step — the answer is still grounded and still cites what
-  it used, it is just the plain search's articles. That fallback also costs the question those
-  twelve seconds before any pack is searched, out of the twenty the whole question is allowed. Every ticked pack gets one line in the
+  one, expect occasional off-language chunks. EVERY pack-scoped question (not only aggregation
+  or superlative ones) gets one extra step before the search: the app asks the local model for
+  a short search plan — up to three candidate article titles and two full-text search queries,
+  never an answer, never a guessed fact — which recovers most of the cases where the question's
+  own words don't match the answering article's title or index entry (a list or superlative
+  question is the clearest example, but any question benefits). **What that step costs is set
+  by how long the model's answer is, not by how long the app has been running.** Measured on a
+  fast desktop processor (32 threads) with the bundled 4B model and no graphics card: about six
+  and a half to eight seconds. On a graphics card the same questions take about half a second.
+  On a much more thread-constrained processor (a two-thread stand-in for a slow machine) they
+  take seven to twelve seconds, and **1 of 50** measured questions on that configuration (2%)
+  ran the full twelve seconds without a usable reply — the plan step is more likely to run out
+  of time on such a machine than the shorter question-plan it replaced, an accepted cost of
+  asking for richer search vocabulary (measured against a like-for-like comparison on the SAME
+  configurations: the plan step's own "no usable reply" rate never exceeded the older step's,
+  either at full threads or at two). Separately, on the FASTEST machine measured (a graphics
+  card), the model's reply is cut off, not just slow, for about 1 question in 200: the plan's
+  length cap is a whole-number multiple of 8 tokens and the longest reply measured landed one
+  token past it, so that one reply (and any as long) is truncated and treated the same as no
+  reply — the plan step still falls back cleanly, it just does so slightly more often than a
+  looser cap would have. A question whose answer is spread across an article's
+  individual rows, rather than named on the page itself, can still miss; and on a machine slow
+  enough that the call runs past twelve seconds, the question falls back to the plain search
+  with no title/query step — the answer is still grounded and still cites what it used, it is
+  just the plain search's articles. That fallback also costs the question those twelve seconds
+  before any pack is searched, out of the twenty the whole question is allowed. Every ticked pack gets one line in the
   "Knowledge packs:" note under the answer — searched (and how much it contributed) or
   not searched/failed with a short reason — even on an answer that cites nothing at all;
   an older answer, from before this note existed, says "outcome not recorded" instead.

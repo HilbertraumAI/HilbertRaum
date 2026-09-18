@@ -71,3 +71,5 @@ signing.env
 .DS_Store
 Thumbs.db
 apps/desktop/screenshots/
+
+/tmp/

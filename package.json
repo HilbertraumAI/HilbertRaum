@@ -12,7 +12,7 @@
     "dev": "npm run dev --workspace apps/desktop",
     "build": "npm run build --workspace apps/desktop",
     "typecheck": "npm run typecheck --workspace apps/desktop",
-    "test": "npm run test --workspace apps/desktop",
+    "test": "npm run test --workspace apps/desktop --",
     "test:coverage": "npm run test:coverage --workspace apps/desktop",
     "package": "npm run package --workspace apps/desktop",
     "package:win": "npm run package:win --workspace apps/desktop"

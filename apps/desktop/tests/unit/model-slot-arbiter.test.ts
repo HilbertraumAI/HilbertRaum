@@ -1,9 +1,11 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, beforeEach } from 'vitest'
 import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
+  MAX_PARK_DEFERRAL_MS,
   ModelSlotArbiter,
+  RESUME_AFTER_CHAT_DELAY_MS,
   SlotAbortedError
 } from '../../src/main/services/analysis/model-slot-arbiter'
 import { openDatabase } from '../../src/main/services/db'
@@ -21,9 +23,55 @@ import { buildTree } from '../../src/main/services/analysis/tree-build'
 
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
+// #399 D3(a): the builder no longer resumes the instant chat releases — it waits
+// RESUME_AFTER_CHAT_DELAY_MS (90 s of real wall clock). Every test here drives that with an
+// injected clock: nothing sleeps, and `advance()` is the ONLY thing that fires a resume, so a
+// resume that happened too early or not at all is visible rather than merely slow.
+interface FakeClock {
+  deps: { now: () => number; setTimer: (fn: () => void, ms: number) => unknown; clearTimer: (h: unknown) => void }
+  advance: (ms: number) => void
+  pending: () => number
+}
+function makeClock(): FakeClock {
+  let nowMs = 0
+  let seq = 0
+  const timers = new Map<number, { at: number; fn: () => void }>()
+  return {
+    deps: {
+      now: () => nowMs,
+      setTimer: (fn, ms) => {
+        const id = ++seq
+        timers.set(id, { at: nowMs + ms, fn })
+        return id
+      },
+      clearTimer: (h) => {
+        timers.delete(h as number)
+      }
+    },
+    advance: (ms) => {
+      nowMs += ms
+      for (const [id, e] of [...timers]) {
+        if (e.at <= nowMs) {
+          timers.delete(id)
+          e.fn()
+        }
+      }
+    },
+    pending: () => timers.size
+  }
+}
+
 describe('ModelSlotArbiter', () => {
+  let clock: FakeClock
+  beforeEach(() => {
+    clock = makeClock()
+  })
+  /** An arbiter on the fake clock, with the SHIPPED delay + cap (never a test-only value). */
+  const mkArbiter = (): ModelSlotArbiter => new ModelSlotArbiter(clock.deps)
+  /** Let the whole post-chat resume delay elapse. */
+  const passDelay = (): void => clock.advance(RESUME_AFTER_CHAT_DELAY_MS)
   it('reports no build active by default; chat acquire is an immediate no-op', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     expect(a.isBuildActive()).toBe(false)
     const release = await a.acquireForChat()
     expect(typeof release).toBe('function')
@@ -31,7 +79,7 @@ describe('ModelSlotArbiter', () => {
   })
 
   it('hands the slot from builder to chat and resumes the builder on release', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     expect(a.isBuildActive()).toBe(true)
     expect(a.shouldYield()).toBe(false)
@@ -59,12 +107,15 @@ describe('ModelSlotArbiter', () => {
     expect(resumed).toBe(false) // builder still parked while chat streams
 
     release() // chat stream ended
+    await tick()
+    expect(resumed).toBe(false) // #399 D3(a): NOT the instant chat let go
+    passDelay()
     await parked
     expect(resumed).toBe(true) // builder resumed in-session, no restart
   })
 
   it('resumes the builder only after the LAST concurrent chat releases', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     const acquire1 = a.acquireForChat()
     const acquire2 = a.acquireForChat()
@@ -78,12 +129,13 @@ describe('ModelSlotArbiter', () => {
     await tick()
     expect(resumed).toBe(false) // one chat still holds the slot
     rel2()
+    passDelay()
     await parked
     expect(resumed).toBe(true)
   })
 
   it('a second concurrent chat does not deadlock when the build is already parked', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     // Chat A pauses the build and waits for the handoff.
     const acquireA = a.acquireForChat()
@@ -107,12 +159,13 @@ describe('ModelSlotArbiter', () => {
     await tick()
     expect(resumed).toBe(false)
     relB()
+    passDelay()
     await parked
     expect(resumed).toBe(true)
   })
 
   it('a fresh build is not poisoned by a prior build s leftover handshake state', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     // Simulate a prior build that left chatHolders > 0 (e.g. an unbalanced release path).
     a.registerBuild('old')
     void a.acquireForChat() // chatHolders -> 1 (never released)
@@ -127,12 +180,13 @@ describe('ModelSlotArbiter', () => {
     const parked = a.reacquire('new').then(() => (resumed = true))
     const release = await acquire
     release()
+    passDelay()
     await parked
     expect(resumed).toBe(true)
   })
 
   it('rejects a parked reacquire on abort (cancel/lock/quit) — no hung await', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     const acquire = a.acquireForChat()
     await tick()
@@ -148,7 +202,7 @@ describe('ModelSlotArbiter', () => {
   // and the pause it requested is dropped, so the builder doesn't needlessly park for a chat
   // that's gone (which, with no chat left to release it, would hang the build).
   it('rejects a chat acquire when its signal aborts during the handoff wait, and unwinds cleanly (REL-3)', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     const controller = new AbortController()
     const acquire = a.acquireForChat(controller.signal)
@@ -166,12 +220,13 @@ describe('ModelSlotArbiter', () => {
     const parked = a.reacquire('job1').then(() => (resumed = true))
     const rel = await acquire2
     rel()
+    passDelay()
     await parked
     expect(resumed).toBe(true)
   })
 
   it('one chat aborting during the wait keeps the pause + handoff for a co-waiting chat (REL-3)', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     const c1 = new AbortController()
     const acquire1 = a.acquireForChat(c1.signal)
@@ -189,12 +244,13 @@ describe('ModelSlotArbiter', () => {
     await tick()
     expect(resumed).toBe(false)
     rel2()
+    passDelay()
     await parked
     expect(resumed).toBe(true)
   })
 
   it('an already-aborted signal makes a chat acquire reject without taking the slot (REL-3)', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     const controller = new AbortController()
     controller.abort() // already stopped before we even ask
@@ -206,12 +262,13 @@ describe('ModelSlotArbiter', () => {
     let resumed = false
     const parked = a.reacquire('job1').then(() => (resumed = true))
     ;(await acquire)()
+    passDelay()
     await parked
     expect(resumed).toBe(true)
   })
 
   it('does not hang a chat acquire that races the build finishing', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     const acquire = a.acquireForChat() // waits for a handoff that will never come
     await tick()
@@ -222,7 +279,7 @@ describe('ModelSlotArbiter', () => {
   })
 
   it('release is idempotent', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     const acquire = a.acquireForChat()
     await tick()
@@ -230,6 +287,7 @@ describe('ModelSlotArbiter', () => {
     const release = await acquire
     release()
     release() // second call is a no-op, does not double-resume
+    passDelay()
     await expect(parked).resolves.toBeUndefined()
   })
 
@@ -239,7 +297,7 @@ describe('ModelSlotArbiter', () => {
   // withChatStream's `finally` later ran the returned release fn — a transient stall in which the
   // build resumed only via the OTHER chat. The fix installs the release-on-abort on BOTH paths.
   it('aborting a FAST-PATH (build-already-parked) chat holder releases its slot promptly (R2)', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     // Chat A pauses the build and is handed the slot (slow path).
     const acquireA = a.acquireForChat()
@@ -258,6 +316,7 @@ describe('ModelSlotArbiter', () => {
     await tick()
     expect(resumed).toBe(false) // A still holds the slot → build NOT resumed yet
     relA() // the surviving chat releases
+    passDelay()
     await tick()
     // FIXED: B was released by its abort, A by relA → chatHolders hit 0 → build resumes. UNFIXED:
     // B's abort installed no listener and its release fn was never called → chatHolders stuck at 1
@@ -266,7 +325,7 @@ describe('ModelSlotArbiter', () => {
   })
 
   it('a FAST-PATH holder freed by abort is idempotent with its release fn (R2 — no double-release)', async () => {
-    const a = new ModelSlotArbiter()
+    const a = mkArbiter()
     a.registerBuild('job1')
     const acquireA = a.acquireForChat()
     await tick()
@@ -287,8 +346,149 @@ describe('ModelSlotArbiter', () => {
     // while A still holds → this pins single-release.
     expect(resumed).toBe(false)
     relA()
+    passDelay()
     await tick()
     expect(resumed).toBe(true)
+  })
+
+  // ---- #399 D3(a): the post-chat resume delay -----------------------------------------
+  //
+  // Why the delay exists: on 11 of our 14 chat models an evicted chat prefix is re-prefilled
+  // from scratch, not restored (model-benchmarks.md §6.6, "2026-09-09 correction (#399)"). The
+  // builder used to take the slot back the instant chatHolders hit 0 — i.e. inside the gap
+  // between one reply ending and the user typing the next — so an ordinary conversation paid a
+  // full re-prefill on EVERY turn. Not evicting is the only lever there is.
+
+  it('does not resume the parked build until the whole post-chat delay has elapsed (#399 D3(a))', async () => {
+    const a = mkArbiter()
+    a.registerBuild('job1')
+    const acquire = a.acquireForChat()
+    await tick()
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true))
+    const release = await acquire
+
+    release() // the chat stream ended
+    await tick()
+    expect(resumed).toBe(false) // pre-#399 this was already true at this point
+
+    clock.advance(RESUME_AFTER_CHAT_DELAY_MS - 1) // one millisecond short
+    await tick()
+    expect(resumed).toBe(false)
+
+    clock.advance(1) // …and now the delay is up
+    await parked
+    expect(resumed).toBe(true)
+  })
+
+  it('a chat turn inside the delay window cancels the resume — and waits for NOTHING itself', async () => {
+    const a = mkArbiter()
+    a.registerBuild('job1')
+    const first = a.acquireForChat()
+    await tick()
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true))
+    ;(await first)()
+
+    // The user's next turn lands 30 s later — inside the window. THE POINT OF THE WHOLE FIX:
+    // the build must not have taken the slot back in between, so nothing was evicted.
+    clock.advance(30_000)
+    await tick()
+    expect(resumed).toBe(false)
+
+    // And this acquire resolves WITHOUT the delay: the delay is on the BUILD's resume, never on
+    // chat's acquisition (which the chat path awaits). No clock advance below — if acquiring the
+    // slot cost any fake time at all, this would hang instead of settling.
+    let acquired = false
+    const second = await a.acquireForChat().then((r) => {
+      acquired = true
+      return r
+    })
+    expect(acquired).toBe(true)
+    expect(clock.pending()).toBe(0) // the armed resume really was cancelled, not just ignored
+
+    // Only the release after the LAST turn re-arms it — so one conversation costs at most one
+    // hand-back, not one per turn.
+    second()
+    passDelay()
+    await parked
+    expect(resumed).toBe(true)
+  })
+
+  // ---- #399 D3(a): the starvation guarantee -------------------------------------------
+  //
+  // The guarantee, stated: the arbiter adds at most MAX_PARK_DEFERRAL_MS of delay to any single
+  // park. A document that silently never gets its deep index is a worse outcome than one slow
+  // reply, so past the cap the next release resumes the build immediately — pre-#399 behaviour.
+
+  it('a park already deferred past the cap resumes on the very next release, with no delay', async () => {
+    const a = mkArbiter()
+    a.registerBuild('job1')
+    const acquire = a.acquireForChat()
+    await tick()
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true))
+    const release = await acquire
+
+    // This chat turn itself ran long enough to carry the park past the cap.
+    clock.advance(MAX_PARK_DEFERRAL_MS)
+    release()
+    await parked // NO advance: past the cap the resume is synchronous
+    expect(resumed).toBe(true)
+    expect(clock.pending()).toBe(0) // it resumed, it did not schedule
+  })
+
+  it('a user chatting steadily every 30 s cannot defer the build for ever (starvation guarantee)', async () => {
+    const a = mkArbiter()
+    a.registerBuild('job1')
+    const opening = a.acquireForChat()
+    await tick()
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true))
+    ;(await opening)()
+
+    // Turn after turn, each landing 30 s after the last — always inside the 90 s window, which
+    // is exactly the pattern a naive "wait 90 s after every chat turn" starves on for ever.
+    let turns = 0
+    while (!resumed && turns < 1000) {
+      turns += 1
+      clock.advance(30_000)
+      await tick()
+      const rel = await a.acquireForChat()
+      rel()
+      await tick()
+    }
+    expect(resumed).toBe(true) // UNCAPPED, this loop runs out its 1000 turns instead
+    await parked
+    // And it resumed on the first release past the cap, no later: 30 s a turn, so the cap falls
+    // on turn MAX_PARK_DEFERRAL_MS / 30_000 and that turn's release is the one that wakes it.
+    expect(turns).toBe(MAX_PARK_DEFERRAL_MS / 30_000)
+  })
+
+  it('an armed resume never fires into a build that was aborted or replaced meanwhile', async () => {
+    const a = mkArbiter()
+    a.registerBuild('job1')
+    const acquire = a.acquireForChat()
+    await tick()
+    const parked = a.reacquire('job1')
+    const rejected = expect(parked).rejects.toBeInstanceOf(SlotAbortedError)
+    ;(await acquire)()
+    expect(clock.pending()).toBe(1) // the resume is armed…
+
+    a.abort() // …and a cancel / lock / quit / model-switch lands first
+    await rejected
+    expect(clock.pending()).toBe(0) // disarmed, so it cannot wake a dead handshake
+
+    // A fresh build starts clean and still gets the normal delayed resume.
+    a.registerBuild('job2')
+    const acquire2 = a.acquireForChat()
+    await tick()
+    let resumed2 = false
+    const parked2 = a.reacquire('job2').then(() => (resumed2 = true))
+    ;(await acquire2)()
+    passDelay()
+    await parked2
+    expect(resumed2).toBe(true)
   })
 })
 
@@ -334,7 +534,8 @@ describe('builder parks at the level boundary (full-audit 2026-07-10 BE-6)', () 
 
     // Real build ('real' modelId ⇒ cache misses again): chat asks for the slot DURING the
     // final level-1 generation.
-    const arbiter = new ModelSlotArbiter()
+    const clock = makeClock()
+    const arbiter = new ModelSlotArbiter(clock.deps)
     arbiter.registerBuild('job-level-yield')
     let calls = 0
     // Boxed so the outer await does NOT flatten (and thus wait on) the acquire promise.
@@ -369,8 +570,10 @@ describe('builder parks at the level boundary (full-audit 2026-07-10 BE-6)', () 
     expect(winner).toBe('chat-acquired')
     expect(calls).toBe(probeL1) // parked BEFORE the first level-2 generation
 
-    // Releasing resumes the SAME build in-session to a complete tree.
+    // Releasing resumes the SAME build in-session to a complete tree — after the #399 D3(a)
+    // post-chat delay, which this fake clock is the only thing that can advance.
     ;(await acquire)()
+    clock.advance(RESUME_AFTER_CHAT_DELAY_MS)
     const meta = await buildDone
     expect(meta.rootId).toBeTruthy()
     expect(meta.levels).toBeGreaterThan(1)

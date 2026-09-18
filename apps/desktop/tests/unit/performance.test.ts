@@ -207,8 +207,10 @@ describe('selectBudgetDevice', () => {
       expect(selectBudgetDevice([card]), name).toBe(card)
     }
     // A 4 GB card is still no budget device — on the reason RESTATED by #321, not the void one:
-    // the E2B (2,271 MiB) does fit such a card, but it is the ONLY ranked model that does, so
-    // admitting it would star the E2B at every RAM size with nothing measured behind that.
+    // the E2B (2,271 MiB) does fit such a card, but it is the ONLY ranked model that does at the
+    // ≈ 3,328 MiB budget one actually produces (#413), so admitting it would star the E2B at every
+    // RAM size with nothing measured behind that. SMALL's `freeMb: 3900` is a fixture, not a
+    // reading: no 4 GB card has ever been probed, and every card that has idles ~768 MiB down.
     expect(selectBudgetDevice([SMALL])).toBeNull()
   })
 })
@@ -538,6 +540,20 @@ describe('loadedAtOnceMb', () => {
 
   it('unified: one pool — the full sum, whatever the rows say', () => {
     expect(loadedAtOnceMb({ memoryClass: 'unified', rows, verdict: { ...estimate, budgetMb: 36_864 } })).toBe(everythingMb)
+  })
+
+  // Wave 8 ruling (d)/NF-3 (step 4-8): a `'gpu'`-posture reranker row is no longer counted
+  // against the processor's memory on `discrete` — its own headroom gate only ever resolves
+  // `'gpu'` when the WHOLE placement fits with margin, and no partial-offload split is tracked
+  // for it the way chat/translation report one, so it contributes 0 (matching a chat/translation
+  // row with no measured spill), never its full size.
+  it('discrete: a gpu-posture reranker row contributes 0, not its full size', () => {
+    const rerankerOnGpu = rows.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const } : r))
+    // pinnedMb no longer includes the reranker's 1.1 GB.
+    const pinnedWithoutReranker = (3.0 + 0.2 + 0.5) * 1024
+    expect(loadedAtOnceMb({ memoryClass: 'discrete', rows: rerankerOnGpu, verdict: estimate })).toBe(
+      Math.round(pinnedWithoutReranker + translationSpillMb)
+    )
   })
 
   it('null when no row has a size', () => {

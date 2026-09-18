@@ -770,7 +770,12 @@ One consequence worth recording because it undercuts a stated rationale: the E2B
 "nothing ranked fits 4,512 anyway, and rule C's no-fit fallback returns the RAM pick regardless".
 That arithmetic no longer holds. Settled 2026-09-08 (owner decision, #321): the floor STAYS at 5,120
 and its recorded reason is replaced — see "Why 5,120 — RESTATED" in the N8 paragraph below, which
-rests on what the star would actually do at ~3,900 MiB free rather than on nothing fitting.
+rests on what the star would actually do at the budget such a card produces rather than on nothing
+fitting. That budget figure was itself corrected 2026-09-10 (#413): the 2026-09-08 text said
+~3,900 MiB free, which no probed card supports — on the 768 MiB idle reserve measured on every card
+in this project it is ≈ 3,328, below the 4B's 3,838, so the E2B is alone at BOTH budget forms and
+the argument is intact. The N8 note carries the reserve table. Closed 2026-09-11 (owner, #413): the
+floor stays without a 4 GB measurement; N8 "Decided 2026-09-11" carries the reason.
 
 **Hardware verification (issue #318, 2026-09-07) — the 6, 8, 12 and 24 GB rows are VERIFIED on
 real starts; the 20 GB row stays predicted.** When this section was written (G3) no model could be
@@ -861,6 +866,36 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    Hash a weight the leg will not sample, or drop the cache (a replug dismounts the volume) before
    the check. Harmless to every verdict in this section: read speed is an input to neither
    `liveChatRecommendation` nor `classifyProfile`.
+
+**2026-09-11 addition (the integrated class measured: the UHD 620 laptop, no leg; PR #454).** The
+two integrated-only laptops above confirmed the naming rule but had never STARTED a model, so the
+class had no speed figure of its own. The UHD 620 machine now has one. `gemma4-e2b-it-qat-q4` — the
+model the picker recommends there, and one never started on that machine before — measured **5.600
+tok/s** decode on the app's own argv (prefill 19.1) and **6.826** under `--device none` (22.4),
+against `qwen3.5-9b-ud-q4kxl` at **1.723** and **2.488**; ctx 8192, `--threads 4`, 512 tokens behind
+a ~2,000-token prefill, every start repeated.
+
+- **Auto-offload is SLOWER on both models and both axes** — decode −18.0 % (E2B) and −30.7 % (9B),
+  prefill −14.8 % and −12.4 % — and on shared memory it costs host RAM instead of saving it: the
+  9B's auto start peaked 2,056.8 MiB above its processor start, leaving 41 MiB free, and loaded in
+  28.77 s against 9.86. This CORRECTS BUILD_STATE §5 item 21 (e), which recorded prefill parity
+  (56 vs 57 t/s) and a 45 % decode loss for this machine: the direction of the decode loss holds,
+  the parity claim does not, and neither magnitude nor the absolutes reproduce.
+- **llama.cpp uses the UHD 620 unasked** — 36/36 and 33/33 layers, `Vulkan0` model buffers of
+  1,341.77 and 5,133.63 MiB — so the never-`--device` rule of item 22 (j) shows on the integrated
+  class what finding 1 shows on hybrids: the naming rule governs the ★ and the tile basis, never
+  placement. `VK_EXT_memory_budget` on this Intel driver reports heap `usage = 0` throughout,
+  including while Vulkan0 held 5.1 GiB of weights, so the heap counter cannot detect iGPU
+  allocation here — only the buffer lines can.
+- **The first Vulkan start of each model pays a one-off shader compile** (E2B auto 4.465 cold vs
+  5.600 warm, byte-identical placement), so the figures above are the warm runs and the cold ones
+  are committed as `*-run1`.
+
+Qualifier carried from the session: AC throughout, but the Windows power mode was "Best power
+efficiency", left as the operator had it — every absolute above is a floor, and all six starts
+shared the setting, so the comparisons between them are unaffected. Evidence:
+`eval/results/hardware/i7-8550u-uhd-620-shared-8gb-laptop-16gb/02-e2b.comment.md` and the per-start
+JSON, redacted `-lv 4` logs and RSS samples beside it.
 
 **Hardware confirmation (issue #391, 2026-09-08): the 24 GB row re-measured under the app's own
 post-#386 launch, and it holds.** Leg 7's confirming start was run on the same rig from the APP
@@ -957,13 +992,87 @@ in-app path depends on parallel slots. **The restore half of that cost MEASURED 
 (#391 leg 7, evidence `leg7-app-q5km-evicted-prefix.*`); the decision stands, the cost is larger
 than stated.** Consecutive turns in one conversation do reuse the prefix in the slot (22 tokens
 re-prefilled on turn 2 of 190 cached). But once another task takes the one slot, the server saves the
-conversation to the host cache and then refuses to load it back: `forcing full prompt re-processing
-due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see llama.cpp PR #13194)`.
-Both 27B quants are hybrid/recurrent, so the restore path is closed to them. Measured: a 435-token
-conversation, evicted by one turn in another conversation, re-prefilled **305 of 452 tokens** on
-return; only the 147-token system prefix survived, because it is common to every conversation and
-stays in the slot. The cost therefore scales with conversation length rather than being constant, and
-it is paid on every hand-back. Follow-up: #399. **What it does NOT change: the context window.**
+conversation to the host cache and then refuses to load it back. Measured: a 435-token conversation,
+evicted by one turn in another conversation, re-prefilled **305 of 452 tokens** on return; only the
+147-token system prefix survived, because it is common to every conversation and stays in the slot.
+
+**2026-09-09 correction (#399): the affected set is 11 of 14 chat models, not "both 27B quants".**
+The first version of this paragraph named only the two 27B quants as hybrid/recurrent. That reading
+was far too narrow. A fourteen-model architecture sweep on `i9-9900x-rtx-3090-24gb-128gb` — raw
+`llama-server`, the app's argv shape at `--ctx-size 8192 -np 1`, **no MTP**, every model fully
+offloaded, three requests per start (long conversation A → a short unrelated B takes the slot → back
+to A) — settles which architectures lose the restore. Evidence: PR #445,
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue399-arch-sweep-*`.
+
+**RE-PREFILLED — 11 models, two architectures.** The whole modern Qwen line by **recurrent state**:
+`qwen3.5-2b/-4b/-9b-ud-q4kxl`, `qwen3.5-35b-a3b-ud-q4kxl`, and all three `qwen3.8-27b` quants
+(`-q4`, `-ud-q4km`, `-ud-q5km`) — 1,488–1,492 of ~1,530–1,571 tokens re-processed on return, with
+only the 41–79-token shared system prefix surviving. And **all four Gemma 4 manifests** by **sliding
+window** (`n_swa` 512 or 1024): `gemma4-e2b`, `gemma4-e4b`, `gemma4-12b`, `gemma4-26b-a4b` — 1,471 of
+1,514, 43 kept. That includes **both 8–12 GB tier picks, the catalog-default 4B and the DIY 9B** —
+i.e. exactly the machines where re-prefilling a whole history is least affordable. The 27B Q5 control
+reproduces leg 7 token for token.
+
+**RESTORED — the three positive controls.** `qwen3-8b-instruct-q4` (arch `qwen3`),
+`qwen3-30b-a3b-q4` (`qwen3moe`) and `ministral3-8b-instruct-2512-q4` (`mistral3`) — no sliding
+window, no recurrent state — each re-prefilled only **14–21 tokens** of a ~1,470-token return prompt.
+So the restore mechanism works, the method detects it, and this is a **measured architecture split**,
+not an anecdote: recurrent state OR a sliding window closes the restore path; nothing else does.
+Among ranked models `ministral3-8b` is the only one that keeps it.
+
+**Which path actually pays the length-proportional cost — the plain CHAT path only (leg B).** A
+documents ask keeps only its **~227-token system prefix** on every turn, with or without a helper
+call: the retrieved-excerpt block changes between turns, so the prompt diverges immediately after the
+system prompt and the history was never being reused there in the first place (control, 2,371-token
+prompt, 2,144 prefilled, 227 kept, nothing touching the slot). RT-2's hoisting keeps the grounding
+rules inside that 227-token prefix, and that prefix is the whole of what in-slot reuse can save on
+that path — so an eviction's marginal cost on a documents ask is bounded by it, not by conversation
+length. `classifySkillPointer` also turns out to run only on the two trigger classes
+`services/analysis/classify.ts:65` pins, not "whenever there are skill candidates": an ordinary
+high-confidence documents ask made zero classifier calls in four attempts, and on a turn that does
+trigger it the cost is ~400 extra prefilled tokens (~1.4 s). The length-proportional cost is real but
+belongs to an ordinary **chat** conversation, where the prompt is append-only and in-slot reuse works
+(171 → 22 → 22). Neither helper runs on that path, and `assertChatStreamReady`
+(`ipc/chat-stream.ts:65-77`) makes every non-yielding lane refuse chat rather than take the slot — so
+the one thing that can evict a live chat is the **yielding deep-index build**. That is what narrowed
+the fix to D3(a).
+
+**No slot arrangement fixes this (leg C).** `-np 2` on the 27B Q5 fits (66/66, 2,676 MiB headroom
+left, so `MTP_VRAM_HEADROOM_MB` does not bite) but halves every conversation's window to 4,096
+(`--ctx-size` is the total cache) — and R3 is **identical token for token**, 1,492 of 1,571. The slot
+picker prefers prefix similarity (0.804, threshold 0.100 — the shared `BASE_SYSTEM_PROMPT`
+guarantees it) over an idle empty slot, and when A did land in the never-used slot the host-cache
+restore failed there too. On a recurrent/SWA model the state cannot be reconstructed from a saved
+prompt at all. **The only lever is not evicting**, and the saved copy is pure waste: 14.86–343.59 MiB
+written per eviction and never read.
+
+**Fixed 2026-09-09 (#399, owner decisions D3(a) + D5).** The arbiter no longer resumes a parked
+deep-index build the instant chat releases the slot — it waits `RESUME_AFTER_CHAT_DELAY_MS` (90 s,
+`services/analysis/model-slot-arbiter.ts`), so a conversation's own typing/reading gaps stop handing
+the slot away turn after turn; a `MAX_PARK_DEFERRAL_MS` (10 min) cap on a single park guarantees the
+build still runs. And `CHAT_SERVER_ARGS` gains `--cache-ram 0` for the affected families only
+(`shared/prompt-cache-rules.ts`, gated on the manifest's `family:` — `qwen3.5`, `qwen3.8`, `gemma4`),
+so the unreadable copy is no longer written; every other family, **including an unmeasured one**,
+keeps today's behaviour, because disabling the cache on an unaffected model would cost real restores
+while leaving it on merely continues the waste. Residual: a pause longer than the delay still lets
+the build resume and evict, so returning from a break costs ONE slow reply — once, not per turn. Both
+sides of the D5 gate were checked on hardware before it shipped — on `i7-8700-gtx-1070-ti-8gb-32gb`
+the app spawned `qwen3.5-9b-ud-q4kxl` WITH `--cache-ram 0` and `qwen3-14b-instruct-q4` without it
+(read from the OS process list, not from our own code), and the affected model still started fully
+offloaded, its 50.25 MiB recurrent state matching the sweep's 9B row exactly:
+`eval/results/hardware/i7-8700-gtx-1070-ti-8gb-32gb/399-cache-ram-gate-smoke.md`.
+
+**A methodological warning for anyone reproducing this.** Do **not** grep for `forcing full prompt
+re-processing due to lack of cache data (likely due to SWA or hybrid/recurrent memory, see llama.cpp
+PR #13194)`. That line appears only on **MTP** starts — it did not appear once in the whole
+fourteen-model sweep, not on the 27B Q5 control, not on any Gemma. Without MTP the server logs a
+confident `load: - found better prompt with f_keep = 0.990, sim = 0.983` and then silently re-prefills
+the whole prompt anyway. Grepping for `forcing full` gives the **opposite** answer; the TOKEN COUNT
+(`prompt eval time = … / N tokens` against `cached n_tokens`) is the only honest read. Still
+unmeasured: the ZIM query expander (#447) — the three chat entries this paragraph used to list are
+measured, see the 2026-09-10 addition below. If llama.cpp PR #13194 lands recurrent-state restore
+upstream, both the delay and the D5 switch become removable. Follow-up: #399 (closed by this work).
+**What it does NOT change: the context window.**
 `--ctx-size` is the TOTAL cache size on both settings and every slot sees all of it
 (`n_ctx_slot = 8192` either way; `kv_unified` goes true → false, `n_seq_max` 4 → 1). That is the
 whole reason only four of the seven cache terms moved — see point 4 above for the rule and the
@@ -973,6 +1082,37 @@ is the safe direction (the guard refuses a rung it could have run, never the rev
 verdicts it was calibrated to reproduce — Q4/Q5 clear a 24 GB card, Q6_K does not — are unchanged.
 Evidence: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/leg1-np-1.*` against
 `leg7-baseline-q5km.*`; finding 4 below is the measurement this decision was waiting for.
+
+**2026-09-10 addition (#446): the three entries the sweep could not start, measured — `qwen3.6`
+loses the restore, `granite` keeps it.** The #399 sweep left three catalog entries untested for
+reasons of logistics, not judgement: `qwen3.6-27b-q4` and `-q5` were broken symlinks into the eval
+drive deleted 2026-09-04, and `granite-4.1-8b-q4` was not on the rig. Under the conservative D5
+default all three were treated as unaffected, which was safe but left the record ambiguous — the
+standing risk being that "never tested" quietly reads as "measured and fine". All three weights were
+fetched, verified against the manifest's `sha256` **and** `size_bytes`, and run through the
+**unchanged** leg-A driver on the same machine and the same pinned binary, no MTP. Evidence:
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue446-arch-sweep-*`.
+
+| model | arch | n_swa | recurrent state | layers | R3 prefilled | kept | verdict |
+|---|---|---|---|---|---|---|---|
+| `qwen3.6-27b-q4` | qwen35 | 0 | 149.62 MiB (64 layers) | 65/65 | **1488 of 1529** | 41 | **RE-PREFILLED** |
+| `qwen3.6-27b-q5` | qwen35 | 0 | 149.62 MiB (64 layers) | 65/65 | **1488 of 1529** | 41 | **RE-PREFILLED** |
+| `granite-4.1-8b-q4` | granite | 0 | none | 41/41 | **22 of 1414** | 1392 | **RESTORED** |
+| `qwen3.8-27b-ud-q5km` (control) | qwen35 | 0 | 149.62 MiB (64 layers) | 66/66 | **1492 of 1571** | 79 | **RE-PREFILLED** |
+
+The control reproduced the sweep **token for token** (1,492 of 1,571, 79 kept), so the rows above
+belong in the same table as the fourteen. **`qwen3.6` is affected because it reports arch `qwen35`
+with a 149.62 MiB recurrent state** — the expectation from its lineage happened to be right, but the
+architecture line is what decided it, and both quants are identical in every column. `--cache-ram 0`
+therefore extends to the `qwen3.6` family (`shared/prompt-cache-rules.ts`), making the affected set
+**13 of 17 measured models**. **`granite` restored** — no sliding window, no recurrent state, 22 of
+1,414 tokens re-prefilled, and the 217.517 MiB it saved on the hand-back was actually read back. It
+becomes the fourth positive control beside `qwen3`, `qwen3moe` and `mistral3`, and it is the
+concrete case for keeping the cache-ON default: the family nobody had an opinion about is the one
+that would have lost real restores. Every `family:` in the catalog now has a verdict; the default
+still governs the family added next. The `forcing full` trap held a fourth time — that line appears
+**0 times** in all four captures, including the two `qwen3.6` runs, which instead logged a confident
+`found better prompt with f_keep = 0.989, sim = 0.985` before re-prefilling 1,488 tokens.
 
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
@@ -1011,35 +1151,85 @@ moved: the RAM pick is the E2B and it fits the card either way. The case that bi
 gaming laptop**, where the RAM pick is the 9B — and the 9B on this card measured **18/33 layers at
 5.2 tok/s**, against 20.2 at 31/33 on an 8 GB desktop card. Today's gate therefore sent the most
 common 6 GB configuration to a model running roughly four times slower than the alternative. With
-the gate at 5,120 the card path stars the 4B (4,410 MiB against a 5,226 MiB budget), fully offloaded
-at card speed.
+the gate at 5,120 the card path stars the 4B (4,410 MiB when this was decided, 3,838 since #391,
+against a 5,226 MiB budget), fully offloaded at card speed.
 
-*Why 5,120 — RESTATED 2026-09-08 (owner decision, issue #321).* The floor is UNCHANGED; its
-recorded reason was wrong and is replaced here. #321 wrote that keeping 4 GB cards (≈ 4,096) out
-costs nothing, "where nothing ranked fits 4,410 anyway and rule C's no-fit fallback hands the
-machine back to the RAM pick regardless". That arithmetic is void: the three estimate fixes of
-2026-09-07/08 took the E2B from 4,746 MiB to **2,271** (the threshold table below), so a 4 GB card
-CAN hold a ranked model — the point already recorded under rule 3 above.
+*Why 5,120 — RESTATED 2026-09-08 (owner decision, issue #321), and RE-RESTATED 2026-09-10 (#413).*
+The floor is UNCHANGED through both; what moved each time is the reason recorded for it. #321 wrote
+that keeping 4 GB cards (≈ 4,096) out costs nothing, "where nothing ranked fits 4,410 anyway and
+rule C's no-fit fallback hands the machine back to the RAM pick regardless". That arithmetic is
+void: the three estimate fixes of 2026-09-07/08 took the E2B from 4,746 MiB to **2,271** (the
+threshold table below), so a 4 GB card CAN hold a ranked model — the point already recorded under
+rule 3 above.
 
-The floor stays on a different and measured basis. At **~3,900 MiB free the E2B is the ONLY ranked
-model that fits** (the 4B, the next one up, needs 4,410; the same holds for the 3,072 MiB budget a
-4 GB card gets when the probe reports no free figure). So admitting 4 GB cards would star the E2B at
-EVERY RAM size — verified against the committed catalog at RAM 8 / 16 / 24 / 32 / 64: the 4B, the 9B,
-the 27B Q4 and the 27B Q5 all collapse to the E2B; only at RAM 12, where the RAM pick is already the
-E2B, would the star not move. That is the same trade #321 made at 6 GB — but there the trade was
+The floor stays on a different and measured basis — the arithmetic note below carries the budget
+figure it rests on, which is the part 2026-09-10 corrected. At the budget a 4 GB card actually
+produces, **the E2B is the ONLY ranked model that fits**, so admitting such cards would star it at
+EVERY RAM size — verified against the committed catalog at RAM 8 / 16 / 24 / 32 / 64: the 4B, the
+9B, the 27B Q4 and the 27B Q5 all collapse to the E2B; only at RAM 12, where the RAM pick is already
+the E2B, would the star not move. That is the same trade #321 made at 6 GB — but there the trade was
 backed by a MEASUREMENT (leg 4 and the 16 GB gaming laptop: the 9B at 18/33 layers, 5.2 tok/s,
 against a fully offloaded 4B at card speed), and here there is none: **no 4 GB card has ever been
 measured in this project**. Demoting a 32 GB machine from the 27B Q5 to the smallest model in the
 catalog on an unmeasured guess is exactly the #318 leg-4 mistake in reverse — leg 4 is what proved a
 gate assumption wrong once already.
 
-*What would reopen it.* A real 4 GB card measured on the §6.6 protocol: the E2B fully offloaded on
-that card against the RAM pick partially offloaded, on a 16 GB and a 32 GB machine. If the card wins
-those, the floor comes down the way it came down for 6 GB. Until then it stays where the measured
-cards put it. (One correction to the framing while restating it: the E2B is not "the smallest
-BUNDLED model" — the only chat model with `bundled_on_preconfigured_drive: true` is
-`qwen3-4b-instruct-q4`. The E2B is the smallest-NEED ranked model, which is why it is the one that
-fits.)
+*What "the budget a 4 GB card actually produces" is — the arithmetic corrected 2026-09-10 (#413).*
+The 2026-09-08 version of this paragraph put that budget at **~3,900 MiB free**, and #413 then
+reported the argument half-dead on it: #391 measured the 4B's host-mapped weights at 497.31 MiB,
+moving its need 4,410 → **3,838**, which 3,900 clears — so on that figure the 4B, not the E2B, would
+be the star, and "the smallest ranked model at every RAM size" would hold only for the no-free-figure
+budget form. Both readings rest on a number that was never a measurement. **3,900 is a fixture
+value**, invented alongside the gate change itself (`freeMb: 3900` in `picker-seams.test.ts`,
+`performance.test.ts` and `performance-gpu.test.ts`, commit `c3247fe5`); no 4 GB card has ever been
+probed. What the probed cards do show is an idle reserve set by the DESKTOP, not by the size of the
+card:
+
+| card | Vulkan total | best idle free | reserve |
+|---|---|---|---|
+| RTX 3060 Laptop | 5,994 | 5,226 | **768** |
+| GTX 1070 Ti | 8,273 | 7,504 | **769** |
+| RTX 3080 Ti | 12,084 | 11,316 | **768** |
+| RTX 3090 | 24,822 | 23,808 | 1,014 |
+
+768 MiB across three cards spanning 6 → 12 GB, and it is a FLOOR rather than a typical figure: the
+worst 1070 Ti reading in the same evidence is 1,686 MiB used, and that box read 1,591 used under an
+ordinary desktop session on 2026-09-10. Applied to a 4 GB card, `graphicsBudgetMib` (the probe's free
+figure, else total − 1,024) is therefore **≈ 4,096 − 768 = 3,328 MiB**, not 3,900 — and the 4B at
+3,838 does not fit it. For the 4B to fit, a card would have to REPORT ≥ 4,606 MiB, which a 4 GB card
+does not have. The probe-free form therefore voids this argument only on a 4 GB card with no desktop
+drawn on it, a machine the project has never seen; on every card it HAS probed, both budget forms —
+the free figure and the no-free-figure total − 1,024 = 3,072 — still collapse to the E2B alone. The
+cost of a lowering stays pinned on both forms in `committed-catalog.test.ts` either way, and that
+test now asserts the 3,328 form beside them.
+
+*Decided 2026-09-11 (owner, #413): the floor STAYS, and without a 4 GB measurement.* The project
+owns no 4 GB card and will not buy one, so the question is closed on the asymmetry between the two
+ways of being wrong instead of being held open for a leg nobody will run. Keeping the floor is the
+side that corrects itself. The floor never moves PLACEMENT (leg 4's E2B went 36/36 onto a card the
+gate of the day refused), so a 4 GB-card machine gets the RAM pick, partially offloaded onto that
+card anyway, and if that start measures below `SLOW_PICK_TOKENS_PER_SECOND` the §6.5 step-down
+(`applySpeedSignal` on the RAM path, `models.ts`; pinned by `committed-catalog.test.ts` "steps each
+tier down one band on a right-sized crawl") moves the ★ one ranked tier down on that user's own
+measurement. Lowering the floor has no such correction: the ★ would sit on the E2B at every RAM
+size, and nothing steps a pick UP when a small model runs fast, so a 32 GB machine would stay on the
+smallest ranked model for good. The accepted residual: on such a machine a RAM pick that runs at or
+above the crawl gate stays the ★ even where the E2B, fully offloaded, might be faster.
+
+*What would reopen it.* A 4 GB card measured on the §6.6 protocol, by anyone who has one: the E2B
+fully offloaded on that card against the RAM pick partially offloaded, on a 16 GB and a 32 GB
+machine. If the card wins those, the floor comes down the way it came down for 6 GB. Two things such
+a card settles before it runs a single benchmark, and both are cheap:
+what it reports as its TOTAL, and what it reports FREE with a desktop on it. **The total is what a
+lowering would have to be set from, and 4,096 is not it** — reported totals do not track nominal
+capacity, and the four measured cards split in both directions: 3080 Ti 12,084 for a nominal 12,288
+and 3060 Laptop 5,994 for 6,144, against 1070 Ti 8,273 for 8,192 and 3090 24,822 for 24,576, the
+latter two summing a second BAR heap. Picking 4,096 off the nominal figure would repeat exactly the
+#321 mistake this row exists to record — every 6 GB card reporting under a 6,144 gate is how the
+6 GB row got here. (One correction to the framing, carried over from the 2026-09-08 restatement:
+the E2B is not "the smallest BUNDLED model" — the only chat model with
+`bundled_on_preconfigured_drive: true` is `qwen3-4b-instruct-q4`. The E2B is the smallest-NEED
+ranked model, which is why it is the one that fits.)
 
 Above the floor the original reason stands: 5,120 admits all three measured 6 GB cards with margin
 for driver variance.

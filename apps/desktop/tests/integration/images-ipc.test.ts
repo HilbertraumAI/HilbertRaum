@@ -55,6 +55,7 @@ import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '../../src/main/services/workspace-vault'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
+import { hangPolls } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -130,7 +131,7 @@ const goodReq = (): ImageAnalyzeRequest => ({
 })
 
 async function waitForTerminal(jobId: string): Promise<ImageJob> {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < hangPolls(200, 5); i++) {
     const { result } = await invoke(handlers, IPC.imageGetJob, jobId)
     const job = result as ImageJob
     if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') return job
@@ -145,7 +146,7 @@ async function waitForTerminal(jobId: string): Promise<ImageJob> {
 // session/turn/stored image exist. Wait for the streamed terminal (imgDone/imgError) — the renderer's
 // real signal — which guarantees persistence is done. Returns the streamed job payload.
 async function waitForImgSend(event: FakeIpcEvent, jobId: string): Promise<ImageJob> {
-  for (let i = 0; i < 200; i++) {
+  for (let i = 0; i < hangPolls(200, 5); i++) {
     const call = event.sender.send.mock.calls.find(
       (c: unknown[]) => c[0] === STREAM.imgDone(jobId) || c[0] === STREAM.imgError(jobId)
     )

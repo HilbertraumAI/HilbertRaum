@@ -139,6 +139,15 @@ export interface RuntimeStartOptions {
    * downstream of the ladder reads it.
    */
   speculativeDecoding?: SpeculativeDecoding | null
+  /**
+   * The model manifest's `family:` (#399 D5) — e.g. `qwen3.5`, `gemma4`, `mistral3`. Supplied by
+   * `startModelRuntime` (which has the manifest). The ONLY thing that reads it is the chat argv
+   * builder's prompt-cache gate (`shared/prompt-cache-rules.ts`): a family measured to lose
+   * llama-server's evicted-prefix restore gets `--cache-ram 0`, because for it the host cache is
+   * written and never read. Absent/unknown ⇒ cache ON, i.e. exactly today's behaviour — the safe
+   * direction, and the reason this is optional rather than required.
+   */
+  family?: string | null
 }
 
 export interface HealthStatus {

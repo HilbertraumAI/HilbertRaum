@@ -1327,6 +1327,12 @@ export const en = {
   'settings.performance.gpuHint':
     'Uses your graphics card to speed up responses when available. Turn off only if you ' +
     'notice stability problems — everything keeps working either way.',
+  // Step 4-4 (Wave 4 ruling (a)): the cpu-hi rerank profile's opt-in. No number in the copy —
+  // the exact thread threshold is an internal tuning constant, not a user-facing figure.
+  'settings.performance.rerankWideScope': 'Rerank more knowledge-pack passages',
+  'settings.performance.rerankWideScopeHint':
+    'Slower per question. Used only on a computer with enough processor threads and the ' +
+    'reranker installed; a computer with a usable graphics card reranks every passage already.',
   'settings.performance.autoStart': 'Load the selected model automatically when the app starts',
   'settings.performance.autoStartHint':
     'On by default. The model selected on the AI Model screen is loaded in the background at ' +
@@ -2009,6 +2015,19 @@ export const en = {
   'perf.step.speed': 'Generation speed with {model}',
   'perf.step.speedSkipped': 'Generation speed (no model running, skipped)',
   'perf.step.hint': 'About half a minute. You can keep using the app.',
+  // #438: a check the app started by itself (first run, or this drive arriving on a different
+  // computer) sends its steps to nobody, so the screen cannot show them advancing. It says this
+  // instead of a step list frozen on step 1 — and because it lands in the same live region the
+  // steps use, an automatic check is still ANNOUNCED rather than silently under way.
+  'perf.running.background': 'Checking this computer in the background.',
+  // #437: a step's progress used to live ONLY in a CSS class and an aria-hidden icon, so the
+  // live region's text never changed as the check advanced and a screen reader heard nothing
+  // after the list appeared. Each step now carries its state IN ITS TEXT — the whole line is
+  // one accessible string, so an advance is a text change with its own context ("Drive speed:
+  // in progress"), not a bare "in progress" detached from the step it belongs to.
+  'perf.step.state.done': '{step}: done',
+  'perf.step.state.active': '{step}: in progress',
+  'perf.step.state.todo': '{step}: waiting',
   'perf.observed.title': 'Observed while you worked',
   // The rows are session latches, but the READ samples behind them are also persisted into the
   // benchmark records (the Drive tile above shows them with their own source and date). The
