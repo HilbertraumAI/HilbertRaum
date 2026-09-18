@@ -161,7 +161,9 @@ import {
 //   • Overshoot: the slice check sits at the top of the loop, so the current iteration always
 //     completes first. One iteration costs at most one `find` hop, so a slice can exceed
 //     `sliceWork` by at most that hop (bounded by the input length) — a failed lookahead near
-//     the start of a 1 MiB input is the worst case, and it ends the scan anyway.
+//     the start of a 1 MiB input is the worst case, and it ends the scan anyway — or, for a
+//     kept table, that table's whole bounded pass (see TABLE-DERIVED WORK above and
+//     `docs/known-limitations.md`); `maxWork` is therefore checked at table granularity.
 //   • `slices` (yields + 1) is reported on `ZimArticle` and is identical on both paths.
 //   • TWO SLICE TRIGGERS, because `sliceWork` counts scanner examinations and the first
 //     measurement showed the scan was never the problem. Ordinary scan slices came in at

@@ -4455,7 +4455,17 @@ nested max-span tables, previously charged nothing and costing ~174 ms in one un
 slice, now costs single-digit-to-low-double-digit milliseconds, the same order as any other
 single very large kept table — see `docs/known-limitations.md` for the disclosed residual this
 still leaves); the non-table invariant (a line-multiset diff — a per-segment text-pattern check
-was tried first and rejected after a real false positive) holds on 152/152 files. The Gold
+was tried first and rejected after a real false positive) holds on 152/152 files. A further
+pre-read review pass found one more pre-existing defect in the shared budget itself: when a
+nested table's own inlined content approached `TABLE_MAX_RAW_CHARS`, the OUTER table's own
+key/value pair built from that string could exceed the remaining budget in a single step and was
+dropped WHOLE rather than truncated — a wrapper around a large nested property table could
+deliver nothing but cap markers and zero data rows, where the identical table un-nested delivers
+thousands of bytes of real data. Fixed: a line or pair that alone exceeds the remaining budget is
+now truncated to what remains and kept (surrogate-safe), instead of discarded outright; the row
+count a cap marker reports was also corrected for the one case where a single very large line
+spans every output segment on its own, so the marker never again claims zero rows were shown
+when real data reached the text. The Gold
 demonstration's OFFLINE leg (the real "Gold" article through both converters, no
 retrieval/ranking involved) confirms the fix on the live article: density and melting point both
 still reach the packet-eligible text, keyed
@@ -4468,4 +4478,5 @@ text-pattern version produced a false positive, with the same re-conversion/line
 the cost check uses) and the Gold demonstration's live leg are pending the one authorised
 `core200` read (PR still open, floors pre-registered before that read — see the PR body). Full
 artifacts: `steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline.json,freeze-4l.txt,
-freeze-4l.superseded-1.txt,freeze-4l.superseded-2.txt,freeze-4l.superseded-3.txt}`.
+freeze-4l.superseded-1.txt,freeze-4l.superseded-2.txt,freeze-4l.superseded-3.txt,
+freeze-4l.superseded-4.txt,freeze-4l.superseded-5.txt}`.

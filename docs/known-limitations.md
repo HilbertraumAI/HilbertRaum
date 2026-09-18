@@ -3046,7 +3046,12 @@ reports and phase plans were working papers; their full text lives in git histor
   row including header rows) and "some cells beyond the table's size caps were omitted"
   markers name the gap, never fill it; a cap firing inside a NESTED table folds into the
   same two markers on the outermost table, so a cut inside nested content is disclosed
-  the same way. Row/column iteration is bounded on three independent axes
+  the same way. A line or key/value pair that alone exceeds the remaining raw-character
+  budget (typically a nested table's own inlined content, close to that same shared cap)
+  is truncated to what remains and kept rather than dropped whole, so a table is never
+  reduced to markers over zero data rows when some of its content was in budget; the kept
+  prefix can still end mid-value, not at a natural word or pair boundary. Row/column
+  iteration is bounded on three independent axes
   (`TABLE_MAX_COLUMNS`, `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`, alongside the
   existing `TABLE_MAX_SOURCE_ROWS`), not merely by "typical tables are small": a table
   whose grid or emitted text would otherwise exceed one of those caps is cut. **This
