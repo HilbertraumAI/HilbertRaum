@@ -55,28 +55,6 @@ object, so one property catches every handle — and closes them in its `afterAl
 vitest's default `sequence.hooks: 'stack'`, pinned by a guard verified to FAIL under `'list'`. Loading `node:sqlite` in every fork added ~180
 ExperimentalWarning lines (268 → 449), so that one warning is swallowed during the harness's own load (now 0). Hygiene, not speed (#458).
 Not this change: the known `zim-client` 8 MiB `read ECONNRESET` load flake failed all 3 attempts in 2 of 3 local full runs (3/3 alone)._
-_2026-09-12 — **#458 (3 of 3 done, acceptance pending) — the windows CI legs: budgets, sharding, timing asserts** (`fix/458-ci-hook-timeout` PR #461;
-`fix/458-shard-windows-legs` PR #462; record `packaging.md` "Continuous integration (CI)"; decision + full evidence in the issue comment).
-Investigated: **five** windows flakes, not three, and #457 did not end them; windows 22.x carried 4 of 5. **(1)** `testTimeout` widened to 60 s
-on CI long ago but `hookTimeout` never did (vitest's 10 s default, 6× tighter) and **2 of the 5 were hook timeouts** — structural, not slow
-setup: 3 forks + main fill a 4-core runner. **(2)** Each windows leg is now two `--shard` jobs (6 legs; ubuntu stays WHOLE so one leg per node
-version still sees cross-file interference). `FullSuiteGuard` is shard-aware or it fails every sharded run — and a folder split would silently
-DISABLE it instead. TWO silent failures found by MEASURING, not reasoning: the split is hashed over `/` + the **posix** path (vitest resolves
-with pathe), so a native-`resolve` reproduction agreed with a real run on 109 of 225 files (chance) while every property test passed; and the
-first sharded CI run **did nothing at all** — the root `test` script forwarded to the workspace without a `--`, so npm ate `--shard` as a config
-and all six legs ran 449 files, merely looking slow (run 34660709148). Both now pinned (sha1 vectors; the trailing `--`). Rejected: dropping a
-suites never close). **Measured once the flag really landed (run 34662589439): windows Test step 483–542 s → 221–239 s, job 10–13 min → 5.3–5.7,
-critical path 13.3 → 5.7 min — windows is no longer the long pole.** It BEATS a halving (per-file cost 2.22 → 1.65/1.99 s; both shards together
-816 s vs 997 s), so "halves exposure, not crowding" was too strong — pressure per runner eases too, plausibly #460's accumulation halved. A
-SIXTH flake appeared on master post-(1) — `zim-arm.test.ts` `collectPackCandidates` L3-b (run 34659678616): NOT the assertion's fault, the arm's
-own 3 s `DF_PROBE_TIMEOUT_MS` lost its race on a starved runner so the list article was never read. **(3) DONE**: the **29 hand-rolled
-`Date.now()` bounds across 16 files** + both fixture `waitFor` defaults now go through `tests/helpers/hang-budget.ts` (4× on CI — the
-`testTimeout` ratio — capped at 45 s so a detector still fires inside the 60 s budget); and a `probeTimeoutMs` SEAM (mirroring
-`articleTimeoutMs`) stops the expansion cases racing that 3 s timer, verified by setting it to 1 ms and watching exactly those 6 cases fail.
-Timing PROOFS are deliberately excluded from the helper (`fts-rowid-sync` 500 ms #84; `zim-arm:672`, which exists to exclude the 15 s default).
-**Week sampled (2026-09-12 → 09-18): 27 of 31 first attempts green (pre-wave ~74%).** 3 reds = vitest's hardcoded 60 s `onTaskUpdate` RPC (MAIN
-process starved, every test green); 1 = `docs-ipc` BE-1, whose literal `60_000` per-test timeout had BECOME the CI default. **(4)** windows CI
-forks capped 3 → 2, and the 50 literal per-test timeouts ≤ 60 s go through `testBudgetMs` (`fix/458-residual-starvation`). Acceptance re-sampled after (4)._
 _2026-09-12 — **#438 CLOSED — the automatic check's frozen step list; owner call taken on option 2**
 (`fix/438-automatic-check-step-list`; record `benchmark.md` "An automatic run's step list", which carries the three options and
 the reasoning). Two CORRECT decisions multiplied: progress is addressed to the window that invoked `benchmark:run` (the automatic

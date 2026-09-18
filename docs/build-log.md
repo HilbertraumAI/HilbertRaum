@@ -27,6 +27,41 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-18 — the #458 windows-CI wave entry retired verbatim (issue closed)
+
+Retired from `BUILD_STATE.md` on 2026-09-18 because the wave is closed: #458 was closed by the owner
+the same day, after step 4 (PR #471 — the windows CI fork cap and `testBudgetMs`) merged and its
+merge run on master (`35344246144`) was green on the first attempt. The entry's last sentence,
+"Acceptance re-sampled after (4)", is therefore superseded: the close rests on the week sampled
+BEFORE step 4 (27 of 31 first attempts green) plus the owner's call, not on a post-cap sample, and
+the closing comment on the issue names the reopen condition (a windows leg red with
+`Timeout calling "onTaskUpdate"` as its only error). The durable record lives on in `packaging.md`
+"Continuous integration (CI)". Citations of the form "BUILD_STATE 2026-09-12 entry" for #458 resolve
+here. Text below is byte-identical to what was removed.
+
+_2026-09-12 — **#458 (3 of 3 done, acceptance pending) — the windows CI legs: budgets, sharding, timing asserts** (`fix/458-ci-hook-timeout` PR #461;
+`fix/458-shard-windows-legs` PR #462; record `packaging.md` "Continuous integration (CI)"; decision + full evidence in the issue comment).
+Investigated: **five** windows flakes, not three, and #457 did not end them; windows 22.x carried 4 of 5. **(1)** `testTimeout` widened to 60 s
+on CI long ago but `hookTimeout` never did (vitest's 10 s default, 6× tighter) and **2 of the 5 were hook timeouts** — structural, not slow
+setup: 3 forks + main fill a 4-core runner. **(2)** Each windows leg is now two `--shard` jobs (6 legs; ubuntu stays WHOLE so one leg per node
+version still sees cross-file interference). `FullSuiteGuard` is shard-aware or it fails every sharded run — and a folder split would silently
+DISABLE it instead. TWO silent failures found by MEASURING, not reasoning: the split is hashed over `/` + the **posix** path (vitest resolves
+with pathe), so a native-`resolve` reproduction agreed with a real run on 109 of 225 files (chance) while every property test passed; and the
+first sharded CI run **did nothing at all** — the root `test` script forwarded to the workspace without a `--`, so npm ate `--shard` as a config
+and all six legs ran 449 files, merely looking slow (run 34660709148). Both now pinned (sha1 vectors; the trailing `--`). Rejected: dropping a
+suites never close). **Measured once the flag really landed (run 34662589439): windows Test step 483–542 s → 221–239 s, job 10–13 min → 5.3–5.7,
+critical path 13.3 → 5.7 min — windows is no longer the long pole.** It BEATS a halving (per-file cost 2.22 → 1.65/1.99 s; both shards together
+816 s vs 997 s), so "halves exposure, not crowding" was too strong — pressure per runner eases too, plausibly #460's accumulation halved. A
+SIXTH flake appeared on master post-(1) — `zim-arm.test.ts` `collectPackCandidates` L3-b (run 34659678616): NOT the assertion's fault, the arm's
+own 3 s `DF_PROBE_TIMEOUT_MS` lost its race on a starved runner so the list article was never read. **(3) DONE**: the **29 hand-rolled
+`Date.now()` bounds across 16 files** + both fixture `waitFor` defaults now go through `tests/helpers/hang-budget.ts` (4× on CI — the
+`testTimeout` ratio — capped at 45 s so a detector still fires inside the 60 s budget); and a `probeTimeoutMs` SEAM (mirroring
+`articleTimeoutMs`) stops the expansion cases racing that 3 s timer, verified by setting it to 1 ms and watching exactly those 6 cases fail.
+Timing PROOFS are deliberately excluded from the helper (`fts-rowid-sync` 500 ms #84; `zim-arm:672`, which exists to exclude the 15 s default).
+**Week sampled (2026-09-12 → 09-18): 27 of 31 first attempts green (pre-wave ~74%).** 3 reds = vitest's hardcoded 60 s `onTaskUpdate` RPC (MAIN
+process starved, every test green); 1 = `docs-ipc` BE-1, whose literal `60_000` per-test timeout had BECOME the CI default. **(4)** windows CI
+forks capped 3 → 2, and the 50 literal per-test timeouts ≤ 60 s go through `testBudgetMs` (`fix/458-residual-starvation`). Acceptance re-sampled after (4)._
+
 ## 2026-09-18 — the oldest closed dated entry retired verbatim (#399 — preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-09-18 to make room for the §11.16 Documents-declutter entry
