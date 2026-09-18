@@ -76,13 +76,17 @@ describe('zimArticleToSegments', () => {
     expect(all).not.toContain('MJX-TeXAtom') // MathML internals never leak
   })
 
-  it('delivers a kept table (its header and data reach the text) but drops its nested table and figures with their captions', () => {
+  it('delivers a kept table (its header and data reach the text), inlining its nested table, and still drops figures with their captions', () => {
     // The infobox table (a header cell, so it clears the structural drop test) is now
     // delivered instead of dropped — table delivery, issue: deliver tables to the model.
     expect(all).toContain('Infobox-Zelle')
     expect(all).toContain('Tabelleninhalt darf nicht erscheinen')
-    // Its NESTED table is still dropped whole (content emitted at most once, never inlined).
-    expect(all).not.toContain('verschachtelte Zelle')
+    // Its NESTED table is INLINED into the parent cell (not dropped): real Wikipedia infoboxes
+    // commonly nest the actual data table one level inside a layout wrapper (the chemical-
+    // element infobox is exactly this shape), so dropping every nested table would drop the
+    // very content this feature exists to deliver. Emitted exactly once, never duplicated.
+    expect(all).toContain('verschachtelte Zelle')
+    expect(all.match(/verschachtelte Zelle/g) ?? []).toHaveLength(1)
     // Figures/captions are untouched by table delivery — still dropped.
     expect(all).not.toContain('Bildunterschrift')
     expect(all).not.toContain('Anlagenfoto')
@@ -193,11 +197,24 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(text).not.toContain('City: Munich; Population: 310 km2')
   })
 
-  it('a nested table is dropped whole — its content never leaks into the parent cell', () => {
+  it('a nested table is inlined into the parent cell, emitted exactly once (never dropped, never duplicated)', () => {
     const html =
       '<table><tr><th>Outer</th></tr>' +
-      '<tr><td><table><tr><td>nested-content-must-not-appear</td></tr></table></td></tr></table>'
-    expect(textOf(html)).not.toContain('nested-content-must-not-appear')
+      '<tr><td><table><tr><th>Inner</th><td>nested-value</td></tr></table></td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('nested-value')
+    expect(text.match(/nested-value/g) ?? []).toHaveLength(1)
+  })
+
+  it('a table nested deeper than the safety cap is dropped, not inlined (pathological input)', () => {
+    let html = '<table><tr><td>'
+    for (let i = 0; i < 12; i += 1) html += `<table><tr><td>depth${i}`
+    html += '</td></tr></table>'.repeat(12) + '</td></tr></table>'
+    expect(() => zimArticleToSegments(html)).not.toThrow()
+    // At least the deepest levels (beyond the cap) must not survive as inlined text; the exact
+    // cutoff is an implementation constant, not part of the contract.
+    const text = textOf(html)
+    expect(text).not.toContain('depth11')
   })
 
   it('a caption is emitted once, identifiably', () => {

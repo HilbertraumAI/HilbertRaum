@@ -13,10 +13,14 @@ import { attrValue, decodeEntities, tidyWhole } from './html'
 // html.ts's header note, "the linear-scanner contract holds").
 //
 // Design choices bound by the brief, stated here since the code is where they are pinned:
-//  - A NESTED table's content is DROPPED WHOLE (not inlined into the parent cell). Depth
-//    counting on the `table` tag name alone finds the matching top-level `</table>` even
-//    though the nested table's own rows/cells are never added to the grid, so nothing is ever
-//    emitted twice.
+//  - A NESTED table is INLINED into the parent cell it sits in, as one compact string, emitted
+//    exactly once (the brief's other allowed choice, "drop the inner table", was tried first
+//    and reverted: Wikipedia's own chemical-element infobox nests the actual property table one
+//    level inside a layout wrapper table, so dropping every nested table drops exactly the
+//    content this feature exists to deliver -- verified against the live "Gold" article, whose
+//    density/melting-point row is a nested table). Nesting is a real stack of build contexts,
+//    capped at `MAX_NESTING_DEPTH` as a safety valve; past the cap a table is dropped, unchanged
+//    from the module's first design.
 //  - A header cell spanning multiple columns is never glued onto a data cell's text. Header
 //    ROWS (every cell in the row is a `<th>`) are excluded from the emitted data lines
 //    entirely; a data row's column key is the NEAREST header row above it that has non-empty
@@ -81,6 +85,54 @@ function clampSpan(attrs: string, key: string, cap: number): number {
   return Math.min(n, cap)
 }
 
+/** One table's in-progress build state -- the unit `parseTableBody`'s stack holds one per
+ *  currently-open `<table>` (outermost plus any nested ones still being parsed). */
+interface TableContext {
+  rows: TableCell[][]
+  caption: string
+  inCaption: boolean
+  cell: TableCell | null
+  rowActive: boolean
+  sourceRowCount: number
+  totalSourceRows: number
+}
+
+function makeContext(): TableContext {
+  return { rows: [], caption: '', inCaption: false, cell: null, rowActive: false, sourceRowCount: 0, totalSourceRows: 0 }
+}
+
+function finishContext(ctx: TableContext): RetainedTable {
+  return {
+    caption: tidyWhole(ctx.caption),
+    rows: ctx.rows.map((row) => row.map((c) => ({ ...c, text: tidyWhole(c.text) }))),
+    sourceRowCount: ctx.sourceRowCount,
+    totalSourceRows: ctx.totalSourceRows,
+    rowsTruncated: ctx.sourceRowCount < ctx.totalSourceRows
+  }
+}
+
+/**
+ * Flatten a nested table into ONE compact inline string, appended into whichever cell/caption
+ * of the PARENT table was open when the nested `<table>` started -- rather than dropping it.
+ * Wikipedia commonly nests the actual data table one level inside a layout wrapper `<table>`
+ * (a chemical-element infobox's "physical properties" section is exactly this shape: an outer
+ * single-column wrapper table whose one cell contains the real, multi-row property table), so
+ * dropping every nested table outright would drop the very content table delivery exists to
+ * reach. Depth is capped (`MAX_NESTING_DEPTH`) as a safety valve against pathological input; a
+ * table nested deeper than the cap is dropped, unchanged from this module's original design.
+ */
+function inlineNestedTable(table: RetainedTable): string {
+  const parts: string[] = []
+  if (table.caption) parts.push(table.caption)
+  parts.push(...tableToRecordLines(table))
+  return parts.join('; ')
+}
+
+/** Safety valve for pathological nesting (each level is a real stack frame's worth of state,
+ *  bounded so a crafted `<table><table><table>...` cannot grow it unboundedly). A table nested
+ *  deeper than this is dropped, exactly as EVERY nested table was in this module's first cut. */
+const MAX_NESTING_DEPTH = 8
+
 /**
  * Parse one `<table ...>` subtree, cursor positioned just after the opening tag's `>`.
  * Returns the RetainedTable and the input index right after the matching top-level
@@ -90,29 +142,25 @@ function clampSpan(attrs: string, key: string, cap: number): number {
 export function parseTableBody(input: string, start: number): { table: RetainedTable; end: number } {
   const n = input.length
   let i = start
-  let depth = 1 // already inside the opening <table>
-  const rows: TableCell[][] = []
-  let caption = ''
-  let inCaption = false
-  let cell: TableCell | null = null
-  let rowActive = false
+  const stack: TableContext[] = [makeContext()] // stack[0] is the OUTERMOST (kept) table
   let refSkipDepth = 0
-  let sourceRowCount = 0
-  let totalSourceRows = 0
+  // > 0 while inside a nested table past MAX_NESTING_DEPTH: dropped whole, unchanged design.
+  let droppedDepth = 0
 
-  // depth > 1 means we are inside a DROPPED nested table (see the `table` branch below): its
-  // text runs must never reach the parent's caption/cell, or the nested content would leak
-  // into whichever cell was open when the nested `<table>` started.
+  const active = (): TableContext => stack[stack.length - 1]
+
   const appendText = (raw: string): void => {
-    if (raw.length === 0 || refSkipDepth > 0 || depth > 1) return
+    if (raw.length === 0 || refSkipDepth > 0 || droppedDepth > 0) return
+    const ctx = active()
     const text = decodeEntities(raw)
-    if (inCaption) caption += text
-    else if (cell) cell.text += text
+    if (ctx.inCaption) ctx.caption += text
+    else if (ctx.cell) ctx.cell.text += text
   }
   const appendLiteral = (literal: string): void => {
-    if (refSkipDepth > 0 || depth > 1) return
-    if (inCaption) caption += literal
-    else if (cell) cell.text += literal
+    if (refSkipDepth > 0 || droppedDepth > 0) return
+    const ctx = active()
+    if (ctx.inCaption) ctx.caption += literal
+    else if (ctx.cell) ctx.cell.text += literal
   }
 
   while (i < n) {
@@ -148,16 +196,25 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
 
     if (name === 'table') {
       if (!isClose) {
-        if (!selfClosing) depth += 1
-        // A nested table's content is dropped whole: while depth > 1, its own tr/td tokens
-        // never reach the branches below, so nothing from it is ever added to `rows`.
-      } else if (depth > 0) {
-        depth -= 1
-        if (depth === 0) return { table: finish(), end: i }
+        if (!selfClosing) {
+          if (stack.length >= MAX_NESTING_DEPTH) droppedDepth += 1
+          else stack.push(makeContext())
+        }
+      } else if (droppedDepth > 0) {
+        droppedDepth -= 1
+      } else if (stack.length > 1) {
+        // A nested table just closed: inline it into whatever cell/caption of the PARENT was
+        // open when it started, then pop back to the parent context.
+        const nested = stack.pop() as TableContext
+        const inline = inlineNestedTable(finishContext(nested))
+        if (inline) appendLiteral(inline)
+      } else {
+        // The OUTERMOST table just closed.
+        return { table: finishContext(stack[0]), end: i }
       }
       continue
     }
-    if (depth > 1) continue // inside a dropped nested table
+    if (droppedDepth > 0) continue // inside a too-deeply-nested (dropped) table
 
     if (name === 'sup') {
       // <sup class="mw-ref"> citation brackets stay dropped, same as prose (html.ts's
@@ -180,38 +237,40 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       continue
     }
     if (name === 'caption') {
-      inCaption = !isClose
+      active().inCaption = !isClose
       continue
     }
     if (name === 'tr') {
+      const ctx = active()
       if (!isClose) {
-        cell = null
-        totalSourceRows += 1
-        if (sourceRowCount < TABLE_MAX_SOURCE_ROWS) {
-          rows.push([])
-          sourceRowCount += 1
-          rowActive = true
+        ctx.cell = null
+        ctx.totalSourceRows += 1
+        if (ctx.sourceRowCount < TABLE_MAX_SOURCE_ROWS) {
+          ctx.rows.push([])
+          ctx.sourceRowCount += 1
+          ctx.rowActive = true
         } else {
-          rowActive = false
+          ctx.rowActive = false
         }
       } else {
-        rowActive = false
+        ctx.rowActive = false
       }
       continue
     }
     if (name === 'td' || name === 'th') {
+      const ctx = active()
       if (isClose || selfClosing) {
-        cell = null
+        ctx.cell = null
         continue
       }
-      if (!rowActive) continue
-      cell = {
+      if (!ctx.rowActive) continue
+      ctx.cell = {
         text: '',
         header: name === 'th',
         rows: clampSpan(attrs, 'rowspan', TABLE_MAX_ROWSPAN),
         columns: clampSpan(attrs, 'colspan', TABLE_MAX_COLSPAN)
       }
-      rows[rows.length - 1].push(cell)
+      ctx.rows[ctx.rows.length - 1].push(ctx.cell)
       continue
     }
     if (!isClose && (name === 'br' || name === 'p' || name === 'div' || name === 'li')) {
@@ -220,17 +279,10 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     // Everything else (thead/tbody/tfoot/span/a/b/i/small/…) is transparent: its own text runs
     // already flow through `appendText` between tags.
   }
-  return { table: finish(), end: n }
-
-  function finish(): RetainedTable {
-    return {
-      caption: tidyWhole(caption),
-      rows: rows.map((row) => row.map((c) => ({ ...c, text: tidyWhole(c.text) }))),
-      sourceRowCount,
-      totalSourceRows,
-      rowsTruncated: sourceRowCount < totalSourceRows
-    }
-  }
+  // EOF without a matching close for every open <table>: total on malformed input (never
+  // throws). Only the OUTERMOST context is returned -- an unterminated nested table's partial
+  // content is not inlined, an acceptable degradation for input that never closes at all.
+  return { table: finishContext(stack[0]), end: n }
 }
 
 /** A header cell exists anywhere in the table. */
