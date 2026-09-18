@@ -1,0 +1,166 @@
+workspace: unlocked
+skills installed: 9 (9 enabled)
+skills after [noskills]: 0 enabled
+runtime: backend=gpu healthy=true model=qwen3.8-27b-ud-q5km
+tee log: <work>/logs/sidecar-150414-859671.log
+ARGV (wrapper): ARGV: <runtime>/llama-server --host 127.0.0.1 --port 43445 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 0 --spec-type draft-mtp --spec-draft-n-max 2
+ARGV (OS process list, /proc/859671/cmdline): <runtime>/llama-server --host 127.0.0.1 --port 43445 --model <drive>/models/chat/qwen3.8-27b-ud-q5km.gguf --ctx-size 8192 --threads 10 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 0 --spec-type draft-mtp --spec-draft-n-max 2
+--cache-ram in the OS argv: present, value 0
+settings contextTokens: 4096
+document: status=indexed chunks=13 title=plant-handbook.txt
+active doc task after ingest: NONE
+pack tools: toolsInstalled=true
+pack: "Physics by Wikipedia" leaf=wikipedia_en_physics_mini_2026-07.zim lang=eng articles=99397 sizeBytes=56681813 enabled=true available=true searchable=yes hint=yes
+
+=== preflight (pack-only, not measured): is the pack retrievable? ===
+
+[preflight turn 1] "What is a neutron star?"
+  13.5 s wall, 2 model task(s) on the chat runtime:
+    task 6: total 141, prefilled 141, kept 0, prompt eval 1090.3 ms, decode 50 tokens / 1459.37 ms
+    task 28: total 2140, prefilled 2140, kept 0, prompt eval 3858.31 ms, decode 254 tokens / 6881.77 ms
+  answer (first 140 chars): A neutron star is the gravitationally collapsed core of a massive supergiant star, resulting from a supernova explosion that compresses the 
+  citations: 5 -> archive:Neutron star | archive:GW170817 | archive:Strange star | archive:Feryal Özel
+  packOutcomes: [{"status":"searched","reason":null,"found":5,"admitted":5}]
+  skillOffer: none
+
+=== P1 (pack + documents) - fresh conversation, two ordinary questions ===
+
+[P1 turn 1] "What is the Doppler effect?"
+  12.8 s wall, 2 model task(s) on the chat runtime:
+    task 130: total 142, prefilled 142, kept 0, prompt eval 845.51 ms, decode 53 tokens / 1473.53 ms
+    task 152: total 2248, prefilled 2248, kept 0, prompt eval 3761.24 ms, decode 256 tokens / 6585.81 ms
+  answer (first 140 chars): The Doppler effect, also known as the Doppler shift, is the change in the frequency or period of a wave relative to an observer who is movin
+  citations: 4 -> document:plant-handbook.txt | archive:Doppler effect | document:plant-handbook.txt | archive:Relativistic Doppler effect
+  packOutcomes: [{"status":"searched","reason":null,"found":4,"admitted":4}]
+  skillOffer: none
+
+[P1 turn 2] "And what does the Heisenberg uncertainty principle state?"
+  11.4 s wall, 2 model task(s) on the chat runtime:
+    task 261: total 146, prefilled 146, kept 0, prompt eval 843.75 ms, decode 71 tokens / 1984.48 ms
+    task 290: total 2723, prefilled 2723, kept 0, prompt eval 4558.73 ms, decode 169 tokens / 3793.01 ms
+  answer (first 140 chars): The Heisenberg uncertainty principle, also known as Heisenberg's indeterminacy principle, states that there is a fundamental limit to the pr
+  citations: 4 -> document:plant-handbook.txt | archive:Uncertainty principle | document:plant-handbook.txt | archive:Werner Heisenberg
+  packOutcomes: [{"status":"searched","reason":null,"found":6,"admitted":6}]
+  skillOffer: none
+
+=== C1 (control, pack scope off) - fresh conversation, two ordinary questions ===
+
+[C1 turn 1] "What is the Doppler effect?"
+  4.2 s wall, 1 model task(s) on the chat runtime:
+    task 355: total 2312, prefilled 2085, kept 227, prompt eval 3166.34 ms, decode 38 tokens / 975.44 ms
+  answer (first 140 chars): The provided document excerpts do not contain information about the Doppler effect. The excerpts consist of maintenance procedures and opera
+  citations: 3 -> document:plant-handbook.txt | document:plant-handbook.txt | document:plant-handbook.txt
+  packOutcomes: none
+  skillOffer: none
+
+[C1 turn 2] "And what does the Heisenberg uncertainty principle state?"
+  4.2 s wall, 1 model task(s) on the chat runtime:
+    task 375: total 2382, prefilled 2155, kept 227, prompt eval 3319.6 ms, decode 40 tokens / 856.96 ms
+  answer (first 140 chars): The provided document excerpts do not contain information about the Heisenberg uncertainty principle. The excerpts consist of maintenance pr
+  citations: 3 -> document:plant-handbook.txt | document:plant-handbook.txt | document:plant-handbook.txt
+  packOutcomes: none
+  skillOffer: none
+
+=== P2 (pack + documents) - fresh conversation, two ordinary questions ===
+
+[P2 turn 1] "What is the Doppler effect?"
+  12.7 s wall, 2 model task(s) on the chat runtime:
+    task 393: total 142, prefilled 142, kept 0, prompt eval 848.89 ms, decode 53 tokens / 1400.49 ms
+    task 415: total 2248, prefilled 2248, kept 0, prompt eval 3726.15 ms, decode 273 tokens / 6607.49 ms
+  answer (first 140 chars): The Doppler effect (also known as Doppler shift) is the change in the frequency or period of a wave relative to an observer who is moving re
+  citations: 4 -> document:plant-handbook.txt | archive:Doppler effect | document:plant-handbook.txt | archive:Relativistic Doppler effect
+  packOutcomes: [{"status":"searched","reason":null,"found":4,"admitted":4}]
+  skillOffer: none
+
+[P2 turn 2] "And what does the Heisenberg uncertainty principle state?"
+  12.9 s wall, 2 model task(s) on the chat runtime:
+    task 525: total 146, prefilled 146, kept 0, prompt eval 822.54 ms, decode 71 tokens / 2002.77 ms
+    task 554: total 2740, prefilled 2740, kept 0, prompt eval 4557.22 ms, decode 240 tokens / 5408.51 ms
+  answer (first 140 chars): The Heisenberg uncertainty principle, also known as the indeterminacy principle, is a fundamental concept in quantum mechanics that states t
+  citations: 4 -> document:plant-handbook.txt | archive:Uncertainty principle | document:plant-handbook.txt | archive:Werner Heisenberg
+  packOutcomes: [{"status":"searched","reason":null,"found":6,"admitted":6}]
+  skillOffer: none
+
+=== C2 (control, pack scope off) - fresh conversation, two ordinary questions ===
+
+[C2 turn 1] "What is the Doppler effect?"
+  4.9 s wall, 1 model task(s) on the chat runtime:
+    task 648: total 2312, prefilled 2085, kept 227, prompt eval 3182.72 ms, decode 74 tokens / 1643.24 ms
+  answer (first 140 chars): The provided document excerpts do not contain information about the Doppler effect. The excerpts are from a plant handbook focusing on maint
+  citations: 3 -> document:plant-handbook.txt | document:plant-handbook.txt | document:plant-handbook.txt
+  packOutcomes: none
+  skillOffer: none
+
+[C2 turn 2] "And what does the Heisenberg uncertainty principle state?"
+  5.5 s wall, 1 model task(s) on the chat runtime:
+    task 680: total 2418, prefilled 2191, kept 227, prompt eval 3506.24 ms, decode 93 tokens / 1927.91 ms
+  answer (first 140 chars): The provided document excerpts do not contain information about the Heisenberg uncertainty principle. The excerpts are from a plant handbook
+  citations: 3 -> document:plant-handbook.txt | document:plant-handbook.txt | document:plant-handbook.txt
+  packOutcomes: none
+  skillOffer: none
+
+=== PO1 (pack only (documentsOff)) - fresh conversation, two ordinary questions ===
+
+[PO1 turn 1] "What is the Doppler effect?"
+  12.6 s wall, 2 model task(s) on the chat runtime:
+    task 718: total 142, prefilled 142, kept 0, prompt eval 855.21 ms, decode 53 tokens / 1413.21 ms
+    task 740: total 1257, prefilled 1257, kept 0, prompt eval 2453.51 ms, decode 312 tokens / 7724.42 ms
+  answer (first 140 chars): The Doppler effect, also known as the Doppler shift, is the change in the frequency or period of a wave relative to an observer who is movin
+  citations: 4 -> archive:Doppler effect | archive:Relativistic Doppler effect | archive:Doppler broadening | archive:Christian Doppler
+  packOutcomes: [{"status":"searched","reason":null,"found":4,"admitted":4}]
+  skillOffer: none
+
+[PO1 turn 2] "And what does the Heisenberg uncertainty principle state?"
+  13.3 s wall, 2 model task(s) on the chat runtime:
+    task 867: total 146, prefilled 146, kept 0, prompt eval 838.23 ms, decode 71 tokens / 2029.28 ms
+    task 896: total 2709, prefilled 2709, kept 0, prompt eval 4618.65 ms, decode 243 tokens / 5718.85 ms
+  answer (first 140 chars): The Heisenberg uncertainty principle, also known as the uncertainty principle or Heisenberg's indeterminacy principle, is a fundamental conc
+  citations: 6 -> archive:Uncertainty principle | archive:Werner Heisenberg | archive:Entropic uncertainty | archive:Uncertainty (book)
+  packOutcomes: [{"status":"searched","reason":null,"found":6,"admitted":6}]
+  skillOffer: none
+
+=== PO2 (pack only (documentsOff)) - fresh conversation, two ordinary questions ===
+
+[PO2 turn 1] "What is the Doppler effect?"
+  12.1 s wall, 2 model task(s) on the chat runtime:
+    task 994: total 142, prefilled 142, kept 0, prompt eval 837.6 ms, decode 53 tokens / 1477.19 ms
+    task 1016: total 1257, prefilled 1257, kept 0, prompt eval 2429.32 ms, decode 304 tokens / 7285.32 ms
+  answer (first 140 chars): The Doppler effect (also known as Doppler shift) is the change in the frequency or period of a wave relative to an observer moving with resp
+  citations: 4 -> archive:Doppler effect | archive:Relativistic Doppler effect | archive:Doppler broadening | archive:Christian Doppler
+  packOutcomes: [{"status":"searched","reason":null,"found":4,"admitted":4}]
+  skillOffer: none
+
+[PO2 turn 2] "And what does the Heisenberg uncertainty principle state?"
+  12.4 s wall, 2 model task(s) on the chat runtime:
+    task 1131: total 146, prefilled 146, kept 0, prompt eval 827.5 ms, decode 71 tokens / 1984.5 ms
+    task 1160: total 2701, prefilled 2701, kept 0, prompt eval 4622.65 ms, decode 224 tokens / 4802.84 ms
+  answer (first 140 chars): The Heisenberg uncertainty principle (also known as Heisenberg's indeterminacy principle) is a fundamental concept in quantum mechanics that
+  citations: 6 -> archive:Uncertainty principle | archive:Werner Heisenberg | archive:Entropic uncertainty | archive:Uncertainty (book)
+  packOutcomes: [{"status":"searched","reason":null,"found":6,"admitted":6}]
+  skillOffer: none
+
+=== table (leg-B columns; the LAST task of a turn is the answer) ===
+| conversation | turn | model tasks | task | total | prefilled | kept | prompt eval ms | decode tok / ms | turn wall s |
+|---|---|---|---|---|---|---|---|---|---|
+| preflight | 1 | **2** | 6 (expand) | 141 | 141 | 0 | 1090.3 | 50 / 1459.37 | 13.5 |
+|  |  |  | 28 (answer) | 2140 | 2140 | **0** | 3858.31 | 254 / 6881.77 |  |
+| P1 | 1 | **2** | 130 (expand) | 142 | 142 | 0 | 845.51 | 53 / 1473.53 | 12.8 |
+|  |  |  | 152 (answer) | 2248 | 2248 | **0** | 3761.24 | 256 / 6585.81 |  |
+| P1 | 2 | **2** | 261 (expand) | 146 | 146 | 0 | 843.75 | 71 / 1984.48 | 11.4 |
+|  |  |  | 290 (answer) | 2723 | 2723 | **0** | 4558.73 | 169 / 3793.01 |  |
+| C1 | 1 | **1** | 355 | 2312 | 2085 | **227** | 3166.34 | 38 / 975.44 | 4.2 |
+| C1 | 2 | **1** | 375 | 2382 | 2155 | **227** | 3319.6 | 40 / 856.96 | 4.2 |
+| P2 | 1 | **2** | 393 (expand) | 142 | 142 | 0 | 848.89 | 53 / 1400.49 | 12.7 |
+|  |  |  | 415 (answer) | 2248 | 2248 | **0** | 3726.15 | 273 / 6607.49 |  |
+| P2 | 2 | **2** | 525 (expand) | 146 | 146 | 0 | 822.54 | 71 / 2002.77 | 12.9 |
+|  |  |  | 554 (answer) | 2740 | 2740 | **0** | 4557.22 | 240 / 5408.51 |  |
+| C2 | 1 | **1** | 648 | 2312 | 2085 | **227** | 3182.72 | 74 / 1643.24 | 4.9 |
+| C2 | 2 | **1** | 680 | 2418 | 2191 | **227** | 3506.24 | 93 / 1927.91 | 5.5 |
+| PO1 | 1 | **2** | 718 (expand) | 142 | 142 | 0 | 855.21 | 53 / 1413.21 | 12.6 |
+|  |  |  | 740 (answer) | 1257 | 1257 | **0** | 2453.51 | 312 / 7724.42 |  |
+| PO1 | 2 | **2** | 867 (expand) | 146 | 146 | 0 | 838.23 | 71 / 2029.28 | 13.3 |
+|  |  |  | 896 (answer) | 2709 | 2709 | **0** | 4618.65 | 243 / 5718.85 |  |
+| PO2 | 1 | **2** | 994 (expand) | 142 | 142 | 0 | 837.6 | 53 / 1477.19 | 12.1 |
+|  |  |  | 1016 (answer) | 1257 | 1257 | **0** | 2429.32 | 304 / 7285.32 |  |
+| PO2 | 2 | **2** | 1131 (expand) | 146 | 146 | 0 | 827.5 | 71 / 1984.5 | 12.4 |
+|  |  |  | 1160 (answer) | 2701 | 2701 | **0** | 4622.65 | 224 / 4802.84 |  |

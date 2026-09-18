@@ -28,6 +28,18 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-18 — **#447 MEASURED — the ZIM query expander DOES evict the prefix, every pack-scoped turn; D-Z20 stands**
+(`eval/447-zim-expander-cache`; record `model-benchmarks.md` §6.6 methodological-warning paragraph, `known-limitations.md`
+"The one chat slot and the prompt cache"; evidence `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue447-zim-expander.*`).
+Measurement only, no product code. Leg B's tee-wrapper method, skills off, one small English ZIM, `--cache-ram 0` read from the OS
+argv. **16 of 16** pack-scoped turns (`qwen3.8-27b-ud-q5km` MTP + `qwen3.5-9b-ud-q4kxl` non-MTP) ran ONE extra task and the answer
+kept **0**, against **227 on 8 of 8** control turns — the plan prompt and the answer prompt share 3 tokens and erase each other's
+context checkpoint. Cost per turn: 369–373 extra prefilled tokens, ≈ 1.2 s prefill on the 27B (inside the classifier proxy,
+bounded by the prefix) — but the plan call DECODES 53–71 tokens, so the whole call is **≈ 2.6–3.2 s per turn** (9B ≈ 1.6–1.8 s).
+**Owner ruling 2026-09-18: D-Z20 "always" stands** — the decode was already accepted (#423), only the bounded cache part is new;
+expander untouched. The trap inverted: `forcing full` DID
+appear on the non-MTP 9B start. The retired #399 entry's "#447 … bounded by inference" sentence is frozen in `build-log.md`;
+this entry supersedes it._
 _2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
 `feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
 "Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
