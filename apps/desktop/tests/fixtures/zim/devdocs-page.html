@@ -18,7 +18,7 @@
 </dl>
 <pre data-language="js">arr.flatMap(x =&gt; [x, x * 2])</pre>
 <p>The result array is a new array; the original array is left unmodified. Depth is fixed at one level, unlike <code>flat(depth)</code>, which accepts an arbitrary depth argument.</p>
-<table class="standard-table"><tbody><tr><th>Browser</th><td>compat-table-never-shown</td></tr><tr><th>Node.js</th><td>Supported</td></tr></tbody></table>
+<table class="standard-table"><tbody><tr><th>Browser</th><td>compat-table-now-delivered</td></tr><tr><th>Node.js</th><td>Supported</td></tr></tbody></table>
 <p>A naïve implementation loops twice – once to map, once to flatten; flatMap does both in a single pass, and engines can special-case the combined operation for a modest speedup on large arrays.</p>
 <p>Related methods worth comparing: <code>map()</code> alone (no flattening), <code>flat()</code> alone (no mapping), and <code>reduce()</code> combined with <code>concat()</code> (the pre-flatMap idiom most codebases used before broad engine support landed).</p>
 <p>A common use is expanding each input item into zero, one, or several output items in a single step: return an empty array to drop an item, a one-element array to keep it unchanged, or a multi-element array to expand it, all from the same callback without a separate filter pass.</p>

@@ -1,5 +1,11 @@
 import type { ExtractedSegment } from '../ingestion/parsers'
 import { normalizeMath } from './math'
+import {
+  hasDeliverableContent,
+  isLayoutTableClass,
+  parseTableBody,
+  serializeTable
+} from './tables'
 
 // ZIM article HTML → ExtractedSegment[] (knowledge packs, query-time retrieval arm).
 //
@@ -17,12 +23,22 @@ import { normalizeMath } from './math'
 // plain-text viewer, never innerHTML, so a permissive scanner cannot become an injection
 // surface.
 //
-// Dropped subtrees: head, script/style/noscript (raw-text aware), tables (infoboxes and
-// data tables scramble into `header: value` noise without geometry), figures/images, nav,
-// and `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup>
-// like m<sup>2</sup> keeps its text). `<math>` emits its alttext normalised to plain text
+// Dropped subtrees: head, script/style/noscript (raw-text aware), figures/images, nav, and
+// `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup> like
+// m<sup>2</sup> keeps its text). `<math>` emits its alttext normalised to plain text
 // (`math.ts`, #340) and skips the MathML subtree; the `<img>` fallback that follows is
 // dropped with all images, so each formula appears exactly once.
+//
+// Tables are DELIVERED, not dropped (issue: deliver tables to the model instead of dropping
+// them — an infobox or data table used to disappear at parse time, so its fact was never
+// merely unranked, it was never retrievable at all). `tables.ts` owns the geometry: a
+// class-based classifier (`navbox`, `vertical-navbox`, `metadata`, `ambox`, `toc`,
+// `sistersitebox` and the like) still drops layout/navigation tables unchanged, and a
+// structural test drops a table with no header cell and no real tabular content; everything
+// else is parsed into a bounded grid (rowspan/colspan expanded, multi-row and mid-table
+// headers rebound, captions kept once) and serialised into one or more retrievable segments,
+// capped so a large table cannot explode the unit count or the scan (`tables.ts`'s own header
+// note has the table-scoped superscript/subscript convention, added in a follow-up commit).
 //
 // ---------------------------------------------------------------------------------------
 // LINEAR FORWARD SCANNER — complexity record (PR #294 review H1)
@@ -160,16 +176,10 @@ import { normalizeMath } from './math'
 // buffer for a tiny result. Neither is counted in `work`, which measures the
 // scanner's own examinations.
 
-/** Elements whose entire subtree is dropped. `<math>` is handled separately (alttext). */
-const SKIP_SUBTREE = new Set([
-  'head',
-  'table',
-  'figure',
-  'nav',
-  'noscript',
-  'template',
-  'svg'
-])
+/** Elements whose entire subtree is dropped. `<math>` is handled separately (alttext);
+ *  `table` is handled separately too (`tables.ts` — layout/navbox tables are still dropped,
+ *  a kept table is parsed and delivered instead of skipped). */
+const SKIP_SUBTREE = new Set(['head', 'figure', 'nav', 'noscript', 'template', 'svg'])
 
 /** Raw-text elements: their content is not markup and is skipped to the matching close tag. */
 const RAW_TEXT = new Set(['script', 'style'])
@@ -509,6 +519,14 @@ export interface ZimConvertOptions {
   /** Scan-work cap in work units (default 4 × maxChars); the scanner stops at the cap and
    *  reports partial output rather than stalling the ask path. */
   maxWork?: number
+  /**
+   * Default true. Set false to reproduce the pre-table-delivery behaviour (every `<table>`
+   * dropped whole, `SKIP_SUBTREE`-style) — used only to measure the table-delivery change's
+   * own cost and non-table invariant (comparing a `true`/`false` conversion of the same
+   * article is how a table-derived segment is told apart from a prose one, without adding a
+   * `kind` field to `ExtractedSegment`). Product call sites never set this.
+   */
+  emitTables?: boolean
 }
 
 export interface ZimSliceOptions extends ZimConvertOptions {
@@ -567,6 +585,7 @@ export function* zimArticleSlices(
   const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS
   const maxWork = opts.maxWork ?? maxChars * 4
   const sliceWork = opts.sliceWork ?? DEFAULT_SLICE_WORK
+  const emitTables = opts.emitTables ?? true
   const sliced = html.length > maxChars
   const input = sliced ? html.slice(0, maxChars) : html
   const n = input.length
@@ -619,6 +638,10 @@ export function* zimArticleSlices(
   let skipDepth = 0
   let supSkipDepth = 0
   let mathDepth = 0
+  // A table dropped by its class (layout/navbox — `tables.ts`'s `isLayoutTableClass`) is
+  // skipped exactly like SKIP_SUBTREE, but `table` is no longer in that shared set (a kept
+  // table needs its own branch below), so it gets its own depth counter.
+  let tableDropDepth = 0
 
   const flush = (): void => {
     const text = body.result()
@@ -650,7 +673,7 @@ export function* zimArticleSlices(
   let textStart = 0
   const emitTextUpTo = function* (upto: number): Generator<void, void, void> {
     if (upto <= textStart) return
-    if (skipDepth === 0 && supSkipDepth === 0 && mathDepth === 0) {
+    if (skipDepth === 0 && supSkipDepth === 0 && mathDepth === 0 && tableDropDepth === 0) {
       let from = textStart
       while (from < upto) {
         let to = from + TEXT_PIECE_CHARS
@@ -897,6 +920,10 @@ export function* zimArticleSlices(
       if (SKIP_SUBTREE.has(name) && !selfClosing) skipDepth += isClose ? -1 : 1
       continue
     }
+    if (tableDropDepth > 0) {
+      if (name === 'table' && !selfClosing) tableDropDepth += isClose ? -1 : 1
+      continue
+    }
     if (supSkipDepth > 0) {
       if (name === 'sup' && !selfClosing) supSkipDepth += isClose ? -1 : 1
       continue
@@ -904,6 +931,33 @@ export function* zimArticleSlices(
 
     if (!isClose && SKIP_SUBTREE.has(name)) {
       if (!selfClosing) skipDepth = 1
+      continue
+    }
+    if (!isClose && name === 'table') {
+      if (selfClosing) continue // no body — nothing to classify or capture
+      const cls = attrValue(attrs, 'class')
+      if (!emitTables || isLayoutTableClass(cls)) {
+        tableDropDepth = 1
+        continue
+      }
+      // `cursor` already sits right after this opening tag's `>` (set above, unconditionally,
+      // for every tag) — exactly where the table's own small tokenizer needs to start.
+      const tableStart = cursor
+      const { table, end } = parseTableBody(input, tableStart)
+      // Charge the bytes this sub-scan examined to the same `work` counter the outer loop is
+      // bounded by (html.ts's header note, "the linear-scanner contract holds" — a kept table
+      // is examined once here and never revisited by the outer loop, so the whole conversion
+      // stays linear in the input length; see docs/known-limitations.md for the one residual
+      // this leaves, an unsliced synchronous stall for a single huge kept table).
+      work += Math.max(1, end - tableStart)
+      if (hasDeliverableContent(table)) {
+        flush()
+        for (const text of serializeTable(table)) {
+          segments.push({ text, pageNumber: null, sectionLabel: currentLabel })
+        }
+      }
+      cursor = end
+      textStart = end
       continue
     }
     if (!isClose && name === 'math') {
