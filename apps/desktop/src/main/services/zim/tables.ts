@@ -261,7 +261,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
   // Shared across every table on the stack (outer and nested): whether ANY cell's span
   // attribute was clamped, folded into the OUTERMOST table's report only.
   let spanClamped = false
-  // Issue #478 (NB2/NB3): total cellsPlaced+chars charged by every nested table's own grid
+  // Issue #478: total cellsPlaced+chars charged by every nested table's own grid
   // expansion and line-building, and whether any nested table's own row or grid/column/char cap
   // fired -- all three flat across the WHOLE call (every nesting depth updates the same
   // variables), then folded into the outermost table's `nestedWork`/`nestedRowsTruncated`/
@@ -299,7 +299,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       ctx.nestedOnly = false
     }
   }
-  // Issue #478 (NB6): a nested table's inline text is structurally its own clause, not running
+  // Issue #478: a nested table's inline text is structurally its own clause, not running
   // prose -- it never glues directly onto whatever text already sits in the same cell/caption.
   // A run of sibling nested tables (nothing but nested-table inlines appended so far) joins
   // with '; ', the same separator `inlineNestedTable` uses for its own parts; a nested table
@@ -352,7 +352,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     if (name === 'table') {
       if (!isClose) {
         if (!selfClosing) {
-          // Issue #478 (NB4): a nested table's OWN class is checked against the same
+          // Issue #478: a nested table's OWN class is checked against the same
           // layout/navbox classifier the outermost table already uses -- a `navbox`/`ambox`
           // nested inside an otherwise-kept table is dropped, not inlined, exactly one
           // condition reusing the existing drop machinery (droppedDepth).
@@ -369,7 +369,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
         // single-column wrapper around it is still judged deliverable.
         const nested = stack.pop() as TableContext
         if (nestedWorkUsed >= TABLE_MAX_RAW_CHARS) {
-          // Issue #478 (NB2): the global nested-work budget for this outermost table is
+          // Issue #478: the global nested-work budget for this outermost table is
           // already spent -- drop this nested table's content entirely, WITHOUT building its
           // grid at all, rather than charging it its own local TABLE_MAX_RAW_CHARS budget. A
           // pathological input with thousands of small nested tables must not multiply real
