@@ -124,8 +124,8 @@ linking nowhere) and user-guide §7b, reachable only through "walkthrough of eve
 R-9 and the network-inventory sentence VERBATIM, §7 the measured edges as a table, §8 maintainer pointers), plus a README
 "Knowledge packs — an offline Wikipedia" section, ToC row, Documentation-table row, the hero line, and the bullet rewritten
 to link it. No code, no behaviour change. The rest of the GitHub-presence review is owner-side and tracked nowhere else:
-repo About text + `zim`/`kiwix`/`wikipedia`/`offline` topics, a v0.1.60 release (the packs entries sit in CHANGELOG
-`[Unreleased]`; v0.1.59 predates the wave), a first screenshot, the org profile README. The follow-up PR #441 adds the repo's
+repo About text + `zim`/`kiwix`/`wikipedia`/`offline` topics, a v0.1.60 release (cut 2026-09-18: the packs entries sit in CHANGELOG
+`[0.1.60]`; v0.1.59 predates the wave), a first screenshot, the org profile README. The follow-up PR #441 adds the repo's
 first `.github/ISSUE_TEMPLATE/`: a knowledge-pack report form asking for the facts that decide those reports, and a `config.yml`
 that keeps blank issues one click away and routes vulnerabilities to the private advisory channel._
 
