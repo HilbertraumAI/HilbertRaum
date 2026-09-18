@@ -4376,25 +4376,48 @@ used to disappear at parse time (`SKIP_SUBTREE`), so an infobox or data table's 
 merely unranked, it was never retrievable at all. `tables.ts` now owns table geometry: a
 class-based classifier (`navbox`, `vertical-navbox`, `metadata`, `ambox`, `toc`,
 `sistersitebox`) and a structural test (no header cell and no real tabular content) still drop
-layout/navigation tables unchanged; everything else is parsed into a bounded grid (rowspan/
-colspan expanded and capped) and serialised as one line per data row, `key: value; key: value`,
-keyed by the NEAREST header row above it — a header row is never itself emitted as data, which
-is what stops a spanning header from being glued onto every cell it covers (a narrower header
-below always wins for the columns it labels; the same mechanism handles a multi-row header and
-a mid-table header rebind, both being just "the nearest all-header row above"). A NESTED table
-is INLINED into its parent cell (one compact string, emitted exactly once), not dropped: real
-Wikipedia infoboxes commonly nest the actual data table one level inside a layout wrapper (the
-chemical-element infobox is exactly this shape), confirmed against the live German "Gold"
-article, whose density/melting-point row lives in such a nested table. Superscripts/subscripts
-read `^value`/`_value` inside table-derived text only (`g/cm^3`, `10^6`), never flattened;
-`<sup class="mw-ref">` citation brackets stay dropped everywhere. Row/char/segment caps
-(`TABLE_MAX_SOURCE_ROWS`, `TABLE_SEGMENT_MAX_CHARS`, `TABLE_MAX_SEGMENTS`) stop a large table
-from exploding the unit count, with a `[Rows 1-k of N source rows shown]` marker when a cap
-cuts. No `ExtractedSegment` shape change. Offline, over the 152-file reference corpus: units per
-article rose from a mean of 23.6 to 27.4; parse work is essentially unchanged (+0.2%); the
-non-table invariant (a line-multiset diff — a per-segment text-pattern check was tried first and
-rejected after a real false positive, disclosed in `compute-cost-4l.mjs`'s own header) holds on
-152/152 files. The acceptance funnel, the `tables32` delivery result and the Gold demonstration's
-live leg are pending the one authorised `core200` read (PR still open, floors pre-registered
-before that read — see the PR body). Full artifacts:
+layout/navigation tables unchanged — except that a headerless, single-column wrapper is still
+delivered when a table nested inside it is itself real tabular content (the wrapper is layout,
+the data one level inside it is not; a scoped pre-read review caught the original structural test
+judging the two as one). Everything else is parsed into a bounded grid (rowspan/colspan expanded
+and capped, and a rowspan can never manufacture a row past the table's own last real source row)
+and serialised as one line per data row, `key: value; key: value`. A row's key is resolved in
+this order: (1) that row's OWN leading header cell, when the row mixes header and data cells —
+an infobox's commonest shape, `<th>Dichte</th><td>19,32</td>`, keyed `Dichte: 19,32`, never
+`Column 1: Dichte; Column 2: 19,32`; (2) failing that, the nearest header ROW above with a
+non-empty value at that column (resolved in one forward pass with a running per-column cache,
+not an upward rescan per cell); (3) `Column N` otherwise. A row's own header wins over a header
+row further above when both could apply — the more specific label, the same "narrower wins" rule
+multi-row headers already use, needed for a real infobox where a section-grouping header row
+(e.g. "Physikalisch") sits above a run of per-row `<th>label</th><td>value</td>` rows. A header
+row is never itself emitted as data, which is what stops a spanning header from being glued onto
+every cell it covers. A NESTED table is INLINED into its parent cell (one compact string, emitted
+exactly once), not dropped: real Wikipedia infoboxes commonly nest the actual data table one
+level inside a layout wrapper (the chemical-element infobox is exactly this shape), confirmed
+against the live German "Gold" article, whose density/melting-point row lives in such a nested
+table. Superscripts/subscripts read `^value`/`_value` inside table-derived text only (`g/cm^3`,
+`10^6`), never flattened; `<sup class="mw-ref">` citation brackets stay dropped everywhere,
+including a plain `<sup>` nested inside one. Five independent caps bound a table's cost to a
+fixed ceiling regardless of its own byte size: `TABLE_MAX_SOURCE_ROWS` (rows parsed),
+`TABLE_MAX_COLUMNS` and `TABLE_MAX_GRID_CELLS` (the expanded grid's width and total size —
+closing a blow-up a scoped pre-read review found: an uncapped grid plus an uncharged `work`
+counter let a ~1 MiB crafted table cost seconds and gigabytes of heap in one uninterruptible
+slice), `TABLE_MAX_RAW_CHARS` (total characters built before packing), and
+`TABLE_SEGMENT_MAX_CHARS`/`TABLE_MAX_SEGMENTS` (the packed output, now enforced even for a
+single record line longer than the cap, which is hard-split). Content dropped by any cap is
+named in the table's own text: `[Rows 1-k of N data rows shown]` for rows, "some cells beyond the
+table's size caps were omitted" for columns/grid/span cuts. The grid-expansion and serialisation
+cost is charged into the same `work` counter the linear-scanner bound is measured against
+(`html.ts`'s complexity record documents the additive, input-independent bound this adds). No
+`ExtractedSegment` shape change. Offline, over the 152-file reference corpus (re-measured after
+the fixes above): units per article rose from a mean of 23.6 to 27.4; parse work is essentially
+unchanged; the non-table invariant (a line-multiset diff — a per-segment text-pattern check was
+tried first and rejected after a real false positive) holds on 152/152 files. A disclosed residual
+(owner's call, not fixed here): a classless image+caption layout table can still clear both the
+class and structural drop tests (`docs/known-limitations.md`). The acceptance funnel, the
+`tables32` delivery result (whose harness-side "table-derived unit" identification was itself
+replaced pre-read, after a text-pattern version produced a false positive, with the same
+re-conversion/line-multiset method the cost check uses) and the Gold demonstration's live leg are
+pending the one authorised `core200` read (PR still open, floors pre-registered before that read
+— see the PR body). Full artifacts:
 `steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline.json,freeze-4l.txt}`.

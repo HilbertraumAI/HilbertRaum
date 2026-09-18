@@ -35,7 +35,13 @@ grid and delivered as retrievable "key: value" units (`tables.ts`, design in `ra
 "Table delivery"). Nested tables are inlined (found via the live "Gold" article: a chemical-
 element infobox nests its real property table one level deep). Offline legs done (cost, the
 non-table invariant, the Gold demonstration's offline leg); the `core200` acceptance read is
-blocked behind the shared runtime lock (`3-gen` held it at hand-off) — PR not yet ready._
+blocked behind the shared runtime lock (`3-gen` held it at hand-off) — PR not yet ready. A
+scoped pre-read Opus review (6 BEHAVIOUR findings) landed before any read data existed; the
+fix pass corrected the row-header rendering, the nested-wrapper drop test, three new grid/
+content caps (`TABLE_MAX_COLUMNS`/`TABLE_MAX_GRID_CELLS`/`TABLE_MAX_RAW_CHARS`) plus their
+`work` charge, the segment-length hard split and the rowspan-overhang clamp, and re-froze
+`freeze-4l.txt`; a classless image+caption layout table stays a disclosed residual for the
+owner. A second review re-checks the fixes before the read runs._
 _2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
 `feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
 "Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
