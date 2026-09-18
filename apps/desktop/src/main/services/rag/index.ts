@@ -197,6 +197,16 @@ export type ExternalRetrievalArm = (
 export interface ExternalRetrievalOutput {
   candidates: Array<Omit<RetrievedChunk, 'label'>>
   outcomes: KnowledgePackOutcome[]
+  /**
+   * Step 4-5 (ruling (e)(i), B3/B7/B20): the SAME material's `capped`-scope selection, when the
+   * arm computed one (`zim/arm.ts`'s `collectPackCandidates` always does). `retrieve()`'s
+   * `!reranked` branch restricts the external candidates to this instead of the whole
+   * `candidates` pool on a rerank-call failure — a wide, un-cross-encoded pool measured landing
+   * BELOW the no-arm baseline (`docs/known-limitations.md`), never above it. Absent (any other
+   * `ExternalRetrievalArm`, any existing fixture) ⇒ the fallback behaves exactly as before this
+   * step (the whole external pool interleaves).
+   */
+  cappedCandidates?: Array<Omit<RetrievedChunk, 'label'>>
 }
 
 /** Chunk text stored on a citation snippet is capped to keep citations_json small. */
@@ -401,12 +411,18 @@ export async function retrieve(
   // fixture still compares equal (L6). An arm that ran always contributes an array — possibly
   // one whose every entry is `skipped`/`failed`.
   let packOutcomes: KnowledgePackOutcome[] | undefined
+  // Step 4-5 (ruling (e)(i)): the arm's `capped`-scope companion selection, held here so the
+  // `!reranked` branch below can restrict to it instead of the whole wide pool. Undefined
+  // whenever the arm supplies none (no arm ran, or an arm from before this step) — the
+  // fallback then behaves exactly as today.
+  let cappedExternalCandidates: Array<Omit<RetrievedChunk, 'label'>> | undefined
   if (externalArm) {
     try {
       const external = await externalArm(question, signal)
       externalCount = external.candidates.length
       candidates.push(...external.candidates)
       packOutcomes = external.outcomes
+      cappedExternalCandidates = external.cappedCandidates
     } catch (err) {
       // #301 P4 (T09): a cancellation is NEVER a fallback. An `AbortError` — from the ask's
       // own signal or thrown by the arm — propagates out of `retrieve()` unchanged, so the
@@ -464,15 +480,33 @@ export async function retrieve(
       })
     }
   }
-  if (!reranked && externalCount > 0 && candidates.length > externalCount) {
+  if (!reranked && externalCount > 0) {
     // No reranker RANKED the two scales (absent, or provisioned and threw), and external
     // candidates were appended AFTER every fused document candidate — a straight trim to
     // topKFinal would then always drop the archive chunks. Round-robin interleave
     // document/archive candidates so both sources reach the budget trim in their own rank
     // order. (After a successful rerank this is dead: relevance decides. With no arm
     // `externalCount === 0`, so the no-arm pipeline is byte-identical — L6's fixture.)
+    //
+    // Step 4-5 (ruling (e)(i), B3/B7/B20): this branch must ALSO run when there are NO document
+    // candidates at all (`candidates.length === externalCount`, e.g. a packs-only ask —
+    // `noDocuments: true`) — the guard used to read `candidates.length > externalCount`, which
+    // is false exactly then, skipping the block entirely and leaving `candidates` as the whole
+    // WIDE, unrestricted external list. That was harmless before this step (the block's old
+    // effect was always a value-identical no-op on an empty `docs`), but is NOT harmless now
+    // that `ext` can genuinely differ from the wide slice: a packs-only ask — the scope the
+    // brief's own acceptance harness and a real "Search my documents" toggled off both use — is
+    // exactly the case ruling (e)(i)'s restriction exists for, and the old guard silently
+    // exempted it. Caught by re-measuring the informational failure-path figure before writing
+    // it, not by a floor.
     const docs = candidates.slice(0, candidates.length - externalCount)
-    const ext = candidates.slice(candidates.length - externalCount)
+    // Restrict the external side to the arm's `capped` companion selection when one was
+    // supplied — a rerank-call failure must fall back to TODAY's baseline, never interleave the
+    // whole wide pool (measured landing below it: 4-4's own gpu-profile no-rerank column packed
+    // FEWER gold blocks than `capped`/no-rerank, see `docs/known-limitations.md`). No
+    // `cappedCandidates` field (any pre-4-5 arm, any existing fixture) ⇒ the wide slice, exactly
+    // as before this step.
+    const ext = cappedExternalCandidates ?? candidates.slice(candidates.length - externalCount)
     const merged: typeof candidates = []
     for (let i = 0; i < Math.max(docs.length, ext.length); i++) {
       if (i < docs.length) merged.push(docs[i])

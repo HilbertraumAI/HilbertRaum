@@ -13,6 +13,7 @@ import { resolveZimDir } from '../drive'
 import type { BinaryVerifyResult } from '../binary-verifier'
 import { combineSignals, type SpawnFn } from '../runtime/sidecar'
 import type { ExternalRetrievalArm, ExternalRetrievalOutput } from '../rag'
+import type { RerankScope } from '../rag/rerank-profile'
 import { EXTERNAL_RETRIEVAL_DEADLINE_MS, collectPackCandidates } from './arm'
 import type { QueryExpander } from './expand'
 import { fetchArticleHtml, probeSearchable } from './client'
@@ -1389,7 +1390,10 @@ export class ZimService {
     question: string,
     signal?: AbortSignal,
     /** #340 L3-b (D-Z20): the ask's query expander (one local-model call per ask), or none. */
-    expand?: QueryExpander
+    expand?: QueryExpander,
+    /** Step 4-4 (ruling (a)): this ask's candidate scope, resolved by the IPC layer from the
+     *  hardware profile. Absent ⇒ `collectPackCandidates`'s own default (`'capped'`). */
+    candidateScope?: RerankScope
   ): Promise<ExternalRetrievalOutput> {
     const ids = [...new Set(packIds ?? [])]
     if (ids.length === 0) return { candidates: [], outcomes: [] }
@@ -1458,9 +1462,22 @@ export class ZimService {
           question,
           deadline.signal,
           library.names,
-          { askSignal: op.signal, articleTimeoutMs: this.deps.articleTimeoutMs, expand: expandOnce }
+          {
+            askSignal: op.signal,
+            articleTimeoutMs: this.deps.articleTimeoutMs,
+            expand: expandOnce,
+            candidateScope
+          }
         )
-        return { candidates: produced.candidates, outcomes: [...outcomes, ...produced.outcomes] }
+        // Step 4-5 (ruling (e)(i), B3/B7): `cappedCandidates` must reach `retrieve()` unchanged
+        // — it is what the `!reranked` fallback restricts to on a rerank-call failure. Dropping
+        // it here (as this line did before) would make the fallback fix in `rag/index.ts` dead
+        // code for every real ask, since `retrieve()` sees only what THIS function returns.
+        return {
+          candidates: produced.candidates,
+          outcomes: [...outcomes, ...produced.outcomes],
+          cappedCandidates: produced.cappedCandidates
+        }
       })
       // Before the CONTENT return: a lock that landed during the fetches must not hand
       // archive text back into the prompt of a session that is closing.
@@ -1517,10 +1534,11 @@ export class ZimService {
   makeArm(
     db: Db,
     packIds: readonly string[] | null | undefined,
-    opts: { expand?: QueryExpander | null } = {}
+    opts: { expand?: QueryExpander | null; candidateScope?: RerankScope } = {}
   ): ExternalRetrievalArm | null {
     if (!packIds || packIds.length === 0) return null
-    return (question, signal) => this.runArm(db, packIds, question, signal, opts.expand ?? undefined)
+    return (question, signal) =>
+      this.runArm(db, packIds, question, signal, opts.expand ?? undefined, opts.candidateScope)
   }
 
   /**

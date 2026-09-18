@@ -472,6 +472,23 @@ export class TranslationRuntime {
     }
   }
 
+  /**
+   * Wave 8 ruling (b)(T): true while a GPU-posture ('auto') sidecar is loading, resident, or
+   * still being torn down — hard (`teardownPromise` pending) or idle (`idleTeardownPromise`
+   * pending). `deviceStatus().live` alone misses all three (F5 / B-5, the Wave 8 analysis):
+   * `server` is set only after `start()` resolves healthy, and the idle teardown nulls `server`
+   * before the kill settles. `resolveDevice()` is re-read live rather than cached per attempt:
+   * it is pure over the current settings/latch state, so a start that already fell back from
+   * 'auto' to 'cpu' (`gpuFellBack` latched first) is correctly read as no longer occupying the
+   * card for the remainder of that same load. A forced-CPU sidecar never occupies the card.
+   */
+  gpuOccupied(): boolean {
+    if (this.starting) return this.resolveDevice() === 'auto'
+    if (this.server) return this.lastStart?.device === 'auto'
+    if (this.teardownPromise || this.idleTeardownPromise) return this.lastStart?.device === 'auto'
+    return false
+  }
+
   /** One launch attempt at one device posture; installs `this.server` on success. */
   private async startAttempt(device: TranslationDevice, startSignal?: AbortSignal): Promise<void> {
     // Parse the server's own load log for the offload outcome (issue #42 reopen): under the

@@ -61,6 +61,7 @@ import { notifyPerformanceChanged } from './ipc/performance-notify'
 import { setAnswerSpeedObserver } from './ipc/chat-stream'
 import { machineKey } from './services/performance'
 import { detectSystem } from './services/benchmark'
+import { createRerankerCallbacks, createPendingModelSwitchCounter } from './services/rag/device-posture'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
@@ -367,6 +368,12 @@ function initBackend(): void {
     getGpuMode: () => readGpuSetting((s) => s.gpuMode, 'auto' as const),
     getGpuAutoDisabled: () => readGpuSetting((s) => s.gpuAutoDisabled, false)
   }
+  // Wave 8 ruling (a) (step 4-8): the per-call counter of `startModelRuntime` calls presently
+  // awaiting the reranker's single-flight suspend after a REAL committed model switch — created
+  // here (one per session) so it can be shared between `registerModelIpc.ts` (increments it)
+  // and the posture-callback factory below (reads only its count). See its own doc comment
+  // (`rag/device-posture.ts`) for why it is a counter, never a boolean.
+  const pendingModelSwitches = createPendingModelSwitchCounter()
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
@@ -438,6 +445,28 @@ function initBackend(): void {
     })
   )
   runtimeRef = runtime
+  // Wave 8 rulings (a), (b)(G), (b)(T), NF-1 (step 4-8): the reranker's device-posture and
+  // CPU-request-ceiling callbacks, built from ONE set of dependencies by the exported factory
+  // (`rag/device-posture.ts`) so a composition test can target the factory itself rather than
+  // trusting that `composeServices` alone proves the wires are never silently dropped.
+  // `getTranslator` reads `ctx.translator` LIVE (never captured): `onModelInstalled` below
+  // re-composes it, and a closure that captured the startup value would consult a
+  // permanently-null or stale instance once a mid-session download lands (B4, the Wave 8
+  // analysis). `getSettings` keeps the SAME locked-workspace fallback (→ null) the old inline
+  // posture closure used.
+  const { devicePosture: rerankerDevicePosture, requestCeiling: rerankerRequestCeiling } = createRerankerCallbacks({
+    runtimeManager: runtime,
+    pendingModelSwitches,
+    getTranslator: () => ctx?.translator ?? null,
+    getSettings: () => {
+      try {
+        return getSettings(workspace.requireDb())
+      } catch {
+        return null
+      }
+    },
+    manifestsDir
+  })
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
   // wiring above stays inline because of its late-bound crash handler.
@@ -448,7 +477,11 @@ function initBackend(): void {
     isDev,
     // Issue #42: the translation sidecar honours the same gpuMode/gpuAutoDisabled the chat
     // ladder reads (read per cold start — a Settings flip needs no restart).
-    gpu: gpuSignals
+    gpu: gpuSignals,
+    // Wave 8 rulings (a)/(b)(Q)/(b)(G): consulted by `rerank()` on every call, never once per
+    // cold start any more (see `createRerankerCallbacks`'s doc comment above).
+    rerankerDevicePosture,
+    rerankerRequestCeiling
   })
   // Packaged-mode OCR execution probe (#232): one bounded worker start, released on success.
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
@@ -579,7 +612,10 @@ function initBackend(): void {
     docTasks,
     plaintextOps,
     zimOps,
-    skills
+    skills,
+    // Wave 8 ruling (a): shared with `registerModelIpc.ts` (increments/decrements it) and the
+    // posture-callback factory above (reads only its count).
+    pendingModelSwitches
   }
   // Knowledge packs (ZIM wave): registry + lazy kiwix-serve sidecar. Built here — not inside
   // registerZimIpc — so the quit teardown reaches it via `ctx.zim`. Spawns nothing until the

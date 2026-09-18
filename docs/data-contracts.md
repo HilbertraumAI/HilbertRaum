@@ -773,9 +773,12 @@ head's own weights + KV.
   same answer `pickerMemoryFor` gives the Models ★); `ResidentModelRow.device` is where a row
   runs under the CURRENT configuration (`'cpu'` for chat/translation under a `cpu` class — no
   usable card, GPU off / auto-disabled — or when the matching observed start was on the CPU
-  backend, or the translation sidecar's posture is `--device none`); `totals.ramAllMb` is
-  class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the observed chat spill +
-  the live translation spill on `discrete`; the full sum on `unified`, compared against the
+  backend, or the translation sidecar's posture is `--device none`; **Wave 8 ruling (a)**: for
+  the reranker role, `'gpu'`/`'cpu'` follows its own headroom gate against the RUNTIME's
+  committed chat model, never `settings.activeModelId` — see `rag/device-posture.ts`);
+  `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
+  observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
+  reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
   unified budget) and `totals.bothOnCard` requires both rows on the card with observed layers.
   The verdict is asked for the EFFECTIVE class (the next start's, and `cpu` when the observed
   start was CPU). Two `placement` fields were added by
@@ -2051,7 +2054,9 @@ size>:<mtime>` — a 404, a timeout, a malformed body or a response observed acr
 change never confirms "no"; a confirmed-no pack is skipped by an ask but stays readable.
 Each ask allocates at most `MAX_SELECTED_PACKS = 12` packs' worth of work: up to
 `MAX_EXTERNAL_CANDIDATES = 24` candidates admitted round-robin in title order after every
-pack settles, at most `PACK_SEARCH_CONCURRENCY = 2` packs searched at once, under one
+pack settles **on the `capped` scope** (step 4-4's default; the `gpu` profile's `all` scope and
+the `cpu-hi` opt-in's `top48` lift this cap — `rag-design.md` §17 PR-B record), at most
+`PACK_SEARCH_CONCURRENCY = 2` packs searched at once, under one
 `EXTERNAL_RETRIEVAL_DEADLINE_MS = 20_000` ms deadline shared with the request guard's one
 retry. `classifyPackSelection` (`zim/packs.ts`) classifies every selected pack id BEFORE
 any eligibility filter, so a missing tools bundle or an all-unavailable selection cannot
@@ -2106,3 +2111,14 @@ only — the entry path and both titles are content and never ride it. New plain
 `'article-save'` (`services/ingestion/plaintext-ops.ts`) tracks the `.parse.md` transient the
 save writes before handing it to `createQueuedDocument` → `processDocument`, so a lock/quit
 mid-save sweeps it like any other in-flight plaintext.
+
+**Step 4-4 (Phase 4 PR-B, Wave 4 ruling (a)):** `AppSettings` gains `ragRerankWideScope: boolean`
+(default `false`, the generic `typeof` write gate — no special-case needed, same as
+`chatCompactionEnabled`/`localApiEnabled`) — the `cpu-hi` rerank hardware profile's opt-in
+(`rag/rerank-profile.ts`'s `rerankScopeFor`: reranks the wider `top48` knowledge-pack candidate
+pool on a machine with no usable GPU but at least `CPU_HI_MIN_THREADS` processor threads; no
+effect on the `gpu` profile, which reranks `GPU_RERANK_SCOPE` regardless, or the `default`
+profile). Surfaced as a `Switch` in `SettingsScreen.tsx`'s performance card beside the GPU
+toggle; no new IPC channel (rides the existing `getSettings`/`updateSettings` pair). No shape
+change to `ExternalCandidate`/`RetrievedChunk`/`Citation` — the scope widens WHICH chunks the
+arm admits, never their fields.

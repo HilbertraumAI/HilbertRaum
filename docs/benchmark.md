@@ -896,10 +896,15 @@ chat and translation auto-fit onto the card (`device: 'gpu'`) — under the CURR
 without a usable card, when the GPU is switched off (`gpuMode: 'off'`) or auto-disabled, when the
 chat's matching observed start landed on the CPU backend, or when the translation sidecar's
 posture is the forced `--device none` (`deviceStatus().device === 'cpu'`, its session fallback
-latch); the copy then says "processor", not "processor, by design" — images / document search
-(reranker + embedder) / voice are pinned to the processor
-by design (`--device none`, see vision/runtime.ts, embeddings/e5.ts, reranker/llama.ts; whisper is
-a CLI) and say so. Lifetime: chat / reranker / embedder stay for the session, translation and
+latch); the copy then says "processor", not "processor, by design". Images / voice are pinned to
+the processor by design (`--device none`, see vision/runtime.ts, embeddings/e5.ts; whisper is a
+CLI) and say so; the embedder half of document search is pinned the same way. The reranker half
+of document search instead follows its own headroom-gated device posture (**Wave 8 ruling (a)**,
+`reranker/llama.ts`, `rag/device-posture.ts`, against the RUNTIME's committed chat model, never
+`settings.activeModelId`) — its row reads `'gpu'`/`'cpu'` from `Reranker.devicePosture()` and its
+copy says plain "processor" (not "by design") on `'cpu'`, since that outcome follows this
+machine's headroom, not a fixed design choice. Lifetime: chat / reranker / embedder stay for the
+session, translation and
 vision unload after their idle window, whisper runs only while transcribing. Liveness comes from
 each service's own handle (`isLoaded()` on `E5Embedder`, `LlamaReranker`, `VisionRuntime` /
 `VisionService`; `Translator.deviceStatus().live`; for chat the runtime STATE —
@@ -917,11 +922,13 @@ unloaded) and the processor: everything loadable at once against RAM, **class-aw
 #303 audit (DR5, owner ruling; `loadedAtOnceMb` in `services/performance.ts`)** — on the `cpu`
 class every row's size; on `discrete` the rows that run on the processor plus the active model's
 OBSERVED partial-offload spill (the CPU-side model + cache bytes of a measured partial start; an
-estimate, a full offload or an unknown split add 0) plus the live translation sidecar's spill
-(size × the share of layers off the card; not live or all on the card → 0), so card-resident
-weights are no longer counted against RAM; on `unified` the full sum, with the copy saying
-"memory" and the "Fits" / "Too much at once" pill comparing against the unified budget rather
-than RAM. What
+estimate, a full offload or an unknown split add 0), the live translation sidecar's spill
+(size × the share of layers off the card; not live or all on the card → 0), and (**Wave 8 ruling
+(d)**) a `'gpu'`-posture reranker row, which adds 0: its own headroom gate only resolves `'gpu'`
+when the whole placement fits with margin, and no partial-offload split is tracked for it — so
+card-resident weights are no longer counted against RAM; on `unified` the full sum, with the copy
+saying "memory" and the "Fits" / "Too much at once" pill comparing against the unified budget
+rather than RAM. What
 the app should DO about the start-order contention (force translation to the processor while chat
 holds the card, or reclaim the card when translation goes idle) is an owner decision (§5 item 22
 (g)).

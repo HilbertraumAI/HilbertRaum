@@ -813,10 +813,161 @@ password recovery — are documented in
 - **Reranker latency on CPU is significant (MEASURED): ≈ 24.7 s worst case** for a 12-candidate
   batch at the full truncation budget on a CPU-pinned i7-1185G7 (~2 s/candidate;
   `HILBERTRAUM_RERANK_SMOKE`, 2026-06-10) — a documents query visibly lengthens on a low-end laptop when
-  the reranker is provisioned. Bounded by the candidate cap (≤ 2×`topKInitial`) + word-truncation
-  budgets (the tuning levers); the reranker stays an opt-in (provision-the-GGUF) feature, never
+  the reranker is provisioned. Bounded, on the `capped` scope (step 4-4's default; see the
+  profile rule immediately below for the `gpu`/`cpu-hi` widenings), by the candidate cap
+  (≤ 2×`topKInitial`) + word-truncation budgets (the tuning levers); the reranker stays an
+  opt-in (provision-the-GGUF) feature, never
   bundled by default. The `HILBERTRAUM_RAG_QUALITY` run is the evidence it earns the cost
-  (rag-design §12.3).
+  (rag-design §12.3). **The rerank hardware-profile rule (step 4-4, `rag-design.md` §17 PR-B
+  record) follows from this cost:** on a usable GPU the reranker sees every fetched knowledge-pack
+  block essentially for free (run L, 2026-09-15: GPU `all`-scope rerank p90 2.67 s for a mean 118
+  documents, max 410); on a CPU-only machine the wider `top48` opt-in (`ragRerankWideScope`)
+  **ships disabled for everyone** — run L measured its rerank p90 at 25.3 s at 8 threads and 29.1 s
+  at 16 threads (16 threads was NOT faster than 8 on this measurement), both roughly 2.3–2.7× the
+  10.8 s bound the ruling set, so `CPU_HI_MIN_THREADS` is frozen at `Infinity` and the `cpu-hi`
+  profile is unreachable by any real machine until a future re-measurement lowers it. Every
+  CPU-only machine keeps today's `capped` scope regardless of thread count.
+- **The reranker's GPU posture is gated on provable headroom, AND a small card now gets the fast,
+  bounded scope instead of a 512-document wide scope run through a CPU reranker (step 4-5, Wave 5
+  ruling (d); step 4-6, Wave 6 ruling (a)) — but the gate itself is still UNVALIDATED on the
+  small-card hardware it exists for.** Step 4-4 launched the reranker with no `--device` argument
+  (llama-server's own `ngl`-auto + `--fit`) whenever `gpuUsefulForProfile` found any usable card —
+  a predicate that never checked whether there was room for a SECOND resident model beside the
+  chat model. Step 4-5 replaced that check: `rerankerDeviceFor` (`rag/rerank-profile.ts`) now
+  requires the budget device's free memory, minus the active chat model's own placement estimate,
+  to clear the reranker's own estimated need (≈ 2.8 GiB, `RERANKER_HEADROOM_FLOOR_MIB`) before
+  choosing the GPU posture — an unknown probe, no useful device, no budget figure, no active model
+  or an unresolvable manifest all mean CPU. Step 4-5 deliberately left the candidate SCOPE alone
+  when it did this, which left a gap the scoped Opus review caught (finding C1): a small card
+  could still resolve the `gpu` PROFILE (and therefore up to 512 documents in one rerank call)
+  while the sidecar it was about to call correctly started on the CPU — a combination that, per
+  run L's own CPU figures (`top48` at 48 documents: p90 25,317 / 29,101 ms), would routinely
+  exceed the 120 s request timeout. **Step 4-6 (Wave 6 ruling (a)) closes that gap:** the resolved
+  posture now feeds the scope decision too, through one shared helper both the sidecar and the
+  per-ask scope call — `gpu` profile + `cpu` posture now resolves `capped` (today's bounded,
+  ~12.9 s p90 scope), never the wide, unbounded one; `cpu-hi` and `default` are unaffected. Proven
+  a no-op on the project's own measurement machine before landing (its posture stays `gpu`, so its
+  scope stays `all`, unchanged). **What this does NOT close:** the project's only measurement
+  machine is a 12 GiB card (ample headroom for both models at once), so no acceptance read has
+  ever exercised the gate's `cpu`-posture branch live — the 5–6 GiB laptop class
+  `architecture.md`'s `USABLE_VRAM_MB` record already discusses. See step 4-5's
+  `hardware-leg.json`: **no such machine was reached in this session** (`available: false`), so
+  the gate ships on the ARITHMETIC alone (the same estimator the picker and the fit budget already
+  use elsewhere, not a new one invented for this gate) plus `rerank-profile.test.ts`'s fixtures
+  (real device/manifest figures, including the #318 RTX 3060 Laptop's own `totalMb`) — not yet
+  confirmed by a live small-card run. **Scoped Opus review of step 4-6, observation O1:**
+  `resolveAskCandidateScope` now does one small, uncached synchronous filesystem read per ask
+  (`findManifestById` → `discoverManifests`, a directory walk + YAML parse over the model
+  manifests) to reach the shared posture helper — measured 26.2 ms first call / 11.5 ms warm p50
+  on local NVMe over the repo's 35 manifest files; negligible against a multi-second ask, and
+  directed by Wave 6 ruling (c) itself, but new and worth naming since `models.ts` already flags
+  this call as a real read on slow portable-drive media (#333). **Scoped Opus review of step 4-6,
+  finding C2, resolved by step 4-7 (Wave 7 ruling (a)):** the shared helper above guarantees the
+  sidecar and the per-ask scope compute the SAME posture from the SAME inputs, but not at the
+  same MOMENT — the sidecar resolved its posture once per cold start and held it for the session,
+  the ask re-resolved on every ask, and only a `gpuMode`/`gpuAutoDisabled` flip suspended the
+  resident sidecar, never an `activeModelId` change (though `activeModelId` also feeds the
+  posture, through `chatModelNeedMib`). Reachable concretely on the project's own measured GTX
+  1070 Ti (`{totalMb: 8273, freeMb: 7504}`, #391 leg 2): starting on the 9B chat model (this
+  card's own starred recommendation) gives posture `cpu`; switching down to the 4B — an ordinary
+  Models-screen action — moves the posture to `gpu` with nothing to suspend the sidecar, so the
+  next ask could resolve the wide `all` scope while the sidecar stayed resident on the CPU — C1's
+  combination again, through a drift window. Step 4-7 adds `activeModelId` to the suspend trigger,
+  fired from all three settings-writing channels (`settings:update`, `models:select`,
+  `models:use`) through one shared predicate (`rerankerPostureInputsChanged`,
+  `rag/device-posture.ts`); `activeEmbeddingModelId` is explicitly not a posture input and never
+  triggers it. **The honest residual:** this is not an absolute guarantee for every ask in
+  flight — `suspend()` is fire-and-forget, so an ask landing mid-teardown hits the sidecar's
+  `tearingDown` guard, its `rerank()` call fails, and Wave 5 ruling (e)(i)'s `cappedCandidates`
+  fallback returns the capped selection instead; that one residual window resolves toward the
+  safe, bounded scope, never the wide one. The small-card posture branch itself remains
+  unvalidated on real hardware, as above.
+- **Scoped Opus review of step 4-7, finding C3, RESOLVED by step 4-8 (Wave 8 ruling (a)):**
+  `activeModelId` was never a safe posture input in the first place — it is a proxy for "the chat
+  model that will be loaded", true only once `models:use`'s multi-GB weight hash and load finish,
+  and false for the whole window before that (the file's own comment calls this "the long
+  pre-start window", minutes on a cold checksum cache). Step 4-7's event-time suspend fired at the
+  START of that window, on the OLD model, then held the posture for the entire hash + load — so a
+  down-switch (e.g. the project's own measured GTX 1070 Ti, `{totalMb: 8273, freeMb: 7504}`: the
+  9B running at posture `cpu`, switching to the 4B) could cold-start the reranker on the GPU beside
+  the still-resident, still-running OLD (larger) chat model. The posture's chat-model input is now
+  the RUNTIME's COMMITTED model (`RuntimeManager.activeModelId()`), never the setting — during the
+  hash window the committed model is still the OLD one, so the posture stays correct throughout by
+  construction, not by a suspend's timing. A chat-model start in flight or PENDING (a per-call
+  counter in `startModelRuntime`, covering the window it spends awaiting the reranker's own
+  single-flight suspend before the load) also forces `cpu`, closing the narrow gap between the
+  commit and the load itself. What makes this hold at every MOMENT, not just at a suspend-covered
+  event, is the reranker's own use-time re-check: it resolves its posture fresh before every
+  `rerank()` call (and again after any await inside one), so a resident sidecar recorded under a
+  stale posture is restarted before serving a request, under race rules that never join a teardown
+  they did not start, never restart twice in one call, and never let another caller's abort end an
+  ask that should instead fall back to the capped, bounded selection. Six residuals remain,
+  disclosed rather than fixed:
+  - **r1 (translation occupancy):** a GPU-posture translation sidecar occupies the card while
+    loading and while tearing down (hard or idle), not only while resident — the reranker's gate
+    now sees all four stages, so a GPU rerank never cold-starts beside an unbudgeted translation
+    occupant, but this is translation's own `--fit` auto-offload policy doing the same thing it
+    already does beside the chat model on master; nothing new to this step.
+  - **r2 (the gate's manifest-only chat-model estimate):** unchanged from the note above —
+    `estimateGraphicsNeedMib` reads the manifest only, so raising the launched context window
+    increases the chat model's real VRAM use without moving any posture input.
+  - **r3 (other GPU consumers, a stale probe, and NVIDIA/Windows' constant `freeMb`):** unchanged
+    from Wave 5 ruling (d)'s own disclosure above — other applications' GPU use is invisible to the
+    gate, a stored probe can go stale between refreshes, and on NVIDIA/Windows the reported free
+    memory does not reliably track what the app itself has already loaded.
+  - **r4 (a GPU cold-start failure, or a second unexpected crash, disables reranking for the
+    session):** the reranker sidecar now drops a dead handle after one unexpected mid-session exit
+    (a driver reset, VRAM/RAM exhaustion) so the next rerank cold-starts fresh with a freshly
+    resolved posture — but a SECOND unexpected exit in the same session, or a genuine GPU cold-start
+    failure, still latches reranking off for the rest of the session (the existing failed-start
+    latch policy, unchanged). There is no GPU→CPU demotion path; a follow-up issue proposes one.
+  - **The Performance card summary line omits a GPU-resident reranker:** the line stays "chat +
+    translation" (unchanged shape); a reranker resident on the graphics card (now visible in its
+    own row) is not folded into that summary total. A follow-up issue proposes fixing or
+    disclosing this directly in the UI copy.
+  - **T's declared cost (Phase 2 ruling (d)):** a GPU-posture translation sidecar can cost the
+    reranker at most two cold starts per translation episode — one on the first ask while
+    translation occupies the card, one on the first ask after it idles out 120 s later. This is a
+    declared deviation from Phase 2 ruling (d)'s literal per-question latency bound for those two
+    asks; it is the same KIND of cost master's first ask already pays once per session (a cold
+    start). The cold start's own duration is not recorded by any existing measurement artifact
+    (`run-summary-a4-gpu.json`'s gate has no timing field; `m2-latency.json` records rerank request
+    latency, never a cold-start duration) and this step runs no inference, so it is stated as
+    unmeasured rather than invented; a behaviour-neutral memo of the manifest read itself was
+    measured at 15.5 ms warm p50 on the drive layout (`K:`), well under the 50 ms threshold that
+    would have required one, so none was added.
+
+  No 5–8 GiB card was available in this session either (Wave 8 ruling (i)'s hardware leg is
+  optional and not blocking): the small-card branch and the fail-vs-spill question above remain
+  unvalidated on real hardware, unchanged from step 4-7's own disclosure.
+- **The `all` rerank scope is capped, and a rerank-call failure now falls back to TODAY's
+  baseline instead of landing below it — both measured, neither asserted (step 4-4's finding,
+  step 4-5's fix).** Step 4-4 shipped `all` with no per-call document ceiling and no dedicated
+  fallback: a rerank-call failure kept `retrieve()`'s existing catch path (the fused order, then
+  the no-rerank interleave) over the WHOLE wide, un-cross-encoded pool. Measured cost: the
+  `gpu` acceptance read's own no-rerank column packed FEWER gold blocks than the shipped
+  `capped`/no-rerank baseline — `allPacked` 26→**22**, `anyPacked` 42→**33**, `goldSpanInPacket`
+  142→**116** — a wide lexical pool with no working cross-encoder was measured WORSE than
+  shipping no rerank at all, the reason `rerankScopeFor` always returns `'capped'` with no
+  reranker provisioned. Step 4-5 (Wave 5 ruling (e), B3 with B7/B20) fixes both halves: (1)
+  `ALL_SCOPE_MAX_DOCS` bounds the TOTAL a single rerank call may see — run L2 (a two-pack
+  development latency read) selected **512** (every cell in {192,256,384,512} cleared the
+  10,848 ms bound with wide margin: p90 by cell 2,251/2,763/2,870/2,816 ms; the genuinely
+  uncapped two-pack distribution itself — mean 115.8 documents, p90 260, max 553 — measured p90
+  3,007 ms); the acceptance read's own worst case, the SAME `H132` that produced a 755-document/
+  10,774 ms call in step 4-4, now caps at 512 documents and reranks in 7,857 ms. (2) the arm now
+  always computes a `capped`-scope companion selection from the SAME material, and `retrieve()`'s
+  fallback restricts to it instead of the wide pool. **Measured, not assumed** (the standard
+  this same finding demanded of step 4-4): replaying the `gpu` acceptance read's own captures
+  through the fixed `retrieve()` with a reranker stub whose `rerank()` throws on every call
+  scores `allPacked` **26**, `anyPacked` **42**, `goldSpanInPacket` **142** — an EXACT match to
+  the baseline, not merely "at or above" it (`fallback-measured.json`). A rerank timeout, crash
+  or failed start now costs only the upside, never the floor. One real fix-of-a-fix along the
+  way: the restriction's own guard originally skipped a packs-only ask (`noDocuments: true` —
+  zero document candidates, exactly the scope both the acceptance harness and a real "Search my
+  documents" toggle-off use) entirely, leaving it on the unrestricted wide pool; caught by
+  re-measuring this same figure before writing it, fixed, and pinned by a dedicated test (no
+  existing property test had `noDocuments: true`, so none could have caught it).
 - **The embedder/reranker failed-start latch is for a PERMANENT fault only — a transient port-bind
   race no longer arms it (arch GPU record §5.5b).** Each
   sidecar latches a failed start so it doesn't re-await the full health timeout on every call. That

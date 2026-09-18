@@ -683,8 +683,12 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(screen.getByText(/Document search \(ranking\)/)).toBeInTheDocument()
     expect(screen.getByText(/Document search \(index\)/)).toBeInTheDocument()
     expect(screen.getByText('Voice')).toBeInTheDocument()
-    // Pinned roles say so, in words; the CLI says it runs only while working.
-    expect(screen.getAllByText(/processor, by design/).length).toBe(4)
+    // Pinned roles say so, in words; the CLI says it runs only while working. Wave 8 ruling (e)
+    // amendment: the reranker's `cpu` fixture row (`device: 'cpu'`, line ~111 above) used to be
+    // the fourth "by design" row before this step — Wave 8 ruling (d) makes a `cpu` reranker
+    // read plain "processor" instead (its posture is headroom-gated, not a fixed design choice),
+    // so three roles now say "by design": vision, the index embedder and voice.
+    expect(screen.getAllByText(/processor, by design/).length).toBe(3)
     expect(screen.getByText(/runs only while working/)).toBeInTheDocument()
     expect(screen.getAllByText(/unloads when idle/).length).toBe(2)
     expect(screen.getAllByText('loaded now').length).toBe(3)
@@ -727,8 +731,11 @@ describe('PerformanceScreen: models on this computer', () => {
     )
     renderScreen()
     await screen.findByText('Models on this computer')
-    expect(screen.getAllByText(/^processor · /)).toHaveLength(2)
-    expect(screen.getAllByText(/processor, by design/)).toHaveLength(4)
+    // Wave 8 ruling (e) amendment: the fixture's reranker row is ALSO `device: 'cpu'` (line
+    // ~111), so its row-sub line now starts with plain "processor · " too (ruling (d)) — three
+    // rows, not two — and only three roles (not four) say "by design".
+    expect(screen.getAllByText(/^processor · /)).toHaveLength(3)
+    expect(screen.getAllByText(/processor, by design/)).toHaveLength(3)
     expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
     expect(screen.getByText(/Will run on the processor from RAM \(15\.7 GB\)/)).toBeInTheDocument()
   })

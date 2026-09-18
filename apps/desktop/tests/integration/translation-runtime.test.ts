@@ -1136,3 +1136,126 @@ describe('#163 (T-3) — per-request timeout wiring', () => {
     await rt.stop()
   })
 })
+
+// Wave 8 ruling (b)(T) (step 4-8): `gpuOccupied()` — true while a GPU-posture ('auto') sidecar is
+// loading, resident, or still being torn down (hard or idle); a forced-CPU sidecar never occupies
+// the card. The reranker's headroom gate consults this so a GPU rerank never cold-starts beside a
+// translation occupant `deviceStatus().live` cannot see (F5 / B-5, the Wave 8 analysis).
+describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
+  it('false before any start (nothing to occupy the card with)', () => {
+    const { spawn } = fakeSpawn()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl })
+    expect(rt.gpuOccupied()).toBe(false)
+  })
+
+  it('(load) true while a GPU-posture cold start is in flight — before deviceStatus().live can see it', async () => {
+    const { spawn } = fakeSpawn()
+    const health: { release: (() => void) | null } = { release: null }
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        await new Promise<void>((r) => (health.release = r))
+        return { ok: true, status: 200 } as Response
+      }
+      if (u.endsWith('/completion')) {
+        return { ok: true, status: 200, body: sseBody(COMPLETION_SSE) } as unknown as Response
+      }
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
+    const p = rt.translate(translateOpts)
+    while (!health.release) await tick()
+    expect(rt.gpuOccupied()).toBe(true) // loading — deviceStatus() would still be null here
+    expect(rt.deviceStatus()).toBeNull()
+    health.release()
+    await p
+    await rt.stop()
+  })
+
+  it('(residency) true once the GPU-posture sidecar is resident', async () => {
+    const { spawn } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
+    await rt.translate(translateOpts)
+    expect(rt.gpuOccupied()).toBe(true)
+    expect(rt.deviceStatus()?.live).toBe(true)
+    await rt.stop()
+  })
+
+  it('(hard teardown) true while suspend()/stop() is tearing the GPU-posture sidecar down', async () => {
+    class GatedChild extends EventEmitter implements ChildProcessLike {
+      pid = 9
+      killed = false
+      kill(): boolean {
+        this.killed = true
+        return true
+      }
+      releaseExit(): void {
+        this.emit('exit', 0, null)
+      }
+    }
+    const children: GatedChild[] = []
+    const spawn = (_c: string, _a: string[]): ChildProcessLike => {
+      const c = new GatedChild()
+      children.push(c)
+      return c
+    }
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
+    await rt.translate(translateOpts)
+    const suspendP = rt.suspend()
+    expect(rt.gpuOccupied()).toBe(true) // still occupied — the child has not exited yet
+    children[0]!.releaseExit()
+    await suspendP
+    expect(rt.gpuOccupied()).toBe(false)
+    await rt.stop()
+  })
+
+  it('(idle teardown) true while the soft idle teardown is killing the GPU-posture sidecar', async () => {
+    class GatedChild extends EventEmitter implements ChildProcessLike {
+      pid = 9
+      killed = false
+      kill(): boolean {
+        this.killed = true
+        return true
+      }
+      releaseExit(): void {
+        this.emit('exit', 0, null)
+      }
+    }
+    const children: GatedChild[] = []
+    const spawn = (_c: string, _a: string[]): ChildProcessLike => {
+      const c = new GatedChild()
+      children.push(c)
+      return c
+    }
+    const { fetchImpl } = translationFetch()
+    const state = { fire: null as (() => void) | null }
+    const clock = {
+      set(cb: () => void) {
+        state.fire = cb
+        return { clear: () => (state.fire = null), unref: () => undefined }
+      }
+    }
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.translate(translateOpts)
+    state.fire!() // idle window elapses -- soft teardown kills the child (B-5's exact window)
+    expect(children[0]!.killed).toBe(true)
+    expect(rt.gpuOccupied()).toBe(true) // occupied -- deviceStatus().live is already false here
+    expect(rt.deviceStatus()?.live).toBe(false)
+    children[0]!.releaseExit()
+    await tick()
+    expect(rt.gpuOccupied()).toBe(false)
+    await rt.stop()
+  })
+
+  it('(forced-CPU) a CPU-posture translation never occupies the card, loading or resident', async () => {
+    const { spawn } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, gpu: { getGpuMode: () => 'off' } })
+    await rt.translate(translateOpts)
+    expect(rt.deviceStatus()?.device).toBe('cpu')
+    expect(rt.gpuOccupied()).toBe(false)
+    await rt.stop()
+  })
+})

@@ -1,9 +1,14 @@
 import { describe, it, expect } from 'vitest'
+import { join } from 'node:path'
 import { EventEmitter } from 'node:events'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import { createSelectedReranker } from '../../src/main/services/reranker/factory'
 import { approxTokenCount, CHUNK_DEFAULTS } from '../../src/main/services/ingestion/chunker'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import { rerankerDeviceFor } from '../../src/main/services/rag/rerank-profile'
+import { discoverManifests, estimateGraphicsNeedMib, graphicsBudgetMib } from '../../src/main/services/models'
+import type { ModelManifest } from '../../src/shared/manifest'
+import type { GpuDevice } from '../../src/shared/types'
 
 // Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
 // fake-spawn + mocked-loopback-fetch harness (the E5 embedder test pattern). CI never
@@ -161,6 +166,120 @@ describe('LlamaReranker', () => {
     expect(args).not.toContain('--cache-ram')
     await reranker.stop()
     expect(child.killed).toBe(true)
+  })
+
+  // Step 4-4 (Wave 4 ruling (a)): the device posture, via the injected `devicePosture` callback.
+  describe('device posture (step 4-4)', () => {
+    it('"gpu" posture omits --device and -ngl, and keeps --rerank/--batch-size/--ubatch-size', async () => {
+      const { spawn, calls } = fakeSpawn()
+      const reranker = new LlamaReranker({
+        ...base,
+        spawn,
+        fetchImpl: rerankFetch([1]),
+        devicePosture: () => 'gpu'
+      })
+      await reranker.rerank('q', ['d'])
+      const argv = calls[0].args.join(' ')
+      expect(argv).toContain('--rerank')
+      expect(argv).not.toContain('--device')
+      expect(argv).not.toContain('-ngl')
+      expect(argv).toContain('--batch-size 2048')
+      expect(argv).toContain('--ubatch-size 2048')
+      await reranker.stop()
+    })
+
+    it('the callback is consulted at START, not at construction — a "cpu" answer at construction time that flips before the first rerank() is honoured', async () => {
+      const { spawn, calls } = fakeSpawn()
+      let posture: 'gpu' | 'cpu' = 'cpu'
+      const reranker = new LlamaReranker({
+        ...base,
+        spawn,
+        fetchImpl: rerankFetch([1]),
+        devicePosture: () => posture
+      })
+      expect(calls.length).toBe(0) // not constructed with any args yet — lazy
+      posture = 'gpu' // flips BEFORE the first rerank() call reaches ensureStarted()
+      await reranker.rerank('q', ['d'])
+      expect(calls[0].args).not.toContain('--device')
+      await reranker.stop()
+    })
+
+    it('absent devicePosture defaults to "cpu" (today\'s behaviour, byte-identical)', async () => {
+      const { spawn, calls } = fakeSpawn()
+      const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch([1]) })
+      await reranker.rerank('q', ['d'])
+      expect(calls[0].args).toContain('--device')
+      expect(calls[0].args).toContain('none')
+      await reranker.stop()
+    })
+
+    it('a posture change stops the sidecar (suspend) so its NEXT start re-evaluates — the caller\'s job, pinned here at the sidecar level', async () => {
+      const { spawn, calls } = fakeSpawn()
+      let posture: 'gpu' | 'cpu' = 'cpu'
+      const reranker = new LlamaReranker({
+        ...base,
+        spawn,
+        fetchImpl: rerankFetch([1]),
+        devicePosture: () => posture
+      })
+      await reranker.rerank('q', ['d'])
+      expect(calls[0].args).toContain('--device') // started cpu
+      // The settings-change wiring calls suspend() (never the permanent stop()) so a lazy
+      // restart is still possible; simulated here directly at the sidecar level.
+      await reranker.suspend()
+      posture = 'gpu'
+      await reranker.rerank('q2', ['d2'])
+      expect(calls.length).toBe(2) // re-spawned
+      expect(calls[1].args).not.toContain('--device') // the NEW start re-evaluated to gpu
+      await reranker.stop()
+    })
+
+    // Step 4-5 (ruling (d), B2): extends the launch-arg coverage above — instead of faking
+    // `devicePosture` directly, this feeds `rerankerDeviceFor`'s REAL headroom gate the three
+    // named fixtures (the SAME ones `rerank-profile.test.ts` pins) and checks the resulting
+    // `--device none` presence/absence at the sidecar-launch level, closing the gap between the
+    // pure decision and the actual spawn args.
+    describe('the headroom gate end to end (step 4-5, ruling (d))', () => {
+      const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
+      function manifestById(id: string): ModelManifest {
+        const found = discoverManifests(MANIFESTS_DIR)
+          .manifests.map((m) => m.manifest)
+          .find((m) => m.id === id)
+        if (!found) throw new Error(`missing manifest ${id}`)
+        return found
+      }
+      const CHAT_4B_MANIFEST = manifestById('qwen3.5-4b-ud-q4kxl')
+      const chatModelNeedMib = estimateGraphicsNeedMib(CHAT_4B_MANIFEST)
+
+      async function launchArgsFor(probeDevices: GpuDevice[] | null, device: GpuDevice | null): Promise<string[]> {
+        const budgetMib = graphicsBudgetMib(device)
+        const posture = rerankerDeviceFor({ probeDevices, budgetMib, chatModelNeedMib })
+        const { spawn, calls } = fakeSpawn()
+        const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch([1]), devicePosture: () => posture })
+        await reranker.rerank('q', ['d'])
+        await reranker.stop()
+        return calls[0]!.args
+      }
+
+      it('(i) provable headroom — the measurement machine (RTX 3080 Ti) — --device none is ABSENT', async () => {
+        const rtx3080Ti: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
+        const args = await launchArgsFor([rtx3080Ti], rtx3080Ti)
+        expect(args).not.toContain('--device')
+      })
+
+      it('(ii) insufficient headroom — the #318 RTX 3060 Laptop (no freeMb) — --device none is PRESENT', async () => {
+        const rtx3060Laptop = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3060 Laptop GPU', totalMb: 5994 } as GpuDevice
+        const args = await launchArgsFor([rtx3060Laptop], rtx3060Laptop)
+        expect(args).toContain('--device')
+        expect(args).toContain('none')
+      })
+
+      it('(iii) unknown (a null probe) — --device none is PRESENT', async () => {
+        const args = await launchArgsFor(null, null)
+        expect(args).toContain('--device')
+        expect(args).toContain('none')
+      })
+    })
   })
 
   it('truncates query and documents to the approx-token budget before sending', async () => {
