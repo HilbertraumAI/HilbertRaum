@@ -116,6 +116,19 @@ import {
 // 3.00. The `work` counter below measures exactly those examinations, so CI asserts the
 // bound deterministically instead of by wall-clock time.
 //
+// TABLE-DERIVED WORK (issue #478) is charged to the SAME counter but is deliberately NOT folded
+// into K·n + c above: it is bounded by tables.ts's own fixed caps (`TABLE_MAX_COLUMNS`,
+// `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`), not by the input length, so it needs its own,
+// additive bound rather than a larger K that would loosen the prose bound for every article that
+// has no tables at all. Per admitted (delivered) table: work_table ≤ (end - tableStart), the
+// source bytes the table's own sub-scan examined (unchanged from before table delivery), PLUS
+// `cellsPlaced + charsUsed` from `serializeTable`'s `workUnits`, itself bounded by
+// `TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS` regardless of how the caps are reached (a
+// fixed ceiling, ~56,000, independent of n) — see `zim-html.test.ts`'s "table cost pathology"
+// suite for the measured worst case against the reviewer's own crafted inputs (a 1 MiB
+// max-colspan/rowspan single cell, and a 400×100 plain grid): both now complete in low
+// milliseconds with bounded heap, where before this fix the former took seconds and gigabytes.
+//
 // ---------------------------------------------------------------------------------------
 // COOPERATIVE SLICING (P1b) — why the linear scanner still yields (PR #294 review H1)
 // ---------------------------------------------------------------------------------------
@@ -954,7 +967,15 @@ export function* zimArticleSlices(
       work += Math.max(1, end - tableStart)
       if (hasDeliverableContent(table)) {
         flush()
-        for (const text of serializeTable(table)) {
+        // Grid expansion and serialisation are their own cost, independent of the table's own
+        // source bytes (a small span-heavy table can expand into a much larger grid) — charged
+        // here as `workUnits` (#478 review finding B2), on top of the byte charge above. Both
+        // are bounded by tables.ts's own fixed caps, not by the input length, which is exactly
+        // why the LINEAR SCANNER — complexity record above states a separate, additive bound
+        // for table-derived work instead of folding it into the prose K·n + c formula.
+        const { segments: texts, workUnits } = serializeTable(table)
+        work += workUnits
+        for (const text of texts) {
           segments.push({ text, pageNumber: null, sectionLabel: currentLabel })
         }
       }
