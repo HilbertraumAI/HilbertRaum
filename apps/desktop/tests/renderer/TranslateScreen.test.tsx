@@ -10,6 +10,7 @@ import { en, t } from '../../src/shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import type { AppStatus, DocTaskStatus, DocumentInfo, TranslateJob } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
 // (no `as never` erasure). The `appStatus`/`docTask` builders return the real shared types and
@@ -457,7 +458,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     // The materialized Markdown lands in the output panel.
     const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
     expect(await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })).toBeInTheDocument()
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('translates a document via the choose-a-document picker path', async () => {
     const f = fileStubs()
@@ -477,7 +478,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     )
     const outPanel = await screen.findByLabelText(t('en', 'translate.output.label'))
     expect(await within(outPanel).findByText('Hello world.', {}, { timeout: 8000 })).toBeInTheDocument()
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('rejects a multi-file drop with a friendly banner (no import)', async () => {
     const f = fileStubs()
@@ -535,7 +536,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     act(() => dropOnZone([new File(['x'], 'a.xyz', { type: '' })]))
     expect(await screen.findByText(t('en', 'translate.file.err.unsupported'))).toBeInTheDocument()
     expect(f.startDocTask).not.toHaveBeenCalled()
-  }, 10000)
+  }, testBudgetMs(10000))
 
   // ---- FE-3 (OCR-R P2): honest handoff when a SUPPORTED file imports but INGESTION fails ----
   // A PDF imports fine, then ingestion fails: an image-only scan with no text, or a corrupt/
@@ -584,7 +585,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     expect(screen.queryByText(t('en', 'translate.file.err.unsupported'))).not.toBeInTheDocument()
     // No translation task runs over a document that has no text.
     expect(f.startDocTask).not.toHaveBeenCalled()
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('FE-3: a corrupt/encrypted PDF surfaces its localized real failure, not "unsupported" (DE)', async () => {
     window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
@@ -618,7 +619,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     } finally {
       window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
     }
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('FE-3 control: a genuinely-unsupported extension (nothing imported) is byte-identical', async () => {
     // main imported nothing supported — the PRE-import path (`documentIds: []`). This must stay
@@ -633,7 +634,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     expect(await screen.findByText(t('en', 'translate.file.err.unsupported'))).toBeInTheDocument()
     expect(listDocuments).not.toHaveBeenCalled()
     expect(f.startDocTask).not.toHaveBeenCalled()
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('exports the materialized document and can show it in Documents', async () => {
     const f = fileStubs()
@@ -652,7 +653,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
 
     await user.click(screen.getByRole('button', { name: t('en', 'translate.file.show') }))
     expect(onNavigate).toHaveBeenCalledWith('documents')
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('CODE-42: a persisted-English doc-task failure message localizes in the German UI', async () => {
     // Doc-task failure messages are persist-canonical ENGLISH (D-L4); the banner must route
@@ -685,7 +686,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     } finally {
       window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)
     }
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('surfaces a truncated hint when only the start of a long translation is shown', async () => {
     const f = fileStubs({ preview: { segments: [{ text: 'Beginning…' }], nextOffset: 40 } })
@@ -697,7 +698,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     expect(
       await screen.findByText(t('en', 'translate.file.truncated'), {}, { timeout: 8000 })
     ).toBeInTheDocument()
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('#58: a done task with gaps shows the page-gap AND failed-parts warnings', async () => {
     const f = fileStubs({
@@ -730,7 +731,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     expect(
       screen.getByText(t('en', 'translate.file.failedParts.other', { count: 2 }))
     ).toBeInTheDocument()
-  }, 10000)
+  }, testBudgetMs(10000))
 
   it('#58: a complete translation shows NO completeness warning', async () => {
     const f = fileStubs()
@@ -747,7 +748,7 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     expect(
       screen.queryByText(t('en', 'translate.file.failedParts.one', { count: 1 }))
     ).not.toBeInTheDocument()
-  }, 10000)
+  }, testBudgetMs(10000))
 })
 
 // ---- #163 (T-2): the mount-adopt effect must have TEETH ----

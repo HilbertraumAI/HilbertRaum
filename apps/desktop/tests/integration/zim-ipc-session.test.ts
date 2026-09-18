@@ -14,6 +14,7 @@ import {
 import { createServer, type ServerResponse } from 'node:http'
 import { tmpdir } from 'node:os'
 import { basename, dirname, join } from 'node:path'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // #301 P3b — the knowledge-pack SESSION BOUNDARY (findings H4 and M4; checks T07 and T08).
 //
@@ -2469,7 +2470,7 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
     } finally {
       await h.close()
     }
-  }, 60_000)
+  }, testBudgetMs(60_000))
 
   // #340 (rag-design D-Z16): the collision surface. `packs:status` is the ONE lock-exempt
   // `packs:*` channel — in-memory only — so `excluded` is the service's last computed list:
@@ -2525,7 +2526,7 @@ describe('#340 — searchability is confirmed right after Add packs… / Enable 
     } finally {
       await h.close()
     }
-  }, 60_000)
+  }, testBudgetMs(60_000))
 })
 
 // ---- #340 Tier-2 (D-Z21): "Save article to my documents" -----------------------------------

@@ -64,6 +64,7 @@ import {
 // The chip/footer phrase is a PURE function of the stored scope (no React state), so the node
 // test can pin "the chip agrees with the resolved scope" (T10) directly against it.
 import { scopeSources } from '../../src/renderer/chat/ScopePopover'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // ZIM knowledge packs (PR #294 → #301) — desired-behaviour regressions for reviewed defects that
 // a LATER phase repairs. Each is an `it.fails` BASELINE (Vitest: the test is reported green while
@@ -1980,7 +1981,7 @@ describe('T15 — fair allocation, bounded concurrency, the selection cap, the d
         await h.close()
       }
     }
-  }, 60_000)
+  }, testBudgetMs(60_000))
 
   // Step 4-5 (ruling (e)(i), B3/B7 — scoped Opus review of step 4-4): `collectPackCandidates`
   // always computes a `cappedCandidates` companion selection, but `runArm` used to reconstruct

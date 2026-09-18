@@ -85,8 +85,10 @@ jobs:
         # (816 s vs 997 s). So sharding does not only halve exposure — pressure per runner
         # genuinely eases (plausibly the #460 handle/temp-root accumulation, halved per runner;
         # correlation, not proven cause). Widening the vitest budgets (step 1, `hookTimeout` /
-        # `testTimeout`) is still what buys TOLERANCE against a starved fork; each shard runs
-        # the same `availableParallelism() - 1` forks.
+        # `testTimeout`) is still what buys TOLERANCE against a starved fork. Since the #458
+        # residual fix each windows shard runs TWO forks, not vitest's default three
+        # (`vitest.config.ts` `poolOptions`, keyed on CI + win32 — nothing to pass here); the
+        # Test step prints "[vitest.config] windows CI leg: forks capped at 2" as evidence.
         #
         # WHY UBUNTU STAYS WHOLE — not just cost. One leg per node version still runs all 449
         # files in a SINGLE vitest process, so cross-file interference (shared module state, a

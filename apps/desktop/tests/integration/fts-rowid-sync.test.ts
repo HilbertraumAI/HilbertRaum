@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { appendMessage, createConversation, deleteConversation, deleteLastAssistantMessage, searchMessages } from '../../src/main/services/chat'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // CODE-4 (full audit 2026-07-11) — the FTS5 delete triggers used `DELETE FROM <fts> WHERE
 // chunk_id/message_id = old.id`: FTS5 has no index on UNINDEXED columns, so EVERY per-row
@@ -87,7 +88,7 @@ describe('CODE-4 — FTS delete triggers are rowid-targeted (timing + plan)', ()
     expect(
       (db.prepare("SELECT COUNT(*) AS n FROM chunks_fts WHERE chunk_id LIKE 'chunk-100-%'").get() as unknown as { n: number }).n
     ).toBe(0)
-  }, 60_000)
+  }, testBudgetMs(60_000))
 
   it('the AD/AU trigger bodies target rowid (O(log N) lookup), with the legacy chunk_id predicate only in the NULL-fallback twins', () => {
     const db = freshDb()
