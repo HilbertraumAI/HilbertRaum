@@ -22,21 +22,29 @@ import { attrValue, decodeEntities, tidyWhole } from './html'
 //    capped at `MAX_NESTING_DEPTH` as a safety valve; past the cap a table is dropped, unchanged
 //    from the module's first design. A wrapper table that carries no header cell of its own and
 //    fewer than two columns is still DELIVERED when a nested table it absorbed is itself real
-//    tabular content (`absorbedDeliverableNested`, #478 review finding B4) -- the wrapper is
-//    layout, but the data one level inside it is not, and the two must not be judged as one.
+//    tabular content (`absorbedDeliverableNested`) -- the wrapper is layout, but the data one
+//    level inside it is not, and the two must not be judged as one. A nested table's OWN class
+//    is still checked against the same layout/navbox classifier as the outermost table (#478):
+//    a `navbox`/`ambox` nested inside an otherwise-kept table is dropped, not inlined. A nested
+//    table's grid expansion and line-building is its own cost, so it is charged into the
+//    outermost table's `workUnits` and bounded by a GLOBAL budget shared across every nested
+//    table one outer table absorbs (`TABLE_MAX_RAW_CHARS`, tracked as `nestedWorkUsed` in
+//    `parseTableBody`): once spent, further nested tables are dropped without even building
+//    their grid, so a pathological input with thousands of small nested tables cannot multiply
+//    real work by table count (#478). A cap firing inside a nested table (its row cap or its
+//    own grid/column/char cap) is folded into the outermost table's own cut markers exactly the
+//    way a clamped span already is, so a cut inside a nested table is never silently invisible.
 //  - A header cell spanning multiple columns is never glued onto a data cell's text. Header
 //    ROWS (every cell in the row is a `<th>`) are excluded from the emitted data lines
 //    entirely; a data row's column key is the NEAREST header row above it that has non-empty
 //    text for that column (looked up in O(1) amortised per cell -- one forward pass keeps a
-//    running per-column key, never an upward rescan, #478 review finding B2), falling back to
-//    that row's OWN leading header cell when it has one (an infobox's `<th>Dichte</th><td>19,32
-//    g/cm³</td>` shape -- #478 review finding B1), and to `Column N` only when neither exists.
-//    A row's own leading header cell wins over a header row further above when both could
-//    apply: it is the more specific label, exactly the "narrower wins" rule multi-row headers
-//    already use, just realised along the row axis instead of the column axis -- required for
-//    the real infobox shape a section-grouping header row (e.g. "Physikalisch") sits above a
-//    run of `<th>label</th><td>value</td>` rows: the section label must not overwrite every
-//    row's own, more specific label.
+//    running per-column key, never an upward rescan), falling back to that row's OWN leading
+//    header cell only when none of the row's own covered columns already has a genuine
+//    (non-group) column key of its own (an infobox's `<th>Dichte</th><td>19,32 g/cm³</td>` row,
+//    with no column headers above it, keys on "Dichte"; an ordinary `<th scope="row">` label
+//    column sitting under real `<th>Country</th><th>Capital</th>` column headers keys on
+//    "Country"/"Capital" instead, never repeats the row's own label as every cell's key), and to
+//    `Column N` only when neither exists.
 //  - A `colspan > 1` header cell keys AT MOST ONE LINE PER ROW, never one per covered cell: it
 //    is a GROUP LABEL. The German-Wikipedia "Gold" infobox labels its rows with plain `<td>`
 //    cells (not `<th>`) under a `<th colspan="2">Physikalisch</th>` group heading, so a row's
@@ -46,20 +54,23 @@ import { attrValue, decodeEntities, tidyWhole } from './html'
 //    is rendered as a group record instead: a 2-column table reads its first cell as the row's
 //    own label ("Physikalisch — Dichte: 19,32 g/cm³ …"); any other column count joins the cells
 //    un-keyed under the one group label, never inventing `Column N` names for columns that were
-//    never headed (see `tableToRecordLines`).
+//    never headed (see `tableToRecordLines`). A row that resolves to a SINGLE source cell
+//    spanning every one of its covered columns (a full-width note or sub-heading row) is
+//    likewise emitted once, un-keyed, never once per covered column and never as `X: X`.
 //  - Superscripts/subscripts are preserved as `^value` / `_value` (so `g/cm<sup>3</sup>` reads
 //    `g/cm^3` and `10<sup>6</sup>` reads `10^6`), but only inside table-derived text -- prose
 //    conversion is unchanged. `<sup class="mw-ref">` citation brackets are still dropped, and an
-//    ordinary `<sup>` nested INSIDE one keeps the skip depth balanced (#478 review finding N4:
-//    html.ts's own prose path already counts every `<sup>` while skipping, for the same reason).
+//    ordinary `<sup>` nested INSIDE one keeps the skip depth balanced (html.ts's own prose path
+//    already counts every `<sup>` while skipping, for the same reason).
 //  - A grid, once rowspan/colspan is expanded, is capped on three independent axes -- columns,
 //    total placed cells, and total emitted characters (`TABLE_MAX_COLUMNS`,
 //    `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`) -- so a table with an enormous span product,
 //    an enormous column count, or a few enormous cell values replicated across many spanned
-//    positions cannot cost more than a fixed, input-independent ceiling (#478 review finding B2).
-//    A `rowspan` can likewise never manufacture a grid row past the table's own last SOURCE row
-//    (finding B5): a rowspan that overhangs the end of the table is clamped to the rows that
-//    actually exist, not padded with phantom empty rows.
+//    positions cannot cost more than a fixed, input-independent ceiling. A `rowspan` can
+//    likewise never manufacture a grid row past the table's own last SOURCE row: a rowspan that
+//    overhangs the end of the table is clamped to the rows that actually exist, not padded with
+//    phantom empty rows. A record line longer than one segment's character cap is hard-split at
+//    a `'; '` pair boundary where one is in budget, never inside a UTF-16 surrogate pair.
 
 /** rowspan/colspan caps -- precedent from the research prototype, not a spec mandate. */
 export const TABLE_MAX_ROWSPAN = 40
@@ -113,13 +124,26 @@ export interface RetainedTable {
   /** True when more source rows existed than TABLE_MAX_SOURCE_ROWS parsed. */
   rowsTruncated: boolean
   /** True when a table nested somewhere inside this one (at any depth, inlined into its
-   *  parent cell) was itself real tabular content -- #478 review finding B4: a headerless,
-   *  single-column OUTER wrapper must still be delivered when the table it wraps is data. */
+   *  parent cell) was itself real tabular content -- a headerless, single-column OUTER wrapper
+   *  must still be delivered when the table it wraps is data (issue #478). */
   absorbedDeliverableNested: boolean
-  /** True when any cell's `rowspan`/`colspan` attribute exceeded its cap and was clamped
-   *  (#478 review finding N6) -- folded into the same "some content was capped" report as the
-   *  column/grid-cell caps, so a clamped span is never silently invisible in the output. */
+  /** True when any cell's `rowspan`/`colspan` attribute exceeded its cap and was clamped --
+   *  folded into the same "some content was capped" report as the column/grid-cell caps, so a
+   *  clamped span is never silently invisible in the output. */
   spanClamped: boolean
+  /** Total `cellsPlaced + charsUsed` charged across every NESTED table's own grid expansion and
+   *  line-building (issue #478), folded into this table's `workUnits` in `serializeTable` so a
+   *  table with many small nested tables cannot cost more real work than it is charged for.
+   *  Meaningful only on the OUTERMOST `RetainedTable` `parseTableBody` returns; 0 otherwise. */
+  nestedWork: number
+  /** True when a NESTED table's own row cap fired -- folded into the outermost table's
+   *  "[Rows … shown]" marker so a cap hit inside a nested table is disclosed the same way one
+   *  at top level is (issue #478). Meaningful only on the OUTERMOST `RetainedTable`. */
+  nestedRowsTruncated: boolean
+  /** True when a NESTED table's own column/grid/char cap fired -- folded into the outermost
+   *  table's "[Some cells … omitted]" marker, same reasoning. Meaningful only on the OUTERMOST
+   *  `RetainedTable`. */
+  nestedGridTruncated: boolean
 }
 
 const CH_SLASH = 47
@@ -147,6 +171,15 @@ interface TableContext {
   sourceRowCount: number
   totalSourceRows: number
   absorbedDeliverableNested: boolean
+  /** Issue #478: true while everything appended into the CURRENT cell/caption (since it last
+   *  started) came only from nested-table inlines, never from ordinary text -- decides whether
+   *  the next nested-table inline joins with '; ' (a run of record-shaped siblings) or ' ' (one
+   *  is sitting inside running prose). Reset whenever a new cell/caption starts. */
+  nestedOnly: boolean
+  /** Issue #478: true right after a nested-table inline was appended into the CURRENT
+   *  cell/caption; the next append of any kind inserts a single space first, so prose that
+   *  follows a nested table's inline text does not run straight into it. */
+  pendingSep: boolean
 }
 
 function makeContext(): TableContext {
@@ -158,11 +191,16 @@ function makeContext(): TableContext {
     rowActive: false,
     sourceRowCount: 0,
     totalSourceRows: 0,
-    absorbedDeliverableNested: false
+    absorbedDeliverableNested: false,
+    nestedOnly: true,
+    pendingSep: false
   }
 }
 
-function finishContext(ctx: TableContext, spanClamped: boolean): RetainedTable {
+function finishContext(
+  ctx: TableContext,
+  extra: { spanClamped: boolean; nestedWork?: number; nestedRowsTruncated?: boolean; nestedGridTruncated?: boolean }
+): RetainedTable {
   return {
     caption: tidyWhole(ctx.caption),
     rows: ctx.rows.map((row) => row.map((c) => ({ ...c, text: tidyWhole(c.text) }))),
@@ -170,7 +208,10 @@ function finishContext(ctx: TableContext, spanClamped: boolean): RetainedTable {
     totalSourceRows: ctx.totalSourceRows,
     rowsTruncated: ctx.sourceRowCount < ctx.totalSourceRows,
     absorbedDeliverableNested: ctx.absorbedDeliverableNested,
-    spanClamped
+    spanClamped: extra.spanClamped,
+    nestedWork: extra.nestedWork ?? 0,
+    nestedRowsTruncated: extra.nestedRowsTruncated ?? false,
+    nestedGridTruncated: extra.nestedGridTruncated ?? false
   }
 }
 
@@ -183,12 +224,18 @@ function finishContext(ctx: TableContext, spanClamped: boolean): RetainedTable {
  * dropping every nested table outright would drop the very content table delivery exists to
  * reach. Depth is capped (`MAX_NESTING_DEPTH`) as a safety valve against pathological input; a
  * table nested deeper than the cap is dropped, unchanged from this module's original design.
+ * Returns the nested table's own grid/line-building cost (`workUnits`, issue #478) and whether
+ * its own row or column/grid/char cap fired, so the caller can fold both into the outermost
+ * table's charged work and cut markers.
  */
-function inlineNestedTable(table: RetainedTable): string {
+function inlineNestedTable(table: RetainedTable): { text: string; workUnits: number; gridTruncated: boolean } {
+  const { lines, gridTruncated, cellsPlaced } = tableToRecordLines(table)
   const parts: string[] = []
   if (table.caption) parts.push(table.caption)
-  parts.push(...tableToRecordLines(table).lines)
-  return parts.join('; ')
+  parts.push(...lines)
+  let charsUsed = table.caption.length
+  for (const line of lines) charsUsed += line.length
+  return { text: parts.join('; '), workUnits: cellsPlaced + charsUsed, gridTruncated }
 }
 
 /** Safety valve for pathological nesting (each level is a real stack frame's worth of state,
@@ -207,11 +254,21 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
   let i = start
   const stack: TableContext[] = [makeContext()] // stack[0] is the OUTERMOST (kept) table
   let refSkipDepth = 0
-  // > 0 while inside a nested table past MAX_NESTING_DEPTH: dropped whole, unchanged design.
+  // > 0 while inside a too-deeply-nested OR layout/navbox-classed nested table: dropped whole
+  // (issue #478 -- a nested table's own class is checked against the same classifier as the
+  // outermost table, not merely its depth).
   let droppedDepth = 0
   // Shared across every table on the stack (outer and nested): whether ANY cell's span
-  // attribute was clamped (#478 review N6), folded into the OUTERMOST table's report only.
+  // attribute was clamped, folded into the OUTERMOST table's report only.
   let spanClamped = false
+  // Issue #478 (NB2/NB3): total cellsPlaced+chars charged by every nested table's own grid
+  // expansion and line-building, and whether any nested table's own row or grid/column/char cap
+  // fired -- all three flat across the WHOLE call (every nesting depth updates the same
+  // variables), then folded into the outermost table's `nestedWork`/`nestedRowsTruncated`/
+  // `nestedGridTruncated` at the final return.
+  let nestedWorkUsed = 0
+  let nestedRowsTruncated = false
+  let nestedGridTruncated = false
 
   const active = (): TableContext => stack[stack.length - 1]
 
@@ -219,14 +276,46 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     if (raw.length === 0 || refSkipDepth > 0 || droppedDepth > 0) return
     const ctx = active()
     const text = decodeEntities(raw)
-    if (ctx.inCaption) ctx.caption += text
-    else if (ctx.cell) ctx.cell.text += text
+    if (ctx.inCaption) {
+      if (ctx.pendingSep) { ctx.caption += ' '; ctx.pendingSep = false }
+      ctx.caption += text
+      ctx.nestedOnly = false
+    } else if (ctx.cell) {
+      if (ctx.pendingSep) { ctx.cell.text += ' '; ctx.pendingSep = false }
+      ctx.cell.text += text
+      ctx.nestedOnly = false
+    }
   }
   const appendLiteral = (literal: string): void => {
     if (refSkipDepth > 0 || droppedDepth > 0) return
     const ctx = active()
-    if (ctx.inCaption) ctx.caption += literal
-    else if (ctx.cell) ctx.cell.text += literal
+    if (ctx.inCaption) {
+      if (ctx.pendingSep) { ctx.caption += ' '; ctx.pendingSep = false }
+      ctx.caption += literal
+      ctx.nestedOnly = false
+    } else if (ctx.cell) {
+      if (ctx.pendingSep) { ctx.cell.text += ' '; ctx.pendingSep = false }
+      ctx.cell.text += literal
+      ctx.nestedOnly = false
+    }
+  }
+  // Issue #478 (NB6): a nested table's inline text is structurally its own clause, not running
+  // prose -- it never glues directly onto whatever text already sits in the same cell/caption.
+  // A run of sibling nested tables (nothing but nested-table inlines appended so far) joins
+  // with '; ', the same separator `inlineNestedTable` uses for its own parts; a nested table
+  // sitting inside real prose joins with a single space on both sides instead, so it reads as
+  // an inserted clause rather than a second field in a list.
+  const appendNestedInline = (inline: string): void => {
+    if (inline.length === 0 || refSkipDepth > 0 || droppedDepth > 0) return
+    const ctx = active()
+    if (ctx.inCaption) {
+      if (ctx.caption.length > 0) ctx.caption += ctx.nestedOnly ? '; ' : ' '
+      ctx.caption += inline
+    } else if (ctx.cell) {
+      if (ctx.cell.text.length > 0) ctx.cell.text += ctx.nestedOnly ? '; ' : ' '
+      ctx.cell.text += inline
+    }
+    ctx.pendingSep = true
   }
 
   while (i < n) {
@@ -263,7 +352,12 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     if (name === 'table') {
       if (!isClose) {
         if (!selfClosing) {
-          if (stack.length >= MAX_NESTING_DEPTH) droppedDepth += 1
+          // Issue #478 (NB4): a nested table's OWN class is checked against the same
+          // layout/navbox classifier the outermost table already uses -- a `navbox`/`ambox`
+          // nested inside an otherwise-kept table is dropped, not inlined, exactly one
+          // condition reusing the existing drop machinery (droppedDepth).
+          const cls = attrValue(attrs, 'class')
+          if (isLayoutTableClass(cls) || stack.length >= MAX_NESTING_DEPTH) droppedDepth += 1
           else stack.push(makeContext())
         }
       } else if (droppedDepth > 0) {
@@ -271,22 +365,39 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       } else if (stack.length > 1) {
         // A nested table just closed: inline it into whatever cell/caption of the PARENT was
         // open when it started, then pop back to the parent context. If the nested table was
-        // itself real tabular content, that fact propagates to the parent (finding B4) so a
-        // headerless single-column wrapper around it is still judged deliverable.
+        // itself real tabular content, that fact propagates to the parent so a headerless
+        // single-column wrapper around it is still judged deliverable.
         const nested = stack.pop() as TableContext
-        const nestedTable = finishContext(nested, false)
-        const inline = inlineNestedTable(nestedTable)
-        if (inline) appendLiteral(inline)
-        if (hasDeliverableContent(nestedTable) || nestedTable.absorbedDeliverableNested) {
-          active().absorbedDeliverableNested = true
+        if (nestedWorkUsed >= TABLE_MAX_RAW_CHARS) {
+          // Issue #478 (NB2): the global nested-work budget for this outermost table is
+          // already spent -- drop this nested table's content entirely, WITHOUT building its
+          // grid at all, rather than charging it its own local TABLE_MAX_RAW_CHARS budget. A
+          // pathological input with thousands of small nested tables must not multiply real
+          // work by table count: only the first TABLE_MAX_RAW_CHARS worth of nested content
+          // is ever inlined, and the drop is disclosed the same way a clamped span is.
+          spanClamped = true
+        } else {
+          const nestedTable = finishContext(nested, { spanClamped: false })
+          if (nestedTable.rowsTruncated) nestedRowsTruncated = true
+          const { text: inline, workUnits: nestedOwnWork, gridTruncated: nestedOwnGridTruncated } =
+            inlineNestedTable(nestedTable)
+          if (nestedOwnGridTruncated) nestedGridTruncated = true
+          nestedWorkUsed += nestedOwnWork
+          appendNestedInline(inline)
+          if (hasDeliverableContent(nestedTable) || nestedTable.absorbedDeliverableNested) {
+            active().absorbedDeliverableNested = true
+          }
         }
       } else {
         // The OUTERMOST table just closed.
-        return { table: finishContext(stack[0], spanClamped), end: i }
+        return {
+          table: finishContext(stack[0], { spanClamped, nestedWork: nestedWorkUsed, nestedRowsTruncated, nestedGridTruncated }),
+          end: i
+        }
       }
       continue
     }
-    if (droppedDepth > 0) continue // inside a too-deeply-nested (dropped) table
+    if (droppedDepth > 0) continue // inside a dropped (too-deep or layout-classed) nested table
 
     if (name === 'sup') {
       // <sup class="mw-ref"> citation brackets stay dropped, same as prose (html.ts's
@@ -297,7 +408,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       // skipping a ref bracket, EVERY nested `<sup>` (ref or not) is counted symmetrically on
       // open/close, exactly like html.ts's own prose `supSkipDepth` -- a plain `<sup>` nested
       // inside a `<sup class="mw-ref">` must not decrement the depth and leak the rest of the
-      // citation (#478 review finding N4).
+      // citation (issue #478).
       if (refSkipDepth > 0) {
         if (!selfClosing) refSkipDepth += isClose ? -1 : 1
         continue
@@ -315,7 +426,12 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       continue
     }
     if (name === 'caption') {
-      active().inCaption = !isClose
+      const ctx = active()
+      ctx.inCaption = !isClose
+      if (!isClose) {
+        ctx.pendingSep = false
+        ctx.nestedOnly = true
+      }
       continue
     }
     if (name === 'tr') {
@@ -347,11 +463,13 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       if (rowSpan.clamped || colSpan.clamped) spanClamped = true
       ctx.cell = { text: '', header: name === 'th', rows: rowSpan.value, columns: colSpan.value }
       ctx.rows[ctx.rows.length - 1].push(ctx.cell)
+      ctx.pendingSep = false
+      ctx.nestedOnly = true
       continue
     }
     if (!isClose && (name === 'br' || name === 'p' || name === 'div' || name === 'li')) {
-      // A SPACE, not a newline (#478 review finding N3): table-derived text is one line per
-      // data row by contract, and an intra-cell break must not split that line in two.
+      // A SPACE, not a newline (issue #478): table-derived text is one line per data row by
+      // contract, and an intra-cell break must not split that line in two.
       appendLiteral(' ')
     }
     // Everything else (thead/tbody/tfoot/span/a/b/i/small/…) is transparent: its own text runs
@@ -360,7 +478,10 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
   // EOF without a matching close for every open <table>: total on malformed input (never
   // throws). Only the OUTERMOST context is returned -- an unterminated nested table's partial
   // content is not inlined, an acceptable degradation for input that never closes at all.
-  return { table: finishContext(stack[0], spanClamped), end: n }
+  return {
+    table: finishContext(stack[0], { spanClamped, nestedWork: nestedWorkUsed, nestedRowsTruncated, nestedGridTruncated }),
+    end: n
+  }
 }
 
 /** A header cell exists anywhere in the table. */
@@ -369,8 +490,8 @@ function hasHeaderCell(table: RetainedTable): boolean {
 }
 
 /** The structural drop test (brief §1): no header cell AND no real tabular content, UNLESS a
- *  nested table this one absorbed was itself real tabular content (finding B4) -- the wrapper's
- *  own shape is layout, but the data one level inside it is not, and the two are judged apart. */
+ *  nested table this one absorbed was itself real tabular content -- the wrapper's own shape is
+ *  layout, but the data one level inside it is not, and the two are judged apart. */
 export function hasDeliverableContent(table: RetainedTable): boolean {
   if (hasHeaderCell(table)) return true
   if (table.absorbedDeliverableNested) return true
@@ -386,10 +507,10 @@ function isAllHeaderRow(row: TableCell[] | undefined): boolean {
 }
 
 /** A MIXED row (some but not all cells are headers) whose leading cell(s) are headers -- an
- *  infobox's `<th>Dichte</th><td>19,32</td>` shape (#478 review finding B1). Multiple leading
- *  header cells (rare: "Country | Capital" both headers, then data) join with ' / ', the same
- *  convention 2g's research prototype uses for multi-row headers. `null` when the row has no
- *  leading header cell at all (an ordinary data row, keyed by a header ROW above instead). */
+ *  infobox's `<th>Dichte</th><td>19,32</td>` shape (issue #478). Multiple leading header cells
+ *  (rare: "Country | Capital" both headers, then data) join with ' / ', the same convention
+ *  used for multi-row headers below. `null` when the row has no leading header cell at all (an
+ *  ordinary data row, keyed by a header ROW above instead). */
 function rowHeaderText(row: TableCell[] | undefined): string | null {
   if (!row || row.length === 0 || !row[0]!.header || row.every((c) => c.header)) return null
   const leading: string[] = []
@@ -402,7 +523,7 @@ function rowHeaderText(row: TableCell[] | undefined): string | null {
 
 /** How many leading GRID columns of a row-header row are covered by its own header cell(s) --
  *  skipped when emitting the row's data pairs (the header cell keys the row, it is not itself a
- *  `Column N` value, #478 review finding B1). */
+ *  `Column N` value, issue #478). */
 function leadingHeaderSpan(gridRow: ReadonlyArray<TableCell | undefined>): number {
   let c = 0
   while (c < gridRow.length && gridRow[c]?.header) c += 1
@@ -411,15 +532,14 @@ function leadingHeaderSpan(gridRow: ReadonlyArray<TableCell | undefined>): numbe
 
 /**
  * Expand rowspan/colspan into a rectangular grid; a spanning cell's text/header flag is
- * repeated into every grid position it covers (same convention as the 2g research prototype),
- * bounded on three independent axes so no crafted span/column/cell combination can cost more
- * than a fixed ceiling (#478 review finding B2):
+ * repeated into every grid position it covers, bounded on three independent axes so no crafted
+ * span/column/cell combination can cost more than a fixed ceiling (issue #478):
  *  - a cell placed at or past `TABLE_MAX_COLUMNS` is dropped and no further source cell in that
  *    row is examined (a row's iteration cost is therefore bounded by the column cap, never by
  *    how many source cells the row actually contains);
- *  - a `rowspan` is clamped to the rows that actually exist in THIS table (#478 review finding
- *    B5) -- it can never manufacture a grid row past the table's last real source row, so a
- *    single source row cannot fake a tall grid the way an unclamped rowspan could;
+ *  - a `rowspan` is clamped to the rows that actually exist in THIS table -- it can never
+ *    manufacture a grid row past the table's last real source row, so a single source row
+ *    cannot fake a tall grid the way an unclamped rowspan could;
  *  - total placed grid cells are capped independently of the above (`TABLE_MAX_GRID_CELLS`), a
  *    backstop against a legitimately-shaped but very large table.
  */
@@ -477,11 +597,16 @@ interface ColumnKey {
  * is what keeps a spanning header from being repeated on every cell): they only seed the keys
  * used for the rows below them. Column keys are resolved in a single forward pass -- a running
  * `columnKeys[c]` cache updated whenever an all-header row is crossed -- so the lookup is O(1)
- * amortised per data cell, never an upward rescan of every row above it (#478 review finding
- * B2). A row's own leading header cell (finding B1) wins over that cache when both could
- * supply a key for the same column: it is the more specific label (see the module header note
- * on why this order, not the reviewer's literal suggestion, is required for a real infobox that
- * mixes a section-grouping header row with per-row `<th>` labels).
+ * amortised per data cell, never an upward rescan of every row above it.
+ *
+ * A row's own leading header cell wins over that cache ONLY when none of the row's own covered
+ * (non-leading-header) columns already has a genuine, non-group column key: an infobox row
+ * shaped `<th>Dichte</th><td>19,32 g/cm³</td>` with no column headers above it keys on "Dichte";
+ * an ordinary `<th scope="row">France</th><td>Paris</td><td>68</td>` row sitting under real
+ * `<th>Country</th><th>Capital</th><th>Population</th>` column headers keys on "Capital"/
+ * "Population" instead, never repeats "France" as every cell's key (issue #478). When the row's
+ * own header is set aside this way, `skipCols` returns to 0 so the leading cell is itself keyed
+ * by its own column header, same as any other covered cell.
  *
  * A `colspan > 1` header cell (`isGroup`, above) is never glued onto a covered column as its own
  * per-cell key -- that is the exact defect it replaces (a real German-Wikipedia infobox labels
@@ -495,8 +620,9 @@ interface ColumnKey {
  * that were never headed at all ("Physikalisch: A; B; C"). The group label is looked up once per
  * row (never once per cell), and is omitted from the line entirely when no group header covers
  * the row (a plain headerless table degrades to the same label/value or unkeyed-join form, with
- * no label prefix). A row that DOES have its own leading header, or whose covered columns already
- * carry a genuine per-column header, is unaffected -- both keep exactly today's per-cell keying.
+ * no label prefix). A row that resolves to a SINGLE source cell spanning every one of its
+ * covered columns (a full-width note or sub-heading row) is emitted once, un-keyed, before any
+ * of the above -- never once per covered column and never as `X: X` (issue #478).
  */
 export function tableToRecordLines(table: RetainedTable): { lines: string[]; gridTruncated: boolean; cellsPlaced: number } {
   const { grid, numCols, gridTruncated: capTruncated, cellsPlaced } = buildGrid(table)
@@ -526,13 +652,43 @@ export function tableToRecordLines(table: RetainedTable): { lines: string[]; gri
       }
       continue
     }
-    const rowHeader = rowHeaderText(sourceRow)
-    const skipCols = rowHeader !== null ? leadingHeaderSpan(grid[r]!) : 0
+    let rowHeader = rowHeaderText(sourceRow)
+    let skipCols = rowHeader !== null ? leadingHeaderSpan(grid[r]!) : 0
+
+    if (rowHeader !== null) {
+      // A genuine (non-group) column key already covers one of this row's own data columns:
+      // the row sits under real column headers, so those headers win over the row's own
+      // leading `<th>` (issue #478) -- treat it as an ordinary column-keyed row instead.
+      let underGenuineColumnHeader = false
+      for (let c = skipCols; c < numCols; c += 1) {
+        const colKey = columnKeys[c]
+        if ((grid[r]![c]?.text ?? '').trim() && colKey !== null && !colKey.isGroup) {
+          underGenuineColumnHeader = true
+          break
+        }
+      }
+      if (underGenuineColumnHeader) {
+        rowHeader = null
+        skipCols = 0
+      }
+    }
 
     if (rowHeader === null) {
       const coveredCols: number[] = []
       for (let c = skipCols; c < numCols; c += 1) {
         if ((grid[r]![c]?.text ?? '').trim()) coveredCols.push(c)
+      }
+      if (coveredCols.length >= 2) {
+        // A single source cell (buildGrid places the SAME TableCell reference into every grid
+        // position its span covers) filling every one of the row's covered columns is a
+        // full-width note or sub-heading, not parallel key/value pairs -- emit it once.
+        const distinctCells = new Set(coveredCols.map((c) => grid[r]![c]))
+        if (distinctCells.size === 1) {
+          const groupKey = coveredCols.map((c) => columnKeys[c]).find((k) => k?.isGroup)
+          const noteText = grid[r]![coveredCols[0]!]!.text.trim()
+          chargeLine(groupKey ? `${groupKey.text} — ${noteText}` : noteText)
+          continue
+        }
       }
       const hasGenuineKey = coveredCols.some((c) => columnKeys[c] !== null && !columnKeys[c]!.isGroup)
       if (coveredCols.length > 0 && !hasGenuineKey) {
@@ -555,7 +711,7 @@ export function tableToRecordLines(table: RetainedTable): { lines: string[]; gri
     const parts: string[] = []
     for (let c = skipCols; c < numCols; c += 1) {
       const value = grid[r]![c]?.text ?? ''
-      if (!value.trim()) continue // N2: a ragged row's empty trailing pair carries no information
+      if (!value.trim()) continue // a ragged row's empty trailing pair carries no information
       const colKey = columnKeys[c]
       // A group-sourced key never becomes a literal per-cell key (see above), even in this
       // mixed fallback (some covered columns genuinely headed, this one is not): it falls back
@@ -574,9 +730,21 @@ export function tableToRecordLines(table: RetainedTable): { lines: string[]; gri
   return { lines, gridTruncated: capTruncated || contentCapped, cellsPlaced }
 }
 
+/** True when `cc` is a UTF-16 high (lead) surrogate. */
+function isHighSurrogate(cc: number): boolean {
+  return cc >= 0xd800 && cc <= 0xdbff
+}
+/** True when `cc` is a UTF-16 low (trail) surrogate. */
+function isLowSurrogate(cc: number): boolean {
+  return cc >= 0xdc00 && cc <= 0xdfff
+}
+
 /** Hard-splits a line longer than `maxChars`, preferring a `'; '` pair boundary within budget
- *  and falling back to a raw character cut -- #478 review finding B3: the segment cap must hold
- *  even for a single record line whose value alone exceeds it. */
+ *  and falling back to a raw character cut -- the segment cap must hold even for a single
+ *  record line whose value alone exceeds it (issue #478). The raw-character fallback never
+ *  cuts inside a UTF-16 surrogate pair (an astral character, e.g. an emoji, split across two
+ *  code units would otherwise leave a lone surrogate in both pieces): the cut index is nudged
+ *  left past the pair boundary, losing no character and keeping every piece well-formed UTF-16. */
 const LONG_LINE_CUT = ' [cut]'
 function splitLongLine(line: string, maxChars: number): string[] {
   if (line.length <= maxChars) return [line]
@@ -586,6 +754,9 @@ function splitLongLine(line: string, maxChars: number): string[] {
   while (rest.length > maxChars) {
     let cut = rest.lastIndexOf('; ', budget)
     if (cut <= 0) cut = budget
+    while (cut > 0 && isHighSurrogate(rest.charCodeAt(cut - 1)) && isLowSurrogate(rest.charCodeAt(cut))) {
+      cut -= 1
+    }
     pieces.push(`${rest.slice(0, cut)}${LONG_LINE_CUT}`)
     rest = rest.slice(cut).replace(/^; /, '')
   }
@@ -595,18 +766,20 @@ function splitLongLine(line: string, maxChars: number): string[] {
 
 export interface TableSerialisation {
   segments: string[]
-  /** Grid cells placed plus characters emitted -- the real cost of delivering this table,
-   *  charged into html.ts's `work` counter alongside the existing per-byte sub-scan charge
-   *  (#478 review finding B2: previously only the table's SOURCE BYTES were charged, so the
-   *  pinned work/n bound never saw the grid-expansion/serialisation cost at all). */
+  /** Grid cells placed plus characters emitted, for this table AND every nested table it
+   *  absorbed -- the real cost of delivering this table, charged into html.ts's `work` counter
+   *  alongside the existing per-byte sub-scan charge (issue #478: previously only the table's
+   *  SOURCE BYTES were charged, and a nested table's own grid/line-building cost was not
+   *  charged anywhere, so the pinned work/n bound never saw it at all). */
   workUnits: number
 }
 
 /**
  * Render a RetainedTable into one or more segment texts, capped so a large table cannot
  * explode the unit count: at most TABLE_MAX_SEGMENTS segments of at most
- * TABLE_SEGMENT_MAX_CHARS characters each, with any single over-long line hard-split first
- * (finding B3). A table cut by any cap says so in its own text.
+ * TABLE_SEGMENT_MAX_CHARS characters each, with any single over-long line hard-split first.
+ * A table cut by any cap -- including a cap that fired inside a table it absorbed by nesting --
+ * says so in its own text.
  */
 export function serializeTable(table: RetainedTable): TableSerialisation {
   const { lines, gridTruncated, cellsPlaced } = tableToRecordLines(table)
@@ -640,14 +813,16 @@ export function serializeTable(table: RetainedTable): TableSerialisation {
   if (current.length > 0 && segments.length < TABLE_MAX_SEGMENTS) segments.push(current.join('\n'))
 
   // Two independent reasons a table's own text says it was cut, joined when both apply: rows
-  // dropped by the row/segment caps (D3: "data rows", since that is what `consumed` counts, not
-  // every source row -- a header row is parsed but never becomes a data line), and cells or
-  // content dropped by the column/grid/char/span caps (B2, N6).
+  // dropped by the row/segment caps, or by a NESTED table's own row cap (`nestedRowsTruncated`,
+  // issue #478) -- "source rows" since `table.totalSourceRows` counts every top-level `<tr>`
+  // including header rows, not only the data rows `consumed` counts; and cells or content
+  // dropped by the column/grid/char/span caps, or by a nested table's own such cap
+  // (`nestedGridTruncated`).
   const markers: string[] = []
-  if (table.rowsTruncated || cutForSegments || consumed < lines.length) {
-    markers.push(`[Rows 1-${consumed} of ${table.totalSourceRows} data rows shown]`)
+  if (table.rowsTruncated || table.nestedRowsTruncated || cutForSegments || consumed < lines.length) {
+    markers.push(`[Rows 1-${consumed} of ${table.totalSourceRows} source rows shown]`)
   }
-  if (gridTruncated || table.spanClamped) {
+  if (gridTruncated || table.spanClamped || table.nestedGridTruncated) {
     markers.push("[Some cells beyond the table's size caps were omitted]")
   }
   if (markers.length > 0) {
@@ -660,5 +835,5 @@ export function serializeTable(table: RetainedTable): TableSerialisation {
   // value leaves a trailing space after its key's colon (`Column 2: `), which `tidyWhole`
   // collapses/trims exactly like the rest of html.ts's output does.
   const texts = segments.map((s) => tidyWhole(s)).filter((s) => s.length > 0)
-  return { segments: texts, workUnits: cellsPlaced + charsUsed }
+  return { segments: texts, workUnits: cellsPlaced + charsUsed + table.nestedWork }
 }

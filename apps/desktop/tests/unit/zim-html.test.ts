@@ -73,7 +73,7 @@ describe('zimArticleToSegments', () => {
   })
 
   it('a prose <sub> keeps today’s flattening unchanged, same as <sup> ' +
-    '(#478 review finding T6: only the <sup> half was pinned)', () => {
+    '(issue #478: only the <sup> half was pinned)', () => {
     const text = zimArticleToSegments('<p>H<sub>2</sub>O ist Wasser.</p>')
       .segments.map((s) => s.text)
       .join('\n')
@@ -298,7 +298,7 @@ describe('zimArticleToSegments — table delivery', () => {
     const shown = TABLE_MAX_SOURCE_ROWS - 1
     expect(text).toContain(`A: ${shown - 1};`)
     expect(text).not.toContain(`A: ${shown};`)
-    expect(text).toMatch(new RegExp(`\\[Rows 1-${shown} of ${rowCount + 1} data rows shown\\]`))
+    expect(text).toMatch(new RegExp(`\\[Rows 1-${shown} of ${rowCount + 1} source rows shown\\]`))
   })
 
   it('a table whose serialisation exceeds the segment/char caps is split, then cut, with the cut marked', () => {
@@ -315,7 +315,7 @@ describe('zimArticleToSegments — table delivery', () => {
     const all = article.segments.map((s) => s.text).join('\n')
     // Not every row can have survived TABLE_MAX_SEGMENTS segments of TABLE_SEGMENT_MAX_CHARS.
     expect(all).not.toContain(`Item${rowCount - 1}`)
-    expect(all).toMatch(/data rows shown\]/)
+    expect(all).toMatch(/source rows shown\]/)
   })
 
   it('caps rowspan and colspan (named constants, pinned by value)', () => {
@@ -360,7 +360,7 @@ describe('zimArticleToSegments — table delivery', () => {
   })
 
   // -------------------------------------------------------------------------------------
-  // Row-header keying (#478 review finding B1). An infobox's commonest shape --
+  // Row-header keying (issue #478). An infobox's commonest shape --
   // `<tr><th>Dichte</th><td>19,32</td></tr>` -- is a MIXED row (its `<th>` is not a header
   // ROW), so it used to fall back to `Column 1: Dichte; Column 2: 19,32` instead of using its
   // own leading header cell as the key.
@@ -396,6 +396,39 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(text).toContain('Schmelzpunkt: 1064,18 °C')
     expect(text).not.toContain('Physikalisch: Dichte')
     expect(text).not.toContain('Physikalisch: 19,32')
+  })
+
+  it('a row’s own leading header cell does NOT win over real column headers above it -- ' +
+    'the commonest sortable Wikipedia table (row-label column under real column headers) ' +
+    'keys every cell by its own column, never by repeating the row label (issue #478)', () => {
+    const html =
+      '<table><tr><th>Country</th><th>Capital</th><th>Population</th></tr>' +
+      '<tr><th scope="row">France</th><td>Paris</td><td>68</td></tr>' +
+      '<tr><th scope="row">Spain</th><td>Madrid</td><td>47</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('Country: France; Capital: Paris; Population: 68')
+    expect(text).toContain('Country: Spain; Capital: Madrid; Population: 47')
+    // The regression this fixes: the row's own header used to win unconditionally, discarding
+    // every real column header and repeating the row label as every cell's key.
+    expect(text).not.toContain('France: Paris')
+    expect(text).not.toContain('France: 68')
+  })
+
+  it('the shapes the row-header/group-label rule exists for stay unaffected by the fix above: ' +
+    'a group label (spanning 2 or 3 columns, or a single un-spanned header cell) still yields ' +
+    'to the row’s own leading header when NO column above genuinely keys the row', () => {
+    // <th colspan=2> group header, no genuine column header below it.
+    expect(textOf('<table><tr><th colspan="2">Physikalisch</th></tr>' +
+      '<tr><th>Dichte</th><td>19,32</td></tr></table>')).toBe('Dichte: 19,32')
+    // A single, un-spanned header cell above a row-header row.
+    expect(textOf('<table><tr><th>Physikalisch</th></tr>' +
+      '<tr><th>Dichte</th><td>19,32</td></tr></table>')).toBe('Dichte: 19,32')
+    // <th colspan=3> group header over a 3-cell row-header row.
+    expect(textOf('<table><tr><th colspan="3">Physikalisch</th></tr>' +
+      '<tr><th>Dichte</th><td>19,32</td><td>g/cm3</td></tr></table>'))
+      .toBe('Dichte: 19,32; Dichte: g/cm3')
+    // No header row at all above the row-header row.
+    expect(textOf('<table><tr><th>Dichte</th><td>19,32</td></tr></table>')).toBe('Dichte: 19,32')
   })
 
   // -------------------------------------------------------------------------------------
@@ -461,6 +494,54 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(textOf(html)).toBe('Name: Density; Value: 19.3')
   })
 
+  // -------------------------------------------------------------------------------------
+  // A single source cell whose `colspan` covers every one of a row's columns (a full-width
+  // note or sub-heading row) is a plain sentence, not parallel key/value pairs -- it must be
+  // emitted exactly once, never once per covered column, and never as the meaningless "X: X"
+  // (issue #478).
+  // -------------------------------------------------------------------------------------
+  it('a full-width colspan note row under a 2-column row-header table is emitted once, ' +
+    'un-keyed, never as "Hinweis zur Messung: Hinweis zur Messung"', () => {
+    const html =
+      '<table><tr><th>A</th><td>1</td></tr>' +
+      '<tr><td colspan="2">Hinweis zur Messung</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toBe('A: 1\nHinweis zur Messung')
+    expect(text).not.toContain('Hinweis zur Messung: Hinweis zur Messung')
+  })
+
+  it('a full-width colspan note row under real column headers is emitted once, un-keyed, ' +
+    'never as "K: Note; V: Note"', () => {
+    const html =
+      '<table><tr><th>K</th><th>V</th></tr>' +
+      '<tr><td>a</td><td>1</td></tr>' +
+      '<tr><td colspan="2">Note</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toBe('K: a; V: 1\nNote')
+    expect(text).not.toContain('K: Note')
+    expect(text).not.toContain('V: Note')
+  })
+
+  it('a full-width colspan note row under a group-labelled infobox is emitted once, ' +
+    'optionally under the group label, never doubled onto every covered column', () => {
+    const html =
+      '<table><tr><th colspan="2">Physikalisch</th></tr>' +
+      '<tr><td>Dichte</td><td>19,32</td></tr>' +
+      '<tr><td colspan="2">Anmerkung zur Messung</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('Physikalisch — Dichte: 19,32')
+    expect(text).toContain('Physikalisch — Anmerkung zur Messung')
+    expect(text).not.toContain('Anmerkung zur Messung: Anmerkung zur Messung')
+  })
+
+  it('a 2-column numeric series under a group label is unaffected (two genuinely distinct ' +
+    'source cells, not one spanning cell, so the group-record label/value form still applies)', () => {
+    const html =
+      '<table><tr><th colspan="2">Messwerte</th></tr>' +
+      '<tr><td>1990</td><td>12,4</td></tr></table>'
+    expect(textOf(html)).toBe('Messwerte — 1990: 12,4')
+  })
+
   it('the article.html infobox row (a real fixture, not a synthetic one) is keyed exactly, ' +
     'not "Column 1: ... Column 2: ..." (pins the exact rendering shape, not just presence)', () => {
     const fixtureText = zimArticleToSegments(FIXTURE).segments.map((s) => s.text).join('\n\n')
@@ -468,7 +549,7 @@ describe('zimArticleToSegments — table delivery', () => {
   })
 
   // -------------------------------------------------------------------------------------
-  // Nested data table inside a headerless single-column wrapper (#478 review finding B4).
+  // Nested data table inside a headerless single-column wrapper (issue #478).
   // -------------------------------------------------------------------------------------
   it('a nested REAL table inside a headerless, single-column wrapper is still delivered -- ' +
     'the wrapper is layout, the data one level inside it is not', () => {
@@ -489,7 +570,61 @@ describe('zimArticleToSegments — table delivery', () => {
   })
 
   // -------------------------------------------------------------------------------------
-  // A rowspan overhanging the table's last real row (#478 review finding B5).
+  // A layout/navbox table NESTED inside an otherwise-kept table is dropped by the same
+  // classifier that already drops one at top level, not inlined (issue #478).
+  // -------------------------------------------------------------------------------------
+  it('a navbox nested inside a kept table is dropped, not inlined -- the classifier applies ' +
+    'at every nesting depth, not only to the outermost table', () => {
+    const html =
+      '<table><tr><th>Data</th><td>x</td></tr>' +
+      '<tr><td>see <table class="navbox"><tr><th>Nav</th><td>junk1</td></tr>' +
+      '<tr><th>N2</th><td>junk2</td></tr></table></td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('Data: x')
+    expect(text).not.toContain('junk1')
+    expect(text).not.toContain('junk2')
+    expect(text).not.toContain('Nav')
+  })
+
+  it('an ambox maintenance box nested inside a lead-table cell is dropped, not inlined, ' +
+    'and does not corrupt the row it was nested in', () => {
+    const html =
+      '<table><tr><th>D</th><td>1</td></tr>' +
+      '<tr><td colspan="2"><table class="ambox"><tr><th>Warn</th>' +
+      '<td>Dieser Artikel ist unvollständig</td></tr></table></td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('D: 1')
+    expect(text).not.toContain('unvollständig')
+    expect(text).not.toContain('Warn')
+  })
+
+  // -------------------------------------------------------------------------------------
+  // Adjacent nested-table inline text, and a nested table sitting inside running prose, must
+  // not be concatenated with no separator (issue #478).
+  // -------------------------------------------------------------------------------------
+  it('two sibling nested tables in the same cell join with "; ", never run together', () => {
+    const html =
+      '<table><tr><td>' +
+      '<table><tr><th>Dichte</th><td>19,32</td></tr></table>' +
+      '<table><tr><th>Schmelz</th><td>1064</td></tr></table>' +
+      '</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('Dichte: 19,32; Schmelz: 1064')
+    expect(text).not.toContain('19,32Schmelz')
+  })
+
+  it('a nested table sitting inside running prose is separated from the surrounding text by ' +
+    'a space on both sides, never glued onto it', () => {
+    const html =
+      '<table><tr><th>A</th><td>vor<table><tr><th>N</th><td>1</td></tr></table>nach</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toBe('A: vor N: 1 nach')
+    expect(text).not.toContain('vorN')
+    expect(text).not.toContain('1nach')
+  })
+
+  // -------------------------------------------------------------------------------------
+  // A rowspan overhanging the table's last real row (issue #478).
   // -------------------------------------------------------------------------------------
   it('a rowspan overhanging the last source row is clamped, not padded with phantom rows', () => {
     const html = '<table><tr><th>A</th><th>B</th></tr><tr><td>x</td><td rowspan="6">y</td></tr></table>'
@@ -499,7 +634,7 @@ describe('zimArticleToSegments — table delivery', () => {
   })
 
   // -------------------------------------------------------------------------------------
-  // A single record line longer than the segment cap is hard-split (#478 review finding B3).
+  // A single record line longer than the segment cap is hard-split (issue #478).
   // -------------------------------------------------------------------------------------
   it('a single record line longer than TABLE_SEGMENT_MAX_CHARS is hard-split, not emitted whole', () => {
     const html = `<table><tr><th>A</th><th>B</th></tr><tr><td>k</td><td>${'v'.repeat(5000)}</td></tr></table>`
@@ -517,8 +652,21 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(rebuilt).toContain('v'.repeat(500))
   })
 
+  it('a hard-split never cuts inside a UTF-16 surrogate pair -- every emitted segment stays ' +
+    'well-formed UTF-16, even when the over-long value is entirely astral characters', () => {
+    // U+1F600 (an emoji) is a surrogate pair; 800 of them is 1,600 UTF-16 code units, well
+    // past TABLE_SEGMENT_MAX_CHARS, with no '; ' pair boundary anywhere in the value at all.
+    const html = `<table><tr><th>A</th><td>${'\u{1F600}'.repeat(800)}</td></tr></table>`
+    const segments = zimArticleToSegments(html).segments
+    expect(segments.length).toBeGreaterThan(1)
+    for (const s of segments) expect(s.text.isWellFormed()).toBe(true)
+    // Nothing is lost: reassembling the pieces (minus the cut markers) recovers every emoji.
+    const rebuilt = segments.map((s) => s.text.replace(/ \[cut\]$/, '')).join('')
+    expect([...rebuilt.matchAll(/\u{1F600}/gu)]).toHaveLength(800)
+  })
+
   it('caps the columns and total grid cells a table may expand into (named constants, ' +
-    'pinned by value) -- #478 review finding B2', () => {
+    'pinned by value) -- issue #478', () => {
     expect(TABLE_MAX_COLUMNS).toBe(60)
     expect(TABLE_MAX_GRID_CELLS).toBe(6_000)
     expect(TABLE_MAX_RAW_CHARS).toBe(50_000)
@@ -534,7 +682,7 @@ describe('zimArticleToSegments — table delivery', () => {
   })
 
   // -------------------------------------------------------------------------------------
-  // A plain <br>, <p>, <div> or <li> inside a table cell (#478 review finding N3): one line
+  // A plain <br>, <p>, <div> or <li> inside a table cell (issue #478): one line
   // per data row is the contract, so an intra-cell break must not split it.
   // -------------------------------------------------------------------------------------
   it('an intra-cell <br> becomes a space, not a newline (one line per data row holds)', () => {
@@ -544,7 +692,7 @@ describe('zimArticleToSegments — table delivery', () => {
   })
 
   // -------------------------------------------------------------------------------------
-  // A ragged row's empty trailing pair carries no information (#478 review finding N2).
+  // A ragged row's empty trailing pair carries no information (issue #478).
   // -------------------------------------------------------------------------------------
   it('a ragged row omits an empty trailing pair instead of emitting "C: "', () => {
     const html = '<table><tr><th>A</th><th>B</th><th>C</th></tr><tr><td>1</td></tr></table>'
@@ -554,7 +702,7 @@ describe('zimArticleToSegments — table delivery', () => {
 
   // -------------------------------------------------------------------------------------
   // A plain <sup> nested inside a dropped <sup class="mw-ref"> must not desynchronise the
-  // skip depth and leak the rest of the citation (#478 review finding N4).
+  // skip depth and leak the rest of the citation (issue #478).
   // -------------------------------------------------------------------------------------
   it('a plain <sup> nested inside a dropped mw-ref <sup> does not leak the rest of the citation', () => {
     const html =
@@ -568,7 +716,7 @@ describe('zimArticleToSegments — table delivery', () => {
 
   // -------------------------------------------------------------------------------------
   // Determinism (brief §1's first bound), pinned directly rather than only relied upon
-  // (#478 review finding T3).
+  // (issue #478).
   // -------------------------------------------------------------------------------------
   it('a table-heavy conversion is byte-identical across repeated runs on the same input', () => {
     const html =
@@ -584,7 +732,7 @@ describe('zimArticleToSegments — table delivery', () => {
 })
 
 // ---------------------------------------------------------------------------------------
-// Table cost pathology (#478 review finding B2): grid expansion and serialisation were
+// Table cost pathology (issue #478): grid expansion and serialisation were
 // previously unbounded and uncharged, so a small, plausible-looking input could cost seconds,
 // tens of MB of text and gigabytes of heap in one uninterruptible slice. These are the
 // reviewer's own crafted reproducing inputs (scaled to the caps now in force), asserted the
@@ -592,7 +740,7 @@ describe('zimArticleToSegments — table delivery', () => {
 // sanity check (generous, not a CI-flake risk) to confirm the fix is not merely "bounded in
 // theory".
 // ---------------------------------------------------------------------------------------
-describe('zimArticleToSegments — table cost pathology (#478 review finding B2)', () => {
+describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
   it('a single cell at the max rowspan/colspan cap, repeated across many real rows, ' +
     'completes fast and produces a small, bounded amount of text', () => {
     // 50 real rows (so rowspan has somewhere real to expand into after B5's fix) each holding
@@ -642,6 +790,53 @@ describe('zimArticleToSegments — table cost pathology (#478 review finding B2)
     const article = zimArticleToSegments(html)
     const proseBound = 5 * html.length + 64
     expect(article.work).toBeLessThanOrEqual(proseBound + TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS)
+  })
+
+  // -------------------------------------------------------------------------------------
+  // A NESTED table's own grid expansion and line-building used to be charged to nothing and
+  // sliced never: thousands of small nested max-span tables inside one wrapper cell could
+  // cost real seconds and gigabytes in one uninterruptible slice, invisible to `work` and to
+  // `maxWork` alike (issue #478). The global nested-work budget bounds this the same way the
+  // per-table caps already bound a single huge table.
+  // -------------------------------------------------------------------------------------
+  it('thousands of small nested max-span tables in one wrapper cell complete fast and with ' +
+    'small, bounded output -- nested work is charged and budgeted, not free and unbounded', () => {
+    const nestedUnit = '<table><tr><td colspan="24" rowspan="40">w</td></tr></table>'
+    const count = Math.ceil((1024 * 1024) / nestedUnit.length)
+    const html = `<table><tr><td>${nestedUnit.repeat(count)}</td></tr></table>`
+    const t0 = performance.now()
+    const article = zimArticleToSegments(html)
+    const ms = performance.now() - t0
+    const text = article.segments.map((s) => s.text).join('\n')
+    // Only the first ~TABLE_MAX_RAW_CHARS worth of nested content is ever inlined -- output
+    // stays small and bounded regardless of how many thousand nested tables the input has.
+    expect(text.length).toBeLessThan(4 * TABLE_MAX_RAW_CHARS)
+    // A single uninterruptible synchronous stall over ~1 MiB of nested tables must stay fast:
+    // before this fix the reviewer measured 173.7 ms for this exact shape (already down from
+    // seconds/gigabytes pre-B2); the budget brings real nested work down to a small constant.
+    expect(ms).toBeLessThan(100)
+    expect(article.work).toBeGreaterThan(0)
+    // The budget cutoff is disclosed like any other cap hit, not silently invisible.
+    expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
+  })
+
+  it('a cap hit inside a NESTED table (its own row cap) is disclosed with the same marker a ' +
+    'top-level table\'s row cap produces', () => {
+    const nestedRows = Array.from(
+      { length: TABLE_MAX_SOURCE_ROWS + 100 },
+      (_, i) => `<tr><th>k${i}</th><td>v${i}</td></tr>`
+    ).join('')
+    const html = `<table><tr><th>Wrap</th><td><table>${nestedRows}</table></td></tr></table>`
+    const text = zimArticleToSegments(html).segments.map((s) => s.text).join('\n')
+    expect(text).toMatch(/\[Rows 1-\d+ of \d+ source rows shown\]/)
+  })
+
+  it('a cap hit inside a NESTED table (its own column cap) is disclosed with the same marker ' +
+    'a top-level table\'s column cap produces', () => {
+    const cells = Array.from({ length: TABLE_MAX_COLUMNS + 20 }, (_, i) => `<td>c${i}</td>`).join('')
+    const html = `<table><tr><th>Wrap</th><td><table><tr>${cells}</tr></table></td></tr></table>`
+    const text = zimArticleToSegments(html).segments.map((s) => s.text).join('\n')
+    expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
   })
 })
 
@@ -751,7 +946,7 @@ const NON_WIKIPEDIA: ReadonlyArray<{
       'N2 + 3H2 → 2NH3',
       // The infobox table has a header cell, so table delivery now keeps it (renamed from
       // 'infobox-never-shown': it used to be dropped whole, it is delivered now). Pinned as
-      // the exact keyed line (#478 review finding T5/B1), not just a substring of the value:
+      // the exact keyed line (issue #478), not just a substring of the value:
       // a row-header row ("Catalyst" is a <th> in the row, not a header ROW above it) must
       // key on "Catalyst", never "Column 1".
       'Catalyst: infobox-now-delivered'
@@ -783,7 +978,7 @@ const NON_WIKIPEDIA: ReadonlyArray<{
       'x => [x, x * 2]',
       // The compat table has header cells, so table delivery now keeps it (renamed from
       // 'compat-table-never-shown': it used to be dropped whole, it is delivered now). Pinned
-      // as the exact keyed lines (#478 review finding T5/B1): each row is its own row-header
+      // as the exact keyed lines (issue #478): each row is its own row-header
       // shape (`<th>Browser</th><td>...</td>`), keyed by that row's own label.
       'Browser: compat-table-now-delivered',
       'Node.js: Supported'
@@ -1318,6 +1513,7 @@ describe('IncrementalTidy — the whole-string tidy, applied piece by piece', ()
         expect(s.text, `${label}: no leading/trailing whitespace`).toBe(s.text.trim())
         expect(s.text, `${label}: no run of three newlines`).not.toMatch(/\n{3}/)
         expect(s.text, `${label}: no space beside a newline`).not.toMatch(/ \n| \n|\n /)
+        expect(s.text.isWellFormed(), `${label}: well-formed UTF-16`).toBe(true)
       }
       if (a.title !== null) expect(a.title, `${label}: title`).toBe(tidyWhole(a.title))
     }

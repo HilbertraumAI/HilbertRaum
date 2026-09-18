@@ -29,9 +29,9 @@ import {
 // (`math.ts`, #340) and skips the MathML subtree; the `<img>` fallback that follows is
 // dropped with all images, so each formula appears exactly once.
 //
-// Tables are DELIVERED, not dropped (issue: deliver tables to the model instead of dropping
-// them — an infobox or data table used to disappear at parse time, so its fact was never
-// merely unranked, it was never retrievable at all). `tables.ts` owns the geometry: a
+// Tables are DELIVERED, not dropped (#478) — an infobox or data table used to disappear at
+// parse time, so its fact was never merely unranked, it was never retrievable at all.
+// `tables.ts` owns the geometry: a
 // class-based classifier (`navbox`, `vertical-navbox`, `metadata`, `ambox`, `toc`,
 // `sistersitebox` and the like) still drops layout/navigation tables unchanged, and a
 // structural test drops a table with no header cell and no real tabular content; everything
@@ -122,12 +122,20 @@ import {
 // additive bound rather than a larger K that would loosen the prose bound for every article that
 // has no tables at all. Per admitted (delivered) table: work_table ≤ (end - tableStart), the
 // source bytes the table's own sub-scan examined (unchanged from before table delivery), PLUS
-// `cellsPlaced + charsUsed` from `serializeTable`'s `workUnits`, itself bounded by
-// `TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS` regardless of how the caps are reached (a
-// fixed ceiling, ~56,000, independent of n) — see `zim-html.test.ts`'s "table cost pathology"
-// suite for the measured worst case against the reviewer's own crafted inputs (a 1 MiB
-// max-colspan/rowspan single cell, and a 400×100 plain grid): both now complete in low
-// milliseconds with bounded heap, where before this fix the former took seconds and gigabytes.
+// `cellsPlaced + charsUsed + nestedWork` from `serializeTable`'s `workUnits`. The outermost
+// table's own share is bounded by `TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS` (~56,000)
+// regardless of how the caps are reached; every NESTED table it absorbs draws from one shared,
+// global `TABLE_MAX_RAW_CHARS` budget (tables.ts's `nestedWorkUsed`), so a nested table past
+// that budget is dropped before its grid is even built — the last nested table admitted can
+// still spend up to its own local `TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS` ceiling, so the
+// combined bound on one outermost table's `workUnits` is `2 × (TABLE_MAX_GRID_CELLS +
+// TABLE_MAX_RAW_CHARS) + TABLE_MAX_RAW_CHARS`, ~162,000: still fixed and independent of n and
+// of how many nested tables the input actually contains — see `zim-html.test.ts`'s "table cost
+// pathology" suite for the measured worst case against the reviewer's own crafted inputs (a
+// 1 MiB max-colspan/rowspan single cell, a 400×100 plain grid, and a 1 MiB wrapper containing
+// thousands of small nested max-span tables): all three complete in low milliseconds with
+// bounded heap, where before this fix the single-cell case took seconds and gigabytes and the
+// nested case was charged (and bounded) not at all.
 //
 // ---------------------------------------------------------------------------------------
 // COOPERATIVE SLICING (P1b) — why the linear scanner still yields (PR #294 review H1)
@@ -969,10 +977,12 @@ export function* zimArticleSlices(
         flush()
         // Grid expansion and serialisation are their own cost, independent of the table's own
         // source bytes (a small span-heavy table can expand into a much larger grid) — charged
-        // here as `workUnits` (#478 review finding B2), on top of the byte charge above. Both
-        // are bounded by tables.ts's own fixed caps, not by the input length, which is exactly
-        // why the LINEAR SCANNER — complexity record above states a separate, additive bound
-        // for table-derived work instead of folding it into the prose K·n + c formula.
+        // here as `workUnits`, on top of the byte charge above, and INCLUDES every nested table
+        // this one absorbed (#478: a nested table's own grid/line-building cost used to be
+        // charged nowhere at all). Both are bounded by tables.ts's own fixed caps, not by the
+        // input length, which is exactly why the LINEAR SCANNER — complexity record above
+        // states a separate, additive bound for table-derived work instead of folding it into
+        // the prose K·n + c formula.
         const { segments: texts, workUnits } = serializeTable(table)
         work += workUnits
         for (const text of texts) {
