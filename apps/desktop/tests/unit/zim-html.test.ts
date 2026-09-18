@@ -811,11 +811,17 @@ describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
     // Only the first ~TABLE_MAX_RAW_CHARS worth of nested content is ever inlined -- output
     // stays small and bounded regardless of how many thousand nested tables the input has.
     expect(text.length).toBeLessThan(4 * TABLE_MAX_RAW_CHARS)
-    // A single uninterruptible synchronous stall over ~1 MiB of nested tables must stay fast:
-    // before this fix the reviewer measured 173.7 ms for this exact shape (already down from
-    // seconds/gigabytes pre-B2); the budget brings real nested work down to a small constant.
-    expect(ms).toBeLessThan(100)
-    expect(article.work).toBeGreaterThan(0)
+    // Deterministic regression guard (never wall-clock alone as the oracle, per this suite's
+    // own convention): nested work IS now charged (work exceeds the outer table's raw byte
+    // count, where the pre-fix code charged nested tables nothing at all) but stays within the
+    // fixed, input-independent ceiling html.ts's header note derives -- never proportional to
+    // how many thousand nested tables the input actually has.
+    expect(article.work).toBeGreaterThan(html.length)
+    expect(article.work).toBeLessThan(html.length + 2 * (TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS) + TABLE_MAX_RAW_CHARS)
+    // Generous wall-clock smoke check only (CI machines vary by an order of magnitude): before
+    // this fix the reviewer measured 173.7 ms for this exact shape on their own desktop
+    // (already down from seconds/gigabytes pre-cap); this is not the pass/fail oracle above.
+    expect(ms).toBeLessThan(2_000)
     // The budget cutoff is disclosed like any other cap hit, not silently invisible.
     expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
   })

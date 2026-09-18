@@ -3042,35 +3042,54 @@ reports and phase plans were working papers; their full text lives in git histor
   Revisited only if upstream kiwix-serve adds authentication.
 - **Table delivery (issue #478) leaves a few residuals.** A cut table (row/char/segment/
   column/grid-cell caps) does not say what a cut row or cell itself contained, only how
-  many were shown — the `[Rows 1-k of N data rows shown]` and "some cells beyond the
-  table's size caps were omitted" markers name the gap, never fill it. Row/column
-  iteration is bounded on three independent axes (`TABLE_MAX_COLUMNS`,
-  `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`, alongside the existing
-  `TABLE_MAX_SOURCE_ROWS`), not merely by "typical tables are small": a table whose
-  grid or emitted text would otherwise exceed one of those caps is cut, cooperatively
-  slicing's ≤5 ms bound is unaffected by it (a scoped Opus review of this step,
-  finding B2, measured the pre-fix cost at up to ~5 s / ~2.3 GB heap for one crafted
-  1 MiB table; the caps close that, not merely narrow it). The layout/navbox classifier
-  is class-based (`navbox`, `vertical-navbox`, `metadata`, `ambox`, `toc`,
-  `sistersitebox`) and can misjudge an unlisted layout convention, or a genuinely
-  tabular one that happens to reuse a listed class name; the structural test (no header
-  cell, no real tabular content) is a backstop, not a guarantee. **A disclosed instance
-  of that backstop's limit (review finding B6, owner's call, not fixed here):** a
-  classless two-column layout wrapper whose cells are an image and its caption (e.g.
+  many were shown — the `[Rows 1-k of N source rows shown]` (`N` counts every top-level
+  row including header rows) and "some cells beyond the table's size caps were omitted"
+  markers name the gap, never fill it; a cap firing inside a NESTED table folds into the
+  same two markers on the outermost table, so a cut inside nested content is disclosed
+  the same way. Row/column iteration is bounded on three independent axes
+  (`TABLE_MAX_COLUMNS`, `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`, alongside the
+  existing `TABLE_MAX_SOURCE_ROWS`), not merely by "typical tables are small": a table
+  whose grid or emitted text would otherwise exceed one of those caps is cut. **This
+  narrows, but does not close, the cooperative-slicing ≤5 ms bound for a single very
+  large kept table** — a scoped review of this step measured the pre-cap cost at up to
+  ~5 s / ~2.3 GB heap for one crafted 1 MiB table; the caps bring that down to tens of
+  milliseconds (measured worst case ~12–20 ms for a 1 MiB table, whether the size comes
+  from one huge grid or from thousands of small tables nested inside a wrapper — a
+  nested table's own grid-expansion/line-building cost is now charged into the same
+  work counter and bounded by a shared budget, closing what used to be an untracked,
+  uncapped cost that scaled with nested-table COUNT rather than with the caps), but the
+  pass itself is not cooperatively sliced and still runs to completion in one
+  uninterruptible stall before the next slicing checkpoint, so the ≤5 ms gate does not
+  literally hold for a single very large kept table (nested or not) even after this fix.
+  The layout/navbox classifier is class-based (`navbox`, `vertical-navbox`, `metadata`,
+  `ambox`, `toc`, `sistersitebox`), applied at every nesting depth (a table nested
+  inside a kept table is checked and dropped the same way the outermost one is), and
+  can misjudge an unlisted layout convention, or a genuinely tabular one that happens to
+  reuse a listed class name; the structural test (no header cell, no real tabular
+  content) is a backstop, not a guarantee. **A disclosed instance of that backstop's
+  limit (owner's call, not fixed here):** a classless two-column layout wrapper whose
+  cells are an image and its caption (e.g.
   `<table style="float:right"><tr><td><img></td><td>caption text</td></tr></table>`)
   carries no listed layout class and has two non-empty cells, so it clears both the
   class check and the structural check and is delivered as ordinary table text — the
   `<figure>` drop rule exists to keep exactly this kind of caption text out, and this
-  shape re-admits it under a different tag. A nested table's own further-nested tables
+  shape re-admits it under a different tag. A possible follow-up hardening, not
+  implemented and no issue opened: treat `role="presentation"` (the standard ARIA
+  marker for a layout-only table) as an additional drop signal alongside the class list,
+  and/or drop a headerless table whose only non-empty cells are, after image removal,
+  empty — the same predicate would also catch a full-width caption/note row that
+  happens to sit in an otherwise-kept table. A nested table's own further-nested tables
   are inlined down to a fixed safety-valve depth (8); deeper nesting is dropped,
   unchanged from the feature's first design. The superscript/subscript readable
   convention (`g/cm^3`, `10^6`) applies inside table-derived text only — prose keeps
   today's flattening (`m<sup>2</sup>` → `m2`) unchanged, a deliberate scoping decision
   (moving prose text too would blur what the funnel change is attributable to),
-  reported, not fixed here. A single article whose entire content is one enormous kept
-  table is parsed by `tables.ts` in one synchronous pass (unlike the surrounding
-  scanner, it is not cooperatively sliced); the three caps above bound that pass to a
-  fixed ceiling regardless of the table's own byte size, but the pass itself still runs
-  to completion before the next cooperative-slicing checkpoint. Five `tables32` ids
-  (H016, H062, H076, H158 en, H181 de) are discovery losses this change cannot fix —
-  their gold article never reaches the candidate pool at all, on any arm.
+  reported, not fixed here. Removing `table` from the scanner's `SKIP_SUBTREE` set also
+  changes html.ts's recovery on unbalanced markup OUTSIDE any table — e.g.
+  `<p>before</p><figure><table></figure><p>after</p>` now returns `before` and `after`
+  as two segments, where it previously dropped the tail after the stray `<table>` inside
+  the (already-dropped) `<figure>` subtree threw off the skip-depth count. This only
+  differs on malformed input that nests a `<table>` inside another dropped subtree, and
+  the new behaviour recovers MORE text, never less. Five `tables32` ids (H016, H062,
+  H076, H158 en, H181 de) are discovery losses this change cannot fix — their gold
+  article never reaches the candidate pool at all, on any arm.

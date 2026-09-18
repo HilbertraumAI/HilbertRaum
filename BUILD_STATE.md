@@ -30,14 +30,14 @@
 > named in §5's branch analysis still carry unmerged work.
 _2026-09-18 — **Table delivery (issue #478, draft PR #479, `feat/zim-deliver-tables`) — IN
 PROGRESS.** `html.ts` now parses a kept `<table>` into a bounded grid of retrievable "key:
-value" units instead of dropping it (`tables.ts`; design `rag-design.md` §17 "Table delivery");
-layout/navbox tables still drop, nested tables inline. Offline legs (cost, non-table invariant,
-Gold demo) are done; the `core200` acceptance read is blocked behind the shared runtime lock
-(`3-gen` holds it) — PR not ready. Two pre-read Opus fix passes landed before any read data
-existed: pass 1 fixed 6 behaviour findings (caps, hard split, rowspan clamp); pass 2 fixed a
-colspan>1 group header keying every covered cell instead of once per row (the flagship Gold
-demo's own defect). A classless image+caption layout table is a disclosed residual; a further
-review re-checks before the read runs._
+value" units instead of dropping it (`tables.ts`; design `rag-design.md` §17 "Table
+delivery"); layout/navbox tables still drop, nested tables inline. Offline legs (cost,
+non-table invariant, Gold demo) re-run clean; the `core200` acceptance read is blocked
+behind the shared runtime lock (`3-gen` holds it) — PR not ready. Three pre-read Opus fix
+passes landed before any read data existed, each behaviour-only: caps/hard-split/rowspan
+clamp, a colspan>1 group header keyed once per row not per cell, and a row/column-header
+precedence fix plus nested-table cost and separator gaps. A classless image+caption layout
+table is a disclosed residual; a further review re-checks before the read runs._
 _2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
 `feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
 "Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
