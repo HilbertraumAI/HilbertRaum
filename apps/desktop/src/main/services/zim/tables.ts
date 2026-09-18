@@ -562,7 +562,7 @@ function buildGrid(table: RetainedTable): { grid: (TableCell | undefined)[][]; n
       }
       const colSpan = Math.min(src.columns, TABLE_MAX_COLUMNS - c)
       if (colSpan < src.columns) gridTruncated = true
-      const rowSpan = Math.min(src.rows, totalRows - r) // B5: never past the last real row
+      const rowSpan = Math.min(src.rows, totalRows - r) // #478: never past the last real row
       for (let dr = 0; dr < rowSpan; dr += 1) {
         ensureRow(r + dr)
         for (let dc = 0; dc < colSpan; dc += 1) {
@@ -634,6 +634,16 @@ export function tableToRecordLines(table: RetainedTable): { lines: string[]; gri
   const chargeLine = (line: string): boolean => {
     if (totalChars + line.length > TABLE_MAX_RAW_CHARS) {
       contentCapped = true
+      // Issue #478: a line that alone exceeds the remaining budget used to be dropped whole
+      // (e.g. a nested table's own inline text saturating this table's raw-char budget could
+      // make the outer row deliver zero data), even though most of it was still in budget.
+      // Emit the in-budget prefix instead; the segment packer's own caps still bound the
+      // final output length regardless of how much of this line survives here.
+      const kept = truncateToBudget(line, TABLE_MAX_RAW_CHARS - totalChars)
+      if (kept.length > 0) {
+        lines.push(kept)
+        totalChars += kept.length
+      }
       return false
     }
     lines.push(line)
@@ -720,6 +730,13 @@ export function tableToRecordLines(table: RetainedTable): { lines: string[]; gri
       const pair = `${key}: ${value}`
       if (totalChars + pair.length > TABLE_MAX_RAW_CHARS) {
         contentCapped = true
+        // Issue #478: same truncate-not-drop rule as `chargeLine` above -- a single pair alone
+        // exceeding the remaining budget still delivers its in-budget prefix, not nothing.
+        const kept = truncateToBudget(pair, TABLE_MAX_RAW_CHARS - totalChars)
+        if (kept.length > 0) {
+          parts.push(kept)
+          totalChars += kept.length
+        }
         break
       }
       parts.push(pair)
@@ -737,6 +754,19 @@ function isHighSurrogate(cc: number): boolean {
 /** True when `cc` is a UTF-16 low (trail) surrogate. */
 function isLowSurrogate(cc: number): boolean {
   return cc >= 0xdc00 && cc <= 0xdfff
+}
+
+/** Truncates `text` to at most `remaining` characters, never inside a UTF-16 surrogate pair
+ *  (issue #478, same convention as `splitLongLine` below). `remaining <= 0` truncates to
+ *  empty -- `tableToRecordLines`'s two budget checks use this so a single line or pair that
+ *  alone exceeds the budget still delivers its in-budget prefix, not nothing. */
+function truncateToBudget(text: string, remaining: number): string {
+  if (remaining <= 0) return ''
+  let cut = Math.min(remaining, text.length)
+  while (cut > 0 && isHighSurrogate(text.charCodeAt(cut - 1)) && isLowSurrogate(text.charCodeAt(cut))) {
+    cut -= 1
+  }
+  return text.slice(0, cut)
 }
 
 /** Hard-splits a line longer than `maxChars`, preferring a `'; '` pair boundary within budget
@@ -794,11 +824,21 @@ export function serializeTable(table: RetainedTable): TableSerialisation {
 
   outer: for (const rawLine of lines) {
     charsUsed += rawLine.length
+    // Issue #478: a single record line can itself be large enough to span every segment this
+    // table is allowed (its value alone approaches TABLE_MAX_RAW_CHARS, far above the
+    // TABLE_MAX_SEGMENTS x TABLE_SEGMENT_MAX_CHARS output budget -- e.g. a nested table's
+    // inlined content truncated to fit above). `linePiecesEmitted` tracks whether any piece of
+    // THIS line already reached `current`/`segments` before a mid-line segment-cap break, so
+    // the row-count marker below still counts it as shown rather than reporting the degenerate
+    // "0 of N rows shown" a fully untouched `consumed` would give even though real text
+    // reached the output.
+    let linePiecesEmitted = false
     for (const piece of splitLongLine(rawLine, TABLE_SEGMENT_MAX_CHARS)) {
       const extra = (current.length > 0 ? 1 : 0) + piece.length
       if (currentChars + extra > TABLE_SEGMENT_MAX_CHARS && current.length > 0) {
         if (segments.length + 1 >= TABLE_MAX_SEGMENTS) {
           cutForSegments = true
+          if (linePiecesEmitted) consumed += 1
           break outer
         }
         segments.push(current.join('\n'))
@@ -807,6 +847,7 @@ export function serializeTable(table: RetainedTable): TableSerialisation {
       }
       current.push(piece)
       currentChars += piece.length + 1
+      linePiecesEmitted = true
     }
     consumed += 1
   }

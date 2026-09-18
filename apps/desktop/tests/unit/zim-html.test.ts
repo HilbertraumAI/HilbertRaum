@@ -755,6 +755,10 @@ describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
     expect(text.length).toBeLessThan(20_000)
     expect(ms).toBeLessThan(500) // generous; before the fix this shape ran into seconds
     expect(article.work).toBeGreaterThan(0)
+    // html.ts's header record derives a combined ceiling for one outermost table's own share
+    // plus the last nested table it may still admit (the nested test below pins the same bound
+    // against a real nested pathology); a single non-nested table must sit inside it too.
+    expect(article.work).toBeLessThanOrEqual(html.length + 2 * (TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS) + TABLE_MAX_RAW_CHARS)
   })
 
   it('a plain, evenly-filled 400×100 grid (no crafted spans at all) completes fast and ' +
@@ -771,6 +775,8 @@ describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
     expect(ms).toBeLessThan(500)
     expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
     expect(article.work).toBeGreaterThan(0)
+    // Same header-record ceiling as the max-span single-cell case above.
+    expect(article.work).toBeLessThanOrEqual(html.length + 2 * (TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS) + TABLE_MAX_RAW_CHARS)
   })
 
   it('the reviewer’s adversarial input (thousands of source cells in one row) is bounded ' +
@@ -843,6 +849,23 @@ describe('zimArticleToSegments — table cost pathology (issue #478)', () => {
     const html = `<table><tr><th>Wrap</th><td><table><tr>${cells}</tr></table></td></tr></table>`
     const text = zimArticleToSegments(html).segments.map((s) => s.text).join('\n')
     expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
+  })
+
+  // A single-column WRAPPER whose one cell is a nested table large enough to saturate its own
+  // TABLE_MAX_RAW_CHARS budget (issue #478): the nested table's own record lines total 375 x
+  // 133 = 49,875 chars, under its own budget, but joining them with '; ' for the inline string
+  // pushes the assembled text to ~50,623 chars -- over the budget the OUTER table's single
+  // key/value pair is then charged against. Before the fix, the outer pair as a whole exceeded
+  // the remaining budget and was dropped entirely, so the wrapper delivered nothing but cap
+  // markers even though the identical table un-nested delivers real data.
+  it('a wrapper whose nested table saturates TABLE_MAX_RAW_CHARS still delivers data up to ' +
+    'the cap, never markers over zero rows', () => {
+    const nestedRows = Array.from({ length: 400 }, () => `<tr><td>P</td><td>${'x'.repeat(130)}</td></tr>`).join('')
+    const html = `<table><tr><td><table>${nestedRows}</table></td></tr></table>`
+    const text = zimArticleToSegments(html).segments.map((s) => s.text).join('\n')
+    expect(text).toMatch(/P: x{100,}/)
+    expect(text).toMatch(/Some cells beyond the table's size caps were omitted/)
+    expect(text).not.toMatch(/^\[Rows 1-0 of /m)
   })
 })
 
