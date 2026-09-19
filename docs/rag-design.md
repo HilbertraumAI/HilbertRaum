@@ -4598,8 +4598,9 @@ cut-boundary annotations above are excluded from the per-line check as reports a
 a cap firing, not content a cap removed.
 
 **Truncation and repetition, checked on the first read after table delivery.** The
-default request path carries no `max_tokens` or sampler pin, so this was named as an
-open obligation for whichever read ran first after the table-delivery change landed.
+default request path carried no `max_tokens` or sampler pin when this read ran, so
+this was named as an open obligation for whichever read ran first after the
+table-delivery change landed.
 The recorded post-fix answer request bodies (185 of
 200; the other 15 are the product's own short-circuited ids, with no request to
 replay) were replayed, unmodified, through a fresh model process per id — the
@@ -4611,8 +4612,8 @@ generated answers, before this run) reproduced exactly before use. Zero answers 
 p90 2 / p99 4 / max 4) — still nowhere near the loop threshold of 10. Answer length
 in tokens: p50 156 / p90 314 / p99 569 / max 620, somewhat longer at the tail than
 the pre-table baseline (p99 478, max 551), consistent with a table now giving the
-model more to draw on. The shipped default request still carries no temperature,
-seed or `max_tokens` — the sampler-pinning change is not in this branch.
+model more to draw on. When this read ran, the shipped default request carried no
+temperature, seed or `max_tokens`; pinning the sampler is not part of this change.
 
 **The Gold demonstration, live, on the fixed code.** The question "Wie hoch sind
 Dichte und Schmelzpunkt von Gold?" again did not itself resolve the "Gold" article
@@ -4625,10 +4626,11 @@ and the shipped path generated a correct, correctly cited answer from them. The
 the crystal-system footnote legend the stylesheet had been consuming the budget
 from, and still carries the density value.
 
-**Status: the change stays a draft.** Every floor and endpoint above holds except
-the one disclosed neutrality exception, which is a genuine miss against the
-pre-registered acceptance criteria (not softened, not re-scored) and keeps this
-change from a clean pass; the maintainer's own review decides what happens next.
+**Status: one disclosed miss against the pre-registered acceptance criteria.** Every
+floor and endpoint above holds except the one neutrality exception, which is a
+genuine miss (not softened, not re-scored) and keeps this change short of a clean
+pass; it was disclosed to the maintainer and accepted as a known residual rather
+than re-scored away.
 
 ## 18. Knowledge-pack retrieval research — the confirmation read and its outcome (design record, 2026-09-19)
 
