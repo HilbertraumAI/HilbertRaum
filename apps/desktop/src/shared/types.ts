@@ -2674,6 +2674,17 @@ export interface PerformanceSnapshot {
        * counts a row that says 'cpu'.
        */
       bothOnCard: boolean
+      /**
+       * #495 fix (MF-3, scoped review of PR #495): chat AND translation SPECIFICALLY — never
+       * the reranker. `perf.models.cardBoth`'s copy names one pair ("Both are on the card right
+       * now. Whichever started second got what was left..."), so the chat/translation summary
+       * line must append that sentence only when THIS pair is the one sharing the card, not
+       * whenever `bothOnCard`'s now-three-way count crosses two (a chat+reranker or
+       * translation+reranker pair would otherwise read as if the absent third model were on the
+       * card too). The warning badge is unaffected — it stays keyed off `bothOnCard` on both
+       * summary lines, since any two-or-more-of-three contention is still worth flagging.
+       */
+      chatAndTranslationOnCard: boolean
     }
   }
   observed: {

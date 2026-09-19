@@ -588,6 +588,27 @@ describe('capability is not execution (DR1)', () => {
     expect(noReranker.placement.totals.bothOnCard).toBe(true) // unchanged: chat + translation alone
   })
 
+  // #495 fix (MF-3, scoped review of PR #495): the reachable case the fix targets — a GPU
+  // machine with no translation model installed (or its posture fallen back), chat AND the
+  // reranker actually resident on the card. `bothOnCard` (the three-way contention flag) must
+  // still be true, but `chatAndTranslationOnCard` — the ONE pair `perf.models.cardBoth`'s copy
+  // is about — must be false, so the renderer never names a translation model that isn't there.
+  it('#495 fix (MF-3): chat on card + reranker on card + translation NOT on card -> bothOnCard true, chatAndTranslationOnCard false', () => {
+    const chatAndReranker = cardMachine({
+      translation: null,
+      reranker: { devicePosture: () => 'gpu', isLoaded: () => true }
+    })
+    expect(rowOf(chatAndReranker.placement, 'chat').device).toBe('gpu')
+    expect(rowOf(chatAndReranker.placement, 'reranker').device).toBe('gpu')
+    expect(chatAndReranker.placement.totals.bothOnCard).toBe(true)
+    expect(chatAndReranker.placement.totals.chatAndTranslationOnCard).toBe(false)
+
+    // Sanity: the ordinary chat+translation-only fixture (no reranker override) still sets BOTH
+    // flags true — the new field is a narrowing, not a behaviour change, when translation really
+    // is on the card.
+    expect(cardMachine({ placement: {} }).placement.totals.chatAndTranslationOnCard).toBe(true)
+  })
+
   it("gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — and the class is the NEXT start's, cpu", () => {
     const off = cardMachine({ settings: { gpuMode: 'off' } })
     expect(rowOf(off.placement, 'chat').device).toBe('cpu')

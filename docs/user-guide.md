@@ -311,9 +311,11 @@ depending on this computer and what else is loaded — never "by design". A row 
 only once that service is actually running and ready, not while it is still starting. Below the
 rows: a card line for chat and translation (what each is resident on the graphics card for,
 against its memory), a second card line whenever the ranking model is also resident there, and a
-processor total (what loading everything at once would take from RAM). Whenever more than one of
-chat, translation and the ranking model share the card at once, both lines carry a note that the
-one that loaded second got what was left over and runs slower.
+processor total (what loading everything at once would take from RAM). Whenever two or more of
+chat, translation and the ranking model share the card at once, both lines carry a warning badge;
+the chat-and-translation line also spells out that whichever of the two loaded second got what
+was left over and runs slower, but only when chat and translation are themselves both on the
+card.
 
 **Observed while you worked.** Three rows fill in from ordinary use, with no separate check: your
 last finished chat answer, your last model start, and your last full file check. These are

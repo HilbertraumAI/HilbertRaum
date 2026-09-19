@@ -1947,7 +1947,10 @@ export const en = {
   'perf.models.card': 'Graphics card: chat {chat} GB + translation {translation} GB, of {vram} GB.',
   // #476: a separate line for the reranker — it may share the card with either, both, or neither
   // of chat/translation, so it is not folded into perf.models.card's fixed two-slot template.
-  'perf.models.cardReranker': 'Graphics card: reranker {reranker} GB, of {vram} GB.',
+  // #495 fix (SF-3): "ranking", not "reranker" — the row label above is "Document search
+  // (ranking)" and the user guide calls it "the ranking model" throughout; de.ts already used
+  // "Ranking". Key and placeholders unchanged.
+  'perf.models.cardReranker': 'Graphics card: ranking {reranker} GB, of {vram} GB.',
   'perf.models.cardBoth':
     'Both are on the card right now. Whichever started second got what was left and runs slower; stop and start it once the other has unloaded.',
   'perf.models.ram': 'Everything loaded at once needs about {sum} GB of {ram} GB RAM.',

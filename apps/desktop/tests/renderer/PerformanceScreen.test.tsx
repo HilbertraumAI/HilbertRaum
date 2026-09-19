@@ -112,7 +112,7 @@ function placement(over: Partial<PerformanceSnapshot['placement']> = {}): Perfor
       { role: 'embeddings', modelId: 'multilingual-e5-small-q8', sizeOnDiskGb: 0.2, device: 'cpu', loaded: true, lifetime: 'session', gpuLayers: null, totalLayers: null },
       { role: 'transcriber', modelId: 'whisper-small', sizeOnDiskGb: 0.5, device: 'cpu', loaded: false, lifetime: 'per-use', gpuLayers: null, totalLayers: null }
     ],
-    totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false },
+    totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false, chatAndTranslationOnCard: false },
     ...over
   }
 }
@@ -696,7 +696,7 @@ describe('PerformanceScreen: models on this computer', () => {
   })
 
   it('sums the card budget and the everything-at-once RAM need, flagging too much', async () => {
-    install(snapshot({ placement: placement({ ramMb: 16_077, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false } }) }))
+    install(snapshot({ placement: placement({ ramMb: 16_077, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: false, chatAndTranslationOnCard: false } }) }))
     renderScreen()
     expect(await screen.findByText(/Graphics card: chat 5\.4 GB \+ translation 6\.8 GB, of 24\.2 GB\./)).toBeInTheDocument()
     expect(screen.getByText(/Everything loaded at once needs about 17\.0 GB of 15\.7 GB RAM\./)).toBeInTheDocument()
@@ -704,21 +704,41 @@ describe('PerformanceScreen: models on this computer', () => {
   })
 
   it('warns when chat and translation are both on the card, with the start-order advice', async () => {
-    install(snapshot({ placement: placement({ ramMb: 131_072, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: true } }) }))
+    install(
+      snapshot({
+        placement: placement({
+          ramMb: 131_072,
+          totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: true, chatAndTranslationOnCard: true }
+        })
+      })
+    )
     renderScreen()
     expect(await screen.findByText(/Both are on the card right now\. Whichever started second got what was left and runs slower/)).toBeInTheDocument()
     expect(screen.getByText('Fits')).toBeInTheDocument()
   })
 
   // #476: the summary carried no line at all for a GPU-resident reranker — neither its own size
-  // nor the shared contention warning.
-  it('#476: shows a separate graphics-card line for a GPU-resident reranker, with the contention badge when it applies', async () => {
+  // nor the shared contention warning. #495 fix (MF-3): this fixture (chat+reranker actually on
+  // the card, translation GPU-postured but NOT resident) is the exact scenario the scoped review
+  // of PR #495 named — `bothOnCard` is true (3-way contention) but `chatAndTranslationOnCard` is
+  // false, so the badge appears on both lines while the chat/translation PAIR sentence (which
+  // names translation specifically) must not.
+  it('#476/#495 fix (MF-2, MF-3): shows a separate graphics-card line for a GPU-resident reranker, the contention badge on both lines, but the chat/translation pair copy only when translation is itself on the card', async () => {
     const rows = placement().models.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const } : r))
-    install(snapshot({ placement: placement({ models: rows, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: true } }) }))
+    install(
+      snapshot({
+        placement: placement({
+          models: rows,
+          totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: true, chatAndTranslationOnCard: false }
+        })
+      })
+    )
     renderScreen()
-    expect(await screen.findByText(/Graphics card: reranker 1\.1 GB, of 24\.2 GB\./)).toBeInTheDocument()
+    expect(await screen.findByText(/Graphics card: ranking 1\.1 GB, of 24\.2 GB\./)).toBeInTheDocument()
     // The chat/translation line is unaffected — both lines coexist.
     expect(screen.getByText(/Graphics card: chat 5\.4 GB \+ translation 6\.8 GB, of 24\.2 GB\./)).toBeInTheDocument()
+    // MF-3: translation is not actually on the card here — the pair-naming sentence must be absent.
+    expect(screen.queryByText(/Both are on the card right now/)).not.toBeInTheDocument()
     // bothOnCard now covers three residents sharing the card — the badge appears on BOTH lines.
     expect(screen.getAllByText('Partly on GPU')).toHaveLength(2)
   })
@@ -727,7 +747,19 @@ describe('PerformanceScreen: models on this computer', () => {
     install(snapshot())
     renderScreen()
     await screen.findByText('Models on this computer')
-    expect(screen.queryByText(/Graphics card: reranker/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
+  })
+
+  // #495 fix (MF-2): the reranker starts lazily on the session's first rerank(), so the ORDINARY
+  // state of a fresh GPU session is device 'gpu' with nothing loaded yet — the line must key off
+  // residency, not posture, or it would assert the ranking model is on the card while the row
+  // right above it is badged "not loaded".
+  it('#495 fix (MF-2): a GPU-postured but not-yet-loaded reranker shows no reranker card line', async () => {
+    const rows = placement().models.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const, loaded: false } : r))
+    install(snapshot({ placement: placement({ models: rows }) }))
+    renderScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
   })
 
   it('on a machine without a usable card there is no card line, only the RAM line', async () => {
@@ -769,7 +801,7 @@ describe('PerformanceScreen: models on this computer', () => {
           vramMb: null,
           ramMb: 49_152,
           verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 36_864, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
-          totals: { ramAllMb: Math.round(40.0 * 1024), bothOnCard: false }
+          totals: { ramAllMb: Math.round(40.0 * 1024), bothOnCard: false, chatAndTranslationOnCard: false }
         })
       })
     )

@@ -71,8 +71,11 @@ export function resolveRerankerDevicePosture(
   // Wave 8 ruling (a): a chat start in flight/pending, or a GPU-posture translation occupant,
   // makes headroom not provable regardless of what the committed model's own placement would
   // say — checked BEFORE resolving the manifest, so neither occupancy input needs a manifest
-  // lookup to short-circuit to `cpu`.
-  if (occupancy.chatStartBusy || occupancy.translationOccupied) return 'cpu'
+  // lookup to short-circuit to `cpu`. #495 fix (SF-1): a reranker already demoted this session
+  // (the sidecar's own `gpuFellBack` latch) forces `cpu` here too, so the ask-site candidate
+  // scope (`registerRagIpc.ts`'s `resolveAskCandidateScope`, the one caller that can see this
+  // field) agrees with the sidecar instead of asking for a GPU-sized scope G would refuse.
+  if (occupancy.chatStartBusy || occupancy.translationOccupied || occupancy.rerankerDemoted) return 'cpu'
   const activeManifest = findManifestById(manifestsDir, occupancy.committedModelId)
   const chatModelNeedMib = activeManifest ? estimateGraphicsNeedMib(activeManifest) : null
   return rerankerDeviceFor({ probeDevices, budgetMib, chatModelNeedMib })
@@ -103,6 +106,17 @@ export interface RerankerOccupancySnapshot {
    * (Wave 8 ruling (b)(T) — `Translator.gpuOccupied()`, `translation/index.ts`).
    */
   translationOccupied: boolean
+  /**
+   * #495 fix (SF-1, scoped review of PR #495): true once the reranker's own session
+   * GPU-fallback latch is armed (`Reranker.gpuDemoted()` — a pure field read, never
+   * `devicePosture()`, which would recurse for the sidecar's own posture callback below).
+   * OPTIONAL, unlike the other two fields: `snapshotRerankerOccupancy`'s existing 3-argument
+   * call sites (predating this field, several inside frozen test fixtures) must keep resolving
+   * an omitted field to "not known to be demoted" rather than a compile error. The one
+   * production reader that can actually see the latch is `registerRagIpc.ts`'s ask site, which
+   * sets it explicitly from `ctx.reranker?.gpuDemoted?.()`.
+   */
+  rerankerDemoted?: boolean
 }
 
 /**

@@ -44,6 +44,16 @@ export interface Reranker {
    * site — no shape or required-member change.
    */
   devicePosture?(): RerankerDevice
+  /**
+   * Optional (#495 fix, SF-1): a pure read of the session GPU-fallback latch (`LlamaReranker`'s
+   * `gpuFellBack`) — never re-derived from `devicePosture()`, which a caller building THIS
+   * instance's own posture callback (`rag/device-posture.ts`'s `createRerankerCallbacks`) could
+   * recurse back into. `registerRagIpc.ts`'s ask site reads this to fold the demotion into
+   * `RerankerOccupancySnapshot.rerankerDemoted`, so a demoted session's per-ask candidate scope
+   * agrees with the sidecar's own forced `'cpu'` posture. A `Reranker` without this member (a
+   * test fake, or any other implementation) is read as "not known to be demoted".
+   */
+  gpuDemoted?(): boolean
   /** Optional (PR #303 P3): subscribe to `isLoaded()` flips; returns the unsubscribe. */
   onResidencyChange?(cb: () => void): () => void
   /** Release the backing sidecar PERMANENTLY. Called on `will-quit`. */

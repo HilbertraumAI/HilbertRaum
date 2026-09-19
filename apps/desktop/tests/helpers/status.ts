@@ -87,7 +87,7 @@ export function performanceSnapshot(over: Partial<PerformanceSnapshot> = {}): Pe
         totalLayers: null
       },
       models: [],
-      totals: { ramAllMb: null, bothOnCard: false }
+      totals: { ramAllMb: null, bothOnCard: false, chatAndTranslationOnCard: false }
     },
     observed: { lastAnswer: null, lastModelLoad: null, lastChecksum: null },
     ...over

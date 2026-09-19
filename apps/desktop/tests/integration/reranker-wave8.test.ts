@@ -592,6 +592,143 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
     expect(fallbacks.length).toBe(1) // the GPU->CPU latch armed (and reported) exactly once
     await reranker.stop()
   })
+
+  // #495 fix (MF-1, scoped review of PR #495): the demoting call itself bypassed G. The ask site
+  // picks GPU_RERANK_SCOPE for a 'gpu' posture, so a genuine GPU cold-start failure could demote
+  // to CPU and then hand the CPU-pinned sidecar the FULL gpu-sized request instead of refusing it
+  // -- the very path the ceiling exists to protect, and the one path none of the four tests above
+  // (all `docs(1)`, none injecting `cpuRequestCeiling`) reached.
+  it('MF-1 (#495 fix): the ceiling is re-applied when the ladder itself demotes gpu->cpu mid-call -- a 60-document request is refused and the CPU-pinned sidecar never receives it', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null)) // the GPU rung dies
+      return child
+    }
+    const good = rerankFetch()
+    const rerankDocCounts: number[] = []
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (calls.length < 2) throw new Error('connection refused') // the dying GPU attempt's own health check
+      if (u.endsWith('/v1/rerank')) {
+        const body = JSON.parse(String(init?.body)) as { documents: string[] }
+        rerankDocCounts.push(body.documents.length)
+      }
+      return good(url, init)
+    }) as typeof fetch
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl,
+      devicePosture: () => 'gpu',
+      cpuRequestCeiling: () => 48
+    })
+    await expect(reranker.rerank('q', docs(60))).rejects.toThrow(/refused/i)
+    // Both rungs were walked -- the demotion itself is unavoidable mid-ladder, discovered only
+    // once the GPU attempt fails -- but the CPU-pinned sidecar the ladder just started never saw
+    // the oversized /v1/rerank request: the refusal fires from resolveServer's own re-check
+    // before rerank() ever calls server.fetch.
+    expect(calls.length).toBe(2)
+    expect(calls[0]!.args).not.toContain('--device')
+    expect(calls[1]!.args).toContain('--device')
+    expect(rerankDocCounts).toHaveLength(0)
+    expect(reranker.devicePosture()).toBe('cpu') // demoted, not latched
+    // Not latched -- a request AT the ceiling on the now-resident CPU sidecar succeeds right
+    // after, on the same instance, with no new spawn.
+    const hits = await reranker.rerank('q2', docs(48))
+    expect(hits).toHaveLength(48)
+    expect(calls.length).toBe(2)
+    await reranker.stop()
+  })
+
+  // #495 fix (SF-2): only handleUnexpectedExit's OWN demotion branch reset unexpectedExitCount;
+  // startLadder's demotion (a genuine cold-start failure) did not. So a GPU exit followed by a
+  // genuine cold-start failure that demotes carried a STALE count into the newly-forced CPU
+  // posture, and a single CPU exit afterwards wrongly latched permanently (the CPU posture never
+  // got its own two-strikes budget the doc comment and commit message promise).
+  it('SF-2 (#495 fix): the exit counter resets on the LADDER demotion path too -- one GPU exit, then a genuine cold-start failure that demotes, then ONE CPU exit is not latched', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const children: FakeChild[] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      children.push(child)
+      if (calls.length === 2) queueMicrotask(() => child.emit('exit', 1, null)) // spawn #2: the failing GPU retry
+      return child
+    }
+    const good = rerankFetch()
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (calls.length === 2) throw new Error('connection refused') // spawn #2's own health check
+      return good(url, init)
+    }) as typeof fetch
+    const fallbacks: string[] = []
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl,
+      devicePosture: () => 'gpu',
+      onDeviceFallback: (reason) => fallbacks.push(reason)
+    })
+    await reranker.rerank('q1', docs(1)) // spawn #1: resident GPU sidecar
+    children[0]!.crash() // unexpected exit #1 under GPU -- drops the handle; unexpectedExitCount = 1, no latch
+    expect(fallbacks.length).toBe(0)
+
+    // Cold-starts fresh on GPU (spawn #2), which fails genuinely and demotes to CPU (spawn #3)
+    // WITHIN this same call -- the LADDER's demotion path, not handleUnexpectedExit's two-strikes.
+    // Pre-fix this path never reset unexpectedExitCount, leaving the stale count of 1 in place.
+    await reranker.rerank('q2', docs(1))
+    expect(calls.length).toBe(3)
+    expect(calls[1]!.args).not.toContain('--device')
+    expect(calls[2]!.args).toContain('--device')
+    expect(fallbacks.length).toBe(1)
+    expect(fallbacks[0]).toMatch(/GPU-attempt start failed/)
+
+    children[2]!.crash() // ONE unexpected exit under the now-demoted CPU posture.
+    // Must NOT be latched -- the CPU posture gets its own two-strikes budget, same as a fresh
+    // demotion; this only latches if the counter carried over the stale GPU-side count of 1.
+    const hits = await reranker.rerank('q3', docs(1))
+    expect(hits).toHaveLength(1)
+    expect(calls.length).toBe(4) // lazily restarted CPU fine, no latch
+    expect(calls[3]!.args).toContain('--device')
+    await reranker.stop()
+  })
+
+  // #495 fix (SF-1): the ask site (registerRagIpc.ts, tested directly in
+  // rerank-profile-wiring.test.ts) needs a PURE read of the demotion latch to fold into its own
+  // occupancy snapshot without recursing into this instance's own posture resolution. This
+  // proves the new gpuDemoted() accessor tracks the latch, and that a request sized to the
+  // ceiling the demoted ask site would actually pick (SF-1's fix) reranks fine on the CPU rung.
+  it('SF-1 (#495 fix): after a GPU demotion, gpuDemoted() reports it and a request at the CPU ceiling reranks fine on the now-forced CPU posture', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null))
+      return child
+    }
+    const good = rerankFetch()
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (calls.length < 2) throw new Error('connection refused')
+      return good(url, init)
+    }) as typeof fetch
+    const ceiling = cpuRequestCeilingFor(DEFAULT_SETTINGS) // the real formula, default settings -> 48
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl,
+      devicePosture: () => 'gpu',
+      cpuRequestCeiling: () => ceiling
+    })
+    expect(reranker.gpuDemoted()).toBe(false) // nothing has failed yet
+    const hits = await reranker.rerank('q', docs(1)) // GPU rung fails -> CPU rung serves it, demotes
+    expect(hits).toHaveLength(1)
+    expect(reranker.gpuDemoted()).toBe(true)
+    const wide = await reranker.rerank('q2', docs(ceiling))
+    expect(wide).toHaveLength(ceiling)
+    expect(calls.length).toBe(2) // the GPU attempt + the one CPU sidecar -- no third spawn
+    await reranker.stop()
+  })
 })
 
 // ---- Ruling (d): the resident sidecar's posture, read back -------------------------------------
