@@ -3139,14 +3139,12 @@ reports and phase plans were working papers; their full text lives in git histor
   two are individually accounted for, not silently dropped — one formula
   normalises to whitespace only (its own rendered value carries no visible
   character), and one sits in a very large table whose own row/segment cap
-  consumes the row that value sits in — a different table, in a different
-  page, from the neutrality exception described below. A related, explicitly
-  out-of-scope class: literal MediaWiki template placeholders (e.g.
-  `{{{Druck}}}`) that appear inside a table are the source page's own
-  content, not markup the converter failed to drop, and are left as-is. A
-  further, rarer container is not yet stepped over on this same path: a
-  `CDATA` section holding a bare `>` inside a kept table can still have its
-  content delivered as table text, where the main document scanner already
-  steps over such a section; no occurrence was found across the sampled
-  pages, and it is tracked in #493 for a separate change that can be
-  measured on its own.
+  consumes the row that value sits in. A related, explicitly out-of-scope
+  class: literal MediaWiki template placeholders (e.g. `{{{Druck}}}`) that
+  appear inside a table are the source page's own content, not markup the
+  converter failed to drop, and are left as-is. A further, rarer container
+  is not yet stepped over on this same path: a `CDATA` section holding a
+  bare `>` inside a kept table can still have its content delivered as table
+  text, where the main document scanner already steps over such a section;
+  no occurrence was found across the sampled pages, and it is tracked in
+  #493 for a separate change that can be measured on its own.
