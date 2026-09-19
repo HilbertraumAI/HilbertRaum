@@ -1,4 +1,5 @@
-import { attrValue, decodeEntities, tidyWhole } from './html'
+import { attrValue, decodeEntities, tidyWhole, RAW_TEXT, SKIP_SUBTREE } from './html'
+import { normalizeMath } from './math'
 
 // Table delivery (issue #478: deliver tables to the model instead of dropping them). html.ts
 // used to drop every `<table>` subtree whole (`SKIP_SUBTREE`), so an infobox or data table
@@ -152,6 +153,26 @@ function isNameChar(cc: number): boolean {
   return (cc >= 65 && cc <= 90) || (cc >= 97 && cc <= 122) || (cc >= 48 && cc <= 57) || cc === 45
 }
 
+/** ASCII-case-insensitive `name` at `at`, followed by a tag-name terminator (or EOF). Kept in
+ *  exact lockstep with html.ts's own (unexported) helper of the same name, so a `<script>`/
+ *  `<style>` body scanned here by `RAW_TEXT` closes on the same boundary the outer scanner would
+ *  use -- duplicated rather than imported because html.ts does not export it and this brief only
+ *  exports `RAW_TEXT`/`SKIP_SUBTREE` (their membership, not their scanning helpers). The input is
+ *  never lowercased: `toLowerCase()` can change a string's length, which would shift every index
+ *  this tokenizer holds. */
+function matchesEndTagName(input: string, at: number, name: string): boolean {
+  if (at + name.length > input.length) return false
+  for (let k = 0; k < name.length; k += 1) {
+    let cc = input.charCodeAt(at + k)
+    if (cc >= 65 && cc <= 90) cc += 32
+    if (cc !== name.charCodeAt(k)) return false
+  }
+  const after = at + name.length
+  if (after >= input.length) return true
+  const cc = input.charCodeAt(after)
+  return cc === 32 || cc === 9 || cc === 10 || cc === 13 || cc === 12 || cc === 62 || cc === CH_SLASH
+}
+
 function clampSpan(attrs: string, key: string, cap: number): { value: number; clamped: boolean } {
   const raw = attrValue(attrs, key)
   if (!raw) return { value: 1, clamped: false }
@@ -258,6 +279,16 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
   // (issue #478 -- a nested table's own class is checked against the same classifier as the
   // outermost table, not merely its depth).
   let droppedDepth = 0
+  // > 0 while inside a `<math>` subtree whose alttext (if any) has already been appended once --
+  // the MathML presentation characters and the raw TeX `<annotation>` source underneath must
+  // both stay out of the cell text (#490). Symmetric on every NESTED `math` tag, exactly like
+  // html.ts's own `mathDepth`.
+  let mathSkipDepth = 0
+  // > 0 while inside one of html.ts's own `SKIP_SUBTREE` elements nested in a kept table --
+  // `head`/`figure`/`nav`/`noscript`/`template`/`svg` are provably absent here except `nav`
+  // (never previously measured; re-measured before this step's read), but the clause is
+  // defensive for all of them. Symmetric on every nested same-name tag, like html.ts's `skipDepth`.
+  let subtreeSkipDepth = 0
   // Shared across every table on the stack (outer and nested): whether ANY cell's span
   // attribute was clamped, folded into the OUTERMOST table's report only.
   let spanClamped = false
@@ -273,7 +304,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
   const active = (): TableContext => stack[stack.length - 1]
 
   const appendText = (raw: string): void => {
-    if (raw.length === 0 || refSkipDepth > 0 || droppedDepth > 0) return
+    if (raw.length === 0 || refSkipDepth > 0 || droppedDepth > 0 || mathSkipDepth > 0 || subtreeSkipDepth > 0) return
     const ctx = active()
     const text = decodeEntities(raw)
     if (ctx.inCaption) {
@@ -287,7 +318,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     }
   }
   const appendLiteral = (literal: string): void => {
-    if (refSkipDepth > 0 || droppedDepth > 0) return
+    if (refSkipDepth > 0 || droppedDepth > 0 || mathSkipDepth > 0 || subtreeSkipDepth > 0) return
     const ctx = active()
     if (ctx.inCaption) {
       if (ctx.pendingSep) { ctx.caption += ' '; ctx.pendingSep = false }
@@ -306,7 +337,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
   // sitting inside real prose joins with a single space on both sides instead, so it reads as
   // an inserted clause rather than a second field in a list.
   const appendNestedInline = (inline: string): void => {
-    if (inline.length === 0 || refSkipDepth > 0 || droppedDepth > 0) return
+    if (inline.length === 0 || refSkipDepth > 0 || droppedDepth > 0 || mathSkipDepth > 0 || subtreeSkipDepth > 0) return
     const ctx = active()
     if (ctx.inCaption) {
       if (ctx.caption.length > 0) ctx.caption += ctx.nestedOnly ? '; ' : ' '
@@ -332,7 +363,18 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     let p = nameStart
     while (p < n && isNameChar(input.charCodeAt(p))) p += 1
     if (p === nameStart) {
-      // Not a real tag (comment, declaration, bogus close, stray `<`): skip to the next `>`.
+      // Not a real tag (comment, declaration, bogus close, stray `<`): skip to the next `>` --
+      // except a well-formed HTML comment, which closes on its own `-->` and may itself contain
+      // a bare `>` (or even a quoted tag) that would otherwise truncate the skip early and leak
+      // a comment fragment as cell text. 291 comments inside tables across 29 files close before
+      // any bare `>` on this corpus (byte-neutral here — see the census), but only a comment
+      // containing a tag could ever leak, and closing on `-->` forecloses that as a class rather
+      // than relying on this corpus never testing it.
+      if (input.startsWith('<!--', lt)) {
+        const close = input.indexOf('-->', lt + 4)
+        i = close < 0 ? n : close + 3
+        continue
+      }
       const gt = input.indexOf('>', lt + 1)
       i = gt < 0 ? n : gt + 1
       continue
@@ -398,6 +440,22 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       continue
     }
     if (droppedDepth > 0) continue // inside a dropped (too-deep or layout-classed) nested table
+
+    // The new suppression states below must be checked here, ahead of every other dispatch:
+    // `appendText(input.slice(i, lt))` above (the text run before whichever tag this is) already
+    // ran before this tag was even classified, so if a state were only honoured further down,
+    // between-tag text inside it would still leak through the appenders. `appendText` /
+    // `appendLiteral` / `appendNestedInline` already re-check both depths themselves (belt and
+    // braces for any call site that does not route through this cascade), but the cascade is
+    // what stops a NESTED same-name tag from being misread as an unrelated one while suppressed.
+    if (mathSkipDepth > 0) {
+      if (name === 'math' && !selfClosing) mathSkipDepth += isClose ? -1 : 1
+      continue
+    }
+    if (subtreeSkipDepth > 0) {
+      if (SKIP_SUBTREE.has(name) && !selfClosing) subtreeSkipDepth += isClose ? -1 : 1
+      continue
+    }
 
     if (name === 'sup') {
       // <sup class="mw-ref"> citation brackets stay dropped, same as prose (html.ts's
@@ -471,6 +529,50 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       // A SPACE, not a newline (issue #478): table-derived text is one line per data row by
       // contract, and an intra-cell break must not split that line in two.
       appendLiteral(' ')
+    }
+    if (!isClose && RAW_TEXT.has(name) && !selfClosing) {
+      // #485: a <style>/<script> body is not markup -- without this, its declaration/source
+      // text would flow into the open cell through `appendText` between "tags" the way any
+      // other run of text does. Scan to the matching end tag exactly as html.ts's own S5
+      // raw-text handling does (`RAW_TEXT` is imported from html.ts so the two paths cannot
+      // drift), and resume AT that end tag so the ordinary path consumes it. EOF without a
+      // match ends this table's parse totally -- never throws -- exactly like every other
+      // unterminated-input case in this tokenizer.
+      let probe = i
+      let end = -1
+      for (;;) {
+        const idx = input.indexOf('</', probe)
+        if (idx < 0) break
+        if (matchesEndTagName(input, idx + 2, name)) {
+          end = idx
+          break
+        }
+        probe = idx + 2
+      }
+      if (end < 0) {
+        i = n
+        break
+      }
+      i = end
+      continue
+    }
+    if (!isClose && name === 'math') {
+      // #490: a formula cell is often the value the table exists to deliver, so this is routed,
+      // never dropped. Read `alttext` and, if present, append `normalizeMath(decodeEntities(...))`
+      // ONCE through `appendLiteral` (not `appendText`, which would decode entities a second
+      // time) -- the same composition html.ts's own prose `<math>` path uses. Then suppress the
+      // whole MathML subtree: one branch removes both the presentation-character run and the
+      // raw TeX `<annotation>` source, since neither reaches the cell text once the subtree
+      // below is suppressed.
+      const alt = attrValue(attrs, 'alttext')
+      if (alt) appendLiteral(` ${normalizeMath(decodeEntities(alt))} `)
+      if (!selfClosing) mathSkipDepth = 1
+      continue
+    }
+    if (!isClose && SKIP_SUBTREE.has(name)) {
+      // html.ts's own SKIP_SUBTREE, imported so membership cannot drift between the two paths.
+      if (!selfClosing) subtreeSkipDepth = 1
+      continue
     }
     // Everything else (thead/tbody/tfoot/span/a/b/i/small/…) is transparent: its own text runs
     // already flow through `appendText` between tags.

@@ -203,11 +203,14 @@ import {
 
 /** Elements whose entire subtree is dropped. `<math>` is handled separately (alttext);
  *  `table` is handled separately too (`tables.ts` — layout/navbox tables are still dropped,
- *  a kept table is parsed and delivered instead of skipped). */
-const SKIP_SUBTREE = new Set(['head', 'figure', 'nav', 'noscript', 'template', 'svg'])
+ *  a kept table is parsed and delivered instead of skipped). Exported so `tables.ts` can apply
+ *  the identical membership inside a KEPT table instead of re-listing the names (#485/#490):
+ *  adding `export` to an existing `const` is behaviour-neutral here. */
+export const SKIP_SUBTREE = new Set(['head', 'figure', 'nav', 'noscript', 'template', 'svg'])
 
-/** Raw-text elements: their content is not markup and is skipped to the matching close tag. */
-const RAW_TEXT = new Set(['script', 'style'])
+/** Raw-text elements: their content is not markup and is skipped to the matching close tag.
+ *  Exported for the same reason as `SKIP_SUBTREE` above. */
+export const RAW_TEXT = new Set(['script', 'style'])
 
 /** Void elements (never pushed on the open stack). Images are dropped; br becomes a newline. */
 const VOID = new Set(['br', 'hr', 'img', 'input', 'link', 'meta', 'source', 'track', 'wbr'])
