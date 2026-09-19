@@ -4559,12 +4559,14 @@ candidate/packet lists, and zero user-visible citation snippets carry either. Of
 in-table formulas in the cache, 259 reach the delivered text with their normalised
 value; the other two are individually accounted for, not silently dropped — one
 normalises to a blank value (`\overbrace{\qquad}`-shaped), and one sits in a very
-large table whose row/column cap now lands on a different cell once the leaked text
-elsewhere in the same table is gone (below).
+large table whose own row/segment cap consumes the row that value sits in — a
+different table, in a different page, from the neutrality exception described
+below.
 
 **The bounded neutrality check (the sound replacement for "only the leak-bearing
-units change", see the check paper's own §B.3): mostly holds, with one disclosed
-exception.** 816 of the 949 cached articles contain none of `style`/`script`/
+units change" — whether removing the noise changed which units the reranker packed
+cannot be settled offline, only by re-running the reranker): mostly holds, with one
+disclosed exception.** 816 of the 949 cached articles contain none of `style`/`script`/
 `noscript`/`template`/`svg`/`figure`/`figcaption`/`head`/`math`/`nav` inside a kept
 table and no tag-bearing comment inside one (`nav` newly measured here — it was
 never checked before — at 0 of 949, so it joins the other classes as provably
