@@ -3183,6 +3183,39 @@ offline article viewer. Files are registered in place, never copied.
   **Still unbuilt after this** (D-Z21's own list, minus the shortcut): an "Open in Documents" jump
   from the saved state, and full enumeration/import of a whole archive (D-Z1, #417).
 
+- **D-Z24 — Conditional archive-language planning (#486, 2026-09-19).** The search-plan step
+  above (`buildPlanMessages`) asks the model to write titles and queries "in the language of
+  the question" unconditionally, which is correct when a ticked pack shares the question's
+  language but a real, measured cost when it does not: an offline funnel-only read on the
+  maintainer's 200-question development bank found that always substituting a pack's own
+  language for that phrase moved English article-stage reach from 27 to 54 of 100 questions,
+  but also cost 5 of 100 German questions asked against German packs — an unconditional
+  substitution was not worth shipping on that trade alone. This PR narrows it: a new module,
+  `question-language.ts`, adds a small, offline, dependency-free detector
+  (`detectQuestionLanguage`) that reads a question as German, English, or unresolved from two
+  fixed, disjoint stop-word lists (62 German words, 56 English words; five words common to
+  both languages in this frame — "in", "an", "am", "so", "also" — are deliberately in
+  neither), with a German-leaning tie-break on doubt (a small, deliberate asymmetry: wrongly
+  reading a German question as English would fire the substitution where it must never fire,
+  while the opposite mistake only misses a chance to fire it). `buildPlanMessages` substitutes
+  the ticked packs' own resolved language for "the language of the question" at its three
+  prompt sites ONLY when the detector names a language AND that language is not already one
+  of the packs' own — otherwise the prompt is untouched, byte for byte, which the tests assert
+  with a sha256 over the composed prompt. Measured the same way, restricted to the same
+  cases this mechanism actually changes, the 27-to-54 English gain holds while German stays at
+  93 of 100, unchanged to the last digit, because a German question against a German pack now
+  gets the exact same prompt it always did. **The detector is a stop-word count, not a
+  language classifier**: checked against the maintainer's own 200-question development bank
+  it agreed with every one of the bank's own language labels (200 of 200), and it is expected
+  to do worse on real, more varied user questions — a short, mixed-language or otherwise
+  ambiguous question can still go undetected, in which case the plan silently stays in the
+  question's own language, exactly as it always has, for any pack language the detector does
+  not recognise (today, anything other than German or English). This PR ships as a draft,
+  gated on the maintainer's offline acceptance read on the 200-question development set (the
+  six floors above, plus new English and German bars for this specific change) — it is not to
+  be read as shipped until that read holds. Item 1 of "Deliberately different from route F"
+  above is updated accordingly.
+
 ### Module map
 
 `services/zim/`: `html.ts` (article HTML → segments; linear forward scanner with a work
@@ -3746,19 +3779,23 @@ never the frequency ladder).
 
 **Deliberately different from route F** (documented adaptations, not oversights):
 
-1. **The planner prompt keeps "in the language of the question"**, not route F's hardcoded
-   German. Route F's one archive IS German Wikipedia, so hardcoding the target language there
-   is correct; the product's knowledge packs are ANY language a user adds
-   (`docs/knowledge-packs.md`: "Wikipedia in about a hundred languages"). Hardcoding German
-   would regress every non-German pack. Step 1c measured that this planner call is NOT
+1. **The planner prompt defaults to "in the language of the question"**, not route F's
+   hardcoded German — and, since D-Z24 below, departs from that default when a ticked pack's
+   own language differs from the question's. Route F's one archive IS German Wikipedia, so
+   hardcoding the target language there is correct; the product's knowledge packs are ANY
+   language a user adds (`docs/knowledge-packs.md`: "Wikipedia in about a hundred languages"),
+   so hardcoding German would regress every non-German pack — the question's own language
+   stays the default for exactly that reason. Step 1c measured that this planner call is NOT
    decorative for English questions against a German archive — turning it off collapses
    `anyArticle` on `MEAS49-en` from 43 to 23 — but also that the model's own German lexical gap
    (not a prompt defect) is why an isolated single-term translation call did not clear 1a-i's
-   bundle-entry bar. Keeping the shipped "match the question's language" framing accepts a
-   real, measured cost on this PR's (German-only) acceptance corpus's English-question half in
-   exchange for correctness on every other pack language. §18 records the later confirmation
-   read of the research bundle and its negative result, and notes how far the research pipeline
-   and the shipped product still are apart on English.
+   bundle-entry bar. Keeping the shipped "match the question's language" framing as an
+   UNCONDITIONAL default accepted a real, measured cost on this PR's (German-only) acceptance
+   corpus's English-question half in exchange for correctness on every other pack language;
+   D-Z24 narrows that cost to only the questions a small offline detector cannot read as
+   German or English. §18 records the later confirmation read of the research bundle and its
+   negative result, and notes how far the research pipeline and the shipped product still are
+   apart on English.
 2. **The read budget (12 reads / 8 admitted) is applied PER PACK**, not globally per ask.
    Route F's `discover()` bounds ONE archive per question; the product can have several packs
    selected for one ask. Every acceptance measurement in this PR uses a single pack, so the
