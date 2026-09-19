@@ -4522,3 +4522,106 @@ Full artifacts: `steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline
 gold-demo.json,acceptance-4l.json,tables32-delivery.json,gap-diagnosis-4l.json,
 id-diff-4l-default.json,freeze-4l.txt,freeze-4l.superseded-1.txt,freeze-4l.superseded-2.txt,
 freeze-4l.superseded-3.txt,freeze-4l.superseded-4.txt,freeze-4l.superseded-5.txt}`.
+
+**Two text leaks that shipped with table delivery, fixed together, with their own
+measured acceptance read (#485, #490).** A `<style>`/`<script>` element nested inside
+a kept table had its raw body flow into the delivered cell text (the table
+serialiser had no notion of "raw text" elements at all); a `<math>` element nested
+inside a kept table was delivered twice over — the rendered MathML presentation
+characters and the raw TeX source, neither normalised, where the prose path already
+normalises and emits a formula's plain-text description once. Both fixed inside the
+one function that serialises a kept table's body: a `<style>`/`<script>` body is now
+scanned to its own matching end tag and dropped, exactly as the main document
+scanner already does outside a table; a `<math>` element is **routed, never
+dropped** — its `alttext`, if present, is normalised and appended once, through the
+same composition and normalisation the prose path uses, and its MathML subtree is
+then suppressed, because a formula cell is often the value the table exists to
+deliver. No other drop rule, table size/shape constant or `ExtractedSegment` shape
+changed.
+
+All six PR-B funnel floors hold, and by a wide, unchanged margin: `allPacked`
+**77** (≥45), `anyCandidate` **116** (≥80), `anyArticle` **120** (≥96) — identical to
+the prior read's own figures, i.e. the fix changes zero funnel-gate outcomes on this
+population — and all three latency floors improve or hold (arm p90 excluding
+planner/rerank 826 ms against 1,052 previously, rerank p90 3,211 ms against 3,193,
+planner p90 577 ms against 570; floors 2,500 / 10,848 / 3,000 ms). The table-delivery
+endpoint that was void in the prior read (a scoring-method defect, not a delivery
+failure) is now measured on a working, pre-registered instrument: on the
+gold-article-restricted population, both required predicates hold at every gate,
+matching the prior diagnostic's own measured values **exactly**, zero churn from
+removing the leaks — candidates P1 **26/32** (≥25), packet P1 **24/32** (≥23),
+candidates P2 **24/32** (≥23), packet P2 **21/32** (≥20). The five leak-eradication
+endpoints: zero table-derived segments carry stylesheet source or the doubled-formula
+signature, offline over the full 949-article cache or in the read's own
+candidate/packet lists, and zero user-visible citation snippets carry either. Of 261
+in-table formulas in the cache, 259 reach the delivered text with their normalised
+value; the other two are individually accounted for, not silently dropped — one
+normalises to a blank value (`\overbrace{\qquad}`-shaped), and one sits in a very
+large table whose row/column cap now lands on a different cell once the leaked text
+elsewhere in the same table is gone (below).
+
+**The bounded neutrality check (the sound replacement for "only the leak-bearing
+units change", see the check paper's own §B.3): mostly holds, with one disclosed
+exception.** 816 of the 949 cached articles contain none of `style`/`script`/
+`noscript`/`template`/`svg`/`figure`/`figcaption`/`head`/`math`/`nav` inside a kept
+table and no tag-bearing comment inside one (`nav` newly measured here — it was
+never checked before — at 0 of 949, so it joins the other classes as provably
+absent); the fixed and unfixed converter produce byte-identical table output for
+**all 816 of them**, with zero exception outside the named classes. The stricter,
+per-line check — does every pre-fix table-derived line survive in the post-fix
+output, by exact match, containment, or a shared 40-character run — holds for all
+but **one** of 23,081 lines considered (after excluding, as the converter's own
+truncation-boundary reports rather than content: a leak that spans a
+`TABLE_SEGMENT_MAX_CHARS` segment boundary, checked with one-segment adjacency, and
+the two existing cut-boundary markers). **The one exception, both halves of it named
+plainly:** the "Coronaviridae" cached article carries a deeply nested clade
+(virus-taxonomy tree) table whose row/column size cap already fired, pre-fix,
+immediately after a single hidden Wikipedia template-maintenance string
+(`<span style="display:none">Vorlage:Klade/Wartung/Style</span>`) — so pre-fix, that
+cap point delivered nothing of value at all beyond the hidden string itself. Removing
+the leaked stylesheet/formula text elsewhere in the SAME table shifts where that same
+cap now fires: post-fix, the hidden string is genuinely gone, but the cap point
+that replaces it delivers substantial real content instead — coronavirus subgenus/
+species classifications (`Minunacovirus: Bat-CoV-HKU8`, `Sarbecovirus: SARS-CoV,
+SARS-CoV-2`, `Merbecovirus: MERS-CoV`, among others) that pre-fix never reached the
+text at all. The table's cap admitted **different** content, not **less** content;
+whether that is an acceptable class of change is the owner's call, not pre-decided
+by this record. Two post-hoc instrument refinements this residual required, both
+made before the freeze and disclosed in the frozen script's own header: the
+leak-bearing test is checked with one-segment adjacency (the same leak can split
+across a segment boundary and read as clean text on one side of it), and the two
+cut-boundary annotations above are excluded from the per-line check as reports about
+a cap firing, not content a cap removed.
+
+**Truncation and repetition, checked on the first read after table delivery.** The
+default request path carries no `max_tokens` or sampler pin, so this was named as an
+open obligation for whichever read ran first after the table-delivery change landed.
+The recorded post-fix answer request bodies (185 of
+200; the other 15 are the product's own short-circuited ids, with no request to
+replay) were replayed, unmodified, through a fresh model process per id — the
+repetition detector's own pinned baseline (0 of 370 flagged on the prior read's
+generated answers, before this run) reproduced exactly before use. Zero answers hit
+`finish_reason: 'length'` (0 of 185) and zero are a repetition loop (0 of 185);
+`maxRep3`, the continuous diagnostic beside the binary loop test, reads p50 1 / p90
+2 / p99 5 / max 8, close to but slightly above the pre-table-prompt baseline (p50 1 /
+p90 2 / p99 4 / max 4) — still nowhere near the loop threshold of 10. Answer length
+in tokens: p50 156 / p90 314 / p99 569 / max 620, somewhat longer at the tail than
+the pre-table baseline (p99 478, max 551), consistent with a table now giving the
+model more to draw on. The shipped default request still carries no temperature,
+seed or `max_tokens` — the sampler-pinning change is not in this branch.
+
+**The Gold demonstration, live, on the fixed code.** The question "Wie hoch sind
+Dichte und Schmelzpunkt von Gold?" again did not itself resolve the "Gold" article
+title through discovery (a discovery-level outcome, unrelated to this fix), but both
+target values again reached the packet through the same two other articles' tables —
+density **19,32 g/cm³** via "Metalle", melting point **1064,18 °C** via "ITS-90" —
+and the shipped path generated a correct, correctly cited answer from them. The
+"Metalle" unit that was stylesheet-bearing before the table-delivery fix is
+**clean now**: its text no longer contains the stylesheet source, ends instead in
+the crystal-system footnote legend the stylesheet had been consuming the budget
+from, and still carries the density value.
+
+**Status: the change stays a draft.** Every floor and endpoint above holds except
+the one disclosed neutrality exception, which is a genuine miss against the
+pre-registered acceptance criteria (not softened, not re-scored) and keeps this
+change from a clean pass; the maintainer's own review decides what happens next.

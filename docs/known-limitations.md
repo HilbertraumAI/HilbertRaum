@@ -3121,22 +3121,26 @@ reports and phase plans were working papers; their full text lives in git histor
   the new behaviour recovers MORE text, never less. Five `tables32` ids (H016, H062,
   H076, H158 en, H181 de) are discovery losses this change cannot fix — their gold
   article never reaches the candidate pool at all, on any arm.
-- **Two known defects ship with this change as measured, tracked for one
-  follow-up fix.** Some Wikipedia pages nest page styling inside a table; the
-  table path has no styling handling of its own, so that styling source becomes
-  part of the retrievable text: 104 of 949 sampled pages carry it, 223 of 26,721
-  retrievable units, 28 of those across 20 of 200 benchmark questions reach the
-  packet, and 23 user-visible citation snippets across 17 questions carry it
-  (#485). A formula inside a table is delivered twice — once as the loose
-  characters of its rendering markup and once as its raw TeX source — because
-  the table path has no formula handling of its own, where ordinary prose emits
-  a formula's plain-text description once: 33 of 949 sampled pages carry it, 261
-  formulas, 89 units across 21 questions, 15 of those across 12 questions reach
-  the packet, and 11 citation snippets across 10 questions carry it (#490). The
-  styling leak produces nothing on the released code, and for formulas the same
-  check finds three pieces of retrievable text there, none of which reach the
-  material the model is given. Both are fixed together in one follow-up change
-  that carries its own measured acceptance run — the formula fix routes a table
-  formula through the same plain-text-description-once path ordinary text
-  already uses, never a plain drop, because a formula cell is often the value
-  the table exists to deliver.
+- **Two known defects that shipped with table delivery are now FIXED, each
+  measured after the fix over the same 949-page sample.** A `<style>`/`<script>`
+  element nested inside a kept table no longer leaks its raw body into the
+  retrievable text — it is dropped exactly the way the main document scanner
+  already drops these two elements outside a table (#485). A formula (`<math>`)
+  nested inside a kept table is no longer delivered twice over — once as the
+  loose characters of its rendering markup and once as its raw TeX source —
+  because it is now routed through the same plain-text-description-once path
+  ordinary prose already uses, never a plain drop, since a formula cell is
+  often the value the table exists to deliver (#490). Measured after the fix:
+  zero table-derived retrievable units carry stylesheet source, and zero carry
+  either half of the doubled-formula signature, offline over the full sample or
+  in a fresh read's own candidate/packet lists; zero user-visible citation
+  snippets carry either. Of the 261 in-table formulas the sample contains, 259
+  reach the delivered text with their normalised value intact; the remaining
+  two are individually accounted for, not silently dropped — one formula
+  normalises to whitespace only (its own rendered value carries no visible
+  character), and one sits in a very large table where an unrelated row/column
+  limit lands on a different cell now that the leaked text elsewhere in the
+  same table is gone. A related, explicitly out-of-scope class: literal
+  MediaWiki template placeholders (e.g. `{{{Druck}}}`) that appear inside a
+  table are the source page's own content, not markup the converter failed to
+  drop, and are left as-is.
