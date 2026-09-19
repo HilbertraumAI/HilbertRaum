@@ -1508,6 +1508,17 @@ export function buildGroundedChatMessages(
   return contextTokens == null ? collapsed : fitMessagesToContext(collapsed, contextTokens)
 }
 
+/**
+ * Grounded document/knowledge-pack answers pin their own decoding setting on the request
+ * itself, independent of requestParamsForMode: temperature 0, max_tokens 1024, no seed. A
+ * replay of many recorded real requests at several candidate settings found no measurable
+ * difference in correctness, refusals or citations, and the cap never bound in practice — so
+ * a grounded answer's wording no longer varies because of sampling. Plain chat, the local API
+ * and the whole-document map-reduce summarizer (its own SUMMARY_TEMPERATURE) are unaffected.
+ */
+export const GROUNDED_TEMPERATURE = 0
+export const GROUNDED_MAX_TOKENS = 1024
+
 export interface GroundedAnswerOptions {
   signal?: AbortSignal
   onToken?: (token: string) => void
@@ -1999,6 +2010,13 @@ export async function generateGroundedAnswer(
   // model cut off at the context ceiling gets the truncated badge instead of persisting a mid-word
   // partial as if complete — a budget-filling document turn is exactly where the ceiling hits.
   let finishReason: string | null = null
+  // The request's own pinned decoding setting, computed once and reused below: at the initial
+  // call, at the truncation gate, and if a continuation runs. A caller-supplied override still
+  // wins, field by field (opts.runtimeOptions) — no caller sets one today.
+  const effectiveRuntimeOptions = {
+    temperature: opts.runtimeOptions?.temperature ?? GROUNDED_TEMPERATURE,
+    maxTokens: opts.runtimeOptions?.maxTokens ?? GROUNDED_MAX_TOKENS
+  }
   // No `mode` is passed: document answers always run 'balanced' — grounded
   // answers should be fast + literal.
   const stream = runtime.chatStream(messages, {
@@ -2006,7 +2024,7 @@ export async function generateGroundedAnswer(
     onFinish: (reason) => {
       finishReason = reason
     },
-    ...opts.runtimeOptions
+    ...effectiveRuntimeOptions
   })
   try {
     for await (const token of stream) {
@@ -2025,7 +2043,12 @@ export async function generateGroundedAnswer(
   // plus a resume anchor, streams the seam-deduped remainder live, and stamps output-truncated only when the
   // cap is exhausted. A user Stop mid-continuation persists the accumulated partial (the engine swallows it);
   // a set `maxTokens` (an explicit cap) is never continued past — same gate as the truncated stamp below.
-  let outputTruncated = finishReason === 'length' && opts.runtimeOptions?.maxTokens == null
+  // A max_tokens cap is now always sent (effectiveRuntimeOptions above), so this condition is
+  // permanently false here: 'length' with a cap in effect means the cap fired, not that the
+  // model hit its context ceiling — the same distinction chat.ts's own Fast-mode gate makes
+  // (generateAssistantMessage). The branch and continueUntilComplete stay: the whole-document
+  // map-reduce reduce phase (streamWholeDocMapReduce) still calls continueUntilComplete.
+  let outputTruncated = finishReason === 'length' && effectiveRuntimeOptions.maxTokens == null
   if (outputTruncated) {
     const acc = { content }
     const finalReason = await continueUntilComplete({
@@ -2037,7 +2060,7 @@ export async function generateGroundedAnswer(
       // No cap was set on the first pass, so let each continuation use as much of the window as fits after
       // its (larger) prompt — the room guard caps it to `contextTokens − prompt`, never overflowing n_ctx.
       outputCap: contextTokens,
-      temperature: opts.runtimeOptions?.temperature,
+      temperature: effectiveRuntimeOptions.temperature,
       acc,
       finishReason
     })
@@ -2170,14 +2193,18 @@ export async function generateGroundedDataAnswer(
   const seededPrefix = opts.answerPrefix ?? ''
   if (opts.answerPrefix) opts.onToken?.(opts.answerPrefix)
   let modelContent = ''
-  // Honest-signal parity with plain chat/grounded (§L0): flag a narration the model cut off at the
-  // context ceiling (no max_tokens cap is ever set on this path).
+  // Honest-signal parity with plain chat/grounded (§L0): flag a narration the model cut off
+  // partway. A 1024-token cap is now always sent (below, mirroring generateGroundedAnswer), so
+  // 'length' here can no longer distinguish "hit the cap" from "hit the context window" — an
+  // accepted, unfixed gap (rare in practice: this mode's replies are short extract narrations).
   let finishReason: string | null = null
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,
     onFinish: (reason) => {
       finishReason = reason
-    }
+    },
+    temperature: GROUNDED_TEMPERATURE,
+    maxTokens: GROUNDED_MAX_TOKENS
   })
   try {
     for await (const token of stream) {

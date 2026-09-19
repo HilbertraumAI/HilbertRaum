@@ -1316,28 +1316,35 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   The local API deliberately still omits `usage` (local-api.md §6.5).
 - **Answer-depth modes (Phase 20, spec §10.3).** `ChatOptions.mode` (`fast|balanced|deep`,
   per message, sticky per conversation in the renderer) threads through
-  `generateAssistantMessage` → `RuntimeChatOptions.mode`. The mapping to request parameters
-  lives in ONE place, `runtime/llama.ts` `requestParamsForMode` (D4): fast = thinking off +
-  temp 0.7 + 1024-token cap; balanced (and omitted) = thinking off, server defaults; deep =
-  thinking on + temp 0.6. Thinking is toggled per request via
-  `chat_template_kwargs.enable_thinking` (D5, verified against the pinned llama.cpp b9585);
-  every chat sidecar is spawned with `--jinja --reasoning-format deepseek`
+  `generateAssistantMessage` → `RuntimeChatOptions.mode`. The mapping to request
+  parameters lives in ONE place, `runtime/llama.ts` `requestParamsForMode` (D4): fast =
+  thinking off + temp 0.7 + 1024-token cap; balanced (and omitted) = thinking off, server
+  defaults; deep = thinking on + temp 0.6. Thinking is toggled per request via
+  `chat_template_kwargs.enable_thinking` (D5, verified against the pinned llama.cpp
+  b9585); every chat sidecar is spawned with `--jinja --reasoning-format deepseek`
   (`CHAT_SERVER_ARGS`, which also carries `-lv 4` for the placement parser and, since
-  2026-09-07, `-np 1` — one server slot; GPU record runtime record, issue #319) so the kwarg
-  acts and reasoning streams as separate `delta.reasoning_content` frames. `stripThinkBlocks` (services/chat.ts) scrubs any inline
-  `<think>` block from persisted replies AND from assistant turns replayed as history (D6 —
-  the collapsed "Thinking…" block is a live-stream affordance only; an all-think aborted
-  reply persists nothing). Document answers (`rag/`) never pass a mode — grounded answers
-  always run balanced. **Research note that shaped D4/D5:** at b9585 `--reasoning auto`
-  (the server default) turns thinking ON for every capable template — the bundled Qwen3
-  models were ALREADY thinking on every reply while the app silently dropped those deltas
-  (pure latency cost), so `enable_thinking` is ALWAYS sent explicitly; balanced/omitted =
-  `false`. The Qwen3 `/think`·`/no_think` soft switches were rejected (they leak into
-  transcripts). D4's fast/deep values come from Qwen3's model-card sampling guidance
-  (re-tune when the release hardware matrix lands); explicit `RuntimeChatOptions.maxTokens`/
-  `temperature` always win over mode-derived values. Deep is offered only when the RUNNING
-  model's manifest sets `supports_thinking_mode` (via `RuntimeStatus` — the Chat screen
-  already polls it; see `model-policy.md`).
+  2026-09-07, `-np 1` — one server slot; GPU record runtime record, issue #319) so the
+  kwarg acts and reasoning streams as separate `delta.reasoning_content` frames.
+  `stripThinkBlocks` (services/chat.ts) scrubs any inline `<think>` block from persisted
+  replies AND from assistant turns replayed as history (D6 — the collapsed "Thinking…"
+  block is a live-stream affordance only; an all-think aborted reply persists nothing).
+  Document answers (`rag/`) never pass a mode — grounded answers always run balanced.
+  Grounded answers additionally pin `temperature: 0` and `max_tokens: 1024` on the request
+  itself, independent of `requestParamsForMode` (unchanged) and never sent to plain chat
+  or the local API, so a grounded answer's wording no longer varies because of sampling —
+  never "identical": the call's position inside the long-lived `llama-server` process
+  still moves the output (a dedicated determinism check ruled out prompt-cache and
+  compute-graph reuse as the cause); the whole-document map-reduce engine's own map/reduce
+  calls keep `SUMMARY_TEMPERATURE` unchanged. **Research note that shaped D4/D5:** at
+  b9585 `--reasoning auto` (the server default) turns thinking ON for every capable
+  template — the bundled Qwen3 models were ALREADY thinking on every reply while the app
+  silently dropped those deltas (pure latency cost), so `enable_thinking` is ALWAYS sent
+  explicitly; balanced/omitted = `false`. The Qwen3 `/think`·`/no_think` soft switches
+  were rejected (they leak into transcripts). D4's fast/deep values come from Qwen3's
+  model-card sampling guidance (re-tune when the release hardware matrix lands); explicit
+  `RuntimeChatOptions.maxTokens`/`temperature` always win over mode-derived values. Deep
+  is offered only when the RUNNING model's manifest sets `supports_thinking_mode` (via
+  `RuntimeStatus` — the Chat screen already polls it; see `model-policy.md`).
 - **Cancellation.** Each in-flight send holds an `AbortController` in the per-conversation
   `inFlightStreams` map in **`ipc/inflight.ts`** (shared by the chat AND RAG channels, not
   `registerChatIpc.ts`); `stopGeneration(conversationId)` aborts it. The runtime's
