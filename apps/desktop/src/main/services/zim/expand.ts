@@ -162,6 +162,22 @@ const LANGUAGE_NAMES: Readonly<Record<string, string>> = {
 /** #486: at most this many named pack languages in the planner prompt. */
 export const MAX_NAMED_ARCHIVE_LANGUAGES = 3
 
+/**
+ * #486 follow-up: OpenZIM allows a pack's `language` attribute to name more than one
+ * language (a comma- or semicolon-joined ISO-639-3 list, e.g. `eng,fra`) or to use one of the
+ * three "no single language" markers `mul` (multiple), `und` (undetermined) or `mis`
+ * (uncoded). A raw value is split on `,`/`;` BEFORE the region-subtag split below, so each
+ * part maps independently instead of the whole value collapsing to one unmapped code.
+ */
+const MULTI_LANGUAGE_MARKERS = new Set(['mul', 'und', 'mis'])
+
+function splitArchiveLanguageValue(raw: string): string[] {
+  return raw
+    .split(/[,;]/)
+    .map((part) => part.trim().toLowerCase())
+    .filter((part) => part.length > 0)
+}
+
 function joinLanguageNames(names: readonly string[]): string {
   if (names.length === 1) return names[0]
   if (names.length === 2) return `${names[0]} or ${names[1]}`
@@ -180,12 +196,32 @@ function resolveArchiveLanguageNames(archiveLanguages?: readonly string[]): stri
   const names: string[] = []
   for (const raw of archiveLanguages) {
     if (typeof raw !== 'string') continue
-    const code = raw.trim().toLowerCase().split(/[-_]/)[0]
-    const name = LANGUAGE_NAMES[code]
-    if (!name) continue
-    if (!names.includes(name)) names.push(name)
+    for (const part of splitArchiveLanguageValue(raw)) {
+      const code = part.split(/[-_]/)[0]
+      const name = LANGUAGE_NAMES[code]
+      if (!name) continue
+      if (!names.includes(name)) names.push(name)
+    }
   }
   return names
+}
+
+/**
+ * #486 follow-up: true when any eligible pack's `language` value carries `mul`/`und`/`mis` —
+ * that pack's own language is unknown, so the "already one of the packs' own" check below
+ * cannot be trusted, and the whole ask's substitution is suppressed rather than risk naming a
+ * language the pack's own content might already cover.
+ */
+function hasUnknownArchiveLanguage(archiveLanguages?: readonly string[]): boolean {
+  if (!archiveLanguages || archiveLanguages.length === 0) return false
+  for (const raw of archiveLanguages) {
+    if (typeof raw !== 'string') continue
+    for (const part of splitArchiveLanguageValue(raw)) {
+      const code = part.split(/[-_]/)[0]
+      if (MULTI_LANGUAGE_MARKERS.has(code)) return true
+    }
+  }
+  return false
 }
 
 /**
@@ -207,17 +243,30 @@ export function resolveArchiveLanguagePhrase(
  * language for the question AND that language's name is NOT already among the ticked packs'
  * own resolved languages. Returns the exact reason for every non-firing case so callers can
  * reason about (or log) why the default prompt was kept.
+ *
+ * #486 follow-up: an eligible pack carrying a `mul`/`und`/`mis` marker (its own language is
+ * unknown) suppresses the override for the whole ask (`archive-languages-unknown`), checked
+ * before the "already one of the packs' own" comparison below — that comparison can only see
+ * the languages a pack's value actually maps to, never the ones an unknown marker might hide.
  */
 export function decidePlanLanguageOverride(
   question: string,
   archiveLanguages?: readonly string[]
 ): {
   fire: boolean
-  reason: 'detector-unresolved' | 'archive-languages-unmapped' | 'same-language' | null
+  reason:
+    | 'detector-unresolved'
+    | 'archive-languages-unmapped'
+    | 'archive-languages-unknown'
+    | 'same-language'
+    | null
   detectedLanguage: 'de' | 'en' | null
 } {
   const detected = detectQuestionLanguage(question)
   if (detected === null) return { fire: false, reason: 'detector-unresolved', detectedLanguage: null }
+  if (hasUnknownArchiveLanguage(archiveLanguages)) {
+    return { fire: false, reason: 'archive-languages-unknown', detectedLanguage: detected }
+  }
   const names = resolveArchiveLanguageNames(archiveLanguages)
   if (names.length === 0) return { fire: false, reason: 'archive-languages-unmapped', detectedLanguage: detected }
   const detectedName = LANGUAGE_NAMES[detected]

@@ -9,6 +9,7 @@ import {
   PLAN_SLOWEST_MEASURED_TOKENS_PER_SEC,
   PLAN_TIMEOUT_MS,
   buildPlanMessages,
+  decidePlanLanguageOverride,
   makeQueryExpander,
   parsePlan
 } from '../../src/main/services/zim/expand'
@@ -222,6 +223,54 @@ describe('buildPlanMessages — conditional archive-language substitution (#486,
     const withNoResolvedLanguage = buildPlanMessages(englishQuestion, [])
     const unmodified = buildPlanMessages(englishQuestion)
     expect(sha256(JSON.stringify(withNoResolvedLanguage))).toBe(sha256(JSON.stringify(unmodified)))
+  })
+
+  it('(f) a list of only unmapped codes is byte-identical to the unmodified builder', () => {
+    const withUnmapped = buildPlanMessages(englishQuestion, ['xx'])
+    const unmodified = buildPlanMessages(englishQuestion)
+    expect(sha256(JSON.stringify(withUnmapped))).toBe(sha256(JSON.stringify(unmodified)))
+  })
+})
+
+// Review 2026-09-20: a pack's `language` attribute is sometimes a comma- or semicolon-joined
+// OpenZIM list (`eng,fra`) or one of the `mul`/`und`/`mis` "no single language" markers.
+// `resolveArchiveLanguageNames` previously reduced the WHOLE value to one code, so a value
+// like `eng,fra` mapped to nothing and its languages were invisible to the "already one of the
+// packs' own" check `decidePlanLanguageOverride` reads.
+describe('buildPlanMessages — multi-language pack values (#486 follow-up)', () => {
+  const englishQuestion = 'Which countries emit the most CO2?'
+
+  function sha256(text: string): string {
+    return createHash('sha256').update(text, 'utf8').digest('hex')
+  }
+
+  it('a comma-joined pack value contributes every language it names to the "already one of the packs\' own" check', () => {
+    const decision = decidePlanLanguageOverride(englishQuestion, ['deu', 'eng,fra'])
+    expect(decision).toMatchObject({ fire: false, reason: 'same-language' })
+    const withPackLanguages = buildPlanMessages(englishQuestion, ['deu', 'eng,fra'])
+    const unmodified = buildPlanMessages(englishQuestion)
+    expect(sha256(JSON.stringify(withPackLanguages))).toBe(sha256(JSON.stringify(unmodified)))
+  })
+
+  it('a semicolon-joined pack value is split the same way', () => {
+    const decision = decidePlanLanguageOverride(englishQuestion, ['deu', 'eng;fra'])
+    expect(decision).toMatchObject({ fire: false, reason: 'same-language' })
+    const withPackLanguages = buildPlanMessages(englishQuestion, ['deu', 'eng;fra'])
+    const unmodified = buildPlanMessages(englishQuestion)
+    expect(sha256(JSON.stringify(withPackLanguages))).toBe(sha256(JSON.stringify(unmodified)))
+  })
+
+  it('a "mul" (multi-language) marker on any eligible pack suppresses the override for the whole ask', () => {
+    const decision = decidePlanLanguageOverride(englishQuestion, ['deu', 'mul'])
+    expect(decision).toMatchObject({ fire: false, reason: 'archive-languages-unknown' })
+    const withPackLanguages = buildPlanMessages(englishQuestion, ['deu', 'mul'])
+    const unmodified = buildPlanMessages(englishQuestion)
+    expect(sha256(JSON.stringify(withPackLanguages))).toBe(sha256(JSON.stringify(unmodified)))
+  })
+
+  it('two distinct single-code packs still name both languages (unchanged behaviour)', () => {
+    const substituted = buildPlanMessages(englishQuestion, ['deu', 'fra'])
+    expect(substituted[0].content).toContain('in German or French')
   })
 })
 

@@ -3183,37 +3183,50 @@ offline article viewer. Files are registered in place, never copied.
   **Still unbuilt after this** (D-Z21's own list, minus the shortcut): an "Open in Documents" jump
   from the saved state, and full enumeration/import of a whole archive (D-Z1, #417).
 
-- **D-Z24 — Conditional archive-language planning (#486, 2026-09-19).** The search-plan step
-  above (`buildPlanMessages`) asks the model to write titles and queries "in the language of
-  the question" unconditionally, which is correct when a ticked pack shares the question's
-  language but a real, measured cost when it does not: an offline funnel-only read on the
-  maintainer's 200-question development bank found that always substituting a pack's own
-  language for that phrase moved English article-stage reach from 27 to 54 of 100 questions,
-  but also cost 5 of 100 German questions asked against German packs — an unconditional
-  substitution was not worth shipping on that trade alone. This PR narrows it: a new module,
-  `question-language.ts`, adds a small, offline, dependency-free detector
-  (`detectQuestionLanguage`) that reads a question as German, English, or unresolved from two
-  fixed, disjoint stop-word lists (62 German words, 56 English words; five words common to
-  both languages in this frame — "in", "an", "am", "so", "also" — are deliberately in
-  neither), with a German-leaning tie-break on doubt (a small, deliberate asymmetry: wrongly
-  reading a German question as English would fire the substitution where it must never fire,
-  while the opposite mistake only misses a chance to fire it). `buildPlanMessages` substitutes
-  the ticked packs' own resolved language for "the language of the question" at its three
-  prompt sites ONLY when the detector names a language AND that language is not already one
-  of the packs' own — otherwise the prompt is untouched, byte for byte, which the tests assert
-  with a sha256 over the composed prompt. Measured the same way, restricted to the same
-  cases this mechanism actually changes, the 27-to-54 English gain holds while German stays at
-  93 of 100, unchanged to the last digit, because a German question against a German pack now
-  gets the exact same prompt it always did. **The detector is a stop-word count, not a
-  language classifier**: checked against the maintainer's own 200-question development bank
-  it agreed with every one of the bank's own language labels (200 of 200), and it is expected
-  to do worse on real, more varied user questions — a short, mixed-language or otherwise
-  ambiguous question can still go undetected, in which case the plan silently stays in the
-  question's own language, exactly as it always has, for any pack language the detector does
-  not recognise (today, anything other than German or English). This PR ships as a draft,
-  gated on the maintainer's offline acceptance read on the 200-question development set (the
-  six floors above, plus new English and German bars for this specific change) — it is not to
-  be read as shipped until that read holds. Item 1 of "Deliberately different from route F"
+- **D-Z24 — Conditional archive-language planning (#486, 2026-09-19).** The
+  search-plan step above (`buildPlanMessages`) asks the model to write titles and queries
+  "in the language of the question" unconditionally, which is correct when a ticked pack
+  shares the question's language but a real, measured cost when it does not: an offline
+  funnel-only read on the maintainer's 200-question development bank found that always
+  substituting a pack's own language for that phrase moved English article-stage reach
+  from 27 to 54 of 100 questions, but also cost 5 of 100 German questions asked against
+  German packs — an unconditional substitution was not worth shipping on that trade
+  alone. This PR narrows it: a new module, `question-language.ts`, adds a small, offline,
+  dependency-free detector (`detectQuestionLanguage`) that reads a question as German,
+  English, or unresolved from two fixed, disjoint stop-word lists (62 German words, 56
+  English words; five words common to both languages in this frame — "in", "an", "am",
+  "so", "also" — are deliberately in neither), with a German-leaning tie-break on doubt
+  (a small, deliberate asymmetry: wrongly reading a German question as English would
+  fire the substitution where it must never fire, while the opposite mistake only misses
+  a chance to fire it). `buildPlanMessages` substitutes the ticked packs' own resolved
+  language for "the language of the question" at its three prompt sites ONLY when the
+  detector names a language AND that language is not already one of the packs' own —
+  otherwise the prompt is untouched, byte for byte, which the tests assert with a sha256
+  over the composed prompt. The maintainer's offline acceptance read on the shipped product
+  (planner and reranker both on, this same 200-question development bank, head `71a3c7c5`,
+  2026-09-20) held: English article-stage reach reached 50 of 100 against a bar of 37,
+  German held at 93 of 100 against a bar of 91, all six PR-B floors passed, and every one
+  of the 100 German questions' composed planner prompt was byte-identical to the previous
+  release's — the 27-to-54 figure above is the earlier harness measurement of this same
+  mechanism (planner only, reproduced outside the product, no reranker), not this PR's own
+  result. **The detector is a stop-word count, not a language classifier, and it alone
+  is limited to German and English**: checked against the maintainer's own 200-question
+  development bank it agreed with every one of the bank's own language labels (200 of
+  200), and it is expected to do worse on real, more varied user questions — a short,
+  mixed-language or otherwise ambiguous question can still go undetected, in which case
+  the plan silently stays in the question's own language. The *pack* side is not limited
+  to German or English: `LANGUAGE_NAMES` maps fourteen languages (German, English, French,
+  Spanish, Italian, Dutch, Portuguese, Polish, Russian, Swedish, Turkish, Arabic, Chinese,
+  Japanese), and the substitution names whichever of them the ticked packs declare, once the
+  question itself is one the detector confidently reads as German or English; a pack whose
+  declared language is unset, outside that table, or a multi-language marker (`mul`, `und`,
+  `mis`) contributes nothing, and when no ticked pack contributes a mapped language the
+  prompt is untouched. A pack's declared language is sometimes a comma- or semicolon-joined
+  list (an OpenZIM multi-language pack, e.g. `eng,fra`); each part of such a value is now
+  split and mapped independently before the "already one of the packs' own" check runs,
+  and a pack carrying `mul`, `und` or `mis` is treated as having an unknown language,
+  which suppresses the substitution for the whole ask rather than risk naming a language
+  the pack's own content already covers. Item 1 of "Deliberately different from route F"
   above is updated accordingly.
 
 ### Module map

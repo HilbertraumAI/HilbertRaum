@@ -2969,10 +2969,15 @@ reports and phase plans were working papers; their full text lives in git histor
   question is the clearest example, but any question benefits). That step now asks in a ticked
   pack's own language instead of the question's when the two are confidently detected to
   differ — but only for a question it can read as German or English (a small, offline
-  word-list check, not a language classifier) and only when the pack's own declared language
-  is one it recognises; every other case — a question the check cannot classify, or a pack
-  whose language is unset or not German/English — still plans in the question's own language,
-  exactly as before (#486). **What that step costs is set
+  word-list check, not a language classifier). It can then name any of fourteen mapped
+  languages the ticked pack declares — German, English, French, Spanish, Italian, Dutch,
+  Portuguese, Polish, Russian, Swedish, Turkish, Arabic, Chinese or Japanese — not only
+  German or English. Every other case — a question the check cannot classify, a pack whose
+  declared language is unset or outside that list, or a pack that declares more than one
+  language (a comma- or semicolon-joined value is now split and each part mapped on its
+  own, but a pack marked `mul`, `und` or `mis` — "multiple", "undetermined" or "uncoded" —
+  is treated as unknown and suppresses the substitution for that question) — still plans in
+  the question's own language, exactly as before (#486). **What that step costs is set
   by how long the model's answer is, not by how long the app has been running.** Measured on a
   fast desktop processor (32 threads) with the bundled 4B model and no graphics card: about six
   and a half to eight seconds. On a graphics card the same questions take about half a second.

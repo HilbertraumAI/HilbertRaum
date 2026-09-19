@@ -5,7 +5,7 @@ import {
   ENGLISH_STOP_WORDS,
   detectQuestionLanguage
 } from '../../src/main/services/zim/question-language'
-import { resolveArchiveLanguagePhrase } from '../../src/main/services/zim/expand'
+import { buildPlanMessages, resolveArchiveLanguagePhrase } from '../../src/main/services/zim/expand'
 
 // #486 (`docs/rag-design.md` §17 D-Z24): `detectQuestionLanguage` is a small, offline,
 // dependency-free guess at a question's language, gating the conditional archive-language
@@ -75,17 +75,18 @@ describe('detectQuestionLanguage', () => {
 // expected sha256 is `sha256(basePrompt.replaceAll('in the language of the question', 'in ' +
 // phrase))`. This exercises `resolveArchiveLanguagePhrase` directly (its own caller,
 // `buildPlanMessages`, is covered separately in `zim-expand.test.ts`).
-const BASE_PLAN_PROMPT =
-  'Prepare a short Wikipedia search plan, not an answer, in the language of the question. ' +
-  'Infer the intended subject from the original question. ' +
-  'titles: up to three likely article titles or genuine aliases, in the language of the ' +
-  'question; queries: up to two concise full-text search queries of 2-4 important words, ' +
-  'in the language of the question, targeting all requested relations. Preserve entity ' +
-  'distinctions, negations, dates, units and exclusions. Do not invent a private fact or ' +
-  'supply guessed answer facts as search terms. An announced future event may already be ' +
-  'documented. Return JSON only.'
+// Review 2026-09-20: derived from the production builder itself, not hand-copied — a
+// hand-copied literal here would let every fixture below stay green through a future edit to
+// `expand.ts`'s actual prompt. `buildPlanMessages` never varies its system content on the
+// question text alone (only a resolved, firing `archiveLanguages` override does that), so any
+// question string yields the same base prompt.
+const BASE_PLAN_PROMPT = buildPlanMessages('irrelevant: no archiveLanguages is passed')[0].content
 
 const basePlanPromptSha256 = 'cc49153888d10bd513ebbca6d386fd7eff1ee460f30f3dbe23b581d6cd57bbe5'
+
+it('the production base prompt is byte-identical to the frozen constant', () => {
+  expect(sha256(BASE_PLAN_PROMPT)).toBe(basePlanPromptSha256)
+})
 
 interface PhraseCase {
   name: string
