@@ -4370,3 +4370,155 @@ manifest-only chat-model estimate, other GPU consumers and a stale probe, and a 
 disabling reranking for the session) are disclosed in `known-limitations.md`, not fixed. Full
 artifacts:
 `steps/4-8-product-pr-rerank-profiles-5/artifacts/{no-op-proof-3.json,harness-inertness-check.json,posture-writers.json,required-wiring-proof.json,posture-cost.json,follow-up-issues.md}`.
+
+**Table delivery (issue #478, open PR) — `html.ts` no longer drops every `<table>`.** A table
+used to disappear at parse time (`SKIP_SUBTREE`), so an infobox or data table's fact was never
+merely unranked, it was never retrievable at all. `tables.ts` now owns table geometry: a
+class-based classifier (`navbox`, `vertical-navbox`, `metadata`, `ambox`, `toc`,
+`sistersitebox`) and a structural test (no header cell and no real tabular content) still drop
+layout/navigation tables unchanged, checked at EVERY nesting depth (a `navbox`/`ambox` nested
+inside an otherwise-kept table is dropped by the same classifier, not inlined) — except that a
+headerless, single-column wrapper is still delivered when a table nested inside it is itself
+real tabular content (the wrapper is layout, the data one level inside it is not; a scoped
+pre-read review caught the original structural test judging the two as one). Everything else is
+parsed into a bounded grid (rowspan/colspan expanded and capped, and a rowspan can never
+manufacture a row past the table's own last real source row) and serialised as one line per data
+row, `key: value; key: value`. A row's key is resolved in this order: (1) the nearest header ROW
+above with a non-empty value at that column (resolved in one forward pass with a running
+per-column cache, not an upward rescan per cell); (2) failing that — none of the row's own
+covered columns has a genuine, non-group column key of its own — that row's OWN leading header
+cell, when the row mixes header and data cells: an infobox's commonest shape,
+`<th>Dichte</th><td>19,32</td>` with no column headers above it, keyed `Dichte: 19,32`, never
+`Column 1: Dichte; Column 2: 19,32`; (3) `Column N` otherwise. An earlier draft of this rule had
+the row's own header win UNCONDITIONALLY over rule (1) — the more specific label, by the same
+"narrower wins" convention multi-row headers use — but a pre-read review measured that this
+discards every real column header on the single commonest Wikipedia data-table shape (a
+row-label column, often `<th scope="row">`, under genuine `<th>` column headers) and repeats the
+row label as every cell's key: `France: Paris; France: 68` instead of `Country: France; Capital:
+Paris; Population: 68`. Column headers now win whenever they genuinely cover the row; the row's
+own header still wins for the shape the rule exists for — a section-grouping header row (e.g.
+"Physikalisch") above a run of per-row `<th>label</th><td>value</td>` rows, where no column
+header ever applies (the two orders are byte-identical on that shape, verified by counterfactual
+measurement). A header row is never itself emitted as data, which is what stops a spanning
+header from being glued onto every cell it covers as a data LINE — but a header cell spanning
+more than one column is a further case a pre-read gate finding caught on the live "Gold" article
+itself: its infobox rows label themselves with a plain `<td>` (not a `<th>`) under an outer
+`<th colspan="2">Physikalisch</th>` group heading, so no row ever reaches rule (2) and the group
+text was reaching rule (1)'s per-column cache for BOTH covered columns, becoming the literal key
+of every row (`Physikalisch: Dichte; Physikalisch: 19,32 g/cm3 …`). A `colspan > 1` header cell
+is tagged as a GROUP LABEL and looked up at most once per ROW, never once per covered cell: when
+a data row has no leading header of its own and none of its covered columns has a genuine
+(non-group) key either, it renders as a group record instead — a 2-column table reads its first
+cell as the row's own label (`Physikalisch — Dichte: gemessen: 19,32 g/cm³ (20 °C); berechnet:
+19,302 g/cm³`, the verbatim delivered text on the live article today), any other column count
+joins the row's cells un-keyed under the one group label rather than inventing `Column N` names
+for columns that were never headed. A row that resolves to a SINGLE source cell spanning every
+one of its covered columns (a full-width note or sub-heading row, identified by grid-position
+object identity, free since `buildGrid` already stores the same cell reference in every position
+its span covers) is likewise emitted once, un-keyed — never once per covered column and never as
+the meaningless `X: X` a full-width `colspan` cell used to produce under a real column-header or
+group-label row. A NESTED table is INLINED into its parent cell (one compact string, emitted
+exactly once), not dropped: real Wikipedia infoboxes commonly nest the actual data table one
+level inside a layout wrapper (the chemical-element infobox is exactly this shape), confirmed
+against the live German "Gold" article, whose density/melting-point row lives in such a nested
+table. Sibling nested tables in the same cell join with `'; '`; a nested table sitting inside
+running prose is separated from it by a space on both sides instead — neither concatenates with
+no separator at all (`19,32Schmelz: 1064` / `vorN: 1nach`, the defects this replaces). A nested
+table's own grid-expansion and line-building cost is charged into the SAME `workUnits` the outer
+table's cost is charged into (previously charged nowhere), bounded by a budget shared across
+every nested table one outer table absorbs so thousands of small nested tables cannot cost real,
+unbounded work; a cap firing inside a nested table (its own row cap, or its own column/grid/char
+cap) is folded into the outermost table's own cut marker, disclosed exactly like a cap firing at
+top level. Superscripts/subscripts read `^value`/`_value` inside table-derived text only
+(`g/cm^3`, `10^6`), never flattened; `<sup class="mw-ref">` citation brackets stay dropped
+everywhere, including a plain `<sup>` nested inside one. Five independent caps bound a table's
+cost to a fixed ceiling regardless of its own byte size: `TABLE_MAX_SOURCE_ROWS` (rows parsed),
+`TABLE_MAX_COLUMNS` and `TABLE_MAX_GRID_CELLS` (the expanded grid's width and total size —
+closing a blow-up a scoped pre-read review found: an uncapped grid plus an uncharged `work`
+counter let a ~1 MiB crafted table cost seconds and gigabytes of heap in one uninterruptible
+slice), `TABLE_MAX_RAW_CHARS` (total characters built before packing, per table AND, as one
+shared budget, across every table it absorbs by nesting), and
+`TABLE_SEGMENT_MAX_CHARS`/`TABLE_MAX_SEGMENTS` (the packed output, now enforced even for a
+single record line longer than the cap, which is hard-split without ever cutting inside a
+UTF-16 surrogate pair). Content dropped by any cap is named in the table's own text:
+`[Rows 1-k of N source rows shown]` for rows (`N` counts every top-level row including header
+rows, hence "source" not "data"), "some cells beyond the table's size caps were omitted" for
+columns/grid/span cuts. The grid-expansion and serialisation cost is charged into the same
+`work` counter the linear-scanner bound is measured against (`html.ts`'s complexity record
+documents the additive, input-independent bound this adds, now including the nested-work
+budget). No `ExtractedSegment` shape change. Offline, over the 152-file reference corpus
+(re-measured after three pre-read Opus review fix passes: caps/hard-split/rowspan clamp; the
+group-label fix above; and the row/column-header precedence, full-width-cell and nested-table
+fixes in this paragraph): units per article rose from a mean of 23.6 to 27.3; parse work is
+essentially unchanged on the corpus (the reviewer's own ~1 MiB wrapper of thousands of small
+nested max-span tables, previously charged nothing and costing ~174 ms in one uninterruptible
+slice, now costs single-digit-to-low-double-digit milliseconds, the same order as any other
+single very large kept table — see `docs/known-limitations.md` for the disclosed residual this
+still leaves); the non-table invariant (a line-multiset diff — a per-segment text-pattern check
+was tried first and rejected after a real false positive) holds on 152/152 files. A further
+pre-read review pass found one more pre-existing defect in the shared budget itself: when a
+nested table's own inlined content approached `TABLE_MAX_RAW_CHARS`, the OUTER table's own
+key/value pair built from that string could exceed the remaining budget in a single step and was
+dropped WHOLE rather than truncated — a wrapper around a large nested property table could
+deliver nothing but cap markers and zero data rows, where the identical table un-nested delivers
+thousands of bytes of real data. Fixed: a line or pair that alone exceeds the remaining budget is
+now truncated to what remains and kept (surrogate-safe), instead of discarded outright; the row
+count a cap marker reports was also corrected for the one case where a single very large line
+spans every output segment on its own, so the marker never again claims zero rows were shown
+when real data reached the text. The Gold
+demonstration's OFFLINE leg (the real "Gold" article through both converters, no
+retrieval/ranking involved) confirms the fix on the live article: density and melting point both
+still reach the packet-eligible text, keyed
+`Physikalisch — Dichte: gemessen: 19,32 g/cm³ (20 °C); berechnet: 19,302 g/cm³` and
+`Physikalisch — Schmelzpunkt: 1337,33 K (1064,18 °C)`. A disclosed residual (owner's call, not
+fixed here): a classless image+caption layout table can still clear both the class and structural
+drop tests (`docs/known-limitations.md`).
+
+**The one authorised `core200` acceptance read (2026-09-18) — every PR-B floor holds, the
+`tables32` delivery endpoint is void on a scoring-method defect — neither a pass nor a miss, the
+Gold demonstration confirms delivery directly.** All six PR-B floors PASS: `allPacked` 77 (≥45), `anyCandidate` 116 (≥80),
+`anyArticle` 120 (≥96), and all three latency floors inside bound — beside 4-k-a's own
+pre-existing master funnel (`anyArticle` 120, `anyCandidate` 116, `allPacked` 78), the funnel is
+effectively unchanged now that table units compete in the same candidate pool. The `tables32`
+delivery thresholds (T-cand ≥26/32, T-packet ≥16/32) both read **0/32** under the pre-registered
+harness-side "table-derived unit" identification script — traced to a scoring-method defect found
+only after the read, not a delivery failure: that script decides a captured candidate/packet unit
+is table-derived by checking that every one of the unit's own newline-delimited lines is a line
+the table-emitting conversion introduces, but the product's own chunking/packing step
+(`chunkSegments` → `collectPackCandidates`, `zim/arm.ts`) joins a segment's per-row lines into one
+line before the harness ever captures it — confirmed structurally (zero of 6,267 captured
+candidate/packet units across the `tables32` population contain a literal newline, though the raw,
+pre-chunking segment for the same content does) and directly, by diffing one raw segment against
+its own captured candidate. Because the check can only pass on a table so short it collapses to a
+single introduced line, it returns "not table-derived" for essentially every genuine multi-row
+table, independent of whether delivery occurred. Two pieces of evidence, neither part of the
+scored result, indicate the underlying delivery does clear both thresholds: the same slot-value
+match with the table-derived filter removed (not a corrected score — it does not distinguish a
+table hit from a prose hit) finds 31/32 candidate-level and 30/32 packet-level hits, and the Gold
+demonstration below reaches both target values directly. Per protocol, the identification script
+is left exactly as frozen (no code, product or scoring, changes after the read); it could only
+ever return 0, for any input, at any threshold, and it never tested the hypothesis, so the
+pre-registered `tables32` delivery endpoint is void — neither a pass nor a miss. The scored result
+of record stays 0 of 32. This is not a precedent for setting aside an endpoint whose instrument
+worked. A dated post-read diagnostic re-score of the same captures, adopted as nothing, found the
+expected value in table-derived units for 29 (looser check) and 26 (stricter check) of 32
+questions among the candidates and 26 and 23 of 32 in the packet. Both checks allow the delivered
+unit to come from any article the run retrieved; restricted to each question's own reference
+article, as the endpoint was originally worded, the same counts are 26 and 24 among the candidates
+and 24 and 21 in the packet. The change stays a draft until the maintainer marks it ready.
+
+**The Gold demonstration, live.** The question "Wie hoch sind Dichte und Schmelzpunkt von Gold?"
+(confirmed by token-Jaccard < 0.19 against every bank question, so it is not one of them) did not
+itself resolve the "Gold" article title through discovery for this phrasing — a discovery-level
+outcome, unrelated to table delivery — but both target values still reached the packet as citable
+units through OTHER articles' own newly-delivered tables: density **19,32 g/cm³** via the
+"Metalle" article's cross-element property table, melting point **1064,18 °C** via the "ITS-90"
+article's fixed-point table, each with a real citation the product would show. The shipped path
+generated a correct, correctly cited answer from them. This is itself a direct, unplanned
+demonstration of table delivery reaching the packet for values the shipped code used to drop
+entirely.
+
+Full artifacts: `steps/4-l-deliver-tables/artifacts/{cost.json,gold-demo-offline.json,
+gold-demo.json,acceptance-4l.json,tables32-delivery.json,gap-diagnosis-4l.json,
+id-diff-4l-default.json,freeze-4l.txt,freeze-4l.superseded-1.txt,freeze-4l.superseded-2.txt,
+freeze-4l.superseded-3.txt,freeze-4l.superseded-4.txt,freeze-4l.superseded-5.txt}`.

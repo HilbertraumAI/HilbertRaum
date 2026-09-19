@@ -40,6 +40,16 @@ bounded by the prefix) — but the plan call DECODES 53–71 tokens, so the whol
 expander untouched. The trap inverted: `forcing full` DID
 appear on the non-MTP 9B start. The retired #399 entry's "#447 … bounded by inference" sentence is frozen in `build-log.md`;
 this entry supersedes it._
+_2026-09-18 — **Table delivery (issue #478, draft PR #479, `feat/zim-deliver-tables`) — READ DONE, six floors hold,
+table-delivery endpoint VOID.** `html.ts` parses a kept `<table>` into a bounded grid of retrievable "key: value"
+units instead of dropping it (`tables.ts`; design `rag-design.md` §17 "Table delivery"). The one authorised `core200`
+acceptance read ran: all six PR-B floors PASS — the measured acceptance of this change. The pre-registered `tables32`
+delivery endpoint is void — neither a pass nor a miss: its identification script required every line of a captured
+unit's own text to be table-introduced, while the chunking step delivers single-line units (0 of 32,257 captured units
+contains a literal newline), so the script could only return 0 for any input and never tested the hypothesis; the
+scored result of record stays 0 of 32. This is not a precedent for setting aside an endpoint whose instrument worked.
+Four pre-read Opus fix passes landed before the read; CI green at the read's head. The change stays a draft until the
+maintainer marks it ready.
 _2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
 `feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
 "Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
