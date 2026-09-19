@@ -7,7 +7,7 @@ the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.
 from its first public `1.0.0` release onward.
 
 > **Pre-1.0.** HilbertRaum has been public since **2026-07-12** and has shipped releases
-> since that day: **v0.1.50** was the first, **v0.1.59** is current. Versions stay in the
+> since that day: **v0.1.50** was the first, **v0.1.60** is current. Versions stay in the
 > `0.1.x` line and SemVer applies from `1.0.0` on — a `0.1.x` bump is a release checkpoint,
 > not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) have no GitHub release
 > page today and no notes here; one of them, `v0.1.46` (2026-07-10), was a pre-release
@@ -25,7 +25,12 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+Nothing yet — the next release's entries accumulate here.
+
+## [0.1.60] — 2026-09-18
+
 ### Added
+
 - **Knowledge packs, one click from the Documents title.** The Documents screen now has a switch
   next to its title — **My documents | Knowledge packs** — instead of a "Reference" entry at the
   bottom of the sidebar. In the packs view each pack has an **Enabled** switch, an **Ask this
@@ -198,7 +203,6 @@ from its first public `1.0.0` release onward.
   download-and-extract steps (including the tarball's single top-level folder) kept as a
   fallback.
 
-### Changed
 
 - **The AI Model screen opens straight away, even on a slow drive.** It used to check every model
   file on the drive before it would show anything at all — on a slow USB drive holding the full set
@@ -254,6 +258,67 @@ from its first public `1.0.0` release onward.
   same applies when nothing at all fits on the card. Translation itself is unchanged: the app still
   gives it whatever graphics memory is free rather than forcing it onto the processor, because on a
   computer where both fit that is many times faster.
+
+
+- **On a computer with a graphics card, the recommended chat model only changes when your
+  computer's usual RAM-based pick would not fit on the card.** A model only runs at card speed
+  when it fits the card, so the star pick on the AI Model screen and the check on the Performance
+  page now check whether the RAM-based pick also fits the graphics card's current free memory
+  (with room for the runtime's working buffers); if it does, nothing changes, and if it does not,
+  the best model that does fit takes its place. RAM is still respected either way: a model that
+  needs more RAM than the computer has is never recommended. The graphics card that counts is the
+  single largest one that is not a shared on-chip graphics chip; a shared on-chip chip, and
+  graphics acceleration switched off in Settings, are both treated as having no card, which keeps
+  the RAM-based pick — as do Apple Silicon computers.
+- **Every request from the app window to the main process now checks where it came from.**
+  Only the app's own window can invoke the internal commands (opening documents, reading
+  settings, running the models); a request from anywhere else is refused before it runs. Nothing
+  else can send such requests today, so nothing changes in use — this closes the door before it
+  is ever needed.
+- **Two small hardening steps with no visible effect.** The app window's content policy now
+  also forbids form submissions, plugins, base-address changes and framing in its built-in
+  fallback layer, and the settings store ignores inherited object names and caps the size of
+  every stored object or list rather than only three of them.
+- **Spell-checking in the message box is switched off.** The built-in browser engine would
+  otherwise download a spelling dictionary from a Google server on Windows and Linux the first
+  time you type — against the promise that nothing leaves the space. Shipping dictionaries on the
+  drive instead is under consideration.
+- **A kit is only called sellable when it really carries the app.** The check that clears a
+  prepared drive for sale now runs as one program for every builder and requires, for each system
+  the kit is sold for, exactly one app of the version being built plus its launcher, and an
+  engine binary whose recorded checksum still matches. A leftover older app build, an engine
+  downloaded without a verifiable checksum, or an engine with no recorded checksum now stops the
+  drive from being cleared (drive builders only; nothing changes for an app already in use).
+- **Updating the app on a drive now means deleting the old one first.** The launchers refuse to
+  start while more than one app version sits on the drive (two portable `.exe` files, two
+  AppImages, or an extracted `HilbertRaum.app` beside a `.app.zip`) and list the files so you can
+  delete the older one — nothing is deleted for you. An older build running beside a newer one
+  could destroy the workspace (the 0.1.59 fix for issue #208 only protects when both copies are
+  0.1.59 or newer). Each launcher also accepts `--check` (`/check` on Windows) to show which app
+  it would start without starting it.
+- **The user guide now says what an unclean stop costs.** Pulling the drive without quitting, a
+  power cut or a forced kill loses the changes made since the workspace last locked or quit; the
+  workspace itself reopens fine from that point. The
+  privacy notice and the security documentation now also say which small things live outside the
+  drive: display preferences in the computer's browser profile, and anything you copy on its
+  clipboard.
+- **A drive on an unfamiliar computer keeps checking itself until it succeeds, once per unlock.**
+  A failed automatic check on a computer this drive doesn't recognize now tries again once each
+  time you unlock, rather than repeatedly for the rest of that session; Check again on the
+  Performance page always works right away in the meantime.
+- **Adding a knowledge pack from a path with an umlaut or accent on Windows now names the cause.**
+  On Windows, kiwix-manage cannot read an archive whose folder or file name contains a non-ASCII
+  character; the panel used to show the generic "could not be read by kiwix-manage" message, and
+  now tells you to move the file to a path made of ASCII characters — the drive's `zim/` folder
+  is simplest — and add it again.
+- **Formulas from a knowledge pack now read as text, not as typesetting code.** Arrows,
+  fractions, roots, Greek letters and signs are written out, and lowered or raised characters sit
+  on the line — CO2, m2, Fe3+ — which is how you type them when searching. Anything unreadable is
+  left as it was. Passages saved in earlier evidence reviews keep the older form.
+- **The privacy notice and Settings screen now name every optional download.** The wording in
+  Settings → Privacy & data and the Privacy notice now says the internet-access setting also
+  covers the AI engine and the optional knowledge-pack tools, not only models, since one setting
+  and one confirmation dialog already covered all three; nothing about what is allowed changed.
 
 ### Fixed
 
@@ -493,68 +558,6 @@ from its first public `1.0.0` release onward.
   check is measuring, so the speed figure was simply absent from the result with nothing to explain
   it. The check now says the speed was skipped because the model was busy; the rating and the
   recommended model still come from RAM, processor and drive speed.
-
-### Changed
-
-- **On a computer with a graphics card, the recommended chat model only changes when your
-  computer's usual RAM-based pick would not fit on the card.** A model only runs at card speed
-  when it fits the card, so the star pick on the AI Model screen and the check on the Performance
-  page now check whether the RAM-based pick also fits the graphics card's current free memory
-  (with room for the runtime's working buffers); if it does, nothing changes, and if it does not,
-  the best model that does fit takes its place. RAM is still respected either way: a model that
-  needs more RAM than the computer has is never recommended. The graphics card that counts is the
-  single largest one that is not a shared on-chip graphics chip; a shared on-chip chip, and
-  graphics acceleration switched off in Settings, are both treated as having no card, which keeps
-  the RAM-based pick — as do Apple Silicon computers.
-- **Every request from the app window to the main process now checks where it came from.**
-  Only the app's own window can invoke the internal commands (opening documents, reading
-  settings, running the models); a request from anywhere else is refused before it runs. Nothing
-  else can send such requests today, so nothing changes in use — this closes the door before it
-  is ever needed.
-- **Two small hardening steps with no visible effect.** The app window's content policy now
-  also forbids form submissions, plugins, base-address changes and framing in its built-in
-  fallback layer, and the settings store ignores inherited object names and caps the size of
-  every stored object or list rather than only three of them.
-- **Spell-checking in the message box is switched off.** The built-in browser engine would
-  otherwise download a spelling dictionary from a Google server on Windows and Linux the first
-  time you type — against the promise that nothing leaves the space. Shipping dictionaries on the
-  drive instead is under consideration.
-- **A kit is only called sellable when it really carries the app.** The check that clears a
-  prepared drive for sale now runs as one program for every builder and requires, for each system
-  the kit is sold for, exactly one app of the version being built plus its launcher, and an
-  engine binary whose recorded checksum still matches. A leftover older app build, an engine
-  downloaded without a verifiable checksum, or an engine with no recorded checksum now stops the
-  drive from being cleared (drive builders only; nothing changes for an app already in use).
-- **Updating the app on a drive now means deleting the old one first.** The launchers refuse to
-  start while more than one app version sits on the drive (two portable `.exe` files, two
-  AppImages, or an extracted `HilbertRaum.app` beside a `.app.zip`) and list the files so you can
-  delete the older one — nothing is deleted for you. An older build running beside a newer one
-  could destroy the workspace (the 0.1.59 fix for issue #208 only protects when both copies are
-  0.1.59 or newer). Each launcher also accepts `--check` (`/check` on Windows) to show which app
-  it would start without starting it.
-- **The user guide now says what an unclean stop costs.** Pulling the drive without quitting, a
-  power cut or a forced kill loses the changes made since the workspace last locked or quit; the
-  workspace itself reopens fine from that point. The
-  privacy notice and the security documentation now also say which small things live outside the
-  drive: display preferences in the computer's browser profile, and anything you copy on its
-  clipboard.
-- **A drive on an unfamiliar computer keeps checking itself until it succeeds, once per unlock.**
-  A failed automatic check on a computer this drive doesn't recognize now tries again once each
-  time you unlock, rather than repeatedly for the rest of that session; Check again on the
-  Performance page always works right away in the meantime.
-- **Adding a knowledge pack from a path with an umlaut or accent on Windows now names the cause.**
-  On Windows, kiwix-manage cannot read an archive whose folder or file name contains a non-ASCII
-  character; the panel used to show the generic "could not be read by kiwix-manage" message, and
-  now tells you to move the file to a path made of ASCII characters — the drive's `zim/` folder
-  is simplest — and add it again.
-- **Formulas from a knowledge pack now read as text, not as typesetting code.** Arrows,
-  fractions, roots, Greek letters and signs are written out, and lowered or raised characters sit
-  on the line — CO2, m2, Fe3+ — which is how you type them when searching. Anything unreadable is
-  left as it was. Passages saved in earlier evidence reviews keep the older form.
-- **The privacy notice and Settings screen now name every optional download.** The wording in
-  Settings → Privacy & data and the Privacy notice now says the internet-access setting also
-  covers the AI engine and the optional knowledge-pack tools, not only models, since one setting
-  and one confirmation dialog already covered all three; nothing about what is allowed changed.
 
 ## [0.1.59] — 2026-08-21
 
@@ -882,7 +885,8 @@ For what the product *is*, see the [README](README.md) and
 [`docs/known-limitations.md`](docs/known-limitations.md). Every release since has its own
 section in [`CHANGELOG.md`](CHANGELOG.md).
 
-[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.59...HEAD
+[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.60...HEAD
+[0.1.60]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.59...v0.1.60
 [0.1.59]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.58...v0.1.59
 [0.1.58]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.57...v0.1.58
 [0.1.57]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.56...v0.1.57

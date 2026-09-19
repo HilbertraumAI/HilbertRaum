@@ -2679,10 +2679,25 @@ it back**.
   **catalog-default 4B and the 9B**, i.e. the 8–12 GB tier picks. Among ranked models only
   `ministral3-8b-instruct-2512-q4` keeps the restore; the dense `qwen3-8b`, the `qwen3-30b-a3b` MoE
   and `granite-4.1-8b-q4` keep it too, which is what makes this a measured architecture split rather
-  than an anecdote. **Not measured:** the ZIM query expander's own call (#447) — every chat family in
+  than an anecdote. Every chat family in
   the catalog now has a verdict, `qwen3.6` (affected) and `granite` (unaffected) being the last two,
   measured under #446. If llama.cpp PR #13194 lands recurrent-state restore upstream, this whole
   entry becomes removable.
+- **A chat with a knowledge pack ticked pays a small, fixed re-prefill on every turn** (measured
+  2026-09-18, #447). The pack arm plans its search with one short model call before each answer,
+  on the same single slot, and that call and the answer evict each other's prefix every time: on
+  16 of 16 measured pack-scoped turns (`qwen3.8-27b-ud-q5km` and `qwen3.5-9b-ud-q4kxl`) the answer
+  kept **0** tokens where the same questions without the pack kept the **227**-token system
+  prefix. The cache cost is that prefix and no more — about 0.35 s on the 27B, independent of
+  conversation length, because a documents turn never reused anything beyond it. The larger cost
+  is the planning call itself: 142–146 tokens in and a 53–71-token plan out, **≈ 2.6–3.2 s per
+  pack-scoped turn on the 27B** on an RTX 3090 (≈ 1.6–1.8 s on the 9B), and more on a CPU, where
+  the decode dominates (#423). It is the running cost of the owner's "always plan" ruling
+  (rag-design §17 D-Z20; turning the call off roughly halves article-stage hits on English
+  questions), which the owner confirmed against these figures on 2026-09-18: the decode was
+  already priced into that ruling, and the part this measurement added is the bounded prefix.
+  A chat without a pack ticked pays none of it.
+  Evidence: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue447-zim-expander.comment.md`.
 - **What can actually evict a live conversation is narrower than it sounds.** `assertChatStreamReady`
   makes categorisation, summary, translate, compare, OCR and every `modelLane` skill run **refuse**
   a chat turn rather than take the slot from it. The one cooperative hand-back is the **yielding

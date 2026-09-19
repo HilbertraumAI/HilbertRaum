@@ -304,7 +304,13 @@ FAMILY_EXECUTABLES=""
 # committed `version: b9196   # PLACEHOLDER …` used to leak the comment into the value.
 strip_value() { echo "$1" | sed 's/[[:space:]][[:space:]]*#.*$//' | tr -d '"'"'"'' | sed 's/[[:space:]]*$//'; }
 
-mapfile -t RAW_LINES < "$SOURCES_FILE"
+# Read WITHOUT `mapfile` (a Bash 4+ builtin absent from macOS's stock Bash 3.2 — it broke
+# the v0.1.60 release's mac leg). Blank lines are kept (as `mapfile -t` kept them), and
+# `|| [[ -n … ]]` keeps a final line that has no trailing newline.
+RAW_LINES=()
+while IFS= read -r raw_line || [[ -n "$raw_line" ]]; do
+  RAW_LINES+=("$raw_line")
+done < "$SOURCES_FILE"
 collapse_block_lists
 for raw in "${PP_LINES[@]}"; do
   line="${raw%$'\r'}"

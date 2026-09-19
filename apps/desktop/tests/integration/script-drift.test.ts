@@ -803,3 +803,48 @@ describe('verify-models / fetch-models enumerate every declared file (#310)', ()
     expect(ps).toContain('Invoke-HandleFile $id $label')
   })
 })
+
+describe('shell scripts — runnable under macOS stock Bash 3.2', () => {
+  // macOS ships Bash 3.2 (GPLv2) and `#!/usr/bin/env bash` resolves to it on a stock machine
+  // and on the `macos-14` release runner. A Bash 4+ construct passes every Windows/Linux leg
+  // (git-bash and ubuntu carry Bash 5) and then dies on a Mac with "command not found": a
+  // `mapfile` in fetch-runtime.sh, added after v0.1.59, failed the v0.1.60 release's mac leg —
+  // the only place any CI runs these scripts on macOS. String scan of CODE lines only (the
+  // comments legitimately name the builtins they avoid).
+  const SHELL_SCRIPTS = [
+    ...readdirSync(join(REPO_ROOT, 'scripts'))
+      .filter((f) => f.endsWith('.sh'))
+      .map((f) => `scripts/${f}`),
+    'launchers/start-hilbertraum.sh',
+    'launchers/Start HilbertRaum.command'
+  ]
+  const BASH4_ONLY: Array<[string, RegExp]> = [
+    ['mapfile / readarray', /(^|[\s;&|(])(mapfile|readarray)\s/],
+    ['associative array (declare/local -A)', /\b(declare|local|typeset)\s+-[a-zA-Z]*A/],
+    ['nameref (declare/local -n)', /\b(declare|local|typeset)\s+-[a-zA-Z]*n\s/],
+    ['case-modifying expansion ${x,,} / ${x^^}', /\$\{[A-Za-z_][A-Za-z0-9_]*(\[[^\]]*\])?(,,?|\^\^?)[^}]*\}/],
+    ['coproc', /(^|[\s;&|(])coproc\s/],
+    ['|& pipe', /\|&/],
+    ['&>> redirect', /&>>/]
+  ]
+
+  it('finds the scripts it is meant to scan', () => {
+    expect(SHELL_SCRIPTS).toContain('scripts/fetch-runtime.sh')
+    expect(SHELL_SCRIPTS.length).toBeGreaterThanOrEqual(8)
+  })
+
+  for (const rel of SHELL_SCRIPTS) {
+    it(`${rel} uses no Bash 4+ construct`, () => {
+      const hits: string[] = []
+      read(rel)
+        .split('\n')
+        .forEach((text, i) => {
+          if (text.trim().startsWith('#')) return
+          for (const [name, re] of BASH4_ONLY) {
+            if (re.test(text)) hits.push(`${rel}:${i + 1} ${name}: ${text.trim()}`)
+          }
+        })
+      expect(hits).toEqual([])
+    })
+  }
+})
