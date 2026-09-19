@@ -3756,7 +3756,9 @@ never the frequency ladder).
    (not a prompt defect) is why an isolated single-term translation call did not clear 1a-i's
    bundle-entry bar. Keeping the shipped "match the question's language" framing accepts a
    real, measured cost on this PR's (German-only) acceptance corpus's English-question half in
-   exchange for correctness on every other pack language.
+   exchange for correctness on every other pack language. §18 records a later confirmation read
+   that measured this trade-off's cost directly, and reports a negative result against its own
+   pre-registered rule.
 2. **The read budget (12 reads / 8 admitted) is applied PER PACK**, not globally per ask.
    Route F's `discover()` bounds ONE archive per question; the product can have several packs
    selected for one ask. Every acceptance measurement in this PR uses a single pack, so the
@@ -4370,3 +4372,65 @@ manifest-only chat-model estimate, other GPU consumers and a stale probe, and a 
 disabling reranking for the session) are disclosed in `known-limitations.md`, not fixed. Full
 artifacts:
 `steps/4-8-product-pr-rerank-profiles-5/artifacts/{no-op-proof-3.json,harness-inertness-check.json,posture-writers.json,required-wiring-proof.json,posture-cost.json,follow-up-issues.md}`.
+
+## 18. Knowledge-pack retrieval research — the confirmation read and its outcome (design record, 2026-09-19)
+
+Over several weeks, a research effort built a candidate retrieval bundle and tested it against
+an earlier research baseline on a held-back question set, to decide whether it should become
+the product's retrieval default. It ended in a reported negative result. This section is the
+record the repository's doc-lifecycle rule requires: what was tested, the rule fixed before any
+answer existed, what the data showed, and what follows. **No external claim is made anywhere
+below**: every figure describes what was measured on one internal question bank, against one
+archive, on one machine — not the app in general and not any other product.
+
+### 18.1 What was tested, and the rule fixed before the data existed
+
+The research bundle was measured against the earlier research route on a fresh 260-question
+confirmation set (about half German, half English), authored with the archive closed to its
+authors, then answered offline and graded by two AI raters. The rule was fixed before any
+answer existed: the bundle would become the product default only if the judged "correct,
+supported and cited" endpoint improved on the earlier research route by at least +10 percentage
+points, with a 95 % confidence interval whose lower bound stayed strictly positive.
+
+### 18.2 The outcome: not passed
+
+The measured improvement was **+2.69 percentage points**, reported 95 % interval
+**[−3.10, +8.59]**; a second rater measured **+2.31 pp**, interval **[−3.88, +8.40]** — same
+sign, same verdict. Both clauses of the rule fail. **The bundle does not become the product
+default; the product changes already merged — the retrieval design recorded in §17 above —
+stay as they are.** The result is recorded here precisely because it is negative, not despite
+that.
+
+### 18.3 A secondary reading of the packets alone
+
+On the same confirmation set, the research bundle's packet beats the earlier research route's
+packet on the same judged, cited endpoint by about **+9 percentage points** (+9.04 pp,
+[+2.93, +14.58]). This is a descriptive secondary, not the gated contrast and not a pass: had
+the rule been written on it, it would have cleared the lower-bound clause and still failed the
++10-point clause. **This measures the research packet, not the shipped product: the merged
+work took the bundle's components, not its pipeline, and the two remain far apart on English**
+for the reasons item 1 above already records. This figure is never a statement about what the
+shipped product delivers.
+
+### 18.4 The fallback: repairs refusals, loses cited answers
+
+One part of the bundle answers directly, without citing anything, whenever it judged retrieval
+unproductive. Measured on its own, it repaired refusals (judged correct **+14.04 pp**, false
+refusals **−16.35 pp**) but, per 121 firings, destroyed **32 answers** the rater of record had
+already graded correct, supported and cited, because a direct answer carries no evidence to
+cite. It is not authorised, and no product work on it is scheduled.
+
+### 18.5 The disclosure, and what follows
+
+The question bank was AI-authored, its answering passages AI-located, and every answer
+AI-rated — there was no human validation, and every agreement figure above is AI-to-AI.
+Plainly: one AI model family, Claude Opus, authored the questions, located the passages and
+rated the answers, and the two raters above are two instances of that one model — which is why
+their agreement is weak evidence. The weakest point is the one the rule depends on: the two
+raters' agreement on whether an answer was correctly cited is **κ₂ = 0.504**. No further judged
+confirmation round of this kind is planned until the citation-grading rubric is repaired or
+replaced with a mechanical citation check.
+
+This closes the retrieval-research effort described above; nothing in it changes what the app
+ships today, and everything in it describes one internal question bank, one archive and one
+machine — not the app in general and not any other product.

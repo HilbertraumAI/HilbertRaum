@@ -28,6 +28,14 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-19 — **The knowledge-pack retrieval research is recorded closed: the pre-registered
+primary did not pass** (`docs/zim-phase3-record`; record `rag-design.md` §18). A candidate
+retrieval bundle measured +2.69 pp [−3.10, +8.59] against its own ≥ +10 pp pre-registered rule
+on a 260-question confirmation set graded by two AI raters — not passed, both clauses fail. The
+bundle does not become the product default; the retrieval design in §17 stays. A packet-only
+secondary reading (+9.04 pp) and an unauthorised answer-repair fallback are also recorded, with
+the standing AI-only disclosure and the citation-agreement figure (κ₂ 0.504) that closes further
+judged rounds until the rubric is repaired._
 _2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
 `feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
 "Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
@@ -129,17 +137,6 @@ repo About text + `zim`/`kiwix`/`wikipedia`/`offline` topics, a v0.1.60 release 
 first `.github/ISSUE_TEMPLATE/`: a knowledge-pack report form asking for the facts that decide those reports, and a `config.yml`
 that keeps blank issues one click away and routes vulnerabilities to the private advisory channel._
 
-_2026-09-14/15 — **Phase 4 PR-A discovery port, step 4-2 redo + step 4-3 N1 resolution: draft PR
-#469, every floor holds** (`feat/zim-discovery-port`). Step 4-2 fixed the first Opus review's
-F1–F9 (F6 dropped): `PLAN_MAX_TOKENS` set to 104 from a measured core200 p99 of 99 tokens (not
-assumed); the admission gate takes two windows; the head-noun read cap counts acceptances; the
-#340 length retry and the five-read no-plan reach are restored. core200 `anyCandidate` 79→81/200
-(now clears its floor); every acceptance and CPU-non-regression floor holds. Step 4-3 (2026-09-15)
-resolved the second review's N1: `arm.ts`'s lead narrowed to the intro segment (`slice(0, 1)`),
-the CASE A end-to-end test added, run A2 read once — zero funnel movement measured on core200
-(0/200 ids differ), every floor still holds. Record `rag-design.md` §17; §5 item 21 (m). Step 4-4
-(2026-09-16) minted **PR-B, draft #470**: `gpu`/`default` hold every floor (`allPacked` 78/200);
-`cpu-hi`'s rerank-latency floor misses in its already-disabled path — Wave 5 ruling (a) read the miss as moot; step 4-5 (same day) resolved the scoped review's B1-B3 (the renderer guard, the headroom gate, the capped ceiling + non-regressive fallback), both profiles hold every floor again — DONE. Step 4-6 (2026-09-17, Wave 6 ruling (a)) resolved the review's one remaining behaviour finding, C1: one shared posture helper now feeds both the sidecar's posture and the per-ask scope, and `gpu` profile + `cpu` posture resolves scope `capped` (never the general rule; `cpu-hi`/`default` unchanged); no-op proof holds on the measurement machine — DONE. Step 4-7 (2026-09-18, Wave 7 ruling (a)) resolved the review's remaining finding on step 4-6, C2: `activeModelId` joins `gpuMode`/`gpuAutoDisabled` as a posture input the sidecar's suspend trigger watches, fired from all three settings-writing channels through one shared predicate; D10 settled non-absolutely across seven sites (the fire-and-forget teardown window resolves toward the safe, capped scope) — DONE; its own scoped review found one open behaviour finding, C3 (the new suspend trigger could cold-start the sidecar on the GPU beside the still-resident PREVIOUS chat model for the whole multi-minute checksum-hash window). Step 4-8 (Wave 8 rulings (a)-(d)) resolves C3 by option B′ (the posture's chat-model input is the RUNTIME's committed model, never the setting), completes the posture class by construction (Q the use-time re-check, G the CPU request ceiling, T translation occupancy), hardens the sidecar's lifecycle (single-flight teardown, dead-handle recovery, abort classification), and stops the Performance screen misreporting the reranker's device — **DONE, pending the Opus review**._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -169,7 +166,9 @@ its residuals stay live in §5 item 23) on 2026-09-12 (preamble budget, making r
 entry), and the #339 Range-first article-reads entry on 2026-09-13 (preamble budget, making room for
 the #460 test-harness entry), and the closed #331 HW3-acceptance entry on 2026-09-13 (preamble budget,
 making room for the #467 test-fixture entry), and the closed #399 prompt-cache entry on 2026-09-18
-(preamble budget, making room for the §11.16 Documents-declutter entry) —
+(preamble budget, making room for the §11.16 Documents-declutter entry), and the Phase 4 PR-A
+discovery-port entry on 2026-09-19 (preamble budget, making room for the knowledge-pack
+retrieval-research record entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
