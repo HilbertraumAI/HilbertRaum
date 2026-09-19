@@ -1417,12 +1417,17 @@ export class ZimService {
       op.signal,
       this.deps.externalDeadlineMs ?? EXTERNAL_RETRIEVAL_DEADLINE_MS
     )
+    // #486 (rag-design.md §17 D-Z24): the ordered, deduped pack languages of THIS ask's
+    // eligible packs, read from `upfront.eligible` (already ordered `title COLLATE NOCASE,
+    // id`, so this order is deterministic and not question-dependent) before any eligibility
+    // filter narrows it further.
+    const askArchiveLanguages = orderedArchiveLanguages(upfront.eligible)
     // #340 L3-b (D-Z20): ONE model call per ask, even across the guard's single admitted retry —
     // the callback below is re-entered once when a discarded attempt is retried, and the
     // expansion must not be paid for twice out of the same deadline. Memoised on first use.
     let expansionOnce: ReturnType<QueryExpander> | null = null
     const expandOnce: QueryExpander | undefined = expand
-      ? (q, s) => (expansionOnce ??= expand(q, s))
+      ? (q, s) => (expansionOnce ??= expand(q, s, askArchiveLanguages))
       : undefined
     try {
       op.assert()
@@ -1595,6 +1600,26 @@ export class ZimService {
       op.release()
     }
   }
+}
+
+/**
+ * #486 (rag-design.md §17 D-Z24): the ordered, deduped `language` values of this ask's
+ * eligible packs, for the planner's conditional archive-language prompt. `eligible` is already
+ * ordered `title COLLATE NOCASE, id` (`classifyPackSelection`), so this order is deterministic
+ * and not question-dependent; a null `language` contributes nothing.
+ */
+function orderedArchiveLanguages(
+  eligible: ReadonlyArray<{ language: string | null }>
+): readonly string[] {
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const pack of eligible) {
+    if (!pack.language) continue
+    if (seen.has(pack.language)) continue
+    seen.add(pack.language)
+    out.push(pack.language)
+  }
+  return out
 }
 
 /** One `skipped` outcome per pack, for the states that skip the sidecar entirely. */

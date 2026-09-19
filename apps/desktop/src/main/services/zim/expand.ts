@@ -1,6 +1,7 @@
 import type { JsonSchema } from '../../../shared/types'
 import type { ChatMessage, ModelRuntime } from '../runtime'
 import { stripThinkBlocks } from '../chat'
+import { detectQuestionLanguage } from './question-language'
 
 // The question -> search PLAN for the knowledge-pack arm (#340 L3-b originally; ported to
 // route F's discovery semantics at Phase 4 PR-A — `docs/rag-design.md` §17 "Discovery port
@@ -37,13 +38,21 @@ import { stripThinkBlocks } from '../chat'
 // the plain `searchPattern` rewrite). The ONE exception is the ask's own cancellation, which
 // is rethrown: a cancellation is never a fallback (#301 P4, T09).
 //
-// Deliberately UNCHANGED from route F: this keeps the prompt in "the language of the
-// question" (route F's own prompt hardcodes German, because route F's one archive IS German
-// Wikipedia) — the product's knowledge packs are ANY language a user adds
+// Deliberately UNCHANGED from route F by default: the prompt defaults to "the language of
+// the question" (route F's own prompt hardcodes German, because route F's one archive IS
+// German Wikipedia) — the product's knowledge packs are ANY language a user adds
 // (`docs/knowledge-packs.md`: "Wikipedia in about a hundred languages"), so hardcoding a
 // target language would regress every non-German pack. See `docs/rag-design.md` §17 "Discovery
-// port (Phase 4 PR-A)" for the measured cost of this choice on the (German-only) acceptance
+// port (Phase 4 PR-A)" for the measured cost of this default on the (German-only) acceptance
 // corpus's English-question half.
+//
+// #486 (rag-design.md §17 D-Z24): that default is now overridden, at exactly the three sites
+// below, when `question-language.ts`'s offline detector confidently reads the question's
+// language AND that language is not already one of the ticked packs' own — closing most of
+// the measured English-question cost above without touching a single German-question prompt
+// against a German pack (asserted byte-identical by a test). An unresolved detection, an
+// unmapped or absent pack language, or a detected language the packs already carry all leave
+// the prompt exactly as it always was.
 //
 // F7 (review 2026-09-14, question-only): route F's prompt asks the model to "infer the intended
 // subject from the original question and its conversation history", but neither this call nor
@@ -69,8 +78,16 @@ export interface SearchPlan {
 
 /** One call per ask; resolves null on any failure except the ask's own abort (rethrown). A
  *  non-null resolution is always a well-formed (possibly all-empty) {@link SearchPlan} —
- *  `parsePlan` never returns null itself, matching `prototype.mjs`'s `interpret()`. */
-export type QueryExpander = (question: string, signal?: AbortSignal) => Promise<SearchPlan | null>
+ *  `parsePlan` never returns null itself, matching `prototype.mjs`'s `interpret()`.
+ *
+ *  #486: an optional third `archiveLanguages` parameter, forwarded to
+ *  {@link buildPlanMessages}. Optional and additive — the one caller that never passes it
+ *  (`index.ts`'s `runArm`, before #486) would be unaffected; `runArm` does pass it. */
+export type QueryExpander = (
+  question: string,
+  signal?: AbortSignal,
+  archiveLanguages?: readonly string[]
+) => Promise<SearchPlan | null>
 
 /**
  * Wall-clock bound on the planner call (ms) — UNCHANGED from the expander this replaces
@@ -120,24 +137,130 @@ export const PLAN_RESPONSE_SCHEMA: JsonSchema = {
 }
 
 /**
+ * #486: a frozen ISO-639 code -> English name table for the conditional archive-language
+ * phrase. A code is lower-cased and any region subtag after `-` or `_` is dropped before
+ * lookup. Not exhaustive by design — an unmapped or unknown code contributes nothing, because
+ * naming the raw code ("in deu") is worse than no instruction to a small local model.
+ */
+const LANGUAGE_NAMES: Readonly<Record<string, string>> = {
+  de: 'German', deu: 'German', ger: 'German',
+  en: 'English', eng: 'English',
+  fr: 'French', fra: 'French', fre: 'French',
+  es: 'Spanish', spa: 'Spanish',
+  it: 'Italian', ita: 'Italian',
+  nl: 'Dutch', nld: 'Dutch', dut: 'Dutch',
+  pt: 'Portuguese', por: 'Portuguese',
+  pl: 'Polish', pol: 'Polish',
+  ru: 'Russian', rus: 'Russian',
+  sv: 'Swedish', swe: 'Swedish',
+  tr: 'Turkish', tur: 'Turkish',
+  ar: 'Arabic', ara: 'Arabic',
+  zh: 'Chinese', zho: 'Chinese', chi: 'Chinese',
+  ja: 'Japanese', jpn: 'Japanese'
+}
+
+/** #486: at most this many named pack languages in the planner prompt. */
+export const MAX_NAMED_ARCHIVE_LANGUAGES = 3
+
+function joinLanguageNames(names: readonly string[]): string {
+  if (names.length === 1) return names[0]
+  if (names.length === 2) return `${names[0]} or ${names[1]}`
+  return `${names.slice(0, -1).join(', ')} or ${names[names.length - 1]}`
+}
+
+/**
+ * #486: map the ticked packs' own `language` codes into names, ordered and deduped on first
+ * appearance, UNCAPPED — used both by {@link resolveArchiveLanguagePhrase} (which caps at
+ * {@link MAX_NAMED_ARCHIVE_LANGUAGES}) and by {@link decidePlanLanguageOverride}'s "already one
+ * of the packs' own" check, which must see every resolved name, not just the ones that would be
+ * named in the prompt.
+ */
+function resolveArchiveLanguageNames(archiveLanguages?: readonly string[]): string[] {
+  if (!archiveLanguages || archiveLanguages.length === 0) return []
+  const names: string[] = []
+  for (const raw of archiveLanguages) {
+    if (typeof raw !== 'string') continue
+    const code = raw.trim().toLowerCase().split(/[-_]/)[0]
+    const name = LANGUAGE_NAMES[code]
+    if (!name) continue
+    if (!names.includes(name)) names.push(name)
+  }
+  return names
+}
+
+/**
+ * #486: resolve the ticked packs' own `language` codes into the phrase substituted for "the
+ * language of the question" in the planner prompt. A null, empty or wholly unmapped input
+ * resolves to `phrase: null` — the untouched case, byte-identical to the default prompt.
+ */
+export function resolveArchiveLanguagePhrase(
+  archiveLanguages?: readonly string[]
+): { phrase: string | null; truncated: boolean } {
+  const names = resolveArchiveLanguageNames(archiveLanguages)
+  if (names.length === 0) return { phrase: null, truncated: false }
+  const truncated = names.length > MAX_NAMED_ARCHIVE_LANGUAGES
+  return { phrase: joinLanguageNames(names.slice(0, MAX_NAMED_ARCHIVE_LANGUAGES)), truncated }
+}
+
+/**
+ * #486: fire the archive-language substitution iff {@link detectQuestionLanguage} resolves a
+ * language for the question AND that language's name is NOT already among the ticked packs'
+ * own resolved languages. Returns the exact reason for every non-firing case so callers can
+ * reason about (or log) why the default prompt was kept.
+ */
+export function decidePlanLanguageOverride(
+  question: string,
+  archiveLanguages?: readonly string[]
+): {
+  fire: boolean
+  reason: 'detector-unresolved' | 'archive-languages-unmapped' | 'same-language' | null
+  detectedLanguage: 'de' | 'en' | null
+} {
+  const detected = detectQuestionLanguage(question)
+  if (detected === null) return { fire: false, reason: 'detector-unresolved', detectedLanguage: null }
+  const names = resolveArchiveLanguageNames(archiveLanguages)
+  if (names.length === 0) return { fire: false, reason: 'archive-languages-unmapped', detectedLanguage: detected }
+  const detectedName = LANGUAGE_NAMES[detected]
+  if (names.includes(detectedName)) return { fire: false, reason: 'same-language', detectedLanguage: detected }
+  return { fire: true, reason: null, detectedLanguage: detected }
+}
+
+/**
  * The per-call messages — route F's `interpret()` system prompt (`prototype.mjs`), adapted
  * only to keep the product's existing "in the language of the question" framing instead of a
  * hardcoded target language (see the file header). The question is CONTENT and rides in the
  * user turn only — it is never logged.
+ *
+ * #486: an optional second `archiveLanguages` parameter. The base template below is the
+ * default, UNCHANGED string; the resolved pack-language phrase is substituted for all three
+ * occurrences of the literal "in the language of the question" ONLY when
+ * {@link decidePlanLanguageOverride} fires for this question — so with an unresolved
+ * detection, an unmapped pack-language list, or a detected language the packs already carry,
+ * `systemContent` is byte-identical to the default prompt.
  */
-export function buildPlanMessages(question: string): ChatMessage[] {
+export function buildPlanMessages(
+  question: string,
+  archiveLanguages?: readonly string[]
+): ChatMessage[] {
+  const baseSystemContent =
+    'Prepare a short Wikipedia search plan, not an answer, in the language of the question. ' +
+    'Infer the intended subject from the original question. ' +
+    'titles: up to three likely article titles or genuine aliases, in the language of the ' +
+    'question; queries: up to two concise full-text search queries of 2-4 important words, ' +
+    'in the language of the question, targeting all requested relations. Preserve entity ' +
+    'distinctions, negations, dates, units and exclusions. Do not invent a private fact or ' +
+    'supply guessed answer facts as search terms. An announced future event may already be ' +
+    'documented. Return JSON only.'
+  const decision = decidePlanLanguageOverride(question, archiveLanguages)
+  let systemContent = baseSystemContent
+  if (decision.fire) {
+    const { phrase } = resolveArchiveLanguagePhrase(archiveLanguages)
+    if (phrase) systemContent = baseSystemContent.replaceAll('in the language of the question', `in ${phrase}`)
+  }
   return [
     {
       role: 'system',
-      content:
-        'Prepare a short Wikipedia search plan, not an answer, in the language of the question. ' +
-        'Infer the intended subject from the original question. ' +
-        'titles: up to three likely article titles or genuine aliases, in the language of the ' +
-        'question; queries: up to two concise full-text search queries of 2-4 important words, ' +
-        'in the language of the question, targeting all requested relations. Preserve entity ' +
-        'distinctions, negations, dates, units and exclusions. Do not invent a private fact or ' +
-        'supply guessed answer facts as search terms. An announced future event may already be ' +
-        'documented. Return JSON only.'
+      content: systemContent
     },
     { role: 'user', content: question }
   ]
@@ -190,7 +313,7 @@ export function makeQueryExpander(
   opts: { timeoutMs?: number } = {}
 ): QueryExpander | null {
   if (!runtime) return null
-  return async (question, signal) => {
+  return async (question, signal, archiveLanguages) => {
     if (signal?.aborted) throw abortError()
     // A linked inner signal: aborts on the ask's abort AND on the wall-clock bound.
     const inner = new AbortController()
@@ -199,7 +322,7 @@ export function makeQueryExpander(
     const timer = setTimeout(() => inner.abort(), opts.timeoutMs ?? PLAN_TIMEOUT_MS)
     try {
       let text = ''
-      const stream = runtime.chatStream(buildPlanMessages(question), {
+      const stream = runtime.chatStream(buildPlanMessages(question, archiveLanguages), {
         signal: inner.signal,
         mode: 'fast',
         maxTokens: PLAN_MAX_TOKENS,

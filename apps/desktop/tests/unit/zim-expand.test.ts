@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { createHash } from 'node:crypto'
 import {
   PLAN_MAX_QUERIES,
   PLAN_MAX_STRING_CHARS,
@@ -164,6 +165,63 @@ describe('buildPlanMessages — the per-call prompt', () => {
     expect(system.content).toContain('language of the question')
     expect(user.role).toBe('user')
     expect(user.content).toBe(question)
+  })
+})
+
+// #486 (`docs/rag-design.md` §17 D-Z24): the search-plan prompt now names the ticked packs'
+// own language instead of "the language of the question" — but ONLY when the question's
+// detected language (`question-language.ts`) differs from every ticked pack's own. When the
+// condition does not hold, the composed messages must be byte-identical to the unconditional
+// builder — asserted below with a sha256 over the JSON-serialised message array.
+describe('buildPlanMessages — conditional archive-language substitution (#486, rag-design.md §17 D-Z24)', () => {
+  const germanQuestion = 'Welche Länder stoßen am meisten CO2 aus?'
+  const englishQuestion = 'Which countries emit the most CO2?'
+
+  function sha256(text: string): string {
+    return createHash('sha256').update(text, 'utf8').digest('hex')
+  }
+
+  it('(a) a German question against a German-only pack is byte-identical to the unmodified builder', () => {
+    const withPackLanguage = buildPlanMessages(germanQuestion, ['deu'])
+    const unmodified = buildPlanMessages(germanQuestion)
+    expect(sha256(JSON.stringify(withPackLanguage))).toBe(sha256(JSON.stringify(unmodified)))
+    expect(withPackLanguage[0].content).toContain('in the language of the question')
+  })
+
+  it('(b) an English question against a German-only pack substitutes the pack\'s language at all three prompt sites, and nothing else', () => {
+    const substituted = buildPlanMessages(englishQuestion, ['deu'])
+    const unmodified = buildPlanMessages(englishQuestion)
+    const [substitutedSystem] = substituted
+    const [unmodifiedSystem] = unmodified
+    expect(substitutedSystem.content).not.toBe(unmodifiedSystem.content)
+    expect(substitutedSystem.content).not.toContain('the language of the question')
+    expect((substitutedSystem.content.match(/in German/g) ?? []).length).toBe(3)
+    // Substituting the phrase back recovers the unmodified prompt byte for byte — nothing
+    // else in the sentence changed.
+    expect(substitutedSystem.content.replaceAll('in German', 'in the language of the question')).toBe(
+      unmodifiedSystem.content
+    )
+    expect(substituted[1]).toEqual(unmodified[1]) // the user turn (the question) is untouched
+  })
+
+  it('(c) an English question against an English-only pack is byte-identical (the language is already the pack\'s own)', () => {
+    const withPackLanguage = buildPlanMessages(englishQuestion, ['eng'])
+    const unmodified = buildPlanMessages(englishQuestion)
+    expect(sha256(JSON.stringify(withPackLanguage))).toBe(sha256(JSON.stringify(unmodified)))
+  })
+
+  it('(d) an English question against mixed German+English packs is byte-identical (English is one of the packs\' own)', () => {
+    const withPackLanguages = buildPlanMessages(englishQuestion, ['deu', 'eng'])
+    const unmodified = buildPlanMessages(englishQuestion)
+    expect(sha256(JSON.stringify(withPackLanguages))).toBe(sha256(JSON.stringify(unmodified)))
+  })
+
+  it('(e) a pack without language metadata never triggers the substitution', () => {
+    // `orderedArchiveLanguages` (`index.ts`) already drops a null `language` before this
+    // point, so a pack lacking language metadata reaches `buildPlanMessages` as an empty list.
+    const withNoResolvedLanguage = buildPlanMessages(englishQuestion, [])
+    const unmodified = buildPlanMessages(englishQuestion)
+    expect(sha256(JSON.stringify(withNoResolvedLanguage))).toBe(sha256(JSON.stringify(unmodified)))
   })
 })
 
