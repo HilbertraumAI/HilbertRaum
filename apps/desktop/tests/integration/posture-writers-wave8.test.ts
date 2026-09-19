@@ -131,7 +131,10 @@ describe('Wave 8: posture-input writers -- the NEXT resolution reflects the writ
       isDev: true,
       runtime,
       reranker: null,
-      workspace: { isUnlocked: () => true }
+      workspace: { isUnlocked: () => true },
+      // #477: pendingModelSwitches is required — startModelRuntime's committed-switch branch
+      // calls it unconditionally now.
+      pendingModelSwitches: createPendingModelSwitchCounter()
     } as unknown as AppContext
     await startModelRuntime(ctx, FOUR_B) // commits via the REAL gate/hash pipeline (mock fallback: missing weights + dev leniency)
     expect(resolveRerankerDevicePosture(getSettings(db), REPO_MANIFESTS, { committedModelId: runtime.activeModelId(), ...NO_OCCUPANCY })).toBe('gpu')

@@ -54,6 +54,7 @@ import {
   type FirstBenchmarkSchedulerDeps
 } from '../../src/main/ipc/registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from '../../src/main/ipc/registerModelIpc'
+import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
@@ -324,7 +325,10 @@ function seamCtx(root: string, ctrl: WorkspaceController, runtime: FakeRuntime, 
     runtime,
     manifestsDir: REPO_MANIFESTS,
     probeGpu,
-    isDev: true
+    isDev: true,
+    // #477: pendingModelSwitches is required — maybeAutoStartActiveModel/startModelRuntime's
+    // committed-switch branch calls it unconditionally now.
+    pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext
   registerWorkspaceIpc(ctx)
   return ctx

@@ -333,10 +333,14 @@ describe('registerModelIpc', () => {
   // F16 (audit-postmerge-2026-06-29): the DB-touching model handlers now require an unlocked
   // workspace. These fixtures predate that guard and omit `workspace`; default them to unlocked
   // (the locked-refusal behaviour is enumerated separately in ipc-lock-coverage.test.ts).
+  // #477: pendingModelSwitches is also defaulted here (a fresh, always-zero counter) so a
+  // fixture that omits it does not crash startModelRuntime's now-unconditional increment/
+  // decrement; a fixture that wires its own (to assert on the counter) overrides it via spread.
   const reg = (ctx: AppContext): void =>
     registerModelIpc({
       trustedSenders: ANY_SENDER,
       workspace: { isUnlocked: () => true },
+      pendingModelSwitches: createPendingModelSwitchCounter(),
       ...(ctx as object)
     } as AppContext)
 
@@ -1401,7 +1405,10 @@ describe('maybeAutoStartActiveModel', () => {
           return { running: true, modelId: 'x', port: null, healthy: true, message: 'ok' }
         },
         activeModelId: () => opts.runningModelId ?? null
-      }
+      },
+      // #477: AppContext.pendingModelSwitches is required — startModelRuntime's committed-switch
+      // branch calls it unconditionally now (no more `?.`/`??` fallback).
+      pendingModelSwitches: createPendingModelSwitchCounter()
     } as unknown as AppContext
   }
 

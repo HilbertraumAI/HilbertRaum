@@ -188,9 +188,11 @@ export interface AppContext {
    * reranker's single-flight suspend after committing to a REAL model switch — shared between
    * `registerModelIpc.ts` (which increments/decrements it) and the reranker's posture/scope
    * resolution (which reads only its count, via `snapshotRerankerOccupancy`). One instance per
-   * app session, created in `main/index.ts`. Optional so partial test contexts stay valid; the
-   * ask-site and posture-factory call sites both fall back to a fresh, always-zero counter when
-   * absent, equivalent to "no model switch pending".
+   * app session, created in `main/index.ts` and wired here. Required (#477): an optional field
+   * with a silent zero-fallback at every read site made it possible to construct a context that
+   * looks valid but never counts a pending switch, widening the GPU-contention window the
+   * counter exists to close; a missing wiring is now a compile error, not a silently-inert
+   * fallback.
    */
-  pendingModelSwitches?: PendingModelSwitchCounter
+  pendingModelSwitches: PendingModelSwitchCounter
 }

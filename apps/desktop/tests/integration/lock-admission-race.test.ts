@@ -81,6 +81,7 @@ import { t } from '../../src/shared/i18n'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 import { registerChatIpc } from '../../src/main/ipc/registerChatIpc'
 import { startModelRuntime } from '../../src/main/ipc/registerModelIpc'
+import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { createConversation, listMessages } from '../../src/main/services/chat'
@@ -295,7 +296,10 @@ async function harness(opts: HarnessOptions = {}): Promise<Harness> {
     translator,
     ocrEngine: opts.ocrEngine ?? null,
     manifestsDir: opts.chatEngine ? REPO_MANIFESTS : null,
-    isDev: opts.chatEngine !== undefined
+    isDev: opts.chatEngine !== undefined,
+    // #477: pendingModelSwitches is required — startModelRuntime's committed-switch branch
+    // (the #344 harness drives a real one below) calls it unconditionally now.
+    pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext
 
   // The plaintext-operation registry (#237), as `main/index.ts` wires it; optionally with the

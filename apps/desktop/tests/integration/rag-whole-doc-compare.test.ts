@@ -31,6 +31,7 @@ import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers, clearSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
+import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import { t } from '../../src/shared/i18n'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -126,7 +127,10 @@ async function makeHarness(opts: { bothFullyChunked?: boolean } = {}): Promise<H
     manifestsDir: null,
     isDev: true,
     audit: () => {},
-    skills
+    skills,
+    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
+    // unconditionally now (no more `??` fallback).
+    pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext
 
   registerBuiltinSkillAnalysisHandlers()

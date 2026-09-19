@@ -12,6 +12,7 @@ import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
 import { resetModelPlacementForTests, setModelPlacementObserver } from '../../src/main/services/runtime/placement'
 import { seedSettings } from '../../src/main/services/settings'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
+import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
 import type { BenchmarkResult, RuntimeStatus } from '../../src/shared/types'
 import { ANY_SENDER } from './ipc'
@@ -108,6 +109,9 @@ export function ctxWith(root: string, db: Db, over: Record<string, unknown> = {}
     probeGpu: undefined,
     runtime: { occupancy: new ModelOccupancy(), active: () => null, status: stoppedStatus },
     isDev: true,
+    // #477: pendingModelSwitches is required — startModelRuntime's committed-switch branch
+    // calls it unconditionally now (no more `?.`/`??` fallback). `over` can still replace it.
+    pendingModelSwitches: createPendingModelSwitchCounter(),
     ...over
   } as unknown as AppContext
 }

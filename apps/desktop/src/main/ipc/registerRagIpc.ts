@@ -57,7 +57,6 @@ import { resolveRerankProfile, rerankScopeFor, type RerankScope } from '../servi
 import {
   resolveRerankerDevicePosture,
   snapshotRerankerOccupancy,
-  createPendingModelSwitchCounter,
   type RerankerOccupancySnapshot
 } from '../services/rag/device-posture'
 import { eligibleDevicesFor, machineKey } from '../services/performance'
@@ -282,18 +281,14 @@ export function registerRagIpc(ctx: AppContext): void {
       // Wave 8 ruling (a)/NF-1: `occupancy` is REQUIRED — built by the SAME
       // `snapshotRerankerOccupancy` helper `main/index.ts`'s posture-callback factory uses, off
       // the SAME `ctx.runtime`/`ctx.translator`, so this per-ask scope and the sidecar's own
-      // posture cannot disagree for this call. `ctx.pendingModelSwitches` is optional only so a
-      // partial test context stays valid; a fresh (always-zero) counter is equivalent to "no
-      // model switch pending" for a context that never wires one.
+      // posture cannot disagree for this call. `ctx.pendingModelSwitches` is required (#477): a
+      // silent always-zero fallback here made a missing wiring indistinguishable from "no model
+      // switch pending", widening the GPU-contention window the counter exists to close.
       const candidateScope = resolveAskCandidateScope(
         rawSettings,
         ctx.reranker != null,
         ctx.manifestsDir,
-        snapshotRerankerOccupancy(
-          ctx.runtime,
-          ctx.pendingModelSwitches ?? createPendingModelSwitchCounter(),
-          () => ctx.translator ?? null
-        )
+        snapshotRerankerOccupancy(ctx.runtime, ctx.pendingModelSwitches, () => ctx.translator ?? null)
       )
 
       // Resolve the conversation's composite scope (plan §10.1 / D1): the UNION of the

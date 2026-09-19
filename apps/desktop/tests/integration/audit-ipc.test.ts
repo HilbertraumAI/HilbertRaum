@@ -60,6 +60,7 @@ import type { KdfParams } from '../../src/main/services/security/crypto'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { ModelRuntime, ChatMessage } from '../../src/main/services/runtime'
+import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
 import type {
   AuditEvent,
@@ -224,7 +225,10 @@ function makeHarness(): Harness {
     embedder: createMockEmbedder(),
     manifestsDir,
     isDev: true,
-    audit
+    audit,
+    // #477: pendingModelSwitches is required — startModelRuntime's committed-switch branch
+    // calls it unconditionally now.
+    pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext
   return { ctx, db, rootPath }
 }
