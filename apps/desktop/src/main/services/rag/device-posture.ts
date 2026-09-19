@@ -71,7 +71,7 @@ export function resolveRerankerDevicePosture(
   // Wave 8 ruling (a): a chat start in flight/pending, or a GPU-posture translation occupant,
   // makes headroom not provable regardless of what the committed model's own placement would
   // say — checked BEFORE resolving the manifest, so neither occupancy input needs a manifest
-  // lookup to short-circuit to `cpu`. #495 fix (SF-1): a reranker already demoted this session
+  // lookup to short-circuit to `cpu`. #495 follow-up: a reranker already demoted this session
   // (the sidecar's own `gpuFellBack` latch) forces `cpu` here too, so the ask-site candidate
   // scope (`registerRagIpc.ts`'s `resolveAskCandidateScope`, the one caller that can see this
   // field) agrees with the sidecar instead of asking for a GPU-sized scope G would refuse.
@@ -107,7 +107,7 @@ export interface RerankerOccupancySnapshot {
    */
   translationOccupied: boolean
   /**
-   * #495 fix (SF-1, scoped review of PR #495): true once the reranker's own session
+   * #495 follow-up: true once the reranker's own session
    * GPU-fallback latch is armed (`Reranker.gpuDemoted()` — a pure field read, never
    * `devicePosture()`, which would recurse for the sidecar's own posture callback below).
    * OPTIONAL, unlike the other two fields: `snapshotRerankerOccupancy`'s existing 3-argument

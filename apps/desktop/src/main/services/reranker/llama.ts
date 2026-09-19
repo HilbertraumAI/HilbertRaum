@@ -172,7 +172,7 @@ export class LlamaReranker implements Reranker {
   }
 
   /**
-   * #495 fix (SF-1): a PURE read of the session GPU-fallback latch, never `resolvePosture()`/
+   * #495 follow-up: a PURE read of the session GPU-fallback latch, never `resolvePosture()`/
    * `devicePosture()` — a caller that folded either of those back into THIS instance's own
    * `opts.devicePosture` callback (as `rag/device-posture.ts`'s ask-site occupancy snapshot
    * does) would recurse into this same resolution. `ctx.reranker.gpuDemoted()` is what the ask
@@ -297,7 +297,7 @@ export class LlamaReranker implements Reranker {
   }
 
   /** #474: arm the session CPU-fallback latch once and report it (observability hook must never
-   *  throw — mirrors `translation/runtime.ts`'s `noteDeviceFallback`). #495 fix (SF-2): the
+   *  throw — mirrors `translation/runtime.ts`'s `noteDeviceFallback`). #495 follow-up: the
    *  `unexpectedExitCount` reset lives HERE, not at either individual demotion call site, so
    *  BOTH demotion paths (a genuine GPU cold-start failure in `startLadder`, and a second
    *  unexpected GPU exit in `handleUnexpectedExit`) give the newly-forced CPU posture the same
@@ -383,7 +383,7 @@ export class LlamaReranker implements Reranker {
    * Wave 8 ruling (b)(Q): resolve this call's posture, apply G's CPU ceiling, and start, join or
    * reuse the sidecar — all in the ONE synchronous section that begins here, re-run after every
    * `await` below (BOTH the mismatch-restart teardown await and `ensureStarted`'s own await —
-   * #495 fix, MF-1: the ladder inside `ensureStarted` can itself demote `'gpu'` to `'cpu'` for a
+   * #495 follow-up: the ladder inside `ensureStarted` can itself demote `'gpu'` to `'cpu'` for a
    * genuine cold-start failure, which used to leave G unchecked for the request that triggered
    * it), so a cold start always launches with the value JUST resolved (never a second, later
    * `devicePosture()` read). The posture is recorded when a cold start BEGINS; a resident or
@@ -398,10 +398,16 @@ export class LlamaReranker implements Reranker {
    *        (see `ensureStarted`), so the ask lands on the capped fallback instead of ending.
    *
    * Refusals under (i)–(iii) likewise throw non-abort errors. No flap: the comparison is on the
-   * RESOLVED posture, so an input change that leaves it unchanged restarts nothing.
+   * RESOLVED posture, so an input change that leaves it unchanged restarts nothing. The
+   * post-`ensureStarted` demotion re-check below owns a SEPARATE flag (`demotionRechecked`),
+   * never rule (iii)'s `restarted` — a call that already restarted once for an ORDINARY mismatch
+   * (occupancy changing mid-session, not a fault) must still have G re-applied if the ladder THEN
+   * demotes inside that very same call (#495 follow-up: sharing `restarted` let that composite
+   * path bypass G entirely).
    */
   private async resolveServer(documentCount: number, callerSignal?: AbortSignal): Promise<LlamaServer> {
     let restarted = false
+    let demotionRechecked = false
     for (;;) {
       const posture: RerankerDevice = this.resolvePosture() // #474: gpuFellBack-aware
       // G (ruling (b)(G)): thrown before any start, in the same synchronous section as the
@@ -441,7 +447,7 @@ export class LlamaReranker implements Reranker {
         continue // Re-resolve from the top: fresh posture, fresh G check, fresh residency read.
       }
       const server = await this.ensureStarted(posture, callerSignal)
-      // #495 fix (MF-1, scoped review of PR #495): `ensureStarted` → `startLadder` can demote
+      // #495 follow-up: `ensureStarted` → `startLadder` can demote
       // `'gpu'` to `'cpu'` INSIDE this same call (a genuine GPU cold-start failure, #474) and
       // return a CPU-pinned sidecar without ever going through the mismatch-restart branch above
       // (there is nothing to "reconcile" — this call itself is the one starting it). Detect it
@@ -450,13 +456,16 @@ export class LlamaReranker implements Reranker {
       // consult the injected callback more often than the existing "resolved once, re-run only
       // after an await that could change it" contract promises (verified against
       // `core-model-ipc.test.ts`'s exact devicePosture() call-count assertions). Loop back ONCE,
-      // guarded by the SAME `restarted` flag as rule (iii), so the top of the loop re-resolves
-      // the now-'cpu' posture and re-applies G against THIS call's real `documentCount` before
-      // any request reaches the CPU-pinned sidecar the ladder just started. When the request
-      // fits the ceiling, the second pass falls through to `ensureStarted` again, which returns
-      // the ALREADY-resident server with no new spawn.
-      if (posture === 'gpu' && !restarted && this.recordedPosture === 'cpu') {
-        restarted = true
+      // guarded by its OWN `demotionRechecked` flag — NEVER rule (iii)'s `restarted`, which an
+      // earlier mismatch restart in this same call may already have spent — so the top of the
+      // loop re-resolves the now-'cpu' posture (gpuFellBack is already armed by the ladder, so
+      // this costs no extra `devicePosture()` read: `resolvePosture()` short-circuits on the
+      // latch) and re-applies G against THIS call's real `documentCount` before any request
+      // reaches the CPU-pinned sidecar the ladder just started. When the request fits the
+      // ceiling, the second pass falls through to `ensureStarted` again, which returns the
+      // ALREADY-resident server with no new spawn.
+      if (posture === 'gpu' && !demotionRechecked && this.recordedPosture === 'cpu') {
+        demotionRechecked = true
         continue
       }
       return server
@@ -543,7 +552,7 @@ export class LlamaReranker implements Reranker {
       this.noteDeviceFallback(
         `Reranker sidecar (GPU) exited unexpectedly twice this session (last exit code ${info.exitCode ?? 'unknown'})`
       )
-      // #495 fix (SF-2): the reset (the untested CPU posture gets its own two-strikes budget) now
+      // #495 follow-up: the reset (the untested CPU posture gets its own two-strikes budget) now
       // lives inside `noteDeviceFallback` itself, shared with `startLadder`'s demotion path.
       return
     }

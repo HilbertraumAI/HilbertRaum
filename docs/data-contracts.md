@@ -780,8 +780,11 @@ head's own weights + KV.
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
-  unified budget) and `totals.bothOnCard` requires both rows on the card with observed layers.
-  **#495 fix (MF-3):** `totals.chatAndTranslationOnCard` is chat-and-translation specifically,
+  unified budget) and `totals.bothOnCard` is true when two or more of chat, translation and the
+  reranker are genuinely resident on the card — chat with an observed GPU start and at least one
+  layer offloaded, translation live with layers on the card, the reranker `'gpu'`-postured and
+  loaded.
+  **#495 follow-up:** `totals.chatAndTranslationOnCard` is chat-and-translation specifically,
   never the reranker — it gates `perf.models.cardBoth`'s pair-naming sentence so that sentence
   stays true when the contending pair `bothOnCard` reports is chat+reranker or
   translation+reranker instead of chat+translation.

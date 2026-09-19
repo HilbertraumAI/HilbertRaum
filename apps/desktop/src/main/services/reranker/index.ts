@@ -45,7 +45,7 @@ export interface Reranker {
    */
   devicePosture?(): RerankerDevice
   /**
-   * Optional (#495 fix, SF-1): a pure read of the session GPU-fallback latch (`LlamaReranker`'s
+   * Optional (#495 follow-up): a pure read of the session GPU-fallback latch (`LlamaReranker`'s
    * `gpuFellBack`) — never re-derived from `devicePosture()`, which a caller building THIS
    * instance's own posture callback (`rag/device-posture.ts`'s `createRerankerCallbacks`) could
    * recurse back into. `registerRagIpc.ts`'s ask site reads this to fold the demotion into

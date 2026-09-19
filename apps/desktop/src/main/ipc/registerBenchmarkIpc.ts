@@ -1143,7 +1143,7 @@ function buildPlacement(
   const totals = {
     ramAllMb: loadedAtOnceMb({ memoryClass, rows, verdict }),
     bothOnCard: [chatOnCard, translationOnCard, rerankerOnCard].filter(Boolean).length >= 2,
-    // #495 fix (MF-3): chat AND translation SPECIFICALLY — the one pair `perf.models.cardBoth`'s
+    // #495 follow-up: chat AND translation SPECIFICALLY — the one pair `perf.models.cardBoth`'s
     // copy actually names. `bothOnCard` widened to a >=2-of-3 count when the reranker joined it
     // (#476), but the chat/translation summary line kept appending that pair-naming sentence
     // whenever `bothOnCard` was true, including when the true contending pair was chat+reranker

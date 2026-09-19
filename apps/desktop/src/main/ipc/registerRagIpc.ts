@@ -284,7 +284,7 @@ export function registerRagIpc(ctx: AppContext): void {
       // posture cannot disagree for this call. `ctx.pendingModelSwitches` is required (#477): a
       // silent always-zero fallback here made a missing wiring indistinguishable from "no model
       // switch pending", widening the GPU-contention window the counter exists to close.
-      // #495 fix (SF-1): `rerankerDemoted` is spread in from `ctx.reranker.gpuDemoted()` — the
+      // #495 follow-up: `rerankerDemoted` is spread in from `ctx.reranker.gpuDemoted()` — the
       // ONE occupancy field `snapshotRerankerOccupancy` itself cannot supply, since the
       // sidecar's own posture-callback factory (`createRerankerCallbacks`) builds its occupancy
       // before the reranker instance exists. Without it, a demoted session kept asking for

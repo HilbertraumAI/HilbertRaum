@@ -588,12 +588,12 @@ describe('capability is not execution (DR1)', () => {
     expect(noReranker.placement.totals.bothOnCard).toBe(true) // unchanged: chat + translation alone
   })
 
-  // #495 fix (MF-3, scoped review of PR #495): the reachable case the fix targets — a GPU
+  // #495 follow-up: the reachable case the fix targets — a GPU
   // machine with no translation model installed (or its posture fallen back), chat AND the
   // reranker actually resident on the card. `bothOnCard` (the three-way contention flag) must
   // still be true, but `chatAndTranslationOnCard` — the ONE pair `perf.models.cardBoth`'s copy
   // is about — must be false, so the renderer never names a translation model that isn't there.
-  it('#495 fix (MF-3): chat on card + reranker on card + translation NOT on card -> bothOnCard true, chatAndTranslationOnCard false', () => {
+  it('#495 follow-up: chat on card + reranker on card + translation NOT on card -> bothOnCard true, chatAndTranslationOnCard false', () => {
     const chatAndReranker = cardMachine({
       translation: null,
       reranker: { devicePosture: () => 'gpu', isLoaded: () => true }

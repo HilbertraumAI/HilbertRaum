@@ -887,7 +887,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const chatRow = p.models.find((r) => r.role === 'chat')
     const trRow = p.models.find((r) => r.role === 'translation')
     const rerankerRow = p.models.find((r) => r.role === 'reranker')
-    // #495 fix (MF-4): `anyOnCard` gates ONLY the chat/translation line below — the reranker
+    // #495 follow-up: `anyOnCard` gates ONLY the chat/translation line below — the reranker
     // line has its own independent gate (`rerankerRow.device === 'gpu' && rerankerRow.loaded`)
     // and never reads this. The `#476` widening to include the reranker had no consumer and one
     // effect: it could render the chat/translation line for a chat+translation pair that were
@@ -952,7 +952,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             <div className="perf-models-summary-line">
               <span>
                 {t('perf.models.card', { chat: gbOf(chatRow.sizeOnDiskGb), translation: gbOf(trRow.sizeOnDiskGb), vram })}
-                {/* #495 fix (MF-3): `perf.models.cardBoth`'s copy names the chat/translation PAIR
+                {/* #495 follow-up: `perf.models.cardBoth`'s copy names the chat/translation PAIR
                     specifically ("Both are on the card... stop and start it once the other has
                     unloaded") — gate its append on `chatAndTranslationOnCard`, not the three-way
                     `bothOnCard`, so it never appears about a translation (or chat) model that
@@ -969,7 +969,7 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
               the reranker is independently resident (it may share the card with either, both, or
               neither of the other two). `bothOnCard` now counts the reranker too (registerBenchmarkIpc.ts),
               so the SAME warning badge appears here whenever this row is part of the contention.
-              #495 fix (MF-2): gated on RESIDENCY (`loaded`) too, not posture alone — the reranker
+              #495 follow-up: gated on RESIDENCY (`loaded`) too, not posture alone — the reranker
               is lazily started, so an ordinary fresh GPU-postured session with nothing resident
               yet must not claim a card line for a model that isn't actually there. */}
           {p.memoryClass !== 'cpu' && vram && rerankerRow && rerankerRow.device === 'gpu' && rerankerRow.loaded && (

@@ -911,14 +911,20 @@ each service's own handle (`isLoaded()` on `E5Embedder`, `LlamaReranker`, `Visio
 `RuntimeManager.status()` running + healthy + no start in flight + the active model, never
 `active() != null` or the placement latch, which is recorded before the #109 warm-up finishes
 (PR #303 audit DR6: a loading model reads "not loaded" until it is ready)); the translation
-row carries its observed layer split when live. Two summary lines: the card (chat + translation
-sizes against VRAM, shown only while a row actually goes to the card, with the START-ORDER
-warning when both are resident on it — `bothOnCard` needs both rows to say `'gpu'`, the active
-chat model resident with its observed start on the GPU and at least one layer offloaded (or no
+row carries its observed layer split when live. Three contributors can each show a summary line
+(the chat+translation pair counts as one line): the chat+translation card line (sizes against
+VRAM, shown only while a row actually goes to the card, with the START-ORDER warning when both
+are resident on it — `chatAndTranslationOnCard` needs both rows to say `'gpu'`, the active chat
+model resident with its observed start on the GPU and at least one layer offloaded (or no
 observation under a GPU-eligible configuration), and the translation sidecar live with layers on
 the card; a live sidecar at 0 offloaded layers, or a chat observed on the CPU, is not "both":
 whichever started second got the leftovers and runs slower; stop and start it once the other has
-unloaded) and the processor: everything loadable at once against RAM, **class-aware since the PR
+unloaded); a separate reranker card line (its own size against VRAM) once the ranking model is
+itself `'gpu'`-postured and actually loaded — a third summary line whenever that row is resident
+on the card; the warning badge (`bothOnCard`, true whenever two or more of chat, translation and
+the reranker are genuinely resident on the card) can appear on either card line, not only when
+the contending pair is chat+translation; and the processor: everything loadable at once against
+RAM, **class-aware since the PR
 #303 audit (DR5, owner ruling; `loadedAtOnceMb` in `services/performance.ts`)** — on the `cpu`
 class every row's size; on `discrete` the rows that run on the processor plus the active model's
 OBSERVED partial-offload spill (the CPU-side model + cache bytes of a measured partial start; an

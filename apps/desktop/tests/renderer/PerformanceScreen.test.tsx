@@ -718,12 +718,12 @@ describe('PerformanceScreen: models on this computer', () => {
   })
 
   // #476: the summary carried no line at all for a GPU-resident reranker — neither its own size
-  // nor the shared contention warning. #495 fix (MF-3): this fixture (chat+reranker actually on
-  // the card, translation GPU-postured but NOT resident) is the exact scenario the scoped review
-  // of PR #495 named — `bothOnCard` is true (3-way contention) but `chatAndTranslationOnCard` is
+  // nor the shared contention warning. #495 follow-up: this fixture (chat+reranker actually on
+  // the card, translation GPU-postured but NOT resident) is the exact scenario named —
+  // `bothOnCard` is true (3-way contention) but `chatAndTranslationOnCard` is
   // false, so the badge appears on both lines while the chat/translation PAIR sentence (which
   // names translation specifically) must not.
-  it('#476/#495 fix (MF-2, MF-3): shows a separate graphics-card line for a GPU-resident reranker, the contention badge on both lines, but the chat/translation pair copy only when translation is itself on the card', async () => {
+  it('#476/#495 follow-up: shows a separate graphics-card line for a GPU-resident reranker, the contention badge on both lines, but the chat/translation pair copy only when translation is itself on the card', async () => {
     const rows = placement().models.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const } : r))
     install(
       snapshot({
@@ -737,7 +737,7 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(await screen.findByText(/Graphics card: ranking 1\.1 GB, of 24\.2 GB\./)).toBeInTheDocument()
     // The chat/translation line is unaffected — both lines coexist.
     expect(screen.getByText(/Graphics card: chat 5\.4 GB \+ translation 6\.8 GB, of 24\.2 GB\./)).toBeInTheDocument()
-    // MF-3: translation is not actually on the card here — the pair-naming sentence must be absent.
+    // #495 follow-up: translation is not actually on the card here — the pair-naming sentence must be absent.
     expect(screen.queryByText(/Both are on the card right now/)).not.toBeInTheDocument()
     // bothOnCard now covers three residents sharing the card — the badge appears on BOTH lines.
     expect(screen.getAllByText('Partly on GPU')).toHaveLength(2)
@@ -750,11 +750,11 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
   })
 
-  // #495 fix (MF-2): the reranker starts lazily on the session's first rerank(), so the ORDINARY
+  // #495 follow-up: the reranker starts lazily on the session's first rerank(), so the ORDINARY
   // state of a fresh GPU session is device 'gpu' with nothing loaded yet — the line must key off
   // residency, not posture, or it would assert the ranking model is on the card while the row
   // right above it is badged "not loaded".
-  it('#495 fix (MF-2): a GPU-postured but not-yet-loaded reranker shows no reranker card line', async () => {
+  it('#495 follow-up: a GPU-postured but not-yet-loaded reranker shows no reranker card line', async () => {
     const rows = placement().models.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const, loaded: false } : r))
     install(snapshot({ placement: placement({ models: rows }) }))
     renderScreen()
@@ -790,6 +790,38 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(screen.getAllByText(/processor, by design/)).toHaveLength(3)
     expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
     expect(screen.getByText(/Will run on the processor from RAM \(15\.7 GB\)/)).toBeInTheDocument()
+  })
+
+  // #495 follow-up: the reverted `anyOnCard` predicate (chat/translation only, never the
+  // reranker) needs its own pin. The case above already puts chat and translation on the
+  // processor, but its fixture's reranker row is ALSO `device: 'cpu'`, so it cannot tell the
+  // reverted predicate apart from the wider one it replaced — re-widening `anyOnCard` to include
+  // the reranker again would leave that case green. These two siblings keep chat and translation
+  // on the processor but move the reranker row onto the card, not loaded and then loaded.
+  it('chat and translation on the processor, reranker resident on the card but not yet loaded: neither card line renders', async () => {
+    const rows = placement().models.map((r) => {
+      if (r.role === 'chat' || r.role === 'translation') return { ...r, device: 'cpu' as const }
+      if (r.role === 'reranker') return { ...r, device: 'gpu' as const, loaded: false }
+      return r
+    })
+    install(snapshot({ placement: placement({ models: rows }) }))
+    renderScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
+    expect(screen.queryByText(/Graphics card: ranking/)).not.toBeInTheDocument()
+  })
+
+  it('chat and translation on the processor, reranker resident and loaded on the card: only the reranker card line renders', async () => {
+    const rows = placement().models.map((r) => {
+      if (r.role === 'chat' || r.role === 'translation') return { ...r, device: 'cpu' as const }
+      if (r.role === 'reranker') return { ...r, device: 'gpu' as const, loaded: true }
+      return r
+    })
+    install(snapshot({ placement: placement({ models: rows }) }))
+    renderScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.queryByText(/Graphics card: chat/)).not.toBeInTheDocument()
+    expect(await screen.findByText(/Graphics card: ranking/)).toBeInTheDocument()
   })
 
   it('on Apple Silicon the processor line speaks of unified memory and the pill compares against the budget (DR5)', async () => {

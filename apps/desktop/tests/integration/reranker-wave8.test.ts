@@ -593,12 +593,12 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
     await reranker.stop()
   })
 
-  // #495 fix (MF-1, scoped review of PR #495): the demoting call itself bypassed G. The ask site
+  // #495 follow-up: the demoting call itself bypassed G. The ask site
   // picks GPU_RERANK_SCOPE for a 'gpu' posture, so a genuine GPU cold-start failure could demote
   // to CPU and then hand the CPU-pinned sidecar the FULL gpu-sized request instead of refusing it
   // -- the very path the ceiling exists to protect, and the one path none of the four tests above
   // (all `docs(1)`, none injecting `cpuRequestCeiling`) reached.
-  it('MF-1 (#495 fix): the ceiling is re-applied when the ladder itself demotes gpu->cpu mid-call -- a 60-document request is refused and the CPU-pinned sidecar never receives it', async () => {
+  it('#495 follow-up: the ceiling is re-applied when the ladder itself demotes gpu->cpu mid-call -- a 60-document request is refused and the CPU-pinned sidecar never receives it', async () => {
     const calls: Array<{ args: string[] }> = []
     const spawn = (_c: string, args: string[]): ChildProcessLike => {
       calls.push({ args })
@@ -642,12 +642,72 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
     await reranker.stop()
   })
 
-  // #495 fix (SF-2): only handleUnexpectedExit's OWN demotion branch reset unexpectedExitCount;
+  // #495 follow-up: the re-check above shares nothing with rule (iii)'s own `restarted` flag any
+  // more, because a call that already spent `restarted` on an ORDINARY posture-flip restart (a
+  // chat start finishing mid-session, not a fault) could still demote genuinely inside that SAME
+  // call and skip the re-check entirely. This fixture drives exactly that composite path: a
+  // resident CPU-recorded sidecar (posture 'cpu', mirroring `occupancy.chatStartBusy`), then the
+  // posture callback flips to 'gpu' (the chat start finishing), which triggers the ORDINARY
+  // mismatch-restart (rule iii) -- and the fresh GPU rung the restart cold-starts then fails
+  // genuinely, demoting to CPU within the very same call.
+  it("#495 follow-up: the ceiling is re-applied even when this call's own mismatch-restart already spent rule (iii)'s flag before the ladder demotes -- a 60-document request is refused after a cpu->gpu restart that itself falls back to cpu", async () => {
+    let posture: RerankerDevice = 'cpu' // simulates occupancy.chatStartBusy resolving 'cpu' on the first ask
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      if (calls.length === 2) queueMicrotask(() => child.emit('exit', 1, null)) // the GPU rung dies
+      return child
+    }
+    const good = rerankFetch()
+    const rerankDocCounts: number[] = []
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (calls.length === 2) throw new Error('connection refused') // the dying GPU attempt's own health check
+      if (u.endsWith('/v1/rerank')) {
+        const body = JSON.parse(String(init?.body)) as { documents: string[] }
+        rerankDocCounts.push(body.documents.length)
+      }
+      return good(url, init)
+    }) as typeof fetch
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl,
+      devicePosture: () => posture,
+      cpuRequestCeiling: () => 48
+    })
+    await reranker.rerank('q1', docs(1)) // cold start #1: resident, recorded 'cpu'
+    expect(calls.length).toBe(1)
+    expect(calls[0]!.args).toContain('--device')
+    rerankDocCounts.length = 0 // only the SECOND call's own /v1/rerank traffic matters below
+
+    posture = 'gpu' // the chat start finished -- the NEXT ask resolves 'gpu' on both sides
+    await expect(reranker.rerank('q2', docs(60))).rejects.toThrow(/refused/i)
+    // Three spawns: the resident CPU sidecar torn down by the ORDINARY mismatch restart (rule
+    // iii, which spends `restarted` -- not the demotion re-check), a GPU rung that then fails
+    // genuinely, and the ladder's own CPU retry -- yet the ceiling still refuses THIS call's
+    // 60-document request before it ever reaches that newly-demoted sidecar.
+    expect(calls.length).toBe(3)
+    expect(calls[1]!.args).not.toContain('--device') // the failing GPU rung
+    expect(calls[2]!.args).toContain('--device') // the ladder's own CPU retry
+    expect(rerankDocCounts).toHaveLength(0)
+    expect(reranker.devicePosture()).toBe('cpu') // demoted, not latched
+
+    // Not latched -- a follow-up call AT the ceiling is served by the now-resident CPU sidecar,
+    // no further spawn.
+    const hits2 = await reranker.rerank('q3', docs(48))
+    expect(hits2).toHaveLength(48)
+    expect(calls.length).toBe(3)
+    await reranker.stop()
+  })
+
+  // #495 follow-up: only handleUnexpectedExit's OWN demotion branch reset unexpectedExitCount;
   // startLadder's demotion (a genuine cold-start failure) did not. So a GPU exit followed by a
   // genuine cold-start failure that demotes carried a STALE count into the newly-forced CPU
   // posture, and a single CPU exit afterwards wrongly latched permanently (the CPU posture never
   // got its own two-strikes budget the doc comment and commit message promise).
-  it('SF-2 (#495 fix): the exit counter resets on the LADDER demotion path too -- one GPU exit, then a genuine cold-start failure that demotes, then ONE CPU exit is not latched', async () => {
+  it('#495 follow-up: the exit counter resets on the LADDER demotion path too -- one GPU exit, then a genuine cold-start failure that demotes, then ONE CPU exit is not latched', async () => {
     const calls: Array<{ args: string[] }> = []
     const children: FakeChild[] = []
     const spawn = (_c: string, args: string[]): ChildProcessLike => {
@@ -694,12 +754,12 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
     await reranker.stop()
   })
 
-  // #495 fix (SF-1): the ask site (registerRagIpc.ts, tested directly in
+  // #495 follow-up: the ask site (registerRagIpc.ts, tested directly in
   // rerank-profile-wiring.test.ts) needs a PURE read of the demotion latch to fold into its own
   // occupancy snapshot without recursing into this instance's own posture resolution. This
   // proves the new gpuDemoted() accessor tracks the latch, and that a request sized to the
-  // ceiling the demoted ask site would actually pick (SF-1's fix) reranks fine on the CPU rung.
-  it('SF-1 (#495 fix): after a GPU demotion, gpuDemoted() reports it and a request at the CPU ceiling reranks fine on the now-forced CPU posture', async () => {
+  // ceiling the demoted ask site would actually pick reranks fine on the CPU rung.
+  it('#495 follow-up: after a GPU demotion, gpuDemoted() reports it and a request at the CPU ceiling reranks fine on the now-forced CPU posture', async () => {
     const calls: Array<{ args: string[] }> = []
     const spawn = (_c: string, args: string[]): ChildProcessLike => {
       calls.push({ args })

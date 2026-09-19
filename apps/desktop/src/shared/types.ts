@@ -2675,7 +2675,7 @@ export interface PerformanceSnapshot {
        */
       bothOnCard: boolean
       /**
-       * #495 fix (MF-3, scoped review of PR #495): chat AND translation SPECIFICALLY — never
+       * #495 follow-up: chat AND translation SPECIFICALLY — never
        * the reranker. `perf.models.cardBoth`'s copy names one pair ("Both are on the card right
        * now. Whichever started second got what was left..."), so the chat/translation summary
        * line must append that sentence only when THIS pair is the one sharing the card, not
