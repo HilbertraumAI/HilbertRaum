@@ -3756,9 +3756,9 @@ never the frequency ladder).
    (not a prompt defect) is why an isolated single-term translation call did not clear 1a-i's
    bundle-entry bar. Keeping the shipped "match the question's language" framing accepts a
    real, measured cost on this PR's (German-only) acceptance corpus's English-question half in
-   exchange for correctness on every other pack language. §18 records a later confirmation read
-   that measured this trade-off's cost directly, and reports a negative result against its own
-   pre-registered rule.
+   exchange for correctness on every other pack language. §18 records the later confirmation
+   read of the research bundle and its negative result, and notes how far the research pipeline
+   and the shipped product still are apart on English.
 2. **The read budget (12 reads / 8 admitted) is applied PER PACK**, not globally per ask.
    Route F's `discover()` bounds ONE archive per question; the product can have several packs
    selected for one ask. Every acceptance measurement in this PR uses a single pack, so the
@@ -4409,15 +4409,17 @@ packet on the same judged, cited endpoint by about **+9 percentage points** (+9.
 the rule been written on it, it would have cleared the lower-bound clause and still failed the
 +10-point clause. **This measures the research packet, not the shipped product: the merged
 work took the bundle's components, not its pipeline, and the two remain far apart on English**
-for the reasons item 1 above already records. This figure is never a statement about what the
-shipped product delivers.
+for the reasons §17 records in its list of adaptations from the earlier research route
+(items 1 and 4). This figure is never a statement about what the shipped product delivers.
 
 ### 18.4 The fallback: repairs refusals, loses cited answers
 
-One part of the bundle answers directly, without citing anything, whenever it judged retrieval
-unproductive. Measured on its own, it repaired refusals (judged correct **+14.04 pp**, false
-refusals **−16.35 pp**) but, per 121 firings, destroyed **32 answers** the rater of record had
-already graded correct, supported and cited, because a direct answer carries no evidence to
+One part of the bundle re-answers a question directly from the model's own knowledge, citing
+nothing, whenever the evidence-based answer reads as a refusal. With it, the bundle's
+judged-correct rate rose **+14.04 pp** over the earlier research route and false refusals fell
+**−16.35 pp**; but on the 121 answers where it fired it replaced **32 answers** that, without
+it, the rater of record graded correct, supported and cited — its trigger cannot tell a refusal
+from a good cited answer that merely sounds cautious, and a direct answer carries no evidence to
 cite. It is not authorised, and no product work on it is scheduled.
 
 ### 18.5 The disclosure, and what follows

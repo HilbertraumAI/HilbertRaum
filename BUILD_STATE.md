@@ -32,10 +32,11 @@ _2026-09-19 — **The knowledge-pack retrieval research is recorded closed: the 
 primary did not pass** (`docs/zim-phase3-record`; record `rag-design.md` §18). A candidate
 retrieval bundle measured +2.69 pp [−3.10, +8.59] against its own ≥ +10 pp pre-registered rule
 on a 260-question confirmation set graded by two AI raters — not passed, both clauses fail. The
-bundle does not become the product default; the retrieval design in §17 stays. A packet-only
-secondary reading (+9.04 pp) and an unauthorised answer-repair fallback are also recorded, with
-the standing AI-only disclosure and the citation-agreement figure (κ₂ 0.504) that closes further
-judged rounds until the rubric is repaired._
+bundle does not become the product default; the retrieval design in §17 stays. A secondary
+reading of the research packet alone (+9.04 pp — descriptive, not the shipped product) and a
+refusal-repair fallback that is not authorised to ship are also recorded, with the standing
+AI-only disclosure and the citation-agreement figure (κ₂ 0.504) that closes further judged
+rounds until the rubric is repaired._
 _2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
 `feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
 "Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
