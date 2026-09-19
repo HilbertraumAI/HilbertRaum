@@ -3117,8 +3117,10 @@ reports and phase plans were working papers; their full text lives in git histor
   the table path has no formula handling of its own, where ordinary prose emits
   a formula's plain-text description once: 33 of 949 sampled pages carry it, 261
   formulas, 89 units across 21 questions, 15 of those across 12 questions reach
-  the packet, and 11 citation snippets across 10 questions carry it (#490). Both
-  are 0 on the released code. Both are fixed together in one follow-up change
+  the packet, and 11 citation snippets across 10 questions carry it (#490). The
+  styling leak produces nothing on the released code, and for formulas the same
+  check finds three pieces of retrievable text there, none of which reach the
+  material the model is given. Both are fixed together in one follow-up change
   that carries its own measured acceptance run — the formula fix routes a table
   formula through the same plain-text-description-once path ordinary text
   already uses, never a plain drop, because a formula cell is often the value

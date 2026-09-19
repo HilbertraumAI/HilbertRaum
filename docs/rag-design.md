@@ -4502,8 +4502,10 @@ pre-registered `tables32` delivery endpoint is void — neither a pass nor a mis
 of record stays 0 of 32. This is not a precedent for setting aside an endpoint whose instrument
 worked. A dated post-read diagnostic re-score of the same captures, adopted as nothing, found the
 expected value in table-derived units for 29 (looser check) and 26 (stricter check) of 32
-questions among the candidates and 26 and 23 of 32 in the packet. The change stays a draft until
-the maintainer marks it ready.
+questions among the candidates and 26 and 23 of 32 in the packet. Both checks allow the delivered
+unit to come from any article the run retrieved; restricted to each question's own reference
+article, as the endpoint was originally worded, the same counts are 26 and 24 among the candidates
+and 24 and 21 in the packet. The change stays a draft until the maintainer marks it ready.
 
 **The Gold demonstration, live.** The question "Wie hoch sind Dichte und Schmelzpunkt von Gold?"
 (confirmed by token-Jaccard < 0.19 against every bank question, so it is not one of them) did not
