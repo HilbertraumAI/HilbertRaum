@@ -26,6 +26,7 @@ import {
   ragSettingsFrom,
   retrieve,
   NO_DOCUMENT_CONTEXT_ANSWER,
+  type GroundedAnswerOptions,
   type RagRetrievalSettings,
   type RetrievedChunk
 } from '../../src/main/services/rag'
@@ -37,6 +38,7 @@ import {
 } from '../../src/main/services/chat'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
+import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
 import { stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import {
@@ -683,11 +685,10 @@ describe('generateGroundedAnswer', () => {
     expect(usage!.usedTokens).toBeGreaterThan(resting.usedTokens)
   })
 
-  // Honest-signal parity with plain chat (§L0): the grounded request now always sends its own
-  // 1024-token cap, so a 'length' finish here means the cap fired, not that the model hit its
-  // context ceiling — the continue-generation branch below no longer engages on this path, and
-  // chatStream is called exactly once. A clean finish still persists unflagged.
-  it('a grounded answer whose own decoding cap fires is not stamped truncated (a clean finish still persists unflagged)', async () => {
+  // Honest-signal parity with plain chat (§L0): a grounded answer the model cut off at the
+  // context ceiling persists with the truncated flag, so the transcript shows the badge instead
+  // of passing a mid-word partial off as complete.
+  it('stamps truncated on a grounded answer cut off at the context ceiling', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
     await seedDocument(db, embedder, 'science.pdf', [
@@ -709,12 +710,10 @@ describe('generateGroundedAnswer', () => {
         options?.onFinish?.('length')
       }
     }
-    const chatSpy = vi.spyOn(cutOffRuntime, 'chatStream')
 
     const msg = await generateGroundedAnswer(db, cutOffRuntime, embedder, conv.id, question, SETTINGS)
-    expect(chatSpy).toHaveBeenCalledTimes(1)
-    expect(msg.truncated).not.toBe(true)
-    expect(listMessages(db, conv.id).at(-1)?.truncated).not.toBe(true)
+    expect(msg.truncated).toBe(true)
+    expect(listMessages(db, conv.id).at(-1)?.truncated).toBe(true)
 
     // A clean finish ('stop' from the mock runtime) stays unflagged.
     const conv2 = createConversation(db, { mode: 'documents' })
@@ -747,7 +746,7 @@ describe('generateGroundedAnswer', () => {
     return rt
   }
 
-  async function askGrounded(runtime: ModelRuntime) {
+  async function askGrounded(runtime: ModelRuntime, opts: GroundedAnswerOptions = {}) {
     const db = freshDb()
     const embedder = new MockEmbedder()
     await seedDocument(db, embedder, 'science.pdf', [
@@ -756,23 +755,70 @@ describe('generateGroundedAnswer', () => {
     const conv = createConversation(db, { mode: 'documents' })
     const question = 'photosynthesis converts sunlight into chemical energy in plants'
     appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
-    return generateGroundedAnswer(db, runtime, embedder, conv.id, question, SETTINGS)
+    return generateGroundedAnswer(db, runtime, embedder, conv.id, question, SETTINGS, opts)
   }
 
-  // Continue-generation (follow-up #1) is retired on this path: the request now always sends its
-  // own 1024-token cap, so the "cut off at the ceiling, no explicit cap" precondition that used
-  // to trigger continueUntilComplete here can no longer occur. A single 'length' finish is the
-  // cap firing, not the ceiling — only the first reply is ever requested or persisted.
-  it('does not continue generation past its own decoding cap (follow-up #1 no longer engages here)', async () => {
+  it('continue-generation FINISHES a grounded answer cut off at the ceiling (follow-up #1)', async () => {
     const runtime = groundedScriptRuntime([
       { reply: 'The first half of the answer', finish: 'length' },
       { reply: ' and the second half completes it.', finish: 'stop' }
     ])
     const msg = await askGrounded(runtime)
 
-    expect(runtime.calls).toBe(1) // the cap fired on the first stream; no continuation call follows
-    expect(msg.content).toBe('The first half of the answer')
-    expect(msg.truncated).not.toBe(true)
+    expect(runtime.calls).toBe(2) // the first cut-off stream + one continuation
+    expect(msg.content).toBe('The first half of the answer and the second half completes it.')
+    expect(msg.truncated).toBeUndefined() // completed cleanly ⇒ no output-truncated badge
+  })
+
+  it('continue-generation is bounded and seam-deduped: an always-cut answer stamps truncated after the cap (follow-up #1)', async () => {
+    // Distinct replies whose openings repeat the prior tail (the seam) — the dedup must emit each once.
+    const runtime = groundedScriptRuntime([
+      { reply: 'alpha beta', finish: 'length' },
+      { reply: 'beta gamma', finish: 'length' },
+      { reply: 'gamma delta', finish: 'length' }
+    ])
+    const msg = await askGrounded(runtime)
+
+    expect(runtime.calls).toBe(1 + MAX_REDUCE_CONTINUATIONS) // bounded: the first stream + 2 continuations
+    expect(msg.truncated).toBe(true) // exhausted while still cut ⇒ honest output-truncated stamp
+    expect(msg.content).toBe('alpha beta gamma delta') // 'beta'/'gamma' seams de-duplicated, not doubled
+  })
+
+  // The gate's actual semantics under the pinned decoding setting: only a CALLER-supplied cap is
+  // never continued past (mirrors chat.ts's own Fast-mode rule) — the product's own pinned default
+  // does not suppress continuation, per the two tests above.
+  it('never continues generation past a caller-supplied maxTokens', async () => {
+    const runtime = groundedScriptRuntime([
+      { reply: 'The caller wanted it short', finish: 'length' },
+      { reply: ' and this only exists if a continuation ran.', finish: 'stop' }
+    ])
+    const msg = await askGrounded(runtime, { runtimeOptions: { maxTokens: 64 } })
+
+    expect(runtime.calls).toBe(1) // a caller-supplied cap is a deliberate ceiling, never continued past
+    expect(msg.content).toBe('The caller wanted it short')
+    expect(msg.truncated).toBeUndefined() // hitting a cap the caller itself asked for is not a surprise
+  })
+
+  // The `??` override precedence (rag/index.ts's effectiveRuntimeOptions): a caller overriding just
+  // one field still gets the pinned default for the other field. No real caller does this today, but
+  // the field-by-field merge is part of the gate's contract and was previously unexercised.
+  it('lets a caller override one field of the pinned decoding setting and keeps the pinned default for the other', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    await seedDocument(db, embedder, 'a.txt', [{ text: 'grounded answers stay balanced here' }])
+    const conv = createConversation(db, { mode: 'documents' })
+    const q = 'grounded answers stay balanced here'
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: q })
+
+    const rt = runtime()
+    const chatSpy = vi.spyOn(rt, 'chatStream')
+    await generateGroundedAnswer(db, rt, embedder, conv.id, q, SETTINGS, {
+      runtimeOptions: { temperature: 0.4 }
+    })
+
+    const options = chatSpy.mock.calls[0][1]
+    expect(options?.temperature).toBe(0.4) // the caller's override wins
+    expect(options?.maxTokens).toBe(1024) // the field the caller left unset still gets the pinned default
   })
 
   it('strips inline think blocks from the persisted grounded answer (D6)', async () => {

@@ -1512,9 +1512,11 @@ export function buildGroundedChatMessages(
  * Grounded document/knowledge-pack answers pin their own decoding setting on the request
  * itself, independent of requestParamsForMode: temperature 0, max_tokens 1024, no seed. A
  * replay of many recorded real requests at several candidate settings found no measurable
- * difference in correctness, refusals or citations, and the cap never bound in practice — so
- * a grounded answer's wording no longer varies because of sampling. Plain chat, the local API
- * and the whole-document map-reduce summarizer (its own SUMMARY_TEMPERATURE) are unaffected.
+ * difference in correctness, refusals or citations, and the cap never bound on any of the
+ * requests measured, all of which were recorded before knowledge-pack tables were delivered
+ * to the model — so a grounded answer's wording no longer varies because of sampling. Plain
+ * chat, the local API and the whole-document map-reduce summarizer (its own
+ * SUMMARY_TEMPERATURE) are unaffected.
  */
 export const GROUNDED_TEMPERATURE = 0
 export const GROUNDED_MAX_TOKENS = 1024
@@ -2043,12 +2045,7 @@ export async function generateGroundedAnswer(
   // plus a resume anchor, streams the seam-deduped remainder live, and stamps output-truncated only when the
   // cap is exhausted. A user Stop mid-continuation persists the accumulated partial (the engine swallows it);
   // a set `maxTokens` (an explicit cap) is never continued past — same gate as the truncated stamp below.
-  // A max_tokens cap is now always sent (effectiveRuntimeOptions above), so this condition is
-  // permanently false here: 'length' with a cap in effect means the cap fired, not that the
-  // model hit its context ceiling — the same distinction chat.ts's own Fast-mode gate makes
-  // (generateAssistantMessage). The branch and continueUntilComplete stay: the whole-document
-  // map-reduce reduce phase (streamWholeDocMapReduce) still calls continueUntilComplete.
-  let outputTruncated = finishReason === 'length' && effectiveRuntimeOptions.maxTokens == null
+  let outputTruncated = finishReason === 'length' && opts.runtimeOptions?.maxTokens == null
   if (outputTruncated) {
     const acc = { content }
     const finalReason = await continueUntilComplete({
@@ -2057,9 +2054,11 @@ export async function generateGroundedAnswer(
       onToken: opts.onToken,
       baseMessages: messages,
       contextTokens,
-      // No cap was set on the first pass, so let each continuation use as much of the window as fits after
-      // its (larger) prompt — the room guard caps it to `contextTokens − prompt`, never overflowing n_ctx.
-      outputCap: contextTokens,
+      // No caller cap was set on the first pass, but the grounded path's own pinned decoding
+      // setting still binds each continuation pass too (never the bare context window) — the
+      // room guard further shrinks it only if `contextTokens − prompt` is smaller still, so a
+      // run of continuations is bounded at the pinned cap per pass, not "as much as fits".
+      outputCap: effectiveRuntimeOptions.maxTokens ?? contextTokens,
       temperature: effectiveRuntimeOptions.temperature,
       acc,
       finishReason
@@ -2195,8 +2194,9 @@ export async function generateGroundedDataAnswer(
   let modelContent = ''
   // Honest-signal parity with plain chat/grounded (§L0): flag a narration the model cut off
   // partway. A 1024-token cap is now always sent (below, mirroring generateGroundedAnswer), so
-  // 'length' here can no longer distinguish "hit the cap" from "hit the context window" — an
-  // accepted, unfixed gap (rare in practice: this mode's replies are short extract narrations).
+  // a reply this mode's own cap ends is flagged as cut off at the model's context limit, which
+  // is the wrong cause — an accepted, unfixed gap (rare in practice: this mode's replies are
+  // short extract narrations; a real fix belongs in its own change, not this one).
   let finishReason: string | null = null
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,
