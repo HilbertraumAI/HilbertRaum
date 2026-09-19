@@ -4475,8 +4475,8 @@ fixed here): a classless image+caption layout table can still clear both the cla
 drop tests (`docs/known-limitations.md`).
 
 **The one authorised `core200` acceptance read (2026-09-18) — every PR-B floor holds, the
-`tables32` delivery thresholds MISS on a scoring-method defect, the Gold demonstration confirms
-delivery directly.** All six PR-B floors PASS: `allPacked` 77 (≥45), `anyCandidate` 116 (≥80),
+`tables32` delivery endpoint is void on a scoring-method defect — neither a pass nor a miss, the
+Gold demonstration confirms delivery directly.** All six PR-B floors PASS: `allPacked` 77 (≥45), `anyCandidate` 116 (≥80),
 `anyArticle` 120 (≥96), and all three latency floors inside bound — beside 4-k-a's own
 pre-existing master funnel (`anyArticle` 120, `anyCandidate` 116, `allPacked` 78), the funnel is
 effectively unchanged now that table units compete in the same candidate pool. The `tables32`
@@ -4496,10 +4496,14 @@ scored result, indicate the underlying delivery does clear both thresholds: the 
 match with the table-derived filter removed (not a corrected score — it does not distinguish a
 table hit from a prose hit) finds 31/32 candidate-level and 30/32 packet-level hits, and the Gold
 demonstration below reaches both target values directly. Per protocol, the identification script
-is left exactly as frozen (no code, product or scoring, changes after the read); the frozen
-result — MISS on both thresholds — is what is reported, and PR-B stays `blocked` for the owner to
-rule (most likely: authorise a scoring-only fix, re-scored from this same read's existing
-captures, never a second `core200` read).
+is left exactly as frozen (no code, product or scoring, changes after the read); it could only
+ever return 0, for any input, at any threshold, and it never tested the hypothesis, so the
+pre-registered `tables32` delivery endpoint is void — neither a pass nor a miss. The scored result
+of record stays 0 of 32. This is not a precedent for setting aside an endpoint whose instrument
+worked. A dated post-read diagnostic re-score of the same captures, adopted as nothing, found the
+expected value in table-derived units for 29 (looser check) and 26 (stricter check) of 32
+questions among the candidates and 26 and 23 of 32 in the packet. The change stays a draft until
+the maintainer marks it ready.
 
 **The Gold demonstration, live.** The question "Wie hoch sind Dichte und Schmelzpunkt von Gold?"
 (confirmed by token-Jaccard < 0.19 against every bank question, so it is not one of them) did not

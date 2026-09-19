@@ -28,16 +28,16 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
-_2026-09-18 — **Table delivery (issue #478, draft PR #479, `feat/zim-deliver-tables`) —
-READ DONE, blocked on a scoring gap.** `html.ts` parses a kept `<table>` into a bounded
-grid of retrievable "key: value" units instead of dropping it (`tables.ts`; design
-`rag-design.md` §17 "Table delivery"). The one authorised `core200` acceptance read ran:
-all six PR-B floors PASS. The `tables32` delivery thresholds both read 0/32 under the
-pre-registered identification script — a scoring-method defect found after the read (the
-captured text loses the per-row line breaks that check depends on): the Gold demonstration
-and an unfiltered re-scan both show the values do reach the packet, so PR-B stays
-`blocked` for the owner to rule, not merged or marked ready. Four pre-read Opus fix passes
-landed before the read; CI green at the read's head.
+_2026-09-18 — **Table delivery (issue #478, draft PR #479, `feat/zim-deliver-tables`) — READ DONE, six floors hold,
+table-delivery endpoint VOID.** `html.ts` parses a kept `<table>` into a bounded grid of retrievable "key: value"
+units instead of dropping it (`tables.ts`; design `rag-design.md` §17 "Table delivery"). The one authorised `core200`
+acceptance read ran: all six PR-B floors PASS — the measured acceptance of this change. The pre-registered `tables32`
+delivery endpoint is void — neither a pass nor a miss: its identification script required every line of a captured
+unit's own text to be table-introduced, while the chunking step delivers single-line units (0 of 32,257 captured units
+contains a literal newline), so the script could only return 0 for any input and never tested the hypothesis; the
+scored result of record stays 0 of 32. This is not a precedent for setting aside an endpoint whose instrument worked.
+Four pre-read Opus fix passes landed before the read; CI green at the read's head. The change stays a draft until the
+maintainer marks it ready.
 _2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
 `feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
 "Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
