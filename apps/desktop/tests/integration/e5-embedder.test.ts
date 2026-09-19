@@ -25,6 +25,35 @@ function fakeSpawn() {
   return { spawn, calls, child }
 }
 
+/** A child whose exit only fires once `releaseExit()` is called — lets a test hold a teardown
+ *  open long enough to observe single-flight sharing (mirrors reranker-wave8.test.ts's). */
+class GatedChild extends EventEmitter implements ChildProcessLike {
+  pid = 9
+  killed = false
+  private wantExit = false
+  private released = false
+  kill(): boolean {
+    this.killed = true
+    this.wantExit = true
+    if (this.released) this.emit('exit', 0, null)
+    return true
+  }
+  releaseExit(): void {
+    this.released = true
+    if (this.wantExit) this.emit('exit', 0, null)
+  }
+}
+
+function fakeGatedSpawn() {
+  const children: GatedChild[] = []
+  const spawn = (): ChildProcessLike => {
+    const c = new GatedChild()
+    children.push(c)
+    return c
+  }
+  return { spawn, children }
+}
+
 /** Routes /health (ok) and /v1/embeddings (returns the given per-text embeddings). */
 function embedFetch(embeddings: number[][], opts: { shuffle?: boolean } = {}): typeof fetch {
   return (async (url: string | URL, init?: RequestInit) => {
@@ -750,6 +779,42 @@ describe('E5Embedder', () => {
     expect(result).not.toMatch(/not started/)
     expect(embedCalls).toBe(1) // the second batch never issued a request to the dead sidecar
     await embedder.stop()
+  })
+
+  // #475 (mirrors reranker-wave8.test.ts's ruling (c)(i) tests): before this fix `teardown()` had
+  // no shared in-flight promise, so a second overlapping `suspend()`/`stop()` call saw `this.server`
+  // already nulled by the first (the no-op branch) and cleared `tearingDown` in its OWN `finally`
+  // while the first caller's `await server.stop()` was still in flight.
+  it('#475: overlapping suspend() + suspend() share ONE teardown pass — the child is killed exactly once', async () => {
+    const { spawn, children } = fakeGatedSpawn()
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
+    await embedder.embed(['a'])
+    const p1 = embedder.suspend()
+    const p2 = embedder.suspend() // overlaps p1 -- must join, not start a second pass
+    expect(children[0]!.killed).toBe(true) // kill() called by the shared pass
+    children[0]!.releaseExit()
+    await Promise.all([p1, p2])
+    expect(children.length).toBe(1) // no second teardown ever spawned/killed a second child
+    await embedder.stop()
+  })
+
+  it('#475: stop() joining an in-flight suspend() still settles only after the shared kill (no orphan on quit)', async () => {
+    const { spawn, children } = fakeGatedSpawn()
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
+    await embedder.embed(['a'])
+    const suspendP = embedder.suspend()
+    let stopSettled = false
+    const stopP = embedder.stop().then(() => {
+      stopSettled = true
+    })
+    // The shared pass has NOT settled yet (child still gated) — stop() must not resolve early.
+    await new Promise((r) => setTimeout(r, 5))
+    expect(stopSettled).toBe(false)
+    expect(children.length).toBe(1) // stop() joined the SAME pass, no second teardown started
+    children[0]!.releaseExit()
+    await Promise.all([suspendP, stopP])
+    expect(stopSettled).toBe(true)
+    expect(children[0]!.killed).toBe(true)
   })
 })
 
