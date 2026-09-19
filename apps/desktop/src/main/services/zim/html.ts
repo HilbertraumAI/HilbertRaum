@@ -1,5 +1,11 @@
 import type { ExtractedSegment } from '../ingestion/parsers'
 import { normalizeMath } from './math'
+import {
+  hasDeliverableContent,
+  isLayoutTableClass,
+  parseTableBody,
+  serializeTable
+} from './tables'
 
 // ZIM article HTML → ExtractedSegment[] (knowledge packs, query-time retrieval arm).
 //
@@ -17,12 +23,24 @@ import { normalizeMath } from './math'
 // plain-text viewer, never innerHTML, so a permissive scanner cannot become an injection
 // surface.
 //
-// Dropped subtrees: head, script/style/noscript (raw-text aware), tables (infoboxes and
-// data tables scramble into `header: value` noise without geometry), figures/images, nav,
-// and `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup>
-// like m<sup>2</sup> keeps its text). `<math>` emits its alttext normalised to plain text
+// Dropped subtrees: head, script/style/noscript (raw-text aware), figures/images, nav, and
+// `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup> like
+// m<sup>2</sup> keeps its text). `<math>` emits its alttext normalised to plain text
 // (`math.ts`, #340) and skips the MathML subtree; the `<img>` fallback that follows is
 // dropped with all images, so each formula appears exactly once.
+//
+// Tables are DELIVERED, not dropped (#478) — an infobox or data table used to disappear at
+// parse time, so its fact was never merely unranked, it was never retrievable at all.
+// `tables.ts` owns the geometry: a
+// class-based classifier (`navbox`, `vertical-navbox`, `metadata`, `ambox`, `toc`,
+// `sistersitebox` and the like) still drops layout/navigation tables unchanged, and a
+// structural test drops a table with no header cell and no real tabular content; everything
+// else is parsed into a bounded grid (rowspan/colspan expanded, multi-row and mid-table
+// headers rebound, captions kept once) and serialised into one or more retrievable segments,
+// capped so a large table cannot explode the unit count or the scan. Superscripts/subscripts
+// are kept readable (`g/cm^3`, `10^6`) inside table-derived text only; prose keeps today's
+// flattening unchanged (`m<sup>2</sup>` → `m2`) — a pre-registered, reported, out-of-scope
+// difference, not an oversight (see the PR and `docs/known-limitations.md`).
 //
 // ---------------------------------------------------------------------------------------
 // LINEAR FORWARD SCANNER — complexity record (PR #294 review H1)
@@ -98,6 +116,27 @@ import { normalizeMath } from './math'
 // 3.00. The `work` counter below measures exactly those examinations, so CI asserts the
 // bound deterministically instead of by wall-clock time.
 //
+// TABLE-DERIVED WORK (issue #478) is charged to the SAME counter but is deliberately NOT folded
+// into K·n + c above: it is bounded by tables.ts's own fixed caps (`TABLE_MAX_COLUMNS`,
+// `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`), not by the input length, so it needs its own,
+// additive bound rather than a larger K that would loosen the prose bound for every article that
+// has no tables at all. Per admitted (delivered) table: work_table ≤ (end - tableStart), the
+// source bytes the table's own sub-scan examined (unchanged from before table delivery), PLUS
+// `cellsPlaced + charsUsed + nestedWork` from `serializeTable`'s `workUnits`. The outermost
+// table's own share is bounded by `TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS` (~56,000)
+// regardless of how the caps are reached; every NESTED table it absorbs draws from one shared,
+// global `TABLE_MAX_RAW_CHARS` budget (tables.ts's `nestedWorkUsed`), so a nested table past
+// that budget is dropped before its grid is even built — the last nested table admitted can
+// still spend up to its own local `TABLE_MAX_GRID_CELLS + TABLE_MAX_RAW_CHARS` ceiling, so the
+// combined bound on one outermost table's `workUnits` is `2 × (TABLE_MAX_GRID_CELLS +
+// TABLE_MAX_RAW_CHARS) + TABLE_MAX_RAW_CHARS`, ~162,000: still fixed and independent of n and
+// of how many nested tables the input actually contains — see `zim-html.test.ts`'s "table cost
+// pathology" suite for the measured worst case against the reviewer's own crafted inputs (a
+// 1 MiB max-colspan/rowspan single cell, a 400×100 plain grid, and a 1 MiB wrapper containing
+// thousands of small nested max-span tables): all three complete in low milliseconds with
+// bounded heap, where before this fix the single-cell case took seconds and gigabytes and the
+// nested case was charged (and bounded) not at all.
+//
 // ---------------------------------------------------------------------------------------
 // COOPERATIVE SLICING (P1b) — why the linear scanner still yields (PR #294 review H1)
 // ---------------------------------------------------------------------------------------
@@ -122,7 +161,9 @@ import { normalizeMath } from './math'
 //   • Overshoot: the slice check sits at the top of the loop, so the current iteration always
 //     completes first. One iteration costs at most one `find` hop, so a slice can exceed
 //     `sliceWork` by at most that hop (bounded by the input length) — a failed lookahead near
-//     the start of a 1 MiB input is the worst case, and it ends the scan anyway.
+//     the start of a 1 MiB input is the worst case, and it ends the scan anyway — or, for a
+//     kept table, that table's whole bounded pass (see TABLE-DERIVED WORK above and
+//     `docs/known-limitations.md`); `maxWork` is therefore checked at table granularity.
 //   • `slices` (yields + 1) is reported on `ZimArticle` and is identical on both paths.
 //   • TWO SLICE TRIGGERS, because `sliceWork` counts scanner examinations and the first
 //     measurement showed the scan was never the problem. Ordinary scan slices came in at
@@ -160,16 +201,10 @@ import { normalizeMath } from './math'
 // buffer for a tiny result. Neither is counted in `work`, which measures the
 // scanner's own examinations.
 
-/** Elements whose entire subtree is dropped. `<math>` is handled separately (alttext). */
-const SKIP_SUBTREE = new Set([
-  'head',
-  'table',
-  'figure',
-  'nav',
-  'noscript',
-  'template',
-  'svg'
-])
+/** Elements whose entire subtree is dropped. `<math>` is handled separately (alttext);
+ *  `table` is handled separately too (`tables.ts` — layout/navbox tables are still dropped,
+ *  a kept table is parsed and delivered instead of skipped). */
+const SKIP_SUBTREE = new Set(['head', 'figure', 'nav', 'noscript', 'template', 'svg'])
 
 /** Raw-text elements: their content is not markup and is skipped to the matching close tag. */
 const RAW_TEXT = new Set(['script', 'style'])
@@ -509,6 +544,14 @@ export interface ZimConvertOptions {
   /** Scan-work cap in work units (default 4 × maxChars); the scanner stops at the cap and
    *  reports partial output rather than stalling the ask path. */
   maxWork?: number
+  /**
+   * Default true. Set false to reproduce the pre-table-delivery behaviour (every `<table>`
+   * dropped whole, `SKIP_SUBTREE`-style) — used only to measure the table-delivery change's
+   * own cost and non-table invariant (comparing a `true`/`false` conversion of the same
+   * article is how a table-derived segment is told apart from a prose one, without adding a
+   * `kind` field to `ExtractedSegment`). Product call sites never set this.
+   */
+  emitTables?: boolean
 }
 
 export interface ZimSliceOptions extends ZimConvertOptions {
@@ -567,6 +610,7 @@ export function* zimArticleSlices(
   const maxChars = opts.maxChars ?? DEFAULT_MAX_CHARS
   const maxWork = opts.maxWork ?? maxChars * 4
   const sliceWork = opts.sliceWork ?? DEFAULT_SLICE_WORK
+  const emitTables = opts.emitTables ?? true
   const sliced = html.length > maxChars
   const input = sliced ? html.slice(0, maxChars) : html
   const n = input.length
@@ -619,6 +663,10 @@ export function* zimArticleSlices(
   let skipDepth = 0
   let supSkipDepth = 0
   let mathDepth = 0
+  // A table dropped by its class (layout/navbox — `tables.ts`'s `isLayoutTableClass`) is
+  // skipped exactly like SKIP_SUBTREE, but `table` is no longer in that shared set (a kept
+  // table needs its own branch below), so it gets its own depth counter.
+  let tableDropDepth = 0
 
   const flush = (): void => {
     const text = body.result()
@@ -650,7 +698,7 @@ export function* zimArticleSlices(
   let textStart = 0
   const emitTextUpTo = function* (upto: number): Generator<void, void, void> {
     if (upto <= textStart) return
-    if (skipDepth === 0 && supSkipDepth === 0 && mathDepth === 0) {
+    if (skipDepth === 0 && supSkipDepth === 0 && mathDepth === 0 && tableDropDepth === 0) {
       let from = textStart
       while (from < upto) {
         let to = from + TEXT_PIECE_CHARS
@@ -897,6 +945,10 @@ export function* zimArticleSlices(
       if (SKIP_SUBTREE.has(name) && !selfClosing) skipDepth += isClose ? -1 : 1
       continue
     }
+    if (tableDropDepth > 0) {
+      if (name === 'table' && !selfClosing) tableDropDepth += isClose ? -1 : 1
+      continue
+    }
     if (supSkipDepth > 0) {
       if (name === 'sup' && !selfClosing) supSkipDepth += isClose ? -1 : 1
       continue
@@ -904,6 +956,43 @@ export function* zimArticleSlices(
 
     if (!isClose && SKIP_SUBTREE.has(name)) {
       if (!selfClosing) skipDepth = 1
+      continue
+    }
+    if (!isClose && name === 'table') {
+      if (selfClosing) continue // no body — nothing to classify or capture
+      const cls = attrValue(attrs, 'class')
+      if (!emitTables || isLayoutTableClass(cls)) {
+        tableDropDepth = 1
+        continue
+      }
+      // `cursor` already sits right after this opening tag's `>` (set above, unconditionally,
+      // for every tag) — exactly where the table's own small tokenizer needs to start.
+      const tableStart = cursor
+      const { table, end } = parseTableBody(input, tableStart)
+      // Charge the bytes this sub-scan examined to the same `work` counter the outer loop is
+      // bounded by (html.ts's header note, "the linear-scanner contract holds" — a kept table
+      // is examined once here and never revisited by the outer loop, so the whole conversion
+      // stays linear in the input length; see docs/known-limitations.md for the one residual
+      // this leaves, an unsliced synchronous stall for a single huge kept table).
+      work += Math.max(1, end - tableStart)
+      if (hasDeliverableContent(table)) {
+        flush()
+        // Grid expansion and serialisation are their own cost, independent of the table's own
+        // source bytes (a small span-heavy table can expand into a much larger grid) — charged
+        // here as `workUnits`, on top of the byte charge above, and INCLUDES every nested table
+        // this one absorbed (#478: a nested table's own grid/line-building cost used to be
+        // charged nowhere at all). Both are bounded by tables.ts's own fixed caps, not by the
+        // input length, which is exactly why the LINEAR SCANNER — complexity record above
+        // states a separate, additive bound for table-derived work instead of folding it into
+        // the prose K·n + c formula.
+        const { segments: texts, workUnits } = serializeTable(table)
+        work += workUnits
+        for (const text of texts) {
+          segments.push({ text, pageNumber: null, sectionLabel: currentLabel })
+        }
+      }
+      cursor = end
+      textStart = end
       continue
     }
     if (!isClose && name === 'math') {

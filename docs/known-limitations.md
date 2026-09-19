@@ -2679,10 +2679,25 @@ it back**.
   **catalog-default 4B and the 9B**, i.e. the 8–12 GB tier picks. Among ranked models only
   `ministral3-8b-instruct-2512-q4` keeps the restore; the dense `qwen3-8b`, the `qwen3-30b-a3b` MoE
   and `granite-4.1-8b-q4` keep it too, which is what makes this a measured architecture split rather
-  than an anecdote. **Not measured:** the ZIM query expander's own call (#447) — every chat family in
+  than an anecdote. Every chat family in
   the catalog now has a verdict, `qwen3.6` (affected) and `granite` (unaffected) being the last two,
   measured under #446. If llama.cpp PR #13194 lands recurrent-state restore upstream, this whole
   entry becomes removable.
+- **A chat with a knowledge pack ticked pays a small, fixed re-prefill on every turn** (measured
+  2026-09-18, #447). The pack arm plans its search with one short model call before each answer,
+  on the same single slot, and that call and the answer evict each other's prefix every time: on
+  16 of 16 measured pack-scoped turns (`qwen3.8-27b-ud-q5km` and `qwen3.5-9b-ud-q4kxl`) the answer
+  kept **0** tokens where the same questions without the pack kept the **227**-token system
+  prefix. The cache cost is that prefix and no more — about 0.35 s on the 27B, independent of
+  conversation length, because a documents turn never reused anything beyond it. The larger cost
+  is the planning call itself: 142–146 tokens in and a 53–71-token plan out, **≈ 2.6–3.2 s per
+  pack-scoped turn on the 27B** on an RTX 3090 (≈ 1.6–1.8 s on the 9B), and more on a CPU, where
+  the decode dominates (#423). It is the running cost of the owner's "always plan" ruling
+  (rag-design §17 D-Z20; turning the call off roughly halves article-stage hits on English
+  questions), which the owner confirmed against these figures on 2026-09-18: the decode was
+  already priced into that ruling, and the part this measurement added is the bounded prefix.
+  A chat without a pack ticked pays none of it.
+  Evidence: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue447-zim-expander.comment.md`.
 - **What can actually evict a live conversation is narrower than it sounds.** `assertChatStreamReady`
   makes categorisation, summary, translate, compare, OCR and every `modelLane` skill run **refuse**
   a chat turn rather than take the slot from it. The one cooperative hand-back is the **yielding
@@ -3040,3 +3055,88 @@ reports and phase plans were working papers; their full text lives in git histor
   deliberately NOT used — a path prefix in argv is readable by any local process, so it
   would be obscurity, not authentication (residual R-8, a documented unused option).
   Revisited only if upstream kiwix-serve adds authentication.
+- **Table delivery (issue #478) leaves a few residuals.** A cut table (row/char/segment/
+  column/grid-cell caps) does not say what a cut row or cell itself contained, only how
+  many were shown — the `[Rows 1-k of N source rows shown]` (`N` counts every top-level
+  row including header rows) and "some cells beyond the table's size caps were omitted"
+  markers name the gap, never fill it; a cap firing inside a NESTED table folds into the
+  same two markers on the outermost table, so a cut inside nested content is disclosed
+  the same way. A line or key/value pair that alone exceeds the remaining raw-character
+  budget (typically a nested table's own inlined content, close to that same shared cap)
+  is truncated to what remains and kept rather than dropped whole, so a table is never
+  reduced to markers over zero data rows when some of its content was in budget; the kept
+  prefix can still end mid-value, not at a natural word or pair boundary, and that cut
+  carries no line-level mark of its own — today's size thresholds happen to keep a
+  mid-number cut unreachable in delivered text, but that is an undocumented coupling
+  between two constants, not a guarantee, and a future change to either one could ship a
+  truncated value with no visible marker on that line. A cut landing inside the one emitted
+  line of a single-row (or otherwise fully-consumed) table can also leave the "rows shown"
+  marker reading as if every source row were present, even though most of that row's text
+  was cut — the cut is disclosed on the line itself, but not echoed into the row count.
+  Neither is fixed here. Row/column
+  iteration is bounded on three independent axes
+  (`TABLE_MAX_COLUMNS`, `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`, alongside the
+  existing `TABLE_MAX_SOURCE_ROWS`), not merely by "typical tables are small": a table
+  whose grid or emitted text would otherwise exceed one of those caps is cut. **This
+  narrows, but does not close, the cooperative-slicing ≤5 ms bound for a single very
+  large kept table** — a scoped review of this step measured the pre-cap cost at up to
+  ~5 s / ~2.3 GB heap for one crafted 1 MiB table; the caps bring that down to tens of
+  milliseconds (measured worst case ~12–20 ms for a 1 MiB table, whether the size comes
+  from one huge grid or from thousands of small tables nested inside a wrapper — a
+  nested table's own grid-expansion/line-building cost is now charged into the same
+  work counter and bounded by a shared budget, closing what used to be an untracked,
+  uncapped cost that scaled with nested-table COUNT rather than with the caps), but the
+  pass itself is not cooperatively sliced and still runs to completion in one
+  uninterruptible stall before the next slicing checkpoint, so the ≤5 ms gate does not
+  literally hold for a single very large kept table (nested or not) even after this fix.
+  The layout/navbox classifier is class-based (`navbox`, `vertical-navbox`, `metadata`,
+  `ambox`, `toc`, `sistersitebox`), applied at every nesting depth (a table nested
+  inside a kept table is checked and dropped the same way the outermost one is), and
+  can misjudge an unlisted layout convention, or a genuinely tabular one that happens to
+  reuse a listed class name; the structural test (no header cell, no real tabular
+  content) is a backstop, not a guarantee. **A disclosed instance of that backstop's
+  limit (owner's call, not fixed here):** a classless two-column layout wrapper whose
+  cells are an image and its caption (e.g.
+  `<table style="float:right"><tr><td><img></td><td>caption text</td></tr></table>`)
+  carries no listed layout class and has two non-empty cells, so it clears both the
+  class check and the structural check and is delivered as ordinary table text — the
+  `<figure>` drop rule exists to keep exactly this kind of caption text out, and this
+  shape re-admits it under a different tag. A possible follow-up hardening, not
+  implemented and no issue opened: treat `role="presentation"` (the standard ARIA
+  marker for a layout-only table) as an additional drop signal alongside the class list,
+  and/or drop a headerless table whose only non-empty cells are, after image removal,
+  empty — the same predicate would also catch a full-width caption/note row that
+  happens to sit in an otherwise-kept table. A nested table's own further-nested tables
+  are inlined down to a fixed safety-valve depth (8); deeper nesting is dropped,
+  unchanged from the feature's first design. The superscript/subscript readable
+  convention (`g/cm^3`, `10^6`) applies inside table-derived text only — prose keeps
+  today's flattening (`m<sup>2</sup>` → `m2`) unchanged, a deliberate scoping decision
+  (moving prose text too would blur what the funnel change is attributable to),
+  reported, not fixed here. Removing `table` from the scanner's `SKIP_SUBTREE` set also
+  changes html.ts's recovery on unbalanced markup OUTSIDE any table — e.g.
+  `<p>before</p><figure><table></figure><p>after</p>` now returns `before` and `after`
+  as two segments, where it previously dropped the tail after the stray `<table>` inside
+  the (already-dropped) `<figure>` subtree threw off the skip-depth count. This only
+  differs on malformed input that nests a `<table>` inside another dropped subtree, and
+  the new behaviour recovers MORE text, never less. Five `tables32` ids (H016, H062,
+  H076, H158 en, H181 de) are discovery losses this change cannot fix — their gold
+  article never reaches the candidate pool at all, on any arm.
+- **Two known defects ship with this change as measured, tracked for one
+  follow-up fix.** Some Wikipedia pages nest page styling inside a table; the
+  table path has no styling handling of its own, so that styling source becomes
+  part of the retrievable text: 104 of 949 sampled pages carry it, 223 of 26,721
+  retrievable units, 28 of those across 20 of 200 benchmark questions reach the
+  packet, and 23 user-visible citation snippets across 17 questions carry it
+  (#485). A formula inside a table is delivered twice — once as the loose
+  characters of its rendering markup and once as its raw TeX source — because
+  the table path has no formula handling of its own, where ordinary prose emits
+  a formula's plain-text description once: 33 of 949 sampled pages carry it, 261
+  formulas, 89 units across 21 questions, 15 of those across 12 questions reach
+  the packet, and 11 citation snippets across 10 questions carry it (#490). The
+  styling leak produces nothing on the released code, and for formulas the same
+  check finds three pieces of retrievable text there, none of which reach the
+  material the model is given. Both are fixed together in one follow-up change
+  that carries its own measured acceptance run — the formula fix routes a table
+  formula through the same plain-text-description-once path ordinary text
+  already uses, never a plain drop, because a formula cell is often the value
+  the table exists to deliver.

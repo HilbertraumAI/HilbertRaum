@@ -1068,8 +1068,25 @@ PR #13194)`. That line appears only on **MTP** starts — it did not appear once
 fourteen-model sweep, not on the 27B Q5 control, not on any Gemma. Without MTP the server logs a
 confident `load: - found better prompt with f_keep = 0.990, sim = 0.983` and then silently re-prefills
 the whole prompt anyway. Grepping for `forcing full` gives the **opposite** answer; the TOKEN COUNT
-(`prompt eval time = … / N tokens` against `cached n_tokens`) is the only honest read. Still
-unmeasured: the ZIM query expander (#447) — the three chat entries this paragraph used to list are
+(`prompt eval time = … / N tokens` against `cached n_tokens`) is the only honest read.
+**Measured 2026-09-18 (#447): the ZIM query expander DOES evict the prefix, on every pack-scoped
+turn** — not the harmless case leg B's proxy predicted. In-app, leg B's tee-wrapper method, skills
+off, `--cache-ram 0` confirmed in the OS argv: **16 of 16** pack-scoped turns across
+`qwen3.8-27b-ud-q5km` (MTP) and `qwen3.5-9b-ud-q4kxl` (non-MTP) ran exactly **one** extra task and
+the answer task then kept **0** tokens, against **227 on 8 of 8** control turns. The plan prompt
+shares 3 tokens with the answer prompt, so each erases the other's context checkpoint — a two-way
+thrash of the one slot. Cost per pack-scoped turn: **369–373 extra prefilled tokens** (the
+142–146-token plan call + the 227-token prefix), ≈ 1.2 s of prefill on the 27B — inside the
+classifier proxy (~400 tokens, ~1.4 s, itself a prefill figure) and bounded by the prefix, not by
+conversation length. But the plan call also **decodes 53–71 tokens** where the classifier decodes
+7, so the whole call is **≈ 2.6–3.2 s per turn on the 27B** (≈ 1.6–1.8 s on the 9B), paid on every
+pack-scoped turn. That decode was already accepted in D-Z20 (#423) and only the bounded cache part
+is new, so the owner ruled 2026-09-18 that D-Z20's "always" stands. The same run logged
+`forcing full` on the **non-MTP** 9B start — on every task that lost its checkpoint, under
+`--cache-ram 0` — so "only on MTP starts" describes the sweep above, not the line; the token count
+stays the read. Evidence:
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue447-zim-expander.comment.md`. The three
+chat entries this paragraph used to list are
 measured, see the 2026-09-10 addition below. If llama.cpp PR #13194 lands recurrent-state restore
 upstream, both the delay and the D5 switch become removable. Follow-up: #399 (closed by this work).
 **What it does NOT change: the context window.**
