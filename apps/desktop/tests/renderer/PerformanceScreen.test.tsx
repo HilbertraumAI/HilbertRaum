@@ -710,6 +710,26 @@ describe('PerformanceScreen: models on this computer', () => {
     expect(screen.getByText('Fits')).toBeInTheDocument()
   })
 
+  // #476: the summary carried no line at all for a GPU-resident reranker — neither its own size
+  // nor the shared contention warning.
+  it('#476: shows a separate graphics-card line for a GPU-resident reranker, with the contention badge when it applies', async () => {
+    const rows = placement().models.map((r) => (r.role === 'reranker' ? { ...r, device: 'gpu' as const } : r))
+    install(snapshot({ placement: placement({ models: rows, totals: { ramAllMb: Math.round(17.0 * 1024), bothOnCard: true } }) }))
+    renderScreen()
+    expect(await screen.findByText(/Graphics card: reranker 1\.1 GB, of 24\.2 GB\./)).toBeInTheDocument()
+    // The chat/translation line is unaffected — both lines coexist.
+    expect(screen.getByText(/Graphics card: chat 5\.4 GB \+ translation 6\.8 GB, of 24\.2 GB\./)).toBeInTheDocument()
+    // bothOnCard now covers three residents sharing the card — the badge appears on BOTH lines.
+    expect(screen.getAllByText('Partly on GPU')).toHaveLength(2)
+  })
+
+  it('#476: a reranker on the processor shows no reranker card line (byte-unchanged default)', async () => {
+    install(snapshot())
+    renderScreen()
+    await screen.findByText('Models on this computer')
+    expect(screen.queryByText(/Graphics card: reranker/)).not.toBeInTheDocument()
+  })
+
   it('on a machine without a usable card there is no card line, only the RAM line', async () => {
     install(snapshot({ placement: placement({ memoryClass: 'cpu', vramMb: null, ramMb: 131_072 }) }))
     renderScreen()

@@ -493,6 +493,8 @@ function cardMachine(over: {
   translation?: TranslationDeviceStatus | null
   status?: RuntimeStatus
   placement?: Partial<ModelPlacement>
+  /** #476: a fake `Reranker` — absent (the default) reports 'cpu', same as no reranker composed. */
+  reranker?: { devicePosture?: () => 'gpu' | 'cpu'; isLoaded?: () => boolean }
 } = {}): { placement: PerformanceSnapshot['placement']; db: Db; ctx: AppContext } {
   // Each machine starts from a clean session latch: a placement recorded for an earlier
   // machine in the same test must not count as this one's observation.
@@ -501,6 +503,7 @@ function cardMachine(over: {
   const db = seededDb(root)
   updateSettings(db, { lastBenchmark: hereResult(), activeModelId: CHAT, gpuProbe: probe([RTX], here()), ...over.settings })
   const ctx = ctxWith(root, db, {
+    reranker: over.reranker,
     manifestsDir: MANIFESTS,
     runtime: {
       occupancy: new ModelOccupancy(),
@@ -525,7 +528,8 @@ function cardMachine(over: {
   return { placement: buildPerformanceSnapshot(ctx).placement, db, ctx }
 }
 
-const rowOf = (p: PerformanceSnapshot['placement'], role: 'chat' | 'translation') => p.models.find((r) => r.role === role)!
+const rowOf = (p: PerformanceSnapshot['placement'], role: 'chat' | 'translation' | 'reranker') =>
+  p.models.find((r) => r.role === role)!
 
 describe('capability is not execution (DR1)', () => {
   it('GPU on: chat and translation say gpu; bothOnCard needs chat resident on the GPU with layers and the translation live with layers', () => {
@@ -545,6 +549,43 @@ describe('capability is not execution (DR1)', () => {
     expect(cardMachine().placement.totals.bothOnCard).toBe(true)
     // The chat model not resident: not both.
     expect(cardMachine({ status: { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' } }).placement.totals.bothOnCard).toBe(false)
+  })
+
+  // #476: the Performance card summary line omitted a GPU-resident reranker — neither the
+  // reranker row's own device nor `bothOnCard` (the contention warning) ever counted it.
+  it('#476: a GPU-resident reranker is a THIRD source of bothOnCard, alongside chat/translation', () => {
+    const withReranker = cardMachine({
+      reranker: { devicePosture: () => 'gpu', isLoaded: () => true }
+    })
+    expect(rowOf(withReranker.placement, 'reranker').device).toBe('gpu')
+    // Chat + translation ALREADY both on the card (the fixture's default) + a resident reranker:
+    // still true (more than two on the card is still contention), never a miscount.
+    expect(withReranker.placement.totals.bothOnCard).toBe(true)
+
+    // Isolate the reranker's OWN contribution: chat/translation both OFF the card, reranker
+    // alone resident on GPU — one source is not contention.
+    const rerankerAlone = cardMachine({
+      translation: null,
+      status: { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' },
+      reranker: { devicePosture: () => 'gpu', isLoaded: () => true }
+    })
+    expect(rowOf(rerankerAlone.placement, 'reranker').device).toBe('gpu')
+    expect(rerankerAlone.placement.totals.bothOnCard).toBe(false)
+
+    // A reranker posture of 'gpu' that is NOT actually loaded (a cold start would take the GPU,
+    // but nothing is resident there yet) does not count as "on the card" either.
+    const rerankerColdOnly = cardMachine({
+      translation: null,
+      status: { running: false, modelId: null, port: null, healthy: false, message: 'Stopped' },
+      reranker: { devicePosture: () => 'gpu', isLoaded: () => false }
+    })
+    expect(rerankerColdOnly.placement.totals.bothOnCard).toBe(false)
+
+    // No reranker composed at all: the row still reports 'cpu' (the isLoaded?-pattern default),
+    // byte-identical to before #476.
+    const noReranker = cardMachine({})
+    expect(rowOf(noReranker.placement, 'reranker').device).toBe('cpu')
+    expect(noReranker.placement.totals.bothOnCard).toBe(true) // unchanged: chat + translation alone
   })
 
   it("gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — and the class is the NEXT start's, cpu", () => {

@@ -886,7 +886,10 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const gbOf = (v: number | null): string => (v == null ? '' : fmt1(v, lang))
     const chatRow = p.models.find((r) => r.role === 'chat')
     const trRow = p.models.find((r) => r.role === 'translation')
-    const anyOnCard = chatRow?.device === 'gpu' || trRow?.device === 'gpu'
+    const rerankerRow = p.models.find((r) => r.role === 'reranker')
+    // #476: a GPU-resident reranker is a THIRD source of the same card-contention the summary
+    // line and its warning badge already cover for chat/translation.
+    const anyOnCard = chatRow?.device === 'gpu' || trRow?.device === 'gpu' || rerankerRow?.device === 'gpu'
     const vram = p.vramMb != null ? fmt1(p.vramMb / 1024, lang) : null
     const unifiedPool = p.memoryClass === 'unified'
     const againstMb = unifiedPool ? (p.verdict.budgetMb ?? p.ramMb) : p.ramMb
@@ -948,6 +951,17 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
                 {t('perf.models.card', { chat: gbOf(chatRow.sizeOnDiskGb), translation: gbOf(trRow.sizeOnDiskGb), vram })}
                 {p.totals.bothOnCard ? ` ${t('perf.models.cardBoth')}` : ''}
               </span>
+              {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}
+            </div>
+          )}
+          {/* #476: a second, labelled line for the reranker — kept separate from the chat/
+              translation line above rather than folded into its fixed two-slot template, since
+              the reranker is independently resident (it may share the card with either, both, or
+              neither of the other two). `bothOnCard` now counts the reranker too (registerBenchmarkIpc.ts),
+              so the SAME warning badge appears here whenever this row is part of the contention. */}
+          {p.memoryClass !== 'cpu' && vram && rerankerRow && rerankerRow.device === 'gpu' && (
+            <div className="perf-models-summary-line">
+              <span>{t('perf.models.cardReranker', { reranker: gbOf(rerankerRow.sizeOnDiskGb), vram })}</span>
               {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}
             </div>
           )}

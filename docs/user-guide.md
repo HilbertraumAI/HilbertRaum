@@ -308,10 +308,12 @@ design (voice and images, always; document search's index model too). Document s
 model (the reranker) is the exception: it follows its own graphics-card headroom check against
 the model you are chatting with, so its row can say either "graphics card" or "processor"
 depending on this computer and what else is loaded — never "by design". A row reads **loaded**
-only once that service is actually running and ready, not while it is still starting. Two totals
-sit below the rows: the card total (what chat and translation are resident on the graphics card
-for, against its memory — a graphics-card ranking model is not part of this total) and the
-processor total (what loading everything at once would take from RAM).
+only once that service is actually running and ready, not while it is still starting. Below the
+rows: a card line for chat and translation (what each is resident on the graphics card for,
+against its memory), a second card line whenever the ranking model is also resident there, and a
+processor total (what loading everything at once would take from RAM). Whenever more than one of
+chat, translation and the ranking model share the card at once, both lines carry a note that the
+one that loaded second got what was left over and runs slower.
 
 **Observed while you worked.** Three rows fill in from ordinary use, with no separate check: your
 last finished chat answer, your last model start, and your last full file check. These are

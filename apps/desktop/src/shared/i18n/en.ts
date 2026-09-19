@@ -1945,6 +1945,9 @@ export const en = {
   'perf.models.lifetime.per-use': 'runs only while working',
   'perf.models.split': '{gpuLayers} of {layers} layers on the card',
   'perf.models.card': 'Graphics card: chat {chat} GB + translation {translation} GB, of {vram} GB.',
+  // #476: a separate line for the reranker — it may share the card with either, both, or neither
+  // of chat/translation, so it is not folded into perf.models.card's fixed two-slot template.
+  'perf.models.cardReranker': 'Graphics card: reranker {reranker} GB, of {vram} GB.',
   'perf.models.cardBoth':
     'Both are on the card right now. Whichever started second got what was left and runs slower; stop and start it once the other has unloaded.',
   'perf.models.ram': 'Everything loaded at once needs about {sum} GB of {ram} GB RAM.',
