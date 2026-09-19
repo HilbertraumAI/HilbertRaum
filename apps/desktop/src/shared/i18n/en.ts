@@ -569,6 +569,8 @@ export const en = {
   'docs.empty.line': 'Import files to ask questions about them — everything stays on this drive.',
   'docs.selectAria': 'Select {title} for asking',
   'docs.selectTitle': 'Select to ask only chosen documents',
+  'docs.selectAllAria': 'Select all documents',
+  'docs.selectAllTitle': 'Select all visible documents, or clear the selection',
   'docs.meta.sectionsCount.one': '{count} section',
   'docs.meta.sectionsCount.other': '{count} sections',
   'docs.meta.summary': 'Summary',
