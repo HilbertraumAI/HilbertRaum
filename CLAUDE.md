@@ -34,6 +34,7 @@ legend), and the Skills / Image-understanding records.
 - **No cloud dependencies. No telemetry. No analytics. No remote crash reporting.**
 - Do not call hosted AI APIs (OpenAI/Anthropic/Google/Mistral/etc.).
 - Never commit model weights, user data, embeddings, logs, or generated files.
+  - "Logs" in that rule means runtime, user and application logs, which stay forbidden; the measurement evidence committed under `eval/results/` (benchmark runs kept deliberately as reviewable evidence) is not "logs" in that sense.
 - Keep the app fully usable with **no internet connection**.
 - Keep all user data local by default; no plaintext workspace unless explicitly chosen.
 - No hardcoded developer-specific absolute paths; don't assume the drive path is identical across OSes.

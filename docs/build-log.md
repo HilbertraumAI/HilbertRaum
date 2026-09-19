@@ -27,6 +27,26 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-19 — the Phase 4 PR-A discovery-port entry retired verbatim (both draft PRs merged)
+
+Retired from `BUILD_STATE.md` on 2026-09-19 (preamble budget, making room for the knowledge-pack
+retrieval-research record entry). Both draft PRs this entry named (#469, #470) are merged and
+shipped (v0.1.60); the durable design record lives on in `rag-design.md` §17. Citations of the
+form "BUILD_STATE 2026-09-14/15 entry" resolve here. Text below is byte-identical to what was
+removed.
+
+_2026-09-14/15 — **Phase 4 PR-A discovery port, step 4-2 redo + step 4-3 N1 resolution: draft PR
+#469, every floor holds** (`feat/zim-discovery-port`). Step 4-2 fixed the first Opus review's
+F1–F9 (F6 dropped): `PLAN_MAX_TOKENS` set to 104 from a measured core200 p99 of 99 tokens (not
+assumed); the admission gate takes two windows; the head-noun read cap counts acceptances; the
+#340 length retry and the five-read no-plan reach are restored. core200 `anyCandidate` 79→81/200
+(now clears its floor); every acceptance and CPU-non-regression floor holds. Step 4-3 (2026-09-15)
+resolved the second review's N1: `arm.ts`'s lead narrowed to the intro segment (`slice(0, 1)`),
+the CASE A end-to-end test added, run A2 read once — zero funnel movement measured on core200
+(0/200 ids differ), every floor still holds. Record `rag-design.md` §17; §5 item 21 (m). Step 4-4
+(2026-09-16) minted **PR-B, draft #470**: `gpu`/`default` hold every floor (`allPacked` 78/200);
+`cpu-hi`'s rerank-latency floor misses in its already-disabled path — Wave 5 ruling (a) read the miss as moot; step 4-5 (same day) resolved the scoped review's B1-B3 (the renderer guard, the headroom gate, the capped ceiling + non-regressive fallback), both profiles hold every floor again — DONE. Step 4-6 (2026-09-17, Wave 6 ruling (a)) resolved the review's one remaining behaviour finding, C1: one shared posture helper now feeds both the sidecar's posture and the per-ask scope, and `gpu` profile + `cpu` posture resolves scope `capped` (never the general rule; `cpu-hi`/`default` unchanged); no-op proof holds on the measurement machine — DONE. Step 4-7 (2026-09-18, Wave 7 ruling (a)) resolved the review's remaining finding on step 4-6, C2: `activeModelId` joins `gpuMode`/`gpuAutoDisabled` as a posture input the sidecar's suspend trigger watches, fired from all three settings-writing channels through one shared predicate; D10 settled non-absolutely across seven sites (the fire-and-forget teardown window resolves toward the safe, capped scope) — DONE; its own scoped review found one open behaviour finding, C3 (the new suspend trigger could cold-start the sidecar on the GPU beside the still-resident PREVIOUS chat model for the whole multi-minute checksum-hash window). Step 4-8 (Wave 8 rulings (a)-(d)) resolves C3 by option B′ (the posture's chat-model input is the RUNTIME's committed model, never the setting), completes the posture class by construction (Q the use-time re-check, G the CPU request ceiling, T translation occupancy), hardens the sidecar's lifecycle (single-flight teardown, dead-handle recovery, abort classification), and stops the Performance screen misreporting the reranker's device — **DONE, pending the Opus review**._
+
 ## 2026-09-18 — the #458 windows-CI wave entry retired verbatim (issue closed)
 
 Retired from `BUILD_STATE.md` on 2026-09-18 because the wave is closed: #458 was closed by the owner
