@@ -3112,21 +3112,33 @@ reports and phase plans were working papers; their full text lives in git histor
   inside a kept table is checked and dropped the same way the outermost one is), and
   can misjudge an unlisted layout convention, or a genuinely tabular one that happens to
   reuse a listed class name; the structural test (no header cell, no real tabular
-  content) is a backstop, not a guarantee. **FIXED (issue #487):** a classless two-column
-  layout wrapper whose cells are an image and its caption (e.g.
+  content) is a backstop, not a guarantee. **A disclosed instance of that backstop's
+  limit, still open as issue #487 — now with the measurement the issue asked for:** a
+  classless two-column layout wrapper whose cells are an image and its caption (e.g.
   `<table style="float:right"><tr><td><img></td><td>caption text</td></tr></table>`)
-  used to carry no listed layout class and have two non-empty cells, clearing both the
-  class check and the structural check to be delivered as ordinary table text. A table
-  cell is now tracked as image-only when it carries an `<img>` and no other text, and a
-  headerless table is dropped as a layout wrapper when it has at least one image-only
-  cell and every source row has at most one other populated cell — a per-table rule, so
-  a genuine data table that happens to carry one image in one row keeps its other rows'
-  real data. Measured on the same offline corpus: exactly 3 tables matched this shape and
-  were delivered before the fix; all 3 are dropped after it, with the corpus's other
-  2,095 delivered tables unchanged. **Still open, no issue filed:** treating
-  `role="presentation"` (the standard ARIA marker for a layout-only table) as an
-  additional, independent drop signal alongside the class list — deliberately out of
-  scope for the #487 fix, which is the one image-only-cell signal alone. A nested table's own further-nested tables
+  carries no listed layout class and has two non-empty cells, so it clears both the
+  class check and the structural check and is delivered as ordinary table text — the
+  `<figure>` drop rule exists to keep exactly this kind of caption text out, and this
+  shape re-admits it under a different tag. **How often, and what it would cost to drop
+  it.** A structural rule for this shape was written and measured on the offline corpus
+  (1,437 articles, 2,151 tables) before being withdrawn: drop a headerless table when one
+  of its cells holds only an image and no source row holds more than one other populated
+  cell. It changed three tables in the whole corpus, none of them on the 949-article
+  Wikipedia corpus. Two were the wrapper shape above, correctly dropped. The third was a
+  Wikivoyage travel-notice box laid out as a table — an icon cell beside the notice, then
+  a row carrying the heading and the list of governments issuing the advisory — and
+  dropping it removed seven delivered lines of that advisory. That is content, not
+  layout, so the rule was withdrawn: two stray caption lines gained corpus-wide is not
+  worth one deleted travel warning, and the shape is left delivered. A narrower rule
+  remains possible (both correct drops sit in MediaWiki's caption furniture — a
+  `thumbimage` cell and a `thumbcaption` div — which the notice box has neither of), and
+  since a figure's own caption is now delivered on purpose (below), a caption arriving as
+  a table line is closer to a formatting oddity than to noise. **Also measured, and also
+  not usable as written:** `role="presentation"`, the standard ARIA marker for a
+  layout-only table, which #487 proposes as a second, independent drop signal. Exactly
+  four tables in the corpus carry it, and all four are German-Wikivoyage travel/warning
+  notices that are delivered today — so a `role="presentation"` drop rule would delete
+  four warning boxes and nothing else. A nested table's own further-nested tables
   are inlined down to a fixed safety-valve depth (8); deeper nesting is dropped,
   unchanged from the feature's first design. The superscript/subscript readable
   convention (`g/cm^3`, `10^6`) applies inside table-derived text only — prose keeps

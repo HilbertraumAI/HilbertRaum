@@ -27,15 +27,12 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
-- **Three small article-reading fixes: a rare text leak, a layout table wrongly kept, and
-  photo captions.** Reading a Wikipedia table that contained a certain very rare block of raw
-  text could leak a stray fragment of it into what the app reads back; that block is now
-  skipped correctly, the same way it already is outside of tables. A classless table used
-  purely to place a photo next to its caption — no real data, just layout — could be kept as
-  if it were a data table, adding the caption's text a second time; such tables are now
-  recognised and left out, while genuine data tables that happen to include a photo are kept
-  as before. A photo's caption, which used to be dropped along with the photo itself, is now
-  kept as part of the article's text.
+- **Two small article-reading fixes: a rare text leak, and photo captions.** Reading a
+  Wikipedia table that contained a certain very rare block of raw text could leak a stray
+  fragment of it into what the app reads back; that block is now skipped correctly, the same
+  way it already is outside of tables. And a photo's caption, which used to be dropped along
+  with the photo itself, is now kept as part of the article's text — the app reads captions on
+  purpose now, the way it already reads a table's own caption.
 
 ## [0.1.60] — 2026-09-18
 
