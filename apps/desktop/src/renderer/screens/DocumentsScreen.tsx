@@ -853,6 +853,19 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
       : narrowed
   }, [docs, section, filter])
 
+  // #214: the header "select all" checkbox — only `indexed` documents ever get a per-row
+  // checkbox (see `showCheckbox && d.status === 'indexed'` below), so "all" here means "every
+  // indexed document in the current section/filter view", matching what the per-row checkboxes
+  // actually offer.
+  const selectableVisibleIds = useMemo(
+    () => visibleDocs.filter((d) => d.status === 'indexed').map((d) => d.id),
+    [visibleDocs]
+  )
+  const allVisibleSelected =
+    selectableVisibleIds.length > 0 && selectableVisibleIds.every((id) => selected.has(id))
+  const someVisibleSelected =
+    !allVisibleSelected && selectableVisibleIds.some((id) => selected.has(id))
+
   // PERF-2 (= PERF-5 Part B; full-audit-2026-06-29 follow-up, Phase 4) — window the documents list
   // so the live DOM (and the per-row Radix `DropdownMenu.Root` state machines) stop growing linearly
   // with library size. The screen scrolls as a whole inside the app's `.content` container (NOT an
@@ -1053,6 +1066,22 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
     })
   }
 
+  // #214: header select-all — a plain two-state toggle, like a table's own "select all" checkbox:
+  // unchecked/indeterminate → select every currently visible (section + filter) indexed document;
+  // checked (all visible already selected) → clear the WHOLE selection, not just the visible ids,
+  // so a second click always empties the selection toolbar.
+  function toggleSelectAll(): void {
+    if (allVisibleSelected) {
+      setSelected(new Set())
+      return
+    }
+    setSelected((prev) => {
+      const next = new Set(prev)
+      for (const id of selectableVisibleIds) next.add(id)
+      return next
+    })
+  }
+
   // Re-index a set of documents — the loop runs in MAIN (startReindexAll) so its determinate
   // progress survives navigating away from this screen; here we just start it and poll via
   // watchReindex. Confirmed first (M-U6) because it is multi-minute CPU work. Used by both
@@ -1241,6 +1270,26 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
           toolbar below, not here. When the list is empty the EmptyState carries the primary. */}
       {!empty && (
         <div className="docs-toolbar">
+          {/* #214: header select-all, beside the per-row checkboxes it mirrors — only rendered
+              when a caller wired the "ask selected documents" action in the first place (the
+              same gate the per-row checkboxes use), and only once there is at least one
+              currently-visible indexed document to select. Wrapped together with the filter
+              (rather than a third `docs-toolbar` flex child) so the toolbar's existing
+              filter-left / actions-right `space-between` layout is unaffected. */}
+          <div className="docs-select-all-and-filter">
+            {Boolean(onAskSelected) && selectableVisibleIds.length > 0 && (
+              <input
+                type="checkbox"
+                className="docs-select-all"
+                checked={allVisibleSelected}
+                ref={(el) => {
+                  if (el) el.indeterminate = someVisibleSelected
+                }}
+                aria-label={t('docs.selectAllAria')}
+                title={t('docs.selectAllTitle')}
+                onChange={toggleSelectAll}
+              />
+            )}
           <div className="docs-filter">
             <Icon name="search" size={16} className="docs-filter-icon" />
             <input
@@ -1251,6 +1300,7 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
               placeholder={t('docs.filter.placeholder')}
               onChange={(e) => setFilter(e.target.value)}
             />
+          </div>
           </div>
           <div className="actions docs-toolbar-actions">
           <button

@@ -37,9 +37,24 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-win:
+  # The windows test job, sharded exactly the way ci.yml shards its windows legs (#458
+  # residual): same `--shard=1/2` / `2/2` matrix, same shard-aware anti-false-green
+  # guard (tests/full-suite-guard.ts — unchanged, it keys off the shard flag, not the
+  # workflow file), same forks cap (vitest.config.ts's `capWindowsCiForks` keys off
+  # `CI` + `win32`, both true here same as on ci.yml's windows legs — nothing to set
+  # here). This IS the "cheap belt-and-braces on the exact tagged commit" ci.yml's
+  # windows legs already gave master; running it unsharded, in one job, was the leg
+  # that hit the `onTaskUpdate` starvation flake on a release run (#458).
+  test-win:
+    name: build-win test (${{ matrix.label }})
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { label: '1 of 2', shard: '--shard=1/2' }
+          - { label: '2 of 2', shard: '--shard=2/2' }
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
@@ -52,9 +67,21 @@ jobs:
       # (Latent since AUD-18 landed after the v0.1.55 tag; first surfaced by a
       # workflow_dispatch run of this workflow.)
       - run: npm run build
-      # Full suite once, on the first-class OS only — master already passed ci-success;
-      # this is the cheap belt-and-braces on the exact tagged commit.
-      - run: npm test
+      - run: npm test -- ${{ matrix.shard }}
+
+  build-win:
+    needs: test-win
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4.3.1
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with: { node-version: 24, cache: npm }
+      - run: npm ci
+      - run: npm run typecheck
+      # Build BEFORE packaging, same reason as test-win above (AUD-18); the full suite
+      # already ran, sharded, in test-win above on this exact checkout.
+      - run: npm run build
       - run: npm run package:win
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:

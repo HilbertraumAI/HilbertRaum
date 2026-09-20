@@ -590,6 +590,8 @@ export const de: Record<keyof typeof en, string> = {
     'Importiere Dateien, um Fragen dazu zu stellen — alles bleibt auf diesem Laufwerk.',
   'docs.selectAria': '{title} zum Fragen auswählen',
   'docs.selectTitle': 'Auswählen, um nur ausgewählte Dokumente zu fragen',
+  'docs.selectAllAria': 'Alle Dokumente auswählen',
+  'docs.selectAllTitle': 'Alle sichtbaren Dokumente auswählen oder die Auswahl aufheben',
   'docs.meta.sectionsCount.one': '{count} Abschnitt',
   'docs.meta.sectionsCount.other': '{count} Abschnitte',
   'docs.meta.summary': 'Zusammenfassung',

@@ -381,8 +381,15 @@ describe.skipIf(!enabled)(
       expect(arEn!.text).toContain(t('en', 'packExport.evidence.article'))
       expect(arEn!.compact).toContain('Treibhausgas/Übersicht_ß')
       // The archive-specific identity warning, never the legacy document claim.
-      expect(arEn!.text).toContain(t('en', 'packExport.evidence.archiveIdentity'))
-      expect(arEn!.text).not.toContain(t('en', 'packExport.evidence.identityUnresolved'))
+      // Asserted on `.compact` (both sides whitespace-stripped), like the locator assertions
+      // above: the font splits the "fi" ligature in "verified", and `.text` extracts that
+      // split with a stray space, breaking a literal-sentence match (#481).
+      expect(arEn!.compact).toContain(
+        t('en', 'packExport.evidence.archiveIdentity').replace(/\s+/g, '')
+      )
+      expect(arEn!.compact).not.toContain(
+        t('en', 'packExport.evidence.identityUnresolved').replace(/\s+/g, '')
+      )
       // §16.1.7 register row: the archive type + availability wording, and no invented hash —
       // the workspace document's SHA-256 is in the PDF exactly once, on its OWN row.
       expect(arEn!.text).toContain(t('en', 'packExport.sources.typeArchive'))
@@ -409,8 +416,14 @@ describe.skipIf(!enabled)(
       expect(arDe!.text).toContain(t('de', 'packExport.evidence.article'))
       expect(arDe!.compact).toContain('Treibhausgas/Übersicht_ß') // umlaut + ß through print
       expect(arDe!.text).toContain('ausschließlich') // ß in the document card, unchanged
-      expect(arDe!.text).toContain(t('de', 'packExport.evidence.archiveIdentity'))
-      expect(arDe!.text).not.toContain(t('de', 'packExport.evidence.identityUnresolved'))
+      // Asserted on `.compact` (both sides whitespace-stripped) for the same reason as the EN
+      // case above: the "fi" ligature split (#481).
+      expect(arDe!.compact).toContain(
+        t('de', 'packExport.evidence.archiveIdentity').replace(/\s+/g, '')
+      )
+      expect(arDe!.compact).not.toContain(
+        t('de', 'packExport.evidence.identityUnresolved').replace(/\s+/g, '')
+      )
       expect(arDe!.text).toContain(t('de', 'packExport.sources.typeArchive'))
       expect(arDe!.text).toContain(t('de', 'packExport.sources.availabilityArchive'))
       expect(arDe!.compact.split('cd'.repeat(32)).length - 1).toBe(1)

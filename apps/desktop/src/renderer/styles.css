@@ -1539,7 +1539,11 @@ code, pre, kbd { font-family: var(--font-mono); }
    on the right (one primary, last in the row). Wraps on a narrow window. */
 .docs-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }
 .docs-toolbar-actions { margin-top: 0; }
-.docs-filter { position: relative; flex: 0 1 280px; min-width: 200px; }
+/* #214: the header select-all checkbox and the name filter share one flex item so the
+   toolbar's filter-left / actions-right `space-between` layout above is unaffected by adding it. */
+.docs-select-all-and-filter { display: flex; align-items: center; gap: 8px; flex: 0 1 280px; min-width: 200px; }
+.docs-select-all { width: 16px; height: 16px; accent-color: var(--accent); flex-shrink: 0; }
+.docs-filter { position: relative; flex: 1 1 auto; min-width: 0; }
 .docs-filter-icon { position: absolute; left: 10px; top: 50%; transform: translateY(-50%); color: var(--text-muted); pointer-events: none; }
 .docs-filter-input { padding-left: 32px; min-height: 36px; }
 .docs-main { min-width: 0; }

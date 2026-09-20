@@ -473,14 +473,81 @@ describe('DocumentsScreen', () => {
     render(<DocumentsScreen onAskSelected={onAskSelected} />)
     await screen.findByText('contract.pdf')
 
-    // Failed documents get no checkbox; nothing selected → no Ask button yet.
-    expect(screen.getAllByRole('checkbox')).toHaveLength(2)
+    // Failed documents get no checkbox; nothing selected → no Ask button yet. The header
+    // select-all checkbox (#214) is the third one, present whenever at least one indexed
+    // document is visible.
+    expect(screen.getAllByRole('checkbox')).toHaveLength(3)
     expect(screen.queryByRole('button', { name: /ask these documents/i })).not.toBeInTheDocument()
 
     await user.click(screen.getByRole('checkbox', { name: /select contract.pdf/i }))
     await user.click(screen.getByRole('checkbox', { name: /select terms.docx/i }))
     await user.click(screen.getByRole('button', { name: /ask these documents \(2\)/i }))
     expect(onAskSelected).toHaveBeenCalledWith(expect.arrayContaining(['d1', 'd2']))
+  })
+
+  // ---- Header "select all" checkbox (#214) ----------------------------------------
+
+  it('the header select-all checkbox selects every visible indexed document, and clears on a second click', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({}),
+        doc({ id: 'd2', title: 'terms.docx' }),
+        // A failed document gets no per-row checkbox at all — select-all must not touch it.
+        doc({ id: 'd3', title: 'broken.xyz', status: 'failed', chunkCount: 0 })
+      ])
+    })
+    render(<DocumentsScreen onAskSelected={() => {}} />)
+    await screen.findByText('contract.pdf')
+
+    const selectAll = screen.getByRole('checkbox', { name: 'Select all documents' })
+    expect(selectAll).not.toBeChecked()
+    expect(screen.queryByRole('group', { name: /actions for the selected documents/i })).not.toBeInTheDocument()
+
+    await user.click(selectAll)
+    expect(screen.getByRole('checkbox', { name: /select contract.pdf/i })).toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /select terms.docx/i })).toBeChecked()
+    expect(selectAll).toBeChecked()
+    const bar = await screen.findByRole('group', { name: /actions for the selected documents/i })
+    expect(within(bar).getByText('2 selected')).toBeInTheDocument()
+
+    // Second click clears the whole selection.
+    await user.click(selectAll)
+    expect(selectAll).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /select contract.pdf/i })).not.toBeChecked()
+    expect(screen.getByRole('checkbox', { name: /select terms.docx/i })).not.toBeChecked()
+    expect(
+      screen.queryByRole('group', { name: /actions for the selected documents/i })
+    ).not.toBeInTheDocument()
+  })
+
+  it('the name filter narrows select-all to only the currently visible documents', async () => {
+    const user = userEvent.setup()
+    stubApi({
+      listCollections: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'd1', title: 'Lease 2026.pdf' }),
+        doc({ id: 'd2', title: 'Q3 audit notes.docx' })
+      ])
+    })
+    render(<DocumentsScreen onAskSelected={() => {}} />)
+    await screen.findByText('Lease 2026.pdf')
+
+    const box = screen.getByRole('searchbox', { name: 'Filter documents by name' })
+    await user.type(box, 'lease')
+    expect(screen.queryByText('Q3 audit notes.docx')).not.toBeInTheDocument()
+
+    await user.click(screen.getByRole('checkbox', { name: 'Select all documents' }))
+    const bar = await screen.findByRole('group', { name: /actions for the selected documents/i })
+    // Only the one FILTERED-IN document was selected, not the whole (unfiltered) library.
+    expect(within(bar).getByText('1 selected')).toBeInTheDocument()
+
+    // Clearing the filter reveals the other document again, still unselected — select-all
+    // acted on what was visible at click time, not a standing "select everything" intent.
+    await user.clear(box)
+    expect(await screen.findByText('Q3 audit notes.docx')).toBeInTheDocument()
+    expect(within(bar).getByText('1 selected')).toBeInTheDocument()
+    expect(screen.getByRole('checkbox', { name: /select q3 audit notes.docx/i })).not.toBeChecked()
   })
 
   // ---- Audio (Phase 36): formats line, Transcribing badge, D35 size confirm ------
