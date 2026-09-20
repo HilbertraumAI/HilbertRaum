@@ -190,6 +190,31 @@ describe('zimArticleToSegments — figure captions', () => {
     expect(article.segments.map((s) => s.text)).toEqual(['Caption: real caption'])
   })
 
+  it('a figure nested inside a figure keeps its own figcaption -- the guard only arms for ' +
+    'non-figure skipped subtrees, so a nested <figure> neither arms nor disarms it', () => {
+    const html =
+      '<figure><img src="a.jpg"><figcaption>outer caption</figcaption>' +
+      '<figure><img src="b.jpg"><figcaption>inner caption</figcaption></figure></figure>'
+    const article = zimArticleToSegments(html)
+    const captions = article.segments.map((s) => s.text).filter((t) => t.startsWith('Caption:'))
+    expect(captions).toEqual(['Caption: outer caption', 'Caption: inner caption'])
+    const all = article.segments.map((s) => s.text).join('\n')
+    expect(all).not.toMatch(/alt|\.jpg/)
+  })
+
+  it('the guard still works INSIDE a nested figure: an svg opened inside the inner figure ' +
+    'suppresses only that svg\'s own figcaption, not the inner figure\'s real one', () => {
+    const html =
+      '<figure><figcaption>outer</figcaption>' +
+      '<figure><svg><figcaption>svg-inner-must-not-appear</figcaption></svg>' +
+      '<figcaption>inner</figcaption></figure></figure>'
+    const article = zimArticleToSegments(html)
+    const captions = article.segments.map((s) => s.text).filter((t) => t.startsWith('Caption:'))
+    expect(captions).toEqual(['Caption: outer', 'Caption: inner'])
+    const all = article.segments.map((s) => s.text).join('\n')
+    expect(all).not.toContain('svg-inner-must-not-appear')
+  })
+
   it('a self-closing <figcaption/> inside an open caption neither ends the caption early nor ' +
     'drops the rest of it', () => {
     const html = '<figure><figcaption>part one <figcaption/> part two</figcaption></figure>'

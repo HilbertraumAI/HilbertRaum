@@ -4707,9 +4707,11 @@ measurement; the paragraph below it records why, so the next reader does not ret
   subtree stay dropped. Two edge cases are guarded explicitly, each with its own test: a
   `<figcaption>` nested inside a skipped subtree (an inline `<svg>` or a `<template>`) never
   starts a capture at all, whether that subtree opened inside an already-open caption or
-  before one — the inner-skip counter arms for every skipped subtree open inside the figure;
-  and a self-closing `<figcaption/>` is ignored on both sides of the open/close split, so it
-  can neither start a capture nor end an open caption early and drop the rest of it.
+  before one — the inner-skip counter arms for every non-`figure` skipped subtree open inside
+  the figure, so a `<figure>` nested inside a `<figure>` keeps its own caption, captured the
+  same way any figure's is; and a self-closing `<figcaption/>` is ignored on both sides of the
+  open/close split, so it can neither start a capture nor end an open caption early and drop
+  the rest of it.
   MediaWiki's `.thumbcaption` is deliberately not given a capture of its own: it already
   reaches delivered text as ordinary prose outside any `<figure>` (measured coverage below),
   so a second capture would deliver the same text twice. A `<figure>` nested INSIDE a kept

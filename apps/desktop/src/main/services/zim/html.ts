@@ -676,10 +676,12 @@ export function* zimArticleSlices(
   // > 0) was opened by a `<figure>` (set at the SKIP_SUBTREE-open branch below, reset once
   // skipDepth returns to 0). `figureCaptionDepth` is > 0 while a `<figcaption>` is open inside
   // that figure skip (a capture, not a suppression: `emitTextUpTo` below routes its text into
-  // `captionBuf` instead of dropping it). `figureInnerSkipDepth` counts EVERY SKIP_SUBTREE
-  // element (svg/template — script/style are already stepped over by S5 before this branch ever
-  // runs) open inside that figure, whether or not a caption is open: a `<figcaption>` inside one
-  // never starts a capture, and text inside one never reaches the buffer.
+  // `captionBuf` instead of dropping it). `figureInnerSkipDepth` counts the non-`figure`
+  // SKIP_SUBTREE elements (svg/template — script/style are already stepped over by S5 before
+  // this branch ever runs) open inside that figure, whether or not a caption is open: a
+  // `<figcaption>` inside one of THOSE never starts a capture, and text inside one never reaches
+  // the buffer. A nested `<figure>` does NOT arm this counter — its own `<figcaption>` is
+  // content the capture is meant to deliver, so it is handled exactly like any figure's caption.
   let skipIsFigure = false
   let figureCaptionDepth = 0
   let figureInnerSkipDepth = 0
@@ -1007,14 +1009,18 @@ export function* zimArticleSlices(
           figureCaptionDepth = 0
           figureInnerSkipDepth = 0
           captionBuf = ''
-        } else if (skipIsFigure) {
-          // Every skipped subtree open INSIDE the figure arms the guard, not only one opened
-          // inside an already-open caption: otherwise a `<figcaption>` nested in an `<svg>` or
-          // `<template>` would start a real capture and leak the dropped subtree's text. The
-          // figure's own open set `skipDepth` to 1 and this is the only place `skipDepth` moves
-          // while a skip is open, so the count of skipped subtrees open inside the figure is
-          // exactly `skipDepth - 1` — armed and disarmed symmetrically by construction.
-          figureInnerSkipDepth = skipDepth - 1
+        } else if (skipIsFigure && name !== 'figure') {
+          // Counts only the non-`figure` skipped subtrees (svg/template/nav/noscript/head) open
+          // INSIDE the figure, incremented/decremented on their own opens/closes and never
+          // below zero: a `<figcaption>` nested in one of THOSE would otherwise start a real
+          // capture and leak the dropped subtree's text. `figure` is excluded on purpose — a
+          // `<figure>` nested inside a `<figure>` is valid HTML5 flow content and its OWN
+          // `<figcaption>` is content the capture is meant to deliver, handled by the branch
+          // above exactly as any figure's caption is; only `skipDepth` (not this counter) tracks
+          // the nested figure's own open/close, so the outer figure's skip still closes
+          // correctly once both have closed.
+          figureInnerSkipDepth += isClose ? -1 : 1
+          if (figureInnerSkipDepth < 0) figureInnerSkipDepth = 0
         }
       }
       continue
