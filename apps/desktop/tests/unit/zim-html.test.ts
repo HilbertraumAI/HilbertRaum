@@ -181,6 +181,22 @@ describe('zimArticleToSegments — figure captions', () => {
     expect(text).not.toContain('svg-leak-must-not-appear')
   })
 
+  it('a figcaption inside a dropped subtree (svg) that opened BEFORE any caption never starts ' +
+    'a capture: only the figure\'s own caption is delivered', () => {
+    const html =
+      '<figure><svg><figcaption>svg-inner-caption</figcaption></svg>' +
+      '<figcaption>real caption</figcaption></figure>'
+    const article = zimArticleToSegments(html)
+    expect(article.segments.map((s) => s.text)).toEqual(['Caption: real caption'])
+  })
+
+  it('a self-closing <figcaption/> inside an open caption neither ends the caption early nor ' +
+    'drops the rest of it', () => {
+    const html = '<figure><figcaption>part one <figcaption/> part two</figcaption></figure>'
+    const article = zimArticleToSegments(html)
+    expect(article.segments.map((s) => s.text)).toEqual(['Caption: part one part two'])
+  })
+
   it('multiple figcaptions in the same figure are each captured as their own segment', () => {
     const html =
       '<figure><figcaption>first caption</figcaption><img src="x.jpg"><figcaption>second caption</figcaption></figure>'
@@ -372,14 +388,40 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(textOf(html)).toContain('lead')
   })
 
-  it('drops a classless headerless table whose only real content is one image beside its ' +
-    'caption (issue #487\'s exact shape)', () => {
+  // The two tests below pin a measured trade-off rather than a fix. A structural rule that
+  // dropped a headerless table as page layout whenever one of its cells held only an image was
+  // written, measured on the offline corpus, and withdrawn: across 1,437 articles it removed
+  // three tables, and one of them was a travel-notice box whose warning text and advisory list
+  // are content, not layout. Both shapes are therefore DELIVERED today, deliberately, and these
+  // tests exist so the next attempt at such a rule has to break them on purpose.
+
+  it('delivers a headerless notice box laid out as a table -- an icon cell beside the notice ' +
+    'and a row of advisory text -- with every one of its lines (the shape a withdrawn ' +
+    'image-only-cell drop rule was measured to remove)', () => {
+    const html =
+      '<table>' +
+      '<tr><td rowspan="3"><img src="notice-icon.png"></td>' +
+      '<td><b>NOTICE:</b> a standing advisory applies to this whole region.</td></tr>' +
+      '<tr><td>Official advisory sources' +
+      '<ul><li>Source one</li><li>Source two</li><li>Source three</li></ul></td></tr>' +
+      '</table>'
+    const text = textOf(html)
+    expect(text).toContain('NOTICE: a standing advisory applies to this whole region.')
+    expect(text).toContain('Official advisory sources')
+    expect(text).toContain('Source one')
+    expect(text).toContain('Source two')
+    expect(text).toContain('Source three')
+  })
+
+  it("delivers issue #487's own image-and-caption wrapper shape too -- a known limitation kept " +
+    'open on purpose, because the structural rule that would drop it also removes notice ' +
+    'boxes (see the test above)', () => {
     const html = '<table style="float:right"><tr><td><img src="x.jpg"></td><td>caption text</td></tr></table>'
-    expect(textOf(html)).not.toContain('caption text')
+    expect(textOf(html)).toContain('caption text')
   })
 
   it('still delivers a genuine two-column data table that also has an image cell in one row ' +
-    '(the risk the per-table, not per-cell, image-only rule forecloses)', () => {
+    '(the per-row structural fallback judges the table, never the single image cell)', () => {
     const html =
       '<table>' +
       '<tr><td><img src="diagram.png"></td><td>a diagram</td></tr>' +

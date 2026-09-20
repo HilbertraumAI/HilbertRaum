@@ -676,9 +676,10 @@ export function* zimArticleSlices(
   // > 0) was opened by a `<figure>` (set at the SKIP_SUBTREE-open branch below, reset once
   // skipDepth returns to 0). `figureCaptionDepth` is > 0 while a `<figcaption>` is open inside
   // that figure skip (a capture, not a suppression: `emitTextUpTo` below routes its text into
-  // `captionBuf` instead of dropping it). `figureInnerSkipDepth` counts a SKIP_SUBTREE element
-  // (svg/template — script/style are already stepped over by S5 before this branch ever runs)
-  // nested INSIDE that open figcaption, so ITS text does not reach the buffer either.
+  // `captionBuf` instead of dropping it). `figureInnerSkipDepth` counts EVERY SKIP_SUBTREE
+  // element (svg/template — script/style are already stepped over by S5 before this branch ever
+  // runs) open inside that figure, whether or not a caption is open: a `<figcaption>` inside one
+  // never starts a capture, and text inside one never reaches the buffer.
   let skipIsFigure = false
   let figureCaptionDepth = 0
   let figureInnerSkipDepth = 0
@@ -970,9 +971,13 @@ export function* zimArticleSlices(
       // A <figcaption> inside a <figure> skip opens/closes the caption capture; the
       // text itself is routed by `emitTextUpTo` above, this only tracks the state. Guarded on
       // `figureInnerSkipDepth === 0` so a `<figcaption>` occurring (invalidly) inside a nested
-      // svg/template does not start a second, inner capture.
+      // svg/template never starts a capture at all — that subtree stays dropped whole.
       if (name === 'figcaption' && skipIsFigure && figureInnerSkipDepth === 0) {
-        if (!isClose && !selfClosing) {
+        // A self-closing `<figcaption/>` is neither an open nor a close: ignored on BOTH sides
+        // of the split, exactly as the SKIP_SUBTREE branch below ignores one. Otherwise it
+        // would fall into the close branch, end an open caption early and drop the rest of it.
+        if (selfClosing) continue
+        if (!isClose) {
           figureCaptionDepth += 1
         } else if (figureCaptionDepth > 0) {
           figureCaptionDepth -= 1
@@ -996,13 +1001,20 @@ export function* zimArticleSlices(
         continue
       }
       if (SKIP_SUBTREE.has(name) && !selfClosing) {
-        if (figureCaptionDepth > 0) figureInnerSkipDepth += isClose ? -1 : 1
         skipDepth += isClose ? -1 : 1
         if (skipDepth === 0) {
           skipIsFigure = false
           figureCaptionDepth = 0
           figureInnerSkipDepth = 0
           captionBuf = ''
+        } else if (skipIsFigure) {
+          // Every skipped subtree open INSIDE the figure arms the guard, not only one opened
+          // inside an already-open caption: otherwise a `<figcaption>` nested in an `<svg>` or
+          // `<template>` would start a real capture and leak the dropped subtree's text. The
+          // figure's own open set `skipDepth` to 1 and this is the only place `skipDepth` moves
+          // while a skip is open, so the count of skipped subtrees open inside the figure is
+          // exactly `skipDepth - 1` — armed and disarmed symmetrically by construction.
+          figureInnerSkipDepth = skipDepth - 1
         }
       }
       continue
