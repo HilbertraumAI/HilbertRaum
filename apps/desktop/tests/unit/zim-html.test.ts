@@ -729,6 +729,130 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(JSON.stringify(a.segments)).toBe(JSON.stringify(b.segments))
     expect(a.work).toBe(b.work)
   })
+
+  // -------------------------------------------------------------------------------------
+  // Two text leaks shipping with table delivery, fixed together (issues #485, #490):
+  // a `<style>`/`<script>` body nested inside a kept table used to flow into the open cell
+  // as ordinary text (nothing in `parseTableBody`'s tag vocabulary recognised them as
+  // raw-text), and a `<math>` nested inside a kept table used to leak BOTH the MathML
+  // presentation-character run and the raw TeX `<annotation>` source (no `<math>` branch
+  // existed at all, so both halves fell through as plain transparent content) instead of
+  // being routed through the same normalised-alttext-once path the prose scanner already
+  // uses. A formula cell is often the value the table exists to deliver, so the fix routes
+  // it, never drops it -- the doubling-fixed case below asserts the value survives exactly
+  // once, not zero times.
+  // -------------------------------------------------------------------------------------
+  it('drops a <style> block nested inside a kept table (real German-Wikipedia shape, ' +
+    'issue #485) -- the declaration text is in no emitted segment, the table\'s real ' +
+    'records survive', () => {
+    const html = readFileSync(join(__dirname, '../fixtures/zim/dewiki-table-style-leak.html'), 'utf8')
+    const article = zimArticleToSegments(html)
+    const text = article.segments.map((s) => s.text).join('\n')
+    expect(text).not.toContain('fussnoten-marke')
+    expect(text).not.toContain('font-style')
+    expect(text).not.toContain('unicode-bidi')
+    expect(text).not.toContain('TemplateStyles')
+    expect(text).not.toMatch(/<[a-z][a-z0-9-]*[\s>]/i)
+    expect(text).toContain('Eigenschaft: Kristallsystem; Wert: kubisch')
+    expect(text).toContain('Eigenschaft: Dichte; Wert: 19,32 g/cm^3')
+  })
+
+  it('a <math> in a data cell (real shape, issue #490) is routed through the normalised ' +
+    'alttext-once path -- reproducing and fixing the read\'s own "Formelzeichen: T ' +
+    '{…displaystyle T}" doubling: the normalised description emitted once, no TeX ' +
+    'source, no doubled presentation characters, and the formula\'s value surviving ' +
+    '(the case that proves this is not a plain drop)', () => {
+    const html = readFileSync(join(__dirname, '../fixtures/zim/dewiki-table-math-leak.html'), 'utf8')
+    const article = zimArticleToSegments(html)
+    const text = article.segments.map((s) => s.text).join('\n')
+    expect(text).not.toContain('\\displaystyle')
+    expect(text).not.toContain('annotation')
+    expect(text).not.toMatch(/<[a-z][a-z0-9-]*[\s>]/i)
+    // Exactly one standalone "T" survives from the formula (none of the surrounding German
+    // prose contains a bare, word-bounded "T" of its own) -- two would mean the doubling
+    // survived, zero would mean the fix regressed to a plain drop.
+    expect(text.match(/\bT\b/g) ?? []).toHaveLength(1)
+    expect(text).toContain('(für Angaben in Kelvin)')
+  })
+
+  it('a <math> with no alttext emits nothing but still suppresses its whole MathML subtree', () => {
+    const html = '<table><tr><th>A</th><td>before<math><mi>T</mi></math>after</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('beforeafter')
+    expect(text).not.toContain('T')
+  })
+
+  it('nested <math> is suppressed symmetrically -- the outer alttext survives once, ' +
+    'nothing from the inner (or outer) presentation tree leaks', () => {
+    const html =
+      '<table><tr><th>A</th><td>' +
+      '<math alttext="X"><mi>outer-leak<math><mi>inner-leak</mi></math>tail-leak</mi></math>' +
+      '</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('X')
+    expect(text).not.toContain('outer-leak')
+    expect(text).not.toContain('inner-leak')
+    expect(text).not.toContain('tail-leak')
+  })
+
+  it('a <math> inside a <caption> is routed through the same alttext-once path, never dropped', () => {
+    const html = '<table><caption>Value: <math alttext="Y"><mi>Y</mi></math></caption>' +
+      '<tr><th>A</th><td>b</td></tr></table>'
+    const text = textOf(html)
+    const captionLine = text.split('\n').find((l) => l.startsWith('Caption:'))
+    expect(captionLine).toBeTruthy()
+    expect(captionLine).toContain('Value:')
+    expect(captionLine).toMatch(/\bY\b/)
+  })
+
+  it('drops <script>, <svg>, <noscript>, <template> and <figure> nested in a kept table, ' +
+    'without leaking their content or breaking the table', () => {
+    const html =
+      '<table><tr><th>A</th><td>' +
+      'lead<script>if (a < b) { document.write("script-leak") }</script>' +
+      '<svg><text>svg-leak</text></svg>' +
+      '<noscript>noscript-leak</noscript>' +
+      '<template><b>template-leak</b></template>' +
+      '<figure><figcaption>figure-leak</figcaption></figure>' +
+      'tail</td></tr></table>'
+    const text = textOf(html)
+    expect(text).toContain('lead')
+    expect(text).toContain('tail')
+    for (const leaked of ['script-leak', 'svg-leak', 'noscript-leak', 'template-leak', 'figure-leak']) {
+      expect(text).not.toContain(leaked)
+    }
+  })
+
+  it('a comment containing a tag inside a table is not leaked; a plain comment is unchanged', () => {
+    const html =
+      '<table>' +
+      '<tr><th>A</th><td>lead<!-- comment with a <b>tag</b> inside -->tail</td></tr>' +
+      '<tr><th>A</th><td>lead2<!-- plain comment -->tail2</td></tr>' +
+      '</table>'
+    const text = textOf(html)
+    expect(text).toContain('leadtail')
+    expect(text).not.toContain('tag')
+    expect(text).not.toContain('comment with a')
+    expect(text).toContain('lead2tail2')
+    expect(text).not.toContain('plain comment')
+  })
+
+  it('an unterminated <style> inside a table at EOF is total -- never throws -- ' +
+    'beside the existing junk-input totality cases', () => {
+    const html = '<table><tr><th>A</th><td>lead<style>.never{closed'
+    expect(() => zimArticleToSegments(html)).not.toThrow()
+    const text = textOf(html)
+    expect(text).toContain('lead')
+    expect(text).not.toContain('never')
+  })
+
+  it('an unterminated <script> inside a table at EOF is total -- never throws', () => {
+    const html = '<table><tr><th>A</th><td>lead<script>var x = 1;'
+    expect(() => zimArticleToSegments(html)).not.toThrow()
+    const text = textOf(html)
+    expect(text).toContain('lead')
+    expect(text).not.toContain('var x')
+  })
 })
 
 // ---------------------------------------------------------------------------------------
