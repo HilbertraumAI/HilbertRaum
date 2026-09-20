@@ -3112,19 +3112,21 @@ reports and phase plans were working papers; their full text lives in git histor
   inside a kept table is checked and dropped the same way the outermost one is), and
   can misjudge an unlisted layout convention, or a genuinely tabular one that happens to
   reuse a listed class name; the structural test (no header cell, no real tabular
-  content) is a backstop, not a guarantee. **A disclosed instance of that backstop's
-  limit (owner's call, not fixed here):** a classless two-column layout wrapper whose
-  cells are an image and its caption (e.g.
+  content) is a backstop, not a guarantee. **FIXED (issue #487):** a classless two-column
+  layout wrapper whose cells are an image and its caption (e.g.
   `<table style="float:right"><tr><td><img></td><td>caption text</td></tr></table>`)
-  carries no listed layout class and has two non-empty cells, so it clears both the
-  class check and the structural check and is delivered as ordinary table text — the
-  `<figure>` drop rule exists to keep exactly this kind of caption text out, and this
-  shape re-admits it under a different tag. A possible follow-up hardening, not
-  implemented and no issue opened: treat `role="presentation"` (the standard ARIA
-  marker for a layout-only table) as an additional drop signal alongside the class list,
-  and/or drop a headerless table whose only non-empty cells are, after image removal,
-  empty — the same predicate would also catch a full-width caption/note row that
-  happens to sit in an otherwise-kept table. A nested table's own further-nested tables
+  used to carry no listed layout class and have two non-empty cells, clearing both the
+  class check and the structural check to be delivered as ordinary table text. A table
+  cell is now tracked as image-only when it carries an `<img>` and no other text, and a
+  headerless table is dropped as a layout wrapper when it has at least one image-only
+  cell and every source row has at most one other populated cell — a per-table rule, so
+  a genuine data table that happens to carry one image in one row keeps its other rows'
+  real data. Measured on the same offline corpus: exactly 3 tables matched this shape and
+  were delivered before the fix; all 3 are dropped after it, with the corpus's other
+  2,095 delivered tables unchanged. **Still open, no issue filed:** treating
+  `role="presentation"` (the standard ARIA marker for a layout-only table) as an
+  additional, independent drop signal alongside the class list — deliberately out of
+  scope for the #487 fix, which is the one image-only-cell signal alone. A nested table's own further-nested tables
   are inlined down to a fixed safety-valve depth (8); deeper nesting is dropped,
   unchanged from the feature's first design. The superscript/subscript readable
   convention (`g/cm^3`, `10^6`) applies inside table-derived text only — prose keeps
@@ -3160,9 +3162,30 @@ reports and phase plans were working papers; their full text lives in git histor
   consumes the row that value sits in. A related, explicitly out-of-scope
   class: literal MediaWiki template placeholders (e.g. `{{{Druck}}}`) that
   appear inside a table are the source page's own content, not markup the
-  converter failed to drop, and are left as-is. A further, rarer container
-  is not yet stepped over on this same path: a `CDATA` section holding a
-  bare `>` inside a kept table can still have its content delivered as table
-  text, where the main document scanner already steps over such a section;
-  no occurrence was found across the sampled pages, and it is tracked in
-  #493 for a separate change that can be measured on its own.
+  converter failed to drop, and are left as-is. **FIXED (issue #493):** a
+  further, rarer container used not to be stepped over on this same
+  path — a `CDATA` section holding a bare `>` inside a kept table could have
+  its content delivered as table text, where the main document scanner
+  already steps over such a section. The table path now mirrors that same
+  step-over. No occurrence was found across the sampled pages before or
+  after the fix (the practical frequency on real articles is genuinely
+  zero); the fix is demonstrated by a pinned fixture — a table cell holding
+  a CDATA section with a bare `>` inside it — that leaked before the fix and
+  does not leak after it.
+- **FIXED: a `<figure>`'s caption text never reached a segment.** The whole
+  `<figure>` subtree — image and `<figcaption>` alike — used to be dropped,
+  unlike a table's own `<caption>`, which is kept. An open `<figcaption>`'s
+  text (while inside a dropped figure) is now captured into its own
+  `Caption: ...` segment, the same labelling and flush order the table path
+  already uses; the image, its `alt` text, and everything else in the figure
+  subtree stay dropped. MediaWiki's `.thumbcaption` convention is
+  deliberately not given a capture of its own — it already reaches delivered
+  text as ordinary prose outside any `<figure>`, so a second capture would
+  deliver the same text twice. Measured on the 949-article corpus (which
+  contains no `<figure>` tag at all) as a no-regression guard: pooled
+  `figure-caption` class coverage is byte-identical before and after
+  (99.63 %). Measured on seven cached non-Wikipedia archives: of 191 real
+  `<figure>` tags (148 with a non-empty caption), 141 (95.3 %) now reach a
+  delivered segment, up from 0 before the fix; the remaining 7 sit inside a
+  Wikivoyage image-gallery grid built as a `<table>` of `<figure>` cells —
+  the KEPT-TABLE subtree-skip path documented above, unchanged by design.

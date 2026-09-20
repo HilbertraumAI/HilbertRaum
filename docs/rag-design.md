@@ -4682,6 +4682,68 @@ genuine miss (not softened, not re-scored) and keeps this change short of a clea
 pass; it was disclosed to the maintainer and accepted as a known residual rather
 than re-scored away.
 
+**Three further converter fixes, measured offline before any funnel read (issues #493,
+#487, 2026-09-20).** Three narrowly-scoped fixes to the table-delivery and prose paths
+above, each pinned by its own test and measured against its own pre-registered metric on
+the full offline article corpus (the 949-article cache plus 488 cached articles from seven
+non-Wikipedia archives), before and after, with the same frozen scripts in the same pass:
+
+- **A CDATA section inside a kept table can leak its text (#493).** `parseTableBody`'s
+  "not a real tag" fallback took the first `>` after `<!`, which a bare `>` inside a
+  `<![CDATA[...]]>` block truncates early, leaking the remainder as cell text — a table-path
+  gap the prose scanner's own S7 CDATA state does not have. Fixed with one branch beside the
+  existing HTML-comment handling, mirroring the prose scanner's step-over exactly (including
+  its `lt + 9` start offset). **Measured:** 0 occurrences in the corpus at both the branch
+  point and the fix (real articles essentially never contain a raw CDATA section — the
+  demonstration is a pinned fixture: a table cell with a CDATA section holding a bare `>`,
+  which leaks at the branch point and does not leak at the fix).
+- **A classless image-and-caption layout table is delivered as if it were data (#487).** A
+  headerless table used to be delivered as data whenever it had two or more non-empty cells,
+  so a common Wikipedia pattern — a two-column table used only to float an image next to its
+  caption, with no class name at all — passed that structural fallback. A table cell is now
+  tracked as image-only when it carries an `<img>` and no other text, and a headerless table
+  is dropped as a layout wrapper when it has at least one image-only cell and every source row
+  has at most one other (non-image) populated cell — a per-TABLE rule, not a per-cell one, so
+  a genuine data table that happens to carry one image in one row keeps its other rows' real
+  data. **Measured, and an honest correction recorded here:** the metric's first draft used a
+  broader oracle (any headerless table with any image-only cell, regardless of other rows),
+  which found 23 such tables delivered at both the branch point and the fix — 20 of which
+  turned out, on inspection, to be genuine multi-column data tables (real Wikivoyage listings
+  pairing a thumbnail with substantial prose in other rows) that the per-table rule correctly
+  keeps delivered, exactly the case the design's own risk note anticipated. A second,
+  separately frozen diagnostic measuring the fix's actual predicate (image-only cell AND every
+  row has at most one other populated cell) found exactly 3 tables matching it, all delivered
+  at the branch point and all correctly dropped at the fix, with the corpus's other 2,095
+  delivered tables unchanged (delta exactly 0). The `role="presentation"` marker the issue also
+  proposes as a second, independent drop signal is out of scope for this change.
+- **A figure's caption text never reaches a segment.** `<figure>` is dropped whole — image and
+  `<figcaption>` alike — while a table's own `<caption>` is kept and rendered as a
+  `Caption: ...` line. The prose scanner now captures an open `<figcaption>`'s text (while
+  inside a dropped figure) into its own segment, labelled and flushed exactly the way a
+  table's caption already is; the image, its `alt` text, and everything else in the figure
+  subtree stay dropped, and a further dropped subtree (an inline SVG) nested inside the
+  caption does not leak into it. MediaWiki's `.thumbcaption` convention is deliberately not
+  given a capture of its own: it already reaches delivered text as ordinary prose outside any
+  `<figure>` (measured coverage below), so a second capture would deliver the same text twice.
+  A `<figure>` nested INSIDE a kept table is unaffected — that is `tables.ts`'s own, separate
+  subtree-skip, unchanged. **Measured:** the 949-article corpus contains no `<figure>` tag at
+  all (Wikipedia/Parsoid output uses the `.thumbcaption` class instead), so its job is a
+  no-regression guard — the `figure-caption` pooled class coverage (`.thumbcaption`/`.caption`,
+  99.63 %, 1,091/1,095 tokens) is byte-identical before and after, confirming no double
+  delivery. The seven archives' cached pages carry 191 real `<figure>` tags, 148 with
+  non-empty captions; 141 of those 148 (95.3 %) now reach a delivered segment as their own
+  `Caption: ...` line, up from 0 before the fix. The 7 that do not are a distinct, disclosed
+  shape: a Wikivoyage image-gallery grid built as a `<table>` of `<figure>` cells, which is the
+  KEPT-TABLE subtree-skip path above, unchanged by design, not a gap in this fix.
+
+**The neutrality invariant held cleanly.** Of the corpus's 1,437 articles, 1,231 contain none
+of the four touched shapes (a figure, a CDATA section, or an image inside a table); all 1,231
+are byte-identical before and after, with zero counterpart misses. The remaining 57 articles
+gained new, favourable lines only (a caption, mainly) — never lost one. Conversion `work` (the
+scanner's own linear-scan accounting) is unchanged to the unit on the 949-article corpus and
+moves by well under 0.01 % on the archive corpus (a handful of tables now returning early
+instead of being fully serialised) — the linear-scanner bound itself is untouched.
+
 ## 18. Knowledge-pack retrieval research — the confirmation read and its outcome (design record, 2026-09-19)
 
 Over several weeks, a research effort built a candidate retrieval bundle and tested it against
