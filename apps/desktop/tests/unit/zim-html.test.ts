@@ -261,6 +261,22 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(text).toContain('two-col-b')
   })
 
+  it('a CDATA section inside a kept table cell does not leak past a bare ">" inside it ' +
+    '(issue #493)', () => {
+    const html = '<table><tr><th>A</th><td><![CDATA[cdata-leak > must-not-appear]]></td></tr></table>'
+    const text = textOf(html)
+    expect(text).not.toContain('cdata-leak')
+    expect(text).not.toContain('must-not-appear')
+    expect(text).not.toContain('CDATA[')
+    expect(text).not.toContain(']]>')
+  })
+
+  it('an unterminated CDATA section inside a table is total -- never throws', () => {
+    const html = '<table><tr><th>A</th><td>lead<![CDATA[never closes'
+    expect(() => zimArticleToSegments(html)).not.toThrow()
+    expect(textOf(html)).toContain('lead')
+  })
+
   it('preserves superscripts/subscripts readably inside table-derived text only', () => {
     const html =
       '<table><tr><th>Metric</th><th>Value</th></tr>' +
