@@ -670,7 +670,7 @@ export function* zimArticleSlices(
   // skipped exactly like SKIP_SUBTREE, but `table` is no longer in that shared set (a kept
   // table needs its own branch below), so it gets its own depth counter.
   let tableDropDepth = 0
-  // 4t-5's sibling for prose: a figure's caption text should reach a segment even though the
+  // A figure's caption text should reach a segment even though the
   // image and the rest of the figure subtree stay dropped — mirrors the kept-table path's own
   // `<caption>` handling. `skipIsFigure` is true only while the CURRENTLY OPEN skip (skipDepth
   // > 0) was opened by a `<figure>` (set at the SKIP_SUBTREE-open branch below, reset once
@@ -748,7 +748,7 @@ export function* zimArticleSlices(
         }
       }
     } else if (skipDepth > 0 && skipIsFigure && figureCaptionDepth > 0 && figureInnerSkipDepth === 0) {
-      // 4t-5: a figure's caption text is captured into its own buffer while the rest of the
+      // A figure's caption text is captured into its own buffer while the rest of the
       // figure subtree stays dropped. Not piece-wise like the ordinary path above — a caption
       // is short by construction (capped at flush, below) — so one decode call is enough,
       // exactly like `headingBuf`'s own whole-string accumulation via `emit`.
@@ -967,7 +967,7 @@ export function* zimArticleSlices(
       continue
     }
     if (skipDepth > 0) {
-      // 4t-5: a <figcaption> inside a <figure> skip opens/closes the caption capture; the
+      // A <figcaption> inside a <figure> skip opens/closes the caption capture; the
       // text itself is routed by `emitTextUpTo` above, this only tracks the state. Guarded on
       // `figureInnerSkipDepth === 0` so a `<figcaption>` occurring (invalidly) inside a nested
       // svg/template does not start a second, inner capture.
