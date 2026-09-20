@@ -94,6 +94,29 @@ describe('resolveAskCandidateScope (registerRagIpc.ts)', () => {
       resolveAskCandidateScope(s, true, MANIFESTS_DIR, { committedModelId: committed, chatStartBusy: false, translationOccupied: true })
     ).toBe('capped')
   })
+
+  // #495 follow-up: the reranker's own session GPU-fallback latch
+  // (`LlamaReranker.gpuDemoted()`) used to be invisible to this function -- after a demotion the
+  // ask site kept resolving the wide GPU_RERANK_SCOPE while the sidecar itself was CPU-pinned,
+  // so G (the CPU request ceiling) refused every such ask and a demoted session got NO rerank at
+  // all for knowledge-pack asks. `rerankerDemoted` on the occupancy snapshot closes that gap.
+  it('#495 follow-up: a demoted reranker (rerankerDemoted) forces the scope down to "capped" even on the big-card fixture that would otherwise resolve the wide scope', () => {
+    const bigCard = settings({
+      gpuMode: 'auto',
+      gpuAutoDisabled: false,
+      gpuProbe: {
+        devices: [{ id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }],
+        probedAt: new Date().toISOString()
+      }
+    })
+    const committed = 'qwen3.5-4b-ud-q4kxl'
+    const MANIFESTS_DIR = join(__dirname, '..', '..', '..', '..', 'model-manifests')
+    // Sanity: the neutral (not-demoted) occupancy still resolves the wide scope on this fixture.
+    expect(resolveAskCandidateScope(bigCard, true, MANIFESTS_DIR, noOccupancy(committed))).toBe(GPU_RERANK_SCOPE)
+    expect(
+      resolveAskCandidateScope(bigCard, true, MANIFESTS_DIR, { ...noOccupancy(committed), rerankerDemoted: true })
+    ).toBe('capped')
+  })
 })
 
 // Wave 6 ruling (c) (scoped Opus review of step 4-5, finding C1): ONE shared posture helper must

@@ -1956,6 +1956,7 @@ export const de: Record<keyof typeof en, string> = {
   'perf.models.lifetime.per-use': 'läuft nur während der Arbeit',
   'perf.models.split': '{gpuLayers} von {layers} Schichten auf der Karte',
   'perf.models.card': 'Grafikkarte: Chat {chat} GB + Übersetzung {translation} GB, von {vram} GB.',
+  'perf.models.cardReranker': 'Grafikkarte: Ranking {reranker} GB, von {vram} GB.',
   'perf.models.cardBoth':
     'Beide sind gerade auf der Karte. Das später gestartete bekam den Rest und läuft langsamer; stoppe und starte es, sobald das andere entladen ist.',
   'perf.models.ram': 'Alles gleichzeitig geladen braucht etwa {sum} GB von {ram} GB RAM.',

@@ -251,7 +251,7 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
   // the start — caught and logged exactly like the existing event-time suspend hooks
   // (`suspendRerankerIfActiveModelChanged` below).
   if (ctx.runtime.activeModelId() !== modelId) {
-    ctx.pendingModelSwitches?.increment()
+    ctx.pendingModelSwitches.increment()
     try {
       await ctx.reranker?.suspend?.().catch((err: unknown) => {
         log.warn('Reranker sidecar suspend before a committed model switch failed', {
@@ -260,7 +260,7 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
         })
       })
     } finally {
-      ctx.pendingModelSwitches?.decrement()
+      ctx.pendingModelSwitches.decrement()
     }
   }
 

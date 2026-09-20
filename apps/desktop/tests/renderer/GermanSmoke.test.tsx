@@ -101,7 +101,7 @@ function perfSnapshot(): PerformanceSnapshot {
       observedMismatch: null,
       verdict: { kind: 'gpu', needMb: 5939, estimated: true, budgetMb: 24_822, freeAtStartMb: null, workingMb: null, spillMb: null, gpuLayers: null, totalLayers: null },
       models: [],
-      totals: { ramAllMb: null, bothOnCard: false }
+      totals: { ramAllMb: null, bothOnCard: false, chatAndTranslationOnCard: false }
     },
     observed: { lastAnswer: null, lastModelLoad: null, lastChecksum: null }
   }

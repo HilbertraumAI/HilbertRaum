@@ -12,6 +12,7 @@ import {
 import { resolveAskCandidateScope } from '../../src/main/ipc/registerRagIpc'
 import type { Translator } from '../../src/main/services/translation'
 import { DEFAULT_SETTINGS, type AppSettings, type GpuDevice } from '../../src/shared/types'
+import type { AppContext } from '../../src/main/services/context'
 
 // Wave 8 ruling (b)(G)/NF-1 (step 4-8, the Wave 8 analysis's finding that a composition test
 // through `compose-services.ts` -> `reranker/factory.ts` alone cannot see an omission at
@@ -56,6 +57,24 @@ describe('Wave 8 NF-1: the required-wiring type-level proof', () => {
     createRerankerCallbacks({ ...base, getTranslator: undefined })
     // @ts-expect-error — getSettings omitted.
     createRerankerCallbacks({ ...base, getSettings: undefined })
+  })
+
+  it('AppContext refuses a literal missing pendingModelSwitches (#477: required, no silent fallback)', () => {
+    const base = {
+      paths: { workspacePath: '/w' },
+      isDev: true,
+      manifestsDir: null,
+      pendingModelSwitches: createPendingModelSwitchCounter()
+    } as unknown as AppContext
+    const acceptsContext = (_ctx: AppContext): void => {}
+
+    // Sanity: the fully-specified shape compiles.
+    acceptsContext(base)
+
+    // @ts-expect-error — pendingModelSwitches omitted; #477 removed the `?` on AppContext's own
+    // field (was optional, with a silent `ctx.pendingModelSwitches ?? createPendingModelSwitchCounter()`
+    // fallback at the ask site) — an omission here must now be a compile error.
+    acceptsContext({ ...base, pendingModelSwitches: undefined })
   })
 
   it('resolveAskCandidateScope (the ask site, registerRagIpc.ts:262-area) refuses a call omitting occupancy', () => {

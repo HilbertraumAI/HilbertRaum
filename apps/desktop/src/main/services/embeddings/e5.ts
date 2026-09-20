@@ -185,6 +185,17 @@ function l2normalize(vec: Float32Array): Float32Array {
   return vec
 }
 
+/** #475 (ported from `reranker/llama.ts`'s Wave 8 ruling (c)(i), the M5 single-flight teardown
+ *  pass): `requesterCount` lives on THIS per-pass object, not on a field the shared promise's
+ *  `finally` clears — a field cleared together with the promise reads 0 by the time an awaiting
+ *  requester resumes. Unlike the reranker, nothing here re-derives a restart decision from
+ *  `requesterCount` (the embedder has no posture-driven restart), but the shape stays identical
+ *  so the two sidecars' teardown lifecycles read the same way. */
+interface TeardownPass {
+  promise: Promise<void>
+  requesterCount: number
+}
+
 export class E5Embedder implements Embedder {
   readonly id: string
   readonly dimensions: number
@@ -198,17 +209,27 @@ export class E5Embedder implements Embedder {
   /** Set by `stop()`; a racing lazy start must not resurrect the sidecar after quit. */
   private stopped = false
   /**
-   * Set WHILE `teardown()` runs (the lock/quit kill path) and cleared when it finishes — the
-   * `suspend()` analogue of `stopped` (F19, full-audit-2026-06-29-postmerge). `stop()` arms the
-   * permanent `stopped` latch before tearing down so a racing `ensureStarted` can't spawn an
-   * orphan; `suspend()` (workspace lock) does NOT, so without this flag a `suspend()` that
-   * interleaves with a concurrent `embed()` (a RAG query / tree-build embedding, NOT in
-   * `inFlightStreams`) could stop the OLD sidecar while a fresh `ensureStarted` spawns and RETAINS
-   * a new one — surviving the lock with chunk-text-derived state in process memory. `ensureStarted`
-   * refuses while it is set. Unlike `stopped` it CLEARS in teardown's `finally`, so a normal
-   * post-suspend `embed()` still lazily restarts.
+   * Set WHILE a teardown pass is in flight (the lock/quit kill path) and cleared together with
+   * `teardownPass` when the shared pass settles — the `suspend()` analogue of `stopped` (F19,
+   * full-audit-2026-06-29-postmerge). `stop()` arms the permanent `stopped` latch before tearing
+   * down so a racing `ensureStarted` can't spawn an orphan; `suspend()` (workspace lock) does NOT,
+   * so without this flag a `suspend()` that interleaves with a concurrent `embed()` (a RAG query /
+   * tree-build embedding, NOT in `inFlightStreams`) could stop the OLD sidecar while a fresh
+   * `ensureStarted` spawns and RETAINS a new one — surviving the lock with chunk-text-derived
+   * state in process memory. `ensureStarted` refuses while it is set. Unlike `stopped` it CLEARS
+   * when the shared pass settles (#475: together with `teardownPass`, never per-caller), so a
+   * normal post-suspend `embed()` still lazily restarts.
    */
   private tearingDown = false
+  /**
+   * #475: the in-flight single-flight teardown pass (ported from `reranker/llama.ts`'s Wave 8
+   * ruling (c)(i), the M5 pattern). Every overlapping `suspend()`/`stop()` call SHARES this one
+   * promise; without it, a second overlapping call would see `this.server` already nulled by the
+   * first (the no-op branch) and clear `tearingDown` in its OWN `finally` while the first caller's
+   * `await server.stop()` was still in flight — the exact race #475 reported. Null when no
+   * teardown is in flight.
+   */
+  private teardownPass: TeardownPass | null = null
   /**
    * Failed-start latch (the LlamaReranker's pattern): a sidecar that could not start for a
    * PERMANENT fault (e.g. a corrupt/incompatible GGUF) must not be re-spawned and re-awaited for
@@ -503,34 +524,54 @@ export class E5Embedder implements Embedder {
     this.startFailed = null
   }
 
-  private async teardown(): Promise<void> {
-    // F19: bar a racing ensureStarted from spawning a sidecar that would outlive this teardown
-    // (and survive the lock). `stop()` already has the permanent `stopped` latch; `suspend()` does
-    // not, so this flag gives the lock path the same protection for the duration of the teardown.
+  /**
+   * #475: start or join the single-flight teardown pass and return the PASS object (mirroring
+   * `reranker/llama.ts`'s `beginOrJoinTeardown`) — an overlapping `suspend()`/`stop()` joins the
+   * SAME in-flight pass instead of racing a second `doTeardown()` that would see `this.server`
+   * already nulled and return early while the first caller's kill is still in flight.
+   */
+  private beginOrJoinTeardown(): TeardownPass {
+    if (this.teardownPass) {
+      this.teardownPass.requesterCount++
+      return this.teardownPass
+    }
     this.tearingDown = true
-    try {
-      // A lazy start may be IN FLIGHT (first embed() racing app quit): `this.server` is
-      // only assigned after start() resolves, so returning here would let the spawned
-      // child outlive the app as an orphan. #244: ABORT it rather than
-      // wait it out — the abort kills the child inside the health wait (the normal stop
-      // path, no orphan), the start rejects AbortError (never latches `startFailed`), and
-      // the await below settles in about one health-poll interval instead of the full
-      // 180 s health window of a wedged cold start.
-      this.startAbort?.abort()
-      if (this.starting) {
-        await this.starting.catch(() => undefined)
-      }
-      const server = this.server
-      this.server = null
-      if (server) {
-        this.emitResidencyChange()
-        await server.stop()
-      }
-    } finally {
-      // Cleared so a post-suspend embed() can lazily restart (suspend() permits a fresh start;
-
-      // only stop()'s separate, permanent `stopped` latch blocks that).
+    const pass: TeardownPass = { promise: Promise.resolve(), requesterCount: 1 }
+    pass.promise = this.doTeardown().finally(() => {
+      // Cleared together, only when THIS shared pass has fully settled — never by an earlier
+      // caller's `finally` while a later joiner is still inside it (single-flight, M5).
       this.tearingDown = false
+      this.teardownPass = null
+    })
+    this.teardownPass = pass
+    return pass
+  }
+
+  private async teardown(): Promise<void> {
+    await this.beginOrJoinTeardown().promise
+  }
+
+  /**
+   * The actual kill, run exactly once per pass regardless of how many callers joined it (#475,
+   * ported from `reranker/llama.ts`'s `doTeardown`).
+   */
+  private async doTeardown(): Promise<void> {
+    // A lazy start may be IN FLIGHT (first embed() racing app quit): `this.server` is
+    // only assigned after start() resolves, so returning here would let the spawned
+    // child outlive the app as an orphan. #244: ABORT it rather than
+    // wait it out — the abort kills the child inside the health wait (the normal stop
+    // path, no orphan), the start rejects AbortError (never latches `startFailed`), and
+    // the await below settles in about one health-poll interval instead of the full
+    // 180 s health window of a wedged cold start.
+    this.startAbort?.abort()
+    if (this.starting) {
+      await this.starting.catch(() => undefined)
+    }
+    const server = this.server
+    this.server = null
+    if (server) {
+      this.emitResidencyChange()
+      await server.stop()
     }
   }
 }

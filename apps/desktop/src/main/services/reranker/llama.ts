@@ -113,6 +113,12 @@ export interface LlamaRerankerOptions extends LlamaRerankerDeps {
    * injects no callback, inert by default — ruling (f)).
    */
   cpuRequestCeiling?: () => number
+  /**
+   * #474 (translation runtime's issue-#42 pattern, ported): fired when the reranker abandons the
+   * GPU posture for the rest of the session (a failed GPU-attempt cold start, or a mid-session
+   * crash of a GPU-composed sidecar). Observability only; must never throw.
+   */
+  onDeviceFallback?: (reason: string) => void
 }
 
 interface RerankResponse {
@@ -151,7 +157,31 @@ export class LlamaReranker implements Reranker {
    */
   devicePosture(): RerankerDevice {
     if (this.server) return this.recordedPosture ?? 'cpu'
+    return this.resolvePosture()
+  }
+
+  /**
+   * #474: the injected callback's answer, forced to `'cpu'` once the session GPU-fallback latch
+   * is armed (mirrors `translation/runtime.ts`'s `resolveDevice()`). Consulted everywhere
+   * `opts.devicePosture()` used to decide a start's device — `resolveServer()`'s per-call
+   * resolution and this class's own `devicePosture()` report.
+   */
+  private resolvePosture(): RerankerDevice {
+    if (this.gpuFellBack) return 'cpu'
     return this.opts.devicePosture?.() ?? 'cpu'
+  }
+
+  /**
+   * #495 follow-up: a PURE read of the session GPU-fallback latch, never `resolvePosture()`/
+   * `devicePosture()` — a caller that folded either of those back into THIS instance's own
+   * `opts.devicePosture` callback (as `rag/device-posture.ts`'s ask-site occupancy snapshot
+   * does) would recurse into this same resolution. `ctx.reranker.gpuDemoted()` is what the ask
+   * site (`registerRagIpc.ts`) feeds into `RerankerOccupancySnapshot.rerankerDemoted`, so a
+   * demoted session's knowledge-pack ask resolves the `capped` scope instead of asking for
+   * `GPU_RERANK_SCOPE` on a sidecar G would then refuse.
+   */
+  gpuDemoted(): boolean {
+    return this.gpuFellBack
   }
 
   /** The sidecar's captured stderr tail (diagnostics; '' before any start or once stopped) — a
@@ -220,9 +250,26 @@ export class LlamaReranker implements Reranker {
    * reset, VRAM/RAM exhaustion) this instance has observed. A teardown NEVER counts as one
    * (`LlamaServer.stop()` arms `stopping` before the kill, gating the hook — `sidecar.ts:675`,
    * `:692`). The first exit just drops the dead handle so the next `rerank()` cold-starts fresh;
-   * a second one in the same session latches `startFailed` like a permanent load fault.
+   * a second one under the SAME posture latches `startFailed` like a permanent load fault (#474:
+   * a second exit under `gpu` demotes to `cpu` instead — see `noteDeviceFallback` — and resets
+   * this counter, so the untested CPU posture gets its own two-strikes budget; only a CPU-posture
+   * exit count reaching two still latches permanently).
    */
   private unexpectedExitCount = 0
+  /**
+   * Session-scoped GPU fallback latch (#474, `translation/runtime.ts`'s issue-#42 pattern,
+   * ported). Armed when a GPU-attempt cold start fails for a genuine (non-abort, non-bind-race)
+   * reason, or a GPU-composed sidecar exits unexpectedly for the second time this session; every
+   * later cold start then pins `cpu` (`resolvePosture()`) instead of repeating the same GPU
+   * config. Deliberately NOT persisted and NEVER writes the global `gpuAutoDisabled` — a
+   * reranker-only fault must not force chat/translation into compatibility mode (a smaller chat
+   * model can still fit the GPU fine). Survives `suspend()` (same GPU after unlock, matching
+   * `startFailed`'s own survival), resets only on app restart. The existing "two exits or a load
+   * fault permanently disables reranking" safety net is preserved for a genuinely broken GPU
+   * setup where CPU rerank might also be unreliable: only a FAILURE OF THE CPU RUNG (after this
+   * latch is armed) still arms `startFailed`, mirroring translation's ladder exactly.
+   */
+  private gpuFellBack = false
   /** Residency listeners (`onResidencyChange`): fired after `isLoaded()` flips. */
   private readonly residencyListeners = new Set<() => void>()
 
@@ -246,6 +293,26 @@ export class LlamaReranker implements Reranker {
       } catch {
         /* observability only */
       }
+    }
+  }
+
+  /** #474: arm the session CPU-fallback latch once and report it (observability hook must never
+   *  throw — mirrors `translation/runtime.ts`'s `noteDeviceFallback`). #495 follow-up: the
+   *  `unexpectedExitCount` reset lives HERE, not at either individual demotion call site, so
+   *  BOTH demotion paths (a genuine GPU cold-start failure in `startLadder`, and a second
+   *  unexpected GPU exit in `handleUnexpectedExit`) give the newly-forced CPU posture the same
+   *  fresh two-strikes budget — the `unexpectedExitCount` doc comment's own promise. Before this
+   *  fix only the exit-count path reset it, so a GPU exit followed by a genuine cold-start
+   *  failure carried a stale count of 1 into the CPU posture and latched it after just one more
+   *  exit. */
+  private noteDeviceFallback(reason: string): void {
+    if (this.gpuFellBack) return
+    this.gpuFellBack = true
+    this.unexpectedExitCount = 0
+    try {
+      this.opts.onDeviceFallback?.(reason)
+    } catch {
+      /* observability only — a throwing hook must not break the start path */
     }
   }
 
@@ -315,9 +382,12 @@ export class LlamaReranker implements Reranker {
   /**
    * Wave 8 ruling (b)(Q): resolve this call's posture, apply G's CPU ceiling, and start, join or
    * reuse the sidecar — all in the ONE synchronous section that begins here, re-run after every
-   * `await` below, so a cold start always launches with the value JUST resolved (never a second,
-   * later `devicePosture()` read). The posture is recorded when a cold start BEGINS; a resident
-   * or starting sidecar recorded under a DIFFERENT posture is restarted, under four race rules:
+   * `await` below (BOTH the mismatch-restart teardown await and `ensureStarted`'s own await —
+   * #495 follow-up: the ladder inside `ensureStarted` can itself demote `'gpu'` to `'cpu'` for a
+   * genuine cold-start failure, which used to leave G unchecked for the request that triggered
+   * it), so a cold start always launches with the value JUST resolved (never a second, later
+   * `devicePosture()` read). The posture is recorded when a cold start BEGINS; a resident or
+   * starting sidecar recorded under a DIFFERENT posture is restarted, under four race rules:
    *
    *  (i)   never join a teardown this call did not start (F19) — refuse instead;
    *  (ii)  after awaiting its OWN teardown, refuse if its own signal aborted or if any OTHER
@@ -328,12 +398,18 @@ export class LlamaReranker implements Reranker {
    *        (see `ensureStarted`), so the ask lands on the capped fallback instead of ending.
    *
    * Refusals under (i)–(iii) likewise throw non-abort errors. No flap: the comparison is on the
-   * RESOLVED posture, so an input change that leaves it unchanged restarts nothing.
+   * RESOLVED posture, so an input change that leaves it unchanged restarts nothing. The
+   * post-`ensureStarted` demotion re-check below owns a SEPARATE flag (`demotionRechecked`),
+   * never rule (iii)'s `restarted` — a call that already restarted once for an ORDINARY mismatch
+   * (occupancy changing mid-session, not a fault) must still have G re-applied if the ladder THEN
+   * demotes inside that very same call (#495 follow-up: sharing `restarted` let that composite
+   * path bypass G entirely).
    */
   private async resolveServer(documentCount: number, callerSignal?: AbortSignal): Promise<LlamaServer> {
     let restarted = false
+    let demotionRechecked = false
     for (;;) {
-      const posture: RerankerDevice = this.opts.devicePosture?.() ?? 'cpu'
+      const posture: RerankerDevice = this.resolvePosture() // #474: gpuFellBack-aware
       // G (ruling (b)(G)): thrown before any start, in the same synchronous section as the
       // posture it tests — so it is re-applied after the await below too. Absent callback ⇒
       // admit everything (what keeps the acceptance harness inert, ruling (f)).
@@ -370,7 +446,173 @@ export class LlamaReranker implements Reranker {
         }
         continue // Re-resolve from the top: fresh posture, fresh G check, fresh residency read.
       }
-      return await this.ensureStarted(posture, callerSignal)
+      const server = await this.ensureStarted(posture, callerSignal)
+      // #495 follow-up: `ensureStarted` → `startLadder` can demote
+      // `'gpu'` to `'cpu'` INSIDE this same call (a genuine GPU cold-start failure, #474) and
+      // return a CPU-pinned sidecar without ever going through the mismatch-restart branch above
+      // (there is nothing to "reconcile" — this call itself is the one starting it). Detect it
+      // via `recordedPosture` (a PURE field `attemptStart` sets the instant an attempt begins),
+      // never a second `resolvePosture()`/`opts.devicePosture()` read — this section must not
+      // consult the injected callback more often than the existing "resolved once, re-run only
+      // after an await that could change it" contract promises (verified against
+      // `core-model-ipc.test.ts`'s exact devicePosture() call-count assertions). Loop back ONCE,
+      // guarded by its OWN `demotionRechecked` flag — NEVER rule (iii)'s `restarted`, which an
+      // earlier mismatch restart in this same call may already have spent — so the top of the
+      // loop re-resolves the now-'cpu' posture (gpuFellBack is already armed by the ladder, so
+      // this costs no extra `devicePosture()` read: `resolvePosture()` short-circuits on the
+      // latch) and re-applies G against THIS call's real `documentCount` before any request
+      // reaches the CPU-pinned sidecar the ladder just started. When the request fits the
+      // ceiling, the second pass falls through to `ensureStarted` again, which returns the
+      // ALREADY-resident server with no new spawn.
+      if (posture === 'gpu' && !demotionRechecked && this.recordedPosture === 'cpu') {
+        demotionRechecked = true
+        continue
+      }
+      return server
+    }
+  }
+
+  /**
+   * Build + start ONE sidecar attempt at EXACTLY `posture` (#474: factored out of `ensureStarted`
+   * so `startLadder` can call it twice — once per rung). Records `recordedPosture` the instant
+   * THIS attempt begins (Wave 8 ruling (b)(Q)), so a demoted retry correctly ends up recording
+   * `cpu`, never the originally-resolved `gpu`.
+   */
+  private attemptStart(posture: RerankerDevice, abortSignal: AbortSignal): Promise<LlamaServer> {
+    const contextTokens = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
+    this.recordedPosture = posture
+    const server = new LlamaServer({
+      binPath: this.opts.binPath,
+      modelPath: this.opts.modelPath,
+      contextTokens,
+      // `--rerank` switches llama-server to embedding mode + RANK pooling and enables
+      // /v1/rerank (b9585 common/arg.cpp L2964–2971 — the one flag is the whole
+      // switch). On the `cpu`/`default` posture `--device none` PINS the reranker to CPU,
+      // exactly like the E5 embedder (architecture.md GPU record §7): a sub-1B scorer gains
+      // little from a GPU and must never contend for VRAM with the chat model. On the `gpu`
+      // posture (step 4-4, a usable card and no reason not to use it) `--device` is OMITTED —
+      // llama-server's own default (`ngl` auto + `--fit`), never `-ngl`: `--device none` stays
+      // the only device argument this app ever passes anywhere.
+      //
+      // `--batch-size`/`--ubatch-size` = the context: in embedding/rerank mode
+      // llama-server FORCES n_batch = n_ubatch and defaults them to 512 (b9585 logs
+      // "embeddings enabled
+      // with n_batch (2048) > n_ubatch (512) ... setting n_batch = n_ubatch = 512").
+      // A rerank input is query+document in ONE sequence — up to
+      // (MAX_QUERY_APPROX_TOKENS + MAX_DOC_APPROX_TOKENS) approx tokens ≈ 1452 real tokens — so
+      // the 512 default makes the server 500 the WHOLE request ("input (… tokens) is too large to
+      // process. increase the physical batch size"), which would silently drop every
+      // rerank pass back to the fused order on real-length chunks. Sizing the physical
+      // batch to the context guarantees any in-context input decodes in one ubatch (a
+      // single rerank input cannot exceed n_ctx anyway). Unaffected by the posture.
+      extraArgs: [
+        '--rerank',
+        ...(posture === 'cpu' ? ['--device', 'none'] : []),
+        '--batch-size',
+        String(contextTokens),
+        '--ubatch-size',
+        String(contextTokens)
+      ],
+      spawn: this.opts.spawn,
+      fetchImpl: this.opts.fetchImpl,
+      findPort: this.opts.findPort,
+      threads: this.opts.threads,
+      healthTimeoutMs: this.opts.healthTimeoutMs,
+      healthIntervalMs: this.opts.healthIntervalMs,
+      host: this.opts.host,
+      // #244: let a lock/quit/Q-restart teardown abort this start mid-health-wait (the child is
+      // killed via the normal stop path; start() rejects AbortError — reclassified below unless
+      // it came from THIS call's own signal).
+      startAbortSignal: abortSignal,
+      // Wave 8 ruling (c)(ii), the translation runtime's M1 pattern (`translation/runtime.ts:527`):
+      // an unexpected exit (a healthy child dying on its own — driver reset, VRAM/RAM
+      // exhaustion) drops the dead handle so the NEXT rerank() cold-starts with a freshly
+      // resolved posture, instead of failing against a dead port for the rest of the session.
+      // Identity-compared so a late crash notification can never clobber a NEWER instance a
+      // restart already installed. `LlamaServer` fires this only for a healthy child dying
+      // outside `stop()` (`sidecar.ts:675`, `:692` — a teardown never counts as an unexpected
+      // exit). #474: a SECOND exit under `gpu` demotes to `cpu` (`handleUnexpectedExit`) instead
+      // of latching outright — a deterministic fault must not cost a fresh cold start on every
+      // ask forever, but the CPU rung still gets its own two-strikes safety net.
+      onUnexpectedExit: (info: UnexpectedExitInfo) => this.handleUnexpectedExit(server, posture, info)
+    })
+    return server.start().then(() => server)
+  }
+
+  /** #474: a healthy child dying on its own (driver reset, VRAM/RAM exhaustion) — shared by both
+   *  rungs `attemptStart` may launch. See `unexpectedExitCount`'s and `gpuFellBack`'s doc comments
+   *  for the exact two-strikes-per-posture rule this implements. */
+  private handleUnexpectedExit(server: LlamaServer, posture: RerankerDevice, info: UnexpectedExitInfo): void {
+    if (this.server !== server) return
+    this.server = null
+    this.emitResidencyChange()
+    this.unexpectedExitCount++
+    if (this.unexpectedExitCount < 2) return
+    if (posture === 'gpu' && !this.gpuFellBack) {
+      this.noteDeviceFallback(
+        `Reranker sidecar (GPU) exited unexpectedly twice this session (last exit code ${info.exitCode ?? 'unknown'})`
+      )
+      // #495 follow-up: the reset (the untested CPU posture gets its own two-strikes budget) now
+      // lives inside `noteDeviceFallback` itself, shared with `startLadder`'s demotion path.
+      return
+    }
+    this.startFailed = new Error(
+      `Reranker sidecar exited unexpectedly twice this session (last exit code ${info.exitCode ?? 'unknown'})`
+    )
+  }
+
+  /**
+   * #474 (translation runtime's issue-#42 ladder, ported): attempt `posture`; on a GENUINE
+   * (non-abort, non-bind-race) GPU-attempt failure, arm the session `gpuFellBack` latch and retry
+   * ONCE on `cpu` within this SAME call — only a failure of THAT CPU rung (or a non-GPU posture's
+   * own failure) arms the permanent `startFailed` latch, preserving the existing "a load fault
+   * disables reranking" safety net for a genuinely broken GPU setup where CPU might also fail.
+   */
+  private async startLadder(posture: RerankerDevice, abort: AbortController): Promise<void> {
+    try {
+      this.server = await this.attemptStart(posture, abort.signal)
+      this.emitResidencyChange()
+      // Which posture (and, on `gpu`, the run-L-selected scope constant — the per-ask
+      // scope itself depends on the opt-in setting too, which this module never reads)
+      // this start actually took.
+      log.info('Reranker sidecar started', {
+        posture,
+        scope: posture === 'gpu' ? GPU_RERANK_SCOPE : undefined
+      })
+      return
+    } catch (err) {
+      const error = err instanceof Error ? err : new Error(String(err))
+      // #244: a teardown-ABORTED start is not a load fault — never latch/demote (it survives
+      // suspend(), so it would disable reranking, or wrongly abandon GPU, for the session).
+      if (isStartAbortError(err) || abort.signal.aborted) throw error
+      // F7 (post-merge audit): a TRANSIENT port-bind race must NOT arm the latch or demote (same
+      // fix as the embedder, F4) — it is not a device fault, and the caller's own retry re-resolves
+      // the SAME posture. Leave every latch untouched so the next rerank() re-attempts.
+      if (isBindRaceError(error.message)) throw error
+      if (posture === 'gpu' && !this.gpuFellBack) {
+        this.noteDeviceFallback(`Reranker sidecar GPU-attempt start failed: ${error.message}`)
+        // A lock/quit/Q-restart that began while the GPU attempt was failing must not cold-load
+        // the reranker on the CPU rung just to tear it straight back down.
+        if (this.stopped || this.tearingDown) throw error
+        try {
+          this.server = await this.attemptStart('cpu', abort.signal)
+          this.emitResidencyChange()
+          log.info('Reranker sidecar started', { posture: 'cpu' })
+          return
+        } catch (cpuErr) {
+          const cpuError = cpuErr instanceof Error ? cpuErr : new Error(String(cpuErr))
+          if (isStartAbortError(cpuErr) || abort.signal.aborted) throw cpuError
+          if (isBindRaceError(cpuError.message)) throw cpuError
+          // Only the CPU rung's OWN failure arms the permanent latch (matching translation's
+          // ladder: "only a failure of the FINAL (CPU) attempt arms the permanent … latch").
+          this.startFailed = cpuError
+          throw cpuError
+        }
+      }
+      // Every other start failure DOES latch (the pre-#474 behaviour, unchanged): no reliable
+      // transient/OOM signature exists to safely un-latch memory pressure on a non-GPU posture.
+      this.startFailed = error
+      throw error
     }
   }
 
@@ -387,105 +629,10 @@ export class LlamaReranker implements Reranker {
     if (!this.starting) {
       const abort = new AbortController()
       this.startAbort = abort
-      const contextTokens = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
-      // Wave 8 ruling (b)(Q): recorded the instant a cold start BEGINS — the exact value this
-      // launch uses, never re-read from `opts.devicePosture` a second time.
-      this.recordedPosture = posture
-      const server = new LlamaServer({
-        binPath: this.opts.binPath,
-        modelPath: this.opts.modelPath,
-        contextTokens,
-        // `--rerank` switches llama-server to embedding mode + RANK pooling and enables
-        // /v1/rerank (b9585 common/arg.cpp L2964–2971 — the one flag is the whole
-        // switch). On the `cpu`/`default` posture `--device none` PINS the reranker to CPU,
-        // exactly like the E5 embedder (architecture.md GPU record §7): a sub-1B scorer gains
-        // little from a GPU and must never contend for VRAM with the chat model. On the `gpu`
-        // posture (step 4-4, a usable card and no reason not to use it) `--device` is OMITTED —
-        // llama-server's own default (`ngl` auto + `--fit`), never `-ngl`: `--device none` stays
-        // the only device argument this app ever passes anywhere.
-        //
-        // `--batch-size`/`--ubatch-size` = the context: in embedding/rerank mode
-        // llama-server FORCES n_batch = n_ubatch and defaults them to 512 (b9585 logs
-        // "embeddings enabled
-        // with n_batch (2048) > n_ubatch (512) ... setting n_batch = n_ubatch = 512").
-        // A rerank input is query+document in ONE sequence — up to
-        // (MAX_QUERY_APPROX_TOKENS + MAX_DOC_APPROX_TOKENS) approx tokens ≈ 1452 real tokens — so
-        // the 512 default makes the server 500 the WHOLE request ("input (… tokens) is too large to
-        // process. increase the physical batch size"), which would silently drop every
-        // rerank pass back to the fused order on real-length chunks. Sizing the physical
-        // batch to the context guarantees any in-context input decodes in one ubatch (a
-        // single rerank input cannot exceed n_ctx anyway). Unaffected by the posture.
-        extraArgs: [
-          '--rerank',
-          ...(posture === 'cpu' ? ['--device', 'none'] : []),
-          '--batch-size',
-          String(contextTokens),
-          '--ubatch-size',
-          String(contextTokens)
-        ],
-        spawn: this.opts.spawn,
-        fetchImpl: this.opts.fetchImpl,
-        findPort: this.opts.findPort,
-        threads: this.opts.threads,
-        healthTimeoutMs: this.opts.healthTimeoutMs,
-        healthIntervalMs: this.opts.healthIntervalMs,
-        host: this.opts.host,
-        // #244: let a lock/quit/Q-restart teardown abort this start mid-health-wait (the child is
-        // killed via the normal stop path; start() rejects AbortError — reclassified below unless
-        // it came from THIS call's own signal).
-        startAbortSignal: abort.signal,
-        // Wave 8 ruling (c)(ii), the translation runtime's M1 pattern (`translation/runtime.ts:527`):
-        // an unexpected exit (a healthy child dying on its own — driver reset, VRAM/RAM
-        // exhaustion) drops the dead handle so the NEXT rerank() cold-starts with a freshly
-        // resolved posture, instead of failing against a dead port for the rest of the session.
-        // Identity-compared so a late crash notification can never clobber a NEWER instance a
-        // restart already installed. `LlamaServer` fires this only for a healthy child dying
-        // outside `stop()` (`sidecar.ts:675`, `:692` — a teardown never counts as an unexpected
-        // exit). A SECOND exit in the same session latches like a permanent load fault: a
-        // deterministic fault must not cost a fresh cold start on every ask forever.
-        onUnexpectedExit: (info: UnexpectedExitInfo) => {
-          if (this.server !== server) return
-          this.server = null
-          this.emitResidencyChange()
-          this.unexpectedExitCount++
-          if (this.unexpectedExitCount >= 2) {
-            this.startFailed = new Error(
-              `Reranker sidecar exited unexpectedly twice this session (last exit code ${info.exitCode ?? 'unknown'})`
-            )
-          }
-        }
+      this.starting = this.startLadder(posture, abort).finally(() => {
+        this.starting = null
+        if (this.startAbort === abort) this.startAbort = null
       })
-      this.starting = server
-        .start()
-        .then(() => {
-          this.server = server
-          this.emitResidencyChange()
-          // Which posture (and, on `gpu`, the run-L-selected scope constant — the per-ask
-          // scope itself depends on the opt-in setting too, which this module never reads)
-          // this start actually took.
-          log.info('Reranker sidecar started', {
-            posture,
-            scope: posture === 'gpu' ? GPU_RERANK_SCOPE : undefined
-          })
-        })
-        .catch((err) => {
-          const error = err instanceof Error ? err : new Error(String(err))
-          // #244: a teardown-ABORTED start is not a load fault — never latch
-          // `startFailed` (it survives suspend(), so it would disable reranking for the session).
-          if (isStartAbortError(err) || abort.signal.aborted) throw error
-          // F7 (post-merge audit): a TRANSIENT port-bind race must NOT arm the latch (same fix as
-          // the embedder, F4). This latch is more persistent than the embedder's — `suspend()`
-          // KEEPS it (a bad GGUF won't load after unlock either) — so arming it for a race killed
-          // reranking for the whole session (a silent quality regression: retrieval falls back to
-          // fused order, rag/index.ts). Forgiving the race makes the keep-on-suspend policy correct:
-          // only a genuine load fault persists. Leave it null so the next rerank() re-attempts.
-          if (!isBindRaceError(error.message)) this.startFailed = error
-          throw error
-        })
-        .finally(() => {
-          this.starting = null
-          if (this.startAbort === abort) this.startAbort = null
-        })
     }
     try {
       await this.starting

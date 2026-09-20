@@ -42,6 +42,11 @@ export interface RerankerSelectionDeps {
    * manual smoke — inert by default).
    */
   requestCeiling?: () => number
+  /**
+   * #474 (translation runtime's issue-#42 pattern, ported): fired when the reranker abandons the
+   * GPU posture for the rest of the session. Observability only; must never throw.
+   */
+  onDeviceFallback?: (reason: string) => void
 }
 
 /**
@@ -58,7 +63,8 @@ export function createSelectedReranker(deps: RerankerSelectionDeps): Reranker | 
         modelPath: model.modelPath,
         contextTokens: model.contextTokens,
         devicePosture: deps.devicePosture,
-        cpuRequestCeiling: deps.requestCeiling
+        cpuRequestCeiling: deps.requestCeiling,
+        onDeviceFallback: deps.onDeviceFallback
       }))
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — a mock reranker would

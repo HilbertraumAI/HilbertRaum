@@ -743,7 +743,8 @@ head's own weights + KV.
   is `currentGpu`'s question, never this field's (owner decision 2026-09-07) —,
   `otherMachines`, `running` (the `benchmark` occupancy span, read directly),
   `placement: { memoryClass, ramMb, vramMb, model, recommendedContextTokens, observed,
-  observedMismatch, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard } }` (the
+  observedMismatch, verdict, models: ResidentModelRow[], totals: { ramAllMb, bothOnCard,
+  chatAndTranslationOnCard } }` (the
   pre-start `verdict` on a discrete card is `estimateGraphicsNeedMib(manifest) ≤
   graphicsBudgetMib(device)` — the picker's fit — with `needMb` = the unrounded weights and
   `budgetMb` = the card's total; `PlacementVerdictInput` in services/performance.ts carries
@@ -779,7 +780,14 @@ head's own weights + KV.
   `totals.ramAllMb` is class-aware (`loadedAtOnceMb`: every row on `cpu`; processor rows + the
   observed chat spill + the live translation spill + (Wave 8 ruling (d)) a `'gpu'`-posture
   reranker row contributing 0 on `discrete`; the full sum on `unified`, compared against the
-  unified budget) and `totals.bothOnCard` requires both rows on the card with observed layers.
+  unified budget) and `totals.bothOnCard` is true when two or more of chat, translation and the
+  reranker are genuinely resident on the card — chat with an observed GPU start and at least one
+  layer offloaded, translation live with layers on the card, the reranker `'gpu'`-postured and
+  loaded.
+  **#495 follow-up:** `totals.chatAndTranslationOnCard` is chat-and-translation specifically,
+  never the reranker — it gates `perf.models.cardBoth`'s pair-naming sentence so that sentence
+  stays true when the contending pair `bothOnCard` reports is chat+reranker or
+  translation+reranker instead of chat+translation.
   The verdict is asked for the EFFECTIVE class (the next start's, and `cpu` when the observed
   start was CPU). Two `placement` fields were added by
   the PR #303 audit P4: **`recommendedContextTokens`** (`number | null`) is the context the

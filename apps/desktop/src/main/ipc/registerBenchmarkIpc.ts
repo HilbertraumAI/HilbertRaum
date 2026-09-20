@@ -1036,6 +1036,11 @@ function buildPlacement(
   const translation = ctx.translator?.deviceStatus?.() ?? null
   const translationDevice: ResidentModelRow['device'] = cardEligible && translation?.device !== 'cpu' ? 'gpu' : 'cpu'
   const chatResident = chatModelResident(ctx, activeId)
+  // #476: Wave 8 ruling (d)'s resident posture (`Reranker.devicePosture()`, the `isLoaded?`
+  // pattern) — the SAME two reads the 'reranker' row below uses, hoisted so `rerankerOnCard` can
+  // share them without re-deriving.
+  const rerankerDevice: ResidentModelRow['device'] = ctx.reranker?.devicePosture?.() ?? 'cpu'
+  const rerankerLoaded = ctx.reranker?.isLoaded?.() ?? false
   const allRows: ResidentModelRow[] = [
     {
       role: 'chat',
@@ -1074,8 +1079,8 @@ function buildPlacement(
       // Wave 8 ruling (d): the resident sidecar's ACTUAL posture, or — when nothing is resident
       // — the posture a cold start would take now (`Reranker.devicePosture()`, the `isLoaded?`
       // pattern). A `Reranker` without that optional member reports `'cpu'` here.
-      device: ctx.reranker?.devicePosture?.() ?? 'cpu',
-      loaded: ctx.reranker?.isLoaded?.() ?? false,
+      device: rerankerDevice,
+      loaded: rerankerLoaded,
       lifetime: 'session',
       gpuLayers: null,
       totalLayers: null
@@ -1131,9 +1136,19 @@ function buildPlacement(
     (observed == null || (observed.backend === 'gpu' && (observed.gpuLayers ?? 0) > 0))
   const translationOnCard =
     translationDevice === 'gpu' && (translation?.live ?? false) && (translation?.gpuLayers ?? 0) > 0
+  // #476: a GPU-resident reranker (device 'gpu' AND actually loaded now — no offload split is
+  // tracked for it, so residency is the whole check) is a THIRD source of the same start-order
+  // contention `bothOnCard` warns about.
+  const rerankerOnCard = rerankerDevice === 'gpu' && rerankerLoaded
   const totals = {
     ramAllMb: loadedAtOnceMb({ memoryClass, rows, verdict }),
-    bothOnCard: chatOnCard && translationOnCard
+    bothOnCard: [chatOnCard, translationOnCard, rerankerOnCard].filter(Boolean).length >= 2,
+    // #495 follow-up: chat AND translation SPECIFICALLY — the one pair `perf.models.cardBoth`'s
+    // copy actually names. `bothOnCard` widened to a >=2-of-3 count when the reranker joined it
+    // (#476), but the chat/translation summary line kept appending that pair-naming sentence
+    // whenever `bothOnCard` was true, including when the true contending pair was chat+reranker
+    // or translation+reranker and the OTHER of chat/translation wasn't on the card at all.
+    chatAndTranslationOnCard: chatOnCard && translationOnCard
   }
   return {
     memoryClass,

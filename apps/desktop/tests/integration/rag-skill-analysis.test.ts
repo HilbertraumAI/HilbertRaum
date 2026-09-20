@@ -34,6 +34,7 @@ import { registerBuiltinSkillAnalysisHandlers, clearSkillAnalysisHandlers } from
 import { SCAN_MARKER_TYPE } from '../../src/main/services/analysis/extract'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
+import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import { t } from '../../src/shared/i18n'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
@@ -174,7 +175,10 @@ async function makeHarness(
     manifestsDir: null,
     isDev: true,
     audit: (type: string, _message: string, meta?: Record<string, unknown>) => audit.push({ type, meta }),
-    skills
+    skills,
+    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
+    // unconditionally now (no more `??` fallback).
+    pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext
 
   registerBuiltinSkillAnalysisHandlers()
@@ -655,7 +659,10 @@ async function makeMultiHarness(opts: {
     manifestsDir: null,
     isDev: true,
     audit: (type: string, _message: string, meta?: Record<string, unknown>) => audit.push({ type, meta }),
-    skills
+    skills,
+    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
+    // unconditionally now (no more `??` fallback).
+    pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext
 
   registerBuiltinSkillAnalysisHandlers()

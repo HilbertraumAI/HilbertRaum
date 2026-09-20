@@ -30,6 +30,7 @@ import { getBuiltinCollection, resolveScope } from '../../src/main/services/coll
 import { seedSettings } from '../../src/main/services/settings'
 import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, ChatMessage } from '../../src/main/services/runtime'
+import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { AppContext } from '../../src/main/services/context'
 import type { Collection, Conversation, DocumentInfo, ImportJob, ImportJobStatus, Message } from '../../src/shared/types'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
@@ -81,7 +82,10 @@ function makeHarness(): Harness {
       isYieldingBuildActive: () => false,
       acquireChatSlot: async () => () => {}
     },
-    audit: () => {}
+    audit: () => {},
+    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
+    // unconditionally now (no more `??` fallback).
+    pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext
   return { ctx, db, rootPath }
 }

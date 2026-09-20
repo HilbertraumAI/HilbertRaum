@@ -2664,13 +2664,27 @@ export interface PerformanceSnapshot {
        */
       ramAllMb: number | null
       /**
-       * Chat and translation are both resident on the card right now, so the second one got
-       * the leftovers: both rows say 'gpu', the active chat model is resident with its
-       * observed start on the GPU and at least one layer offloaded (or no observation under a
-       * GPU-eligible configuration), and the translation sidecar is live with layers on the
-       * card. Never true for a row that says 'cpu'.
+       * At least two of {chat, translation, reranker} are resident on the card right now, so
+       * whichever loaded last got the leftovers (#476 added the reranker to what was originally
+       * a chat/translation-only pair — the name stays `bothOnCard`, the count is now over three
+       * candidates): chat needs its observed start actually on the GPU with at least one layer
+       * offloaded (or no observation under a GPU-eligible configuration); translation needs the
+       * sidecar live with layers on the card; the reranker needs its posture 'gpu' AND actually
+       * loaded (no offload split is tracked for it, so residency is the whole check). Never
+       * counts a row that says 'cpu'.
        */
       bothOnCard: boolean
+      /**
+       * #495 follow-up: chat AND translation SPECIFICALLY — never
+       * the reranker. `perf.models.cardBoth`'s copy names one pair ("Both are on the card right
+       * now. Whichever started second got what was left..."), so the chat/translation summary
+       * line must append that sentence only when THIS pair is the one sharing the card, not
+       * whenever `bothOnCard`'s now-three-way count crosses two (a chat+reranker or
+       * translation+reranker pair would otherwise read as if the absent third model were on the
+       * card too). The warning badge is unaffected — it stays keyed off `bothOnCard` on both
+       * summary lines, since any two-or-more-of-three contention is still worth flagging.
+       */
+      chatAndTranslationOnCard: boolean
     }
   }
   observed: {

@@ -886,6 +886,12 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
     const gbOf = (v: number | null): string => (v == null ? '' : fmt1(v, lang))
     const chatRow = p.models.find((r) => r.role === 'chat')
     const trRow = p.models.find((r) => r.role === 'translation')
+    const rerankerRow = p.models.find((r) => r.role === 'reranker')
+    // #495 follow-up: `anyOnCard` gates ONLY the chat/translation line below — the reranker
+    // line has its own independent gate (`rerankerRow.device === 'gpu' && rerankerRow.loaded`)
+    // and never reads this. The `#476` widening to include the reranker had no consumer and one
+    // effect: it could render the chat/translation line for a chat+translation pair that were
+    // both actually on the processor, whenever the reranker's own headroom check resolved 'gpu'.
     const anyOnCard = chatRow?.device === 'gpu' || trRow?.device === 'gpu'
     const vram = p.vramMb != null ? fmt1(p.vramMb / 1024, lang) : null
     const unifiedPool = p.memoryClass === 'unified'
@@ -946,8 +952,29 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             <div className="perf-models-summary-line">
               <span>
                 {t('perf.models.card', { chat: gbOf(chatRow.sizeOnDiskGb), translation: gbOf(trRow.sizeOnDiskGb), vram })}
-                {p.totals.bothOnCard ? ` ${t('perf.models.cardBoth')}` : ''}
+                {/* #495 follow-up: `perf.models.cardBoth`'s copy names the chat/translation PAIR
+                    specifically ("Both are on the card... stop and start it once the other has
+                    unloaded") — gate its append on `chatAndTranslationOnCard`, not the three-way
+                    `bothOnCard`, so it never appears about a translation (or chat) model that
+                    isn't actually on the card when the reranker is the other contending row. */}
+                {p.totals.chatAndTranslationOnCard ? ` ${t('perf.models.cardBoth')}` : ''}
               </span>
+              {/* The warning badge stays on `bothOnCard` (any two-or-more-of-three contention) on
+                  BOTH summary lines — only the pair-naming SENTENCE above is narrowed. */}
+              {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}
+            </div>
+          )}
+          {/* #476: a second, labelled line for the reranker — kept separate from the chat/
+              translation line above rather than folded into its fixed two-slot template, since
+              the reranker is independently resident (it may share the card with either, both, or
+              neither of the other two). `bothOnCard` now counts the reranker too (registerBenchmarkIpc.ts),
+              so the SAME warning badge appears here whenever this row is part of the contention.
+              #495 follow-up: gated on RESIDENCY (`loaded`) too, not posture alone — the reranker
+              is lazily started, so an ordinary fresh GPU-postured session with nothing resident
+              yet must not claim a card line for a model that isn't actually there. */}
+          {p.memoryClass !== 'cpu' && vram && rerankerRow && rerankerRow.device === 'gpu' && rerankerRow.loaded && (
+            <div className="perf-models-summary-line">
+              <span>{t('perf.models.cardReranker', { reranker: gbOf(rerankerRow.sizeOnDiskGb), vram })}</span>
               {p.totals.bothOnCard && <Badge tone="warning">{t('perf.place.partial')}</Badge>}
             </div>
           )}

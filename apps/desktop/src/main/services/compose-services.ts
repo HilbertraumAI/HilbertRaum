@@ -184,7 +184,11 @@ export function composeServices({
     model: resolveModelByRole(manifestsDir, rootPath, 'reranker', { discovered }),
     onSelect: (kind, reason) => log.info('Reranker backend selected', { kind, reason }),
     devicePosture: rerankerDevicePosture,
-    requestCeiling: rerankerRequestCeiling
+    requestCeiling: rerankerRequestCeiling,
+    // #474: surfaced the same way translation's GPU fallback is disclosed — a log line here, and
+    // the Performance screen's reranker row already reads `devicePosture()`, which reports 'cpu'
+    // once this latch is armed.
+    onDeviceFallback: (reason) => log.warn('Reranker sidecar fell back to CPU for this session', { reason })
   })
   // The audio transcriber — the whisper.cpp CLI; selected only when binary + GGML weights
   // exist (null otherwise; audio imports fail per-file with the download-the-model copy).

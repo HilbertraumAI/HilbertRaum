@@ -40,6 +40,7 @@ import { SCAN_MARKER_TYPE, aggregateExtractions } from '../../src/main/services/
 import { buildListingAnswer } from '../../src/main/services/analysis/listing-answer'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
+import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { Message } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -148,7 +149,10 @@ function makeCtx(
     embedder: createMockEmbedder(),
     reranker: null,
     ocrEngine: undefined,
-    skills: { ...skillsDirs, appVersion: '0.1.55' }
+    skills: { ...skillsDirs, appVersion: '0.1.55' },
+    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
+    // unconditionally now (no more `??` fallback).
+    pendingModelSwitches: createPendingModelSwitchCounter()
   } as unknown as AppContext
 }
 
