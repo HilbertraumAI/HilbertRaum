@@ -113,6 +113,12 @@ interface TableCell {
   header: boolean
   rows: number
   columns: number
+  /** Issue #487: true once a non-close `img` tag was seen while this cell was the active
+   *  context (same suppression guards as `appendText`). Carried through unchanged by
+   *  `finishContext`'s `{ ...c }` spread -- an IMAGE-ONLY cell (this true, `text` empty after
+   *  tidy) is the structural signal `hasDeliverableContent` uses to drop a classless
+   *  image-and-caption layout table. */
+  image: boolean
 }
 
 export interface RetainedTable {
@@ -530,10 +536,22 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       const rowSpan = clampSpan(attrs, 'rowspan', TABLE_MAX_ROWSPAN)
       const colSpan = clampSpan(attrs, 'colspan', TABLE_MAX_COLSPAN)
       if (rowSpan.clamped || colSpan.clamped) spanClamped = true
-      ctx.cell = { text: '', header: name === 'th', rows: rowSpan.value, columns: colSpan.value }
+      ctx.cell = { text: '', header: name === 'th', rows: rowSpan.value, columns: colSpan.value, image: false }
       ctx.rows[ctx.rows.length - 1].push(ctx.cell)
       ctx.pendingSep = false
       ctx.nestedOnly = true
+      continue
+    }
+    if (!isClose && name === 'img') {
+      // Issue #487: mark the active cell as carrying an image, under the SAME suppression
+      // guards `appendText` uses. `droppedDepth`/`mathSkipDepth`/`subtreeSkipDepth` are already
+      // guaranteed 0 here (each would have `continue`d earlier in this cascade); `refSkipDepth`
+      // is not, since it is only checked inside the `sup`/`sub` handling above, so it is
+      // checked explicitly.
+      if (refSkipDepth === 0) {
+        const ctx = active()
+        if (ctx.cell) ctx.cell.image = true
+      }
       continue
     }
     if (!isClose && (name === 'br' || name === 'p' || name === 'div' || name === 'li')) {
@@ -608,6 +626,30 @@ function hasHeaderCell(table: RetainedTable): boolean {
 export function hasDeliverableContent(table: RetainedTable): boolean {
   if (hasHeaderCell(table)) return true
   if (table.absorbedDeliverableNested) return true
+  // Issue #487: a headerless table whose only real content is one image beside its caption is
+  // page layout, not data -- e.g. `<table style="float:right"><tr><td><img></td><td>caption
+  // text</td></tr></table>`. A cell is IMAGE-ONLY when it carries an `<img>` and no text; a
+  // cell is POPULATED when it is image-only or has non-empty text. The table is a LAYOUT
+  // WRAPPER -- dropped exactly like a class-matched layout table -- when at least one
+  // image-only cell exists anywhere in it AND every source row has at most one populated cell
+  // that is not image-only. This is deliberately a per-TABLE check, not a per-cell one: a
+  // genuine two-column data table with one image cell in one row keeps two or more non-image
+  // populated cells in its OTHER rows, so it is not touched by this clause.
+  let hasImageOnlyCell = false
+  let everyRowHasAtMostOneNonImagePopulatedCell = true
+  for (const row of table.rows) {
+    let nonImagePopulated = 0
+    for (const cell of row) {
+      const hasText = cell.text.trim().length > 0
+      if (cell.image && !hasText) hasImageOnlyCell = true
+      else if (hasText) nonImagePopulated += 1
+    }
+    if (nonImagePopulated > 1) {
+      everyRowHasAtMostOneNonImagePopulatedCell = false
+      break
+    }
+  }
+  if (hasImageOnlyCell && everyRowHasAtMostOneNonImagePopulatedCell) return false
   const numCols = table.rows.reduce((m, row) => Math.max(m, row.reduce((s, c) => s + c.columns, 0)), 0)
   const hasText = table.rows.some((row) => row.some((c) => c.text.trim().length > 0))
   return numCols >= 2 && hasText

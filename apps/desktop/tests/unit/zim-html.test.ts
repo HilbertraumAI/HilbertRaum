@@ -277,6 +277,25 @@ describe('zimArticleToSegments — table delivery', () => {
     expect(textOf(html)).toContain('lead')
   })
 
+  it('drops a classless headerless table whose only real content is one image beside its ' +
+    'caption (issue #487\'s exact shape)', () => {
+    const html = '<table style="float:right"><tr><td><img src="x.jpg"></td><td>caption text</td></tr></table>'
+    expect(textOf(html)).not.toContain('caption text')
+  })
+
+  it('still delivers a genuine two-column data table that also has an image cell in one row ' +
+    '(the risk the per-table, not per-cell, image-only rule forecloses)', () => {
+    const html =
+      '<table>' +
+      '<tr><td><img src="diagram.png"></td><td>a diagram</td></tr>' +
+      '<tr><td>Length</td><td>12 m</td></tr>' +
+      '<tr><td>Width</td><td>4 m</td></tr>' +
+      '</table>'
+    const text = textOf(html)
+    expect(text).toContain('Length: 12 m')
+    expect(text).toContain('Width: 4 m')
+  })
+
   it('preserves superscripts/subscripts readably inside table-derived text only', () => {
     const html =
       '<table><tr><th>Metric</th><th>Value</th></tr>' +
