@@ -35,6 +35,8 @@ import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
 import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
 import { SIDECAR_FAMILY_SPECS, type FetchFn } from '../../src/main/services/assets'
 import { llamaServerBinaryName, registerSidecarChild, unregisterSidecarChild } from '../../src/main/services/runtime/sidecar'
+import { whisperCliBinaryName } from '../../src/main/services/transcriber'
+import type { AppContext } from '../../src/main/services/context'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { updateSettings } from '../../src/main/services/settings'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
@@ -45,6 +47,7 @@ const handlers = ipcState.handlers as IpcHandlers
 const HOST_OS = hostRuntimeOs()
 const HOST_ARCH = hostRuntimeArch()
 const BIN_NAME = llamaServerBinaryName()
+const WHISPER_BIN = whisperCliBinaryName()
 const exe = (base: string): string => (HOST_OS === 'win' ? `${base}.exe` : base)
 const KIWIX_FILES = [exe('kiwix-serve'), exe('kiwix-manage'), exe('kiwix-search'), 'icudt74.dll']
 const BODY = 'archive-bytes'
@@ -55,7 +58,26 @@ const okFetch: FetchFn = async () => new Response(BODY, { status: 200, headers: 
 /** Drops the family's declared files at the extract root (the flat-zip shape). */
 const extractAll: ExtractFn = async (_archive, destDir) => {
   await mkdir(destDir, { recursive: true })
-  for (const f of [BIN_NAME, ...KIWIX_FILES]) await writeFile(join(destDir, f), `bytes of ${f}`)
+  for (const f of [BIN_NAME, WHISPER_BIN, ...KIWIX_FILES]) await writeFile(join(destDir, f), `bytes of ${f}`)
+}
+
+/** A minimal VALID transcriber manifest for the #497 case (JSON is YAML). */
+const WHISPER_MANIFEST = {
+  id: 'whisper-test',
+  display_name: 'Whisper (test)',
+  family: 'whisper',
+  role: 'transcriber',
+  format: 'ggml',
+  runtime: 'whisper_cpp',
+  license: 'mit',
+  size_on_disk_gb: 0.1,
+  recommended_min_ram_gb: 1,
+  recommended_ram_gb: 2,
+  recommended_context_tokens: 0,
+  local_path: 'models/transcriber/whisper-test.bin',
+  sha256: 'REPLACE_WITH_REAL_HASH',
+  recommended_profiles: [],
+  license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-09-21', notes: '' }
 }
 
 interface Drive {
@@ -64,17 +86,25 @@ interface Drive {
   manager: EngineDownloadManager
   fetchSpy: ReturnType<typeof vi.fn>
   reconcile: ReturnType<typeof vi.fn>
+  ctx: AppContext
 }
 
 /** A drive whose yaml pins the chat engine + the optional kiwix_tools family for this host,
  *  with a policy that allows downloads and the network setting on; the engine IPC registered
- *  over a real DB. `ctx.zim` is a stub whose `reconcile` the completed-install hook must call. */
-function makeDrive(): Drive {
+ *  over a real DB. `ctx.zim` is a stub whose `reconcile` the completed-install hook must call.
+ *  `withWhisper` (#497) also pins the whisper_cpp family and provisions the speech model's
+ *  manifest + weight, so only the voice ENGINE is missing — the "Install voice engine" case. */
+function makeDrive(opts: { withWhisper?: boolean } = {}): Drive {
   const root = freshRoot()
   const manifests = join(root, 'model-manifests')
   mkdirSync(manifests, { recursive: true })
   mkdirSync(join(root, 'config'), { recursive: true })
   writeFileSync(join(root, 'config', 'policy.json'), JSON.stringify({ network: { allow_model_downloads: true } }))
+  if (opts.withWhisper) {
+    writeFileSync(join(manifests, 'whisper-test.yaml'), JSON.stringify(WHISPER_MANIFEST))
+    mkdirSync(join(root, 'models', 'transcriber'), { recursive: true })
+    writeFileSync(join(root, 'models', 'transcriber', 'whisper-test.bin'), 'ggml-bytes')
+  }
   writeFileSync(
     join(manifests, 'runtime-sources.yaml'),
     stringify({
@@ -82,6 +112,14 @@ function makeDrive(): Drive {
         version: 'btest',
         builds: [{ os: HOST_OS, arch: HOST_ARCH, backend: 'cpu', url: 'https://example.test/llama.zip', sha256: SHA, extract_to: `runtime/llama.cpp/${HOST_OS}` }]
       },
+      ...(opts.withWhisper
+        ? {
+            whisper_cpp: {
+              version: 'wtest',
+              builds: [{ os: HOST_OS, arch: HOST_ARCH, backend: 'cpu', url: 'https://example.test/whisper.zip', sha256: SHA, extract_to: `runtime/whisper.cpp/${HOST_OS}` }]
+            }
+          }
+        : {}),
       kiwix_tools: {
         version: '3.8.1',
         optional: true,
@@ -109,13 +147,41 @@ function makeDrive(): Drive {
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
     manifestsDir: manifests,
     runtime: { activeModelId: () => null, status: () => ({ running: false, modelId: null, startingModelId: null, port: null, healthy: false, message: '' }) },
-    zim: { reconcile }
+    zim: { reconcile },
+    // #497: the startup composition found no whisper-cli, so the slot is null until an install.
+    transcriber: null
   })
   handlers.clear()
   const manager = new EngineDownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, extractImpl: extractAll })
   registerEngineIpc(ctx, manager)
-  return { root, handlers, manager, fetchSpy, reconcile }
+  return { root, handlers, manager, fetchSpy, reconcile, ctx }
 }
+
+describe('a completed whisper_cpp install activates dictation without a restart (#497)', () => {
+  it('fills the null transcriber slot the moment the voice engine is on the drive', async () => {
+    const d = makeDrive({ withWhisper: true })
+    expect(d.ctx.transcriber).toBeNull()
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['whisper_cpp'] })
+    const job = await settle(d, result as EngineDownloadJob)
+    expect(job.status).toBe('done')
+    expect(existsSync(join(d.root, 'runtime', 'whisper.cpp', HOST_OS, WHISPER_BIN))).toBe(true)
+    // The completed install re-ran the transcriber selector — binary + weights are both present now.
+    await vi.waitFor(() => expect(d.ctx.transcriber).not.toBeNull())
+    expect(d.ctx.transcriber?.id).toBe('whisper-test')
+    // Only the requested family was fetched; the packs reconcile is the kiwix hook's, not this one's.
+    expect(d.fetchSpy).toHaveBeenCalledTimes(1)
+    expect(d.reconcile).not.toHaveBeenCalled()
+  })
+
+  it('a chat-engine install leaves the slot alone (the speech model is still unusable without whisper-cli)', async () => {
+    const d = makeDrive({ withWhisper: true })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'] })
+    const job = await settle(d, result as EngineDownloadJob)
+    expect(job.status).toBe('done')
+    await new Promise((r) => setTimeout(r, 20))
+    expect(d.ctx.transcriber).toBeNull()
+  })
+})
 
 async function settle(d: Drive, job: EngineDownloadJob): Promise<EngineDownloadJob> {
   await vi.waitFor(() => expect(['done', 'failed', 'cancelled']).toContain(d.manager.get(job.jobId).status), { timeout: 5000 })

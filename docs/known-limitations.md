@@ -1875,10 +1875,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   to the AI Model screen; a task started anyway refuses with the same friendly copy. Since
   issue #40 (2026-07-09) a completed **in-app download re-runs the translation selector**
   (`AppContext.onModelInstalled`), so translation activates the moment the GGUF lands — no
-  restart. Residuals: a weight copied onto the drive OUTSIDE the app (manual file copy) is
-  still only picked up at the next start, and the **transcriber/reranker/embedder** keep the
-  startup-frozen selection (their handles are captured at IPC-registration/ingestion-wiring
-  time — a mid-session whisper download still needs a restart).
+  restart; since #497 (2026-09-21) the same hook — and the engine installer's completion hook
+  for `whisper_cpp` — re-runs the **transcriber** selector too (`refreshTranscriberSlot`, a null
+  slot only), so voice dictation and audio import activate the moment the speech model or the
+  voice engine lands. Residuals: a weight copied onto the drive OUTSIDE the app (manual file
+  copy) is still only picked up at the next start, and the **reranker, embedder and OCR engine**
+  keep the startup-frozen selection (the embedder and OCR handles are captured at wiring time in
+  `main/index.ts`; the embedder must never swap mid-session anyway — an index embedded by one
+  model is unusable with another; the OCR refresh has its own open owner call).
 - **A failed translation-model START disables translation until the app restarts or the model is
   re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
   first translate. If that start

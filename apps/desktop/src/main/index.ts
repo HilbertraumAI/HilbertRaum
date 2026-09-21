@@ -80,7 +80,12 @@ import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
 import { createSkillRegistry } from './services/skills/registry'
-import { composeServices, composeTranslator, shouldReplaceTranslator } from './services/compose-services'
+import {
+  composeServices,
+  composeTranslator,
+  refreshTranscriberSlot,
+  shouldReplaceTranslator
+} from './services/compose-services'
 import {
   initBinaryVerification,
   setBinaryVerificationPosture,
@@ -669,15 +674,24 @@ function initBackend(): void {
   // to a working translator; `shouldReplaceTranslator` holds the rule) — never a LIVE sidecar:
   // a running instance means the role was already available, and construction of the lazy
   // runtime spawns nothing. All translator consumers read `ctx.translator` live
-  // (translateJobs/docTasks/IPC/lock/quit), so one re-assignment flips them together. The
-  // transcriber/reranker/embedder keep the documented restart requirement for now — their
-  // handles are captured at wiring time in registerDocsIpc / ingestion deps, so a ctx
-  // re-assignment alone would activate them inconsistently.
+  // (translateJobs/docTasks/IPC/lock/quit), so one re-assignment flips them together.
+  // #497: the TRANSCRIBER joins the refresh (`refreshTranscriberSlot`, a null slot only). Every
+  // consumer reads `ctx.transcriber` per call too — the dictation IPC, the per-operation
+  // ingestion deps in registerDocsIpc, the pack-article save, the lock's suspend and the quit's
+  // stop — and construction spawns nothing (the whisper CLI runs per transcribe). The engine
+  // installer's `onInstalled` (`whisper_cpp`) runs the same refresh. The reranker keeps the
+  // documented restart requirement (unaudited); the embedder and the OCR engine are captured at
+  // wiring time (`getIngestionDeps` / `getOcrEngine` above) and must stay startup-frozen — an
+  // index embedded by one embedder is unusable with another.
   ctx.onModelInstalled = (modelId) => {
     // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model
     // BEFORE the translator rule below can return early (that rule is about a different slot).
     clearModelLoadLatch(modelId)
-    if (!ctx || !shouldReplaceTranslator(ctx.translator)) return
+    if (!ctx) return
+    // #497: BEFORE the translator early-return (a different slot), and never throwing — the
+    // download manager swallows the whole hook, so a throw here would skip the refresh below.
+    refreshTranscriberSlot(ctx)
+    if (!shouldReplaceTranslator(ctx.translator)) return
     ctx.translator = composeTranslator({
       rootPath: paths.rootPath,
       manifestsDir,

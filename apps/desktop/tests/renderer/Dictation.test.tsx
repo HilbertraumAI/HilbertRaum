@@ -117,6 +117,27 @@ describe('availability gating (D14 precedent)', () => {
     expect(screen.queryByRole('button', { name: /dictate a message/i })).not.toBeInTheDocument()
   })
 
+  it('ChatScreen re-reads availability on window focus — a download that finished while the user stayed in chat (#497)', async () => {
+    const getAppStatus = vi.fn(async () => appStatus({ dictationAvailable: false }))
+    stubApi({
+      getAppStatus,
+      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
+      listConversations: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [])
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await screen.findByPlaceholderText('Message…')
+    expect(screen.queryByRole('button', { name: /dictate a message/i })).not.toBeInTheDocument()
+
+    // Main re-selected the transcriber when the speech model landed (the #497 hook); the open
+    // chat screen learns of it on the next focus, exactly like the Translate screen does.
+    getAppStatus.mockImplementation(async () => appStatus({ dictationAvailable: true }))
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(await screen.findByRole('button', { name: /dictate a message/i })).toBeInTheDocument()
+  })
+
   it('the Composer hides the mic when dictation is unavailable (default)', () => {
     render(
       <Composer

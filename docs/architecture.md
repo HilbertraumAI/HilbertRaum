@@ -1694,7 +1694,16 @@ explicitly out of scope.
 
 - **Availability-driven (D14 precedent, no settings key):** `AppStatus.dictationAvailable`
   = "a transcriber is selected"; the mic button simply doesn't render without it. The IPC
-  refuses friendly as a backstop.
+  refuses friendly as a backstop. **Restart-free activation (#497, 2026-09-21):** the slot is
+  re-selected by `refreshTranscriberSlot` (`compose-services.ts`, the transcriber twin of the
+  issue-#40 `composeTranslator`) from BOTH install hooks — `AppContext.onModelInstalled` after a
+  speech-model download and `EngineDownloadManager.onInstalled` after a `whisper_cpp` engine
+  install — a null slot only (a live instance may hold an in-flight child that the lock/quit
+  teardowns reach through `ctx.transcriber`). Every consumer already read the slot per call
+  (dictation IPC, the per-operation ingestion deps, the pack-article save, lock, quit), so the
+  "captured at wiring time" premise the restart requirement rested on was never true for the
+  transcriber (it is for the embedder + OCR engine: `main/index.ts` `getIngestionDeps`). The
+  chat screen re-reads the flag on mount and on window focus (the Translate-screen pattern).
 - **Permissions:** the Phase-31 deny-by-default `setPermissionRequestHandler` gained its
   single exception — `media` requests that are **audio-only and from the app's own
   WebContents** (`services/permissions.ts`; scope matrix unit-tested). See

@@ -49,7 +49,9 @@ export interface AppContext {
    * Audio transcriber: the whisper.cpp CLI behind the `Transcriber`
    * interface, selected only when the binary + the GGML weights exist. Null/absent =
    * audio imports fail per-file with friendly copy (graceful-fallback rule — there is
-   * deliberately no mock transcriber).
+   * deliberately no mock transcriber). MUTABLE (#497): a null slot is RE-ASSIGNED by
+   * `refreshTranscriberSlot` when a mid-session speech-model download or whisper.cpp engine
+   * install makes the role available — consumers read it off ctx per call, never capture it.
    */
   transcriber?: Transcriber | null
   /**
@@ -177,10 +179,12 @@ export interface AppContext {
   /**
    * Fired by the in-app download manager when a model download completes (issue #40, all files in
    * place). The live wiring (main/index.ts) re-runs the availability selectors that composed to
-   * null at startup — the translation sidecar today — so a downloaded model activates without an
-   * app restart. The transcriber/reranker/embedder still need a restart: their handles are
-   * captured at IPC-registration/ingestion-wiring time (see the known-limitations doc). Optional
-   * so partial test contexts stay valid; must never throw (the manager guards regardless).
+   * null at startup — the translation sidecar (#40) and the transcriber (#497; its engine-install
+   * twin is `EngineDownloadManager.onInstalled` for `whisper_cpp`) — so a downloaded model
+   * activates without an app restart. The reranker still needs a restart (unaudited); the
+   * embedder and the OCR engine are captured at wiring time (`getIngestionDeps` / `getOcrEngine`
+   * in main/index.ts) and stay startup-frozen by design. Optional so partial test contexts stay
+   * valid; must never throw (the manager guards regardless).
    */
   onModelInstalled?: (modelId: string) => void
   /**

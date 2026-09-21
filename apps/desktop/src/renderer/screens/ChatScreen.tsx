@@ -311,8 +311,24 @@ export function ChatScreen({
   const [articleTarget, setArticleTarget] = useState<ArticleTarget | null>(null)
   // Voice dictation: availability-driven — the composer mic renders only
   // when a transcriber is selected (whisper binary + weights on the drive). Best-effort
-  // like `docs`: a failed status read just hides the mic.
+  // like `docs`: a failed status read just hides the mic. Read on mount AND on window focus
+  // (#497, the Translate-screen pattern): main re-selects the transcriber the moment a
+  // mid-session speech-model download or voice-engine install lands, and a user who stayed in
+  // chat meanwhile must not need a restart — or a navigation — to see the mic.
   const [dictationAvailable, setDictationAvailable] = useState(false)
+  const refreshDictationAvailability = useCallback(async (): Promise<void> => {
+    try {
+      const status = await window.api.getAppStatus()
+      setDictationAvailable(status?.dictationAvailable === true)
+    } catch {
+      setDictationAvailable(false)
+    }
+  }, [])
+  useEffect(() => {
+    const onFocus = (): void => void refreshDictationAvailability()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [refreshDictationAvailability])
   // Composite scope for the NEXT documents conversation (plan D1); once a conversation is
   // created it owns the scope (`scope_v2_json`) and this clears. Seeded from the Documents
   // screen's "Ask these documents" handoff (a specific-doc selection).
@@ -523,14 +539,7 @@ export function ChatScreen({
         setPacks([])
       }
     })()
-    void (async () => {
-      try {
-        const status = await window.api.getAppStatus()
-        setDictationAvailable(status?.dictationAvailable === true)
-      } catch {
-        setDictationAvailable(false)
-      }
-    })()
+    void refreshDictationAvailability()
     void (async () => {
       try {
         // Only ENABLED, available skills are pickable for a turn (skills plan §10.2/§11.3).
@@ -542,7 +551,7 @@ export function ChatScreen({
         setEnabledSkills([])
       }
     })()
-  }, [refreshConversations, checkRuntime])
+  }, [refreshConversations, checkRuntime, refreshDictationAvailability])
 
   // While no runtime is up, poll: the app may still be auto-starting the selected model
   // in the background (it can take a while to load a large GGUF), and the screen should
