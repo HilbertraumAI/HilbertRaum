@@ -1,4 +1,3 @@
-import { basename } from 'node:path'
 import type { Transcriber } from './index'
 import { createWhisperCliTranscriber, resolveWhisperCliPath } from './cli'
 import { resolveSidecarSelection } from '../select-sidecar-backed'
@@ -28,9 +27,13 @@ export interface TranscriberModelInfo {
  */
 export const VAD_MODEL_FILE_RE = /^ggml-silero-.*\.bin$/i
 
-/** The VAD model among a resolved transcriber's required files, or null when none is declared. */
+/**
+ * The VAD model among a resolved transcriber's required files, or null when none is declared.
+ * Matches the last path segment on EITHER separator (a Windows path is judged the same on a
+ * POSIX host — `node:path`'s basename would not split it there).
+ */
 export function vadModelPathOf(model: Pick<TranscriberModelInfo, 'requiredPaths'>): string | null {
-  return model.requiredPaths?.find((p) => VAD_MODEL_FILE_RE.test(basename(p))) ?? null
+  return model.requiredPaths?.find((p) => VAD_MODEL_FILE_RE.test(p.split(/[\\/]/).pop() ?? p)) ?? null
 }
 
 export interface TranscriberSelectionDeps {
