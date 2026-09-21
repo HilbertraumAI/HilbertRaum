@@ -7,7 +7,7 @@ the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.
 from its first public `1.0.0` release onward.
 
 > **Pre-1.0.** HilbertRaum has been public since **2026-07-12** and has shipped releases
-> since that day: **v0.1.50** was the first, **v0.1.60** is current. Versions stay in the
+> since that day: **v0.1.50** was the first, **v0.1.61** is current. Versions stay in the
 > `0.1.x` line and SemVer applies from `1.0.0` on — a `0.1.x` bump is a release checkpoint,
 > not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) have no GitHub release
 > page today and no notes here; one of them, `v0.1.46` (2026-07-10), was a pre-release
@@ -24,6 +24,10 @@ from its first public `1.0.0` release onward.
 > not for a contributor.
 
 ## [Unreleased]
+
+Nothing yet — the next release's entries accumulate here.
+
+## [0.1.61] — 2026-09-21
 
 ### Added
 
@@ -927,7 +931,8 @@ For what the product *is*, see the [README](README.md) and
 [`docs/known-limitations.md`](docs/known-limitations.md). Every release since has its own
 section in [`CHANGELOG.md`](CHANGELOG.md).
 
-[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.60...HEAD
+[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.61...HEAD
+[0.1.61]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.60...v0.1.61
 [0.1.60]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.59...v0.1.60
 [0.1.59]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.58...v0.1.59
 [0.1.58]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.57...v0.1.58

@@ -29,7 +29,7 @@
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
 _2026-09-20 — **Wave 13 research recorded, five PRs shipped under a new standing shipping rule, the
-v0.1.61 tag deferred.** Retrieval is deterministic across repeated asks and a cold process restart — the
+v0.1.61 cut 2026-09-21.** Retrieval is deterministic across repeated asks and a cold process restart — the
 only variance measured was in answer wording, now removed by the sampler pin. Converter coverage is
 93–99% on ordinary prose-shaped content; a lower figure on giant list-style tables is a size/row cap by
 design, not a defect. Nothing breaks on seven non-Wikipedia test archives; two converter gaps were
