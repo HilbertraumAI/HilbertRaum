@@ -249,6 +249,48 @@ describe('admitArticle — explicit-different-sense (topic-conflict pairs)', () 
     expect(result.admitted).toBe(true)
   })
 
+  // Issue #488: the converter now writes `^`/`_` markers into prose, so the article text this
+  // gate is handed reads `CO_2` / `H_2O` where it used to read `CO2` / `H2O`. Both the question
+  // and the two body windows are folded before `norm` (`supsub.ts`), because `norm` rewrites
+  // `_` to a space and would otherwise split `CO_2` into two sub-floor tokens — the escape
+  // above would stop finding the question's `co2` and this article would newly be REFUSED.
+  it('the lexical-overlap escape still fires when the article text carries sup/sub markers and the question does not (issue #488)', () => {
+    const marked = 'In der Mythologie erscheinen H_2O und CO_2 als wiederkehrende Motive.'
+    const result = admitArticle(
+      'Wie ist die Rotation des Planeten mit H2O und CO2?',
+      'Eine Göttin der Mythologie',
+      marked,
+      marked,
+      'fts'
+    )
+    // lex(lead, tokens(q)) counts "h2o" and "co2" = 2 -> the escape fires -> admitted.
+    expect(result.admitted).toBe(true)
+
+    // Same article text, a question with no shared content tokens at all: the pair still fires,
+    // so the fold widens nothing — it only restores the overlap the markers had hidden.
+    const unrelated = admitArticle('Wie ist die Rotation des Planeten?', 'Eine Göttin der Mythologie', marked, marked, 'fts')
+    expect(unrelated).toEqual({ admitted: false, reason: 'explicit-different-sense', route: 'fts' })
+  })
+
+  it('an identifier folds to ONE token on both sides and still matches itself (issue #488)', () => {
+    // The first cut folded `_` only before a DIGIT, so `snake_case` tokenised as "snake" +
+    // "case". The census over 949 + 488 cached articles measured that rule's cost — 86 real
+    // match terms split by a surviving marker (`NO_x`, `SO_x`, `pK_S`, `kW_p`, `MW_th`,
+    // `T_krit`, `C_org`), with no `<sub>` at all in the code-oriented packs it protected — so
+    // the fold is symmetric now: both sides yield "snakecase", and the identifier still matches
+    // an article that writes it the same way. What it no longer matches is `snake case`.
+    const text = 'Die Mythologie kennt snake_case und die Rotation nicht.'
+    const result = admitArticle('Wie ist die Rotation des snake_case Planeten?', 'Mythologie', text, text, 'fts')
+    // lex(lead, tokens(q)) counts "snakecase" and "rotation" = 2 -> the escape fires.
+    expect(result.admitted).toBe(true)
+
+    // The documented consequence, pinned: an article that spells the identifier with a SPACE
+    // now shares only "rotation", one token short of the escape, and the pair refuses.
+    const spaced = 'Die Mythologie kennt snake case und die Rotation nicht.'
+    const apart = admitArticle('Wie ist die Rotation des snake_case Planeten?', 'Mythologie', spaced, spaced, 'fts')
+    expect(apart).toEqual({ admitted: false, reason: 'explicit-different-sense', route: 'fts' })
+  })
+
   it('a pair does NOT fire when the question itself does not match the "wanted" side', () => {
     const result = admitArticle(
       'Was ist eine Göttin?',

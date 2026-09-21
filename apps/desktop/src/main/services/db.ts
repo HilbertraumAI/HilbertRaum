@@ -1162,6 +1162,12 @@ function applyPragmasAndMigrations(db: Db): void {
   // user turn, or user Stop). Additive + nullable — an older app ignores it and reads every reply as
   // complete, byte-identical to before. CONTENT-free (a single boolean).
   ensureColumn(db, 'messages', 'truncated', 'truncated INTEGER')
+  // #498 — WHICH ceiling cut the reply short: 'context' (the model ran out of context room) or
+  // 'cap' (the app's own fixed per-reply token cap), NULL on every complete reply and on every
+  // pre-#498 row. Additive + nullable; a truncated legacy row with NULL reads back as 'context',
+  // the flag's historical meaning, so the badge's advice is unchanged for old history. CODE-only
+  // (a two-value enum), never content.
+  ensureColumn(db, 'messages', 'truncated_cause', 'truncated_cause TEXT')
   // Issue #80 (wave R80) — the per-answer actionable skill OFFER: JSON-serialized `SkillOffer`
   // (installId + title + provenance 'deterministic' | 'classifier'), or NULL (no offer — every
   // ordinary answer and every pre-migration row). Additive + nullable, STRUCTURAL only (never the

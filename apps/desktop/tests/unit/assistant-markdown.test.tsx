@@ -131,6 +131,69 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.textContent).toContain('$5 and $10')
   })
 
+  it('promotes a single-$ span that looks like math to INLINE KaTeX (#501)', () => {
+    // remark-math's own single-dollar mode stays off (it would claim "$5 and $10" too); the
+    // normalization promotes only spans passing Pandoc's shape rule AND a math-content rule.
+    for (const text of ['$E = mc^2$', '$m$', '$\\alpha_i$', '$x^2 + y^2$']) {
+      const { container } = render(<AssistantMarkdown text={text} />)
+      expect(container.querySelector('.katex'), `expected ${text} to typeset`).not.toBeNull()
+      expect(container.querySelector('.katex-display'), `${text} is inline math`).toBeNull()
+    }
+  })
+
+  it('promotes BOTH pairs in a sentence, and a span closed before punctuation (#501)', () => {
+    const two = render(<AssistantMarkdown text={'$a=1$ and $b=2$'} />)
+    expect(two.container.querySelectorAll('.katex')).toHaveLength(2)
+    // The closer is followed by `-`: allowed (only a digit right after it would disqualify it).
+    const axis = render(<AssistantMarkdown text={'The $x$-axis'} />)
+    expect(axis.container.querySelector('.katex'), 'expected $x$ to typeset').not.toBeNull()
+  })
+
+  it('leaves currency, ranges and env vars as prose — the #501 promotion is not greedy', () => {
+    for (const text of [
+      'It costs $5 and $10',
+      'between $5 and $10 per month',
+      'US$ 20',
+      'paid $5, $10 or $20',
+      '$HOME/$USER are env vars'
+    ]) {
+      const { container } = render(<AssistantMarkdown text={text} />)
+      expect(container.querySelector('.katex'), `${text} must stay prose`).toBeNull()
+      expect(container.textContent).toContain(text)
+    }
+  })
+
+  it('an escaped \\$ pair and a $ pair spanning two lines stay prose (#501)', () => {
+    const escaped = render(<AssistantMarkdown text={'costs \\$5 and \\$10'} />)
+    expect(escaped.container.querySelector('.katex')).toBeNull()
+    expect(escaped.container.textContent).toContain('$5 and $10')
+    // Inline math never spans a line break, so this is two literal dollars, not one span.
+    const wrapped = render(<AssistantMarkdown text={'$a =\nb$'} />)
+    expect(wrapped.container.querySelector('.katex')).toBeNull()
+    expect(wrapped.container.textContent).toContain('$a =')
+    expect(wrapped.container.textContent).toContain('b$')
+  })
+
+  it('does NOT promote single $ inside code (#501)', () => {
+    const { container } = render(
+      <AssistantMarkdown text={'```\n$x^2$\n```\n\nand inline `$y_1$` too'} />
+    )
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('$x^2$')
+    expect(container.textContent).toContain('$y_1$')
+  })
+
+  it('leaves existing $$ math untouched: inline stays inline, own-line stays display (#501)', () => {
+    const inline = render(<AssistantMarkdown text={'an $$x^2$$ inline'} />)
+    expect(inline.container.querySelector('.katex'), 'expected $$…$$ to typeset').not.toBeNull()
+    expect(inline.container.querySelector('.katex-display')).toBeNull()
+    const display = render(<AssistantMarkdown text={'$$\n x \n$$'} />)
+    expect(
+      display.container.querySelector('.katex-display'),
+      'own-line $$ block must stay DISPLAY math'
+    ).not.toBeNull()
+  })
+
   it('STREAMING: an unclosed trailing \\[ … typesets progressively (remend handler)', () => {
     // Mid-stream the closing \] has not arrived yet, so the whole-text normalization cannot
     // claim it — the custom remend handler completes the tail to closed $$ each flush.
@@ -177,6 +240,37 @@ describe('AssistantMarkdown math (KaTeX)', () => {
     expect(container.querySelector('.katex-error')).toBeNull()
     expect(container.textContent).not.toContain('\\left')
     expect(container.textContent).toContain('so:')
+  })
+
+  it('STREAMING: a half-streamed $ … tail typesets instead of flashing raw TeX (#501)', () => {
+    const { container } = render(<AssistantMarkdown text={'Einstein: $E = mc^'} streaming />)
+    expect(container.querySelector('.katex'), 'unclosed $ tail should typeset').not.toBeNull()
+    expect(container.querySelector('.katex-display')).toBeNull()
+    // The dangling `^` is cut by the completion, and no raw delimiter is left on screen.
+    expect(container.textContent).not.toContain('mc^')
+    expect(container.textContent).not.toContain('$E')
+  })
+
+  it('STREAMING: an ambiguous currency tail stays literal (#501)', () => {
+    // Mid-stream "$5 and the" carries no TeX signal and has no closer to judge it by — the
+    // static pass would keep it prose, so the streaming pass must not claim it either.
+    const { container } = render(<AssistantMarkdown text={'it costs $5 and the'} streaming />)
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('$5 and the')
+  })
+
+  it('STREAMING: an unsalvageable $ tail is HIDDEN, not shown as raw TeX or an error (#501)', () => {
+    const { container } = render(<AssistantMarkdown text={'so:\n\n$\\left( x + 1'} streaming />)
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.querySelector('.katex-error')).toBeNull()
+    expect(container.textContent).not.toContain('\\left')
+    expect(container.textContent).toContain('so:')
+  })
+
+  it('STREAMING: a $ tail inside an unclosed code fence stays verbatim (#501)', () => {
+    const { container } = render(<AssistantMarkdown text={'```\n$x^2'} streaming />)
+    expect(container.querySelector('.katex')).toBeNull()
+    expect(container.textContent).toContain('$x^2')
   })
 
   it('STATIC: an unclosed \\[ stays literal (no remend on persisted turns — self-healing)', () => {

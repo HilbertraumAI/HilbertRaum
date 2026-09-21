@@ -1182,13 +1182,23 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   if complete. Now `readChatSSE`/`parseSseLine` surface `finish_reason` via a new `RuntimeChatOptions.onFinish`
   callback; `generateAssistantMessage` flags `finishReason === 'length'` and persists it as `messages.truncated`
   (additive nullable column; threaded through `Message`, `appendMessage`, and the regenerate delete/restore
-  snapshot). The transcript renders a quiet amber "Reply cut off — reached the model's context limit" note
-  (`.msg-truncated`, `chat.truncated.*`) with an actionable tooltip. A user Stop carries no finish reason, so
+  snapshot). The transcript renders a quiet amber note (`.msg-truncated`, `chat.truncated.*`) with an
+  actionable tooltip. A user Stop carries no finish reason, so
   the intentional partial is **not** flagged. **Since 2026-07-04** (rag-design §15.8) the grounded
   doc-answer paths (`generateGroundedAnswer`/`generateGroundedDataAnswer`) stamp the same flag — a
-  budget-filling document turn is where the ceiling actually hits — and a `'length'` that came from a
-  `max_tokens` CAP (Fast mode's 1024) is **no longer flagged**: the badge claims "context limit", and a
-  capped reply at single-digit meter usage wearing it was a false "context is full" signal.
+  budget-filling document turn is where the ceiling actually hits — and in PLAIN CHAT a `'length'` that
+  came from a `max_tokens` CAP (Fast mode's 1024) is **no longer flagged**: the badge claimed "context
+  limit", and a capped reply at single-digit meter usage wearing it was a false "context is full" signal.
+  **Since 2026-09-21 (#498)** the badge names no cause at all — it reads just "Reply cut off" — because
+  the grounded paths DO flag their own pinned cap (they pin 1024 per pass and continue, §15.8/#491) and
+  the "raise the context size" remedy is wrong for those. The cause rides per message instead, as
+  `Message.truncatedCause` (`'context' | 'cap'`, persisted `messages.truncated_cause`, NULL on a legacy
+  row ⇒ read as `'context'`), and the renderer picks the tooltip from it. Decided by the pure
+  `truncationCause(finishReason, sentCap, timings)` (`rag/whole-doc-tree.ts`): not `'length'` ⇒ no cause;
+  no cap sent ⇒ `'context'`; the server generated FEWER tokens than the cap it was given ⇒ `'context'`
+  (only the window explains stopping short); otherwise `'cap'`. On the continuation engine the window
+  also wins whenever it shrank or eliminated a pass's room (`continueUntilComplete` reports the cause
+  back with the final finish reason).
 - **First-answer warm-up hint (#39, 2026-07-09).** The first generation after a model start/switch
   pays one-time costs (weights into memory + the long system-prompt prefill that `cache_prompt: true`
   then reuses — dramatic on CPU-pinned sessions); the sidecar already budgets for it internally
@@ -1477,7 +1487,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   posture is unchanged — and drop `rehype-harden` as redundant under the CSP + the link gate below).
   The app ships no Tailwind, so Streamdown's one non-semantic element — `**bold**` as a styled
   `<span>` — is mapped back to `<strong>`; every other element is already semantic and styled by the
-  existing `.md` CSS. The `components`/plugin objects are **module-level** in `Transcript.tsx` so their
+  existing `.md` CSS. The `components`/plugin objects are **module-level** in `AssistantMarkdown.tsx` so their
   references stay stable across the ~40 ms flush — an inline object would defeat Streamdown's block
   memoization (see FE-1, measured). Links are whitelisted to http(s) and get `target="_blank"` so the
   main process's window-open handler routes them to the OS browser and denies everything else
@@ -1490,8 +1500,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     a model that emitted LaTeX math showed raw `\frac{…}{…}` noise; KaTeX now renders it as typeset
     math inline in the answer, persisted and live. Fonts bundle as **local assets**
     (`out/renderer/assets/KaTeX_*.woff2/ttf`) so it stays fully offline under `font-src 'self'` — no
-    CDN, consistent with the no-cloud rule. Delimiters are block `$$…$$` / `\(…\)` / `\[…\]`, **not**
-    single `$`, so prose like "owes $5 and $10" is never mangled into math.
+    CDN, consistent with the no-cloud rule. Delimiters are `$$…$$` / `\(…\)` / `\[…\]`, and a single
+    `$…$` span is promoted to inline math **only when it looks like math** (#501): Pandoc's rule (no
+    space just inside the delimiters, no digit right after the closer, same line) plus a TeX signal
+    (`\ ^ _ { } = + < > |`) or a one-or-two-letter span like `$x$`. remark-math's own single-`$` mode
+    stays off, so prose like "owes $5 and $10", `$HOME/$USER` and escaped `\$` are never mangled.
 - **Runtime requirement (decision).** `sendChatMessage` does **not** auto-start a runtime: a chat
   needs a started model (`RuntimeManager.start()`). With no active runtime the handler throws and
   the Chat screen shows a "start a model" empty state that links to Models (and polls

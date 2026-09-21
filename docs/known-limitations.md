@@ -993,7 +993,9 @@ password recovery — are documented in
   before knowledge-pack tables were delivered to the model. A reply that reaches the cap is not
   silently cut: the same continue-generation engine the whole-document path uses (below) picks
   it up, capped at 1024 tokens per pass, continued up to twice more, then honestly flagged
-  `truncated` if still cut after that.
+  `truncated` if still cut after that. **Since #498** that flag no longer blames the context
+  window: the badge says only "Reply cut off", and a reply the app's own cap ended says so and
+  offers "ask the model to continue" rather than "raise the context size", which would not help.
 
 ## Document tasks & summaries
 
@@ -3172,10 +3174,23 @@ reports and phase plans were working papers; their full text lives in git histor
   four warning boxes and nothing else. A nested table's own further-nested tables
   are inlined down to a fixed safety-valve depth (8); deeper nesting is dropped,
   unchanged from the feature's first design. The superscript/subscript readable
-  convention (`g/cm^3`, `10^6`) applies inside table-derived text only — prose keeps
-  today's flattening (`m<sup>2</sup>` → `m2`) unchanged, a deliberate scoping decision
-  (moving prose text too would blur what the funnel change is attributable to),
-  reported, not fixed here. Removing `table` from the scanner's `SKIP_SUBTREE` set also
+  convention (`g/cm^3`, `10^6`, `H_2O`) applied inside table-derived text only when
+  table delivery shipped — prose kept today's flattening (`m<sup>2</sup>` → `m2`) as a
+  deliberate scoping decision, reported rather than fixed there. It is fixed now (#488):
+  prose and headings emit the same markers, from the same module as the table path
+  (`zim/supsub.ts`), and the retrieval matchers fold the markers back out of BOTH the
+  question and the article text, so every alphanumeric run of the text a matcher compared
+  before is still a substring of what it compares now. A marker is written only where it
+  will sit BETWEEN two alphanumerics, so the reference back-links, the bracketed notes
+  (`^[note 1]`) and the empty `<sup></sup>` that the feature's first cut marked are
+  unmarked again. **Two residuals remain, by design.** An exponent whose base ends in a
+  non-alphanumeric loses its marker — `(a+b)<sup>2</sup>` reads `(a+b)2` — because the rule
+  reads only the one character before the element, and `)` is not one a marker may follow
+  any more than the space before a back-link is. And the fold is now
+  symmetric in `^` and `_` (a census measured the digit-only `_` rule splitting 86 real
+  match terms — `NO_x`, `SO_x`, `pK_S`, `T_krit`), so a typed `snake_case` yields the one
+  term `snakecase`: it still matches an article writing it the same way, but no longer one
+  writing `snake case`. Removing `table` from the scanner's `SKIP_SUBTREE` set also
   changes html.ts's recovery on unbalanced markup OUTSIDE any table — e.g.
   `<p>before</p><figure><table></figure><p>after</p>` now returns `before` and `after`
   as two segments, where it previously dropped the tail after the stray `<table>` inside

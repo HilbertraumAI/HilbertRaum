@@ -1650,7 +1650,7 @@ ACTUAL assembled prompt, stopping (`CONTINUATION_MIN_OUTPUT_TOKENS = 256` floor)
 the runtime rejects. All INSIDE the existing try/catch: a Stop mid-continuation is caught and the accumulated
 partial persisted (the aborted pass's partial folded in via a `finally` seam-flush) — never a fresh pass past
 the abort. **Stamp decision (data contract):** `Message.truncated = true` is set ONLY when continuation is
-EXHAUSTED and the last pass is still 'length' — an honest **OUTPUT**-truncation badge (shipped copy: "Reply cut off — reached the model's context limit", #151 RD-4),
+EXHAUSTED and the last pass is still 'length' — an honest **OUTPUT**-truncation badge (shipped copy since #498: "Reply cut off", cause-neutral; the remedy comes from `Message.truncatedCause`, which `continueUntilComplete` returns alongside the final finish reason),
 **parity with the single-turn grounded path's `messages.truncated`**, kept STRICTLY separate from
 `coverage.truncated` (**INPUT** coverage). The whole document can be covered (`coverage.truncated:false`) while
 the deliverable is output-cut (`Message.truncated:true`); a user Stop leaves it false. **Scope:** the shared
@@ -1900,8 +1900,9 @@ independent fixes:
   `ensureColumn`; threaded through `Message.truncated`, `MessageRow`, `rowToMessage`, `AppendMessageInput`,
   the `appendMessage` INSERT, and the regenerate delete/restore snapshot for byte-faithful restore). A user
   **Stop** aborts before any final chunk, so `finishReason` stays null → the intentional partial is **not**
-  flagged. Renderer: a quiet amber `.msg-truncated` note ("Reply cut off — reached the model's context
-  limit", `chat.truncated.label`/`.hint`, `role="note"`) with an actionable tooltip. **Scope:** plain chat
+  flagged. Renderer: a quiet amber `.msg-truncated` note (shipped 2026-07-01 as "Reply cut off — reached
+  the model's context limit"; cause-neutral "Reply cut off" since #498, see the amendment below;
+  `chat.truncated.label`/`.hint.*`, `role="note"`) with an actionable tooltip. **Scope:** plain chat
   (`generateAssistantMessage`); the grounded doc-answer path is out of scope for this signal.
 - **German subword safety (§15.2).** `messageTokens` scales the 1.3 base word rate by
   `CHAT_TOKENS_PER_WORD_SAFETY (1.5)` → ≈1.95 real tokens/word, mirroring the RAG grounded-answer ÷1.5
@@ -1954,6 +1955,15 @@ context size."* All four observations were real seams:
   limit" at single-digit meter usage — a false "context is full" signal. `generateAssistantMessage` flags
   truncated only when NO cap was in effect (`runtimeOptions.maxTokens ?? requestParamsForMode(mode).maxTokens`
   is null); prompt fitting reserves ≥ the Fast cap of answer room, so with a cap set the cap is what fired.
+  **Amended 2026-09-21 (#498):** that "no longer flagged" rule is PLAIN CHAT only. The grounded paths pin
+  their own 1024-token cap per pass and still flag a reply it ended (#491), so the fix there is to stop
+  NAMING a cause in the badge: the label is now just "Reply cut off", and the per-message
+  `Message.truncatedCause` (`'context' | 'cap'`, persisted `messages.truncated_cause`; NULL on a legacy
+  row ⇒ `'context'`) picks the tooltip, so "raise the context size" is offered only when the window really
+  was the reason. The shared pure `truncationCause(finishReason, sentCap, timings)` decides it — no cap
+  sent ⇒ `'context'`; `timings.predicted_n` short of the cap ⇒ `'context'` (the server stopped before the
+  cap it was given); else `'cap'` — and `continueUntilComplete` additionally reports `'context'` when the
+  no-overflow room guard shrank a pass's ceiling below `outputCap` or left no room to continue at all.
 - **One window for every area.** Doc tasks budgeted against bare `settings.contextTokens` while chat/RAG
   budgeted against the launched window — the literal "different context sizes in different areas". The
   `DocTaskManager.getContextTokens` dep (main/index.ts) now returns `effectiveContextWindow(active, s)`
@@ -4770,6 +4780,37 @@ un-run over the articles that could actually fail it; the figures above are the 
 Conversion `work` (the scanner's own linear-scan accounting) is identical to the unit at the
 branch point on both corpora — 89,120.55 mean on the 949-article corpus and 30,778.62 mean on
 the archive corpus — and the linear-scanner bound itself is untouched.
+
+**Prose joins the table superscript/subscript convention (#488, 2026-09-21).** The `^`/`_`
+markers the table path has written since #478 now come from prose and headings too (`m^2`,
+`10^6`, `H_2O`, `NO_x`, previously fused), from one module (`zim/supsub.ts`) that also owns
+the shared `mw-ref` predicate. **A marker is written only where it sits BETWEEN alphanumerics**
+(`shouldMark`; a leading `+ - − ±` counts: `10^−6`, `Na^+` read as exponents). The first cut
+marked every one; the census: of 12,483 insertions only 18 % were foldable, 63 % landed in
+reference back-link runs (`↑ a b c` → `↑ ^a ^b ^c` — no `mw-ref` class there) and a
+paragraph-initial `<sup>` opened 88 of 100 Greek-Wikivoyage articles. **Retrieval does not move
+with the markers:** both matchers (`queryTerms`/`overlapScore`, the admission gate’s inputs)
+fold both sides, symmetrically in `^` and `_` — the digit-only `_` rule went because it split
+86 real terms (`NO_x`, `SO_x`, `pK_S`, `T_krit`) while the packs it protected carry no
+`<sub>`; the price: a typed `snake_case` matches `snake_case`, not `snake case`. Both compare
+by SUBSTRING, so: **every alphanumeric run of the pre-#488 text is still a substring of the
+folded text** — only a surviving marker between alphanumerics could break it, and none is
+emitted bar the sign forms; `packs:getArticle` returns it too.
+**Measured (2026-09-21, `tmp/488-measurement/`, baseline master `d3ecc22a` vs head `a6dacb35`; the
+949 core200 Wikipedia articles + 488 articles from seven other archives):** the first cut (`02ca2a9f`)
+inserted 12,483 markers in core200, 18 % fold-shaped, 63 % on reference back-links; the revision
+inserts 2,897 (90 % fold-shaped, the rest sign exponents such as `10^−12`), 0 on back-links, and
+drops 745 #478 table markers that sat next to a non-alphanumeric (`[PRON]_2` → `[PRON]2`). Moved:
+246 of 949 articles, 1,462 prose lines and 426 table lines; 1 of the 488 archive articles. The
+invariant of record — every alphanumeric run ≥ 3 of the baseline text is still a substring of the
+folded head text — holds on 1,436 of 1,437 articles; the one exception is three words of a
+table-truncation notice (`[Rows 1-1 of 1 source rows shown]`) that the shorter cell text made
+unnecessary. Question side: 0 of the 200 core200 questions carry a marker, `queryTerms` identical
+for all 200. Acceptance read (the 4-z-r harness, gpu profile, both packs, 200/200): all six PR-B
+floors PASS — allPacked 102, anyCandidate 143, anyArticle 143 (identical to the #500 read),
+arm-excl-planner+rerank p90 1,137 ms, rerank p90 3,231 ms, planner p90 922 ms; the same 14 ids
+without a generated answer as in the #500 read. Artifacts stay local (`tmp/`, git-ignored), as
+for #479/#500.
 
 ### Shipping rule for knowledge-pack changes
 

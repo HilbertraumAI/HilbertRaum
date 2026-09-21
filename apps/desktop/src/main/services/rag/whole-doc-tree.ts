@@ -1,6 +1,12 @@
 import type { Db } from '../db'
-import type { Citation, CoverageInfo, KnowledgePackOutcome, Message } from '../../../shared/types'
-import type { ChatMessage, ModelRuntime } from '../runtime'
+import type {
+  Citation,
+  CoverageInfo,
+  KnowledgePackOutcome,
+  Message,
+  TruncationCause
+} from '../../../shared/types'
+import type { ChatMessage, ModelRuntime, RuntimeTimings } from '../runtime'
 import {
   ANALYSIS_RESPONSE_RESERVE_TOKENS,
   CHAT_RESPONSE_RESERVE_TOKENS,
@@ -203,6 +209,43 @@ export interface ContinueGenerationInput {
   acc: { content: string }
   /** The finish reason of the pass that just completed ('length' = cut at the ceiling ⇒ continue). */
   finishReason: string | null
+  /** #498 — the `max_tokens` the pass that just completed was sent (null = none), so the engine can
+   *  attribute a cut to the right ceiling even when the room guard stops it before any new pass runs. */
+  sentCap?: number | null
+  /** #498 — that pass's runtime timings, when the runtime reported any (absent on the mock). */
+  timings?: RuntimeTimings | null
+}
+
+/** What `continueUntilComplete` reports back about the LAST pass it saw (#498). */
+export interface ContinuationOutcome {
+  /** The final finish reason: 'length' = still cut after the bounded re-prompts; null on a user Stop. */
+  finishReason: string | null
+  /** Which ceiling ended it — undefined unless `finishReason === 'length'`. */
+  cause?: TruncationCause
+}
+
+/**
+ * #498 — which ceiling ended ONE pass. llama-server reports the same `finish_reason: 'length'` for the
+ * model's context window and for a `max_tokens` cap the app sent, but only the first is fixed by raising
+ * the context size, so the badge's remedy has to come from here rather than from the reason alone:
+ *  - anything but 'length' ⇒ the reply finished, no cause;
+ *  - no cap was sent ⇒ the window is the only ceiling there was;
+ *  - the server generated FEWER tokens than the cap it was given ⇒ it stopped for some other reason,
+ *    and on this boundary that reason is the window (the prompt left less room than the cap asked for);
+ *  - otherwise the cap is what fired.
+ * `timings` is optional by design: the mock runtime and hand-rolled test runtimes report none, and
+ * without it a capped pass attributes to 'cap' — the honest default for a cap that was reached.
+ */
+export function truncationCause(
+  finishReason: string | null,
+  sentCap: number | null | undefined,
+  timings?: RuntimeTimings | null
+): TruncationCause | undefined {
+  if (finishReason !== 'length') return undefined
+  if (sentCap == null) return 'context'
+  const produced = timings?.predicted_n
+  if (produced != null && produced < sentCap) return 'context'
+  return 'cap'
 }
 
 /**
@@ -215,13 +258,23 @@ export interface ContinueGenerationInput {
  * against the ACTUAL assembled prompt, and the loop stops rather than assemble a prompt the runtime would
  * reject — the HTTP 400 class). A user Stop mid-continuation flushes the seam-deduped partial into
  * `acc.content` and returns (swallowed — the caller persists the accumulated partial); a real error
- * propagates. Returns the FINAL finish reason: the caller stamps an honest OUTPUT-truncation when it is still
- * 'length' (the cap was exhausted); `null` on a user Stop (intentional, not an overflow).
+ * propagates. Returns the FINAL finish reason together with its #498 CAUSE: the caller stamps an honest
+ * OUTPUT-truncation when the reason is still 'length' (the cap was exhausted) and uses the cause to pick the
+ * remedy the badge offers; `finishReason: null` on a user Stop (intentional, not an overflow).
  */
-export async function continueUntilComplete(input: ContinueGenerationInput): Promise<string | null> {
+export async function continueUntilComplete(input: ContinueGenerationInput): Promise<ContinuationOutcome> {
   const { runtime, signal, onToken, baseMessages, contextTokens, outputCap, temperature, acc } = input
   let finishReason = input.finishReason
   let continuations = 0
+  // #498 cause bookkeeping, seeded with the pass the caller already ran so the cause is attributable
+  // even when the room guard stops the loop before a single continuation pass gets to run.
+  let lastSentCap: number | null = input.sentCap ?? null
+  let lastTimings: RuntimeTimings | null = input.timings ?? null
+  // True when the WINDOW (not the app's cap) set the last pass's ceiling: the room guard shrank
+  // `continueCap` below `outputCap`, so a 'length' from that pass is the window talking.
+  let capShrunkByWindow = false
+  // True when the loop stopped because no room was left to continue at all — the window again.
+  let stoppedForRoom = false
   try {
     while (finishReason === 'length' && continuations < MAX_REDUCE_CONTINUATIONS) {
       continuations++
@@ -229,7 +282,13 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
       const continueMessages = withContinuation(baseMessages, anchor)
       const continuePromptTokens = continueMessages.reduce((sum, m) => sum + approxPromptTokens(m.content), 0)
       const continueCap = Math.min(outputCap, contextTokens - continuePromptTokens)
-      if (continueCap < CONTINUATION_MIN_OUTPUT_TOKENS) break
+      if (continueCap < CONTINUATION_MIN_OUTPUT_TOKENS) {
+        stoppedForRoom = true
+        break
+      }
+      lastSentCap = continueCap
+      lastTimings = null
+      capShrunkByWindow = continueCap < outputCap
       finishReason = null
       // Hold back the continuation's opening until enough is buffered to resolve the seam overlap against
       // the anchor, then stream the DE-DUPLICATED remainder live.
@@ -249,8 +308,9 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
           signal,
           maxTokens: continueCap,
           temperature,
-          onFinish: (reason) => {
+          onFinish: (reason, tm) => {
             finishReason = reason
+            lastTimings = tm ?? null
           }
         })) {
           if (seamResolved) {
@@ -271,9 +331,14 @@ export async function continueUntilComplete(input: ContinueGenerationInput): Pro
     if (!isAbortError(err, signal)) throw err
     // A user Stop mid-continuation: the seam partial was flushed into acc.content by the finally above.
     // Swallow and report null so the caller persists the partial and does NOT stamp it output-truncated.
-    return null
+    return { finishReason: null }
   }
-  return finishReason
+  // #498 — attribute the final cut. The window wins over the cap whenever the window is what actually
+  // bound the last pass: it left no room to continue at all (`stoppedForRoom`), or it shrank that pass's
+  // ceiling below the app's own cap (`capShrunkByWindow`). Otherwise the per-pass helper decides.
+  if (finishReason !== 'length') return { finishReason }
+  if (stoppedForRoom || capShrunkByWindow) return { finishReason, cause: 'context' }
+  return { finishReason, cause: truncationCause(finishReason, lastSentCap, lastTimings) }
 }
 
 // ── Reduce output/notes budget (Phase 2 — wholedoc-truncation-fix-plan §4) ────────────────────────────
@@ -496,6 +561,9 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
   // Phase 4 (§6): set true ONLY when continue-generation is exhausted and the deliverable is still cut at
   // the output ceiling — an honest OUTPUT-truncation stamp, distinct from the INPUT-coverage `truncated`.
   let outputTruncated = false
+  // #498: which ceiling cut it — set together with `outputTruncated`, so the badge offers the remedy
+  // that applies ("raise the context size" only when the window really is the reason).
+  let outputCause: TruncationCause | undefined
   if (answerPrefix) onToken?.(answerPrefix)
   // Phase 3 — progress affordance (wholedoc-truncation-fix-plan §5): a MULTI-window source runs SILENT
   // map calls before the first streamed reduce token; that gap otherwise reads as a hang. Fire the SAME
@@ -588,12 +656,16 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     // user Stop aborts before any final chunk so onFinish never fires → stays null → not continued and not
     // output-truncated (the abort partial is intentional; parity with the single-turn grounded path).
     let finishReason: string | null = null
+    // #498: the reduce's own timings ride the same final chunk — the cause attribution needs to know
+    // whether the server actually reached `reduceOutputCap` or stopped short of it (⇒ the window).
+    let reduceTimings: RuntimeTimings | null = null
     for await (const token of runtime.chatStream(messages, {
       signal,
       maxTokens: reduceOutputCap,
       temperature: SUMMARY_TEMPERATURE,
-      onFinish: (reason) => {
+      onFinish: (reason, tm) => {
         finishReason = reason
+        reduceTimings = tm ?? null
       }
     })) {
       content += token
@@ -609,7 +681,7 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     // below means a CLEAN return — an exhausted-while-'length' reduce is honestly stamped output-truncated;
     // a user Stop returns null ⇒ false (intentional, not an overflow).
     const acc = { content }
-    const finalReason = await continueUntilComplete({
+    const outcome = await continueUntilComplete({
       runtime,
       signal,
       onToken,
@@ -618,10 +690,15 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
       outputCap: reduceOutputCap,
       temperature: SUMMARY_TEMPERATURE,
       acc,
-      finishReason
+      finishReason,
+      // #498: the reduce pass's own ceiling + timings, so the engine can attribute a cut that the
+      // room guard ends before any continuation pass runs.
+      sentCap: reduceOutputCap,
+      timings: reduceTimings
     })
     content = acc.content
-    outputTruncated = finalReason === 'length'
+    outputTruncated = outcome.finishReason === 'length'
+    outputCause = outcome.cause
   } catch (err) {
     // A user Stop aborts mid-map (no partial) or mid-reduce (keep the partial); any other error is a
     // real failure and propagates. Same contract as `generateGroundedAnswer`'s stream.
@@ -658,7 +735,9 @@ export async function streamWholeDocMapReduce(input: WholeDocMapReduceInput): Pr
     // Phase 4 (§6): honest OUTPUT-truncation stamp when continue-generation was exhausted and the
     // deliverable is still cut at the ceiling — the "Answer truncated" badge, distinct from the coverage
     // (INPUT) truncation above. False on a clean finish and on a user Stop.
-    truncated: outputTruncated
+    truncated: outputTruncated,
+    // #498: the badge names no cause any more — this picks which remedy it offers.
+    truncatedCause: outputCause
   }, signal)
 }
 

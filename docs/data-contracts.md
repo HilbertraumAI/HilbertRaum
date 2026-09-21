@@ -380,6 +380,11 @@ equal-ms ties → stable turn order). **System prompt is built per request, NOT 
 `messages.pack_outcomes_json` (#301 P4, findings M6/M7) is additive and null on every
 pre-P4 row and every message with no knowledge pack in scope — see "Knowledge packs"
 below for the shape and the whitelist that parses it.
+`messages.truncated_cause` (#498) is additive and nullable: `'context' | 'cap'` next to
+`messages.truncated`, surfaced as `Message.truncatedCause` (`TruncationCause`) and written
+only alongside `truncated: true`. NULL on every complete reply and every pre-#498 row — a
+truncated legacy row reads back as `'context'`, the flag's historical meaning — and it is
+carried verbatim through the regenerate delete/restore snapshot (`DeletedMessage`).
 ✅ **Title:** new conversations are `"New chat"`; first user message sets the title (≤60 chars),
 later messages don't overwrite it. Conversations list newest-updated first.
 (Phase 42: the default is persist-canonical English — `t('en', 'main.chat.defaultTitle')`,
@@ -1934,7 +1939,9 @@ is the served library's collision losers `{ packId, collidesWith }` from the ser
 recomputed from the registry at every reconciliation and mutation, from the resolved set at every
 library build, `null` until this session computed one and after a lock; absent on an older main —
 never a database read, so the channel stays lock-exempt) · `packs:getArticle` (`PackArticle | null` — plain sectioned
-TEXT, never HTML; the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
+TEXT, never HTML, carrying the converter's superscript/subscript markers (`m^2`, `10^6`, `H_2O` — #488,
+rag-design §17), which the retrieval matchers fold back out but the viewer shows as delivered;
+the read follows exactly ONE same-book redirect — kiwix-serve answers a ZIM
 alias entry with `302 → /content/<book>/<target>` (P7 T19) — while a cross-book, chained or
 contract-refused target returns `null` and the locator does not change; both requests carry
 `Range: bytes=0-`, which routes the read past the upstream Windows cut-short defect and makes

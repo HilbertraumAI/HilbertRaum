@@ -27,6 +27,34 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-21 — the closed 2026-09-10 #436/#437 live-region entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-21 (preamble budget, making room for the #488/#498/#501
+entry). The two live-region fixes this entry describes shipped in `fix/436-437-live-region-announce`
+and are unchanged since; the by-ear screen-reader leg it names stays an owner item on the closed
+issues. Citations of the form "BUILD_STATE 2026-09-10 entry" resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-09-10 — **#436 + #437 CLOSED — the two silent live regions fixed** (`fix/436-437-live-region-announce`).
+**#436:** `role="status"` is a LIVE REGION (implicit `aria-live="polite"`), not a quieter label — so the `Banner` nested inside
+`ErrorBanner`'s always-mounted `role="alert"` wrapper became the nearest live-region ancestor of the message AND arrived already
+containing it: M-U1 one level down, silencing the shared failure surface of 11 screens + the gate's #145 wrong-password banner.
+`Banner`'s `role` prop now accepts `null` (render no role at all; `aria-live="off"` does NOT work, the ROLE has to go) and
+`ErrorBanner` passes it. The blast radius was one site larger than the issue said: `ModelsScreen`'s download panel keeps its own
+hand-rolled copy of the wrapper with TWO nested `role="status"` Banners — same defect, fixed the same way. **#437:** the
+Performance step list was BOTH inserted with its content and textless as it advanced (progress rode only on `perf-step-{state}`
+and an `aria-hidden` icon). The `<ul>` is now mounted unconditionally (`.perf-steps:empty` collapses it, idle layout unchanged)
+and each step carries its state IN its accessible text — the visible label is `aria-hidden` and an sr-only twin reads
+"<step>: <state>" (new `perf.step.state.*` keys, EN+DE) — so an advance is a whole-line text change WITH context, plus
+`aria-current="step"` on the active item. Guard: `tests/unit/live-region-nesting.test.ts` parses every renderer `.tsx` and fails
+on ANY live-region role nested inside another (it flags all three pre-fix sites; two fixtures pin the broken and the fixed shape).
+**Not closed by this branch: the BY-EAR leg.** Both issues require re-verification with a screen reader (#436 also on the #145
+wrong-password path, #437 during a real multi-second check) — that needs Narrator on the 1070 Ti box and is the remaining
+acceptance item on the PR. **Sequencing:** #438 (an automatic run's steps never advance) is still an open owner call on the same
+subtree; this fix is forward-compatible with either of its options — under option 2 the items render on `ownActionInFlight`
+instead of `busy`, a one-condition change, not a rework. Docs: `benchmark.md` §2 row HW3 + §4, `known-limitations.md`
+(Performance + Accessibility), `design-guidelines.md` §6 error announcements._
+
 ## 2026-09-20 — BUILD_STATE §5 item 21 (m) retired verbatim (both draft PRs merged)
 
 Retired from `BUILD_STATE.md` on 2026-09-20 (§5 budget; the wave-13 drain). Both draft PRs this

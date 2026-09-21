@@ -14,7 +14,8 @@ import {
   type DocumentScope,
   type KnowledgePackOutcome,
   type Message,
-  type SkillOffer
+  type SkillOffer,
+  type TruncationCause
 } from '../../shared/types'
 import { parseDocumentScope } from './collections'
 import { buildFtsMatchQuery } from './fts'
@@ -231,8 +232,11 @@ interface MessageRow {
   auto_fired: number | null
   /** Full-doc-skills Phase 1 — JSON-serialized `CoverageInfo` (D48), or NULL (legacy/no coverage). */
   coverage_json: string | null
-  /** 1 when this assistant reply was cut off at the context ceiling (finish_reason 'length'); else NULL/0. */
+  /** 1 when this assistant reply was cut off at a ceiling (finish_reason 'length'); else NULL/0. */
   truncated: number | null
+  /** #498 — which ceiling cut it: 'context' | 'cap'. NULL on a complete reply and on a pre-#498
+   *  truncated row (read back as 'context', the flag's historical meaning). */
+  truncated_cause?: string | null
   /** Derived by listMessages (EXISTS over `result_tables`): 1 when a result table is attached
    *  (result-tables plan §4, Phase 2). Absent on other query paths — coalesced to undefined. */
   has_result_table?: number | null
@@ -444,6 +448,13 @@ function serializePackOutcomes(outcomes: KnowledgePackOutcome[] | null | undefin
   }
 }
 
+/** Read `messages.truncated_cause` (#498) for a row already known to be truncated. NULL (pre-#498)
+ *  or an unrecognized value ⇒ 'context', the flag's historical meaning — so a legacy cut-off reply
+ *  keeps exactly the advice it used to show. Only ever called when `truncated === 1`. */
+function parseTruncationCause(raw: string | null | undefined): TruncationCause {
+  return raw === 'cap' ? 'cap' : 'context'
+}
+
 function rowToMessage(r: MessageRow): Message {
   const citations = parseCitations(r.citations_json)
   const coverage = parseCoverage(r.coverage_json)
@@ -470,6 +481,10 @@ function rowToMessage(r: MessageRow): Message {
     // Only surface truncation as a positive flag (undefined on complete replies / user turns), so a
     // pre-migration NULL row and a normal reply both read exactly as before.
     truncated: r.truncated === 1 ? true : undefined,
+    // #498: the cause rides with the flag. A truncated row written before #498 has no cause stored —
+    // it reads as 'context', which is exactly what the pre-#498 badge claimed, so old history keeps
+    // its old advice. Anything unrecognized degrades the same way (tolerant read, like coverage).
+    truncatedCause: r.truncated === 1 ? parseTruncationCause(r.truncated_cause) : undefined,
     // Positive-flag convention (Phase 2 result tables): 1 → true, anything else (incl. query paths
     // that don't compute the EXISTS) → undefined, so older rows and other readers are byte-identical.
     hasResultTable: r.has_result_table === 1 ? true : undefined,
@@ -825,11 +840,18 @@ export interface AppendMessageInput {
    */
   coverage?: CoverageInfo | null
   /**
-   * True when this assistant reply was cut off at the token/context ceiling (finish_reason 'length',
+   * True when this assistant reply was cut off at a token ceiling (finish_reason 'length',
    * §L0 honest-signal). Stamped on assistant rows only; omitted/false ⇒ NULL (complete reply). Never
    * set on a user-initiated Stop (that partial is intentional and user-known, not a length overflow).
    */
   truncated?: boolean
+  /**
+   * #498 — WHICH ceiling cut it: 'context' (the model ran out of context room) or 'cap' (the app's
+   * own fixed per-reply cap). Stored only alongside `truncated: true`; ignored (⇒ NULL) otherwise,
+   * so a complete reply can never carry a stray cause. Omitted on a truncated row ⇒ NULL, which the
+   * read side resolves to 'context' (the pre-#498 meaning).
+   */
+  truncatedCause?: TruncationCause
   /**
    * The actionable per-answer skill OFFER (issue #80, wave R80) — persisted to
    * `messages.skill_offer_json`. Assistant rows only; omitted/null ⇒ NULL (no offer — every
@@ -857,6 +879,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   // Stamp auto-fire provenance only when a skill is actually stamped; 1 = auto-fired, NULL otherwise.
   const autoFired = skillId != null && input.autoFired === true
   const truncated = input.truncated === true
+  // #498: the cause is meaningful only on a truncated row — a complete reply always stores NULL.
+  const truncatedCause = truncated ? (input.truncatedCause ?? null) : null
   // #80: best-effort like coverage — a serialization fault degrades to NULL, never blocks the answer.
   const skillOfferJson = serializeSkillOffer(input.skillOffer)
   // #301 P4: same best-effort posture — the ANSWER must persist even if the metadata cannot.
@@ -873,6 +897,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     autoFired,
     coverage: input.coverage ?? undefined,
     truncated: truncated ? true : undefined,
+    // Mirror the read side exactly: a truncated row with no stored cause reads back as 'context'.
+    truncatedCause: truncated ? (truncatedCause ?? 'context') : undefined,
     skillOffer: skillOfferJson != null ? (input.skillOffer ?? undefined) : undefined,
     // Mirrors the row: undefined when nothing was written (no pack in scope, or a serialization
     // fault), so the returned Message and a later `listMessages` read agree.
@@ -880,8 +906,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   }
   prepareCached(
     db,
-    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated, skill_offer_json, pack_outcomes_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated, truncated_cause, skill_offer_json, pack_outcomes_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     msg.id,
     msg.conversationId,
@@ -894,6 +920,7 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     autoFired ? 1 : null,
     coverageJson,
     truncated ? 1 : null,
+    truncatedCause,
     skillOfferJson,
     packOutcomesJson
   )
@@ -994,6 +1021,9 @@ export interface DeletedMessage {
   readonly kind: string | null
   readonly coversThroughRowid: number | null
   readonly truncated: number | null
+  /** #498 — the truncation CAUSE, captured verbatim so a restore cannot silently downgrade a
+   *  'cap' reply to the legacy 'context' reading (the `skillOfferJson` class of bug). */
+  readonly truncatedCause: string | null
   /** #132/#135 (skills-pipeline audit): the persisted per-answer skill OFFER (#80). Omitting it from
    *  the snapshot silently stripped the offer row on BOTH restore legs (F2 + CB-2) — the exact class
    *  the result-table capture below exists for. */
@@ -1020,6 +1050,7 @@ interface DeletedMessageRow {
   kind: string | null
   covers_through_rowid: number | null
   truncated: number | null
+  truncated_cause: string | null
   skill_offer_json: string | null
   pack_outcomes_json: string | null
 }
@@ -1095,7 +1126,7 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     .prepare(
       `SELECT id, conversation_id, role, content, created_at, token_count, citations_json,
               skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated,
-              skill_offer_json, pack_outcomes_json
+              truncated_cause, skill_offer_json, pack_outcomes_json
        FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
@@ -1123,6 +1154,7 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     kind: row.kind,
     coversThroughRowid: row.covers_through_rowid,
     truncated: row.truncated,
+    truncatedCause: row.truncated_cause,
     skillOfferJson: row.skill_offer_json,
     packOutcomesJson: row.pack_outcomes_json,
     resultTables: tableRows.map((t) => ({
@@ -1159,8 +1191,8 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     `INSERT INTO messages
        (id, conversation_id, role, content, created_at, token_count, citations_json,
         skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated,
-        skill_offer_json, pack_outcomes_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        truncated_cause, skill_offer_json, pack_outcomes_json)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     m.id,
     m.conversationId,
@@ -1175,6 +1207,7 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     m.kind,
     m.coversThroughRowid,
     m.truncated,
+    m.truncatedCause,
     m.skillOfferJson,
     m.packOutcomesJson
   )
@@ -1776,7 +1809,10 @@ export async function generateAssistantMessage(
       // S13c undo lines up 1:1 with the glyph (§22-A5).
       autoFired: fence ? opts.skill?.autoFired === true : false,
       // Honest-signal flag: mark a reply the model cut off at the context ceiling ('length').
-      truncated
+      truncated,
+      // #498: plain chat flags ONLY the uncapped case (see the gate above), so its flagged case is
+      // the context window by construction — never the app's own cap.
+      truncatedCause: truncated ? 'context' : undefined
     },
     opts.signal
   )

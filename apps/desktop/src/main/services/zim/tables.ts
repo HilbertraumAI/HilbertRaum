@@ -1,5 +1,6 @@
 import { attrValue, decodeEntities, tidyWhole, RAW_TEXT, SKIP_SUBTREE } from './html'
 import { normalizeMath } from './math'
+import { REF_SUP_CLASS_RE, SUB_MARK, SUP_MARK, lastCharOf, shouldMark } from './supsub'
 
 // Table delivery (issue #478: deliver tables to the model instead of dropping them). html.ts
 // used to drop every `<table>` subtree whole (`SKIP_SUBTREE`), so an infobox or data table
@@ -59,10 +60,12 @@ import { normalizeMath } from './math'
 //    spanning every one of its covered columns (a full-width note or sub-heading row) is
 //    likewise emitted once, un-keyed, never once per covered column and never as `X: X`.
 //  - Superscripts/subscripts are preserved as `^value` / `_value` (so `g/cm<sup>3</sup>` reads
-//    `g/cm^3` and `10<sup>6</sup>` reads `10^6`), but only inside table-derived text -- prose
-//    conversion is unchanged. `<sup class="mw-ref">` citation brackets are still dropped, and an
-//    ordinary `<sup>` nested INSIDE one keeps the skip depth balanced (html.ts's own prose path
-//    already counts every `<sup>` while skipping, for the same reason).
+//    `g/cm^3` and `10<sup>6</sup>` reads `10^6`); since #488 ordinary prose shares the same
+//    convention, from the same module (`supsub.ts`), including its emit predicate: the marker is
+//    written only where it sits BETWEEN alphanumerics (`shouldMark`), so a `<sup>[note 1]</sup>`
+//    in a cell is left unmarked. `<sup class="mw-ref">` citation brackets are still dropped, and
+//    an ordinary `<sup>` nested INSIDE one keeps the skip depth balanced (html.ts's own prose
+//    path already counts every `<sup>` while skipping, for the same reason).
 //  - A grid, once rowspan/colspan is expanded, is capped on three independent axes -- columns,
 //    total placed cells, and total emitted characters (`TABLE_MAX_COLUMNS`,
 //    `TABLE_MAX_GRID_CELLS`, `TABLE_MAX_RAW_CHARS`) -- so a table with an enormous span product,
@@ -100,9 +103,6 @@ export const TABLE_MAX_RAW_CHARS = 50_000
 
 /** Layout/decoration tables carry one of these classes and are still dropped, unchanged. */
 const LAYOUT_TABLE_CLASS_RE = /\b(?:navbox|vertical-navbox|metadata|ambox|toc|sistersitebox)\b/i
-
-/** Reference/citation superscripts: same predicate html.ts's prose path already uses. */
-const REF_SUP_CLASS_RE = /\b(?:mw-ref|reference)\b/
 
 export function isLayoutTableClass(classAttr: string | null): boolean {
   return classAttr !== null && LAYOUT_TABLE_CLASS_RE.test(classAttr)
@@ -303,21 +303,40 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
 
   const active = (): TableContext => stack[stack.length - 1]
 
+  // The sup/sub marker a `<sup>`/`<sub>` open tag ARMED, still waiting for the element's own
+  // text (#488). One rule in one module: the marker is written only where `shouldMark` holds —
+  // the last character already in the cell/caption buffer against the first character of the
+  // text about to be appended — exactly as html.ts decides it for prose. `takeMark` consumes
+  // the armed marker; every structural boundary below (cell, row, caption, table, a break
+  // literal, a nested table's inline) clears it instead, so it can never attach to a later run.
+  let pendingMark: string | null = null
+  const takeMark = (buf: string, next: string): string => {
+    if (pendingMark === null) return ''
+    const mark = pendingMark
+    pendingMark = null
+    return shouldMark(lastCharOf(buf), next) ? mark : ''
+  }
+
   const appendText = (raw: string): void => {
     if (raw.length === 0 || refSkipDepth > 0 || droppedDepth > 0 || mathSkipDepth > 0 || subtreeSkipDepth > 0) return
     const ctx = active()
     const text = decodeEntities(raw)
     if (ctx.inCaption) {
+      // The pending separator is appended FIRST, so a marker is judged against it and a
+      // separated run therefore never marks -- the same answer prose gives after a space.
       if (ctx.pendingSep) { ctx.caption += ' '; ctx.pendingSep = false }
-      ctx.caption += text
+      ctx.caption += takeMark(ctx.caption, text) + text
       ctx.nestedOnly = false
     } else if (ctx.cell) {
       if (ctx.pendingSep) { ctx.cell.text += ' '; ctx.pendingSep = false }
-      ctx.cell.text += text
+      ctx.cell.text += takeMark(ctx.cell.text, text) + text
       ctx.nestedOnly = false
     }
   }
   const appendLiteral = (literal: string): void => {
+    // A literal is never a sup/sub's own text -- it is an intra-cell break space or a formula --
+    // so it CLEARS an armed marker rather than consuming it (#488).
+    pendingMark = null
     if (refSkipDepth > 0 || droppedDepth > 0 || mathSkipDepth > 0 || subtreeSkipDepth > 0) return
     const ctx = active()
     if (ctx.inCaption) {
@@ -337,6 +356,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
   // sitting inside real prose joins with a single space on both sides instead, so it reads as
   // an inserted clause rather than a second field in a list.
   const appendNestedInline = (inline: string): void => {
+    pendingMark = null // a nested table's text is its own clause, never a sup/sub's (#488)
     if (inline.length === 0 || refSkipDepth > 0 || droppedDepth > 0 || mathSkipDepth > 0 || subtreeSkipDepth > 0) return
     const ctx = active()
     if (ctx.inCaption) {
@@ -403,6 +423,7 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
     i = gt + 1
 
     if (name === 'table') {
+      pendingMark = null // a table boundary ends the current mark run (#488)
       if (!isClose) {
         if (!selfClosing) {
           // Issue #478: a nested table's OWN class is checked against the same
@@ -470,29 +491,40 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
 
     if (name === 'sup') {
       // <sup class="mw-ref"> citation brackets stay dropped, same as prose (html.ts's
-      // supSkipDepth). An ordinary <sup> gets the table-scoped readable convention: a literal
-      // `^` immediately before its own text, so `g/cm<sup>3</sup>` reads `g/cm^3` and
-      // `10<sup>6</sup>` reads `10^6` -- never flattened to `g/cm3` / `106`. Prose keeps
-      // today's flattening unchanged (out of scope — docs/known-limitations.md). While already
-      // skipping a ref bracket, EVERY nested `<sup>` (ref or not) is counted symmetrically on
-      // open/close, exactly like html.ts's own prose `supSkipDepth` -- a plain `<sup>` nested
-      // inside a `<sup class="mw-ref">` must not decrement the depth and leak the rest of the
-      // citation (issue #478).
+      // supSkipDepth). An ordinary <sup> ARMS the readable convention: a literal `^`
+      // immediately before its own text, written by `appendText` only where `shouldMark` holds,
+      // so `g/cm<sup>3</sup>` reads `g/cm^3` and `10<sup>6</sup>` reads `10^6` -- never
+      // flattened to `g/cm3` / `106` -- while a `<sup>[note 1]</sup>` or a space-separated one
+      // is left unmarked. Table-scoped when it shipped (#478); prose now shares it, and both
+      // sides come from `supsub.ts` (#488), so the marker a matcher folds back out is the
+      // marker this path wrote. While already skipping a ref bracket, EVERY nested `<sup>` (ref
+      // or not) is counted symmetrically on open/close, exactly like html.ts's own prose
+      // `supSkipDepth` -- a plain `<sup>` nested inside a `<sup class="mw-ref">` must not
+      // decrement the depth and leak the rest of the citation (issue #478).
       if (refSkipDepth > 0) {
         if (!selfClosing) refSkipDepth += isClose ? -1 : 1
         continue
       }
-      if (!isClose && !selfClosing) {
+      if (isClose) pendingMark = null // the element ended before any text: nothing to mark
+      else if (!selfClosing) {
         const cls = attrValue(attrs, 'class') ?? ''
-        if (REF_SUP_CLASS_RE.test(cls)) refSkipDepth = 1
-        else appendLiteral('^')
+        if (REF_SUP_CLASS_RE.test(cls)) {
+          pendingMark = null
+          refSkipDepth = 1
+        } else pendingMark = SUP_MARK
       }
       continue
     }
     if (name === 'sub') {
-      // Same convention, `_value` (e.g. `H<sub>2</sub>O` reads `H_2O`).
-      if (!isClose && !selfClosing) appendLiteral('_')
+      // Same convention, `_value` (e.g. `H<sub>2</sub>O` reads `H_2O`, `NO<sub>x</sub>` `NO_x`).
+      if (isClose) pendingMark = null
+      else if (!selfClosing) pendingMark = SUB_MARK
       continue
+    }
+    if (name === 'caption' || name === 'tr' || name === 'td' || name === 'th') {
+      // A cell, row or caption boundary ends the current mark run (#488): an armed marker
+      // belongs to the sup/sub's own text and can never cross into the next buffer.
+      pendingMark = null
     }
     if (name === 'caption') {
       const ctx = active()

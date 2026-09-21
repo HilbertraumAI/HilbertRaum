@@ -9,6 +9,7 @@ import { fetchArticleHtml, searchPack, suggestTitles, type KiwixSearchHit } from
 import type { QueryExpander, SearchPlan } from './expand'
 import { zimArticleToSegmentsAsync, type ZimArticle } from './html'
 import { searchPattern } from './query-rewrite'
+import { foldSupSub } from './supsub'
 
 // Query-time candidate production for the ZIM retrieval arm (knowledge packs).
 //
@@ -802,18 +803,30 @@ function isCancellation(askSignal: AbortSignal | undefined): boolean {
   return askSignal.aborted
 }
 
-/** Distinct lowercase query terms of ≥3 letters/digits (unicode-aware). */
+/** Distinct lowercase query terms of ≥3 letters/digits (unicode-aware), taken over the FOLDED
+ *  question (#488, `supsub.ts`): a typed `10^6`, `H_2O` or `NO_x` contributes `106` / `h2o` /
+ *  `nox` — the same terms the bare question produced before the converter marked sup/sub, and
+ *  the same shape `overlapScore` folds the article side down to. The fold is symmetric in `^`
+ *  and `_` (revised after the #488 census), so a typed `snake_case` yields the single term
+ *  `snakecase` — which is also what an article writing it the same way yields. */
 export function queryTerms(question: string): string[] {
   const terms = new Set<string>()
-  for (const m of question.toLowerCase().matchAll(/[\p{L}\p{N}]{3,}/gu)) terms.add(m[0])
+  for (const m of foldSupSub(question).toLowerCase().matchAll(/[\p{L}\p{N}]{3,}/gu)) terms.add(m[0])
   return [...terms]
 }
 
 /** How many distinct query terms a chunk contains — the cheap per-article chunk picker.
- *  (Selection only; the reranker downstream does the real scoring.) */
+ *  (Selection only; the reranker downstream does the real scoring.)
+ *  The haystack is FOLDED first (#488): chunk text is converter output, so `25 m^2` must still
+ *  answer to the term `m2` that the pre-#488 `25 m2` answered to. The comparison is by
+ *  SUBSTRING, and the fold only REMOVES characters, so it can never break a term that matched
+ *  before — only a marker SURVIVING between two alphanumerics could, by splitting a run, and
+ *  `supsub.ts`'s emit rule writes none that the fold does not remove (bar a sign-suffixed
+ *  `10^−6`, where the sign has split the run already). Invariant: every alphanumeric run of the
+ *  pre-#488 text is still a substring of this haystack. */
 export function overlapScore(text: string, terms: readonly string[]): number {
   if (terms.length === 0) return 0
-  const hay = text.toLowerCase()
+  const hay = foldSupSub(text).toLowerCase()
   let n = 0
   for (const t of terms) if (hay.includes(t)) n++
   return n

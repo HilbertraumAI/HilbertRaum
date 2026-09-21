@@ -6,7 +6,10 @@
 // become PLAIN characters, never ₂/² — `<sub>/<sup>` already render plain elsewhere in the
 // converter, and the retrieval-arm tokeniser (`arm.ts` `queryTerms` = `/[\p{L}\p{N}]{3,}/gu`,
 // `overlapScore` = `includes`) treats `₂` as `\p{N}`, so a typed "CO2" would never match a
-// literal `CO₂` — that's the mechanical reason, not just cosmetics.
+// literal `CO₂` — that's the mechanical reason, not just cosmetics. Since #488 the converter's
+// `<sub>`/`<sup>` elements DO carry a marker (`H_2O`, `10^6`) and the matchers fold it back out
+// (`supsub.ts`), but this rule is unchanged: a marker is one ASCII char a fold can remove, a
+// superscript codepoint is not, so `mv^{2}` still normalises to `mv2` here and never to `mv²`.
 //
 // A single-cursor tokenizer over an explicit stack, NOT regexes: nested braces (real in the
 // corpus — nested `\frac`) need either a nested quantifier or a fixpoint loop, both

@@ -694,6 +694,35 @@ describe('queryTerms / overlapScore', () => {
     expect(overlapScore('Treibhausgas aus CO2-Quellen', terms)).toBe(2)
     expect(overlapScore('nichts davon', terms)).toBe(0)
   })
+
+  // Issue #488: the converter now writes `^`/`_` markers into PROSE as well as table text, so
+  // both sides are folded before they are compared (`supsub.ts`). Both sides compare by
+  // substring and the fold only removes characters, so the invariant is that every alphanumeric
+  // run of the pre-#488 text is still a substring of what the matcher sees — a question that
+  // matched before still matches — and a user who types the marker themselves lands on the same
+  // terms.
+  it('folds the sup/sub markers out of the question, so a typed 10^6 or H_2O yields the same terms as before', () => {
+    expect(queryTerms('Wie viel ist 10^6?')).toContain('106')
+    expect(queryTerms('Was ist H_2O?')).toContain('h2o')
+    // The fold is symmetric in `^` and `_` since the census: the narrow "`_` only before a
+    // digit" rule left 86 real match terms split by a surviving marker (`NO_x`, `SO_x`,
+    // `pK_S`, `kW_p`, `MW_th`, `T_krit`, `C_org`), and the code-oriented packs it was written
+    // to protect (devdocs, gobyexample) carry no `<sub>` at all.
+    expect(queryTerms('Was ist NOx?')).toContain('nox')
+    expect(queryTerms('Was macht snake_case?')).toContain('snakecase')
+    expect(queryTerms('Was macht snake_case?')).not.toContain('snake')
+  })
+
+  it('folds the markers out of the chunk text, so marked converter output still answers the old terms', () => {
+    expect(overlapScore('Die Fläche ist 25 m^2 und 10^6 Einheiten CO_2', ['106', 'co2'])).toBe(2)
+    expect(overlapScore('Die Fläche ist 25 m^2', ['m2'])).toBe(1)
+    const terms = queryTerms('Zu was wird Treibhausgas und CO2?')
+    expect(overlapScore('Treibhausgas aus CO_2-Quellen', terms)).toBe(2)
+    // The `NO<sub>x</sub>` class, end to end: a question typing `NOx` answers the article that
+    // writes it marked, which the digit-only fold no longer did.
+    expect(overlapScore('Stickoxide werden als NO_x und SO_x angegeben', ['nox'])).toBe(1)
+    expect(overlapScore('Stickoxide werden als NO_x und SO_x angegeben', queryTerms('Was ist NOx?'))).toBe(1)
+  })
 })
 
 // Step 4-4 (Wave 4 ruling (a), Phase 2 ruling (d)) — the candidate SCOPE per hardware profile.

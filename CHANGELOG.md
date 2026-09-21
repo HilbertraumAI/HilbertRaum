@@ -47,6 +47,21 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Inline math written as `$…$` now renders in chat.** Before, only `$$…$$` blocks and
+  `\(…\)` spans were typeset, so the inline formulas many local models write showed up as raw
+  text with the dollar signs. A single-dollar span is typeset only when it looks like math, so
+  amounts such as "$5 and $10" still read as plain text (#501).
+- **The "reply cut off" note no longer blames the context window for every cut.** A grounded
+  answer from your documents or a knowledge pack is stopped by a fixed length the app allows
+  for one reply, and the note used to say the model's context limit was reached and to suggest
+  raising the context size, which cannot help there. The note now just says the reply was cut
+  off, and its tooltip suggests raising the context size only when the context really ran out
+  (#498).
+- **Superscripts and subscripts in knowledge-pack articles stay readable everywhere.** An area
+  of `25 m²` or a number like `10⁶` in an ordinary paragraph used to reach the model and the
+  article view fused as `25 m2` and `106`; only table text kept them apart. Paragraphs and
+  headings now use the same readable form as tables (`25 m^2`, `10^6`, `H_2O`), and search
+  still finds them from a plainly typed question such as "CO2" or "106" (#488).
 - **Voice dictation works right after you install the speech model or the voice engine — no
   restart.** The app used to keep its startup answer ("not available") until it was restarted,
   without saying so; the microphone button now appears as soon as the download or install

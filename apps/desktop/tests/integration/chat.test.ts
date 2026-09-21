@@ -392,6 +392,72 @@ describe('message coverage persistence (full-doc-skills D48)', () => {
   })
 })
 
+// ---- Truncation CAUSE persistence (#498) -------------------------------------------
+// The badge names no cause any more; `messages.truncated_cause` carries it per message so the
+// tooltip offers the remedy that applies. Additive + nullable: a pre-#498 truncated row has no
+// cause stored and must keep reading as 'context', which is exactly what the old badge claimed.
+describe('message truncation cause persistence (#498)', () => {
+  it('round-trips truncatedCause through appendMessage → listMessages', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const msg = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'a grounded answer that hit the app cap',
+      truncated: true,
+      truncatedCause: 'cap'
+    })
+    expect(msg.truncatedCause).toBe('cap')
+    expect(listMessages(db, conv.id).at(-1)?.truncatedCause).toBe('cap')
+  })
+
+  it('a legacy truncated row (truncated=1, truncated_cause NULL) reads back as "context"', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'cut off' })
+    // Exactly the shape a pre-#498 app wrote: the flag, no cause.
+    db.prepare('UPDATE messages SET truncated = 1, truncated_cause = NULL WHERE id = ?').run(msg.id)
+    const read = listMessages(db, conv.id).at(-1)
+    expect(read?.truncated).toBe(true)
+    expect(read?.truncatedCause).toBe('context')
+  })
+
+  it('a complete reply stores no cause even if one is passed (NULL ⇒ undefined)', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'a complete answer',
+      truncatedCause: 'cap'
+    })
+    const raw = db
+      .prepare('SELECT truncated, truncated_cause FROM messages WHERE conversation_id = ?')
+      .get(conv.id) as { truncated: number | null; truncated_cause: string | null }
+    expect(raw.truncated).toBeNull()
+    expect(raw.truncated_cause).toBeNull()
+    expect(listMessages(db, conv.id).at(-1)?.truncatedCause).toBeUndefined()
+  })
+
+  it('delete → restore carries the cause verbatim (a "cap" reply never downgrades to "context")', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'summarize it' })
+    appendMessage(db, {
+      conversationId: conv.id,
+      role: 'assistant',
+      content: 'a grounded answer the app cap ended',
+      truncated: true,
+      truncatedCause: 'cap'
+    })
+
+    const snapshot = deleteLastAssistantMessage(db, conv.id)
+    expect(snapshot?.truncatedCause).toBe('cap')
+    restoreMessage(db, snapshot!)
+    expect(listMessages(db, conv.id).at(-1)?.truncatedCause).toBe('cap')
+  })
+})
+
 describe('system prompt + message assembly', () => {
   it('the plain-chat base prompt answers from the model’s own knowledge and carries no grounding rules', () => {
     const p = buildSystemPrompt()
@@ -473,6 +539,10 @@ describe('generateAssistantMessage (streaming)', () => {
     expect(msg.truncated).toBe(true)
     // Round-trips through the DB read (messages.truncated → Message.truncated).
     expect(listMessages(db, conv.id).at(-1)?.truncated).toBe(true)
+    // #498: plain chat flags ONLY the uncapped case, so its flagged case IS the context window —
+    // the badge's tooltip may honestly offer "raise the context size" here.
+    expect(msg.truncatedCause).toBe('context')
+    expect(listMessages(db, conv.id).at(-1)?.truncatedCause).toBe('context')
   })
 
   // #290: the runtime's per-request timings reach the caller through `onTimings` — only for a

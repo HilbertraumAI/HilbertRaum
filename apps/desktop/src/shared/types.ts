@@ -972,6 +972,13 @@ export interface Citation {
   articlePath?: string | null
 }
 
+/**
+ * Which ceiling cut a reply short (#498). llama-server reports the same `finish_reason: 'length'`
+ * for both, but the honest remedy differs: only `'context'` is fixed by raising the context size,
+ * while `'cap'` is the app's own fixed per-reply token budget (grounded answers pin one per pass).
+ */
+export type TruncationCause = 'context' | 'cap'
+
 export interface Message {
   id: string
   conversationId: string
@@ -1019,15 +1026,27 @@ export interface Message {
    */
   coverage?: CoverageInfo
   /**
-   * True when this assistant reply was CUT OFF because generation hit the token/context ceiling
-   * (llama-server `finish_reason: 'length'`) — the answer is incomplete, not a clean EOS. Surfaced
-   * so the transcript can honestly say "reply cut off at the context limit" instead of a silent
-   * mid-word stop (D:\ testing report, 2026-07-01). Persisted as `messages.truncated` (1/NULL);
-   * undefined on a complete reply, on user turns, and on a user-initiated Stop (which carries no
-   * finish reason). Set by the plain-chat generation path (`generateAssistantMessage`); the grounded
-   * document-answer path is out of scope for this signal.
+   * True when this assistant reply was CUT OFF because generation hit a ceiling (llama-server
+   * `finish_reason: 'length'`) — the answer is incomplete, not a clean EOS. Surfaced so the
+   * transcript can honestly say the reply was cut off instead of a silent mid-word stop (D:\
+   * testing report, 2026-07-01). Persisted as `messages.truncated` (1/NULL); undefined on a
+   * complete reply, on user turns, and on a user-initiated Stop (which carries no finish reason).
+   * Stamped by the plain-chat path (`generateAssistantMessage`) AND — since 2026-07-04 / #491 —
+   * by both grounded document-answer paths (`generateGroundedAnswer`, `generateGroundedDataAnswer`)
+   * and the whole-document map-reduce. WHICH ceiling fired is carried separately in
+   * `truncatedCause` (#498) — the badge itself names no cause.
    */
   truncated?: boolean
+  /**
+   * Which ceiling ended a `truncated` reply (#498), so the transcript offers the remedy that
+   * actually applies instead of always blaming the context window:
+   *  - `'context'` — the model ran out of context room ("raise the context size" is the fix);
+   *  - `'cap'` — the app's own fixed per-reply token cap ended it (the window may be nearly empty).
+   * Set whenever `truncated` is true; undefined otherwise. Persisted as `messages.truncated_cause`
+   * (TEXT/NULL) — a pre-#498 truncated row has NULL and reads back as `'context'`, the flag's
+   * historical meaning.
+   */
+  truncatedCause?: TruncationCause
   /**
    * True when a generic RESULT TABLE is attached to this assistant answer (result-tables plan §4,
    * Phase 2) — the structured rows behind e.g. a bank "as CSV" answer, persisted in `result_tables`

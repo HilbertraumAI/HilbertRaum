@@ -1,4 +1,5 @@
 import { norm } from './head-noun'
+import { foldSupSub } from './supsub'
 
 // The article admission gate (route F's `admitArticle`, ported as a pure function — Phase 4
 // PR-A, `docs/rag-design.md` §17 "Discovery port (Phase 4 PR-A)"). A small set of
@@ -132,10 +133,27 @@ export function admitArticle(
   wideText: string,
   route: string
 ): AdmissionResult {
-  const q = norm(question)
+  // The sup/sub markers the converter now writes (#488, `supsub.ts`) are folded out of the
+  // question and of both BODY windows before anything else touches them. The fold must run
+  // BEFORE `norm`, not inside `tokens`/`lex`: `norm` already rewrites `_` to a space, so by the
+  // time those two see a string the subscript marker is gone and `CO_2` has become `co 2` —
+  // two tokens, both under the length floor, where the pre-#488 `CO2` was the single token a
+  // question's `CO2` matches. Folding first restores exactly that token. `lex` compares by
+  // SUBSTRING and the fold only removes characters, so the invariant it buys is the same one
+  // the arm gets: every alphanumeric run of the pre-#488 text is still a substring of what this
+  // gate compares — no article this gate admitted before can be newly refused by the markers.
+  // The TITLE is deliberately NOT folded, and `norm` itself is not touched. `norm`'s own `_` →
+  // space rule is there for titles (ZIM titles are path-derived and use `_` as a word
+  // separator), and folding would have to run before it — i.e. it would have to decide, on a
+  // string that mixes both uses of `_`, which underscores are separators. Nothing here needs
+  // that decision: the title is read only by `t`/`titleAndLead`, whose every predicate is a
+  // word-shaped regex (`mytholog`, `atemregler`, `roman`, `heraldik`), and no marker can appear
+  // inside one of those words. A `<sup>`/`<sub>` in a page's own `<h1>` (rare — a DISPLAYTITLE
+  // formula) therefore reaches `t` marked, and that is the one accepted residual of this seam.
+  const q = norm(foldSupSub(question))
   const t = norm(title)
-  const lead = norm(leadText)
-  const wide = norm(wideText)
+  const lead = norm(foldSupSub(leadText))
+  const wide = norm(foldSupSub(wideText))
   const titleAndLead = `${t} ${lead}`
 
   const biology =

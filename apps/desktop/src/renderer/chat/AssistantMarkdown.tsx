@@ -17,9 +17,10 @@ import 'katex/dist/katex.min.css'
 
 // The math plugin (KaTeX) is module-level so its reference is stable across renders — a fresh
 // object each render would defeat Streamdown's block memoization. remark-math parses ONLY
-// $$…$$ — NOT single `$` (deliberately off: it mangles prose like "$5 and $10" as math) and NOT
-// the LaTeX-style \(…\)/\[…\] delimiters; those are normalized to $$ by
-// `normalizeMathDelimiters` below before the text reaches Streamdown.
+// $$…$$ — NOT single `$` (`singleDollarTextMath` stays off: it claims EVERY `$` pair, mangling
+// prose like "$5 and $10" into math) and NOT the LaTeX-style \(…\)/\[…\] delimiters. Both of
+// those forms are normalized to $$ by `normalizeMathDelimiters` below — brackets always, single
+// `$…$` only when the span really looks like math (#501) — before the text reaches Streamdown.
 const mdPlugins = { math }
 
 // Local models emit LaTeX-style `\[ … \]` / `\( … \)` math at least as often as the `$$` form,
@@ -38,21 +39,113 @@ const mdPlugins = { math }
 const CODE_SPLIT_RE = /(```[\s\S]*?(?:```|$)|~~~[\s\S]*?(?:~~~|$)|`[^`\n]+`)/
 
 function normalizeMathDelimiters(text: string): string {
-  if (!text.includes('\\[') && !text.includes('\\(')) return text
+  if (!text.includes('\\[') && !text.includes('\\(') && !text.includes('$')) return text
   const parts = text.split(CODE_SPLIT_RE)
   for (let i = 0; i < parts.length; i += 2) {
-    parts[i] = parts[i]!
-      // Line-anchored \[ … \] first: micromark's DISPLAY (flow) math needs `$$` on its own
-      // lines, so a block-shaped bracket pair becomes the fence form…
-      .replace(
-        /^[ \t]*\\\[([\s\S]+?)\\\][ \t]*$/gm,
-        (_m, inner: string) => `$$\n${inner.trim()}\n$$`
-      )
-      // …and anything left (mid-sentence brackets, \( … \)) becomes inline math text.
-      .replace(/\\\[([\s\S]+?)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
-      .replace(/\\\(([\s\S]+?)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
+    parts[i] = promoteSingleDollarMath(
+      parts[i]!
+        // Line-anchored \[ … \] first: micromark's DISPLAY (flow) math needs `$$` on its own
+        // lines, so a block-shaped bracket pair becomes the fence form…
+        .replace(
+          /^[ \t]*\\\[([\s\S]+?)\\\][ \t]*$/gm,
+          (_m, inner: string) => `$$\n${inner.trim()}\n$$`
+        )
+        // …and anything left (mid-sentence brackets, \( … \)) becomes inline math text.
+        .replace(/\\\[([\s\S]+?)\\\]/g, (_m, inner: string) => `$$${inner}$$`)
+        .replace(/\\\(([\s\S]+?)\\\)/g, (_m, inner: string) => `$$${inner}$$`)
+    )
   }
   return parts.join('')
+}
+
+// #501 — models write inline math as `$ … $` at least as often as `$$ … $$`, and remark-math's
+// own single-dollar mode is not an option: it claims EVERY `$` pair, so "owes $5 and $10" turns
+// into math. Promote only spans that genuinely look like math. Two filters, both on the
+// code-free prose segments: Pandoc's shape rule (no whitespace just inside the delimiters, no
+// digit immediately after the closer, never across a line break) AND a content rule — a TeX
+// signal character, or a one/two-character symbol like `$m$`, `$x$`, `$π$`. Everything else
+// stays literal, which is why `$HOME/$USER` survives (`/` is deliberately NOT a signal) as do
+// currency runs and escaped `\$`. The promoted form is the GLUED `$$…$$`, which micromark reads
+// as INLINE (text) math: its flow/display construct rejects a `$` on the opening fence line.
+const TEX_SIGNAL = /[\\^_{}=+<>|]/
+
+function looksLikeMath(inner: string): boolean {
+  if (TEX_SIGNAL.test(inner)) return true
+  // A bare symbol: `$x$`, `$xy$`. Digits are excluded so `$5` can never qualify.
+  return inner.length <= 2 && !/[\d\s]/.test(inner)
+}
+
+/** `$` at `i` opens a span only if it is unescaped and the next character starts an expression. */
+function isDollarOpener(prose: string, i: number): boolean {
+  const prev = i > 0 ? prose[i - 1]! : ''
+  const next = prose[i + 1]
+  return prev !== '\\' && prev !== '$' && next !== undefined && next !== '$' && !/\s/.test(next)
+}
+
+/** The closing `$` for the opener at `open`, or -1 (Pandoc's spacing/digit rule; same line only). */
+function closingDollar(prose: string, open: number): number {
+  for (let j = open + 1; j < prose.length; j++) {
+    const c = prose[j]!
+    if (c === '\n') return -1 // inline math never spans lines
+    if (c !== '$') continue
+    const before = prose[j - 1]!
+    const after = prose[j + 1] ?? ''
+    if (before === '\\' || /\s/.test(before)) continue
+    if (after === '$' || /[0-9]/.test(after)) continue
+    return j
+  }
+  return -1
+}
+
+/** One promotable `$…$` span: the index of its opening `$` and of its closing `$`. */
+type DollarSpan = { open: number; close: number }
+
+/**
+ * One left-to-right pass over a prose segment: the `$…$` spans worth promoting, plus `tailOpen`
+ * — the last opener still waiting for its closer, which is what the streaming pass completes.
+ * `$$…$$` is opaque (remark-math owns it); an UNCLOSED `$$` owns everything after it, so the
+ * scan stops there and reports no tail.
+ */
+function scanDollarMath(prose: string): { spans: DollarSpan[]; tailOpen: number } {
+  const spans: DollarSpan[] = []
+  let tailOpen = -1
+  let i = 0
+  while (i < prose.length) {
+    if (prose[i] !== '$') {
+      i++
+    } else if (prose[i + 1] === '$') {
+      const end = prose.indexOf('$$', i + 2)
+      if (end === -1) return { spans, tailOpen: -1 }
+      i = end + 2
+    } else if (!isDollarOpener(prose, i)) {
+      i++
+    } else {
+      const close = closingDollar(prose, i)
+      if (close === -1) {
+        tailOpen = i
+        i++
+      } else if (looksLikeMath(prose.slice(i + 1, close))) {
+        spans.push({ open: i, close })
+        i = close + 1
+      } else {
+        i++
+      }
+    }
+  }
+  return { spans, tailOpen }
+}
+
+function promoteSingleDollarMath(prose: string): string {
+  if (!prose.includes('$')) return prose
+  const { spans } = scanDollarMath(prose)
+  if (spans.length === 0) return prose
+  let out = ''
+  let copied = 0
+  for (const { open, close } of spans) {
+    out += `${prose.slice(copied, open)}$$${prose.slice(open + 1, close)}$$`
+    copied = close + 1
+  }
+  return out + prose.slice(copied)
 }
 
 // A partially-streamed TeX expression usually is NOT valid TeX (a `\frac{…` cut mid-group
@@ -128,13 +221,41 @@ function completeTrailingBracketMath(text: string): string {
   return parts.join('')
 }
 
+// Streaming companion to `promoteSingleDollarMath` (#501): a trailing `$ E = mc^` has no closer
+// yet, so the whole-text pass cannot claim it. Complete the LAST dangling opener in the trailing
+// prose segment — but only when the partial already carries a TeX signal. A tail like "$5 and
+// the" or a bare "$m" is still ambiguous (the next token could make it prose or currency), and
+// unlike the static pass there is no closer to judge it by, so the short-symbol rule does NOT
+// apply here: an ambiguous tail simply stays literal for this flush.
+function completeTrailingDollarMath(text: string): string {
+  if (!text.includes('$')) return text
+  const parts = text.split(CODE_SPLIT_RE)
+  const last = parts.length - 1
+  if (last % 2 === 1) return text // the buffer currently ends inside code — leave it alone
+  const tail = parts[last]!
+  const { tailOpen } = scanDollarMath(tail)
+  // A newline after the opener means the buffer moved on: it was a literal `$`, not math.
+  if (tailOpen === -1 || tail.indexOf('\n', tailOpen) !== -1) return text
+  const inner = tail.slice(tailOpen + 1)
+  if (!TEX_SIGNAL.test(inner)) return text
+  const fixed = completePartialTex(inner)
+  // Unparseable even after completion → hide the tail this flush (same as the bracket path).
+  parts[last] = fixed === null ? tail.slice(0, tailOpen) : `${tail.slice(0, tailOpen)}$$${fixed}$$`
+  return parts.join('')
+}
+
+/** Both streaming completions in one handler, brackets first (they may emit `$$` the second reads). */
+function completeTrailingMath(text: string): string {
+  return completeTrailingDollarMath(completeTrailingBracketMath(text))
+}
+
 // Module-level (stable reference for Streamdown's memoization). Priority 10 puts the handler
 // BEFORE remend's built-in links completion (20) — that handler treats a dangling `\[ …` tail
 // as an incomplete LINK, completes it to `](streamdown:incomplete-link)`, and EARLY-RETURNS
 // the whole pipeline, so at any later priority we would never run. Converting first also means
-// links sees no unclosed `[` and the katex built-in (70) sees our `$$` already balanced.
+// links sees no unclosed `[` and the katex built-ins (70/75) see our `$$` already balanced.
 const mdRemend = {
-  handlers: [{ name: 'latex-bracket-math', priority: 10, handle: completeTrailingBracketMath }]
+  handlers: [{ name: 'trailing-math', priority: 10, handle: completeTrailingMath }]
 }
 
 // Pare Streamdown's default rehype chain (raw → sanitize → harden) down to just `sanitize`:

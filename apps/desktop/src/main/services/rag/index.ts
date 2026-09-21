@@ -1,7 +1,7 @@
 import type { Db } from '../db'
 import { t } from '../../../shared/i18n'
-import type { AppSettings, Citation, ContextUsage, CoverageInfo, KnowledgePackOutcome, Message, RetrievalScope } from '../../../shared/types'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
+import type { AppSettings, Citation, ContextUsage, CoverageInfo, KnowledgePackOutcome, Message, RetrievalScope, TruncationCause } from '../../../shared/types'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from '../runtime'
 import { type Embedder, VectorIndex } from '../embeddings'
 import type { Reranker } from '../reranker'
 import { buildScopeFilter } from '../retrieval-scope'
@@ -61,7 +61,12 @@ import {
 } from '../skills/prompt'
 import { getSettings } from '../settings'
 import { scanRedactionCandidates, type RedactionCounts } from '../skills/tools/redaction'
-import { answerWholeDocFromTree, continueUntilComplete, streamWholeDocMapReduce } from './whole-doc-tree'
+import {
+  answerWholeDocFromTree,
+  continueUntilComplete,
+  streamWholeDocMapReduce,
+  truncationCause
+} from './whole-doc-tree'
 import { documentChunkCount } from '../analysis/coverage'
 // #301 P4 (plan §9.21 (e)5): a DB-ONLY title lookup for the answer paths that never query packs.
 // No cycle — `services/zim` reaches back into `rag` with TYPE-only imports (`ExternalRetrievalArm`
@@ -2012,6 +2017,10 @@ export async function generateGroundedAnswer(
   // model cut off at the context ceiling gets the truncated badge instead of persisting a mid-word
   // partial as if complete — a budget-filling document turn is exactly where the ceiling hits.
   let finishReason: string | null = null
+  // #498: the first pass's timings ride the same final chunk. They decide whether a 'length' came
+  // from the pinned cap (the server really generated `maxTokens` tokens) or from the window (it
+  // stopped short of the cap it was given) — see `truncationCause`.
+  let timings: RuntimeTimings | null = null
   // The request's own pinned decoding setting, computed once and reused below: at the initial
   // call, at the truncation gate, and if a continuation runs. A caller-supplied override still
   // wins, field by field (opts.runtimeOptions) — no caller sets one today.
@@ -2023,8 +2032,9 @@ export async function generateGroundedAnswer(
   // answers should be fast + literal.
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,
-    onFinish: (reason) => {
+    onFinish: (reason, tm) => {
       finishReason = reason
+      timings = tm ?? null
     },
     ...effectiveRuntimeOptions
   })
@@ -2046,9 +2056,11 @@ export async function generateGroundedAnswer(
   // cap is exhausted. A user Stop mid-continuation persists the accumulated partial (the engine swallows it);
   // a set `maxTokens` (an explicit cap) is never continued past — same gate as the truncated stamp below.
   let outputTruncated = finishReason === 'length' && opts.runtimeOptions?.maxTokens == null
+  // #498: which ceiling cut it, decided by the LAST pass (the engine reports it back).
+  let outputCause: TruncationCause | undefined
   if (outputTruncated) {
     const acc = { content }
-    const finalReason = await continueUntilComplete({
+    const outcome = await continueUntilComplete({
       runtime,
       signal: opts.signal,
       onToken: opts.onToken,
@@ -2061,10 +2073,15 @@ export async function generateGroundedAnswer(
       outputCap: effectiveRuntimeOptions.maxTokens ?? contextTokens,
       temperature: effectiveRuntimeOptions.temperature,
       acc,
-      finishReason
+      finishReason,
+      // #498: the first pass's own ceiling + timings, so a cut the room guard ends before any
+      // continuation pass runs is still attributed to the right ceiling.
+      sentCap: effectiveRuntimeOptions.maxTokens ?? null,
+      timings
     })
     content = acc.content
-    outputTruncated = finalReason === 'length'
+    outputTruncated = outcome.finishReason === 'length'
+    outputCause = outcome.cause
   }
   // Reasoning never reaches the DB — same defense-in-depth strip as plain chat.
   content = stripThinkBlocks(content)
@@ -2100,7 +2117,10 @@ export async function generateGroundedAnswer(
     // Honest OUTPUT-truncation stamp: 'length' with no cap = cut off at the context ceiling; after
     // continue-generation this is true only when the bounded re-prompts were EXHAUSTED and the answer is
     // still cut (false on a clean finish and on a user Stop — computed above).
-    truncated: outputTruncated
+    truncated: outputTruncated,
+    // #498: the badge names no cause; this picks the remedy it offers ('context' ⇒ "raise the
+    // context size", 'cap' ⇒ "ask it to continue").
+    truncatedCause: outputCause
   }, opts.signal)
 }
 
@@ -2193,15 +2213,19 @@ export async function generateGroundedDataAnswer(
   if (opts.answerPrefix) opts.onToken?.(opts.answerPrefix)
   let modelContent = ''
   // Honest-signal parity with plain chat/grounded (§L0): flag a narration the model cut off
-  // partway. A 1024-token cap is now always sent (below, mirroring generateGroundedAnswer), so
-  // a reply this mode's own cap ends is flagged as cut off at the model's context limit, which
-  // is the wrong cause — an accepted, unfixed gap (rare in practice: this mode's replies are
-  // short extract narrations; a real fix belongs in its own change, not this one).
+  // partway. This mode always sends its own `GROUNDED_MAX_TOKENS` cap (below, mirroring
+  // generateGroundedAnswer) and never continues, so a 'length' here is normally that cap rather
+  // than the window. Since #498 the badge no longer names a cause: `truncationCause` attributes
+  // the cut from the cap actually sent plus the server's `predicted_n` (a pass that generated
+  // fewer tokens than its cap stopped for the window), and the transcript offers the matching
+  // remedy instead of always pointing at the context size.
   let finishReason: string | null = null
+  let timings: RuntimeTimings | null = null
   const stream = runtime.chatStream(messages, {
     signal: opts.signal,
-    onFinish: (reason) => {
+    onFinish: (reason, tm) => {
       finishReason = reason
+      timings = tm ?? null
     },
     temperature: GROUNDED_TEMPERATURE,
     maxTokens: GROUNDED_MAX_TOKENS
@@ -2247,6 +2271,8 @@ export async function generateGroundedDataAnswer(
     packOutcomes: opts.packOutcomes,
     skillId: skillFence ? (opts.skill?.installId ?? null) : null,
     autoFired: skillFence ? opts.skill?.autoFired === true : false,
-    truncated: finishReason === 'length'
+    truncated: finishReason === 'length',
+    // #498: one pass, one cap — attribute the cut instead of blaming the window by default.
+    truncatedCause: truncationCause(finishReason, GROUNDED_MAX_TOKENS, timings)
   }, opts.signal)
 }
