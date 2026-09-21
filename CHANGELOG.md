@@ -25,7 +25,14 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Fixed
+
+- **Two small article-reading fixes: a rare text leak, and photo captions.** Reading a
+  Wikipedia table that contained a certain very rare block of raw text could leak a stray
+  fragment of it into what the app reads back; that block is now skipped correctly, the same
+  way it already is outside of tables. And a photo's caption, which used to be dropped along
+  with the photo itself, is now kept as part of the article's text — the app reads captions on
+  purpose now, the way it already reads a table's own caption.
 
 ## [0.1.61] — 2026-09-21
 

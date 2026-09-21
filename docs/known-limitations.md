@@ -3114,18 +3114,32 @@ reports and phase plans were working papers; their full text lives in git histor
   can misjudge an unlisted layout convention, or a genuinely tabular one that happens to
   reuse a listed class name; the structural test (no header cell, no real tabular
   content) is a backstop, not a guarantee. **A disclosed instance of that backstop's
-  limit (owner's call, not fixed here):** a classless two-column layout wrapper whose
-  cells are an image and its caption (e.g.
+  limit, still open as issue #487 — now with the measurement the issue asked for:** a
+  classless two-column layout wrapper whose cells are an image and its caption (e.g.
   `<table style="float:right"><tr><td><img></td><td>caption text</td></tr></table>`)
   carries no listed layout class and has two non-empty cells, so it clears both the
   class check and the structural check and is delivered as ordinary table text — the
   `<figure>` drop rule exists to keep exactly this kind of caption text out, and this
-  shape re-admits it under a different tag. A possible follow-up hardening, not
-  implemented and no issue opened: treat `role="presentation"` (the standard ARIA
-  marker for a layout-only table) as an additional drop signal alongside the class list,
-  and/or drop a headerless table whose only non-empty cells are, after image removal,
-  empty — the same predicate would also catch a full-width caption/note row that
-  happens to sit in an otherwise-kept table. A nested table's own further-nested tables
+  shape re-admits it under a different tag. **How often, and what it would cost to drop
+  it.** A structural rule for this shape was written and measured on the offline corpus
+  (1,437 articles, 2,151 tables) before being withdrawn: drop a headerless table when one
+  of its cells holds only an image and no source row holds more than one other populated
+  cell. It changed three tables in the whole corpus, none of them on the 949-article
+  Wikipedia corpus. Two were the wrapper shape above, correctly dropped. The third was a
+  Wikivoyage travel-notice box laid out as a table — an icon cell beside the notice, then
+  a row carrying the heading and the list of governments issuing the advisory — and
+  dropping it removed seven delivered lines of that advisory. That is content, not
+  layout, so the rule was withdrawn: two stray caption lines gained corpus-wide is not
+  worth one deleted travel warning, and the shape is left delivered. A narrower rule
+  remains possible (both correct drops sit in MediaWiki's caption furniture — a
+  `thumbimage` cell and a `thumbcaption` div — which the notice box has neither of), and
+  since a figure's own caption is now delivered on purpose (below), a caption arriving as
+  a table line is closer to a formatting oddity than to noise. **Also measured, and also
+  not usable as written:** `role="presentation"`, the standard ARIA marker for a
+  layout-only table, which #487 proposes as a second, independent drop signal. Exactly
+  four tables in the corpus carry it, and all four are German-Wikivoyage travel/warning
+  notices that are delivered today — so a `role="presentation"` drop rule would delete
+  four warning boxes and nothing else. A nested table's own further-nested tables
   are inlined down to a fixed safety-valve depth (8); deeper nesting is dropped,
   unchanged from the feature's first design. The superscript/subscript readable
   convention (`g/cm^3`, `10^6`) applies inside table-derived text only — prose keeps
@@ -3161,9 +3175,30 @@ reports and phase plans were working papers; their full text lives in git histor
   consumes the row that value sits in. A related, explicitly out-of-scope
   class: literal MediaWiki template placeholders (e.g. `{{{Druck}}}`) that
   appear inside a table are the source page's own content, not markup the
-  converter failed to drop, and are left as-is. A further, rarer container
-  is not yet stepped over on this same path: a `CDATA` section holding a
-  bare `>` inside a kept table can still have its content delivered as table
-  text, where the main document scanner already steps over such a section;
-  no occurrence was found across the sampled pages, and it is tracked in
-  #493 for a separate change that can be measured on its own.
+  converter failed to drop, and are left as-is. **FIXED (issue #493):** a
+  further, rarer container used not to be stepped over on this same
+  path — a `CDATA` section holding a bare `>` inside a kept table could have
+  its content delivered as table text, where the main document scanner
+  already steps over such a section. The table path now mirrors that same
+  step-over. No occurrence was found across the sampled pages before or
+  after the fix (the practical frequency on real articles is genuinely
+  zero); the fix is demonstrated by a pinned fixture — a table cell holding
+  a CDATA section with a bare `>` inside it — that leaked before the fix and
+  does not leak after it.
+- **FIXED: a `<figure>`'s caption text never reached a segment.** The whole
+  `<figure>` subtree — image and `<figcaption>` alike — used to be dropped,
+  unlike a table's own `<caption>`, which is kept. An open `<figcaption>`'s
+  text (while inside a dropped figure) is now captured into its own
+  `Caption: ...` segment, the same labelling and flush order the table path
+  already uses; the image, its `alt` text, and everything else in the figure
+  subtree stay dropped. MediaWiki's `.thumbcaption` convention is
+  deliberately not given a capture of its own — it already reaches delivered
+  text as ordinary prose outside any `<figure>`, so a second capture would
+  deliver the same text twice. Measured on the 949-article corpus (which
+  contains no `<figure>` tag at all) as a no-regression guard: pooled
+  `figure-caption` class coverage is byte-identical before and after
+  (99.63 %). Measured on seven cached non-Wikipedia archives: of 191 real
+  `<figure>` tags (148 with a non-empty caption), 141 (95.3 %) now reach a
+  delivered segment, up from 0 before the fix; the remaining 7 sit inside a
+  Wikivoyage image-gallery grid built as a `<table>` of `<figure>` cells —
+  the KEPT-TABLE subtree-skip path documented above, unchanged by design.

@@ -670,6 +670,25 @@ export function* zimArticleSlices(
   // skipped exactly like SKIP_SUBTREE, but `table` is no longer in that shared set (a kept
   // table needs its own branch below), so it gets its own depth counter.
   let tableDropDepth = 0
+  // A figure's caption text should reach a segment even though the
+  // image and the rest of the figure subtree stay dropped — mirrors the kept-table path's own
+  // `<caption>` handling. `skipIsFigure` is true only while the CURRENTLY OPEN skip (skipDepth
+  // > 0) was opened by a `<figure>` (set at the SKIP_SUBTREE-open branch below, reset once
+  // skipDepth returns to 0). `figureCaptionDepth` is > 0 while a `<figcaption>` is open inside
+  // that figure skip (a capture, not a suppression: `emitTextUpTo` below routes its text into
+  // `captionBuf` instead of dropping it). `figureInnerSkipDepth` counts the non-`figure`
+  // SKIP_SUBTREE elements (svg/template — script/style are already stepped over by S5 before
+  // this branch ever runs) open inside that figure, whether or not a caption is open: a
+  // `<figcaption>` inside one of THOSE never starts a capture, and text inside one never reaches
+  // the buffer. A nested `<figure>` does NOT arm this counter — its own `<figcaption>` is
+  // content the capture is meant to deliver, so it is handled exactly like any figure's caption.
+  let skipIsFigure = false
+  let figureCaptionDepth = 0
+  let figureInnerSkipDepth = 0
+  let captionBuf = ''
+  // Mirrors tables.ts's TABLE_SEGMENT_MAX_CHARS (1500) by value, not by import — html.ts does
+  // not depend on tables.ts (the dependency runs the other way).
+  const FIGURE_CAPTION_MAX_CHARS = 1500
 
   const flush = (): void => {
     const text = body.result()
@@ -731,6 +750,12 @@ export function* zimArticleSlices(
           yield
         }
       }
+    } else if (skipDepth > 0 && skipIsFigure && figureCaptionDepth > 0 && figureInnerSkipDepth === 0) {
+      // A figure's caption text is captured into its own buffer while the rest of the
+      // figure subtree stays dropped. Not piece-wise like the ordinary path above — a caption
+      // is short by construction (capped at flush, below) — so one decode call is enough,
+      // exactly like `headingBuf`'s own whole-string accumulation via `emit`.
+      captionBuf += decodeEntities(input.slice(textStart, upto))
     }
     textStart = upto
   }
@@ -945,7 +970,59 @@ export function* zimArticleSlices(
       continue
     }
     if (skipDepth > 0) {
-      if (SKIP_SUBTREE.has(name) && !selfClosing) skipDepth += isClose ? -1 : 1
+      // A <figcaption> inside a <figure> skip opens/closes the caption capture; the
+      // text itself is routed by `emitTextUpTo` above, this only tracks the state. Guarded on
+      // `figureInnerSkipDepth === 0` so a `<figcaption>` occurring (invalidly) inside a nested
+      // svg/template never starts a capture at all — that subtree stays dropped whole.
+      if (name === 'figcaption' && skipIsFigure && figureInnerSkipDepth === 0) {
+        // A self-closing `<figcaption/>` is neither an open nor a close: ignored on BOTH sides
+        // of the split, exactly as the SKIP_SUBTREE branch below ignores one. Otherwise it
+        // would fall into the close branch, end an open caption early and drop the rest of it.
+        if (selfClosing) continue
+        if (!isClose) {
+          figureCaptionDepth += 1
+        } else if (figureCaptionDepth > 0) {
+          figureCaptionDepth -= 1
+          if (figureCaptionDepth === 0) {
+            // On the matching close: decode already happened per chunk above, so only tidy
+            // (the same whole-string helper ordinary text uses) and cap — mirrors the
+            // kept-table path's own `Caption: ` line and its TABLE_SEGMENT_MAX_CHARS cap.
+            const tidied = tidyWhole(captionBuf)
+            captionBuf = ''
+            const capped =
+              tidied.length <= FIGURE_CAPTION_MAX_CHARS ? tidied : capCaptionChars(tidied, FIGURE_CAPTION_MAX_CHARS)
+            if (capped.length > 0) {
+              // Byte-for-byte the shape and flush order the kept-table path uses: flush the
+              // pending prose first so the caption never fuses into the surrounding paragraph,
+              // then push the caption straight into `segments` (never through `emit`/`body`).
+              flush()
+              segments.push({ text: `Caption: ${capped}`, pageNumber: null, sectionLabel: currentLabel })
+            }
+          }
+        }
+        continue
+      }
+      if (SKIP_SUBTREE.has(name) && !selfClosing) {
+        skipDepth += isClose ? -1 : 1
+        if (skipDepth === 0) {
+          skipIsFigure = false
+          figureCaptionDepth = 0
+          figureInnerSkipDepth = 0
+          captionBuf = ''
+        } else if (skipIsFigure && name !== 'figure') {
+          // Counts only the non-`figure` skipped subtrees (svg/template/nav/noscript/head) open
+          // INSIDE the figure, incremented/decremented on their own opens/closes and never
+          // below zero: a `<figcaption>` nested in one of THOSE would otherwise start a real
+          // capture and leak the dropped subtree's text. `figure` is excluded on purpose — a
+          // `<figure>` nested inside a `<figure>` is valid HTML5 flow content and its OWN
+          // `<figcaption>` is content the capture is meant to deliver, handled by the branch
+          // above exactly as any figure's caption is; only `skipDepth` (not this counter) tracks
+          // the nested figure's own open/close, so the outer figure's skip still closes
+          // correctly once both have closed.
+          figureInnerSkipDepth += isClose ? -1 : 1
+          if (figureInnerSkipDepth < 0) figureInnerSkipDepth = 0
+        }
+      }
       continue
     }
     if (tableDropDepth > 0) {
@@ -958,7 +1035,10 @@ export function* zimArticleSlices(
     }
 
     if (!isClose && SKIP_SUBTREE.has(name)) {
-      if (!selfClosing) skipDepth = 1
+      if (!selfClosing) {
+        skipDepth = 1
+        skipIsFigure = name === 'figure'
+      }
       continue
     }
     if (!isClose && name === 'table') {
@@ -1109,6 +1189,17 @@ export async function zimArticleToSegmentsAsync(
     if (step.done) return step.value
     await new Promise<void>((resolve) => setImmediate(resolve))
   }
+}
+
+/** Truncates a figure caption to `max` characters, never inside a UTF-16 surrogate pair —
+ *  the same care tables.ts's own segment caps take (its `truncateToBudget`), duplicated
+ *  rather than imported since that helper is not exported and this is the only caller here. */
+function capCaptionChars(text: string, max: number): string {
+  let cut = max
+  const prev = text.charCodeAt(cut - 1)
+  const next = text.charCodeAt(cut)
+  if (prev >= 0xd800 && prev <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) cut -= 1
+  return text.slice(0, cut)
 }
 
 /** ASCII-case-insensitive `name` at `at`, followed by a tag-name terminator (or EOF).

@@ -48,11 +48,15 @@ describe('zimArticleToSegments', () => {
     // 'Verfahrensbeschreibung' now repeats: the section's infobox table (kept, delivered as
     // its own segment — table delivery) splits the prose before it from the prose after it,
     // and both still carry the section's own heading as their sectionLabel.
+    // 'Doppelkontaktverfahren' now repeats too, for the same reason: the section's figure
+    // caption is delivered as its own segment (issue: figure captions reach a segment),
+    // which flushes the surrounding prose first, exactly as the table case above does.
     expect(labels).toEqual([
       null,
       'Verfahrensbeschreibung',
       'Verfahrensbeschreibung',
       'Verfahrensbeschreibung',
+      'Doppelkontaktverfahren',
       'Doppelkontaktverfahren',
       'Einzelnachweise'
     ])
@@ -88,7 +92,7 @@ describe('zimArticleToSegments', () => {
     expect(all).not.toContain('MJX-TeXAtom') // MathML internals never leak
   })
 
-  it('delivers a kept table (its header and data reach the text), inlining its nested table, and still drops figures with their captions', () => {
+  it('delivers a kept table (its header and data reach the text), inlining its nested table, and delivers a figure caption while still dropping its image', () => {
     // The infobox table (a header cell, so it clears the structural drop test) is now
     // delivered instead of dropped — table delivery, issue: deliver tables to the model.
     expect(all).toContain('Infobox-Zelle')
@@ -99,8 +103,10 @@ describe('zimArticleToSegments', () => {
     // very content this feature exists to deliver. Emitted exactly once, never duplicated.
     expect(all).toContain('verschachtelte Zelle')
     expect(all.match(/verschachtelte Zelle/g) ?? []).toHaveLength(1)
-    // Figures/captions are untouched by table delivery — still dropped.
-    expect(all).not.toContain('Bildunterschrift')
+    // A figure's caption text now reaches its own segment, labelled the same way a table's
+    // own <caption> is; the image itself (and its alt text) stays dropped with the rest of
+    // the figure subtree.
+    expect(all).toContain('Caption: Ansicht der Anlage von außen')
     expect(all).not.toContain('Anlagenfoto')
   })
 
@@ -137,10 +143,140 @@ describe('zimArticleToSegments', () => {
 })
 
 // ---------------------------------------------------------------------------------------
+// Figure captions: a <figure>'s whole subtree is dropped (image and caption alike), except
+// that its <figcaption> text is captured into its own "Caption: " segment -- the same
+// labelling and flush-first order the kept-table path already uses for a table's own
+// <caption>. The image, its alt text, and everything else in the figure subtree stay dropped.
+// ---------------------------------------------------------------------------------------
+describe('zimArticleToSegments — figure captions', () => {
+  const textOf = (html: string): string =>
+    zimArticleToSegments(html)
+      .segments.map((s) => s.text)
+      .join('\n')
+
+  it('captures a figcaption as its own "Caption: " segment while the image and its alt stay dropped', () => {
+    const html =
+      '<p>lead prose.</p>' +
+      '<figure><img src="x.jpg" alt="alt-text-must-not-appear"><figcaption>Simple caption</figcaption></figure>' +
+      '<p>tail prose.</p>'
+    const article = zimArticleToSegments(html)
+    const captionSegment = article.segments.find((s) => s.text.startsWith('Caption:'))
+    expect(captionSegment?.text).toBe('Caption: Simple caption')
+    const all = article.segments.map((s) => s.text).join('\n')
+    expect(all).not.toContain('alt-text-must-not-appear')
+    expect(all).toContain('lead prose')
+    expect(all).toContain('tail prose')
+  })
+
+  it('a figcaption containing an inline tag and an entity is decoded and tidied like ordinary text', () => {
+    const html = '<figure><img src="x.jpg"><figcaption>A caption with <b>bold</b> text &amp; more</figcaption></figure>'
+    expect(textOf(html)).toContain('Caption: A caption with bold text & more')
+  })
+
+  it('a dropped subtree (svg) nested inside an open figcaption does not leak its text into the caption', () => {
+    const html =
+      '<figure><figcaption>before <svg><text>svg-leak-must-not-appear</text></svg> after</figcaption></figure>'
+    const text = textOf(html)
+    expect(text).toContain('Caption: before after')
+    expect(text).not.toContain('svg-leak-must-not-appear')
+  })
+
+  it('a figcaption inside a dropped subtree (svg) that opened BEFORE any caption never starts ' +
+    'a capture: only the figure\'s own caption is delivered', () => {
+    const html =
+      '<figure><svg><figcaption>svg-inner-caption</figcaption></svg>' +
+      '<figcaption>real caption</figcaption></figure>'
+    const article = zimArticleToSegments(html)
+    expect(article.segments.map((s) => s.text)).toEqual(['Caption: real caption'])
+  })
+
+  it('a figure nested inside a figure keeps its own figcaption -- the guard only arms for ' +
+    'non-figure skipped subtrees, so a nested <figure> neither arms nor disarms it', () => {
+    const html =
+      '<figure><img src="a.jpg"><figcaption>outer caption</figcaption>' +
+      '<figure><img src="b.jpg"><figcaption>inner caption</figcaption></figure></figure>'
+    const article = zimArticleToSegments(html)
+    const captions = article.segments.map((s) => s.text).filter((t) => t.startsWith('Caption:'))
+    expect(captions).toEqual(['Caption: outer caption', 'Caption: inner caption'])
+    const all = article.segments.map((s) => s.text).join('\n')
+    expect(all).not.toMatch(/alt|\.jpg/)
+  })
+
+  it('the guard still works INSIDE a nested figure: an svg opened inside the inner figure ' +
+    'suppresses only that svg\'s own figcaption, not the inner figure\'s real one', () => {
+    const html =
+      '<figure><figcaption>outer</figcaption>' +
+      '<figure><svg><figcaption>svg-inner-must-not-appear</figcaption></svg>' +
+      '<figcaption>inner</figcaption></figure></figure>'
+    const article = zimArticleToSegments(html)
+    const captions = article.segments.map((s) => s.text).filter((t) => t.startsWith('Caption:'))
+    expect(captions).toEqual(['Caption: outer', 'Caption: inner'])
+    const all = article.segments.map((s) => s.text).join('\n')
+    expect(all).not.toContain('svg-inner-must-not-appear')
+  })
+
+  it('a self-closing <figcaption/> inside an open caption neither ends the caption early nor ' +
+    'drops the rest of it', () => {
+    const html = '<figure><figcaption>part one <figcaption/> part two</figcaption></figure>'
+    const article = zimArticleToSegments(html)
+    expect(article.segments.map((s) => s.text)).toEqual(['Caption: part one part two'])
+  })
+
+  it('multiple figcaptions in the same figure are each captured as their own segment', () => {
+    const html =
+      '<figure><figcaption>first caption</figcaption><img src="x.jpg"><figcaption>second caption</figcaption></figure>'
+    const article = zimArticleToSegments(html)
+    const captions = article.segments.map((s) => s.text).filter((t) => t.startsWith('Caption:'))
+    expect(captions).toEqual(['Caption: first caption', 'Caption: second caption'])
+  })
+
+  it('a figcaption outside any figure is ordinary prose, untouched by this change', () => {
+    const html = '<p>lead</p><figcaption>a naked figcaption</figcaption><p>tail</p>'
+    const text = textOf(html)
+    expect(text).toContain('a naked figcaption')
+    expect(text).not.toContain('Caption:')
+  })
+
+  it('an empty or whitespace-only figcaption emits no caption segment at all', () => {
+    const html = '<figure><img src="x.jpg"><figcaption>   </figcaption></figure>'
+    const article = zimArticleToSegments(html)
+    expect(article.segments.some((s) => s.text.startsWith('Caption:'))).toBe(false)
+  })
+
+  it('a caption longer than the table segment cap (1,500 characters) is truncated, never thrown', () => {
+    const html = `<figure><figcaption>${'x'.repeat(2000)}</figcaption></figure>`
+    expect(() => zimArticleToSegments(html)).not.toThrow()
+    const article = zimArticleToSegments(html)
+    const captionSegment = article.segments.find((s) => s.text.startsWith('Caption:'))
+    expect(captionSegment?.text.length).toBeLessThanOrEqual('Caption: '.length + 1500)
+  })
+
+  it('an unterminated figcaption/figure at EOF is total -- never throws, no caption segment', () => {
+    const html = '<p>lead</p><figure><figcaption>never closes'
+    expect(() => zimArticleToSegments(html)).not.toThrow()
+    const text = textOf(html)
+    expect(text).toContain('lead')
+  })
+
+  it("MediaWiki's div.thumbcaption sitting OUTSIDE a <figure> is ordinary prose already, " +
+    'unaffected by this change (no double delivery)', () => {
+    const html = '<div class="thumb"><div class="thumbcaption">already delivered as prose</div></div>'
+    const article = zimArticleToSegments(html)
+    const all = article.segments.map((s) => s.text).join('\n')
+    expect(all).toContain('already delivered as prose')
+    // Exactly once: this class-based path is untouched, so there is no second, duplicate
+    // delivery mechanism for the same text.
+    expect(all.match(/already delivered as prose/g) ?? []).toHaveLength(1)
+  })
+})
+
+// ---------------------------------------------------------------------------------------
 // Table delivery (issue: deliver tables to the model instead of dropping them). A kept table
 // is parsed into a bounded grid and rendered as one line per data row, `key: value; key:
 // value`, keyed by the nearest header row above (2g's research-prototype convention, ported
-// fresh — see tables.ts). Layout/navbox tables and figures are unaffected.
+// fresh — see tables.ts). Layout/navbox tables are unaffected; a figure's caption text now
+// reaches its own segment (see the "figure captions" describe above) while everything else in
+// the figure subtree stays dropped, exactly as before.
 // ---------------------------------------------------------------------------------------
 describe('zimArticleToSegments — table delivery', () => {
   const textOf = (html: string): string =>
@@ -259,6 +395,67 @@ describe('zimArticleToSegments — table delivery', () => {
     const text = textOf(html)
     expect(text).toContain('two-col-a')
     expect(text).toContain('two-col-b')
+  })
+
+  it('a CDATA section inside a kept table cell does not leak past a bare ">" inside it ' +
+    '(issue #493)', () => {
+    const html = '<table><tr><th>A</th><td><![CDATA[cdata-leak > must-not-appear]]></td></tr></table>'
+    const text = textOf(html)
+    expect(text).not.toContain('cdata-leak')
+    expect(text).not.toContain('must-not-appear')
+    expect(text).not.toContain('CDATA[')
+    expect(text).not.toContain(']]>')
+  })
+
+  it('an unterminated CDATA section inside a table is total -- never throws', () => {
+    const html = '<table><tr><th>A</th><td>lead<![CDATA[never closes'
+    expect(() => zimArticleToSegments(html)).not.toThrow()
+    expect(textOf(html)).toContain('lead')
+  })
+
+  // The two tests below pin a measured trade-off rather than a fix. A structural rule that
+  // dropped a headerless table as page layout whenever one of its cells held only an image was
+  // written, measured on the offline corpus, and withdrawn: across 1,437 articles it removed
+  // three tables, and one of them was a travel-notice box whose warning text and advisory list
+  // are content, not layout. Both shapes are therefore DELIVERED today, deliberately, and these
+  // tests exist so the next attempt at such a rule has to break them on purpose.
+
+  it('delivers a headerless notice box laid out as a table -- an icon cell beside the notice ' +
+    'and a row of advisory text -- with every one of its lines (the shape a withdrawn ' +
+    'image-only-cell drop rule was measured to remove)', () => {
+    const html =
+      '<table>' +
+      '<tr><td rowspan="3"><img src="notice-icon.png"></td>' +
+      '<td><b>NOTICE:</b> a standing advisory applies to this whole region.</td></tr>' +
+      '<tr><td>Official advisory sources' +
+      '<ul><li>Source one</li><li>Source two</li><li>Source three</li></ul></td></tr>' +
+      '</table>'
+    const text = textOf(html)
+    expect(text).toContain('NOTICE: a standing advisory applies to this whole region.')
+    expect(text).toContain('Official advisory sources')
+    expect(text).toContain('Source one')
+    expect(text).toContain('Source two')
+    expect(text).toContain('Source three')
+  })
+
+  it("delivers issue #487's own image-and-caption wrapper shape too -- a known limitation kept " +
+    'open on purpose, because the structural rule that would drop it also removes notice ' +
+    'boxes (see the test above)', () => {
+    const html = '<table style="float:right"><tr><td><img src="x.jpg"></td><td>caption text</td></tr></table>'
+    expect(textOf(html)).toContain('caption text')
+  })
+
+  it('still delivers a genuine two-column data table that also has an image cell in one row ' +
+    '(the per-row structural fallback judges the table, never the single image cell)', () => {
+    const html =
+      '<table>' +
+      '<tr><td><img src="diagram.png"></td><td>a diagram</td></tr>' +
+      '<tr><td>Length</td><td>12 m</td></tr>' +
+      '<tr><td>Width</td><td>4 m</td></tr>' +
+      '</table>'
+    const text = textOf(html)
+    expect(text).toContain('Length: 12 m')
+    expect(text).toContain('Width: 4 m')
   })
 
   it('preserves superscripts/subscripts readably inside table-derived text only', () => {

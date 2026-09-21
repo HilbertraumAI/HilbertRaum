@@ -375,6 +375,17 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
         i = close < 0 ? n : close + 3
         continue
       }
+      // Issue #493: a CDATA section closes on its own `]]>` and may itself contain a bare `>`
+      // that would otherwise truncate the skip early and leak the remainder as cell text --
+      // the same failure mode the comment branch above already forecloses for `<!--`. Mirrors
+      // html.ts's own S7 CDATA state (including its `lt + 9` start offset, the length of
+      // `<![CDATA[`): on no closing `]]>`, this table's parse ends totally, exactly like every
+      // other unterminated-input case in this tokenizer -- it never throws.
+      if (input.startsWith('<![CDATA[', lt)) {
+        const close = input.indexOf(']]>', lt + 9)
+        i = close < 0 ? n : close + 3
+        continue
+      }
       const gt = input.indexOf('>', lt + 1)
       i = gt < 0 ? n : gt + 1
       continue
