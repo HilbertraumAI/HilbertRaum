@@ -8,6 +8,11 @@ import { documentsDir } from '../services/ingestion'
 import { shredFile, workspaceAdmitsWork } from '../services/workspace-vault'
 import { tMain } from '../services/i18n'
 import { log } from '../services/logging'
+import {
+  describeDictationLevel,
+  judgeDictationLevel,
+  measureWavPcm16Level
+} from '../../shared/dictation-level'
 
 // Voice dictation IPC (wave-3 plan §10). The renderer records and resamples
 // in-page and sends WAV BYTES (never a path); this handler writes them to a
@@ -89,6 +94,18 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
     if (audio.byteLength > DICTATION_MAX_BYTES) throw new Error(DICTATION_TOO_LONG_MESSAGE)
     // Refuse a concurrent dictation BEFORE touching disk or spawning (no double-spawn).
     if (inFlight) throw new Error(DICTATION_BUSY_MESSAGE)
+    // #497: refuse a recording with no usable signal BEFORE the temp write and the whisper
+    // spawn — the pinned whisper hallucinates a word ("you") on digital silence rather than
+    // returning nothing. The renderer applies the same rule first (`assertUsableDictation`)
+    // with the actionable copy; this is the backstop on the bytes (shared rule:
+    // `shared/dictation-level.ts`). Numbers only in the log — never content. Bytes that are
+    // not our PCM16 mono WAV get no verdict here; whisper's decode failure covers them.
+    const level = measureWavPcm16Level(audio)
+    const verdict = level ? judgeDictationLevel(level) : 'ok'
+    if (level && verdict !== 'ok') {
+      log.info('Dictation refused before transcription', { verdict, ...describeDictationLevel(level) })
+      throw new Error(tMain(verdict === 'silent' ? 'main.dictation.silent' : 'main.dictation.tooShort'))
+    }
     inFlight = true
 
     // Wall-clock bound: abort (→ kills the whisper child → transcribe rejects) so a wedged

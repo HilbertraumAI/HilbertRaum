@@ -177,8 +177,10 @@ nothing in mammoth or this app calls `XMLSerializer`; the DOCX export path in
 
 ### Voice dictation data path (Phase 37, decision D30)
 The composer mic records **in the renderer** (`getUserMedia` → `MediaRecorder`), resamples to
-16 kHz mono and encodes a WAV **in-page**, and sends the **bytes** (never a path) over the
-`dictation:transcribe` IPC. The main process writes them to a transient
+16 kHz mono, refuses a clip that carries no usable signal **in-page** (#497 — nothing is sent),
+encodes a WAV **in-page**, and sends the **bytes** (never a path) over the
+`dictation:transcribe` IPC. The main process re-checks the bytes' level BEFORE any write (a
+refusal logs level figures only, never content) and writes them to a transient
 `<uuid>.parse-dictation.wav` under `workspace/documents/` — the `.parse` infix puts it under the
 same startup `shredStalePlaintext` crash sweep as every ingestion transient — runs the Phase-36
 whisper transcriber (whose own transcript JSON transient is steered into the same swept

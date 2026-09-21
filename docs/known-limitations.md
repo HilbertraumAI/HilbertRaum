@@ -2191,6 +2191,21 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   is still running past a 10-minute wall-clock ceiling (env-tunable; the recording is already
   capped at ~35 min of audio) is killed and the composer gets the friendly failure instead of
   a perpetual spinner.
+- **A silent or near-silent recording is refused before whisper runs (#497).** Whisper does not
+  return "nothing" for silence: the pinned build turns digital silence into the single word
+  `you` (under `-l de`: `[Musik]`) and low white noise into random-script text or broadcaster
+  credits (measured 2026-09-21 against the real binary + weights). The renderer therefore
+  measures the rendered audio and refuses a clip whose peak stays under −50 dBFS (or whose RMS
+  stays under −70 dBFS, or that is shorter than 300 ms) with "No sound reached the
+  microphone…" — the usual causes are a muted or wrong default input device, or the OS handing
+  a desktop app silence when its privacy settings do not allow the microphone. The main handler
+  re-checks the bytes as a backstop; only level figures go to the local log, never content.
+  Ordinary speech sits 40–50 dB above the floor (`shared/dictation-level.ts` records the
+  calibration). What the gate does NOT catch: a quiet room's noise floor between roughly −50
+  and −30 dBFS with no speech in it still reaches whisper and can still come back as a stray
+  word or phrase. The recorded follow-up is Silero VAD for whisper (`--vad`, a small pinned
+  model the drive does not carry yet), which would also help long audio imports. There is no
+  input-device picker: the system default microphone is used.
 
 ## Scanned-PDF / photo OCR
 

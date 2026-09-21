@@ -484,6 +484,10 @@ export const de: Record<keyof typeof en, string> = {
   'chat.dictation.stop': 'Diktat beenden und Text einfügen',
   'chat.dictation.transcribing': 'Deine Sprache wird in Text umgewandelt',
   'chat.dictation.noSpeech': 'Es wurde keine Sprache erkannt — versuch es noch einmal.',
+  // #497 — siehe en.ts.
+  'chat.dictation.silent':
+    'Am Mikrofon ist kein Ton angekommen. Prüf, ob es stummgeschaltet ist und ob HilbertRaum es ' +
+    'laut Systemeinstellungen verwenden darf, und versuch es dann noch einmal.',
   'chat.dictation.micBlocked':
     'Das Mikrofon konnte nicht verwendet werden. Prüf die Mikrofon-Einstellungen deines ' +
     'Systems und versuch es dann noch einmal.',
@@ -2604,6 +2608,11 @@ export const de: Record<keyof typeof en, string> = {
   // S3 (full-audit-2026-06-30) — siehe en.ts.
   'main.dictation.locked':
     'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um die Spracheingabe zu verwenden.',
+  // #497 — siehe en.ts.
+  'main.dictation.silent':
+    'Am Mikrofon ist kein Ton angekommen. Prüf, ob es stummgeschaltet ist und ob HilbertRaum es ' +
+    'laut Systemeinstellungen verwenden darf, und versuch es dann noch einmal.',
+  'main.dictation.tooShort': 'Die Aufnahme war zu kurz für Sprache — versuch es noch einmal.',
   'main.preflight.readOnly':
     'Dieses Laufwerk scheint schreibgeschützt zu sein, daher kann die App ihren ' +
     'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in der ' +

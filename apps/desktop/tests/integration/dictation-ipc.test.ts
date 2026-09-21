@@ -26,6 +26,8 @@ import {
   registerDictationIpc
 } from '../../src/main/ipc/registerDictationIpc'
 import { documentsDir } from '../../src/main/services/ingestion'
+import { encodeWavPcm16 } from '../../src/renderer/lib/wav'
+import { t } from '../../src/shared/i18n'
 import type { Transcriber, TranscribeOptions } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -222,6 +224,50 @@ describe('registerDictationIpc', () => {
 
     const { result } = await invoke(handlers, IPC.transcribeDictation, Buffer.from([9, 9, 9]))
     expect(result).toBe('Hello there dictation works')
+  })
+
+  // #497: the silence gate's backstop. The renderer refuses a silent recording first (with the
+  // actionable copy); the handler re-checks the WAV bytes so a silent clip can never reach
+  // whisper — which hallucinates a word ("you" on the pinned build) rather than return nothing.
+  it('refuses a silent WAV before touching the disk or the transcriber (#497)', async () => {
+    const workspacePath = freshWorkspacePath()
+    const { transcriber, seen } = fakeTranscriber()
+    registerDictationIpc(ctxWith(workspacePath, transcriber).ctx)
+
+    const silent = encodeWavPcm16(new Float32Array(16000 * 2), 16000) // 2 s of digital silence
+    await expect(invoke(handlers, IPC.transcribeDictation, silent)).rejects.toThrow(
+      t('en', 'main.dictation.silent')
+    )
+    expect(seen).toHaveLength(0)
+    expect(readdirSync(documentsDir(workspacePath))).toEqual([])
+  })
+
+  it('refuses a too-short WAV with the no-speech copy, not the microphone copy (#497)', async () => {
+    const workspacePath = freshWorkspacePath()
+    const { transcriber, seen } = fakeTranscriber()
+    registerDictationIpc(ctxWith(workspacePath, transcriber).ctx)
+
+    const loudButShort = new Float32Array(1600) // 100 ms
+    for (let i = 0; i < loudButShort.length; i++) loudButShort[i] = 0.5 * Math.sin((2 * Math.PI * 440 * i) / 16000)
+    await expect(invoke(handlers, IPC.transcribeDictation, encodeWavPcm16(loudButShort, 16000))).rejects.toThrow(
+      t('en', 'main.dictation.tooShort')
+    )
+    expect(seen).toHaveLength(0)
+    expect(readdirSync(documentsDir(workspacePath))).toEqual([])
+  })
+
+  it('passes a speech-level WAV through to the transcriber unchanged (#497)', async () => {
+    const workspacePath = freshWorkspacePath()
+    const { transcriber, seen } = fakeTranscriber()
+    registerDictationIpc(ctxWith(workspacePath, transcriber).ctx)
+
+    const tone = new Float32Array(16000 * 2)
+    for (let i = 0; i < tone.length; i++) tone[i] = 0.1 * Math.sin((2 * Math.PI * 440 * i) / 16000) // −20 dBFS
+    const wav = encodeWavPcm16(tone, 16000)
+    const { result } = await invoke(handlers, IPC.transcribeDictation, wav)
+    expect(result).toBe('Hello there dictation works')
+    expect(seen).toHaveLength(1)
+    expect(seen[0].bytes).toEqual(Buffer.from(wav))
   })
 
   // REL-3 (TEST-4): whisper is not internally serialized, so a second mic press while the

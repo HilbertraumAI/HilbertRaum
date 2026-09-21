@@ -1682,7 +1682,11 @@ it fails with friendly convert-to-WAV/MP3 copy.
 Push-to-talk into the chat composer — a thin client of the Phase-36 transcriber. The
 whole pipeline (locked in D30): renderer `getUserMedia` audio → `MediaRecorder`
 (webm/opus) → decode + resample to **16 kHz mono** via an `OfflineAudioContext` render →
-**pure-JS WAV encode** (`renderer/lib/wav.ts`, no new deps) → BYTES over the
+**level gate** (`shared/dictation-level.ts`, #497 amendment: a clip with no usable signal —
+peak under −50 dBFS, RMS under −70 dBFS or shorter than 300 ms — is refused HERE with the
+"check your microphone" copy, and again in main as the backstop, because the pinned whisper
+hallucinates a word on silence rather than returning nothing; the module records the
+calibration) → **pure-JS WAV encode** (`renderer/lib/wav.ts`, no new deps) → BYTES over the
 request/response IPC **`dictation:transcribe`** (preload `transcribeDictation`; no new
 event channels) → main writes a transient `<uuid>.parse-dictation.wav` into the
 documents dir (the `.parse` infix = crash-sweep coverage), runs

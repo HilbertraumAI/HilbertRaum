@@ -471,6 +471,10 @@ export const en = {
   'chat.dictation.stop': 'Stop dictation and insert the text',
   'chat.dictation.transcribing': 'Turning your speech into text',
   'chat.dictation.noSpeech': 'No speech was recognized — try speaking again.',
+  // #497: the level gate's refusal (canonical English lives in lib/dictation.ts, exact-matched
+  // at display like micBlocked). A muted/wrong device, or the OS feeding a blocked app silence.
+  'chat.dictation.silent':
+    'No sound reached the microphone. Check that it is not muted and that HilbertRaum may use it in the system settings, then try again.',
   'chat.dictation.micBlocked':
     'The microphone could not be used. Check the system microphone settings, then try again.',
 
@@ -2598,6 +2602,11 @@ export const en = {
   // S3 (full-audit-2026-06-30): dictation writes a transient plaintext WAV into the workspace
   // documents dir, so it must lock-gate like the other workspace-touching handlers.
   'main.dictation.locked': 'Workspace is locked. Unlock it to use voice dictation.',
+  // #497: the level gate's main-process backstop (the renderer refuses first with the chat.*
+  // copy above; these are seen only by a caller that bypassed it).
+  'main.dictation.silent':
+    'No sound reached the microphone. Check that it is not muted and that HilbertRaum may use it in the system settings, then try again.',
+  'main.dictation.tooShort': 'The recording was too short to contain speech — try again.',
   'main.preflight.readOnly':
     'This drive appears to be read-only, so the app cannot create its workspace. ' +
     'Try a different USB port, or see the troubleshooting guide.',

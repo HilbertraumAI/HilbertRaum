@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Spinner } from '../components'
 import {
   captureDictation,
+  DICTATION_SILENT_MESSAGE,
+  DICTATION_TOO_SHORT_MESSAGE,
   MIC_BLOCKED_MESSAGE,
   type DictationCapture,
   type DictationCaptureStart
@@ -48,12 +50,17 @@ export function DictationButton({
   // component. This latch lets the resolved start() release that stream instead of leaking it (F21).
   const mountedRef = useRef(true)
 
-  // lib/dictation stays t-free (a pure module); its canonical mic-blocked English is
-  // exact-matched here and localized at display (renderer-ephemeral, never persisted).
+  // lib/dictation stays t-free (a pure module); its canonical English messages are
+  // exact-matched here and localized at display (renderer-ephemeral, never persisted). The
+  // #497 level gate's two refusals join the mic-blocked one: silence gets the microphone hint,
+  // a too-short clip the plain no-speech notice.
   function friendlyCaptureError(e: unknown): string {
-    return e instanceof Error && e.message === MIC_BLOCKED_MESSAGE
-      ? t('chat.dictation.micBlocked')
-      : friendlyIpcError(e)
+    if (e instanceof Error) {
+      if (e.message === MIC_BLOCKED_MESSAGE) return t('chat.dictation.micBlocked')
+      if (e.message === DICTATION_SILENT_MESSAGE) return t('chat.dictation.silent')
+      if (e.message === DICTATION_TOO_SHORT_MESSAGE) return t('chat.dictation.noSpeech')
+    }
+    return friendlyIpcError(e)
   }
 
   // Keep a stable handle to the latest onRecording so the unmount cleanup can call it

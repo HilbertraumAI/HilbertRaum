@@ -407,7 +407,10 @@ speech model and then securely deleted — it is never saved, never listed anywh
 never leaves your device. If no microphone button is visible, the speech model isn't
 installed on this drive (you can add it from the **AI Model** screen if downloads are
 enabled). German and English both work — speak naturally, in whole sentences, for the
-best results.
+best results. If the app says that no sound reached the microphone, check that the
+microphone isn't muted, that the right one is set as your system's default input, and that
+Windows/macOS allows HilbertRaum to use it (the system's microphone privacy setting), then
+try again.
 
 ### Find something you talked about (search)
 
