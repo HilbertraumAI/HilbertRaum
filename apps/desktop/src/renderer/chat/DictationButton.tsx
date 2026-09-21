@@ -15,8 +15,9 @@ import { useT } from '../i18n'
 // indicator is the recording signal), click again to stop — the audio is resampled
 // in-page, transcribed locally by the drive's whisper model, and the text lands in
 // the input FOR REVIEW. Nothing is ever auto-sent, and the recording never leaves
-// the machine. The button renders only when a transcriber is available
-// (availability-driven — ChatScreen gates on `dictationAvailable`; no settings key).
+// the machine. The live button renders only when a transcriber is available
+// (availability-driven — ChatScreen gates on `dictationAvailable`; no settings key);
+// without one, `DictationUnavailableButton` below stands in (#497 discoverability).
 
 type DictationState = 'idle' | 'starting' | 'recording' | 'transcribing'
 
@@ -153,6 +154,37 @@ export function DictationButton({
       }}
     >
       {state === 'transcribing' ? <Spinner /> : <MicIcon />}
+    </Button>
+  )
+}
+
+/**
+ * The "not installed" mic (#497 discoverability): the same glyph at the disabled opacity,
+ * focusable and clickable (`aria-disabled`, not `disabled`, so keyboard users reach the
+ * explanation too). Its click toggles the composer's hint that names the missing speech model
+ * and deep-links to the AI Model screen. Rendered for `dictationAvailable === false` only —
+ * never for a status that has not been read yet, so mount never flashes it.
+ */
+export function DictationUnavailableButton({
+  expanded,
+  onToggle
+}: {
+  expanded: boolean
+  onToggle: () => void
+}): JSX.Element {
+  const { t } = useT()
+  const label = t('chat.dictation.unavailable')
+  return (
+    <Button
+      variant="ghost"
+      className="dictation-btn dictation-unavailable"
+      aria-label={label}
+      title={label}
+      aria-disabled="true"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <MicIcon />
     </Button>
   )
 }

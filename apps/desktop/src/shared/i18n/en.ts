@@ -468,6 +468,11 @@ export const en = {
 
   // ---- Chat: dictation (DictationButton.tsx) ----
   'chat.dictation.start': 'Dictate a message',
+  // #497 (discoverability): the visibly disabled mic on a drive without the speech model, and
+  // the hint its click reveals (the deep link reuses chat.noModel.open).
+  'chat.dictation.unavailable': 'Voice dictation is not installed on this drive',
+  'chat.dictation.needsModel':
+    'Dictating a message needs the speech model, which is not installed on this drive. You can add it on the AI Model screen.',
   'chat.dictation.stop': 'Stop dictation and insert the text',
   'chat.dictation.transcribing': 'Turning your speech into text',
   'chat.dictation.noSpeech': 'No speech was recognized — try speaking again.',

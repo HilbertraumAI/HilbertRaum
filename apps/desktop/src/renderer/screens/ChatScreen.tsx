@@ -309,13 +309,15 @@ export function ChatScreen({
   // citation article viewer target (null = closed).
   const [packs, setPacks] = useState<KnowledgePack[]>([])
   const [articleTarget, setArticleTarget] = useState<ArticleTarget | null>(null)
-  // Voice dictation: availability-driven — the composer mic renders only
-  // when a transcriber is selected (whisper binary + weights on the drive). Best-effort
-  // like `docs`: a failed status read just hides the mic. Read on mount AND on window focus
-  // (#497, the Translate-screen pattern): main re-selects the transcriber the moment a
-  // mid-session speech-model download or voice-engine install lands, and a user who stayed in
-  // chat meanwhile must not need a restart — or a navigation — to see the mic.
-  const [dictationAvailable, setDictationAvailable] = useState(false)
+  // Voice dictation: availability-driven — the composer's LIVE mic renders only when a
+  // transcriber is selected (whisper binary + weights on the drive); without one the composer
+  // shows the "not installed" mic that points at the AI Model screen (#497). `null` until the
+  // first status read so mount never flashes either state; a failed read counts as unavailable.
+  // Read on mount AND on window focus (#497, the Translate-screen pattern): main re-selects the
+  // transcriber the moment a mid-session speech-model download or voice-engine install lands,
+  // and a user who stayed in chat meanwhile must not need a restart — or a navigation — to see
+  // the mic.
+  const [dictationAvailable, setDictationAvailable] = useState<boolean | null>(null)
   const refreshDictationAvailability = useCallback(async (): Promise<void> => {
     try {
       const status = await window.api.getAppStatus()
@@ -2539,6 +2541,7 @@ export function ChatScreen({
           sendLabel={mode === 'documents' ? t('chat.send.ask') : t('chat.send.send')}
           inputRef={composerRef}
           dictationAvailable={dictationAvailable}
+          onOpenModels={() => onNavigate('models')}
           onDictationError={setError}
           // CR-3: withhold the paperclip while an import is pending (mirrors the `onTryAgain ? h :
           // undefined` gating pattern) so the one-pending-import model is honest; the guard inside

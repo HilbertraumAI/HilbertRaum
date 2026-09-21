@@ -2175,9 +2175,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   real-time÷1.5, see "Audio transcription" above), so a 15-second dictation takes a few
   seconds to land. A warm whisper-server mode is the recorded
   follow-up if dictation latency ever warrants it (D34's revisit clause).
-- **The mic appears only when the speech model is installed** (the same
-  availability-driven gate as audio import — no settings key). On a drive without the
-  whisper binary + weights there is no dictation affordance at all, by design.
+- **The mic works only when the speech model is installed** (the same
+  availability-driven gate as audio import — no settings key). Since #497 a drive without the
+  whisper binary + weights shows the mic greyed out instead of hiding it: a click explains what
+  is missing and opens the AI Model screen (which says whether the model, the voice engine or
+  both are absent). Availability is read on entering the chat screen and on window focus.
 - **Whisper, not the OS, decides what was said.** Dictation quality is the small model's
   (see "Audio transcription" above); the text always lands in the message box for review
   and is never auto-sent — that review step is the accuracy backstop.

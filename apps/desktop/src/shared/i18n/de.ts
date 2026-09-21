@@ -481,6 +481,10 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Chat: dictation ----
   'chat.dictation.start': 'Nachricht diktieren',
+  // #497 — siehe en.ts.
+  'chat.dictation.unavailable': 'Spracheingabe ist auf diesem Laufwerk nicht installiert',
+  'chat.dictation.needsModel':
+    'Zum Diktieren fehlt das Sprachmodell auf diesem Laufwerk. Du kannst es im Bereich „KI-Modell“ hinzufügen.',
   'chat.dictation.stop': 'Diktat beenden und Text einfügen',
   'chat.dictation.transcribing': 'Deine Sprache wird in Text umgewandelt',
   'chat.dictation.noSpeech': 'Es wurde keine Sprache erkannt — versuch es noch einmal.',

@@ -1417,6 +1417,18 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Voice-dictation mic: quiet ghost button beside Send; while recording it
    pulses so stopping is obvious (the OS mic indicator is the authoritative signal). */
 .dictation-btn { min-width: 26px; padding-left: 3px; padding-right: 3px; }
+/* #497: the "not installed" mic — the same glyph at the disabled opacity (guidelines §6), still
+   focusable/clickable (aria-disabled, not disabled) so its click can explain what is missing. */
+.dictation-btn.dictation-unavailable { opacity: 0.5; }
+.btn.ghost.dictation-btn.dictation-unavailable:hover { opacity: 0.8; }
+/* The explanation under the composer row: hint typography with the deep-link button inline. */
+.composer-hint {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: var(--space-2);
+  margin: var(--space-1) 0 0;
+}
 /* Attach-files button: quiet ghost paperclip beside the mic/Send (plan §11.2). The
    icon is centered, so a wide box pushed it away from the mic — hug the glyph (the 24px
    global button min keeps the hit target; height carries the vertical target). */

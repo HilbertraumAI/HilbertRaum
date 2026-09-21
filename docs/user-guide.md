@@ -404,9 +404,9 @@ recordings — see §7), a small **microphone button** appears next to **Send**:
 
 Dictation happens entirely on this drive: the recording is turned into text by the local
 speech model and then securely deleted — it is never saved, never listed anywhere, and
-never leaves your device. If no microphone button is visible, the speech model isn't
-installed on this drive (you can add it from the **AI Model** screen if downloads are
-enabled). German and English both work — speak naturally, in whole sentences, for the
+never leaves your device. If the microphone button looks greyed out, the speech model isn't
+installed on this drive — click it to see what's missing and jump to the **AI Model** screen
+(you can add the model there if downloads are enabled). German and English both work — speak naturally, in whole sentences, for the
 best results. If the app says that no sound reached the microphone, check that the
 microphone isn't muted, that the right one is set as your system's default input, and that
 Windows/macOS allows HilbertRaum to use it (the system's microphone privacy setting), then

@@ -1,14 +1,18 @@
 // @vitest-environment jsdom
 import { useState } from 'react'
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { Composer } from '../../src/renderer/chat/Composer'
 import { DictationButton } from '../../src/renderer/chat/DictationButton'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { t } from '../../src/shared/i18n'
 import type { DictationCapture, DictationCaptureStart } from '../../src/renderer/lib/dictation'
-import { MIC_BLOCKED_MESSAGE } from '../../src/renderer/lib/dictation'
+import {
+  DICTATION_SILENT_MESSAGE,
+  DICTATION_TOO_SHORT_MESSAGE,
+  MIC_BLOCKED_MESSAGE
+} from '../../src/renderer/lib/dictation'
 import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -58,6 +62,7 @@ function Harness(props: {
   onError?: (m: string) => void
   onSend?: () => void
   available?: boolean
+  onOpenModels?: () => void
 }): JSX.Element {
   const [value, setValue] = useState(props.initial ?? '')
   return (
@@ -72,6 +77,7 @@ function Harness(props: {
       dictationAvailable={props.available ?? true}
       onDictationError={props.onError}
       dictationCaptureImpl={props.capture}
+      onOpenModels={props.onOpenModels}
     />
   )
 }
@@ -114,6 +120,8 @@ describe('availability gating (D14 precedent)', () => {
     })
     render(<ChatScreen onNavigate={() => {}} />)
     await screen.findByPlaceholderText('Message…')
+    // #497: unavailable is no longer invisible — the "not installed" mic stands in for it.
+    expect(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') })).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /dictate a message/i })).not.toBeInTheDocument()
   })
 
@@ -151,6 +159,49 @@ describe('availability gating (D14 precedent)', () => {
       />
     )
     expect(screen.queryByRole('button', { name: /dictate/i })).not.toBeInTheDocument()
+  })
+})
+
+// #497 (discoverability): on a drive without the speech model the mic used to vanish, and the
+// only pointer to dictation was a sentence in the user guide. The composer now shows a visibly
+// disabled mic whose click explains what is missing and deep-links to the AI Model screen.
+// `undefined` (status not read yet) still renders nothing — no flash on mount.
+describe('the "not installed" mic (#497 — discoverable, never hidden)', () => {
+  it('renders a visibly disabled mic when dictation is unavailable — never the live one, no hint until asked', () => {
+    render(<Harness available={false} />)
+    const mic = screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') })
+    expect(mic).toHaveAttribute('aria-disabled', 'true')
+    expect(screen.queryByRole('button', { name: /dictate a message/i })).not.toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'chat.dictation.needsModel'))).not.toBeInTheDocument()
+  })
+
+  it('one click explains what is missing; one more opens the AI Model screen', async () => {
+    const user = userEvent.setup()
+    const onOpenModels = vi.fn()
+    render(<Harness available={false} onOpenModels={onOpenModels} />)
+    await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
+    expect(screen.getByText(t('en', 'chat.dictation.needsModel'))).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: t('en', 'chat.noModel.open') }))
+    expect(onOpenModels).toHaveBeenCalledTimes(1)
+    // A second click on the mic folds the hint away again.
+    await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
+    expect(screen.queryByText(t('en', 'chat.dictation.needsModel'))).not.toBeInTheDocument()
+  })
+
+  it('ChatScreen threads the deep link: the hint navigates to the AI Model screen', async () => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    stubApi({
+      getAppStatus: vi.fn(async () => appStatus({ dictationAvailable: false })),
+      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
+      listConversations: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [])
+    })
+    render(<ChatScreen onNavigate={onNavigate} />)
+    await user.click(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
+    const composer = document.querySelector('.composer') as HTMLElement
+    await user.click(within(composer).getByRole('button', { name: t('en', 'chat.noModel.open') }))
+    expect(onNavigate).toHaveBeenCalledWith('models')
   })
 })
 
@@ -263,6 +314,50 @@ describe('friendly failures (§11.4)', () => {
     await waitFor(() => expect(onError).toHaveBeenCalledWith(MIC_BLOCKED_MESSAGE))
     expect(micButton()).toBeEnabled()
     expect(micButton()).toHaveAttribute('aria-pressed', 'false')
+  })
+
+  // #497: the renderer gate refuses a recording with no usable signal BEFORE the IPC — nothing
+  // is sent, whisper never runs, and the copy tells the user what to check. Localized at display
+  // from the canonical English constant, the MIC_BLOCKED_MESSAGE pattern.
+  it('surfaces the silent-recording copy when the capture carried no signal, sends nothing, and recovers (#497)', async () => {
+    const user = userEvent.setup()
+    const transcribe = vi.fn(async () => 'never')
+    stubApi({ transcribeDictation: transcribe })
+    const onError = vi.fn()
+    const capture: DictationCapture = {
+      stop: async () => {
+        throw new Error(DICTATION_SILENT_MESSAGE)
+      },
+      cancel: vi.fn(),
+      analyser: null
+    }
+    render(<Harness initial="keep me" capture={async () => capture} onError={onError} />)
+
+    await user.click(micButton())
+    await user.click(await screen.findByRole('button', { name: /stop dictation/i }))
+
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(t('en', 'chat.dictation.silent')))
+    expect(transcribe).not.toHaveBeenCalled()
+    expect((screen.getByPlaceholderText('Message…') as HTMLTextAreaElement).value).toBe('keep me')
+    expect(micButton()).toBeEnabled()
+  })
+
+  it('maps a too-short recording to the no-speech copy, not the microphone copy (#497)', async () => {
+    const user = userEvent.setup()
+    stubApi({ transcribeDictation: vi.fn(async () => 'never') })
+    const onError = vi.fn()
+    const capture: DictationCapture = {
+      stop: async () => {
+        throw new Error(DICTATION_TOO_SHORT_MESSAGE)
+      },
+      cancel: vi.fn(),
+      analyser: null
+    }
+    render(<Harness capture={async () => capture} onError={onError} />)
+
+    await user.click(micButton())
+    await user.click(await screen.findByRole('button', { name: /stop dictation/i }))
+    await waitFor(() => expect(onError).toHaveBeenCalledWith(t('en', 'chat.dictation.noSpeech')))
   })
 
   it('releases the microphone when the composer unmounts mid-recording', async () => {

@@ -1697,7 +1697,13 @@ the text. The composer (`renderer/chat/DictationButton.tsx` + `Composer.tsx`) in
 explicitly out of scope.
 
 - **Availability-driven (D14 precedent, no settings key):** `AppStatus.dictationAvailable`
-  = "a transcriber is selected"; the mic button simply doesn't render without it. The IPC
+  = "a transcriber is selected"; the live mic renders with it and — the #497 amendment to D30 —
+  a visibly disabled **"not installed" mic** renders without it (`DictationUnavailableButton`:
+  `aria-disabled`, a click reveals the hint that names the missing speech model plus the
+  `onNavigate('models')` deep link; the composer prop is tri-state, `null` = status unread →
+  nothing, so mount never flashes either state). The AI Model screen's hide-the-disabled-Select
+  precedent (§11 of the design guidelines) does not apply: there the one clear action sits on
+  the same card, here it lives on another screen, so the mic is the pointer. The IPC
   refuses friendly as a backstop. **Restart-free activation (#497, 2026-09-21):** the slot is
   re-selected by `refreshTranscriberSlot` (`compose-services.ts`, the transcriber twin of the
   issue-#40 `composeTranslator`) from BOTH install hooks — `AppContext.onModelInstalled` after a
@@ -1715,7 +1721,8 @@ explicitly out of scope.
 - **Privacy:** the recording exists only as the shredded transient; **no audit event**
   (content-adjacent, like search); errors to the renderer are fixed friendly copy with
   the technical reason in the local log only. The OS mic indicator is the recording
-  signal. Locked workspace needs no handling — the composer doesn't exist pre-unlock.
+  signal. Locked workspace: the composer doesn't exist pre-unlock, and since S3 the IPC refuses
+  on a locked vault anyway (`main.dictation.locked`, before any byte is written).
 - **Concurrency & timeout (backend audit 2026-06-27, REL-3).** whisper is not internally
   serialized, so the handler holds a **single-flight guard**: a second `dictation:transcribe`
   while one is in flight is rejected with friendly copy (`DICTATION_BUSY_MESSAGE`) BEFORE it

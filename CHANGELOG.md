@@ -25,8 +25,23 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Changed
+
+- **The microphone button no longer disappears when the speech model is missing.** On a
+  drive without the speech model, the chat composer now shows the button greyed out; clicking
+  it explains what is missing and opens the AI Model screen, where the model can be added
+  (#497).
+
 ### Fixed
 
+- **Voice dictation works right after you install the speech model or the voice engine — no
+  restart.** The app used to keep its startup answer ("not available") until it was restarted,
+  without saying so; the microphone button now appears as soon as the download or install
+  finishes, also when you stayed in the chat meanwhile (#497).
+- **A silent recording no longer turns into a stray word.** When nothing reaches the
+  microphone — it is muted, the wrong input device is selected, or the operating system does
+  not allow the app to use it — dictation now says so instead of inserting the word "you"
+  (#497).
 - **Two small article-reading fixes: a rare text leak, and photo captions.** Reading a
   Wikipedia table that contained a certain very rare block of raw text could leak a stray
   fragment of it into what the app reads back; that block is now skipped correctly, the same
