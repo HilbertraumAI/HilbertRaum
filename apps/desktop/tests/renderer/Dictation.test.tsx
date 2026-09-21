@@ -44,15 +44,27 @@ function runtimeStatus(): RuntimeStatus {
 }
 
 /** A capture whose stop() resolves with fixed bytes — the renderer-side fake mic. */
-function fakeCapture(bytes = new Uint8Array([1, 2, 3])): {
+function fakeCapture(
+  bytes = new Uint8Array([1, 2, 3]),
+  analyser: AnalyserNode | null = null
+): {
   start: DictationCaptureStart
   cancel: ReturnType<typeof vi.fn>
 } {
   const cancel = vi.fn()
-  // analyser: null — jsdom has no Web Audio. The Composer's waveform overlay must
-  // no-op (render nothing) on a null analyser; the record flow stays unaffected.
-  const capture: DictationCapture = { stop: async () => bytes, cancel, analyser: null }
+  // analyser: null by default — jsdom has no Web Audio. The Composer's waveform overlay must
+  // no-op (render nothing) on a null analyser; the record flow stays unaffected. The no-signal
+  // tests pass a fake tap instead.
+  const capture: DictationCapture = { stop: async () => bytes, cancel, analyser }
   return { start: async () => capture, cancel }
+}
+
+/** A stand-in for the Web Audio tap: every time-domain frame is filled with `level.value`. */
+function fakeAnalyser(level: { value: number }): AnalyserNode {
+  return {
+    fftSize: 8,
+    getFloatTimeDomainData: (arr: Float32Array) => arr.fill(level.value)
+  } as unknown as AnalyserNode
 }
 
 /** Stateful Composer harness (the real Composer is controlled by ChatScreen). */
@@ -63,6 +75,7 @@ function Harness(props: {
   onSend?: () => void
   available?: boolean
   onOpenModels?: () => void
+  noSignalTiming?: { afterMs: number; pollMs: number }
 }): JSX.Element {
   const [value, setValue] = useState(props.initial ?? '')
   return (
@@ -78,6 +91,7 @@ function Harness(props: {
       onDictationError={props.onError}
       dictationCaptureImpl={props.capture}
       onOpenModels={props.onOpenModels}
+      noSignalTiming={props.noSignalTiming}
     />
   )
 }
@@ -202,6 +216,59 @@ describe('the "not installed" mic (#497 — discoverable, never hidden)', () => 
     const composer = document.querySelector('.composer') as HTMLElement
     await user.click(within(composer).getByRole('button', { name: t('en', 'chat.noModel.open') }))
     expect(onNavigate).toHaveBeenCalledWith('models')
+  })
+})
+
+// #497 follow-up (owner request): while recording, the composer says at once when nothing is
+// reaching the microphone — sampled from the waveform's Web Audio tap against the same −50 dBFS
+// floor the post-stop gate applies. Timing is injected small here; the product default is 2 s.
+describe('the live "no signal" hint while recording', () => {
+  const FAST = { afterMs: 80, pollMs: 10 }
+  const noSignalText = (): string => t('en', 'chat.dictation.noSignal')
+
+  it('appears once the tap has stayed silent for the window, and clears the moment sound comes in', async () => {
+    const user = userEvent.setup()
+    stubApi({ transcribeDictation: vi.fn(async () => 'text') })
+    const level = { value: 0 } // digital silence — a muted or blocked device
+    const { start } = fakeCapture(new Uint8Array([1]), fakeAnalyser(level))
+    render(<Harness capture={start} noSignalTiming={FAST} />)
+
+    await user.click(micButton())
+    await screen.findByRole('button', { name: /stop dictation/i })
+    expect(await screen.findByText(noSignalText())).toBeInTheDocument()
+
+    level.value = 0.2 // −14 dBFS: the user started talking
+    await waitFor(() => expect(screen.queryByText(noSignalText())).not.toBeInTheDocument())
+  })
+
+  it('never appears while there is signal, and is gone once recording stops', async () => {
+    const user = userEvent.setup()
+    stubApi({ transcribeDictation: vi.fn(async () => 'text') })
+    const level = { value: 0.2 }
+    const { start } = fakeCapture(new Uint8Array([1]), fakeAnalyser(level))
+    render(<Harness capture={start} noSignalTiming={FAST} />)
+
+    await user.click(micButton())
+    await screen.findByRole('button', { name: /stop dictation/i })
+    await new Promise((r) => setTimeout(r, FAST.afterMs * 3))
+    expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
+
+    level.value = 0
+    expect(await screen.findByText(noSignalText())).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: /stop dictation/i }))
+    await waitFor(() => expect(screen.queryByText(noSignalText())).not.toBeInTheDocument())
+  })
+
+  it('stays silent without a Web Audio tap (analyser null) — the post-stop gate still covers that', async () => {
+    const user = userEvent.setup()
+    stubApi({ transcribeDictation: vi.fn(async () => 'text') })
+    const { start } = fakeCapture()
+    render(<Harness capture={start} noSignalTiming={FAST} />)
+
+    await user.click(micButton())
+    await screen.findByRole('button', { name: /stop dictation/i })
+    await new Promise((r) => setTimeout(r, FAST.afterMs * 3))
+    expect(screen.queryByText(noSignalText())).not.toBeInTheDocument()
   })
 })
 

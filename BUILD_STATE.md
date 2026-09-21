@@ -30,8 +30,9 @@
 > named in §5's branch analysis still carry unmerged work.
 _2026-09-21 — **#497 — dictation: the speech model activates the moment its download (or the voice
 engine's install) lands, a silent recording is refused before whisper runs, and the composer mic
-shows as "not installed" with a path to the AI Model screen instead of vanishing** (branch
-`feat/497-dictation-discoverability-silence`, three commits; record: `architecture.md` "Voice
+shows as "not installed" with a path to the AI Model screen instead of vanishing — plus a live
+"no sound is reaching the microphone" hint while recording (owner request)** (PR #503, branch
+`feat/497-dictation-discoverability-silence`, four commits; record: `architecture.md` "Voice
 dictation" — the D30 amendment + the restart-free-activation paragraph; `known-limitations.md`
 "Voice dictation"; gate rule + calibration in `shared/dictation-level.ts`). Evidence (K:, the pinned
 whisper-cli + ggml-small): digital silence under `-l auto` → the single word `you`, `-l de` →
