@@ -395,7 +395,9 @@ recordings — see §7), a small **microphone button** appears next to **Send**:
 
 1. Click the mic to start recording. Your computer's usual microphone indicator turns on,
    and the button pulses while it listens. The first time, Windows/macOS may ask you to
-   allow microphone access for the app.
+   allow microphone access for the app. If nothing reaches the microphone for a couple of
+   seconds, a note under the message box says so right away, so you can fix the mic before
+   you finish.
 2. Speak, then click the mic again to stop. After a brief moment the recognized text
    appears in the message box, right where your cursor was — it does **not** send
    anything.

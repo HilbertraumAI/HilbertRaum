@@ -1739,7 +1739,11 @@ explicitly out of scope.
   the border). Decorative (`aria-hidden`) — the mic `aria-pressed`/label stays
   authoritative — and `prefers-reduced-motion`-aware (static baseline). Degrades to no
   wave (button pulse + dim only) when Web Audio is absent (`analyser: null`). Local, no new
-  deps. Full record: wave-3 plan §10.
+  deps. **Live no-signal hint (#497 follow-up, owner request):** `useNoSignalHint` samples the
+  same tap four times a second and, once its peak has stayed under the gate's −50 dBFS floor
+  for 2 s, the composer shows the "no sound is reaching the microphone" note until signal
+  returns or recording ends; a null analyser never shows it (the post-stop gate still refuses).
+  Full record: wave-3 plan §10.
 
 ## Scanned-PDF / photo OCR (Phase 38, wave-3 plan §11, decisions D31–D33)
 

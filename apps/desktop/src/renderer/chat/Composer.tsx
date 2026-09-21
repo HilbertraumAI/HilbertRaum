@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Button } from '../components'
 import { DictationButton, DictationUnavailableButton } from './DictationButton'
+import { useNoSignalHint, type NoSignalTiming } from './useNoSignalHint'
 import { Waveform } from './Waveform'
 import { useT } from '../i18n'
 import type { DictationCaptureStart } from '../lib/dictation'
@@ -37,6 +38,8 @@ interface ComposerProps {
   onDictationError?: (message: string) => void
   /** Test seam forwarded to DictationButton (real getUserMedia capture by default). */
   dictationCaptureImpl?: DictationCaptureStart
+  /** Test seam: the live no-signal hint's timing (two seconds / four samples a second by default). */
+  noSignalTiming?: NoSignalTiming
   /** Attach files to the chat (plan §11.2 net-new intake). Renders a paperclip button when
    *  given; the keyboard-reachable picker fallback for the chat-surface drag/drop target. */
   onAttach?: () => void
@@ -56,6 +59,7 @@ export function Composer({
   onOpenModels,
   onDictationError,
   dictationCaptureImpl,
+  noSignalTiming,
   onAttach
 }: ComposerProps): JSX.Element {
   const { t } = useT()
@@ -76,6 +80,8 @@ export function Composer({
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
   // #497: the "not installed" mic's explanation, revealed on click (never on hover alone).
   const [dictationHint, setDictationHint] = useState(false)
+  // #497 follow-up: "no sound is reaching the microphone", live, from the waveform's tap.
+  const noSignal = useNoSignalHint(analyser, recording, noSignalTiming)
 
   // Auto-grow with content, capped — past the cap the textarea scrolls. scrollHeight
   // excludes the border (box-sizing: border-box), so add it back or a 2px overflow
@@ -190,6 +196,11 @@ export function Composer({
           </Button>
         )}
       </div>
+      {recording && noSignal && (
+        <p className="hint composer-hint" role="status">
+          {t('chat.dictation.noSignal')}
+        </p>
+      )}
       {dictationAvailable === false && dictationHint && (
         <p className="hint composer-hint" role="status">
           {t('chat.dictation.needsModel')}

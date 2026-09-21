@@ -480,6 +480,9 @@ export const en = {
   // at display like micBlocked). A muted/wrong device, or the OS feeding a blocked app silence.
   'chat.dictation.silent':
     'No sound reached the microphone. Check that it is not muted and that HilbertRaum may use it in the system settings, then try again.',
+  // #497 follow-up: the LIVE hint under the message box while recording (useNoSignalHint.ts).
+  'chat.dictation.noSignal':
+    'No sound is reaching the microphone — check that it is not muted and that the right input device is selected.',
   'chat.dictation.micBlocked':
     'The microphone could not be used. Check the system microphone settings, then try again.',
 
