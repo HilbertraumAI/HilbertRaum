@@ -249,6 +249,37 @@ describe('admitArticle — explicit-different-sense (topic-conflict pairs)', () 
     expect(result.admitted).toBe(true)
   })
 
+  // Issue #488: the converter now writes `^`/`_` markers into prose, so the article text this
+  // gate is handed reads `CO_2` / `H_2O` where it used to read `CO2` / `H2O`. Both the question
+  // and the two body windows are folded before `norm` (`supsub.ts`), because `norm` rewrites
+  // `_` to a space and would otherwise split `CO_2` into two sub-floor tokens — the escape
+  // above would stop finding the question's `co2` and this article would newly be REFUSED.
+  it('the lexical-overlap escape still fires when the article text carries sup/sub markers and the question does not (issue #488)', () => {
+    const marked = 'In der Mythologie erscheinen H_2O und CO_2 als wiederkehrende Motive.'
+    const result = admitArticle(
+      'Wie ist die Rotation des Planeten mit H2O und CO2?',
+      'Eine Göttin der Mythologie',
+      marked,
+      marked,
+      'fts'
+    )
+    // lex(lead, tokens(q)) counts "h2o" and "co2" = 2 -> the escape fires -> admitted.
+    expect(result.admitted).toBe(true)
+
+    // Same article text, a question with no shared content tokens at all: the pair still fires,
+    // so the fold widens nothing — it only restores the overlap the markers had hidden.
+    const unrelated = admitArticle('Wie ist die Rotation des Planeten?', 'Eine Göttin der Mythologie', marked, marked, 'fts')
+    expect(unrelated).toEqual({ admitted: false, reason: 'explicit-different-sense', route: 'fts' })
+  })
+
+  it('an identifier keeps today’s tokenisation — the fold never touches `_` before a letter (issue #488)', () => {
+    const text = 'Die Mythologie kennt snake_case nicht.'
+    const result = admitArticle('Wie ist die Rotation des snake_case Planeten?', 'Mythologie', text, text, 'fts')
+    // `norm` splits the identifier into "snake" + "case" on BOTH sides, exactly as before #488,
+    // so the escape fires on those two tokens.
+    expect(result.admitted).toBe(true)
+  })
+
   it('a pair does NOT fire when the question itself does not match the "wanted" side', () => {
     const result = admitArticle(
       'Was ist eine Göttin?',

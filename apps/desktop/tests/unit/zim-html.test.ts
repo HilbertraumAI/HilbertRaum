@@ -71,18 +71,71 @@ describe('zimArticleToSegments', () => {
     expect(all).not.toContain('stylesheet')
   })
 
-  it('drops mw-ref citation brackets but keeps ordinary superscripts', () => {
+  it('drops mw-ref citation brackets but keeps ordinary superscripts, marked (issue #488)', () => {
     expect(all).not.toContain('[1]')
-    expect(all).toContain('25 m2 gemessen')
+    expect(all).toContain('25 m^2 gemessen')
+    expect(all).not.toContain('25 m2 gemessen')
   })
 
-  it('a prose <sub> keeps today’s flattening unchanged, same as <sup> ' +
-    '(issue #478: only the <sup> half was pinned)', () => {
+  it('a prose <sub> gets the same readable marker as a table cell’s ' +
+    '(issue #488: prose used to flatten H<sub>2</sub>O to H2O)', () => {
     const text = zimArticleToSegments('<p>H<sub>2</sub>O ist Wasser.</p>')
       .segments.map((s) => s.text)
       .join('\n')
-    expect(text).toContain('H2O ist Wasser')
-    expect(text).not.toContain('H_2O')
+    expect(text).toContain('H_2O ist Wasser')
+    expect(text).not.toContain('H2O ist')
+  })
+
+  it('a prose <sup> exponent no longer fuses into its base (issue #488: 10<sup>6</sup> read as 106)', () => {
+    const text = zimArticleToSegments('<p>Rund 10<sup>6</sup> Einheiten.</p>')
+      .segments.map((s) => s.text)
+      .join('\n')
+    expect(text).toContain('10^6 Einheiten')
+    expect(text).not.toMatch(/\b106\b/)
+  })
+
+  it('marks an ordinary prose <sup> that sits right beside a dropped mw-ref one (issue #488)', () => {
+    const text = zimArticleToSegments(
+      '<p>Wert<sup class="mw-ref">[7]</sup> von 3 m<sup>3</sup> pro Tag.</p>'
+    )
+      .segments.map((s) => s.text)
+      .join('\n')
+    expect(text).toContain('3 m^3 pro Tag')
+    expect(text).not.toContain('[7]')
+    expect(text).not.toContain('Wert^')
+  })
+
+  it('marks a <sup> inside a heading, and the marked text reaches both the body and the sectionLabel (issue #488)', () => {
+    const article = zimArticleToSegments(
+      '<h1>Titel</h1><h2>Fläche in m<sup>2</sup></h2><p>Rumpf.</p>'
+    )
+    const labelled = article.segments.find((s) => s.sectionLabel !== null)
+    expect(labelled?.sectionLabel).toBe('Fläche in m^2')
+    expect(labelled?.text.startsWith('Fläche in m^2')).toBe(true)
+  })
+
+  it('an empty prose <sup> leaves a lone marker — the forward scanner cannot know the element ' +
+    'is empty, and a lone marker folds to nothing for the matchers (issue #488)', () => {
+    const text = zimArticleToSegments('<p>Rest<sup></sup> danach.</p>')
+      .segments.map((s) => s.text)
+      .join('\n')
+    expect(text).toBe('Rest^ danach.')
+  })
+
+  it('a self-closing prose <sup/> or <sub/> marks nothing (issue #488)', () => {
+    const text = zimArticleToSegments('<p>a<sup/>b<sub/>c</p>')
+      .segments.map((s) => s.text)
+      .join('\n')
+    expect(text).toBe('abc')
+  })
+
+  it('a plain prose <sup> nested inside a dropped mw-ref <sup> does not leak the rest of the citation (issue #488)', () => {
+    const text = zimArticleToSegments('<p>1<sup class="mw-ref">[x<sup>2</sup>]leak</sup>tail</p>')
+      .segments.map((s) => s.text)
+      .join('\n')
+    expect(text).toBe('1tail')
+    expect(text).not.toContain('leak')
+    expect(text).not.toContain('^')
   })
 
   it('emits each formula once, normalised to plain text', () => {

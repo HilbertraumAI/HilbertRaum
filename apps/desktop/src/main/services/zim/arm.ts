@@ -9,6 +9,7 @@ import { fetchArticleHtml, searchPack, suggestTitles, type KiwixSearchHit } from
 import type { QueryExpander, SearchPlan } from './expand'
 import { zimArticleToSegmentsAsync, type ZimArticle } from './html'
 import { searchPattern } from './query-rewrite'
+import { foldSupSub } from './supsub'
 
 // Query-time candidate production for the ZIM retrieval arm (knowledge packs).
 //
@@ -802,18 +803,24 @@ function isCancellation(askSignal: AbortSignal | undefined): boolean {
   return askSignal.aborted
 }
 
-/** Distinct lowercase query terms of ≥3 letters/digits (unicode-aware). */
+/** Distinct lowercase query terms of ≥3 letters/digits (unicode-aware), taken over the FOLDED
+ *  question (#488, `supsub.ts`): a typed `10^6` or `H_2O` contributes `106` / `h2o` — the same
+ *  terms the bare question produced before the converter marked sup/sub, and the same shape
+ *  `overlapScore` folds the article side down to. */
 export function queryTerms(question: string): string[] {
   const terms = new Set<string>()
-  for (const m of question.toLowerCase().matchAll(/[\p{L}\p{N}]{3,}/gu)) terms.add(m[0])
+  for (const m of foldSupSub(question).toLowerCase().matchAll(/[\p{L}\p{N}]{3,}/gu)) terms.add(m[0])
   return [...terms]
 }
 
 /** How many distinct query terms a chunk contains — the cheap per-article chunk picker.
- *  (Selection only; the reranker downstream does the real scoring.) */
+ *  (Selection only; the reranker downstream does the real scoring.)
+ *  The haystack is FOLDED first (#488): chunk text is converter output, so `25 m^2` must still
+ *  answer to the term `m2` that the pre-#488 `25 m2` answered to. Fold shapes = emitted
+ *  shapes, so this is exactly the old haystack, never a wider one. */
 export function overlapScore(text: string, terms: readonly string[]): number {
   if (terms.length === 0) return 0
-  const hay = text.toLowerCase()
+  const hay = foldSupSub(text).toLowerCase()
   let n = 0
   for (const t of terms) if (hay.includes(t)) n++
   return n

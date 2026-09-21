@@ -694,6 +694,25 @@ describe('queryTerms / overlapScore', () => {
     expect(overlapScore('Treibhausgas aus CO2-Quellen', terms)).toBe(2)
     expect(overlapScore('nichts davon', terms)).toBe(0)
   })
+
+  // Issue #488: the converter now writes `^`/`_` markers into PROSE as well as table text, so
+  // both sides are folded before they are compared (`supsub.ts`). The invariant is that the
+  // matcher sees exactly the pre-#488 flattened text — a question that matched before still
+  // matches — and that a user who types the marker themselves lands on the same terms.
+  it('folds the sup/sub markers out of the question, so a typed 10^6 or H_2O yields the same terms as before', () => {
+    expect(queryTerms('Wie viel ist 10^6?')).toContain('106')
+    expect(queryTerms('Was ist H_2O?')).toContain('h2o')
+    // Not folded: an underscore before a letter stays an identifier boundary.
+    expect(queryTerms('Was macht snake_case?')).toContain('snake')
+    expect(queryTerms('Was macht snake_case?')).not.toContain('snakecase')
+  })
+
+  it('folds the markers out of the chunk text, so marked converter output still answers the old terms', () => {
+    expect(overlapScore('Die Fläche ist 25 m^2 und 10^6 Einheiten CO_2', ['106', 'co2'])).toBe(2)
+    expect(overlapScore('Die Fläche ist 25 m^2', ['m2'])).toBe(1)
+    const terms = queryTerms('Zu was wird Treibhausgas und CO2?')
+    expect(overlapScore('Treibhausgas aus CO_2-Quellen', terms)).toBe(2)
+  })
 })
 
 // Step 4-4 (Wave 4 ruling (a), Phase 2 ruling (d)) — the candidate SCOPE per hardware profile.

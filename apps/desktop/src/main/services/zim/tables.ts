@@ -1,5 +1,6 @@
 import { attrValue, decodeEntities, tidyWhole, RAW_TEXT, SKIP_SUBTREE } from './html'
 import { normalizeMath } from './math'
+import { REF_SUP_CLASS_RE, SUB_MARK, SUP_MARK } from './supsub'
 
 // Table delivery (issue #478: deliver tables to the model instead of dropping them). html.ts
 // used to drop every `<table>` subtree whole (`SKIP_SUBTREE`), so an infobox or data table
@@ -100,9 +101,6 @@ export const TABLE_MAX_RAW_CHARS = 50_000
 
 /** Layout/decoration tables carry one of these classes and are still dropped, unchanged. */
 const LAYOUT_TABLE_CLASS_RE = /\b(?:navbox|vertical-navbox|metadata|ambox|toc|sistersitebox)\b/i
-
-/** Reference/citation superscripts: same predicate html.ts's prose path already uses. */
-const REF_SUP_CLASS_RE = /\b(?:mw-ref|reference)\b/
 
 export function isLayoutTableClass(classAttr: string | null): boolean {
   return classAttr !== null && LAYOUT_TABLE_CLASS_RE.test(classAttr)
@@ -470,10 +468,11 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
 
     if (name === 'sup') {
       // <sup class="mw-ref"> citation brackets stay dropped, same as prose (html.ts's
-      // supSkipDepth). An ordinary <sup> gets the table-scoped readable convention: a literal
+      // supSkipDepth). An ordinary <sup> gets the readable convention: a literal
       // `^` immediately before its own text, so `g/cm<sup>3</sup>` reads `g/cm^3` and
-      // `10<sup>6</sup>` reads `10^6` -- never flattened to `g/cm3` / `106`. Prose keeps
-      // today's flattening unchanged (out of scope — docs/known-limitations.md). While already
+      // `10<sup>6</sup>` reads `10^6` -- never flattened to `g/cm3` / `106`. Table-scoped when
+      // it shipped (#478); prose now shares it, and both sides come from `supsub.ts` (#488), so
+      // the marker a matcher folds back out is the marker this path wrote. While already
       // skipping a ref bracket, EVERY nested `<sup>` (ref or not) is counted symmetrically on
       // open/close, exactly like html.ts's own prose `supSkipDepth` -- a plain `<sup>` nested
       // inside a `<sup class="mw-ref">` must not decrement the depth and leak the rest of the
@@ -485,13 +484,13 @@ export function parseTableBody(input: string, start: number): { table: RetainedT
       if (!isClose && !selfClosing) {
         const cls = attrValue(attrs, 'class') ?? ''
         if (REF_SUP_CLASS_RE.test(cls)) refSkipDepth = 1
-        else appendLiteral('^')
+        else appendLiteral(SUP_MARK)
       }
       continue
     }
     if (name === 'sub') {
       // Same convention, `_value` (e.g. `H<sub>2</sub>O` reads `H_2O`).
-      if (!isClose && !selfClosing) appendLiteral('_')
+      if (!isClose && !selfClosing) appendLiteral(SUB_MARK)
       continue
     }
     if (name === 'caption') {

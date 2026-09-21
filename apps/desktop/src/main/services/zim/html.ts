@@ -1,5 +1,6 @@
 import type { ExtractedSegment } from '../ingestion/parsers'
 import { normalizeMath } from './math'
+import { REF_SUP_CLASS_RE, SUB_MARK, SUP_MARK } from './supsub'
 import {
   hasDeliverableContent,
   isLayoutTableClass,
@@ -25,7 +26,8 @@ import {
 //
 // Dropped subtrees: head, script/style/noscript (raw-text aware), figures/images, nav, and
 // `<sup class="mw-ref">` citation brackets ([1][2] — noise for retrieval; other <sup> like
-// m<sup>2</sup> keeps its text). `<math>` emits its alttext normalised to plain text
+// m<sup>2</sup> keeps its text, now marked — see the sup/sub rule below).
+// `<math>` emits its alttext normalised to plain text
 // (`math.ts`, #340) and skips the MathML subtree; the `<img>` fallback that follows is
 // dropped with all images, so each formula appears exactly once.
 //
@@ -37,10 +39,17 @@ import {
 // structural test drops a table with no header cell and no real tabular content; everything
 // else is parsed into a bounded grid (rowspan/colspan expanded, multi-row and mid-table
 // headers rebound, captions kept once) and serialised into one or more retrievable segments,
-// capped so a large table cannot explode the unit count or the scan. Superscripts/subscripts
-// are kept readable (`g/cm^3`, `10^6`) inside table-derived text only; prose keeps today's
-// flattening unchanged (`m<sup>2</sup>` → `m2`) — a pre-registered, reported, out-of-scope
-// difference, not an oversight (see the PR and `docs/known-limitations.md`).
+// capped so a large table cannot explode the unit count or the scan.
+//
+// Superscripts/subscripts are kept readable EVERYWHERE (#488): prose, headings and
+// table-derived text share one convention, owned by `supsub.ts` — an ordinary `<sup>` emits a
+// literal `^` and a `<sub>` a literal `_` immediately before its own text, so `m<sup>2</sup>`
+// reads `m^2`, `10<sup>6</sup>` reads `10^6` and `H<sub>2</sub>O` reads `H_2O` instead of
+// fusing into `m2` / `106` / `H2O`. Table-derived text had this since #478; prose was left
+// flattened then as a deliberate scoping decision and is now aligned. Retrieval does NOT move
+// with it: the matchers (`arm.ts`, `admit.ts`) run `foldSupSub` over both the question and the
+// article text, so they compare exactly the flattened text they compared before — the markers
+// change what is read, never what is retrieved.
 //
 // ---------------------------------------------------------------------------------------
 // LINEAR FORWARD SCANNER — complexity record (PR #294 review H1)
@@ -1086,12 +1095,28 @@ export function* zimArticleSlices(
       continue
     }
     if (!isClose && name === 'sup') {
-      // Reference brackets ([1], [note 2]) are retrieval noise; other superscripts keep text.
+      // Reference brackets ([1], [note 2]) are retrieval noise; other superscripts keep text,
+      // marked with a literal `^` before it (#488 — the shared convention in `supsub.ts`, the
+      // one `tables.ts` has used since #478). `emit` routes it exactly like ordinary character
+      // data, so a `<sup>` inside a heading marks the heading text and one in a paragraph marks
+      // the body; the text run before this tag was already emitted above (`emitTextUpTo(lt)`),
+      // which is what puts the marker immediately before the sup's own text. A self-closing
+      // `<sup/>` has no text to mark and is ignored on both halves, exactly as the citation
+      // branch ignores one. An EMPTY `<sup></sup>` leaves a lone `^`: accepted, not special-
+      // cased — the scanner is forward-only and cannot know the element is empty until its
+      // close, and `foldSupSub` folds nothing there (a caret with no alphanumeric after it),
+      // so no matcher sees a difference.
       const cls = attrValue(attrs, 'class') ?? ''
-      if (/\b(?:mw-ref|reference)\b/.test(cls)) {
+      if (REF_SUP_CLASS_RE.test(cls)) {
         if (!selfClosing) supSkipDepth = 1
         continue
       }
+      if (!selfClosing) emit(SUP_MARK)
+    }
+    if (!isClose && name === 'sub' && !selfClosing) {
+      // Same convention, `_value` — `H<sub>2</sub>O` reads `H_2O`. There is no citation kind of
+      // `<sub>`, so no skip-depth counterpart: every ordinary `<sub>` is marked.
+      emit(SUB_MARK)
     }
 
     const h = /^h([1-6])$/.exec(name)
