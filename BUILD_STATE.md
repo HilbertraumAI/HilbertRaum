@@ -28,6 +28,24 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-21 — **#488 / #498 / #501 fixed in one PR (`fix/488-498-501-prose-supsub-cutoff-badge-inline-math`):
+ZIM prose keeps superscripts/subscripts readable and retrieval folds them; the cut-off badge names no
+cause and its remedy follows which ceiling fired; inline `$…$` math renders.** Records: `rag-design.md`
+§17 "Prose joins the table superscript/subscript convention" (+ `known-limitations.md`, `zim/supsub.ts`);
+`architecture.md` honest-signal record + `rag-design.md` §15 amendments + `data-contracts.md`
+(`messages.truncated_cause`); `architecture.md` "Markdown rendering" KaTeX bullet. **#488 was measured
+twice** (`tmp/488-measurement/`, the 4-z-r harness, both packs): the first cut marked every `<sup>`/`<sub>`
+— 12,483 insertions on the 949 core200 articles, 63 % of them reference back-links (`↑ ^a ^b ^c`), 18 %
+fold-shaped — and its digit-only `_` fold split 86 real terms (`NO_x`, `pK_S`, `T_krit`); the rule became
+"mark only between alphanumerics (or before a sign), fold `^`/`_` between any two alphanumerics": 2,897
+insertions (90 % fold-shaped, 0 on back-links), 246/949 articles moved, and the invariant of record (every
+alphanumeric run ≥ 3 of the old text is still a substring of the folded new text) holds on 1,436 of 1,437
+articles. Both reads passed all six PR-B floors at the #500 read's count figures (102/143/143). **#498:**
+the runtime yields one bit (`finish_reason: 'length'`), so the cause is computed app-side — no cap sent, or
+fewer tokens generated than the cap sent ⇒ window, else cap — and a legacy row reads as the old advice.
+**#501:** Pandoc's shape rule + a TeX-signal/short-span content rule; remark-math's single-`$` mode stays
+off. Open: a `<figcaption>` inside a dropped `<figure>` (the #500 capture path) still fuses sup/sub — a
+two-line change if the owner wants it; the `snake case` vs `snake_case` question-side note is recorded._
 _2026-09-21 — **#497 — dictation: the speech model activates the moment its download (or the voice
 engine's install) lands, a silent recording is refused before whisper runs, and the composer mic
 shows as "not installed" with a path to the AI Model screen instead of vanishing — plus a live
@@ -137,25 +155,6 @@ joins `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` (`shared/prompt-cache-rules.ts`), a
 positive control, and the concrete case for the cache-ON default. Control `qwen3.8-27b-ud-q5km` reproduced the sweep token for
 token (1,492 of 1,571, 79 kept). Trap held a fourth time: `forcing full` appears **0 times** in all four captures, including the
 two that re-prefilled. Every catalog `family:` now has a verdict; the default still governs the family added next._
-_2026-09-10 — **#436 + #437 CLOSED — the two silent live regions fixed** (`fix/436-437-live-region-announce`).
-**#436:** `role="status"` is a LIVE REGION (implicit `aria-live="polite"`), not a quieter label — so the `Banner` nested inside
-`ErrorBanner`'s always-mounted `role="alert"` wrapper became the nearest live-region ancestor of the message AND arrived already
-containing it: M-U1 one level down, silencing the shared failure surface of 11 screens + the gate's #145 wrong-password banner.
-`Banner`'s `role` prop now accepts `null` (render no role at all; `aria-live="off"` does NOT work, the ROLE has to go) and
-`ErrorBanner` passes it. The blast radius was one site larger than the issue said: `ModelsScreen`'s download panel keeps its own
-hand-rolled copy of the wrapper with TWO nested `role="status"` Banners — same defect, fixed the same way. **#437:** the
-Performance step list was BOTH inserted with its content and textless as it advanced (progress rode only on `perf-step-{state}`
-and an `aria-hidden` icon). The `<ul>` is now mounted unconditionally (`.perf-steps:empty` collapses it, idle layout unchanged)
-and each step carries its state IN its accessible text — the visible label is `aria-hidden` and an sr-only twin reads
-"<step>: <state>" (new `perf.step.state.*` keys, EN+DE) — so an advance is a whole-line text change WITH context, plus
-`aria-current="step"` on the active item. Guard: `tests/unit/live-region-nesting.test.ts` parses every renderer `.tsx` and fails
-on ANY live-region role nested inside another (it flags all three pre-fix sites; two fixtures pin the broken and the fixed shape).
-**Not closed by this branch: the BY-EAR leg.** Both issues require re-verification with a screen reader (#436 also on the #145
-wrong-password path, #437 during a real multi-second check) — that needs Narrator on the 1070 Ti box and is the remaining
-acceptance item on the PR. **Sequencing:** #438 (an automatic run's steps never advance) is still an open owner call on the same
-subtree; this fix is forward-compatible with either of its options — under option 2 the items render on `ownActionInFlight`
-instead of `busy`, a one-condition change, not a rework. Docs: `benchmark.md` §2 row HW3 + §4, `known-limitations.md`
-(Performance + Accessibility), `design-guidelines.md` §6 error announcements._
 
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
@@ -191,7 +190,8 @@ discovery-port entry on 2026-09-19 (preamble budget, making room for the knowled
 retrieval-research record entry), and the closed 2026-09-09 knowledge-packs-docs entry on
 2026-09-20 (preamble budget, making room for the wave-13 entry), and the two closed 2026-09-10
 dependency-advisory entries (PR #451 xmldom, PR #452 build chain) on 2026-09-21 (preamble
-budget, making room for the #497 dictation entry) —
+budget, making room for the #497 dictation entry), and the closed 2026-09-10 #436/#437 live-region entry on
+2026-09-21 (preamble budget, making room for the #488/#498/#501 entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
