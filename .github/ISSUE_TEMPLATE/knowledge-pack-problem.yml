@@ -95,7 +95,7 @@ body:
     attributes:
       label: HilbertRaum version
       description: Settings → Diagnostics (advanced) → App & runtime shows it; "built from source at <commit>" is also fine.
-      placeholder: 0.1.60
+      placeholder: 0.1.61
     validations:
       required: true
 
