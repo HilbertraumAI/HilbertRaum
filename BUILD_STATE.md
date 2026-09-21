@@ -38,8 +38,10 @@ dictation" — the D30 amendment + the restart-free-activation paragraph; `known
 whisper-cli + ggml-small): digital silence under `-l auto` → the single word `you`, `-l de` →
 `[Musik]`, low noise → random-script garbage; no decoder flag covers noise, so the gate sits BEFORE
 whisper. The "captured at wiring time" premise behind the restart rule was false for the transcriber
-since 2026-06-28 (true for embedder + OCR). Still open on the issue: TTS (owner ruling), Silero VAD
-(follow-up), a real-microphone calibration of the gate on the built app._
+since 2026-06-28 (true for embedder + OCR). Owner rulings the same day (recorded on the closed
+issue): TTS out of scope; **#504 Silero VAD, dictation-only, fetched in-app** — shipped as the
+whisper manifest's second required `files[]` entry + `TranscribeOptions.vad` (`-vp 200` keeps
+quiet onsets; measured). Still open: a real-microphone calibration of the gate on the built app._
 _2026-09-20 — **Wave 13 research recorded, five PRs shipped under a new standing shipping rule, the
 v0.1.61 cut 2026-09-21.** Retrieval is deterministic across repeated asks and a cold process restart — the
 only variance measured was in answer wording, now removed by the sampler pin. Converter coverage is

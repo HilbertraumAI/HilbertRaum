@@ -391,7 +391,9 @@ dropped.
 ### Dictate a message (voice)
 
 If your drive has the speech model installed (the same one that transcribes audio
-recordings — see §7), a small **microphone button** appears next to **Send**:
+recordings — see §7; it comes with a small second file that tells speech apart from silence
+and background noise, fetched together with it), a small **microphone button** appears next
+to **Send**:
 
 1. Click the mic to start recording. Your computer's usual microphone indicator turns on,
    and the button pulses while it listens. The first time, Windows/macOS may ask you to

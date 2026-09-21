@@ -72,7 +72,7 @@ HILBERTRAUM/
 │   └── cpu/                                     # pure-CPU safety-net build + its own marker (win/linux only)
 ├── runtime/whisper.cpp/{win,mac,linux}/        # SECOND sidecar family: the whisper-cli transcriber
 │   └── .hilbertraum-runtime.json                       # same marker scheme; win = upstream prebuilt, mac/linux = source-build (see below)
-├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
+├── models/{chat,embeddings,reranker,transcriber,vision,translation}/ # weights (git-ignored; transcriber/ = whisper GGML .bin + the Silero VAD .bin its manifest requires since #504; vision/ = the GGUF + its mmproj projector, image understanding V1–V5; translation/ = TranslateGemma GGUF, TG wave)
 ├── runtime/kiwix-tools/{win,mac,linux}/        # THIRD sidecar family: kiwix-serve + kiwix-manage + kiwix-search
 │   ├── .hilbertraum-runtime.json                       #   (knowledge packs; OPTIONAL — never a readiness prerequisite). Install
 │   │                                            #   marker: a hash per executable + per ICU DLL (win only). An in-app

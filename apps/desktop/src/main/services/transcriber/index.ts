@@ -27,6 +27,14 @@ export interface TranscriptSegment {
 export interface TranscribeOptions {
   /** ISO 639-1 hint; default `auto` (whisper detects the spoken language). */
   language?: string
+  /**
+   * Run Silero voice-activity detection before decoding (#504): only the stretches that carry
+   * speech are transcribed, and a recording without any yields NO segments instead of a
+   * hallucinated word. Honoured only when the drive carries the VAD model (the whisper
+   * manifest's second required file); a backend without one ignores the flag. Dictation sets
+   * it; audio imports do not (the VAD remaps timestamps — unmeasured against citations).
+   */
+  vad?: boolean
   /** Coarse progress callback (0–100), parsed from the CLI's `-pp` output. */
   onProgress?: (percent: number) => void
   /**
@@ -62,5 +70,5 @@ export {
   whisperCliDir
 } from './cli'
 export type { WhisperCliOptions } from './cli'
-export { createSelectedTranscriber } from './factory'
+export { createSelectedTranscriber, vadModelPathOf, VAD_MODEL_FILE_RE } from './factory'
 export type { TranscriberModelInfo, TranscriberSelectionDeps } from './factory'

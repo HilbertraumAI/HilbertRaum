@@ -7,7 +7,12 @@ import {
   refreshTranscriberSlot,
   shouldReplaceTranscriber
 } from '../../src/main/services/compose-services'
-import { whisperCliBinaryName, whisperCliDir, type Transcriber } from '../../src/main/services/transcriber'
+import {
+  WhisperCliTranscriber,
+  whisperCliBinaryName,
+  whisperCliDir,
+  type Transcriber
+} from '../../src/main/services/transcriber'
 
 // Issue #497 — the post-install transcriber re-selection, the transcriber twin of the issue-#40
 // translator hook (compose-translator.test.ts). `composeTranscriber` is the ONE construction
@@ -91,6 +96,46 @@ describe('composeTranscriber (issue #497 — post-install re-selection)', () => 
     installBinary(root)
     installWeight(root)
     expect(composeTranscriber({ rootPath: root, manifestsDir: null })).toBeNull()
+  })
+})
+
+// #504: the shipped whisper manifest declares the Silero VAD model as a second REQUIRED file
+// (`files[]`). Over a real temp layout: the transcriber stays null until BOTH files are present,
+// and the composed CLI backend knows the VAD path (found by name among the required files).
+describe('composeTranscriber — the Silero VAD file as the second required file (#504)', () => {
+  const VAD_NAME = 'ggml-silero-v5.1.2.bin'
+  function tempDriveWithVad(): { root: string; manifestsDir: string } {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-compose-transcriber-vad-'))
+    const manifestsDir = join(root, 'model-manifests')
+    mkdirSync(manifestsDir, { recursive: true })
+    writeFileSync(
+      join(manifestsDir, 'whisper-test.yaml'),
+      JSON.stringify({
+        ...MANIFEST,
+        files: [{ local_path: `models/transcriber/${VAD_NAME}`, sha256: 'REPLACE_WITH_REAL_HASH' }]
+      })
+    )
+    return { root, manifestsDir }
+  }
+
+  it('stays null with the weight alone, and composes with the VAD path once the second file lands', () => {
+    const { root, manifestsDir } = tempDriveWithVad()
+    installBinary(root)
+    installWeight(root)
+    expect(composeTranscriber({ rootPath: root, manifestsDir })).toBeNull()
+
+    writeFileSync(join(root, 'models', 'transcriber', VAD_NAME), 'vad-bytes')
+    const transcriber = composeTranscriber({ rootPath: root, manifestsDir })
+    expect(transcriber).toBeInstanceOf(WhisperCliTranscriber)
+    expect((transcriber as WhisperCliTranscriber).vadModelPath).toBe(join(root, 'models', 'transcriber', VAD_NAME))
+  })
+
+  it('a weight-only manifest composes without a VAD path (drives from before #504 keep working)', () => {
+    const { root, manifestsDir } = tempDrive()
+    installBinary(root)
+    installWeight(root)
+    const transcriber = composeTranscriber({ rootPath: root, manifestsDir })
+    expect((transcriber as WhisperCliTranscriber).vadModelPath).toBeNull()
   })
 })
 

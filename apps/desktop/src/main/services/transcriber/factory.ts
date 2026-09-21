@@ -13,6 +13,27 @@ export interface TranscriberModelInfo {
   id: string
   /** Absolute path to the transcriber GGML weight file. */
   modelPath: string
+  /**
+   * Every file the manifest requires (the weight + its `files[]`, #310). The Silero VAD model
+   * (#504) is found here by name; the selection ladder requires all of them to be present.
+   */
+  requiredPaths?: string[]
+}
+
+/**
+ * The Silero VAD GGML file as the whisper.cpp project names it (`ggml-silero-<version>.bin`,
+ * #504). Declared in the whisper manifest's `files[]`, so it is fetched, verified and required
+ * together with the weight; recognised here by name so the manifest schema stays untouched.
+ */
+export const VAD_MODEL_FILE_RE = /^ggml-silero-.*\.bin$/i
+
+/**
+ * The VAD model among a resolved transcriber's required files, or null when none is declared.
+ * Matches the last path segment on EITHER separator (a Windows path is judged the same on a
+ * POSIX host — `node:path`'s basename would not split it there).
+ */
+export function vadModelPathOf(model: Pick<TranscriberModelInfo, 'requiredPaths'>): string | null {
+  return model.requiredPaths?.find((p) => VAD_MODEL_FILE_RE.test(p.split(/[\\/]/).pop() ?? p)) ?? null
 }
 
 export interface TranscriberSelectionDeps {
@@ -39,7 +60,8 @@ export function createSelectedTranscriber(deps: TranscriberSelectionDeps): Trans
       createWhisperCliTranscriber({
         id: model.id,
         binPath,
-        modelPath: model.modelPath
+        modelPath: model.modelPath,
+        vadModelPath: vadModelPathOf(model)
       }))
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — a mock transcript would
