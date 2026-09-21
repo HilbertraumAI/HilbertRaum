@@ -492,6 +492,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.dictation.silent':
     'Am Mikrofon ist kein Ton angekommen. Prüf, ob es stummgeschaltet ist und ob HilbertRaum es ' +
     'laut Systemeinstellungen verwenden darf, und versuch es dann noch einmal.',
+  // #497 Folge-Hinweis — siehe en.ts.
+  'chat.dictation.noSignal':
+    'Am Mikrofon kommt kein Ton an — prüf, ob es stummgeschaltet ist und ob das richtige Eingabegerät ausgewählt ist.',
   'chat.dictation.micBlocked':
     'Das Mikrofon konnte nicht verwendet werden. Prüf die Mikrofon-Einstellungen deines ' +
     'Systems und versuch es dann noch einmal.',

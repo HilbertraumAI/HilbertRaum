@@ -2202,6 +2202,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   microphone…" — the usual causes are a muted or wrong default input device, or the OS handing
   a desktop app silence when its privacy settings do not allow the microphone. The main handler
   re-checks the bytes as a backstop; only level figures go to the local log, never content.
+  While you record, the composer also shows a live "no sound is reaching the microphone" note
+  once the mic tap has stayed under the same floor for two seconds, so a dead input is visible
+  before you stop (it needs Web Audio; without it the post-stop refusal is the only signal).
   Ordinary speech sits 40–50 dB above the floor (`shared/dictation-level.ts` records the
   calibration). What the gate does NOT catch: a quiet room's noise floor between roughly −50
   and −30 dBFS with no speech in it still reaches whisper and can still come back as a stray

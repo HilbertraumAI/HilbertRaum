@@ -25,6 +25,13 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Added
+
+- **While you dictate, the app tells you at once when nothing is reaching the microphone.**
+  After about two seconds without any sound, a note appears under the message box and
+  disappears as soon as sound comes in — so a muted or wrong microphone is caught before you
+  stop, not after (#497).
+
 ### Changed
 
 - **The microphone button no longer disappears when the speech model is missing.** On a
