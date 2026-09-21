@@ -989,10 +989,11 @@ password recovery — are documented in
 - **Grounded document and knowledge-pack answers pin a fixed decoding setting on the request
   (temperature 0, no seed, a 1024-token cap per pass) instead of the model server's own
   defaults** — a systematic replay of many recorded real requests found no measurable difference
-  in correctness, refusals or citations. A reply that reaches the cap is not silently cut: the
-  same continue-generation engine the whole-document path uses (below) picks it up, capped at
-  1024 tokens per pass, continued up to twice more, then honestly flagged `truncated` if still
-  cut after that.
+  in correctness, refusals or citations on the requests measured, all of which were recorded
+  before knowledge-pack tables were delivered to the model. A reply that reaches the cap is not
+  silently cut: the same continue-generation engine the whole-document path uses (below) picks
+  it up, capped at 1024 tokens per pass, continued up to twice more, then honestly flagged
+  `truncated` if still cut after that.
 
 ## Document tasks & summaries
 

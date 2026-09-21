@@ -2124,6 +2124,10 @@ scope popover; the ask then retrieves from the packs *query-time* alongside the 
 corpus, with citations that name the archive + article + section and open a read-only
 offline article viewer. Files are registered in place, never copied.
 
+**Citation legend.** `steps/…` paths cited in this record are the maintainer's
+local research tree (`tmp/zim-final-overview-…`), not part of this repository;
+the figures they support are quoted in the text.
+
 ### The decisions and the facts they rest on
 
 - **D-Z1 — kiwix-serve sidecar, not libzim bindings.** `@openzim/libzim` does not install
@@ -4599,19 +4603,20 @@ planner/rerank 826 ms against 1,052 previously, rerank p90 3,211 ms against 3,19
 planner p90 577 ms against 570; floors 2,500 / 10,848 / 3,000 ms). The table-delivery
 endpoint that was void in the prior read (a scoring-method defect, not a delivery
 failure) is now measured on a working, pre-registered instrument: on the
-gold-article-restricted population, both required predicates hold at every gate,
-matching the prior diagnostic's own measured values **exactly**, zero churn from
-removing the leaks — candidates P1 **26/32** (≥25), packet P1 **24/32** (≥23),
-candidates P2 **24/32** (≥23), packet P2 **21/32** (≥20). The five leak-eradication
-endpoints: zero table-derived segments carry stylesheet source or the doubled-formula
-signature, offline over the full 949-article cache or in the read's own
-candidate/packet lists, and zero user-visible citation snippets carry either. Of 261
-in-table formulas in the cache, 259 reach the delivered text with their normalised
-value; the other two are individually accounted for, not silently dropped — one
-normalises to a blank value (`\overbrace{\qquad}`-shaped), and one sits in a very
-large table whose own row/segment cap consumes the row that value sits in — a
-different table, in a different page, from the neutrality exception described
-below.
+gold-article-restricted population, both required predicates hold at every gate
+(predicate 1: the faithful raw-segment match; predicate 2: the stricter requirement
+that the value sit inside a table-introduced line), matching the prior diagnostic's
+own measured values **exactly**, zero churn from removing the leaks — candidates P1
+**26/32** (≥25), packet P1 **24/32** (≥23), candidates P2 **24/32** (≥23), packet P2
+**21/32** (≥20). The five leak-eradication endpoints: zero table-derived segments
+carry stylesheet source or the doubled-formula signature, offline over the full
+949-article cache or in the read's own candidate/packet lists, and zero user-visible
+citation snippets carry either. Of 261 in-table formulas in the cache, 259 reach the
+delivered text with their normalised value; the other two are individually accounted
+for, not silently dropped — one normalises to a blank value
+(`\overbrace{\qquad}`-shaped), and one sits in a very large table whose own
+row/segment cap consumes the row that value sits in — a different table, in a
+different page, from the neutrality exception described below.
 
 **The bounded neutrality check (the sound replacement for "only the leak-bearing
 units change" — whether removing the noise changed which units the reranker packed
@@ -4765,6 +4770,22 @@ un-run over the articles that could actually fail it; the figures above are the 
 Conversion `work` (the scanner's own linear-scan accounting) is identical to the unit at the
 branch point on both corpora — 89,120.55 mean on the 949-article corpus and 30,778.62 mean on
 the archive corpus — and the linear-scanner bound itself is untouched.
+
+### Shipping rule for knowledge-pack changes
+
+Every change to knowledge-pack retrieval or delivery now ships under one standing
+rule, adopted this wave: the unit test suite and CI must be green; then, unless the
+change is text-only, one pre-registered acceptance read runs — the maintainer's
+offline acceptance read on the 200-question development set — checking the six
+delivery floors this record's table-delivery entry above already reports
+(`allPacked` >= 45/200, `anyCandidate` >= 80/200, `anyArticle` >= 96/200, arm
+latency p90 excluding planner/rerank <= 2,500 ms, rerank latency p90 <= 10,848 ms,
+planner latency p90 <= 3,000 ms), with the change's own target metric moved in the
+direction the change intends; then a scoped review with no must-fix findings
+outstanding. Once all of that holds, the change merges and is tagged the same day. A
+text-only change (docs, comments, no code) skips the read entirely. A floor miss is
+a stop: the change does not ship on a miss, and a miss is never cleared by taking a
+second, more favourable read.
 
 ## 18. Knowledge-pack retrieval research — the confirmation read and its outcome (design record, 2026-09-19)
 
