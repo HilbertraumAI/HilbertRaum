@@ -272,12 +272,23 @@ describe('admitArticle — explicit-different-sense (topic-conflict pairs)', () 
     expect(unrelated).toEqual({ admitted: false, reason: 'explicit-different-sense', route: 'fts' })
   })
 
-  it('an identifier keeps today’s tokenisation — the fold never touches `_` before a letter (issue #488)', () => {
-    const text = 'Die Mythologie kennt snake_case nicht.'
+  it('an identifier folds to ONE token on both sides and still matches itself (issue #488)', () => {
+    // The first cut folded `_` only before a DIGIT, so `snake_case` tokenised as "snake" +
+    // "case". The census over 949 + 488 cached articles measured that rule's cost — 86 real
+    // match terms split by a surviving marker (`NO_x`, `SO_x`, `pK_S`, `kW_p`, `MW_th`,
+    // `T_krit`, `C_org`), with no `<sub>` at all in the code-oriented packs it protected — so
+    // the fold is symmetric now: both sides yield "snakecase", and the identifier still matches
+    // an article that writes it the same way. What it no longer matches is `snake case`.
+    const text = 'Die Mythologie kennt snake_case und die Rotation nicht.'
     const result = admitArticle('Wie ist die Rotation des snake_case Planeten?', 'Mythologie', text, text, 'fts')
-    // `norm` splits the identifier into "snake" + "case" on BOTH sides, exactly as before #488,
-    // so the escape fires on those two tokens.
+    // lex(lead, tokens(q)) counts "snakecase" and "rotation" = 2 -> the escape fires.
     expect(result.admitted).toBe(true)
+
+    // The documented consequence, pinned: an article that spells the identifier with a SPACE
+    // now shares only "rotation", one token short of the escape, and the pair refuses.
+    const spaced = 'Die Mythologie kennt snake case und die Rotation nicht.'
+    const apart = admitArticle('Wie ist die Rotation des snake_case Planeten?', 'Mythologie', spaced, spaced, 'fts')
+    expect(apart).toEqual({ admitted: false, reason: 'explicit-different-sense', route: 'fts' })
   })
 
   it('a pair does NOT fire when the question itself does not match the "wanted" side', () => {

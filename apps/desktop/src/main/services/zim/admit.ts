@@ -138,7 +138,10 @@ export function admitArticle(
   // BEFORE `norm`, not inside `tokens`/`lex`: `norm` already rewrites `_` to a space, so by the
   // time those two see a string the subscript marker is gone and `CO_2` has become `co 2` —
   // two tokens, both under the length floor, where the pre-#488 `CO2` was the single token a
-  // question's `CO2` matches. Folding first restores exactly that token.
+  // question's `CO2` matches. Folding first restores exactly that token. `lex` compares by
+  // SUBSTRING and the fold only removes characters, so the invariant it buys is the same one
+  // the arm gets: every alphanumeric run of the pre-#488 text is still a substring of what this
+  // gate compares — no article this gate admitted before can be newly refused by the markers.
   // The TITLE is deliberately NOT folded, and `norm` itself is not touched. `norm`'s own `_` →
   // space rule is there for titles (ZIM titles are path-derived and use `_` as a word
   // separator), and folding would have to run before it — i.e. it would have to decide, on a

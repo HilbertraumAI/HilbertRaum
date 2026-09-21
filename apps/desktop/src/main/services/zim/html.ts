@@ -1,6 +1,6 @@
 import type { ExtractedSegment } from '../ingestion/parsers'
 import { normalizeMath } from './math'
-import { REF_SUP_CLASS_RE, SUB_MARK, SUP_MARK } from './supsub'
+import { REF_SUP_CLASS_RE, SUB_MARK, SUP_MARK, lastCharOf, shouldMark } from './supsub'
 import {
   hasDeliverableContent,
   isLayoutTableClass,
@@ -46,10 +46,15 @@ import {
 // literal `^` and a `<sub>` a literal `_` immediately before its own text, so `m<sup>2</sup>`
 // reads `m^2`, `10<sup>6</sup>` reads `10^6` and `H<sub>2</sub>O` reads `H_2O` instead of
 // fusing into `m2` / `106` / `H2O`. Table-derived text had this since #478; prose was left
-// flattened then as a deliberate scoping decision and is now aligned. Retrieval does NOT move
-// with it: the matchers (`arm.ts`, `admit.ts`) run `foldSupSub` over both the question and the
-// article text, so they compare exactly the flattened text they compared before — the markers
-// change what is read, never what is retrieved.
+// flattened then as a deliberate scoping decision and is now aligned. A marker is written only
+// where `supsub.ts`'s `shouldMark` holds — BETWEEN two alphanumerics (a sign, `+ - − ±`, counts
+// as a valid right-hand side, since it already splits the run) — which is why a `<sup>` opened
+// here only ARMS the marker and `emit` below decides: a reference back-link (`↑ <sup>a</sup>`,
+// preceded by a space), a paragraph-initial `<sup>` sentence and an empty `<sup></sup>` are all
+// left unmarked. Retrieval does NOT move with the markers: the matchers (`arm.ts`, `admit.ts`)
+// run `foldSupSub` over both the question and the article text, so every alphanumeric run of
+// the pre-#488 text is still a substring of what they compare — the markers change what is
+// read, never what is retrieved.
 //
 // ---------------------------------------------------------------------------------------
 // LINEAR FORWARD SCANNER — complexity record (PR #294 review H1)
@@ -699,24 +704,52 @@ export function* zimArticleSlices(
   // not depend on tables.ts (the dependency runs the other way).
   const FIGURE_CAPTION_MAX_CHARS = 1500
 
+  // The sup/sub marker an ordinary `<sup>`/`<sub>` open tag ARMED, still waiting for the
+  // element's own text (#488). It is written only if that text turns out to start where a
+  // marker would sit between alphanumerics; anything else — a close tag, a block boundary, a
+  // citation skip, a table — disarms it. `lastEmittedChar` is the last code point actually
+  // written into whichever buffer is current (body or heading): maintained at the single `emit`
+  // funnel below and cleared at every block/segment boundary by `endMarkRun`, so a
+  // paragraph-initial `<sup>` has no `prev` to mark against and never marks.
+  let pendingMark: string | null = null
+  let lastEmittedChar = ''
+
+  /** A block or segment boundary: an armed marker cannot cross it, and nothing written before
+   *  it can be the character a marker follows. */
+  const endMarkRun = (): void => {
+    pendingMark = null
+    lastEmittedChar = ''
+  }
+
   const flush = (): void => {
     const text = body.result()
     if (text.length > 0) segments.push({ text, pageNumber: null, sectionLabel: currentLabel })
     body.reset()
+    endMarkRun()
   }
 
-  const emit = (text: string): void => {
-    if (text.length === 0) return
+  const emit = (raw: string): void => {
+    if (raw.length === 0) return
+    let text = raw
+    if (pendingMark !== null) {
+      // The armed marker is resolved by the FIRST text emitted after it — the sup/sub's own
+      // text — and is consumed either way, so it can never attach to a later run.
+      const mark = pendingMark
+      pendingMark = null
+      if (shouldMark(lastEmittedChar, text)) text = mark + text
+    }
     if (headingLevel > 0) {
       headingBuf += text
       headingNewlines = trailingNewlines(text, headingNewlines)
     } else {
       body.push(text)
     }
+    lastEmittedChar = lastCharOf(text)
   }
 
   /** A block boundary: one newline, unless two already terminate the text. */
   const emitBreak = (): void => {
+    endMarkRun()
     if ((headingLevel > 0 ? headingNewlines : body.carryNewlines) >= 2) return
     emit('\n')
   }
@@ -1052,6 +1085,9 @@ export function* zimArticleSlices(
     }
     if (!isClose && name === 'table') {
       if (selfClosing) continue // no body — nothing to classify or capture
+      // A table's text is delivered as its own segments (or dropped): either way it is a
+      // segment break, so no armed marker and no `prev` character crosses it (#488).
+      endMarkRun()
       const cls = attrValue(attrs, 'class')
       if (!emitTables || isLayoutTableClass(cls)) {
         tableDropDepth = 1
@@ -1094,33 +1130,44 @@ export function* zimArticleSlices(
       if (!selfClosing) mathDepth = 1
       continue
     }
-    if (!isClose && name === 'sup') {
-      // Reference brackets ([1], [note 2]) are retrieval noise; other superscripts keep text,
-      // marked with a literal `^` before it (#488 — the shared convention in `supsub.ts`, the
-      // one `tables.ts` has used since #478). `emit` routes it exactly like ordinary character
-      // data, so a `<sup>` inside a heading marks the heading text and one in a paragraph marks
-      // the body; the text run before this tag was already emitted above (`emitTextUpTo(lt)`),
-      // which is what puts the marker immediately before the sup's own text. A self-closing
-      // `<sup/>` has no text to mark and is ignored on both halves, exactly as the citation
-      // branch ignores one. An EMPTY `<sup></sup>` leaves a lone `^`: accepted, not special-
-      // cased — the scanner is forward-only and cannot know the element is empty until its
-      // close, and `foldSupSub` folds nothing there (a caret with no alphanumeric after it),
-      // so no matcher sees a difference.
+    if (name === 'sup') {
+      // Reference brackets ([1], [note 2]) are retrieval noise and stay dropped whole; every
+      // other superscript keeps its text and ARMS a `^` (#488 — the shared convention in
+      // `supsub.ts`, the one `tables.ts` has used since #478). The marker is not written here:
+      // `emit` writes it only if the element's own text starts where `shouldMark` holds, which
+      // is what leaves a reference back-link (`↑ <sup>a</sup>`) and a paragraph-initial `<sup>`
+      // unmarked. The text run before this tag was already emitted above (`emitTextUpTo(lt)`),
+      // which is what makes `lastEmittedChar` the character the marker would follow; `emit`
+      // routes the marked text exactly like ordinary character data, so a `<sup>` inside a
+      // heading marks the heading and one in a paragraph marks the body. A self-closing
+      // `<sup/>` has no text and arms nothing, exactly as the citation branch ignores one, and
+      // the close tag disarms — so an EMPTY `<sup></sup>` now leaves nothing at all.
+      if (isClose) {
+        pendingMark = null
+        continue
+      }
       const cls = attrValue(attrs, 'class') ?? ''
       if (REF_SUP_CLASS_RE.test(cls)) {
+        pendingMark = null
         if (!selfClosing) supSkipDepth = 1
         continue
       }
-      if (!selfClosing) emit(SUP_MARK)
+      if (!selfClosing) pendingMark = SUP_MARK
+      continue
     }
-    if (!isClose && name === 'sub' && !selfClosing) {
-      // Same convention, `_value` — `H<sub>2</sub>O` reads `H_2O`. There is no citation kind of
-      // `<sub>`, so no skip-depth counterpart: every ordinary `<sub>` is marked.
-      emit(SUB_MARK)
+    if (name === 'sub') {
+      // Same convention, `_value` — `H<sub>2</sub>O` reads `H_2O` and `NO<sub>x</sub>` reads
+      // `NO_x`. There is no citation kind of `<sub>`, so no skip-depth counterpart.
+      if (isClose) pendingMark = null
+      else if (!selfClosing) pendingMark = SUB_MARK
+      continue
     }
 
     const h = /^h([1-6])$/.exec(name)
     if (h) {
+      // Both halves switch which buffer `emit` writes into, so both end the current mark run
+      // (#488): the heading starts with nothing to its left, and the body resumes after one.
+      endMarkRun()
       if (!isClose) {
         headingLevel = Number(h[1])
         headingBuf = ''
