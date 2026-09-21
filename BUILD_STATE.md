@@ -28,6 +28,17 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-21 — **#497 — dictation: the speech model activates the moment its download (or the voice
+engine's install) lands, a silent recording is refused before whisper runs, and the composer mic
+shows as "not installed" with a path to the AI Model screen instead of vanishing** (branch
+`feat/497-dictation-discoverability-silence`, three commits; record: `architecture.md` "Voice
+dictation" — the D30 amendment + the restart-free-activation paragraph; `known-limitations.md`
+"Voice dictation"; gate rule + calibration in `shared/dictation-level.ts`). Evidence (K:, the pinned
+whisper-cli + ggml-small): digital silence under `-l auto` → the single word `you`, `-l de` →
+`[Musik]`, low noise → random-script garbage; no decoder flag covers noise, so the gate sits BEFORE
+whisper. The "captured at wiring time" premise behind the restart rule was false for the transcriber
+since 2026-06-28 (true for embedder + OCR). Still open on the issue: TTS (owner ruling), Silero VAD
+(follow-up), a real-microphone calibration of the gate on the built app._
 _2026-09-20 — **Wave 13 research recorded, five PRs shipped under a new standing shipping rule, the
 v0.1.61 cut 2026-09-21.** Retrieval is deterministic across repeated asks and a cold process restart — the
 only variance measured was in answer wording, now removed by the sampler pin. Converter coverage is
@@ -123,23 +134,6 @@ joins `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` (`shared/prompt-cache-rules.ts`), a
 positive control, and the concrete case for the cache-ON default. Control `qwen3.8-27b-ud-q5km` reproduced the sweep token for
 token (1,492 of 1,571, 79 kept). Trap held a fourth time: `forcing full` appears **0 times** in all four captures, including the
 two that re-prefilled. Every catalog `family:` now has a verdict; the default still governs the family added next._
-_2026-09-10 — **Build-chain advisories cleared: `fast-uri` 3.1.7, `browserslist` 4.28.9, `js-yaml` 4.3.2,
-`baseline-browser-mapping` 2.11.21** (PR #452, stacked on PR #451). All dev-scope, in-range, lockfile-only; browserslist brings
-its data chain with it. `npm audit` after this is **0 high / 0 critical** — only the deferred vitest chain remains. The four
-`fast-uri` CVEs all need an untrusted URI and the only consumer is `ajv` reading our own `electron-builder.yml` on the MANUAL
-package step (R2) — no exposure. The one that matters on a PUBLIC repo is `browserslist` CVE-2026-73088: `normalizeStats()` runs
-on every `browserslist()` call and auto-discovers `browserslist-stats.json` up the directory tree, so a contributor PR adding one
-file crashes every Babel/Vite build in CI. Build-availability only._
-_2026-09-10 — **`@xmldom/xmldom` 0.8.13 → 0.8.15 — the one dependency advisory that reached users** (PR #451,
-`fix/xmldom-parser-dos-0815`; record `security-model.md` BE-9 + the DOCX-parser paragraph under it, which carries the
-reachability analysis). Ten advisories: the four PARSER-side ones reach `parsers/docx.ts` → mammoth → `DOMParser` on an imported
-`.docx` and freeze the main process (M-3 bounds inflated BYTES not TIME; `parseTimeoutMs` is a `Promise.race` a synchronous
-parser never loses); the six serializer-side ones are unreachable. Lockfile-only, 3 lines + regenerated notices. **Two findings
-to keep:** (a) the Dependabot alert list is NOT the inventory — it had opened 1 of the 10 and that 1 was the unreachable class,
-while `npm audit` on the same DB found all ten plus unalerted js-yaml/baseline-browser-mapping; security updates are OFF, there
-is no `.github/dependabot.yml`, and CI runs no `npm audit`. (b) A bare `npm install` rewrites ~28 unrelated `"peer": true`
-markers — PRE-EXISTING drift (reproduces on a clean master with no version change), so bump dependency lockfiles surgically.
-Follow-up PR #452; the vitest 3→4 major (CVE-2026-84373, unreachable — no browser mode, no dev server) is DEFERRED, needs an owner._
 _2026-09-10 — **#436 + #437 CLOSED — the two silent live regions fixed** (`fix/436-437-live-region-announce`).
 **#436:** `role="status"` is a LIVE REGION (implicit `aria-live="polite"`), not a quieter label — so the `Banner` nested inside
 `ErrorBanner`'s always-mounted `role="alert"` wrapper became the nearest live-region ancestor of the message AND arrived already
@@ -192,7 +186,9 @@ making room for the #467 test-fixture entry), and the closed #399 prompt-cache e
 (preamble budget, making room for the §11.16 Documents-declutter entry), and the Phase 4 PR-A
 discovery-port entry on 2026-09-19 (preamble budget, making room for the knowledge-pack
 retrieval-research record entry), and the closed 2026-09-09 knowledge-packs-docs entry on
-2026-09-20 (preamble budget, making room for the wave-13 entry) —
+2026-09-20 (preamble budget, making room for the wave-13 entry), and the two closed 2026-09-10
+dependency-advisory entries (PR #451 xmldom, PR #452 build chain) on 2026-09-21 (preamble
+budget, making room for the #497 dictation entry) —
 citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
 "Skills — Sn handoff" resolve there._
 
@@ -516,7 +512,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       `TableSpec` port, derived-column eval, no-skill tabular routing, remaining §5 deferrals) ·
       security-hardening lows L-4/L-5/L-7 (§8; L-8 is closed
       — `npm ci` everywhere) · the `IBAN_CANDIDATE_RE` backtracking hazard (known-limitations) ·
-      restart-required mid-session installs for transcriber/reranker/embedder · the open GPU
+      restart-required mid-session installs for reranker/embedder/OCR (transcriber: #497) · the open GPU
       hardware-matrix legs (item 1b: ② ④ ⑤ ⑥ ⑦ ⑧ ⑨).
     - [x] **Flip to public** — **DONE 2026-07-12** (observed via the GitHub API 2026-07-13 at
       the PR #57 merge review): repo public, **private vulnerability reporting ENABLED** (item

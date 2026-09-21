@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode, type RefObject } from 'react'
 import { Button } from '../components'
-import { DictationButton } from './DictationButton'
+import { DictationButton, DictationUnavailableButton } from './DictationButton'
 import { Waveform } from './Waveform'
 import { useT } from '../i18n'
 import type { DictationCaptureStart } from '../lib/dictation'
@@ -26,8 +26,13 @@ interface ComposerProps {
   footer?: ReactNode
   /** Lets the screen focus the input (example-prompt chips fill it). */
   inputRef?: RefObject<HTMLTextAreaElement>
-  /** Voice dictation: the mic renders only when a transcriber exists. */
-  dictationAvailable?: boolean
+  /** Voice dictation (#497): `true` renders the live mic; `false` renders the visibly disabled
+   *  "not installed" mic whose click explains the missing speech model and deep-links to the
+   *  AI Model screen; `null`/`undefined` (status not read yet) renders nothing — no flash. */
+  dictationAvailable?: boolean | null
+  /** Opens the AI Model screen from the "not installed" hint (the screen's
+   *  `onNavigate('models')`); without it the hint carries no button. */
+  onOpenModels?: () => void
   /** Friendly dictation failure copy — surfaced by the screen like other errors. */
   onDictationError?: (message: string) => void
   /** Test seam forwarded to DictationButton (real getUserMedia capture by default). */
@@ -48,6 +53,7 @@ export function Composer({
   footer,
   inputRef,
   dictationAvailable,
+  onOpenModels,
   onDictationError,
   dictationCaptureImpl,
   onAttach
@@ -68,6 +74,8 @@ export function Composer({
   // `analyser` is null then and Waveform simply draws nothing.
   const [recording, setRecording] = useState(false)
   const [analyser, setAnalyser] = useState<AnalyserNode | null>(null)
+  // #497: the "not installed" mic's explanation, revealed on click (never on hover alone).
+  const [dictationHint, setDictationHint] = useState(false)
 
   // Auto-grow with content, capped — past the cap the textarea scrolls. scrollHeight
   // excludes the border (box-sizing: border-box), so add it back or a 2px overflow
@@ -171,6 +179,9 @@ export function Composer({
             captureImpl={dictationCaptureImpl}
           />
         )}
+        {dictationAvailable === false && (
+          <DictationUnavailableButton expanded={dictationHint} onToggle={() => setDictationHint((h) => !h)} />
+        )}
         {streaming ? (
           <Button onClick={onStop}>{t('chat.composer.stop')}</Button>
         ) : (
@@ -179,6 +190,16 @@ export function Composer({
           </Button>
         )}
       </div>
+      {dictationAvailable === false && dictationHint && (
+        <p className="hint composer-hint" role="status">
+          {t('chat.dictation.needsModel')}
+          {onOpenModels && (
+            <Button size="sm" variant="ghost" onClick={onOpenModels}>
+              {t('chat.noModel.open')}
+            </Button>
+          )}
+        </p>
+      )}
       {footer != null && <div className="composer-footer">{footer}</div>}
     </div>
   )

@@ -45,6 +45,23 @@ The knowledge-packs docs page and README section this entry describes shipped an
 since. Citations of the form "BUILD_STATE 2026-09-09 entry" resolve here. Text below is
 byte-identical to what was removed.
 
+_2026-09-10 — **Build-chain advisories cleared: `fast-uri` 3.1.7, `browserslist` 4.28.9, `js-yaml` 4.3.2,
+`baseline-browser-mapping` 2.11.21** (PR #452, stacked on PR #451). All dev-scope, in-range, lockfile-only; browserslist brings
+its data chain with it. `npm audit` after this is **0 high / 0 critical** — only the deferred vitest chain remains. The four
+`fast-uri` CVEs all need an untrusted URI and the only consumer is `ajv` reading our own `electron-builder.yml` on the MANUAL
+package step (R2) — no exposure. The one that matters on a PUBLIC repo is `browserslist` CVE-2026-73088: `normalizeStats()` runs
+on every `browserslist()` call and auto-discovers `browserslist-stats.json` up the directory tree, so a contributor PR adding one
+file crashes every Babel/Vite build in CI. Build-availability only._
+_2026-09-10 — **`@xmldom/xmldom` 0.8.13 → 0.8.15 — the one dependency advisory that reached users** (PR #451,
+`fix/xmldom-parser-dos-0815`; record `security-model.md` BE-9 + the DOCX-parser paragraph under it, which carries the
+reachability analysis). Ten advisories: the four PARSER-side ones reach `parsers/docx.ts` → mammoth → `DOMParser` on an imported
+`.docx` and freeze the main process (M-3 bounds inflated BYTES not TIME; `parseTimeoutMs` is a `Promise.race` a synchronous
+parser never loses); the six serializer-side ones are unreachable. Lockfile-only, 3 lines + regenerated notices. **Two findings
+to keep:** (a) the Dependabot alert list is NOT the inventory — it had opened 1 of the 10 and that 1 was the unreachable class,
+while `npm audit` on the same DB found all ten plus unalerted js-yaml/baseline-browser-mapping; security updates are OFF, there
+is no `.github/dependabot.yml`, and CI runs no `npm audit`. (b) A bare `npm install` rewrites ~28 unrelated `"peer": true`
+markers — PRE-EXISTING drift (reproduces on a clean master with no version change), so bump dependency lockfiles surgically.
+Follow-up PR #452; the vitest 3→4 major (CVE-2026-84373, unreachable — no browser mode, no dev server) is DEFERRED, needs an owner._
 _2026-09-09 — **Knowledge packs get a public face (`docs/knowledge-packs.md` + README section; docs-only,
 `docs/knowledge-packs-readme-and-page`):** the feature shipped but the repo did not say so — one README bullet (#5 of 10,
 linking nowhere) and user-guide §7b, reachable only through "walkthrough of every screen". New canonical page

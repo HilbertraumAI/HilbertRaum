@@ -1875,10 +1875,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   to the AI Model screen; a task started anyway refuses with the same friendly copy. Since
   issue #40 (2026-07-09) a completed **in-app download re-runs the translation selector**
   (`AppContext.onModelInstalled`), so translation activates the moment the GGUF lands — no
-  restart. Residuals: a weight copied onto the drive OUTSIDE the app (manual file copy) is
-  still only picked up at the next start, and the **transcriber/reranker/embedder** keep the
-  startup-frozen selection (their handles are captured at IPC-registration/ingestion-wiring
-  time — a mid-session whisper download still needs a restart).
+  restart; since #497 (2026-09-21) the same hook — and the engine installer's completion hook
+  for `whisper_cpp` — re-runs the **transcriber** selector too (`refreshTranscriberSlot`, a null
+  slot only), so voice dictation and audio import activate the moment the speech model or the
+  voice engine lands. Residuals: a weight copied onto the drive OUTSIDE the app (manual file
+  copy) is still only picked up at the next start, and the **reranker, embedder and OCR engine**
+  keep the startup-frozen selection (the embedder and OCR handles are captured at wiring time in
+  `main/index.ts`; the embedder must never swap mid-session anyway — an index embedded by one
+  model is unusable with another; the OCR refresh has its own open owner call).
 - **A failed translation-model START disables translation until the app restarts or the model is
   re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
   first translate. If that start
@@ -2171,9 +2175,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   real-time÷1.5, see "Audio transcription" above), so a 15-second dictation takes a few
   seconds to land. A warm whisper-server mode is the recorded
   follow-up if dictation latency ever warrants it (D34's revisit clause).
-- **The mic appears only when the speech model is installed** (the same
-  availability-driven gate as audio import — no settings key). On a drive without the
-  whisper binary + weights there is no dictation affordance at all, by design.
+- **The mic works only when the speech model is installed** (the same
+  availability-driven gate as audio import — no settings key). Since #497 a drive without the
+  whisper binary + weights shows the mic greyed out instead of hiding it: a click explains what
+  is missing and opens the AI Model screen (which says whether the model, the voice engine or
+  both are absent). Availability is read on entering the chat screen and on window focus.
 - **Whisper, not the OS, decides what was said.** Dictation quality is the small model's
   (see "Audio transcription" above); the text always lands in the message box for review
   and is never auto-sent — that review step is the accuracy backstop.
@@ -2187,6 +2193,21 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   is still running past a 10-minute wall-clock ceiling (env-tunable; the recording is already
   capped at ~35 min of audio) is killed and the composer gets the friendly failure instead of
   a perpetual spinner.
+- **A silent or near-silent recording is refused before whisper runs (#497).** Whisper does not
+  return "nothing" for silence: the pinned build turns digital silence into the single word
+  `you` (under `-l de`: `[Musik]`) and low white noise into random-script text or broadcaster
+  credits (measured 2026-09-21 against the real binary + weights). The renderer therefore
+  measures the rendered audio and refuses a clip whose peak stays under −50 dBFS (or whose RMS
+  stays under −70 dBFS, or that is shorter than 300 ms) with "No sound reached the
+  microphone…" — the usual causes are a muted or wrong default input device, or the OS handing
+  a desktop app silence when its privacy settings do not allow the microphone. The main handler
+  re-checks the bytes as a backstop; only level figures go to the local log, never content.
+  Ordinary speech sits 40–50 dB above the floor (`shared/dictation-level.ts` records the
+  calibration). What the gate does NOT catch: a quiet room's noise floor between roughly −50
+  and −30 dBFS with no speech in it still reaches whisper and can still come back as a stray
+  word or phrase. The recorded follow-up is Silero VAD for whisper (`--vad`, a small pinned
+  model the drive does not carry yet), which would also help long audio imports. There is no
+  input-device picker: the system default microphone is used.
 
 ## Scanned-PDF / photo OCR
 

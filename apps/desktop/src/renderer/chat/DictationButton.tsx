@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from 'react'
 import { Button, Spinner } from '../components'
 import {
   captureDictation,
+  DICTATION_SILENT_MESSAGE,
+  DICTATION_TOO_SHORT_MESSAGE,
   MIC_BLOCKED_MESSAGE,
   type DictationCapture,
   type DictationCaptureStart
@@ -13,8 +15,9 @@ import { useT } from '../i18n'
 // indicator is the recording signal), click again to stop — the audio is resampled
 // in-page, transcribed locally by the drive's whisper model, and the text lands in
 // the input FOR REVIEW. Nothing is ever auto-sent, and the recording never leaves
-// the machine. The button renders only when a transcriber is available
-// (availability-driven — ChatScreen gates on `dictationAvailable`; no settings key).
+// the machine. The live button renders only when a transcriber is available
+// (availability-driven — ChatScreen gates on `dictationAvailable`; no settings key);
+// without one, `DictationUnavailableButton` below stands in (#497 discoverability).
 
 type DictationState = 'idle' | 'starting' | 'recording' | 'transcribing'
 
@@ -48,12 +51,17 @@ export function DictationButton({
   // component. This latch lets the resolved start() release that stream instead of leaking it (F21).
   const mountedRef = useRef(true)
 
-  // lib/dictation stays t-free (a pure module); its canonical mic-blocked English is
-  // exact-matched here and localized at display (renderer-ephemeral, never persisted).
+  // lib/dictation stays t-free (a pure module); its canonical English messages are
+  // exact-matched here and localized at display (renderer-ephemeral, never persisted). The
+  // #497 level gate's two refusals join the mic-blocked one: silence gets the microphone hint,
+  // a too-short clip the plain no-speech notice.
   function friendlyCaptureError(e: unknown): string {
-    return e instanceof Error && e.message === MIC_BLOCKED_MESSAGE
-      ? t('chat.dictation.micBlocked')
-      : friendlyIpcError(e)
+    if (e instanceof Error) {
+      if (e.message === MIC_BLOCKED_MESSAGE) return t('chat.dictation.micBlocked')
+      if (e.message === DICTATION_SILENT_MESSAGE) return t('chat.dictation.silent')
+      if (e.message === DICTATION_TOO_SHORT_MESSAGE) return t('chat.dictation.noSpeech')
+    }
+    return friendlyIpcError(e)
   }
 
   // Keep a stable handle to the latest onRecording so the unmount cleanup can call it
@@ -146,6 +154,37 @@ export function DictationButton({
       }}
     >
       {state === 'transcribing' ? <Spinner /> : <MicIcon />}
+    </Button>
+  )
+}
+
+/**
+ * The "not installed" mic (#497 discoverability): the same glyph at the disabled opacity,
+ * focusable and clickable (`aria-disabled`, not `disabled`, so keyboard users reach the
+ * explanation too). Its click toggles the composer's hint that names the missing speech model
+ * and deep-links to the AI Model screen. Rendered for `dictationAvailable === false` only —
+ * never for a status that has not been read yet, so mount never flashes it.
+ */
+export function DictationUnavailableButton({
+  expanded,
+  onToggle
+}: {
+  expanded: boolean
+  onToggle: () => void
+}): JSX.Element {
+  const { t } = useT()
+  const label = t('chat.dictation.unavailable')
+  return (
+    <Button
+      variant="ghost"
+      className="dictation-btn dictation-unavailable"
+      aria-label={label}
+      title={label}
+      aria-disabled="true"
+      aria-expanded={expanded}
+      onClick={onToggle}
+    >
+      <MicIcon />
     </Button>
   )
 }

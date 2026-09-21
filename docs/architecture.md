@@ -1682,7 +1682,11 @@ it fails with friendly convert-to-WAV/MP3 copy.
 Push-to-talk into the chat composer — a thin client of the Phase-36 transcriber. The
 whole pipeline (locked in D30): renderer `getUserMedia` audio → `MediaRecorder`
 (webm/opus) → decode + resample to **16 kHz mono** via an `OfflineAudioContext` render →
-**pure-JS WAV encode** (`renderer/lib/wav.ts`, no new deps) → BYTES over the
+**level gate** (`shared/dictation-level.ts`, #497 amendment: a clip with no usable signal —
+peak under −50 dBFS, RMS under −70 dBFS or shorter than 300 ms — is refused HERE with the
+"check your microphone" copy, and again in main as the backstop, because the pinned whisper
+hallucinates a word on silence rather than returning nothing; the module records the
+calibration) → **pure-JS WAV encode** (`renderer/lib/wav.ts`, no new deps) → BYTES over the
 request/response IPC **`dictation:transcribe`** (preload `transcribeDictation`; no new
 event channels) → main writes a transient `<uuid>.parse-dictation.wav` into the
 documents dir (the `.parse` infix = crash-sweep coverage), runs
@@ -1693,8 +1697,23 @@ the text. The composer (`renderer/chat/DictationButton.tsx` + `Composer.tsx`) in
 explicitly out of scope.
 
 - **Availability-driven (D14 precedent, no settings key):** `AppStatus.dictationAvailable`
-  = "a transcriber is selected"; the mic button simply doesn't render without it. The IPC
-  refuses friendly as a backstop.
+  = "a transcriber is selected"; the live mic renders with it and — the #497 amendment to D30 —
+  a visibly disabled **"not installed" mic** renders without it (`DictationUnavailableButton`:
+  `aria-disabled`, a click reveals the hint that names the missing speech model plus the
+  `onNavigate('models')` deep link; the composer prop is tri-state, `null` = status unread →
+  nothing, so mount never flashes either state). The AI Model screen's hide-the-disabled-Select
+  precedent (§11 of the design guidelines) does not apply: there the one clear action sits on
+  the same card, here it lives on another screen, so the mic is the pointer. The IPC
+  refuses friendly as a backstop. **Restart-free activation (#497, 2026-09-21):** the slot is
+  re-selected by `refreshTranscriberSlot` (`compose-services.ts`, the transcriber twin of the
+  issue-#40 `composeTranslator`) from BOTH install hooks — `AppContext.onModelInstalled` after a
+  speech-model download and `EngineDownloadManager.onInstalled` after a `whisper_cpp` engine
+  install — a null slot only (a live instance may hold an in-flight child that the lock/quit
+  teardowns reach through `ctx.transcriber`). Every consumer already read the slot per call
+  (dictation IPC, the per-operation ingestion deps, the pack-article save, lock, quit), so the
+  "captured at wiring time" premise the restart requirement rested on was never true for the
+  transcriber (it is for the embedder + OCR engine: `main/index.ts` `getIngestionDeps`). The
+  chat screen re-reads the flag on mount and on window focus (the Translate-screen pattern).
 - **Permissions:** the Phase-31 deny-by-default `setPermissionRequestHandler` gained its
   single exception — `media` requests that are **audio-only and from the app's own
   WebContents** (`services/permissions.ts`; scope matrix unit-tested). See
@@ -1702,7 +1721,8 @@ explicitly out of scope.
 - **Privacy:** the recording exists only as the shredded transient; **no audit event**
   (content-adjacent, like search); errors to the renderer are fixed friendly copy with
   the technical reason in the local log only. The OS mic indicator is the recording
-  signal. Locked workspace needs no handling — the composer doesn't exist pre-unlock.
+  signal. Locked workspace: the composer doesn't exist pre-unlock, and since S3 the IPC refuses
+  on a locked vault anyway (`main.dictation.locked`, before any byte is written).
 - **Concurrency & timeout (backend audit 2026-06-27, REL-3).** whisper is not internally
   serialized, so the handler holds a **single-flight guard**: a second `dictation:transcribe`
   while one is in flight is rejected with friendly copy (`DICTATION_BUSY_MESSAGE`) BEFORE it

@@ -12,6 +12,7 @@ import type { Reranker } from './reranker'
 import type { Transcriber } from './transcriber'
 import type { OcrEngine } from './ocr'
 import type { Translator, TranslationGpuDeps } from './translation'
+import type { AppContext } from './context'
 
 // M-A3 (audit-2026-06-13): the four availability-driven service selectors (embedder,
 // reranker, transcriber, OCR) were ~30 lines of near-identical "resolve the role's model,
@@ -137,6 +138,71 @@ export function shouldReplaceTranslator(current: Translator | null | undefined):
 }
 
 /**
+ * Build (or re-build) JUST the audio-transcriber selection from the current drive layout — the
+ * transcriber twin of `composeTranslator` (issue #497). ONE construction shared by
+ * `composeServices` (startup) and the two mid-session install hooks (`AppContext.onModelInstalled`
+ * after a speech-model download, `EngineDownloadManager.onInstalled` after a whisper.cpp engine
+ * install), so the call sites can never drift. Cheap + synchronous: construction spawns nothing
+ * (the whisper CLI runs per `transcribe()` call). No context window (`includeContextTokens:
+ * false`) — the CLI takes none.
+ */
+export function composeTranscriber(deps: ComposeServicesDeps): Transcriber | null {
+  return createSelectedTranscriber({
+    rootPath: deps.rootPath,
+    isDev: deps.isDev ?? false,
+    model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'transcriber', {
+      includeContextTokens: false,
+      discovered: deps.discovered
+    }),
+    onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
+  })
+}
+
+/**
+ * Should a mid-session install refresh replace the current transcriber slot (#497)? ONLY a null
+ * slot: the CLI transcriber has no start-failure latch (nothing starts until a transcribe), and a
+ * live instance may hold an in-flight whisper child that the lock/quit teardowns reach through
+ * `ctx.transcriber` — replacing it would orphan that child from `suspend()`/`stop()`.
+ */
+export function shouldReplaceTranscriber(current: Transcriber | null | undefined): boolean {
+  return current == null
+}
+
+/**
+ * Fill a null `ctx.transcriber` from the current drive layout after a mid-session install
+ * (#497): the hook body both install paths share. Returns true when the slot flipped from null
+ * to a live transcriber. Re-discovers the manifests (no `discovered`) because the install just
+ * CHANGED the drive. NEVER throws: the download manager wraps the whole `onModelInstalled` hook
+ * in one swallowing try/catch, so a throw here would silently skip the issue-#40 translator
+ * refresh that follows it in `main/index.ts` — a fault is logged and reads as "still
+ * unavailable" instead.
+ */
+export interface TranscriberSlot {
+  transcriber?: Transcriber | null
+  /** Only the drive root is read (binary + weight paths resolve against it). */
+  paths: Pick<AppContext['paths'], 'rootPath'>
+  manifestsDir: AppContext['manifestsDir']
+  isDev: AppContext['isDev']
+}
+
+export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
+  try {
+    if (!shouldReplaceTranscriber(ctx.transcriber)) return false
+    const next = composeTranscriber({
+      rootPath: ctx.paths.rootPath,
+      manifestsDir: ctx.manifestsDir,
+      isDev: ctx.isDev
+    })
+    if (!next) return false
+    ctx.transcriber = next
+    return true
+  } catch (err) {
+    log.warn('Transcriber refresh after an install failed', { error: String(err) })
+    return false
+  }
+}
+
+/**
  * Build the availability-driven services from the drive layout: the embedder (real E5 when
  * its binary + weights are present, else mock so the app launches model-free), and the
  * reranker / transcriber / OCR engine (real when provisioned, else `null` — a mock there
@@ -192,16 +258,9 @@ export function composeServices({
   })
   // The audio transcriber — the whisper.cpp CLI; selected only when binary + GGML weights
   // exist (null otherwise; audio imports fail per-file with the download-the-model copy).
-  // No context window.
-  const transcriber = createSelectedTranscriber({
-    rootPath,
-    isDev,
-    model: resolveModelByRole(manifestsDir, rootPath, 'transcriber', {
-      includeContextTokens: false,
-      discovered
-    }),
-    onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
-  })
+  // Shares `composeTranscriber` with the #497 post-install re-selection (speech-model download
+  // or whisper.cpp engine install) so the call sites can never drift.
+  const transcriber = composeTranscriber({ rootPath, manifestsDir, isDev, discovered })
   // Local OCR — tesseract.js over the drive's vendored `ocr/` language files; selected
   // only when those exist (null otherwise; photo imports fail per-file and detected scans
   // show the notice without the "Make searchable" offer).

@@ -181,6 +181,10 @@ describe('German render smokes (Phase 40)', () => {
     expect(
       screen.getByRole('button', { name: t('de', 'chat.attach.button') })
     ).toBeInTheDocument()
+    // #497: the status seeds no transcriber, so the "not installed" mic renders its German label.
+    expect(
+      await screen.findByRole('button', { name: t('de', 'chat.dictation.unavailable') })
+    ).toBeInTheDocument()
   })
 
   it('DocumentsScreen renders German (empty state + section rail)', async () => {
