@@ -424,11 +424,16 @@ export const en = {
   // approximate-token honesty ("about" = the estimate is an over-count).
   'chat.context.usageTooltip': 'Memory for this conversation: {pct}% full (about {used} of {window} tokens).',
   'chat.context.willSummarize': 'When it fills up, older messages are summarized automatically to make room.',
-  // Honest-signal truncation notice (§L0): shown on an assistant reply the model cut off at the
-  // context ceiling (finish_reason 'length'). Label is the visible line; hint is the tooltip.
-  'chat.truncated.label': 'Reply cut off — reached the model’s context limit',
-  'chat.truncated.hint':
+  // Honest-signal truncation notice (§L0): shown on an assistant reply that was cut off at a token
+  // ceiling (finish_reason 'length'). Label is the visible line; the hint is the tooltip. #498: the
+  // label names NO cause — two ceilings produce the same signal — and the tooltip is picked by
+  // `Message.truncatedCause`, so "raise the context size" is offered only when the window really
+  // was the reason. A legacy row without a cause reads as '.context' (the pre-#498 advice).
+  'chat.truncated.label': 'Reply cut off',
+  'chat.truncated.hint.context':
     'The model ran out of room to finish this answer. Ask it to continue, start a new chat, or raise the context size on the AI Model screen.',
+  'chat.truncated.hint.cap':
+    'This grounded answer reached the fixed length the app allows for one reply. Ask the model to continue where it stopped.',
   // #290: the per-answer speed line under a finished chat answer (this session only, never saved).
   // {tps} / {ttft} / {tokens} arrive pre-formatted for the UI language.
   'chat.speed.line': '{tps} tok/s · {ttft} s to first token · {tokens} tokens',

@@ -565,12 +565,22 @@ const MessageBlock = memo(function MessageBlock({
               </div>
             )
           })()}
-        {/* Honest-signal truncation notice (§L0): a quiet, labelled line on an assistant reply the
-            model cut off at the token/context ceiling (finish_reason 'length'). Never colour-only —
-            a labelled marker with an explanatory tooltip (guidelines §9); role="note" so AT reads it
-            as supplementary to the answer, not an alert. */}
+        {/* Honest-signal truncation notice (§L0): a quiet, labelled line on an assistant reply that
+            was cut off at a token ceiling (finish_reason 'length'). Never colour-only — a labelled
+            marker with an explanatory tooltip (guidelines §9); role="note" so AT reads it as
+            supplementary to the answer, not an alert. #498: the label names no cause (two different
+            ceilings produce the same signal) and the tooltip follows `truncatedCause` — a row that
+            carries none (written before #498) keeps the old context-window advice. */}
         {m.role === 'assistant' && m.truncated && (
-          <div className="msg-truncated" role="note" title={t('chat.truncated.hint')}>
+          <div
+            className="msg-truncated"
+            role="note"
+            title={
+              (m.truncatedCause ?? 'context') === 'cap'
+                ? t('chat.truncated.hint.cap')
+                : t('chat.truncated.hint.context')
+            }
+          >
             <span className="msg-truncated-glyph" aria-hidden="true">
               ⚠
             </span>

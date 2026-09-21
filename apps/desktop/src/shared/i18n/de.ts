@@ -445,14 +445,18 @@ export const de: Record<keyof typeof en, string> = {
   // RD-3-Glossar: deutscher Plural ist „Token", nicht „Tokens" (full-audit 2026-07-11 CODE-43).
   'chat.context.usageTooltip': 'Speicher für dieses Gespräch: {pct} % belegt (etwa {used} von {window} Token).',
   'chat.context.willSummarize': 'Bei vollem Speicher werden ältere Nachrichten automatisch zusammengefasst, um Platz zu schaffen.',
-  // Ehrliches Signal (§L0): erscheint bei einer Antwort, die das Modell am Kontextlimit abgeschnitten hat.
+  // Ehrliches Signal (§L0): erscheint bei einer Antwort, die an einer Token-Grenze abgeschnitten wurde.
+  // #498: die Beschriftung nennt KEINE Ursache mehr; der Tooltip wird über `Message.truncatedCause`
+  // gewählt, damit „Kontextgröße erhöhen“ nur dort steht, wo wirklich der Kontext ausging.
   // #290: Geschwindigkeitszeile unter einer fertigen Antwort (nur diese Sitzung, nie gespeichert).
   'chat.speed.line': '{tps} Token/s · {ttft} s bis zum ersten Token · {tokens} Token',
   'chat.speed.hint':
     'Wie schnell diese Antwort entstanden ist: Decodier-Geschwindigkeit der KI-Engine, Wartezeit bis zum ersten Wort und Anzahl der erzeugten Token. Nur für Antworten aus dieser Sitzung.',
-  'chat.truncated.label': 'Antwort abgeschnitten – Kontextlimit des Modells erreicht',
-  'chat.truncated.hint':
+  'chat.truncated.label': 'Antwort abgeschnitten',
+  'chat.truncated.hint.context':
     'Dem Modell ging der Platz aus, um diese Antwort zu beenden. Bitte es fortzufahren, beginne einen neuen Chat oder erhöhe die Kontextgröße im Bereich „KI-Modell“.',
+  'chat.truncated.hint.cap':
+    'Diese Dokumentantwort hat die feste Länge erreicht, die die App für eine einzelne Antwort zulässt. Bitte das Modell, dort fortzufahren, wo es aufgehört hat.',
 
   // ---- Chat: document scope ----
   'chat.scope.usingAll': 'Nutzt alle Dokumente',

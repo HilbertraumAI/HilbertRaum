@@ -36,7 +36,7 @@ import {
   getConversationContextUsage,
   listMessages
 } from '../../src/main/services/chat'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from '../../src/main/services/runtime'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
 import { stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
@@ -727,22 +727,28 @@ describe('generateGroundedAnswer', () => {
   // instead of persisting a mid-word partial — the same engine the map-reduce reduce uses. A scripted runtime
   // fires a finish reason + reply per chatStream call so a test can drive the loop and assert the outcome.
   function groundedScriptRuntime(
-    script: Array<{ reply: string; finish?: string }>
-  ): ModelRuntime & { calls: number } {
+    // #498: `timings` is optional per step — the cause attribution reads `predicted_n` to tell a
+    // pass that really reached its cap from one the window stopped short of it. `caps` records the
+    // `max_tokens` each pass was actually sent, so a test can see the room guard shrink it.
+    script: Array<{ reply: string; finish?: string; timings?: RuntimeTimings }>,
+    contextWindow = 2048
+  ): ModelRuntime & { calls: number; caps: Array<number | undefined> } {
     const rt = {
       modelId: 'script',
       calls: 0,
+      caps: [] as Array<number | undefined>,
       start: async () => {},
       stop: async () => {},
       health: async () => ({ healthy: true, message: 'ok', port: null }),
-      contextWindow: () => 2048,
+      contextWindow: () => contextWindow,
       async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
         const step = script[Math.min(rt.calls, script.length - 1)]
         rt.calls++
+        rt.caps.push(options?.maxTokens)
         yield step.reply
-        options?.onFinish?.(step.finish ?? 'stop')
+        options?.onFinish?.(step.finish ?? 'stop', step.timings)
       }
-    } as unknown as ModelRuntime & { calls: number }
+    } as unknown as ModelRuntime & { calls: number; caps: Array<number | undefined> }
     return rt
   }
 
@@ -797,6 +803,45 @@ describe('generateGroundedAnswer', () => {
     expect(runtime.calls).toBe(1) // a caller-supplied cap is a deliberate ceiling, never continued past
     expect(msg.content).toBe('The caller wanted it short')
     expect(msg.truncated).toBeUndefined() // hitting a cap the caller itself asked for is not a surprise
+  })
+
+  // #498: the badge no longer names a cause — `Message.truncatedCause` decides which remedy the
+  // tooltip offers. 'context' ⇒ "raise the context size" (the window really was the reason);
+  // 'cap' ⇒ "ask it to continue" (the app's own 1024-token-per-pass ceiling ended it).
+  it('#498: a grounded answer still cut after the continuations is attributed to the app’s own cap', async () => {
+    const runtime = groundedScriptRuntime([
+      { reply: 'alpha beta', finish: 'length' },
+      { reply: 'beta gamma', finish: 'length' },
+      { reply: 'gamma delta', finish: 'length' }
+    ])
+    const msg = await askGrounded(runtime)
+
+    // Every pass was sent the full pinned cap (the room guard never had to shrink it), so the
+    // window was never the binding ceiling — the app's own cap is what kept firing.
+    expect(new Set(runtime.caps)).toEqual(new Set([1024]))
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncatedCause).toBe('cap')
+  })
+
+  it('#498: a grounded answer the WINDOW left no room to continue is attributed to the context', async () => {
+    // A tiny launched window: the grounded prompt plus the resume anchor leaves less than
+    // CONTINUATION_MIN_OUTPUT_TOKENS of room, so the engine's no-overflow guard stops the loop
+    // before a single continuation pass can run. Nothing but the window explains that.
+    const runtime = groundedScriptRuntime(
+      [{ reply: 'cut at the wall', finish: 'length', timings: { predicted_n: 300 } }],
+      2048 / 4
+    )
+    const msg = await askGrounded(runtime)
+
+    expect(runtime.calls).toBe(1) // no room for even one continuation pass
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncatedCause).toBe('context')
+  })
+
+  it('#498: a grounded answer that finishes cleanly carries neither the flag nor a cause', async () => {
+    const msg = await askGrounded(groundedScriptRuntime([{ reply: 'A complete answer.', finish: 'stop' }]))
+    expect(msg.truncated).toBeUndefined()
+    expect(msg.truncatedCause).toBeUndefined()
   })
 
   // The `??` override precedence (rag/index.ts's effectiveRuntimeOptions): a caller overriding just
@@ -912,6 +957,64 @@ describe('generateGroundedAnswer', () => {
     expect(options?.temperature).toBe(0)
     expect(options?.maxTokens).toBe(1024)
     expect(options).not.toHaveProperty('seed')
+  })
+
+  // #498: the grounded-DATA narration sends its own 1024-token cap and never continues, so a
+  // 'length' here is normally the APP's ceiling, not the window. Before #498 every such reply wore
+  // a badge that read "reached the model's context limit" and advised raising the context size —
+  // advice that cannot help. The flag stays; the cause now says which remedy applies.
+  async function askGroundedData(rt: ModelRuntime) {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
+    const msg = await generateGroundedDataAnswer(db, rt, conv.id, 'who is the vendor?', {
+      dataBlock: '{"vendor":"Acme GmbH"}',
+      postscript: '',
+      citations: []
+    })
+    return { msg, persisted: listMessages(db, conv.id).at(-1) }
+  }
+
+  it('#498: a grounded-DATA narration that runs into its own cap is flagged with cause "cap"', async () => {
+    const rt = runtime()
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* (
+      _messages: ChatMessage[],
+      options?: RuntimeChatOptions
+    ) {
+      yield 'The vendor is Acme GmbH and the narration runs'
+      // The server generated exactly the 1024 tokens it was allowed: the cap is what fired.
+      options?.onFinish?.('length', { predicted_n: 1024 })
+    })
+    const { msg, persisted } = await askGroundedData(rt)
+
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncatedCause).toBe('cap')
+    // Round-trips through the DB read (messages.truncated_cause → Message.truncatedCause).
+    expect(persisted?.truncatedCause).toBe('cap')
+  })
+
+  it('#498: a grounded-DATA narration that stopped SHORT of its cap is flagged with cause "context"', async () => {
+    const rt = runtime()
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* (
+      _messages: ChatMessage[],
+      options?: RuntimeChatOptions
+    ) {
+      yield 'The vendor is Acme GmbH and the narration runs'
+      // Allowed 1024, produced 300 — only the window explains stopping that early.
+      options?.onFinish?.('length', { predicted_n: 300 })
+    })
+    const { msg, persisted } = await askGroundedData(rt)
+
+    expect(msg.truncated).toBe(true)
+    expect(msg.truncatedCause).toBe('context')
+    expect(persisted?.truncatedCause).toBe('context')
+  })
+
+  it('#498: a clean grounded-DATA narration carries neither the flag nor a cause', async () => {
+    const { msg, persisted } = await askGroundedData(runtime())
+    expect(msg.truncated).toBeUndefined()
+    expect(msg.truncatedCause).toBeUndefined()
+    expect(persisted?.truncatedCause).toBeUndefined()
   })
 
   it('buildGroundedChatMessages scrubs think blocks from replayed assistant turns', () => {
