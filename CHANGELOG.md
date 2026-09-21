@@ -25,7 +25,49 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Added
+
+- **Knowledge-pack answers can now draw on the values inside a page's tables.** Material property
+  tables, comparison tables and similar structured content used to be dropped entirely when a
+  knowledge-pack page was read; those values now reach the pack's content and can be cited in an
+  answer, the same way ordinary paragraph text already was.
+- **A select-all checkbox in the documents view.** Next to the per-row checkboxes and the "Add to
+  project" action, one control now selects or clears every document in the current list at once
+  (#214).
+
+### Changed
+
+- **Grounded document and knowledge-pack answers no longer vary in wording between two askings of
+  the same question.** The app now sends the model a fixed decoding setting (no randomness, and a
+  per-pass length cap that is continued rather than cut off) instead of the model server's own
+  defaults, so a repeated question gets the same wording back. A related case, where the cut-off
+  notice itself can be inaccurate, is tracked separately (#498).
+- **Knowledge-pack answers only name a pack's language when it is relevant.** The search planner
+  used to mention the pack's archive language on every question; it now does so only when the
+  question is asked in a different language than the pack itself. On a maintainer benchmark this
+  roughly doubled how often an English question against a German-language pack reached the right
+  article (27 in 100 to 50 in 100), with German-language questions unaffected (#486).
+
+### Fixed
+
+- **Knowledge-pack table content no longer leaks a page's stylesheet or repeats a formula.** A
+  style/script element or a mathematical formula nested inside a table that a knowledge pack reads
+  could end up in the delivered text — raw CSS in one case, both the rendered and the source form
+  of the same formula in the other. Both are now handled the way the rest of the page already was:
+  styling is dropped, and a formula is converted once, not twice (#485, #490).
+- **The reranker recovers from a graphics-card failure instead of staying off for the session.**
+  When ranking on the graphics card fails, the app now falls back to the processor for the rest of
+  the session, and the request-size ceiling that fallback enforces is correctly re-applied along
+  every path that can trigger it (#474).
+- **The document-search model's shutdown can no longer overlap with itself.** (#475)
+- **The Performance page now accounts for a loaded ranking model.** Its graphics-memory figures
+  used to check only the chat and translation models; they now include a resident ranking model
+  and the graphics memory it is contending for (#476).
+- **The counter behind a pending model switch can no longer silently read as empty.** (#477)
+- **A test covering evidence-pack PDF text extraction no longer misreports a passing result as a
+  failure.** (#481)
+- **The release build now runs its test suite split into shards, the same way ordinary CI already
+  does, instead of one long unsharded run.** (#458)
 
 ## [0.1.60] — 2026-09-18
 
