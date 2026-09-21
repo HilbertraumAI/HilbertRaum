@@ -1690,7 +1690,10 @@ calibration) → **pure-JS WAV encode** (`renderer/lib/wav.ts`, no new deps) →
 request/response IPC **`dictation:transcribe`** (preload `transcribeDictation`; no new
 event channels) → main writes a transient `<uuid>.parse-dictation.wav` into the
 documents dir (the `.parse` infix = crash-sweep coverage), runs
-`Transcriber.transcribe(tempPath, { workDir })`, **shreds the WAV in `finally`**, returns
+`Transcriber.transcribe(tempPath, { workDir, vad: true })` — #504: whisper-cli runs Silero VAD
+first (`--vad -vm <model> -vp 200`; the VAD model is the whisper manifest's second required
+`files[]` entry, found by name in `transcriber/factory.ts`), so a clip without speech decodes
+to NO segments; imports pass no `vad` — **shreds the WAV in `finally`**, returns
 the text. The composer (`renderer/chat/DictationButton.tsx` + `Composer.tsx`) inserts it
 **at the cursor for review — never auto-sent**; the insert prefers
 `execCommand('insertText')` so it joins the input's normal undo history. Streaming ASR is

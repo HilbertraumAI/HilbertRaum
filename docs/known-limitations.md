@@ -2206,11 +2206,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   once the mic tap has stayed under the same floor for two seconds, so a dead input is visible
   before you stop (it needs Web Audio; without it the post-stop refusal is the only signal).
   Ordinary speech sits 40–50 dB above the floor (`shared/dictation-level.ts` records the
-  calibration). What the gate does NOT catch: a quiet room's noise floor between roughly −50
-  and −30 dBFS with no speech in it still reaches whisper and can still come back as a stray
-  word or phrase. The recorded follow-up is Silero VAD for whisper (`--vad`, a small pinned
-  model the drive does not carry yet), which would also help long audio imports. There is no
-  input-device picker: the system default microphone is used.
+  calibration). Beyond the gate, whisper runs **Silero voice-activity detection first on every
+  dictation (#504):** the VAD model (`ggml-silero-v5.1.2.bin`, MIT, under a megabyte) is the
+  speech model's second required file — fetched, verified and offered on the AI Model screen
+  together with the weight — and a recording with no speech in it, the noise band the level
+  gate cannot judge, comes back as "No speech was recognized" instead of a stray word
+  (measured 2026-09-21: digital silence and −40 / −30 dBFS white noise → zero segments in
+  half a second; a German sentence attenuated by 40 dB still verbatim, thanks to a 200 ms
+  speech pad that keeps quiet onsets — whisper.cpp's 30 ms default clipped the first word).
+  Audio **imports still run without VAD**: it remaps segment timestamps and audio citations
+  cite time ranges — unmeasured, so left as is. There is no input-device picker: the system
+  default microphone is used.
 
 ## Scanned-PDF / photo OCR
 

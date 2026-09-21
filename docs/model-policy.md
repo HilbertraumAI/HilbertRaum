@@ -40,7 +40,7 @@
 | Chat (Gemma 31B) | Gemma 4 31B Instruct QAT Q4_0 | ~17.7 GB | 24 GB | — (rank 0) | **Gemma 4 QAT wave; eval ratified 2026-08-03 (§9.3): DO NOT PROMOTE — the issue-#82 drop condition met** (ties the 26B-A4B within .003 F1 at 4.2–6× slower decode, +3.3 GB disk). Stays a selectable opt-in — the Apache-2.0 dense quality ceiling for 32 GB GPU boxes. All §9.1 legs PASSED 2026-07-30 incl. the first load smoke. |
 | Embeddings | Multilingual E5 Small (F16) | ~0.25 GB | 4 GB | all | Local document search (needed for Q&A) |
 | Reranker (optional) | BGE Reranker v2 M3 (F16) | ~1.16 GB | 6 GB | LITE+ (in the DIY `--with-assets` set; **not** on a preconfigured commercial drive — `bundled_on_preconfigured_drive:false`, advisory/unused) | Retrieval-quality pass over document search — search works fully without it |
-| Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation; whisper.cpp GGML; MIT |
+| Transcriber | Whisper Small (multilingual) | ~0.49 GB | 4 GB | all (bundled) | Audio transcription + voice dictation; whisper.cpp GGML; MIT. Since #504 its manifest also requires the Silero VAD v5.1.2 model (~0.9 MB, MIT) — voice-activity detection before a dictation is decoded |
 | Vision (optional) | Qwen2.5-VL 3B Instruct Q4 + f16 mmproj | ~3.27 GB (2 files) | 12 GB | in the `--with-assets` default set (2026-07-01); **not** auto-recommended in-app (`recommended_profiles: []`, rank 0) — availability-driven, used on demand by the Images screen | Image understanding — the Images screen (Phases V1–V5). Two files: GGUF + the `mmproj` projector. CPU-pinned; ~4.6 GB peak RSS. **Co-resident with a 12B chat ⇒ >16 GB (PROD-1)** — see "The vision role" below. Apache-2.0 |
 
 > Qwen3 **1.7B** was in the original spec §7.3 (the TINY/UNKNOWN "small" model) but was **dropped**:
@@ -55,7 +55,7 @@
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
 
-All models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5, Whisper transcriber).
+All models are **Apache-2.0** (Qwen3, the Phase-28 challengers, BGE reranker) / **MIT** (E5, Whisper transcriber, the Silero VAD file the transcriber manifest carries since #504).
 Sizes/RAM come from each manifest
 (`size_on_disk_gb` / `recommended_min_ram_gb`); download URLs live in the manifests' `download.url`
 (catalog with source links in the [README](../README.md)). **Auto-tier** is the
@@ -675,6 +675,19 @@ conversion from `huggingface.co/ggerganov/whisper.cpp` (declares MIT; mechanical
 conversion — the E5/reranker provenance posture). Full notes in the manifest's
 `license_review` block. The weight rides the NORMAL manifest pipeline (`fetch-models`,
 in-app downloader, `verify-models`).
+
+**License-review record — Silero VAD v5.1.2 GGML model (status: approved, reviewed
+2026-09-21, #504):** the whisper manifest's second required file
+(`models/transcriber/ggml-silero-v5.1.2.bin`, 885,098 bytes,
+`29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf`, fetched from
+`huggingface.co/ggml-org/whisper-vad`). Silero VAD is **MIT** (github.com/snakers4/silero-vad
+LICENSE, Copyright (c) 2020-present Silero Team); the GGML file is the whisper.cpp project's
+mechanical format conversion of the v5.1.2 ONNX model — the same provenance posture as the
+Whisper weights above. Commercial redistribution permitted with the copyright + license
+notice, which `DRIVE-NOTICES.md` carries as its own line under the transcriber's entry. Used
+by `whisper-cli --vad` for DICTATION only (audio imports stay VAD-free — timestamp remapping
+unmeasured against citation time ranges). Rides the same manifest pipeline as the weight
+(#310 `files[]`): fetched, verified and shown as part of the speech model.
 
 ## The OCR asset class
 

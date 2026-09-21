@@ -25,6 +25,23 @@ download:
   sha256: 1be3a9b2063867b937e64e2ec7483364a79917e157fa98c5d94b5c1fffea987b
   size_bytes: 487601967
   license_url: https://github.com/openai/whisper/blob/main/LICENSE
+# #504: Silero VAD v5.1.2 — the whisper.cpp project's GGML conversion of Silero's
+# voice-activity model (MIT, Silero Team). whisper-cli runs it BEFORE decoding a dictation
+# (`--vad`), so a recording with no speech in it yields no segments instead of a hallucinated
+# word ("you" on digital silence, random-script text on low noise — measured 2026-09-21).
+# A second REQUIRED file of this model (#310 machinery): fetch-models, verify-models and the
+# in-app downloader fetch + verify it with the weight, and the transcriber selects only when
+# both are present. The CLI wrapper finds it by name (`ggml-silero-*.bin`). Dictation only —
+# audio imports run without VAD (its timestamp remapping is unmeasured against citations).
+# sha256 + size captured from a fresh download on 2026-09-21.
+files:
+  - local_path: models/transcriber/ggml-silero-v5.1.2.bin
+    sha256: 29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf
+    download:
+      url: https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v5.1.2.bin
+      sha256: 29940d98d42b91fbd05ce489f3ecf7c72f0a42f027e4875919a28fb4c04ea2cf
+      size_bytes: 885098
+      license_url: https://github.com/snakers4/silero-vad/blob/master/LICENSE
 # Bundled by default: audio transcription is a headline feature and the weight is
 # small next to the chat models. Works on every profile — transcription is a batch
 # job (peak RSS well under 2 GB, measured R-W4).

@@ -60,6 +60,17 @@ export function resolveWhisperCliPath(
 export const AUDIO_DECODE_ERROR_PREFIX = 'AUDIO_DECODE_FAILED:'
 
 /**
+ * Speech padding (ms) handed to whisper-cli's Silero VAD (`-vp`) for dictation (#504). The
+ * pad protects word onsets: with whisper.cpp's 30 ms default the pinned build clipped "Guten"
+ * off a German test sentence attenuated by 40 dB; with 200 ms the sentence is kept verbatim,
+ * while digital silence and −40 / −30 dBFS white-noise clips still yield ZERO segments
+ * (measured 2026-09-21 against the real binary + ggml-small + ggml-silero-v5.1.2). The
+ * threshold stays at whisper.cpp's default (0.5): lowering it did not help the onset and
+ * would only cost noise margin.
+ */
+export const VAD_SPEECH_PAD_MS = 200
+
+/**
  * Per-spawn INACTIVITY watchdog ceiling (REL-1). whisper-cli emits `-pp` progress
  * (`progress = N%`, ~every 5%); a healthy run — even a slow, hours-long one — keeps
  * producing output, so the watchdog is reset on EVERY stdout/stderr chunk and only
@@ -111,6 +122,11 @@ export interface WhisperCliOptions {
   binPath: string
   /** Absolute path of the GGML weights. */
   modelPath: string
+  /**
+   * Absolute path of the Silero VAD GGML model (#504), or null/undefined when the drive has
+   * none. Used only by calls that ask for it (`TranscribeOptions.vad` — dictation today).
+   */
+  vadModelPath?: string | null
   /** CLI threads (`-t`); default = half the logical cores (the sidecar default). */
   threads?: number
   /** Injected spawn for tests (no real process). */
@@ -135,6 +151,8 @@ export interface WhisperCliOptions {
 
 export class WhisperCliTranscriber implements Transcriber {
   readonly id: string
+  /** The Silero VAD model this transcriber can run before decoding (#504), or null. */
+  readonly vadModelPath: string | null
   private readonly binPath: string
   private readonly modelPath: string
   private readonly threads: number
@@ -157,6 +175,7 @@ export class WhisperCliTranscriber implements Transcriber {
     this.id = opts.id
     this.binPath = opts.binPath
     this.modelPath = opts.modelPath
+    this.vadModelPath = opts.vadModelPath ?? null
     this.threads = opts.threads ?? defaultThreadCount()
     this.idleTimeoutMs = resolveIdleTimeoutMs(opts.idleTimeoutMs)
     this.killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
@@ -188,6 +207,14 @@ export class WhisperCliTranscriber implements Transcriber {
       '-oj',
       '-of', outBase
     ]
+    // #504: voice-activity detection BEFORE decoding, for the calls that ask (dictation). Silero
+    // VAD finds the speech segments and whisper decodes only those; a recording with none
+    // yields an empty transcript (the JSON is still written, with no segments) instead of a
+    // hallucinated word. Imports stay VAD-free: the VAD remaps segment timestamps and audio
+    // citations cite time ranges — unmeasured, so not switched on there.
+    if (opts.vad && this.vadModelPath) {
+      args.push('--vad', '-vm', this.vadModelPath, '-vp', String(VAD_SPEECH_PAD_MS))
+    }
 
     // `done` resolves only after the shred below runs. suspend()/stop() await it (via the
     // `active` map) so a killed child's transient transcript is shredded before the parent

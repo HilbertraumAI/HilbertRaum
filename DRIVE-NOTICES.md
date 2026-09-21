@@ -1803,6 +1803,7 @@ review time (as published upstream — the `licenses/README.md` convention).
 
 - Multilingual E5 Small (F16) (`multilingual-e5-small-q8`) — upstream: https://huggingface.co/keisuke-miyako/multilingual-e5-small-gguf-f16 — license: mit (https://huggingface.co/intfloat/multilingual-e5-small) — Copyright (c) Microsoft Corporation (github.com/microsoft/unilm, the multilingual-e5 upstream)
 - Whisper Small (multilingual transcriber) (`whisper-small-multilingual`) — upstream: https://huggingface.co/ggerganov/whisper.cpp — license: mit (https://github.com/openai/whisper/blob/main/LICENSE) — Copyright (c) 2022 OpenAI (github.com/openai/whisper)
+  - also ships `models/transcriber/ggml-silero-v5.1.2.bin`: Silero VAD v5.1.2 (voice-activity model; GGML conversion published by ggml-org/whisper-vad) — license: mit (https://github.com/snakers4/silero-vad/blob/master/LICENSE) — Copyright (c) 2020-present Silero Team
 
 ## Apache License 2.0
 

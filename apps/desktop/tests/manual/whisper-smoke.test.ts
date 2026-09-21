@@ -39,7 +39,8 @@ const enabled = ROOT.length > 0 && existsSync(ROOT) && AUDIO_DIR.length > 0 && e
 function transcriberModel(root: string): string | null {
   const dir = join(root, 'models', 'transcriber')
   if (!existsSync(dir)) return null
-  const bin = readdirSync(dir).find((f) => f.endsWith('.bin'))
+  // The WHISPER weight — not the Silero VAD file that sits beside it since #504 (it sorts first).
+  const bin = readdirSync(dir).find((f) => f.endsWith('.bin') && !/silero/i.test(f))
   return bin ? join(dir, bin) : null
 }
 

@@ -37,9 +37,9 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 /** A fake transcriber that records what it saw on disk at transcribe time. */
 function fakeTranscriber(behavior?: { fail?: boolean }): {
   transcriber: Transcriber
-  seen: { filePath: string; existed: boolean; bytes: Buffer | null; workDir?: string }[]
+  seen: { filePath: string; existed: boolean; bytes: Buffer | null; workDir?: string; vad?: boolean }[]
 } {
-  const seen: { filePath: string; existed: boolean; bytes: Buffer | null; workDir?: string }[] = []
+  const seen: { filePath: string; existed: boolean; bytes: Buffer | null; workDir?: string; vad?: boolean }[] = []
   return {
     seen,
     transcriber: {
@@ -50,7 +50,8 @@ function fakeTranscriber(behavior?: { fail?: boolean }): {
           filePath,
           existed,
           bytes: existed ? readFileSync(filePath) : null,
-          workDir: opts?.workDir
+          workDir: opts?.workDir,
+          vad: opts?.vad
         })
         if (behavior?.fail) throw new Error('boom: ggml backend exploded (exit 3)')
         return [
@@ -268,6 +269,8 @@ describe('registerDictationIpc', () => {
     expect(result).toBe('Hello there dictation works')
     expect(seen).toHaveLength(1)
     expect(seen[0].bytes).toEqual(Buffer.from(wav))
+    // #504: dictation asks for Silero VAD (the backend honours it only with the model on the drive).
+    expect(seen[0].vad).toBe(true)
   })
 
   // REL-3 (TEST-4): whisper is not internally serialized, so a second mic press while the

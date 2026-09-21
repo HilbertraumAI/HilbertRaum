@@ -86,7 +86,10 @@ budget, so `fileCount` is then a lower bound; `ImportJob` (the `importDocuments`
 `getActiveImportJob`) carry the same field for the import's own walk) +
 `transcribeDictation(audio: Uint8Array): Promise<string>` (`dictation:transcribe`, Phase 37 —
 voice dictation: 16 kHz mono WAV bytes in, plain text out; request/response, nothing persisted,
-no audit; `AppStatus` gained the additive `dictationAvailable: boolean` gate).
+no audit; `AppStatus` gained the additive `dictationAvailable: boolean` gate). #504:
+`TranscribeOptions` gained the additive `vad?: boolean` — dictation passes `true`, imports
+nothing; the whisper manifest declares the Silero VAD file as its second required `files[]`
+entry (the #310 multi-file shape), so `resolveModelByRole`'s `requiredPaths` carries it.
 Phase 38: `kind: 'ocr'` on the same doc-task channels (one PDF; the target must be
 scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
 `DocumentInfo` gained the DERIVED `scanDetected` flag + optional `ocr: DocumentOcrInfo`

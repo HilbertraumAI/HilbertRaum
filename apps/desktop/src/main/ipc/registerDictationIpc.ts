@@ -124,7 +124,11 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
       await writeFile(tempPath, audio)
       const segments = await transcriber.transcribe(tempPath, {
         workDir: storeDir,
-        signal: op?.signal ?? controller.signal
+        signal: op?.signal ?? controller.signal,
+        // #504: Silero VAD first — a dictation with speech in only part of the clip is decoded
+        // where it speaks, and one with none (the noise band the level gate cannot judge)
+        // comes back EMPTY → the composer's no-speech notice, never a stray word.
+        vad: true
       })
       return segments
         .map((s) => s.text)

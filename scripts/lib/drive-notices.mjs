@@ -53,6 +53,21 @@ const MIT_WEIGHT_COPYRIGHTS = {
   'whisper-small-multilingual': 'Copyright (c) 2022 OpenAI (github.com/openai/whisper)'
 }
 
+/**
+ * Pinned attribution for ADDITIONAL required files (#310 `files[]`) whose upstream is NOT the
+ * manifest's own — a second model riding a manifest (#504: the Silero VAD model the whisper
+ * manifest carries). Keyed by `<manifest id>:<file basename>`. Shards of the same weight
+ * (`-00002-of-00003` …) need none; any other extra file without a pinned line makes the
+ * builder throw, so an unattributed file can never ship silently (the MIT rule above).
+ */
+const EXTRA_FILE_NOTICES = {
+  'whisper-small-multilingual:ggml-silero-v5.1.2.bin':
+    'Silero VAD v5.1.2 (voice-activity model; GGML conversion published by ggml-org/whisper-vad) — ' +
+    'license: mit (https://github.com/snakers4/silero-vad/blob/master/LICENSE) — ' +
+    'Copyright (c) 2020-present Silero Team'
+}
+const WEIGHT_SHARD_RE = /-\d{5}-of-\d{5}\./
+
 /** Wrap verbatim license text in a code fence that cannot collide with its content. */
 function fence(text) {
   const runs = text.match(/`+/g) ?? []
@@ -151,7 +166,11 @@ export function buildDriveNotices(repoRoot) {
       // The upstream repo is the download URL up to the file path (HF `/resolve/` form).
       upstream: url ? String(url).split('/resolve/')[0] : null,
       licenseUrl: parsed.download?.license_url ? String(parsed.download.license_url) : null,
-      reviewStatus: parsed.license_review?.status ? String(parsed.license_review.status) : 'missing'
+      reviewStatus: parsed.license_review?.status ? String(parsed.license_review.status) : 'missing',
+      // #310 `files[]`: the additional required files, for the per-file attribution below.
+      extraFiles: Array.isArray(parsed.files)
+        ? parsed.files.map((f) => String(f?.local_path ?? '')).filter((p) => p.length > 0)
+        : []
     })
   }
   models.sort((a, b) => foldedCodepointCompare(a.id, b.id))
@@ -399,6 +418,20 @@ export function buildDriveNotices(repoRoot) {
           (mitCopyright ? ` — ${mitCopyright}` : '') +
           (m.reviewStatus === 'approved' ? '' : ` — license_review.status: ${m.reviewStatus}`)
       )
+      // #504: an additional required file from ANOTHER upstream carries its own pinned line
+      // (a shard of the same weight shares the manifest's upstream and needs none).
+      for (const localPath of m.extraFiles) {
+        const base = localPath.split('/').pop() ?? localPath
+        if (WEIGHT_SHARD_RE.test(base)) continue
+        const notice = EXTRA_FILE_NOTICES[`${m.id}:${base}`]
+        if (!notice) {
+          throw new Error(
+            `extra required file ${localPath} of manifest ${m.id} has no pinned attribution — add ` +
+              'it to EXTRA_FILE_NOTICES in scripts/lib/drive-notices.mjs'
+          )
+        }
+        lines.push(`  - also ships \`${localPath}\`: ${notice}`)
+      }
     }
   }
   lines.push('')

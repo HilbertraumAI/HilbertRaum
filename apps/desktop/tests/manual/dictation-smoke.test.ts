@@ -35,6 +35,7 @@ import {
   resolveWhisperCliPath
 } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
+import { encodeWavPcm16 } from '../../src/renderer/lib/wav'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 
 const ROOT = process.env.HILBERTRAUM_DICTATION_SMOKE?.trim() ?? ''
@@ -46,7 +47,8 @@ const handlers = ipcState.handlers as unknown as IpcHandlers
 function transcriberModel(root: string): string | null {
   const dir = join(root, 'models', 'transcriber')
   if (!existsSync(dir)) return null
-  const bin = readdirSync(dir).find((f) => f.endsWith('.bin'))
+  // The WHISPER weight — not the Silero VAD file that sits beside it since #504 (it sorts first).
+  const bin = readdirSync(dir).find((f) => f.endsWith('.bin') && !/silero/i.test(f))
   return bin ? join(dir, bin) : null
 }
 
@@ -65,13 +67,17 @@ describe.skipIf(!enabled)('Dictation smoke (manual, real whisper-cli over the di
       expect(existsSync(wavFixture), `fixture missing: ${wavFixture}`).toBe(true)
 
       const workspacePath = mkdtempSync(join(tmpdir(), 'hilbertraum-dictation-smoke-'))
+      // #504: the Silero VAD model sits next to the weight on a provisioned drive; the handler
+      // asks for VAD, so this smoke exercises the real `--vad` path when the file is there.
+      const vadModelPath = join(ROOT, 'models', 'transcriber', 'ggml-silero-v5.1.2.bin')
       const ctx = {
         trustedSenders: ANY_SENDER,
         paths: { workspacePath },
         transcriber: createWhisperCliTranscriber({
           id: 'smoke-whisper',
           binPath: binPath!,
-          modelPath: modelPath!
+          modelPath: modelPath!,
+          vadModelPath: existsSync(vadModelPath) ? vadModelPath : null
         }),
         workspace: { isUnlocked: () => true }
       } as unknown as AppContext
@@ -82,10 +88,26 @@ describe.skipIf(!enabled)('Dictation smoke (manual, real whisper-cli over the di
       const { result } = await invoke(handlers, IPC.transcribeDictation, bytes)
       const text = result as string
 
-      console.log(`[dictation] ${text.length} chars: ${text.slice(0, 200)}`)
+      console.log(`[dictation] vad=${existsSync(vadModelPath)} ${text.length} chars: ${text.slice(0, 200)}`)
       expect(text.length).toBeGreaterThan(10)
       // Transients are gone: the documents dir holds nothing after the call.
       expect(readdirSync(documentsDir(workspacePath))).toEqual([])
+
+      // #504: with the VAD model present, a clip of low white noise (−40 dBFS peak — above the
+      // #497 level gate, below anything VAD calls speech) comes back EMPTY, never as a word.
+      if (existsSync(vadModelPath)) {
+        const RATE = 16000
+        const noise = new Float32Array(RATE * 5)
+        let seed = 12345
+        for (let i = 0; i < noise.length; i++) {
+          seed = (seed * 1103515245 + 12345) & 0x7fffffff
+          noise[i] = 0.01 * ((seed / 0x7fffffff) * 2 - 1)
+        }
+        const { result: noiseResult } = await invoke(handlers, IPC.transcribeDictation, encodeWavPcm16(noise, RATE))
+        console.log(`[dictation] noise clip → ${JSON.stringify(noiseResult)}`)
+        expect(noiseResult).toBe('')
+        expect(readdirSync(documentsDir(workspacePath))).toEqual([])
+      }
     }
   )
 })

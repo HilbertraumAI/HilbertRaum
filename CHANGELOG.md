@@ -34,6 +34,12 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Dictation now ignores background noise.** Before transcribing what you dictated, the app
+  runs a small voice-activity model (Silero VAD) so a recording with no speech in it yields
+  "No speech was recognized" instead of a stray word. The model is a second, small file of the
+  speech model: the AI Model screen fetches it together with the speech model, and a drive
+  that has only the older single file shows the speech model as incomplete until that one
+  file is added (#504).
 - **The microphone button no longer disappears when the speech model is missing.** On a
   drive without the speech model, the chat composer now shows the button greyed out; clicking
   it explains what is missing and opens the AI Model screen, where the model can be added

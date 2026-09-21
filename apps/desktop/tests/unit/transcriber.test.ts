@@ -8,12 +8,13 @@ import {
   createSelectedTranscriber,
   createWhisperCliTranscriber,
   resolveWhisperCliPath,
+  vadModelPathOf,
   whisperCliBinaryName,
   whisperCliDir,
   type Transcriber,
   type TranscriberModelInfo
 } from '../../src/main/services/transcriber'
-import { AUDIO_DECODE_ERROR_PREFIX } from '../../src/main/services/transcriber/cli'
+import { AUDIO_DECODE_ERROR_PREFIX, VAD_SPEECH_PAD_MS } from '../../src/main/services/transcriber/cli'
 import {
   killRegisteredSidecarChildren,
   registeredSidecarPids
@@ -47,6 +48,31 @@ describe('createSelectedTranscriber — availability matrix (D9 pattern)', () =>
     expect(result === null).toBe(expectNull)
     expect(selected).toMatch(reason)
     if (!expectNull) expect(result!.id).toBe(`${MODEL.id}@C:/bin`)
+  })
+
+  // #504: the Silero VAD model is the whisper manifest's second REQUIRED file — a drive with
+  // only the weight is not "available" (the AI Model screen offers the missing file instead).
+  it('stays null while a declared VAD file is absent, and selects once it is present', () => {
+    const withVad: TranscriberModelInfo = {
+      ...MODEL,
+      requiredPaths: [MODEL.modelPath, 'D:/models/transcriber/ggml-silero-v5.1.2.bin']
+    }
+    const present = new Set([MODEL.modelPath])
+    const deps = {
+      rootPath: 'D:/',
+      model: withVad,
+      resolveBin: () => 'C:/bin',
+      modelExists: (p: string) => present.has(p),
+      makeTranscriber: (m: TranscriberModelInfo, b: string): Transcriber => ({
+        id: `${m.id}@${b}:${vadModelPathOf(m) ?? 'no-vad'}`,
+        transcribe: async () => []
+      })
+    }
+    expect(createSelectedTranscriber(deps)).toBeNull()
+    present.add('D:/models/transcriber/ggml-silero-v5.1.2.bin')
+    expect(createSelectedTranscriber(deps)?.id).toBe(
+      `${MODEL.id}@C:/bin:D:/models/transcriber/ggml-silero-v5.1.2.bin`
+    )
   })
 
   // There is deliberately NO mock fallback: a missing transcriber must surface as a
@@ -152,12 +178,14 @@ function fakeCliTranscriber(opts: {
   json?: unknown
   stderrText?: string
   exitCode?: number
+  vadModelPath?: string
 }): { transcriber: ReturnType<typeof createWhisperCliTranscriber>; spawned: string[][] } {
   const spawned: string[][] = []
   const transcriber = createWhisperCliTranscriber({
     id: 'whisper-small-multilingual',
     binPath: 'C:/fake/whisper-cli.exe',
     modelPath: 'C:/fake/ggml-small.bin',
+    vadModelPath: opts.vadModelPath,
     threads: 4,
     spawnImpl: (_cmd: string, args: string[], _o: SpawnOptions): ChildProcess => {
       spawned.push(args)
@@ -183,6 +211,65 @@ const WHISPER_JSON = {
     { offsets: { from: 8440, to: 9000 }, text: '   ' } // whitespace-only → dropped
   ]
 }
+
+// #504: Silero VAD before decoding, for the calls that ask (dictation). The CLI contract:
+// `--vad -vm <model> -vp 200` only when BOTH the caller asked and a VAD model is known; imports
+// (no `vad`) and drives without the file stay byte-identical to before.
+describe('WhisperCliTranscriber — Silero VAD for dictation (#504)', () => {
+  const VAD = 'C:/fake/ggml-silero-v5.1.2.bin'
+  const EMPTY_JSON = { result: { language: 'en' }, transcription: [] }
+
+  it('adds --vad, the model path and the measured speech pad when asked and a VAD model is known', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-vad-'))
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON, vadModelPath: VAD })
+    expect(transcriber.vadModelPath).toBe(VAD)
+    await transcriber.transcribe('C:/audio/dictation.wav', { workDir, vad: true })
+    const args = spawned[0]
+    expect(args).toContain('--vad')
+    expect(args[args.indexOf('-vm') + 1]).toBe(VAD)
+    expect(args[args.indexOf('-vp') + 1]).toBe(String(VAD_SPEECH_PAD_MS))
+    expect(VAD_SPEECH_PAD_MS).toBe(200) // the 2026-09-21 calibration: keeps "Guten" at −40 dB
+  })
+
+  it('stays VAD-free for an import (no `vad`) even when a VAD model is known', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-vad-'))
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON, vadModelPath: VAD })
+    await transcriber.transcribe('C:/audio/meeting.mp3', { workDir })
+    expect(spawned[0]).not.toContain('--vad')
+    expect(spawned[0]).not.toContain('-vm')
+  })
+
+  it('stays VAD-free when the drive has no VAD model, even for a dictation', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-vad-'))
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON })
+    expect(transcriber.vadModelPath).toBeNull()
+    await transcriber.transcribe('C:/audio/dictation.wav', { workDir, vad: true })
+    expect(spawned[0]).not.toContain('--vad')
+  })
+
+  it('a transcript with no segments (VAD found no speech) is an EMPTY list, not a failure', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-vad-'))
+    const { transcriber } = fakeCliTranscriber({ json: EMPTY_JSON, vadModelPath: VAD })
+    await expect(transcriber.transcribe('C:/audio/noise.wav', { workDir, vad: true })).resolves.toEqual([])
+    expect(readdirSync(workDir)).toEqual([]) // the transient JSON is still shredded
+  })
+})
+
+describe('vadModelPathOf (#504)', () => {
+  it('finds the Silero file among the required paths by its whisper.cpp name, on either separator', () => {
+    expect(vadModelPathOf({ requiredPaths: ['D:/m/ggml-small.bin', 'D:/m/ggml-silero-v5.1.2.bin'] })).toBe(
+      'D:/m/ggml-silero-v5.1.2.bin'
+    )
+    expect(vadModelPathOf({ requiredPaths: ['D:\\m\\ggml-small.bin', 'D:\\m\\ggml-silero-v6.bin'] })).toBe(
+      'D:\\m\\ggml-silero-v6.bin'
+    )
+  })
+
+  it('is null without one (a weight-only manifest, or no required paths at all)', () => {
+    expect(vadModelPathOf({ requiredPaths: ['D:/m/ggml-small.bin'] })).toBeNull()
+    expect(vadModelPathOf({})).toBeNull()
+  })
+})
 
 describe('WhisperCliTranscriber (fake spawn)', () => {
   it('REFUSES to spawn a tampered whisper-cli (pre-spawn re-hash, vuln-scan B)', async () => {
