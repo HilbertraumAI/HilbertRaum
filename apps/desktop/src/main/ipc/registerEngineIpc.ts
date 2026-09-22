@@ -2,11 +2,12 @@ import { guardedHandleFor } from './guarded-handle'
 import { refreshGpuProbeAfterRuntimeInstall } from './registerBenchmarkIpc'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { EngineDownloadJob, EngineStatus } from '../../shared/types'
+import type { EngineDownloadJob, EngineStatus, OcrInstallJob, OcrInstallStatus } from '../../shared/types'
 import { EngineDownloadManager, engineStatus, parseEngineDownloadRequest } from '../services/runtime-download'
+import { OcrInstallManager, assertNoOcrInstallPayload } from '../services/ocr-install'
 import { registeredSidecarPids } from '../services/runtime/sidecar'
 import { clearModelLoadLatches } from '../services/runtime/factory'
-import { refreshTranscriberSlot } from '../services/compose-services'
+import { refreshOcrSlot, refreshTranscriberSlot } from '../services/compose-services'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
@@ -18,6 +19,8 @@ import type { DownloadGates } from '../services/downloads'
 // started model falls back to the built-in demo runtime — this lets the user install the
 // real engine from inside the app. The gates mirror the model downloader exactly (the
 // policy ceiling AND the user's allowNetwork setting), re-checked HERE on every start.
+// The OCR language-file installer (#410) lives here too — it shares the gates, but it is its
+// own narrow service, not an engine family (`services/ocr-install.ts`).
 
 /**
  * Is the chat engine's install dir in LIVE use? True while a model runtime is RUNNING or
@@ -52,10 +55,26 @@ export function kiwixToolsInUse(): boolean {
   return registeredSidecarPids('kiwix_tools').length > 0
 }
 
-export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManager): void {
+export interface RegisterEngineIpcOptions {
+  /** The OCR installer (#410); tests inject one with a fake fetch and fake pins. */
+  ocrInstaller?: OcrInstallManager
+  /**
+   * The app-bundled `model-manifests/` (resolved WITHOUT the env override) — the OCR installer's
+   * fallback source list when the drive's yaml carries no `ocr:` block (#410).
+   */
+  bundledManifestsDir?: string | null
+}
+
+export function registerEngineIpc(
+  ctx: AppContext,
+  manager?: EngineDownloadManager,
+  options: RegisterEngineIpcOptions = {}
+): void {
   const ipcHandle = guardedHandleFor(ctx)
   const engine =
     manager ?? new EngineDownloadManager({ fetchImpl: fetch, log: (m, meta) => log.info(m, meta) })
+  const ocrInstaller =
+    options.ocrInstaller ?? new OcrInstallManager({ fetchImpl: fetch, log: (m, meta) => log.info(m, meta) })
   // Issue #323: a benchmark run BEFORE the chat engine existed persisted an empty stamped GPU
   // probe (PR #308 decision 6 — an honest "no card"), and nothing re-ran the probe until the
   // next unlock, the next check or "Try GPU again". Installing the chat engine is the moment
@@ -130,5 +149,36 @@ export function registerEngineIpc(ctx: AppContext, manager?: EngineDownloadManag
   ipcHandle(
     IPC.cancelEngineDownload,
     (_e, jobId: string): EngineDownloadJob => engine.cancel(jobId)
+  )
+
+  // ---- In-app OCR language-file install (#410) ----
+  // OCR is not an engine family: its own installer (`services/ocr-install.ts`) fetches the
+  // code-pinned language files into `ocr/`, then `refreshOcrSlot` activates the engine without a
+  // restart. Same gates as the engine (re-checked on every start); pre-unlock like the rest of
+  // this registrar (the setting reads as off while locked, so a locked install is refused).
+  const ocrSources = () => ({
+    rootPath: ctx.paths.rootPath,
+    manifestsDir: ctx.manifestsDir ?? null,
+    bundledManifestsDir: options.bundledManifestsDir ?? null
+  })
+
+  ipcHandle(IPC.getOcrInstallStatus, (): Promise<OcrInstallStatus> => ocrInstaller.status(ocrSources()))
+
+  ipcHandle(IPC.installOcr, (_e, ...args: unknown[]): Promise<OcrInstallJob> => {
+    // The install takes NO payload — what is installed is pinned in code, never renderer input.
+    assertNoOcrInstallPayload(args)
+    return ocrInstaller.start({
+      ...ocrSources(),
+      gates: gates(),
+      activate: () => refreshOcrSlot(ctx)
+    })
+  })
+
+  ipcHandle(IPC.getOcrInstallJob, (_e, jobId: unknown): OcrInstallJob =>
+    ocrInstaller.get(typeof jobId === 'string' ? jobId : '')
+  )
+
+  ipcHandle(IPC.cancelOcrInstall, (_e, jobId: unknown): OcrInstallJob =>
+    ocrInstaller.cancel(typeof jobId === 'string' ? jobId : '')
   )
 }

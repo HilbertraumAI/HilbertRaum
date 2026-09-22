@@ -69,8 +69,9 @@ export const DRIVE_LAYOUT_DIRS: readonly string[] = [
   // Never fetched by `prepare-drive --with-assets` — a DIY user runs
   // `fetch-runtime --family kiwix_tools` explicitly once they want ZIM knowledge packs.
   ...DRIVE_OS_DIRS.map((os) => `runtime/kiwix-tools/${os}`),
-  // OCR language files: `<lang>.traineddata.gz`, vendored at drive-build
-  // time (runtime-sources.yaml `ocr:` block) — the engine never fetches at runtime.
+  // OCR language files: `<lang>.traineddata.gz`, vendored at drive-build time
+  // (runtime-sources.yaml `ocr:` block) or fetched by the user-confirmed in-app OCR
+  // installer (#410, services/ocr-install.ts). The recognizer itself never fetches.
   'ocr',
   // Knowledge packs (ZIM wave): external ZIM archives (offline Wikipedia etc.) the chat
   // can retrieve from. PLAIN files outside the encrypted workspace (public, read-only,

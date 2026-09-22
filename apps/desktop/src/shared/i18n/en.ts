@@ -2567,6 +2567,37 @@ export const en = {
     "The knowledge-pack tools can't be replaced while a pack is being served. Lock the workspace or wait for the current question to finish, then try again — or restart the app if the notice stays.",
   // #339 P8-2: the `downloadEngine` payload named something that is not an engine family.
   'main.engine.badRequest': 'The engine install request was not understood. Please try again.',
+  // #410: the in-app OCR language-file installer (services/ocr-install.ts). Session-only job
+  // errors and refusals, localized at emission (i18n record §3.3 rule 2).
+  'main.ocr.badRequest': 'The OCR download request was not understood. Please try again.',
+  'main.ocr.alreadyRunning': 'The OCR files are already downloading.',
+  'main.ocr.noSources':
+    'This drive has no download list for the OCR files. Add them with the drive setup ' +
+    'scripts instead ("fetch-runtime --family ocr").',
+  'main.ocr.sourcesMismatch':
+    'The OCR download list on this drive does not match this version of HilbertRaum, so ' +
+    'nothing was downloaded. Add the files with the drive setup scripts instead ' +
+    '("fetch-runtime --family ocr").',
+  'main.ocr.alreadyInstalled':
+    'The OCR files are already on this drive. If text recognition is still not offered, ' +
+    'restart HilbertRaum.',
+  'main.ocr.unsafeFolder':
+    'The "ocr" folder on this drive is not an ordinary folder (it may point to another ' +
+    'location), so nothing was written. Replace it with an ordinary folder named "ocr", then ' +
+    'try again.',
+  'main.ocr.writeFailed':
+    'The OCR files could not be saved to this drive. Check that it is not full or ' +
+    'write-protected, then try again.',
+  'main.ocr.downloadFailed':
+    'The OCR files could not be downloaded. Check the internet connection, then try again.',
+  'main.ocr.checksumMismatch':
+    'A downloaded OCR file did not match its expected checksum and was discarded — the files ' +
+    'already on this drive were not changed. Please try again.',
+  'main.ocr.readFailed':
+    'The OCR files already on this drive could not be read — the drive may have been removed, or ' +
+    'another program is using the files. Check the drive, then try again.',
+  'main.ocr.unknownJob':
+    'This OCR download is no longer tracked. Start it again if the files are still missing.',
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
   'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
   'main.docs.tooManyPaths': 'Too many files were selected at once. Choose a folder instead.',

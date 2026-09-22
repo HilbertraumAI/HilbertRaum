@@ -1,6 +1,8 @@
 // OCR contract (wave-3 plan §11). Turns a page IMAGE (PNG/JPEG bytes) into
-// recognized text — fully local: tesseract.js (WASM) with the language files vendored
-// on the drive (`ocr/`), never fetched at runtime.
+// recognized text — fully local: tesseract.js (WASM) with the language files on the
+// drive (`ocr/`). The recognizer never fetches anything; the files are vendored at
+// drive-build time or installed by the user-confirmed in-app OCR installer (#410,
+// `services/ocr-install.ts` — code-pinned hashes, fixed destination).
 //
 // Recognition ALWAYS runs in the MAIN process via tesseract.js
 // Node mode, which consumes image-file Buffers with no canvas and loads its worker

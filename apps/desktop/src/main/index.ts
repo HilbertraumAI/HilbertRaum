@@ -750,7 +750,9 @@ function initBackend(): void {
   registerImagesIpc(ctx, ctx.vision)
   registerTranslateIpc(ctx, ctx.translateJobs)
   registerDownloadIpc(ctx)
-  registerEngineIpc(ctx)
+  // #410: the OCR installer falls back to the APP-BUNDLED source list (no env override) when the
+  // drive's yaml carries no `ocr:` block.
+  registerEngineIpc(ctx, undefined, { bundledManifestsDir: resolveManifestsDir(app.getAppPath()) })
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   // The Performance screen's "last answer" figure: every finished chat answer's #290 speed

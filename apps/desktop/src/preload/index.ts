@@ -63,6 +63,8 @@ import type {
   ImportPreflight,
   Message,
   ModelInfo,
+  OcrInstallJob,
+  OcrInstallStatus,
   ModelState,
   ModelVerifyProgress,
   PickDocumentsResult,
@@ -210,6 +212,20 @@ const api = {
   /** Cancel an in-flight engine download. */
   cancelEngineDownload: (jobId: string): Promise<EngineDownloadJob> =>
     ipcRenderer.invoke(IPC.cancelEngineDownload, jobId),
+
+  // ---- In-app OCR language-file install (#410) ----
+  /** The OCR install dialog facts + whether the action can be offered (pinned languages, sizes,
+   *  what is already installed, the source host, the licence). */
+  getOcrInstallStatus: (): Promise<OcrInstallStatus> => ipcRenderer.invoke(IPC.getOcrInstallStatus),
+  /** Start fetching the pinned OCR language files. Gated like model downloads. Takes NO payload —
+   *  main refuses any argument (what is installed is pinned in code). */
+  installOcr: (): Promise<OcrInstallJob> => ipcRenderer.invoke(IPC.installOcr),
+  /** Poll the OCR install job (progress, then the activation outcome). */
+  getOcrInstallJob: (jobId: string): Promise<OcrInstallJob> =>
+    ipcRenderer.invoke(IPC.getOcrInstallJob, jobId),
+  /** Cancel an in-flight OCR install. */
+  cancelOcrInstall: (jobId: string): Promise<OcrInstallJob> =>
+    ipcRenderer.invoke(IPC.cancelOcrInstall, jobId),
 
   // ---- Image understanding (vision) ----
   /** Is image understanding available (runtime + a verified vision model + projector)? */

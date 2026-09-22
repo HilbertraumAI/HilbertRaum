@@ -745,6 +745,59 @@ export interface EngineDownloadRequest {
   families?: RuntimeFamily[]
 }
 
+// ---- In-app OCR language-file install (#410) ----
+//
+// OCR is not an engine family: the language files are plain hash-verified files with their own
+// narrow installer (`main/services/ocr-install.ts`). What is installed (language, sha256, size) is
+// pinned in code; the drive's yaml only supplies the download URL.
+
+/** One pinned OCR language as the install surfaces present it. */
+export interface OcrInstallLanguage {
+  /** Traineddata language code (`deu`, `eng`). */
+  lang: string
+  /** Exact size of the pinned file (code-side pin). */
+  sizeBytes: number
+  /** On the drive AND matching its pinned hash (the hash is the install state). */
+  installed: boolean
+}
+
+/** What the OCR install dialog states and whether the action can be offered (`ocr:status`). */
+export interface OcrInstallStatus {
+  /** A source list matching the code pins was found (the drive's yaml, else the app-bundled one). */
+  available: boolean
+  /** Every pinned language, in pin order. */
+  languages: OcrInstallLanguage[]
+  /** Bytes still to download: the sizes of the languages not yet installed. */
+  totalBytes: number
+  /** The host(s) the files come from, computed in main from the pinned URLs; null when unavailable. */
+  sourceHost: string | null
+  /** The licence of the language data (code-side: `Apache-2.0`). */
+  license: string
+}
+
+export type OcrInstallJobStatus =
+  | 'queued'
+  | 'downloading'
+  | 'verifying'
+  | 'activating'
+  | 'done'
+  | 'failed'
+  | 'cancelled'
+
+/** The in-app OCR install job (`ocr:install` / `ocr:getJob` / `ocr:cancel`). Session-only. */
+export interface OcrInstallJob {
+  jobId: string
+  status: OcrInstallJobStatus
+  /** Bytes downloaded so far across the whole job. */
+  receivedBytes: number
+  /** Sum of the pinned sizes of the files this job fetches. */
+  totalBytes: number
+  /** What activating the engine did — set when `status === 'done'`, else null. */
+  outcome: OcrRefreshOutcome | null
+  /** Friendly failure reason when `status === 'failed'`. */
+  error: string | null
+}
+
 // ---- Image understanding (vision) — image-understanding plan §9.3 ----
 //
 // A separate, lazily-started `llama-server --mmproj` sidecar answers a question about ONE

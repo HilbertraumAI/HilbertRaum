@@ -2567,6 +2567,42 @@ export const de: Record<keyof typeof en, string> = {
     'Sperre den Arbeitsbereich oder warte, bis die aktuelle Frage beantwortet ist, und versuche es dann erneut – oder starte die App neu, falls der Hinweis bleibt.',
   // #339 P8-2: die downloadEngine-Anfrage nannte etwas, das keine Engine-Familie ist.
   'main.engine.badRequest': 'Die Anfrage zur Engine-Installation wurde nicht verstanden. Bitte versuche es erneut.',
+  // #410: der In-App-Installer für die OCR-Sprachdateien (services/ocr-install.ts).
+  'main.ocr.badRequest':
+    'Die Anfrage zum Herunterladen der OCR-Dateien wurde nicht verstanden. Bitte versuche es ' +
+    'erneut.',
+  'main.ocr.alreadyRunning': 'Die OCR-Dateien werden bereits heruntergeladen.',
+  'main.ocr.noSources':
+    'Auf diesem Laufwerk gibt es keine Download-Liste für die OCR-Dateien. Ergänze sie ' +
+    'stattdessen mit den Einrichtungsskripten des Laufwerks („fetch-runtime --family ocr“).',
+  'main.ocr.sourcesMismatch':
+    'Die Download-Liste für die OCR-Dateien auf diesem Laufwerk passt nicht zu dieser Version ' +
+    'von HilbertRaum, deshalb wurde nichts heruntergeladen. Ergänze die Dateien stattdessen ' +
+    'mit den Einrichtungsskripten des Laufwerks („fetch-runtime --family ocr“).',
+  'main.ocr.alreadyInstalled':
+    'Die OCR-Dateien liegen bereits auf diesem Laufwerk. Wenn die Texterkennung trotzdem ' +
+    'nicht angeboten wird, starte HilbertRaum neu.',
+  'main.ocr.unsafeFolder':
+    'Der Ordner „ocr“ auf diesem Laufwerk ist kein gewöhnlicher Ordner (er verweist womöglich ' +
+    'an einen anderen Ort), deshalb wurde nichts geschrieben. Ersetze ihn durch einen ' +
+    'gewöhnlichen Ordner namens „ocr“ und versuch es dann erneut.',
+  'main.ocr.writeFailed':
+    'Die OCR-Dateien konnten nicht auf diesem Laufwerk gespeichert werden. Prüfe, ob es voll ' +
+    'oder schreibgeschützt ist, und versuch es dann erneut.',
+  'main.ocr.downloadFailed':
+    'Die OCR-Dateien konnten nicht heruntergeladen werden. Prüfe die Internetverbindung und ' +
+    'versuch es dann erneut.',
+  'main.ocr.checksumMismatch':
+    'Eine heruntergeladene OCR-Datei stimmte nicht mit ihrer erwarteten Prüfsumme überein ' +
+    'und wurde verworfen — die Dateien auf diesem Laufwerk wurden nicht verändert. Bitte ' +
+    'versuche es erneut.',
+  'main.ocr.readFailed':
+    'Die OCR-Dateien auf diesem Laufwerk konnten nicht gelesen werden — das Laufwerk wurde ' +
+    'womöglich entfernt, oder ein anderes Programm nutzt die Dateien. Prüfe das Laufwerk und ' +
+    'versuch es dann erneut.',
+  'main.ocr.unknownJob':
+    'Dieser OCR-Download wird nicht mehr verfolgt. Starte ihn erneut, falls die Dateien noch ' +
+    'fehlen.',
   'main.docs.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Dokumente zu verwalten.',
   'main.docs.processing':
     'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',
