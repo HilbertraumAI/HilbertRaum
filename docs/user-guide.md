@@ -183,8 +183,9 @@ can turn this off under **Settings → Load the selected model automatically**.
 
 A model marked **Not downloaded** can be fetched from inside the app — for example the larger
 8B model after you upgrade to a 16 GB laptop. The only things the app ever downloads are AI
-models, the AI engine and the optional knowledge-pack tools — each one only after you confirm
-it, each one verified before use. None of it ever happens by itself:
+models, the AI engine, the optional knowledge-pack tools and the optional text-recognition (OCR)
+files — each one only after you confirm it, each one verified before use. None of it ever
+happens by itself:
 
 1. Open **Settings** and make sure **Allow internet access for model downloads and updates**
    is on (it is **on by default**, including on prepared commercial drives, unless this drive's
@@ -508,9 +509,15 @@ search model than the one currently active, and takes a moment per file.
 **Scanned PDFs — "Make searchable (OCR)".** A PDF that is only pictures of pages (a
 scanner's output) has no readable text, so the app tells you honestly: *"This PDF looks
 like a scan — it has no readable text yet."* If your drive has the OCR files, the row
-offers a **Make searchable (OCR)** button right on the row (if it says the OCR files are
-*not on this drive*, add them with `prepare-drive --with-assets` or `fetch-runtime --family ocr` —
-see the Troubleshooting guide): the pages are read **on this drive** (no cloud OCR —
+offers a **Make searchable (OCR)** button right on the row. If it says the OCR files are
+*not on this drive*, the row offers **Download OCR files** instead: a short confirmation shows
+the two language files (German and English, about 4 MB, Apache-2.0) and where they come from,
+and once they are downloaded and checked, text recognition starts working **without a restart**
+— the row then offers **Make searchable (OCR)**. (The same download is on the **AI Model**
+screen as *"Text recognition for scans and photos (optional)"*. It follows the same rules as a
+model download: the drive policy and **Allow internet access…** must permit it. Without
+internet, add the files with `prepare-drive --with-assets` or `fetch-runtime --family ocr` —
+see the Troubleshooting guide.) The pages are read **on this drive** (no cloud OCR —
 German and English are included), with per-page progress and a Cancel button; the last
 step reads *"Finishing — making the text searchable…"* while the recognized text is
 indexed. When it finishes, the document is a normal searchable document; answers cite it
@@ -520,7 +527,9 @@ blurry ones. If a first reading came out poorly (or you added better OCR files l
 **Read again (OCR)** in the document's **⋯** menu reads the pages again — unlike
 **Re-index**, which reuses the stored reading. Reading a scan is never automatic (it takes
 a couple of seconds per page); you choose when. **Photos of pages** (PNG/JPG) are the
-small exception: they are read immediately on import.
+small exception: they are read immediately on import. A photo imported while the OCR files
+were missing shows as **Failed** with the same **Download OCR files** offer; after the download,
+**Try again** on that row reads it.
 
 **Each document is a compact row.** On the **Documents** screen every file is one row:
 its name and a muted line of details (type, size, sections), any **location/project tags**,
@@ -1081,8 +1090,8 @@ skill's figures.
 
 Open **Settings → Privacy & data** (or click the **🔒 Local · Offline** status in the chat header)
 to see where your data lives and confirm the app's network state. The only things the app ever
-downloads are AI models, the AI engine and the optional knowledge-pack tools — each one only
-after you confirm it, each one verified before use. That setting is on by default so you can
+downloads are AI models, the AI engine, the optional knowledge-pack tools and the optional
+text-recognition (OCR) files — each one only after you confirm it, each one verified before use. That setting is on by default so you can
 fetch a model out of the box, including on a prepared commercial drive; every download is
 explicit and confirmed, and the core app — chat, documents, search — never goes online. (A link you confirm
 in the dialog described in §6 is opened by your *browser*, not by the app.) Logs are stored

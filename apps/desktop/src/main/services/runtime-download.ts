@@ -49,8 +49,10 @@ import { assertDownloadAllowed, type DownloadGates } from './downloads'
 // `SIDECAR_FAMILY_SPECS` (`services/assets.ts` — the ONE registry the installer and the
 // commercial-drive gate share) and add the matching `<family>:` block to runtime-sources.yaml;
 // a family that ships more than one file declares `executables` / `runtime_files` there.
-// Everything else (status, install, the Models-screen banner) generalizes automatically.
-// (See docs/packaging.md.)
+// Status and install then cover it; the renderer surfaces do NOT — the Models-screen banners
+// and the knowledge-pack tools row are hard-coded per family, so a new family needs its own
+// copy and affordance. (See docs/packaging.md.) The OCR language files are not a family: they
+// have their own installer (`services/ocr-install.ts`, #410).
 //
 // An OPTIONAL family is never part of the default install selection and never counted in
 // readiness — `downloadEngine` takes no arguments, so "install everything missing" must not

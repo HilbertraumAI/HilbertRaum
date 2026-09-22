@@ -27,6 +27,31 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-22 — the closed 2026-09-11 #413 and 2026-09-10 #446 entries retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-22 (preamble budget, making room for the #410 entry — two entries,
+so the preamble also stays inside its budget once the open PR #288 adds its own entry). Both issues are
+closed and their records unchanged: #413 → `model-benchmarks.md` §6.6 N8 "Decided 2026-09-11"; #446 →
+`model-benchmarks.md` §6.6 "2026-09-10 addition (#446)". Citations of the form "BUILD_STATE 2026-09-11 entry"
+or "BUILD_STATE 2026-09-10 entry" resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-11 — **#413 CLOSED — `USABLE_VRAM_MB` stays 5,120, decided without a 4 GB measurement** (`docs/413-keep-usable-vram-floor`; record
+`model-benchmarks.md` §6.6 N8 "Decided 2026-09-11", §5 item 22 (e)(1)). The project owns no 4 GB card and will not buy one. Keeping the floor
+self-corrects (placement ignores it; a crawl on the RAM pick steps the ★ down, §6.5); lowering it would pin the E2B with no step back up. Docs only._
+_2026-09-10 — **#446 CLOSED — the three untested chat entries measured; `qwen3.6` joins the rule, `granite` does not**
+(`eval/446-untested-families-sweep`; record `model-benchmarks.md` §6.6 "2026-09-10 addition (#446)",
+`known-limitations.md` "The one chat slot and the prompt cache"; evidence
+`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue446-arch-sweep-*`). The #399 sweep skipped these three for logistics:
+both `qwen3.6-27b` quants were broken symlinks into the eval drive deleted 2026-09-04, `granite-4.1-8b-q4` was never on the rig.
+Weights re-fetched and verified against manifest `sha256` **and** `size_bytes`, then run through the **unchanged** leg-A driver,
+same pinned b9849 (`799fcc04a`), no MTP, all fully offloaded. **`qwen3.6` RE-PREFILLED** — both quants report arch `qwen35` with a
+149.62 MiB recurrent state over 64 layers and re-prefill **1,488 of 1,529** tokens, keeping only the 41-token system prefix; it
+joins `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` (`shared/prompt-cache-rules.ts`), affected set now **13 of 17 measured models**.
+**`granite` RESTORED** — arch `granite`, `n_swa` 0, no recurrent state, **22 of 1,414** re-prefilled with 1,392 kept; a fourth
+positive control, and the concrete case for the cache-ON default. Control `qwen3.8-27b-ud-q5km` reproduced the sweep token for
+token (1,492 of 1,571, 79 kept). Trap held a fourth time: `forcing full` appears **0 times** in all four captures, including the
+two that re-prefilled. Every catalog `family:` now has a verdict; the default still governs the family added next._
+
 ## 2026-09-21 — the closed 2026-09-10 #436/#437 live-region entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-09-21 (preamble budget, making room for the #488/#498/#501

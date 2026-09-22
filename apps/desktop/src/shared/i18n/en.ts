@@ -592,10 +592,23 @@ export const en = {
   'docs.meta.sectionsCount.other': '{count} sections',
   'docs.meta.summary': 'Summary',
   'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" on this row to read the pages on this drive.',
+  // #410: the in-app download first (the install control sits under the row's banner); the
+  // drive-setup script stays the DIY alternative. `…Offline` is the copy when this drive has no
+  // usable download list, so there is no button to point at.
   'docs.scan.ocrMissing':
+    'Making it searchable needs the OCR files, which are not on this drive. Download them ' +
+    'below — or, on a drive you set up yourself, add them with "fetch-runtime --family ocr".',
+  'docs.scan.ocrMissingOffline':
     'Making it searchable needs the OCR files, which are not on this drive. To add them, re-run ' +
     'the drive setup with "--with-assets", or fetch only the OCR files with ' +
     '"fetch-runtime --family ocr".',
+  // #410: appended at DISPLAY time to a failed photo row whose stored error is
+  // `main.ingest.imageNeedsOcr` (persist-canonical — its own text never changes).
+  'docs.photo.ocrMissing': 'Download the OCR files below, then use "Try again" to read this photo.',
+  'docs.photo.ocrMissingOffline':
+    'Add the OCR files with the drive setup ("fetch-runtime --family ocr"), then use "Try again" ' +
+    'to read this photo.',
+  'docs.photo.ocrReady': 'Text recognition is ready now — use "Try again" to read this photo.',
   // Scan-row explanation + Documents banner when the OCR files are on the drive but the
   // recognizer cannot run in this build (#232; default wording from #219, owner review pending).
   'docs.scan.ocrUnavailable':
@@ -1220,6 +1233,41 @@ export const en = {
   // (`KnowledgePackToolsDialog.tsx`).
   'models.packTools.row': 'Knowledge-pack tools: not installed',
   'models.packTools.install': 'Install…',
+  // #410: the quiet OCR row — shown while the OCR files are missing (or incomplete) and this
+  // drive has a usable download list; hidden once installed. Opens the OCR install dialog.
+  'models.ocr.row': 'Text recognition for scans and photos (optional)',
+  // #410: the in-app OCR files install — the facts-only confirmation (the licence is approved,
+  // so no acknowledgement) and the inline control. Sizes, languages and the source host come
+  // from main (code-side pins; the host from the drive's download list).
+  'ocr.install.action': 'Download OCR files',
+  'ocr.install.actionTitle': 'Download the text-recognition (OCR) language files for scans and photos',
+  'ocr.install.confirm.title': 'Download the OCR files?',
+  'ocr.install.confirm.explain':
+    'Text recognition (OCR) reads scanned PDFs and photographed pages on this computer. It ' +
+    'needs the language files below on this drive — nothing else is downloaded, and your ' +
+    'documents never leave this computer.',
+  'ocr.install.confirm.languages': 'Languages',
+  'ocr.install.confirm.hint': 'Each file is checked against its expected checksum before it is used.',
+  'ocr.install.confirm.start': 'Download',
+  'ocr.install.lang.deu': 'German',
+  'ocr.install.lang.eng': 'English',
+  'ocr.install.starting': 'Starting the download…',
+  'ocr.install.progress': 'Downloading the OCR files… {pct} %',
+  'ocr.install.verifying': 'Checking the OCR files…',
+  'ocr.install.activating': 'Starting text recognition…',
+  'ocr.install.failed': 'The OCR files could not be installed.',
+  // OCR-specific labels: the AI Model screen can show a model download's "Cancel download" /
+  // "Retry download" at the same time, and the accessible names must tell them apart.
+  'ocr.install.retry': 'Retry the OCR download',
+  'ocr.install.cancel': 'Cancel the OCR download',
+  // Every file is on the drive but the recognizer was not started with them (copied by hand
+  // while the app ran): nothing to download, a restart picks them up.
+  'ocr.install.alreadyPresent': 'The OCR files are already on this drive. Restart HilbertRaum to use them.',
+  'ocr.install.outcome.activated': 'Text recognition is ready — no restart needed.',
+  'ocr.install.outcome.restartRequired':
+    'The OCR files are in place. Restart HilbertRaum to use the new language files.',
+  'ocr.install.outcome.unchanged':
+    'The OCR files are in place. If text recognition is still not offered, restart HilbertRaum.',
   // RAM-gate copy, composed of full clauses (spec §11.4 — never "your hardware is bad").
   'models.ram.needs': 'Needs at least {min} GB RAM',
   'models.ram.machine': ' — this computer has about {ram} GB',
@@ -1324,8 +1372,9 @@ export const en = {
   'settings.network.allow': 'Allow internet access for model downloads and updates',
   'settings.network.hint':
     'On by default, so a fresh install can fetch a model out of the box. When off, the app ' +
-    'makes no internet calls. Turning it on enables downloads for models, the AI engine, and ' +
-    'the optional knowledge-pack tools — each one asks for confirmation first, and a drive ' +
+    'makes no internet calls. Turning it on enables downloads for models, the AI engine, the ' +
+    'optional knowledge-pack tools and the optional text-recognition (OCR) files — each one asks ' +
+    'for confirmation first, and a drive ' +
     'policy can keep downloads disabled entirely. Your prompts and documents never leave this ' +
     'device regardless of this setting.',
   'settings.appearance.title': 'Appearance',
@@ -1608,7 +1657,8 @@ export const en = {
   'privacy.statement.online':
     'HilbertRaum runs the AI model on your laptop. Your prompts, documents, ' +
     'embeddings, and chat history stay local — even with internet access enabled, only ' +
-    'downloads (models, the AI engine, and the optional knowledge-pack tools) use the network.',
+    'downloads (models, the AI engine, the optional knowledge-pack tools and the optional ' +
+    'text-recognition (OCR) files) use the network.',
   'privacy.statement.noUploads':
     'This app does not send your data to cloud AI providers. There are no prompt, ' +
     'document, or embedding uploads, no telemetry, no analytics, and no remote crash ' +
@@ -1634,8 +1684,9 @@ export const en = {
   'privacy.network.telemetryValue': 'Nothing leaves this device — there’s no tracking to turn off',
   'privacy.network.hint':
     'The app warns before any internet action. The only things the app ever downloads are AI ' +
-    'models, the AI engine and the optional knowledge-pack tools — each one only after you ' +
-    'confirm it, each one verified before use. This is on by default and can be turned off on ' +
+    'models, the AI engine, the optional knowledge-pack tools and the optional text-recognition ' +
+    '(OCR) files — each one only after you confirm it, each one verified before use. This is on ' +
+    'by default and can be turned off on ' +
     'the General tab. A drive policy can disable it entirely. The Local API below is a ' +
     'separate, opt-in feature that never touches the internet.',
   'privacy.data.title': 'Where your data lives',
@@ -2495,8 +2546,9 @@ export const en = {
   'main.task.sourceUnreadable':
     'The stored copy of this document could not be read. Re-import the document, then try again.',
   'main.task.needsOcr':
-    'Text recognition needs the OCR files, which are not on this drive. To add them, re-run the ' +
-    'drive setup with "--with-assets", or fetch only the OCR files with "fetch-runtime --family ocr".',
+    'Text recognition needs the OCR files, which are not on this drive. Download them with ' +
+    '"Download OCR files" on the scanned document or on the AI Model screen — or, on a drive ' +
+    'you set up yourself, add them with "fetch-runtime --family ocr".',
   // Files present but the recognizer cannot run in this build (#232).
   'main.task.ocrUnavailable':
     'Text recognition (OCR) is not available in this build: the OCR files are on this drive, but ' +
@@ -2567,6 +2619,37 @@ export const en = {
     "The knowledge-pack tools can't be replaced while a pack is being served. Lock the workspace or wait for the current question to finish, then try again — or restart the app if the notice stays.",
   // #339 P8-2: the `downloadEngine` payload named something that is not an engine family.
   'main.engine.badRequest': 'The engine install request was not understood. Please try again.',
+  // #410: the in-app OCR language-file installer (services/ocr-install.ts). Session-only job
+  // errors and refusals, localized at emission (i18n record §3.3 rule 2).
+  'main.ocr.badRequest': 'The OCR download request was not understood. Please try again.',
+  'main.ocr.alreadyRunning': 'The OCR files are already downloading.',
+  'main.ocr.noSources':
+    'This drive has no download list for the OCR files. Add them with the drive setup ' +
+    'scripts instead ("fetch-runtime --family ocr").',
+  'main.ocr.sourcesMismatch':
+    'The OCR download list on this drive does not match this version of HilbertRaum, so ' +
+    'nothing was downloaded. Add the files with the drive setup scripts instead ' +
+    '("fetch-runtime --family ocr").',
+  'main.ocr.alreadyInstalled':
+    'The OCR files are already on this drive. If text recognition is still not offered, ' +
+    'restart HilbertRaum.',
+  'main.ocr.unsafeFolder':
+    'The "ocr" folder on this drive is not an ordinary folder (it may point to another ' +
+    'location), so nothing was written. Replace it with an ordinary folder named "ocr", then ' +
+    'try again.',
+  'main.ocr.writeFailed':
+    'The OCR files could not be saved to this drive. Check that it is not full or ' +
+    'write-protected, then try again.',
+  'main.ocr.downloadFailed':
+    'The OCR files could not be downloaded. Check the internet connection, then try again.',
+  'main.ocr.checksumMismatch':
+    'A downloaded OCR file did not match its expected checksum and was discarded — the files ' +
+    'already on this drive were not changed. Please try again.',
+  'main.ocr.readFailed':
+    'The OCR files already on this drive could not be read — the drive may have been removed, or ' +
+    'another program is using the files. Check the drive, then try again.',
+  'main.ocr.unknownJob':
+    'This OCR download is no longer tracked. Start it again if the files are still missing.',
   'main.docs.locked': 'Workspace is locked. Unlock it to manage documents.',
   'main.docs.processing': 'This document is still being processed. Wait for the import to finish.',
   'main.docs.tooManyPaths': 'Too many files were selected at once. Choose a folder instead.',

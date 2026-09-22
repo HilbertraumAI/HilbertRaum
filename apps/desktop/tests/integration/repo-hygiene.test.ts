@@ -876,14 +876,16 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
 
   it('the network-inventory sentence is stated identically wherever it lives (#339 P8-5)', () => {
     // The app's network footprint grew a third leg (the optional kiwix-tools family, #339
-    // P8-1/P8-2): models + the AI engine + the optional knowledge-pack tools, all behind the
-    // same gate. This ONE sentence is the shared statement of that inventory — pinned
+    // P8-1/P8-2) and a fourth (the optional OCR language files, #410): models + the AI engine +
+    // the optional knowledge-pack tools + the optional OCR files, all behind the same gate. This
+    // ONE sentence is the shared statement of that inventory — pinned
     // VERBATIM across every doc that states it, and echoed in the Settings/Privacy tab hint
     // (en.ts `privacy.network.hint`) so the UI copy cannot drift from the docs silently.
     const oneLine = (s: string): string => s.replace(/\s+/g, ' ')
     const sentence =
-      'The only things the app ever downloads are AI models, the AI engine and the optional ' +
-      'knowledge-pack tools — each one only after you confirm it, each one verified before use.'
+      'The only things the app ever downloads are AI models, the AI engine, the optional ' +
+      'knowledge-pack tools and the optional text-recognition (OCR) files — each one only after ' +
+      'you confirm it, each one verified before use.'
     const privacy = readFileSync(join(repoRoot, 'PRIVACY.md'), 'utf8')
     const readme = readFileSync(join(repoRoot, 'README.md'), 'utf8')
     const userGuide = readFileSync(join(repoRoot, 'docs', 'user-guide.md'), 'utf8')
@@ -902,5 +904,27 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
       oneLine(en['privacy.network.hint']).includes(sentence),
       'en.ts privacy.network.hint must state the sentence verbatim so the UI cannot drift from the docs'
     ).toBe(true)
+  })
+
+  it('no living doc or English UI string still states a retired, shorter inventory (#410)', () => {
+    // The sentence test above only asserts the CURRENT wording is present — an old copy left
+    // beside it (a second paragraph, another doc, another UI key) passed it. When the inventory
+    // gained the OCR files (#410), six such copies were found by review, not by this net. The
+    // frozen archive `docs/build-log.md` is exempt: it keeps retired text verbatim by design.
+    const oneLine = (s: string): string => s.replace(/\s+/g, ' ')
+    const retired =
+      'The only things the app ever downloads are AI models, the AI engine and the optional ' +
+      'knowledge-pack tools —'
+    const docs = [
+      ...readdirSync(repoRoot).filter((f) => f.endsWith('.md')).map((f) => join(repoRoot, f)),
+      ...readdirSync(join(repoRoot, 'docs'))
+        .filter((f) => f.endsWith('.md') && f !== 'build-log.md')
+        .map((f) => join(repoRoot, 'docs', f))
+    ]
+    const offenders = docs.filter((f) => oneLine(readFileSync(f, 'utf8')).includes(retired))
+    const uiKeys = Object.entries(en)
+      .filter(([, value]) => oneLine(value).includes(retired))
+      .map(([key]) => `en.ts ${key}`)
+    expect([...offenders, ...uiKeys]).toEqual([])
   })
 })

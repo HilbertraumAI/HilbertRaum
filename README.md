@@ -133,12 +133,15 @@ checksums. If no release is listed yet, build from source below; the result is t
 - The download is the app only. A working chat needs two more downloads, both offered on the
   **AI Model** screen inside the app: the AI engine (the `llama.cpp` runtime; the screen shows
   an install banner until it is present, and without it started models run in demo mode with
-  simulated answers) and an AI model of your choice. A third download is optional: the
+  simulated answers) and an AI model of your choice. Two more downloads are optional: the
   kiwix-tools binaries (GPL-3.0-or-later) that power offline knowledge packs, offered from the
-  **Knowledge packs** panel's tools-missing notice or a mirror on the **AI Model** screen, only
-  once you ask for it. The only things the app ever downloads are AI models, the AI engine and
-  the optional knowledge-pack tools — each one only after you confirm it, each one verified
-  before use. Repo users can instead provision everything up front with step 2 below.
+  **Knowledge packs** panel's tools-missing notice or a mirror on the **AI Model** screen, and the
+  text-recognition (OCR) language files (German + English, about 4 MB, Apache-2.0) that read
+  scanned PDFs and photos, offered on a scan or photo in **Documents** that needs them and on the
+  **AI Model** screen — each only once you ask for it. The only things the app ever downloads are
+  AI models, the AI engine, the optional knowledge-pack tools and the optional text-recognition
+  (OCR) files — each one only after you confirm it, each one verified before use. Repo users can
+  instead provision everything up front with step 2 below.
 - **Windows:** the build is unsigned for now, so SmartScreen shows "Windows protected your PC".
   Click **More info → Run anyway**.
 - **macOS:** the `.app` is unsigned too. If Gatekeeper blocks the first launch, allow it under

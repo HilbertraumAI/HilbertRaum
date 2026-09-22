@@ -58,7 +58,9 @@ export interface AppContext {
    * Local OCR engine: tesseract.js over the drive's vendored language
    * files, selected only when those exist. Null/absent = photo imports fail per-file
    * with friendly copy and detected scans show no "Make searchable" offer
-   * (graceful-fallback rule — there is deliberately no mock OCR engine).
+   * (graceful-fallback rule — there is deliberately no mock OCR engine). MUTABLE (#410): the
+   * in-app OCR installer runs `refreshOcrSlot`, which fills a null slot (or re-probes an engine
+   * that could not start) — consumers read it off ctx per call, never capture it.
    */
   ocrEngine?: OcrEngine | null
   /**
@@ -182,9 +184,10 @@ export interface AppContext {
    * null at startup — the translation sidecar (#40) and the transcriber (#497; its engine-install
    * twin is `EngineDownloadManager.onInstalled` for `whisper_cpp`) — so a downloaded model
    * activates without an app restart. The reranker still needs a restart (unaudited); the
-   * embedder and the OCR engine are captured at wiring time (`getIngestionDeps` / `getOcrEngine`
-   * in main/index.ts) and stay startup-frozen by design. Optional so partial test contexts stay
-   * valid; must never throw (the manager guards regardless).
+   * embedder is captured at wiring time (`getIngestionDeps` in main/index.ts) and stays
+   * startup-frozen by design. The OCR engine is refreshed by its own installer, not by this hook
+   * (#410 — `refreshOcrSlot`). Optional so partial test contexts stay valid; must never throw
+   * (the manager guards regardless).
    */
   onModelInstalled?: (modelId: string) => void
   /**

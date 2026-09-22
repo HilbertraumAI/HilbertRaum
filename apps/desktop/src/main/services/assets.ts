@@ -659,6 +659,8 @@ const REDIRECT_STATUSES = new Set([301, 302, 303, 307, 308])
 const MAX_REDIRECTS = 5
 /** Tolerance over the known size for header rounding / multipart framing. */
 const SIZE_CAP_MARGIN = 1024 * 1024
+/** How long a failed download waits for its write stream to close before rejecting anyway (#410). */
+const FAIL_CLOSE_WAIT_MS = 5_000
 /** Backstop when NOTHING bounds the body (no Content-Length AND no caller `maxBytes`). F17 lowered
  *  this from 64 GiB toward a realistic max single weight; both in-app downloaders now ALWAYS pass a
  *  `maxBytes` (engine: a per-family ceiling; model: the manifest size or a per-role default), so the
@@ -863,12 +865,26 @@ export async function downloadToFile(
     // On any failure (abort, stream error, OR the size cap), close BOTH streams so no fd stays
     // open on the partial file — a later resume/rename must not contend with a stale handle.
     // `end()` (not `destroy()`) flushes the bytes that DID arrive: they are the resume prefix.
+    // Reject only once the write stream has CLOSED (#410): the file is opened asynchronously, so
+    // an abort landing before the open completed used to reject first — a caller that deletes the
+    // partial on failure then ran before the file existed, and the late open left an orphan. A
+    // bounded wait: a stream that never reports 'close' cannot pin the caller's job forever.
     const fail = (err: Error): void => {
       if (settled) return
       settled = true
       nodeStream.destroy()
       out.end()
-      reject(err)
+      let rejected = false
+      const settleReject = (): void => {
+        if (rejected) return
+        rejected = true
+        clearTimeout(closeTimer)
+        reject(err)
+      }
+      const closeTimer = setTimeout(settleReject, FAIL_CLOSE_WAIT_MS)
+      ;(closeTimer as { unref?: () => void }).unref?.()
+      if (out.closed) settleReject()
+      else out.once('close', settleReject)
     }
     nodeStream.on('data', (chunk: Buffer) => {
       received += chunk.length

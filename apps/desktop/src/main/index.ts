@@ -83,6 +83,7 @@ import { createSkillRegistry } from './services/skills/registry'
 import {
   composeServices,
   composeTranslator,
+  probeOcrEngine,
   refreshTranscriberSlot,
   shouldReplaceTranslator
 } from './services/compose-services'
@@ -490,22 +491,9 @@ function initBackend(): void {
   })
   // Packaged-mode OCR execution probe (#232): one bounded worker start, released on success.
   // Fire-and-forget — startup never waits on it; a failure only latches the engine unavailable.
-  // Content-free log: outcome + duration.
-  if (ocrEngine?.probe) {
-    const probeT0 = performance.now()
-    void ocrEngine.probe().then(
-      (ok) =>
-        log.info('OCR execution probe', {
-          ok,
-          ms: Math.round(performance.now() - probeT0),
-          engine: ocrEngine.id
-        }),
-      (err: unknown) =>
-        log.warn('OCR execution probe threw', {
-          error: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)
-        })
-    )
-  }
+  // The helper (content-free log: outcome, duration, engine id) is shared with the #410
+  // post-install refresh, which awaits it instead.
+  if (ocrEngine?.probe) void probeOcrEngine(ocrEngine)
 
   // Document task engine: one-at-a-time summary/translation/compare jobs. The
   // chat-streaming guard reads the shared in-flight registry — tasks never put
@@ -548,10 +536,19 @@ function initBackend(): void {
       return launchContextTokens(s, findManifestById(manifestsDir, s.activeModelId))
     },
     getStoreDir: () => documentsDir(paths.workspacePath),
-    getIngestionDeps: () => ({ embedder, cipher: workspace.documentCipher(), ocrEngine, plaintextOps }),
+    // The embedder stays captured (an index embedded by one embedder is unusable with another);
+    // the OCR engine is read LIVE off ctx (#410, the getTranslator argument above): an in-app
+    // install fills a null slot mid-session, and a captured startup value would leave the
+    // "Make searchable (OCR)" admission, photo re-extraction and categorize on the old null.
+    getIngestionDeps: () => ({
+      embedder,
+      cipher: workspace.documentCipher(),
+      ocrEngine: ctx?.ocrEngine ?? null,
+      plaintextOps
+    }),
     beginDocumentWork: () => workspace.beginDocumentWork(),
-    // The OCR task's engine + the hidden-window PDF rasterizer.
-    getOcrEngine: () => ocrEngine,
+    // The OCR task's engine (read live, #410) + the hidden-window PDF rasterizer.
+    getOcrEngine: () => ctx?.ocrEngine ?? null,
     rasterizePdf: rasterizePdfWithHiddenWindow,
     // BE-1 (ocr-audit 2026-07-18): the ingestion `processing` probe — the mirror of the docs
     // IPC `requireNoActiveTask` guard. Assigned by registerDocsIpc at registration time
@@ -680,9 +677,10 @@ function initBackend(): void {
   // ingestion deps in registerDocsIpc, the pack-article save, the lock's suspend and the quit's
   // stop — and construction spawns nothing (the whisper CLI runs per transcribe). The engine
   // installer's `onInstalled` (`whisper_cpp`) runs the same refresh. The reranker keeps the
-  // documented restart requirement (unaudited); the embedder and the OCR engine are captured at
-  // wiring time (`getIngestionDeps` / `getOcrEngine` above) and must stay startup-frozen — an
-  // index embedded by one embedder is unusable with another.
+  // documented restart requirement (unaudited); the embedder is captured at wiring time
+  // (`getIngestionDeps` above) and must stay startup-frozen — an index embedded by one embedder
+  // is unusable with another. The OCR engine is not a model download: the in-app OCR installer
+  // refreshes its slot (`refreshOcrSlot`, wired in registerEngineIpc — #410).
   ctx.onModelInstalled = (modelId) => {
     // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model
     // BEFORE the translator rule below can return early (that rule is about a different slot).
@@ -752,7 +750,9 @@ function initBackend(): void {
   registerImagesIpc(ctx, ctx.vision)
   registerTranslateIpc(ctx, ctx.translateJobs)
   registerDownloadIpc(ctx)
-  registerEngineIpc(ctx)
+  // #410: the OCR installer falls back to the APP-BUNDLED source list (no env override) when the
+  // drive's yaml carries no `ocr:` block.
+  registerEngineIpc(ctx, undefined, { bundledManifestsDir: resolveManifestsDir(app.getAppPath()) })
   registerRagIpc(ctx)
   registerBenchmarkIpc(ctx)
   // The Performance screen's "last answer" figure: every finished chat answer's #290 speed

@@ -28,6 +28,13 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-22 — **#410 — the OCR language files install in-app (`feat/410-in-app-ocr-install`): a failed scan or
+photo row in Documents and a quiet AI Model row offer "Download OCR files", and OCR activates without a restart.**
+Record: `architecture.md` "In-app OCR install — design record" (owner decisions D1–D7, the facts, the design as
+built); contracts in `data-contracts.md` (four `ocr:*` channels, `OcrRefreshOutcome`); `security-model.md` (#410
+note). Its own narrow installer, not an engine family; sha256 + exact size pinned in code (`OCR_PINS`,
+drift-tested), only the URL from the yaml; the doc-task deps now read `ctx.ocrEngine` live. Open: the owner's
+packaged-build checks (PR body); hand-copied files or a grown language set still need a restart (§5 item 15(a))._
 _2026-09-21 — **#488 / #498 / #501 fixed in one PR (`fix/488-498-501-prose-supsub-cutoff-badge-inline-math`):
 ZIM prose keeps superscripts/subscripts readable and retrieval folds them; the cut-off badge names no
 cause and its remedy follows which ceiling fired; inline `$…$` math renders.** Records: `rag-design.md`
@@ -139,22 +146,6 @@ frozen on step 1 for 13.7 s. The list now belongs to a run THIS window started; 
 would have regressed #437). Option 1 (broadcast) was rejected as a HALF-fix — the common path is the user arriving MID-RUN, and a
 late-joining window has already missed the one-shot steps. IPC contract UNCHANGED. Residuals: no per-step detail for an automatic
 run (option 3, the steps carried in `PerformanceSnapshot`, stays available), and the by-ear leg #436/#437 owe now has this line._
-_2026-09-11 — **#413 CLOSED — `USABLE_VRAM_MB` stays 5,120, decided without a 4 GB measurement** (`docs/413-keep-usable-vram-floor`; record
-`model-benchmarks.md` §6.6 N8 "Decided 2026-09-11", §5 item 22 (e)(1)). The project owns no 4 GB card and will not buy one. Keeping the floor
-self-corrects (placement ignores it; a crawl on the RAM pick steps the ★ down, §6.5); lowering it would pin the E2B with no step back up. Docs only._
-_2026-09-10 — **#446 CLOSED — the three untested chat entries measured; `qwen3.6` joins the rule, `granite` does not**
-(`eval/446-untested-families-sweep`; record `model-benchmarks.md` §6.6 "2026-09-10 addition (#446)",
-`known-limitations.md` "The one chat slot and the prompt cache"; evidence
-`eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue446-arch-sweep-*`). The #399 sweep skipped these three for logistics:
-both `qwen3.6-27b` quants were broken symlinks into the eval drive deleted 2026-09-04, `granite-4.1-8b-q4` was never on the rig.
-Weights re-fetched and verified against manifest `sha256` **and** `size_bytes`, then run through the **unchanged** leg-A driver,
-same pinned b9849 (`799fcc04a`), no MTP, all fully offloaded. **`qwen3.6` RE-PREFILLED** — both quants report arch `qwen35` with a
-149.62 MiB recurrent state over 64 layers and re-prefill **1,488 of 1,529** tokens, keeping only the 41-token system prefix; it
-joins `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` (`shared/prompt-cache-rules.ts`), affected set now **13 of 17 measured models**.
-**`granite` RESTORED** — arch `granite`, `n_swa` 0, no recurrent state, **22 of 1,414** re-prefilled with 1,392 kept; a fourth
-positive control, and the concrete case for the cache-ON default. Control `qwen3.8-27b-ud-q5km` reproduced the sweep token for
-token (1,492 of 1,571, 79 kept). Trap held a fourth time: `forcing full` appears **0 times** in all four captures, including the
-two that re-prefilled. Every catalog `family:` now has a verdict; the default still governs the family added next._
 
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
@@ -191,9 +182,9 @@ retrieval-research record entry), and the closed 2026-09-09 knowledge-packs-docs
 2026-09-20 (preamble budget, making room for the wave-13 entry), and the two closed 2026-09-10
 dependency-advisory entries (PR #451 xmldom, PR #452 build chain) on 2026-09-21 (preamble
 budget, making room for the #497 dictation entry), and the closed 2026-09-10 #436/#437 live-region entry on
-2026-09-21 (preamble budget, making room for the #488/#498/#501 entry) —
-citations of the form "BUILD_STATE <date> entry" / "BUILD_STATE V1" /
-"Skills — Sn handoff" resolve there._
+2026-09-21 (preamble budget, making room for the #488/#498/#501 entry), and the closed #446 and #413 entries on
+2026-09-22 (preamble budget, making room for the #410 entry) — citations of the form "BUILD_STATE <date> entry" /
+"BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---
 ## 1. Current status
@@ -515,7 +506,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
       `TableSpec` port, derived-column eval, no-skill tabular routing, remaining §5 deferrals) ·
       security-hardening lows L-4/L-5/L-7 (§8; L-8 is closed
       — `npm ci` everywhere) · the `IBAN_CANDIDATE_RE` backtracking hazard (known-limitations) ·
-      restart-required mid-session installs for reranker/embedder/OCR (transcriber: #497) · the open GPU
+      restart-required mid-session installs for reranker/embedder (transcriber: #497; OCR: #410) · the open GPU
       hardware-matrix legs (item 1b: ② ④ ⑤ ⑥ ⑦ ⑧ ⑨).
     - [x] **Flip to public** — **DONE 2026-07-12** (observed via the GitHub API 2026-07-13 at
       the PR #57 merge review): repo public, **private vulnerability reporting ENABLED** (item
@@ -586,10 +577,10 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
 
 15. **OCR-R wave deferrals (registered at the 2026-07-18 close-out; durable ledger =
     `architecture.md` "OCR audit (2026-07-18) — remediation ledger", PR #75):**
-    (a) **mid-session OCR-asset refresh** — the engine is composed once at startup; installing
-    `ocr/` files mid-session needs a relaunch (documented). Options: the translator-#40
-    `onModelInstalled` re-composition analogue for the `ocr` role, or a "Check again" affordance
-    on the `ocrMissing` banner — owner UX call. (b) **packaged OCR smoke, recognition leg** —
+    (a) **mid-session OCR-asset refresh** — the IN-APP install activates OCR without a restart
+    (#410, `refreshOcrSlot`). Left: files copied onto the drive by hand, and a download that grows
+    a live recognizer's language set, still need a relaunch (documented); a "Check again" affordance
+    would cover the first — owner UX call. (b) **packaged OCR smoke, recognition leg** —
     the wave's machine carries no `*.traineddata.gz`; the CSP-exposed rasterizer leg WAS
     verified inside a packaged build (P5 probe). Run the full `tests/manual/ocr-smoke.test.ts`
     flow on an asset-carrying drive before the next release. **SUPERSEDED 2026-07-19 (DEP-1 P4):

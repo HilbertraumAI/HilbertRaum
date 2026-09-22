@@ -310,18 +310,23 @@ text locally (German + English; needs the drive's `ocr/` language files; runs a 
 seconds per page). PDFs that mix real text pages with scanned pages index their text pages
 only — they are not detected as scans.
 
-If the action reports *"…the OCR files, which are not on this drive"*, the drive was built
-without them. Add them by re-running `prepare-drive --with-assets`, or fetch only the OCR
-family with `fetch-runtime --family ocr` (`.ps1 -Family ocr` on Windows) — see
-[`packaging.md`](packaging.md). Commercially-built drives already include them. **Restart the
-app after adding the files** — OCR availability is resolved once at startup, so a fetch done
-while the app is running won't be offered until the next launch.
+If the row says *"…needs the OCR files, which are not on this drive"*, the drive has no OCR
+language files yet (commercially-built drives already include them). Use the row's **Download
+OCR files** button (or *"Text recognition for scans and photos (optional)"* on the **AI Model**
+screen): confirm the two files (German + English, about 4 MB), and once they are downloaded and
+checked, text recognition starts **without a restart** — the row then offers **Make searchable
+(OCR)**. A photo that failed for the same reason reads with **Try again** afterwards. The download
+follows the usual gates: if the button is greyed out, the drive policy or **Settings → Allow
+internet access for model downloads and updates** is blocking downloads, and the row says which.
 
-**If the app closes itself the moment OCR starts, that is a known packaging defect, not your
-drive.** In a packaged build the OCR worker cannot load part of itself out of the app archive
-and the whole app exits — see [`known-limitations.md`](known-limitations.md) ("OCR does not work
-in a PACKAGED build"). Nothing you can add to the drive fixes it; the workaround until the fix
-ships is to leave scanned PDFs unconverted (their text pages, if any, still index).
+Without internet (or on a drive you set up yourself), add the files instead by re-running
+`prepare-drive --with-assets`, or fetch only the OCR family with `fetch-runtime --family ocr`
+(`.ps1 -Family ocr` on Windows) — see [`packaging.md`](packaging.md). **Files added this way
+while the app is running are noticed at the next start** — restart the app after adding them.
+If the row names only this setup route and offers no download button, the drive has no usable
+OCR download list — its `model-manifests/runtime-sources.yaml` pins different OCR files than this
+version of the app accepts (the app checks the files against checksums built into it); use the
+script route, or update the app.
 
 ---
 

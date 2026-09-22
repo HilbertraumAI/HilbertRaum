@@ -222,7 +222,11 @@ jobs:
               ' both offered on the **AI Model** screen inside the app: the **AI engine**' +
               ' (llama.cpp — the screen shows an install banner until it is present; without it,' +
               ' models run in demo mode with simulated answers) and an **AI model** of your' +
-              ' choice. Every download asks first and is SHA-256-verified. Offline installs:' +
+              ' choice. Two optional downloads are offered in the app only when you need them:' +
+              ' the knowledge-pack tools, and the **text-recognition (OCR) files** for scanned' +
+              ' PDFs and photos (German + English, about 4 MB; offered on the scan or photo in' +
+              ' Documents and on the AI Model screen). Every download asks first and is' +
+              ' SHA-256-verified. Offline installs:' +
               ' the llama-runtime-*.zip assets below hold the same verified engine build —' +
               ' unzip into the runtime/llama.cpp/ folder on the drive. Repo users can' +
               ' provision a drive up front instead (README step 2). Unsigned build: see the' +

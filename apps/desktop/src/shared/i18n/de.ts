@@ -612,10 +612,23 @@ export const de: Record<keyof typeof en, string> = {
   'docs.meta.summary': 'Zusammenfassung',
   'docs.scan.ocrOffer':
     'Nutze „Durchsuchbar machen (OCR)“ in dieser Zeile, um die Seiten auf diesem Laufwerk zu lesen.',
+  // #410: zuerst der In-App-Download (die Schaltfläche steht unter dem Hinweis der Zeile).
   'docs.scan.ocrMissing':
+    'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk. Lade sie unten ' +
+    'herunter — oder ergänze sie auf einem selbst eingerichteten Laufwerk mit ' +
+    '„fetch-runtime --family ocr“.',
+  'docs.scan.ocrMissingOffline':
     'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk. Um sie zu ergänzen, ' +
     'die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur die OCR-Dateien ' +
     'mit „fetch-runtime --family ocr“ holen.',
+  'docs.photo.ocrMissing':
+    'Lade unten die OCR-Dateien herunter und nutze dann „Erneut versuchen“, um dieses Foto zu ' +
+    'lesen.',
+  'docs.photo.ocrMissingOffline':
+    'Ergänze die OCR-Dateien mit der Laufwerk-Einrichtung („fetch-runtime --family ocr“) und ' +
+    'nutze dann „Erneut versuchen“, um dieses Foto zu lesen.',
+  'docs.photo.ocrReady':
+    'Die Texterkennung ist jetzt bereit — nutze „Erneut versuchen“, um dieses Foto zu lesen.',
   // Scan-Zeile + Banner, wenn die OCR-Dateien da sind, aber die Erkennung nicht startet (#232;
   // Standardtext aus #219, Freigabe durch den Owner offen).
   'docs.scan.ocrUnavailable':
@@ -1244,6 +1257,37 @@ export const de: Record<keyof typeof en, string> = {
   // wie der Hinweis im Wissenspakete-Panel (`KnowledgePackToolsDialog.tsx`).
   'models.packTools.row': 'Wissenspaket-Werkzeuge: nicht installiert',
   'models.packTools.install': 'Installieren…',
+  // #410: die ruhige OCR-Zeile und der In-App-Download der OCR-Dateien.
+  'models.ocr.row': 'Texterkennung für Scans und Fotos (optional)',
+  'ocr.install.action': 'OCR-Dateien herunterladen',
+  'ocr.install.actionTitle':
+    'Die Sprachdateien der Texterkennung (OCR) für Scans und Fotos herunterladen',
+  'ocr.install.confirm.title': 'OCR-Dateien herunterladen?',
+  'ocr.install.confirm.explain':
+    'Die Texterkennung (OCR) liest gescannte PDFs und fotografierte Seiten auf diesem ' +
+    'Computer. Dafür braucht sie die unten genannten Sprachdateien auf diesem Laufwerk — sonst ' +
+    'wird nichts heruntergeladen, und deine Dokumente verlassen diesen Computer nie.',
+  'ocr.install.confirm.languages': 'Sprachen',
+  'ocr.install.confirm.hint':
+    'Jede Datei wird vor der Nutzung mit ihrer erwarteten Prüfsumme verglichen.',
+  'ocr.install.confirm.start': 'Herunterladen',
+  'ocr.install.lang.deu': 'Deutsch',
+  'ocr.install.lang.eng': 'Englisch',
+  'ocr.install.starting': 'Download wird gestartet…',
+  'ocr.install.progress': 'OCR-Dateien werden heruntergeladen… {pct} %',
+  'ocr.install.verifying': 'OCR-Dateien werden geprüft…',
+  'ocr.install.activating': 'Texterkennung wird gestartet…',
+  'ocr.install.failed': 'Die OCR-Dateien konnten nicht installiert werden.',
+  'ocr.install.retry': 'OCR-Download erneut versuchen',
+  'ocr.install.cancel': 'OCR-Download abbrechen',
+  'ocr.install.alreadyPresent':
+    'Die OCR-Dateien liegen bereits auf diesem Laufwerk. Starte HilbertRaum neu, um sie zu nutzen.',
+  'ocr.install.outcome.activated': 'Die Texterkennung ist bereit — kein Neustart nötig.',
+  'ocr.install.outcome.restartRequired':
+    'Die OCR-Dateien sind da. Starte HilbertRaum neu, um die neuen Sprachdateien zu nutzen.',
+  'ocr.install.outcome.unchanged':
+    'Die OCR-Dateien sind da. Wenn die Texterkennung trotzdem nicht angeboten wird, starte ' +
+    'HilbertRaum neu.',
   'models.ram.needs': 'Braucht mindestens {min} GB RAM',
   'models.ram.machine': ' — dieser Computer hat etwa {ram} GB',
   'models.ram.advice': '. Wähle ein kleineres Modell — die Qualität bleibt top.',
@@ -1355,7 +1399,8 @@ export const de: Record<keyof typeof en, string> = {
   'settings.network.hint':
     'Standardmäßig an, damit eine frische Installation gleich Modelle herunterladen kann. ' +
     'Ausgeschaltet stellt die App keinerlei Internetverbindung her. Eingeschaltet ermöglicht ' +
-    'es Downloads für Modelle, die KI-Engine und die optionalen Wissenspaket-Werkzeuge — ' +
+    'es Downloads für Modelle, die KI-Engine, die optionalen Wissenspaket-Werkzeuge und die ' +
+    'optionalen Texterkennungs-Dateien (OCR) — ' +
     'jeder Download fragt zuerst nach deiner Bestätigung, und eine Laufwerksrichtlinie ' +
     'kann Downloads ganz deaktiviert lassen. Deine Fragen und Dokumente verlassen dieses ' +
     'Gerät in keinem Fall.',
@@ -1638,8 +1683,8 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.statement.online':
     'HilbertRaum führt das KI-Modell auf deinem Laptop aus. Deine Fragen, ' +
     'Dokumente, Embeddings und Chat-Verläufe bleiben lokal — auch mit aktiviertem ' +
-    'Internetzugriff nutzen nur Downloads (Modelle, die KI-Engine und die optionalen ' +
-    'Wissenspaket-Werkzeuge) das Netzwerk.',
+    'Internetzugriff nutzen nur Downloads (Modelle, die KI-Engine, die optionalen ' +
+    'Wissenspaket-Werkzeuge und die optionalen Texterkennungs-Dateien (OCR)) das Netzwerk.',
   'privacy.statement.noUploads':
     'Diese App sendet deine Daten an keine Cloud-KI-Anbieter. Es gibt keine Uploads von ' +
     'Fragen, Dokumenten oder Embeddings, keine Telemetrie, keine Analytik und keine ' +
@@ -1665,8 +1710,9 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.telemetryValue':
     'Nichts verlässt dieses Gerät — es gibt kein Tracking, das man abschalten müsste',
   'privacy.network.hint':
-    'Die App warnt vor jeder Internetaktion. Sie lädt einzig KI-Modelle, die KI-Engine und ' +
-    'die optionalen Wissenspaket-Werkzeuge herunter — jeweils erst nach deiner Bestätigung ' +
+    'Die App warnt vor jeder Internetaktion. Sie lädt einzig KI-Modelle, die KI-Engine, die ' +
+    'optionalen Wissenspaket-Werkzeuge und die optionalen Texterkennungs-Dateien (OCR) ' +
+    'herunter — jeweils erst nach deiner Bestätigung ' +
     'und jeweils vor der Nutzung geprüft. Das ist standardmäßig an und über den ' +
     'Allgemein-Tab abschaltbar. Eine Laufwerksrichtlinie kann das komplett deaktivieren. Die ' +
     'lokale API weiter unten ist eine getrennte, freiwillige Funktion, die nie ins Internet geht.',
@@ -2477,8 +2523,9 @@ export const de: Record<keyof typeof en, string> = {
     'Dokument neu und versuch es dann noch einmal.',
   'main.task.needsOcr':
     'Für die Texterkennung werden die OCR-Dateien benötigt, die auf diesem Laufwerk fehlen. ' +
-    'Um sie zu ergänzen, die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur ' +
-    'die OCR-Dateien mit „fetch-runtime --family ocr“ holen.',
+    'Lade sie mit „OCR-Dateien herunterladen“ beim gescannten Dokument oder im ' +
+    'KI-Modell-Bereich herunter — oder ergänze sie auf einem selbst eingerichteten Laufwerk mit ' +
+    '„fetch-runtime --family ocr“.',
   // Dateien vorhanden, aber die Erkennung startet in dieser Version nicht (#232).
   'main.task.ocrUnavailable':
     'Die Texterkennung (OCR) ist in dieser Version nicht verfügbar: Die OCR-Dateien liegen auf ' +
@@ -2567,6 +2614,42 @@ export const de: Record<keyof typeof en, string> = {
     'Sperre den Arbeitsbereich oder warte, bis die aktuelle Frage beantwortet ist, und versuche es dann erneut – oder starte die App neu, falls der Hinweis bleibt.',
   // #339 P8-2: die downloadEngine-Anfrage nannte etwas, das keine Engine-Familie ist.
   'main.engine.badRequest': 'Die Anfrage zur Engine-Installation wurde nicht verstanden. Bitte versuche es erneut.',
+  // #410: der In-App-Installer für die OCR-Sprachdateien (services/ocr-install.ts).
+  'main.ocr.badRequest':
+    'Die Anfrage zum Herunterladen der OCR-Dateien wurde nicht verstanden. Bitte versuche es ' +
+    'erneut.',
+  'main.ocr.alreadyRunning': 'Die OCR-Dateien werden bereits heruntergeladen.',
+  'main.ocr.noSources':
+    'Auf diesem Laufwerk gibt es keine Download-Liste für die OCR-Dateien. Ergänze sie ' +
+    'stattdessen mit den Einrichtungsskripten des Laufwerks („fetch-runtime --family ocr“).',
+  'main.ocr.sourcesMismatch':
+    'Die Download-Liste für die OCR-Dateien auf diesem Laufwerk passt nicht zu dieser Version ' +
+    'von HilbertRaum, deshalb wurde nichts heruntergeladen. Ergänze die Dateien stattdessen ' +
+    'mit den Einrichtungsskripten des Laufwerks („fetch-runtime --family ocr“).',
+  'main.ocr.alreadyInstalled':
+    'Die OCR-Dateien liegen bereits auf diesem Laufwerk. Wenn die Texterkennung trotzdem ' +
+    'nicht angeboten wird, starte HilbertRaum neu.',
+  'main.ocr.unsafeFolder':
+    'Der Ordner „ocr“ auf diesem Laufwerk ist kein gewöhnlicher Ordner (er verweist womöglich ' +
+    'an einen anderen Ort), deshalb wurde nichts geschrieben. Ersetze ihn durch einen ' +
+    'gewöhnlichen Ordner namens „ocr“ und versuch es dann erneut.',
+  'main.ocr.writeFailed':
+    'Die OCR-Dateien konnten nicht auf diesem Laufwerk gespeichert werden. Prüfe, ob es voll ' +
+    'oder schreibgeschützt ist, und versuch es dann erneut.',
+  'main.ocr.downloadFailed':
+    'Die OCR-Dateien konnten nicht heruntergeladen werden. Prüfe die Internetverbindung und ' +
+    'versuch es dann erneut.',
+  'main.ocr.checksumMismatch':
+    'Eine heruntergeladene OCR-Datei stimmte nicht mit ihrer erwarteten Prüfsumme überein ' +
+    'und wurde verworfen — die Dateien auf diesem Laufwerk wurden nicht verändert. Bitte ' +
+    'versuche es erneut.',
+  'main.ocr.readFailed':
+    'Die OCR-Dateien auf diesem Laufwerk konnten nicht gelesen werden — das Laufwerk wurde ' +
+    'womöglich entfernt, oder ein anderes Programm nutzt die Dateien. Prüfe das Laufwerk und ' +
+    'versuch es dann erneut.',
+  'main.ocr.unknownJob':
+    'Dieser OCR-Download wird nicht mehr verfolgt. Starte ihn erneut, falls die Dateien noch ' +
+    'fehlen.',
   'main.docs.locked': 'Der Arbeitsbereich ist gesperrt. Entsperre ihn, um Dokumente zu verwalten.',
   'main.docs.processing':
     'Dieses Dokument wird noch verarbeitet. Warte, bis der Import fertig ist.',

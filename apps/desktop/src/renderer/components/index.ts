@@ -15,6 +15,15 @@ export {
   KnowledgePackToolsDialog,
   type KnowledgePackToolsDialogProps
 } from './KnowledgePackToolsDialog'
+export {
+  OcrInstallControl,
+  OcrInstallDialog,
+  ocrFilesPresent,
+  ocrInstallOutcomeText,
+  type OcrInstallControlProps,
+  type OcrInstallDialogProps,
+  type OcrInstallView
+} from './OcrInstall'
 export { SegmentedControl, type SegmentedControlProps, type SegmentedOption } from './SegmentedControl'
 export { Switch, type SwitchProps } from './Switch'
 export { Chip, type ChipProps } from './Chip'

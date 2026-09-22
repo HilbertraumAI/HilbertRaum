@@ -250,6 +250,8 @@ const overrides: Record<string, unknown> = {
   }),
   getPolicy: async () => null,
   getEngineStatus: async () => null,
+  // #410: the OCR install row/dialog read this; null = no offer in the marketing preview.
+  getOcrInstallStatus: async () => null,
   getRuntimeStatus: async () => {
     const c = new URLSearchParams(location.search).get('case') ?? ''
     // #107: the chat-starting-progress case exercises the honest load-progress panel —

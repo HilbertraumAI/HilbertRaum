@@ -221,6 +221,16 @@ export const IPC = {
   getEngineJob: 'engine:getJob',
   /** Cancel an in-flight engine download. */
   cancelEngineDownload: 'engine:cancel',
+  // In-app OCR language-file install (#410) — its own narrow installer, not an engine family.
+  // Same gates as model/engine downloads. Never the `OCR_RASTER` channels (the rasterizer window).
+  /** The dialog facts: pinned languages + sizes + installed, bytes to fetch, source host, licence. */
+  getOcrInstallStatus: 'ocr:status',
+  /** Start fetching the pinned OCR language files (no payload; gated: policy ∧ setting). */
+  installOcr: 'ocr:install',
+  /** Poll the OCR install job's progress/status/outcome. */
+  getOcrInstallJob: 'ocr:getJob',
+  /** Cancel an in-flight OCR install. */
+  cancelOcrInstall: 'ocr:cancel',
   // Image understanding (vision) — image-understanding plan §9.1. A separate lazy
   // `llama-server --mmproj` sidecar answers a question about ONE image. Async-with-streaming
   // (the STREAM.img* channels below); `getStatus` is workspace-agnostic, the file/runtime

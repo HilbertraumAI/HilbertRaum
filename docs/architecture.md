@@ -1728,7 +1728,8 @@ explicitly out of scope.
   teardowns reach through `ctx.transcriber`). Every consumer already read the slot per call
   (dictation IPC, the per-operation ingestion deps, the pack-article save, lock, quit), so the
   "captured at wiring time" premise the restart requirement rested on was never true for the
-  transcriber (it is for the embedder + OCR engine: `main/index.ts` `getIngestionDeps`). The
+  transcriber (it is for the embedder: `main/index.ts` `getIngestionDeps`; the OCR engine was
+  captured there too until #410 made both OCR reads live — "In-app OCR install — design record"). The
   chat screen re-reads the flag on mount and on window focus (the Translate-screen pattern).
 - **Permissions:** the Phase-31 deny-by-default `setPermissionRequestHandler` gained its
   single exception — `media` requests that are **audio-only and from the app's own
@@ -1889,7 +1890,9 @@ sentinel-tested), zero native deps.
   `getRuntime`, `getTranslator` — the TranslateGemma sidecar, TG-3 —, `isChatStreaming`,
   `getContextTokens`, `getStoreDir`, `getIngestionDeps`, `beginDocumentWork`, `getOcrEngine`,
   `rasterizePdf`, `audit`), so the engine tests without Electron; `main/index.ts` wires it and
-  exposes it as `AppContext.docTasks`.
+  exposes it as `AppContext.docTasks`. `getOcrEngine` and the ingestion deps' `ocrEngine` read
+  `ctx.ocrEngine` LIVE (#410 — an in-app OCR install fills the slot mid-session); only the
+  embedder stays captured.
 - **Concurrency (D26, RESOLVED): strict one-at-a-time, with one exception.** Tasks serialize
   among themselves (one FIFO queue, one runner). A **non-yielding** task (`summary`,
   `translation`, `compare`, `ocr`) **refuses to start while a chat answer streams** (it reads
@@ -10938,7 +10941,7 @@ Translate handoff · P3 `0687a437` docs truth · P4 `f8f3dc29` backend hardening
 
 ### Registered deferrals (owner follow-ups)
 
-1. **Mid-session OCR-asset refresh** (translator-#40 analogue or a "Check again" affordance on the `ocrMissing` banner) — needs an owner UX call; until then: restart after installing assets (documented).
+1. **Mid-session OCR-asset refresh** (translator-#40 analogue or a "Check again" affordance on the `ocrMissing` banner) — needs an owner UX call; until then: restart after installing assets (documented). **⟶ RESOLVED for the in-app path (#410, 2026-09-22):** the in-app OCR install refreshes the slot without a restart ("In-app OCR install — design record" below). Files copied onto the drive by hand, and a download that grows a running recognizer's language set, still take effect at the next start (`known-limitations.md`).
 2. **Packaged OCR smoke, recognition leg** — the wave's build machine carries no `*.traineddata.gz`; the CSP-exposed rasterizer leg WAS verified inside a packaged build (P5). Run the full `tests/manual/ocr-smoke.test.ts` flow on an asset-carrying drive before the next release. **⟶ SUPERSEDED (2026-07-19, DEP-1 P4): this deferral FIRED and the answer is a crash.** The packaged smoke was run and packaged OCR **kills the whole app** — the `asarUnpack` list omits the tesseract.js worker's hoisted deps (`regenerator-runtime`, `is-url`, …), which stay inside `app.asar` and cannot be resolved from `app.asar.unpacked`, while `ocrAvailable` still reports true. Pre-existing and version-independent; dev-mode OCR unaffected. **Do not re-run this as a release-acceptance step** — it is blocked behind the fix bundle registered as follow-up 2 of the DEP-1 record (**⟶ CONTAINED since PR #268 (#232):** the load failure is a per-document error and a packaged build reports OCR unavailable until its startup probe passes; the closure landed in PR #269) ("Dependency remediation — design record (wave DEP-1, PR #77)" §5), below.
 3. **macOS/Linux packaged CSP + OCR smoke** (P5 measured Windows).
 4. **BE-7 memory profile** of a real 300+-page scan (manual, real assets) — confirms `page.cleanup()` keeps the hidden renderer flat.
@@ -10949,6 +10952,134 @@ Historical note: dated design-record narratives elsewhere in the docs (e.g. the 
 records in `design-guidelines.md`) describe the pre-wave overflow-item placement as it was
 when written — they are snapshots, kept verbatim by convention; the present-tense guidance
 was updated.
+
+## In-app OCR install — design record (issue #410, §1–§5)
+
+_Issue #410 (2026-09-22). The OCR language files were the only drive asset with no in-app install
+path: #59 (2026-07-17) had fixed the dead end with copy naming `prepare-drive --with-assets` /
+`fetch-runtime --family ocr`, but a user of the released portable app has no repo and no scripts.
+The analysis paper was a git-ignored working paper; this record keeps its decisions and the facts
+they rest on._
+
+**§1 Decisions (owner, 2026-09-22).**
+- **D1 — a narrow OCR installer, not a fourth engine family.** `RuntimeFamily`,
+  `SIDECAR_FAMILY_SPECS`, `EngineStatus`, `EngineDownloadManager`, the provisioning scripts, the
+  sell gate and the yaml `ocr:` schema are untouched. The engine installer is archive-shaped
+  (download → verify → pre-clean → extract → flatten → marker): with `extractTo = ocr` its pre-clean
+  would delete a sibling or user-added language, `runtimeInstallCurrent` is marker-based (every
+  script-provisioned drive would read "not current"), and a required family would be swept into
+  the argument-less "Install the AI engine" button.
+- **D2 — activate without a restart.** A null slot is composed and probed; an engine that latched
+  `'unavailable'` with the same language set on disk is probed again; a LIVE engine whose language
+  set grew is not replaced or stopped — the job reports "restart required". The outcome
+  (`OcrRefreshOutcome`) flows back to the UI.
+- **D3 — at the point of need** (the failed scan row and the failed photo row in Documents) plus a
+  quiet row on the AI Model screen. No always-on Documents banner.
+- **D4 — a facts-only confirmation** (languages, total size, licence, source host, "checked
+  before use"); no acknowledgement checkbox — the Apache-2.0 data licence is approved.
+- **D5 — sha256 and exact size anchored in CODE** (`OCR_PINS`), drift-tested against the committed
+  yaml; only the download URL comes from the yaml. No URL literal in `src/` (the R-O2 no-CDN
+  sentinel).
+- **D6 — the pinned `{deu, eng}` set as one bundle**; a language picker is future scope.
+- **D7 — pre-existing problems stay out of scope** (listed in §5), except the two docs this change
+  rewrites anyway: the stale packaged-OCR crash paragraph in `troubleshooting.md` (fixed by #232)
+  and `packaging.md`'s non-existent `ENGINE_FAMILIES` / "the banner generalizes automatically"
+  (the source of the issue's false "direction 1 generalizes the banner for free" premise).
+
+**§2 Facts the design rests on.**
+1. Only two closures captured the startup OCR engine — `main/index.ts` `getIngestionDeps` and
+   `getOcrEngine`; every other reader (status, import/re-index, preview, segments, pack save, lock
+   suspend, quit stop) read `ctx.ocrEngine` per call. The "startup-frozen" rationale ("an index
+   embedded by one embedder is unusable with another") is embedder-only. Reassigning the slot
+   alone would have split the brain: "Make searchable (OCR)" refused with `main.task.needsOcr`
+   right after the UI offered it, translate/compare of a photo failed `sourceUnreadable` (the
+   #156 symptom), categorize of a photo failed `documentNotReady`.
+2. A tesseract engine's languages are fixed at construction; `stop()` latches permanently; tesseract
+   .js 7.0.0 `terminate()` leaves pending jobs unresolved — so a live engine is never swapped.
+   `cacheMethod: 'none'` means a re-probe reads the files from disk again.
+3. The hash is the install state (`planOcrDownloads`, the sell gate, both scripts) — no marker.
+4. The yaml `ocr.files[].dest` is only root-contained; trusting it would make one click an
+   arbitrary-file write on the drive (Low under security-model S4, closed anyway by the fixed
+   destination and the language allow-list).
+5. The pinned files are 1,333,102 bytes (`deu`) and 2,952,873 bytes (`eng`), measured 2026-09-22
+   from the pinned URLs; their sha256 matched the pins.
+6. A release-only portable exe reads the APP-BUNDLED `model-manifests/`; a launcher-started drive
+   reads the drive's user-writable copy (`HILBERTRAUM_MANIFESTS_DIR`).
+
+**§3 Design as built.**
+- **Service** `services/ocr-install.ts` (Electron-free). `OCR_PINS` + `OCR_LICENSE`;
+  `resolveOcrSources` reads the drive's yaml `ocr:` block, falls back to the app-bundled copy only
+  when the drive's offers no usable block (none, or a yaml that does not validate as a whole), and refuses a block that lacks a pinned language or pins a
+  different sha256 (`mismatch` — never "fixed" by falling back); `planOcrDownloads` over the pins
+  (code hash + fixed `ocr/<lang>.traineddata.gz` destination, yaml URL) skips present + matching
+  files. `prepareOcrFolder` creates `ocr/` when missing and refuses a symlink/junction, a
+  non-directory, or a realpath outside the root — at start and before every write. Per file:
+  unlink any `<dest>.part` → `downloadToFile(url, part, { maxBytes: pinned size + 1 MiB })` →
+  `verifyDownloadedFile(part, pin)` → rename over `<dest>`; a mismatch deletes the `.part` and
+  leaves an existing file untouched; nothing else in `ocr/` is touched. `OcrInstallManager`:
+  a synchronous single-flight latch plus a run-settled latch, cancel in every live state (the
+  `.part` is removed), the job reaches `'done'` only after `activate` (the slot refresh) resolved,
+  and a nothing-to-fetch start is refused (a backstop — the UI itself shows "already on this drive —
+  restart" when every file is present, the hand-copied case). A download that failed on the DRIVE
+  (EACCES/EPERM/EROFS/ENOSPC/…) reads "could not be saved to this drive", not "check the internet";
+  a present file that cannot be hashed at start reads as friendly copy, never a raw path. Logs carry language codes, byte counts and outcomes only.
+- **One shared-seam fix** (`assets.ts` `downloadToFile`): a FAILED download now rejects only once
+  its write stream has closed (bounded at 5 s). The file is opened asynchronously, so under load a
+  body failing (or a cancel landing) before the open completed rejected first — the installer's
+  `.part` delete then ran before the file existed and the late open left an orphan (seen once as a
+  full-suite flake; `download-fail-close.test.ts` reproduces it deterministically by delaying the
+  open). The model downloader's kept `.part` benefits the same way (no stale handle on resume).
+- **Activation** (`compose-services.ts`): `composeOcrEngine` (shared with `composeServices`),
+  `probeOcrEngine` (shared with the startup probe — content-free log: outcome, ms, engine id) and
+  `refreshOcrSlot` (the D2 rules; never throws; awaits the probe, bounded by the engine's own start
+  timeout). `main/index.ts` reads `ctx?.ocrEngine ?? null` in both doc-task deps (source-pinned by
+  `compose-ocr.test.ts`; the three consumers are covered by `ocr-slot-live-consumers.test.ts`).
+- **IPC** in `registerEngineIpc.ts` through its guarded handler, pre-unlock like the engine
+  channels: `ocr:status`, `ocr:install` (no payload — any argument is refused with friendly copy
+  and never echoed; `gates()` re-checked on every start), `ocr:getJob`, `ocr:cancel`. The
+  app-bundled manifests dir is resolved in `main/index.ts` WITHOUT the env override and passed in.
+  Preload `index.ts` only — never `preload/ocr.ts` (the hostile-PDF rasterizer window).
+- **Renderer.** `useOcrInstall` (lazy status/policy fetch, 500 ms poll, module-remembered job,
+  `onFinished` once per job); `components/OcrInstall.tsx` — `OcrInstallDialog` (D4) and
+  `OcrInstallControl` (action → progress/cancel → failure/retry → outcome). DocRow: a failed scan
+  row and a failed photo row whose stored error IS `main.ingest.imageNeedsOcr` (matched through the
+  display map's canonical-English lookup, `displayMapKey`; the persisted text stays byte-identical)
+  get remedy copy, and — while the files are missing — the control under the row's banner (outside
+  it: an error banner is an alert region). When every file is already on the drive but the slot is
+  empty (copied by hand mid-session) the control names the restart instead of offering a dialog with
+  nothing to download. No Cancel while `activating` (the files are in place; the refresh is
+  bounded); the Cancel/retry labels name OCR so they never share an accessible name with a model
+  download's on the AI Model screen; `onFinished` fires exactly once per job. With no usable source list the rows name the offline
+  script route and show no button. DocumentsScreen re-reads the app status on window focus and when
+  a job finishes (an activated engine flips the scan rows to "Make searchable"), and toasts the
+  outcome. The AI Model screen's row shows while a pinned file is missing (or wrong) and hides
+  once installed.
+- **Copy + disclosures.** `docs.scan.ocrMissing` and `main.task.needsOcr` (never persisted) name
+  the in-app action first, the script as the DIY alternative; the network-inventory sentence
+  (pinned in five places by `repo-hygiene.test.ts`) gained its fourth item; PRIVACY.md's downloads
+  section names the OCR files and their host.
+
+**§4 Tests.** `ocr-install.test.ts` (gates, payload, hostile `dest`, pin mismatch, bundled
+fallback, hash-is-state skip, mismatch keeps the old file, size cap, third-language survival,
+symlinked `ocr/`, cancel in every state, single-flight, content-free logs, IPC end to end),
+`ocr-pins.test.ts` (the drift test), `preload-ocr-install.test.ts`, `compose-ocr.test.ts` (the D2
+rules + the capture pin), `ocr-slot-live-consumers.test.ts` (the split-brain regression),
+`download-fail-close.test.ts` (the seam fix above) and `OcrInstall.test.tsx` (rows, dialog, job
+states, focus/job re-read, AI Model row, German).
+
+**§5 Residuals and follow-ups.**
+- Files copied onto the drive by hand while the app runs, and an in-app download that grows a
+  running recognizer's language set, take effect at the next start (`known-limitations.md`) —
+  what is left of BUILD_STATE §5 item 15(a).
+- Changing the pinned data version edits three places together: the yaml `ocr:` block,
+  `model-policy.md` "The OCR asset class", and `OCR_PINS` (the drift test enforces it).
+- Owner-runnable on a packaged build: see the PR's manual checks (download from a scan row on a
+  drive without `ocr/` — the offer appears without a restart; a photo import reads text; the
+  German UI; policy/`allowNetwork` off disables the action).
+- Pre-existing, out of scope (D7; not filed): engine `extract_to` unconstrained + destructive
+  pre-clean; the model manifest `local_path` has no prefix rule; PRIVACY.md item 3 vs the
+  dialog-less engine banner; `translationAvailable` is read on mount only; release-only installs
+  have no app skills.
 
 ## Dependency remediation — design record (wave DEP-1, PR #77)
 

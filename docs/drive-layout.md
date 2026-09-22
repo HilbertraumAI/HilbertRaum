@@ -288,8 +288,15 @@ carries ONLY the language data under `ocr/`:
 - The pin lives in `runtime-sources.yaml` under the additive **`ocr:`** block — a NEW
   asset class (D32): plain files `{ lang, url, sha256, dest }`, no extraction, no
   install marker. Idempotency IS the hash: present + matching sha256 ⇒ skip.
-- Fetch with **`fetch-runtime --family ocr`** (`-Family ocr` on PowerShell) — one run
-  covers every OS (the data is platform-independent).
+- **In the app** (#410): a failed scan or photo row in **Documents**, or the quiet *"Text
+  recognition for scans and photos (optional)"* row on the **AI Model** screen, offers
+  **Download OCR files** — a facts-only confirmation, then the pinned `deu` + `eng` files land in
+  `ocr/`. The app pins their sha256 + exact size in code (`services/ocr-install.ts`,
+  drift-tested against the yaml); from the yaml it takes only the URL, never the `dest`. When
+  the drive's yaml offers no usable `ocr:` block (none, or the file does not validate) it falls back
+  to the app-bundled copy; a valid block pinning other files is refused.
+- **Offline / DIY:** fetch with **`fetch-runtime --family ocr`** (`-Family ocr` on PowerShell) —
+  one run covers every OS (the data is platform-independent).
 - Shipped files: `deu.traineddata.gz` (1.27 MB) + `eng.traineddata.gz` (2.82 MB), the
   tessdata_best-integerized variant (R-O3), exactly as tesseract.js reads them
   (`langPath` + gzip — never decompressed on the drive).
@@ -297,8 +304,12 @@ carries ONLY the language data under `ocr/`:
   notice without the OCR offer, and photo imports fail per-file with friendly copy.
   `assertCommercialDrive` + both build-commercial-drive script gates verify the files
   on a SOLD drive.
-- Availability is resolved once **at startup**, not re-probed mid-session: if you add the
-  `ocr/` files while the app is running, restart it before the OCR offer appears.
+- Activation: the in-app download activates OCR **without a restart** — once every file is
+  in place the app re-reads `ocr/` and fills an empty OCR slot (a packaged build proves the
+  recognizer starts first). A running recognizer is never replaced mid-session, so files that
+  GROW its language set (e.g. `eng` added to a `deu`-only drive) take effect after a restart,
+  and files **copied onto the drive by hand** while the app runs are not noticed until the next
+  start.
 
 ## Portability notes
 - No hardcoded absolute paths; everything derives from the resolved root (spec rule).
