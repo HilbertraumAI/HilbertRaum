@@ -5,7 +5,7 @@
 
 import { memo } from 'react'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
-import { Badge, Banner, Button, Chip, Icon, Spinner } from '../../components'
+import { Badge, Banner, Button, Chip, Icon, OcrInstallControl, Spinner, ocrFilesPresent, type OcrInstallView } from '../../components'
 import type { DocumentInfo, DocumentLifecycle, OcrState } from '@shared/types'
 import { generatedStaleness } from '@shared/types'
 import { markDocTaskCancelRequested, type ActiveDocTask } from '../../lib/doctasks'
@@ -20,6 +20,7 @@ import {
   badgeFor,
   isRetryableFailure,
   metaLine,
+  ocrRemedyKind,
   provenanceLine,
   rowChips
 } from './format'
@@ -47,6 +48,8 @@ export const DocRow = memo(function DocRow({
   sourcesById,
   ocrAvailable,
   ocrState,
+  ocrInstall,
+  onDownloadOcr,
   translationAvailable,
   busy,
   rowBusy,
@@ -95,6 +98,14 @@ export const DocRow = memo(function DocRow({
    * files" copy; `'unavailable'` must not claim the files are missing. Optional for older callers.
    */
   ocrState?: OcrState
+  /**
+   * The in-app OCR files install (#410) — passed ONLY to a failed scan/photo row that needs the
+   * files while they are missing (null — Object.is-stable — for every other row, PERF-5), so the
+   * row can offer "Download OCR files" and show the job in place.
+   */
+  ocrInstall?: OcrInstallView | null
+  /** Opens the screen's one OCR install confirmation dialog (stable identity, PERF-5). */
+  onDownloadOcr?: () => void
   /** The TranslateGemma sidecar resolved at startup (TG-3) — gates the Translate item. */
   translationAvailable: boolean
   busy: string | null
@@ -157,6 +168,16 @@ export const DocRow = memo(function DocRow({
   const deepIndexComplete = d.treeStatus === 'ready' && d.extractStatus === 'ready'
   const canDeepIndex = canDocTasks && !d.origin && !deepIndexComplete
   const showOcr = Boolean(d.scanDetected && ocrAvailable)
+  // #410: a failed scan or a failed photo that needs the OCR files. While the files are missing
+  // the row names the in-app download (or, with no usable source list on this drive, the offline
+  // drive-setup path) and shows the install control under its banner; once OCR is available a
+  // photo row says "Try again" will now read it. The stored error text itself never changes.
+  const ocrRemedy = ocrRemedyKind(d)
+  const ocrFilesMissing = !ocrAvailable && (ocrState ?? 'missing') === 'missing'
+  const ocrOffline = ocrInstall?.status?.available === false
+  // The files are on the drive but the slot is still empty (copied by hand mid-session): the
+  // install control says "restart"; the row must not also claim they are missing.
+  const ocrPresent = ocrFilesPresent(ocrInstall?.status)
   // OCR-R P1 FE-2: the D33 explicit redo — an already-OCR'd, INDEXED PDF can be read again
   // (better assets / a bad first pass; the backend admits it). Distinct from `showOcr`: a
   // detected scan is a FAILED row and gets the inline button in the failed branch instead.
@@ -249,10 +270,21 @@ export const DocRow = memo(function DocRow({
                     ? t('docs.scan.ocrUnavailable')
                     : ocrState === 'probing'
                       ? null // verdict pending (seconds) — claim nothing either way
-                      : t('docs.scan.ocrMissing')}
+                      : ocrPresent
+                        ? null // the control below names the restart
+                        : t(ocrOffline ? 'docs.scan.ocrMissingOffline' : 'docs.scan.ocrMissing')}
               </>
             )}
+            {ocrRemedy === 'photo' && ocrAvailable && <> {t('docs.photo.ocrReady')}</>}
+            {ocrRemedy === 'photo' && ocrFilesMissing && !ocrPresent && (
+              <> {t(ocrOffline ? 'docs.photo.ocrMissingOffline' : 'docs.photo.ocrMissing')}</>
+            )}
           </Banner>
+        )}
+        {/* Outside the banner: an error banner is an alert region, and progress ticks inside it
+            would be re-announced. */}
+        {ocrRemedy != null && ocrFilesMissing && ocrInstall && onDownloadOcr && (
+          <OcrInstallControl install={ocrInstall} onRequestInstall={onDownloadOcr} t={t} />
         )}
         {d.staleEmbeddings && <Banner tone="warning">{t('docs.stale.banner')}</Banner>}
       </div>

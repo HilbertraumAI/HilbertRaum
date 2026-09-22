@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, KnowledgePackToolsDialog, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, KnowledgePackToolsDialog, OcrInstallControl, OcrInstallDialog, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
 import {
   availableFamilies,
   groupModelVariants,
@@ -17,6 +17,7 @@ import {
 import { computeDownloadGate } from '../lib/downloadGate'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useKnowledgePackToolsInstall } from '../lib/useKnowledgePackToolsInstall'
+import { useOcrInstall } from '../lib/useOcrInstall'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
@@ -268,6 +269,16 @@ export function ModelsScreen(): JSX.Element {
   const packToolsInstall = useKnowledgePackToolsInstall(packToolsMissing, () => {
     void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
   })
+  // #410: the quiet OCR row — the SAME dialog/hook the Documents rows use. Shown while this drive
+  // has a usable download list and a pinned language file is missing (or does not match its pin),
+  // plus, after a job this visit ran, until the screen is left (so its outcome — "ready" or
+  // "restart" — stays readable). Hidden once installed.
+  const [ocrDialogOpen, setOcrDialogOpen] = useState(false)
+  const [ocrJobFinishedHere, setOcrJobFinishedHere] = useState(false)
+  const ocrInstall = useOcrInstall(true, () => setOcrJobFinishedHere(true))
+  const ocrFilesMissing =
+    ocrInstall.status?.available === true && ocrInstall.status.languages.some((l) => !l.installed)
+  const ocrRowVisible = ocrFilesMissing || ocrInstall.live || ocrJobFinishedHere
   // Mounted flag (audit FE-4): refresh() and the download/engine polls below resolve async; a
   // parked tick can land AFTER unmount (clearing the interval doesn't abort the in-flight
   // promise). Guard every setState behind this so ModelsScreen joins the uniform FE-4 discipline.
@@ -1290,6 +1301,14 @@ export function ModelsScreen(): JSX.Element {
         </div>
       )}
 
+      {/* #410: the quiet OCR row (a hint line, like the knowledge-pack tools row above). */}
+      {ocrRowVisible && (
+        <div className="ocr-install-row">
+          <p className="hint">{t('models.ocr.row')}</p>
+          <OcrInstallControl install={ocrInstall} onRequestInstall={() => setOcrDialogOpen(true)} t={t} />
+        </div>
+      )}
+
       {models.length === 0 && (
         <EmptyState
           title={t('models.empty.title')}
@@ -1534,6 +1553,22 @@ export function ModelsScreen(): JSX.Element {
             void packToolsInstall.start()
           }}
           onCancel={() => setPackToolsDialogOpen(false)}
+          t={t}
+        />
+      )}
+
+      {ocrInstall.status && (
+        <OcrInstallDialog
+          open={ocrDialogOpen}
+          status={ocrInstall.status}
+          downloadsEnabled={ocrInstall.downloadsEnabled}
+          blockedReason={ocrInstall.blockedReason}
+          onConfirm={() => {
+            setOcrDialogOpen(false)
+            void ocrInstall.start()
+          }}
+          onCancel={() => setOcrDialogOpen(false)}
+          lang={lang}
           t={t}
         />
       )}

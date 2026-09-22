@@ -9,7 +9,7 @@ import type { DocTaskKind, DocumentInfo, IngestionStatus } from '@shared/types'
 import { provenanceView } from '@shared/types'
 import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
 import type { I18n } from '../../i18n'
-import { unsupportedTypeExt } from '../../lib/displayMap'
+import { displayMapKey, unsupportedTypeExt } from '../../lib/displayMap'
 
 /**
  * A failed import is RETRYABLE when re-indexing could plausibly succeed (a transient read /
@@ -25,6 +25,20 @@ export function isRetryableFailure(errorMessage: string | null | undefined): boo
   if (unsupportedTypeExt(msg) != null) return false
   if (msg === en['main.ingest.fileTooLarge'] || msg === en['main.ingest.tooManyChunks']) return false
   return true
+}
+
+/**
+ * Which in-app OCR remedy a row needs (#410), or null: a FAILED detected scan (`'scan'` — the
+ * "Make searchable" path) or a FAILED photo whose stored error is the canonical
+ * `main.ingest.imageNeedsOcr` (`'photo'` — "Try again" after the download). Matched through the
+ * display map's canonical-English lookup; the stored text itself is never changed.
+ */
+export function ocrRemedyKind(
+  d: Pick<DocumentInfo, 'status' | 'scanDetected' | 'errorMessage'>
+): 'scan' | 'photo' | null {
+  if (d.status !== 'failed') return null
+  if (d.scanDetected) return 'scan'
+  return displayMapKey(d.errorMessage) === 'main.ingest.imageNeedsOcr' ? 'photo' : null
 }
 
 // Status pills: icon + word, never color-only (guidelines §6). Labels speak

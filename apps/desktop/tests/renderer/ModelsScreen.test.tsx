@@ -16,6 +16,7 @@ import {
   type EngineStatus,
   type ModelInfo,
   type ModelVerifyProgress,
+  type OcrInstallStatus,
   type PolicyStatus,
   type RuntimeStatus
 } from '../../src/shared/types'
@@ -64,6 +65,15 @@ function policyStatus(opts: { downloadsAllowed: boolean; settingOn: boolean }): 
 }
 
 const appStatus = { machineRamGb: 32 } as unknown as AppStatus
+
+/** #410: a drive with no usable OCR source list — the AI Model screen's OCR row stays hidden. */
+const NO_OCR_SOURCES: OcrInstallStatus = {
+  available: false,
+  languages: [],
+  totalBytes: 0,
+  sourceHost: null,
+  license: 'Apache-2.0'
+}
 
 function stub(opts: {
   models?: ModelInfo[]
@@ -1211,6 +1221,8 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       ),
       getAppStatus: vi.fn(async () => appStatus),
       getEngineStatus: vi.fn(async () => idleEngine),
+      // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
+      getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
       getRuntimeStatus: vi.fn(async () => idleRuntime),
       onModelVerifyProgress: vi.fn(() => () => {}),
       downloadModel,
@@ -2155,6 +2167,8 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
       getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
       getAppStatus: vi.fn(async () => appStatusFixture({ machineRamGb: opts.machineRamGb ?? 32 })),
       getEngineStatus: vi.fn(async () => idleEngine),
+      // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
+      getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
       getRuntimeStatus: vi.fn(async () => idleRuntime),
       onModelVerifyProgress: vi.fn(() => () => {}),
       // #314: the mount-time adopt read. Nothing is downloading in these cases.
@@ -2629,6 +2643,8 @@ describe('lazy verification + "Check all model files" (#382)', () => {
       getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
       getAppStatus: vi.fn(async () => appStatus),
       getEngineStatus: vi.fn(async () => idleEngine),
+      // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
+      getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
       getRuntimeStatus: vi.fn(async () => idleRuntime),
       onModelVerifyProgress: vi.fn((cb: (p: ModelVerifyProgress) => void) => {
         sink = cb
@@ -2743,6 +2759,8 @@ describe('cancelling "Check all model files" (#420)', () => {
       getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
       getAppStatus: vi.fn(async () => appStatus),
       getEngineStatus: vi.fn(async () => idleEngine),
+      // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
+      getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
       getRuntimeStatus: vi.fn(async () => idleRuntime),
       onModelVerifyProgress: vi.fn((cb: (p: ModelVerifyProgress) => void) => {
         sink = cb

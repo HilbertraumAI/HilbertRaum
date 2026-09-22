@@ -592,10 +592,23 @@ export const en = {
   'docs.meta.sectionsCount.other': '{count} sections',
   'docs.meta.summary': 'Summary',
   'docs.scan.ocrOffer': 'Use "Make searchable (OCR)" on this row to read the pages on this drive.',
+  // #410: the in-app download first (the install control sits under the row's banner); the
+  // drive-setup script stays the DIY alternative. `…Offline` is the copy when this drive has no
+  // usable download list, so there is no button to point at.
   'docs.scan.ocrMissing':
+    'Making it searchable needs the OCR files, which are not on this drive. Download them ' +
+    'below — or, on a drive you set up yourself, add them with "fetch-runtime --family ocr".',
+  'docs.scan.ocrMissingOffline':
     'Making it searchable needs the OCR files, which are not on this drive. To add them, re-run ' +
     'the drive setup with "--with-assets", or fetch only the OCR files with ' +
     '"fetch-runtime --family ocr".',
+  // #410: appended at DISPLAY time to a failed photo row whose stored error is
+  // `main.ingest.imageNeedsOcr` (persist-canonical — its own text never changes).
+  'docs.photo.ocrMissing': 'Download the OCR files below, then use "Try again" to read this photo.',
+  'docs.photo.ocrMissingOffline':
+    'Add the OCR files with the drive setup ("fetch-runtime --family ocr"), then use "Try again" ' +
+    'to read this photo.',
+  'docs.photo.ocrReady': 'Text recognition is ready now — use "Try again" to read this photo.',
   // Scan-row explanation + Documents banner when the OCR files are on the drive but the
   // recognizer cannot run in this build (#232; default wording from #219, owner review pending).
   'docs.scan.ocrUnavailable':
@@ -1220,6 +1233,41 @@ export const en = {
   // (`KnowledgePackToolsDialog.tsx`).
   'models.packTools.row': 'Knowledge-pack tools: not installed',
   'models.packTools.install': 'Install…',
+  // #410: the quiet OCR row — shown while the OCR files are missing (or incomplete) and this
+  // drive has a usable download list; hidden once installed. Opens the OCR install dialog.
+  'models.ocr.row': 'Text recognition for scans and photos (optional)',
+  // #410: the in-app OCR files install — the facts-only confirmation (the licence is approved,
+  // so no acknowledgement) and the inline control. Sizes, languages and the source host come
+  // from main (code-side pins; the host from the drive's download list).
+  'ocr.install.action': 'Download OCR files',
+  'ocr.install.actionTitle': 'Download the text-recognition (OCR) language files for scans and photos',
+  'ocr.install.confirm.title': 'Download the OCR files?',
+  'ocr.install.confirm.explain':
+    'Text recognition (OCR) reads scanned PDFs and photographed pages on this computer. It ' +
+    'needs the language files below on this drive — nothing else is downloaded, and your ' +
+    'documents never leave this computer.',
+  'ocr.install.confirm.languages': 'Languages',
+  'ocr.install.confirm.hint': 'Each file is checked against its expected checksum before it is used.',
+  'ocr.install.confirm.start': 'Download',
+  'ocr.install.lang.deu': 'German',
+  'ocr.install.lang.eng': 'English',
+  'ocr.install.starting': 'Starting the download…',
+  'ocr.install.progress': 'Downloading the OCR files… {pct} %',
+  'ocr.install.verifying': 'Checking the OCR files…',
+  'ocr.install.activating': 'Starting text recognition…',
+  'ocr.install.failed': 'The OCR files could not be installed.',
+  // OCR-specific labels: the AI Model screen can show a model download's "Cancel download" /
+  // "Retry download" at the same time, and the accessible names must tell them apart.
+  'ocr.install.retry': 'Retry the OCR download',
+  'ocr.install.cancel': 'Cancel the OCR download',
+  // Every file is on the drive but the recognizer was not started with them (copied by hand
+  // while the app ran): nothing to download, a restart picks them up.
+  'ocr.install.alreadyPresent': 'The OCR files are already on this drive. Restart HilbertRaum to use them.',
+  'ocr.install.outcome.activated': 'Text recognition is ready — no restart needed.',
+  'ocr.install.outcome.restartRequired':
+    'The OCR files are in place. Restart HilbertRaum to use the new language files.',
+  'ocr.install.outcome.unchanged':
+    'The OCR files are in place. If text recognition is still not offered, restart HilbertRaum.',
   // RAM-gate copy, composed of full clauses (spec §11.4 — never "your hardware is bad").
   'models.ram.needs': 'Needs at least {min} GB RAM',
   'models.ram.machine': ' — this computer has about {ram} GB',
@@ -2495,8 +2543,9 @@ export const en = {
   'main.task.sourceUnreadable':
     'The stored copy of this document could not be read. Re-import the document, then try again.',
   'main.task.needsOcr':
-    'Text recognition needs the OCR files, which are not on this drive. To add them, re-run the ' +
-    'drive setup with "--with-assets", or fetch only the OCR files with "fetch-runtime --family ocr".',
+    'Text recognition needs the OCR files, which are not on this drive. Download them with ' +
+    '"Download OCR files" on the scanned document or on the AI Model screen — or, on a drive ' +
+    'you set up yourself, add them with "fetch-runtime --family ocr".',
   // Files present but the recognizer cannot run in this build (#232).
   'main.task.ocrUnavailable':
     'Text recognition (OCR) is not available in this build: the OCR files are on this drive, but ' +

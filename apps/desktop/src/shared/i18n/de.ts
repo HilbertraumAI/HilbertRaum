@@ -612,10 +612,23 @@ export const de: Record<keyof typeof en, string> = {
   'docs.meta.summary': 'Zusammenfassung',
   'docs.scan.ocrOffer':
     'Nutze „Durchsuchbar machen (OCR)“ in dieser Zeile, um die Seiten auf diesem Laufwerk zu lesen.',
+  // #410: zuerst der In-App-Download (die Schaltfläche steht unter dem Hinweis der Zeile).
   'docs.scan.ocrMissing':
+    'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk. Lade sie unten ' +
+    'herunter — oder ergänze sie auf einem selbst eingerichteten Laufwerk mit ' +
+    '„fetch-runtime --family ocr“.',
+  'docs.scan.ocrMissingOffline':
     'Zum Durchsuchbar-Machen fehlen die OCR-Dateien auf diesem Laufwerk. Um sie zu ergänzen, ' +
     'die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur die OCR-Dateien ' +
     'mit „fetch-runtime --family ocr“ holen.',
+  'docs.photo.ocrMissing':
+    'Lade unten die OCR-Dateien herunter und nutze dann „Erneut versuchen“, um dieses Foto zu ' +
+    'lesen.',
+  'docs.photo.ocrMissingOffline':
+    'Ergänze die OCR-Dateien mit der Laufwerk-Einrichtung („fetch-runtime --family ocr“) und ' +
+    'nutze dann „Erneut versuchen“, um dieses Foto zu lesen.',
+  'docs.photo.ocrReady':
+    'Die Texterkennung ist jetzt bereit — nutze „Erneut versuchen“, um dieses Foto zu lesen.',
   // Scan-Zeile + Banner, wenn die OCR-Dateien da sind, aber die Erkennung nicht startet (#232;
   // Standardtext aus #219, Freigabe durch den Owner offen).
   'docs.scan.ocrUnavailable':
@@ -1244,6 +1257,37 @@ export const de: Record<keyof typeof en, string> = {
   // wie der Hinweis im Wissenspakete-Panel (`KnowledgePackToolsDialog.tsx`).
   'models.packTools.row': 'Wissenspaket-Werkzeuge: nicht installiert',
   'models.packTools.install': 'Installieren…',
+  // #410: die ruhige OCR-Zeile und der In-App-Download der OCR-Dateien.
+  'models.ocr.row': 'Texterkennung für Scans und Fotos (optional)',
+  'ocr.install.action': 'OCR-Dateien herunterladen',
+  'ocr.install.actionTitle':
+    'Die Sprachdateien der Texterkennung (OCR) für Scans und Fotos herunterladen',
+  'ocr.install.confirm.title': 'OCR-Dateien herunterladen?',
+  'ocr.install.confirm.explain':
+    'Die Texterkennung (OCR) liest gescannte PDFs und fotografierte Seiten auf diesem ' +
+    'Computer. Dafür braucht sie die unten genannten Sprachdateien auf diesem Laufwerk — sonst ' +
+    'wird nichts heruntergeladen, und deine Dokumente verlassen diesen Computer nie.',
+  'ocr.install.confirm.languages': 'Sprachen',
+  'ocr.install.confirm.hint':
+    'Jede Datei wird vor der Nutzung mit ihrer erwarteten Prüfsumme verglichen.',
+  'ocr.install.confirm.start': 'Herunterladen',
+  'ocr.install.lang.deu': 'Deutsch',
+  'ocr.install.lang.eng': 'Englisch',
+  'ocr.install.starting': 'Download wird gestartet…',
+  'ocr.install.progress': 'OCR-Dateien werden heruntergeladen… {pct} %',
+  'ocr.install.verifying': 'OCR-Dateien werden geprüft…',
+  'ocr.install.activating': 'Texterkennung wird gestartet…',
+  'ocr.install.failed': 'Die OCR-Dateien konnten nicht installiert werden.',
+  'ocr.install.retry': 'OCR-Download erneut versuchen',
+  'ocr.install.cancel': 'OCR-Download abbrechen',
+  'ocr.install.alreadyPresent':
+    'Die OCR-Dateien liegen bereits auf diesem Laufwerk. Starte HilbertRaum neu, um sie zu nutzen.',
+  'ocr.install.outcome.activated': 'Die Texterkennung ist bereit — kein Neustart nötig.',
+  'ocr.install.outcome.restartRequired':
+    'Die OCR-Dateien sind da. Starte HilbertRaum neu, um die neuen Sprachdateien zu nutzen.',
+  'ocr.install.outcome.unchanged':
+    'Die OCR-Dateien sind da. Wenn die Texterkennung trotzdem nicht angeboten wird, starte ' +
+    'HilbertRaum neu.',
   'models.ram.needs': 'Braucht mindestens {min} GB RAM',
   'models.ram.machine': ' — dieser Computer hat etwa {ram} GB',
   'models.ram.advice': '. Wähle ein kleineres Modell — die Qualität bleibt top.',
@@ -2477,8 +2521,9 @@ export const de: Record<keyof typeof en, string> = {
     'Dokument neu und versuch es dann noch einmal.',
   'main.task.needsOcr':
     'Für die Texterkennung werden die OCR-Dateien benötigt, die auf diesem Laufwerk fehlen. ' +
-    'Um sie zu ergänzen, die Laufwerk-Einrichtung mit „--with-assets“ erneut ausführen oder nur ' +
-    'die OCR-Dateien mit „fetch-runtime --family ocr“ holen.',
+    'Lade sie mit „OCR-Dateien herunterladen“ beim gescannten Dokument oder im ' +
+    'KI-Modell-Bereich herunter — oder ergänze sie auf einem selbst eingerichteten Laufwerk mit ' +
+    '„fetch-runtime --family ocr“.',
   // Dateien vorhanden, aber die Erkennung startet in dieser Version nicht (#232).
   'main.task.ocrUnavailable':
     'Die Texterkennung (OCR) ist in dieser Version nicht verfügbar: Die OCR-Dateien liegen auf ' +

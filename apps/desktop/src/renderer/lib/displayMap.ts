@@ -50,6 +50,16 @@ const KEY_BY_ENGLISH: ReadonlyMap<string, MessageKey> = new Map(
   DISPLAY_MAP_KEYS.map((key) => [en[key], key])
 )
 
+/**
+ * The persist-canonical key a stored English string IS (exact match), or null. Lets a row branch
+ * on WHICH known failure it carries without comparing raw English at the call site — e.g. the
+ * photo row's in-app OCR remedy (#410) keys off `main.ingest.imageNeedsOcr`, whose stored text
+ * never changes (the remedy is appended at display time instead).
+ */
+export function displayMapKey(raw: string | null | undefined): MessageKey | null {
+  return raw ? (KEY_BY_ENGLISH.get(raw) ?? null) : null
+}
+
 /** A bound translator (what `useT().t` returns, or `(k) => t(lang, k)`). */
 export type BoundT = (key: MessageKey, params?: MessageParams) => string
 

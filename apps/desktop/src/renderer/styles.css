@@ -486,6 +486,10 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* In-app model download progress. */
 .download-progress { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; }
 .download-progress .hint { margin: 0; flex-basis: 100%; }
+/* In-app OCR files install (#410): the inline action / progress / outcome under a failed scan or
+   photo row's banner and in the AI Model screen's quiet row. Tokens only. */
+.ocr-install { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-top: 4px; }
+.ocr-install .hint { margin: 0; flex-basis: 100%; }
 /* "Install the AI engine" banner body: stacked label + action/progress. */
 .engine-install { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
 .engine-install progress { width: 100%; accent-color: var(--accent); }

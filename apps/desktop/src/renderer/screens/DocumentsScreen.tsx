@@ -1,7 +1,7 @@
 import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react'
 import type { ReactNode } from 'react'
 import { useVirtualizer } from '@tanstack/react-virtual'
-import { Badge, Banner, Button, Chip, ConfirmDialog, EmptyState, ErrorBanner, Icon, Modal, Progress, SegmentedControl, Spinner, useToast, type BadgeTone } from '../components'
+import { Badge, Banner, Button, Chip, ConfirmDialog, EmptyState, ErrorBanner, Icon, Modal, OcrInstallDialog, Progress, SegmentedControl, Spinner, ocrInstallOutcomeText, useToast, type BadgeTone } from '../components'
 import * as DropdownMenu from '@radix-ui/react-dropdown-menu'
 import type {
   Collection,
@@ -38,6 +38,7 @@ import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { getLastTranslateChoice, setLastTranslateChoice } from '../lib/translateSession'
 import { localizeServerCopy, unsupportedTypeExt } from '../lib/displayMap'
 import { useEventCallback } from '../lib/useEventCallback'
+import { useOcrInstall } from '../lib/useOcrInstall'
 import { useT, type I18n } from '../i18n'
 import { en, type MessageKey, type UiLanguage } from '@shared/i18n'
 // DX-3 split (full-audit-2026-06-29 follow-up Phase 8): the per-row component, the section rail,
@@ -54,6 +55,7 @@ import {
   DOC_ROW_ESTIMATED_HEIGHT,
   DOC_ROW_OVERSCAN,
   formatSize,
+  ocrRemedyKind,
   provenanceLine
 } from './documents/format'
 import {
@@ -218,9 +220,10 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
   // gates OCR — read once with it below.
   const [translationAvailable, setTranslationAvailable] = useState(false)
   // OCR availability (availability-driven, no settings key): gates "Make searchable
-  // (OCR)" and the photo-import mention. Read once per mount — the language files don't appear
-  // mid-session; only a packaged build's startup probe verdict can change, and the status effect
-  // below re-reads while it is still 'probing' (#232).
+  // (OCR)" and the photo-import mention. Read on mount, re-read while a packaged build's startup
+  // probe is still 'probing' (#232), on window focus, and when an in-app OCR install finishes —
+  // the install activates the engine mid-session (#410), so the offer can appear without a
+  // restart or a navigation.
   const [ocrAvailable, setOcrAvailable] = useState(false)
   // Why it is off (#232): 'missing' (no files) vs 'unavailable' (files present, recognizer cannot
   // run in this build → the banner below + a scan-row copy that does not claim the files are missing).
@@ -322,33 +325,59 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
     })
   }, [refreshCollections])
 
+  // The OCR + translation verdicts. A packaged build's OCR verdict is 'probing' for the first
+  // seconds after launch (and right after an in-app install activates the engine, #410); re-read
+  // the status while it is pending so a read in that window does not pin "no OCR" (#232).
+  const statusRecheckRef = useRef<ReturnType<typeof setTimeout> | null>(null)
+  const readStatus = useEventCallback(async (): Promise<void> => {
+    try {
+      const status = await window.api.getAppStatus()
+      if (!mountedRef.current) return
+      const state = status.ocrState ?? (status.ocrAvailable ? 'available' : 'missing')
+      setOcrAvailable(status.ocrAvailable)
+      setOcrState(state)
+      setTranslationAvailable(status.translationAvailable)
+      if (statusRecheckRef.current) clearTimeout(statusRecheckRef.current)
+      statusRecheckRef.current =
+        state === 'probing' ? setTimeout(() => readStatus(), OCR_PROBE_RECHECK_MS) : null
+    } catch {
+      // No status (partial test bridge) → keep the safe defaults: no OCR offer, no
+      // Translate (the install hint shows instead).
+    }
+  })
+
   useEffect(() => {
     refresh().catch((e) => setError(friendlyIpcError(e)))
-    // A packaged build's OCR verdict is 'probing' for the first seconds after launch; re-read the
-    // status while it is pending so a mount in that window does not pin "no OCR" (#232).
-    let cancelled = false
-    let recheck: ReturnType<typeof setTimeout> | null = null
-    const readStatus = async (): Promise<void> => {
-      try {
-        const status = await window.api.getAppStatus()
-        if (cancelled) return
-        const state = status.ocrState ?? (status.ocrAvailable ? 'available' : 'missing')
-        setOcrAvailable(status.ocrAvailable)
-        setOcrState(state)
-        setTranslationAvailable(status.translationAvailable)
-        if (state === 'probing') recheck = setTimeout(() => void readStatus(), OCR_PROBE_RECHECK_MS)
-      } catch {
-        // No status (partial test bridge) → keep the safe defaults: no OCR offer, no
-        // Translate (the install hint shows instead).
-      }
-    }
-    void readStatus()
+    readStatus()
     return () => {
-      cancelled = true
-      if (recheck) clearTimeout(recheck)
+      if (statusRecheckRef.current) clearTimeout(statusRecheckRef.current)
       if (pollRef.current) clearInterval(pollRef.current)
     }
-  }, [refresh])
+  }, [refresh, readStatus])
+
+  // #410: re-read on window focus (the ChatScreen dictation pattern) — OCR files can become
+  // usable while the user is elsewhere (an install started on the AI Model screen).
+  useEffect(() => {
+    const onFocus = (): void => readStatus()
+    window.addEventListener('focus', onFocus)
+    return () => window.removeEventListener('focus', onFocus)
+  }, [readStatus])
+
+  // #410: the in-app OCR files install, offered on a failed scan/photo row while the files are
+  // missing. Lazy — the hook fetches its status/policy only once such a row is on screen. A
+  // finished job re-reads the app status (an activated engine flips the scan rows to "Make
+  // searchable"); a completed one also toasts its outcome.
+  // Memoized on the list (PF-5: a large library re-renders on every 400 ms import tick).
+  const hasOcrRemedyRow = useMemo(() => (docs ?? []).some((d) => ocrRemedyKind(d) != null), [docs])
+  const needsOcrInstall = ocrState === 'missing' && hasOcrRemedyRow
+  const [ocrDialogOpen, setOcrDialogOpen] = useState(false)
+  const ocrInstall = useOcrInstall(needsOcrInstall, (job) => {
+    readStatus()
+    if (job.status === 'done' && job.outcome && mountedRef.current) {
+      showToast(ocrInstallOutcomeText(job.outcome, t))
+    }
+  })
+  const openOcrDialog = useCallback(() => setOcrDialogOpen(true), [])
 
   // Poll the import job until ingestion settles (FE-7). The 400 ms tick reads ONLY the small
   // `getImportJob` status; the full `listDocuments` + collections refresh (which re-derives the whole
@@ -1175,6 +1204,10 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
         sourcesById={sourcesById}
         ocrAvailable={ocrAvailable}
         ocrState={ocrState}
+        // #410 (PERF-5): the install object only for a row that needs the files — null for all
+        // the others, so an install tick re-renders the few rows showing it, never the list.
+        ocrInstall={needsOcrInstall && ocrRemedyKind(d) != null ? ocrInstall : null}
+        onDownloadOcr={openOcrDialog}
         translationAvailable={translationAvailable}
         busy={busy}
         rowBusy={rowBusy}
@@ -1705,6 +1738,22 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
             : t('docs.reindexAllConfirm.body')}
         </p>
       </ConfirmDialog>
+
+      {ocrInstall.status && (
+        <OcrInstallDialog
+          open={ocrDialogOpen}
+          status={ocrInstall.status}
+          downloadsEnabled={ocrInstall.downloadsEnabled}
+          blockedReason={ocrInstall.blockedReason}
+          onConfirm={() => {
+            setOcrDialogOpen(false)
+            void ocrInstall.start()
+          }}
+          onCancel={() => setOcrDialogOpen(false)}
+          lang={lang}
+          t={t}
+        />
+      )}
 
       {translateDoc && (
         <Modal
