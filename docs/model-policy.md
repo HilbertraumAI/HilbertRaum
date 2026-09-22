@@ -697,6 +697,18 @@ sha256-verified files (no extraction, no marker — the hash is the install stat
 The OCR engine itself (tesseract.js + its WASM core) ships INSIDE the app as pinned
 npm dependencies, not as drive assets.
 
+**In-app install (#410).** The released app can fetch the same two files itself — **Download OCR
+files** on a failed scan/photo row in Documents, or the quiet row on the AI Model screen — behind a
+facts-only confirmation (languages, size, Apache-2.0, source host; no acknowledgement, the licence
+is approved) and the usual gates (policy ∧ `allowNetwork`). OCR is **not** an engine family: it
+has its own narrow installer (`services/ocr-install.ts`). Its trust anchor is **code-side**: the
+`OCR_PINS` table carries each language's sha256 and exact size, drift-tested against the table
+below and the committed yaml (`tests/unit/ocr-pins.test.ts`); the yaml contributes only the
+download URL (its `dest` is ignored — the destination is always `ocr/<lang>.traineddata.gz`), and
+a yaml whose sha256 differs from the pin is refused. **Changing the pinned data version therefore
+means editing three places together:** the yaml `ocr:` block, this table, and `OCR_PINS` — the
+drift test fails until they agree.
+
 **License-review record — tesseract.js 7.0.0 npm dependency (status: approved,
 reviewed 2026-06-11):** **Apache-2.0** (npm + repo `naptha/tesseract.js`). Pure
 JS/WASM, no native build. Pinned EXACT (`"tesseract.js": "7.0.0"` — the D-UI1/Radix
@@ -720,8 +732,11 @@ upstream):
 
 | Asset | SHA-256 | Size |
 |---|---|---|
-| `ocr/deu.traineddata.gz` | `306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b` | 1.27 MB |
-| `ocr/eng.traineddata.gz` | `45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91` | 2.82 MB |
+| `ocr/deu.traineddata.gz` | `306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b` | 1.27 MB (1,333,102 bytes) |
+| `ocr/eng.traineddata.gz` | `45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91` | 2.82 MB (2,952,873 bytes) |
+
+The exact byte counts were measured on 2026-09-22 from fresh downloads of the pinned URLs, whose
+sha256 matched this table (they are what `OCR_PINS` carries).
 
 ## Sidecar binaries — kiwix-tools (knowledge packs, #301; family contract #339 P8-1)
 

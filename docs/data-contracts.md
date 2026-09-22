@@ -1760,6 +1760,29 @@ whole renderer-visible surface.
   count stays 145) and **no preload change** — `missingOptionalFamilies` and the gate additions ride the existing
   `engineStatus` payload / the existing assert-tool call, unread by the renderer until the
   consent step (#339 P8-2).
+- **In-app OCR language-file install (#410)** — its own narrow installer, NOT an engine family
+  (`EngineStatus`/`EngineDownloadRequest`/the `engine:*` channels are unchanged). Four channels,
+  all through `registerEngineIpc`'s guarded handler, pre-unlock like the engine ones:
+  `getOcrInstallStatus(): Promise<OcrInstallStatus>` (`ocr:status`), `installOcr():
+  Promise<OcrInstallJob>` (`ocr:install` — takes NO payload: the preload sends none, and main
+  refuses any argument with `main.ocr.badRequest` without echoing it), `getOcrInstallJob(jobId)`
+  (`ocr:getJob`), `cancelOcrInstall(jobId)` (`ocr:cancel`). Types (`shared/types.ts`):
+  `OcrInstallLanguage = { lang, sizeBytes, installed }` (installed = on the drive AND matching the
+  pinned hash); `OcrInstallStatus = { available, languages: OcrInstallLanguage[], totalBytes
+  (the not-installed languages' sizes), sourceHost: string | null (computed in main from the
+  pinned URLs), license (code-side 'Apache-2.0') }`; `OcrInstallJob = { jobId, status:
+  queued|downloading|verifying|activating|done|failed|cancelled, receivedBytes, totalBytes,
+  outcome: OcrRefreshOutcome | null, error: string | null }` — session-only, never persisted;
+  `outcome` is set on `done`, which the job reaches only after the engine slot was refreshed.
+  `OcrRefreshOutcome = 'activated' | 'restartRequired' | 'unchanged' | 'startFailed'` is what
+  `refreshOcrSlot` (`main/services/compose-services.ts`) did to `AppContext.ocrEngine`, which is
+  now MUTABLE (read live by every consumer, including the doc-task deps). What is installed is
+  pinned in code (`OCR_PINS`: `{ lang, sha256, sizeBytes }` for `deu` + `eng`, drift-tested
+  against `runtime-sources.yaml`); the yaml's `ocr:` block contributes only each pinned language's
+  URL — its `dest` is ignored (always `ocr/<lang>.traineddata.gz`) and a differing `sha256` is
+  refused. No schema change; `main.ingest.imageNeedsOcr` (persist-canonical) is unchanged — the
+  photo row's remedy is appended at display time (`displayMapKey`, `renderer/lib/displayMap.ts`).
+  Record: `architecture.md` "In-app OCR install — design record".
 - **Image understanding (vision)** — `imageGetStatus(): Promise<VisionStatus>`,
   `imageChooseImage()` (opaque token + name + sizeBytes; the path stays in main, D2),
   `imageReadBytes(token)`, `imageAnalyze(req: ImageAnalyzeRequest): Promise<ImageJob>`,
@@ -1830,7 +1853,7 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
+`shared/ipc.ts` (156 channels since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
 sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
 (now 3, `packs:changed` added) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented

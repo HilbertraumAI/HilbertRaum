@@ -132,8 +132,9 @@ so. Packs are a retrieval source, not a second brain bolted onto every feature.
 Everything stays on this computer. The pack server binds to `127.0.0.1` only, asking never
 leaves the machine, and registering a pack tells nobody anything. The app's whole network
 footprint is unchanged by this feature except for the tools download itself: The only things
-the app ever downloads are AI models, the AI engine and the optional knowledge-pack tools —
-each one only after you confirm it, each one verified before use.
+the app ever downloads are AI models, the AI engine, the optional knowledge-pack tools and the
+optional text-recognition (OCR) files — each one only after you confirm it, each one verified
+before use.
 
 One limit belongs in plain sight rather than in a footnote, because it is the single place
 where knowledge packs are weaker than the rest of the workspace: While the workspace is

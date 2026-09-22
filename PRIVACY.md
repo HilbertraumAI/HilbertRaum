@@ -26,7 +26,7 @@ described under "Letting other apps on this computer use your model" below.
   local model, puts the text in the message box for you to review, and securely deletes the
   recording. Dictations are not saved, not logged, and never sent anywhere — the message itself
   is only sent to the local model when you press Send.
-- **No scan or photo upload.** Reading scanned PDFs and photos of pages (OCR) happens **on this device** with a local recognition engine and language files stored on the drive — no cloud OCR service is ever involved, and the app never fetches language data at run time.
+- **No scan or photo upload.** Reading scanned PDFs and photos of pages (OCR) happens **on this device** with a local recognition engine and language files stored on the drive — no cloud OCR service is ever involved. The recognizer never fetches anything itself; the language files are either already on the drive or downloaded once, after you confirm it (see below).
 - **No image upload.** When you ask questions about a picture (the **Images** screen), the image is
   analyzed **on this device** by a local vision model — the bytes are never sent off-device, and no
   cloud image service is ever involved.
@@ -34,8 +34,8 @@ described under "Letting other apps on this computer use your model" below.
   the translation is produced **on this device** by a local translation model — your text and
   documents are never sent off-device, and no cloud translation service is ever involved.
 - **No embedding upload.** Vector indexes stay local.
-- **No automatic downloads.** Models, the AI engine, and the optional knowledge-pack tools are
-  only ever fetched after you explicitly opt in.
+- **No automatic downloads.** Models, the AI engine, the optional knowledge-pack tools and the
+  optional text-recognition (OCR) files are only ever fetched after you explicitly opt in.
 
 ## What data is stored, and where
 
@@ -87,8 +87,9 @@ The app's **core path — chat, documents, indexing, search — always stays loc
 network calls. A visible indicator (in the chat header; clicking it opens
 Settings → **Privacy & data**) tells you the current state honestly: **Local · Offline** when
 no network is permitted, or "Downloads allowed — chats and documents stay local" when it is.
-The only things the app ever downloads are AI models, the AI engine and the optional
-knowledge-pack tools — each one only after you confirm it, each one verified before use. That
+The only things the app ever downloads are AI models, the AI engine, the optional
+knowledge-pack tools and the optional text-recognition (OCR) files — each one only after you
+confirm it, each one verified before use. That
 setting is now **on by default** so a fresh install can fetch models out of the box — but it
 stays bounded: every download is explicit and confirmed, and you can turn it off in Settings:
 
@@ -105,25 +106,31 @@ The built-in browser engine's own background fetches are switched off as well: s
 disabled, because the engine would otherwise download a spelling dictionary from a Google-operated
 server on Windows and Linux the first time you type.
 
-## Model, engine and knowledge-pack-tool downloads — the app's only use of the internet
+## Model, engine, knowledge-pack-tool and OCR-file downloads — the app's only use of the internet
 
-The **only** thing the app can use the internet for is fetching a model file, the AI engine, or
-the optional knowledge-pack tools — from the **AI Model** screen, or, for the knowledge-pack
-tools, also from the **Knowledge packs** panel's tools-missing notice. Three things must all be
-true before a single byte moves:
+The **only** thing the app can use the internet for is fetching a model file, the AI engine, the
+optional knowledge-pack tools, or the optional text-recognition (OCR) language files — from the
+**AI Model** screen, or, for the knowledge-pack tools, also from the **Knowledge packs** panel's
+tools-missing notice, and, for the OCR files, also from a scanned PDF or photo in **Documents**
+that needs them. Three things must all be true before a single byte moves:
 
 1. The drive's policy permits these downloads (drives — including prepared commercial drives —
-   ship with this **permitted** so you can add models, the engine or the knowledge-pack tools; a
-   drive `policy` can turn it off entirely).
+   ship with this **permitted** so you can add models, the engine, the knowledge-pack tools or the
+   OCR files; a drive `policy` can turn it off entirely).
 2. You left the Settings checkbox above on (it is **on** by default for a fresh install, unless the
    drive's policy disables it) — or turned it back on if you had switched it off.
 3. You confirmed that specific download in a dialog showing its size, license, and source address —
    including explicitly accepting the license when it hasn't been pre-reviewed. The knowledge-pack
-   tools are GPL-3.0-or-later and always show that license for you to accept.
+   tools are GPL-3.0-or-later and always show that license for you to accept. The OCR files (two
+   language files, German and English, about 4 MB together, Apache-2.0, from `cdn.jsdelivr.net`)
+   show their languages, size, license and source host; their license is pre-reviewed, so there
+   is nothing extra to accept.
 
 The request goes only to the address printed in the model's local manifest — the knowledge-pack
-tools instead ride the pinned `runtime-sources.yaml`, not a model manifest, but the same
-address-only, no-telemetry rule applies. Nothing about you, your prompts, or your documents is
+tools and the OCR files instead ride the pinned `runtime-sources.yaml`, not a model manifest, but
+the same address-only, no-telemetry rule applies. For the OCR files the app itself fixes which
+files it accepts (their checksums and sizes are built into the app) and where they go (the drive's
+`ocr/` folder); the list on the drive only supplies the download address. Nothing about you, your prompts, or your documents is
 ever sent. There are **no update checks, no model catalog, and no background downloads** — with
 the checkbox off (or no internet at all) the app is fully usable and makes no internet calls.
 Every downloaded file is checked against its expected checksum before the app will use it.

@@ -27,6 +27,16 @@ from its first public `1.0.0` release onward.
 
 ### Added
 
+- **Text recognition (OCR) can now be added from inside the app.** When a scanned PDF or a
+  photo of a page needs the OCR language files and they are not on the drive, its row in
+  **Documents** offers **Download OCR files** — and the **AI Model** screen shows the same
+  offer as "Text recognition for scans and photos (optional)". A short confirmation names the
+  two files (German and English, about 4 MB, Apache-2.0) and where they come from; once they
+  are downloaded and checked, text recognition works **without restarting the app**: the scan
+  offers **Make searchable (OCR)**, and a photo that failed reads with **Try again**. Like
+  every other download it asks first, needs the drive policy and **Allow internet access…** to
+  permit it, and is verified before use. Portable-app users no longer need the drive-setup
+  scripts for OCR; they remain the offline alternative (#410).
 - **While you dictate, the app tells you at once when nothing is reaching the microphone.**
   After about two seconds without any sound, a note appears under the message box and
   disappears as soon as sound comes in — so a muted or wrong microphone is caught before you

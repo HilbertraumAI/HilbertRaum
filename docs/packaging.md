@@ -45,17 +45,23 @@ master pipeline** that produces a finished, sellable drive (see the last section
     `fetch-runtime` scripts provision at build time can also be fetched **from inside the app** (the
     "Install the AI engine" banner on the AI Model screen) when a drive has model weights but no
     engine — otherwise a started model silently falls back to the demo runtime. The installer is
-    **engine-family-generic**: `ENGINE_FAMILIES` lists `llama_cpp` (the `llama-server` chat engine)
-    and `whisper_cpp` (the `whisper-cli` voice/transcription engine), and a single install fetches
-    every missing family for the host. **The banner is scoped per concern (ModelsScreen):** it reads
+    **engine-family-generic**: `SIDECAR_FAMILY_SPECS` (`services/assets.ts` — the ONE registry the
+    installer and the commercial-drive gate share) lists `llama_cpp` (the `llama-server` chat
+    engine), `whisper_cpp` (the `whisper-cli` voice/transcription engine) and the OPTIONAL
+    `kiwix_tools` (the knowledge-pack tools, #339 — never part of the default install), and a single
+    default install fetches every missing REQUIRED family for the host. **The banner is scoped per concern (ModelsScreen):** it reads
     `EngineStatus.missingFamilies` and shows the strong *"Install the AI engine — models run in demo
     mode"* **warning only when `llama_cpp` (the chat engine) is missing**; when the chat engine is
     present and only `whisper_cpp` is absent it shows a quiet **info** note (*"Add voice dictation
     (optional)"*) instead — chat already answers for real, so the demo-mode alarm would be false. **To
     add a future engine family:** add its `<family>:` block
     to `model-manifests/runtime-sources.yaml` (with a real host build + SHA-256) and one entry to
-    `ENGINE_FAMILIES` (`{ family, binaryBase }`); status, install, flatten, marker, and the banner
-    generalize automatically. A family with **no prebuilt host build** (e.g. whisper.cpp on
+    `SIDECAR_FAMILY_SPECS` (`{ family, binaryBase, … }`); status, install, flatten and marker then
+    cover it. The renderer does **not** generalize: the two engine banners and the knowledge-pack
+    tools row are hard-coded per family in `ModelsScreen.tsx`, so a new family also needs its own
+    copy and affordance. **The OCR language files are not an engine family** — plain hash-verified
+    files, no archive, no marker — and have their own narrow in-app installer
+    (`services/ocr-install.ts`, #410; drive-layout.md "OCR language files"). A family with **no prebuilt host build** (e.g. whisper.cpp on
     macOS/Linux, which ships Windows-only binaries — built from source by the drive builder) is
     simply skipped by the in-app installer. **Extraction is bounded** (F-33, full-audit 2026-07-16):
     `extractWithTar` runs under a 5-min deadline + SIGTERM→SIGKILL escalation and threads the job's

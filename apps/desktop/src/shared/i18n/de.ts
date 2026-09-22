@@ -1399,7 +1399,8 @@ export const de: Record<keyof typeof en, string> = {
   'settings.network.hint':
     'Standardmäßig an, damit eine frische Installation gleich Modelle herunterladen kann. ' +
     'Ausgeschaltet stellt die App keinerlei Internetverbindung her. Eingeschaltet ermöglicht ' +
-    'es Downloads für Modelle, die KI-Engine und die optionalen Wissenspaket-Werkzeuge — ' +
+    'es Downloads für Modelle, die KI-Engine, die optionalen Wissenspaket-Werkzeuge und die ' +
+    'optionalen Texterkennungs-Dateien (OCR) — ' +
     'jeder Download fragt zuerst nach deiner Bestätigung, und eine Laufwerksrichtlinie ' +
     'kann Downloads ganz deaktiviert lassen. Deine Fragen und Dokumente verlassen dieses ' +
     'Gerät in keinem Fall.',
@@ -1682,8 +1683,8 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.statement.online':
     'HilbertRaum führt das KI-Modell auf deinem Laptop aus. Deine Fragen, ' +
     'Dokumente, Embeddings und Chat-Verläufe bleiben lokal — auch mit aktiviertem ' +
-    'Internetzugriff nutzen nur Downloads (Modelle, die KI-Engine und die optionalen ' +
-    'Wissenspaket-Werkzeuge) das Netzwerk.',
+    'Internetzugriff nutzen nur Downloads (Modelle, die KI-Engine, die optionalen ' +
+    'Wissenspaket-Werkzeuge und die optionalen Texterkennungs-Dateien (OCR)) das Netzwerk.',
   'privacy.statement.noUploads':
     'Diese App sendet deine Daten an keine Cloud-KI-Anbieter. Es gibt keine Uploads von ' +
     'Fragen, Dokumenten oder Embeddings, keine Telemetrie, keine Analytik und keine ' +
@@ -1709,8 +1710,9 @@ export const de: Record<keyof typeof en, string> = {
   'privacy.network.telemetryValue':
     'Nichts verlässt dieses Gerät — es gibt kein Tracking, das man abschalten müsste',
   'privacy.network.hint':
-    'Die App warnt vor jeder Internetaktion. Sie lädt einzig KI-Modelle, die KI-Engine und ' +
-    'die optionalen Wissenspaket-Werkzeuge herunter — jeweils erst nach deiner Bestätigung ' +
+    'Die App warnt vor jeder Internetaktion. Sie lädt einzig KI-Modelle, die KI-Engine, die ' +
+    'optionalen Wissenspaket-Werkzeuge und die optionalen Texterkennungs-Dateien (OCR) ' +
+    'herunter — jeweils erst nach deiner Bestätigung ' +
     'und jeweils vor der Nutzung geprüft. Das ist standardmäßig an und über den ' +
     'Allgemein-Tab abschaltbar. Eine Laufwerksrichtlinie kann das komplett deaktivieren. Die ' +
     'lokale API weiter unten ist eine getrennte, freiwillige Funktion, die nie ins Internet geht.',

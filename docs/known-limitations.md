@@ -1880,11 +1880,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   restart; since #497 (2026-09-21) the same hook — and the engine installer's completion hook
   for `whisper_cpp` — re-runs the **transcriber** selector too (`refreshTranscriberSlot`, a null
   slot only), so voice dictation and audio import activate the moment the speech model or the
-  voice engine lands. Residuals: a weight copied onto the drive OUTSIDE the app (manual file
-  copy) is still only picked up at the next start, and the **reranker, embedder and OCR engine**
-  keep the startup-frozen selection (the embedder and OCR handles are captured at wiring time in
-  `main/index.ts`; the embedder must never swap mid-session anyway — an index embedded by one
-  model is unusable with another; the OCR refresh has its own open owner call).
+  voice engine lands. Since #410 (2026-09-22) the **in-app OCR files install** activates OCR the
+  same way (`refreshOcrSlot` after the download: an empty OCR slot is filled and proven, no
+  restart). Residuals: a weight — or an OCR language file — copied onto the drive OUTSIDE the app
+  (manual file copy) is still only picked up at the next start; an in-app OCR download that GROWS
+  a running recognizer's language set (e.g. `eng` added to a `deu`-only drive) takes effect after
+  a restart (the job says so — a live recognizer is never replaced mid-session); and the
+  **reranker and embedder** keep the startup-frozen selection (the embedder handle is captured at
+  wiring time in `main/index.ts` and must never swap mid-session anyway — an index embedded by
+  one model is unusable with another).
 - **A failed translation-model START disables translation until the app restarts or the model is
   re-downloaded in-app — and now says so (FA-4 F-7).** The ~10 GB sidecar is started lazily on the
   first translate. If that start
@@ -2253,7 +2257,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   searchable anyway, because the recognition is already saved and the index rebuild is
   already underway.
 - **Photos are read on import** (the D33 asymmetry — one image, seconds). A photo
-  import without the OCR files on the drive fails per-file with friendly copy.
+  import without the OCR files on the drive fails per-file with friendly copy; the row then
+  offers **Download OCR files** (#410), and **Try again** reads the photo once they are in place
+  (the stored failure text itself is unchanged — the remedy line is added at display time).
 - **A single crafted/huge page can't wedge OCR for the session** (backend audit
   2026-06-27, REL-2). tesseract.js recognitions are serialized through one worker and a WASM
   job isn't cooperatively cancellable, so a page that exceeds a 2-minute per-page ceiling

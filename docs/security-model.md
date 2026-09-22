@@ -194,9 +194,9 @@ content). The OS microphone indicator is the recording signal; the app adds no o
 ## Offline posture (spec §3.6)
 
 The app makes **no outbound network calls in its core path** — this is a property of the code, not a
-firewall. The only things the app ever downloads are AI models, the AI engine and the optional
-knowledge-pack tools — each one only after you confirm it, each one verified before use. Two
-layers make it visible and defensible:
+firewall. The only things the app ever downloads are AI models, the AI engine, the optional
+knowledge-pack tools and the optional text-recognition (OCR) files — each one only after you
+confirm it, each one verified before use. Two layers make it visible and defensible:
 
 ### 1. Policy precedence (`services/policy.ts`)
 `config/policy.json` and `config/drive.json` are **optional** (developer runs fall back to defaults)
@@ -204,7 +204,8 @@ and are merged over `DEFAULT_POLICY`, where **update checks and telemetry are of
 exists for either) and — since Phase 18 (wave-1 decision D3 — architecture.md "In-app model downloader") — `allow_model_downloads` is
 **permitted**, so that with no policy file the spec §3.6 user toggle is the effective downloads
 gate. The same key also gates the AI engine and the optional knowledge-pack-tools downloads
-(#339 P8-2, owner-ruled: no new policy key, the one gate covers all three). The policy models
+(#339 P8-2, owner-ruled: no new policy key, the one gate covers all three) and the in-app OCR
+language-file install (#410 — still no new key; the one gate covers all four). The policy models
 the spec §6 shape (`network` / `workspace` / `models` blocks).
 
 **Fail-closed on a packaged build (audit M-4, 2026-06-13).** The base the file is merged over —
@@ -257,7 +258,7 @@ offlineMode            = !networkAllowed
 The optional knowledge-pack tools (`kiwix_tools`) reuse `allowModelDownloads` rather than adding
 a policy key of their own (owner-ruled 2026-09-06, #339 P8-2) — a drive that restricts model
 downloads restricts the knowledge-pack-tools install the same way, with no separate switch to
-keep in sync.
+keep in sync. The in-app OCR language-file install (#410) reuses it the same way.
 
 Consequences:
 - **The shipped default permits downloads, but only when a policy also allows them.** `allowNetwork`
@@ -2087,6 +2088,7 @@ MB; the same ceiling covers the optional `kiwix_tools` family, whose per-platfor
 10-20 MB, since it installs through the same `installOne` path), and the model path passes the
 manifest's exact `size_bytes` when known, else a bounded **per-role
 default** (`modelWeightMaxBytes`: chat/vision 40 GiB, transcriber 8 GiB, embeddings/reranker 4 GiB).
+The in-app OCR installer (#410) passes each file's code-pinned exact size + 1 MiB.
 The backstop itself was lowered 64 → 48 GiB and is now unreachable from production (defence-in-depth
 for a future caller). Residual: the cap is a disk-fill bound, not an integrity control — wrong bytes
 are still caught by the post-download SHA verify; and the DIY `fetch-*` scripts use the OS-native
@@ -2128,6 +2130,25 @@ break the legitimate offline-curation workflow (a user adding a manifest that po
 mirror / a non-listed but honest host) without binding the local-write attacker, who can edit the
 allowlist too. Manifest signing/pinning stays the only real fix and remains a **product decision**,
 not a code change for this round.
+
+**#410 — the in-app OCR install is pinned in code, not trusted by location.** The OCR language
+files are the one downloadable asset whose trust anchor is NOT the drive's yaml: the app carries
+its own `{ lang, sha256, sizeBytes }` table (`OCR_PINS` in `services/ocr-install.ts`,
+drift-tested against the committed `runtime-sources.yaml`), installs only those languages
+(`deu` + `eng`), and writes them only to `ocr/<lang>.traineddata.gz` under the drive root. From
+the drive's yaml it takes **the download URL and nothing else**: a yaml whose `sha256` differs
+from the pin is refused, its `dest` is ignored, and its other languages are ignored — so a
+tampered yaml can redirect the host (the S4 IP-leak residual above) but cannot choose the bytes or
+the path. Why stricter than models and the engine: the files are parsed by the tesseract WASM
+worker inside the main process, and a yaml-controlled `dest` would have made one user click a
+second arbitrary-file-write primitive on the drive (e.g. `dest: Start HilbertRaum.cmd`). The write
+itself: `ocr/` is created when missing and refused when it is a symlink/junction or resolves
+(realpath) outside the drive root, re-checked before every write; each file streams to
+`<dest>.part` (a pre-existing `.part` is unlinked first, so a planted link cannot redirect it), is
+verified against the PIN, and only then renamed over `<dest>`; a mismatch deletes the `.part` and
+leaves any existing file untouched; nothing else in `ocr/` is listed, deleted or modified (a
+user-added third language survives). The request takes no renderer payload — the IPC refuses any
+argument.
 
 ### D4 — the authoritative vision guard now bounds decoded pixels, not just bytes
 `validateAnalyzeRequest` (SEC-3) capped bytes but not decoded dimensions, and `runtime.ts` inlines
