@@ -1,7 +1,7 @@
 import { createSelectedEmbedder } from './embeddings/factory'
 import { createSelectedReranker } from './reranker'
 import { createSelectedTranscriber } from './transcriber'
-import { createSelectedOcrEngine } from './ocr'
+import { createSelectedOcrEngine, listOcrLanguages, ocrAssetsDir, type OcrSelectionDeps } from './ocr'
 import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
 import { discoverManifests, type DiscoveredManifest } from './models'
@@ -13,6 +13,7 @@ import type { Transcriber } from './transcriber'
 import type { OcrEngine } from './ocr'
 import type { Translator, TranslationGpuDeps } from './translation'
 import type { AppContext } from './context'
+import type { OcrRefreshOutcome } from '../../shared/types'
 
 // M-A3 (audit-2026-06-13): the four availability-driven service selectors (embedder,
 // reranker, transcriber, OCR) were ~30 lines of near-identical "resolve the role's model,
@@ -202,6 +203,114 @@ export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
   }
 }
 
+export interface ComposeOcrEngineDeps {
+  /** Drive root — the language files live at `<root>/ocr/`. */
+  rootPath: string
+  /** Developer build: the engine starts `'available'` instead of `'probing'` (#232). */
+  isDev?: boolean
+  /** Test seams (default: the real folder listing and the tesseract.js engine). */
+  listLanguages?: OcrSelectionDeps['listLanguages']
+  makeEngine?: OcrSelectionDeps['makeEngine']
+}
+
+/**
+ * Build (or re-build) JUST the OCR engine selection from the drive's `ocr/` folder — the OCR twin
+ * of `composeTranscriber` (#410). ONE construction shared by `composeServices` (startup) and
+ * `refreshOcrSlot` (after an in-app install), so the two can never drift. Cheap + synchronous:
+ * the tesseract worker starts lazily. A packaged build's engine starts `'probing'` and must be
+ * proven with `probeOcrEngine` before `ocrAvailable` may say so (#232).
+ */
+export function composeOcrEngine(deps: ComposeOcrEngineDeps): OcrEngine | null {
+  return createSelectedOcrEngine({
+    rootPath: deps.rootPath,
+    probeRequired: !(deps.isDev ?? false),
+    ...(deps.listLanguages ? { listLanguages: deps.listLanguages } : {}),
+    ...(deps.makeEngine ? { makeEngine: deps.makeEngine } : {}),
+    onSelect: (kind, reason) => log.info('OCR backend selected', { kind, reason })
+  })
+}
+
+/**
+ * The packaged-mode OCR execution probe (#232): one bounded worker start (the engine's own start
+ * timeout), released on success. Shared by startup (fire-and-forget) and `refreshOcrSlot`
+ * (awaited, so the install job can report a definite outcome — #410). Never rejects. Content-free
+ * log: outcome, duration, engine id. An engine without `probe` (a test fake) reports its
+ * availability as-is.
+ */
+export async function probeOcrEngine(engine: OcrEngine): Promise<boolean> {
+  if (!engine.probe) return (engine.availability?.() ?? 'available') === 'available'
+  const t0 = performance.now()
+  try {
+    const ok = await engine.probe()
+    log.info('OCR execution probe', { ok, ms: Math.round(performance.now() - t0), engine: engine.id })
+    return ok
+  } catch (err) {
+    log.warn('OCR execution probe threw', {
+      error: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)
+    })
+    return false
+  }
+}
+
+/** The slice of the app context `refreshOcrSlot` reads and (for a null slot) writes. */
+export interface OcrSlot {
+  ocrEngine?: OcrEngine | null
+  /** Only the drive root is read (the language files resolve against it). */
+  paths: Pick<AppContext['paths'], 'rootPath'>
+  isDev: AppContext['isDev']
+}
+
+function sameLanguageSet(a: readonly string[], b: readonly string[]): boolean {
+  if (a.length !== b.length) return false
+  const sortedA = [...a].sort()
+  const sortedB = [...b].sort()
+  return sortedA.every((lang, i) => lang === sortedB[i])
+}
+
+/**
+ * Re-read the drive's `ocr/` folder after an in-app install and bring the OCR slot up to date
+ * without a restart (#410). Every consumer reads `ctx.ocrEngine` per call (the ingestion deps,
+ * the doc tasks, preview, status, lock, quit), so one assignment flips them together. Rules:
+ *   - NULL slot → compose an engine from the folder and probe it: `'activated'` when it proved it
+ *     runs, `'startFailed'` when it could not start, `'unchanged'` when the folder still holds no
+ *     language files;
+ *   - an engine whose language set equals the folder's and that latched `'unavailable'` → probe
+ *     THAT instance again (the worker re-reads the files from disk — `cacheMethod: 'none'`);
+ *   - an engine whose language set DIFFERS from the folder's (in practice: it grew) →
+ *     `'restartRequired'`. Its languages are fixed at construction, and it is never replaced
+ *     mid-session: `stop()` latches permanently, tesseract.js leaves pending jobs hanging on
+ *     terminate, and an un-stopped old worker would survive the lock teardown;
+ *   - otherwise `'unchanged'`.
+ * The probe is awaited, bounded by the engine's own start timeout. NEVER throws: a fault is
+ * logged and reads as `'startFailed'`.
+ */
+export async function refreshOcrSlot(
+  ctx: OcrSlot,
+  deps: Pick<ComposeOcrEngineDeps, 'listLanguages' | 'makeEngine'> = {}
+): Promise<OcrRefreshOutcome> {
+  try {
+    const rootPath = ctx.paths.rootPath
+    const current = ctx.ocrEngine ?? null
+    if (current == null) {
+      const next = composeOcrEngine({ rootPath, isDev: ctx.isDev, ...deps })
+      if (!next) return 'unchanged'
+      ctx.ocrEngine = next
+      return (await probeOcrEngine(next)) ? 'activated' : 'startFailed'
+    }
+    const onDisk = (deps.listLanguages ?? listOcrLanguages)(ocrAssetsDir(rootPath))
+    if (!sameLanguageSet(current.languages, onDisk)) return 'restartRequired'
+    if ((current.availability?.() ?? 'available') === 'unavailable') {
+      return (await probeOcrEngine(current)) ? 'activated' : 'startFailed'
+    }
+    return 'unchanged'
+  } catch (err) {
+    log.warn('OCR refresh after an install failed', {
+      error: err instanceof Error ? err.name : 'unknown'
+    })
+    return 'startFailed'
+  }
+}
+
 /**
  * Build the availability-driven services from the drive layout: the embedder (real E5 when
  * its binary + weights are present, else mock so the app launches model-free), and the
@@ -265,12 +374,9 @@ export function composeServices({
   // only when those exist (null otherwise; photo imports fail per-file and detected scans
   // show the notice without the "Make searchable" offer).
   // A packaged build must prove the worker runs before `ocrAvailable` may say so: the engine
-  // starts 'probing' and the main wiring runs `engine.probe()` once at startup (#232).
-  const ocrEngine = createSelectedOcrEngine({
-    rootPath,
-    probeRequired: !isDev,
-    onSelect: (kind, reason) => log.info('OCR backend selected', { kind, reason })
-  })
+  // starts 'probing' and the main wiring runs `probeOcrEngine` once at startup (#232). Shares
+  // `composeOcrEngine` with the #410 post-install refresh so the call sites can never drift.
+  const ocrEngine = composeOcrEngine({ rootPath, isDev })
   // The TranslateGemma sidecar (TG wave). Selected only when the llama-server binary + the
   // translation GGUF are present (null otherwise — no mock; translation refuses with the friendly
   // install path at TG-3). Its own lazy `LlamaServer`, --ctx-size from the manifest, no --jinja.

@@ -18,6 +18,20 @@ export type WorkspaceMode = 'encrypted' | 'plaintext_dev'
  */
 export type OcrState = 'available' | 'probing' | 'unavailable' | 'missing'
 
+/**
+ * What re-reading the drive's `ocr/` folder did to the OCR engine slot after an in-app install
+ * (#410, `refreshOcrSlot` in `main/services/compose-services.ts`):
+ *   - `'activated'`       — the slot was empty (or its engine could not start) and now holds an
+ *                           engine that proved it runs; no restart needed;
+ *   - `'restartRequired'` — a live engine is serving a different language set than the folder now
+ *                           holds; it is never replaced mid-session, so the new files wait for a
+ *                           restart;
+ *   - `'unchanged'`       — nothing to activate (the engine already serves this language set, or
+ *                           the folder still holds no language files);
+ *   - `'startFailed'`     — an engine exists but could not start in this build (the #232 verdict).
+ */
+export type OcrRefreshOutcome = 'activated' | 'restartRequired' | 'unchanged' | 'startFailed'
+
 export interface AppStatus {
   appName: string
   appVersion: string
