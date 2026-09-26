@@ -1103,7 +1103,6 @@ overrides.getWorkspaceState = async () =>
 // bundled app-skills/ at build time, everything else (the letter, the receipt, the machine and
 // its figures) is invented and only has to be plausible.
 const MKT_CHAT_MODEL = 'qwen3.5-9b-ud-q4kxl'
-const MKT_GPU = 'NVIDIA GeForce RTX 4060 Laptop GPU'
 
 // Home + Translate read the app status (workspace posture, translation sidecar present).
 const baseGetAppStatus = overrides.getAppStatus as () => Promise<Record<string, unknown>>
@@ -1134,6 +1133,8 @@ function mktModels(): ModelInfo[] {
     chat('qwen3.5-4b-ud-q4kxl', 'Qwen3.5 4B (UD-Q4_K_XL)', 'qwen3.5', 2.9, 8),
     chat('ministral3-8b-instruct-2512-q4', 'Ministral 3 8B Instruct (2512) Q4', 'ministral3', 5.2, 12),
     chat('gemma4-12b-it-qat-q4', 'Gemma 4 12B Instruct QAT Q4', 'gemma4', 7.0, 14),
+    // The performance shot's measured model (the test rig's check), so its name resolves there.
+    chat('qwen3.8-27b-ud-q5km', 'Qwen3.8 27B UD-Q5_K_M', 'qwen3.8', 18.4, 23, { recommendedContextTokens: 32_768 }),
     modelRow({ id: 'translategemma-12b-it-q4', displayName: 'TranslateGemma 12B (Q4_K_M)', family: 'translategemma', role: 'translation', license: 'gemma', sizeOnDiskGb: 7.3, recommendedMinRamGb: 13 } as Partial<ModelInfo>),
     modelRow({ id: 'qwen2.5-vl-3b-instruct-q4', displayName: 'Qwen2.5-VL 3B Instruct Q4', family: 'qwen2.5-vl', role: 'vision', sizeOnDiskGb: 3.27, recommendedMinRamGb: 12 } as Partial<ModelInfo>),
     modelRow({ id: 'whisper-small-multilingual', displayName: 'Whisper Small (multilingual transcriber)', family: 'whisper', role: 'transcriber', license: 'mit', sizeOnDiskGb: 0.49, recommendedMinRamGb: 4 } as Partial<ModelInfo>)
@@ -1346,26 +1347,38 @@ overrides.listKnowledgePacks = async () =>
     : []
 overrides.getKnowledgePackStatus = async () => ({ toolsInstalled: true, refreshing: false, revision: 1, excluded: null })
 
-// Performance: a mid-range laptop that runs the 9B on its GPU. Staged figures, not a measurement.
+// Performance: the REAL check from the maintainers' test rig (i9-9900X, 128 GB, RTX 3090) as the
+// app recorded it on 2026-09-21: Qwen3.8 27B UD-Q5_K_M at 41.9 tokens/s, 32k context fully on the
+// GPU, 19.8 GB loaded from the drive at 1,185.7 MB/s. Only the other-machines rows are staged.
+const MKT_PERF_MODEL = 'qwen3.8-27b-ud-q5km'
+const MKT_PERF_GPU = 'NVIDIA GeForce RTX 3090'
+const MKT_PERF_READ = {
+  mbps: 1185.7,
+  bytes: 19_800_000_000,
+  ms: 16_699,
+  source: 'model_load',
+  modelId: MKT_PERF_MODEL,
+  at: '2026-09-21T17:56:50Z'
+} as const
 function mktBench(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
   return {
-    os: 'win32',
+    os: 'linux',
     arch: 'x64',
-    cpuModel: 'AMD Ryzen 7 8845HS',
-    cpuCores: 16,
-    ramGb: 31.3,
-    gpu: MKT_GPU,
-    gpuVramMb: 8188,
+    cpuModel: 'Intel(R) Core(TM) i9-9900X CPU @ 3.50GHz',
+    cpuCores: 20,
+    ramGb: 125.5,
+    gpu: MKT_PERF_GPU,
+    gpuVramMb: 24_822,
     driveReadMbps: null,
-    driveWriteMbps: 214,
-    tokensPerSecond: 36,
+    driveWriteMbps: null,
+    tokensPerSecond: 41.9,
     speedBasis: { basis: 'timings', tokens: 64 },
-    measuredModelId: MKT_CHAT_MODEL,
-    effectiveRead: { mbps: 352, bytes: 6_000_000_000, ms: 17_000, source: 'model_load', modelId: MKT_CHAT_MODEL, at: '2026-09-24T09:12:00Z' },
-    profile: 'BALANCED',
-    recommendedModelId: MKT_CHAT_MODEL,
+    measuredModelId: MKT_PERF_MODEL,
+    effectiveRead: MKT_PERF_READ,
+    profile: 'PRO',
+    recommendedModelId: MKT_PERF_MODEL,
     warnings: [],
-    ranAt: '2026-09-24T09:14:00Z',
+    ranAt: '2026-09-21T17:56:50Z',
     ...over
   } as BenchmarkResult
 }
@@ -1376,42 +1389,38 @@ overrides.getPerformance = async () => {
   })
   return {
     current: mktBench(),
-    recommendation: { modelId: MKT_CHAT_MODEL, basis: 'discrete' },
+    recommendation: { modelId: MKT_PERF_MODEL, basis: 'discrete' },
     currentMachine: true,
-    currentGpu: { name: MKT_GPU, totalMb: 8188, useful: true },
-    graphicsDevice: { name: MKT_GPU, totalMb: 8188, useful: true },
+    currentGpu: { name: MKT_PERF_GPU, totalMb: 24_822, useful: true },
+    graphicsDevice: { name: MKT_PERF_GPU, totalMb: 24_822, useful: true },
     otherMachines: [
-      mktBench({ os: 'win32', cpuModel: 'Intel Core i5-1235U', cpuCores: 10, ramGb: 15.7, gpu: null, gpuVramMb: null, tokensPerSecond: 9, measuredModelId: 'qwen3.5-4b-ud-q4kxl', recommendedModelId: 'qwen3.5-4b-ud-q4kxl', profile: 'LITE', ranAt: '2026-09-18T16:40:00Z' }),
-      mktBench({ os: 'darwin', arch: 'arm64', cpuModel: 'Apple M3 Pro', cpuCores: 12, ramGb: 36, gpu: 'Apple M3 Pro', gpuVramMb: null, tokensPerSecond: 29, ranAt: '2026-09-10T11:05:00Z' })
+      mktBench({ os: 'win32', cpuModel: 'Intel Core i5-1235U', cpuCores: 10, ramGb: 15.7, gpu: null, gpuVramMb: null, tokensPerSecond: 9, measuredModelId: 'qwen3.5-4b-ud-q4kxl', recommendedModelId: 'qwen3.5-4b-ud-q4kxl', profile: 'LITE', effectiveRead: null, ranAt: '2026-09-18T16:40:00Z' })
     ],
     running: false,
     placement: {
       memoryClass: 'discrete',
-      ramMb: 32_047,
-      vramMb: 8188,
-      model: { id: MKT_CHAT_MODEL, sizeOnDiskGb: 6.0, contextTokens: 8192 },
-      recommendedContextTokens: 8192,
+      ramMb: 128_512,
+      vramMb: 24_822,
+      model: { id: MKT_PERF_MODEL, sizeOnDiskGb: 18.4, contextTokens: 32_768 },
+      recommendedContextTokens: 32_768,
       observed: {
-        modelId: MKT_CHAT_MODEL, contextTokens: 8192, backend: 'gpu', gpuLayers: 41, totalLayers: 41,
-        gpuModelMb: 5500, cpuModelMb: 400, gpuKvMb: 300, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey: null, at: '2026-09-24T09:12:00Z'
+        modelId: MKT_PERF_MODEL, contextTokens: 32_768, backend: 'gpu', gpuLayers: 66, totalLayers: 66,
+        gpuModelMb: 18_900, cpuModelMb: 400, gpuKvMb: 2_100, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey: null, at: '2026-09-21T17:56:50Z'
       },
       observedMismatch: null,
-      verdict: { kind: 'gpu', needMb: 6200, estimated: false, budgetMb: 8188, freeAtStartMb: 7400, workingMb: 6200, spillMb: null, gpuLayers: 41, totalLayers: 41 },
+      verdict: { kind: 'gpu', needMb: 21_504, estimated: false, budgetMb: 24_822, freeAtStartMb: 24_000, workingMb: 21_504, spillMb: null, gpuLayers: 66, totalLayers: 66 },
       models: [
-        mdl('chat', MKT_CHAT_MODEL, 6.0, 'gpu', true, 'session'),
+        mdl('chat', MKT_PERF_MODEL, 18.4, 'gpu', true, 'session'),
         mdl('translation', 'translategemma-12b-it-q4', 7.3, 'gpu', false, 'idle'),
         mdl('vision', 'qwen2.5-vl-3b-instruct-q4', 3.27, 'cpu', false, 'idle'),
         mdl('reranker', 'bge-reranker-v2-m3-f16', 1.1, 'cpu', true, 'session'),
         mdl('embeddings', 'multilingual-e5-small-q8', 0.2, 'cpu', true, 'session'),
         mdl('transcriber', 'whisper-small-multilingual', 0.49, 'cpu', false, 'per-use')
       ],
-      totals: { ramAllMb: Math.round(18.3 * 1024), bothOnCard: false, chatAndTranslationOnCard: false }
+      totals: { ramAllMb: Math.round(33.0 * 1024), bothOnCard: false, chatAndTranslationOnCard: false }
     },
-    observed: {
-      lastAnswer: { tokensPerSecond: 35.4, ttftMs: 610, tokens: 412, modelId: MKT_CHAT_MODEL, at: '2026-09-24T09:31:00Z' },
-      lastModelLoad: mktBench().effectiveRead,
-      lastChecksum: null
-    }
+    // As on the rig at capture time: nothing observed yet in that session.
+    observed: { lastAnswer: null, lastModelLoad: null, lastChecksum: null }
   }
 }
 
@@ -1666,7 +1675,8 @@ const MKT_SHELL: Record<string, { goal: string; step: () => void; w: number; h: 
   translate: { goal: '.translate-output p:not(.hint)', step: mktStepTranslate, w: 1180, h: 800, what: 'Translate, a finished translation' },
   images: { goal: '.image-workspace img', step: mktStepImages, w: 1180, h: 800, what: 'Images, a described photo' },
   models: { goal: '.model-card', step: mktStepTo('nav.models'), w: 1180, h: 1080, what: 'AI Model, the active model' },
-  performance: { goal: '.perf-tile', step: mktStepTo('nav.performance'), w: 1180, h: 1080, what: 'Performance, a measured machine' },
+  // Landscape and wide: the tiles + the model card + the start of "Observed while you worked".
+  performance: { goal: '.perf-tile', step: mktStepTo('nav.performance'), w: 1460, h: 764, what: 'Performance, the measured test rig' },
   settings: { goal: '.settings-tabs', step: mktStepTo('nav.settings', 'settings.tab.general'), w: 1180, h: 1080, what: 'Settings, general tab' },
   review: { goal: '.review-decisions', step: mktStepReview, w: 1180, h: 1080, what: 'Evidence review of the contract answer, in progress' },
   lock: { goal: '.gate-card', step: noop, w: 1180, h: 800, what: 'Lock screen of the encrypted workspace' },

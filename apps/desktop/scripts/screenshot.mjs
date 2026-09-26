@@ -109,7 +109,7 @@ const MKT_SHOTS = {
   'marketing-translate': [1220, 856],
   'marketing-images': [1220, 856],
   'marketing-models': [1220, 1136],
-  'marketing-performance': [1220, 1136],
+  'marketing-performance': [1500, 820],
   'marketing-settings': [1220, 1136],
   'marketing-skills': [1220, 956],
   'marketing-review': [1220, 1136],

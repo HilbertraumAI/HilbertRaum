@@ -1725,8 +1725,10 @@ settings (General), privacy, skills, and the rail privacy indicator close-up.
   sources) by `StagedShell` in `preview.tsx`. The data is invented (a lease, a café receipt, a
   letter from a property manager, a laptop with a mid-range GPU); the model ids and names are the
   shipping catalog entries, and the skills list is read from the bundled `app-skills/*/SKILL.md`
-  at build time, so a new app skill shows up without touching the harness. Performance figures are
-  staged, not measured.
+  at build time, so a new app skill shows up without touching the harness. The performance shot
+  (landscape, 1460 CSS px wide) carries the REAL check the app recorded on the maintainers' test rig
+  on 2026-09-21 (i9-9900X, 125.5 GB RAM, RTX 3090: Qwen3.8 27B UD-Q5_K_M at 41.9 tokens/s, 32k
+  context fully on the GPU, 19.8 GB read at 1,185.7 MB/s); only its other-machines rows are staged.
 - **Strict readiness.** The runner passes `--strict` to `scripts/screenshot.mjs`: a shot whose walk
   never reached its goal selector (`body[data-marketing-ready]`) fails the run instead of shipping a
   wrong image. Before this wave the harness silently produced blank captures: event subscriptions
