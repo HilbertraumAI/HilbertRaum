@@ -1664,30 +1664,34 @@ function MktIndicator(): JSX.Element {
   )
 }
 
-const MKT_SHELL: Record<string, { goal: string; step: () => void; w: number; h: number; what: string }> = {
-  salary: { goal: '.msg-content', step: mktStepChat, w: 1180, h: 800, what: 'staged salary-negotiation chat' },
-  spending: { goal: '.msg-content', step: mktStepChat, w: 1180, h: 800, what: 'staged fictional spending answer' },
-  contract: { goal: '.sources-cards', step: mktStepChatSources, w: 1180, h: 1170, what: 'staged contract-deadlines answer, sources expanded' },
-  documents: { goal: '.doc-row', step: mktStepTo('nav.documents'), w: 1180, h: 800, what: 'staged document library' },
-  privacy: { goal: '.offline-statement', step: mktStepTo('nav.settings', 'settings.tab.privacy'), w: 1180, h: 1080, what: 'Settings privacy tab, offline posture' },
-  home: { goal: '.readiness-card', step: mktStepHome, w: 1180, h: 800, what: 'Home, ready to work' },
-  packs: { goal: '.packs-card-actions', step: mktStepTo('nav.documents', 'docs.mode.packs'), w: 1180, h: 800, what: 'Documents, knowledge packs' },
-  translate: { goal: '.translate-output p:not(.hint)', step: mktStepTranslate, w: 1180, h: 800, what: 'Translate, a finished translation' },
-  images: { goal: '.image-workspace img', step: mktStepImages, w: 1180, h: 800, what: 'Images, a described photo' },
-  models: { goal: '.model-card', step: mktStepTo('nav.models'), w: 1180, h: 1080, what: 'AI Model, the active model' },
-  // Landscape and wide: the tiles + the model card + the start of "Observed while you worked".
-  performance: { goal: '.perf-tile', step: mktStepTo('nav.performance'), w: 1460, h: 764, what: 'Performance, the measured test rig' },
-  settings: { goal: '.settings-tabs', step: mktStepTo('nav.settings', 'settings.tab.general'), w: 1180, h: 1080, what: 'Settings, general tab' },
-  review: { goal: '.review-decisions', step: mktStepReview, w: 1180, h: 1080, what: 'Evidence review of the contract answer, in progress' },
-  lock: { goal: '.gate-card', step: noop, w: 1180, h: 800, what: 'Lock screen of the encrypted workspace' },
-  skills: { goal: '.skills-toolbar', step: mktStepTo('nav.settings', 'settings.tab.skills'), w: 1180, h: 900, what: 'Settings, skills library' }
+// Every staged shell renders in ONE landscape format by default (owner decision 2026-09-26):
+// 1460 x 764 CSS px, 3000 x 1640 PNG at SHOT_SCALE=2 with the harness padding. A shot may override
+// `w`/`h` only for a deliberate exception; scripts/screenshot.mjs MKT_SIZE must match the frame.
+const MKT_W = 1460
+const MKT_H = 764
+const MKT_SHELL: Record<string, { goal: string; step: () => void; w?: number; h?: number; what: string }> = {
+  salary: { goal: '.msg-content', step: mktStepChat, what: 'staged salary-negotiation chat' },
+  spending: { goal: '.msg-content', step: mktStepChat, what: 'staged fictional spending answer' },
+  contract: { goal: '.sources-cards', step: mktStepChatSources, what: 'staged contract-deadlines answer, sources expanded' },
+  documents: { goal: '.doc-row', step: mktStepTo('nav.documents'), what: 'staged document library' },
+  privacy: { goal: '.offline-statement', step: mktStepTo('nav.settings', 'settings.tab.privacy'), what: 'Settings privacy tab, offline posture' },
+  home: { goal: '.readiness-card', step: mktStepHome, what: 'Home, ready to work' },
+  packs: { goal: '.packs-card-actions', step: mktStepTo('nav.documents', 'docs.mode.packs'), what: 'Documents, knowledge packs' },
+  translate: { goal: '.translate-output p:not(.hint)', step: mktStepTranslate, what: 'Translate, a finished translation' },
+  images: { goal: '.image-workspace img', step: mktStepImages, what: 'Images, a described photo' },
+  models: { goal: '.model-card', step: mktStepTo('nav.models'), what: 'AI Model, the active model' },
+  performance: { goal: '.perf-tile', step: mktStepTo('nav.performance'), what: 'Performance, the measured test rig' },
+  settings: { goal: '.settings-tabs', step: mktStepTo('nav.settings', 'settings.tab.general'), what: 'Settings, general tab' },
+  review: { goal: '.review-decisions', step: mktStepReview, what: 'Evidence review of the contract answer, in progress' },
+  lock: { goal: '.gate-card', step: noop, what: 'Lock screen of the encrypted workspace' },
+  skills: { goal: '.skills-toolbar', step: mktStepTo('nav.settings', 'settings.tab.skills'), what: 'Settings, skills library' }
 }
 for (const [shot, cfg] of Object.entries(MKT_SHELL)) {
   for (const suffix of ['', '-de', '-light', '-de-light']) {
     CASES[`marketing-${shot}${suffix}`] = {
       label: `Marketing — full shell, ${cfg.what} (${suffix.includes('light') ? 'light' : 'dark'}${suffix.includes('de') ? ', DE' : ''})`,
       node: (
-        <div style={{ width: cfg.w, height: cfg.h }}>
+        <div style={{ width: cfg.w ?? MKT_W, height: cfg.h ?? MKT_H }}>
           <StagedShell goal={cfg.goal} step={cfg.step} />
         </div>
       )

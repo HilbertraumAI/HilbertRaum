@@ -98,22 +98,26 @@ const READY = {
 // marketing-<shot>[-de][-light]; pair with SHOT_SCALE=2 for hi-dpi output. The staged shells
 // self-report readiness via body[data-marketing-ready]; the indicator close-up is a plain
 // component case.
+// Landscape by default (owner decision 2026-09-26): the staged frame is 1460 x 764 CSS px
+// (preview.tsx MKT_W/MKT_H) plus the 2 x 20 px harness padding and body margin.
+const MKT_SIZE = [1500, 820]
 const MKT_SHOTS = {
-  'marketing-salary': [1220, 856],
-  'marketing-spending': [1220, 856],
-  'marketing-contract': [1220, 1226],
-  'marketing-documents': [1220, 856],
-  'marketing-privacy': [1220, 1136],
-  'marketing-home': [1220, 856],
-  'marketing-packs': [1220, 856],
-  'marketing-translate': [1220, 856],
-  'marketing-images': [1220, 856],
-  'marketing-models': [1220, 1136],
-  'marketing-performance': [1500, 820],
-  'marketing-settings': [1220, 1136],
-  'marketing-skills': [1220, 956],
-  'marketing-review': [1220, 1136],
-  'marketing-lock': [1220, 856],
+  'marketing-salary': MKT_SIZE,
+  'marketing-spending': MKT_SIZE,
+  'marketing-contract': MKT_SIZE,
+  'marketing-documents': MKT_SIZE,
+  'marketing-privacy': MKT_SIZE,
+  'marketing-home': MKT_SIZE,
+  'marketing-packs': MKT_SIZE,
+  'marketing-translate': MKT_SIZE,
+  'marketing-images': MKT_SIZE,
+  'marketing-models': MKT_SIZE,
+  'marketing-performance': MKT_SIZE,
+  'marketing-settings': MKT_SIZE,
+  'marketing-skills': MKT_SIZE,
+  'marketing-review': MKT_SIZE,
+  'marketing-lock': MKT_SIZE,
+  // The rail indicator close-up is a component, not a shell: its own small canvas.
   'marketing-indicator': [640, 280]
 }
 const MKT_VARIANTS = ['', '-de', '-light', '-de-light']
