@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-26: **Marketing screenshot matrix (`feat/marketing-screenshot-matrix`): `npm run screenshots:marketing`
+renders 16 staged shots × EN/DE × dark/light at 2x with a manifest and a contact sheet.** Record:
+`design-guidelines.md` §16. Fixed on the way: the preview proxy's async `on*` default blanked every
+marketing capture; captures were clamped to the display height. Staged data only, no product code touched._
 _2026-09-22 — **#410 — the OCR language files install in-app (`feat/410-in-app-ocr-install`): a failed scan or
 photo row in Documents and a quiet AI Model row offer "Download OCR files", and OCR activates without a restart.**
 Record: `architecture.md` "In-app OCR install — design record" (owner decisions D1–D7, the facts, the design as

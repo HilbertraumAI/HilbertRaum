@@ -1702,3 +1702,46 @@ Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `li
 out of the screen so `modelLibrary` can share them without importing it back), `styles.css`, EN/DE
 catalogs. Behavioral coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`, the real-catalog
 grouping/face controls in `committed-catalog.test.ts`; visual fixtures: `models*` preview cases.
+
+---
+
+## 16. Marketing screenshot matrix: design record (2026-09-26)
+
+**What it is.** `npm run screenshots:marketing` (in `apps/desktop`) renders every staged marketing
+shot of the preview harness in all four variants (EN/DE × dark/light) at 2x, into
+`apps/desktop/screenshots/marketing/` (gitignored), with a `manifest.json` (shot, language, theme,
+pixel size, app version, commit, dirty flag) and an `index.html` contact sheet (one row per shot,
+the four variants side by side) for the visual check. `-- home translate` limits the run to named
+shots; `--out=` and `--scale=` override the folder and the density.
+
+**Shots (16 × 4 = 64 images).** lock (encrypted-workspace gate), home, salary (plain chat), spending
+and contract (documents Q&A, sources collapsed/expanded), review (evidence review of the contract
+answer, in progress), documents, packs (knowledge packs), translate, images, models, performance,
+settings (General), privacy, skills, and the rail privacy indicator close-up.
+
+**Decisions and the facts they rest on.**
+- **The real app shell, fictional data.** Every shot is `<App />` with a mocked `window.api`,
+  walked through the real UI (rail, segmented tabs, a history row, the review entry under the
+  sources) by `StagedShell` in `preview.tsx`. The data is invented (a lease, a café receipt, a
+  letter from a property manager, a laptop with a mid-range GPU); the model ids and names are the
+  shipping catalog entries, and the skills list is read from the bundled `app-skills/*/SKILL.md`
+  at build time, so a new app skill shows up without touching the harness. Performance figures are
+  staged, not measured.
+- **Strict readiness.** The runner passes `--strict` to `scripts/screenshot.mjs`: a shot whose walk
+  never reached its goal selector (`body[data-marketing-ready]`) fails the run instead of shipping a
+  wrong image. Before this wave the harness silently produced blank captures: event subscriptions
+  (`onX(cb)`) fell through to the proxy's async default, so the shell's effect cleanup called a
+  Promise and unmounted. The proxy now returns a synchronous unsubscribe for every `on*` method.
+- **Pixel density without the display clamp.** A capture window is created offscreen, resized
+  after creation to `SCALE ×` its CSS size and zoomed by `SCALE`, then read with `capturePage()`.
+  Measured on a 3440×1440 display with Electron 43: a window is clamped to the display height at
+  creation (the 2x contract shot, 2452px tall, came out 1413px); `--force-device-scale-factor`
+  re-applies the clamp, `webPreferences.offscreen.deviceScaleFactor` is ignored, and CDP
+  `Page.captureScreenshot` with `clip.scale` (or `Emulation.setDeviceMetricsOverride`) breaks the
+  offscreen layout. The resize-after-create surface has no such limit (verified at 2560×3400).
+- **Headless.** No display needed with offscreen rendering on a desktop session; on a headless
+  Linux box without `DISPLAY` the runner wraps the capture in `xvfb-run` when installed.
+
+Implementation: `apps/desktop/scripts/marketing-screenshots.mjs` (runner, manifest, contact sheet),
+`scripts/screenshot.mjs` (`--marketing`, `--out=`, `--strict`, sizes), `src/renderer/preview/preview.tsx`
+(marketing block: staged data + walk steps).

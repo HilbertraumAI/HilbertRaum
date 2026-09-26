@@ -6,8 +6,8 @@
 // self-describing. This file is dev-only (never bundled into the shipped app).
 import { useEffect } from 'react'
 import { createRoot } from 'react-dom/client'
-import { DEFAULT_SETTINGS, type BenchmarkResult, type Citation, type Collection, type Conversation, type DocumentInfo, type DriveStatus, type Message, type ModelInfo, type PolicyStatus, type SkillInfo } from '@shared/types'
-import { t as tCatalog } from '@shared/i18n'
+import { DEFAULT_SETTINGS, type BenchmarkResult, type Citation, type Collection, type Conversation, type DocumentInfo, type DriveStatus, type EvidenceReviewItem, type Message, type ModelInfo, type PolicyStatus, type SkillInfo } from '@shared/types'
+import { t as tCatalog, type MessageKey } from '@shared/i18n'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY, useT } from '../i18n'
 import { LocalIndicator, ToastProvider } from '../components'
 import { ConversationList } from '../chat/ConversationList'
@@ -18,6 +18,7 @@ import { CoverageMeter } from '../components'
 import { ScopePopover } from '../chat/ScopePopover'
 import { Transcript } from '../chat/Transcript'
 import { App } from '../App'
+import { computeReadyGate } from '../lib/reviewSession'
 import { ChatScreen } from '../screens/ChatScreen'
 import { DocumentsScreen } from '../screens/DocumentsScreen'
 import { ModelsScreen, __resetModelsScreenMemoryForTests } from '../screens/ModelsScreen'
@@ -288,6 +289,10 @@ const overrides: Record<string, unknown> = {
   {
     get(_t, prop: string) {
       if (prop in overrides) return overrides[prop]
+      // Event subscriptions (`onX(cb)`) return their unsubscribe function SYNCHRONOUSLY; an async
+      // default hands the caller a Promise, and the effect cleanup `off()` then throws and
+      // unmounts the whole shell (blank marketing captures, 2026-09).
+      if (/^on[A-Z]/.test(prop)) return () => noop
       // Any other call: a no-op async returning null (covers the on-interaction methods).
       return async () => null
     }
@@ -700,6 +705,8 @@ const mktSegs = (): string[] => mktCase().split('-')
 const mktDe = (): boolean => mktSegs().includes('de')
 const mktLight = (): boolean => mktSegs().includes('light')
 const mktShot = (): string => mktSegs()[1] ?? ''
+/** The review shot reuses the contract shot's staged conversation, answer and documents. */
+const mktContractish = (): boolean => mktShot() === 'contract' || mktShot() === 'review'
 
 const MKT_ANSWER_EN = [
   'Based on your bank statements, your largest spending category last year was **housing**. Here is the full breakdown:',
@@ -844,7 +851,7 @@ function mktConversations(): Conversation[] {
       conv('m3', de ? 'Ideen fürs Team-Offsite' : 'Ideas for the team offsite', null)
     ]
   }
-  if (mktShot() === 'contract') {
+  if (mktContractish()) {
     return [
       {
         ...docsConv('m1', de ? 'Mietvertrag: Fristen' : 'Rental contract: deadlines'),
@@ -875,7 +882,7 @@ function mktMessages(): Message[] {
       de ? MKT_SALARY_DE : MKT_SALARY_EN
     )
   }
-  if (mktShot() === 'contract') {
+  if (mktContractish()) {
     return turn(
       de
         ? 'Liste alle Fristen und Kündigungsfristen in meinem Mietvertrag auf, jeweils mit der Klausel, aus der sie stammen.'
@@ -934,7 +941,7 @@ function mktDocuments(): DocumentInfo[] {
   const de = mktDe()
   const [fin, legal, tax, work] = mktProjects()
   const PDF = 'application/pdf'
-  if (mktShot() === 'contract') {
+  if (mktContractish()) {
     return [
       mktDoc('mkt-d1', de ? 'mietvertrag-lindenstrasse-14.pdf' : 'lease-lindenstrasse-14.pdf', PDF, 412 * 1024, 14, [legal]),
       mktDoc('mkt-d2', de ? 'versicherungspolicen.pdf' : 'insurance-policies.pdf', PDF, 1258 * 1024, 42, [MKT_LIB]),
@@ -1000,7 +1007,7 @@ overrides.getRuntimeStatus = async () => {
   // A believable model name in the header hint instead of the mock id — a currently-ranked,
   // shipping manifest id (PF-2, full-audit 2026-07-12b: captures must not show a model no
   // user can select; swap deliberately when a bigger model productizes).
-  return isMkt() ? { ...st, modelId: 'ministral3-8b-instruct-2512-q4' } : st
+  return isMkt() ? { ...st, modelId: 'qwen3.5-9b-ud-q4kxl' } : st
 }
 overrides.listDocuments = async () => (isMkt() ? mktDocuments() : DOCUMENTS)
 // The privacy shot (and the rail indicator on every marketing shell) reads the effective
@@ -1082,12 +1089,372 @@ const baseGetWorkspaceState = overrides.getWorkspaceState as () => Promise<{
 overrides.getWorkspaceState = async () =>
   isMkt()
     ? {
-        state: 'unlocked' as const,
+        // The lock shot is the only staged shell that shows the gate instead of the app.
+        state: mktShot() === 'lock' ? ('locked' as const) : ('unlocked' as const),
         mode: 'encrypted' as const,
         plaintextAllowed: false,
         encryptionRequired: true
       }
     : baseGetWorkspaceState()
+
+// ---- Marketing: the rest of the product (2026-09 screenshot matrix) -----------------------------
+// Staged, entirely fictional data for the screens beyond chat/documents/privacy. Model ids and
+// names are the REAL shipping catalog entries (model-manifests/), the skills are read from the
+// bundled app-skills/ at build time, everything else (the letter, the receipt, the machine and
+// its figures) is invented and only has to be plausible.
+const MKT_CHAT_MODEL = 'qwen3.5-9b-ud-q4kxl'
+const MKT_GPU = 'NVIDIA GeForce RTX 4060 Laptop GPU'
+
+// Home + Translate read the app status (workspace posture, translation sidecar present).
+const baseGetAppStatus = overrides.getAppStatus as () => Promise<Record<string, unknown>>
+overrides.getAppStatus = async () =>
+  isMkt()
+    ? {
+        ...(await baseGetAppStatus()),
+        appName: 'HilbertRaum',
+        offlineMode: true,
+        networkAllowed: false,
+        activeModelId: MKT_CHAT_MODEL,
+        workspaceMode: 'encrypted',
+        workspaceReady: true,
+        machineRamGb: 32,
+        dictationAvailable: true,
+        ocrAvailable: true,
+        translationAvailable: true,
+        translationDevice: { device: 'auto', gpuLayers: 49, totalLayers: 49, live: true }
+      }
+    : baseGetAppStatus()
+
+// AI Model screen: the active 9B plus a few installed alternatives and the helper roles.
+function mktModels(): ModelInfo[] {
+  const chat = (id: string, displayName: string, family: string, sizeOnDiskGb: number, recommendedMinRamGb: number, over: Partial<ModelInfo> = {}): ModelInfo =>
+    modelRow({ id, displayName, family, sizeOnDiskGb, recommendedMinRamGb, recommendedContextTokens: 8192, ...over })
+  return [
+    chat(MKT_CHAT_MODEL, 'Qwen3.5 9B (UD-Q4_K_XL)', 'qwen3.5', 6.0, 12, { state: 'running', recommended: true }),
+    chat('qwen3.5-4b-ud-q4kxl', 'Qwen3.5 4B (UD-Q4_K_XL)', 'qwen3.5', 2.9, 8),
+    chat('ministral3-8b-instruct-2512-q4', 'Ministral 3 8B Instruct (2512) Q4', 'ministral3', 5.2, 12),
+    chat('gemma4-12b-it-qat-q4', 'Gemma 4 12B Instruct QAT Q4', 'gemma4', 7.0, 14),
+    modelRow({ id: 'translategemma-12b-it-q4', displayName: 'TranslateGemma 12B (Q4_K_M)', family: 'translategemma', role: 'translation', license: 'gemma', sizeOnDiskGb: 7.3, recommendedMinRamGb: 13 } as Partial<ModelInfo>),
+    modelRow({ id: 'qwen2.5-vl-3b-instruct-q4', displayName: 'Qwen2.5-VL 3B Instruct Q4', family: 'qwen2.5-vl', role: 'vision', sizeOnDiskGb: 3.27, recommendedMinRamGb: 12 } as Partial<ModelInfo>),
+    modelRow({ id: 'whisper-small-multilingual', displayName: 'Whisper Small (multilingual transcriber)', family: 'whisper', role: 'transcriber', license: 'mit', sizeOnDiskGb: 0.49, recommendedMinRamGb: 4 } as Partial<ModelInfo>)
+  ]
+}
+const baseListModels = overrides.listModels as () => Promise<ModelInfo[]>
+overrides.listModels = async () => (isMkt() ? mktModels() : baseListModels())
+
+// Settings: the Kit's offline posture, and the chat model the rest of the shell names.
+const mktBaseGetSettings = overrides.getSettings as () => Promise<typeof DEFAULT_SETTINGS>
+overrides.getSettings = async () => {
+  const s = await mktBaseGetSettings()
+  return isMkt() ? { ...s, activeModelId: MKT_CHAT_MODEL, allowNetwork: false } : s
+}
+
+// Translate: the walk types a (fictional) letter and presses Translate; the job completes at once.
+// The EN capture translates the German original to English, the DE capture the other way round.
+const MKT_LETTER_DE = [
+  'Sehr geehrte Frau Berger,',
+  '',
+  'anbei erhalten Sie die Betriebskostenabrechnung 2025 für Ihre Wohnung in der Lindenstraße 14, Top 5. Aus der Abrechnung ergibt sich eine Nachzahlung von 184,60 €. Bitte überweisen Sie den Betrag bis zum 30. Oktober 2026 auf das bekannte Konto.',
+  '',
+  'Ab November 2026 erhöht sich die monatliche Vorauszahlung um 15 € auf 245 €. Die Belege können Sie nach Terminvereinbarung in unserem Büro einsehen.',
+  '',
+  'Mit freundlichen Grüßen',
+  'Hausverwaltung Kern'
+].join('\n')
+const MKT_LETTER_EN = [
+  'Dear Ms Berger,',
+  '',
+  'Please find enclosed the 2025 operating cost statement for your apartment at Lindenstraße 14, unit 5. The statement shows an additional payment of €184.60. Please transfer this amount to the usual account by 30 October 2026.',
+  '',
+  'From November 2026, your monthly advance payment will increase by €15 to €245. You can inspect the receipts at our office by appointment.',
+  '',
+  'Kind regards',
+  'Kern Property Management'
+].join('\n')
+const mktTranslateInput = (): string => (mktDe() ? MKT_LETTER_EN : MKT_LETTER_DE)
+const mktTranslateOutput = (): string => (mktDe() ? MKT_LETTER_DE : MKT_LETTER_EN)
+overrides.translateStart = async () => ({ jobId: 'mkt-tx', state: 'translating', text: '' })
+overrides.onTranslateDone = (_jobId: string, cb: (job: { text: string }) => void) => {
+  // A Markdown hard break keeps the closing and the signature on their own lines.
+  setTimeout(() => cb({ text: mktTranslateOutput().replace(/\n(?=[^\n]+$)/, '  \n') }), 30)
+  return noop
+}
+/** Types into a React-controlled textarea (the native setter + an input event React listens to). */
+function mktType(el: HTMLTextAreaElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set
+  setter?.call(el, value)
+  el.dispatchEvent(new Event('input', { bubbles: true }))
+}
+function mktStepTranslate(): void {
+  const area = document.querySelector<HTMLTextAreaElement>('.translate-pane textarea')
+  if (!area) {
+    mktClickNav(bothLangs('nav.translate'))
+    return
+  }
+  if (area.value !== mktTranslateInput()) {
+    mktType(area, mktTranslateInput())
+    return
+  }
+  const go = Array.from(document.querySelectorAll<HTMLButtonElement>('.translate-pane button')).find((b) =>
+    bothLangs('translate.action').includes((b.textContent ?? '').trim())
+  )
+  go?.click()
+}
+
+// Images: one saved analysis of a (fictional) café receipt, drawn on a canvas at load time so no
+// binary asset is checked in. The walk opens it from the history list.
+const MKT_RECEIPT_W = 560
+const MKT_RECEIPT_H = 860
+function mktReceiptPng(): Promise<Uint8Array> {
+  const c = document.createElement('canvas')
+  c.width = MKT_RECEIPT_W
+  c.height = MKT_RECEIPT_H
+  const g = c.getContext('2d')!
+  g.fillStyle = '#e9e4da'
+  g.fillRect(0, 0, c.width, c.height)
+  g.fillStyle = '#fdfcf8'
+  g.fillRect(40, 30, c.width - 80, c.height - 60)
+  g.fillStyle = '#23211d'
+  const center = (text: string, y: number, font: string): void => {
+    g.font = font
+    g.fillText(text, (c.width - g.measureText(text).width) / 2, y)
+  }
+  const row = (left: string, right: string, y: number, bold = false): void => {
+    g.font = `${bold ? 'bold ' : ''}20px monospace`
+    g.fillText(left, 70, y)
+    g.fillText(right, c.width - 70 - g.measureText(right).width, y)
+  }
+  center('CAFÉ LINDENHOF', 95, 'bold 30px monospace')
+  center('Lindenstraße 9', 128, '18px monospace')
+  center('12.09.2026   12:41   Tisch 4', 158, '18px monospace')
+  g.fillRect(70, 185, c.width - 140, 2)
+  row('2 x Cappuccino', '7,60', 230)
+  row('1 x Apfelstrudel', '4,90', 268)
+  row('1 x Club Sandwich', '11,50', 306)
+  row('1 x Mineralwasser 0,5l', '3,20', 344)
+  g.fillRect(70, 372, c.width - 140, 2)
+  row('SUMME EUR', '27,20', 418, true)
+  row('MwSt 19% Getränke', '1,72', 470)
+  row('MwSt 7% Speisen', '1,07', 506)
+  row('Netto', '24,41', 542)
+  g.fillRect(70, 572, c.width - 140, 2)
+  row('Kartenzahlung', '27,20', 616)
+  center('Vielen Dank für Ihren Besuch!', 700, '18px monospace')
+  return new Promise((resolve) =>
+    c.toBlob((b) => void b!.arrayBuffer().then((buf) => resolve(new Uint8Array(buf))), 'image/png')
+  )
+}
+const MKT_RECEIPT_Q_EN = 'Summarize this receipt: total, VAT and payment method.'
+const MKT_RECEIPT_Q_DE = 'Fasse diesen Beleg zusammen: Summe, Mehrwertsteuer und Zahlungsart.'
+const MKT_RECEIPT_A_EN = [
+  'This is a receipt from **Café Lindenhof**, dated **12.09.2026 at 12:41**.',
+  '',
+  '- **Total:** €27.20, paid by card',
+  '- **VAT included:** €2.79',
+  '  - 19% on drinks (€10.80): €1.72',
+  '  - 7% on food (€16.40): €1.07',
+  '- **Items:** 2 × cappuccino, 1 × apple strudel, 1 × club sandwich, 1 × mineral water (0.5 l)',
+  '',
+  'The net amount is **€24.41**.'
+].join('\n')
+const MKT_RECEIPT_A_DE = [
+  'Das ist ein Beleg vom **Café Lindenhof** vom **12.09.2026 um 12:41 Uhr**.',
+  '',
+  '- **Summe:** 27,20 €, bezahlt mit Karte',
+  '- **Enthaltene MwSt:** 2,79 €',
+  '  - 19 % auf Getränke (10,80 €): 1,72 €',
+  '  - 7 % auf Speisen (16,40 €): 1,07 €',
+  '- **Positionen:** 2 × Cappuccino, 1 × Apfelstrudel, 1 × Club Sandwich, 1 × Mineralwasser (0,5 l)',
+  '',
+  'Der Nettobetrag beträgt **24,41 €**.'
+].join('\n')
+const mktReceiptTitle = (): string => (mktDe() ? 'beleg-cafe-lindenhof.png' : 'receipt-cafe-lindenhof.png')
+overrides.imageGetStatus = async () =>
+  isMkt() ? { available: true, modelId: 'qwen2.5-vl-3b-instruct-q4', modelDisplayName: 'Qwen2.5-VL 3B Instruct Q4' } : null
+overrides.listImageSessions = async () =>
+  isMkt()
+    ? [
+        {
+          id: 'mkt-img1',
+          title: mktReceiptTitle(),
+          mimeType: 'image/png',
+          sizeBytes: 48_213,
+          width: MKT_RECEIPT_W,
+          height: MKT_RECEIPT_H,
+          turnCount: 1,
+          firstQuestion: mktDe() ? MKT_RECEIPT_Q_DE : MKT_RECEIPT_Q_EN,
+          createdAt: now,
+          updatedAt: now
+        }
+      ]
+    : []
+overrides.getImageSession = async () => ({
+  id: 'mkt-img1',
+  title: mktReceiptTitle(),
+  mimeType: 'image/png',
+  sizeBytes: 48_213,
+  width: MKT_RECEIPT_W,
+  height: MKT_RECEIPT_H,
+  imageBytes: await mktReceiptPng(),
+  turns: [
+    {
+      id: 'mkt-img1-t1',
+      question: mktDe() ? MKT_RECEIPT_Q_DE : MKT_RECEIPT_Q_EN,
+      answer: mktDe() ? MKT_RECEIPT_A_DE : MKT_RECEIPT_A_EN,
+      createdAt: now
+    }
+  ],
+  createdAt: now,
+  updatedAt: now
+})
+function mktStepImages(): void {
+  const open = document.querySelector<HTMLButtonElement>('.image-history-open')
+  if (open) {
+    open.click()
+    return
+  }
+  mktClickNav(bothLangs('nav.images'))
+}
+
+// Knowledge packs: offline Wikipedia/Wiktionary archives as Kiwix publishes them.
+function mktPack(id: string, title: string, description: string, language: string, articleCount: number, gb: number, leaf: string, enabled = true): Record<string, unknown> {
+  return {
+    id,
+    title,
+    description,
+    language,
+    zimDate: '2026-08-01',
+    articleCount,
+    sizeBytes: Math.round(gb * 1024 ** 3),
+    leaf,
+    enabled,
+    available: true,
+    unavailableReason: null,
+    searchable: 'yes',
+    searchableHint: 'yes',
+    addedAt: now
+  }
+}
+overrides.listKnowledgePacks = async () =>
+  isMkt()
+    ? [
+        mktPack('mkt-p1', 'Wikipedia', 'Die freie Enzyklopädie (Deutsch, ohne Bilder)', 'deu', 2_981_000, 11.9, 'wikipedia_de_all_nopic_2026-08.zim'),
+        mktPack('mkt-p2', 'Wikipedia', 'The free encyclopedia (English, no pictures)', 'eng', 6_978_000, 47.8, 'wikipedia_en_all_nopic_2026-08.zim'),
+        mktPack('mkt-p3', 'Wiktionary', 'Das freie Wörterbuch (Deutsch)', 'deu', 1_164_000, 1.4, 'wiktionary_de_all_nopic_2026-08.zim'),
+        mktPack('mkt-p4', 'Wikivoyage', 'The free worldwide travel guide (English)', 'eng', 32_400, 0.9, 'wikivoyage_en_all_nopic_2026-08.zim', false)
+      ]
+    : []
+overrides.getKnowledgePackStatus = async () => ({ toolsInstalled: true, refreshing: false, revision: 1, excluded: null })
+
+// Performance: a mid-range laptop that runs the 9B on its GPU. Staged figures, not a measurement.
+function mktBench(over: Partial<BenchmarkResult> = {}): BenchmarkResult {
+  return {
+    os: 'win32',
+    arch: 'x64',
+    cpuModel: 'AMD Ryzen 7 8845HS',
+    cpuCores: 16,
+    ramGb: 31.3,
+    gpu: MKT_GPU,
+    gpuVramMb: 8188,
+    driveReadMbps: null,
+    driveWriteMbps: 214,
+    tokensPerSecond: 36,
+    speedBasis: { basis: 'timings', tokens: 64 },
+    measuredModelId: MKT_CHAT_MODEL,
+    effectiveRead: { mbps: 352, bytes: 6_000_000_000, ms: 17_000, source: 'model_load', modelId: MKT_CHAT_MODEL, at: '2026-09-24T09:12:00Z' },
+    profile: 'BALANCED',
+    recommendedModelId: MKT_CHAT_MODEL,
+    warnings: [],
+    ranAt: '2026-09-24T09:14:00Z',
+    ...over
+  } as BenchmarkResult
+}
+overrides.getPerformance = async () => {
+  if (!isMkt()) return null
+  const mdl = (role: string, modelId: string, sizeOnDiskGb: number, device: string, loaded: boolean, lifetime: string): Record<string, unknown> => ({
+    role, modelId, sizeOnDiskGb, device, loaded, lifetime, gpuLayers: null, totalLayers: null
+  })
+  return {
+    current: mktBench(),
+    recommendation: { modelId: MKT_CHAT_MODEL, basis: 'discrete' },
+    currentMachine: true,
+    currentGpu: { name: MKT_GPU, totalMb: 8188, useful: true },
+    graphicsDevice: { name: MKT_GPU, totalMb: 8188, useful: true },
+    otherMachines: [
+      mktBench({ os: 'win32', cpuModel: 'Intel Core i5-1235U', cpuCores: 10, ramGb: 15.7, gpu: null, gpuVramMb: null, tokensPerSecond: 9, measuredModelId: 'qwen3.5-4b-ud-q4kxl', recommendedModelId: 'qwen3.5-4b-ud-q4kxl', profile: 'LITE', ranAt: '2026-09-18T16:40:00Z' }),
+      mktBench({ os: 'darwin', arch: 'arm64', cpuModel: 'Apple M3 Pro', cpuCores: 12, ramGb: 36, gpu: 'Apple M3 Pro', gpuVramMb: null, tokensPerSecond: 29, ranAt: '2026-09-10T11:05:00Z' })
+    ],
+    running: false,
+    placement: {
+      memoryClass: 'discrete',
+      ramMb: 32_047,
+      vramMb: 8188,
+      model: { id: MKT_CHAT_MODEL, sizeOnDiskGb: 6.0, contextTokens: 8192 },
+      recommendedContextTokens: 8192,
+      observed: {
+        modelId: MKT_CHAT_MODEL, contextTokens: 8192, backend: 'gpu', gpuLayers: 41, totalLayers: 41,
+        gpuModelMb: 5500, cpuModelMb: 400, gpuKvMb: 300, cpuKvMb: null, metalMaxWorkingSetMb: null, machineKey: null, at: '2026-09-24T09:12:00Z'
+      },
+      observedMismatch: null,
+      verdict: { kind: 'gpu', needMb: 6200, estimated: false, budgetMb: 8188, freeAtStartMb: 7400, workingMb: 6200, spillMb: null, gpuLayers: 41, totalLayers: 41 },
+      models: [
+        mdl('chat', MKT_CHAT_MODEL, 6.0, 'gpu', true, 'session'),
+        mdl('translation', 'translategemma-12b-it-q4', 7.3, 'gpu', false, 'idle'),
+        mdl('vision', 'qwen2.5-vl-3b-instruct-q4', 3.27, 'cpu', false, 'idle'),
+        mdl('reranker', 'bge-reranker-v2-m3-f16', 1.1, 'cpu', true, 'session'),
+        mdl('embeddings', 'multilingual-e5-small-q8', 0.2, 'cpu', true, 'session'),
+        mdl('transcriber', 'whisper-small-multilingual', 0.49, 'cpu', false, 'per-use')
+      ],
+      totals: { ramAllMb: Math.round(18.3 * 1024), bothOnCard: false, chatAndTranslationOnCard: false }
+    },
+    observed: {
+      lastAnswer: { tokensPerSecond: 35.4, ttftMs: 610, tokens: 412, modelId: MKT_CHAT_MODEL, at: '2026-09-24T09:31:00Z' },
+      lastModelLoad: mktBench().effectiveRead,
+      lastChecksum: null
+    }
+  }
+}
+
+// Skills: the bundled app skills, read from app-skills/*/SKILL.md at build time so the capture
+// always shows the skills that actually ship (title/description/localized DE from the header).
+const MKT_SKILL_FILES = import.meta.glob('../../../../../app-skills/*/SKILL.md', {
+  query: '?raw',
+  import: 'default',
+  eager: true
+}) as Record<string, string>
+function mktSkills(): SkillInfo[] {
+  const field = (head: string, re: RegExp): string => (head.match(re)?.[1] ?? '').trim()
+  return Object.values(MKT_SKILL_FILES).map((raw) => {
+    const head = raw.split(/^---\s*$/m)[1] ?? ''
+    const id = field(head, /^id:\s*(.+)$/m)
+    const de = head.split(/^localized:.*$/m)[1] ?? ''
+    return {
+      installId: `app:${id}`,
+      id,
+      title: field(head, /^title:\s*(.+)$/m),
+      description: field(head, /^description:\s*(.+)$/m),
+      localized: {
+        de: { title: field(de, /^\s+title:\s*(.+)$/m), description: field(de, /^\s+description:\s*(.+)$/m) }
+      },
+      version: field(head, /^version:\s*(\S+)/m),
+      kind: (field(head, /^kind:\s*(\w+)/m) || 'guidance') as SkillInfo['kind'],
+      author: 'HilbertRaum',
+      language: 'en',
+      source: 'app',
+      trustedLevel: 'app',
+      enabled: true,
+      warningAck: true,
+      unavailable: false,
+      permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
+      permissionSummary: '',
+      duplicateId: false,
+      installedAt: now,
+      updatedAt: now
+    } as SkillInfo
+  })
+}
+const baseListSkills = overrides.listSkills as () => Promise<SkillInfo[]>
+overrides.listSkills = async () => (isMkt() ? mktSkills() : baseListSkills())
 
 // Walk helpers: each staged shell ticks until its goal selector exists, clicking its way
 // through the real UI. Nav labels are matched in both languages.
@@ -1113,18 +1480,121 @@ function mktStepChatSources(): void {
   }
   mktStepChat()
 }
-function mktStepDocuments(): void {
-  mktClickNav(['Documents', 'Dokumente'])
-}
-function mktStepPrivacy(): void {
+// Both UI languages' label for a catalog key, so a walk step matches EN and DE shells alike.
+const bothLangs = (key: MessageKey): string[] => [tCatalog('en', key), tCatalog('de', key)]
+/** Clicks the segmented-control button (Settings tabs, Documents mode, Chat mode) labelled by
+ *  `key`; false when no such button is on screen yet. A selected one counts as done. */
+function mktClickSeg(key: MessageKey): boolean {
+  const labels = bothLangs(key)
   const seg = Array.from(document.querySelectorAll<HTMLButtonElement>('.seg-btn')).find((b) =>
-    ['Privacy & data', 'Privatsphäre & Daten'].includes((b.textContent ?? '').trim())
+    labels.includes((b.textContent ?? '').trim())
   )
-  if (seg) {
-    seg.click()
+  if (!seg) return false
+  if (!seg.classList.contains('selected')) seg.click()
+  return true
+}
+/** Walk step: open the rail destination `navKey`, then (optionally) its segmented tab `segKey`. */
+function mktStepTo(navKey: MessageKey, segKey?: MessageKey): () => void {
+  return () => {
+    if (segKey && mktClickSeg(segKey)) return
+    mktClickNav(bothLangs(navKey))
+  }
+}
+function mktStepHome(): void {
+  document.querySelector<HTMLButtonElement>('.brand')?.click()
+}
+
+// Review: the evidence review of the contract answer (same staged chat as the contract shot).
+// Each answer block is one item linked to the source its marker names; the first four are
+// already marked supported, so the capture shows the review in progress. The walk opens it
+// through the real "Review answer and sources" entry under the answer's sources.
+function mktReviewDetail(): Record<string, unknown> {
+  const answer = mktDe() ? MKT_CONTRACT_DE : MKT_CONTRACT_EN
+  const blocks = answer.split('\n').filter((l) => l.trim() !== '')
+  const items = blocks.map((line, i) => {
+    const listItem = /^\d+\.\s/.test(line)
+    const marker = line.match(/\[(S\d)\]/)?.[1]
+    return {
+      id: `mkt-ri${i}`,
+      reviewId: 'mkt-r1',
+      ordinal: i,
+      kind: 'block',
+      blockKey: `b${i}-${listItem ? 'list_item' : 'paragraph'}`,
+      blockKind: listItem ? 'list_item' : 'paragraph',
+      startOffset: null,
+      endOffset: null,
+      textSnapshot: line.replace(/^\d+\.\s/, ''),
+      decision: i >= 1 && i <= 4 ? 'supported' : 'not_reviewed',
+      reviewerNote: null,
+      links: marker ? [{ evidenceKey: marker.toLowerCase(), origin: 'answer_marker', relation: i <= 4 ? 'supports' : null }] : [],
+      createdAt: now,
+      updatedAt: now
+    }
+  })
+  const sources = mktContractCitations().map((c) => ({
+    key: c.label.toLowerCase(),
+    machineLabel: c.label,
+    kind: 'direct_excerpt',
+    identity: 'resolved',
+    documentId: 'mkt-d1',
+    documentTitle: c.sourceTitle,
+    documentSha256: 'ab'.repeat(32),
+    mimeType: 'application/pdf',
+    pageNumber: c.pageNumber ?? null,
+    sectionLabel: null,
+    snippet: c.snippet ?? null,
+    sourceChunkId: null,
+    availabilityAtCreation: 'available'
+  }))
+  return {
+    id: 'mkt-r1',
+    conversationId: 'm1',
+    messageId: 'mm2',
+    questionMessageId: 'mm1',
+    title: mktDe() ? 'Mietvertrag: Fristen' : 'Rental contract: deadlines',
+    status: 'draft',
+    outdated: false,
+    reviewerLabel: null,
+    generalNote: null,
+    createdAt: now,
+    updatedAt: now,
+    completedAt: null,
+    answerSnapshot: answer,
+    questionSnapshot: mktMessages()[0].content,
+    sources,
+    coverageSnapshot: { mode: 'relevance', chunksCovered: 5, chunksTotal: 14 },
+    generationSnapshot: {
+      generatedAt: now,
+      modelId: MKT_CHAT_MODEL,
+      modelDisplayName: 'Qwen3.5 9B (UD-Q4_K_XL)',
+      skillId: null,
+      skillDisplayName: null,
+      appVersion: '0.1.61',
+      answerTruncated: false,
+      answerMode: 'relevance'
+    },
+    exports: [],
+    gate: computeReadyGate(items as unknown as EvidenceReviewItem[]),
+    items
+  }
+}
+overrides.createEvidenceReview = async () => mktReviewDetail()
+overrides.getEvidenceReview = async () => mktReviewDetail()
+overrides.refreshEvidenceReviewState = async () => ({
+  reviewId: 'mkt-r1',
+  outdated: false,
+  answerState: 'unchanged',
+  coverageState: 'unchanged',
+  sources: mktContractCitations().map((c) => ({ key: c.label.toLowerCase(), state: 'unchanged' })),
+  acknowledgedAt: null
+})
+function mktStepReview(): void {
+  const entry = document.querySelector<HTMLButtonElement>('.sources-review')
+  if (entry) {
+    entry.click()
     return
   }
-  mktClickNav(['Settings', 'Einstellungen'])
+  mktStepChatSources()
 }
 
 function StagedShell({ goal, step }: { goal: string; step: () => void }): JSX.Element {
@@ -1132,6 +1602,8 @@ function StagedShell({ goal, step }: { goal: string; step: () => void }): JSX.El
   // screenshot script when the goal element is up.
   useEffect(() => {
     document.documentElement.dataset.theme = mktLight() ? 'light' : 'dark'
+    // No page-level scrollbar at the capture's right edge (the screens' own scroll areas stay).
+    document.documentElement.style.overflow = 'hidden'
     // The settings load can remount the tree (language/theme application) AFTER a first
     // successful walk, resetting the selection — so keep walking until the goal has been
     // continuously present for a few ticks, and only then mark the capture ready.
@@ -1187,8 +1659,18 @@ const MKT_SHELL: Record<string, { goal: string; step: () => void; w: number; h: 
   salary: { goal: '.msg-content', step: mktStepChat, w: 1180, h: 800, what: 'staged salary-negotiation chat' },
   spending: { goal: '.msg-content', step: mktStepChat, w: 1180, h: 800, what: 'staged fictional spending answer' },
   contract: { goal: '.sources-cards', step: mktStepChatSources, w: 1180, h: 1170, what: 'staged contract-deadlines answer, sources expanded' },
-  documents: { goal: '.doc-row', step: mktStepDocuments, w: 1180, h: 800, what: 'staged document library' },
-  privacy: { goal: '.offline-statement', step: mktStepPrivacy, w: 1180, h: 1080, what: 'Settings privacy tab, offline posture' }
+  documents: { goal: '.doc-row', step: mktStepTo('nav.documents'), w: 1180, h: 800, what: 'staged document library' },
+  privacy: { goal: '.offline-statement', step: mktStepTo('nav.settings', 'settings.tab.privacy'), w: 1180, h: 1080, what: 'Settings privacy tab, offline posture' },
+  home: { goal: '.readiness-card', step: mktStepHome, w: 1180, h: 800, what: 'Home, ready to work' },
+  packs: { goal: '.packs-card-actions', step: mktStepTo('nav.documents', 'docs.mode.packs'), w: 1180, h: 800, what: 'Documents, knowledge packs' },
+  translate: { goal: '.translate-output p:not(.hint)', step: mktStepTranslate, w: 1180, h: 800, what: 'Translate, a finished translation' },
+  images: { goal: '.image-workspace img', step: mktStepImages, w: 1180, h: 800, what: 'Images, a described photo' },
+  models: { goal: '.model-card', step: mktStepTo('nav.models'), w: 1180, h: 1080, what: 'AI Model, the active model' },
+  performance: { goal: '.perf-tile', step: mktStepTo('nav.performance'), w: 1180, h: 1080, what: 'Performance, a measured machine' },
+  settings: { goal: '.settings-tabs', step: mktStepTo('nav.settings', 'settings.tab.general'), w: 1180, h: 1080, what: 'Settings, general tab' },
+  review: { goal: '.review-decisions', step: mktStepReview, w: 1180, h: 1080, what: 'Evidence review of the contract answer, in progress' },
+  lock: { goal: '.gate-card', step: noop, w: 1180, h: 800, what: 'Lock screen of the encrypted workspace' },
+  skills: { goal: '.skills-toolbar', step: mktStepTo('nav.settings', 'settings.tab.skills'), w: 1180, h: 900, what: 'Settings, skills library' }
 }
 for (const [shot, cfg] of Object.entries(MKT_SHELL)) {
   for (const suffix of ['', '-de', '-light', '-de-light']) {
