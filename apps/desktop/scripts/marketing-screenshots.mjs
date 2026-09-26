@@ -173,11 +173,13 @@ ${[...byShot.keys()].map((shot) => `<section><h2>${shot}</h2><div class="row">${
     if (list.length === 0) return close()
     index = (i + list.length) % list.length
     const a = list[index]
-    document.getElementById('viewer-img').src = a.dataset.file
-    document.getElementById('viewer-img').alt = a.dataset.file
+    // The link's href is the one path (a copy of the sheet that moves the PNGs rewrites only src/href).
+    const file = a.getAttribute('href')
+    document.getElementById('viewer-img').src = file
+    document.getElementById('viewer-img').alt = file
     document.getElementById('viewer-caption').textContent = a.dataset.caption
     document.getElementById('viewer-pos').textContent = (index + 1) + ' / ' + list.length
-    document.getElementById('viewer-open').href = a.dataset.file
+    document.getElementById('viewer-open').href = file
     viewer.classList.add('open')
     document.body.style.overflow = 'hidden'
   }
