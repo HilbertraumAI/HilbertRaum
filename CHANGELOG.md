@@ -44,6 +44,10 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **Document translation works in slightly smaller parts.** A long document is now translated
+  in parts of about 640 words instead of about 690, so a part full of dense text, such as an
+  invoice or a table, stays within the input size the translation model was trained on. A long
+  document takes about 7 % more parts (#512).
 - **Dictation now ignores background noise.** Before transcribing what you dictated, the app
   runs a small voice-activity model (Silero VAD) so a recording with no speech in it yields
   "No speech was recognized" instead of a stray word. The model is a second, small file of the

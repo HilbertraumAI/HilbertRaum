@@ -28,6 +28,9 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-27 — **#512 decision 3 — translation planner constants 2.8 in / 3.1 out (`feat/512-translation-constants`).**
+Curated-10 basis (owner ruling); at ctx 4096 the D4 clamp now binds: 642-word windows, `windowMaxTokens` 1,998, a token-dense
+window under the trained 2K. Record: `architecture.md` translation record "#512" bullet, `model-benchmarks.md` §11.2. Open: none._
 _2026-09-22 — **#410 — the OCR language files install in-app (`feat/410-in-app-ocr-install`): a failed scan or
 photo row in Documents and a quiet AI Model row offer "Download OCR files", and OCR activates without a restart.**
 Record: `architecture.md` "In-app OCR install — design record" (owner decisions D1–D7, the facts, the design as

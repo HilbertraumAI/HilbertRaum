@@ -374,7 +374,7 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
     // OUTPUT weight: translate a WORD-SPARSE source (German — compounds ⇒ few words, so output
     // tokens per SOURCE word is largest) into every token-heavy TARGET, plus EN→DE. The planner's
     // TRANSLATION_OUTPUT_TOKENS_PER_WORD is "output tokens per SOURCE word", so this is the worst
-    // case that must stay under the shipped constant (3.0 since TG-6) for the output cap to never truncate.
+    // case that must stay under the shipped constant (3.1 since #512) for the output cap to never truncate.
     for (const T of HEAVY_TARGETS) {
       const src = T === 'de' ? LANG_SAMPLES.en : LANG_SAMPLES.de
       const srcLang: TranslationLangCode = T === 'de' ? 'en' : 'de'
@@ -398,7 +398,7 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
 
     // The planner's safety contract: the SHIPPED constants must be UPPER bounds on the real Gemma
     // numbers, so a window can only ever OVER-chunk (harmless) — never overflow the 2K trained
-    // input or the output cap. Print the verdict for the TG-6 constants decision.
+    // input or the output cap. Print the verdict for the constants (2.8 / 3.1 since #512).
     const inputConstant = TRANSLATION_INPUT_TOKENS_PER_WORD
     console.log(
       `[${label}] INPUT constant TRANSLATION_INPUT_TOKENS_PER_WORD=${inputConstant} vs measured max ${maxInputTpw.toFixed(2)} → ` +
@@ -520,7 +520,7 @@ describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real b9849 + real 
 
   // (11) TG-6 multi-window END-TO-END on the real model — the doc-task's core loop (the path the
   // recalibrated planner constants actually change). A ~1,000-word German document is planned with
-  // the SHIPPING `planTranslationWindows` (new 2.5/3.0 weights ⇒ ~690-word windows), each window is
+  // the SHIPPING `planTranslationWindows` (2.8/3.1 weights since #512 ⇒ 642-word windows), each window is
   // translated on the real sidecar, and the stitched output is checked for the TG-6 safety property:
   // ≥2 windows are produced AND no window's real output hits its `windowMaxTokens` cap (over-chunk,
   // never truncate). Front-and-back reference codes must survive so nothing is silently dropped
@@ -540,7 +540,7 @@ describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real b9849 + real 
       'informieren wir Sie über die neuen Öffnungszeiten unseres Kundenservice ab dem kommenden Monat.',
       'erläutern wir die geänderten Bedingungen für Rücksendungen und Erstattungen im Detail.'
     ]
-    // ~70 segments (~1,100 words) comfortably exceeds the ~690-word TG-6 window budget → ≥2 windows.
+    // ~70 segments (~1,100 words) comfortably exceeds the 642-word window budget → ≥2 windows.
     const segments = Array.from({ length: 70 }, (_, i) =>
       `Zu Referenz REF-40${String(i + 1).padStart(2, '0')} ${SENTENCES[i % SENTENCES.length]}`
     )

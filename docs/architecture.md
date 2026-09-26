@@ -2479,7 +2479,8 @@ Per-finding disposition (F-1…F-8):
   **`TRANSLATION_OUTPUT_TOKENS_PER_WORD = 3.0`**, both conservative ceilings over the measured maxima
   so a window can only OVER-chunk, never overflow (the D4 clamp still binds: at 2.5 tok/word a
   clamp-word window's input stays under 2K). Windows shrink to **~690 words** (`windowMaxTokens`
-  ≈2,071) — the honest cost of the heavy tokenizer. **D8 (GPU):** TG-6 KEPT the CPU pin for v1
+  ≈2,071) — the honest cost of the heavy tokenizer. *(Raised to 2.8 / 3.1 by #512 on
+  2026-09-27 — 642-word windows; see the #512 bullet at the end of this record.)* **D8 (GPU):** TG-6 KEPT the CPU pin for v1
   (~3–4 tok/s tolerable for a background doc-task; GPU deferred, not rejected) — **superseded by
   issue #42 (2026-07-09)**, which pulled GPU forward: see the issue-#40/#42 bullet below. The
   per-window timeout was recalibrated to 45 min (a ~2,070-token full window at the observed-worst
@@ -2624,6 +2625,18 @@ Per-finding disposition (F-1…F-8):
   the Translate screen adds the "Reading…"/"Saving…" phase labels and the file store skips
   no-op poll writes. Frontend deltas (#161/#162) live in the screens (always-mounted
   ErrorBanner, single-control drop zones, visible device remedy, doc-path sameLang guard).
+- **#512 (2026-09-27) — planner constants raised to 2.8 in / 3.1 out (owner decision 3).**
+  `TRANSLATION_INPUT_TOKENS_PER_WORD` 2.5 → **2.8**, `TRANSLATION_OUTPUT_TOKENS_PER_WORD`
+  3.0 → **3.1**. The basis is the curated-10 measurement (owner-accepted; the other 41 languages
+  were not measured): the translategemma smoke's short 19–23-word samples reach 2.79 input /
+  3.06 output tokens per word on both b9849 and b11146, while realistic prose stays at ≤ 2.26 /
+  ≤ 1.96. So this is a deliberate margin for token-dense text (invoices, tables), not a
+  correction for prose, which was already under 2.5 / 3.0. At the launched ctx 4096 the **D4
+  clamp now binds** — floor(1800 / 2.8) = **642 words**, where the context split would allow 643
+  — and `windowMaxTokens` is **1,998** (was 690 words / 2,071). A full window of ~2.8 tok/word
+  text is ≈ 1,798 input tokens plus the scaffold, **under** TranslateGemma's trained 2K input;
+  at 690 words it was ≈ 2,080, just over. The cost is about 7 % more windows per document. The
+  45-min per-window timeout is unchanged (a ~2,000-token window at ~1.1 tok/s is still ~30 min).
 
 ### §-anchor legend (historical plan citations)
 

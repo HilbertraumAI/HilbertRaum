@@ -1948,8 +1948,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   The model card specifies a total INPUT of ~2K tokens (the fine-tune's trained size), so
   the planner clamps every window regardless of the launched context (plan D4). TG-6
   re-measured the real Gemma tokenizer (much heavier than the earlier Qwen estimate — up to
-  ~2.3 tokens/word on Czech/Ukrainian prose), so windows are now **~690 words** — smaller,
-  hence more of them on a long document. Each window is translated independently: a recurring
+  ~2.3 tokens/word on Czech/Ukrainian prose), so windows are now **~640 words** (642 at the
+  launched 4,096 context since #512, which keeps even a token-dense window under the 2K input) —
+  smaller, hence more of them on a long document. Each window is translated independently: a recurring
   term can be rendered differently in different windows. A sliding glossary/context header is
   explicitly out of scope for now.
 - **Window sizing is "over-chunk, never overflow" for realistic prose — not an absolute
@@ -1986,7 +1987,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
 - **A window the model refuses/garbles/TRUNCATES is marked or fails, never silently dropped.**
   A window that throws, comes back empty, **or runs to the output-limit cap without a clean
   stop** — the greedy-decode repetition loop that is the classic temperature-0 MT pathology, or a
-  token-dense window clipping at the ~2,070-token cap — is now DETECTED via the completion's final
+  token-dense window clipping at the ~2,000-token cap — is now DETECTED via the completion's final
   stop reason and treated as a failed attempt (TA-5). The shipped detector keys on the final
   frame's **`stop_type ∈ {eos, word}`** first — the pinned b9849 does NOT emit the legacy
   `stopping_word`/eos-flag fields on a clean stop (issue #31a); those legacy fields remain only

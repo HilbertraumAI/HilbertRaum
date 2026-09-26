@@ -47,8 +47,8 @@ import { packIntoWindows } from './summary'
 // clamp: TranslateGemma's model card specifies a TOTAL INPUT of ~2K tokens (the gemma3
 // architecture supports far more, but the fine-tune is trained/evaluated at ≤2K), so the
 // per-window input is HARD-capped at `TRANSLATION_MAX_INPUT_TOKENS` regardless of the
-// launched context — and at 2.5 tokens/word that clamp binds in REAL tokens (a clamp-word
-// window stays under the trained 2K). There is NO window ceiling: a faithful translation
+// launched context — and at 2.8 tokens/word that clamp binds in REAL tokens (a clamp-word
+// window stays under the trained 2K, even on token-dense text). There is NO window ceiling: a faithful translation
 // may not silently truncate the document (the summary ceiling exists because a summary may
 // honestly cover "the beginning"; a translation may not). Long documents simply take more
 // windows — progress is visible and cancel always works.
@@ -62,34 +62,36 @@ export const TRANSLATION_PROMPT_RESERVE_TOKENS = 300
 /**
  * INPUT tokens per SOURCE word on the real Gemma tokenizer — MEASURED at TG-6
  * (`llama-tokenize` over realistic office prose, the curated 10: en 1.11 · de 1.43 ·
- * nl 1.65 · uk 2.13 · pl 2.19 · cs 2.26; a token-dense 20-word invoice line peaks ~2.8).
- * 2.5 is a conservative CEILING above the heaviest (Czech/Cyrillic) so a window can only
- * OVER-chunk, never overflow. This REPLACES the Qwen3-4B-measured 1.3 the chat path used
- * (~half the real Gemma weight — the latent overflow the TG-6 re-measure caught). It is
- * deliberately NOT the shared `SUMMARY_TOKENS_PER_WORD` (1.3): that stays the CHAT model's
- * summary factor for a DIFFERENT tokenizer and must not move with translation.
+ * nl 1.65 · uk 2.13 · pl 2.19 · cs 2.26; a token-dense 20-word invoice line peaks ~2.8, and
+ * the smoke's short samples reached 2.79 on b9849 and b11146). 2.8 (#512; TG-6 set 2.5) is a
+ * deliberate margin for token-dense text such as invoices and tables, not only for prose: a
+ * full window of such text stays under the trained 2K input (see `TRANSLATION_MAX_INPUT_TOKENS`).
+ * It costs about 7 % more windows per document; realistic prose was already under 2.5. This
+ * REPLACES the Qwen3-4B-measured 1.3 the chat path used (~half the real Gemma weight — the
+ * latent overflow the TG-6 re-measure caught). It is deliberately NOT the shared
+ * `SUMMARY_TOKENS_PER_WORD` (1.3): that stays the CHAT model's summary factor for a DIFFERENT
+ * tokenizer and must not move with translation.
  */
-export const TRANSLATION_INPUT_TOKENS_PER_WORD = 2.5
+export const TRANSLATION_INPUT_TOKENS_PER_WORD = 2.8
 /**
  * OUTPUT tokens per SOURCE word — MEASURED at TG-6 (word-sparse German source → token-dense
- * targets, the worst case: en→de 1.39 · de→pl 1.79 · de→uk 1.90 · de→cs 1.96 on prose). 3.0 is a
- * conservative ceiling well above the realistic prose worst case (1.96) — a several-hundred-word
- * window's real output sits far under the resulting cap, so it can never truncate a realistic
- * window's translation. (The ~3.06 seen on a token-dense 20-word invoice line is a SHORT-sample
- * peak, not a sustained rate: a full window amortizes far below it, so it does not truncate
- * either.) Raised from the Qwen3-4B-measured 2.0.
+ * targets, the worst case: en→de 1.39 · de→pl 1.79 · de→uk 1.90 · de→cs 1.96 on prose). 3.1
+ * (#512; TG-6 set 3.0) sits above even the ~3.06 that token-dense 19–23-word samples reach (a
+ * short-sample peak — a full window amortizes far below it), and far above the realistic prose
+ * worst case (1.96), so the output cap never truncates a window's translation. Raised from the
+ * Qwen3-4B-measured 2.0.
  */
-export const TRANSLATION_OUTPUT_TOKENS_PER_WORD = 3.0
+export const TRANSLATION_OUTPUT_TOKENS_PER_WORD = 3.1
 /**
  * D4 (translategemma plan §2): the model card's "Total input context of 2K tokens",
  * minus the prompt scaffold — a HARD per-window input ceiling enforced by
- * `translationBudgetWords` even when the launched context would allow more. At the TG-6
- * `TRANSLATION_INPUT_TOKENS_PER_WORD = 2.5` this is ~720 words; on realistic prose (≤2.26 tok/word)
- * a window's real input then stays under the trained 2K, and a rare token-dense window (~2.8
- * tok/word + scaffold) nudges only slightly over 2K — a fine-tune-QUALITY edge, still far under the
- * launched 4096 context, so never a hard overflow. (At `--ctx-size 4096` the output-room split
- * above binds first at ~690 words; this clamp is the backstop that keeps a bigger future context
- * from quietly exceeding the trained input.)
+ * `translationBudgetWords` even when the launched context would allow more. At
+ * `TRANSLATION_INPUT_TOKENS_PER_WORD = 2.8` this is 642 words, and since #512 it is the limit
+ * that binds at the launched `--ctx-size 4096` (the output-room split above would allow 643;
+ * at TG-6's 2.5 / 3.0 the split bound first, at 690). A full window of token-dense text
+ * (~2.8 tok/word) then stays under the trained 2K: 642 × 2.8 ≈ 1,798 tokens plus the scaffold
+ * (under 150) is below 2,048, where at 690 words it nudged just over. Realistic prose
+ * (≤2.26 tok/word) stays far below.
  */
 export const TRANSLATION_MAX_INPUT_TOKENS = 1800
 /** Floor for a window's output cap (degenerate tiny contexts). */
@@ -163,7 +165,7 @@ export function planTranslationWindows(
   // fill charged a >16-char word ceil(len/4) against a per-WORD budget, under-filling windows
   // 1.5–2.5× on compound-heavy prose (de/cs) — extra windows + extra prompt-scaffold prefills
   // on exactly the languages whose windows already decode ~30 min each on CPU. Both the input
-  // (2.5 tok/word) and output (3.0 tok/word) ceilings are per SOURCE WORD, so words is the
+  // (2.8 tok/word) and output (3.1 tok/word) ceilings are per SOURCE WORD, so words is the
   // correct budget unit for both constraints; ordinary short-word prose packs byte-identically.
   const windows = packIntoWindows(segmentTexts, budgetWords, approxBudgetWordCount)
   // Output headroom = the usable tokens the input share cannot consume — ≥ the output

@@ -133,8 +133,8 @@ const DEFAULT_TRANSLATION_CONTEXT_TOKENS = 4096
 /**
  * Per-window bound so a WEDGED sidecar fails the window instead of hanging the job — sized
  * for the real CPU decode. TG-6 re-measured the Gemma tokenizer: a near-budget window at the
- * launched 4096 ctx carries a ~2,070-token output cap (`windowMaxTokens`), and CPU decode ran
- * 1.1–4.4 tok/s across the TG-6 run (the low end under memory pressure) — so a full window can
+ * launched 4096 ctx carries a ~2,000-token output cap (`windowMaxTokens`; 1,998 since #512),
+ * and CPU decode ran 1.1–4.4 tok/s across the TG-6 run (the low end under memory pressure) — so a full window can
  * be ~30 min at ~1.1 tok/s before prefill. 45 min never kills such a live slow decode (the old
  * 300 s did — every full window timed out twice into a failed-window notice; the interim TG-3
  * 30 min would clip a ~1.1 tok/s full window) while still bounding a true hang; user cancel stays
