@@ -1710,8 +1710,9 @@ grouping/face controls in `committed-catalog.test.ts`; visual fixtures: `models*
 **What it is.** `npm run screenshots:marketing` (in `apps/desktop`) renders every staged marketing
 shot of the preview harness in all four variants (EN/DE × dark/light) at 2x, into
 `apps/desktop/screenshots/marketing/` (gitignored), with a `manifest.json` (shot, language, theme,
-pixel size, app version, commit, dirty flag) and an `index.html` contact sheet (one row per shot,
-the four variants side by side) for the visual check. `-- home translate` limits the run to named
+pixel size, app version, commit, dirty flag) and an `index.html` contact sheet for the visual
+check: one row per shot, filters for language and theme (kept in the URL query), and a full-size
+viewer whose side buttons and arrow keys step through the currently filtered images. `-- home translate` limits the run to named
 shots; `--out=` and `--scale=` override the folder and the density.
 
 **Format: landscape by default (owner decision 2026-09-26).** Every staged shell renders in one
