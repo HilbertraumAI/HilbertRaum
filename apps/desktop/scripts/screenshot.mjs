@@ -5,7 +5,10 @@
 //
 // Run: npm run screenshot            (default cases)
 //      npm run screenshot -- documents chat-byproject
-// Output: apps/desktop/screenshots/. On a headless box it still needs GL libs on LD_LIBRARY_PATH
+//      flags: --marketing (every marketing case, all four variants), --out=<dir>,
+//             --strict (exit 1 when any case missed its ready condition or failed to capture)
+//      The full marketing matrix has its own runner: `npm run screenshots:marketing`.
+// Output: apps/desktop/screenshots/ (or --out). On a headless box it still needs GL libs on LD_LIBRARY_PATH
 // (the nix dev shell provides them): `nix develop --command npm run screenshot`.
 import { app, BrowserWindow } from 'electron'
 import { cpSync, existsSync, mkdirSync, writeFileSync } from 'node:fs'
@@ -14,7 +17,16 @@ import { fileURLToPath, pathToFileURL } from 'node:url'
 
 const here = dirname(fileURLToPath(import.meta.url))
 const previewHtml = resolve(here, '../out/preview/preview/preview.html')
-const outDir = resolve(here, '../screenshots')
+const argv = (() => {
+  // Electron's argv includes its own flags + the script path; take everything AFTER the script.
+  const i = process.argv.findIndex((a) => a.endsWith('screenshot.mjs'))
+  return i >= 0 ? process.argv.slice(i + 1) : []
+})()
+const outArg = argv.find((a) => a.startsWith('--out='))
+const outDir = outArg ? resolve(outArg.slice('--out='.length)) : resolve(here, '../screenshots')
+const STRICT = argv.includes('--strict')
+/** Cases that missed their ready condition or failed to capture (reported; fatal with --strict). */
+const failures = []
 
 // The brand asset src is deliberately RELATIVE (`brand/…` — design record §13.3: file:// prod
 // load), so from the nested preview.html it resolves to out/preview/preview/brand/, one level
@@ -86,16 +98,32 @@ const READY = {
 // marketing-<shot>[-de][-light]; pair with SHOT_SCALE=2 for hi-dpi output. The staged shells
 // self-report readiness via body[data-marketing-ready]; the indicator close-up is a plain
 // component case.
+// Landscape by default (owner decision 2026-09-26): the staged frame is 1460 x 764 CSS px
+// (preview.tsx MKT_W/MKT_H) plus the 2 x 20 px harness padding and body margin.
+const MKT_SIZE = [1500, 820]
 const MKT_SHOTS = {
-  'marketing-salary': [1220, 856],
-  'marketing-spending': [1220, 856],
-  'marketing-contract': [1220, 1226],
-  'marketing-documents': [1220, 856],
-  'marketing-privacy': [1220, 1136],
+  'marketing-salary': MKT_SIZE,
+  'marketing-spending': MKT_SIZE,
+  'marketing-contract': MKT_SIZE,
+  'marketing-documents': MKT_SIZE,
+  'marketing-privacy': MKT_SIZE,
+  'marketing-home': MKT_SIZE,
+  'marketing-packs': MKT_SIZE,
+  'marketing-translate': MKT_SIZE,
+  'marketing-images': MKT_SIZE,
+  'marketing-models': MKT_SIZE,
+  'marketing-performance': MKT_SIZE,
+  'marketing-settings': MKT_SIZE,
+  'marketing-skills': MKT_SIZE,
+  'marketing-review': MKT_SIZE,
+  'marketing-lock': MKT_SIZE,
+  // The rail indicator close-up is a component, not a shell: its own small canvas.
   'marketing-indicator': [640, 280]
 }
+const MKT_VARIANTS = ['', '-de', '-light', '-de-light']
+const MKT_CASES = Object.keys(MKT_SHOTS).flatMap((base) => MKT_VARIANTS.map((v) => base + v))
 for (const [base, size] of Object.entries(MKT_SHOTS)) {
-  for (const suffix of ['', '-de', '-light', '-de-light']) {
+  for (const suffix of MKT_VARIANTS) {
     SIZES[base + suffix] = size
     READY[base + suffix] = base === 'marketing-indicator' ? '.local-indicator' : 'body[data-marketing-ready]'
   }
@@ -134,6 +162,7 @@ async function waitReady(win, c) {
     if (ok) break
     if (Date.now() >= deadline) {
       console.warn(`  [wait:${c}] ready condition not met within ${ceiling}ms — capturing anyway`)
+      failures.push(`${c}: ready condition not met`)
       break
     }
     await new Promise((r) => setTimeout(r, 50))
@@ -149,35 +178,43 @@ async function waitReady(win, c) {
   }
 }
 
-// Electron's argv includes flags + the script path; take everything AFTER the script as case ids.
-const sIdx = process.argv.findIndex((a) => a.endsWith('screenshot.mjs'))
-let cases = (sIdx >= 0 ? process.argv.slice(sIdx + 1) : []).filter((a) => !a.startsWith('-'))
+let cases = argv.filter((a) => !a.startsWith('-'))
+if (argv.includes('--marketing')) cases = [...cases, ...MKT_CASES]
 if (cases.length === 0) cases = ['documents', 'chat-byproject']
 
 // Headless hardening (pass --no-sandbox on the CLI too; the switch alone is too late for the zygote).
 app.commandLine.appendSwitch('no-sandbox')
 // SHOT_SCALE=2 renders every capture at 2x device pixels (crisp marketing/hero images).
-if (process.env.SHOT_SCALE) app.commandLine.appendSwitch('force-device-scale-factor', process.env.SHOT_SCALE)
+const SCALE = Number(process.env.SHOT_SCALE) || 1
 app.commandLine.appendSwitch('disable-dev-shm-usage')
 // Destroying the only window would fire the default window-all-closed → app.quit(), killing the run
 // before the next case. A no-op listener keeps the app alive between captures; we quit explicitly.
 app.on('window-all-closed', () => {})
 
-// Never hang the CI/agent: bail out after a generous ceiling.
+// Never hang the CI/agent: bail out after a generous ceiling (per case: the full marketing
+// matrix is ~70 captures).
 const hardTimeout = setTimeout(() => {
   console.error('screenshot: hard timeout, exiting')
   process.exit(1)
-}, 90_000)
+}, 60_000 + cases.length * 10_000)
 
 function capture(c) {
   return new Promise((done) => {
     const [w, h] = SIZES[c] ?? [1180, 760]
+    // SCALE is a SCALE-times larger surface at zoom SCALE: the CSS layout is identical to 1x,
+    // each CSS pixel just gets SCALE^2 device pixels. Offscreen + a resize AFTER creation: a
+    // window is clamped to the display at creation (on a 1440p screen a 1226px-tall marketing
+    // shell at 2x came out ~700px tall with a scrollbar); an offscreen surface resized later is
+    // not. (--force-device-scale-factor and offscreen.deviceScaleFactor both hit the clamp or
+    // are ignored in Electron 43; CDP clip-scaling breaks the offscreen layout.)
     const win = new BrowserWindow({
-      width: w,
-      height: h,
+      width: w * SCALE,
+      height: h * SCALE,
       show: false,
-      webPreferences: { backgroundThrottling: false }
+      enableLargerThanScreen: true,
+      webPreferences: { backgroundThrottling: false, offscreen: true, zoomFactor: SCALE }
     })
+    win.setContentSize(w * SCALE, h * SCALE)
     win.webContents.on('console-message', (_e, _l, msg) => console.log(`  [page:${c}]`, msg))
     win.webContents.on('render-process-gone', (_e, d) => console.error(`  [gone:${c}]`, d.reason))
     const url = `${pathToFileURL(previewHtml).href}?case=${encodeURIComponent(c)}`
@@ -218,7 +255,7 @@ function capture(c) {
           // Park the pointer in the harness padding (bottom-left corner): the hidden window maps
           // the REAL OS cursor position, so a stray :hover fill (a rail item, a document row)
           // lands in captures. The 16px harness padding is guaranteed interaction-free.
-          win.webContents.sendInputEvent({ type: 'mouseMove', x: 8, y: h - 8 })
+          win.webContents.sendInputEvent({ type: 'mouseMove', x: 8, y: h * SCALE - 8 })
           await win.webContents.executeJavaScript(
             'new Promise((r) => requestAnimationFrame(() => requestAnimationFrame(() => r(true))))',
             true
@@ -230,6 +267,7 @@ function capture(c) {
         console.log('captured', c, '→', file, `(${img.getSize().width}x${img.getSize().height})`)
       } catch (e) {
         console.error('capture failed', c, e)
+        failures.push(`${c}: capture failed`)
       } finally {
         win.destroy()
         done()
@@ -237,6 +275,7 @@ function capture(c) {
     })
     win.webContents.once('did-fail-load', (_e, code, desc) => {
       console.error('load failed', c, code, desc)
+      failures.push(`${c}: load failed`)
       win.destroy()
       done()
     })
@@ -251,5 +290,9 @@ app.whenReady().then(async () => {
   console.log('preview html:', previewHtml)
   for (const c of cases) await capture(c)
   clearTimeout(hardTimeout)
+  if (failures.length > 0) {
+    console.error(`screenshot: ${failures.length} case(s) not clean:\n  ${failures.join('\n  ')}`)
+    if (STRICT) return app.exit(1)
+  }
   app.quit()
 })

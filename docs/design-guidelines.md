@@ -1702,3 +1702,57 @@ Implementation: `ModelsScreen.tsx`, `lib/modelLibrary.ts` (grouping + face), `li
 out of the screen so `modelLibrary` can share them without importing it back), `styles.css`, EN/DE
 catalogs. Behavioral coverage: `ModelsScreen.test.tsx`, `model-library.test.ts`, the real-catalog
 grouping/face controls in `committed-catalog.test.ts`; visual fixtures: `models*` preview cases.
+
+---
+
+## 16. Marketing screenshot matrix: design record (2026-09-26)
+
+**What it is.** `npm run screenshots:marketing` (in `apps/desktop`) renders every staged marketing
+shot of the preview harness in all four variants (EN/DE × dark/light) at 2x, into
+`apps/desktop/screenshots/marketing/` (gitignored), with a `manifest.json` (shot, language, theme,
+pixel size, app version, commit, dirty flag) and an `index.html` contact sheet for the visual
+check: one row per shot, filters for language and theme (kept in the URL query), and a full-size
+viewer whose side buttons and arrow keys step through the currently filtered images. `-- home translate` limits the run to named
+shots; `--out=` and `--scale=` override the folder and the density.
+
+**Format: landscape by default (owner decision 2026-09-26).** Every staged shell renders in one
+frame of 1460 × 764 CSS px (`MKT_W`/`MKT_H` in `preview.tsx`), so each image is 1500 × 820 at 1x
+and 3000 × 1640 PNG at 2x, a 1.83:1 landscape that places well in articles and on social cards.
+Tall screens (AI model, settings, review, the contract answer) are cut at that height rather
+than captured in full. A shot overrides `w`/`h` only as a deliberate exception, and then
+`MKT_SHOTS` in `scripts/screenshot.mjs` must name the matching size; the indicator close-up is the
+one exception (a component on its own 640 × 280 canvas).
+
+**Shots (16 × 4 = 64 images).** lock (encrypted-workspace gate), home, salary (plain chat), spending
+and contract (documents Q&A, sources collapsed/expanded), review (evidence review of the contract
+answer, in progress), documents, packs (knowledge packs), translate, images, models, performance,
+settings (General), privacy, skills, and the rail privacy indicator close-up.
+
+**Decisions and the facts they rest on.**
+- **The real app shell, fictional data.** Every shot is `<App />` with a mocked `window.api`,
+  walked through the real UI (rail, segmented tabs, a history row, the review entry under the
+  sources) by `StagedShell` in `preview.tsx`. The data is invented (a lease, a café receipt, a
+  letter from a property manager, a laptop with a mid-range GPU); the model ids and names are the
+  shipping catalog entries, and the skills list is read from the bundled `app-skills/*/SKILL.md`
+  at build time, so a new app skill shows up without touching the harness. The performance shot
+  carries the REAL check the app recorded on the maintainers' test rig
+  on 2026-09-21 (i9-9900X, 125.5 GB RAM, RTX 3090: Qwen3.8 27B UD-Q5_K_M at 41.9 tokens/s, 32k
+  context fully on the GPU, 19.8 GB read at 1,185.7 MB/s); only its other-machines rows are staged.
+- **Strict readiness.** The runner passes `--strict` to `scripts/screenshot.mjs`: a shot whose walk
+  never reached its goal selector (`body[data-marketing-ready]`) fails the run instead of shipping a
+  wrong image. Before this wave the harness silently produced blank captures: event subscriptions
+  (`onX(cb)`) fell through to the proxy's async default, so the shell's effect cleanup called a
+  Promise and unmounted. The proxy now returns a synchronous unsubscribe for every `on*` method.
+- **Pixel density without the display clamp.** A capture window is created offscreen, resized
+  after creation to `SCALE ×` its CSS size and zoomed by `SCALE`, then read with `capturePage()`.
+  Measured on a 3440×1440 display with Electron 43: a window is clamped to the display height at
+  creation (the 2x contract shot, 2452px tall, came out 1413px); `--force-device-scale-factor`
+  re-applies the clamp, `webPreferences.offscreen.deviceScaleFactor` is ignored, and CDP
+  `Page.captureScreenshot` with `clip.scale` (or `Emulation.setDeviceMetricsOverride`) breaks the
+  offscreen layout. The resize-after-create surface has no such limit (verified at 2560×3400).
+- **Headless.** No display needed with offscreen rendering on a desktop session; on a headless
+  Linux box without `DISPLAY` the runner wraps the capture in `xvfb-run` when installed.
+
+Implementation: `apps/desktop/scripts/marketing-screenshots.mjs` (runner, manifest, contact sheet),
+`scripts/screenshot.mjs` (`--marketing`, `--out=`, `--strict`, sizes), `src/renderer/preview/preview.tsx`
+(marketing block: staged data + walk steps).
