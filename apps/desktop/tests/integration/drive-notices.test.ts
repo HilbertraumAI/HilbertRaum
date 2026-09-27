@@ -99,6 +99,9 @@ describe('DRIVE-NOTICES.md ships and stays fresh (LIC-1)', () => {
     expect(text).toContain('Apache License')
     expect(text).toContain('Version 2.0, January 2004')
     expect(text).toContain("This software is provided 'as-is'")
+    // #512: the LLVM OpenMP runtime the llama.cpp Windows archives redistribute since b11146.
+    expect(text).toContain('LLVM OpenMP runtime (bundled in the llama.cpp Windows archives)')
+    expect(text).toContain('The LLVM Project is under the Apache License v2.0 with LLVM Exceptions')
     // And the sibling notice files are referenced by name.
     expect(text).toContain('THIRD-PARTY-NOTICES.md')
   })

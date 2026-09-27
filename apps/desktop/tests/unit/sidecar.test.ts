@@ -687,8 +687,9 @@ describe('LlamaServer', () => {
 // in process lists, and llama-server echoes resolved params to stderr), injected as a
 // Bearer header at the single fetch() chokepoint, and redacted from everything the
 // captured stderr tail flows into (start-failure errors → gpuLastError → audit → log
-// export). Verified against the pinned b9849 build: LLAMA_API_KEY enforces auth on every
-// content-bearing route (only /health and /v1/models are exempt upstream).
+// export). Verified against b9849: LLAMA_API_KEY enforces auth on every content-bearing route
+// (only /health and /v1/models were exempt). On the b11146 pin (#512) only /health is: an
+// unauthenticated /v1/models now answers 401. The app always sends the key, so nothing changes.
 
 function makeServer(overrides: Partial<ConstructorParameters<typeof LlamaServer>[0]> = {}) {
   const { spawn, calls, child } = fakeSpawn()
