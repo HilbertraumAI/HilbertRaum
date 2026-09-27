@@ -1299,6 +1299,15 @@ function discoverTempCatalog(yaml: string): ReturnType<typeof discoverManifests>
   }
 }
 
+describe('committed catalog — prompt cache on for every chat model (#512)', () => {
+  // Owner decision 1: on b11146 qwen3.5 and gemma4 restore an evicted prompt (measured), and
+  // qwen3.6/qwen3.8 are ON by ruling pending the rig check. `disable_prompt_cache: true` is for a
+  // model the manual prompt-cache smoke shows cannot restore; setting it here needs that evidence.
+  it('no committed manifest sets disable_prompt_cache', () => {
+    expect(committedManifests().filter((m) => m.disablePromptCache).map((m) => m.id)).toEqual([])
+  })
+})
+
 describe('committed catalog — every multi-file weight is fully declared (#310)', () => {
   it('does not carry the Flash-Next manifest split out of PR #302', () => {
     const manifests = committedManifests()

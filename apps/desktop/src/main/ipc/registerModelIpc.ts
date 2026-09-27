@@ -310,9 +310,9 @@ export async function startModelRuntime(ctx: AppContext, modelId: string): Promi
     // #182: the manifest's opt-in, not a decision. The ladder gates it on the hardware it
     // actually finds and silently drops it when the machine cannot benefit.
     speculativeDecoding: found.manifest.speculativeDecoding ?? null,
-    // #399 D5: the prompt-cache gate's only input. The manifest states the family; the RULE
-    // (which families lost the evicted-prefix restore, and why) lives in shared/prompt-cache-rules.
-    family: found.manifest.family
+    // #512: the manifest states a fact (this model cannot restore an evicted prompt); the flag it
+    // maps to is code-owned, in shared/prompt-cache-rules.
+    disablePromptCache: found.manifest.disablePromptCache === true
   })
   perfMark('runtime_ready', {
     modelId,

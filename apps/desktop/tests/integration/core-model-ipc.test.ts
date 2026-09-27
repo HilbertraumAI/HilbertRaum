@@ -657,11 +657,68 @@ describe('registerModelIpc', () => {
     expect(started[1].speculativeDecoding).toBeNull()
   })
 
-  // Issue #399 D5: the manifest's `family:` has to REACH the runtime start options — it is the
-  // ONLY input to the prompt-cache gate (`shared/prompt-cache-rules.ts`), and a dropped field
-  // here would be invisible: the affected model would simply go on writing a host-cache copy
-  // llama-server can never read back, exactly as before the fix.
-  it('forwards the manifest family into the runtime start options (#399 D5)', async () => {
+  // Issue #512: the manifest's `disable_prompt_cache` has to REACH the runtime start options — it
+  // is the only per-model input to the chat argv's prompt-cache flag (`shared/prompt-cache-rules.ts`),
+  // and a dropped field here would be invisible: the model would go on writing a host-cache copy
+  // llama-server can never read back.
+  it('forwards disable_prompt_cache into the runtime start options (#512)', async () => {
+    const manifestsDir = mkdtempSync(join(tmpdir(), 'hilbertraum-dpc-'))
+    for (const [id, extra] of [
+      ['no-restore', { disable_prompt_cache: true }],
+      ['restores', {}]
+    ] as const) {
+      writeFileSync(
+        join(manifestsDir, `${id}.yaml`),
+        stringify({
+          id,
+          display_name: id,
+          family: 'qwen3.5',
+          role: 'chat',
+          format: 'gguf',
+          runtime: 'llama_cpp',
+          license: 'apache-2.0',
+          size_on_disk_gb: 0.1,
+          recommended_min_ram_gb: 1,
+          recommended_ram_gb: 1,
+          recommended_context_tokens: 4096,
+          ...extra,
+          local_path: `models/chat/${id}.gguf`,
+          sha256: 'a'.repeat(64),
+          license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-09-27', notes: '' }
+        })
+      )
+    }
+    const started: Array<Record<string, unknown>> = []
+    const db = seededDb()
+    updateSettings(db, { developerMode: true })
+    const ctx = {
+      db,
+      manifestsDir,
+      paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
+      isDev: false,
+      runtime: {
+        start: async (o: Record<string, unknown>) => {
+          started.push(o)
+          return { running: true, modelId: String(o.modelId), port: null, healthy: true, message: 'ok' }
+        },
+        activeModelId: () => null
+      }
+    } as unknown as AppContext
+    reg(ctx)
+    await invoke(handlers, IPC.startRuntime, 'no-restore')
+    expect(started[0].disablePromptCache).toBe(true)
+    expect(promptCacheServerArgs({ disablePromptCache: true, totalRamBytes: 64 * 1024 ** 3 })).toEqual([
+      '--cache-ram',
+      '0'
+    ])
+    // Without the field: an explicit false, so the argv carries the RAM-scaled ceiling.
+    await invoke(handlers, IPC.startRuntime, 'restores')
+    expect(started[1].disablePromptCache).toBe(false)
+    // The #399 family field is gone from the start options.
+    expect('family' in started[1]).toBe(false)
+  })
+
+  it('the four former #399 families start with the prompt cache on (#512)', async () => {
     const started: Array<Record<string, unknown>> = []
     const db = seededDb()
     updateSettings(db, { developerMode: true })
@@ -679,14 +736,11 @@ describe('registerModelIpc', () => {
       }
     } as unknown as AppContext
     reg(ctx)
-    // An AFFECTED family (recurrent state — the sweep's 27B control) …
-    await invoke(handlers, IPC.startRuntime, 'qwen3.8-27b-q4')
-    expect(started[0].family).toBe('qwen3.8')
-    expect(promptCacheServerArgs(started[0].family as string)).toEqual(['--cache-ram', '0'])
-    // … and one that restores, which must keep today's argv exactly.
-    await invoke(handlers, IPC.startRuntime, 'qwen3-4b-instruct-q4')
-    expect(started[1].family).toBe('qwen3')
-    expect(promptCacheServerArgs(started[1].family as string)).toEqual([])
+    // The four former #399 families: cache on by owner ruling.
+    for (const id of ['qwen3.5-9b-ud-q4kxl', 'qwen3.6-27b-q4', 'qwen3.8-27b-q4', 'gemma4-12b-it-qat-q4']) {
+      await invoke(handlers, IPC.startRuntime, id)
+    }
+    expect(started.map((o) => o.disablePromptCache)).toEqual([false, false, false, false])
   })
 
   it('refuses the mock fallback on a PACKAGED build with no policy.json (M-4 fail-closed)', async () => {

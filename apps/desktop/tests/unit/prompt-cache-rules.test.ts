@@ -1,82 +1,68 @@
 import { describe, it, expect } from 'vitest'
 import {
-  PROMPT_CACHE_RESTORE_BROKEN_FAMILIES,
+  PROMPT_CACHE_MAX_MIB,
+  PROMPT_CACHE_RAM_DIVISOR,
+  promptCacheRamMib,
   promptCacheServerArgs
 } from '../../src/shared/prompt-cache-rules'
 
-// Issue #399 D5, extended by #446. The rule is a NAMED list with a measured basis, not an inline
-// literal at the argv call site, so these tests can pin (a) the measured split, (b) that the
-// default for anything unmeasured is cache-ON, and (c) that the flag we emit is the one the pinned
-// binary takes. The families come from the fourteen-model sweep recorded in model-benchmarks.md
-// §6.6 ("2026-09-09 correction (#399)") plus the three models #446 added ("2026-09-10 addition
-// (#446)"); the four RESTORED rows below are its positive controls.
+// Issue #512, owner decisions 1 and 2. The #399 family list is gone (qwen3.5 and gemma4 restore on
+// b11146); every chat model gets a RAM-scaled `--cache-ram`, and a manifest that still cannot
+// restore opts out with `disable_prompt_cache: true` → the code-owned `--cache-ram 0`.
 
-describe('prompt-cache family rule (#399 D5)', () => {
-  it('disables the host prompt cache for every family measured to lose the restore', () => {
-    // RE-PREFILLED in the sweep: qwen3.5 / qwen3.6 / qwen3.8 by recurrent state (all three report
-    // arch `qwen35`), gemma4 by sliding window.
-    for (const family of ['qwen3.5', 'qwen3.6', 'qwen3.8', 'gemma4']) {
-      expect(promptCacheServerArgs(family)).toEqual(['--cache-ram', '0'])
+const GiB = 1024 ** 3
+
+describe('prompt-cache RAM ceiling (#512 decision 2)', () => {
+  it('is 1/8 of total RAM, never more than llama.cpp’s 8,192 MiB default', () => {
+    expect(PROMPT_CACHE_MAX_MIB).toBe(8192)
+    expect(PROMPT_CACHE_RAM_DIVISOR).toBe(8)
+    expect(promptCacheRamMib(8 * GiB)).toBe(1024)
+    expect(promptCacheRamMib(16 * GiB)).toBe(2048)
+    expect(promptCacheRamMib(32 * GiB)).toBe(4096)
+    expect(promptCacheRamMib(64 * GiB)).toBe(8192)
+    expect(promptCacheRamMib(128 * GiB)).toBe(8192)
+  })
+
+  it('rounds down on the odd totals real machines report', () => {
+    // An "8 GB" laptop reports less than 8 GiB (firmware and iGPU reservations); a "16 GB" one the
+    // same. The ceiling follows what the OS reports, rounded down to whole MiB.
+    expect(promptCacheRamMib(7.84 * GiB)).toBe(Math.floor((7.84 * 1024) / 8))
+    expect(promptCacheRamMib(15.8 * GiB)).toBe(Math.floor((15.8 * 1024) / 8))
+    expect(Number.isInteger(promptCacheRamMib(63.7 * GiB))).toBe(true)
+  })
+
+  it('a junk RAM reading falls back to the ceiling (what llama.cpp uses with no flag)', () => {
+    for (const junk of [0, -1, Number.NaN, Number.POSITIVE_INFINITY]) {
+      expect(promptCacheRamMib(junk)).toBe(8192)
     }
   })
+})
 
-  it('leaves every family that DID restore alone — argv byte-identical to before #399', () => {
-    // The sweep's four positive controls, by the `family:` their manifests declare. `granite` is
-    // the one #446 added: measured, and measured to RESTORE (22 of 1,414 tokens re-prefilled).
-    for (const family of ['qwen3', 'mistral3', 'granite']) {
-      expect(promptCacheServerArgs(family)).toEqual([])
-    }
-  })
-
-  it('defaults an UNMEASURED family to cache-ON (the deliberate safe direction)', () => {
-    // #446 measured the last two families that had no verdict, so every `family:` in today's
-    // catalog is now on one side of the split — which is exactly why the examples here must be
-    // families that do NOT exist in the catalog. This test is not about qwen3.6 or granite; it is
-    // about the family somebody adds NEXT, before anyone has run the sweep against it. Turning the
-    // cache off on a model that CAN restore costs real restores on every hand-back; leaving it on
-    // for one that cannot merely continues a waste we can bound. So an unknown family, and a model
-    // with no family at all, must add nothing to the argv.
-    for (const family of ['llama9', 'phi-next', 'qwen4', 'gemma5']) {
-      expect(promptCacheServerArgs(family)).toEqual([])
-    }
-    expect(promptCacheServerArgs(null)).toEqual([])
-    expect(promptCacheServerArgs(undefined)).toEqual([])
-    expect(promptCacheServerArgs('')).toEqual([])
-  })
-
-  it('matches the family exactly — no prefix or substring creep', () => {
-    // `qwen3` must not be caught by `qwen3.5`, and `qwen3.5` must not swallow a future
-    // `qwen3.5x`. A prefix match here would silently disable the cache on models that restore.
-    expect(promptCacheServerArgs('qwen3')).toEqual([])
-    expect(promptCacheServerArgs('qwen3.55')).toEqual([])
-    expect(promptCacheServerArgs('qwen3.65')).toEqual([])
-    expect(promptCacheServerArgs('gemma4x')).toEqual([])
-    expect(promptCacheServerArgs('GEMMA4')).toEqual([]) // manifests are lower-case
-  })
-
-  it('emits the flag the pinned b9849 binary actually takes', () => {
-    // `-cram, --cache-ram N` — "default: 8192, -1 = no limit, 0 = disable". Verified against
-    // `llama-server.exe --help` on the pin (799fcc04a) before this shipped. A malformed arg here
-    // breaks EVERY chat model start on every machine, not just the affected families.
-    const args = promptCacheServerArgs('gemma4')
-    expect(args).toHaveLength(2)
-    expect(args[0]).toBe('--cache-ram')
-    expect(args[1]).toBe('0')
-  })
-
-  it('the exported list is exactly the four families measured to lose the restore', () => {
-    // A guard against quietly widening the rule: adding a family here requires a measurement, and
-    // this expectation is the place where that measurement has to be produced. It went from three
-    // to four on 2026-09-10 because #446 fetched qwen3.6's weights and ran the #399 protocol
-    // against both quants — not because qwen3.6 looked like the families around it. Anything else
-    // arriving in this array without an evidence file under
-    // eval/results/hardware/*/issue*-arch-sweep-* behind it is the failure this test exists to
-    // catch.
-    expect([...PROMPT_CACHE_RESTORE_BROKEN_FAMILIES].sort()).toEqual([
-      'gemma4',
-      'qwen3.5',
-      'qwen3.6',
-      'qwen3.8'
+describe('prompt-cache server args (#512 decisions 1 + 2)', () => {
+  it('passes the RAM-scaled ceiling by default — every chat model, no family list', () => {
+    expect(promptCacheServerArgs({ totalRamBytes: 16 * GiB })).toEqual(['--cache-ram', '2048'])
+    expect(promptCacheServerArgs({ totalRamBytes: 64 * GiB, disablePromptCache: false })).toEqual([
+      '--cache-ram',
+      '8192'
     ])
+  })
+
+  it('disable_prompt_cache: true wins with --cache-ram 0, whatever the RAM', () => {
+    for (const gb of [8, 16, 32, 64, 128]) {
+      expect(promptCacheServerArgs({ totalRamBytes: gb * GiB, disablePromptCache: true })).toEqual([
+        '--cache-ram',
+        '0'
+      ])
+    }
+  })
+
+  it('always emits exactly one --cache-ram, as an adjacent flag/value pair', () => {
+    // A malformed pair here breaks EVERY chat model start on every machine.
+    for (const disablePromptCache of [true, false, undefined]) {
+      const args = promptCacheServerArgs({ totalRamBytes: 32 * GiB, disablePromptCache })
+      expect(args).toHaveLength(2)
+      expect(args[0]).toBe('--cache-ram')
+      expect(args[1]).toMatch(/^\d+$/)
+    }
   })
 })
