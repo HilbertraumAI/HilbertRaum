@@ -353,12 +353,13 @@ npm run package:win                                                            #
 copy ".\apps\desktop\release\HilbertRaum-*-portable.exe" E:\                    # place the launcher on the drive
 ```
 
-> ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b9849** — bumped
-> from b9585 on 2026-07-01 as the **Qwen3.5 compatibility gate**; real per-OS URLs + SHA-256
-> checksums from the official GitHub Releases API `digest` metadata) — `fetch-runtime` downloads,
-> verifies, extracts (zip and tar.gz) and flattens the binaries for all three OSes from any host.
-> **A real b9849 fetch + a one-old-model / one-Qwen3.5-model load are a REQUIRED manual smoke** (it
-> cannot run in offline CI; see BUILD_STATE "Qwen3.5 Unsloth wave" and `model-benchmarks.md` §9).
+> ✅ **`runtime-sources.yaml` is pinned to a real release** (`ggml-org/llama.cpp` **b11146** — the
+> build named by upstream's stable **v0.5.0**, bumped from b9849 on 2026-09-27 under #512; real
+> per-OS URLs + SHA-256 checksums from the official GitHub Releases API `digest` metadata, all five
+> also confirmed by local download) — `fetch-runtime` downloads, verifies, extracts (zip and tar.gz)
+> and flattens the binaries for all three OSes from any host. **A real fetch + the manual smokes
+> on the pin are REQUIRED** (they cannot run in offline CI; #512 records what ran on b11146 and
+> what is still open — the MTP start on the 24 GB rig and the macOS/Linux assets).
 > The win/linux default is the **Vulkan full build** (GPU acceleration with
 > built-in CPU degradation) plus a pure-CPU safety net at `runtime/llama.cpp/<os>/cpu/` — see
 > [`drive-layout.md`](drive-layout.md) and the [`architecture.md`](architecture.md) GPU record.
@@ -932,15 +933,17 @@ unless that env var is set, so a green CI run says nothing about them.
 
 **Before any drive ships, run the applicable subset against the real artifacts** (a locally
 provisioned smoke drive with a llama.cpp binary + a small chat GGUF; see BUILD_STATE).
-Treat this as part of the gate, not optional polish. **NOTE (2026-07-01):** the runtime pin
-moved to **b9849**, so re-run `fetch-runtime` on the smoke drive to refresh the binary before
-these harnesses prove the *current* pin (the drive's previous binary was b9585).
+Treat this as part of the gate, not optional polish. **NOTE (2026-09-27, #512):** the runtime pin
+moved to **b11146** (= upstream v0.5.0), so re-run `fetch-runtime` on the smoke drive (both the
+default build and `--backend cpu`) to refresh the binary before these harnesses prove the
+*current* pin (the drive's previous binary was b9849).
 
 | Harness | Env var(s) | Proves |
 | --- | --- | --- |
 | `bringup-smoke` | `HILBERTRAUM_BRINGUP_SMOKE` | the runtime starts + streams against the real binary |
 | `gpu-smoke` | `HILBERTRAUM_GPU_SMOKE` | rung-1 GPU start, forced-CPU rung, rung-3 safety net |
 | `thinking-smoke` / `gemma-thinking` | `HILBERTRAUM_THINKING_SMOKE` / `HILBERTRAUM_GEMMA_THINKING` | deep-mode reasoning channel |
+| `prompt-cache-smoke` | `HILBERTRAUM_PROMPT_CACHE_SMOKE` | whether the pinned server RESTORES a chat GGUF's evicted conversation from its host-RAM prompt cache (the #399 evict-and-return protocol with the app's chat argv); prints `prompt_n` on return, RESTORED / RE-PREFILLED, restore == `cache_prompt: false` recompute, and the manifest advice for `disable_prompt_cache` (#512). Run it for every new chat manifest |
 | `rerank-smoke` | `HILBERTRAUM_RERANK_SMOKE` | the reranker sidecar reorders retrieval |
 | `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation |
 | `ocr-smoke` | `HILBERTRAUM_OCR_SMOKE` | WASM OCR over a real scan |
@@ -975,7 +978,9 @@ optional — each has a default or is only needed by its harness:
 
 | Input var | Read by | Points at |
 | --- | --- | --- |
-| `HILBERTRAUM_SMOKE_MODEL` | `bringup-smoke` / `gpu-smoke` / `thinking-smoke` | one chat-model `.gguf` filename (else the smallest chat model) |
+| `HILBERTRAUM_SMOKE_MODEL` | `bringup-smoke` / `gpu-smoke` / `thinking-smoke` / `prompt-cache-smoke` | one chat-model `.gguf` filename (else the smallest chat model) |
+| `HILBERTRAUM_PROMPT_CACHE_SMOKE_DISABLE` | `prompt-cache-smoke` | `1` spawns the model as `disable_prompt_cache: true` (`--cache-ram 0`) — the control run, which must come back RE-PREFILLED |
+| `HILBERTRAUM_PROMPT_CACHE_SMOKE_MTP` | `prompt-cache-smoke` | `1` adds rung 1a's MTP flags (`--spec-type draft-mtp --spec-draft-n-max 2`), for a manifest with `speculative_decoding: mtp` that the app starts that way on a GPU |
 | `HILBERTRAUM_GEMMA_MODEL` | `gemma-thinking` | the Gemma model filename (default `gemma4-12b-it-qat-q4.gguf`) |
 | `HILBERTRAUM_OCR_IMAGE` | `ocr-smoke` | a real German scan image (png/jpg) — **never committed** |
 | `HILBERTRAUM_REAL_MODEL_PATH` | `real-model/wave3` | the chat GGUF path (default `D:/models/chat/qwen3.5-4b-ud-q4kxl.gguf`; sibling `HILBERTRAUM_LLAMA_BIN` points at the binary) |

@@ -297,7 +297,8 @@ detection helper only and must never gate an allowed-vs-blocked decision.
 **Sidecar requests are authenticated (local-api wave P1).** Loopback binding alone leaves a port any
 same-machine process can call, so every `llama-server` sidecar spawn (chat, embedder, reranker,
 vision, translation) now carries a fresh per-spawn API key, delivered via the **child-scoped env**
-(`LLAMA_API_KEY` — verified enforced on the pinned b9849 build) and injected as a Bearer header at
+(`LLAMA_API_KEY` — verified enforced on b9849 and again on the b11146 pin, where an unauthenticated
+`/v1/models` now answers 401 too; #512) and injected as a Bearer header at
 the single `LlamaServer.fetch()` chokepoint. The key is never placed in argv (readable in any
 process list, and llama-server echoes resolved params to stderr) and never set on the app's own
 `process.env` (other children would inherit it). **The one exception is the knowledge-pack sidecar
@@ -305,8 +306,10 @@ process list, and llama-server echoes resolved params to stderr) and never set o
 unauthenticated sidecar" below (residual R-9).** Key material is redacted AT THE STDERR DRAIN over
 a partial-line hold-back window — so neither the captured tail (→ error strings, `gpuLastError`,
 the audit trail, the app log, the support-log export) nor the streaming `onStderrData` observer
-can ever see the key, whole or chunk-split. Upstream exempts `/health` and `/v1/models` from auth on this pin — a local
-process can still read liveness plus the loaded model's file path (metadata only, never content).
+can ever see the key, whole or chunk-split. On the b11146 pin upstream exempts only `/health` from auth — a local
+process can read liveness (`{"status":"ok"}`) and nothing else; `/v1/models`, `/props`, `/slots` and `/metrics` answer
+401 without the key (verified 2026-09-27, #512). On b9849 `/v1/models` was exempt too and exposed the loaded model's
+file path (metadata only, never content).
 Residual (recorded, accepted): an env-delivered key defends against cross-user and log/stderr
 exposure, not against a same-user debugger reading the child's environment.
 
@@ -347,8 +350,9 @@ running as you**. Two doors exist:
 - With the key requirement switched off (a confirmed user choice), any local program can use the
   model. The `Host`/`Origin`/content-type checks stay **unconditional** in that mode, so the
   browser remains locked out either way.
-- On the pinned sidecar build, `/health` and `/v1/models` remain auth-exempt upstream, so a local
-  process can read liveness and the loaded model's **file path** (metadata, never content).
+- On the pinned sidecar build (b11146) only `/health` stays auth-exempt upstream, so a local process
+  can read liveness and nothing else. (On b9849 `/v1/models` was exempt too and exposed the loaded
+  model's **file path** — metadata, never content; #512.)
 - What a connected app does with the answers it receives is outside HilbertRaum's control; this is
   stated to the user in the consent dialog, `PRIVACY.md`, and the user guide rather than pretended
   away.
@@ -2349,7 +2353,9 @@ error bodies are upstream-structural (an HTTP status + a reason code/type), neve
 content, so the tail carries nothing content-bearing. This is **accepted as an Info residual**: the
 500-char cap bounds size and a one-line `INVARIANT (SEC-N3)` comment at the cap pins the expectation and
 asks for a re-verify on every llama.cpp pin bump; if a future server ever echoed request content into an
-error body, the fallback should be sanitized to a fixed structural string + numeric status.
+error body, the fallback should be sanitized to a fixed structural string + numeric status. Re-verified
+on the b11146 bump (#512): the 400 `exceed_context_size_error` and 500 image-not-supported bodies are
+byte-identical to b9849's.
 
 ## Residual egress channels
 

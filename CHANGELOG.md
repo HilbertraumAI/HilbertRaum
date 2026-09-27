@@ -44,6 +44,14 @@ from its first public `1.0.0` release onward.
 
 ### Changed
 
+- **The AI engine is updated to llama.cpp b11146 (the upstream v0.5.0 release).** In our
+  document-question tests the ten built-in chat models answer as accurately as before. On the
+  Qwen3.5 and Gemma 4 models, coming back to a conversation after something else used the model (a
+  document being indexed, another conversation) no longer means re-reading the whole
+  conversation first: the engine now restores it from memory, so that first reply starts sooner.
+  The memory the engine keeps for this is limited to an eighth of the computer's RAM, at most
+  8 GB; when it is full, the oldest saved conversation is dropped. A drive set up with the
+  previous engine keeps using it until the drive-setup script is run again (#512).
 - **Document translation works in slightly smaller parts.** A long document is now translated
   in parts of about 640 words instead of about 690, so a part full of dense text, such as an
   invoice or a table, stays within the input size the translation model was trained on. A long
