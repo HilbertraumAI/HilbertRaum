@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-27 — **#518 — the `--list-devices` and vision SSE fixtures re-captured on the b11146 pin (`fix/518-recapture-fixtures-b11146`, F-40).**
+K: test drive, i9-14900K / RTX 3080 Ti: `list-devices-b11146-vulkan-rtx3080ti.txt` now lists two devices (the card, 12,084 / 11,316 MiB,
+and the UHD 770 iGPU, which `looksIntegrated` sorts) and `vision/vision-sse-b11146.txt` (a synthetic "Müller & Söhne" invoice, `<drive>`
+redacted) replaces the b9585 samples; assertions and provenance notes moved with them. Closes §5 item 7 TS-3 (h). Open: none._
 _2026-09-27 — **#517 — the grounded-QA scorer reads the German "not stated" forms (`fix/517-scorer-german-abstentions`).**
 Detector v4 (`tests/eval/text.mjs`): sentence-scoped "nennt … nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet"
 when the sentence names the sources; pinned on the three #514 gate answers in `score.test.ts`. Test harness only. Record:
@@ -389,15 +393,10 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
        - (f) **all perf numbers** (tok/s, peak RSS, model load time).
        - (g) **real GPU behavior** — the fake-spawn unit tests cover the ladder LOGIC, not drivers;
          see item 1b's ①–⑨ hardware matrix for the driver-level legs.
-       - (h) **b9849 verbatim-capture re-take (F-40, audit-2026-07-16)** — the GPU `--list-devices`
-         fixture (`list-devices-b9585-vulkan-rtx3080ti.txt`) and the vision SSE sample
-         (`vision-sse-sample.txt`, still `system_fingerprint b9585-…`) were captured on b9585; the
-         runtime pin is b9849. On the next smoke session re-run `llama-server --list-devices` + one
-         vision stream, commit b9849-named captures, and MOVE the byte-pinned assertions with them
-         (`gpu.test.ts` freeMb 11525 / the CRLF check; `vision-sse.test.ts` the split-UTF-8
-         "Müller & Söhne" reconstruction — a fresh capture must preserve a multibyte-split frame).
-         If the parse fails, that parser fix is the real payload. Until then the b9585 fixtures
-         guard the b9585 shape only (M-A5 is observation-triggered — see the `gpu.test.ts` header).
+       - (h) **verbatim-capture re-take (F-40, audit-2026-07-16) — DONE 2026-09-27 (#518):**
+         `list-devices-b11146-vulkan-rtx3080ti.txt` (two devices: the card + the UHD 770 iGPU) and
+         `vision/vision-sse-b11146.txt` replace the b9585 captures; the `gpu.test.ts` / `vision-sse.test.ts`
+         assertions moved with them. Standing rule: re-capture on every runtime pin bump (TS-3(a)).
        - (i) **real-server mid-stream error-frame smoke (F-02 / §Q Q-2, audit-2026-07-16)** —
          Phase 4 made `readChatSSE` REJECT on an in-band error frame (`data: {"error":{…}}` or a
          bare `error: {…}` field line), pinned only against hand-authored b9849-shaped fixtures.

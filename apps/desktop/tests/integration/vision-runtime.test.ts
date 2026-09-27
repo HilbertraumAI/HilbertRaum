@@ -17,11 +17,12 @@ import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shar
 // timer reset on every entry, NO teardown while a job runs, and a clean cold restart afterwards.
 // No real binary is spawned: spawn/fetchImpl/findPort are injected (the e5/reranker seam).
 
+// The verbatim b11146 vision capture (#518; provenance in tests/unit/vision-sse.test.ts).
 const FIXTURE_SSE = readFileSync(
-  join(__dirname, '../fixtures/vision/vision-sse-sample.txt'),
+  join(__dirname, '../fixtures/vision/vision-sse-b11146.txt'),
   'utf8'
 )
-const FIXTURE_ANSWER = 'This is an invoice from Müller & Söhne GmbH, and it is in German.'
+const FIXTURE_ANSWER = 'This is a German invoice issued by Müller & Söhne GmbH, and it is in German.'
 
 class FakeChild extends EventEmitter implements ChildProcessLike {
   pid = 9

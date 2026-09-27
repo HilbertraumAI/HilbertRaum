@@ -10247,8 +10247,8 @@ OCR (tesseract.js, Documents) and from any image generation (never built)._
   inheriting `CHAT_SERVER_ARGS`; `--reasoning-format` must be **left at default** for a non-reasoning
   VLM; `--device none` CPU-pins (the embedder precedent).
 - The streamed frames are **byte-identical to text chat** → `readChatSSE` parses them unchanged
-  (verbatim sample pinned at `tests/fixtures/vision/vision-sse-sample.txt`; CI regression in
-  `tests/unit/vision-sse.test.ts`).
+  (verbatim sample pinned at `tests/fixtures/vision/vision-sse-b11146.txt` — re-taken on the b11146
+  pin 2026-09-27, #518, replacing the b9585 V1 sample; CI regression in `tests/unit/vision-sse.test.ts`).
 - `cache_prompt:true` ⇒ the image prefill is **cached across follow-ups** (`cache_n:2812,
   prompt_n:1` measured on the 2nd question) — the per-image thread pays the (slow CPU) prefill once.
 - Multimodal CLIs (`llama-mtmd-cli` etc.) are **also bundled** — Option C remains an unused fallback.

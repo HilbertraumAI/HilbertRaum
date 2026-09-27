@@ -14,32 +14,37 @@ import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/
 // probe is driven entirely through the fake-spawn seam.
 
 // L19 (audit-2026-06-13): a captured-real-output regression fixture. This is the verbatim
-// `llama-server --list-devices` stdout CAPTURED ON b9585 on the dev box (CRLF preserved;
-// .gitattributes keeps it binary). The runtime pin is now b11146 (#512; b9849 before it, whose
-// `--list-devices` stdout #512 found byte-identical) — a re-capture on the pin is OWED and rides
-// the next manual smoke-drive session (BUILD_STATE §5 item 7 TS-3 consolidated smoke checklist;
-// audit-2026-07-16 F-40). So this guards the b9585 device-line shape only: it reddens if the
-// PARSER regresses against that shape, NOT if a later pin changed the shape (which the frozen
-// b9585 capture cannot observe — M-A5 is observation-triggered, so re-capture happens when a
-// HILBERTRAUM_* run sees a change).
-const LIST_DEVICES_B9585 = readFileSync(
-  join(__dirname, '..', 'fixtures', 'list-devices-b9585-vulkan-rtx3080ti.txt'),
+// `llama-server --list-devices` STDOUT captured on the CURRENT pin, b11146, on the dev box
+// (i9-14900K / RTX 3080 Ti, 2026-09-27, #518; CRLF preserved — .gitattributes keeps it binary).
+// b11146 also prints `llama_server: initializing ...` on STDERR, which the probe never reads.
+// The b9585 capture it replaces (F-40, audit-2026-07-16) was two pins old and is retired: same
+// machine, same device-line shape, only the free figure differed, and a pin-named fixture that
+// lags the pin is exactly what #518 describes. This one lists TWO devices — the card and the
+// Intel UHD 770 iGPU the b9585 run did not show — so it also pins the hybrid-box shape the
+// `looksIntegrated` rule (#320) sorts. Re-capture on every runtime pin bump (TS-3(a)).
+const LIST_DEVICES_B11146 = readFileSync(
+  join(__dirname, '..', 'fixtures', 'list-devices-b11146-vulkan-rtx3080ti.txt'),
   'utf8'
 )
 
-// The REAL output captured from the b9585 Vulkan build on the dev machine.
+// A hand-written LF variant of the same card's line (an earlier b9585 free figure).
 const RTX_3080TI_OUTPUT = `Available devices:
   Vulkan0: NVIDIA GeForce RTX 3080 Ti (12300 MiB, 11511 MiB free)
 `
 
 describe('parseListDevices', () => {
-  it('parses the captured real b9585 --list-devices fixture (L19 regression)', () => {
+  it('parses the captured real b11146 --list-devices fixture (L19 regression, #518)', () => {
     // The on-disk capture still carries the tool's native CRLF line endings — the parser
-    // must split on /\r?\n/ and land the same device a hand-written string would.
-    expect(LIST_DEVICES_B9585).toContain('\r\n')
-    expect(parseListDevices(LIST_DEVICES_B9585)).toEqual([
-      { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11525 }
+    // must split on /\r?\n/ and land the same devices a hand-written string would.
+    expect(LIST_DEVICES_B11146).toContain('\r\n')
+    expect(parseListDevices(LIST_DEVICES_B11146)).toEqual([
+      { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12084, freeMb: 11316 },
+      // The iGPU reports unified memory: "free" above "total" is what the tool printed.
+      { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
     ])
+    const [card, igpu] = parseListDevices(LIST_DEVICES_B11146)
+    expect(looksIntegrated(card.name)).toBe(false)
+    expect(looksIntegrated(igpu.name)).toBe(true)
   })
 
   it('parses the real single-GPU fixture', () => {
