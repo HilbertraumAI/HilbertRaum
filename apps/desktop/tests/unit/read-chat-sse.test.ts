@@ -14,10 +14,11 @@ import {
 
 const enc = new TextEncoder()
 // Fixture provenance (CODE-9/TQ-6, full-audit 2026-07-11): these SSE frames are hand-authored to the
-// llama-server (b9849) output shape — `choices[].delta.content` for answer tokens,
-// `choices[].delta.reasoning_content` for `--reasoning-format deepseek` thinking deltas. CI green does
-// NOT evidence the real wire contract (see BUILD_STATE §5 TS-3 inventory); re-verify these frames against
-// a captured smoke transcript on a runtime pin bump.
+// llama-server output shape — `choices[].delta.content` for answer tokens,
+// `choices[].delta.reasoning_content` for `--reasoning-format deepseek` thinking deltas. The content
+// shape is pinned by real captures on the current pin b11146 (`chat-sse-timings-b11146.txt`, #512;
+// `vision/vision-sse-b11146.txt`, #518); the reasoning shape has no capture yet — re-verify it against
+// a captured smoke transcript on a runtime pin bump (BUILD_STATE §5 TS-3 inventory).
 const chatChunk = (content: string): string =>
   `data: ${JSON.stringify({ choices: [{ delta: { content } }] })}\n\n`
 const reasoningChunk = (reasoning_content: string): string =>
@@ -123,12 +124,12 @@ describe('readChatSSE — CB-5 idle watchdog', () => {
 // complete (finish_reason null ⇒ no truncated badge, no error — the silent-truncation class the
 // translation reader was hardened against in TA-4 M2/M3). The reader must reject instead.
 //
-// Frame-shape provenance (b9849, TS-3(a) rider): the two in-band shapes mirror the ones the
-// repo verified for the pinned server in the TA-4 translation-audit record
-// (docs/architecture.md "translation audit"): a `data: {"error":{…}}` frame and a bare
-// `error: {…}` SSE field line. CI green does NOT evidence the real wire contract — re-verify
-// both shapes against a captured smoke transcript on every runtime pin bump (BUILD_STATE §5
-// TS-3 inventory; the real-server error-frame smoke is owed at the next smoke-drive session).
+// Frame-shape provenance (TS-3(a) rider): the two in-band shapes mirror the ones the repo
+// verified on b9849 in the TA-4 translation-audit record (docs/architecture.md "translation
+// audit"): a `data: {"error":{…}}` frame and a bare `error: {…}` SSE field line. No capture of
+// either exists on the current pin b11146 (#518 re-took the SUCCESS streams only) — CI green does
+// NOT evidence this wire contract; re-verify both shapes against a captured smoke transcript on
+// every runtime pin bump (BUILD_STATE §5 TS-3 inventory; the real-server error-frame smoke is owed).
 describe('readChatSSE — in-band error frames reject the stream (F-02)', () => {
   const errorDataFrame = (message: string, type: string): string =>
     `data: ${JSON.stringify({ error: { code: 500, message, type } })}\n\n`
@@ -214,8 +215,8 @@ describe('readChatSSE — in-band error frames reject the stream (F-02)', () => 
 })
 
 // #290/#291 — llama-server's per-request `timings` block rides the streamed completion. The REAL
-// b9849 shape is pinned by `chat-sse-timings-fixture.test.ts` on the transcript captured for #298
-// (the timings ride the `finish_reason: "stop"` chunk itself; no trailing choices-less chunk). The
+// shape is pinned by `chat-sse-timings-fixture.test.ts` on the b9849 (#298) and b11146 (#512)
+// captures (the timings ride the `finish_reason: "stop"` chunk itself; no trailing choices-less chunk). The
 // shapes below are ROBUSTNESS cases beyond that pin. The reader remembers the last block seen on
 // ANY chunk and hands it up with the finish reason, once, at `[DONE]` / the clean close — and
 // never on an abort, an error frame or a watchdog trip.
