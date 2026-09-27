@@ -23,7 +23,10 @@ import { promptCacheRamMib } from '../../src/shared/prompt-cache-rules'
 // (`CHAT_SERVER_ARGS`, `-np 1`, the RAM-scaled `--cache-ram`, GPU auto-offload as on rung 1), at
 // ctx 8192 as in the #399 sweep. The protocol (#399, re-run for #512):
 //   1. conversation A — a synthetic ~1,700-token facts prompt + a question;
-//   2. an unrelated conversation B takes the one slot (A is evicted to the host cache);
+//   2. an unrelated conversation B, with the SAME system message, takes the one slot (A is evicted
+//      to the host cache). Every app chat shares one system prompt, and that shared prefix is the
+//      case #399 lost on b9849: a B with a different system message let b9849 restore qwen3.8 on
+//      the 24 GB rig (PR #524), so it did not separate the builds;
 //   3. A extended with its reply and a new question — `prompt_n` here is what was re-prefilled;
 //   4. B again, then the same extended request with `cache_prompt: false` — the reference.
 // It prints `prompt_n` on return, a RESTORED / RE-PREFILLED verdict, whether the restored answer
@@ -76,12 +79,13 @@ function factsPrompt(): string {
   return lines.join('\n')
 }
 
-const SYSTEM_A = 'You answer questions about the facts the user gives you. Answer briefly and exactly.'
+/** One system message for A and B, as in the app (see the protocol note above, #512 / PR #524). */
+const SYSTEM = 'You answer questions about the facts the user gives you. Answer briefly and exactly.'
 const FACTS = factsPrompt()
 const QUESTION_1 = 'Who owns the item in room 117, and how much does it weigh?'
 const QUESTION_2 = 'And which colour is the item in room 142? Name its owner too.'
 const B_MESSAGES = [
-  { role: 'system', content: 'You are a helpful writing assistant.' },
+  { role: 'system', content: SYSTEM },
   {
     role: 'user',
     content:
@@ -163,7 +167,7 @@ describe.skipIf(!enabled)('Prompt-cache smoke (manual, real llama-server + one c
       )
 
       const a: Msg[] = [
-        { role: 'system', content: SYSTEM_A },
+        { role: 'system', content: SYSTEM },
         { role: 'user', content: `${FACTS}\n\n${QUESTION_1}` }
       ]
       const first = await ask(a, true)
