@@ -1,4 +1,5 @@
 import { describe, it, expect } from 'vitest'
+import { execFileSync } from 'node:child_process'
 import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
 import { en } from '../../src/shared/i18n'
@@ -927,5 +928,25 @@ describe('repo hygiene — the ZIM required-check inventory is honest (PR #294 �
       .filter(([, value]) => oneLine(value).includes(retired))
       .map(([key]) => `en.ts ${key}`)
     expect([...offenders, ...uiKeys]).toEqual([])
+  })
+})
+
+// #512 (PR #524): `scripts/fetch-runtime.sh` was committed as 100644, so the documented direct call
+// (`scripts/fetch-runtime.sh --target …`) failed with "Permission denied" on the rig. The scripts
+// call each other through `bash`, which hid it. Every tracked shell script under scripts/ must be
+// executable in the git index (launchers get their bit from build-commercial-drive at drive time).
+describe('repo hygiene — scripts/*.sh are executable in git (#512)', () => {
+  const repoRoot = resolve(process.cwd(), '..', '..')
+  let index = ''
+  try {
+    index = execFileSync('git', ['ls-files', '-s', '--', 'scripts/*.sh'], { cwd: repoRoot, encoding: 'utf8' })
+  } catch {
+    index = '' // not a git checkout (e.g. a source tarball) — nothing to check
+  }
+  it.skipIf(index === '')('every scripts/*.sh has mode 100755', () => {
+    const lines = index.trim().split('\n')
+    expect(lines.length).toBeGreaterThanOrEqual(7)
+    const notExecutable = lines.filter((l) => !l.startsWith('100755 ')).map((l) => l.split('\t')[1])
+    expect(notExecutable).toEqual([])
   })
 })

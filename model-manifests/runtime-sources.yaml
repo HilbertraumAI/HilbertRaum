@@ -44,7 +44,8 @@
 # ggml-org/llama.cpp GitHub Releases API (the `digest` field, one per asset), same five-asset
 # topology as before (win vulkan + win cpu, mac arm64 metal, linux vulkan + linux cpu), and ALL
 # FIVE were confirmed against a local download on 2026-09-27 (SHA-256 exact). The win assets
-# ran on the dev box; the mac/linux ones could not be RUN there. fetch-runtime re-SHA-256-verifies
+# ran on the dev box and the linux-vulkan one on the RTX 3090 rig (#512); the mac one has not
+# been run. fetch-runtime re-SHA-256-verifies
 # each archive BEFORE extracting, so a wrong/changed digest deletes the archive and fails the run —
 # a bad binary can never silently install.
 # The Windows archive changed shape on this bump: the MS OpenMP redistributable

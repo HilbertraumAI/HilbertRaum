@@ -219,10 +219,13 @@ async function main() {
   }
   const excerpt = lines.filter((l) => /load_tensors|buffer|_Host|offload|device|SWA|recurrent|fit|ctx|slots|kv_unified|n_parallel|draft|spec/i.test(l)).slice(0, 300)
   writeFileSync(heapsPath, 'phase,t,heap,size_mib,budget_mib,usage_mib,device_local\n' + heapSamples.flatMap((s) => s.heaps.map((h) => `${s.phase},${s.t},${h.heap},${h.size_mib},${h.budget_mib},${h.usage_mib},${h.device_local}`)).join('\n') + '\n')
+  // #512: the build the server logged (`build 11146 (7fe450e19)`), not a hard-coded label.
+  const logBuild = /\bbuild (\d+) \(([0-9a-f]+)\)/.exec(raw)
   const result = {
     hw_slug: args.slug, leg, variant, rung: rungLabel, model_id: modelId, model_file: path.basename(modelPath),
     model_bytes: statSync(modelPath).size,
-    runtime: '9849 (799fcc04a)', argv: redact(argv.join(' ')), mtp, extra_args: extra, ctx, threads, physical_batch: physicalBatch, ubatch: ubatch ?? physicalBatch,
+    runtime: logBuild ? `${logBuild[1]} (${logBuild[2]})` : 'unknown',
+    argv: redact(argv.join(' ')), mtp, extra_args: extra, ctx, threads, physical_batch: physicalBatch, ubatch: ubatch ?? physicalBatch,
     before, load_ms: loadMs, load_peak_nvidia_smi: loadPeak, after_load: afterLoad, prompt_tokens: n, request_ms: reqMs,
     tokens_predicted: body.tokens_predicted, timings, peak_nvidia_smi: peak, samples,
     after_stop: { nvidia_smi: after, list_devices: afterDevices, heaps: afterHeaps, exit: exited },

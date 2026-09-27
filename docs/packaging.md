@@ -943,7 +943,7 @@ default build and `--backend cpu`) to refresh the binary before these harnesses 
 | `bringup-smoke` | `HILBERTRAUM_BRINGUP_SMOKE` | the runtime starts + streams against the real binary |
 | `gpu-smoke` | `HILBERTRAUM_GPU_SMOKE` | rung-1 GPU start, forced-CPU rung, rung-3 safety net |
 | `thinking-smoke` / `gemma-thinking` | `HILBERTRAUM_THINKING_SMOKE` / `HILBERTRAUM_GEMMA_THINKING` | deep-mode reasoning channel |
-| `prompt-cache-smoke` | `HILBERTRAUM_PROMPT_CACHE_SMOKE` | whether the pinned server RESTORES a chat GGUF's evicted conversation from its host-RAM prompt cache (the #399 evict-and-return protocol with the app's chat argv); prints `prompt_n` on return, RESTORED / RE-PREFILLED, restore == `cache_prompt: false` recompute, and the manifest advice for `disable_prompt_cache` (#512). Run it for every new chat manifest |
+| `prompt-cache-smoke` | `HILBERTRAUM_PROMPT_CACHE_SMOKE` | whether the pinned server RESTORES a chat GGUF's evicted conversation from its host-RAM prompt cache (the #399 evict-and-return protocol with the app's chat argv; the evicting conversation shares the system message, as every app chat does); prints `prompt_n` on return, RESTORED / RE-PREFILLED, restore == `cache_prompt: false` recompute, and the manifest advice for `disable_prompt_cache` (#512). Run it for every new chat manifest |
 | `rerank-smoke` | `HILBERTRAUM_RERANK_SMOKE` | the reranker sidecar reorders retrieval |
 | `whisper-smoke` / `dictation-smoke` | `HILBERTRAUM_WHISPER_SMOKE` / `HILBERTRAUM_DICTATION_SMOKE` | whisper-cli transcription + dictation |
 | `ocr-smoke` | `HILBERTRAUM_OCR_SMOKE` | WASM OCR over a real scan |

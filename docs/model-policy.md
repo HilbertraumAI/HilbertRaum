@@ -345,11 +345,12 @@ the validator.
   `false` keeps the cache on with the RAM-scaled ceiling every chat model gets (1/8 of total RAM,
   at most 8,192 MiB — `shared/prompt-cache-rules.ts`). Like `speculative_decoding`, the manifest
   never supplies arguments. It replaces the #399 family list (`qwen3.5`, `qwen3.6`, `qwen3.8`,
-  `gemma4` got `--cache-ram 0` on b9849): on b11146 qwen3.5 and gemma4 restore, measured, and
-  qwen3.6/qwen3.8 are on by owner ruling, so **no committed manifest sets it**
+  `gemma4` got `--cache-ram 0` on b9849): on b11146 all four restore, measured (qwen3.6/qwen3.8 on
+  the 24 GB rig, PR #524), so **no committed manifest sets it**
   (`committed-catalog.test.ts`). To decide it for a new GGUF, run
   `tests/manual/prompt-cache-smoke.test.ts` (`HILBERTRAUM_PROMPT_CACHE_SMOKE=<drive root>`,
-  `HILBERTRAUM_SMOKE_MODEL=<gguf>`): it evicts a ~1,700-token conversation, brings it back and
+  `HILBERTRAUM_SMOKE_MODEL=<gguf>`): it evicts a ~1,700-token conversation with an unrelated one
+  that shares its system message (the app's case), brings it back and
   prints `RESTORED` or `RE-PREFILLED` with the advice. An older app ignores the key (unknown keys
   are ignored), which is the cache-on behaviour it already had. Evidence: `model-benchmarks.md`
   §6.6 "#512 amendment".
@@ -682,9 +683,9 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 > ✅ **Pinned to a real release: `b11146`** (= upstream stable **v0.5.0**, bumped from b9849 under
 > #512), with real per-OS URLs and SHA-256 checksums from the official GitHub Releases API
 > `digest` metadata, all five also confirmed by local download — `fetch-runtime` re-verifies before
-> extracting (a wrong/changed hash fails the run). What was verified on the new build, and what is
-> still open (the MTP start and qwen3.6/qwen3.8 cache restore on the 24 GB rig; the macOS/Linux
-> assets were hash-checked but never run), is in #512.
+> extracting (a wrong/changed hash fails the run). What was verified on the new build is in #512:
+> Windows on the dev box, the Linux Vulkan asset on the 24 GB rig (the 27B MTP start and the
+> qwen3.6/qwen3.8 cache restore, PR #524). The macOS asset was hash-checked but never run.
 > Notes on the current release format:
 > - The **Windows** asset is a `.zip` with the binaries at the archive root; **macOS/Linux** assets
 >   are `.tar.gz` nested under `llama-<tag>/`. `fetch-runtime` handles both, **flattens** nested

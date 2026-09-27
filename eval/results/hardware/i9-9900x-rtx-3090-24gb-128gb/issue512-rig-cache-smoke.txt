@@ -1,0 +1,131 @@
+# #512 rig leg 1: prompt-cache smoke on the i9-9900X / RTX 3090 24 GB / 128 GB rig, 2026-09-27
+# tests/manual/prompt-cache-smoke.test.ts at master 401b90c0; [prompt-cache] lines only
+
+## cache-b11146-qwen3.6-27b-q4
+[prompt-cache] model qwen3.6-27b-q4.gguf
+[prompt-cache] --cache-ram 8192 (RAM rule: 8192 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 32 of 1903 (cache_n 1871) → RESTORED (1.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1903
+[prompt-cache] restored answer == reference (50 chars)
+[prompt-cache] answer: "The item in room 142 is grey and belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.36.911.908 I srv        update:  - cache state: 1 prompts, 565.859 MiB (limits: 8192.000 MiB, 8192 tokens, 27086 est)
+  0.36.911.915 I srv  get_availabl: prompt cache update took 367.48 ms
+  0.38.664.990 I srv  get_availabl: updating prompt cache
+  0.39.037.942 I srv        update:  - cache state: 1 prompts, 455.319 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.39.037.948 I srv  get_availabl: prompt cache update took 372.96 ms
+  0.39.890.001 I srv  get_availabl: updating prompt cache
+  0.40.603.656 I srv        update:  - cache state: 1 prompts, 1017.676 MiB (limits: 8192.000 MiB, 8192 tokens, 15439 est)
+  0.40.603.662 I srv  get_availabl: prompt cache update took 713.66 ms
+  0.40.619.700 I slot   operator(): id  0 | task 94 | restored context checkpoint (pos_min = 51, pos_max = 51, n_tokens = 52, n_past = 52, size = 149.626 MiB)
+  0.42.184.430 I srv  get_availabl: updating prompt cache
+  0.42.547.683 I srv        update:  - cache state: 1 prompts, 455.319 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.42.547.688 I srv  get_availabl: prompt cache update took 363.26 ms
+
+## cache-b11146-qwen3.6-27b-q5
+[prompt-cache] model qwen3.6-27b-q5.gguf
+[prompt-cache] --cache-ram 8192 (RAM rule: 8192 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 32 of 1903 (cache_n 1871) → RESTORED (1.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1903
+[prompt-cache] restored answer == reference (50 chars)
+[prompt-cache] answer: "The item in room 142 is grey and belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.24.606.754 I srv        update:  - cache state: 1 prompts, 565.859 MiB (limits: 8192.000 MiB, 8192 tokens, 27086 est)
+  0.24.606.757 I srv  get_availabl: prompt cache update took 366.62 ms
+  0.26.676.793 I srv  get_availabl: updating prompt cache
+  0.27.065.811 I srv        update:  - cache state: 1 prompts, 455.444 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.27.065.817 I srv  get_availabl: prompt cache update took 389.02 ms
+  0.28.015.010 I srv  get_availabl: updating prompt cache
+  0.28.722.503 I srv        update:  - cache state: 1 prompts, 1017.676 MiB (limits: 8192.000 MiB, 8192 tokens, 15439 est)
+  0.28.722.509 I srv  get_availabl: prompt cache update took 707.50 ms
+  0.28.738.505 I slot   operator(): id  0 | task 96 | restored context checkpoint (pos_min = 51, pos_max = 51, n_tokens = 52, n_past = 52, size = 149.626 MiB)
+  0.30.590.154 I srv  get_availabl: updating prompt cache
+  0.30.960.752 I srv        update:  - cache state: 1 prompts, 455.444 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.30.960.761 I srv  get_availabl: prompt cache update took 370.60 ms
+
+## cache-b11146-qwen3.8-27b-ud-q5km
+[prompt-cache] model qwen3.8-27b-ud-q5km.gguf
+[prompt-cache] --cache-ram 8192 (RAM rule: 8192 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 32 of 1903 (cache_n 1871) → RESTORED (1.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1903
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] answer: "The item in room 142 is grey, and it belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.50.982.930 I srv        update:  - cache state: 1 prompts, 565.859 MiB (limits: 8192.000 MiB, 8192 tokens, 27086 est)
+  0.50.982.933 I srv  get_availabl: prompt cache update took 366.32 ms
+  0.52.610.734 I srv  get_availabl: updating prompt cache
+  0.52.993.128 I srv        update:  - cache state: 1 prompts, 454.631 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.52.993.134 I srv  get_availabl: prompt cache update took 382.40 ms
+  0.54.020.012 I srv  get_availabl: updating prompt cache
+  0.54.749.499 I srv        update:  - cache state: 1 prompts, 1017.801 MiB (limits: 8192.000 MiB, 8192 tokens, 15453 est)
+  0.54.749.504 I srv  get_availabl: prompt cache update took 729.49 ms
+  0.54.765.681 I slot   operator(): id  0 | task 85 | restored context checkpoint (pos_min = 51, pos_max = 51, n_tokens = 52, n_past = 52, size = 149.626 MiB)
+  0.56.190.186 I srv  get_availabl: updating prompt cache
+  0.56.563.468 I srv        update:  - cache state: 1 prompts, 454.631 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.56.563.475 I srv  get_availabl: prompt cache update took 373.29 ms
+
+## cache-b11146-qwen3.8-mtp
+[prompt-cache] model qwen3.8-27b-ud-q5km.gguf
+[prompt-cache] --cache-ram 8192 (RAM rule: 8192 MiB), -np 1, --ctx-size 8192, --spec-type draft-mtp --spec-draft-n-max 2
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 31 of 1903 (cache_n 1872) → RESTORED (1.6 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1903
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] answer: "The item in room 142 is grey, and it belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.14.230.597 I srv        update:  - cache state: 1 prompts, 580.617 MiB (limits: 8192.000 MiB, 8192 tokens, 26412 est)
+  0.14.230.599 I srv  get_availabl: prompt cache update took 372.56 ms
+  0.15.514.806 I srv  get_availabl: updating prompt cache
+  0.15.912.556 I srv        update:  - cache state: 1 prompts, 455.244 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.15.912.562 I srv  get_availabl: prompt cache update took 397.75 ms
+  0.16.785.096 I srv  get_availabl: updating prompt cache
+  0.17.544.190 I srv        update:  - cache state: 1 prompts, 1054.927 MiB (limits: 8192.000 MiB, 8192 tokens, 14917 est)
+  0.17.544.196 I srv  get_availabl: prompt cache update took 759.10 ms
+  0.17.577.658 I slot   operator(): id  0 | task 39 | restored context checkpoint (pos_min = 51, pos_max = 51, n_tokens = 52, n_past = 52, size = 149.830 MiB)
+  0.18.495.722 I srv  get_availabl: updating prompt cache
+  0.18.871.557 I srv        update:  - cache state: 1 prompts, 455.244 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.18.871.563 I srv  get_availabl: prompt cache update took 375.84 ms
+
+## cache-b9849-qwen3.8
+[prompt-cache] model qwen3.8-27b-ud-q5km.gguf
+[prompt-cache] --cache-ram 8192 (RAM rule: 8192 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 32 of 1903 (cache_n 1871) → RESTORED (1.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1903
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] answer: "The item in room 142 is grey, and it belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.10.606.049 I srv        update:  - cache state: 1 prompts, 416.226 MiB (limits: 8192.000 MiB, 8192 tokens, 36824 est)
+  0.10.606.051 I srv  get_availabl: prompt cache update took 278.58 ms
+  0.12.253.057 I srv  get_availabl: updating prompt cache
+  0.12.529.467 I srv        update:  - cache state: 1 prompts, 305.004 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.12.529.472 I srv  get_availabl: prompt cache update took 276.41 ms
+  0.13.430.806 I srv  get_availabl: updating prompt cache
+  0.13.854.657 I srv        update:  - cache state: 1 prompts, 568.915 MiB (limits: 8192.000 MiB, 8192 tokens, 27646 est)
+  0.13.854.662 I srv  get_availabl: prompt cache update took 423.86 ms
+  0.13.870.720 I slot   operator(): id  0 | task 85 | restored context checkpoint (pos_min = 11, pos_max = 11, n_tokens = 12, n_past = 12, size = 149.626 MiB)
+  0.15.456.012 I srv  get_availabl: updating prompt cache
+  0.15.826.516 I srv        update:  - cache state: 1 prompts, 454.631 MiB (limits: 8192.000 MiB, 8192 tokens, 8192 est)
+  0.15.826.521 I srv  get_availabl: prompt cache update took 370.51 ms
+
+# Supplement: #399 protocol (B shares A's system prompt), issue399-arch-sweep.mjs --extra "--cache-ram 8192"
+399proto-b11146-qwen3.6-27b-q4 | R1 (conversation A, long) | prompt_tokens 1508 prompt_n 1508 cache_n 0
+399proto-b11146-qwen3.6-27b-q4 | R2 (conversation B, short) | prompt_tokens 64 prompt_n 23 cache_n 41
+399proto-b11146-qwen3.6-27b-q4 | R3 (back to conversation A) | prompt_tokens 1533 prompt_n 29 cache_n 1504
+399proto-b11146-qwen3.8-27b-ud-q5km | R1 (conversation A, long) | prompt_tokens 1546 prompt_n 1546 cache_n 0
+399proto-b11146-qwen3.8-27b-ud-q5km | R2 (conversation B, short) | prompt_tokens 102 prompt_n 23 cache_n 79
+399proto-b11146-qwen3.8-27b-ud-q5km | R3 (back to conversation A) | prompt_tokens 1571 prompt_n 29 cache_n 1542
+399proto-b9849-qwen3.6-27b-q4 | R1 (conversation A, long) | prompt_tokens 1508 prompt_n 1508 cache_n 0
+399proto-b9849-qwen3.6-27b-q4 | R2 (conversation B, short) | prompt_tokens 64 prompt_n 23 cache_n 41
+399proto-b9849-qwen3.6-27b-q4 | R3 (back to conversation A) | prompt_tokens 1529 prompt_n 1488 cache_n 41
+399proto-b9849-qwen3.8-27b-ud-q5km | R1 (conversation A, long) | prompt_tokens 1546 prompt_n 1546 cache_n 0
+399proto-b9849-qwen3.8-27b-ud-q5km | R2 (conversation B, short) | prompt_tokens 102 prompt_n 23 cache_n 79
+399proto-b9849-qwen3.8-27b-ud-q5km | R3 (back to conversation A) | prompt_tokens 1571 prompt_n 1492 cache_n 79

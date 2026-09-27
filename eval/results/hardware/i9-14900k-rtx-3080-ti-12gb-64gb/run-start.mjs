@@ -170,10 +170,13 @@ async function main() {
     device: pick(/^ggml_vulkan|device|Vulkan\d/i).slice(0, 40)
   }
   const excerpt = lines.filter((l) => /load_tensors|buffer|_Host|offload|device|SWA|recurrent|fit|ctx|slots|kv_unified|n_parallel/i.test(l)).slice(0, 300)
+  // #512: the build the server logged (`build 11146 (7fe450e19)`), not a hard-coded label.
+  const logBuild = /\bbuild (\d+) \(([0-9a-f]+)\)/.exec(raw)
   const result = {
     hw_slug: args.slug, leg, variant, model_id: modelId, model_file: path.basename(modelPath),
     model_bytes: (await import('node:fs')).statSync(modelPath).size,
-    runtime: '9849 (799fcc04a)', argv: redact(argv.join(' ')), extra_args: extra, ctx, threads, physical_batch: physicalBatch,
+    runtime: logBuild ? `${logBuild[1]} (${logBuild[2]})` : 'unknown',
+    argv: redact(argv.join(' ')), extra_args: extra, ctx, threads, physical_batch: physicalBatch,
     before, load_ms: loadMs, after_load: afterLoad, prompt_tokens: n, request_ms: reqMs,
     tokens_predicted: body.tokens_predicted, timings, peak_nvidia_smi: peak, samples, after_stop: { nvidia_smi: after, list_devices: afterDevices, exit: exited },
     prompt_text_in_log: promptLeak, fit, excerpt, app_report: null
