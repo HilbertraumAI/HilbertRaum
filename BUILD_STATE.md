@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-27 — **#515 — the #312 model-vs-device check compares the first error line; the sidecars log uncoloured (`fix/515-failure-signature`).**
+`failureSignature` read the last tail line — a per-process timestamp, or on Windows a bare colour reset (stdout is NUL, which
+`--log-colors auto` takes for a terminal) — so rungs never matched, or always did. Now the first `E` line, prefix stripped; `--log-colors
+off` on every `LlamaServer` spawn; the tail ANSI-free. Record: `architecture.md` GPU record "#515 amendment". Open: none._
 _2026-09-27 — **#512 — llama.cpp pin b9849 → b11146 (= upstream v0.5.0), prompt cache on for every chat model (`feat/512-llama-cpp-b11146`).**
 The #399 family list is gone: manifest `disable_prompt_cache` (default false; true → `--cache-ram 0`; none set) + `--cache-ram
 min(8192, RAM MiB / 8)` on every chat start; manual `prompt-cache-smoke`; LLVM `libomp.dll` licence pinned (`licenses/`, DRIVE-NOTICES).
@@ -146,15 +150,6 @@ object, so one property catches every handle — and closes them in its `afterAl
 vitest's default `sequence.hooks: 'stack'`, pinned by a guard verified to FAIL under `'list'`. Loading `node:sqlite` in every fork added ~180
 ExperimentalWarning lines (268 → 449), so that one warning is swallowed during the harness's own load (now 0). Hygiene, not speed (#458).
 Not this change: the known `zim-client` 8 MiB `read ECONNRESET` load flake failed all 3 attempts in 2 of 3 local full runs (3/3 alone)._
-_2026-09-12 — **#438 CLOSED — the automatic check's frozen step list; owner call taken on option 2**
-(`fix/438-automatic-check-step-list`; record `benchmark.md` "An automatic run's step list", which carries the three options and
-the reasoning). Two CORRECT decisions multiplied: progress is addressed to the window that invoked `benchmark:run` (the automatic
-scheduler passes none) while the screen drew the list for any held BACKEND span (audit M1) — so #331 leg 2's moved-drive check sat
-frozen on step 1 for 13.7 s. The list now belongs to a run THIS window started; every other span renders one line,
-`perf.running.background`, **inside the same live region**, so an automatic check is announced rather than silent (an empty region
-would have regressed #437). Option 1 (broadcast) was rejected as a HALF-fix — the common path is the user arriving MID-RUN, and a
-late-joining window has already missed the one-shot steps. IPC contract UNCHANGED. Residuals: no per-step detail for an automatic
-run (option 3, the steps carried in `PerformanceSnapshot`, stays available), and the by-ear leg #436/#437 owe now has this line._
 
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
@@ -192,7 +187,8 @@ retrieval-research record entry), and the closed 2026-09-09 knowledge-packs-docs
 dependency-advisory entries (PR #451 xmldom, PR #452 build chain) on 2026-09-21 (preamble
 budget, making room for the #497 dictation entry), and the closed 2026-09-10 #436/#437 live-region entry on
 2026-09-21 (preamble budget, making room for the #488/#498/#501 entry), and the closed #446 and #413 entries on
-2026-09-22 (preamble budget, making room for the #410 entry) — citations of the form "BUILD_STATE <date> entry" /
+2026-09-22 (preamble budget, making room for the #410 entry), and the closed 2026-09-12 #438 entry on
+2026-09-27 (preamble budget, making room for the #515 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

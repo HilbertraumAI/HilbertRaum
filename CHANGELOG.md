@@ -69,6 +69,9 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A model that cannot be loaded is now reliably told apart from a graphics-card problem.**
+  Before, on some systems such a model could switch graphics acceleration off for every model,
+  or two different start failures could be taken for the same one (#515).
 - **Inline math written as `$…$` now renders in chat.** Before, only `$$…$$` blocks and
   `\(…\)` spans were typeset, so the inline formulas many local models write showed up as raw
   text with the dollar signs. A single-dollar span is typeset only when it looks like math, so

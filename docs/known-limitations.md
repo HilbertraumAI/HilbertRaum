@@ -2519,7 +2519,12 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   rung-1 failure is held until the forced-CPU rungs answer: one of them starting persists
   `gpuAutoDisabled` as before, while every rung dying the same way blames the model — nothing is
   persisted, and the user gets a notice naming the model plus the rung-4 mock's disclosed
-  simulated replies (architecture.md §5.2). Since issue #372 (2026-09-07) the model is also named
+  simulated replies (architecture.md §5.2). Until #515 (2026-09-27) the "same way" comparison read
+  the last log line, which never carried the error (a per-process timestamp, or on Windows a bare
+  colour reset), so where the log is uncoloured (macOS/Linux, by llama.cpp's own terminal check) a
+  model fault still disabled GPU, and on Windows two different
+  failures with the same exit code counted as one; it now compares the first error line with the
+  timestamp stripped, and the sidecars log without colour. Since issue #372 (2026-09-07) the model is also named
   when acceleration is off or auto-disabled (no GPU rung to compare against), and a blamed model
   is **latched for the session**: its next start spawns no rung and lands on the notice + the
   mock at once instead of paying up to three 180 s health timeouts again. Residuals: (a) the

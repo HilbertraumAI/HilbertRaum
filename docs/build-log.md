@@ -27,6 +27,22 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-27 — the closed 2026-09-12 #438 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-27 (preamble budget, making room for the #515 entry). #438 is closed
+and its record unchanged: `benchmark.md` "An automatic run's step list". Citations of the form "BUILD_STATE
+2026-09-12 entry" resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-12 — **#438 CLOSED — the automatic check's frozen step list; owner call taken on option 2**
+(`fix/438-automatic-check-step-list`; record `benchmark.md` "An automatic run's step list", which carries the three options and
+the reasoning). Two CORRECT decisions multiplied: progress is addressed to the window that invoked `benchmark:run` (the automatic
+scheduler passes none) while the screen drew the list for any held BACKEND span (audit M1) — so #331 leg 2's moved-drive check sat
+frozen on step 1 for 13.7 s. The list now belongs to a run THIS window started; every other span renders one line,
+`perf.running.background`, **inside the same live region**, so an automatic check is announced rather than silent (an empty region
+would have regressed #437). Option 1 (broadcast) was rejected as a HALF-fix — the common path is the user arriving MID-RUN, and a
+late-joining window has already missed the one-shot steps. IPC contract UNCHANGED. Residuals: no per-step detail for an automatic
+run (option 3, the steps carried in `PerformanceSnapshot`, stays available), and the by-ear leg #436/#437 owe now has this line._
+
 ## 2026-09-22 — the closed 2026-09-11 #413 and 2026-09-10 #446 entries retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-09-22 (preamble budget, making room for the #410 entry — two entries,

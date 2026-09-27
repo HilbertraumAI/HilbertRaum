@@ -3165,6 +3165,24 @@ succeeds, so the GPU is still blamed). It also survives a runtime-pin bump that 
 architecture. An unrecognised shape yields `null`, which the conservative fallback above reads as
 a device fault. Bind races (REL-1, §5.5) are still excluded before any of this.
 
+**#515 amendment (2026-09-27): the tail line is the first ERROR line, timestamp stripped, and the
+log is uncoloured.** The rule above compared the **last** tail line, and on real llama-server output
+that line was never evidence. At `-lv 4` every line carries a per-process timestamp
+(`0.00.160.242 E …`), so two rungs' last lines never matched and a model fault stayed a device
+verdict — the #312 bug, live wherever the log is uncoloured (macOS/Linux). On Windows the sidecar's
+stdout is NUL, which llama.cpp's `--log-colors auto` reads as a terminal, so the last line was a bare
+colour reset and ANY two same-code failures matched. Either way the last line is the generic
+`exiting due to model loading error`. Now (`sidecar.ts` `failureLine`): ANSI codes and the
+`<elapsed> <level> ` prefix are stripped, and the signature line is the **first** `E`-level line —
+llama.cpp prints the root cause first (`gguf_init_from_reader: this GGUF file is version …`), then
+the generic lines, identically on every rung; else the first unprefixed `error …` line (an argument
+error, followed by a usage screen); else the last line. Every `LlamaServer` spawn (chat, embedder,
+reranker, translation, vision) passes `--log-colors off` (present on b9849 and b11146), and the
+stderr tail is stripped of colour codes before it reaches error strings, `gpuLastError`, the audit
+trail or the log export. Verified with real captured tails (`tests/fixtures/start-failure-b11146-*`)
+and the real ladder on the pinned binaries: a corrupt GGUF fails every rung and names the model,
+persisting nothing; a healthy model starts on rung 1.
+
 **The model verdict is remembered for the session, and reached without a GPU rung (issue #372,
 2026-09-07 — the #312 follow-up).** Two additions to the branch above, both in `factory.ts`:
 
