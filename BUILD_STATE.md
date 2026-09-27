@@ -99,9 +99,9 @@ confirmed there. 21 open issues were triaged with a disposition each. A tooling 
 converter's own design. A three-arm English read found that naming a pack's archive language only when
 it differs from the question's carries the gain, while dropping the word "Wikipedia" from the planner
 prompt collapses it. Merged this wave: #492, #491, #494, #495, #496 (all 2026-09-20) — recorded in
-`docs/rag-design.md` §17 and CHANGELOG's `[Unreleased]`; the v0.1.61 tag stays the owner's own act.
-Next: the tag; one converter PR for #487/#493 and captions with its own acceptance read; the
-cut-off-badge residual (#498)._
+`docs/rag-design.md` §17 and CHANGELOG's `[0.1.61]`; the v0.1.61 tag was cut 2026-09-21.
+Next items since shipped in v0.1.62: the converter PR for #487/#493 and captions (#500); the
+cut-off-badge residual (#498, via #509)._
 _2026-09-19 — **The knowledge-pack retrieval research is recorded closed: the pre-registered
 primary did not pass** (`docs/zim-phase3-record`; record `rag-design.md` §18). A candidate
 retrieval bundle measured +2.69 pp [−3.10, +8.59] against its own ≥ +10 pp pre-registered rule
