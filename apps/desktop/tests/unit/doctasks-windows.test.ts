@@ -168,16 +168,30 @@ import {
 const T_BUDGET = translationBudgetWords(CTX)
 
 describe('translationBudgetWords', () => {
-  it('splits the usable context by the TG-6 Gemma token weight: 2.5/word in, 3.0/word out', () => {
+  it('splits the usable context by the Gemma token weight (2.8/word in, 3.1/word out), clamped by D4', () => {
     const usable = CTX - TRANSLATION_PROMPT_RESERVE_TOKENS
-    // At the sidecar's launched 4096 the context split (~690 words ≈ 1725 input tokens)
-    // sits just under the D4 clamp (720 words), so the formula is the context share.
-    expect(T_BUDGET).toBe(
-      Math.floor(usable / (TRANSLATION_INPUT_TOKENS_PER_WORD + TRANSLATION_OUTPUT_TOKENS_PER_WORD))
+    const byContext = Math.floor(
+      usable / (TRANSLATION_INPUT_TOKENS_PER_WORD + TRANSLATION_OUTPUT_TOKENS_PER_WORD)
     )
+    const clampWords = Math.floor(TRANSLATION_MAX_INPUT_TOKENS / TRANSLATION_INPUT_TOKENS_PER_WORD)
+    expect(T_BUDGET).toBe(Math.min(byContext, clampWords))
     expect(Math.ceil(T_BUDGET * TRANSLATION_INPUT_TOKENS_PER_WORD)).toBeLessThanOrEqual(
       TRANSLATION_MAX_INPUT_TOKENS
     )
+  })
+
+  it('#512: at the launched 4096 the D4 clamp binds — 642-word windows, a 1,998-token output cap', () => {
+    // The context split would allow floor(3796 / 5.9) = 643 words; the clamp allows
+    // floor(1800 / 2.8) = 642. A full window of token-dense text (~2.8 tok/word) is then
+    // ≈ 1,798 input tokens + the scaffold (under 150), below TranslateGemma's trained 2,048.
+    // At TG-6's 2.5 / 3.0 the split bound first at 690 words (≈ 1,932 + scaffold, just over).
+    expect(CTX).toBe(4096)
+    expect(T_BUDGET).toBe(642)
+    expect(Math.ceil(T_BUDGET * 2.8) + 150).toBeLessThan(2048)
+    const cap = planTranslationWindows([chunkOf(200)], CTX).windowMaxTokens
+    expect(cap).toBe(1998)
+    // The output cap still covers the output weight for a full window.
+    expect(cap).toBeGreaterThanOrEqual(Math.ceil(T_BUDGET * TRANSLATION_OUTPUT_TOKENS_PER_WORD))
   })
 
   it('D4: clamps the input to the model card 2K spec on larger contexts', () => {
@@ -292,10 +306,10 @@ describe('#165 (P-1) — translation packs in the budget\'s own unit (WORDS)', (
   })
 
   it('fits MORE real compound words per window than the token estimate allowed (fewer windows)', () => {
-    // 30 parser segments of 10 compounds each. Word measure: 40/segment → 17 segments per
-    // 690-word window → 2 windows. The old token fill charged 60/segment → 11 per window →
+    // 30 parser segments of 10 compounds each. Word measure: 40/segment → 16 segments per
+    // 642-word window → 2 windows. The old token fill charged 60/segment → 10 per window →
     // 3 windows (the under-fill this fixes). Same real model-token load per window either
-    // way — the input ceiling 2.5 tok/word-equivalent covers the heaviest measured language.
+    // way — the input ceiling 2.8 tok/word-equivalent covers the heaviest measured language.
     const segs = Array.from({ length: 30 }, (_, i) => compoundSegment(10, `k${i}y`))
     const plan = planTranslationWindows(segs, CTX)
     expect(plan.windows).toHaveLength(2) // pre-fix: 3
@@ -303,7 +317,7 @@ describe('#165 (P-1) — translation packs in the budget\'s own unit (WORDS)', (
     for (const w of plan.windows) {
       expect(approxBudgetWordCount(w)).toBeLessThanOrEqual(T_BUDGET)
       // …and the window's REAL input-token estimate still fits the launched context share
-      // (2.5 tokens per charged word-equivalent is the conservative ceiling).
+      // (2.8 tokens per charged word-equivalent is the conservative ceiling).
       expect(approxBudgetWordCount(w) * TRANSLATION_INPUT_TOKENS_PER_WORD).toBeLessThanOrEqual(
         TRANSLATION_MAX_INPUT_TOKENS
       )

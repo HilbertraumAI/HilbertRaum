@@ -2290,6 +2290,17 @@ old estimate; `windowMaxTokens` ≈ 2,071), the honest cost of the heavy tokeniz
 the only failure mode; the doc-task suite's "fit property" proves input estimate + output cap ≤ the
 usable context at every context size.
 
+**#512 amendment (2026-09-27): the constants are 2.8 in / 3.1 out.** The translategemma smoke
+prints `RAISE` on b9849 and on b11146 alike because its short 19–23-word samples reach **2.79**
+input / **3.06** output tokens per word. Those are the short-sample peaks already recorded above,
+not a prose rate; realistic prose stays at ≤ 2.26 / ≤ 1.96. The owner raised the constants anyway,
+on the curated-10 basis (the other 41 languages were not measured), as a deliberate margin for
+token-dense text. At ctx 4096 the D4 clamp now binds at **642 words** (the context split would
+allow 643) with `windowMaxTokens` **1,998**; a full window of ~2.8 tok/word text is ≈ 1,950 real
+input tokens with the scaffold, under the trained 2K (it was ≈ 2,080 at 690 words). The cost is
+about 7 % more windows per document. Against the measured 2.79 / 3.06, the smoke's verdict for
+both constants becomes `SAFE`.
+
 **Decisions revisited at TG-6:**
 - **D8 (GPU) — TG-6 kept the CPU pin for v1** (~3–4 tok/s tolerable for a BACKGROUND doc-task with
   per-window progress + instant cancel; the smoke drive was Windows Vulkan where #25142, the
@@ -2298,7 +2309,7 @@ usable context at every context size.
   auto-offload by default) with a forced-CPU fallback + session latch on a GPU fault — see §11.4
   for the ladder and the OPEN GPU-decode re-smoke. #25142 stays contained by `--parallel 1` in
   both postures. The per-window request timeout stays at the CPU-sized **45 min**
-  (`DEFAULT_REQUEST_TIMEOUT_MS`): a ~2,070-token full window at the observed-worst ~1.1 tok/s is
+  (`DEFAULT_REQUEST_TIMEOUT_MS`): a ~2,000-token full window at the observed-worst ~1.1 tok/s is
   ~30 min, so 45 min never false-kills a live slow CPU decode while still bounding a true hang
   (user cancel stays instant; on a GPU decode the bound is simply generous).
 - **D9 (chat-during-translation relaxation) — KEEP serialization.** The co-residency measurement is
@@ -2336,7 +2347,7 @@ beating the shipped 12B on the LOCAL evidence:
    10 round-trip with verbatim identifier/number preservation, injection-resistant, no stop-token
    leak.
 2. **Tokens-per-word re-measured** for its own tokenizer (the planner constants are model-specific —
-   a different tokenizer needs its own `llama-tokenize` sweep; do NOT inherit the 2.5/3.0).
+   a different tokenizer needs its own `llama-tokenize` sweep; do NOT inherit the 2.8/3.1).
 3. **Peak RSS (sidecar-alone AND co-resident)** measured → its own `recommended_min_ram_gb`.
 4. **CPU tok/s** measured → the per-window timeout + the D8 GPU decision re-run for that model.
 5. **Translation quality** judged on the SAME per-language round-trips (fidelity, localization,
