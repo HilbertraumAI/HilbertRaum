@@ -35,9 +35,9 @@ redacted) replaces the b9585 samples; assertions and provenance notes moved with
 _2026-09-27 — **#517 — the grounded-QA scorer reads the German "not stated" forms (`fix/517-scorer-german-abstentions`).**
 Detector v4 (`tests/eval/text.mjs`): sentence-scoped "nennt … nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet"
 when the sentence names the sources; pinned on the three #514 gate answers in `score.test.ts`. Test harness only. Record:
-`model-benchmarks.md` §6.6 "#512 amendment" (v4 note). **Open (owner):** the re-score of the committed dumps — 21 flips in four
-2026-09 dumps, all German refusals, no ratified 2026-07 number moves, but the PR #293 gate row (`architecture.md` §52) cites two of
-them; the delta table is on the PR. The closed #460 entry retired for the preamble budget._
+`model-benchmarks.md` §6.6 "#512 amendment" (v4 note). Re-score DONE the same day (owner option A, `fix/517-rescore-v4`): every
+dump carries a `*-quality-rescored.csv`, four move (21 German refusals in `512-b*` / `pr6-*`), the five v3 files reproduce byte-for-byte,
+the 2026-07-09 ruling kept; `architecture.md` §52 CODE-1 row noted. Open: none. The closed #460 entry retired for the preamble budget._
 _2026-09-27 — **#515 — the #312 model-vs-device check compares the first error line; the sidecars log uncoloured (`fix/515-failure-signature`).**
 `failureSignature` read the last tail line — a per-process timestamp, or on Windows a bare colour reset (stdout is NUL, which
 `--log-colors auto` takes for a terminal) — so rungs never matched, or always did. Now the first `E` line, prefix stripped; `--log-colors

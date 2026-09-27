@@ -1208,8 +1208,12 @@ Evidence: `eval/results/i9-14900K-512-b9849-vulkan-*` and `…-512-b11146-vulkan
 #517, 2026-09-27: `text.mjs` gained sentence-scoped German "not stated" families — "nennt …
 nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet" when the sentence names the
 source material — pinned on these three answers in `score.test.ts`. On v4 the three score the same
-on both builds, leaving the `gemma4-e2b` improvement as the gate's only flip; the committed dumps'
-re-score follows the §9.3 "Scorer v3" precedent once the owner has read its delta table.)*
+on both builds, leaving the `gemma4-e2b` improvement as the gate's only flip. The committed dumps
+were re-scored on v4 the same day, after the owner read the delta table and kept the 2026-07-09
+hand-audit ruling (the v4 participle form needs a source word in its sentence): every dump now
+carries a `*-quality-rescored.csv`; four move in the abstention columns (`512-b9849`, `512-b11146`,
+`pr6-before`, `pr6-after` — 21 items, all German refusals) and the five v3 files reproduce
+byte-for-byte, so no ratified 2026-07 number moved.)*
 
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
@@ -1620,8 +1624,10 @@ Headline verdicts as reported:
   across the runs (incl. a German "kein/keine … erwähnt" negation family) — extend the phrase
   list + rescore via the §2 `rescore.mjs` flow (no model re-runs needed). *(Detector fix DONE
   2026-08-03 — v3 phrase list + split-negation patterns, all four dumps rescored and the flips
-  audited item-by-item; see §9.3 "Scorer v3". The length-normalized column remains a
-  nice-to-have; EM + audited hallucinations stay the primary cross-family read.)*
+  audited item-by-item; see §9.3 "Scorer v3". v4 on 2026-09-27 (#517) added the sentence-scoped
+  German "not stated" forms and re-scored every dump; see §6.6 "#512 amendment". The
+  length-normalized column remains a nice-to-have; EM + audited hallucinations stay the primary
+  cross-family read.)*
 
 **What the runs do NOT cover (why ranks are still unmoved):** owner ratification of a
 tester-machine run as the §9 record; the §3/§4 speed/RSS sweep (decides the 35B-A3B and supplies
