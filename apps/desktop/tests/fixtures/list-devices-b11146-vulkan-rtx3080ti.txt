@@ -1,0 +1,3 @@
+Available devices:
+  Vulkan0: NVIDIA GeForce RTX 3080 Ti (12084 MiB, 11316 MiB free)
+  Vulkan1: Intel(R) UHD Graphics 770 (32606 MiB, 48060 MiB free)
