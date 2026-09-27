@@ -141,11 +141,49 @@ export const ABSTAIN_PATTERNS = [
   / kann (?:\S+ ){0,10}?keine (?:\S+ ){0,8}?(?:finden|entnehmen|ableiten) /
 ]
 
+// v4 (2026-09-27, #517): German "not stated" forms whose words a fixed phrase cannot pin
+// down — "nicht … angegeben / genannt / festgelegt / erwähnt / beantwortet" with an adverb or
+// a source reference in between ("wird in den Dokumenten nicht direkt genannt", "nicht direkt
+// in den Dokumenten angegeben", "laut den Dokumenten … nicht festgelegt") and the verb-first
+// "nennt … nicht" ("nennt aber nicht, welches Lehrbuch …"). Observed in the #514 pin-bump
+// gate: three items scored differently on b9849 vs b11146 for the SAME substance, i.e. the
+// scorer moved, not the model. These run on ONE SENTENCE at a time (the raw answer split on
+// sentence punctuation BEFORE normalization erases it), with a tight gap, so an incidental
+// "nicht" in a confident answer ("Die Frist ist nicht verlängerbar [S1]") cannot pair with a
+// participle two sentences later. Participles are matched exactly — no `\S*` — so "nicht
+// genannten" (an attribute, not a refusal) stays out. The participle family additionally
+// requires the SAME sentence to name the source material (Dokument/Auszüge/Unterlagen/Quelle/
+// Text/Kontext/Exemplare …): "X wird im Dokument nicht genannt" declines, "X wird im Kurs nicht
+// direkt genannt" is a claim about X — this keeps the 2026-07-09 hand-audit ruling on the
+// qwen3-30b Lehrbuch item (pinned below in score.test.ts) intact. The verb-first form needs no
+// source word: "nennt … nicht" already says a source fails to name something.
+export const ABSTAIN_SENTENCE_PATTERNS = [
+  / nennt (?:\S+ ){0,3}?nicht /
+]
+const NOT_STATED_PARTICIPLE = / nicht (?:\S+ ){0,4}?(?:angegeben|genannt|festgelegt|erwähnt|beantwortet) /
+const NAMES_SOURCE_MATERIAL =
+  / (?:\S*dokument\S*|\S*auszug\S*|\S*auszüge\S*|unterlagen|quellen?|texte?n?|kontext|exemplaren?) /
+
+/** Sentence boundaries for the sentence-scoped families (raw text, pre-normalization). */
+const SENTENCE_BOUNDARY = /[.!?;:\n…]+/
+
+/** The sentence-scoped v4 test (one raw sentence in, normalized inside). */
+function isAbstentionSentence(sentence) {
+  const s = ' ' + normalizeText(sentence) + ' '
+  return (
+    ABSTAIN_SENTENCE_PATTERNS.some((re) => re.test(s)) ||
+    (NOT_STATED_PARTICIPLE.test(s) && NAMES_SOURCE_MATERIAL.test(s))
+  )
+}
+
 /** True when the answer reads as a refusal to answer (heuristic — audit raw dumps too). */
 export function isAbstention(answer) {
   const flat = ' ' + normalizeText(answer) + ' '
-  return (
+  if (
     ABSTAIN_PHRASES.some((p) => flat.includes(' ' + normalizeText(p) + ' ')) ||
     ABSTAIN_PATTERNS.some((re) => re.test(flat))
-  )
+  ) {
+    return true
+  }
+  return answer.split(SENTENCE_BOUNDARY).some(isAbstentionSentence)
 }

@@ -27,6 +27,23 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-09-27 — the closed 2026-09-13 #460 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-09-27 (preamble budget, making room for the #517 scorer entry). #460 is closed
+and its record unchanged: `packaging.md` "Continuous integration (CI)" and `tests/helpers/sqlite-handles.ts`. Citations
+of the form "BUILD_STATE 2026-09-13 entry" resolve here for #460 (the #467 entry of the same day is still live). Text
+below is byte-identical to what was removed.
+
+_2026-09-13 — **#460 fixed (acceptance: the CI legs print `1 deferred root`) — the harness closes the sqlite handles test files leave open**
+(`fix/460-sqlite-handles`; record `packaging.md` "Continuous integration (CI)", design in `tests/helpers/sqlite-handles.ts`). Counted at runtime,
+not by grep: **120 files** leave **1,709 of 2,306** handles open (the issue's static 99 missed the vault-opened ones). `tests/setup-temp-roots.ts`
+now replaces `DatabaseSync` on the `node:sqlite` CJS module object with a recording subclass — `db.ts` and every raw-handle test read it off that
+object, so one property catches every handle — and closes them in its `afterAll` BEFORE root removal. Full suite on Windows: **deferred roots
+1,515 → 1** (that 1 is `temp-roots.test.ts` exercising the deferral), zero `database is not open`, no new failure. The order holds only under
+vitest's default `sequence.hooks: 'stack'`, pinned by a guard verified to FAIL under `'list'`. Loading `node:sqlite` in every fork added ~180
+ExperimentalWarning lines (268 → 449), so that one warning is swallowed during the harness's own load (now 0). Hygiene, not speed (#458).
+Not this change: the known `zim-client` 8 MiB `read ECONNRESET` load flake failed all 3 attempts in 2 of 3 local full runs (3/3 alone)._
+
 ## 2026-09-27 — the closed 2026-09-12 #438 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-09-27 (preamble budget, making room for the #515 entry). #438 is closed

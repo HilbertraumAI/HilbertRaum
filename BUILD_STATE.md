@@ -28,6 +28,12 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-27 — **#517 — the grounded-QA scorer reads the German "not stated" forms (`fix/517-scorer-german-abstentions`).**
+Detector v4 (`tests/eval/text.mjs`): sentence-scoped "nennt … nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet"
+when the sentence names the sources; pinned on the three #514 gate answers in `score.test.ts`. Test harness only. Record:
+`model-benchmarks.md` §6.6 "#512 amendment" (v4 note). **Open (owner):** the re-score of the committed dumps — 21 flips in four
+2026-09 dumps, all German refusals, no ratified 2026-07 number moves, but the PR #293 gate row (`architecture.md` §52) cites two of
+them; the delta table is on the PR. The closed #460 entry retired for the preamble budget._
 _2026-09-27 — **#515 — the #312 model-vs-device check compares the first error line; the sidecars log uncoloured (`fix/515-failure-signature`).**
 `failureSignature` read the last tail line — a per-process timestamp, or on Windows a bare colour reset (stdout is NUL, which
 `--log-colors auto` takes for a terminal) — so rungs never matched, or always did. Now the first `E` line, prefix stripped; `--log-colors
@@ -141,15 +147,6 @@ tail — it stops ~0.4 % short and the OS resets at **~19 s, every time** (the 2
 up; 4–64 KB 0 of 80; client-closes-first 0 of 50. Fix: the ceiling answers are keep-alive with `keepAliveTimeout` 0, `retry: 2` dropped, plus an
 assert the server never closed first (FAILS on an idle box with the line removed). Under load after: 26 of 26 ceiling legs, ≤ 111 ms. Production
 `/raw` absorbs it (1 s idle + resume, 24/24 starved 1 MiB reads at ~1.1 s); kiwix-serve's own close is unmeasured._
-_2026-09-13 — **#460 fixed (acceptance: the CI legs print `1 deferred root`) — the harness closes the sqlite handles test files leave open**
-(`fix/460-sqlite-handles`; record `packaging.md` "Continuous integration (CI)", design in `tests/helpers/sqlite-handles.ts`). Counted at runtime,
-not by grep: **120 files** leave **1,709 of 2,306** handles open (the issue's static 99 missed the vault-opened ones). `tests/setup-temp-roots.ts`
-now replaces `DatabaseSync` on the `node:sqlite` CJS module object with a recording subclass — `db.ts` and every raw-handle test read it off that
-object, so one property catches every handle — and closes them in its `afterAll` BEFORE root removal. Full suite on Windows: **deferred roots
-1,515 → 1** (that 1 is `temp-roots.test.ts` exercising the deferral), zero `database is not open`, no new failure. The order holds only under
-vitest's default `sequence.hooks: 'stack'`, pinned by a guard verified to FAIL under `'list'`. Loading `node:sqlite` in every fork added ~180
-ExperimentalWarning lines (268 → 449), so that one warning is swallowed during the harness's own load (now 0). Hygiene, not speed (#458).
-Not this change: the known `zim-client` 8 MiB `read ECONNRESET` load flake failed all 3 attempts in 2 of 3 local full runs (3/3 alone)._
 
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
@@ -188,7 +185,8 @@ dependency-advisory entries (PR #451 xmldom, PR #452 build chain) on 2026-09-21 
 budget, making room for the #497 dictation entry), and the closed 2026-09-10 #436/#437 live-region entry on
 2026-09-21 (preamble budget, making room for the #488/#498/#501 entry), and the closed #446 and #413 entries on
 2026-09-22 (preamble budget, making room for the #410 entry), and the closed 2026-09-12 #438 entry on
-2026-09-27 (preamble budget, making room for the #515 entry) — citations of the form "BUILD_STATE <date> entry" /
+2026-09-27 (preamble budget, making room for the #515 entry), and the closed 2026-09-13 #460 test-harness entry on
+2026-09-27 (preamble budget, making room for the #517 scorer entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---
