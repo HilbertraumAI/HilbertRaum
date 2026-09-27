@@ -429,7 +429,8 @@ cap · balanced/omitted = thinking off, server defaults · deep = thinking on + 
 Explicit `maxTokens`/`temperature` win over mode-derived values.
 ✅ **Thinking switch (D5):** per-request `chat_template_kwargs: { enable_thinking }` on
 `/v1/chat/completions`, ALWAYS sent explicitly (the runtime default is thinking ON for capable
-templates — verified on b9585, expected on the b9849 pin). Chat sidecars spawn with **`CHAT_SERVER_ARGS` = `--jinja --reasoning-format
+templates — verified on b9585, and on the b11146 pin: `reasoning_content` deltas, no `<think>` in
+content, #512). Chat sidecars spawn with **`CHAT_SERVER_ARGS` = `--jinja --reasoning-format
 deepseek`** (pins the mechanism's preconditions; embedder excluded). Reasoning streams as
 separate `delta.reasoning_content` frames → `RuntimeChatOptions.onReasoning(delta)` →
 `chat:reasoning:<id>`; the generator yields answer text only.
@@ -451,6 +452,16 @@ flag list is code-owned; extras are appended last in `buildArgs`, so a free-form
 override `--host`). The ladder gates the rung on a probed GPU with the weight's bytes +
 `MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
 `architecture.md` "MTP speculative decoding".
+✅ **Prompt cache (#512; replaces the #399 D5 family gate):** manifest `disable_prompt_cache`
+(optional boolean, default false = cache on; chat role only; a non-boolean or another role is a
+validation error) → `ModelManifest.disablePromptCache?: true` (ABSENT unless true) →
+`RuntimeStartOptions.disablePromptCache` (supplied by `startModelRuntime` as an explicit boolean) →
+the chat argv builder (`LlamaRuntime`), which appends exactly ONE `--cache-ram` after
+`CHAT_SERVER_ARGS` and before the rung args: `0` when the field is true, else
+`min(8192, floor(total RAM MiB / 8))` from `os.totalmem()` (`shared/prompt-cache-rules.ts`,
+`promptCacheServerArgs`). The manifest states a fact and never supplies the flag. Chat only — the
+embedder, reranker, translation and vision sidecars pass no `--cache-ram`. `RuntimeStartOptions.family`
+(the #399 gate's input) is gone. An older app ignores the unknown key, i.e. keeps the cache on.
 ✅ **Graphics-memory cache term (PR #308 audit decision 11, 2026-09-06):** manifest
 `estimated_context_cache_gib` (optional; a number ≥ 0 — wrong type or a negative value is a
 validation error, never a silent default) → `ModelManifest.estimatedContextCacheGib?: number`
@@ -1024,8 +1035,8 @@ head's own weights + KV.
   manifest count (this doc no longer restates a hard total — it drifted twice, see DOC-3/F-20): the
   catalog spans 6 role dirs (chat + E5 + bge-reranker + whisper transcriber + translategemma
   translation + qwen2.5-vl vision), and `runtime-sources.yaml` is pinned to the REAL
-  `ggml-org/llama.cpp@b9849` release (bumped from b9585 for the Qwen3.5 gate) with real URLs +
-  SHA-256, plus `whisper_cpp:`/`ocr:`
+  `ggml-org/llama.cpp@b11146` release (= upstream v0.5.0; bumped from b9585 for the Qwen3.5 gate,
+  then from b9849 under #512) with real URLs + SHA-256, plus `whisper_cpp:`/`ocr:`
   asset blocks — the original "b9196 placeholder / one CPU build per OS" text below is the Phase-12
   as-built snapshot.)** The Phase-12 snapshot: `runtime-sources.yaml` referenced
   `ggml-org/llama.cpp@b9196` as a PLACEHOLDER, one CPU build per OS.

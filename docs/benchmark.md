@@ -155,7 +155,7 @@ Adjustments, in order:
 - **Very low** throughput (`tokensPerSecond < VERY_LOW_TOKENS_PER_SECOND = 3`) downgrades one
   step (never below `TINY`). **Basis shift (issue #291, 2026-09-04):** the threshold was
   calibrated when the figure was a prefill-inclusive chunk rate; it now compares the runtime's
-  decode-only tokens/sec, which reads higher (the #291 rig on the pinned b9849: the old probe's
+  decode-only tokens/sec, which reads higher (the #291 rig on b9849, then the pin: the old probe's
   25 vs 28.2 / 25.9 measured with MTP, 21.8 without — verified against `print_timing` on #298;
   the issue's 47.9 came from a newer `-fa` build). It is an
   order-of-magnitude gate far below any figure the change moves, so it was deliberately **not
@@ -791,7 +791,7 @@ the ACTIVE model (`placement.model.contextTokens`) and for the RECOMMENDED one �
 chat ladder now reads it (`runtime/placement.ts`, one parser per attempt, fed by the sidecar's
 `onStderrData`; the chat server runs with `-lv 4` because the pinned build prints these lines
 only from log verbosity 4 up, verified 2026-09-05: 3 prints none, 5 adds the `--fit` dry-run
-pass): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices and the
+pass; the b11146 pin prints the same lines at 4, #512): `offloaded X/Y layers to GPU`, every `<device> model buffer size` (CPU* devices and the
 backends' `<Backend>_Host` buffers are the CPU side), every `<device> KV buffer size`, the Metal
 budget line. The reading is recorded once the rung is healthy (`recordModelPlacement`, stamped
 with the backend, the launched context
@@ -1453,7 +1453,11 @@ commit references, and added the changelog entry.
   (`known-limitations.md` "Performance screen and per-computer history").
 - **HW2 / T9** (closed 2026-09-08, #329): real b9849 partial- and full-offload load logs are
   captured and pinned as `apps/desktop/tests/fixtures/placement-b9849-*.txt`, and both
-  `placement-parser.test.ts` and `placement-wiring.test.ts` read them. Still unwitnessed by any
+  `placement-parser.test.ts` and `placement-wiring.test.ts` read them. A b11146 re-capture of the
+  49/49 start sits beside them since #512 (`placement-b11146-full-49of49-swa.txt`), taken through
+  the app's own spawn — so it keeps the ANSI colour codes llama.cpp adds on Windows when stdout is
+  NUL (it reads NUL as a terminal; b9849 does the same under the app's stdio). The parser's
+  patterns are unanchored and read it unchanged. Still unwitnessed by any
   capture, so still handwritten from ggml's naming convention: CUDA and Metal devices, a
   `<Backend>_Host` **KV** buffer (M7), and two GPUs both holding weights (HW4 / #332).
 - **HW3** — the P10 review passed EN/DE layout at 880/1024/1280 px in both themes, the German

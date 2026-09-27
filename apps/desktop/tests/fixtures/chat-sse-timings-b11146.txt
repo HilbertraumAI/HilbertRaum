@@ -1,0 +1,13 @@
+: Captured llama-server SSE tail — pinned b11146 (system_fingerprint b11146-7fe450e19), Windows Vulkan release,
+: /v1/chat/completions with stream:true, prompt "Write one sentence about privacy.", max_tokens 64, thinking off,
+: the app's chat argv (--jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 8151), gemma4-12b-it-qat-q4, no MTP.
+: Source: issue #512 (2026-09-27, i9-14900K / RTX 3080 Ti). Frames: the last content chunk, the finish chunk carrying
+: `timings` (there is NO trailing choices-less chunk — the same shape as b9849), then [DONE]. The model path was scrubbed
+: to <drive>/…; nothing else was edited. Matching server line: eval time = 6426.08 ms / 24 tokens (3.58 tokens per
+: second) — the 12B spilled to host memory with ~3.2 GB of desktop VRAM held (#318). These colon lines are SSE comments.
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"."}}],"created":1790470500,"id":"chatcmpl-JcUVn3Er61A2tXiutQnMvZrpfjG2XCJW","model":"<drive>/models/chat/gemma4-12b-it-qat-q4.gguf","system_fingerprint":"b11146-7fe450e19","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":"stop","index":0,"delta":{}}],"created":1790470500,"id":"chatcmpl-JcUVn3Er61A2tXiutQnMvZrpfjG2XCJW","model":"<drive>/models/chat/gemma4-12b-it-qat-q4.gguf","system_fingerprint":"b11146-7fe450e19","object":"chat.completion.chunk","timings":{"cache_n":0,"prompt_n":19,"prompt_ms":942.623,"prompt_per_token_ms":49.611736842105266,"prompt_per_second":20.156520687485877,"predicted_n":24,"predicted_ms":6426.083,"predicted_per_token_ms":279.39491304347825,"predicted_per_second":3.5791632320964424}}
+
+data: [DONE]

@@ -212,9 +212,9 @@ what is already there. You can also fetch piecemeal (`fetch-models` / `fetch-run
 
 > `runtime-sources.yaml` pins all three sidecar families — `llama.cpp`, `whisper.cpp`, and the
 > optional `kiwix-tools` — plus the OCR language-file block, each with real per-OS URLs and
-> SHA-256 checksums. The `llama.cpp` block is pinned to a real release (b9849, bumped from b9585
-> on 2026-07-01 as the Qwen3.5 compatibility gate) from the official GitHub Releases API digest
-> metadata. `fetch-runtime` downloads, verifies, extracts (zip and tar.gz), and flattens the
+> SHA-256 checksums. The `llama.cpp` block is pinned to a real release (b11146, the build behind
+> upstream's stable v0.5.0, bumped from b9849 on 2026-09-27, #512) from the official GitHub
+> Releases API digest metadata. `fetch-runtime` downloads, verifies, extracts (zip and tar.gz), and flattens the
 > binaries for all three OSes from any host — `fetch-runtime --family kiwix_tools` fetches the
 > optional knowledge-pack tools the same way. Model weight URLs are real Hugging Face links, and
 > the bundled manifests carry real pinned SHA-256 hashes (captured from verified downloads with

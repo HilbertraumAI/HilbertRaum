@@ -1,0 +1,157 @@
+# #512 prompt-cache smoke — tests/manual/prompt-cache-smoke.test.ts, 2026-09-27
+# i9-14900K / RTX 3080 Ti 12 GB / 64 GB (OS reports 63.7 GiB → --cache-ram 8151), Windows 11, win-vulkan.
+# The app's chat argv (createLlamaRuntime: CHAT_SERVER_ARGS, -np 1, --cache-ram, rung-1 GPU auto-offload), --ctx-size 8192.
+# b11146 runs: a scratch drive root with the b11146 runtime + models junctioned to the test drive; b9849: the test drive itself.
+# Lines: the smoke's own [prompt-cache] output, then the server's cache log lines it echoes. Paths redacted to <drive>.
+
+## b11146 · qwen3.5-4b-ud-q4kxl
+[prompt-cache] model qwen3.5-4b-ud-q4kxl.gguf
+[prompt-cache] --cache-ram 8151 (RAM rule: 8151 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 52 of 1899 (cache_n 1847) → RESTORED (2.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1899
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] answer: "The item in room 142 is grey, and it belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.03.414.039 I srv  get_availabl: prompt cache update took 45.86 ms
+  0.03.949.530 I srv  get_availabl: updating prompt cache
+  0.03.998.473 I srv        update:  - cache state: 1 prompts, 154.661 MiB (limits: 8151.000 MiB, 8192 tokens, 8192 est)
+  0.03.998.478 I srv  get_availabl: prompt cache update took 48.95 ms
+  0.04.003.699 I slot   operator(): id  0 | task 97 | restored context checkpoint (pos_min = 1846, pos_max = 1846, n_tokens = 1847, n_past = 1847, size = 50.251 MiB)
+  0.04.213.787 I srv  get_availabl: updating prompt cache
+  0.04.284.004 I srv        update:  - cache state: 1 prompts, 311.172 MiB (limits: 8151.000 MiB, 8192 tokens, 50188 est)
+  0.04.284.009 I srv  get_availabl: prompt cache update took 70.22 ms
+  0.04.289.443 I slot   operator(): id  0 | task 118 | restored context checkpoint (pos_min = 51, pos_max = 51, n_tokens = 52, n_past = 52, size = 50.251 MiB)
+  0.04.786.929 I srv  get_availabl: updating prompt cache
+  0.04.835.388 I srv        update:  - cache state: 1 prompts, 154.661 MiB (limits: 8151.000 MiB, 8192 tokens, 8192 est)
+  0.04.835.395 I srv  get_availabl: prompt cache update took 48.47 ms
+
+## b11146 · qwen3.5-9b-ud-q4kxl
+[prompt-cache] model qwen3.5-9b-ud-q4kxl.gguf
+[prompt-cache] --cache-ram 8151 (RAM rule: 8151 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 52 of 1899 (cache_n 1847) → RESTORED (2.7 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1899
+[prompt-cache] restored answer == reference (50 chars)
+[prompt-cache] answer: "The item in room 142 is grey and belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.09.389.637 I srv  get_availabl: prompt cache update took 44.53 ms
+  0.16.106.481 I srv  get_availabl: updating prompt cache
+  0.16.153.333 I srv        update:  - cache state: 1 prompts, 153.723 MiB (limits: 8151.000 MiB, 8192 tokens, 8192 est)
+  0.16.153.339 I srv  get_availabl: prompt cache update took 46.86 ms
+  0.16.158.674 I slot   operator(): id  0 | task 67 | restored context checkpoint (pos_min = 1846, pos_max = 1846, n_tokens = 1847, n_past = 1847, size = 50.251 MiB)
+  0.19.080.556 I srv  get_availabl: updating prompt cache
+  0.19.152.738 I srv        update:  - cache state: 1 prompts, 311.109 MiB (limits: 8151.000 MiB, 8192 tokens, 50146 est)
+  0.19.152.744 I srv  get_availabl: prompt cache update took 72.19 ms
+  0.19.157.950 I slot   operator(): id  0 | task 86 | restored context checkpoint (pos_min = 51, pos_max = 51, n_tokens = 52, n_past = 52, size = 50.251 MiB)
+  0.25.256.420 I srv  get_availabl: updating prompt cache
+  0.25.302.764 I srv        update:  - cache state: 1 prompts, 153.723 MiB (limits: 8151.000 MiB, 8192 tokens, 8192 est)
+  0.25.302.769 I srv  get_availabl: prompt cache update took 46.35 ms
+
+## b11146 · gemma4-e2b-it-qat-q4
+[prompt-cache] model gemma4-e2b-it-qat-q4.gguf
+[prompt-cache] --cache-ram 8151 (RAM rule: 8151 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1836 of 1836 prompt tokens
+[prompt-cache] A returned after B: prompt_n 48 of 1879 (cache_n 1831) → RESTORED (2.6 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1879
+[prompt-cache] restored answer == reference (62 chars)
+[prompt-cache] answer: "The item in room 142 is a grey kettle, and its owner is Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.09.981.609 I srv  get_availabl: prompt cache update took 6.93 ms
+  0.10.194.924 I srv  get_availabl: updating prompt cache
+  0.10.199.274 I srv        update:  - cache state: 1 prompts, 2.295 MiB (limits: 8151.000 MiB, 8192 tokens, 316131 est)
+  0.10.199.280 I srv  get_availabl: prompt cache update took 4.36 ms
+  0.10.200.172 I slot   operator(): id  0 | task 59 | restored context checkpoint (pos_min = 0, pos_max = 1831, n_tokens = 1832, n_past = 1831, size = 6.006 MiB)
+  0.10.333.538 I srv  get_availabl: updating prompt cache
+  0.10.344.138 I srv        update:  - cache state: 1 prompts, 41.420 MiB (limits: 8151.000 MiB, 8192 tokens, 373502 est)
+  0.10.344.142 I srv  get_availabl: prompt cache update took 10.60 ms
+  0.10.344.386 I slot   operator(): id  0 | task 82 | restored context checkpoint (pos_min = 0, pos_max = 48, n_tokens = 49, n_past = 48, size = 0.575 MiB)
+  0.10.521.539 I srv  get_availabl: updating prompt cache
+  0.10.525.971 I srv        update:  - cache state: 1 prompts, 2.823 MiB (limits: 8151.000 MiB, 8192 tokens, 251210 est)
+  0.10.525.977 I srv  get_availabl: prompt cache update took 4.44 ms
+
+## b11146 · gemma4-12b-it-qat-q4
+[prompt-cache] model gemma4-12b-it-qat-q4.gguf
+[prompt-cache] --cache-ram 8151 (RAM rule: 8151 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1840 of 1840 prompt tokens
+[prompt-cache] A returned after B: prompt_n 53 of 1888 (cache_n 1835) → RESTORED (2.8 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1888
+[prompt-cache] restored answer == reference (50 chars)
+[prompt-cache] answer: "The item in room 142 is grey and belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.30.452.283 I srv  get_availabl: prompt cache update took 275.85 ms
+  0.43.962.751 I srv  get_availabl: updating prompt cache
+  0.44.030.904 I srv        update:  - cache state: 1 prompts, 54.428 MiB (limits: 8151.000 MiB, 8192 tokens, 15425 est)
+  0.44.030.909 I srv  get_availabl: prompt cache update took 68.16 ms
+  0.44.063.499 I slot   operator(): id  0 | task 74 | restored context checkpoint (pos_min = 0, pos_max = 1835, n_tokens = 1836, n_past = 1835, size = 320.013 MiB)
+  0.49.424.238 I srv  get_availabl: updating prompt cache
+  0.49.861.331 I srv        update:  - cache state: 1 prompts, 1636.383 MiB (limits: 8151.000 MiB, 8192 tokens, 9479 est)
+  0.49.861.338 I srv  get_availabl: prompt cache update took 437.10 ms
+  0.49.863.224 I slot   operator(): id  0 | task 93 | restored context checkpoint (pos_min = 0, pos_max = 52, n_tokens = 53, n_past = 52, size = 16.564 MiB)
+  1.02.946.248 I srv  get_availabl: updating prompt cache
+  1.03.021.543 I srv        update:  - cache state: 1 prompts, 70.680 MiB (limits: 8151.000 MiB, 8192 tokens, 11878 est)
+  1.03.021.550 I srv  get_availabl: prompt cache update took 75.30 ms
+
+## b11146 · qwen3-8b-instruct-q4 (control family)
+[prompt-cache] model qwen3-8b-instruct-q4.gguf
+[prompt-cache] --cache-ram 8151 (RAM rule: 8151 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1807 of 1807 prompt tokens
+[prompt-cache] A returned after B: prompt_n 52 of 1855 (cache_n 1803) → RESTORED (2.8 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1855
+[prompt-cache] restored answer == reference (63 chars)
+[prompt-cache] answer: "The item in room 142 is a grey kettle, and it belongs to Carla."
+[prompt-cache] ADVICE: leave disable_prompt_cache unset
+[prompt-cache] server cache log:
+  0.11.020.536 I srv  get_availabl: updating prompt cache
+  0.11.095.114 I srv        update:  - cache state: 1 prompts, 256.944 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+  0.11.095.116 I srv  get_availabl: prompt cache update took 74.58 ms
+  0.11.906.067 I srv  get_availabl: updating prompt cache
+  0.11.938.307 I srv        update:  - cache state: 1 prompts, 19.831 MiB (limits: 8151.000 MiB, 8192 tokens, 57955 est)
+  0.11.938.313 I srv  get_availabl: prompt cache update took 32.24 ms
+  0.12.368.559 I srv  get_availabl: updating prompt cache
+  0.12.444.145 I srv        update:  - cache state: 1 prompts, 263.554 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+  0.12.444.151 I srv  get_availabl: prompt cache update took 75.59 ms
+  0.13.220.031 I srv  get_availabl: updating prompt cache
+  0.13.255.613 I srv        update:  - cache state: 1 prompts, 19.831 MiB (limits: 8151.000 MiB, 8192 tokens, 57955 est)
+  0.13.255.618 I srv  get_availabl: prompt cache update took 35.59 ms
+
+## b11146 · qwen3.5-4b-ud-q4kxl, HILBERTRAUM_PROMPT_CACHE_SMOKE_DISABLE=1 (control)
+[prompt-cache] model qwen3.5-4b-ud-q4kxl.gguf
+[prompt-cache] --cache-ram 0 (RAM rule: 8151 MiB; spawned as disable_prompt_cache: true), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 1899 of 1899 (cache_n 0) → RE-PREFILLED (100.0 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1899
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] answer: "The item in room 142 is grey, and it belongs to Carla."
+[prompt-cache] ADVICE: control run (cache disabled) — expect RE-PREFILLED; no manifest advice
+[prompt-cache] server cache log:
+  0.00.809.127 I load: special tokens cache size = 33
+  0.00.838.437 I load: token to piece cache size = 1.7581 MB
+  0.02.385.953 I srv    load_model: prompt cache is disabled - use `--cache-ram N` to enable it
+
+## b9849 (the previous pin) · qwen3.5-4b-ud-q4kxl (control)
+[prompt-cache] model qwen3.5-4b-ud-q4kxl.gguf
+[prompt-cache] --cache-ram 8151 (RAM rule: 8151 MiB), -np 1, --ctx-size 8192
+[prompt-cache] A: prompt_n 1851 of 1851 prompt tokens
+[prompt-cache] A returned after B: prompt_n 1878 of 1899 (cache_n 21) → RE-PREFILLED (98.9 % re-prefilled)
+[prompt-cache] reference (cache_prompt: false): prompt_n 1899
+[prompt-cache] restored answer == reference (54 chars)
+[prompt-cache] answer: "The item in room 142 is grey, and it belongs to Carla."
+[prompt-cache] ADVICE: set disable_prompt_cache: true
+[prompt-cache] server cache log:
+  0.03.365.763 I srv  get_availabl: prompt cache update took 38.39 ms
+  0.03.912.994 I srv  get_availabl: updating prompt cache
+  0.03.951.150 I srv        update:  - cache state: 1 prompts, 104.410 MiB (limits: 8151.000 MiB, 8192 tokens, 9758 est)
+  0.03.951.155 I srv  get_availabl: prompt cache update took 38.16 ms
+  0.03.956.395 I slot   operator(): id  0 | task 97 | restored context checkpoint (pos_min = 20, pos_max = 20, n_tokens = 21, n_past = 21, size = 50.251 MiB)
+  0.04.452.153 I srv  get_availabl: updating prompt cache
+  0.04.510.787 I srv        update:  - cache state: 1 prompts, 210.663 MiB (limits: 8151.000 MiB, 8192 tokens, 74133 est)
+  0.04.510.793 I srv  get_availabl: prompt cache update took 58.64 ms
+  0.04.515.977 I slot   operator(): id  0 | task 118 | restored context checkpoint (pos_min = 11, pos_max = 11, n_tokens = 12, n_past = 12, size = 50.251 MiB)
+  0.05.042.821 I srv  get_availabl: updating prompt cache
+  0.05.092.400 I srv        update:  - cache state: 1 prompts, 154.661 MiB (limits: 8151.000 MiB, 8192 tokens, 8192 est)
+  0.05.092.407 I srv  get_availabl: prompt cache update took 49.59 ms

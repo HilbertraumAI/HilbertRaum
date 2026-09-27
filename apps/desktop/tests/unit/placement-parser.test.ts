@@ -244,6 +244,28 @@ describe('createPlacementParser', () => {
     expect(r.gpuComputeMb).toBe(541.07)
   })
 
+  it('reads the b11146 re-capture of that start, ANSI colour codes and all (#512)', () => {
+    // Same model and card as the b9849 fixture above, on the b11146 pin with today's chat argv
+    // (`-np 1 --cache-ram 8151`), captured through the app's own spawn. With stdout on NUL, which
+    // Windows reports as a terminal, llama.cpp colours every line (b9849 does the same under the
+    // app's stdio; the b9849 fixtures were script captures). The parser's patterns are unanchored,
+    // so the codes around the timestamp and level change nothing.
+    const text = fixture('placement-b11146-full-49of49-swa.txt')
+    expect(text).toContain(String.fromCharCode(27) + '[')
+    expect(text).toContain('build 11146 (7fe450e19)')
+    const r = feed(text).reading()
+    expect(r.gpuLayers).toBe(49)
+    expect(r.totalLayers).toBe(49)
+    // The weights are unchanged from b9849 to the MiB.
+    expect(r.cpuModelMb).toBe(787.5)
+    expect(r.gpuModelMb).toBe(6637.63)
+    // One slot: the full-attention KV is 960 MiB (b9849's four unified slots showed 1,920); the SWA
+    // half stays 128.
+    expect(r.gpuKvMb).toBe(1088)
+    expect(r.gpuRsMb).toBeNull()
+    expect(r.gpuComputeMb).toBe(528.07)
+  })
+
   it('takes the MAX per context per device, so a re-reserve that GREW the buffer is counted right', () => {
     // The rule is llama.cpp's own semantics, not "ignore a repeated line": a re-reserve may
     // print a LARGER figure (a bigger graph), and that is the buffer's size — while two
@@ -331,8 +353,11 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
     'placement-b9849-partial-20of33-hybrid.txt',
     'placement-b9849-partial-18of33-np4.txt',
     'placement-b9849-partial-62of66-mtp.txt',
-    'placement-b9849-full-49of49-swa.txt'
+    'placement-b9849-full-49of49-swa.txt',
+    'placement-b11146-full-49of49-swa.txt' // #512: captured through the app's spawn, so ANSI-coloured
   ]
+  /** The colour codes llama.cpp adds when it believes stderr is a terminal (see the #512 test above). */
+  const ANSI = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g')
   // Request lines, JSON bodies, and the home directories a path would be rooted in (the argv
   // header of each fixture is hand-redacted to `<drive>`).
   const FORBIDDEN = ['POST /', 'GET /', '"content"', '"messages"', 'C:' + String.fromCharCode(92) + 'Users', '/home/', '/Users/']
@@ -360,7 +385,7 @@ describe('the committed load logs carry no request or prompt content (DR3)', () 
   }
 
   it.each(NAMES)('%s', (name) => {
-    const text = fixture(name)
+    const text = fixture(name).replace(ANSI, '')
     for (const needle of FORBIDDEN) expect(`${name}: ${text.includes(needle)}`).toBe(`${name}: false`)
     // Every slot line prints its conversation id; the app never sets one, so it is always empty.
     const ids = text.match(/conv_id=[^|,\n]*/g) ?? []

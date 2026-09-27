@@ -1,3 +1,4 @@
+import { totalmem } from 'node:os'
 import type { ChatDepthMode } from '../../../shared/types'
 import { promptCacheServerArgs } from '../../../shared/prompt-cache-rules'
 import type {
@@ -70,10 +71,15 @@ import { LlamaServer, type LlamaServerOptions } from './sidecar'
  * had ever touched — so no slot arrangement fixes it and the only lever is NOT EVICTING. The
  * decision to run one slot still stands (nothing here is caused by `-np 1`; four slots lose the
  * restore the same way). What changed instead: the model-slot arbiter waits before resuming a
- * parked deep-index build (#399 D3(a)), and the unreadable cache copy is switched off for the
- * affected families (#399 D5, `shared/prompt-cache-rules.ts`). Also measured: on a DOCUMENTS ask
- * only the ~227-token system prefix is ever reused anyway, so the length-proportional cost belongs
- * to the plain-chat path alone. Record: `model-benchmarks.md` §6.6 "2026-09-09 correction (#399)".
+ * parked deep-index build (#399 D3(a)), and the unreadable cache copy was switched off for the
+ * affected families (#399 D5). Also measured: on a DOCUMENTS ask only the ~227-token system prefix
+ * is ever reused anyway, so the length-proportional cost belongs to the plain-chat path alone.
+ * Record: `model-benchmarks.md` §6.6 "2026-09-09 correction (#399)".
+ *
+ * REVERSED on b11146 (#512): qwen3.5 and gemma4 restore an evicted, extended conversation (48 of
+ * ~1,700 tokens re-prefilled), so the family list is gone and every chat model gets the cache with
+ * a RAM-scaled ceiling; `disable_prompt_cache: true` opts a manifest out
+ * (`shared/prompt-cache-rules.ts`).
  */
 /**
  * `-lv 4` (log verbosity): the pinned build prints its load log (`load_tensors: offloaded X/Y
@@ -114,6 +120,8 @@ export type LlamaRuntimeDeps = Pick<
   | 'onStderrData'
 > & {
   binPath: string
+  /** Total machine RAM for the prompt-cache ceiling (#512); defaults to `os.totalmem()`. */
+  totalRamBytes?: number
 }
 
 /**
@@ -505,12 +513,18 @@ export class LlamaRuntime implements ModelRuntime {
       modelPath: opts.modelPath,
       contextTokens: opts.contextTokens,
       physicalBatchSize: Math.min(opts.contextTokens, CHAT_MAX_PHYSICAL_BATCH),
-      // #399 D5: `--cache-ram 0`, but ONLY for the manifest families measured to lose
-      // llama-server's evicted-prefix restore — the rule and its measured basis are in
-      // `shared/prompt-cache-rules.ts`. It sits between the shared const and the ladder's rung
-      // args so a rung can still override anything it needs to (`--device none`), exactly as
-      // before; every unaffected and every unmeasured family adds nothing here.
-      extraArgs: [...CHAT_SERVER_ARGS, ...promptCacheServerArgs(opts.family), ...(deps.extraArgs ?? [])],
+      // #512: exactly one `--cache-ram` — the RAM-scaled ceiling, or 0 for a manifest that sets
+      // `disable_prompt_cache: true` (rule in `shared/prompt-cache-rules.ts`). It sits between the
+      // shared const and the ladder's rung args so a rung can still override what it needs to
+      // (`--device none`).
+      extraArgs: [
+        ...CHAT_SERVER_ARGS,
+        ...promptCacheServerArgs({
+          disablePromptCache: opts.disablePromptCache,
+          totalRamBytes: deps.totalRamBytes ?? totalmem()
+        }),
+        ...(deps.extraArgs ?? [])
+      ],
       onUnexpectedExit: deps.onUnexpectedExit,
       onStderrData: deps.onStderrData,
       spawn: deps.spawn,

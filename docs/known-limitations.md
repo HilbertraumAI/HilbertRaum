@@ -1989,7 +1989,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   stop** — the greedy-decode repetition loop that is the classic temperature-0 MT pathology, or a
   token-dense window clipping at the ~2,000-token cap — is now DETECTED via the completion's final
   stop reason and treated as a failed attempt (TA-5). The shipped detector keys on the final
-  frame's **`stop_type ∈ {eos, word}`** first — the pinned b9849 does NOT emit the legacy
+  frame's **`stop_type ∈ {eos, word}`** first — b9849 does NOT emit the legacy
   `stopping_word`/eos-flag fields on a clean stop (issue #31a); those legacy fields remain only
   as the back-compat fallback for older builds (`completion.ts`; wording corrected per #164 D-4).
   **Retry is by failure class (FA-2 F-2, refined by #160 BE-2):** a THROW or an EMPTY reply is
@@ -2457,9 +2457,11 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   boundary against casual use by other programs, not against code already running with the user's
   rights; a same-user debugger can read it out of the unlocked workspace. Recorded in
   [`security-model.md`](security-model.md) and [`../SECURITY.md`](../SECURITY.md).
-- **The pinned sidecar build leaves `/health` and `/v1/models` auth-exempt on its own port**, so a
-  local process can read liveness and the loaded model's file path (metadata, never content) —
-  upstream behaviour, unrelated to the app's own endpoint but part of the same threat surface.
+- **The pinned sidecar build leaves `/health` auth-exempt on its own port**, so a local process can
+  read liveness (`{"status":"ok"}`) — upstream behaviour, unrelated to the app's own endpoint but
+  part of the same threat surface. On b9849 `/v1/models` was exempt too and exposed the loaded
+  model's file path (metadata, never content); on the b11146 pin it answers 401 without the key
+  (#512). A drive still on b9849 keeps the wider exemption until its engine is re-fetched.
 
 ## Internationalization ([`architecture.md`](architecture.md) i18n record)
 
@@ -2709,16 +2711,29 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   lands on the RTX, pinned as a fixture), so what stays open there is the SNAPSHOT's device
   pairing on a hybrid box that also has a budget device (#332).
 
-## The one chat slot and the prompt cache (#319 / #399 — [`model-benchmarks.md`](model-benchmarks.md) §6.6)
+## The one chat slot and the prompt cache (#319 / #399 / #512 — [`model-benchmarks.md`](model-benchmarks.md) §6.6)
 
 The chat sidecar runs **one** server slot (`-np 1`, issue #319): the app is single-user and already
 serialises every lane that reaches it, and four slots cost card memory exactly where the fit decides
 between a full and a half offload. The consequence is that when something else takes the slot, the
-conversation's KV prefix is evicted — and on most of the models we ship, llama-server **cannot give
-it back**.
+conversation's KV prefix is evicted. On the b9849 engine most of the models we ship **could not get
+it back**; on the b11146 pin (#512) the measured ones can. The bullets below say which engine they
+describe.
 
-- **On 13 of our 17 measured chat models an evicted chat prefix is re-prefilled from scratch, not
-  restored** (measured 2026-09-08/09, #399; extended 2026-09-10, #446). llama-server saves the
+- **Since the b11146 pin (#512, 2026-09-27) an evicted conversation is restored on the Qwen3.5 and
+  Gemma 4 models.** Measured with the #399 protocol and the app's chat argv: 48 of ~1,700 tokens
+  re-prefilled on return for `qwen3.5-4b`/`-9b` and `gemma4-e2b`/`-12b` (b9849: 1,654–1,736), and
+  the restored answer byte-identical to a full recompute; the committed prompt-cache smoke
+  confirmed it (48–53 of ~1,900 re-prefilled). `qwen3.6` and `qwen3.8` share `qwen3.5`'s
+  architecture and have the cache on by owner ruling; their restore is confirmed on the 24 GB rig
+  before the next release, and a family that fails it gets `disable_prompt_cache: true`.
+- **A drive still carrying the b9849 engine loses that again.** The app does not compare the
+  installed engine with the pin, so a drive set up before #512 keeps b9849 until `fetch-runtime` /
+  the drive-setup script runs again. On it, the Qwen3.5 / Gemma 4 / Qwen3.6 / Qwen3.8 models now
+  write a host-RAM cache copy they cannot read (the #399 gate that switched it off is gone), bounded
+  by the ceiling below.
+- **On b9849, on 13 of our 17 measured chat models an evicted chat prefix is re-prefilled from
+  scratch, not restored** (measured 2026-09-08/09, #399; extended 2026-09-10, #446). llama-server saves the
   conversation to its host-RAM prompt cache and then silently re-processes the whole prompt anyway.
   Two architectures lose the restore: **recurrent state** — the whole `qwen3.5` line (`-2b`, `-4b`,
   `-9b`, `-35b-a3b`), both `qwen3.6-27b` quants and all three `qwen3.8-27b` quants — and a **sliding
@@ -2728,10 +2743,9 @@ it back**.
   and `granite-4.1-8b-q4` keep it too, which is what makes this a measured architecture split rather
   than an anecdote. Every chat family in
   the catalog now has a verdict, `qwen3.6` (affected) and `granite` (unaffected) being the last two,
-  measured under #446. If llama.cpp PR #13194 lands recurrent-state restore upstream, this whole
-  entry becomes removable.
+  measured under #446. (b11146 restores the Qwen3.5 and Gemma 4 rows — first bullet.)
 - **A chat with a knowledge pack ticked pays a small, fixed re-prefill on every turn** (measured
-  2026-09-18, #447). The pack arm plans its search with one short model call before each answer,
+  2026-09-18 on b9849, #447; not re-measured on b11146). The pack arm plans its search with one short model call before each answer,
   on the same single slot, and that call and the answer evict each other's prefix every time: on
   16 of 16 measured pack-scoped turns (`qwen3.8-27b-ud-q5km` and `qwen3.5-9b-ud-q4kxl`) the answer
   kept **0** tokens where the same questions without the pack kept the **227**-token system
@@ -2757,21 +2771,27 @@ it back**.
   now waits 90 s after a chat turn before resuming a parked deep-index build, which removes the
   per-turn churn — a conversation's own typing and reading gaps no longer hand the slot away turn
   after turn. It does not remove the cost. A pause **longer** than 90 s still lets the build resume
-  and evict, so the first reply after that break re-prefills the conversation: once, not per turn.
+  and evict, so the first reply after that break re-prefills the conversation: once, not per turn
+  (on b9849; on b11146 a model that restores gets it back from the host cache instead, while the
+  cache still holds it).
   Nor is the delay unbounded — a single park is deferred for at most 10 minutes, after which the
   build resumes at the next release regardless. That cap is deliberate: a document that silently
   never gets its deep index is a worse outcome than one slow reply. A steady chat every 30 s
   therefore still pays a re-prefill roughly every 10 minutes.
-- **Behaviour change on affected models: llama-server's host prompt cache is switched off**
-  (`--cache-ram 0`, gated on the manifest's `family:` — `qwen3.5`, `qwen3.6`, `qwen3.8`, `gemma4`).
-  On those models the cache was written on every hand-back (15–344 MiB per eviction, up to an 8 GiB
-  host-RAM default) and **never read**, so this gives that RAM back and costs nothing. Every other
-  family — **including a family nobody has measured** — keeps the cache on. That asymmetry is the
-  point: disabling it on an unaffected model would cost real restores, while leaving it on an
-  affected one merely continues a waste we can already name. `granite-4.1-8b-q4` is what that
-  caution is for: it was the entry expected to be a formality and it turned out to restore. Chat
-  only; the embedder, reranker, translation and vision sidecars do not inherit the chat args and are
-  untouched.
+- **The host prompt cache is on for every chat model, with a ceiling scaled to the machine (#512).**
+  `--cache-ram` is 1/8 of total RAM, at most llama.cpp's own 8,192 MiB default: 8 GB → 1 GiB,
+  16 GB → 2 GiB, 32 GB → 4 GiB, 64 GB and more → 8 GiB. Each saved conversation costs host RAM
+  (15–344 MiB per eviction on the models #399 measured), and when the ceiling is reached llama.cpp
+  drops the oldest entry, so the conversation left longest ago is the one that re-prefills.
+  Measured (#512, `qwen3-8b`): at a 16 GB machine's 2 GiB, six ~3,000-token conversations visited
+  in rotation outgrow the ceiling, so each is dropped just before it comes back and every return
+  re-prefills; at 8 GiB the same session restored every time. `gemma4-12b` saved up to 1.6 GiB for
+  a single conversation, so 2 GiB holds about one.
+  A manifest whose model cannot restore on the pinned engine opts out with
+  `disable_prompt_cache: true` (`--cache-ram 0`); none does today, and
+  `tests/manual/prompt-cache-smoke.test.ts` decides it for a new GGUF. On b9849 the #399 gate passed
+  `--cache-ram 0` for `qwen3.5`, `qwen3.6`, `qwen3.8` and `gemma4`. Chat only; the embedder,
+  reranker, translation and vision sidecars do not inherit the chat args and are untouched.
 
 ## Speculative decoding (MTP — [`architecture.md`](architecture.md) "MTP speculative decoding" record)
 

@@ -15,12 +15,13 @@ import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/
 
 // L19 (audit-2026-06-13): a captured-real-output regression fixture. This is the verbatim
 // `llama-server --list-devices` stdout CAPTURED ON b9585 on the dev box (CRLF preserved;
-// .gitattributes keeps it binary). The runtime pin is now b9849 (bumped 2026-06-30,
-// runtime-sources.yaml:34) — a b9849 re-capture is OWED and rides the next manual smoke-drive
-// session (BUILD_STATE §5 item 7 TS-3 consolidated smoke checklist; audit-2026-07-16 F-40).
-// So this guards the b9585 device-line shape only: it reddens if the PARSER regresses against
-// that shape, NOT if b9849 changed the shape (which the frozen b9585 capture cannot observe —
-// M-A5 is observation-triggered, so re-capture happens when a HILBERTRAUM_* run sees a change).
+// .gitattributes keeps it binary). The runtime pin is now b11146 (#512; b9849 before it, whose
+// `--list-devices` stdout #512 found byte-identical) — a re-capture on the pin is OWED and rides
+// the next manual smoke-drive session (BUILD_STATE §5 item 7 TS-3 consolidated smoke checklist;
+// audit-2026-07-16 F-40). So this guards the b9585 device-line shape only: it reddens if the
+// PARSER regresses against that shape, NOT if a later pin changed the shape (which the frozen
+// b9585 capture cannot observe — M-A5 is observation-triggered, so re-capture happens when a
+// HILBERTRAUM_* run sees a change).
 const LIST_DEVICES_B9585 = readFileSync(
   join(__dirname, '..', 'fixtures', 'list-devices-b9585-vulkan-rtx3080ti.txt'),
   'utf8'

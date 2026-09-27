@@ -160,6 +160,41 @@ describe('validateManifest', () => {
     expect(res.errors.some((e) => e.includes('role: chat'))).toBe(true)
   })
 
+  // Issue #512: `disable_prompt_cache` states a fact (this model cannot restore an evicted prompt on
+  // the pinned runtime); the runtime maps true to the code-owned `--cache-ram 0`. Default false =
+  // cache on, today's behaviour for every manifest without the field.
+  it('parses disable_prompt_cache: true; false and absent both leave the field off', () => {
+    expect(
+      validateManifest(rawManifest({ disable_prompt_cache: true })).manifest?.disablePromptCache
+    ).toBe(true)
+    for (const raw of [rawManifest({ disable_prompt_cache: false }), rawManifest()]) {
+      const res = validateManifest(raw)
+      expect(res.ok).toBe(true)
+      expect(res.manifest?.disablePromptCache).toBeUndefined()
+    }
+  })
+
+  it('rejects a non-boolean disable_prompt_cache', () => {
+    for (const value of ['true', 'yes', 1, 0, null, ['--cache-ram', '0'], { ram: 0 }]) {
+      const res = validateManifest(rawManifest({ disable_prompt_cache: value }))
+      expect(res.ok, String(value)).toBe(false)
+      expect(res.errors.some((e) => e.includes('disable_prompt_cache')), String(value)).toBe(true)
+    }
+  })
+
+  it('rejects disable_prompt_cache on a non-chat role (only the chat argv builder reads it)', () => {
+    for (const role of ['embeddings', 'reranker', 'vision', 'translation']) {
+      const res = validateManifest(rawManifest({ role, disable_prompt_cache: true }))
+      expect(res.ok, role).toBe(false)
+      expect(
+        res.errors.some((e) => e.includes('disable_prompt_cache') && e.includes('role: chat')),
+        role
+      ).toBe(true)
+    }
+    // false on another role is also rejected: the key is chat-only, whatever its value.
+    expect(validateManifest(rawManifest({ role: 'embeddings', disable_prompt_cache: false })).ok).toBe(false)
+  })
+
   // vuln-scan-2026-06-21 [path-traversal]: a hostile manifest's local_path is rejected at the
   // source so discoverManifests records it in errors and SKIPS it — the throw on the model-list
   // path (which broke the whole Models screen) can no longer be reached by these shapes.

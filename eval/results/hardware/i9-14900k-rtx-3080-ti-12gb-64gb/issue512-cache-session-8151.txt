@@ -1,0 +1,82 @@
+# #512 decision 2 — one session at --cache-ram 8151, qwen3-8b-instruct-q4 on b11146, 2026-09-27
+# argv: <drive>\runtime\llama.cpp\win\llama-server.exe --host 127.0.0.1 --port <n> --model <drive>\models\chat\qwen3-8b-instruct-q4.gguf --ctx-size 8192 --threads 16 --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 8151
+# Six conversations (Alpha…Foxtrot; 40–100 synthetic notes each, then +30 notes and a question per turn) hand the
+# one slot back and forth in the order 0 1 0 2 1 3 0 4 2 5 1 3 0 4 5 2 0 1; temperature 0, max_tokens 48,
+# cache_prompt true, thinking off. Per turn: prompt tokens, prompt_n (prefilled), cache_n (reused).
+
+## turns
+turn 1	Alpha	prompt_tokens 1118	prompt_n 1118	cache_n 0
+turn 2	Bravo	prompt_tokens 1497	prompt_n 1491	cache_n 6
+turn 3	Alpha	prompt_tokens 2031	prompt_n 917	cache_n 1114
+turn 4	Charlie	prompt_tokens 1772	prompt_n 1766	cache_n 6
+turn 5	Bravo	prompt_tokens 2405	prompt_n 912	cache_n 1493
+turn 6	Delta	prompt_tokens 2099	prompt_n 2093	cache_n 6
+turn 7	Alpha	prompt_tokens 2943	prompt_n 916	cache_n 2027
+turn 8	Echo	prompt_tokens 2426	prompt_n 2420	cache_n 6
+turn 9	Charlie	prompt_tokens 2678	prompt_n 910	cache_n 1768
+turn 10	Foxtrot	prompt_tokens 2958	prompt_n 2952	cache_n 6
+turn 11	Bravo	prompt_tokens 3310	prompt_n 909	cache_n 2401
+turn 12	Delta	prompt_tokens 3007	prompt_n 912	cache_n 2095
+turn 13	Alpha	prompt_tokens 3854	prompt_n 915	cache_n 2939
+turn 14	Echo	prompt_tokens 3305	prompt_n 883	cache_n 2422
+turn 15	Foxtrot	prompt_tokens 3895	prompt_n 941	cache_n 2954
+turn 16	Charlie	prompt_tokens 3585	prompt_n 911	cache_n 2674
+turn 17	Alpha	prompt_tokens 4766	prompt_n 916	cache_n 3850
+turn 18	Bravo	prompt_tokens 4219	prompt_n 913	cache_n 3306
+
+## server cache lines (#### = turn boundary)
+0.03.841.370 I srv    load_model: prompt cache is enabled, size limit: 8151 MiB
+#### turn 1 conversation Alpha @1ms
+0.04.042.227 I srv        update:  - cache state: 0 prompts, 0.000 MiB (limits: 8151.000 MiB, 8192 tokens, 8546942976 est)
+#### turn 2 conversation Bravo @1008ms
+0.05.062.669 I srv   prompt_save:  - saving prompt with length 1146, total state size = 161.170 MiB (draft: 0.000 MiB)
+0.05.166.141 I srv        update:  - cache state: 1 prompts, 161.170 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 3 conversation Alpha @2249ms
+0.06.293.675 I srv   prompt_save:  - saving prompt with length 1520, total state size = 213.768 MiB (draft: 0.000 MiB)
+0.06.472.844 I srv        update:  - cache state: 1 prompts, 213.768 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 4 conversation Charlie @3609ms
+0.07.660.855 I srv   prompt_save:  - saving prompt with length 2058, total state size = 289.431 MiB (draft: 0.000 MiB)
+0.07.761.369 I srv        update:  - cache state: 2 prompts, 503.199 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 5 conversation Bravo @4951ms
+0.08.988.684 I srv   prompt_save:  - saving prompt with length 1796, total state size = 252.584 MiB (draft: 0.000 MiB)
+0.09.119.398 I srv        update:  - cache state: 2 prompts, 542.015 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 6 conversation Delta @6198ms
+0.10.243.514 I srv   prompt_save:  - saving prompt with length 2425, total state size = 341.044 MiB (draft: 0.000 MiB)
+0.10.410.795 I srv        update:  - cache state: 3 prompts, 883.059 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 7 conversation Alpha @7755ms
+0.11.805.197 I srv   prompt_save:  - saving prompt with length 2122, total state size = 298.431 MiB (draft: 0.000 MiB)
+0.11.987.269 I srv        update:  - cache state: 3 prompts, 892.060 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 8 conversation Echo @9399ms
+0.13.450.248 I srv   prompt_save:  - saving prompt with length 2969, total state size = 417.550 MiB (draft: 0.000 MiB)
+0.13.602.297 I srv        update:  - cache state: 4 prompts, 1309.610 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 9 conversation Charlie @11296ms
+0.15.344.644 I srv   prompt_save:  - saving prompt with length 2451, total state size = 344.701 MiB (draft: 0.000 MiB)
+0.15.502.310 I srv        update:  - cache state: 4 prompts, 1401.727 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 10 conversation Foxtrot @12839ms
+0.16.882.354 I srv   prompt_save:  - saving prompt with length 2702, total state size = 380.001 MiB (draft: 0.000 MiB)
+0.17.030.688 I srv        update:  - cache state: 5 prompts, 1781.727 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 11 conversation Bravo @14993ms
+0.19.030.951 I srv   prompt_save:  - saving prompt with length 2982, total state size = 419.379 MiB (draft: 0.000 MiB)
+0.19.222.825 I srv        update:  - cache state: 5 prompts, 1860.062 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 12 conversation Delta @16585ms
+0.20.637.284 I srv   prompt_save:  - saving prompt with length 3333, total state size = 468.742 MiB (draft: 0.000 MiB)
+0.20.826.412 I srv        update:  - cache state: 5 prompts, 2030.373 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 13 conversation Alpha @18190ms
+0.22.245.217 I srv   prompt_save:  - saving prompt with length 3032, total state size = 426.411 MiB (draft: 0.000 MiB)
+0.22.445.580 I srv        update:  - cache state: 5 prompts, 2039.233 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 14 conversation Echo @20194ms
+0.24.236.709 I srv   prompt_save:  - saving prompt with length 3880, total state size = 545.670 MiB (draft: 0.000 MiB)
+0.24.506.885 I srv        update:  - cache state: 5 prompts, 2240.202 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 15 conversation Foxtrot @22018ms
+0.26.071.349 I srv   prompt_save:  - saving prompt with length 3331, total state size = 468.461 MiB (draft: 0.000 MiB)
+0.26.285.664 I srv        update:  - cache state: 5 prompts, 2289.284 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 16 conversation Charlie @24131ms
+0.28.181.450 I srv   prompt_save:  - saving prompt with length 3923, total state size = 551.718 MiB (draft: 0.000 MiB)
+0.28.503.330 I srv        update:  - cache state: 5 prompts, 2461.001 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 17 conversation Alpha @25902ms
+0.29.948.659 I srv   prompt_save:  - saving prompt with length 3607, total state size = 507.277 MiB (draft: 0.000 MiB)
+0.30.173.483 I srv        update:  - cache state: 5 prompts, 2422.608 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### turn 18 conversation Bravo @28360ms
+0.32.405.259 I srv   prompt_save:  - saving prompt with length 4794, total state size = 674.212 MiB (draft: 0.000 MiB)
+0.32.727.661 I srv        update:  - cache state: 5 prompts, 2628.077 MiB (limits: 8151.000 MiB, 8192 tokens, 57957 est)
+#### end @30268ms

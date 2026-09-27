@@ -613,8 +613,9 @@ describe('committed model-manifests/runtime-sources.yaml (Phase 14 pin)', () => 
   }
 
   it('validates (incl. the duplicate-triple check)', () => {
-    // Pin bumped b9585 → b9849 (Qwen3.5 compatibility gate, 2026-07-01).
-    expect(committed().version).toBe('b9849')
+    // Pin bumped b9585 → b9849 (Qwen3.5 compatibility gate, 2026-07-01), then b9849 → b11146
+    // (= upstream stable v0.5.0, #512, 2026-09-27).
+    expect(committed().version).toBe('b11146')
   })
 
   it('is vulkan-first on win/linux with the cpu safety net at <os>/cpu', () => {

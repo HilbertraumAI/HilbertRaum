@@ -50,7 +50,8 @@
 > **reranker** (also XLM-R family) is pinned to **F16 for the same reason**; its live load on b9585
 > is verified by the `HILBERTRAUM_RERANK_SMOKE` manual harness. _(These were verified on b9585; the
 > b9849 pin bump re-opens them — the manual smoke re-confirms the embedder + reranker sidecars load
-> on b9849, or records explicitly if deferred.)_ License review (recorded in its manifest):
+> on b9849, or records explicitly if deferred. On the b11146 pin (#512) the rerank and rag-quality
+> smokes passed with both sidecars.)_ License review (recorded in its manifest):
 > base model `BAAI/bge-reranker-v2-m3` = Apache-2.0 (HF API, 2026-06-10); GGUF from
 > `gpustack/bge-reranker-v2-m3-GGUF` (also Apache-2.0, mechanical conversion — same provenance
 > posture as the E5 entry). `Qwen3-Reranker-0.6B` was rejected: no official GGUF.
@@ -89,7 +90,9 @@ Sizes/RAM come from each manifest
 Min-RAM values were **recalibrated from measured peak RSS** in the Phase-29 run (8B: 16→12,
 12–14B: 16→14). Adding a model is
 **manifest-only** (no code change): drop a YAML in
-`model-manifests/chat/` with a `download` block + a `recommended_profiles` list.
+`model-manifests/chat/` with a `download` block + a `recommended_profiles` list. Before it ships,
+run the manual prompt-cache smoke against the GGUF (`tests/manual/prompt-cache-smoke.test.ts`,
+#512) and set `disable_prompt_cache: true` only if it reports `RE-PREFILLED` (below).
 
 ## Qwen3.5 Unsloth wave (2026-07-01)
 
@@ -183,8 +186,9 @@ repos ungated), 140+ languages:
   `enable_thinking: false` suppresses it is part of the promotion smoke.
 - **Hashes are real**: pinned from HF LFS OIDs (the qwen3.5-27b posture) and **confirmed against
   real downloads** — `fetch-models` fetched + SHA-256-verified E2B/E4B/26B-A4B on 2026-07-23.
-- **Runtime**: Gemma 4 needs llama.cpp ~b8680+ (MoE included); the pinned **b9849** loads all
-  three smoked sizes (E-series MatFormer + the Gemma MoE were arch firsts for the catalog). The
+- **Runtime**: Gemma 4 needs llama.cpp ~b8680+ (MoE included); **b9849** loaded all
+  three smoked sizes (E-series MatFormer + the Gemma MoE were arch firsts for the catalog), and the
+  pinned **b11146** was re-run on E2B and 12B (#512). The
   31B (same dense arch string as the 12B) is un-smoked but lowest-risk.
 - **Smoke status (2026-07-23):** E2B + E4B **in-app smoke PASSED** (0.1.48 portable, DIY test
   drive, b9849 win-vulkan). The 26B-A4B loads + answers via CLI but needs a **≥24 GB** machine for
@@ -237,7 +241,8 @@ recommended_min_ram_gb, recommended_ram_gb, recommended_context_tokens, local_pa
 `license_review` block. Optional: `recommended_profiles` (a list of hardware profiles — the legacy
 no-RAM picker), `recommendation_rank` (integer, default 0; higher = preferred among models that fit
 the machine's RAM — the Phase-29 quality-aware tiebreak in `recommendModelIdByRam`),
-`supports_thinking_mode` (below), `speculative_decoding` (below), a `download` block (below),
+`supports_thinking_mode` (below), `speculative_decoding` (below), `disable_prompt_cache` (below),
+a `download` block (below),
 `estimated_context_cache_gib` (number ≥ 0; the graphics-memory picker's per-model context-cache
 term, PR #308 §6.6 rule C — absent defaults to 0.5 GiB in code, so the field is set only for the
 seven models whose figure was actually measured), and — for a `role: vision`
@@ -332,6 +337,22 @@ the validator.
   spawning it with the flag pair and reading draft acceptance back — done for the two UD
   successors on 2026-08-20 (acceptance 0.79 / 0.67, head PRESENT; §9.5), which is why they keep
   the field and why nothing keeps it unverified.
+
+- **`disable_prompt_cache`** (optional boolean, default `false`, issue #512) is **chat-role only**
+  (a value on any other role is a validation error; a non-boolean too). It states a FACT: the
+  pinned llama-server cannot restore this model's evicted prompt from its host-RAM prompt cache, so
+  the cache is written and never read. `true` maps to the code-owned `--cache-ram 0`; absent or
+  `false` keeps the cache on with the RAM-scaled ceiling every chat model gets (1/8 of total RAM,
+  at most 8,192 MiB — `shared/prompt-cache-rules.ts`). Like `speculative_decoding`, the manifest
+  never supplies arguments. It replaces the #399 family list (`qwen3.5`, `qwen3.6`, `qwen3.8`,
+  `gemma4` got `--cache-ram 0` on b9849): on b11146 qwen3.5 and gemma4 restore, measured, and
+  qwen3.6/qwen3.8 are on by owner ruling, so **no committed manifest sets it**
+  (`committed-catalog.test.ts`). To decide it for a new GGUF, run
+  `tests/manual/prompt-cache-smoke.test.ts` (`HILBERTRAUM_PROMPT_CACHE_SMOKE=<drive root>`,
+  `HILBERTRAUM_SMOKE_MODEL=<gguf>`): it evicts a ~1,700-token conversation, brings it back and
+  prints `RESTORED` or `RE-PREFILLED` with the advice. An older app ignores the key (unknown keys
+  are ignored), which is the cache-on behaviour it already had. Evidence: `model-benchmarks.md`
+  §6.6 "#512 amendment".
 
 ## Model states (spec §7.4)
 Computed by `services/models.ts` with this precedence:
@@ -599,8 +620,34 @@ GPU driver) — no new licenses enter the product. The file is validated by
 (everything except the downloaded archive + the `cpu/` safety net) so an upgrade can never mix
 two builds or keep a stale binary under a fresh marker (GPU audit round).
 
-**License-review record — llama.cpp b9849 runtime assets (the CURRENT pin; status: approved,
-reviewed 2026-07-01):** the pin was bumped b9585 → **b9849** (2026-06-30, upstream commit
+**License-review record — llama.cpp b11146 runtime assets (the CURRENT pin; status: approved,
+reviewed 2026-09-27, issue #512):** the pin was bumped b9849 → **b11146** (2026-09-23, upstream
+commit `7fe450e1`), the build named by upstream's stable release **v0.5.0** (both tags resolve to
+that commit). llama.cpp itself stays **MIT**. One component changed licence class in the Windows
+archives (win-vulkan and win-cpu alike): the MS OpenMP redistributable `libomp140.x86_64.dll` is
+replaced by the LLVM Project's **`libomp.dll`**, shipped with its own **`LICENSE-LLVM-OpenMP`**
+(Apache-2.0 WITH LLVM-exception, plus the legacy LLVM/OpenMP terms the file carries). The file
+lands next to the binary on extraction; the same text is pinned verbatim as
+`licenses/LLVM-OpenMP.txt` and inlined into `DRIVE-NOTICES.md` (Apache-2.0 §4(a) needs the text
+to travel with the copy, and a DLL shipped whole is not the "embedded portions" the LLVM
+exception relieves). Other archive changes, none licence-relevant: `llama-template-analysis` is
+dropped (Windows; and on macOS/Linux with `llama-debug-template-parser`), the macOS/Linux
+libraries carry new version suffixes (ggml 0.15.3 → 0.25.1, llama 0.0.9849 → 0.5.0; nothing in the
+repo names them), and macOS adds `ggml-metal-tuning`. The macOS/Linux archives still ship
+llama.cpp's own `LICENSE`. All five SHA-256 values are the official GitHub Releases API `digest`
+for tag `b11146` AND were confirmed against a local download on 2026-09-27; `fetch-runtime`
+re-verifies each archive before extraction.
+
+| Asset | SHA-256 | Notes |
+|---|---|---|
+| `llama-b11146-bin-win-vulkan-x64.zip` | `55a378aa095b466979d85075234f66d7655c7a7483222af0c006c0e55b4d7bd6` | MIT; Vulkan full build (default win build); ships LLVM `libomp.dll` + `LICENSE-LLVM-OpenMP` |
+| `llama-b11146-bin-win-cpu-x64.zip` | `14cf1303ca9ac3abd94816850532f9f9a69ac66fbaca3776fc6f9061c2fac1d1` | MIT; pure-CPU safety net; same `libomp.dll` + licence file |
+| `llama-b11146-bin-macos-arm64.tar.gz` | `1ad3f9eff80edb9dbef4259ad564d1720612ef7eea48fa4afed0e54f5f3d5711` | MIT; Metal (mac arm64) |
+| `llama-b11146-bin-ubuntu-vulkan-x64.tar.gz` | `d3ce40fce7403cc93bcf5718fc46c6efb61ed9709f8e5d9f10c86bf0e30e8fb3` | MIT; Vulkan full build (default linux build) |
+| `llama-b11146-bin-ubuntu-x64.tar.gz` | `c150306eb16b5ab696f76a8bdf810c35fd98a24e82158742e6fa28f420ff8410` | MIT; pure-CPU safety net |
+
+**License-review record — llama.cpp b9849 runtime assets (HISTORICAL — the prior pin; status:
+approved, reviewed 2026-07-01):** the pin was bumped b9585 → **b9849** (2026-06-30, upstream commit
 `799fcc0`) as the **Qwen3.5 compatibility gate**. Licensing is unchanged from the b9585 review
 below: all five pinned assets build from the same **MIT**-licensed `ggml-org/llama.cpp` source at
 tag `b9849`, the Vulkan archives redistribute no Vulkan SDK/loader (it ships with the user's GPU
@@ -632,21 +679,28 @@ later-added assets (Vulkan default + CPU safety net) are explicitly part of this
 The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the original b9585 review
 (unchanged in `runtime-sources.yaml`). **No new licenses enter the product.**
 
-> ✅ **Pinned to a real release: `b9849`** (2026-06-30, bumped from b9585 as the Qwen3.5
-> compatibility gate), with real per-OS URLs and SHA-256 checksums from the official GitHub
-> Releases API `digest` metadata — `fetch-runtime` re-verifies before extracting (a wrong/changed
-> hash fails the run). **The b9849 fetch + a one-old-model / one-Qwen3.5-model load are a REQUIRED
-> manual smoke** (BUILD_STATE "Qwen3.5 Unsloth wave"; `model-benchmarks.md` §9).
+> ✅ **Pinned to a real release: `b11146`** (= upstream stable **v0.5.0**, bumped from b9849 under
+> #512), with real per-OS URLs and SHA-256 checksums from the official GitHub Releases API
+> `digest` metadata, all five also confirmed by local download — `fetch-runtime` re-verifies before
+> extracting (a wrong/changed hash fails the run). What was verified on the new build, and what is
+> still open (the MTP start and qwen3.6/qwen3.8 cache restore on the 24 GB rig; the macOS/Linux
+> assets were hash-checked but never run), is in #512.
 > Notes on the current release format:
 > - The **Windows** asset is a `.zip` with the binaries at the archive root; **macOS/Linux** assets
 >   are `.tar.gz` nested under `llama-<tag>/`. `fetch-runtime` handles both, **flattens** nested
 >   layouts so `llama-server[.exe]` lands at `runtime/llama.cpp/<os>/`, and **materializes the
 >   `lib*.so`/`.dylib` version symlinks as copies** (exFAT drives and Windows hosts cannot hold
 >   symlinks).
-> - **To bump the release:** pick a new tag from the
->   [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), update `version`
->   + the per-OS asset `url`s (asset names vary per release), download each asset, and promote its
->   real SHA-256 into `sha256` as a deliberate, reviewed change. A real-hash mismatch makes
+> - **To bump the release:** pin ONLY a build that an upstream **stable `vX.Y.Z` release** names
+>   (policy since #512, owner ruling 2026-09-27). Since August 2026 upstream's stable releases carry
+>   no assets and name a nightly `bNNNNN` (their notes and `nightly-tag.txt`), and every `bNNNNN` tag
+>   is marked `prerelease: true`, which `fetch-runtime` ignores. Confirm the two tags resolve to one
+>   commit; a plain nightly needs an explicit exception recorded in the yaml header. Then update
+>   `version` + the per-OS asset `url`s (asset names vary per release) from the
+>   [ggml-org/llama.cpp releases](https://github.com/ggml-org/llama.cpp/releases), download each
+>   asset, promote its real SHA-256 into `sha256`, re-verify the llama.cpp facts the app depends on
+>   (`architecture.md` GPU record "llama.cpp facts"), write the licence record above, and
+>   regenerate `DRIVE-NOTICES.md` — as a deliberate, reviewed change. A real-hash mismatch makes
 >   `fetch-runtime` delete the archive and fail.
 
 ## The whisper.cpp transcriber family

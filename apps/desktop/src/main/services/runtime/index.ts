@@ -140,14 +140,13 @@ export interface RuntimeStartOptions {
    */
   speculativeDecoding?: SpeculativeDecoding | null
   /**
-   * The model manifest's `family:` (#399 D5) — e.g. `qwen3.5`, `gemma4`, `mistral3`. Supplied by
-   * `startModelRuntime` (which has the manifest). The ONLY thing that reads it is the chat argv
-   * builder's prompt-cache gate (`shared/prompt-cache-rules.ts`): a family measured to lose
-   * llama-server's evicted-prefix restore gets `--cache-ram 0`, because for it the host cache is
-   * written and never read. Absent/unknown ⇒ cache ON, i.e. exactly today's behaviour — the safe
-   * direction, and the reason this is optional rather than required.
+   * The model manifest's `disable_prompt_cache` (#512): true when llama-server cannot restore this
+   * model's evicted prompt on the pinned runtime. Supplied by `startModelRuntime` (which has the
+   * manifest); the chat argv builder maps true to the code-owned `--cache-ram 0`
+   * (`shared/prompt-cache-rules.ts`). Absent/false ⇒ the cache stays on with its RAM-scaled
+   * ceiling.
    */
-  family?: string | null
+  disablePromptCache?: boolean
 }
 
 export interface HealthStatus {

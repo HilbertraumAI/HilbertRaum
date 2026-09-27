@@ -1131,6 +1131,81 @@ still governs the family added next. The `forcing full` trap held a fourth time 
 **0 times** in all four captures, including the two `qwen3.6` runs, which instead logged a confident
 `found better prompt with f_keep = 0.989, sim = 0.985` before re-prefilling 1,488 tokens.
 
+**#512 amendment (2026-09-27): on the b11146 pin the restore WORKS for `qwen3.5` and `gemma4` —
+the family gate is gone.** The #399 protocol (conversation A, an unrelated B takes the one slot, A
+extended with its reply and a new question) was re-run on the i9-14900K / RTX 3080 Ti with the
+app's chat argv and the default `--cache-ram`, b9849 alongside as the control:
+
+| model | b9849: re-prefilled on return | b11146 |
+|---|---|---|
+| `qwen3.5-4b-ud-q4kxl` | 1,736 | **48** |
+| `qwen3.5-9b-ud-q4kxl` | 1,736 | **48** |
+| `gemma4-e2b-it-qat-q4` | 1,654 | **48** |
+| `gemma4-12b-it-qat-q4` | 1,658 | **48** |
+| `qwen3-8b-instruct-q4` (control) | 48 | 48 |
+
+On b11146 the restored answer (120 tokens, temperature 0) is byte-identical to a
+`cache_prompt: false` recompute on the same server, with the facts correct. `qwen3.6` and `qwen3.8`
+were not on that machine; they share `qwen3.5`'s architecture (arch `qwen35`), and the owner ruled
+the cache ON for all four #399 families (decision 1), with their restore confirmed on the 24 GB rig
+before the next release. What shipped: `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` is removed; a manifest
+states `disable_prompt_cache: true` if the manual smoke `tests/manual/prompt-cache-smoke.test.ts`
+shows its GGUF re-prefilling on the pin (none does); and every chat start gets
+`--cache-ram min(8192, total RAM MiB / 8)` (decision 2 — 8 GB → 1 GiB, 16 GB → 2 GiB, 32 GB →
+4 GiB, 64 GB+ → 8 GiB; the OS reports a "64 GB" box as 63.7 GiB, so this machine gets 8,151 MiB).
+The #399 / #446 tables above describe b9849 and stay as its record.
+
+The committed smoke reproduces it through the app's own spawn (`createLlamaRuntime`, so the argv is
+the shipped one including `--cache-ram 8151`), ~1,850-token conversation, 2026-09-27:
+
+| run | re-prefilled on return | restored answer == `cache_prompt: false` recompute | advice |
+|---|---|---|---|
+| b11146 · `qwen3.5-4b-ud-q4kxl` | **52 of 1,899** — RESTORED | yes | leave unset |
+| b11146 · `qwen3.5-9b-ud-q4kxl` | **52 of 1,899** — RESTORED | yes | leave unset |
+| b11146 · `gemma4-e2b-it-qat-q4` | **48 of 1,879** — RESTORED | yes | leave unset |
+| b11146 · `gemma4-12b-it-qat-q4` | **53 of 1,888** — RESTORED | yes | leave unset |
+| b11146 · `qwen3-8b-instruct-q4` (control family) | **52 of 1,855** — RESTORED | yes | leave unset |
+| b11146 · `qwen3.5-4b`, spawned as `disable_prompt_cache: true` | 1,899 of 1,899 — RE-PREFILLED | (control) | — |
+| **b9849** · `qwen3.5-4b-ud-q4kxl` | 1,878 of 1,899 — RE-PREFILLED | (control) | set `true` |
+
+The two controls show the smoke separates the cases: the field really turns the cache off, and the
+old pin still loses the restore under the new argv. Evidence:
+`eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/issue512-prompt-cache-smoke.txt`.
+
+**Decision 2, measured (one session per cap, `qwen3-8b-instruct-q4` on b11146, 2026-09-27).** Six
+conversations of 1,100–4,800 tokens hand the one slot back and forth over 18 turns, each turn
+extending the conversation it returns to. `qwen3-8b` was chosen for its large per-token state
+(≈ 140 KiB: a 4,794-token prompt saves 674.2 MiB), so the smaller cap is actually reached.
+
+- **At 8,151 MiB (this machine's rule value)** the cache grew to 5 saved prompts / **2,628 MiB** by
+  turn 18 and never evicted; every returning conversation restored (only the ~910 new tokens
+  prefilled, even for a 4,766-token prompt).
+- **At 2,048 MiB (a 16 GB machine's value)** the log reads `making room for prompt cache entry,
+  removing oldest entry (size = … MiB)` on every save from turn 11, and the cache never exceeded
+  **2,039 MiB** — the ceiling holds and eviction works. The cost is visible too: six conversations
+  of ~3,000+ tokens visited in rotation outgrow 2 GiB, so the oldest-first eviction removes each one
+  just before it comes back, and from turn 11 every return re-prefilled in full (cache_n 6). Fewer
+  or shorter conversations fit (turns 3–9 restored at the same cap). How many a cap holds depends
+  on the model: in the smoke above the server reported single-prompt cache states from 2.3 MiB
+  (`gemma4-e2b`) and ~154 MiB (`qwen3.5-4b`/`-9b`) up to **1,636 MiB** (`gemma4-12b`, which also
+  saves context checkpoints) for conversations of under 1,900 tokens — so on a 16 GB machine
+  (2 GiB) the 12B keeps roughly one conversation. Not measured further here; an observation for
+  the owner, not a change.
+
+Evidence: `…/issue512-cache-session-8151.txt` and `…/issue512-cache-session-2048.txt` (per-turn
+prompt / prefilled / reused tokens and the server's cache lines).
+
+**The pin bump's grounded-QA gate (§2 harness, 2026-09-27): PASSED.** All ten chat GGUFs on the
+test drive, the same machine and backend (i9-14900K, Vulkan), b9849 on the current master against
+b11146 with this change's argv. EM, citation-correct and grounded rate are **identical on all ten**;
+`mean_f1` moves by at most ±0.003; 83–100 of 100 answers per model are byte-identical (near-tie
+token flips — the kernels changed). Four items flip, all on the abstention column: `gemma4-e2b` on
+the unanswerable `de-vhs-lehrbuch` stops inventing a textbook and abstains (a real improvement);
+the other three (`qwen3.5-4b` on the same item, `qwen3.5-9b` on `de-hr-sick`, and `qwen3-4b`'s one
+over-abstention on the answerable `de-contract-termination`) give the same substance on both builds
+and flip only because the scorer's abstention phrase list matches one wording and not the other.
+Evidence: `eval/results/i9-14900K-512-b9849-vulkan-*` and `…-512-b11146-vulkan-*`.
+
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit
 spreads layers over every listed device — did not hold on the pinned b9849 build on either hybrid

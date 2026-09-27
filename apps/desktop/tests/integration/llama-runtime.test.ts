@@ -516,68 +516,81 @@ describe('answer-depth mode → request mapping (D4)', () => {
     await runtime.stop()
   })
 
-  // ---- #399 D5 (+ #446): the family-gated prompt-cache switch --------------------------
+  // ---- #512: the prompt cache — RAM-scaled ceiling, manifest opt-out ----------------------
   //
-  // On 13 of our 17 measured chat models llama-server writes the evicted conversation to its
-  // host-RAM prompt cache and can never read it back (recurrent state / sliding window — see
-  // shared/prompt-cache-rules.ts for the sweep). `--cache-ram 0` stops paying for a copy that is
-  // never used. CHAT_SERVER_ARGS is shared by EVERY chat model start on every machine, so these
-  // pin both halves: the flag appears for an affected family, and the argv of every other family
-  // is byte-identical to what it was before #399.
+  // CHAT_SERVER_ARGS is shared by EVERY chat model start on every machine. Since #512 each start
+  // carries exactly one `--cache-ram`: min(8192, total RAM MiB / 8), or 0 when the manifest sets
+  // `disable_prompt_cache: true` (the #399 family list is gone — see shared/prompt-cache-rules.ts).
 
-  it('passes --cache-ram 0 for a family measured to lose the prompt-cache restore (#399 D5)', async () => {
-    const { spawn, calls } = fakeSpawn()
-    const runtime = new LlamaRuntime(
-      { ...startOpts, modelId: 'qwen3.5-9b-ud-q4kxl', family: 'qwen3.5' },
-      {
+  const GiB = 1024 ** 3
+  const cacheRamOf = (args: string[]): string[] =>
+    args.flatMap((a, i) => (a === '--cache-ram' ? [args[i + 1]] : []))
+
+  it('passes a RAM-scaled --cache-ram to every chat model (#512 decision 2)', async () => {
+    for (const [gb, expected] of [
+      [8, '1024'],
+      [16, '2048'],
+      [32, '4096'],
+      [64, '8192'],
+      [128, '8192']
+    ] as const) {
+      const { spawn, calls } = fakeSpawn()
+      const runtime = new LlamaRuntime(startOpts, {
         binPath: '/bin/llama-server',
         spawn,
         fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
         findPort: async () => 51010,
-        healthIntervalMs: 1
-      }
-    )
-    await runtime.start()
-    const args = calls[0].args
-    expect(args.join(' ')).toContain('--cache-ram 0')
-    // Adjacent, in order, and not accidentally consuming another flag's value.
-    expect(args[args.indexOf('--cache-ram') + 1]).toBe('0')
-    // Everything the chat sidecar already got is still there, unmoved.
-    for (const a of CHAT_SERVER_ARGS) expect(args).toContain(a)
-    await runtime.stop()
-  })
-
-  it('adds nothing for an unaffected OR unmeasured family, and for a model with no family', async () => {
-    // 'qwen3' and 'granite' restored in the sweep (granite measured by #446); 'llama9' is not a
-    // family in the catalog at all, so it stands for the family added NEXT, which defaults to
-    // cache-ON until someone measures it; no family at all is the same safe default. All four must
-    // produce the pre-#399 argv. ('qwen3.6' used to be the unmeasured example here — #446 measured
-    // it and it turned out AFFECTED, so it would no longer test the default it was standing for.)
-    for (const family of ['qwen3', 'granite', 'llama9', undefined]) {
-      const { spawn, calls } = fakeSpawn()
-      const runtime = new LlamaRuntime(
-        { ...startOpts, family },
-        {
-          binPath: '/bin/llama-server',
-          spawn,
-          fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
-          findPort: async () => 51011,
-          healthIntervalMs: 1
-        }
-      )
+        healthIntervalMs: 1,
+        totalRamBytes: gb * GiB
+      })
       await runtime.start()
-      expect(calls[0].args).not.toContain('--cache-ram')
+      expect(cacheRamOf(calls[0].args), `${gb} GB`).toEqual([expected])
       expect(calls[0].args).not.toContain('-cram')
+      for (const a of CHAT_SERVER_ARGS) expect(calls[0].args).toContain(a)
       await runtime.stop()
     }
   })
 
-  it('the prompt-cache flag never displaces a ladder rung arg (--device none still wins)', async () => {
-    // The rung's extraArgs are appended AFTER the cache flag, so rung 2 can still force CPU on an
-    // affected model — the ladder contract is unchanged by #399.
+  it('disable_prompt_cache wins with --cache-ram 0 — still exactly one flag (#512 decision 1)', async () => {
     const { spawn, calls } = fakeSpawn()
     const runtime = new LlamaRuntime(
-      { ...startOpts, family: 'gemma4' },
+      { ...startOpts, disablePromptCache: true },
+      {
+        binPath: '/bin/llama-server',
+        spawn,
+        fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+        findPort: async () => 51011,
+        healthIntervalMs: 1,
+        totalRamBytes: 64 * GiB
+      }
+    )
+    await runtime.start()
+    expect(cacheRamOf(calls[0].args)).toEqual(['0'])
+    await runtime.stop()
+  })
+
+  it('defaults the ceiling to the real machine RAM when no seam is given', async () => {
+    const { totalmem } = await import('node:os')
+    const { promptCacheRamMib } = await import('../../src/shared/prompt-cache-rules')
+    const { spawn, calls } = fakeSpawn()
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn,
+      fetchImpl: chatFetch({ frames: ['data: [DONE]\n\n'] }),
+      findPort: async () => 51013,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    expect(cacheRamOf(calls[0].args)).toEqual([String(promptCacheRamMib(totalmem()))])
+    await runtime.stop()
+  })
+
+  it('the prompt-cache flag never displaces a ladder rung arg (--device none still wins)', async () => {
+    // The rung's extraArgs are appended AFTER the cache flag, so rung 2 can still force CPU — the
+    // ladder contract is unchanged by #399 and #512.
+    const { spawn, calls } = fakeSpawn()
+    const runtime = new LlamaRuntime(
+      { ...startOpts, disablePromptCache: true },
       {
         binPath: '/bin/llama-server',
         spawn,

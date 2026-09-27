@@ -31,56 +31,64 @@
 #     builds:
 #       - { os, arch, backend, url, sha256, extract_to }
 #
-# PINNED RELEASE: b9849 (2026-06-30, upstream commit 799fcc0) — BUMPED from b9585
-# (2026-06-09) as the Qwen3.5 COMPATIBILITY GATE: the Qwen3.5 chat manifests
-# (model-manifests/chat/qwen3.5-*) are a newer architecture that may not load on the
-# old b9585 build. The sha256 values below are the OFFICIAL release-asset digests from
-# the ggml-org/llama.cpp GitHub Releases API (the `digest` field, one per asset), the
-# same five-asset product topology as b9585 (win vulkan + win cpu, mac arm64 metal,
-# linux vulkan + linux cpu). The win-vulkan asset is confirmed by every TG smoke (it is the
-# D:\ pin). The **win-cpu** asset was confirmed against a LOCAL RE-DOWNLOAD 2026-07-05
-# (TG-6 CPU-safety-net attempt: fetched + SHA-256 == fa7d9d93…4352, exact). The mac/linux
-# assets are NOT yet confirmed against a local re-download on this machine — that is the
-# remaining REQUIRED manual smoke (BUILD_STATE "Qwen3.5 Unsloth wave"):
-# fetch-runtime re-SHA-256-verifies each archive BEFORE extracting, so a wrong/changed
-# digest deletes the archive and fails the run — a bad binary can never silently install.
-# To bump again: pick a new tag from https://github.com/ggml-org/llama.cpp/releases,
-# update version + per-OS asset URLs (asset names vary by release), capture each asset's
-# real SHA-256 (release `digest` metadata or a local hash), and promote it here as a
-# deliberate, reviewed change.
+# PINNED RELEASE: b11146 (2026-09-23, upstream commit 7fe450e1) — the build named by upstream's
+# STABLE release v0.5.0: the `v0.5.0` tag and `b11146` resolve to the same commit. BUMPED from
+# b9849 (2026-06-30, 799fcc0) under issue #512, which records what was verified on it (argv,
+# `--list-devices`, load log, SSE shape, error bodies, speed, the manual smokes) and the two
+# behaviour changes the app follows: the prompt cache now restores Qwen3.5 / Gemma 4 (the #399
+# family gate is replaced by the manifest field `disable_prompt_cache`), and an unauthenticated
+# `/v1/models` answers 401 (the app always sends its key). Since August 2026 upstream publishes
+# stable `vX.Y.Z` releases WITHOUT assets, each naming a nightly build, and marks every `bNNNNN`
+# tag `prerelease: true` (b9849 was not); fetch-runtime ignores that flag, so pinning the build
+# tag works as before. The sha256 values below are the OFFICIAL release-asset digests from the
+# ggml-org/llama.cpp GitHub Releases API (the `digest` field, one per asset), same five-asset
+# topology as before (win vulkan + win cpu, mac arm64 metal, linux vulkan + linux cpu), and ALL
+# FIVE were confirmed against a local download on 2026-09-27 (SHA-256 exact). The win assets
+# ran on the dev box; the mac/linux ones could not be RUN there. fetch-runtime re-SHA-256-verifies
+# each archive BEFORE extracting, so a wrong/changed digest deletes the archive and fails the run —
+# a bad binary can never silently install.
+# The Windows archive changed shape on this bump: the MS OpenMP redistributable
+# (libomp140.x86_64.dll) is replaced by LLVM's libomp.dll + LICENSE-LLVM-OpenMP, and
+# llama-template-analysis.exe is gone (licence record: docs/model-policy.md).
+# To bump again: pin ONLY a build that an upstream stable `vX.Y.Z` release names (the release's
+# notes / `nightly-tag.txt` asset give the `bNNNNN`; confirm both tags resolve to one commit) —
+# a plain nightly needs an explicit, recorded exception here. Update version + per-OS asset URLs
+# (asset names vary by release), capture each asset's real SHA-256 (release `digest` metadata AND
+# a local download), re-verify the llama.cpp facts the app depends on (docs/architecture.md GPU
+# record "llama.cpp facts"), and promote it here as a deliberate, reviewed change.
 
 llama_cpp:
-  version: b9849
+  version: b11146
   builds:
     - os: win
       arch: x64
       backend: vulkan
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b9849/llama-b9849-bin-win-vulkan-x64.zip
-      sha256: ed6156dec5303748fdf13d0056c5fb29aa504210e01d949e72ce20e3d680e4d6
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-win-vulkan-x64.zip
+      sha256: 55a378aa095b466979d85075234f66d7655c7a7483222af0c006c0e55b4d7bd6
       extract_to: runtime/llama.cpp/win
     - os: win
       arch: x64
       backend: cpu
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b9849/llama-b9849-bin-win-cpu-x64.zip
-      sha256: fa7d9d93fa86979c5b44ba176cadae1167b5b054d4c467d184d81def4d714352
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-win-cpu-x64.zip
+      sha256: 14cf1303ca9ac3abd94816850532f9f9a69ac66fbaca3776fc6f9061c2fac1d1
       extract_to: runtime/llama.cpp/win/cpu
     - os: mac
       arch: arm64
       backend: metal
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b9849/llama-b9849-bin-macos-arm64.tar.gz
-      sha256: fccd749707c0fb0bbcee1682a0097f0d7a6e4adb6ce7fc8c6151d9e1d4b3c830
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-macos-arm64.tar.gz
+      sha256: 1ad3f9eff80edb9dbef4259ad564d1720612ef7eea48fa4afed0e54f5f3d5711
       extract_to: runtime/llama.cpp/mac
     - os: linux
       arch: x64
       backend: vulkan
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b9849/llama-b9849-bin-ubuntu-vulkan-x64.tar.gz
-      sha256: 0fb2491604cbc468321bcaaa56991cfbc27fb0ac58b9597fd290a81b86da06d4
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-ubuntu-vulkan-x64.tar.gz
+      sha256: d3ce40fce7403cc93bcf5718fc46c6efb61ed9709f8e5d9f10c86bf0e30e8fb3
       extract_to: runtime/llama.cpp/linux
     - os: linux
       arch: x64
       backend: cpu
-      url: https://github.com/ggml-org/llama.cpp/releases/download/b9849/llama-b9849-bin-ubuntu-x64.tar.gz
-      sha256: 9ce3b4db4535fd68efb272b7159ffbe0748884c2db3525e68ae4315ba2df2a4d
+      url: https://github.com/ggml-org/llama.cpp/releases/download/b11146/llama-b11146-bin-ubuntu-x64.tar.gz
+      sha256: c150306eb16b5ab696f76a8bdf810c35fd98a24e82158742e6fa28f420ff8410
       extract_to: runtime/llama.cpp/linux/cpu
 
 # SECOND SIDECAR FAMILY (Phase 36): whisper.cpp — the audio transcriber. ADDITIVE

@@ -134,6 +134,14 @@ export interface ModelManifest {
    * ladder is the sole consumer.
    */
   speculativeDecoding?: SpeculativeDecoding
+  /**
+   * `disable_prompt_cache` (#512): the pinned llama-server cannot restore this model's evicted
+   * prompt, so its host-RAM prompt cache is pure waste. Absent (= false) keeps the cache on, which
+   * is what every manifest without the field gets. The runtime maps true to the code-owned
+   * `--cache-ram 0` — the manifest states a fact and never supplies arguments. Chat role only;
+   * `tests/manual/prompt-cache-smoke.test.ts` tells whoever adds a manifest whether it is needed.
+   */
+  disablePromptCache?: boolean
   /** Path of the weight file relative to the DRIVE ROOT (e.g. `models/chat/x.gguf`). */
   localPath: string
   /** Expected SHA-256 (lower-case hex). May be a placeholder until a real drive is built. */
@@ -408,6 +416,21 @@ export function validateManifest(raw: unknown): ValidationResult {
     }
   }
 
+  // Optional prompt-cache opt-out (#512). Boolean, chat-only for the same reason as
+  // speculative_decoding: only the chat argv builder reads it, so on any other role it would be
+  // silently inert — rejected rather than ignored.
+  let disablePromptCache = false
+  const dpc = raw['disable_prompt_cache']
+  if (dpc !== undefined) {
+    if (typeof dpc !== 'boolean') {
+      errors.push('"disable_prompt_cache" must be a boolean when present')
+    } else if (roleRaw !== 'chat') {
+      errors.push('"disable_prompt_cache" is only supported for role: chat')
+    } else {
+      disablePromptCache = dpc
+    }
+  }
+
   // Optional: which hardware profiles this model targets.
   let recommendedProfiles: HardwareProfile[] = []
   const rp = raw['recommended_profiles']
@@ -666,6 +689,7 @@ export function validateManifest(raw: unknown): ValidationResult {
       recommendedContextTokens,
       supportsThinkingMode,
       ...(speculativeDecoding ? { speculativeDecoding } : {}),
+      ...(disablePromptCache ? { disablePromptCache: true } : {}),
       localPath,
       sha256,
       recommendedProfiles,

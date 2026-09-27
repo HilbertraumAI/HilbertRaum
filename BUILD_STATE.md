@@ -28,6 +28,12 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-09-27 — **#512 — llama.cpp pin b9849 → b11146 (= upstream v0.5.0), prompt cache on for every chat model (`feat/512-llama-cpp-b11146`).**
+The #399 family list is gone: manifest `disable_prompt_cache` (default false; true → `--cache-ram 0`; none set) + `--cache-ram
+min(8192, RAM MiB / 8)` on every chat start; manual `prompt-cache-smoke`; LLVM `libomp.dll` licence pinned (`licenses/`, DRIVE-NOTICES).
+Records: model-policy (licence, "To bump": stable-release pins only), model-benchmarks §6.6 "#512 amendment" (smoke, cache session, the
+grounded-QA gate: PASSED, EM/citations identical on 10 models), GPU record §3. Open (gate the next tag): rig legs (27B MTP start;
+qwen3.6/3.8 restore); macOS/Linux assets never run; b9849 drives keep b9849 until re-fetched (K: too — its yaml pins b9849)._
 _2026-09-27 — **#512 decision 3 — translation planner constants 2.8 in / 3.1 out (`feat/512-translation-constants`).**
 Curated-10 basis (owner ruling); at ctx 4096 the D4 clamp now binds: 642-word windows, `windowMaxTokens` 1,998, a token-dense
 window under the trained 2K. Record: `architecture.md` translation record "#512" bullet, `model-benchmarks.md` §11.2. Open: none._

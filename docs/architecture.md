@@ -2791,8 +2791,9 @@ files**.
     spawn (every model start — chat, embedder, reranker, vision all funnel through here) never
     flashes a console window on Windows, matching the tar / transcriber / runtime-download spawns.
     **Sidecar auth (local-api wave P1):** every spawn generates a fresh 32-byte hex API key,
-    delivered via the **child-scoped env** (`LLAMA_API_KEY`, verified enforced on the pinned b9849
-    build — the upstream exempts only `/health` and `/v1/models`) — never argv (visible in process
+    delivered via the **child-scoped env** (`LLAMA_API_KEY`, verified enforced on b9849 — where the
+    upstream exempted `/health` and `/v1/models` — and on the b11146 pin, where only `/health` is
+    exempt, #512) — never argv (visible in process
     lists; llama-server echoes resolved params to stderr) and never the parent `process.env`
     (whisper-cli/tar/the GPU probe would inherit it). `LlamaServer.fetch()` is the single HTTP
     chokepoint and injects `Authorization: Bearer <key>` for all consumers. Stderr never carries
@@ -3055,6 +3056,21 @@ last *verified* runtime evidence; the b9849 re-verification is the REQUIRED manu
 `model-benchmarks.md` §9. These facts — `-ngl auto`/`--fit on` defaults, `--device none`,
 `--list-devices`, the Vulkan-archive-is-a-full-build property — are long-standing upstream behaviour
 expected to hold on b9849, but that is not yet re-confirmed on this project's drive.)
+
+**PIN BUMPED 2026-09-27: the live pin is now b11146** (= upstream stable v0.5.0, issue #512), and
+the facts below were **re-verified on it** on an i9-14900K / RTX 3080 Ti with the app's exact argv
+and b9849 alongside as the control: every flag the app passes still parses (`--device none`,
+`--pooling mean`, `--no-mmproj-offload`, `--spec-type draft-mtp`, `--reasoning-format deepseek`, …);
+`-ngl auto` / `--fit on` are still the defaults (the gpu smoke passed 4/4, and every load-log line
+`placement.ts` reads is unchanged, with identical MiB); `--list-devices` stdout is byte-identical
+(b11146 adds an `llama_server: initializing ...` line on **stderr**, which `parseListDevices` never
+reads); the win-cpu asset serves rung 3; `mmproj_use_gpu`, `kv_unified = false` under `-np 1`,
+`cache_ram_mib = 8192` and `n_ctx_checkpoints = 32` are unchanged defaults. Removed upstream:
+`--mlock` / `--no-mmap` (now `--load-mode`, default `auto` = mmap, plus `--lazy-mode`) — the app
+passes none of them. The one behaviour change the app follows is the prompt cache (qwen3.5 / gemma4
+now restore; `shared/prompt-cache-rules.ts`). The Vulkan free-memory reading on NVIDIA/Windows is
+still constant (#318). Not verified here: MTP (no local GGUF with `nextn` heads) and the
+macOS/Linux assets (hash-checked only).
 
 **VISION RE-VERIFIED 2026-07-01 (RUNTIME-5 + RUNTIME-6).** The b9849 vision smoke that §9 owed was
 run live on the provisioned `D:\` drive. Garbage ("multilingual token-salad") image descriptions
@@ -3361,10 +3377,14 @@ llama-server's host-RAM prompt cache does **not** restore it — recurrent state
 so the server saves the conversation and silently re-prefills it anyway. Not caused by `-np 1`
 (four slots lose the restore the same way) and not fixable by any slot arrangement, so the fix is
 not to evict: the model-slot arbiter waits 90 s after a chat turn before resuming a parked
-deep-index build, capped at 10 minutes of deferral per park (D3(a)), and `--cache-ram 0` stops the
-unreadable copy being written for those families (D5, `shared/prompt-cache-rules.ts`).
-Record: `model-benchmarks.md` §6.6 "2026-09-07 amendment (#319)" and its "2026-09-09 correction
-(#399)"; BUILD_STATE §5 item 22 (f)/(i).
+deep-index build, capped at 10 minutes of deferral per park (D3(a)), and `--cache-ram 0` stopped the
+unreadable copy being written for those families (D5). **Reversed on the b11146 pin (#512,
+2026-09-27):** `qwen3.5` and `gemma4` restore there (48 of ~1,700 tokens re-prefilled), so the
+family gate is gone; every chat start gets `--cache-ram min(8192, total RAM MiB / 8)`, and a
+manifest opts out with `disable_prompt_cache: true` (none does; `shared/prompt-cache-rules.ts`).
+The D3(a) arbiter wait is unchanged.
+Record: `model-benchmarks.md` §6.6 "2026-09-07 amendment (#319)", its "2026-09-09 correction
+(#399)" and its "#512 amendment"; BUILD_STATE §5 item 22 (f)/(i).
 Separately, whether `--fit` also puts layers on a hybrid laptop's iGPU — which the app
 never excludes with `--device` — was read from `common/fit.cpp` as "it spreads layers across every
 device `--list-devices` lists". **MEASURED FALSE on the pinned b9849 build (#318 leg 5, 2026-09-07;
