@@ -134,16 +134,34 @@ export function isBindRaceError(message: string): boolean {
 /** The suffix `stderrSuffix()` builds; the classifier below splits the tail off at it. */
 const LAST_OUTPUT_MARKER = ' — last output: '
 
-/** The ` — last output: …` tail's LAST non-empty line, or '' when there is no tail. */
-function lastOutputLine(message: string): string {
+/** ANSI colour codes; llama.cpp prints its first line before `--log-colors off` is parsed (#515). */
+const ANSI_RE = new RegExp(String.fromCharCode(27) + '\\[[0-9;]*m', 'g')
+/** llama.cpp's per-line log prefix: elapsed time since start plus a one-letter level. */
+const LOG_PREFIX_RE = /^\d+\.\d\d\.\d\d\d\.\d\d\d ([DIWE]) /
+
+/**
+ * The line of the ` — last output: …` tail that names the failure, or '' when there is no tail
+ * (#515). In order: the FIRST error-level log line — llama.cpp prints the root cause first and
+ * generic "failed to load" / "exiting due to …" lines after it, identically on every rung — then
+ * the first unprefixed `error …` line (an argument error, followed by a usage screen), then the
+ * last line. The per-process timestamp is stripped, so two processes failing the same way compare
+ * equal; the last line alone never did (a colour reset, or a generic exit notice).
+ */
+function failureLine(message: string): string {
   const at = message.lastIndexOf(LAST_OUTPUT_MARKER)
   if (at < 0) return ''
   const lines = message
     .slice(at + LAST_OUTPUT_MARKER.length)
+    .replace(ANSI_RE, '')
     .split('\n')
     .map((line) => line.trim())
     .filter((line) => line.length > 0)
-  return lines.at(-1) ?? ''
+  const strip = (line: string): string => line.replace(LOG_PREFIX_RE, '').trim()
+  const error = lines.find((line) => LOG_PREFIX_RE.exec(line)?.[1] === 'E')
+  if (error) return strip(error)
+  const argError = lines.find((line) => /^error\b/i.test(line))
+  if (argError) return argError
+  return strip(lines.at(-1) ?? '')
 }
 
 /**
@@ -155,9 +173,9 @@ function lastOutputLine(message: string): string {
  *
  * Covers the four shapes this module throws — `launch` (spawn error), `exit:code N` /
  * `exit:signal S`, `timeout` (the health budget), `integrity` (pre-spawn hash mismatch) — plus
- * the last non-empty line of the captured `— last output:` tail, which on the exit path IS the
- * failing line. Earlier tail lines are deliberately ignored: two loads of the same broken weight
- * print different progress before the same final error. Returns null for anything else, and the
+ * the failure line of the captured `— last output:` tail (`failureLine`: the first error-level
+ * line, timestamp stripped — #515). Progress lines are deliberately ignored: two loads of the same
+ * broken weight print different progress before the same error. Returns null for anything else, and the
  * ladder treats "no signature" as a device fault (its conservative default).
  */
 export function failureSignature(reason: string): string | null {
@@ -172,7 +190,7 @@ export function failureSignature(reason: string): string | null {
           ? 'timeout'
           : null
   if (kind === null) return null
-  const tail = lastOutputLine(reason)
+  const tail = failureLine(reason)
   return tail ? `${kind} | ${tail}` : kind
 }
 
@@ -533,6 +551,11 @@ export class LlamaServer {
       String(this.opts.contextTokens),
       '--threads',
       String(threads),
+      // #515: stdout is NUL on Windows, which llama.cpp's `--log-colors auto` reads as a terminal,
+      // so every stderr line came colour-coded into the tail that error strings, the audit trail,
+      // the log export and the #312 failure signature are built from. On both b9849 and b11146.
+      '--log-colors',
+      'off',
       ...batchArgs,
       ...(this.opts.extraArgs ?? [])
     ]
@@ -716,7 +739,9 @@ export class LlamaServer {
    *  what a start actually logged (device offload, a fit spill) without this class growing a
    *  bespoke event for every such question. Diagnostics-only; no in-repo caller today. */
   redactedTail(): string {
-    return redactSidecarSecrets(this.stderrTail + this.stderrCarry, this.apiKey)
+    // #515: no colour codes in anything built from the tail (the first line is printed before
+    // `--log-colors off` takes effect; an older binary may ignore the flag).
+    return redactSidecarSecrets(this.stderrTail + this.stderrCarry, this.apiKey).replace(ANSI_RE, '')
   }
 
   /** A ` — last output: …` suffix from the captured stderr tail, or '' if none. */

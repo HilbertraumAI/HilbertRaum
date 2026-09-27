@@ -1440,6 +1440,54 @@ describe('#312 — a model-load failure is not a device verdict', () => {
   })
 })
 
+// #515: the same verdicts on REAL llama-server tails (b11146, captured with the app's argv and
+// stdio; tests/fixtures/start-failure-b11146-*.txt). The two rungs' last lines carry different
+// per-process timestamps — the #312 comparison has to see past them to the root cause.
+describe('#515 — the #312 verdicts on real llama-server tails', () => {
+  beforeEach(() => clearSpeculativeSuppression())
+
+  const reason = (name: string): string =>
+    'llama-server exited before becoming healthy (code 1) — last output: ' +
+    readFileSync(join(__dirname, '..', 'fixtures', `start-failure-b11146-${name}.txt`), 'utf8').trim()
+
+  it('a corrupt GGUF failing on the GPU rung and both CPU rungs blames the MODEL', async () => {
+    const h = ladderHarness({
+      failFirst: 3,
+      probe: [RTX],
+      failMessages: [reason('broken-gguf-gpu'), reason('broken-gguf-cpu'), reason('broken-gguf-cpu')],
+      realMock: true
+    })
+    await h.factory(opts).start()
+    expect(h.failures).toEqual([])
+    expect(h.modelLoadFailures).toHaveLength(1)
+  })
+
+  it('…and so does the colour-coded GPU tail the app captured before --log-colors off', async () => {
+    const h = ladderHarness({
+      failFirst: 3,
+      probe: [RTX],
+      failMessages: [reason('broken-gguf-gpu-coloured'), reason('broken-gguf-cpu'), reason('broken-gguf-cpu')],
+      realMock: true
+    })
+    await h.factory(opts).start()
+    expect(h.failures).toEqual([])
+    expect(h.modelLoadFailures).toHaveLength(1)
+  })
+
+  it('a GPU-side failure with a different cause stays a DEVICE verdict', async () => {
+    const h = ladderHarness({
+      failFirst: 3,
+      probe: [RTX],
+      failMessages: [reason('bad-device'), reason('broken-gguf-cpu'), reason('broken-gguf-cpu')],
+      realMock: true
+    })
+    await h.factory(opts).start()
+    expect(h.failures).toHaveLength(1)
+    expect(h.failures[0]).toContain('invalid device: Vulkan7')
+    expect(h.modelLoadFailures).toEqual([])
+  })
+})
+
 // #372 (the #312 follow-up): (1) a model the ladder blamed is LATCHED for the session — a later
 // start of it spawns no rung and pays no health timeout, it re-fires the notice and lands on the
 // mock at once; (2) with acceleration off (or the auto-disable flag already persisted) there is no

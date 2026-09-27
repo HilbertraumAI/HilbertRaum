@@ -1,6 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import http from 'node:http'
@@ -973,6 +973,88 @@ describe('failureSignature (#312)', () => {
     ]) {
       expect(failureSignature(unknown), unknown).toBeNull()
     }
+  })
+})
+
+// #515: the #312 comparison on REAL llama-server tails (b11146, the app's chat argv, the app's
+// stdio). The bare-line cases above never had llama.cpp's per-process timestamp, and under the
+// app's own stdio the last line of a real tail is just a colour reset — so two rungs either never
+// matched or always did. Fixtures: tests/fixtures/start-failure-b11146-*.txt (paths → <drive>).
+describe('failureSignature on real llama-server tails (#515)', () => {
+  const EXIT = 'llama-server exited before becoming healthy (code 1) — last output: '
+  const tail = (name: string): string =>
+    readFileSync(join(__dirname, '..', 'fixtures', `start-failure-b11146-${name}.txt`), 'utf8').trim()
+  const ESC = String.fromCharCode(27)
+  const ROOT_CAUSE =
+    'gguf_init_from_reader: this GGUF file is version 117901063 but this software only supports up to version 3'
+
+  it('the same corrupt GGUF on the GPU and the CPU rung compares EQUAL — the root cause, no timestamp', () => {
+    const gpu = failureSignature(EXIT + tail('broken-gguf-gpu'))
+    const cpu = failureSignature(EXIT + tail('broken-gguf-cpu'))
+    expect(gpu).toBe(`exit:code 1 | ${ROOT_CAUSE}`)
+    expect(cpu).toBe(gpu)
+    // The raw last lines differ only in their timestamps — what made the old rule never match.
+    const last = (t: string): string => t.split('\n').filter(Boolean).at(-1)!
+    expect(last(tail('broken-gguf-gpu'))).not.toBe(last(tail('broken-gguf-cpu')))
+  })
+
+  it('a colour-coded tail (the app stdio before --log-colors off) gives the same signature', () => {
+    const coloured = tail('broken-gguf-gpu-coloured')
+    expect(coloured).toContain(ESC)
+    // Its last non-empty line is only a colour reset: the old rule compared that, i.e. nothing.
+    expect(coloured.split('\n').filter((l) => l.trim()).at(-1)!.trim()).toBe(`${ESC}[0m`)
+    expect(failureSignature(EXIT + coloured)).toBe(failureSignature(EXIT + tail('broken-gguf-cpu')))
+  })
+
+  it('CRLF line endings (how Windows delivers the tail) change nothing', () => {
+    const crlf = tail('broken-gguf-cpu').split('\n').join('\r\n')
+    expect(failureSignature(EXIT + crlf)).toBe(`exit:code 1 | ${ROOT_CAUSE}`)
+  })
+
+  it('an argument error is named by its own line, never by the usage screen after it', () => {
+    const arg = failureSignature(EXIT + tail('bad-device'))
+    expect(arg).toBe('exit:code 1 | error while handling argument "--device": invalid device: Vulkan7')
+    // …so a GPU-side failure and a CPU-side load failure stay DIFFERENT (a device verdict).
+    expect(arg).not.toBe(failureSignature(EXIT + tail('broken-gguf-cpu')))
+  })
+})
+
+describe('sidecar log output is never colour-coded (#515)', () => {
+  it('every llama-server spawn passes --log-colors off (all five sidecars share buildArgs)', () => {
+    const server = new LlamaServer({ binPath: '/bin/s', modelPath: '/m.gguf', contextTokens: 2048 })
+    const args = server.buildArgs(51302)
+    expect(args[args.indexOf('--log-colors') + 1]).toBe('off')
+    expect(args.filter((a) => a === '--log-colors')).toHaveLength(1)
+  })
+
+  it('strips colour codes from the tail a start-failure error carries', async () => {
+    const ESC = String.fromCharCode(27)
+    const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+    child.stderr = new EventEmitter()
+    const spawn = (): ChildProcessLike => {
+      queueMicrotask(() => {
+        // The first line llama.cpp prints before it parses --log-colors off.
+        child.stderr.emit('data', Buffer.from(`${ESC}[34m0.00.001.047${ESC}[0m ${ESC}[32mI ${ESC}[0msrv  llama_server: initializing ...\r\n`))
+        child.stderr.emit('data', Buffer.from('0.00.160.242 E gguf_init_from_reader: failed to read header\r\n'))
+        child.emit('exit', 1, null)
+      })
+      return child
+    }
+    const fetchImpl = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 51303,
+      healthIntervalMs: 1
+    })
+    let message = ''
+    await server.start().catch((err: Error) => (message = err.message))
+    expect(message).toContain('initializing ...')
+    expect(message).not.toContain(ESC)
+    expect(failureSignature(message)).toBe('exit:code 1 | gguf_init_from_reader: failed to read header')
   })
 })
 

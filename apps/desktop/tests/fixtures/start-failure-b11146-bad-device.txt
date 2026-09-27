@@ -1,0 +1,14 @@
+[34m0.00.001.053[0m [32mI [0msrv  llama_server: initializing ...
+0.00.145.558 I load_backend: loaded RPC backend from <drive>\runtime\llama.cpp\win\ggml-rpc.dll
+0.00.145.685 I load_backend: loaded Vulkan backend from <drive>\runtime\llama.cpp\win\ggml-vulkan.dll
+0.00.152.112 I load_backend: loaded CPU backend from <drive>\runtime\llama.cpp\win\ggml-cpu-alderlake.dll
+error while handling argument "--device": invalid device: Vulkan7
+
+usage:
+-dev,  --device <dev1,dev2,..>          comma-separated list of devices to use for offloading (none = don't
+                                        offload)
+                                        use --list-devices to see a list of available devices
+                                        (env: LLAMA_ARG_DEVICE)
+
+
+to show complete usage, run with -h
