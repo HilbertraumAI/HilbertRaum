@@ -46,7 +46,7 @@ from its first public `1.0.0` release onward.
 
 - **The AI engine is updated to llama.cpp b11146 (the upstream v0.5.0 release).** In our
   document-question tests the ten built-in chat models answer as accurately as before. On the
-  Qwen3.5 and Gemma 4 models, coming back to a conversation after something else used the model (a
+  Qwen3.5, Qwen3.6, Qwen3.8 and Gemma 4 models, coming back to a conversation after something else used the model (a
   document being indexed, another conversation) no longer means re-reading the whole
   conversation first: the engine now restores it from memory, so that first reply starts sooner.
   The memory the engine keeps for this is limited to an eighth of the computer's RAM, at most

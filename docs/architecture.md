@@ -3069,8 +3069,9 @@ reads); the win-cpu asset serves rung 3; `mmproj_use_gpu`, `kv_unified = false` 
 `--mlock` / `--no-mmap` (now `--load-mode`, default `auto` = mmap, plus `--lazy-mode`) — the app
 passes none of them. The one behaviour change the app follows is the prompt cache (qwen3.5 / gemma4
 now restore; `shared/prompt-cache-rules.ts`). The Vulkan free-memory reading on NVIDIA/Windows is
-still constant (#318). Not verified here: MTP (no local GGUF with `nextn` heads) and the
-macOS/Linux assets (hash-checked only).
+still constant (#318). MTP was verified on the RTX 3090 rig with the Linux Vulkan asset (the 27B
+at 66/66 with `--spec-type draft-mtp`, draft acceptance 0.754 against b9849's 0.760, decode within
+noise; PR #524, `model-benchmarks.md` §6.6 "Rig legs"). The macOS asset is hash-checked only.
 
 **VISION RE-VERIFIED 2026-07-01 (RUNTIME-5 + RUNTIME-6).** The b9849 vision smoke that §9 owed was
 run live on the provisioned `D:\` drive. Garbage ("multilingual token-salad") image descriptions

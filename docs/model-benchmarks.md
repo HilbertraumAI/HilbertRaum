@@ -1147,8 +1147,8 @@ app's chat argv and the default `--cache-ram`, b9849 alongside as the control:
 On b11146 the restored answer (120 tokens, temperature 0) is byte-identical to a
 `cache_prompt: false` recompute on the same server, with the facts correct. `qwen3.6` and `qwen3.8`
 were not on that machine; they share `qwen3.5`'s architecture (arch `qwen35`), and the owner ruled
-the cache ON for all four #399 families (decision 1), with their restore confirmed on the 24 GB rig
-before the next release. What shipped: `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` is removed; a manifest
+the cache ON for all four #399 families (decision 1); the RTX 3090 rig confirmed both on 2026-09-27
+("Rig legs" below). What shipped: `PROMPT_CACHE_RESTORE_BROKEN_FAMILIES` is removed; a manifest
 states `disable_prompt_cache: true` if the manual smoke `tests/manual/prompt-cache-smoke.test.ts`
 shows its GGUF re-prefilling on the pin (none does); and every chat start gets
 `--cache-ram min(8192, total RAM MiB / 8)` (decision 2 — 8 GB → 1 GiB, 16 GB → 2 GiB, 32 GB →
@@ -1168,8 +1168,15 @@ the shipped one including `--cache-ram 8151`), ~1,850-token conversation, 2026-0
 | b11146 · `qwen3.5-4b`, spawned as `disable_prompt_cache: true` | 1,899 of 1,899 — RE-PREFILLED | (control) | — |
 | **b9849** · `qwen3.5-4b-ud-q4kxl` | 1,878 of 1,899 — RE-PREFILLED | (control) | set `true` |
 
-The two controls show the smoke separates the cases: the field really turns the cache off, and the
-old pin still loses the restore under the new argv. Evidence:
+The controls show the field really turns the cache off, and this old pin losing the restore for
+`qwen3.5-4b`. **Correction (rig legs, PR #524):** in these runs B used a different system message
+from A, and the same smoke's b9849 control RESTORED `qwen3.8` on the rig — so that protocol does
+not separate the builds for every family. The case #399 lost is B sharing A's system message,
+which is also the app's case (every chat carries one system prompt), so the smoke now sends B with
+A's system message (#512 close-out). The corrected smoke has not been re-run on this machine yet —
+Windows' application-control policy blocked the engine that day. This machine's original #512
+table above was made with the #399 harness (shared system message), and the rig's runs below
+use it too, so the shared-prefix case is measured for all four families. Evidence:
 `eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/issue512-prompt-cache-smoke.txt`.
 
 **Decision 2, measured (one session per cap, `qwen3-8b-instruct-q4` on b11146, 2026-09-27).** Six
@@ -1214,6 +1221,35 @@ hand-audit ruling (the v4 participle form needs a source word in its sentence): 
 carries a `*-quality-rescored.csv`; four move in the abstention columns (`512-b9849`, `512-b11146`,
 `pr6-before`, `pr6-after` — 21 items, all German refusals) and the five v3 files reproduce
 byte-for-byte, so no ratified 2026-07 number moved.)*
+
+**Rig legs (2026-09-27; i9-9900X / RTX 3090 24 GB / 128 GB, Linux, the `ubuntu-vulkan` b11146
+asset; PR #524): both PASSED.** The desktop held 698 MiB of VRAM.
+
+*Leg 1 — `qwen3.6` / `qwen3.8` restore.* The #399 harness (`issue399-arch-sweep.mjs`, B shares A's
+system message, `--cache-ram 8192`) on both builds:
+
+| model | b9849: re-prefilled on return | b11146 |
+|---|---|---|
+| `qwen3.6-27b-q4` | 1,488 of 1,529 | **29 of 1,533** |
+| `qwen3.8-27b-ud-q5km` | 1,492 of 1,571 | **29 of 1,571** |
+
+The smoke agreed on b11146 (then still with a different B system message): `qwen3.6-27b-q4` and
+`-q5`, `qwen3.8-27b-ud-q5km`, and the 27B with rung 1a's MTP flags all RESTORED, 31–32 of 1,903
+re-prefilled, restored answer == recompute. So all four #399 families restore on b11146, and no
+manifest sets `disable_prompt_cache`.
+
+*Leg 2 — the 27B starts with MTP.* `run-start.mjs`, `qwen3.8-27b-ud-q5km` at ctx 8192, `-np 1`,
+`--spec-type draft-mtp --spec-draft-n-max 2`, a 2,015-token prompt and 512 generated tokens,
+builds alternating: all four runs offload **66/66**; draft acceptance 0.754 (b11146) against 0.760
+(b9849); decode 46.7 / 45.8 tok/s on b11146 against 46.0 / 45.2 on b9849 (+1.4 %, inside each
+build's a/b spread); prompt processing about 3 % slower on b11146 (826–829 against 854–856 tok/s);
+load 8.1–8.2 s on both. Both builds sit about 10 % under #318's 51.0 tok/s with the drafts matching
+#318 exactly, and the card now runs at a 275 W power limit — card state, not the build.
+
+Evidence: `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue512-rig-cache-smoke.txt`
+(imported from PR #524, byte-identical). The Leg 2 run logs (`leg512-mtp-*`) stay in PR #524, which
+was not merged; the run-start harness there now reads the build from the server log instead of
+writing a fixed label.
 
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit

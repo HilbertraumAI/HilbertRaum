@@ -2728,10 +2728,9 @@ describe.
 - **Since the b11146 pin (#512, 2026-09-27) an evicted conversation is restored on the Qwen3.5 and
   Gemma 4 models.** Measured with the #399 protocol and the app's chat argv: 48 of ~1,700 tokens
   re-prefilled on return for `qwen3.5-4b`/`-9b` and `gemma4-e2b`/`-12b` (b9849: 1,654–1,736), and
-  the restored answer byte-identical to a full recompute; the committed prompt-cache smoke
-  confirmed it (48–53 of ~1,900 re-prefilled). `qwen3.6` and `qwen3.8` share `qwen3.5`'s
-  architecture and have the cache on by owner ruling; their restore is confirmed on the 24 GB rig
-  before the next release, and a family that fails it gets `disable_prompt_cache: true`.
+  the restored answer byte-identical to a full recompute. `qwen3.6` and `qwen3.8` restore too:
+  measured on the RTX 3090 rig on 2026-09-27 (29 of ~1,550 re-prefilled; b9849 1,488–1,492; PR #524),
+  so all four #399 families keep the cache and no manifest sets `disable_prompt_cache`.
 - **A drive still carrying the b9849 engine loses that again.** The app does not compare the
   installed engine with the pin, so a drive set up before #512 keeps b9849 until `fetch-runtime` /
   the drive-setup script runs again. On it, the Qwen3.5 / Gemma 4 / Qwen3.6 / Qwen3.8 models now
