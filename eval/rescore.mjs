@@ -76,7 +76,7 @@ for (const file of dumps) {
   }
 
   const csv = [HEADER.join(',')]
-  console.log(`\n=== ${stem}  (re-scored; abstention detector v3, 2026-08-03) ===`)
+  console.log(`\n=== ${stem}  (re-scored; abstention detector v4, 2026-09-27 — #517) ===`)
   console.log('model'.padEnd(34) + 'halluc% old->new   abstain(unans)%')
   for (const [model, m] of byModel) {
     const a = aggregate(model, m.scores)

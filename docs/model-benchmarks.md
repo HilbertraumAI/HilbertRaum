@@ -1204,7 +1204,12 @@ the unanswerable `de-vhs-lehrbuch` stops inventing a textbook and abstains (a re
 the other three (`qwen3.5-4b` on the same item, `qwen3.5-9b` on `de-hr-sick`, and `qwen3-4b`'s one
 over-abstention on the answerable `de-contract-termination`) give the same substance on both builds
 and flip only because the scorer's abstention phrase list matches one wording and not the other.
-Evidence: `eval/results/i9-14900K-512-b9849-vulkan-*` and `…-512-b11146-vulkan-*`.
+Evidence: `eval/results/i9-14900K-512-b9849-vulkan-*` and `…-512-b11146-vulkan-*`. *(Scorer v4,
+#517, 2026-09-27: `text.mjs` gained sentence-scoped German "not stated" families — "nennt …
+nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet" when the sentence names the
+source material — pinned on these three answers in `score.test.ts`. On v4 the three score the same
+on both builds, leaving the `gemma4-e2b` improvement as the gate's only flip; the committed dumps'
+re-score follows the §9.3 "Scorer v3" precedent once the owner has read its delta table.)*
 
 **2026-09-07 amendment (#320, owner decision).** Both halves of the hybrid-laptop question are now
 closed. (j) The app keeps its **never-`--device`** rule: the premise it rested on — llama.cpp's fit

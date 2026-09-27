@@ -181,7 +181,9 @@ describe('isAbstention — audited real-run patterns v3 (2026-08-03, the two i9 
   })
   // Audited REAL hallucinations from the same runs must stay non-matches — including the
   // borderline qwen3-30b Lehrbuch item (hand-audited REAL 2026-07-09: hedges with "nicht
-  // direkt genannt" but carries no kein/keine refusal and asserts distractor content).
+  // direkt genannt" but carries no kein/keine refusal and asserts distractor content). The v4
+  // sentence family (#517) keeps this ruling: its participle form needs a source word in the
+  // same sentence, and "im Italienischkurs" is not one.
   it('does NOT flag the audited real hallucinations from the i9 runs', () => {
     expect(
       isAbstention(
@@ -202,6 +204,71 @@ describe('isAbstention — audited real-run patterns v3 (2026-08-03, the two i9 
     ).toBe(false)
     // An affirmative kein-negation in a CORRECT answer must not match the kein…erwähnt family.
     expect(isAbstention('Es fallen keine weiteren Kosten für die erste Restmülltonne an [S2].')).toBe(false)
+  })
+})
+
+describe('isAbstention — audited real-run patterns v4 (2026-09-27, #517: German "not stated" forms)', () => {
+  // The #514 pin-bump gate (b9849 vs b11146, ten models) scored three items DIFFERENTLY for
+  // the same substance — the scorer moved, not the model. Each string below is VERBATIM from
+  // eval/results/i9-14900K-512-b{9849,11146}-vulkan-items.jsonl. Sentence-scoped families in
+  // text.mjs: "nennt … nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet"
+  // when the same sentence names the source material.
+  it('catches "nennt … nicht", "nicht festgelegt" and "nicht direkt genannt / angegeben / beantwortet"', () => {
+    // qwen3.5-4b-ud-q4kxl · de-vhs-lehrbuch (unanswerable) — b9849: the verb-first form …
+    expect(
+      isAbstention(
+        'Das Dokument [S1] erwähnt zwar, dass für den Italienischkurs ein Lehrbuch mitzubringen ist, nennt aber nicht, welches spezifische Lehrbuch verwendet wird.'
+      )
+    ).toBe(true)
+    // … and its b11146 twin (a phrase the list already had — pinned so the pair stays level).
+    expect(
+      isAbstention(
+        'Das angegebene Lehrbuch wird nicht im Dokument angegeben.\n\nDie einzige Erwähnung eines Lehrbuchs findet sich in [S1], wo lediglich gefordert wird, dass es zur ersten Stunde mitgebracht werden muss. Der genaue Titel oder der Autor werden in den bereitgestellten Auszügen nicht genannt.'
+      )
+    ).toBe(true)
+    // qwen3.5-9b-ud-q4kxl · de-hr-sick (unanswerable) — b9849: plain "nicht festgelegt".
+    expect(
+      isAbstention(
+        'Laut den vorliegenden Dokumenten sind die Anzahl der bezahlten Krankheitstage pro Jahr nicht festgelegt. Das Mitarbeiterhandbuch erwähnt lediglich, dass Vollzeitbeschäftigte zwanzig bezahlte **Urlaubstage** pro Jahr erwerben [S1]. Informationen zu bezahlten Krankheitstagen finden sich in den bereitgestellten Auszügen nicht.'
+      )
+    ).toBe(true)
+    // qwen3-4b-instruct-q4 · de-contract-termination (answerable → an over-abstention) —
+    // b9849 "in den Dokumenten nicht direkt genannt" vs b11146 "nicht direkt in den Dokumenten angegeben".
+    expect(
+      isAbstention(
+        'Die Kündigungsfrist für eine ordentliche Kündigung des Rahmenvertrags wird in den Dokumenten nicht direkt genannt. Allerdings wird in [S1] die Kündigungsfrist während der Probezeit für neue Mitarbeitende als zwei Wochen angegeben.'
+      )
+    ).toBe(true)
+    expect(
+      isAbstention(
+        'Die Kündigungsfrist für eine ordentliche Kündigung des Rahmenvertrags wird nicht direkt in den Dokumenten angegeben.'
+      )
+    ).toBe(true)
+    // qwen3-14b-instruct-q4 · de-hr-sick (both builds; the #228 run hit the same form).
+    expect(
+      isAbstention(
+        'Laut dem Mitarbeiterhandbuch gibt es für Vollzeitbeschäftigte zwanzig bezahlte Urlaubstage pro Jahr [S1]. Die Frage nach bezahlten Krankheitstagen wird in den bereitgestellten Dokumenten nicht direkt beantwortet.'
+      )
+    ).toBe(true)
+  })
+  it('does NOT flag a correct, cited answer that merely contains "nicht"', () => {
+    expect(isAbstention('Die Frist ist nicht verlängerbar [S1].')).toBe(false)
+    expect(
+      isAbstention('Die Kündigungsfrist beträgt drei Monate [S1]. Eine Verlängerung ist im Vertrag nicht vorgesehen.')
+    ).toBe(false)
+    // "nicht" and a participle in DIFFERENT sentences never pair up (sentence scope).
+    expect(
+      isAbstention('Die Haftung ist nicht begrenzt [S1]. Die Obergrenze wird im Dokument in Abschnitt 4 genannt.')
+    ).toBe(false)
+    // A participle BEFORE the negation states a fact, it does not decline.
+    expect(
+      isAbstention('Der Lieferant wird im Dokument als Acme GmbH genannt und haftet nicht für Folgeschäden [S1].')
+    ).toBe(false)
+    // "nicht genannten" is an attribute — the participles match exactly.
+    expect(isAbstention('Die im Dokument nicht genannten Nebenkosten trägt der Mieter [S1].')).toBe(false)
+    // No source word in the sentence ⇒ the participle family stays out. This is the sentence
+    // the v3 block above pins as a hand-audited REAL hallucination (2026-07-09).
+    expect(isAbstention('Das Lehrbuch wird im Italienischkurs nicht direkt genannt.')).toBe(false)
   })
 })
 
