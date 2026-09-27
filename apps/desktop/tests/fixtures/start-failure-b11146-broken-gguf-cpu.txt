@@ -1,0 +1,30 @@
+[34m0.00.001.052[0m [32mI [0msrv  llama_server: initializing ...
+0.00.148.442 I cmn  common_param: common_params_print_info: build 11146 (7fe450e19) with Clang 20.1.8 for Windows x86_64
+0.00.148.444 I cmn  common_param: common_params_print_info: verbosity = 4 (adjust with the `-lv N` CLI arg)
+0.00.148.445 I cmn  common_param: device_info:
+0.00.150.165 I cmn  common_param:   - Vulkan0 : NVIDIA GeForce RTX 3080 Ti (12084 MiB, 11316 MiB free)
+0.00.151.720 I cmn  common_param:   - Vulkan1 : Intel(R) UHD Graphics 770 (32606 MiB, 48060 MiB free)
+0.00.151.730 I cmn  common_param:   - CPU     : Intel(R) Core(TM) i9-14900K (65212 MiB, 27168 MiB free)
+0.00.151.763 I cmn  common_param: system_info: n_threads = 16 (n_threads_batch = 16) / 32 | CPU : SSE3 = 1 | SSSE3 = 1 | AVX = 1 | AVX_VNNI = 1 | AVX2 = 1 | F16C = 1 | FMA = 1 | BMI2 = 1 | LLAMAFILE = 1 | OPENMP = 1 | REPACK = 1 | 
+0.00.151.825 I srv  init_listene: running without SSL
+0.00.151.837 I srv  init_listene: api_keys: ****kkkk
+0.00.151.955 I srv          init: using 31 threads for HTTP server
+0.00.162.009 I srv    load_model: loading model '<drive>\models\chat\broken.gguf'
+0.00.162.013 I srv    load_model: local path '<drive>\models\chat\broken.gguf'
+0.00.162.021 I cmn  common_init_: fitting params to device memory ...
+0.00.162.021 I cmn  common_init_: (for bugs during this step try to reproduce them with -fit off, or provide --verbose logs if the bug only occurs with -fit on)
+0.00.162.046 I common_params_fit_impl: getting device memory data for initial parameters:
+0.00.162.182 E gguf_init_from_reader: this GGUF file is version 117901063 but this software only supports up to version 3
+0.00.162.185 E gguf_init_from_reader: failed to read header
+0.00.162.247 E llama_model_load: error loading model: llama_model_loader: failed to load model from <drive>\models\chat\broken.gguf
+0.00.162.253 E llama_model_load_from_file_impl: failed to load model
+0.00.162.280 E common_fit_params: encountered an error while trying to fit params to free device memory: failed to load model
+0.00.162.288 I common_fit_params: fitting params to free memory took 0.00 seconds
+0.00.162.373 E gguf_init_from_reader: this GGUF file is version 117901063 but this software only supports up to version 3
+0.00.162.383 E gguf_init_from_reader: failed to read header
+0.00.162.424 E llama_model_load: error loading model: llama_model_loader: failed to load model from <drive>\models\chat\broken.gguf
+0.00.162.427 E llama_model_load_from_file_impl: failed to load model
+0.00.162.432 E cmn  common_init_: failed to load model '<drive>\models\chat\broken.gguf'
+0.00.162.433 E srv    load_model: failed to load model, '<drive>\models\chat\broken.gguf'
+0.00.162.436 I srv    operator(): operator(): cleaning up before exit...
+0.00.163.328 E srv  llama_server: exiting due to model loading error

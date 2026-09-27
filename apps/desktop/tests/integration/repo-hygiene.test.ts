@@ -39,14 +39,14 @@ describe('repo hygiene — lockfile discipline (issue #49)', () => {
 describe('repo hygiene — no literal NUL bytes in source (CODE-24)', () => {
   // `txt` joined the filter with licenses/ (LIC-1, 2026-07-12b): the pinned license
   // texts are inlined verbatim into the generated DRIVE-NOTICES.md, so a stray byte
-  // there ships onto every drive. The .txt files under the covered roots are the EIGHT
+  // there ships onto every drive. The .txt files under the covered roots are the TWELVE
   // captured-tool-output fixtures in `tests/fixtures/` — a `--list-devices` capture, two chat-SSE
   // timings captures (b9849, and b11146 from #512), the four b9849 load logs added by #329 and the
-  // b11146 load log from #512. They are no longer all plain ASCII (the load logs carry
-  // an em dash in their `# … — argv:` header and BPE merge glyphs in the vocab lines, and the
-  // b11146 log keeps llama.cpp's ANSI colour codes, 0x1b), but the
-  // two nets here are about NUL bytes and a UTF-8 BOM, which none of them has: each was
-  // byte-checked when it was added, and both nets still pass over all eight.
+  // b11146 load log from #512, and the four failing-start tails from #515. They are no longer all
+  // plain ASCII (the load logs carry an em dash in their `# … — argv:` header and BPE merge glyphs
+  // in the vocab lines, and the b11146 log and one #515 tail keep llama.cpp's ANSI colour codes,
+  // 0x1b), but the two nets here are about NUL bytes and a UTF-8 BOM, which none of them has: each was
+  // byte-checked when it was added, and both nets still pass over all twelve.
   //
   // AUD-06: `sh|ps1|cmd|command` joined the filter too. Before that, the scripts/ walk below
   // covered only the .mjs files there — the 6 .sh + 8 .ps1 provisioning scripts, which are the

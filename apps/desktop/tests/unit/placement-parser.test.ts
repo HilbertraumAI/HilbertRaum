@@ -247,9 +247,9 @@ describe('createPlacementParser', () => {
   it('reads the b11146 re-capture of that start, ANSI colour codes and all (#512)', () => {
     // Same model and card as the b9849 fixture above, on the b11146 pin with today's chat argv
     // (`-np 1 --cache-ram 8151`), captured through the app's own spawn. With stdout on NUL, which
-    // Windows reports as a terminal, llama.cpp colours every line (b9849 does the same under the
-    // app's stdio; the b9849 fixtures were script captures). The parser's patterns are unanchored,
-    // so the codes around the timestamp and level change nothing.
+    // Windows reports as a terminal, llama.cpp coloured every line (b9849 too) until #515 passed
+    // `--log-colors off`; the b9849 fixtures were script captures. The parser's patterns are
+    // unanchored, so the codes around the timestamp and level change nothing.
     const text = fixture('placement-b11146-full-49of49-swa.txt')
     expect(text).toContain(String.fromCharCode(27) + '[')
     expect(text).toContain('build 11146 (7fe450e19)')

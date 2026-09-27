@@ -1455,8 +1455,8 @@ commit references, and added the changelog entry.
   captured and pinned as `apps/desktop/tests/fixtures/placement-b9849-*.txt`, and both
   `placement-parser.test.ts` and `placement-wiring.test.ts` read them. A b11146 re-capture of the
   49/49 start sits beside them since #512 (`placement-b11146-full-49of49-swa.txt`), taken through
-  the app's own spawn — so it keeps the ANSI colour codes llama.cpp adds on Windows when stdout is
-  NUL (it reads NUL as a terminal; b9849 does the same under the app's stdio). The parser's
+  the app's own spawn — so it keeps the ANSI colour codes llama.cpp added on Windows when stdout is
+  NUL (it reads NUL as a terminal; b9849 did the same) until #515 passed `--log-colors off`. The parser's
   patterns are unanchored and read it unchanged. Still unwitnessed by any
   capture, so still handwritten from ggml's naming convention: CUDA and Metal devices, a
   `<Backend>_Host` **KV** buffer (M7), and two GPUs both holding weights (HW4 / #332).
