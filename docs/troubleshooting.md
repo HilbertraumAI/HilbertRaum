@@ -44,6 +44,41 @@ should not appear at all.
 
 ---
 
+## Linux: the AppImage does not start
+
+**Nothing happens on double-click.** A downloaded file is not executable yet. Make it executable
+once, then start it:
+
+```bash
+chmod +x HilbertRaum-<version>.AppImage
+./HilbertRaum-<version>.AppImage
+```
+
+**"dlopen(): error loading libfuse.so.2" / "AppImages require FUSE to run".** AppImages need the
+older FUSE 2 library, which newer distributions no longer install by default. Install it once:
+
+- Ubuntu 24.04 and later: `sudo apt install libfuse2t64`
+- Ubuntu 22.04, Debian, Linux Mint: `sudo apt install libfuse2`
+- Fedora: `sudo dnf install fuse-libs`
+
+**The window never opens and the terminal mentions `chrome-sandbox` or "The SUID sandbox helper
+binary was found, but is not configured correctly".** Some distributions, notably Ubuntu 24.04 and
+later, block the kernel feature that the app's built-in security sandbox uses. You can start the
+app without that sandbox:
+
+```bash
+./HilbertRaum-<version>.AppImage --no-sandbox
+```
+
+Keep in mind what this switch does: it turns off a protection layer that isolates the app's
+window content from the rest of your system. HilbertRaum only shows its own local content and
+does not browse the web, so the practical risk is low, but it is a workaround and not the
+recommended setup. The cleaner fix is to allow the sandbox for this one app with an AppArmor
+profile (Ubuntu documents this under "unprivileged user namespace restrictions"), which leaves
+the sandbox on.
+
+---
+
 ## I downloaded the app from GitHub — where are the models?
 
 A release download is **the app only**. It starts in **demo mode** (simulated placeholder answers)

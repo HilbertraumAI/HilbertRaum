@@ -49,10 +49,17 @@ prepared drive:
 1. **Windows:** put `HilbertRaum-<version>-portable.exe` wherever you like (an external drive or a
    folder) and double-click it. **macOS:** unzip `HilbertRaum-<version>-mac-arm64.app.zip` and open
    the app (keep the zip if you copy it onto an exFAT drive — extract on the target computer).
-   **Linux:** make the `.AppImage` executable and run it.
+   **Linux:** make the AppImage executable once, then run it (or double-click it in your file
+   manager):
+   ```bash
+   chmod +x HilbertRaum-<version>.AppImage
+   ./HilbertRaum-<version>.AppImage
+   ```
 2. The same first-time security warning as above may appear (the release builds are unsigned for
    now) — see [`troubleshooting.md`](troubleshooting.md) for the exact clicks, including the newer
-   macOS **System Settings → Privacy & Security → "Open Anyway"** flow.
+   macOS **System Settings → Privacy & Security → "Open Anyway"** flow. On Linux there is no such
+   warning, but newer distributions can stop the AppImage for a missing FUSE library or a sandbox
+   error; see "Linux: the AppImage does not start" in the same file for both fixes.
 3. A fresh download has **no AI models yet** — the app starts in demo mode. Get the models either
    with the `prepare-drive --with-assets` script (README step 2) or from inside the app on the
    **AI Model** screen (each download asks first and is checksum-verified).
