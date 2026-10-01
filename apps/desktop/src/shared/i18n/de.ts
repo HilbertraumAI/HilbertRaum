@@ -487,8 +487,19 @@ export const de: Record<keyof typeof en, string> = {
   'chat.dictation.start': 'Nachricht diktieren',
   // #497 — siehe en.ts.
   'chat.dictation.unavailable': 'Spracheingabe ist auf diesem Laufwerk nicht installiert',
+  'chat.dictation.unavailableSystem': 'Spracheingabe ist auf diesem Betriebssystem nicht verfügbar',
   'chat.dictation.needsModel':
     'Zum Diktieren fehlt das Sprachmodell auf diesem Laufwerk. Du kannst es im Bereich „KI-Modell“ hinzufügen.',
+  // #527 — siehe en.ts.
+  'chat.dictation.needsEngine':
+    'Zum Diktieren fehlt die Sprach-Engine auf diesem Laufwerk. Du kannst sie im Bereich „KI-Modell“ installieren.',
+  'chat.dictation.needsModelAndEngine':
+    'Zum Diktieren fehlen das Sprachmodell und die Sprach-Engine auf diesem Laufwerk. Du kannst beide im Bereich „KI-Modell“ hinzufügen.',
+  'chat.dictation.engineUnsupported':
+    'Spracheingabe ist auf diesem Betriebssystem noch nicht verfügbar: Die App kann die nötige Sprach-Engine hier nicht installieren.',
+  'chat.dictation.getModel': 'Sprachmodell holen',
+  'chat.dictation.getEngine': 'Sprach-Engine holen',
+  'chat.dictation.setUp': 'Spracheingabe einrichten',
   'chat.dictation.stop': 'Diktat beenden und Text einfügen',
   'chat.dictation.transcribing': 'Deine Sprache wird in Text umgewandelt',
   'chat.dictation.noSpeech': 'Es wurde keine Sprache erkannt — versuch es noch einmal.',
@@ -1298,6 +1309,10 @@ export const de: Record<keyof typeof en, string> = {
     'Installiert — wird automatisch verwendet. Es gibt nichts zu starten.',
   'models.automatic.notInstalled':
     'Wird nach der Installation automatisch verwendet — keine Einrichtung nötig.',
+  // #527 — siehe en.ts.
+  'models.transcriber.engineUnsupported':
+    'Auf diesem Betriebssystem kann die App die Sprach-Engine noch nicht installieren — dieses ' +
+    'Modell ermöglicht hier deshalb weder Spracheingabe noch Audio-Import.',
   'models.vision.installed':
     'Installiert — bereit im Tab „Bilder“. Hier gibt es nichts zu starten.',
   'models.vision.notInstalled':
@@ -2290,6 +2305,14 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.audioNeedsTranscriber':
     'Für den Audio-Import wird das Transkriptionsmodell benötigt — lade es im ' +
     'KI-Modell-Bereich herunter.',
+  'main.ingest.audioNeedsEngine':
+    'Für den Audio-Import wird die Sprach-Engine benötigt — installiere sie im KI-Modell-Bereich.',
+  'main.ingest.audioNeedsModelAndEngine':
+    'Für den Audio-Import werden das Transkriptionsmodell und die Sprach-Engine benötigt — ' +
+    'füge beide im KI-Modell-Bereich hinzu.',
+  'main.ingest.audioEngineUnsupported':
+    'Audio-Import ist auf diesem Betriebssystem noch nicht verfügbar: Die App kann die nötige ' +
+    'Sprach-Engine hier nicht installieren.',
   'main.ingest.audioUnreadable':
     'Diese Audiodatei konnte nicht gelesen werden. Wandle sie in WAV oder MP3 um und ' +
     'importiere sie noch einmal.',

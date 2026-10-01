@@ -2180,7 +2180,11 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
 - **mac/linux drives need a source-built whisper-cli.** Upstream ships a prebuilt binary
   for Windows only (R-W1); on other OSes audio import fails friendly until the drive
   builder compiles the pinned tag (see `drive-layout.md`). Windows-first, by the
-  project's platform priority.
+  project's platform priority. Since #527 the app says this rather than blaming the speech
+  model. The import failure reads "not available on this operating system yet", and so does
+  the dictation hint. The speech-model card on the AI Model screen notes that the model alone
+  does not enable dictation or audio import there. The download stays offered, because a
+  source-built engine makes the model useful.
 - **Transcription quality is the small model's.** Proper nouns and unusual terms can be
   misheard (R-W3: "LibriVox" → "Librebox"); numbers, names of people/places, and dates
   held up well in the German probes. The transcript is searchable text, not a notarized
@@ -2198,9 +2202,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   follow-up if dictation latency ever warrants it (D34's revisit clause).
 - **The mic works only when the speech model is installed** (the same
   availability-driven gate as audio import — no settings key). Since #497 a drive without the
-  whisper binary + weights shows the mic greyed out instead of hiding it: a click explains what
-  is missing and opens the AI Model screen (which says whether the model, the voice engine or
-  both are absent). Availability is read on entering the chat screen and on window focus.
+  whisper binary + weights shows the mic greyed out instead of hiding it. A click explains what
+  is missing; since #527 that names the actual piece: the speech model, the voice engine, or
+  both. Its button opens the AI Model screen on the speech model (Browse, Voice), with the
+  voice-engine banner above it. Where this operating system has no voice-engine build the app
+  can install, the hint says dictation is not available here and offers no button.
+  Availability and its reason are read on entering the chat screen and on window focus.
 - **Whisper, not the OS, decides what was said.** Dictation quality is the small model's
   (see "Audio transcription" above); the text always lands in the message box for review
   and is never auto-sent — that review step is the accuracy backstop.

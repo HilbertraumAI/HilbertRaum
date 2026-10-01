@@ -28,6 +28,11 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-01 — **#527 — the greyed-out mic names the missing piece and its button opens the AI Model screen on the speech model
+(`fix/527-dictation-hint-cause`).** Cause per drive state (`TranscriberMissing`: model / engine / both / `engine-unsupported` = no engine
+build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
+screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
+`data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
 _2026-09-27 — **#518 — the `--list-devices` and vision SSE fixtures re-captured on the b11146 pin (`fix/518-recapture-fixtures-b11146`, F-40).**
 K: test drive, i9-14900K / RTX 3080 Ti: `list-devices-b11146-vulkan-rtx3080ti.txt` now lists two devices (the card, 12,084 / 11,316 MiB,
 and the UHD 770 iGPU, which `looksIntegrated` sorts) and `vision/vision-sse-b11146.txt` (a synthetic "Müller & Söhne" invoice, `<drive>`
@@ -144,13 +149,6 @@ packs…". Written 2026-09-09, brought up to master 2026-09-18 (83 commits) with
 goes through MAIN (`copyToClipboard`) — it used `navigator.clipboard`, which the PR's test passed only via user-event's stub;
 Home counts a pack "ready" by the panel's ask eligibility (not a no-index archive) and says "none ready", not "none enabled";
 `architecture.md`'s smart-views note. The closed #399 entry retired for the preamble budget._
-_2026-09-13 — **#467 fixed — the `zim-client` 8 MiB `read ECONNRESET` was the FIXTURE's server-side close, not a slow transfer**
-(`fix/467-zim-client-reset`; record `rag-design.md` §17 D-Z22 "Also absorbed"). Reproduced outside vitest (14 of 30, idle-priority load): the
-client asks `Connection: close`, the fixture closed ~1 ms after its last write, and a CPU-starved Windows reader then never gets the queued
-tail — it stops ~0.4 % short and the OS resets at **~19 s, every time** (the 2026-09-05 15 s timeout and ~19 s reset were this). From 256 KB
-up; 4–64 KB 0 of 80; client-closes-first 0 of 50. Fix: the ceiling answers are keep-alive with `keepAliveTimeout` 0, `retry: 2` dropped, plus an
-assert the server never closed first (FAILS on an idle box with the line removed). Under load after: 26 of 26 ceiling legs, ≤ 111 ms. Production
-`/raw` absorbs it (1 s idle + resume, 24/24 starved 1 MiB reads at ~1.1 s); kiwix-serve's own close is unmeasured._
 
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
@@ -190,7 +188,8 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 2026-09-21 (preamble budget, making room for the #488/#498/#501 entry), and the closed #446 and #413 entries on
 2026-09-22 (preamble budget, making room for the #410 entry), and the closed 2026-09-12 #438 entry on
 2026-09-27 (preamble budget, making room for the #515 entry), and the closed 2026-09-13 #460 test-harness entry on
-2026-09-27 (preamble budget, making room for the #517 scorer entry) — citations of the form "BUILD_STATE <date> entry" /
+2026-09-27 (preamble budget, making room for the #517 scorer entry), and the closed 2026-09-13 #467 entry on 2026-10-01
+(preamble budget, making room for the #527 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

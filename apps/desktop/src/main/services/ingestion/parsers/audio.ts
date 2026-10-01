@@ -1,4 +1,5 @@
 import { t } from '../../../../shared/i18n'
+import type { TranscriberMissing } from '../../../../shared/types'
 import type { DocumentParser, ExtractedSegment, ParseContext, ParsedDocument } from './index'
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../transcriber/cli'
 import { log } from '../../logging'
@@ -42,12 +43,32 @@ import { approxTokenCount, windowByTokens, CHUNK_DEFAULTS } from '../chunker'
 /** Extensions the pinned whisper-cli actually decodes — keep the promise honest. */
 export const AUDIO_EXTENSIONS = ['.wav', '.mp3', '.flac', '.ogg'] as const
 
-// The three failure messages below are persist-canonical English (i18n record §3.3
+// The failure messages below are persist-canonical English (i18n record §3.3
 // rule 1): they land in `documents.error_message`, so they are written as the explicit
 // ENGLISH catalog values — the renderer display map translates them at display (D-L4).
 
-/** Friendly copy when no transcriber is available (binary or weights missing). */
+/** Friendly copy when no transcriber is available because the speech model is missing. The
+ *  stored text predates #527 and must not change: old rows map through the display map by it. */
 export const AUDIO_NEEDS_TRANSCRIBER_MESSAGE = t('en', 'main.ingest.audioNeedsTranscriber')
+
+/**
+ * The persisted failure for an audio file with no transcriber, naming the piece that is really
+ * missing (#527): the speech model, the voice engine, both, or an engine with no build for this
+ * system. Before #527 every case stored the model copy — on a Linux drive that told the user to
+ * download the model they had just downloaded. An absent reason keeps the model copy.
+ */
+export function audioUnavailableMessage(missing: TranscriberMissing | null | undefined): string {
+  switch (missing) {
+    case 'engine':
+      return t('en', 'main.ingest.audioNeedsEngine')
+    case 'model-and-engine':
+      return t('en', 'main.ingest.audioNeedsModelAndEngine')
+    case 'engine-unsupported':
+      return t('en', 'main.ingest.audioEngineUnsupported')
+    default:
+      return AUDIO_NEEDS_TRANSCRIBER_MESSAGE
+  }
+}
 
 /** Friendly copy when the binary cannot decode the file (corrupt / unsupported codec). */
 export const AUDIO_UNREADABLE_MESSAGE = t('en', 'main.ingest.audioUnreadable')
@@ -166,7 +187,7 @@ export const AudioParser: DocumentParser = {
     if (!transcriber) {
       // Friendly per-file failure (never a throw that crashes the run — processDocument
       // catches this onto the document row as `failed` + error_message).
-      throw new Error(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
+      throw new Error(audioUnavailableMessage(ctx?.transcriberMissing))
     }
     let segments
     try {

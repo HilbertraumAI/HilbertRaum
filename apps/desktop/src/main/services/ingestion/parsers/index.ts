@@ -1,5 +1,6 @@
 import { extname } from 'node:path'
 import type { Transcriber } from '../../transcriber'
+import type { TranscriberMissing } from '../../../../shared/types'
 import type { OcrEngine, OcrPage } from '../../ocr'
 
 // Document parsers (spec §7.7 / §9.2 DocumentParser interface). Each parser turns a
@@ -44,6 +45,8 @@ export interface ParsedDocument {
  */
 export interface ParseContext {
   transcriber?: Transcriber | null
+  /** Why `transcriber` is null (#527): the AudioParser names the missing piece. */
+  transcriberMissing?: TranscriberMissing | null
   /** Coarse progress (0–100) — surfaces as "Transcribing… N%" during audio ingestion. */
   onProgress?: (percent: number) => void
   /** Directory for transient content files the parse may create (storeDir). */

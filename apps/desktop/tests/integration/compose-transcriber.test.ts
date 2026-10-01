@@ -2,17 +2,27 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { stringify } from 'yaml'
 import {
+  composeServices,
   composeTranscriber,
+  composeTranscriberSlot,
   refreshTranscriberSlot,
   shouldReplaceTranscriber
 } from '../../src/main/services/compose-services'
 import {
+  engineFamilyHasHostBuild,
+  hostRuntimeArch,
+  hostRuntimeOs
+} from '../../src/main/services/runtime-download'
+import {
   WhisperCliTranscriber,
   whisperCliBinaryName,
   whisperCliDir,
+  transcriberMissingReason,
   type Transcriber
 } from '../../src/main/services/transcriber'
+import type { TranscriberMissing } from '../../src/shared/types'
 
 // Issue #497 — the post-install transcriber re-selection, the transcriber twin of the issue-#40
 // translator hook (compose-translator.test.ts). `composeTranscriber` is the ONE construction
@@ -205,5 +215,192 @@ describe('refreshTranscriberSlot (#497 — the hook body both install paths shar
     expect(() => refreshTranscriberSlot(ctx)).not.toThrow()
     expect(refreshTranscriberSlot(ctx)).toBe(false)
     expect(ctx.transcriber).toBeNull()
+  })
+})
+
+// #527 — WHY the slot is empty. The selection ladder stops at the first missing rung (binary
+// before weights), so on a Linux drive with the speech model installed and no engine it read as
+// "no binary" while every surface blamed the model. The reason is derived independently of the
+// ladder, and an engine with no build for this host is its own answer: no download can help.
+describe('transcriberMissingReason (#527 — which piece is missing)', () => {
+  const MODEL = { id: 'w', modelPath: '/drive/models/transcriber/w.bin' }
+  function reason(opts: { binary: boolean; weights: boolean; fetchable: boolean; model?: typeof MODEL | null }) {
+    return transcriberMissingReason({
+      rootPath: '/drive',
+      model: opts.model === undefined ? MODEL : opts.model,
+      engineFetchable: opts.fetchable,
+      resolveBin: () => (opts.binary ? '/drive/runtime/whisper.cpp/x/whisper-cli' : null),
+      modelExists: () => opts.weights
+    })
+  }
+
+  it('is null with the engine and the weights present', () => {
+    expect(reason({ binary: true, weights: true, fetchable: true })).toBeNull()
+    // An engine on the drive is enough, even where none could be fetched (a source-built one).
+    expect(reason({ binary: true, weights: true, fetchable: false })).toBeNull()
+  })
+
+  it('names the model when only the weights are missing', () => {
+    expect(reason({ binary: true, weights: false, fetchable: true })).toBe('model')
+    expect(reason({ binary: true, weights: false, fetchable: false })).toBe('model')
+    // No transcriber manifest at all reads as "no speech model on this drive" too.
+    expect(reason({ binary: true, weights: true, fetchable: true, model: null })).toBe('model')
+  })
+
+  it('names the engine when only the engine is missing and this host has a build of it', () => {
+    expect(reason({ binary: false, weights: true, fetchable: true })).toBe('engine')
+  })
+
+  it('names both when neither is on the drive and both can be fetched', () => {
+    expect(reason({ binary: false, weights: false, fetchable: true })).toBe('model-and-engine')
+  })
+
+  it('reports an engine with no build for this host whatever the weights’ state (the Linux report)', () => {
+    expect(reason({ binary: false, weights: true, fetchable: false })).toBe('engine-unsupported')
+    expect(reason({ binary: false, weights: false, fetchable: false })).toBe('engine-unsupported')
+  })
+
+  it('requires EVERY required file, like the selection ladder (#504 VAD file)', () => {
+    const withVad = { ...MODEL, requiredPaths: [MODEL.modelPath, '/drive/models/transcriber/ggml-silero-v5.1.2.bin'] }
+    const missingVad = transcriberMissingReason({
+      rootPath: '/drive',
+      model: withVad,
+      engineFetchable: true,
+      resolveBin: () => '/bin/whisper-cli',
+      modelExists: (p) => p === MODEL.modelPath
+    })
+    expect(missingVad).toBe('model')
+  })
+})
+
+/** runtime-sources.yaml with a whisper_cpp build for `os` (the host's, by default). */
+function writeRuntimeSources(manifestsDir: string, os: string = hostRuntimeOs(), whisper = true): void {
+  const build = (family: 'llama.cpp' | 'whisper.cpp', buildOs: string) => ({
+    os: buildOs,
+    arch: hostRuntimeArch(),
+    backend: 'cpu',
+    url: `https://example.test/${family}-${buildOs}.zip`,
+    sha256: 'a'.repeat(64),
+    extract_to: `runtime/${family}/${buildOs}`
+  })
+  const sources: Record<string, unknown> = {
+    llama_cpp: { version: 'btest', builds: [build('llama.cpp', hostRuntimeOs())] }
+  }
+  if (whisper) sources.whisper_cpp = { version: 'wtest', builds: [build('whisper.cpp', os)] }
+  writeFileSync(join(manifestsDir, 'runtime-sources.yaml'), stringify(sources))
+}
+
+/** Any runtime-sources OS key that is not this host's. */
+function otherOs(): string {
+  return hostRuntimeOs() === 'linux' ? 'win' : 'linux'
+}
+
+describe('engineFamilyHasHostBuild (#527)', () => {
+  it('is true only for a family with a build for this host', () => {
+    const { manifestsDir } = tempDrive()
+    writeRuntimeSources(manifestsDir)
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp')).toBe(true)
+    writeRuntimeSources(manifestsDir, otherOs())
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp')).toBe(false)
+    writeRuntimeSources(manifestsDir, hostRuntimeOs(), false)
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp')).toBe(false)
+  })
+
+  it('is false without a readable yaml', () => {
+    const { manifestsDir } = tempDrive()
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp')).toBe(false) // absent
+    writeFileSync(join(manifestsDir, 'runtime-sources.yaml'), 'llama_cpp: [not, a, mapping')
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp')).toBe(false) // malformed
+    expect(engineFamilyHasHostBuild(null, 'whisper_cpp')).toBe(false)
+  })
+
+  it('follows the platform it is asked about — the shipped v1.8.6-era shape (win only)', () => {
+    const { manifestsDir } = tempDrive()
+    writeRuntimeSources(manifestsDir, 'win')
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'win32', 'x64')).toBe(true)
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'linux', 'x64')).toBe(false)
+    expect(engineFamilyHasHostBuild(manifestsDir, 'whisper_cpp', 'darwin', 'arm64')).toBe(false)
+  })
+})
+
+describe('composeTranscriberSlot (#527 — the slot and its reason from one resolution)', () => {
+  it('walks a fresh drive from "both missing" to "engine" to selected', () => {
+    const { root, manifestsDir } = tempDrive()
+    writeRuntimeSources(manifestsDir)
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir })).toEqual({
+      transcriber: null,
+      missing: 'model-and-engine'
+    })
+    installWeight(root)
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir }).missing).toBe('engine')
+    installBinary(root)
+    const slot = composeTranscriberSlot({ rootPath: root, manifestsDir })
+    expect(slot.transcriber?.id).toBe('whisper-test')
+    expect(slot.missing).toBeNull()
+  })
+
+  it('reports the model once the engine is in place', () => {
+    const { root, manifestsDir } = tempDrive()
+    writeRuntimeSources(manifestsDir)
+    installBinary(root)
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir }).missing).toBe('model')
+  })
+
+  it('the issue’s drive: speech model installed, no engine, and no engine build for this OS', () => {
+    const { root, manifestsDir } = tempDrive()
+    writeRuntimeSources(manifestsDir, otherOs())
+    installWeight(root)
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir })).toEqual({
+      transcriber: null,
+      missing: 'engine-unsupported'
+    })
+  })
+
+  it('composeTranscriber stays the slot’s transcriber (the startup and hook call sites agree)', () => {
+    const { root, manifestsDir } = tempDrive()
+    writeRuntimeSources(manifestsDir)
+    installBinary(root)
+    installWeight(root)
+    expect(composeTranscriber({ rootPath: root, manifestsDir })?.id).toBe('whisper-test')
+  })
+
+  it('composeServices carries the reason alongside the slot', () => {
+    const { root, manifestsDir } = tempDrive()
+    writeRuntimeSources(manifestsDir)
+    installWeight(root)
+    const services = composeServices({
+      rootPath: root,
+      manifestsDir,
+      rerankerDevicePosture: () => 'cpu',
+      rerankerRequestCeiling: () => Infinity
+    })
+    expect(services.transcriber).toBeNull()
+    expect(services.transcriberMissing).toBe('engine')
+  })
+})
+
+describe('refreshTranscriberSlot keeps the reason in step (#527)', () => {
+  function slot(root: string, manifestsDir: string | null) {
+    return {
+      transcriber: null as Transcriber | null,
+      transcriberMissing: undefined as TranscriberMissing | null | undefined,
+      paths: { rootPath: root },
+      manifestsDir,
+      isDev: false
+    }
+  }
+
+  it('re-derives the reason on every refresh of a null slot, and clears it when the slot fills', () => {
+    const { root, manifestsDir } = tempDrive()
+    writeRuntimeSources(manifestsDir)
+    const ctx = slot(root, manifestsDir)
+    // The voice engine install landed without the model: "both" turns into "model".
+    installBinary(root)
+    expect(refreshTranscriberSlot(ctx)).toBe(false)
+    expect(ctx.transcriberMissing).toBe('model')
+    installWeight(root)
+    expect(refreshTranscriberSlot(ctx)).toBe(true)
+    expect(ctx.transcriber?.id).toBe('whisper-test')
+    expect(ctx.transcriberMissing).toBeNull()
   })
 })

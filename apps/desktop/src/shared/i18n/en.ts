@@ -95,7 +95,8 @@ export const en = {
   'home.model.badgeRunning': 'Running',
   'home.model.badgeStarting': 'Starting',
   'home.model.badgeNeedsModel': 'Needs a model',
-  'home.model.open': 'Open AI Model',
+  // #527: never "Open AI Model" — next to "AI" the verb reads as the company name "OpenAI".
+  'home.model.open': 'Go to AI Model',
   'home.model.choose': 'Choose a model',
   'home.docs.label': 'Documents',
   'home.docs.none': 'No documents yet — add some to ask about them',
@@ -138,7 +139,7 @@ export const en = {
   'chat.noModel.startingProgress':
     'Your model is starting — reading the model file ({gb} GB), about {pct}% so far. This ' +
     'screen continues automatically once it is ready.',
-  'chat.noModel.open': 'Open AI Model',
+  'chat.noModel.open': 'Go to AI Model',
   'chat.noModel.recheck': 'Re-check',
   'chat.empty.title': 'Ask a question, or ask about your documents.',
   'chat.empty.lineDocuments': 'Answers come from your documents and cite their sources.',
@@ -474,10 +475,22 @@ export const en = {
   // ---- Chat: dictation (DictationButton.tsx) ----
   'chat.dictation.start': 'Dictate a message',
   // #497 (discoverability): the visibly disabled mic on a drive without the speech model, and
-  // the hint its click reveals (the deep link reuses chat.noModel.open).
+  // the hint its click reveals. #527: the hint names the piece that is really missing (the
+  // speech model, the voice engine, both — or an engine this system has no build of), and its
+  // own button names the action and opens the AI Model screen on the speech model.
   'chat.dictation.unavailable': 'Voice dictation is not installed on this drive',
+  'chat.dictation.unavailableSystem': 'Voice dictation is not available on this operating system',
   'chat.dictation.needsModel':
     'Dictating a message needs the speech model, which is not installed on this drive. You can add it on the AI Model screen.',
+  'chat.dictation.needsEngine':
+    'Dictating a message needs the voice engine, which is not installed on this drive. You can install it on the AI Model screen.',
+  'chat.dictation.needsModelAndEngine':
+    'Dictating a message needs the speech model and the voice engine, which are not on this drive yet. You can add both on the AI Model screen.',
+  'chat.dictation.engineUnsupported':
+    'Voice dictation is not available on this operating system yet: the app cannot install the voice engine it needs here.',
+  'chat.dictation.getModel': 'Get the speech model',
+  'chat.dictation.getEngine': 'Get the voice engine',
+  'chat.dictation.setUp': 'Set up voice dictation',
   'chat.dictation.stop': 'Stop dictation and insert the text',
   'chat.dictation.transcribing': 'Turning your speech into text',
   'chat.dictation.noSpeech': 'No speech was recognized — try speaking again.',
@@ -1277,6 +1290,11 @@ export const en = {
   'models.badge.ramNeeded': 'Needs ≥{min} GB RAM',
   'models.automatic.installed': 'Installed — used automatically. There is nothing to start.',
   'models.automatic.notInstalled': 'Used automatically once installed — no setup needed.',
+  // #527: on the speech-model card when the voice engine has no build for this system — the
+  // download stays offered (a drive builder can compile the engine), but it is no longer
+  // presented as if it enabled dictation on its own.
+  'models.transcriber.engineUnsupported':
+    'On this operating system the app cannot install the voice engine yet, so this model does not enable voice dictation or audio import here.',
   'models.vision.installed': 'Installed — ready in the Images tab. Nothing to start here.',
   'models.vision.notInstalled': 'Available in the Images tab once installed — no setup needed.',
   'models.translation.installed': 'Installed — used automatically for translation. Nothing to start here.',
@@ -2314,6 +2332,13 @@ export const en = {
   'main.ingest.pdfScanDetected': 'This PDF looks like a scan — it has no readable text yet.',
   'main.ingest.audioNeedsTranscriber':
     'Audio import needs the transcription model — download it on the AI Model screen.',
+  // #527: the other three reasons a transcriber is missing (persist-canonical like the above).
+  'main.ingest.audioNeedsEngine':
+    'Audio import needs the voice engine — install it on the AI Model screen.',
+  'main.ingest.audioNeedsModelAndEngine':
+    'Audio import needs the transcription model and the voice engine — add both on the AI Model screen.',
+  'main.ingest.audioEngineUnsupported':
+    'Audio import is not available on this operating system yet: the app cannot install the voice engine it needs here.',
   'main.ingest.audioUnreadable':
     'This audio file could not be read. Convert it to WAV or MP3 and import it again.',
   'main.ingest.audioTranscriptionFailed':

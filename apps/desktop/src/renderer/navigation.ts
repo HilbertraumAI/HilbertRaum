@@ -6,6 +6,8 @@
 //   - 'ask-documents'          → Chat screen opened in documents mode
 //   - 'documents:packs'        → Documents screen opened in its Knowledge-packs mode (§11.16 —
 //     the header's "My documents | Knowledge packs" switch; plain 'documents' opens My documents)
+//   - 'models:voice'           → AI Model screen opened on Browse, filtered to the Voice task (#527 —
+//     the composer's dictation hint; plain 'models' opens the screen's own default view)
 //   - 'settings:privacy'       → Settings, "Privacy & data" tab
 //   - 'settings:diagnostics'   → Settings, "Diagnostics (advanced)" tab
 //   - 'settings:skills' / 'skills' → Settings, "Skills" tab (rail rework 2026-09-05: Skills
@@ -41,6 +43,8 @@ export interface NavResolution {
   chatMode?: 'chat' | 'documents'
   /** Set when the target picks the Documents screen's mode (plain 'documents' = My documents). */
   documentsMode?: 'documents' | 'packs'
+  /** Set when the target opens the AI Model screen on one task's Browse list (#527). */
+  modelsFocus?: 'voice'
 }
 
 export function resolveNavTarget(target: string): NavResolution {
@@ -51,6 +55,8 @@ export function resolveNavTarget(target: string): NavResolution {
       return { screen: 'documents', documentsMode: 'documents' }
     case 'documents:packs':
       return { screen: 'documents', documentsMode: 'packs' }
+    case 'models:voice':
+      return { screen: 'models', modelsFocus: 'voice' }
     case 'chat':
       return { screen: 'chat', chatMode: 'chat' }
     case 'settings':

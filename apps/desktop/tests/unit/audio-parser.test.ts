@@ -8,6 +8,7 @@ import {
   AUDIO_TRANSCRIPTION_FAILED_MESSAGE,
   AUDIO_UNREADABLE_MESSAGE,
   audioRangeLabel,
+  audioUnavailableMessage,
   formatAudioTimestamp,
   packTranscriptSegments
 } from '../../src/main/services/ingestion/parsers/audio'
@@ -15,6 +16,7 @@ import { isAudioPath, selectParser, supportedExtensions } from '../../src/main/s
 import { chunkSegments, approxTokenCount, CHUNK_DEFAULTS } from '../../src/main/services/ingestion/chunker'
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../src/main/services/transcriber/cli'
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
+import { t } from '../../src/shared/i18n'
 
 // Phase 36 — the AudioParser with a FAKE transcriber behind the injection seam (the
 // wave-3 testing posture: CI is zero-binary/zero-audio; the real path lives in the
@@ -204,6 +206,29 @@ describe('AudioParser', () => {
     )
     await expect(AudioParser.parse('meeting.mp3')).rejects.toThrow(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
   })
+
+  // #527: the stored failure names the piece that is really missing. Before, every case stored the
+  // model copy — a Linux drive (v1.8.6 engine: Windows-only) told the user to download the model
+  // they had just downloaded. The model copy itself is unchanged: old rows still map by its text.
+  it('names the missing piece when the transcriber is absent (#527)', async () => {
+    const cases = [
+      ['model', 'main.ingest.audioNeedsTranscriber'],
+      ['engine', 'main.ingest.audioNeedsEngine'],
+      ['model-and-engine', 'main.ingest.audioNeedsModelAndEngine'],
+      ['engine-unsupported', 'main.ingest.audioEngineUnsupported']
+    ] as const
+    for (const [missing, key] of cases) {
+      expect(audioUnavailableMessage(missing)).toBe(t('en', key))
+      await expect(AudioParser.parse('meeting.mp3', { transcriberMissing: missing })).rejects.toThrow(t('en', key))
+    }
+    expect(audioUnavailableMessage(null)).toBe(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
+    expect(audioUnavailableMessage(undefined)).toBe(AUDIO_NEEDS_TRANSCRIBER_MESSAGE)
+    // The pre-#527 stored text, verbatim: persisted rows keep translating through the display map.
+    expect(AUDIO_NEEDS_TRANSCRIBER_MESSAGE).toBe(
+      'Audio import needs the transcription model — download it on the AI Model screen.'
+    )
+  })
+
 
   it('maps a decode failure to the convert-to-WAV/MP3 copy (R-W2 silent-failure mode)', async () => {
     const failing: Transcriber = {

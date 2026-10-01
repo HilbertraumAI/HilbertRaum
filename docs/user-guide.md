@@ -418,9 +418,12 @@ to **Send**:
 
 Dictation happens entirely on this drive: the recording is turned into text by the local
 speech model and then securely deleted — it is never saved, never listed anywhere, and
-never leaves your device. If the microphone button looks greyed out, the speech model isn't
-installed on this drive — click it to see what's missing and jump to the **AI Model** screen
-(you can add the model there if downloads are enabled). German and English both work — speak naturally, in whole sentences, for the
+never leaves your device. If the microphone button looks greyed out, something dictation needs is
+not on this drive yet: the speech model, the voice engine that runs it, or both. Click the button
+to see which one. The button under the note (for example **Get the speech model**) opens the
+**AI Model** screen right at the speech model, where you can add what is missing if downloads are
+enabled. On an operating system where the app cannot install the voice engine, the note says
+that voice dictation is not available there yet. German and English both work — speak naturally, in whole sentences, for the
 best results. If the app says that no sound reached the microphone, check that the
 microphone isn't muted, that the right one is set as your system's default input, and that
 Windows/macOS allows HilbertRaum to use it (the system's microphone privacy setting), then

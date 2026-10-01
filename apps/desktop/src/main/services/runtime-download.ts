@@ -161,6 +161,23 @@ function availableEngines(
 }
 
 /**
+ * Does `family` have a build for this host in runtime-sources.yaml (#527)? False when the yaml
+ * is absent or malformed, or the family has no block or no build for this os/arch — i.e. the
+ * in-app installer could never fetch it here. Reads the yaml only; the binary's presence is the
+ * caller's own check.
+ */
+export function engineFamilyHasHostBuild(
+  manifestsDir: string | null,
+  family: EngineFamily,
+  platform: NodeJS.Platform = process.platform,
+  arch: string = process.arch
+): boolean {
+  const result = manifestsDir ? loadSourcesResult(manifestsDir) : null
+  const sources = result ? familyBlock(result, family) : undefined
+  return sources != null && selectHostBuild(sources, platform, arch) != null
+}
+
+/**
  * Validate the renderer's `downloadEngine` payload (#339 P8-2). Renderer input is untrusted:
  * anything but "absent" or `{ families: [<known family>, …] }` is rejected with friendly copy,
  * and the parsed list is rebuilt from the code's own family names (never the caller's strings

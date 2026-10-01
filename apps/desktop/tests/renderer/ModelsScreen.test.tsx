@@ -81,12 +81,17 @@ function stub(opts: {
   activeModelId?: string | null
   downloadModel?: ReturnType<typeof vi.fn>
   getDownloadJob?: ReturnType<typeof vi.fn>
+  /** Overrides on the base status (#527: `transcriberMissing`). */
+  appStatus?: Partial<AppStatus>
+  /** The engine status (#527 banner cases); absent = the bridge has none (reads as null). */
+  engine?: EngineStatus
 }): void {
   stubApi({
     listModels: vi.fn(async () => opts.models ?? [model()]),
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: opts.activeModelId ?? null })),
     getPolicy: vi.fn(async () => opts.policy ?? policyStatus({ downloadsAllowed: true, settingOn: true })),
-    getAppStatus: vi.fn(async () => appStatus),
+    getAppStatus: vi.fn(async () => ({ ...appStatus, ...opts.appStatus })),
+    ...(opts.engine ? { getEngineStatus: vi.fn(async () => opts.engine) } : {}),
     downloadModel: (opts.downloadModel ?? vi.fn()),
     getDownloadJob: (opts.getDownloadJob ?? vi.fn()),
     // #314: the mount-time adopt read and the main-side dismissal. Idle by default — these
@@ -279,6 +284,41 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
     expect(screen.getByText(/Installed — used automatically/i)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
     expect(screen.getByText(/Turns audio recordings into searchable text/)).toBeInTheDocument()
+  })
+
+  // #527: on Linux with the v1.8.6 pin (and on macOS) the voice engine has no build the app can
+  // install. The card used to present the download as the way to dictation; it now says that the
+  // model alone does not enable it here — and the download stays offered (a drive builder can
+  // compile the engine, which then makes the model useful).
+  it('#527 says the model does not enable dictation here when the voice engine has no build for this system', async () => {
+    stub({
+      models: [transcriber({ state: 'missing' })],
+      appStatus: { transcriberMissing: 'engine-unsupported' }
+    })
+    render(<ModelsScreen />)
+    expect(await screen.findByText(t('en', 'models.transcriber.engineUnsupported'))).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument()
+  })
+
+  it('#527 shows no such note while the engine can be installed (or is installed)', async () => {
+    for (const missing of ['model', 'engine', 'model-and-engine', null] as const) {
+      stub({ models: [transcriber({ state: 'missing' })], appStatus: { transcriberMissing: missing } })
+      const { unmount } = render(<ModelsScreen />)
+      await screen.findByText('Whisper Small (multilingual transcriber)')
+      expect(screen.queryByText(t('en', 'models.transcriber.engineUnsupported'))).not.toBeInTheDocument()
+      unmount()
+    }
+  })
+
+  it('#527 the note sits on the speech-model card only', async () => {
+    stub({
+      models: [model({ id: 'chat', displayName: 'Chat model' }), transcriber({ state: 'missing' })],
+      appStatus: { transcriberMissing: 'engine-unsupported' }
+    })
+    render(<ModelsScreen />)
+    const note = await screen.findByText(t('en', 'models.transcriber.engineUnsupported'))
+    expect(note.closest('.model-card')).toHaveTextContent('Whisper Small (multilingual transcriber)')
+    expect(screen.getAllByText(t('en', 'models.transcriber.engineUnsupported'))).toHaveLength(1)
   })
 
   it('offers Download for a missing vision model — never Select/Start', async () => {
@@ -594,6 +634,97 @@ describe('ModelsScreen — installed and catalog library views', () => {
     expect(screen.queryByText('Embedder Missing')).not.toBeInTheDocument()
     await userEvent.setup().click(screen.getByRole('radio', { name: 'Browse models' }))
     expect(screen.getByText('Embedder Missing')).toBeInTheDocument()
+  })
+})
+
+// #527: the composer's dictation hint ("Get the speech model") opens this screen through the
+// 'models:voice' deep link. It used to land on "On this drive" — where a missing speech model, by
+// definition, is not listed — so the user had to find Browse and the Voice task themselves.
+describe('ModelsScreen — the speech-model deep link (#527)', () => {
+  const library = (): ModelInfo[] => [
+    model({ id: 'chat-installed', displayName: 'Installed chat model', state: 'installed' }),
+    model({ id: 'chat-missing', displayName: 'Another chat model', state: 'missing' }),
+    model({
+      id: 'whisper-small-multilingual',
+      displayName: 'Whisper Small (multilingual transcriber)',
+      family: 'whisper',
+      role: 'transcriber',
+      format: 'ggml',
+      runtime: 'whisper_cpp',
+      state: 'missing'
+    })
+  ]
+
+  it('focus "voice" opens Browse filtered to the Voice task, even on a drive with installed models', async () => {
+    stub({ models: library() })
+    render(<ModelsScreen focus="voice" />)
+    expect(await screen.findByText('Whisper Small (multilingual transcriber)')).toBeVisible()
+    expect(screen.getByRole('radio', { name: 'Browse models' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('combobox', { name: 'Task' })).toHaveValue('transcriber')
+    expect(screen.queryByText('Another chat model')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument()
+  })
+
+  it('without a focus the screen keeps its own default (On this drive, all tasks)', async () => {
+    stub({ models: library() })
+    render(<ModelsScreen />)
+    expect(await screen.findByText('Installed chat model')).toBeVisible()
+    expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('combobox', { name: 'Task' })).toHaveValue('all')
+    expect(screen.queryByText('Whisper Small (multilingual transcriber)')).not.toBeInTheDocument()
+  })
+
+  describe('scrolls the library into view — unless an engine banner is the first thing to act on', () => {
+    let scrolled: Element[]
+    beforeEach(() => {
+      scrolled = []
+      // jsdom has no layout, so scrollIntoView does not exist there: record the calls instead.
+      Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+        scrolled.push(this)
+      })
+    })
+    afterEach(() => {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    })
+    const engine = (missing: string[]): EngineStatus => ({
+      installed: missing.length === 0,
+      available: true,
+      version: 'btest',
+      backend: 'vulkan',
+      missingFamilies: missing
+    })
+
+    it('only the model missing: the library (with the speech model) is scrolled to, once', async () => {
+      stub({ models: library(), engine: engine([]) })
+      render(<ModelsScreen focus="voice" />)
+      await screen.findByText('Whisper Small (multilingual transcriber)')
+      await waitFor(() => expect(scrolled).toHaveLength(1))
+      expect(scrolled[0]).toBe(screen.getByRole('region', { name: t('en', 'models.library.title') }))
+    })
+
+    it('the voice engine missing: stays at the top, where its banner is', async () => {
+      stub({ models: library(), engine: engine(['whisper_cpp']) })
+      render(<ModelsScreen focus="voice" />)
+      expect(await screen.findByText(t('en', 'models.voiceEngine.title'))).toBeInTheDocument()
+      expect(screen.getByText('Whisper Small (multilingual transcriber)')).toBeInTheDocument()
+      expect(scrolled).toHaveLength(0)
+    })
+
+    it('no focus: never scrolls', async () => {
+      stub({ models: library(), engine: engine([]) })
+      render(<ModelsScreen />)
+      await screen.findByText('Installed chat model')
+      expect(scrolled).toHaveLength(0)
+    })
+  })
+
+  it('the screen’s own controls take over after the deep link', async () => {
+    const user = userEvent.setup()
+    stub({ models: library() })
+    render(<ModelsScreen focus="voice" />)
+    await screen.findByText('Whisper Small (multilingual transcriber)')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'all')
+    expect(screen.getByText('Another chat model')).toBeVisible()
   })
 })
 

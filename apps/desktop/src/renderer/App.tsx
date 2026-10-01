@@ -144,6 +144,10 @@ function AppShell(): JSX.Element {
   // "Add packs…") opens the knowledge-pack panel. The screen's own header switch takes over
   // once mounted.
   const [documentsMode, setDocumentsMode] = useState<'documents' | 'packs'>('documents')
+  // Which library the AI Model screen opens on (#527): the 'models:voice' deep link (the
+  // composer's dictation hint) opens Browse filtered to the speech model; plain 'models'
+  // navigation opens the screen's own default. Read once at mount, like `documentsMode`.
+  const [modelsFocus, setModelsFocus] = useState<'voice' | null>(null)
   // EP-1 P5 (plan §10): the conversation the Chat screen should open with — set ONLY by the
   // review screen's "Back to chat" so it returns to the ORIGINATING conversation. One-shot
   // by construction: every normal chat navigation (navigate below) clears it.
@@ -270,6 +274,7 @@ function AppShell(): JSX.Element {
     }
     if (next.settingsTab) setSettingsTab(next.settingsTab)
     if (next.documentsMode) setDocumentsMode(next.documentsMode)
+    if (next.screen === 'models') setModelsFocus(next.modelsFocus ?? null)
     setScreen(next.screen)
   }
 
@@ -526,7 +531,7 @@ function AppShell(): JSX.Element {
             )}
             {screen === 'translate' && <TranslateScreen onNavigate={navigate} />}
             {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
-            {screen === 'models' && <ModelsScreen />}
+            {screen === 'models' && <ModelsScreen focus={modelsFocus} />}
             {screen === 'performance' && <PerformanceScreen onNavigate={navigate} />}
             {screen === 'settings' && (
               <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />

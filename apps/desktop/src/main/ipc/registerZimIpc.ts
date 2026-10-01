@@ -279,6 +279,7 @@ export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platfo
             embedder: ctx.embedder,
             cipher: ctx.workspace.documentCipher(),
             transcriber: ctx.transcriber,
+            transcriberMissing: ctx.transcriberMissing,
             ocrEngine: ctx.ocrEngine,
             plaintextOps: ctx.plaintextOps
           },

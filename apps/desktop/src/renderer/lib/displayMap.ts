@@ -20,6 +20,10 @@ import { CITE_CODE_SPLIT_RE, CITE_MARKER_RE } from '@shared/citation-markers'
 export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.ingest.pdfScanDetected',
   'main.ingest.audioNeedsTranscriber',
+  // #527: the audio failure names the missing piece — engine, both, or no engine for this system.
+  'main.ingest.audioNeedsEngine',
+  'main.ingest.audioNeedsModelAndEngine',
+  'main.ingest.audioEngineUnsupported',
   'main.ingest.audioUnreadable',
   'main.ingest.audioTranscriptionFailed',
   'main.ingest.imageNeedsOcr',

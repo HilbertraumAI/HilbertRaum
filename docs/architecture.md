@@ -1731,6 +1731,34 @@ explicitly out of scope.
   transcriber (it is for the embedder: `main/index.ts` `getIngestionDeps`; the OCR engine was
   captured there too until #410 made both OCR reads live — "In-app OCR install — design record"). The
   chat screen re-reads the flag on mount and on window focus (the Translate-screen pattern).
+- **#527 amendment — the hint names the missing piece.** The transcriber needs two pieces, the
+  whisper.cpp engine and the speech-model weights, and the hint used to blame the model in every
+  case. Seen on Linux (v0.1.62): the model was installed, the engine was missing and had no
+  build to install (the `whisper_cpp` pin was Windows-only), and the hint still pointed at the
+  model download. Along with the slot, `composeTranscriberSlot` (`compose-services.ts`) now stores
+  `AppContext.transcriberMissing` (`TranscriberMissing`: `model` · `engine` · `model-and-engine` ·
+  `engine-unsupported`). It is computed by `transcriberMissingReason` (`transcriber/factory.ts`),
+  which checks the binary and the weights separately. The selection ladder can't give the reason:
+  it stops at the first missing rung, binary before weights. `engineFamilyHasHostBuild`
+  (`runtime-download.ts`) decides fetchable versus unsupported. The reason is set at startup and
+  by every `refreshTranscriberSlot`, the same three moments that set the slot. `getAppStatus`
+  (which the shell polls) only reads it back, as the optional `AppStatus.transcriberMissing`.
+  - **The hint.** Each cause gets its own text and its own button: "Get the speech model",
+    "Get the voice engine", or "Set up voice dictation". The hint no longer borrows
+    `chat.noModel.open`. Every button opens the new virtual target `models:voice`: the AI Model
+    screen on Browse, filtered to the Voice task, where the speech model is listed whether or
+    not it is installed and the voice-engine banner sits above it. Before, the link landed on
+    "On this drive", which by definition does not list a missing model.
+  - **`engine-unsupported`.** The hint has no button, and the mic is labelled "not available on
+    this operating system". The speech-model card on the AI Model screen says the model alone
+    does not enable dictation or audio import there. Its download stays offered, because a drive
+    builder can compile the engine.
+  - **Audio imports.** The same reason picks the persisted failure (`audioUnavailableMessage`):
+    three new persist-canonical values, while the model copy stays byte-identical so old rows
+    still map.
+  - **"Open AI Model" is gone** from every button (Home, the chat no-model state, this hint).
+    Next to "AI", "Open" reads as the company name. The buttons now say "Go to AI Model"; the
+    German „KI-Modell öffnen“ has no such reading and is kept.
 - **Permissions:** the Phase-31 deny-by-default `setPermissionRequestHandler` gained its
   single exception — `media` requests that are **audio-only and from the app's own
   WebContents** (`services/permissions.ts`; scope matrix unit-tested). See

@@ -13,7 +13,8 @@ import {
   DICTATION_TOO_SHORT_MESSAGE,
   MIC_BLOCKED_MESSAGE
 } from '../../src/renderer/lib/dictation'
-import type { AppStatus, RuntimeStatus } from '../../src/shared/types'
+import type { AppStatus, RuntimeStatus, TranscriberMissing } from '../../src/shared/types'
+import type { MessageKey } from '../../src/shared/i18n'
 import { stubApi } from '../helpers/renderer'
 
 // Voice dictation in the composer (Phase 37, D30): availability gating (the mic exists
@@ -74,6 +75,7 @@ function Harness(props: {
   onError?: (m: string) => void
   onSend?: () => void
   available?: boolean
+  missing?: TranscriberMissing | null
   onOpenModels?: () => void
   noSignalTiming?: { afterMs: number; pollMs: number }
 }): JSX.Element {
@@ -88,6 +90,7 @@ function Harness(props: {
       placeholder="Message…"
       sendLabel="Send"
       dictationAvailable={props.available ?? true}
+      dictationMissing={props.missing}
       onDictationError={props.onError}
       dictationCaptureImpl={props.capture}
       onOpenModels={props.onOpenModels}
@@ -195,7 +198,7 @@ describe('the "not installed" mic (#497 — discoverable, never hidden)', () => 
     render(<Harness available={false} onOpenModels={onOpenModels} />)
     await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
     expect(screen.getByText(t('en', 'chat.dictation.needsModel'))).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: t('en', 'chat.noModel.open') }))
+    await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.getModel') }))
     expect(onOpenModels).toHaveBeenCalledTimes(1)
     // A second click on the mic folds the hint away again.
     await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
@@ -214,8 +217,84 @@ describe('the "not installed" mic (#497 — discoverable, never hidden)', () => 
     render(<ChatScreen onNavigate={onNavigate} />)
     await user.click(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
     const composer = document.querySelector('.composer') as HTMLElement
-    await user.click(within(composer).getByRole('button', { name: t('en', 'chat.noModel.open') }))
-    expect(onNavigate).toHaveBeenCalledWith('models')
+    await user.click(within(composer).getByRole('button', { name: t('en', 'chat.dictation.getModel') }))
+    // #527: straight to the speech model on Browse, not the installed-models view.
+    expect(onNavigate).toHaveBeenCalledWith('models:voice')
+  })
+})
+
+// #527: the hint used to blame the speech model in every case and borrowed "Open AI Model" for
+// its button. On a Linux drive (v1.8.6 engine: Windows-only) the model was installed and the
+// ENGINE was missing — with no build the app could install. Each cause now has its own text and
+// button, and the cause with nothing to fetch has no button at all.
+describe('the "not installed" hint names the missing piece (#527)', () => {
+  const CASES: { missing: TranscriberMissing; text: MessageKey; action: MessageKey }[] = [
+    { missing: 'model', text: 'chat.dictation.needsModel', action: 'chat.dictation.getModel' },
+    { missing: 'engine', text: 'chat.dictation.needsEngine', action: 'chat.dictation.getEngine' },
+    { missing: 'model-and-engine', text: 'chat.dictation.needsModelAndEngine', action: 'chat.dictation.setUp' }
+  ]
+
+  for (const c of CASES) {
+    it(`${c.missing}: names it and offers its own action`, async () => {
+      const user = userEvent.setup()
+      const onOpenModels = vi.fn()
+      render(<Harness available={false} missing={c.missing} onOpenModels={onOpenModels} />)
+      await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
+      expect(screen.getByText(t('en', c.text))).toBeInTheDocument()
+      await user.click(screen.getByRole('button', { name: t('en', c.action) }))
+      expect(onOpenModels).toHaveBeenCalledTimes(1)
+    })
+  }
+
+  it('engine-unsupported: says it is not available on this operating system, with no dead-end button', async () => {
+    const user = userEvent.setup()
+    render(<Harness available={false} missing="engine-unsupported" onOpenModels={vi.fn()} />)
+    // The mic's own name changes too: nothing is "not installed on this drive" that could be.
+    expect(screen.queryByRole('button', { name: t('en', 'chat.dictation.unavailable') })).not.toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailableSystem') }))
+    const hint = screen.getByText(t('en', 'chat.dictation.engineUnsupported'))
+    expect(within(hint).queryByRole('button')).not.toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'chat.dictation.needsModel'))).not.toBeInTheDocument()
+  })
+
+  it('no button reads "Open AI …" (next to "AI" the verb parses as the company name)', async () => {
+    const user = userEvent.setup()
+    render(<Harness available={false} missing="model" onOpenModels={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
+    expect(screen.queryByRole('button', { name: /open ai/i })).not.toBeInTheDocument()
+  })
+
+  it('ChatScreen reads the cause from the app status and re-reads it on focus', async () => {
+    const user = userEvent.setup()
+    const getAppStatus = vi.fn(async () =>
+      appStatus({ dictationAvailable: false, transcriberMissing: 'model-and-engine' })
+    )
+    stubApi({
+      getAppStatus,
+      getRuntimeStatus: vi.fn(async () => runtimeStatus()),
+      listConversations: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [])
+    })
+    render(<ChatScreen onNavigate={() => {}} />)
+    await user.click(await screen.findByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
+    expect(screen.getByText(t('en', 'chat.dictation.needsModelAndEngine'))).toBeInTheDocument()
+
+    // The voice engine landed while the user stayed in chat; only the model is missing now.
+    getAppStatus.mockImplementation(async () =>
+      appStatus({ dictationAvailable: false, transcriberMissing: 'model' })
+    )
+    act(() => {
+      window.dispatchEvent(new Event('focus'))
+    })
+    expect(await screen.findByText(t('en', 'chat.dictation.needsModel'))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'chat.dictation.needsModelAndEngine'))).not.toBeInTheDocument()
+  })
+
+  it('a status without the field (an older main) falls back to the speech-model copy', async () => {
+    const user = userEvent.setup()
+    render(<Harness available={false} onOpenModels={vi.fn()} />)
+    await user.click(screen.getByRole('button', { name: t('en', 'chat.dictation.unavailable') }))
+    expect(screen.getByText(t('en', 'chat.dictation.needsModel'))).toBeInTheDocument()
   })
 })
 

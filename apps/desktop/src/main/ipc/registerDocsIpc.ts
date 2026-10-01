@@ -267,6 +267,7 @@ export function registerDocsIpc(ctx: AppContext): void {
     embedder: ctx.embedder,
     cipher: ctx.workspace.documentCipher(),
     transcriber: ctx.transcriber,
+    transcriberMissing: ctx.transcriberMissing,
     ocrEngine: ctx.ocrEngine,
     onTranscribeProgress: (documentId, percent) => transcribing.set(documentId, percent),
     signal,

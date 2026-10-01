@@ -161,19 +161,24 @@ export function DictationButton({
 /**
  * The "not installed" mic (#497 discoverability): the same glyph at the disabled opacity,
  * focusable and clickable (`aria-disabled`, not `disabled`, so keyboard users reach the
- * explanation too). Its click toggles the composer's hint that names the missing speech model
- * and deep-links to the AI Model screen. Rendered for `dictationAvailable === false` only —
- * never for a status that has not been read yet, so mount never flashes it.
+ * explanation too). Its click toggles the composer's hint that names the missing piece (#527:
+ * the speech model, the voice engine or both) and deep-links to the AI Model screen.
+ * `unsupported`: the voice engine has no build for this system — the label says "not available
+ * on this operating system" rather than "not installed on this drive". Rendered for
+ * `dictationAvailable === false` only — never for a status that has not been read yet, so
+ * mount never flashes it.
  */
 export function DictationUnavailableButton({
   expanded,
-  onToggle
+  onToggle,
+  unsupported = false
 }: {
   expanded: boolean
   onToggle: () => void
+  unsupported?: boolean
 }): JSX.Element {
   const { t } = useT()
-  const label = t('chat.dictation.unavailable')
+  const label = t(unsupported ? 'chat.dictation.unavailableSystem' : 'chat.dictation.unavailable')
   return (
     <Button
       variant="ghost"

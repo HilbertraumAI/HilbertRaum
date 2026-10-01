@@ -27,6 +27,20 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-01 — the closed 2026-09-13 #467 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-01 (preamble budget, making room for the #527 entry). #467 is closed and its
+record unchanged: `rag-design.md` §17 D-Z22 "Also absorbed". Citations of the form "BUILD_STATE 2026-09-13 entry" now
+resolve here for both entries of that day (#460 below). Text below is byte-identical to what was removed.
+
+_2026-09-13 — **#467 fixed — the `zim-client` 8 MiB `read ECONNRESET` was the FIXTURE's server-side close, not a slow transfer**
+(`fix/467-zim-client-reset`; record `rag-design.md` §17 D-Z22 "Also absorbed"). Reproduced outside vitest (14 of 30, idle-priority load): the
+client asks `Connection: close`, the fixture closed ~1 ms after its last write, and a CPU-starved Windows reader then never gets the queued
+tail — it stops ~0.4 % short and the OS resets at **~19 s, every time** (the 2026-09-05 15 s timeout and ~19 s reset were this). From 256 KB
+up; 4–64 KB 0 of 80; client-closes-first 0 of 50. Fix: the ceiling answers are keep-alive with `keepAliveTimeout` 0, `retry: 2` dropped, plus an
+assert the server never closed first (FAILS on an idle box with the line removed). Under load after: 26 of 26 ceiling legs, ≤ 111 ms. Production
+`/raw` absorbs it (1 s idle + resume, 24/24 starved 1 MiB reads at ~1.1 s); kiwix-serve's own close is unmeasured._
+
 ## 2026-09-27 — the closed 2026-09-13 #460 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-09-27 (preamble budget, making room for the #517 scorer entry). #460 is closed
