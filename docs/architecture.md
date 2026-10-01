@@ -12017,7 +12017,8 @@ window loading a static page; first-contentful-paint in ms after the window is c
   with the header's `originalPolicy`, and rasterization completed under that intersection. Same
   result on 43.4.0.
 - **Packaging, all three platforms:** `release.yml` `workflow_dispatch` run 36937141219 on the bump
-  commit.
+  commit: `build-win` (both test shards), `build-mac` and `build-linux` succeeded (win-portable
+  115.3 MB, mac-app 156.7 MB, linux-appimage 165.4 MB), and the tag-gated `release` job skipped.
 - 43.4.0 logs `sandboxed_renderer.bundle.js script failed to run` whenever a debugger attaches to
   a sandboxed window; 43.7.7 does not (fixed upstream in 43.7.4).
 
