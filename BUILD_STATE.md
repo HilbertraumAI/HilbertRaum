@@ -28,6 +28,11 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-01 — **DEP-5 — Electron 43.4.0 → 43.7.7 clears the four high Dependabot alerts 98–101 (`fix/dependabot-electron-43-7-7`).**
+Three are unreachable here (no custom protocol, no `<webview>`, every window denies popups); the preload-cache one (alert 98) needs a
+renderer exploit first. Lockfile-only; Node 24.21.0, SQLite 3.53.4. Suite parity, the sqlite tests under Electron itself, a packaged
+smoke, cross-version workspaces and the OCR window's runtime CSP (open since DEP-1) all pass. Cost: from 43.7.2 the first window paints
+later (packaged +64 ms; owner accepted). Record: `architecture.md` "Electron 43.4.0 → 43.7.7". Open: macOS/Linux at runtime; §5 18(g)._
 _2026-10-01 — **#530 — an engine the OS refuses to start is named as such, never as a GPU, model or memory fault (`fix/530-engine-load-failure`).**
 One classifier (`runtime/engine-load.ts`: Linux ld.so text, Windows NTSTATUS + a System32 VC++ check, macOS dyld) at every spawn site, a
 session verdict (never persisted) fed by the startup probe and every refusal, `AppStatus.engineProblems`, `engine:recheck` ("Check again")
@@ -628,9 +633,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     measurement on an asset-carrying drive closes both. **⟶ 2026-09-02 (audit Phase 1, PR #269):
     the packaged Windows build's startup OCR execution probe PASSED against a scratch root with
     `deu`+`eng` files (`ok: true`, 277 ms) — worker script, hoisted deps, WASM core and language
-    init load from `app.asar.unpacked`. STILL OPEN (owner-runnable on the packaged build): the
-    interactive recognition leg (photo import + "Make searchable (OCR)" on a scanned PDF) and the
-    OCR window's runtime CSP leg; record machine/date/outcome here when run.**
+    init load from `app.asar.unpacked`. ⟶ 2026-10-01 (DEP-5, packaged 43.7.7, i9-14900K): the OCR
+    window's runtime CSP leg PASSED, and "Make searchable (OCR)" on a scanned PDF recognised its
+    text, both IPC-driven. STILL OPEN (owner, packaged build): photo import + the UI clicks.**
     (d) ⚠️ **Electron 44 is a CUSTOMER-FACING decision, not a routine bump** — it removes macOS 12
     support and drops 32-bit Windows (ia32) + Linux armv7l. **E43 is the last series shipping
     prebuilt 32-bit binaries, supported until January 2027.** Decide deliberately with the drive
@@ -639,11 +644,11 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     environments even with a seeded cache, because `@electron/get` always fetches
     `SHASUMS256.txt`; fixed on master only, not in any 26.15.x. Affects BUILD machines, not the
     shipped app, but it rubs against the offline-first posture.
-    (f) **Manual legs still owed by the owner** (P4's human-only items): the `defaultPath`
-    dialog probe that decides whether Electron 43 pre-selects the host Downloads folder
-    (owner decision D-2, conditional — if it fires, pass an explicit root at the
-    `save-export.ts` seam), a real OS drag-and-drop onto the composer (`webUtils`), and a
-    double-click launch of the portable `.exe`.
+    (f) ~~Manual legs owed by the owner~~ **DONE 2026-08-19** (owner-run; DEP-4 record §3):
+    `defaultPath` resolves to the drive, not Downloads (D-2 void); a real drag-and-drop imports;
+    the portable `.exe` starts by double-click on a prepared drive.
+    (g) **DEP-5 (2026-10-01, Electron 43.7.7; record "Electron 43.4.0 → 43.7.7" §3):** from 43.7.2
+    the first window paints later (packaged +64 ms, dev +435 ms). Re-measure at every 43.x bump.
 17. **STR-1 follow-up register (owner-facing; registered at the 2026-07-20 close-out; durable
     ledger = `docs/architecture.md` "Skills & tools architecture review (2026-07-19) — design
     record (wave STR-1, 2026-07-20)"):** (a) **Issue #80** — the constrained

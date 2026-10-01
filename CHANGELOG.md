@@ -81,6 +81,13 @@ from its first public `1.0.0` release onward.
   starts with Chromium's operating-system sandbox switched off instead of refusing to start, and a
   desktop shortcut built from the AppImage's own menu entry always starts it that way. Nothing in
   the app changed; Windows and macOS are not affected. Details in the known limitations.
+- **Electron 43.4.0 → 43.7.7**, the browser engine the app runs on, with seven weeks of
+  Chromium security fixes. It clears four high-severity Electron advisories
+  (GHSA-gr2m-v5gq-v685, GHSA-j84w-jfhq-vhvj, GHSA-9qh4-3jw8-366w, GHSA-qmv3-fv6v-rmhq). Three
+  concern features HilbertRaum does not use; the fourth needs a separate attack on the app
+  first. **Workspaces open exactly as before**, also with an older copy of the app, and the
+  minimum operating systems are unchanged. The window can take a moment longer to appear at
+  start, under a tenth of a second on our test PC. That change comes with the security fixes.
 
 ## [0.1.62] — 2026-09-28
 

@@ -64,13 +64,17 @@ the intersection of both**. All four policy strings live in `main/window-securit
    Method note for whoever re-runs this: do **not** measure the header by registering your own
    `webRequest.onHeadersReceived` — Electron allows only ONE listener per session, so doing so
    REPLACES the app's handler and the probe then observes the absence of a header it removed
-   itself. Provoke a violation of a directive that exists only in the header (`base-uri`) and
-   read the header back out of the violation's `originalPolicy`. The DEP-4 run measured only
-   the main window at runtime; the OCR window's runtime leg stayed unmeasured because that
-   window opens only for OCR work and the build machine carries no `*.traineddata` — the
-   header is page-agnostic (one session-level handler, one `buildCsp(false)` string), so the
-   mechanism is proven, but the OCR window's runtime `blob:` intersection is still carrying
-   its Electron-39 measurement.
+   itself. Provoke a violation and read the header back out of the violation's
+   `originalPolicy`. Since #266 both baked metas carry `base-uri 'none'` too, so `base-uri` is
+   no longer header-only: one `<base>` injection fires one violation per policy, and the
+   header's is the event whose `originalPolicy` is byte-exact to `buildCsp(false)` (its
+   directive order differs from the meta's). A directive only the header forbids still
+   discriminates on its own: the OCR window's `blob:` image. **Re-confirmed on the Electron
+   43.7.7 / Chromium 150.0.7871.250 packaged build (2026-10-01, DEP-5)** for the main window as
+   above, and **for the first time at runtime in the OCR window**: attached during a live OCR
+   task, its meta was byte-exact to `buildMetaCsp(false, 'ocr')`, a `blob:` image the meta
+   allows was blocked with the header's `originalPolicy`, and rasterization completed under
+   that intersection (`architecture.md` "Electron 43.4.0 → 43.7.7" §4).
 2. **`<meta http-equiv="Content-Security-Policy">`** in each page — `buildMetaCsp(isDev, page)`,
    **generated at build time** by the `hilbertraum:csp-meta` transform in
    `electron.vite.config.ts`. The checked-in HTML carries the dev policy (Vite HMR needs the
@@ -160,6 +164,15 @@ via the lockfile — review upstream advisories for all of them each release; th
 means there is no auto-update channel to catch a disclosed vulnerability between releases.
 The DOCX pair was missing from this list until the 0.8.15 bump, which is exactly how ten xmldom
 advisories went unwatched.
+
+**Electron itself has the same exposure, and Dependabot understates it.** Electron is a
+devDependency in npm terms but the runtime of every packaged build. Dependabot files its alerts as
+`development` scope, and `npm audit --omit=dev` leaves it out. Triage each Electron advisory
+against the window posture: no custom protocol or scheme, no `<webview>`, every window denies
+`window.open`, every window sandboxed (preloads only in the main and OCR windows). Patch even
+when nothing is reachable, because each 43.x patch release also carries Chromium security
+backports that never raise an alert. The 2026-09-29 batch is triaged in `architecture.md`
+"Electron 43.4.0 → 43.7.7" §1.
 
 **Why the DOCX parser needs that watch specifically.** The ingestion caps bound *bytes*,
 not *time*: the M-3 zip-bomb guard checks the DECLARED inflated size, and `parseWithLimits`'

@@ -83,8 +83,8 @@ a future move to Tauri/Rust is a localized swap.
   sidecar — design record" below.
 
 ## Storage
-`node:sqlite` — built into the Node bundled by **Electron ^43.4.0** (Node 24.x; measured 24.18.1 /
-SQLite 3.53.1 on the packaged E43 build, wave DEP-4). It is loaded via
+`node:sqlite` — built into the Node bundled by **Electron ^43.7.7** (Node 24.x; measured 24.21.0 /
+SQLite 3.53.4 on the Electron 43.7.7 binary, wave DEP-5). It is loaded via
 `createRequire` in `services/db.ts` because the experimental module is absent from
 `module.builtinModules`, which otherwise makes bundlers try to resolve a non-existent `sqlite`
 package. One SQLite DB per workspace (`workspace/hilbertraum.sqlite`) holds the original spec §8 tables
@@ -378,7 +378,7 @@ force-quit. The contract now:
 
 **Drag-drop intake (full-audit-2026-06-29 follow-up, Phase 2 — FE-A / FE-C).** Chat drag-and-drop
 attach was **silently dead in the shipped app**: `ChatScreen.pathsFromDrop` read `(file).path`, the
-non-standard `File.path` Electron **removed in v32** (the app pins `^43.4.0`; installed 43.4.0). At
+non-standard `File.path` Electron **removed in v32** (the app pins `^43.7.7`; installed 43.7.7). At
 runtime `.path` is `undefined`, so the loop produced `[]`, `attachFiles` was never called, and a drop
 did nothing — no import, no pending chip, no error. It went unnoticed because the only intake test
 (`ChatAttach.test.tsx`) **fabricated** `dataTransfer.files = [{ name, path }]`, injecting a property
@@ -11923,6 +11923,119 @@ was deleted at close-out — **no `git show` recovers it**. Citations of that fo
 
 Surviving sources for anything not resolved above: this record, the phase commits, and the PR #187
 body.
+
+## Electron 43.4.0 → 43.7.7 — design record (wave DEP-5)
+
+_Wave DEP-5 (2026-10-01) cleared the four high Dependabot alerts that Electron's 2026-09-29
+advisories opened (alerts 98–101) by moving the locked Electron **43.4.0 → 43.7.7**, the newest
+43.x. At the npm level it is lockfile-only: the `electron` entry and its declared range, nothing
+else (43.7.7's dependency object, `engines` and lack of install scripts are identical to 43.4.0's).
+The analysis was a git-ignored `tmp/` working paper; this record is the surviving source._
+
+### §1 Alert ledger + reachability
+
+| Alert | Advisory | Fixed in (43.x) | Precondition the advisory names | Verdict + evidence |
+|---|---|---|---|---|
+| 101 | GHSA-gr2m-v5gq-v685 / CVE-2026-102674: a window opened from a sandboxed top-level document does not inherit its sandbox | 43.4.1 | untrusted content in a sandboxed top-level document that may open popups | **Unreachable.** No document is ever sandboxed (no CSP `sandbox` directive, no iframes), and all three windows return `{ action: 'deny' }` from `setWindowOpenHandler` (`createWindowOpenPolicy` in `window-security.ts`; `rasterizer.ts`; `print-pdf.ts`), which is the advisory's own "not affected" case. |
+| 100 | GHSA-j84w-jfhq-vhvj / CVE-2026-102675: `registerFileProtocol` / `registerHttpProtocol` responses readable cross-origin | 43.4.1 | a custom `supportFetchAPI` scheme without `corsEnabled` | **Unreachable.** The app registers no scheme and no protocol handler of any kind; it loads the built-in `file://`. |
+| 99 | GHSA-9qh4-3jw8-366w / CVE-2026-102676: `<webview>` can enable Node.js in its Web Workers | 43.4.1 | `<webview>` enabled and an unsandboxed embedder | **Unreachable twice:** `webviewTag` is never set, and every window is `sandbox: true`. |
+| 98 | GHSA-qmv3-fv6v-rmhq / CVE-2026-102677: the sandboxed-preload code cache can be poisoned by a compromised renderer | **43.5.0** | a compromised renderer in an app that loads untrusted content; no app-side workaround | **Applies in principle, low likelihood.** The main and OCR windows run sandboxed preloads, and the threat model's threat #1 is exactly a hostile document reaching code execution in a renderer (`security-model.md`). What the bug adds to that foothold: the attacker's code comes back on later launches on that computer (the cache lives in the host profile), and possibly, inferred from the fix (writes are now matched against the preloads pushed to *that* frame) rather than stated by the advisory, a write into the main window's preload from the narrow OCR window. It needs a separate renderer exploit first and is fixed only by upgrading. |
+
+Dependabot files all four as `development` / `transitive`. Both labels are wrong in impact terms:
+Electron is a direct devDependency and the runtime of every packaged build (DEP-4 §3), and
+`npm audit --omit=dev` does not list it at all.
+
+### §2 Decisions
+
+- **43.7.7, not the alert-clearing floor 43.5.0.** The 43.x line is cumulative, and nearly every
+  patch release since 43.4.0 carries Chromium / V8 / Skia security backports that Dependabot never
+  alerts on: the renderer-compromise class that alert 98 needs as its first step. Later fixes this
+  app benefits from: 43.7.4 makes `ready-to-show` fire for hidden windows that could stop painting
+  (a hidden first window failed to paint within 3 s in 1 of 5 probe runs on 43.5.0, 2 of 5 on
+  43.7.0 and 2 of 6 on 43.7.3; never in about 40 runs each on 43.4.0 and 43.7.7). 43.7.6 stops WASM modules
+  loaded from the code cache crashing after a patch update (tesseract.js) and ends a GPU-process
+  crash loop when the sandbox cannot read the install folder (removable drives).
+- **Floor `^43.7.7`**, the DEP-1/DEP-3 precedent: the floor is the version the wave verified.
+- **Stay on 43.** Electron 44 is still the customer-facing decision of DEP-4 §5 item 4.
+- **The first-paint cost of §3 is accepted** (owner decision, 2026-10-01), recorded here and in
+  `benchmark.md` "Perf marks"; not reported upstream (owner decision).
+- `electron-builder.yml` said to bump `electronVersion` "when the installed Electron major/minor
+  changes". The parity test compares the exact version, so the comment now says every change,
+  patch releases included.
+
+### §3 The first-paint cost (43.7.2 and later)
+
+Measured on the i9-14900K / RTX 3080 Ti + UHD 770 desktop (Windows 11). Probe: one `show: false`
+window loading a static page; first-contentful-paint in ms after the window is created; median of
+5 interleaved runs (one discarded warm-up per binary):
+
+| 43.4.0 | 43.4.1 | 43.5.0 | 43.6.0 | 43.7.0 | 43.7.1 | **43.7.2** | 43.7.3 | 43.7.4 | 43.7.7 |
+|---|---|---|---|---|---|---|---|---|---|
+| 408 | 417 | 437 | 416–426 | 435 | 440 | **1,064** | 847–856 | 1,049 | 790–793 |
+
+- Only the **first window of a process** is affected; later windows paint as before. The renderer's
+  first frame is what arrives late (the first `requestAnimationFrame` moves with it), not
+  `ready-to-show`: showing the window early, creating it visible, warming the GPU process first
+  (`app.getGPUInfo`) and `--disable-gpu` all leave it unchanged. No window-handling change on our
+  side can recover it.
+- 43.7.2 holds a USB-chooser use-after-free fix, a Windows protocol-client fix and 17 + 1 Chromium /
+  ANGLE / Skia / V8 security cherry-picks (electron/electron#53984, #53988). The cost rides on a
+  security fix that every later 43.x carries.
+- **What a user sees is far smaller than the probe number.** The packaged renderer reaches its first
+  paint about 1.1 s after the window is created anyway, which absorbs most of the stall. Perf-log
+  medians (`HILBERTRAUM_PERF_LOG=1`, n = 5 interleaved, warm profile): packaged
+  `window_ready_to_show` 1,165 → 1,229 ms (**+64**), `gate_visible` 1,193 → 1,278 ms (**+85**);
+  the unpackaged dev app 491 → 926 ms (+435). Slower machines and drives were not measured.
+
+### §4 Re-verification ledger (2026-10-01, the desktop above)
+
+- **npm:** written with the pinned npm 11.6.2 (`packageManager`); lockfile diff = the `electron`
+  entry + the workspace range echo, integrity equal to the registry's; fresh `npm ci`, the
+  `verify-electron.mjs` postinstall clean, binary fetched lazily (`v43.7.7`).
+- **Runtime facts, read off both binaries:** Chromium 150.0.7871.224 → **150.0.7871.250**, Node
+  24.18.1 → **24.21.0**, V8 15.0.245.28 → .31, SQLite 3.53.1 → **3.53.4**. FTS5 `bm25()`,
+  `snippet()` and `highlight()` give byte-identical results on both.
+- **Suite:** 478 files / 7,898 passed / 86 skipped / 7,985 on both (master's tree on 43.4.0, then
+  43.7.7), the real-Electron `evidence-pack-pdf-smoke` 8/8 included. Vitest runs on host Node (24.19
+  here), so the 147 test files that touch `node:sqlite` were also run **under Electron 43.7.7
+  itself** (`ELECTRON_RUN_AS_NODE`): 138 passed / 9 skipped, 2,465 tests, the same set as on host
+  Node. CI's Node 24 legs already run 24.21.0. The Node 24.19–24.21 `node:sqlite` changes
+  (`prepare()` now rejects statement-less SQL; Booleans and ArrayBuffers now bind) hit no code path.
+- **Packaged Windows build** (`package:win`, `electron=43.7.7`), driven over CDP against scratch drive
+  roots: baked meta byte-exact; header CSP attached and enforced on `file://` (the violation's
+  `originalPolicy` byte-exact to `buildCsp(false)`); `window.open` denied; permission check path
+  grants the microphone and denies camera, geolocation and notifications; the request path allows
+  audio and refuses video; encrypted workspace create → import → lock → wrong password refused →
+  unlock, then restart + unlock; OCR available (WASM from `app.asar.unpacked`), and a "Make
+  searchable (OCR)" task on an image-only PDF recognised its text through the sandboxed rasterizer
+  window. The same 17 checks pass on a 43.4.0 package of the same tree.
+- **Cross-version:** a workspace created by the 43.4.0 package opens in 43.7.7 with its documents
+  and OCR text intact, and the reverse. Nothing on disk changed in either direction.
+- **The OCR window's runtime CSP (open since DEP-1; a DEP-4 §3 gap):** attached to the live hidden
+  `ocr.html` window during a 24-page OCR task. Its only bridge is `ocrRaster` (no `window.api`), the
+  meta is byte-exact to `buildMetaCsp(false, 'ocr')`, a `blob:` image the meta allows was blocked
+  with the header's `originalPolicy`, and rasterization completed under that intersection. Same
+  result on 43.4.0.
+- **Packaging, all three platforms:** `release.yml` `workflow_dispatch` run 36937141219 on the bump
+  commit.
+- 43.4.0 logs `sandboxed_renderer.bundle.js script failed to run` whenever a debugger attaches to
+  a sandboxed window; 43.7.7 does not (fixed upstream in 43.7.4).
+
+**Not measured:** macOS and Linux at runtime (they package, but nothing launched them); photo
+import and UI clicks (every leg above is IPC-driven); a real Kit drive (K: carries an older exe and
+a real workspace, so scratch roots were used); the first-paint cost on slower hardware.
+
+### §5 Follow-ups
+
+1. Re-measure the first-paint cost at every 43.x bump and remove the notes once it is gone
+   (BUILD_STATE §5 item 18(g)).
+2. DEP-4 §2's CSP method ("provoke a violation of a header-only directive (`base-uri`)") expired
+   with #266, which put `base-uri` into both baked metas, so one injection now fires one violation
+   per policy. `security-model.md` describes the method that still discriminates.
+3. Unchanged and not in this wave: `.github/dependabot.yml` (DEP-4 §5 item 1); Electron 44 (item
+   4); the medium vitest alerts 91 / 92 / 94, which need vitest 3.2.6 → 4.1.11, a major;
+   `npm audit` also flags brace-expansion, undici and fast-uri (dev toolchain) and dompurify (not
+   shipped, DEP-3 §1).
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
