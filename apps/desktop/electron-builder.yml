@@ -27,17 +27,17 @@ productName: HilbertRaum
 executableName: HilbertRaum
 
 # electron-builder 26 cannot auto-detect the Electron version in this npm workspace: `electron`
-# is pinned as a RANGE (^43.4.0 in devDependencies) and is HOISTED to the repo-root node_modules,
+# is pinned as a RANGE (^43.7.7 in devDependencies) and is HOISTED to the repo-root node_modules,
 # which eb — running from apps/desktop — does not resolve, so it errors on the range. Pin the
-# exact installed version here. Keep in sync with the `electron` devDependency (currently ^43.4.0 →
-# 43.4.0); bump when the installed Electron major/minor changes.
+# exact installed version here. Keep in sync with the `electron` devDependency (currently ^43.7.7 →
+# 43.7.7); bump whenever the locked version changes, patch releases included.
 #
 # THIS FIELD, NOT THE devDependency, SELECTS THE RUNTIME THAT IS ACTUALLY PACKAGED. Wave DEP-1
 # shipped Electron 37 from a build whose devDep said 39 because this line was left behind, and a
 # human caught it by luck (DEP-1 §4(b)). Since wave DEP-4 that is guarded automatically:
 # tests/integration/packaging.test.ts asserts this value equals the electron version pinned in
 # package-lock.json and satisfies the declared caret range. Edit both or the green gate fails.
-electronVersion: 43.4.0
+electronVersion: 43.7.7
 
 directories:
   # buildResources holds icons etc. (optional; defaults are used if absent).
