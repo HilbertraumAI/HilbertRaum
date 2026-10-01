@@ -28,6 +28,7 @@ import {
 import { documentsDir } from '../../src/main/services/ingestion'
 import { encodeWavPcm16 } from '../../src/renderer/lib/wav'
 import { t } from '../../src/shared/i18n'
+import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
 import type { Transcriber, TranscribeOptions } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -346,4 +347,44 @@ describe('registerDictationIpc', () => {
     // The temp WAV is shredded even though the child wedged (finally ran).
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
   }, 120_000)
+})
+
+// #530: the OS refused to start the voice engine — the handler says so (a retry would not help);
+// every other failure keeps the generic copy.
+describe('registerDictationIpc — voice engine refused by the OS (#530)', () => {
+  const throwing = (err: Error): Transcriber => ({
+    id: 'fake-whisper',
+    async transcribe() {
+      throw err
+    }
+  })
+
+  it('an EngineCannotRunError (whisper family) rejects with the engine-cannot-run copy and shreds the temp file', async () => {
+    const workspacePath = freshWorkspacePath()
+    const refusal = new EngineCannotRunError('whisper-cli', {
+      family: 'whisper_cpp',
+      reason: 'library-missing',
+      os: 'linux',
+      name: 'libgomp.so.1',
+      exit: 'exit code 127'
+    })
+    registerDictationIpc(ctxWith(workspacePath, throwing(refusal)).ctx)
+    const err = await invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3])).then(
+      () => null,
+      (e: unknown) => e
+    )
+    expect(String(err)).toContain(t('en', 'main.dictation.engineCannotRun'))
+    expect(String(err)).not.toContain(DICTATION_FAILED_MESSAGE)
+    expect(String(err)).not.toContain('libgomp') // the technical detail stays out of the toast
+    expect(readdirSync(documentsDir(workspacePath))).toEqual([])
+  })
+
+  it('any other failure still rejects with the unchanged generic copy', async () => {
+    expect(DICTATION_FAILED_MESSAGE).toBe('Could not transcribe that — try again.')
+    const workspacePath = freshWorkspacePath()
+    registerDictationIpc(ctxWith(workspacePath, throwing(new Error('whisper-cli exited with code 3: boom'))).ctx)
+    await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))).rejects.toThrow(
+      DICTATION_FAILED_MESSAGE
+    )
+  })
 })

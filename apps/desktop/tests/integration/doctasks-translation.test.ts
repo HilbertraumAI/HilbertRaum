@@ -52,6 +52,7 @@ import type { ModelRuntime } from '../../src/main/services/runtime'
 import type { OcrEngine } from '../../src/main/services/ocr'
 import { applyUiLanguageSetting } from '../../src/main/services/i18n'
 import { t } from '../../src/shared/i18n'
+import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
 import { hangBudgetMs, testBudgetMs } from '../helpers/hang-budget'
 
 // Phase 34 — the translation document task (wave-3 plan §7, decisions D27 + D36), REROUTED at
@@ -818,6 +819,39 @@ describe('failed windows (R-T2 retry-then-mark policy)', () => {
     expect(status.state).toBe('failed')
     expect(status.error).toBe(t('en', 'main.translation.startFailed')) // distinct, friendly, content-free
     expect(calls).toBe(1) // start failure fails the task immediately — no futile per-window retry
+  })
+
+  it('#530: a latched start failure the OS loader caused fails the task with the engine copy, not the memory one', async () => {
+    const docId = await importDoc(60)
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'scripted-translator',
+      contextWindow: () => 4096,
+      stop: async () => {},
+      async translate() {
+        calls += 1
+        throw new TranslationStartError(
+          new EngineCannotRunError('llama-server', {
+            family: 'llama_cpp',
+            reason: 'library-missing',
+            os: 'linux',
+            name: 'libgomp.so.1',
+            exit: 'exit code 127'
+          })
+        )
+      }
+    }
+    const manager = makeManager({ translator })
+    const { jobId } = manager.startDocTask({
+      kind: 'translation',
+      documentIds: [docId],
+      params: { sourceLang: 'en', targetLang: 'de' }
+    })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(t('en', 'main.engine.cannotRun'))
+    expect(status.error).not.toBe(t('en', 'main.translation.startFailed'))
+    expect(calls).toBe(1)
   })
 
   it('an empty reply counts as a failure: one retry, then the marked window', async () => {

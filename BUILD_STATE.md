@@ -28,6 +28,12 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-01 — **#530 — an engine the OS refuses to start is named as such, never as a GPU, model or memory fault (`fix/530-engine-load-failure`).**
+One classifier (`runtime/engine-load.ts`: Linux ld.so text, Windows NTSTATUS + a System32 VC++ check, macOS dyld) at every spawn site, a
+session verdict (never persisted) fed by the startup probe and every refusal, `AppStatus.engineProblems`, `engine:recheck` ("Check again")
+with a full latch re-arm, and a heal at unlock (loader-caused `gpuAutoDisabled`, raw-path document rows). Owner rulings: no libgomp/VC++
+bundling, option C, kiwix out of scope. Records: `architecture.md` "Engine load failures", design-guidelines §11.17, data-contracts.
+Real-app verified (Linux container w/o libgomp1 + heal by apt; Windows en/de). Open: a stock desktop run; macOS unmeasured; #516 reinstall._
 _2026-10-01 — **#527 — the greyed-out mic names the missing piece and its button opens the AI Model screen on the speech model
 (`fix/527-dictation-hint-cause`).** Cause per drive state (`TranscriberMissing`: model / engine / both / `engine-unsupported` = no engine
 build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
@@ -138,17 +144,6 @@ contains a literal newline), so the script could only return 0 for any input and
 scored result of record stays 0 of 32. This is not a precedent for setting aside an endpoint whose instrument worked.
 Four pre-read Opus fix passes landed before the read; CI green at the read's head. The change stays a draft until the
 maintainer marks it ready.
-_2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
-`feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
-"Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
-reliable). Documents header: a "My documents | Knowledge packs" switch (`documents:packs` deep link; the rail's "Reference"
-group is gone). Rail: counts, ONE "Needs attention" view (failed ∪ stale) replacing the four diagnostic views, Unfiled inside
-Projects, locations behind a remembered "More", a name filter. Packs panel: one Switch per pack, "Ask this pack", Remove
-behind "⋯", setup card, "Copy the library address". Entry points: Home's fourth readiness row, the scope picker's "Add
-packs…". Written 2026-09-09, brought up to master 2026-09-18 (83 commits) with three review fixes: the library-address copy
-goes through MAIN (`copyToClipboard`) — it used `navigator.clipboard`, which the PR's test passed only via user-event's stub;
-Home counts a pack "ready" by the panel's ask eligibility (not a no-index archive) and says "none ready", not "none enabled";
-`architecture.md`'s smart-views note. The closed #399 entry retired for the preamble budget._
 
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
@@ -189,7 +184,8 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 2026-09-22 (preamble budget, making room for the #410 entry), and the closed 2026-09-12 #438 entry on
 2026-09-27 (preamble budget, making room for the #515 entry), and the closed 2026-09-13 #460 test-harness entry on
 2026-09-27 (preamble budget, making room for the #517 scorer entry), and the closed 2026-09-13 #467 entry on 2026-10-01
-(preamble budget, making room for the #527 entry) — citations of the form "BUILD_STATE <date> entry" /
+(preamble budget, making room for the #527 entry), and the closed 2026-09-18 #444 Documents-declutter entry on
+2026-10-01 (preamble budget, making room for the #530 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

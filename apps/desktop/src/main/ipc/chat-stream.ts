@@ -28,6 +28,7 @@ import {
 } from '../services/runtime/llama'
 import { modelBusyMessageKey } from '../services/runtime/occupancy'
 import { tMain } from '../services/i18n'
+import { isEngineCannotRunError } from '../services/runtime/engine-load'
 import { log } from '../services/logging'
 import { perfMark, perfMs } from '../services/perf'
 import { inFlightStreams, streamBuffers, streamSettled } from './inflight'
@@ -371,6 +372,8 @@ export async function withChatStream(
     const emptyCompletion = isEmptyCompletionError(err)
     const streamError = isChatStreamError(err)
     const overflow = isExceedContextError(err)
+    // #530: a document question needs the embedder, and the OS refused to start the engine.
+    const engine = isEngineCannotRunError(err)
     const message = unresponsive
       ? tMain('main.chat.runtimeUnresponsive')
       : emptyCompletion
@@ -379,7 +382,9 @@ export async function withChatStream(
           ? tMain('main.chat.streamError')
           : overflow
             ? tMain('main.model.contextExceeded')
-            : raw
+            : engine
+              ? tMain('main.engine.cannotRun')
+              : raw
     log.error(logLabel, { conversationId, message: raw })
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.error(conversationId), message)
@@ -389,7 +394,7 @@ export async function withChatStream(
     // here is what leaked the unmapped "ChatRequestError: HTTP 400 …" string to users. For
     // any other failure (incl. aborts) rethrow the original error untouched so its type and
     // message are preserved upstream.
-    throw unresponsive || emptyCompletion || streamError || overflow ? new Error(message) : err
+    throw unresponsive || emptyCompletion || streamError || overflow || engine ? new Error(message) : err
   } finally {
     // Resume any paused deep-index build first (idempotent; no-op when none was paused).
     releaseSlot()

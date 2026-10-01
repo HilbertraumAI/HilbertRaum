@@ -525,6 +525,16 @@ export class E5Embedder implements Embedder {
   }
 
   /**
+   * #530: re-arm the failed-start latch WITHOUT a teardown — called when the chat engine is
+   * installed or "Check again" found that the engine runs now. Before #530 only a lock/unlock
+   * (or a restart) re-armed it, so an engine repaired mid-session still failed every import.
+   * Harmless on a live sidecar: the latch is only ever set on a start that did not come up.
+   */
+  resetStartFailure(): void {
+    this.startFailed = null
+  }
+
+  /**
    * #475: start or join the single-flight teardown pass and return the PASS object (mirroring
    * `reranker/llama.ts`'s `beginOrJoinTeardown`) — an overlapping `suspend()`/`stop()` joins the
    * SAME in-flight pass instead of racing a second `doTeardown()` that would see `this.server`

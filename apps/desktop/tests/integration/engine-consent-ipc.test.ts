@@ -38,6 +38,7 @@ import { llamaServerBinaryName, registerSidecarChild, unregisterSidecarChild } f
 import { whisperCliBinaryName } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
+import { engineProblemFor, reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { updateSettings } from '../../src/main/services/settings'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
@@ -192,6 +193,7 @@ const kiwixDir = (root: string): string => join(root, 'runtime', 'kiwix-tools', 
 const llamaBin = (root: string): string => join(root, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME)
 
 afterEach(async () => {
+  resetEngineProblemsForTest()
   await closePerformanceFixture()
 })
 
@@ -314,5 +316,49 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
     for (const spec of optional) expect(spec.license, spec.family).toMatch(/^[A-Za-z0-9.+-]+$/)
     const notices = readFileSync(join(__dirname, '..', '..', '..', '..', 'DRIVE-NOTICES.md'), 'utf8')
     expect(notices).toContain(`### kiwix-tools 3.8.1 — ${SIDECAR_FAMILY_SPECS.find((s) => s.family === 'kiwix_tools')?.license}`)
+  })
+})
+
+// #530: the  handler and the install hook's verdict/latch handling.
+describe('engine load verdicts over IPC (#530)', () => {
+  const LLAMA_PROBLEM = { family: 'llama_cpp', reason: 'library-missing', os: 'linux', name: 'libgomp.so.1', exit: 'exit code 127' } as const
+
+  it('engine:recheck is registered and refuses while the workspace does not admit work', async () => {
+    const d = makeDrive()
+    expect(d.handlers.has(IPC.recheckEngine)).toBe(true)
+    ;(d.ctx as unknown as { workspace: unknown }).workspace = { isUnlocked: () => false }
+    await expect(invoke(d.handlers, IPC.recheckEngine)).rejects.toThrow(/locked/i)
+    ;(d.ctx as unknown as { workspace: unknown }).workspace = { isUnlocked: () => true, isLocking: () => true }
+    await expect(invoke(d.handlers, IPC.recheckEngine)).rejects.toThrow(/locked/i)
+  })
+
+  it('engine:recheck with no verdicts answers an empty problem list', async () => {
+    const d = makeDrive()
+    const { result } = await invoke(d.handlers, IPC.recheckEngine)
+    expect(result).toEqual({ problems: [] })
+  })
+
+  it('a completed chat-engine install drops the old binary verdict and re-arms the consumers', async () => {
+    const d = makeDrive()
+    const resetStartFailure = vi.fn()
+    Object.assign(d.ctx, { embedder: { resetStartFailure }, reranker: { resetStartFailure }, vision: { resetStartFailure } })
+    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem({ ...LLAMA_PROBLEM, family: 'whisper_cpp' })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine)
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    await vi.waitFor(() => expect(resetStartFailure).toHaveBeenCalledTimes(3))
+    expect(engineProblemFor('llama_cpp')).toBeNull()
+    // Only the family that was installed loses its verdict.
+    expect(engineProblemFor('whisper_cpp')).not.toBeNull()
+  })
+
+  it('a completed voice-engine install drops only the voice verdict', async () => {
+    const d = makeDrive({ withWhisper: true })
+    reportEngineProblem(LLAMA_PROBLEM)
+    reportEngineProblem({ ...LLAMA_PROBLEM, family: 'whisper_cpp' })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['whisper_cpp'] })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(engineProblemFor('whisper_cpp')).toBeNull()
+    expect(engineProblemFor('llama_cpp')).not.toBeNull()
   })
 })

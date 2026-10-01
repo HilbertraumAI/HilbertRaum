@@ -10,6 +10,7 @@ import {
 import { maxInputApproxTokens } from '../runtime/context-budget'
 import { truncateToApproxTokens, CHUNK_DEFAULTS } from '../ingestion/chunker'
 import { GPU_RERANK_SCOPE, type RerankerDevice } from '../rag/rerank-profile'
+import { isEngineCannotRunError } from '../runtime/engine-load'
 import { log } from '../logging'
 
 // Real on-device reranker (rag-design §11). The THIRD `LlamaServer`
@@ -589,6 +590,13 @@ export class LlamaReranker implements Reranker {
       // fix as the embedder, F4) — it is not a device fault, and the caller's own retry re-resolves
       // the SAME posture. Leave every latch untouched so the next rerank() re-attempts.
       if (isBindRaceError(error.message)) throw error
+      // #530: the OS refused to start the program — not a device fault, so no GPU-fallback latch
+      // and no CPU retry (the same program would be refused again). It latches like any load
+      // fault, until "Check again" or an engine install re-arms it (`resetStartFailure`).
+      if (isEngineCannotRunError(error)) {
+        this.startFailed = error
+        throw error
+      }
       if (posture === 'gpu' && !this.gpuFellBack) {
         this.noteDeviceFallback(`Reranker sidecar GPU-attempt start failed: ${error.message}`)
         // A lock/quit/Q-restart that began while the GPU attempt was failing must not cold-load
@@ -727,6 +735,14 @@ export class LlamaReranker implements Reranker {
    */
   async suspend(): Promise<void> {
     await this.teardown()
+  }
+
+  /**
+   * #530: re-arm the failed-start latch — the chat engine was just installed, or "Check again"
+   * found that the engine runs now. A load fault of the GGUF itself re-latches on the next ask.
+   */
+  resetStartFailure(): void {
+    this.startFailed = null
   }
 }
 

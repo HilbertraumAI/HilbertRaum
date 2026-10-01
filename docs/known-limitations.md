@@ -2508,6 +2508,48 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   and the fixed RAG answers translate (or don't) independently of the current UI language —
   accepted.
 
+## What the AI engine needs from the system (#530 — [`architecture.md`](architecture.md) "Engine load failures")
+
+- **On Linux, a 2022-era distribution or newer.** The pinned llama.cpp and whisper.cpp Linux
+  builds need glibc 2.34, GCC 12's libstdc++ (`GLIBCXX_3.4.30`) and, for `llama-server`, OpenSSL 3,
+  which means Ubuntu 22.04, Debian 12 or Fedora 36 and newer. Electron's own floor (Ubuntu
+  18.04+) is lower and does not apply to the engine. These floors come from the pinned builds;
+  re-read them on every engine pin bump (`model-policy.md` "To bump").
+- **libgomp is taken from the system, not bundled (owner decision 2026-10-01).** Every Linux engine
+  build links `libgomp.so.1`. Desktop images ship `libgomp1`: Ubuntu Desktop 22.04.5 / 24.04.3 /
+  24.04.4 and every Debian 13.7 live flavour were checked. Minimal, server, WSL and container
+  installs may lack it, and then the app names the library and the package. Bundling is
+  reopened only if real users report the problem; the facts for that case are on the #530
+  comment.
+- **On Windows, the Visual C++ runtime is taken from the system, not bundled.** Every Windows
+  engine build (llama.cpp, whisper.cpp, kiwix-tools) imports `msvcp140.dll`, `vcruntime140.dll`
+  and `vcruntime140_1.dll`, and no drive folder carries them. Most PCs have the Redistributable
+  through other programs, but it is not part of Windows. Whether a stock Windows 10/11
+  installation carries it was not measured. A missing DLL exits 0xC0000135 with no message, so
+  the app checks `System32` for the three files to tell this case from damaged engine files. That
+  check is presence-only: an outdated Redistributable with the files present reads as "damaged
+  engine files", and the troubleshooting entry covers both causes.
+- **A refusal is a session verdict.** It is not stored, and a restart or **Check again** re-tests
+  it. Check again re-starts only the engines that have a verdict; it does not install anything.
+  When the refused program later starts on its own (an intermittent Smart App Control block), its
+  verdict clears itself.
+- **On Linux and macOS, a program that cannot even be spawned is not classified.** Example: a drive
+  mounted `noexec`, where the error is EACCES. It keeps the old "failed to launch" handling, now
+  without the path in its message. A drive the app itself runs from is not mounted `noexec`.
+- **Knowledge packs keep their old wording for this case.** kiwix-tools is static on Linux and
+  macOS, which makes it immune there. On Windows it imports the Visual C++ runtime like the
+  engines, and a refusal there still reads "search error" (chat) or "the archive could not be
+  read" (*Add packs…*). This is out of #530's scope.
+- **macOS is classified from dyld's documented wording; it has not been measured on a Mac.**
+- **Old records keep what they recorded.** Activity-log (audit) entries written before #530
+  can hold a raw loader line with the drive path; they are append-only and stay as they are. New
+  code writes none. Failed document rows and the GPU flags are cleaned at the next session start.
+  An audio row that failed before #530 cannot be told apart from any other transcription failure,
+  so it keeps its old text.
+- **No reinstall button for an engine that is present but broken.** For "damaged engine files"
+  the troubleshooting entry describes deleting the engine folder and installing it again. The
+  in-app reinstall belongs to #516.
+
 ## GPU acceleration ([`architecture.md`](architecture.md) GPU record)
 
 - **Integrated GPUs (Intel Iris Xe / UHD, AMD APU "Radeon Graphics") gain little.** They share

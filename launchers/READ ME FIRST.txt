@@ -34,6 +34,22 @@ wrong. To continue:
 You usually only have to do this once.
 
 
+"THE AI ENGINE CAN'T RUN ON THIS COMPUTER"
+------------------------------------------------------------------------------
+
+The app opens, but the AI Model screen says the AI engine can't run here.
+The screen names what is missing. The usual causes:
+
+  Linux   :  The system library libgomp is missing. Install it once:
+               Ubuntu, Debian, Linux Mint:  sudo apt install libgomp1
+               Fedora:                      sudo dnf install libgomp
+             Linux needs Ubuntu 22.04, Debian 12 or Fedora 36, or newer.
+  Windows :  The Microsoft Visual C++ Redistributable (x64) is missing.
+             Install it from Microsoft.
+
+Then choose "Check again" on the AI Model screen, or restart the app.
+
+
 IF IT DOES NOT OPEN
 ------------------------------------------------------------------------------
 

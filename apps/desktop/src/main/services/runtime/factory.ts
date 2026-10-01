@@ -1,7 +1,7 @@
 import { existsSync } from 'node:fs'
 import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
-import type { GpuDevice, PlacementDevice } from '../../../shared/types'
+import type { EngineProblem, GpuDevice, PlacementDevice } from '../../../shared/types'
 import type { SpeculativeDecoding } from '../../../shared/manifest'
 import type {
   ChatMessage,
@@ -18,6 +18,7 @@ import { createPlacementParser, recordModelPlacement } from './placement'
 import { probeGpuDevices } from './gpu'
 import { displayDevice } from '../../../shared/gpu-rules'
 import { startModelPrefetch, type ModelPrefetch } from './prefetch'
+import { isEngineCannotRunError, type EngineCannotRunError } from './engine-load'
 import { isNextModelLoadSuppressed, recordModelLoadRead } from '../read-speed'
 import {
   failureSignature,
@@ -299,6 +300,16 @@ export interface RuntimeSelectionDeps {
    * ({@link modelLoadLatchReason}) — the user is told once more why the replies are simulated.
    */
   onModelLoadFailure?: (opts: RuntimeStartOptions, reason: string) => void
+  /**
+   * #530: fired once when EVERY real rung failed because the operating system refused to start
+   * the engine program (`EngineCannotRunError` — a missing system library, a system too old, a
+   * missing Windows runtime, a code-integrity block). Neither the GPU nor the model is blamed:
+   * nothing is persisted, nothing is latched, and the walk ends on the rung-4 mock. The caller
+   * tells the user the ENGINE cannot run. (A rung the loader refused never counts in the #312
+   * comparison either — so a later rung that does start, a Windows Kit's `cpu/` build beside a
+   * damaged main folder, lands without `gpuAutoDisabled`.)
+   */
+  onEngineCannotRun?: (opts: RuntimeStartOptions, problem: EngineProblem) => void
   /** Test seam: override the prefetch reader (default {@link startModelPrefetch}). */
   makePrefetch?: (paths: string[]) => ModelPrefetch
   /** GPU ladder hooks. Omitted → defaults (gpuMode 'auto', no persistence). */
@@ -380,6 +391,7 @@ class LadderRuntime implements ModelRuntime {
       onWarmup?: RuntimeSelectionDeps['onWarmup']
       onSpeculative?: RuntimeSelectionDeps['onSpeculative']
       onModelLoadFailure?: RuntimeSelectionDeps['onModelLoadFailure']
+      onEngineCannotRun?: RuntimeSelectionDeps['onEngineCannotRun']
       warmupTimeoutMs: number
       onPrefetch?: RuntimeSelectionDeps['onPrefetch']
       makePrefetch: NonNullable<RuntimeSelectionDeps['makePrefetch']>
@@ -400,6 +412,12 @@ class LadderRuntime implements ModelRuntime {
     let pendingGpuFailure: { reason: string; signature: string | null } | null = null
     /** #312: the last forced-CPU rung's failure class — the control side of the comparison. */
     let cpuSignature: string | null = null
+    /**
+     * #530: the last rung the OS loader refused. Such a rung is no evidence about the GPU or the
+     * model, so it never enters the #312 comparison; when it is ALL the walk saw, the engine is
+     * named instead of either.
+     */
+    let engineFailure: EngineCannotRunError | null = null
     // #372: this model was already blamed this session — every rung died of the model. Do not
     // pay the rung health timeouts again: name it once more and go straight to the rung-4
     // mock, exactly the outcome the first walk reached, minus the wait. Checked AFTER the
@@ -510,6 +528,13 @@ class LadderRuntime implements ModelRuntime {
         // and must never be persisted as a GPU fault (the child was loading, not broken),
         // so this check runs before the gpuAttempt branch below (which now HOLDS it — #312).
         if (this.cancelled) throw cancelledStartError()
+        // #530: the OS refused to start the program — not the GPU's fault, not the model's, and not
+        // the MTP flags' (so no speculative latch either). Try the next rung: a Windows Kit's
+        // `cpu/` build has its own DLLs and may still run beside a damaged main folder.
+        if (isEngineCannotRunError(err)) {
+          engineFailure = err
+          continue
+        }
         const reason = err instanceof Error ? err.message : String(err)
         // #182: rung 1a failing says nothing about the GPU — the plain GPU rung is next in
         // the walk and IS the device verdict. Never persist `gpuAutoDisabled` here (an
@@ -678,6 +703,14 @@ class LadderRuntime implements ModelRuntime {
     // device verdict, exactly as before: unknown evidence must never un-blame a real GPU
     // fault and reinstate a multi-minute health timeout on every later start.
     const reason = lastError instanceof Error ? lastError.message : String(lastError)
+    // #530: every rung that failed was refused by the OS loader — the ENGINE cannot run here.
+    // Nothing is persisted and nothing is latched: installing the missing library (or the
+    // runtime) and choosing Check again, or restarting, must find a clean slate.
+    if (engineFailure !== null && pendingGpuFailure === null && cpuSignature === null) {
+      this.deps.onEngineCannotRun?.(this.opts, engineFailure.problem)
+      await this.fallBackToMock(`the AI engine cannot run on this computer: ${engineFailure.message}`)
+      return
+    }
     if (pendingGpuFailure) {
       const modelFault = cpuSignature !== null && cpuSignature === pendingGpuFailure.signature
       if (modelFault) this.blameModel(pendingGpuFailure.reason)
@@ -743,7 +776,10 @@ class LadderRuntime implements ModelRuntime {
     // #380: "don't know" answers no, like every other branch here — an unknown probe cannot
     // establish the VRAM headroom the measured gain depends on.
     if (devices === null) {
-      return { ok: false, reason: 'device probe timed out — cannot check VRAM headroom' }
+      return {
+        ok: false,
+        reason: 'device probe gave no answer (timed out, or the engine could not start) — cannot check VRAM headroom'
+      }
     }
     if (devices.length === 0) {
       return { ok: false, reason: 'no GPU device (the measured gain is a full-offload GPU result)' }
@@ -949,6 +985,7 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
       onWarmup: deps.onWarmup,
       onSpeculative: deps.onSpeculative,
       onModelLoadFailure: deps.onModelLoadFailure,
+      onEngineCannotRun: deps.onEngineCannotRun,
       warmupTimeoutMs: deps.warmupTimeoutMs ?? WARMUP_TIMEOUT_MS,
       onPrefetch: deps.onPrefetch,
       makePrefetch: deps.makePrefetch ?? startModelPrefetch,

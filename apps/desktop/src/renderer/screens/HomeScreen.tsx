@@ -2,6 +2,7 @@ import { useEffect, useState } from 'react'
 import { Badge, Banner, Button, Icon, type IconName } from '../components'
 import { RUNTIME_POLL_MS } from '../lib/polling'
 import { localizeServerCopy } from '../lib/displayMap'
+import { useEngineProblems } from '../lib/useEngineProblems'
 import { useT } from '../i18n'
 import type {
   AppStatus,
@@ -27,7 +28,8 @@ interface Props {
  * instead of re-rendering the whole screen every 2.5 s on a fresh-but-identical object.
  */
 function sameRuntime(a: RuntimeStatus | null, b: RuntimeStatus | null): boolean {
-  return a != null && b != null && a.running === b.running && a.modelId === b.modelId
+  // `backend` too (#530): the model row tells the demo runtime apart from a real one.
+  return a != null && b != null && a.running === b.running && a.modelId === b.modelId && a.backend === b.backend
 }
 
 /** Test probe (the `__docRowRenderCounts` pattern, DEV-only): HomeScreen render count. */
@@ -45,6 +47,9 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   const [preflight, setPreflight] = useState<PreflightResult | null>(null)
   /** §5 item 22 (a): what the moved-drive check did this session, or null when nothing to say. */
   const [moved, setMoved] = useState<MovedDriveNotice | null>(null)
+  // #530: the chat engine is on the drive but the OS refused to start it — the top unmet
+  // prerequisite, above the model itself (live: the startup check may land after this mounts).
+  const chatEngineProblem = useEngineProblems()?.find((p) => p.family === 'llama_cpp') ?? null
 
   useEffect(() => {
     let active = true
@@ -158,12 +163,27 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
   // a "Start chatting" that dead-ends at the no-model empty state. Guarded on a loaded
   // status so we don't flash "Choose a model" before we know there isn't one.
   const needsModel = status != null && !modelRunning && !status.activeModelId
+  // #530: the engine can't run here, so whatever "runs" is the demo runtime — the loud primary
+  // leads to the AI Model screen, where the engine banner says what to install (D-UI3: the action
+  // that unblocks the user leads; chatting stays a secondary, never hard-disabled).
+  // A real runtime answering (a Windows Kit's `cpu/` build beside a damaged main folder) means chat
+  // works — the "replies are simulated" row would be false then; the AI Model banner still names
+  // the problem for the other features.
+  const realRuntime = running && runtime?.backend != null && runtime.backend !== 'mock'
+  const needsEngine = chatEngineProblem != null && !realRuntime
+  // #530: a running DEMO runtime is not "ready" — the row says demo mode, the headline does not
+  // claim more than that. (Rendered only from a real status read, never assumed.)
+  const demoRunning = modelRunning && runtime?.backend === 'mock'
 
-  const headline = modelRunning
-    ? t('home.headline.ready')
-    : status?.activeModelId
-      ? t('home.headline.starting')
-      : t('home.headline.almost')
+  const headline = needsEngine
+    ? t('home.headline.almost')
+    : modelRunning
+      ? demoRunning
+        ? t('home.headline.almost')
+        : t('home.headline.ready')
+      : status?.activeModelId
+        ? t('home.headline.starting')
+        : t('home.headline.almost')
 
   // ---- Readiness rows ----------------------------------------------------------
 
@@ -188,7 +208,39 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
       )
   }
 
-  const modelRow: ReadinessRowProps = modelRunning
+  const modelRow: ReadinessRowProps = needsEngine
+    ? {
+        icon: 'brain',
+        label: t('home.model.label'),
+        value: t('home.model.engineCannotRun'),
+        badge: (
+          <Badge tone="warning" icon="⚠">
+            {t('home.model.badgeEngine')}
+          </Badge>
+        ),
+        action: (
+          <Button size="sm" onClick={() => onNavigate('models')}>
+            {t('home.model.open')}
+          </Button>
+        )
+      }
+    : demoRunning
+      ? {
+          icon: 'brain',
+          label: t('home.model.label'),
+          value: t('home.model.demo', { model: runtime?.modelId ?? t('home.model.fallbackName') }),
+          badge: (
+            <Badge tone="neutral" icon="○">
+              {t('home.model.badgeDemo')}
+            </Badge>
+          ),
+          action: (
+            <Button size="sm" onClick={() => onNavigate('models')}>
+              {t('home.model.open')}
+            </Button>
+          )
+        }
+      : modelRunning
     ? {
         icon: 'brain',
         label: t('home.model.label'),
@@ -380,7 +432,14 @@ export function HomeScreen({ onNavigate }: Props): JSX.Element {
           chatting" leads, as before. The model row keeps its own inline "Choose a model"
           (a small Secondary), so the remediation isn't duplicated as a second loud button. */}
       <div className="actions">
-        {needsModel ? (
+        {needsEngine ? (
+          <>
+            <Button variant="primary" onClick={() => onNavigate('models')}>
+              {t('home.model.open')}
+            </Button>
+            <Button onClick={() => onNavigate('chat')}>{t('home.actions.startChat')}</Button>
+          </>
+        ) : needsModel ? (
           <>
             <Button variant="primary" onClick={() => onNavigate('models')}>
               {t('home.model.choose')}

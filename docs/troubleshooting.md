@@ -84,6 +84,72 @@ checks for that situation itself (it arises on Ubuntu 24.04 and later, for examp
 without the sandbox instead of aborting. What that means for security is described in
 [`known-limitations.md`](known-limitations.md) under "Security & privacy".
 
+**The app starts, but the AI engine does not.** See the next entry.
+
+---
+
+## "The AI engine can't run on this computer"
+
+The AI engine is on your drive, but your operating system refused to start it. This happens
+before the engine can do anything, so it is not a problem with a model or with your graphics card.
+Until it is fixed, models answer in **demo mode** with visibly simulated replies. Your documents,
+chats and settings are not affected.
+
+The **AI Model** screen shows a banner that says which of the cases below applies. **Settings →
+Diagnostics** shows the technical detail: the library's name and the exit code. Once you have
+fixed the cause, choose **Check again** in that banner, or restart the app. The app stores nothing
+about this, so there is nothing to reset.
+
+**Linux: "A system library it needs is missing: libgomp.so.1".** The engine uses GCC's OpenMP
+library. Desktop installations of Ubuntu, Debian, Linux Mint and Fedora normally include it; it
+can be missing on minimal or server installations. Install it once:
+
+- Ubuntu, Debian, Linux Mint: `sudo apt install libgomp1`
+- Fedora: `sudo dnf install libgomp`
+
+The voice engine (dictation and audio import), where one is installed, needs the same library.
+If the banner names another library, install the package that provides it with your software
+manager.
+
+**Linux: "It needs a newer Linux".** The engine is built for 2022-era systems and newer. It needs
+glibc 2.34, the C++ library of GCC 12 (`GLIBCXX_3.4.30`) and OpenSSL 3. That means **Ubuntu 22.04,
+Debian 12 or Fedora 36, or newer**; Linux Mint 21 and newer are based on Ubuntu 22.04. On an older
+system, such as Ubuntu 20.04 or Debian 11, no package fixes this: the system itself needs an
+upgrade. A missing `libvulkan1` is *not* this problem: without it the engine simply runs on the
+processor.
+
+**Windows: "Windows is missing the Microsoft Visual C++ Redistributable".** The engines use
+Microsoft's C++ runtime (`msvcp140.dll`, `vcruntime140.dll`, `vcruntime140_1.dll`). Many PCs
+already have it because other programs installed it, but it is not part of Windows itself.
+Install the **Microsoft Visual C++ Redistributable for Visual Studio 2015–2022, x64 version**,
+from Microsoft. The download needs an internet connection; if this computer stays offline, fetch
+the installer on another computer and copy it over. Then choose Check again.
+
+**Windows: "Windows security blocked it".** Smart App Control, or an antivirus program, refused to
+start the engine. The engine programs are not signed by a publisher Smart App Control knows, and its
+block does not happen every time: on the project's own test machine it came and went from one day
+to the next. Choose Check again later. An antivirus program may have put the engine in quarantine;
+its own window says so and lets you allow it. Whether to change these settings (Windows Security →
+App & browser control → Smart App Control, or your antivirus program's settings) is your decision;
+the app cannot override them.
+
+**"Some of its files on this drive are missing or damaged".** A library that the engine keeps next
+to its program could not be loaded, which usually means an interrupted copy. If the AI Model screen
+installed the engine for you: quit the app, delete the engine folder on the drive
+(`runtime/llama.cpp/win`, `…/mac` or `…/linux`; for the voice engine `runtime/whisper.cpp/…`),
+start the app again and install the engine from the AI Model screen. On a drive someone prepared
+for you, ask them to copy the engine folder again. On Windows the same message can also mean an
+outdated Visual C++ Redistributable; installing the current one (above) is worth trying first.
+
+**macOS: "It needs a newer version of macOS".** Update macOS, then choose Check again.
+
+**What the other screens say meanwhile.** Each says the same thing in one sentence and points to
+the AI Model screen:
+- documents that failed to import (choose **Try again** once the engine runs);
+- **Translate** and **Images**;
+- voice dictation;
+- the notice in the chat.
+
 ---
 
 ## I downloaded the app from GitHub — where are the models?
@@ -155,6 +221,9 @@ real AI answers.
 
 If you have the repo, a drive builder can do steps 2–3 with the prepare-drive + verify-models
 scripts (see [`packaging.md`](packaging.md)).
+
+If the model and the engine are both on the drive and the AI Model screen says **"The AI engine
+can't run on this computer"**, a file is not missing — see the entry of that name above.
 
 ---
 

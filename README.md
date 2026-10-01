@@ -92,6 +92,13 @@ polished release is manual release testing: signed installers and a live demo ru
 ## What you need
 
 - **A computer** running Windows, macOS, or Linux, with at least **8 GB of RAM**.
+  - **Linux:** Ubuntu 22.04, Debian 12 or Fedora 36, or newer. The AI engine needs glibc 2.34,
+    GCC 12's C++ library and OpenSSL 3, and uses the system's OpenMP library (`libgomp1`), which
+    desktop installations include.
+  - **Windows:** the AI engine uses Microsoft's Visual C++ 2015–2022 runtime (x64), which most
+    PCs already have.
+  - If either is missing, the app names it on the AI Model screen; see
+    [The AI engine can't run on this computer](docs/troubleshooting.md#the-ai-engine-cant-run-on-this-computer).
 - **Memory decides which model you get.** The app detects your RAM and graphics memory (VRAM)
   automatically, benchmarks your machine, and recommends the model that fits best. On a computer
   without a usable graphics card the RAM tiers below decide directly; on a computer with one, the

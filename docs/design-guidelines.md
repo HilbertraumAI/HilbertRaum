@@ -1343,6 +1343,91 @@ eligibility, the empty state's copy action, the picker's "Add packs…"), `HomeK
 (the three row states + the absent row), `GermanSmoke.test.tsx`, `InformationArchitecture.test.tsx`
 (`documents:packs`), `i18n-unused-keys.test.ts`, `zim-ui-layout-rules.test.ts`.
 
+### 11.17 "The AI engine can't run on this computer" — design record (IMPLEMENTED 2026-10-01, #530)
+
+_How the app tells the user that an engine on the drive cannot run here: the OS refused the
+program before it started (Linux without `libgomp1`, a system too old, Windows without the Visual
+C++ runtime, a Smart App Control block). Engineering record: `architecture.md` "Engine load
+failures". Code cites this section as **§11.17**._
+
+**The problem.** The app used to name the wrong thing in every surface: a GPU fault (silently), a
+model that "could not be loaded on this computer — choose another model", "low on memory",
+"pick another model", "no usable graphics card", and in Documents the loader's raw English line
+with the absolute drive path. Each of those sends the user to the wrong fix.
+
+**Decisions.**
+1. **Name the engine, the missing piece, and the one next step.** The lead is always the same
+   sentence: "The AI engine can't run on this computer". It is followed by ONE reason sentence
+   chosen by the verdict (`shared/engine-problem.ts`):
+   - a missing library is named, with the package for Ubuntu/Debian/Mint and Fedora
+     (`libgomp1` / `libgomp`);
+   - a too-old system is named with its floor (Ubuntu 22.04, Debian 12, Fedora 36 or newer);
+   - a missing Visual C++ Redistributable, damaged engine files, or a Smart App Control block each
+     get their own sentence.
+
+   The pronoun "it" (German „sie“, die Engine) keeps the reason sentences shared between the AI
+   engine and the voice engine.
+2. **No commands, no codes in the everyday path (§1.3, §7).** Shell commands (`sudo apt install
+   libgomp1`) live in `troubleshooting.md`. The exit code and the library name in technical form
+   appear in Diagnostics only. "Choose Check again" follows the existing copy convention, with no
+   quotes around a button name in English; German quotes the exact button label, „Erneut prüfen“.
+3. **One place to fix it, one action.** The AI Model screen carries a warning `Banner` in the
+   exact place and shape of the missing-engine banner (`.engine-install`: title, reason, demo note,
+   button). Models answer in demo mode either way, so the two states share a tone. The only
+   action is **Check again**. A spinner sits beside its own "Checking…" label (§6).
+   - Still failing: a short line inside the banner says so; it is a polite live region, so it is
+     announced.
+   - Healed: the banner unmounts on the push, and a toast says "The AI engine runs again."
+4. **Everything else points there.**
+   - **Home.** The model row shows a warning badge "Can't run" and the action Go to AI Model.
+     The hero's single loud primary becomes **Go to AI Model** (D-UI3: the action that unblocks
+     the user leads). Start chatting stays a secondary, never disabled, because demo replies are
+     still possible.
+   - **The chat notice.** Its button reads **Go to AI Model** instead of "Details" (a new
+     optional `target` on `runtime:notice`). The notice leaves by itself when the verdict goes,
+     but only on that transition: a stale "can't run" must not outlive the fix, and a verdict
+     not yet read must not clear it.
+   - **No contradicting neighbour.** While the chat engine can't run, the AI Model screen hides
+     the optional voice-engine install banner, because its copy says "chat … already works"
+     (found in the real-app review).
+   - **Translate, Images, dictation, Documents rows.** Each shows one sentence ending "The AI
+     Model screen says what is missing".
+5. **The voice engine is quieter.** Chat still works, so a voice-engine refusal is a hint line
+   under the speech-model card (the #527 `engineUnsupported` shape) plus the same small Check
+   again. Its outcome line is an ALWAYS-mounted `role="status"`, because the card is no live
+   region and a status inserted already holding its text is missed (§6, M-U1).
+6. **Honest demo.** Home no longer calls a demo runtime "running": "{model} is running in demo
+   mode — replies are simulated", a neutral badge "Demo mode", and the "almost ready" headline.
+   The reverse holds too: "replies are simulated" and the banner's demo note appear only while the
+   demo runtime is actually answering. A Windows Kit's `cpu/` build can run beside a damaged main
+   folder, and then Home keeps its running row (review fix).
+   The Performance graphics tile says "The AI engine can't run on this computer, so the graphics
+   card could not be checked", with the pill "Unknown", instead of "No usable graphics card".
+7. **Live, not polled.** Every surface reads `AppStatus.engineProblems` through
+   `useEngineProblems()`, on mount and on the payload-free `engine:problemsChanged` push.
+   - A refusal found after a screen mounted still shows (the startup check may land later).
+   - A healed engine leaves every screen at once.
+   - No surface re-checks on window focus (owner decision: restart or the button).
+
+**As built.**
+- **Renderer:**
+  - `components/EngineProblemNotice.tsx` (`banner` / `hint`; pure — the screen passes
+    `onRecheck`);
+  - `lib/useEngineProblems.ts`;
+  - `shared/engine-problem.ts` (reason → key + params, the package table, the Diagnostics
+    phrases);
+  - `screens/ModelsScreen.tsx`, `HomeScreen.tsx`, `PerformanceScreen.tsx`,
+    `settings/DiagnosticsTab.tsx`, `App.tsx`;
+  - the `engineCannotRun` codes in `images/AnswerThread.tsx` and `TranslateScreen.tsx`;
+  - `.engine-problem-hint` in `styles.css`.
+- **Copy:** `models.engineProblem.*`, `home.model.{engineCannotRun,badgeEngine,demo,badgeDemo}`,
+  `app.noticeGoToModels`, `diag.engine.*`, `perf.tile.graphics.engine`, `perf.rating.unknown`,
+  plus the `main.*` and persist-canonical `main.ingest.*` keys (en + de).
+- **Tests:** `tests/renderer/EngineProblem.test.tsx` (every reason, Check again in its three
+  outcomes, the always-mounted hint status, German, ModelsScreen push in and out, Home, the
+  App notice target, the Diagnostics line and report, the Performance tile, the Translate/Images
+  codes), `live-region-nesting.test.ts`, `display-map.test.ts`.
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

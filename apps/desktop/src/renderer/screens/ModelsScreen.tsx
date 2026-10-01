@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, ErrorBanner, KnowledgePackToolsDialog, OcrInstallControl, OcrInstallDialog, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, EngineProblemNotice, ErrorBanner, KnowledgePackToolsDialog, OcrInstallControl, OcrInstallDialog, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
 import {
   availableFamilies,
   groupModelVariants,
@@ -18,12 +18,14 @@ import { computeDownloadGate } from '../lib/downloadGate'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useKnowledgePackToolsInstall } from '../lib/useKnowledgePackToolsInstall'
 import { useOcrInstall } from '../lib/useOcrInstall'
+import { useEngineProblems } from '../lib/useEngineProblems'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
   AppSettings,
   DownloadJob,
   EngineDownloadJob,
+  EngineRecheckResult,
   EngineStatus,
   ModelInfo,
   ModelState,
@@ -291,6 +293,15 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
   const [ocrDialogOpen, setOcrDialogOpen] = useState(false)
   const [ocrJobFinishedHere, setOcrJobFinishedHere] = useState(false)
   const ocrInstall = useOcrInstall(true, () => setOcrJobFinishedHere(true))
+  // #530: an engine on the drive that the OS refused to start this session (live: the push
+  // re-reads it, so a refusal found after this screen mounted still shows, and a healed one goes).
+  const engineProblems = useEngineProblems()
+  const chatEngineProblem = engineProblems?.find((p) => p.family === 'llama_cpp') ?? null
+  const voiceEngineProblem = engineProblems?.find((p) => p.family === 'whisper_cpp') ?? null
+  const recheckEngine = (): Promise<EngineRecheckResult> =>
+    window.api.recheckEngine().catch((err: unknown) => {
+      throw new Error(friendlyIpcError(err))
+    })
   const ocrFilesMissing =
     ocrInstall.status?.available === true && ocrInstall.status.languages.some((l) => !l.installed)
   const ocrRowVisible = ocrFilesMissing || ocrInstall.live || ocrJobFinishedHere
@@ -947,6 +958,10 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
         {m.role === 'transcriber' && voiceEngineUnsupported && (
           <p className="hint">{t('models.transcriber.engineUnsupported')}</p>
         )}
+        {/* #530: the voice engine is on the drive, but the OS refused to start it. */}
+        {m.role === 'transcriber' && voiceEngineProblem && (
+          <EngineProblemNotice problem={voiceEngineProblem} variant="hint" onRecheck={recheckEngine} t={t} />
+        )}
 
         <div className="model-row-actions">
         {!automatic && (
@@ -1275,6 +1290,20 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
 
       {anyDownloadable && downloadsBlockedReason && <Banner tone="info">{downloadsBlockedReason}</Banner>}
 
+      {/* #530: the chat engine IS on the drive, but the OS refused to start it — the same strong
+          place and shape as the missing-engine banner below (models answer in demo mode either
+          way), with the one thing the user can do here: Check again after installing the fix. */}
+      {chatEngineProblem && (
+        <EngineProblemNotice
+          problem={chatEngineProblem}
+          variant="banner"
+          onRecheck={recheckEngine}
+          // The demo note only while no real runtime answers (a `cpu/` build may run beside it).
+          demoNote={!(runtime?.running === true && runtime.backend != null && runtime.backend !== 'mock')}
+          t={t}
+        />
+      )}
+
       {/* Chat engine (llama.cpp) missing → real "demo mode" warning. Voice engine
           (whisper.cpp) missing on its own → a quiet note: chat already works, only
           dictation waits. An installed chat engine never shows the alarming banner. */}
@@ -1285,8 +1314,12 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
           explainKey: 'models.engine.explain',
           installKey: 'models.engine.install'
         })}
+      {/* #530: not while the chat engine can't run — its copy says chat already works, which
+          would contradict the banner above (and on Linux the same missing library would block
+          the voice engine too). */}
       {engine &&
         engine.available &&
+        !chatEngineProblem &&
         !engine.missingFamilies.includes('llama_cpp') &&
         engine.missingFamilies.includes('whisper_cpp') &&
         engineBanner({

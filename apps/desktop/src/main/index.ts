@@ -4,6 +4,8 @@ import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { resolvePaths, ensureWorkspaceDirs, findPreparedDriveRoot } from './services/workspace'
 import { applyUiLanguageSetting, initMainI18n, tMain } from './services/i18n'
+import { healEngineLoadState, startEngineCheck } from './services/engine-health'
+import { onEngineProblemsChanged } from './services/runtime/engine-load'
 import { createExternalOpener } from './external-open'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
@@ -294,12 +296,26 @@ function initBackend(): void {
       reason: reason.slice(0, 500)
     })
   }
-  const notifyRenderer = (message: string): void => {
+  // `target` (#530): where the notice's button should take the user — omitted, it opens
+  // Diagnostics ("Details"); 'models' opens the AI Model screen, where the engine banner says what to do.
+  const notifyRenderer = (message: string, target?: 'models'): void => {
     for (const win of BrowserWindow.getAllWindows()) {
-      win.webContents.send(EVENTS.runtimeNotice, message)
+      win.webContents.send(EVENTS.runtimeNotice, message, target)
     }
     log.info('Runtime notice', { message })
   }
+  // #530: the engine verdict changed (a new refusal, or a re-check that healed it) — every window
+  // re-reads the app status. Payload-free, like performance:changed.
+  onEngineProblemsChanged(() => {
+    for (const win of BrowserWindow.getAllWindows()) {
+      try {
+        if (win.isDestroyed() || win.webContents.isDestroyed()) continue
+        win.webContents.send(EVENTS.engineProblemsChanged)
+      } catch {
+        /* one dead recipient never blocks the next */
+      }
+    }
+  })
   // #301 P3b, finding L7 (plan §9.17 (e)3): the pack-set update broadcast — the
   // `notifyRenderer` shape, guarded per-window since a pack change can land between a window
   // closing and its BrowserWindow instance being dropped from `getAllWindows()`.
@@ -429,6 +445,19 @@ function initBackend(): void {
           reason
         })
         notifyRenderer(tMain('main.runtime.modelCannotLoad', { model: opts.modelId }))
+      },
+      // #530: every rung was refused by the OS loader — the ENGINE cannot run on this computer.
+      // Nothing persisted, nothing latched (the verdict lives in engine-load.ts for the session);
+      // the notice's button opens the AI Model screen, where the engine banner names the fix.
+      onEngineCannotRun: (opts, problem) => {
+        perfMark('runtime_engine_cannot_run', { modelId: opts.modelId, reason: problem.reason })
+        log.warn('The AI engine cannot run on this computer — neither the GPU nor the model is blamed', {
+          modelId: opts.modelId,
+          reason: problem.reason,
+          name: problem.name,
+          exit: problem.exit
+        })
+        notifyRenderer(tMain('main.runtime.engineCannotRun'), 'models')
       },
       onPrefetch: (opts, event, detail) => {
         perfMark('model_prefetch', { modelId: opts.modelId, event })
@@ -682,15 +711,8 @@ function initBackend(): void {
   // (`getIngestionDeps` above) and must stay startup-frozen — an index embedded by one embedder
   // is unusable with another. The OCR engine is not a model download: the in-app OCR installer
   // refreshes its slot (`refreshOcrSlot`, wired in registerEngineIpc — #410).
-  ctx.onModelInstalled = (modelId) => {
-    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model
-    // BEFORE the translator rule below can return early (that rule is about a different slot).
-    clearModelLoadLatch(modelId)
-    if (!ctx) return
-    // #497: BEFORE the translator early-return (a different slot), and never throwing — the
-    // download manager swallows the whole hook, so a throw here would skip the refresh below.
-    refreshTranscriberSlot(ctx)
-    if (!shouldReplaceTranslator(ctx.translator)) return
+  ctx.refreshTranslatorSlot = () => {
+    if (!ctx || !shouldReplaceTranslator(ctx.translator)) return
     ctx.translator = composeTranslator({
       rootPath: paths.rootPath,
       manifestsDir,
@@ -699,6 +721,16 @@ function initBackend(): void {
     })
     // The replacement is a fresh instance: re-attach the Performance push to it.
     ctx.translator?.onResidencyChange?.(notifyPerformanceChanged)
+  }
+  ctx.onModelInstalled = (modelId) => {
+    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model
+    // BEFORE the translator rule below can return early (that rule is about a different slot).
+    clearModelLoadLatch(modelId)
+    if (!ctx) return
+    // #497: BEFORE the translator refresh (a different slot), and never throwing — the
+    // download manager swallows the whole hook, so a throw here would skip the refresh below.
+    refreshTranscriberSlot(ctx)
+    ctx.refreshTranslatorSlot?.()
   }
   // The Performance screen's push (PR #303 P3, G6): every transition of the chat runtime
   // (starting / ready / stopped) and every resident sidecar loading or unloading (the
@@ -776,6 +808,13 @@ function initBackend(): void {
   // benchmark's MEASUREMENT is scheduled behind that start's settlement — its drive probe and
   // speed leg never contend with the multi-GB weight hash + load, and the speed leg sees the
   // runtime the start brought up. Neither call blocks startup.
+  // #530: the engine check — the session's device probe, started now, before any unlock (it is
+  // the one spawn of the chat engine the session pays anyway), so a program the OS refuses is
+  // known before anything tries to use it. Then heal what such a refusal wrote before the fix — a
+  // compatibility-mode flag that blamed the GPU, raw loader lines on failed documents — BEFORE the
+  // auto-start reads the flags (a locked workspace skips the heal; the unlock seams run it).
+  startEngineCheck(appCtx)
+  healEngineLoadState(appCtx)
   const firstBenchmark = prepareFirstBenchmark(ctx)
   // #380: the auto-start waits for the session's probe (≈1 s idle; resolved at once with no binary),
   // so the ladder finds a settled device list instead of racing the weight upload for the driver.

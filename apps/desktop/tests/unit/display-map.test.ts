@@ -99,6 +99,9 @@ describe('localizeServerCopy (D-L4)', () => {
       'main.ingest.audioEngineUnsupported',
       'main.ingest.audioUnreadable',
       'main.ingest.audioTranscriptionFailed',
+      // #530: the OS refused to start the AI engine / the voice engine — canonical, path-free.
+      'main.ingest.engineCannotRun',
+      'main.ingest.voiceEngineCannotRun',
       'main.ingest.imageNeedsOcr',
       'main.ingest.imageNoText',
       'main.ingest.imageOcrFailed',
@@ -191,7 +194,9 @@ describe('localizeServerCopy (D-L4)', () => {
       // #110: the slow-read warning carries the measured effective MB/s.
       'main.benchmark.warnSlowRead': { mbps: 70 },
       // §6.5 (issue #95): the recommendation-lowered warning carries TWO values.
-      'main.benchmark.warnRecommendationLowered': { tps: 2.2, model: 'qwen3.6-27b-q4' }
+      'main.benchmark.warnRecommendationLowered': { tps: 2.2, model: 'qwen3.6-27b-q4' },
+      // #530: the engine cannot run — the one value is the library's file NAME (never a path).
+      'main.ingest.engineLibraryMissing': { library: 'libgomp.so.1' }
     }
     expect([...INTERPOLATED_MAP_KEYS].sort()).toEqual(Object.keys(params).sort())
     for (const key of INTERPOLATED_MAP_KEYS) {

@@ -1759,6 +1759,19 @@ explicitly out of scope.
   - **"Open AI Model" is gone** from every button (Home, the chat no-model state, this hint).
     Next to "AI", "Open" reads as the company name. The buttons now say "Go to AI Model"; the
     German „KI-Modell öffnen“ has no such reading and is kept.
+- **#530 amendment — an engine that is present but cannot run.**
+  - **What it covers.** `TranscriberMissing` covers an engine that is ABSENT. An engine the OS
+    loader refuses is the other case: `whisper-cli` is on the drive, the transcriber is selected,
+    and every spawn dies first. Linux without `libgomp1` and Windows without the Visual C++ runtime
+    are the measured cases.
+  - **Classification.** `WhisperCliTranscriber` classifies the exit and throws
+    `EngineCannotRunError` (`whisper_cpp`), and the session verdict names it.
+  - **What the user sees.** Dictation shows `main.dictation.engineCannotRun`; audio import stores
+    `main.ingest.voiceEngineCannotRun`; the speech-model card gets a quiet hint with Check again.
+  - **Side fixes.** The four dictation refusals moved from English literals to catalog keys (their
+    English text is unchanged); the spawn passes `windowsHide`; a signal death keeps its stderr
+    tail.
+  - **Record:** "Engine load failures — design record".
 - **Permissions:** the Phase-31 deny-by-default `setPermissionRequestHandler` gained its
   single exception — `media` requests that are **audio-only and from the app's own
   WebContents** (`services/permissions.ts`; scope matrix unit-tested). See
@@ -3245,6 +3258,20 @@ persisting nothing; a healthy model starts on rung 1.
 > Tests: `runtime-ladder.test.ts` "#372", `core-model-ipc.test.ts` (verify), `engine-consent-ipc.test.ts`
 > (engine install), the `ctx.onModelInstalled` source-text pin, `gpu-ipc.test.ts` (Try GPU again).
 
+**#530 amendment — a program the OS loader refused is neither verdict.**
+- **The defect.** A refused `llama-server` (Linux without `libgomp1`, Windows without the Visual
+  C++ runtime, a Smart App Control block) dies before printing a line of its own, so the #312
+  comparison judged the loader's line. On Linux that line carries the binary's path, which
+  differs between the main build and the `cpu/` safety net. So a prepared Kit blamed the **GPU**
+  (it persisted `gpuAutoDisabled`), and the next start blamed and latched the **model**. On
+  Windows the bare exit codes matched, so the model was blamed at once.
+- **The fix.** `LlamaServer` now throws `EngineCannotRunError` for such a refusal. A refused rung
+  is excluded from the comparison: no `pendingGpuFailure`, no `cpuSignature`, no speculative
+  latch. A walk refused on every rung fires `onEngineCannotRun` instead of either verdict.
+- **Healing stale state.** The heal at unlock clears a `gpuAutoDisabled` whose `gpuLastError`
+  classifies as a refusal.
+- **Record:** "Engine load failures — design record" below.
+
 *Interaction with #320* (excluding a hybrid laptop's iGPU with `--device` at launch): **decided
 2026-09-07 — it does not land**; the fit already drops the integrated device by type (runtime
 record above), so rung *construction* is unchanged and this interaction is moot. Had it landed, a
@@ -3400,9 +3427,9 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
 | Datum | Home |
 |---|---|
 | `gpuMode: 'auto' \| 'off'` (user intent; Settings toggle) | `AppSettings` (encrypted DB) |
-| `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder once its CPU control probe confirms a *device* fault (§5.2, #312); cleared by "Try GPU again". A model no rung can load writes neither field |
-| Models blamed as unloadable this session (#372) | `factory.ts` module state (`Map<modelId, reason>`, the #182 `speculativeSuppressed` idiom) — never persisted; a latched model's next start spawns no rung. Cleared per model by "Verify checksum" / a completed download of it, for every model by a chat-engine install, and by an app restart — **not** by "Try GPU again" (§5.2) |
-| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run. **Decision 6 amended (#380, 2026-09-08):** its one exception is a probe that TIMED OUT — that is not an answer but the absence of one, so it writes nothing and pushes nothing, the stored stamped probe stands until the next start / check / "Try GPU again", and the summary the run uses comes from this machine's record (`eligibleDevicesFor`), which is what decision 6 actually requires. Persisting the empty stamped probe there was the #330 failure: the driver was busy with the weight upload, and a card machine was recorded as having none |
+| `gpuAutoDisabled`, `gpuLastError` (detected problem) | `AppSettings` — written by the ladder once its CPU control probe confirms a *device* fault (§5.2, #312); cleared by "Try GPU again". A model no rung can load writes neither field, nor does a program the OS loader refused (#530) — and a pair a refusal wrote before #530 is cleared at the next session start (`healEngineLoadState`) |
+| Models blamed as unloadable this session (#372) | `factory.ts` module state (`Map<modelId, reason>`, the #182 `speculativeSuppressed` idiom) — never persisted; a latched model's next start spawns no rung. Cleared per model by "Verify checksum" / a completed download of it, for every model by a chat-engine install or a successful engine "Check again" (#530), and by an app restart — **not** by "Try GPU again" (§5.2) |
+| `gpuProbe` (devices + `probedAt` + `machineKey`, the stamp of the machine it ran on — PR #303 audit M8.3) | `AppSettings` — persisted by the benchmark path **and refreshed once per session** post-unlock, so a drive moved between machines re-labels itself; a probe stamped with another machine supplies nothing to the Performance screen, the Models ★ or the benchmark, an unstamped legacy one stays eligible until a local refresh replaces it (`eligibleGpuProbe`, `shared/gpu-rules.ts`). Since the PR #308 audit (decision 6) a probe that cannot run (no binary resolves) or that threw persists an **empty** probe (`{ devices: [], probedAt, machineKey }`) exactly like an empty successful probe — stamped, and only after the admission + unlock-epoch re-check — so a card from a previous session on the SAME machine never survives a failed refresh and the Models badge, the benchmark and the Performance tile can never disagree on the device (an empty stamped result re-stamps no old device, so #303's "no re-stamping" guarantee holds either way). **Refreshed again when the chat engine is installed** (issue #323, 2026-09-06): `EngineDownloadManager.onInstalled` → `refreshGpuProbeAfterRuntimeInstall` re-runs the same `probeAndPersistGpu` (cache invalidated first) when a `llama_cpp` install reaches `done` and this machine's eligible probe lists no device — the empty probe of a benchmark run before the binary existed; an eligible probe with a device, a whisper-only install, or a failed / cancelled one leaves it alone, and the benchmark is never re-run. **Decision 6 amended (#380, 2026-09-08):** its one exception is a probe that TIMED OUT — that is not an answer but the absence of one, so it writes nothing and pushes nothing, the stored stamped probe stands until the next start / check / "Try GPU again", and the summary the run uses comes from this machine's record (`eligibleDevicesFor`), which is what decision 6 actually requires. Persisting the empty stamped probe there was the #330 failure: the driver was busy with the weight upload, and a card machine was recorded as having none. **#530:** a program the OS loader refused is the same kind of non-answer — the probe resolves `null` and records the engine verdict instead of persisting "no graphics card" |
 | Active backend + GPU name this session | `RuntimeStatus` (in-memory, `getRuntimeStatus` IPC) — `factory.ts`'s `gpuName` is the shared `displayDevice(devices)` pick (PR #303 audit M8.2: the budget device, else the largest non-integrated one, else the first listed — an earlier `devices[0]` rule named the iGPU on a hybrid box while the model ran on the dGPU), display only; it is not necessarily the budget device the picker or the Performance tile use. When the probe is UNKNOWN (#380) both the backend and the name come from this start's own load log instead — `gpuLayers > 0` ⇒ `gpu`, named from the `device_info` row that took the largest COMPUTE buffer (else the largest row). Never the FIRST row: the parser keeps them in LOG order, which is not the order the fit used — on the `ryzen-7-5800h-rtx-3060-laptop-6gb-14gb` evidence `Vulkan0` is the iGPU, listed first and given no buffers at all, while every buffer went to the RTX at `Vulkan1`. `displayDevice` itself cannot be reused there: it takes `GpuDevice[]`, whose `totalMb` is non-null, and a `PlacementDevice`'s is nullable |
 
 **Runtime record (PR #308 audit, 2026-09-06; the `-np` half DECIDED 2026-09-07), not a picker
@@ -3680,6 +3707,7 @@ translation…".
 | VRAM too small at load | upstream `--fit` partial offload — no special casing |
 | Vulkan present but slower than CPU (weak iGPU) | no crash; honest §8 copy; Settings toggle exists; no auto-benchmark in v1 |
 | Rungs 1–2 both fail (binary-level breakage) | rung 3 pure-CPU build |
+| The OS refuses the program (a missing system library like `libgomp.so.1`, a system too old, the Visual C++ runtime missing, Smart App Control) | `EngineCannotRunError` on every rung it hits → **neither verdict**: nothing persisted, nothing latched, the probe answers *unknown*; the session verdict drives the AI Model banner and `main.runtime.engineCannotRun`; Check again or a restart heals it (#530, "Engine load failures — design record") |
 | Stale flag after a driver upgrade | "Try GPU again" (re-probes, clears flags) |
 
 **Release acceptance:** the manual 9-machine hardware matrix lives in **BUILD_STATE §5**
@@ -3690,6 +3718,234 @@ translation…".
 **History:** Phases 14–16 = commits `f1dcf34`, `9067b89`, `2d4adb7` (2026-06-10); the GPU
 audit round = commit `4549934` (same day; full finding list in BUILD_STATE §3 "GPU audit
 round"); the full original plan: `git show 4549934:docs/gpu-support-plan.md`.
+
+
+## Engine load failures — design record (#530, 2026-10-01)
+
+_An engine program is on the drive, passes the pre-spawn hash check, and the operating system's
+loader still refuses to start it. Before #530 nothing recognised that; the app blamed the GPU, the
+model, memory or the archive instead. Code cites this record as "Engine load failures"._
+
+### §1 The facts it rests on (measured 2026-10-01)
+
+- **Linux.** The pinned llama.cpp b11146 Linux builds (`ubuntu-x64`, `ubuntu-vulkan-x64`) and
+  whisper.cpp b5130 all link GCC's OpenMP runtime `libgomp.so.1`; none bundles it. In stock Ubuntu
+  22.04 and 24.04 containers, without `libgomp1`, every one of them exits **127** with one stderr
+  line: `<abs path>: error while loading shared libraries: libgomp.so.1: cannot open shared object
+  file: No such file or directory`. Desktop images do ship `libgomp1` (Ubuntu Desktop 22.04.5,
+  24.04.3/.4 and Debian 13.7 live; owner comment on #530).
+- **The real floor** is set by the binaries, read with `objdump`/`readelf`: glibc ≥ 2.34,
+  libstdc++ with `GLIBCXX_3.4.30` (GCC 12), OpenSSL 3 for `llama-server`, `libvulkan.so.1` for the
+  GPU path only. That is roughly Ubuntu 22.04+, Debian 12+ and Fedora 36+.
+- **ld.so names only the first missing library.** Ubuntu 20.04 reports `libssl.so.3`, never
+  `libgomp.so.1`. A "too old" system fails differently: `version 'GLIBC_2.34' not found`, one line
+  per missing version, with exit **1**, not 127. So the classifier reads the text; the exit code
+  decides nothing on Linux.
+- **libvulkan is not a load failure.** The Vulkan backend is loaded with `dlopen`
+  (`GGML_BACKEND_DL`). Without `libvulkan1` the program starts, `--list-devices` prints
+  `(none)`, and the CPU path works. That is the existing "No Vulkan loader" row of the
+  failure-modes table above.
+- **kiwix-serve is static** ("not a dynamic executable") and is immune on Linux.
+- **Windows.** A missing DLL exits `3221225781` (0xC0000135) and a mismatched DLL exits
+  `3221225785` (0xC0000139). In both cases there is no stderr, the exit comes about 20 ms after the
+  spawn, and no dialog appears, with or without `windowsHide` (Node 24). A Smart App Control block
+  was seen on the dev box as 0xC0E90002 (2026-09-04).
+- **Every Windows engine imports the Visual C++ runtime.** The llama.cpp, whisper.cpp and
+  kiwix-tools builds all import `msvcp140.dll`, `vcruntime140.dll` and `vcruntime140_1.dll`, and
+  no drive folder carries them. A PC without the Visual C++ 2015–2022 Redistributable (x64) is the
+  Windows twin of Linux without libgomp. Whether stock Windows images carry it is unmeasured.
+- **macOS** (not measured): dyld writes `Library not loaded:` or `Symbol not found:` and aborts
+  (SIGABRT).
+- **Node's view.** On Linux stderr arrived before `'exit'` in 40 of 40 measured runs, but Node does
+  not guarantee that order. The GPU probe already waited for `'close'`; `LlamaServer` read the
+  tail on `'exit'`.
+
+### §2 Decisions (owner, 2026-10-01)
+
+1. **No bundling.** libgomp is not bundled. Bundling is reopened only if real users report the
+   problem; the facts for that case (which copy, where it would live, the licence) are kept on the
+   #530 comment. The Visual C++ runtime is reported, documented and not bundled; bundling it is
+   its own decision.
+2. **Detect in both places, with one classifier (option C).**
+   - Every spawn site classifies its own failure, so no consumer misattributes it.
+   - A session verdict feeds the UI before anything fails, and gives one place to heal.
+   - A central check alone would fix the message but not the damage: the GPU flag, the model
+     latch, and the stored drive path.
+3. **OS scope.** Linux is measured end to end. The Windows exit codes are mapped, with a
+   real-app check on the dev box. macOS dyld is classified on its documented wording.
+   Knowledge packs (kiwix) are **out of scope** (known-limitations).
+4. **The verdict is never persisted, and is never a GPU or model verdict.** It heals on restart
+   and on **Check again**. There is no automatic re-check on window focus.
+5. **State written before #530 heals at unlock.** A `gpuAutoDisabled` whose `gpuLastError`
+   classifies as a load refusal is cleared, and failed document rows lose the raw loader line.
+   Audit rows that already hold a path are left as they are (append-only, local); new code writes
+   none.
+6. **Copy.** The UI names the library and the package (`libgomp1` / `libgomp`). The shell command
+   lives in `troubleshooting.md` only, and the exit code in Diagnostics only (guidelines §7).
+
+### §3 The classifier (`runtime/engine-load.ts`, pure)
+
+`classifyLoadFailure({ exitCode, signal, stderr, platform, systemDllExists })` returns a
+`LoadFailure` (reason, `os`, an optional file or version `name`, never a path, and the `exit`
+string for Diagnostics), or **null** for every failure that is not the loader's. A null keeps the
+caller's old handling byte for byte.
+
+| Evidence | Reason |
+|---|---|
+| `error while loading shared libraries: <lib>:` with a system library | `library-missing` (`name` = the soname) |
+| … `libssl.so.3` / `libcrypto.so.3` (in every supported base image, so its absence means a pre-2022 system) | `system-too-old` |
+| … a library the engine ships (`lib(llama\|ggml\|mtmd\|whisper)…`) | `files-damaged` |
+| `version 'GLIBC_x' / 'GLIBCXX_x' / 'CXXABI_x' not found` | `system-too-old` |
+| `symbol lookup error: <engine lib>: … undefined symbol: X` | `files-damaged` (a SYSTEM library — a mismatched Mesa driver — is null: the #312 device logic decides) |
+| dyld `Library not loaded: @rpath/…` (or an engine dylib) | `files-damaged` |
+| dyld `Library not loaded: /usr/lib/…`, `Symbol not found` (expected in a system lib), `newer than running OS` | `system-too-old` |
+| exit 0xC0000135 / 0xC0000139 / 0xC000007B with a VC++ DLL absent from `%SystemRoot%\System32` | `vc-runtime-missing` (`name` = that DLL) |
+| … with all three present | `files-damaged` |
+| exit 0xC0E90002 | `blocked` (code integrity / Smart App Control) |
+| Windows spawn error EPERM / `UNKNOWN` / EACCES (`classifySpawnError` — policy, security software, quarantine) | `blocked` |
+
+`classifyLoadFailureMessage` applies the same classifier to a stored message (the `exited before
+becoming healthy (code N)` shape), for the heal.
+
+### §4 The spawn sites
+
+**`LlamaServer`** covers chat, the embedder, the reranker, vision and translation.
+- On an early `'exit'` it waits up to 100 ms for `'close'` (`STDERR_DRAIN_MS`) before reading the
+  tail.
+- On a load refusal it logs the raw tail once (local log, path included), reports the verdict, and
+  throws **`EngineCannotRunError`** with a path-free message.
+- A spawn error, synchronous (EPERM, `spawn UNKNOWN` — Node throws those) or async, is a
+  refusal on Windows (`classifySpawnError` → `blocked`). Otherwise it keeps the `failed to launch`
+  shape, now path-free (`spawn EACCES`; Node's message carried the absolute path into document
+  rows).
+  - Review fix: the bare `launch` signature matched on every rung, so a Windows block had moved
+    from "blame the GPU" to "blame the model".
+- A healthy start clears a verdict recorded against THE SAME binary (`clearEngineProblemFor`): an
+  intermittent block that went away. A Windows Kit's `cpu/` build starting beside a damaged main
+  folder does not clear it.
+
+**The GPU probe** (`gpu.ts`) pipes stderr. A refusal resolves **`null`**, the #380 unknown: not
+cached, not persisted. It also reports the verdict. Before #530 it was cached and persisted as "no
+graphics card".
+
+**whisper-cli** (`transcriber/cli.ts`) classifies on `'close'` and throws the typed error for the
+`whisper_cpp` family. The signal branch now keeps the stderr tail, and the spawn passes
+`windowsHide`.
+
+**Consumers:**
+- **Chat ladder.** A refused rung is never held as a GPU verdict and never sets the #312 control
+  signature; the walk continues. If every rung was refused, `onEngineCannotRun` fires instead of
+  `onGpuFailure` or `blameModel`: nothing is persisted, nothing is latched, and the user gets
+  `main.runtime.engineCannotRun` (button: Go to AI Model), then the rung-4 mock. A Windows Kit's
+  `cpu/` build can still start beside a damaged main folder; it then runs on CPU without
+  `gpuAutoDisabled`.
+- **Embedder.** Still latches, so a refused engine is not respawned on every import. Ingestion
+  stores the canonical, display-mapped text: `main.ingest.engineLibraryMissing` (interpolated
+  `{library}`) or `main.ingest.engineCannotRun`. A document question maps the error to
+  `main.engine.cannotRun`.
+- **Reranker and translation.** No GPU-fallback latch, no CPU retry; they latch. Translation
+  reports `engineCannotRun` instead of the "free memory" copy.
+- **Vision.** Reports `engineCannotRun` (it used to say "pick another model") and repeats it
+  through its 5 s cooldown.
+- **Dictation and audio import.** The voice-engine copy (`main.dictation.engineCannotRun`,
+  `main.ingest.voiceEngineCannotRun`). The four dictation refusals, previously English-only
+  literals, are now catalog keys.
+
+### §5 The session verdict
+
+**The store** (`engine-load.ts`, module-level, the `modelLoadLatched` idiom) holds one
+`EngineProblem` per family (`llama_cpp`, `whisper_cpp`).
+- **Fed by** every classified spawn, and by the **startup check**: `startEngineCheck` runs the
+  session's cached GPU probe at app start, before any unlock. This costs no extra spawn on a healthy
+  machine, because the post-unlock refresh and the ladder read the same cache. Before #530 a
+  never-benchmarked drive did not probe at startup at all.
+- **Read by** `AppStatus.engineProblems` (chat engine first). The payload-free
+  `engine:problemsChanged` push, sent on a new, different or cleared verdict, makes mounted
+  screens re-read it.
+
+**Check again** (`engine:recheck`, `ipc/engine-recheck.ts`) re-starts each family with a verdict.
+- Each engine gets an explicit spawn (`checkProgramLoads`): `llama-server --version` and
+  `whisper-cli --help`.
+  - Review fix: the chat engine first re-used the probe, but the probe answers `[]` for a binary
+    it could not even run (a failed integrity check, a spawn error). That read as "loads".
+  - `unchecked` keeps the verdict.
+- **Single flight.** The chat banner and the voice hint can both be on screen, and a second click
+  joins the running pass.
+- A program the OS now accepts loses its verdict and is re-armed:
+  - `rearmLlamaConsumers` clears the #372 model latches, the embedder's and reranker's
+    `startFailed`, the vision cooldown and a latched translator slot;
+  - the heal below runs;
+  - the probe is invalidated, re-run and persisted for this computer;
+  - a selected model standing in on the mock is restarted on the real engine (an active deep-index
+    build is aborted first, like every IPC start path).
+- A program that has left the drive just loses its verdict, with no re-arm.
+
+**The engine install hook** now runs the same `rearmLlamaConsumers` and clears the family's verdict.
+Before #530 it re-armed the model latches only, so a repaired engine still failed every import
+until a lock/unlock.
+
+**The heal** (`healEngineLoadState`) runs at every session start (plaintext startup, unlock,
+create), before the auto-start reads the GPU flags. It clears a loader-caused `gpuAutoDisabled`
+together with its `gpuLastError`. That flag has no machine stamp, so it would otherwise have followed
+the drive to every computer. It also rewrites failed rows still holding the raw line
+(`rewriteEngineFailureRows`). Both steps are idempotent and admission-gated.
+
+### §6 Surfaces
+
+Design record: [`design-guidelines.md`](design-guidelines.md) §11.17.
+- **AI Model screen.** A warning banner in the missing-engine banner's place (title, reason
+  sentence, demo note, Check again). The voice engine gets a quiet hint under the speech-model
+  card.
+- **Home.** The model row says the engine can't run, and the hero's primary becomes Go to AI Model.
+  A demo runtime is no longer reported as "running".
+  - Gated on the demo runtime: while a REAL runtime answers (a `cpu/` build), Home keeps its
+    running row, and the AI Model banner drops its demo note (`demoNote`). The banner itself
+    stays, because the main binary still fails the other features.
+- **Chat.** The runtime notice, which the App drops once the chat verdict clears.
+- **Diagnostics.** One line per engine, with the library and the exit code, also in the Copy
+  report.
+- **Performance.** The graphics tile says the card could not be checked, instead of "No usable
+  graphics card".
+- **Documents, Translate, Images, dictation.** Their own short engine copy.
+
+### §7 Not built / residual
+
+- Knowledge packs keep their old wording for a Windows VC++ refusal (out of scope; kiwix is static
+  on Linux and macOS).
+- No reinstall button for a present-but-broken engine (#516 territory). The demo runtime still
+  counts as "engine in use" for an in-app reinstall.
+- macOS classification is unmeasured on hardware.
+- The Windows VC++ check is presence-only. An outdated Redistributable whose DLLs are present reads
+  as damaged engine files; the troubleshooting entry covers both causes.
+- Audit rows written before #530 keep their raw `reason`.
+
+Tests: `engine-load.test.ts` (the classifier on the measured strings, the store),
+`engine-load-spawn.test.ts` (`LlamaServer`, the probe), `runtime-ladder.test.ts` "#530",
+`engine-health.test.ts`, `engine-recheck.test.ts`, `engine-consent-ipc.test.ts`,
+`core-model-ipc.test.ts`, the consumer files ("#530" blocks) and
+`tests/renderer/EngineProblem.test.tsx`.
+
+**Real-app verification (2026-10-01; the built app over CDP, scripts kept out of the repo).**
+
+**Linux.** This branch's app ran under the Linux Electron 43.4.0 in a stock `ubuntu:24.04`
+container without `libgomp1`, on a drive laid out like a prepared Kit: the pinned b11146 Vulkan
+build plus the `cpu/` net, with a dummy chat and embedder model.
+- The startup check reported `library-missing libgomp.so.1 (exit code 127)` before anything ran.
+- A model start was refused on all three rungs, and the engine notice fired with
+  `gpuAutoDisabled` false and `gpuLastError` null. Before the fix this was the "GPU blamed"
+  defect.
+- An import failed with the interpolated `libgomp.so.1` row text. Diagnostics read "Can't run — a
+  system library is missing (libgomp.so.1, exit code 127)".
+- Check again first answered "still can't start". After `apt-get install libgomp1` in the running
+  container, a second Check again cleared the verdict without a restart, showed the toast, and
+  restarted the model on the real engine.
+
+**Windows** (dev box). `llama-server.exe` sat alone in the engine folder, so exit 0xC0000135
+followed, with the Visual C++ runtime present, giving `files-damaged`. The same legs ran in English
+and German, in light and dark.
+
+**The review found two things, both fixed:** the stale engine notice after a heal, and the
+voice-engine banner contradicting the chat banner.
 
 
 ## Internationalization — design record (Phases 39–42)
@@ -11455,7 +11711,10 @@ never bare `^41` / `^42`.
 **Minimum OS floors are UNCHANGED** — confirmed, not assumed, because this product runs on the
 customer's machine: the `## Platform support` sections of the v39.8.10 and v43.4.0 READMEs are
 **byte-identical** (Windows 10+, macOS 12 Monterey+, Linux Ubuntu 18.04+/Fedora 32+/Debian 10+;
-the macOS-12 floor was set back at Electron 38). No customer is dropped. ⚠️ **Electron 44 is a
+the macOS-12 floor was set back at Electron 38). No customer is dropped. *(#530 note: those are
+**Electron's** floors only. The AI engine sets a higher one on Linux: glibc 2.34, GCC 12's
+libstdc++, OpenSSL 3, which means Ubuntu 22.04, Debian 12 or Fedora 36 and newer. On Windows it
+needs the Visual C++ runtime. See "Engine load failures — design record".)* ⚠️ **Electron 44 is a
 different story and is a roadmap item, not a bump:** it removes macOS 12 support and drops 32-bit
 Windows (ia32) and Linux armv7l. E43 is the **last series shipping prebuilt 32-bit binaries**, EOL
 **January 2027**.

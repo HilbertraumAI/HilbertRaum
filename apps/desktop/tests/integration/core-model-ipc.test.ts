@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import { promptCacheServerArgs } from '../../src/shared/prompt-cache-rules'
 import { createHash } from 'node:crypto'
 import { EventEmitter } from 'node:events'
@@ -60,6 +60,7 @@ import { getSettings, seedSettings, updateSettings } from '../../src/main/servic
 import type { AppSettings, AppStatus, GpuDevice, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { t } from '../../src/shared/i18n'
+import { reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
@@ -81,6 +82,8 @@ function seededDb(): Db {
 function bogusConfigDir(): string {
   return join(tmpdir(), 'hilbertraum-no-such-config-dir')
 }
+
+afterEach(() => resetEngineProblemsForTest())
 
 beforeEach(() => {
   ipcState.handlers.clear()
@@ -202,6 +205,25 @@ describe('registerCoreIpc', () => {
     expect(live.dictationAvailable).toBe(true)
     expect(live.transcriberMissing).toBeNull()
     expect((await statusWith({ transcriber: null })).transcriberMissing).toBe('model')
+  })
+
+  // #530: the engine load verdicts ride getAppStatus — empty normally, the chat engine first.
+  it('getAppStatus lists the engine problems a spawn reported this session (#530)', async () => {
+    const ctx = {
+      trustedSenders: ANY_SENDER,
+      paths: { configPath: bogusConfigDir() },
+      workspace: {
+        isUnlocked: () => false,
+        getState: (): WorkspaceStateInfo => ({ state: 'locked', mode: null, plaintextAllowed: false, encryptionRequired: true })
+      }
+    } as unknown as AppContext
+    registerCoreIpc(ctx)
+    expect(((await invoke(handlers, IPC.getAppStatus)).result as AppStatus).engineProblems).toEqual([])
+    const whisper = { family: 'whisper_cpp', reason: 'library-missing', os: 'linux', name: 'libgomp.so.1', exit: 'exit code 127' } as const
+    const llama = { ...whisper, family: 'llama_cpp' } as const
+    reportEngineProblem(whisper)
+    reportEngineProblem(llama)
+    expect(((await invoke(handlers, IPC.getAppStatus)).result as AppStatus).engineProblems).toEqual([llama, whisper])
   })
 
   it('getAppStatus forwards the translation device outcome (issue #42 reopen — the Translate hint feed)', async () => {

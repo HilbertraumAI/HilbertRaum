@@ -27,6 +27,24 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-01 — the closed 2026-09-18 #444 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-01 (preamble budget, making room for the #530 entry). PR #444 is merged and its
+record unchanged: `docs/design-guidelines.md` §11.16. Citations of the form "BUILD_STATE 2026-09-18 entry" for the
+Documents rail declutter now resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-18 — **Documents rail declutter + Knowledge packs as a mode of Documents (PR #444,
+`feat/documents-rail-declutter-packs-mode`; record `docs/design-guidelines.md` §11.16).** Renderer-only; the owner chose
+"Option A" of the 2026-09-09 mockups (Option B — a "Knowledge" rail destination — stays parked until pack quality is
+reliable). Documents header: a "My documents | Knowledge packs" switch (`documents:packs` deep link; the rail's "Reference"
+group is gone). Rail: counts, ONE "Needs attention" view (failed ∪ stale) replacing the four diagnostic views, Unfiled inside
+Projects, locations behind a remembered "More", a name filter. Packs panel: one Switch per pack, "Ask this pack", Remove
+behind "⋯", setup card, "Copy the library address". Entry points: Home's fourth readiness row, the scope picker's "Add
+packs…". Written 2026-09-09, brought up to master 2026-09-18 (83 commits) with three review fixes: the library-address copy
+goes through MAIN (`copyToClipboard`) — it used `navigator.clipboard`, which the PR's test passed only via user-event's stub;
+Home counts a pack "ready" by the panel's ask eligibility (not a no-index archive) and says "none ready", not "none enabled";
+`architecture.md`'s smart-views note. The closed #399 entry retired for the preamble budget._
+
 ## 2026-10-01 — the closed 2026-09-13 #467 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-01 (preamble budget, making room for the #527 entry). #467 is closed and its

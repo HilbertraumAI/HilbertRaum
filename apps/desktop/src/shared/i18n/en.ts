@@ -26,6 +26,8 @@ export const en = {
   'app.lockNow': 'Lock now',
   'app.lockNowTitle': 'Re-encrypt and lock the workspace',
   'app.noticeDetails': 'Details',
+  // #530: the engine notice leads to the AI Model screen, where the engine banner names the fix.
+  'app.noticeGoToModels': 'Go to AI Model',
   'app.fatal.title': 'The app could not start',
   // Split around the inline <code>logs/app.log</code> element (the path is literal).
   'app.fatal.hintBefore':
@@ -97,6 +99,11 @@ export const en = {
   'home.model.badgeNeedsModel': 'Needs a model',
   // #527: never "Open AI Model" — next to "AI" the verb reads as the company name "OpenAI".
   'home.model.open': 'Go to AI Model',
+  // #530: the model row names an engine that cannot run, and no longer calls the demo runtime "running".
+  'home.model.engineCannotRun': "The AI engine can't run on this computer — replies are simulated",
+  'home.model.badgeEngine': "Can't run",
+  'home.model.demo': '{model} is running in demo mode — replies are simulated',
+  'home.model.badgeDemo': 'Demo mode',
   'home.model.choose': 'Choose a model',
   'home.docs.label': 'Documents',
   'home.docs.none': 'No documents yet — add some to ask about them',
@@ -1228,6 +1235,24 @@ export const en = {
     'start a model for real answers.',
   'models.engine.install': 'Install AI engine',
   'models.engine.retry': 'Try again',
+  // #530: an engine that IS on the drive but cannot run here (the OS refused it). "it" is the engine
+  // named in the title (German: „sie“ — die Engine). Commands live in the docs, never here.
+  'models.engineProblem.title': "The AI engine can't run on this computer",
+  'models.engineProblem.voiceTitle': "The voice engine can't run on this computer.",
+  'models.engineProblem.libraryMissingPackage': 'A system library it needs is missing: {library}. Install the package {debPackage} (Ubuntu, Debian, Linux Mint) or {rpmPackage} (Fedora) with your software manager or a terminal, then choose Check again.',
+  'models.engineProblem.libraryMissing': 'A system library it needs is missing: {library}. Install it with your software manager or a terminal, then choose Check again.',
+  'models.engineProblem.systemTooOldLinux': 'It needs a newer Linux: Ubuntu 22.04, Debian 12, Fedora 36 or newer.',
+  'models.engineProblem.systemTooOldMac': 'It needs a newer version of macOS. Update macOS, then choose Check again.',
+  'models.engineProblem.systemTooOld': 'It needs a newer version of the operating system.',
+  'models.engineProblem.vcRuntimeMissing': 'Windows is missing the Microsoft Visual C++ Redistributable (x64) it needs. Install it, then choose Check again.',
+  'models.engineProblem.filesDamaged': 'Some of its files on this drive are missing or damaged. The troubleshooting guide explains how to set it up again.',
+  'models.engineProblem.blocked': 'Windows security blocked it (Smart App Control or your antivirus program). The troubleshooting guide explains what you can do.',
+  'models.engineProblem.demoNote': 'Until then, models answer in demo mode — the replies are simulated.',
+  'models.engineProblem.check': 'Check again',
+  'models.engineProblem.checking': 'Checking…',
+  'models.engineProblem.stillFailing': "It still can't start. Check that the installation finished, then try again.",
+  'models.engineProblem.fixed': 'The AI engine runs again.',
+  'models.engineProblem.voiceFixed': 'The voice engine runs again.',
   'models.engine.progress': 'Downloading the AI engine… {pct} %',
   'models.engine.downloadingNoTotal': 'Downloading the AI engine…',
   'models.engine.verifying': 'Verifying the AI engine…',
@@ -1880,6 +1905,15 @@ export const en = {
   'diag.accel.gpuFallbackName': 'Graphics card',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Built-in demo mode',
+  // #530: the technical detail (library name, exit code) is shown here only (guidelines §7).
+  'diag.app.engine': 'AI engine',
+  'diag.app.voiceEngine': 'Voice engine',
+  'diag.engine.cannotRun': "Can't run — {reason}",
+  'diag.engine.reason.libraryMissing': 'a system library is missing',
+  'diag.engine.reason.systemTooOld': 'the system is too old',
+  'diag.engine.reason.filesDamaged': 'engine files missing or damaged',
+  'diag.engine.reason.vcRuntimeMissing': 'Visual C++ runtime missing',
+  'diag.engine.reason.blocked': 'blocked by Windows security',
   'diag.accel.cpu': 'CPU',
   'diag.accel.gpuAvailable': '{name} (GPU available)',
   'diag.app.title': 'App & runtime',
@@ -2054,6 +2088,8 @@ export const en = {
   'perf.tile.graphics': 'Graphics memory',
   'perf.tile.graphics.unit': 'GB VRAM',
   'perf.tile.graphics.none': 'No usable graphics card. Models run on the processor.',
+  // #530: an engine the OS refused never enumerated anything — no "no graphics card" verdict.
+  'perf.tile.graphics.engine': "The AI engine can't run on this computer, so the graphics card could not be checked.",
   // A card may be present: the GPU is switched off in Settings or auto-disabled after a crash.
   'perf.tile.graphics.off': 'Graphics acceleration is off. Models run on the processor.',
   'perf.tile.graphics.small': 'Under {min} GB: models run on the processor.',
@@ -2069,6 +2105,8 @@ export const en = {
   'perf.rating.integrated': 'Integrated',
   'perf.rating.notRecorded': 'Not recorded',
   'perf.rating.none': 'None',
+  // #530: the graphics card could not be checked (the engine the probe runs was refused).
+  'perf.rating.unknown': 'Unknown',
   'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
   'perf.tile.drive': 'Drive',
   'perf.tile.drive.unit': 'MB/s read',
@@ -2343,6 +2381,10 @@ export const en = {
     'This audio file could not be read. Convert it to WAV or MP3 and import it again.',
   'main.ingest.audioTranscriptionFailed':
     'The recording could not be transcribed. Re-index this document to try again.',
+  // #530: persist-canonical (display-mapped) — never the loader's raw line, which holds the drive path.
+  'main.ingest.engineCannotRun': "The AI engine can't run on this computer, so this document could not be indexed. The AI Model screen says what to do — then try again.",
+  'main.ingest.engineLibraryMissing': "The AI engine can't run on this computer because the system library {library} is missing. The AI Model screen says how to fix it — then try again.",
+  'main.ingest.voiceEngineCannotRun': "The voice engine can't run on this computer, so this recording could not be transcribed. The AI Model screen says what to do — then re-index this document.",
   'main.ingest.imageNeedsOcr':
     'Photo import needs the text-recognition (OCR) files, which are not on this drive.',
   'main.ingest.imageNoText':
@@ -2487,6 +2529,9 @@ export const en = {
   'main.runtime.modelCannotLoad':
     '{model} could not be loaded on this computer — replies are simulated until you choose ' +
     'another model.',
+  // #530: the OS refused to start the engine program — neither the GPU nor the model is blamed.
+  'main.runtime.engineCannotRun': "The AI engine can't run on this computer, so replies are simulated. The AI Model screen says what is missing.",
+  'main.engine.cannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
   'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',
   'main.translation.noModel':
     'Translating needs the translation model, which is not installed on this drive. ' +
@@ -2728,6 +2773,12 @@ export const en = {
   'main.dictation.silent':
     'No sound reached the microphone. Check that it is not muted and that HilbertRaum may use it in the system settings, then try again.',
   'main.dictation.tooShort': 'The recording was too short to contain speech — try again.',
+  // #530: the dictation refusals were English-only literals in main; the English text is unchanged.
+  'main.dictation.unavailable': 'Voice dictation is not available on this drive yet — the AI Model screen shows what is missing.',
+  'main.dictation.failed': 'Could not transcribe that — try again.',
+  'main.dictation.tooLong': 'That recording is too long for dictation. For long recordings, import the audio file as a document instead.',
+  'main.dictation.busy': 'Still transcribing the last dictation — one moment.',
+  'main.dictation.engineCannotRun': "The voice engine can't run on this computer. The AI Model screen says what is missing.",
   'main.preflight.readOnly':
     'This drive appears to be read-only, so the app cannot create its workspace. ' +
     'Try a different USB port, or see the troubleshooting guide.',
@@ -3161,6 +3212,8 @@ export const en = {
     "That image couldn't be opened. It may be damaged or in an unsupported format.",
   'images.err.multiDrop': 'Drop one image at a time.',
   'images.err.runtimeFailed': "The vision model couldn't start. Try again, or pick another model.",
+  // #530: another model would not help — the OS refused the engine program.
+  'images.err.engineCannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
   'images.err.emptyResponse': 'No answer came back for that image. Try rephrasing your question.',
   // #120 item 1: a BLANK question is an input problem, not an empty model answer.
   'images.err.emptyQuestion': 'Type a question about the image first.',
@@ -3271,6 +3324,8 @@ export const en = {
   'translate.err.runtimeFailed': "The translation model couldn't finish. Try again, or a shorter text.",
   'translate.err.startFailed':
     "The translation model couldn't start — the device may be low on memory. Close other apps or restart HilbertRaum, then try again.",
+  // #530: not a memory problem — the OS refused the engine program.
+  'translate.err.engineCannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
   'translate.err.empty': 'No translation came back. Try again, or rephrase the text.',
   'translate.err.sameLang': 'Pick two different languages.',
   // #160 (BE-3): the finite paste bound (TRANSLATE_MAX_TEXT_CHARS — keep the number in sync).

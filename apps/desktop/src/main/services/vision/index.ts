@@ -3,6 +3,7 @@ import type { AppContext } from '../context'
 import type { ImageAnalyzeRequest, ImageJob, VisionErrorCode, VisionStatus } from '../../../shared/types'
 import { discoverManifests, mmprojPath, weightPath } from '../models'
 import { resolveLlamaServerPath } from '../runtime/sidecar'
+import { isEngineCannotRunError } from '../runtime/engine-load'
 import { log } from '../logging'
 import { getVisionStatus } from './status'
 import { VisionRuntime, VisionAnalyzeError } from './runtime'
@@ -104,6 +105,17 @@ export class VisionService {
   private tearingDown = false
   /** When the last FAILED runtime start settled (#117), or null. Gates the cooldown fast-fail. */
   private startFailedAt: number | null = null
+  /** #530: the code that failed start reported — the cooldown fast-fail repeats it. */
+  private startFailedCode: VisionErrorCode = 'runtimeFailed'
+
+  /**
+   * #530: drop the failed-start cooldown — the chat engine was just installed, or "Check again"
+   * found that it runs now, so the next analyze should start fresh rather than wait the window out.
+   */
+  resetStartFailure(): void {
+    this.startFailedAt = null
+    this.startFailedCode = 'runtimeFailed'
+  }
   /** Residency listeners (`onResidencyChange`), forwarded from every runtime this service builds. */
   private readonly residencyListeners = new Set<() => void>()
 
@@ -218,7 +230,7 @@ export class VisionService {
       // window the failure record clears and the analyze below rebuilds a fresh runtime.
       if (this.startFailedAt !== null) {
         if (Date.now() - this.startFailedAt < this.startFailureCooldownMs) {
-          this.fail(jobId, 'runtimeFailed', emit)
+          this.fail(jobId, this.startFailedCode, emit)
           return
         }
         this.startFailedAt = null
@@ -262,9 +274,12 @@ export class VisionService {
       // Discard the latched instance (checked even on the abort path, so a cancelled job can't
       // strand it) and start the cooldown clock; the next analyze past the window cold-starts
       // a fresh runtime, so "Try again" can actually succeed.
+      // #530: the OS refused to start the engine program — say so, not "pick another model".
+      const engineCannotRun = isEngineCannotRunError(err)
       if (this.runtime?.isStartFailed?.()) {
         this.runtime = null
         this.startFailedAt = Date.now()
+        this.startFailedCode = engineCannotRun ? 'engineCannotRun' : 'runtimeFailed'
       }
       if (signal.aborted) {
         this.cancel(jobId)
@@ -274,7 +289,11 @@ export class VisionService {
       // gets a friendly code. A runtime failure that knows its own code (#123: timedOut /
       // contextExceeded) keeps it; everything else stays the generic runtimeFailed.
       log.warn('Vision analyze failed', { jobId, error: String(err) })
-      this.fail(jobId, err instanceof VisionAnalyzeError ? err.code : 'runtimeFailed', emit)
+      this.fail(
+        jobId,
+        err instanceof VisionAnalyzeError ? err.code : engineCannotRun ? 'engineCannotRun' : 'runtimeFailed',
+        emit
+      )
     } finally {
       // #120 item 3: the busy slot is released HERE — after the (possibly aborted) runtime call
       // fully unwound — never in cancel(), so a new analyze can't run concurrently against the

@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, writeFileSync, existsSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,6 +15,12 @@ import {
   type TranscriberModelInfo
 } from '../../src/main/services/transcriber'
 import { AUDIO_DECODE_ERROR_PREFIX, VAD_SPEECH_PAD_MS } from '../../src/main/services/transcriber/cli'
+import {
+  EngineCannotRunError,
+  engineProblemFor,
+  isEngineCannotRunError,
+  resetEngineProblemsForTest
+} from '../../src/main/services/runtime/engine-load'
 import {
   killRegisteredSidecarChildren,
   registeredSidecarPids
@@ -574,5 +580,77 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     })
     await expect(t.transcribe('a.mp3', { workDir: '' })).rejects.toThrow(/workDir is required/i)
     expect(spawned).toBe(false)
+  })
+})
+
+// #530: a whisper-cli the OS loader refuses is classified (typed, path-free error + session verdict);
+// every other failure keeps its old message.
+describe('WhisperCliTranscriber — OS loader refusal (#530)', () => {
+  afterEach(() => resetEngineProblemsForTest())
+
+  const LOADER_LINE =
+    '/media/someone/HR/runtime/whisper.cpp/linux/whisper-cli: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
+
+  /** A transcriber whose child writes `stderrText`, then closes with (code, signal). */
+  function closing(stderrText: string, code: number | null, signal: NodeJS.Signals | null) {
+    const spawnOptions: SpawnOptions[] = []
+    const transcriber = createWhisperCliTranscriber({
+      id: 'whisper-small-multilingual',
+      binPath: '/fake/whisper-cli',
+      modelPath: '/fake/ggml-small.bin',
+      threads: 2,
+      spawnImpl: (_cmd: string, _args: string[], o: SpawnOptions): ChildProcess => {
+        spawnOptions.push(o)
+        const child = makeFakeChild()
+        setImmediate(() => {
+          if (stderrText) child.stderr.emit('data', Buffer.from(stderrText))
+          child.emit('close', code, signal)
+        })
+        return child as unknown as ChildProcess
+      }
+    })
+    return { transcriber, spawnOptions }
+  }
+  const workDir = (): string => mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-530-'))
+
+  it('exit 127 with the loader line rejects with EngineCannotRunError and records the verdict', async () => {
+    const { transcriber } = closing(LOADER_LINE, 127, null)
+    const err = await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch((e: unknown) => e)
+    expect(isEngineCannotRunError(err)).toBe(true)
+    const expected = { family: 'whisper_cpp', reason: 'library-missing', name: 'libgomp.so.1', exit: 'exit code 127' }
+    expect((err as EngineCannotRunError).problem).toMatchObject(expected)
+    expect(engineProblemFor('whisper_cpp')).toMatchObject(expected)
+    // path-free: the drive path never rides the error message
+    expect((err as Error).message).not.toContain('/media/someone')
+  })
+
+  it('a child killed by a signal keeps the signal message, now with the stderr tail', async () => {
+    const { transcriber } = closing('some diagnostic line from whisper\n', null, 'SIGSEGV')
+    const err = await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch((e: unknown) => e)
+    expect(isEngineCannotRunError(err)).toBe(false)
+    expect((err as Error).message).toMatch(/^whisper-cli was terminated \(SIGSEGV\): /)
+    expect((err as Error).message).toContain('some diagnostic line from whisper')
+    expect(engineProblemFor('whisper_cpp')).toBeNull()
+  })
+
+  it('a signal death without stderr has no dangling colon', async () => {
+    const { transcriber } = closing('', null, 'SIGSEGV')
+    await expect(transcriber.transcribe('a.mp3', { workDir: workDir() })).rejects.toThrow(
+      /^whisper-cli was terminated \(SIGSEGV\)$/
+    )
+  })
+
+  it('a normal non-zero exit with non-loader stderr keeps the old "exited with code N:" message', async () => {
+    const { transcriber } = closing('model load failed', 3, null)
+    const err = await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch((e: unknown) => e)
+    expect(isEngineCannotRunError(err)).toBe(false)
+    expect((err as Error).message).toBe('whisper-cli exited with code 3: model load failed')
+    expect(engineProblemFor('whisper_cpp')).toBeNull()
+  })
+
+  it('spawns with windowsHide: true', async () => {
+    const { transcriber, spawnOptions } = closing(LOADER_LINE, 127, null)
+    await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch(() => undefined)
+    expect(spawnOptions[0]?.windowsHide).toBe(true)
   })
 })

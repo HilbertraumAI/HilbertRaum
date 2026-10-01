@@ -116,7 +116,7 @@ function gpuSummary(devices: readonly GpuDevice[], next: NextStartMemory): GpuBe
  * and a card machine was recorded (and labelled, and RAM-classed) as having none. Every OTHER
  * path is unchanged — an empty list, a missing binary and a thrower all still write.
  */
-async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
+export async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
   let devices: GpuDevice[] = []
   let gpuMode: AppSettings['gpuMode'] = 'auto'
   let gpuAutoDisabled = false
@@ -152,13 +152,13 @@ async function probeAndPersistGpu(ctx: AppContext): Promise<GpuBenchmarkInput> {
       // FAILURE plus attempt a (refused) empty write — neither is true here, so return the empty
       // summary without touching the DB at all.
       if (!workspaceAdmitsWork(ctx.workspace)) {
-        log.info('GPU probe timed out; workspace locked meanwhile')
+        log.info('GPU probe gave no answer (timed out, or the engine could not start); workspace locked meanwhile')
         return gpuSummary(
           [],
           nextStartMemory({ platform: process.platform, arch: process.arch, devices: [], gpuMode, gpuAutoDisabled })
         )
       }
-      log.info('GPU probe timed out; the stored probe stands until the next start or check')
+      log.info('GPU probe gave no answer (timed out, or the engine could not start — #530); the stored probe stands until the next start or check')
       devices = eligibleDevicesFor(getSettings(ctx.db), hereKey)
     } else {
       devices = probed

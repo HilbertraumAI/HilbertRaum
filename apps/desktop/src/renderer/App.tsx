@@ -2,6 +2,7 @@ import {
   Suspense,
   lazy,
   useEffect,
+  useRef,
   useState,
   type ComponentType,
   type LazyExoticComponent
@@ -74,6 +75,7 @@ import {
 } from './components'
 import { setThemeSetting } from './theme'
 import { runAndSurface } from './lib/errors'
+import { useEngineProblems } from './lib/useEngineProblems'
 import { purgeSessionStores } from './lib/lockPurge'
 import { flushReviewSession, type ReviewHandoffTarget } from './lib/reviewSession'
 import { I18nProvider, useT, type I18n } from './i18n'
@@ -175,7 +177,9 @@ function AppShell(): JSX.Element {
   const [fatalError, setFatalError] = useState<string | null>(null)
   // One-line, dismissible runtime notice: currently the GPU crash auto-fallback's
   // friendly "switched to compatibility mode" message (spec §11.4 tone).
-  const [notice, setNotice] = useState<string | null>(null)
+  // #530: `target` says where its button leads — absent: Diagnostics ("Details"); 'models': the
+  // AI Model screen, where the engine banner names what to install.
+  const [notice, setNotice] = useState<{ message: string; target?: 'models' } | null>(null)
   // full-audit 2026-07-11 CODE-26: a FAILED "Lock now" (main restored the unlocked vault,
   // CODE-1a) used to be an unhandled rejection — the shell silently stayed unlocked on the
   // most security-sensitive control. Main's friendly copy is surfaced here as a dismissible
@@ -185,9 +189,23 @@ function AppShell(): JSX.Element {
   const { t, applyLanguageSetting } = useT()
 
   useEffect(() => {
-    const unsubscribe = window.api?.onRuntimeNotice?.((message) => setNotice(message))
+    const unsubscribe = window.api?.onRuntimeNotice?.((message, target) => setNotice({ message, target }))
     return () => unsubscribe?.()
   }, [])
+
+  // #530: the engine notice ("can't run … replies are simulated") is stale the moment the chat
+  // engine's verdict goes away (Check again healed it) — drop it then. Only on that TRANSITION:
+  // the notice can arrive before this hook's first re-read lands, and an absent verdict at that
+  // point must not clear it.
+  const chatEngineBlocked = useEngineProblems()?.some((p) => p.family === 'llama_cpp') ?? null
+  const wasChatEngineBlocked = useRef(false)
+  useEffect(() => {
+    if (chatEngineBlocked === true) wasChatEngineBlocked.current = true
+    else if (chatEngineBlocked === false && wasChatEngineBlocked.current) {
+      wasChatEngineBlocked.current = false
+      setNotice((current) => (current?.target === 'models' ? null : current))
+    }
+  }, [chatEngineBlocked])
 
   useEffect(() => {
     let active = true
@@ -459,12 +477,18 @@ function AppShell(): JSX.Element {
             t={t}
             onDismiss={() => setNotice(null)}
             action={
-              <Button size="sm" onClick={() => navigate('settings:diagnostics')}>
-                {t('app.noticeDetails')}
-              </Button>
+              notice.target === 'models' ? (
+                <Button size="sm" onClick={() => navigate('models')}>
+                  {t('app.noticeGoToModels')}
+                </Button>
+              ) : (
+                <Button size="sm" onClick={() => navigate('settings:diagnostics')}>
+                  {t('app.noticeDetails')}
+                </Button>
+              )
             }
           >
-            {notice}
+            {notice.message}
           </Banner>
         )}
         {/* Per-screen error boundary (audit FE-1). KEYED by `screen`, so navigating to any
