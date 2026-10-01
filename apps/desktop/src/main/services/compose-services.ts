@@ -1,10 +1,11 @@
 import { createSelectedEmbedder } from './embeddings/factory'
 import { createSelectedReranker } from './reranker'
-import { createSelectedTranscriber } from './transcriber'
+import { createSelectedTranscriber, transcriberMissingReason } from './transcriber'
 import { createSelectedOcrEngine, listOcrLanguages, ocrAssetsDir, type OcrSelectionDeps } from './ocr'
 import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
 import { discoverManifests, type DiscoveredManifest } from './models'
+import { engineFamilyHasHostBuild } from './runtime-download'
 import { log } from './logging'
 import { perfMark } from './perf'
 import type { Embedder } from './embeddings'
@@ -13,7 +14,7 @@ import type { Transcriber } from './transcriber'
 import type { OcrEngine } from './ocr'
 import type { Translator, TranslationGpuDeps } from './translation'
 import type { AppContext } from './context'
-import type { OcrRefreshOutcome } from '../../shared/types'
+import type { OcrRefreshOutcome, TranscriberMissing } from '../../shared/types'
 
 // M-A3 (audit-2026-06-13): the four availability-driven service selectors (embedder,
 // reranker, transcriber, OCR) were ~30 lines of near-identical "resolve the role's model,
@@ -27,6 +28,8 @@ export interface AvailabilityServices {
   embedder: Embedder
   reranker: Reranker | null
   transcriber: Transcriber | null
+  /** Why `transcriber` is null (#527) — null when it is selected. See `composeTranscriberSlot`. */
+  transcriberMissing: TranscriberMissing | null
   ocrEngine: OcrEngine | null
   /**
    * The TranslateGemma translation sidecar (TG wave, plan §2 D1), selected only when its binary +
@@ -148,15 +151,45 @@ export function shouldReplaceTranslator(current: Translator | null | undefined):
  * false`) — the CLI takes none.
  */
 export function composeTranscriber(deps: ComposeServicesDeps): Transcriber | null {
-  return createSelectedTranscriber({
+  return composeTranscriberSlot(deps).transcriber
+}
+
+/**
+ * `composeTranscriber` plus WHY the slot is empty (#527): the transcriber needs the whisper.cpp
+ * engine AND the speech model, and the composer hint, the audio-import failure and the AI Model
+ * screen each name the piece that is really missing — including "the engine has no build for
+ * this system", where no download can help. Computed here, from the same model resolution, at
+ * the same three moments the slot itself is (startup + the two install hooks), so the reason can
+ * never describe a different drive state than the slot; `getAppStatus` (polled by the shell)
+ * only reads it back.
+ */
+export function composeTranscriberSlot(deps: ComposeServicesDeps): {
+  transcriber: Transcriber | null
+  missing: TranscriberMissing | null
+} {
+  const isDev = deps.isDev ?? false
+  const model = resolveModelByRole(deps.manifestsDir, deps.rootPath, 'transcriber', {
+    includeContextTokens: false,
+    discovered: deps.discovered
+  })
+  const transcriber = createSelectedTranscriber({
     rootPath: deps.rootPath,
-    isDev: deps.isDev ?? false,
-    model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'transcriber', {
-      includeContextTokens: false,
-      discovered: deps.discovered
-    }),
+    isDev,
+    model,
     onSelect: (kind, reason) => log.info('Transcriber backend selected', { kind, reason })
   })
+  if (transcriber) return { transcriber, missing: null }
+  const missing =
+    transcriberMissingReason({
+      rootPath: deps.rootPath,
+      model,
+      isDev,
+      engineFetchable: engineFamilyHasHostBuild(deps.manifestsDir, 'whisper_cpp')
+    }) ??
+    // Both pieces are on the drive, yet nothing was selected (the ladder and this check read
+    // the same files, so only a race with a removal lands here): the model is the honest guess.
+    'model'
+  return { transcriber: null, missing }
 }
 
 /**
@@ -180,6 +213,8 @@ export function shouldReplaceTranscriber(current: Transcriber | null | undefined
  */
 export interface TranscriberSlot {
   transcriber?: Transcriber | null
+  /** Re-derived on every refresh of a null slot (#527), cleared when the slot fills. */
+  transcriberMissing?: TranscriberMissing | null
   /** Only the drive root is read (binary + weight paths resolve against it). */
   paths: Pick<AppContext['paths'], 'rootPath'>
   manifestsDir: AppContext['manifestsDir']
@@ -189,13 +224,16 @@ export interface TranscriberSlot {
 export function refreshTranscriberSlot(ctx: TranscriberSlot): boolean {
   try {
     if (!shouldReplaceTranscriber(ctx.transcriber)) return false
-    const next = composeTranscriber({
+    const next = composeTranscriberSlot({
       rootPath: ctx.paths.rootPath,
       manifestsDir: ctx.manifestsDir,
       isDev: ctx.isDev
     })
-    if (!next) return false
-    ctx.transcriber = next
+    // #527: the reason moves with every refresh — an engine install that lands without the model
+    // turns "engine" into "model", which the composer hint must say on the next status read.
+    ctx.transcriberMissing = next.missing
+    if (!next.transcriber) return false
+    ctx.transcriber = next.transcriber
     return true
   } catch (err) {
     log.warn('Transcriber refresh after an install failed', { error: String(err) })
@@ -366,10 +404,15 @@ export function composeServices({
     onDeviceFallback: (reason) => log.warn('Reranker sidecar fell back to CPU for this session', { reason })
   })
   // The audio transcriber — the whisper.cpp CLI; selected only when binary + GGML weights
-  // exist (null otherwise; audio imports fail per-file with the download-the-model copy).
-  // Shares `composeTranscriber` with the #497 post-install re-selection (speech-model download
-  // or whisper.cpp engine install) so the call sites can never drift.
-  const transcriber = composeTranscriber({ rootPath, manifestsDir, isDev, discovered })
+  // exist (null otherwise; audio imports fail per-file with copy that names the missing piece,
+  // #527). Shares `composeTranscriberSlot` with the #497 post-install re-selection (speech-model
+  // download or whisper.cpp engine install) so the call sites can never drift.
+  const { transcriber, missing: transcriberMissing } = composeTranscriberSlot({
+    rootPath,
+    manifestsDir,
+    isDev,
+    discovered
+  })
   // Local OCR — tesseract.js over the drive's vendored `ocr/` language files; selected
   // only when those exist (null otherwise; photo imports fail per-file and detected scans
   // show the notice without the "Make searchable" offer).
@@ -384,5 +427,5 @@ export function composeServices({
   // sites can never drift.
   const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered })
 
-  return { embedder, reranker, transcriber, ocrEngine, translator }
+  return { embedder, reranker, transcriber, transcriberMissing, ocrEngine, translator }
 }

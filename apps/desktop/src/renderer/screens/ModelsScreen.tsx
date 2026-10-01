@@ -211,12 +211,24 @@ export function __resetModelsScreenMemoryForTests(seed?: {
   setActiveVerify(null)
 }
 
-export function ModelsScreen(): JSX.Element {
+export interface ModelsScreenProps {
+  /**
+   * Open on one task's Browse list instead of the default view (#527): `'voice'` is the
+   * composer's dictation hint ("Get the speech model") — Browse, because the speech model is
+   * the missing piece there, filtered to the Voice task so it is the row in view. Read at mount;
+   * the screen's own controls take over from there (the `documents:packs` pattern).
+   */
+  focus?: 'voice' | null
+}
+
+export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Element {
   const { t, tCount, lang } = useT()
   const [models, setModels] = useState<ModelInfo[] | null>(null)
-  const [libraryView, setLibraryView] = useState<'installed' | 'browse' | null>(null)
+  const [libraryView, setLibraryView] = useState<'installed' | 'browse' | null>(
+    focus === 'voice' ? 'browse' : null
+  )
   const [query, setQuery] = useState('')
-  const [task, setTask] = useState<ModelTask | 'all'>('all')
+  const [task, setTask] = useState<ModelTask | 'all'>(focus === 'voice' ? 'transcriber' : 'all')
   const [family, setFamily] = useState('all')
   // F3/C1: group expansion is DERIVED by default — a group holding a damaged (`checksum_failed`)
   // variant starts expanded, so the repair row is reachable without first guessing that it hides
@@ -227,6 +239,9 @@ export function ModelsScreen(): JSX.Element {
   const [settings, setSettings] = useState<AppSettings | null>(null)
   const [policy, setPolicy] = useState<PolicyStatus | null>(null)
   const [machineRam, setMachineRam] = useState<number | null>(UNKNOWN_RAM)
+  // #527: the voice engine has no build for this system (and none is on the drive) — the
+  // speech-model card says so instead of presenting its download as the way to dictation.
+  const [voiceEngineUnsupported, setVoiceEngineUnsupported] = useState(false)
   // Drives a determinate bar instead of an opaque spinner while weights hash — in the
   // loading state (a cold ACTIVE model, the one file lazy verification still hashes) and,
   // since #382, IN PLACE on the loaded screen while "Check all model files" runs. Null once
@@ -290,6 +305,21 @@ export function ModelsScreen(): JSX.Element {
     }
   }, [])
 
+  // #527: the 'voice' deep link lands ON the speech model. The library sits below the engine
+  // banners, the OCR row and the context card, so once the first load is in, it is scrolled into
+  // view, unless an engine banner is showing: then an engine is part of what is missing, and the
+  // banner at the top is the first thing to act on. Once per visit, never after the user scrolled.
+  const libraryRef = useRef<HTMLElement>(null)
+  const focusScrolledRef = useRef(false)
+  useEffect(() => {
+    if (focus !== 'voice' || models === null || focusScrolledRef.current) return
+    focusScrolledRef.current = true
+    const engineBannerShown =
+      engine?.available === true &&
+      (engine.missingFamilies.includes('llama_cpp') || engine.missingFamilies.includes('whisper_cpp'))
+    if (!engineBannerShown) libraryRef.current?.scrollIntoView?.({ block: 'start' })
+  }, [focus, models, engine])
+
   async function refresh(): Promise<void> {
     const [m, s, p, e, rt] = await Promise.all([
       // #382: LAZY verification. The Models screen used to omit the flag and hash every
@@ -320,7 +350,11 @@ export function ModelsScreen(): JSX.Element {
     // Machine RAM feeds the "needs more memory" flag copy; best-effort.
     window.api
       .getAppStatus()
-      .then((st) => mountedRef.current && setMachineRam(st.machineRamGb))
+      .then((st) => {
+        if (!mountedRef.current) return
+        setMachineRam(st.machineRamGb)
+        setVoiceEngineUnsupported(st.transcriberMissing === 'engine-unsupported')
+      })
       .catch(() => mountedRef.current && setMachineRam(UNKNOWN_RAM))
   }
 
@@ -910,6 +944,10 @@ export function ModelsScreen(): JSX.Element {
           </div>
         </div>
 
+        {m.role === 'transcriber' && voiceEngineUnsupported && (
+          <p className="hint">{t('models.transcriber.engineUnsupported')}</p>
+        )}
+
         <div className="model-row-actions">
         {!automatic && (
           // A "Not downloaded" card shows ONE clear action — Download (rendered below) —
@@ -1380,7 +1418,7 @@ export function ModelsScreen(): JSX.Element {
         </div>
       )}
 
-      <section className="model-library" aria-label={t('models.library.title')}>
+      <section ref={libraryRef} className="model-library" aria-label={t('models.library.title')}>
         <h2>{t('models.library.title')}</h2>
         <SegmentedControl
           ariaLabel={t('models.library.view')}

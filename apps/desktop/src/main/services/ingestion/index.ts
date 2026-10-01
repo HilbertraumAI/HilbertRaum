@@ -25,6 +25,7 @@ import type {
   ImportPreflight,
   IngestionStatus,
   ExtractStatus,
+  TranscriberMissing,
   TreeBuildStatus,
   WalkExhausted
 } from '../../../shared/types'
@@ -93,10 +94,12 @@ export interface IngestionDeps {
   cipher?: DocumentCipher | null
   /**
    * Transcriber for audio imports. Optional AND nullable: absent/null means an audio
-   * FILE fails friendly with the download-the-model copy — text ingestion is
-   * unaffected (graceful-fallback rule).
+   * FILE fails friendly with copy naming the missing piece (`transcriberMissing`) — text
+   * ingestion is unaffected (graceful-fallback rule).
    */
   transcriber?: Transcriber | null
+  /** Why `transcriber` is null (#527) — picks the audio failure copy; absent = the model copy. */
+  transcriberMissing?: TranscriberMissing | null
   /**
    * Coarse transcription progress (0–100) per document, surfaced by the IPC layer as
    * "Transcribing… N%" on the documents table polling path (import AND re-index).
@@ -880,6 +883,7 @@ export async function prepareDocument(
     // a re-index reuses it instead of failing scan detection again.
     const parseCtx: ParseContext = {
       transcriber: deps.transcriber,
+      transcriberMissing: deps.transcriberMissing,
       ocrEngine: deps.ocrEngine,
       ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
       workDir: storeDir,

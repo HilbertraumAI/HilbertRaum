@@ -90,6 +90,14 @@ no audit; `AppStatus` gained the additive `dictationAvailable: boolean` gate). #
 `TranscribeOptions` gained the additive `vad?: boolean` — dictation passes `true`, imports
 nothing; the whisper manifest declares the Silero VAD file as its second required `files[]`
 entry (the #310 multi-file shape), so `resolveModelByRole`'s `requiredPaths` carries it.
+#527: `AppStatus` gained the additive-optional `transcriberMissing?: TranscriberMissing | null`
+(`'model' | 'engine' | 'model-and-engine' | 'engine-unsupported'`, null while a transcriber is
+selected — the `ocrState` precedent), read from `AppContext.transcriberMissing`, which is stored
+with the slot; `IngestionDeps`/`ParseContext` carry it to the AudioParser, and
+`documents.error_message` gained three persist-canonical English values
+(`main.ingest.audioNeedsEngine`, `…audioNeedsModelAndEngine`, `…audioEngineUnsupported`,
+display-map translated; `audioNeedsTranscriber` unchanged) — no schema change. Renderer
+navigation gained the virtual target `models:voice` (the AI Model screen on Browse, Voice task).
 Phase 38: `kind: 'ocr'` on the same doc-task channels (one PDF; the target must be
 scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
 `DocumentInfo` gained the DERIVED `scanDetected` flag + optional `ocr: DocumentOcrInfo`

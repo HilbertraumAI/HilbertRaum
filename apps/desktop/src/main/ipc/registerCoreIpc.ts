@@ -65,6 +65,9 @@ export function registerCoreIpc(ctx: AppContext): void {
       // Dictation is availability-driven (transcriber selected at startup iff
       // whisper binary + weights exist) — the composer mic gates on this flag.
       dictationAvailable: ctx.transcriber != null,
+      // #527: which piece is missing, so the hint names it. Stored with the slot, never
+      // recomputed here — the shell polls this handler, and the reason needs a manifest walk.
+      transcriberMissing: ctx.transcriber != null ? null : (ctx.transcriberMissing ?? 'model'),
       // OCR is availability-driven too — gates "Make searchable (OCR)" + the photo hint. Reads
       // the engine's execution state, not mere presence (#232): false while a packaged build's
       // startup probe runs and after a worker failure. `ocrState` tells the renderer why.

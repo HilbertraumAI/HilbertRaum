@@ -32,9 +32,10 @@ import {
 //     transcript content).
 
 /** Friendly refusal when no transcriber is selected (binary or weights absent). The
- *  renderer hides the mic in this state, so this is a defensive backstop. */
+ *  renderer shows the "not installed" mic in this state, so this is a defensive backstop. It
+ *  names neither piece (#527): the engine can be the missing one, and the hint says which. */
 export const DICTATION_UNAVAILABLE_MESSAGE =
-  'Voice dictation is not available — the speech model is not installed on this drive.'
+  'Voice dictation is not available on this drive yet — the AI Model screen shows what is missing.'
 
 /** Friendly catch-all for a failed transcription (never the raw CLI error). */
 export const DICTATION_FAILED_MESSAGE = 'Could not transcribe that — try again.'

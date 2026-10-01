@@ -17,7 +17,8 @@ import {
   type RunnableTool,
   type RuntimeStatus,
   type SkillInfo,
-  type SkillSuggestion
+  type SkillSuggestion,
+  type TranscriberMissing
 } from '@shared/types'
 import type { AnswerSpeed } from '@shared/ipc'
 import { isReviewEligible } from '@shared/evidence-review'
@@ -318,12 +319,17 @@ export function ChatScreen({
   // and a user who stayed in chat meanwhile must not need a restart — or a navigation — to see
   // the mic.
   const [dictationAvailable, setDictationAvailable] = useState<boolean | null>(null)
+  // #527: WHICH piece is missing (speech model / voice engine / both / no engine for this
+  // system) — the composer hint names it instead of always blaming the model.
+  const [dictationMissing, setDictationMissing] = useState<TranscriberMissing | null>(null)
   const refreshDictationAvailability = useCallback(async (): Promise<void> => {
     try {
       const status = await window.api.getAppStatus()
       setDictationAvailable(status?.dictationAvailable === true)
+      setDictationMissing(status?.transcriberMissing ?? null)
     } catch {
       setDictationAvailable(false)
+      setDictationMissing(null)
     }
   }, [])
   useEffect(() => {
@@ -2541,7 +2547,8 @@ export function ChatScreen({
           sendLabel={mode === 'documents' ? t('chat.send.ask') : t('chat.send.send')}
           inputRef={composerRef}
           dictationAvailable={dictationAvailable}
-          onOpenModels={() => onNavigate('models')}
+          dictationMissing={dictationMissing}
+          onOpenModels={() => onNavigate('models:voice')}
           onDictationError={setError}
           // CR-3: withhold the paperclip while an import is pending (mirrors the `onTryAgain ? h :
           // undefined` gating pattern) so the one-pending-import model is honest; the guard inside

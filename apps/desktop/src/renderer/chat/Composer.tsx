@@ -5,6 +5,8 @@ import { useNoSignalHint, type NoSignalTiming } from './useNoSignalHint'
 import { Waveform } from './Waveform'
 import { useT } from '../i18n'
 import type { DictationCaptureStart } from '../lib/dictation'
+import type { MessageKey } from '@shared/i18n'
+import type { TranscriberMissing } from '@shared/types'
 
 // Composer (guidelines §3/§6): auto-growing textarea with ONE action button —
 // Send while idle, Stop while streaming (keyboard-reachable either way). Enter sends,
@@ -13,6 +15,19 @@ import type { DictationCaptureStart } from '../lib/dictation'
 // transcribed speech is INSERTED at the cursor for review — never sent.
 
 const MAX_GROW_PX = 220
+
+/**
+ * The "not installed" mic's hint per missing piece (#527): what the text names and what its
+ * button says. Each button names its action — never "Open AI Model", which reads as "OpenAI" —
+ * and all of them open the AI Model screen on the speech model. With no engine build for this
+ * system there is nothing to fetch, so that hint carries no button at all (no dead end).
+ */
+const DICTATION_HINTS: Record<TranscriberMissing, { text: MessageKey; action: MessageKey | null }> = {
+  model: { text: 'chat.dictation.needsModel', action: 'chat.dictation.getModel' },
+  engine: { text: 'chat.dictation.needsEngine', action: 'chat.dictation.getEngine' },
+  'model-and-engine': { text: 'chat.dictation.needsModelAndEngine', action: 'chat.dictation.setUp' },
+  'engine-unsupported': { text: 'chat.dictation.engineUnsupported', action: null }
+}
 
 interface ComposerProps {
   value: string
@@ -31,8 +46,11 @@ interface ComposerProps {
    *  "not installed" mic whose click explains the missing speech model and deep-links to the
    *  AI Model screen; `null`/`undefined` (status not read yet) renders nothing — no flash. */
   dictationAvailable?: boolean | null
-  /** Opens the AI Model screen from the "not installed" hint (the screen's
-   *  `onNavigate('models')`); without it the hint carries no button. */
+  /** Why dictation is unavailable (#527) — picks the hint's text and button. Absent/null falls
+   *  back to the speech-model copy (an older main, or a failed status read). */
+  dictationMissing?: TranscriberMissing | null
+  /** Opens the AI Model screen on the speech model from the "not installed" hint (the screen's
+   *  `onNavigate('models:voice')`); without it the hint carries no button. */
   onOpenModels?: () => void
   /** Friendly dictation failure copy — surfaced by the screen like other errors. */
   onDictationError?: (message: string) => void
@@ -56,6 +74,7 @@ export function Composer({
   footer,
   inputRef,
   dictationAvailable,
+  dictationMissing,
   onOpenModels,
   onDictationError,
   dictationCaptureImpl,
@@ -82,6 +101,7 @@ export function Composer({
   const [dictationHint, setDictationHint] = useState(false)
   // #497 follow-up: "no sound is reaching the microphone", live, from the waveform's tap.
   const noSignal = useNoSignalHint(analyser, recording, noSignalTiming)
+  const dictationHintCopy = DICTATION_HINTS[dictationMissing ?? 'model']
 
   // Auto-grow with content, capped — past the cap the textarea scrolls. scrollHeight
   // excludes the border (box-sizing: border-box), so add it back or a 2px overflow
@@ -186,7 +206,11 @@ export function Composer({
           />
         )}
         {dictationAvailable === false && (
-          <DictationUnavailableButton expanded={dictationHint} onToggle={() => setDictationHint((h) => !h)} />
+          <DictationUnavailableButton
+            unsupported={dictationMissing === 'engine-unsupported'}
+            expanded={dictationHint}
+            onToggle={() => setDictationHint((h) => !h)}
+          />
         )}
         {streaming ? (
           <Button onClick={onStop}>{t('chat.composer.stop')}</Button>
@@ -203,10 +227,10 @@ export function Composer({
       )}
       {dictationAvailable === false && dictationHint && (
         <p className="hint composer-hint" role="status">
-          {t('chat.dictation.needsModel')}
-          {onOpenModels && (
+          {t(dictationHintCopy.text)}
+          {onOpenModels && dictationHintCopy.action && (
             <Button size="sm" variant="ghost" onClick={onOpenModels}>
-              {t('chat.noModel.open')}
+              {t(dictationHintCopy.action)}
             </Button>
           )}
         </p>

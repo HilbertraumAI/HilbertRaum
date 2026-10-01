@@ -93,6 +93,10 @@ describe('localizeServerCopy (D-L4)', () => {
     const persistCanonical: MessageKey[] = [
       'main.ingest.pdfScanDetected',
       'main.ingest.audioNeedsTranscriber',
+      // #527: the audio failure names the missing piece (engine / both / no engine build here).
+      'main.ingest.audioNeedsEngine',
+      'main.ingest.audioNeedsModelAndEngine',
+      'main.ingest.audioEngineUnsupported',
       'main.ingest.audioUnreadable',
       'main.ingest.audioTranscriptionFailed',
       'main.ingest.imageNeedsOcr',

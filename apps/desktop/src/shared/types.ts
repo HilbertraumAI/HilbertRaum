@@ -32,6 +32,19 @@ export type OcrState = 'available' | 'probing' | 'unavailable' | 'missing'
  */
 export type OcrRefreshOutcome = 'activated' | 'restartRequired' | 'unchanged' | 'startFailed'
 
+/**
+ * What keeps the speech transcriber (dictation + audio import) from being available (#527).
+ * The transcriber needs TWO pieces — the whisper.cpp engine binary and the speech-model
+ * weights — and each surface must name the one that is really missing:
+ *   - `'model'`              — the engine is on the drive, the speech model is not;
+ *   - `'engine'`             — the speech model is on the drive, the engine is not, and the
+ *                              engine has a build for this system (the AI Model screen installs it);
+ *   - `'model-and-engine'`   — neither is on the drive; both can be fetched in-app;
+ *   - `'engine-unsupported'` — no engine on the drive AND no engine build for this system, so
+ *                              nothing the app can download makes the transcriber work here.
+ */
+export type TranscriberMissing = 'model' | 'engine' | 'model-and-engine' | 'engine-unsupported'
+
 export interface AppStatus {
   appName: string
   appVersion: string
@@ -53,6 +66,12 @@ export interface AppStatus {
    * composer mic — availability-driven, no settings key.
    */
   dictationAvailable: boolean
+  /**
+   * Why `dictationAvailable` is false (#527) — see `TranscriberMissing`; null while a
+   * transcriber is selected. Optional so older status fixtures stay valid (the `ocrState`
+   * shape); a renderer that finds it absent falls back to the speech-model copy.
+   */
+  transcriberMissing?: TranscriberMissing | null
   /**
    * Local text recognition (OCR) is available: the language files exist in the drive's `ocr/`
    * dir and the recognizer can run in this build (#232: false while a packaged build's startup

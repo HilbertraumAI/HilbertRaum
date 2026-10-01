@@ -70,5 +70,5 @@ export {
   whisperCliDir
 } from './cli'
 export type { WhisperCliOptions } from './cli'
-export { createSelectedTranscriber, vadModelPathOf, VAD_MODEL_FILE_RE } from './factory'
-export type { TranscriberModelInfo, TranscriberSelectionDeps } from './factory'
+export { createSelectedTranscriber, transcriberMissingReason, vadModelPathOf, VAD_MODEL_FILE_RE } from './factory'
+export type { TranscriberMissingDeps, TranscriberModelInfo, TranscriberSelectionDeps } from './factory'

@@ -1,4 +1,6 @@
+import { existsSync } from 'node:fs'
 import type { Transcriber } from './index'
+import type { TranscriberMissing } from '../../../shared/types'
 import { createWhisperCliTranscriber, resolveWhisperCliPath } from './cli'
 import { resolveSidecarSelection } from '../select-sidecar-backed'
 
@@ -83,4 +85,39 @@ export function createSelectedTranscriber(deps: TranscriberSelectionDeps): Trans
   }
   deps.onSelect?.('whisper', sel.reason)
   return makeTranscriber(sel.model, sel.binPath)
+}
+
+export interface TranscriberMissingDeps {
+  rootPath: string
+  model: TranscriberModelInfo | null
+  isDev?: boolean
+  /** The `whisper_cpp` engine family has a build for this host in runtime-sources.yaml. */
+  engineFetchable: boolean
+  resolveBin?: (rootPath: string) => string | null
+  modelExists?: (modelPath: string) => boolean
+}
+
+/**
+ * Which piece keeps the transcriber unavailable (#527), or null when both are present. The
+ * selection ladder above stops at the FIRST missing rung (binary before weights), so it cannot
+ * say "the engine is missing but the model is here" — the case a Linux drive hit with v1.8.6's
+ * Windows-only engine, where every surface blamed the model the user had just downloaded. This
+ * checks the binary and the weights independently; an engine with no host build is reported
+ * whatever the weights' state, because downloading them cannot make the transcriber work.
+ */
+export function transcriberMissingReason(deps: TranscriberMissingDeps): TranscriberMissing | null {
+  const resolveBin =
+    deps.resolveBin ??
+    ((root: string) => resolveWhisperCliPath(root, process.platform, process.env, { isDev: deps.isDev }))
+  const modelExists = deps.modelExists ?? existsSync
+  const binaryPresent = resolveBin(deps.rootPath) != null
+  const required = deps.model
+    ? deps.model.requiredPaths?.length
+      ? deps.model.requiredPaths
+      : [deps.model.modelPath]
+    : null
+  const weightsPresent = required != null && required.every((p) => modelExists(p))
+  if (binaryPresent) return weightsPresent ? null : 'model'
+  if (!deps.engineFetchable) return 'engine-unsupported'
+  return weightsPresent ? 'engine' : 'model-and-engine'
 }

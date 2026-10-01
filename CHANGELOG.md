@@ -34,6 +34,23 @@ from its first public `1.0.0` release onward.
   how to start the app without it when you have no administrator rights), and why a prepared
   drive is started with its launcher rather than the AppImage itself.
 
+### Fixed
+
+- **The greyed-out microphone now says what is really missing, and its button goes there.**
+  Voice dictation needs two things on the drive: the speech model and the voice engine that runs
+  it. The note under the greyed-out mic used to blame the speech model every time. On Linux it
+  kept doing so after the model was installed, when the real gap was the voice engine, which the
+  app could not install there. The note now names the speech model, the voice engine or both.
+  Its button says what it does (**Get the speech model**, **Get the voice engine** or **Set up
+  voice dictation**) and opens the **AI Model** screen on the speech model itself, not on the
+  list of installed models. Where the app cannot install the voice engine on this operating
+  system, the note says that voice dictation is not available there yet and offers no button.
+  The speech-model card on the AI Model screen says the same. An audio file import that fails
+  for the same reason now names the missing piece too (#527).
+- **No more "Open AI Model" buttons.** The English label read like the company name "OpenAI".
+  On Home and in the chat's "no model is running" note the button now says **Go to AI Model**
+  (#527).
+
 ### Security
 
 - **Documented: on Linux, the AppImage can run without Chromium's sandbox.** On distributions

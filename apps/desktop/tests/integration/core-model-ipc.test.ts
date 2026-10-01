@@ -166,6 +166,44 @@ describe('registerCoreIpc', () => {
     expect(minimal.ocrState).toBe('available')
   })
 
+  // #527: the composer hint names the missing piece. The reason is stored on ctx with the slot
+  // (startup + the install hooks) and only READ here — this handler is polled by the shell.
+  it('getAppStatus reports why dictation is unavailable, and null once a transcriber is selected (#527)', async () => {
+    const lockedWorkspace = {
+      isUnlocked: () => false,
+      getState: (): WorkspaceStateInfo => ({
+        state: 'locked',
+        mode: null,
+        plaintextAllowed: false,
+        encryptionRequired: true
+      })
+    }
+    const statusWith = async (slot: Record<string, unknown>): Promise<AppStatus> => {
+      const ctx = {
+        trustedSenders: ANY_SENDER,
+        paths: { configPath: bogusConfigDir() },
+        workspace: lockedWorkspace,
+        ...slot
+      } as unknown as AppContext
+      registerCoreIpc(ctx)
+      const { result } = await invoke(handlers, IPC.getAppStatus)
+      return result as AppStatus
+    }
+    for (const missing of ['model', 'engine', 'model-and-engine', 'engine-unsupported'] as const) {
+      const status = await statusWith({ transcriber: null, transcriberMissing: missing })
+      expect(status.dictationAvailable).toBe(false)
+      expect(status.transcriberMissing).toBe(missing)
+    }
+    // A live transcriber wins over a stale reason; an unset reason reads as the model copy.
+    const live = await statusWith({
+      transcriber: { id: 'w', transcribe: async () => [] },
+      transcriberMissing: 'engine'
+    })
+    expect(live.dictationAvailable).toBe(true)
+    expect(live.transcriberMissing).toBeNull()
+    expect((await statusWith({ transcriber: null })).transcriberMissing).toBe('model')
+  })
+
   it('getAppStatus forwards the translation device outcome (issue #42 reopen — the Translate hint feed)', async () => {
     const lockedWorkspace = {
       isUnlocked: () => false,

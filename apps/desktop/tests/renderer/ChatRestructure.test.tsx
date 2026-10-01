@@ -338,7 +338,8 @@ describe('ChatScreen — no-model empty state (M-U3)', () => {
     expect(await screen.findByText('No model is running')).toBeInTheDocument()
     expect(container.querySelector('.empty-state')).not.toBeNull()
     expect(container.querySelector('.card')).toBeNull()
-    expect(screen.getByRole('button', { name: 'Open AI Model' })).toBeInTheDocument()
+    // #527: "Open AI Model" read as "OpenAI model" — the button names where it goes instead.
+    expect(screen.getByRole('button', { name: 'Go to AI Model' })).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Re-check' })).toBeInTheDocument()
   })
 })

@@ -358,6 +358,8 @@ the everyday path.
 | "Export conversation to .md" | "Save this conversation" |
 | "Regenerate response" | "Try again" |
 | "Telemetry disabled." | "Nothing leaves this drive. There's no tracking to turn off." |
+| "Open AI Model" | "Go to AI Model" — never "Open" right before "AI": it reads as the company name OpenAI (#527) |
+| "Open AI Model" under "the speech model is missing" | "Get the speech model" — a hint's button names its action, and lands where the action is (#527) |
 
 **Ambient privacy signal:** subtle lock/shield glyph + "Local · Offline", neutral color.
 Hover/click popover: "Everything stays on this drive. No internet connection is used."

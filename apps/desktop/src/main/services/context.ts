@@ -18,6 +18,7 @@ import type { TranslateJobService } from './translation/jobs'
 import type { LocalApiServer } from './local-api/server'
 import type { PlaintextOpsRegistry } from './ingestion/plaintext-ops'
 import type { PendingModelSwitchCounter } from './rag/device-posture'
+import type { TranscriberMissing } from '../../shared/types'
 
 // Shared application context assembled at startup and passed to IPC handlers.
 export interface AppContext {
@@ -54,6 +55,13 @@ export interface AppContext {
    * install makes the role available — consumers read it off ctx per call, never capture it.
    */
   transcriber?: Transcriber | null
+  /**
+   * Why `transcriber` is null (#527): the missing engine, the missing speech model, both, or an
+   * engine with no build for this system. Set together with the slot — at startup and by every
+   * `refreshTranscriberSlot` — so it always describes the same drive state; null while a
+   * transcriber is selected. `getAppStatus` and the audio-import deps read it per call.
+   */
+  transcriberMissing?: TranscriberMissing | null
   /**
    * Local OCR engine: tesseract.js over the drive's vendored language
    * files, selected only when those exist. Null/absent = photo imports fail per-file

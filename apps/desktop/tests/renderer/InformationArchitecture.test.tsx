@@ -36,6 +36,8 @@ describe('resolveNavTarget — virtual targets + legacy aliases', () => {
     expect(resolveNavTarget('translate')).toEqual({ screen: 'translate' })
     expect(resolveNavTarget('images')).toEqual({ screen: 'images' })
     expect(resolveNavTarget('models')).toEqual({ screen: 'models' })
+    // #527: the composer's dictation hint opens the AI Model screen on the speech model.
+    expect(resolveNavTarget('models:voice')).toEqual({ screen: 'models', modelsFocus: 'voice' })
     // Performance is a primary destination after AI Model (design-guidelines §2, 2026-09).
     expect(resolveNavTarget('performance')).toEqual({ screen: 'performance' })
     expect(resolveNavTarget('chat')).toEqual({ screen: 'chat', chatMode: 'chat' })
