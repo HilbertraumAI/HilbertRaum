@@ -10,6 +10,14 @@ import {
   type ResolveBinOptions
 } from '../runtime/sidecar'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import {
+  EngineCannotRunError,
+  classifyLoadFailure,
+  classifySpawnError,
+  clearEngineProblemFor,
+  describeLoadFailure,
+  reportEngineProblem
+} from '../runtime/engine-load'
 import { shredFile } from '../workspace-vault'
 import { log } from '../logging'
 import type { TranscribeOptions, Transcriber, TranscriptSegment } from './index'
@@ -147,6 +155,10 @@ export interface WhisperCliOptions {
   killGraceMs?: number
   /** Cap on the `suspend()`/`stop()` cleanup await (REL-2). Default `DEFAULT_SUSPEND_TIMEOUT_MS`. */
   suspendTimeoutMs?: number
+  /** #530 test seam: the OS the load-failure classifier reports (default `process.platform`). */
+  platform?: NodeJS.Platform
+  /** #530 test seam: the Windows System32 DLL check the classifier consults. */
+  systemDllExists?: (dll: string) => boolean
 }
 
 export class WhisperCliTranscriber implements Transcriber {
@@ -161,6 +173,8 @@ export class WhisperCliTranscriber implements Transcriber {
   private readonly suspendTimeoutMs: number
   private readonly spawnImpl: (command: string, args: string[], options: SpawnOptions) => ChildProcess
   private readonly verifyBinary: (binPath: string) => Promise<BinaryVerifyResult>
+  private readonly platform?: NodeJS.Platform
+  private readonly systemDllExists?: (dll: string) => boolean
   /**
    * In-flight CLI children mapped to a promise that resolves when that child has fully
    * exited AND its `transcribe()` cleanup (the transient-transcript shred) has run.
@@ -182,6 +196,8 @@ export class WhisperCliTranscriber implements Transcriber {
     this.suspendTimeoutMs = opts.suspendTimeoutMs ?? DEFAULT_SUSPEND_TIMEOUT_MS
     this.spawnImpl = opts.spawnImpl ?? nodeSpawn
     this.verifyBinary = opts.verifyBinary ?? verifyBinaryBeforeSpawn
+    this.platform = opts.platform
+    this.systemDllExists = opts.systemDllExists
   }
 
   async transcribe(filePath: string, opts: TranscribeOptions): Promise<TranscriptSegment[]> {
@@ -271,7 +287,8 @@ export class WhisperCliTranscriber implements Transcriber {
       throw new Error('whisper-cli failed pre-spawn integrity verification')
     }
     return new Promise((resolve, reject) => {
-      const child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'] })
+      // windowsHide (#530): every other sidecar spawn already passed it; this one never did.
+      const child = this.spawnImpl(this.binPath, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true })
       onChild(child) // register in `active` so suspend()/stop() can kill + await its cleanup
       // CODE-11 (full-audit 2026-07-11): make the child reachable by the crash-exit reap —
       // a hard uncaughtException skips suspend()/stop(), and on Windows the child survives.
@@ -331,6 +348,19 @@ export class WhisperCliTranscriber implements Transcriber {
         unregisterSidecarChild(child.pid) // CODE-11: gone/never started — off the kill list
         clearWatchdog()
         opts.signal?.removeEventListener('abort', onAbort)
+        // #530: a Windows refusal by policy / security software is the voice engine's verdict.
+        const refused = classifySpawnError(err, this.platform)
+        if (refused) {
+          const problem = { family: 'whisper_cpp' as const, ...refused }
+          log.warn('whisper-cli cannot run on this computer — the operating system refused to start it', {
+            problem: describeLoadFailure(refused),
+            binPath: this.binPath,
+            error: String(err)
+          })
+          reportEngineProblem(problem, this.binPath)
+          reject(new EngineCannotRunError('whisper-cli', problem))
+          return
+        }
         reject(err)
       })
       child.on('close', (code, signal) => {
@@ -339,22 +369,59 @@ export class WhisperCliTranscriber implements Transcriber {
         opts.signal?.removeEventListener('abort', onAbort)
         if (opts.signal?.aborted || this.stopped) {
           reject(new Error('Transcription was cancelled.'))
-        } else if (timedOut) {
+          return
+        }
+        if (timedOut) {
           // Distinct from a generic terminate so the local log shows WHY (no content).
           reject(new Error(`whisper-cli watchdog: no output for ${this.idleTimeoutMs} ms; transcription aborted`))
+          return
+        }
+        // #530: the OS refused to start the program (a missing system library, a system too
+        // old, a missing Windows runtime, a code-integrity block) — the voice ENGINE cannot run
+        // here, which no retry, re-index or other recording fixes.
+        const refused =
+          signal || (code !== null && code !== 0) ? this.loadFailureError(code, signal, stderrTail) : null
+        if (refused) {
+          reject(refused)
         } else if (signal) {
-          reject(new Error(`whisper-cli was terminated (${signal})`))
+          // The tail now rides the signal branch too (#530): a dyld abort explains itself there.
+          reject(new Error(`whisper-cli was terminated (${signal})${stderrTail ? `: ${stderrTail.slice(-500)}` : ''}`))
         } else {
           // Exit code deliberately NOT used as the success signal (see module note);
           // a hard non-zero exit (missing DLL, bad model) still fails loudly here.
           if (code !== null && code !== 0) {
             reject(new Error(`whisper-cli exited with code ${code}: ${stderrTail.slice(-500)}`))
           } else {
+            // #530: the program ran — a refusal recorded against THIS binary is stale.
+            clearEngineProblemFor('whisper_cpp', this.binPath)
             resolve({ code, stderrTail })
           }
         }
       })
     })
+  }
+
+  /**
+   * #530: the typed error when the OS loader refused whisper-cli, else null. Records the session
+   * verdict and logs the raw tail (it holds the drive path) once, locally.
+   */
+  private loadFailureError(code: number | null, signal: string | null, stderrTail: string): EngineCannotRunError | null {
+    const failure = classifyLoadFailure({
+      exitCode: code,
+      signal,
+      stderr: stderrTail,
+      platform: this.platform,
+      systemDllExists: this.systemDllExists
+    })
+    if (!failure) return null
+    const problem = { family: 'whisper_cpp' as const, ...failure }
+    log.warn('whisper-cli cannot run on this computer — the operating system refused to start it', {
+      problem: describeLoadFailure(failure),
+      binPath: this.binPath,
+      stderr: stderrTail.trim().slice(-1000)
+    })
+    reportEngineProblem(problem, this.binPath)
+    return new EngineCannotRunError('whisper-cli', problem)
   }
 
   /**

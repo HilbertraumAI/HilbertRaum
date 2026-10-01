@@ -98,6 +98,25 @@ with the slot; `IngestionDeps`/`ParseContext` carry it to the AudioParser, and
 (`main.ingest.audioNeedsEngine`, `…audioNeedsModelAndEngine`, `…audioEngineUnsupported`,
 display-map translated; `audioNeedsTranscriber` unchanged) — no schema change. Renderer
 navigation gained the virtual target `models:voice` (the AI Model screen on Browse, Voice task).
+#530 (`architecture.md` "Engine load failures — design record"): `AppStatus` gained the
+additive-optional `engineProblems?: EngineProblem[]` — `{ family: 'llama_cpp' | 'whisper_cpp',
+reason: 'library-missing' | 'system-too-old' | 'files-damaged' | 'vc-runtime-missing' |
+'blocked', os: 'win' | 'mac' | 'linux', name?: string, exit: string }` (`name` is a library
+FILE name or a version tag such as `GLIBC_2.34`, never a path; `exit` is for Diagnostics), the chat
+engine first; a SESSION verdict held in main memory (`runtime/engine-load.ts`), never persisted.
+New invoke channel `recheckEngine(): Promise<EngineRecheckResult>` (`engine:recheck`, no payload,
+admission-gated — refused while locked; `{ problems: EngineProblem[] }` = what is still refused
+after re-starting each engine with a verdict) and the payload-free event
+`EVENTS.engineProblemsChanged` (`engine:problemsChanged`, preload `onEngineProblemsChanged`) on a
+new, different or cleared verdict. `runtime:notice` gained an optional second argument
+`target?: 'models'` (preload `onRuntimeNotice(cb(message, target?))`): the notice's button opens
+the AI Model screen instead of Diagnostics. `TranslateErrorCode` and `VisionErrorCode` gained
+`'engineCannotRun'`. `documents.error_message` gained three persist-canonical English values —
+`main.ingest.engineCannotRun`, `main.ingest.voiceEngineCannotRun` (exact match) and the
+INTERPOLATED `main.ingest.engineLibraryMissing` (`{library}` = the file name) — display-map
+translated; rows that stored the raw loader line before #530 (absolute drive path included) are
+rewritten to them at every session start. Settings: a `gpuAutoDisabled` whose `gpuLastError`
+classifies as a load refusal is cleared (both fields) at every session start. No schema change.
 Phase 38: `kind: 'ocr'` on the same doc-task channels (one PDF; the target must be
 scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
 `DocumentInfo` gained the DERIVED `scanDetected` flag + optional `ocr: DocumentOcrInfo`
@@ -1872,9 +1891,9 @@ whole renderer-visible surface.
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
 The #138 backfill above closed the *feature* gaps. A mechanical pass over every key in
-`shared/ipc.ts` (156 channels since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
+`shared/ipc.ts` (157 channels since #530 added `engine:recheck`; 156 since #410 added the four `ocr:*` install channels — 152 before it, counted from the `IPC` keys on master `4086a4cf`, so the figure had drifted past the "148" recorded here; 148 channels since #420 added `models:cancelVerify`; 147 since #340 Tier-2 added `packs:saveArticle` — the keys of its `IPC` constant (138 at the time of this
 sweep, +7 `packs:*` keys added by #301 P7); the `STREAM` builders, `OCR_RASTER` and `EVENTS`
-(now 3, `packs:changed` added) are separate constants, #259) against this file then found **16** that
+(now 3, `packs:changed` added; #530 added `engine:problemsChanged` to `EVENTS`) are separate constants, #259) against this file then found **16** that
 appeared under neither their method name nor their channel string — mostly siblings of documented
 calls that arrived one at a time. Listed here so the declared source of truth is complete; each
 one's behaviour stays owned by the design record named beside it.

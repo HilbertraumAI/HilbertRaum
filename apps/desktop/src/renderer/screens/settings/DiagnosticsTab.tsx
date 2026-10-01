@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { Fragment, useCallback, useEffect, useRef, useState } from 'react'
 import { Banner, Button, ErrorBanner, useToast } from '../../components'
 import { useT, type I18n } from '../../i18n'
 import { localizeServerCopy } from '../../lib/displayMap'
@@ -6,6 +6,7 @@ import { runAndSurface } from '../../lib/errors'
 import { fmt1 } from '../../lib/format'
 import { formatSize } from '../documents/format'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
+import { ENGINE_PROBLEM_DIAG_KEY, engineProblemTechnicalDetail } from '@shared/engine-problem'
 import type {
   AppSettings,
   AppStatus,
@@ -13,6 +14,7 @@ import type {
   AuditEventType,
   BenchmarkResult,
   DriveStatus,
+  EngineProblem,
   LocalApiStatus,
   PerformanceSnapshot,
   RuntimeInstallInfo,
@@ -162,6 +164,19 @@ function localApiStatusLine(api: LocalApiStatus | null | undefined, t: I18n['t']
   })
 }
 
+/** #530: one Diagnostics line for an engine the OS refused — the reason in words, then the
+ *  technical values untranslated (§7: the library name and the exit code live here only). */
+function engineProblemLine(problem: EngineProblem, t: I18n['t']): string {
+  const detail = engineProblemTechnicalDetail(problem)
+  const line = t('diag.engine.cannotRun', { reason: t(ENGINE_PROBLEM_DIAG_KEY[problem.reason]) })
+  return detail ? `${line} (${detail})` : line
+}
+
+/** #530: the label of an engine's Diagnostics line. */
+function engineProblemLabel(problem: EngineProblem, t: I18n['t']): string {
+  return t(problem.family === 'whisper_cpp' ? 'diag.app.voiceEngine' : 'diag.app.engine')
+}
+
 /** Plain-text rendering of the "App & runtime" card for the Copy button — the same labels
  *  + values shown on screen, so a user can paste the lot into a support message. */
 function buildAppRuntimeReport(
@@ -178,6 +193,7 @@ function buildAppRuntimeReport(
     `${t('diag.app.profile')}: ${app?.hardwareProfile ?? t('diag.app.unknown')}`,
     `${t('diag.app.runtime')}: ${runtimeStatusLine(runtime, t)}`,
     `${t('diag.app.acceleration')}: ${accelerationLabel(runtime, currentGpu, t)}`,
+    ...(app?.engineProblems ?? []).map((p) => `${engineProblemLabel(p, t)}: ${engineProblemLine(p, t)}`),
     `${t('diag.localApi.label')}: ${localApiStatusLine(app?.localApi, t)}`,
     `${t('diag.app.runtimeBuild')}: ${
       install ? `llama.cpp ${install.version} (${install.backend})` : t('diag.app.noInstallMarker')
@@ -426,6 +442,9 @@ export function DiagnosticsTab(): JSX.Element {
     void refreshStatus()
   }, [refreshStatus])
 
+  // #530: an engine verdict that lands (or heals) while this tab is open re-reads the card.
+  useEffect(() => window.api?.onEngineProblemsChanged?.(() => void refreshStatus()), [refreshStatus])
+
   // "Try GPU again" (architecture.md GPU record §8): clears the automatic compatibility-mode flag
   // (e.g. after a graphics-driver update) WITHOUT touching the Settings toggle. The
   // dedicated IPC also invalidates the session probe cache + re-probes — a plain
@@ -467,6 +486,12 @@ export function DiagnosticsTab(): JSX.Element {
           <dd>{runtimeStatusLine(runtime, t)}</dd>
           <dt>{t('diag.app.acceleration')}</dt>
           <dd>{accelerationLabel(runtime, currentGpu, t)}</dd>
+          {(app?.engineProblems ?? []).map((p) => (
+            <Fragment key={p.family}>
+              <dt>{engineProblemLabel(p, t)}</dt>
+              <dd>{engineProblemLine(p, t)}</dd>
+            </Fragment>
+          ))}
           <dt>{t('diag.localApi.label')}</dt>
           <dd>{localApiStatusLine(app?.localApi, t)}</dd>
           <dt>{t('diag.app.runtimeBuild')}</dt>

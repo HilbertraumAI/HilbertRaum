@@ -2,16 +2,24 @@ import { guardedHandleFor } from './guarded-handle'
 import { refreshGpuProbeAfterRuntimeInstall } from './registerBenchmarkIpc'
 import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
-import type { EngineDownloadJob, EngineStatus, OcrInstallJob, OcrInstallStatus } from '../../shared/types'
+import type {
+  EngineDownloadJob,
+  EngineRecheckResult,
+  EngineStatus,
+  OcrInstallJob,
+  OcrInstallStatus
+} from '../../shared/types'
 import { EngineDownloadManager, engineStatus, parseEngineDownloadRequest } from '../services/runtime-download'
 import { OcrInstallManager, assertNoOcrInstallPayload } from '../services/ocr-install'
 import { registeredSidecarPids } from '../services/runtime/sidecar'
-import { clearModelLoadLatches } from '../services/runtime/factory'
+import { clearEngineProblem } from '../services/runtime/engine-load'
+import { rearmLlamaConsumers, recheckEngines } from './engine-recheck'
 import { refreshOcrSlot, refreshTranscriberSlot } from '../services/compose-services'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { getSettings } from '../services/settings'
 import { loadPolicy } from '../services/policy'
 import { log } from '../services/logging'
+import { tMain } from '../services/i18n'
 import type { RuntimeManager } from '../services/runtime'
 import type { DownloadGates } from '../services/downloads'
 
@@ -84,13 +92,20 @@ export function registerEngineIpc(
     if (families.includes('llama_cpp')) {
       // #372: a new runtime binary may load what the old one could not (a pin that adds an
       // architecture) — every model the ladder latched as unloadable this session is re-armed.
-      clearModelLoadLatches()
+      // #530: and every other consumer's failed-start latch with it (the embedder's used to need
+      // a lock/unlock), and the old binary's load verdict no longer describes the new one — a
+      // refusal of the new binary re-reports itself on its first spawn (the probe just below).
+      clearEngineProblem('llama_cpp')
+      rearmLlamaConsumers(ctx)
       void refreshGpuProbeAfterRuntimeInstall(ctx)
     }
     // #497: the voice engine just arrived — when the speech model is already on the drive the
     // transcriber selects NOW, so the composer mic appears without a restart (the model-download
     // twin of this hook is `AppContext.onModelInstalled`). Never throws; a null slot only.
-    if (families.includes('whisper_cpp')) refreshTranscriberSlot(ctx)
+    if (families.includes('whisper_cpp')) {
+      clearEngineProblem('whisper_cpp') // #530: a new binary; a refusal re-reports on its next spawn
+      refreshTranscriberSlot(ctx)
+    }
     // #339 P8-2: the knowledge-pack tools just arrived — the packs panel's status re-resolves
     // the binaries on its next read, and the searchability cache key carries the tools
     // fingerprint (rag-design §17 D-Z11/D-Z15), so one background reconcile re-probes every
@@ -110,6 +125,13 @@ export function registerEngineIpc(
     const settingAllows = ctx.workspace.isUnlocked() && getSettings(ctx.db).allowNetwork
     return { policyAllows: policy.network.allowModelDownloads, settingAllows }
   }
+
+  // #530 "Check again": no payload; drive-local spawns only. Admission-gated like every
+  // engine action — a re-check that re-arms sidecars must not run under a lock teardown.
+  ipcHandle(IPC.recheckEngine, async (): Promise<EngineRecheckResult> => {
+    if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.settings.locked'))
+    return recheckEngines(ctx)
+  })
 
   ipcHandle(
     IPC.getEngineStatus,

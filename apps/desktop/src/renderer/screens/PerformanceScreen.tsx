@@ -4,6 +4,7 @@ import { useT, type I18n } from '../i18n'
 import { localizeServerCopy } from '../lib/displayMap'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '../lib/format'
+import { useEngineProblems } from '../lib/useEngineProblems'
 import type { UiLanguage } from '@shared/i18n'
 import { isHardwareProfile } from '@shared/benchmark-schema'
 import { isUsefulDevice, looksIntegrated, USABLE_VRAM_MB } from '@shared/gpu-rules'
@@ -356,6 +357,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
   // The GPU is switched off in Settings or auto-disabled after a crash: the next start runs from
   // RAM whatever card the probe lists, and the graphics tile says so instead of "no card".
   const [gpuOff, setGpuOff] = useState(false)
+  // #530: the chat engine the device probe runs was refused by the OS this session — the probe
+  // never enumerated anything, so a 'none' here is not knowledge of a missing card.
+  const engineCannotRun = useEngineProblems()?.some((p) => p.family === 'llama_cpp') ?? false
   const [runtimeModelId, setRuntimeModelId] = useState<string | null>(null)
   /** The running model landed on the GPU rung (`RuntimeStatus.backend === 'gpu'`): with the
    *  placement evidence, the "running on the graphics card right now" line (issue #325 (3)). */
@@ -713,7 +717,9 @@ export function PerformanceScreen({ onNavigate }: PerformanceScreenProps): JSX.E
             ? [t('perf.tile.graphics.notRecorded'), t('perf.rating.notRecorded')]
             : graphics.kind === 'off'
               ? [t('perf.tile.graphics.off'), t('perf.rating.none')]
-              : [t('perf.tile.graphics.none'), t('perf.rating.none')]
+              : engineCannotRun
+                ? [t('perf.tile.graphics.engine'), t('perf.rating.unknown')]
+                : [t('perf.tile.graphics.none'), t('perf.rating.none')]
       return <Tile label={t('perf.tile.graphics')} value={null} sub={sub} pill={pill} tone="neutral" />
     }
     const { mb, name, useful, integrated } = graphics

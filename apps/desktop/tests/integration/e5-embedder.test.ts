@@ -1,8 +1,13 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { createSelectedEmbedder } from '../../src/main/services/embeddings/factory'
+import {
+  engineProblemFor,
+  isEngineCannotRunError,
+  resetEngineProblemsForTest
+} from '../../src/main/services/runtime/engine-load'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
 class FakeChild extends EventEmitter implements ChildProcessLike {
@@ -848,5 +853,69 @@ describe('createSelectedEmbedder', () => {
     })
     expect(e.id).toBe('multilingual-e5-small-q8')
     expect(e).toBeInstanceOf(E5Embedder)
+  })
+})
+
+// #530: a program the OS loader refuses latches like any load fault (no retry storm, no raw loader
+// line stored on every document), and "Check again" / an engine install re-arms it.
+describe('E5Embedder — OS loader refusal (#530)', () => {
+  afterEach(() => resetEngineProblemsForTest())
+
+  const base = {
+    id: 'multilingual-e5-small-q8',
+    binPath: '/bin/llama-server',
+    modelPath: '/models/e5.gguf',
+    findPort: async () => 52000,
+    healthIntervalMs: 1,
+    dimensions: 2
+  }
+  const refusingFetch = (async () => {
+    throw new Error('connection refused')
+  }) as unknown as typeof fetch
+
+  function loaderRefusedSpawn() {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      const stderr = new EventEmitter()
+      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
+      queueMicrotask(() => {
+        stderr.emit(
+          'data',
+          '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
+        )
+        child.emit('exit', 127, null)
+        child.emit('close', 127, null)
+      })
+      return child
+    }
+    return { spawn, calls }
+  }
+
+  it('latches a loader refusal: embed rejects with EngineCannotRunError, no second spawn', async () => {
+    const { spawn, calls } = loaderRefusedSpawn()
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: refusingFetch })
+    const err = await embedder.embed(['hello']).catch((e: unknown) => e)
+    expect(isEngineCannotRunError(err)).toBe(true)
+    expect((err as Error).message).not.toContain('/media/someone') // path-free: it is stored on documents
+    expect(calls.length).toBe(1)
+    expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'library-missing', name: 'libgomp.so.1' })
+
+    const again = await embedder.embed(['hello']).catch((e: unknown) => e)
+    expect(isEngineCannotRunError(again)).toBe(true) // the latched error, rethrown
+    expect(calls.length).toBe(1)
+    await embedder.stop()
+  })
+
+  it('resetStartFailure() re-arms the latch: the next embed spawns again', async () => {
+    const { spawn, calls } = loaderRefusedSpawn()
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: refusingFetch })
+    await expect(embedder.embed(['hello'])).rejects.toThrow()
+    expect(calls.length).toBe(1)
+    embedder.resetStartFailure()
+    await expect(embedder.embed(['hello'])).rejects.toThrow() // refused again, but it TRIED
+    expect(calls.length).toBe(2)
+    await embedder.stop()
   })
 })

@@ -33,6 +33,10 @@ from its first public `1.0.0` release onward.
   distributions leave out (which package to install on Ubuntu, Debian, Linux Mint and Fedora, and
   how to start the app without it when you have no administrator rights), and why a prepared
   drive is started with its launcher rather than the AppImage itself.
+- **The Linux and Windows requirements are written down.** Linux needs Ubuntu 22.04, Debian 12 or
+  Fedora 36, or newer; Windows needs Microsoft's Visual C++ runtime, which most PCs already have.
+  The README, the user guide, the drive's "READ ME FIRST" and a new Troubleshooting entry, "The AI
+  engine can't run on this computer", give the exact package to install (#530).
 
 ### Fixed
 
@@ -50,6 +54,25 @@ from its first public `1.0.0` release onward.
 - **No more "Open AI Model" buttons.** The English label read like the company name "OpenAI".
   On Home and in the chat's "no model is running" note the button now says **Go to AI Model**
   (#527).
+- **When your computer can't run the AI engine, the app now says so, names what is missing, and
+  blames nothing else.** Sometimes the engine is on the drive but your operating system refuses
+  to start it: on Linux when a system library such as `libgomp1` is missing, or the system is
+  older than Ubuntu 22.04 / Debian 12 / Fedora 36; on Windows when Microsoft's Visual C++
+  runtime is missing, or Smart App Control or an antivirus program blocks the program. Until now the app misreported this:
+  - it switched your graphics card off without telling you, or said your model "could not be
+    loaded on this computer";
+  - Translate blamed low memory, and Images suggested another model;
+  - the GPU check reported "no graphics card";
+  - documents failed with a raw technical line that showed the drive's folder path.
+
+  Now the **AI Model** screen shows one banner that says what is missing, which package to install
+  on Linux, and offers **Check again** for once you have fixed it, with no restart needed. Home,
+  the chat, Translate, Images, dictation and Documents all point to that banner, and Settings →
+  Diagnostics has the technical detail. Nothing about it is stored, and drives that were already
+  marked wrongly (graphics card switched off, failed documents showing a path) are corrected the
+  next time you unlock. The voice-dictation messages are now shown in German too (#530).
+- **Home no longer calls the demo mode "running".** When a model answers with simulated demo
+  replies, Home says so (#530).
 
 ### Security
 

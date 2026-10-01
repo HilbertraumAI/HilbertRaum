@@ -156,6 +156,18 @@ Key config points:
   AppImage does not start" and `known-limitations.md` "Security & privacy". The static-runtime
   toolset (`toolsets.appimage: 1.0.3`) would drop the host `libfuse2` requirement and the
   desktop-entry flag but keeps the same `AppRun` probe; it has not been tried here.
+- **The Linux floor is the AI engine's, not the AppImage's (#530).** Electron runs on Ubuntu
+  18.04+, but the pinned llama.cpp/whisper.cpp Linux builds need glibc 2.34, GCC 12's libstdc++
+  and OpenSSL 3, which means Ubuntu 22.04, Debian 12 or Fedora 36 and newer. They also take
+  `libgomp.so.1` from the host; desktop images include it, and it is not bundled (owner decision
+  2026-10-01). The Windows engine builds likewise take the Visual C++ 2015–2022 runtime from the
+  host. The app classifies a refused engine and names the cause (`architecture.md` "Engine load
+  failures"), and the user-facing minimum is stated in README, `user-guide.md` §1,
+  `troubleshooting.md` and `launchers/READ ME FIRST.txt`.
+  - **Sidecar environment.** The app sets no `LD_LIBRARY_PATH` of its own, so every sidecar
+    inherits the parent's environment. Under the AppImage that includes the `AppRun` export
+    `LD_LIBRARY_PATH=$APPDIR/usr/lib` (measured on the v0.1.62 AppImage for the #530
+    bundling study).
 - **The renderer CSP `<meta>` tags are generated at build time** (BE-2, ocr-audit 2026-07-18):
   the `hilbertraum:csp-meta` transform in `electron.vite.config.ts` rewrites the
   `Content-Security-Policy` meta in `index.html`/`ocr.html` from the single source of truth

@@ -103,7 +103,8 @@ async function translateWithRetry(
       // windows. No cause message crosses to the renderer.
       if (isTranslationStartError(err)) {
         log.warn('Translation sidecar start failed', { error: err.message })
-        throw new Error(tMain('main.translation.startFailed'))
+        // #530: the OS refused to start the engine program — the engine copy, not the memory one.
+        throw new Error(tMain(err.engineCannotRun ? 'main.engine.cannotRun' : 'main.translation.startFailed'))
       }
       // #160 (BE-2): a per-request TIMEOUT during a LIVE decode (tokens flowed) is as
       // deterministic as a limit stop — temperature-0 on the same hardware reproduces the same

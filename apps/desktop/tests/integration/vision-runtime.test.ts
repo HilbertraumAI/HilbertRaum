@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -8,6 +8,7 @@ import {
   type VisionAnalyzeOptions
 } from '../../src/main/services/vision/runtime'
 import { VisionService, type VisionStreamEmitter } from '../../src/main/services/vision'
+import { EngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 
@@ -715,5 +716,98 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     expect(answer).toBe(FIXTURE_ANSWER)
     expect(calls.length).toBe(2)
     await rt.stop()
+  })
+})
+
+// #530: the OS loader refused the engine program — the service reports `engineCannotRun` (not the
+// generic `runtimeFailed`), repeats it inside the cooldown, and "Check again" drops the cooldown.
+describe('VisionService — OS loader refusal (#530)', () => {
+  afterEach(() => resetEngineProblemsForTest())
+
+  const refusal = () =>
+    new EngineCannotRunError('llama-server', {
+      family: 'llama_cpp',
+      reason: 'library-missing',
+      os: 'linux',
+      name: 'libgomp.so.1',
+      exit: 'exit code 127'
+    })
+
+  function refusingService(cooldownMs = 60_000) {
+    let built = 0
+    let healthy = false
+    const service = new VisionService({
+      getStatus: async () => VLM_AVAILABLE,
+      createRuntime: () => {
+        built++
+        return {
+          analyze: async () => {
+            if (healthy) return FIXTURE_ANSWER
+            throw refusal()
+          },
+          isStartFailed: () => !healthy
+        }
+      },
+      startFailureCooldownMs: cooldownMs
+    })
+    return { service, built: () => built, heal: () => (healthy = true) }
+  }
+
+  it('fails the job with engineCannotRun, and a second analyze inside the cooldown fails fast the same way', async () => {
+    const { service, built } = refusingService()
+    const first = await runToTerminal(service, serviceReq())
+    expect(first.state).toBe('failed')
+    expect(first.error).toBe('engineCannotRun')
+    const second = await runToTerminal(service, serviceReq())
+    expect(second.state).toBe('failed')
+    expect(second.error).toBe('engineCannotRun')
+    expect(built()).toBe(1) // the cooldown fast-fail built no new runtime
+    await service.stop()
+  })
+
+  it('resetStartFailure() drops the cooldown so the next analyze builds a fresh runtime', async () => {
+    const { service, built, heal } = refusingService()
+    expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
+    service.resetStartFailure()
+    heal()
+    const next = await runToTerminal(service, serviceReq())
+    expect(next.state).toBe('done')
+    expect(built()).toBe(2)
+    await service.stop()
+  })
+
+  it('a real VisionRuntime whose sidecar the loader refuses ends engineCannotRun (one spawn)', async () => {
+    let spawnCount = 0
+    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
+      spawnCount++
+      const child = new FakeChild()
+      const stderr = new EventEmitter()
+      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
+      queueMicrotask(() => {
+        stderr.emit(
+          'data',
+          '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
+        )
+        child.emit('exit', 127, null)
+        child.emit('close', 127, null)
+      })
+      return child
+    }
+    const service = new VisionService({
+      getStatus: async () => VLM_AVAILABLE,
+      createRuntime: () =>
+        new VisionRuntime({
+          ...base,
+          spawn,
+          fetchImpl: (async () => {
+            throw new Error('connection refused')
+          }) as unknown as typeof fetch
+        }),
+      startFailureCooldownMs: 60_000
+    })
+    expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
+    expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
+    expect(spawnCount).toBe(1)
+    await service.stop()
   })
 })

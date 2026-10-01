@@ -8,6 +8,15 @@ import { log } from '../logging'
 import { perfMark, perfMs } from '../perf'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
 import type { HealthStatus } from './index'
+import {
+  EngineCannotRunError,
+  classifyLoadFailure,
+  classifySpawnError,
+  clearEngineProblemFor,
+  describeLoadFailure,
+  pathFreeSpawnError,
+  reportEngineProblem
+} from './engine-load'
 
 // Sidecar discovery + lifecycle (spec §6, §7.5). Locates the prebuilt `llama-server`
 // binary on the drive and manages the child process that both the chat runtime
@@ -398,6 +407,10 @@ export interface LlamaServerOptions {
   startAbortSignal?: AbortSignal
   // Test seams:
   spawn?: SpawnFn
+  /** #530: the OS the load-failure classifier reports (default `process.platform`). */
+  platform?: NodeJS.Platform
+  /** #530: the Windows System32 DLL check the classifier consults after a DLL-shaped exit code. */
+  systemDllExists?: (dll: string) => boolean
   fetchImpl?: FetchFn
   findPort?: (host: string) => Promise<number>
   /** Grace period after SIGTERM before escalating to SIGKILL on stop() (default 2000ms). */
@@ -424,6 +437,15 @@ const INITIAL_HEALTH_INTERVAL_MS = 50
 const DEFAULT_KILL_GRACE_MS = 2_000
 /** Per-probe timeout so a hung (accepts-but-never-responds) server can't stall the poll. */
 const HEALTH_PROBE_TIMEOUT_MS = 3_000
+/**
+ * #530: how long a start failure waits for the child's `'close'` (stdio drained) after its
+ * `'exit'` before reading the stderr tail. Node may emit `'exit'` while output is still in the
+ * pipe — the reason the GPU probe resolves on `'close'` — and the tail now decides whether the
+ * OS loader refused the program. A real child closes within a millisecond or two of exiting
+ * (stderr arrived BEFORE exit in 40 of 40 measured loader failures); the bound only stops a pipe
+ * held open by something else from stalling the start.
+ */
+const STDERR_DRAIN_MS = 100
 
 /**
  * Owns one `llama-server` child process bound to loopback. Spawns it, waits for the
@@ -487,6 +509,11 @@ export class LlamaServer {
   private exited = false
   private exitCode: number | null = null
   private exitSignal: string | null = null
+  /**
+   * #530: THIS spawn's `'close'` (every stdio stream drained). Per spawn, never shared: on the
+   * bind-retry path a previous child's late `'close'` must not mark the retry's pipe as drained.
+   */
+  private closeState: { closed: boolean; promise: Promise<void> } | null = null
   /** Published (exact-key-redacted) stderr, capped at STDERR_TAIL_MAX. */
   private stderrTail = ''
   /** The held-back last ≤STDERR_REDACT_HOLDBACK chars — see the hold-back note above. */
@@ -648,14 +675,31 @@ export class LlamaServer {
     // the parent's own `process.env` must stay clean (whisper-cli, tar, and the GPU probe
     // would inherit it). The spread copies process.env for THIS child only.
     this.apiKey = randomBytes(32).toString('hex')
-    const child = this.spawn(this.opts.binPath, this.buildArgs(this.port), {
-      stdio: ['ignore', 'ignore', 'pipe'],
-      // REL-7: never flash a console window on Windows for this high-frequency spawn (every
-      // model start), matching the tar / transcriber / runtime-download spawns. No-op off Windows.
-      windowsHide: true,
-      env: { ...process.env, LLAMA_API_KEY: this.apiKey }
-    })
+    let child: ChildProcessLike
+    try {
+      child = this.spawn(this.opts.binPath, this.buildArgs(this.port), {
+        stdio: ['ignore', 'ignore', 'pipe'],
+        // REL-7: never flash a console window on Windows for this high-frequency spawn (every
+        // model start), matching the tar / transcriber / runtime-download spawns. No-op off Windows.
+        windowsHide: true,
+        env: { ...process.env, LLAMA_API_KEY: this.apiKey }
+      })
+    } catch (err) {
+      // #530: Node throws SYNCHRONOUSLY for spawn errors outside its short async list (EPERM,
+      // `spawn UNKNOWN` — how an antivirus or application-control block often surfaces). That
+      // escaped every caller unclassified; it now takes the async 'error' path's shape.
+      this.port = null
+      this.throwLaunchFailure(err)
+    }
     this.child = child
+    const closeState = { closed: false, promise: Promise.resolve() }
+    closeState.promise = new Promise<void>((resolve) => {
+      child.once('close', () => {
+        closeState.closed = true
+        resolve()
+      })
+    })
+    this.closeState = closeState
     // CODE-11: make the child reachable by the crash-exit reap for as long as it lives.
     // F-32: every LlamaServer consumer (chat/embedder/reranker/vision/translation) runs the
     // shared `runtime/llama.cpp/<os>/` binary, so it registers under the llama_cpp family.
@@ -723,6 +767,9 @@ export class LlamaServer {
 
     await this.waitForHealthy()
     this.ready = true
+    // #530: this program runs — a refusal recorded against THIS binary (an intermittent block that
+    // went away) is stale. A refusal of another binary of the family stays.
+    clearEngineProblemFor('llama_cpp', this.opts.binPath)
     // Wall-clock model load for THIS rung attempt: binary verify + spawn + first healthy
     // /health. The embedding flag separates the chat runtime from the E5 sidecar.
     perfMark('sidecar_healthy', {
@@ -742,6 +789,65 @@ export class LlamaServer {
     // #515: no colour codes in anything built from the tail (the first line is printed before
     // `--log-colors off` takes effect; an older binary may ignore the flag).
     return redactSidecarSecrets(this.stderrTail + this.stderrCarry, this.apiKey).replace(ANSI_RE, '')
+  }
+
+  /** #530: wait (bounded) for `'close'` after an early `'exit'`, so the tail is complete. */
+  private async awaitStderrDrain(): Promise<void> {
+    const state = this.closeState
+    // A fake child with no stderr stream has nothing to drain.
+    if (!state || state.closed || !this.child?.stderr) return
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([state.promise, new Promise<void>((resolve) => (timer = setTimeout(resolve, STDERR_DRAIN_MS)))])
+    clearTimeout(timer)
+  }
+
+  /**
+   * #530: the program never started. On Windows a refusal by policy or security software comes
+   * back as a spawn error (EPERM / UNKNOWN / EACCES) — the OS refused it, so the typed error and
+   * the verdict. Anything else keeps the `failed to launch` shape, now WITHOUT the absolute path
+   * Node puts in the message (`spawn <path> EACCES` reached document rows); the log keeps it.
+   */
+  private throwLaunchFailure(err: unknown): never {
+    const failure = classifySpawnError(err, this.opts.platform)
+    const raw = err instanceof Error ? err.message : String(err)
+    if (failure) {
+      const problem = { family: 'llama_cpp' as const, ...failure }
+      log.warn('llama-server cannot run on this computer — the operating system refused to start it', {
+        problem: describeLoadFailure(failure),
+        binPath: this.opts.binPath,
+        error: raw
+      })
+      reportEngineProblem(problem, this.opts.binPath)
+      throw new EngineCannotRunError('llama-server', problem)
+    }
+    log.warn('llama-server failed to launch', { binPath: this.opts.binPath, error: raw })
+    throw new Error(`llama-server failed to launch: ${pathFreeSpawnError(err)}`)
+  }
+
+  /**
+   * #530: the OS loader refused the program (a missing system library, a system too old, a
+   * missing Windows runtime, a code-integrity block) — record the session verdict and throw the
+   * typed, path-free error instead of the generic exit message, so no caller reads it as a GPU,
+   * model or memory fault. The raw tail (it holds the drive path) goes to the local log once.
+   */
+  private throwIfEngineCannotRun(): void {
+    const tail = this.redactedTail()
+    const failure = classifyLoadFailure({
+      exitCode: this.exitCode,
+      signal: this.exitSignal,
+      stderr: tail,
+      platform: this.opts.platform,
+      systemDllExists: this.opts.systemDllExists
+    })
+    if (!failure) return
+    const problem = { family: 'llama_cpp' as const, ...failure }
+    log.warn('llama-server cannot run on this computer — the operating system refused to start it', {
+      problem: describeLoadFailure(failure),
+      binPath: this.opts.binPath,
+      stderr: tail.trim().slice(-1000)
+    })
+    reportEngineProblem(problem, this.opts.binPath)
+    throw new EngineCannotRunError('llama-server', problem)
   }
 
   /** A ` — last output: …` suffix from the captured stderr tail, or '' if none. */
@@ -774,12 +880,15 @@ export class LlamaServer {
         this.throwIfStartAborted()
       }
       if (this.spawnError) {
-        const message = this.spawnError.message
+        const spawnError = this.spawnError
         await this.stop()
-        throw new Error(`llama-server failed to launch: ${message}`)
+        this.throwLaunchFailure(spawnError)
       }
       if (this.exited) {
+        // #530: the tail decides whether the OS loader refused the program, so let it drain.
+        await this.awaitStderrDrain()
         this.child = null
+        this.throwIfEngineCannotRun()
         const code = this.exitCode != null ? `code ${this.exitCode}` : `signal ${this.exitSignal}`
         // A port conflict or bad model makes llama-server exit immediately — the stderr
         // tail (e.g. "bind: address already in use") explains which.

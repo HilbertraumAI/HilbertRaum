@@ -58,6 +58,7 @@ import {
   type WalkBudget
 } from './limits'
 import type { PlaintextOpsRegistry } from './plaintext-ops'
+import { failureRowMessage } from './engine-failure'
 import {
   canonicalLeafFor,
   locateOriginal,
@@ -1024,8 +1025,9 @@ export async function prepareDocument(
     setStatus(db, documentId, 'embedding')
     return { documentId, ready: true }
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    setStatus(db, documentId, 'failed', message)
+    // #530: an engine the OS refused to start persists canonical text, never the loader's raw
+    // line (it carries the absolute drive path); any other failure keeps its own message.
+    setStatus(db, documentId, 'failed', failureRowMessage(err))
     return { documentId, ready: false }
   } finally {
     // Shred transient decrypted copies whether parse succeeded or failed — the embed phase
@@ -1074,8 +1076,9 @@ export async function finalizeDocument(
     perfMark('ingest_indexed', { docId: documentId })
     return infoOrDeleted(db, documentId)
   } catch (err) {
-    const message = err instanceof Error ? err.message : String(err)
-    setStatus(db, documentId, 'failed', message)
+    // #530: an engine the OS refused to start persists canonical text, never the loader's raw
+    // line (it carries the absolute drive path); any other failure keeps its own message.
+    setStatus(db, documentId, 'failed', failureRowMessage(err))
     return infoOrDeleted(db, documentId)
   }
 }

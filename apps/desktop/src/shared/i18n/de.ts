@@ -62,6 +62,8 @@ export const de: Record<keyof typeof en, string> = {
   'app.lockNow': 'Jetzt sperren',
   'app.lockNowTitle': 'Arbeitsbereich wieder verschlüsseln und sperren',
   'app.noticeDetails': 'Details',
+  // #530: the engine notice leads to the AI Model screen, where the engine banner names the fix.
+  'app.noticeGoToModels': 'KI-Modell öffnen',
   'app.fatal.title': 'Die App konnte nicht starten',
   'app.fatal.hintBefore':
     'Das lokale Backend ist nicht gestartet, daher kann nichts geladen werden. Starte die ' +
@@ -123,6 +125,11 @@ export const de: Record<keyof typeof en, string> = {
   'home.model.badgeStarting': 'Startet',
   'home.model.badgeNeedsModel': 'Braucht ein Modell',
   'home.model.open': 'KI-Modell öffnen',
+  // #530: the model row names an engine that cannot run, and no longer calls the demo runtime "running".
+  'home.model.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen — die Antworten sind simuliert',
+  'home.model.badgeEngine': 'Läuft nicht',
+  'home.model.demo': '{model} läuft im Demo-Modus — die Antworten sind simuliert',
+  'home.model.badgeDemo': 'Demo-Modus',
   'home.model.choose': 'Modell auswählen',
   'home.docs.label': 'Dokumente',
   'home.docs.none': 'Noch keine Dokumente — füge welche hinzu, um Fragen dazu zu stellen',
@@ -1250,6 +1257,24 @@ export const de: Record<keyof typeof en, string> = {
     'Engines einmal — starte dann ein Modell für echte Antworten.',
   'models.engine.install': 'KI-Engine installieren',
   'models.engine.retry': 'Erneut versuchen',
+  // #530: an engine that IS on the drive but cannot run here (the OS refused it). "it" is the engine
+  // named in the title (German: „sie“ — die Engine). Commands live in the docs, never here.
+  'models.engineProblem.title': 'Die KI-Engine kann auf diesem Computer nicht laufen',
+  'models.engineProblem.voiceTitle': 'Die Sprach-Engine kann auf diesem Computer nicht laufen.',
+  'models.engineProblem.libraryMissingPackage': 'Eine Systembibliothek, die sie braucht, fehlt: {library}. Installiere das Paket {debPackage} (Ubuntu, Debian, Linux Mint) oder {rpmPackage} (Fedora) über deine Softwareverwaltung oder ein Terminal und wähle dann „Erneut prüfen“.',
+  'models.engineProblem.libraryMissing': 'Eine Systembibliothek, die sie braucht, fehlt: {library}. Installiere sie über deine Softwareverwaltung oder ein Terminal und wähle dann „Erneut prüfen“.',
+  'models.engineProblem.systemTooOldLinux': 'Sie braucht ein neueres Linux: Ubuntu 22.04, Debian 12, Fedora 36 oder neuer.',
+  'models.engineProblem.systemTooOldMac': 'Sie braucht eine neuere macOS-Version. Aktualisiere macOS und wähle dann „Erneut prüfen“.',
+  'models.engineProblem.systemTooOld': 'Sie braucht eine neuere Version des Betriebssystems.',
+  'models.engineProblem.vcRuntimeMissing': 'Windows fehlt das Microsoft Visual C++ Redistributable (x64), das sie braucht. Installiere es und wähle dann „Erneut prüfen“.',
+  'models.engineProblem.filesDamaged': 'Einige ihrer Dateien auf diesem Laufwerk fehlen oder sind beschädigt. In der Anleitung zur Fehlerbehebung steht, wie du sie neu einrichtest.',
+  'models.engineProblem.blocked': 'Die Windows-Sicherheit hat sie blockiert (intelligente App-Steuerung oder dein Virenschutz). In der Anleitung zur Fehlerbehebung steht, was du tun kannst.',
+  'models.engineProblem.demoNote': 'Bis dahin antworten Modelle im Demo-Modus — die Antworten sind simuliert.',
+  'models.engineProblem.check': 'Erneut prüfen',
+  'models.engineProblem.checking': 'Wird geprüft…',
+  'models.engineProblem.stillFailing': 'Sie kann immer noch nicht starten. Prüf, ob die Installation abgeschlossen ist, und versuch es dann noch einmal.',
+  'models.engineProblem.fixed': 'Die KI-Engine läuft wieder.',
+  'models.engineProblem.voiceFixed': 'Die Sprach-Engine läuft wieder.',
   'models.engine.progress': 'KI-Engine wird heruntergeladen… {pct} %',
   'models.engine.downloadingNoTotal': 'KI-Engine wird heruntergeladen…',
   'models.engine.verifying': 'KI-Engine wird geprüft…',
@@ -1904,6 +1929,15 @@ export const de: Record<keyof typeof en, string> = {
   'diag.accel.gpuFallbackName': 'Grafikkarte',
   'diag.accel.gpu': '{name} (GPU)',
   'diag.accel.mock': 'Eingebauter Demo-Modus',
+  // #530: the technical detail (library name, exit code) is shown here only (guidelines §7).
+  'diag.app.engine': 'KI-Engine',
+  'diag.app.voiceEngine': 'Sprach-Engine',
+  'diag.engine.cannotRun': 'Kann nicht laufen — {reason}',
+  'diag.engine.reason.libraryMissing': 'eine Systembibliothek fehlt',
+  'diag.engine.reason.systemTooOld': 'das System ist zu alt',
+  'diag.engine.reason.filesDamaged': 'Engine-Dateien fehlen oder sind beschädigt',
+  'diag.engine.reason.vcRuntimeMissing': 'Visual-C++-Laufzeit fehlt',
+  'diag.engine.reason.blocked': 'von der Windows-Sicherheit blockiert',
   'diag.accel.cpu': 'CPU',
   'diag.accel.gpuAvailable': '{name} (GPU verfügbar)',
   'diag.app.title': 'App & Laufzeit',
@@ -2047,6 +2081,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.tile.graphics': 'Grafikspeicher',
   'perf.tile.graphics.unit': 'GB VRAM',
   'perf.tile.graphics.none': 'Keine nutzbare Grafikkarte. Modelle laufen auf dem Prozessor.',
+  // #530: an engine the OS refused never enumerated anything — no "no graphics card" verdict.
+  'perf.tile.graphics.engine': 'Die KI-Engine kann auf diesem Computer nicht laufen, deshalb ließ sich die Grafikkarte nicht prüfen.',
   'perf.tile.graphics.off': 'Grafikbeschleunigung ist aus. Modelle laufen auf dem Prozessor.',
   'perf.tile.graphics.small': 'Unter {min} GB: Modelle laufen auf dem Prozessor.',
   'perf.tile.graphics.integrated': 'Integriert, gemeinsamer Speicher: Modelle laufen auf dem Prozessor.',
@@ -2057,6 +2093,8 @@ export const de: Record<keyof typeof en, string> = {
   'perf.rating.integrated': 'Integriert',
   'perf.rating.notRecorded': 'Nicht erfasst',
   'perf.rating.none': 'Keine',
+  // #530: die Grafikkarte ließ sich nicht prüfen (die Engine, die die Prüfung startet, wurde abgewiesen).
+  'perf.rating.unknown': 'Unbekannt',
   'perf.others.subGpu': '{cpu}, {ram} GB RAM, {vram} GB VRAM · {when}',
   'perf.tile.drive': 'Laufwerk',
   'perf.tile.drive.unit': 'MB/s lesen',
@@ -2319,6 +2357,10 @@ export const de: Record<keyof typeof en, string> = {
   'main.ingest.audioTranscriptionFailed':
     'Die Aufnahme konnte nicht transkribiert werden. Indexiere dieses Dokument neu, um es ' +
     'noch einmal zu versuchen.',
+  // #530: persist-canonical (display-mapped) — never the loader's raw line, which holds the drive path.
+  'main.ingest.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen, deshalb konnte dieses Dokument nicht indexiert werden. Im Bereich „KI-Modell“ steht, was zu tun ist — versuch es danach erneut.',
+  'main.ingest.engineLibraryMissing': 'Die KI-Engine kann auf diesem Computer nicht laufen, weil die Systembibliothek {library} fehlt. Im Bereich „KI-Modell“ steht, wie du das behebst — versuch es danach erneut.',
+  'main.ingest.voiceEngineCannotRun': 'Die Sprach-Engine kann auf diesem Computer nicht laufen, deshalb konnte diese Aufnahme nicht transkribiert werden. Im Bereich „KI-Modell“ steht, was zu tun ist — indexiere das Dokument danach neu.',
   'main.ingest.imageNeedsOcr':
     'Für den Foto-Import werden die Texterkennungs-Dateien (OCR) benötigt, die auf diesem ' +
     'Laufwerk fehlen.',
@@ -2457,6 +2499,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.runtime.modelCannotLoad':
     '{model} konnte auf diesem Computer nicht geladen werden — die Antworten sind simuliert, ' +
     'bis du ein anderes Modell auswählst.',
+  // #530: the OS refused to start the engine program — neither the GPU nor the model is blamed.
+  'main.runtime.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen, deshalb sind die Antworten simuliert. Im Bereich „KI-Modell“ steht, was fehlt.',
+  'main.engine.cannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
   'main.noModelRunning':
     'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
   'main.translation.noModel':
@@ -2730,6 +2775,12 @@ export const de: Record<keyof typeof en, string> = {
     'Am Mikrofon ist kein Ton angekommen. Prüf, ob es stummgeschaltet ist und ob HilbertRaum es ' +
     'laut Systemeinstellungen verwenden darf, und versuch es dann noch einmal.',
   'main.dictation.tooShort': 'Die Aufnahme war zu kurz für Sprache — versuch es noch einmal.',
+  // #530: the dictation refusals were English-only literals in main; the English text is unchanged.
+  'main.dictation.unavailable': 'Sprachdiktat ist auf diesem Laufwerk noch nicht verfügbar — im Bereich „KI-Modell“ siehst du, was fehlt.',
+  'main.dictation.failed': 'Das konnte nicht transkribiert werden — versuch es noch einmal.',
+  'main.dictation.tooLong': 'Diese Aufnahme ist zu lang für ein Diktat. Importiere lange Aufnahmen stattdessen als Audiodatei im Bereich „Dokumente“.',
+  'main.dictation.busy': 'Das letzte Diktat wird noch transkribiert — einen Moment.',
+  'main.dictation.engineCannotRun': 'Die Sprach-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
   'main.preflight.readOnly':
     'Dieses Laufwerk scheint schreibgeschützt zu sein, daher kann die App ihren ' +
     'Arbeitsbereich nicht anlegen. Versuch einen anderen USB-Anschluss oder sieh in der ' +
@@ -3132,6 +3183,8 @@ export const de: Record<keyof typeof en, string> = {
   'images.err.multiDrop': 'Leg immer nur ein Bild ab.',
   'images.err.runtimeFailed':
     'Das KI-Bildmodell konnte nicht starten. Versuch es erneut oder wähle ein anderes Modell.',
+  // #530: another model would not help — the OS refused the engine program.
+  'images.err.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
   'images.err.emptyResponse':
     'Für dieses Bild kam keine Antwort zurück. Formulier deine Frage anders.',
   // #120 Punkt 1: eine LEERE Frage ist ein Eingabeproblem, keine leere Modellantwort.
@@ -3232,6 +3285,8 @@ export const de: Record<keyof typeof en, string> = {
   'translate.err.runtimeFailed': 'Das Übersetzungsmodell konnte nicht fertigstellen. Versuche es erneut oder mit kürzerem Text.',
   'translate.err.startFailed':
     'Das Übersetzungsmodell konnte nicht starten — möglicherweise ist zu wenig Arbeitsspeicher frei. Schließe andere Programme oder starte HilbertRaum neu und versuche es dann erneut.',
+  // #530: not a memory problem — the OS refused the engine program.
+  'translate.err.engineCannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
   'translate.err.empty': 'Es kam keine Übersetzung zurück. Versuche es erneut oder formuliere den Text um.',
   'translate.err.sameLang': 'Wähle zwei verschiedene Sprachen.',
   // #160 (BE-3): die endliche Eingabegrenze (TRANSLATE_MAX_TEXT_CHARS — Zahl synchron halten).

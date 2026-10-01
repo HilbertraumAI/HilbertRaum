@@ -1,6 +1,15 @@
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { GpuDevice } from '../../../shared/types'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import { log } from '../logging'
+import {
+  classifyLoadFailure,
+  classifySpawnError,
+  clearEngineProblemFor,
+  describeLoadFailure,
+  reportEngineProblem,
+  type LoadFailure
+} from './engine-load'
 import type { ChildProcessLike, SpawnFn } from './sidecar'
 
 // GPU device probe (architecture.md GPU record §5.1). Spawns the drive's OWN
@@ -13,7 +22,8 @@ import type { ChildProcessLike, SpawnFn } from './sidecar'
 // factory.ts is the actual guarantee; this feeds the UI label, Diagnostics, and the
 // conservative classifyProfile bump. Never throws: any failure → `[]` (an ANSWER: "this
 // machine enumerates no device") EXCEPT the kill-timeout → `null` (UNKNOWN: the driver
-// never answered), which is never cached and never persisted (#380).
+// never answered), which is never cached and never persisted (#380), and a program the OS
+// loader refused → `null` too, recorded as the session's engine verdict (#530).
 
 /**
  * Kill the probe child after this long; a wedged driver must not stall startup.
@@ -71,7 +81,14 @@ export interface GpuProbeDeps {
    * is that it NEVER throws — so a tampered binary is simply never executed for the probe.
    */
   verify?: (binPath: string) => Promise<BinaryVerifyResult>
+  /** #530: the OS the load-failure classifier reports (default `process.platform`). */
+  platform?: NodeJS.Platform
+  /** #530: the Windows System32 DLL check the classifier consults after a DLL-shaped exit code. */
+  systemDllExists?: (dll: string) => boolean
 }
+
+/** #530: keep this much of the probe's stderr — enough for the loader's one-line refusal. */
+const PROBE_STDERR_MAX = 4000
 
 /**
  * Spawn `<binPath> --list-devices`, parse stdout, and resolve the device list. Bounded
@@ -84,6 +101,12 @@ export interface GpuProbeDeps {
  * (#380). Callers must not read `null` as "no GPU": the session cache drops it (the next
  * caller re-probes), `probeAndPersistGpu` writes nothing (the stored probe stands) and the
  * start ladder labels the rung from the load log instead.
+ *
+ * #530: a program the OS loader REFUSED (a missing system library, a system too old, a missing
+ * Windows runtime, a code-integrity block) is not an answer either — the engine never ran, so it
+ * could not have enumerated anything. It resolves `null` like the timeout, and the refusal is
+ * recorded as the session's engine verdict (`engine-load.ts`). Before #530 it was cached and
+ * persisted as "no graphics card", which fed the Performance tile, the ★ pick and the profile.
  */
 export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}): Promise<GpuDevice[] | null> {
   const spawn = deps.spawn ?? ((cmd, args, opts) => nodeSpawn(cmd, args, opts))
@@ -100,15 +123,32 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
   if (verification === 'mismatch') return []
 
   return new Promise<GpuDevice[] | null>((resolve) => {
+    /** #530: the OS refused the program — log once (local, path included) and record the verdict. */
+    const recordRefusal = (failure: LoadFailure, detail: string): void => {
+      log.warn('The device probe could not start the AI engine — the operating system refused it', {
+        problem: describeLoadFailure(failure),
+        binPath,
+        detail
+      })
+      reportEngineProblem({ family: 'llama_cpp', ...failure }, binPath)
+    }
     let child: ChildProcessLike
     try {
       // REL-7: windowsHide so the once-per-session probe never flashes a console window on
       // Windows (matching the sidecar / tar / transcriber spawns). No-op off Windows.
       child = spawn(binPath, ['--list-devices'], {
-        stdio: ['ignore', 'pipe', 'ignore'],
+        // #530: stderr piped (it was ignored) — the loader's refusal is only ever written there.
+        stdio: ['ignore', 'pipe', 'pipe'],
         windowsHide: true
       })
-    } catch {
+    } catch (err) {
+      // #530: a Windows refusal by policy / security software is the engine verdict, not "no GPU".
+      const refused = classifySpawnError(err, deps.platform)
+      if (refused) {
+        recordRefusal(refused, String(err))
+        resolve(null)
+        return
+      }
       resolve([])
       return
     }
@@ -138,12 +178,44 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
     child.stdout?.on('data', (chunk: unknown) => {
       stdout += String(chunk)
     })
-    child.once('error', () => finish([]))
+    let stderr = ''
+    // Drained either way (a piped-but-unread stream can fill and block the child).
+    child.stderr?.on('data', (chunk: unknown) => {
+      stderr = (stderr + String(chunk)).slice(-PROBE_STDERR_MAX)
+    })
+    child.once('error', (err: unknown) => {
+      const refused = classifySpawnError(err, deps.platform)
+      if (refused) {
+        recordRefusal(refused, String(err))
+        finish(null)
+        return
+      }
+      finish([])
+    })
     // Resolve on 'close', not 'exit': 'exit' can fire while probe output is still
     // buffered in the pipe (Node delivers it afterwards), which would truncate the
     // parse into a false-empty device list. 'close' fires only after stdio drained.
-    child.once('close', (code: unknown) => {
-      finish(code === 0 ? parseListDevices(stdout) : [])
+    child.once('close', (code: unknown, signal: unknown) => {
+      if (code === 0) {
+        // #530: the program ran — a refusal recorded against THIS binary is stale.
+        clearEngineProblemFor('llama_cpp', binPath)
+        finish(parseListDevices(stdout))
+        return
+      }
+      const failure = classifyLoadFailure({
+        exitCode: typeof code === 'number' ? code : null,
+        signal: typeof signal === 'string' ? signal : null,
+        stderr,
+        platform: deps.platform,
+        systemDllExists: deps.systemDllExists
+      })
+      if (failure) {
+        // #530: the engine never ran — UNKNOWN, not "no device"; the refusal becomes the verdict.
+        recordRefusal(failure, stderr.trim().slice(-1000))
+        finish(null)
+        return
+      }
+      finish([])
     })
   })
 }

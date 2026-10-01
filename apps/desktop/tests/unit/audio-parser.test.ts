@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   AudioParser,
+  AUDIO_ENGINE_CANNOT_RUN_MESSAGE,
   AUDIO_EXTENSIONS,
   AUDIO_NEEDS_TRANSCRIBER_MESSAGE,
   AUDIO_SEGMENT_MAX_TOKENS,
@@ -17,6 +18,7 @@ import { chunkSegments, approxTokenCount, CHUNK_DEFAULTS } from '../../src/main/
 import { AUDIO_DECODE_ERROR_PREFIX } from '../../src/main/services/transcriber/cli'
 import type { Transcriber, TranscriptSegment } from '../../src/main/services/transcriber'
 import { t } from '../../src/shared/i18n'
+import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
 
 // Phase 36 — the AudioParser with a FAKE transcriber behind the injection seam (the
 // wave-3 testing posture: CI is zero-binary/zero-audio; the real path lives in the
@@ -252,6 +254,25 @@ describe('AudioParser', () => {
     const err = await AudioParser.parse('meeting.mp3', { transcriber: failing }).catch((e) => e)
     expect((err as Error).message).toBe(AUDIO_TRANSCRIPTION_FAILED_MESSAGE)
     expect((err as Error).message).not.toContain('0xc000001d')
+  })
+
+  it('#530: an EngineCannotRunError maps to the voice-engine copy, not the generic failure', async () => {
+    const refused: Transcriber = {
+      id: 'fake',
+      transcribe: async () => {
+        throw new EngineCannotRunError('whisper-cli', {
+          family: 'whisper_cpp',
+          reason: 'library-missing',
+          os: 'linux',
+          name: 'libgomp.so.1',
+          exit: 'exit code 127'
+        })
+      }
+    }
+    const err = await AudioParser.parse('meeting.mp3', { transcriber: refused }).catch((e) => e)
+    expect((err as Error).message).toBe(AUDIO_ENGINE_CANNOT_RUN_MESSAGE)
+    expect((err as Error).message).not.toBe(AUDIO_TRANSCRIPTION_FAILED_MESSAGE)
+    expect((err as Error).message).not.toContain('libgomp') // persisted on the document row: no detail
   })
 
   it('forwards progress + workDir to the transcriber', async () => {

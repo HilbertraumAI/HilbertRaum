@@ -13,6 +13,12 @@ a portable drive. Your prompts, documents, embeddings, and chat history stay loc
 - **A laptop** running a system your kit is made for. The kit's label names them — Windows,
   macOS (Apple silicon) or Linux; a kit can cover one or several, and it carries the app and the
   launcher for each one it names. No admin rights needed.
+  - **On Linux:** Ubuntu 22.04, Debian 12 or Fedora 36, or newer (Linux Mint 21+ counts).
+    Desktop installations already include everything the AI engine needs; on a minimal
+    installation it may report a missing library, and
+    [`troubleshooting.md`](troubleshooting.md) says which package to add.
+  - **On Windows:** the AI engine uses Microsoft's Visual C++ runtime, which most PCs already
+    have; if yours does not, the app says so (same troubleshooting entry).
 - **Enough memory (RAM):** about **8 GB** runs the standard model well; **16 GB or more** lets you
   use the larger, more capable model. The app checks your laptop and picks the best fit for you.
 - **A free USB port** — ideally **USB-3** (the blue port) for the best speed.
@@ -249,6 +255,13 @@ words per second" and "faster than you can read". There is nothing to install or
   remembers that verdict until you close it, so choosing the same model again shows the note
   right away instead of waiting through another load attempt. To make it try the file again,
   use **Verify checksum** on that model (or download it again, or restart the app).
+- If your computer refuses to start the AI engine itself, the **AI Model** screen says so in a
+  banner: "The AI engine can't run on this computer". This is not a problem with the model or the
+  graphics card; something the engine needs is missing from your system. The banner names it,
+  typically a system library on Linux or Microsoft's Visual C++ runtime on Windows. Install it,
+  then choose **Check again** (or restart the app). Home, the chat and Diagnostics point to the
+  same banner. Step by step: [`troubleshooting.md`](troubleshooting.md), "The AI engine can't run
+  on this computer".
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
   big speedups come from dedicated graphics cards.

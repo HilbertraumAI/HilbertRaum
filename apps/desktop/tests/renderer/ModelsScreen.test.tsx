@@ -1352,6 +1352,8 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
       ),
       getAppStatus: vi.fn(async () => appStatus),
       getEngineStatus: vi.fn(async () => idleEngine),
+      // #530: the engine-verdict push the screen subscribes to.
+      onEngineProblemsChanged: vi.fn(() => () => {}),
       // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
       getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
       getRuntimeStatus: vi.fn(async () => idleRuntime),
@@ -2298,6 +2300,8 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
       getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
       getAppStatus: vi.fn(async () => appStatusFixture({ machineRamGb: opts.machineRamGb ?? 32 })),
       getEngineStatus: vi.fn(async () => idleEngine),
+      // #530: the engine-verdict push the screen subscribes to.
+      onEngineProblemsChanged: vi.fn(() => () => {}),
       // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
       getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
       getRuntimeStatus: vi.fn(async () => idleRuntime),
@@ -2774,6 +2778,8 @@ describe('lazy verification + "Check all model files" (#382)', () => {
       getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
       getAppStatus: vi.fn(async () => appStatus),
       getEngineStatus: vi.fn(async () => idleEngine),
+      // #530: the engine-verdict push the screen subscribes to.
+      onEngineProblemsChanged: vi.fn(() => () => {}),
       // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
       getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
       getRuntimeStatus: vi.fn(async () => idleRuntime),
@@ -2890,6 +2896,8 @@ describe('cancelling "Check all model files" (#420)', () => {
       getPolicy: vi.fn(async () => policyStatus({ downloadsAllowed: true, settingOn: true })),
       getAppStatus: vi.fn(async () => appStatus),
       getEngineStatus: vi.fn(async () => idleEngine),
+      // #530: the engine-verdict push the screen subscribes to.
+      onEngineProblemsChanged: vi.fn(() => () => {}),
       // #410: the OCR row's lazy status read — no usable source list, so the row stays hidden.
       getOcrInstallStatus: vi.fn(async (): Promise<OcrInstallStatus> => NO_OCR_SOURCES),
       getRuntimeStatus: vi.fn(async () => idleRuntime),

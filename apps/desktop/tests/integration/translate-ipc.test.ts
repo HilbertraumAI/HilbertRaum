@@ -19,6 +19,7 @@ import { registerTranslateIpc } from '../../src/main/ipc/registerTranslateIpc'
 import { TranslateJobService } from '../../src/main/services/translation/jobs'
 import type { Translator } from '../../src/main/services/translation'
 import { TRANSLATION_STOP_TOKEN, TranslationStartError } from '../../src/main/services/translation'
+import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
 import { planTranslationWindows } from '../../src/main/services/doctasks/translation'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import { TRANSLATE_MAX_TEXT_CHARS } from '../../src/shared/types'
@@ -245,6 +246,35 @@ describe('registerTranslateIpc — translate job contract', () => {
     expect(terminal.state).toBe('failed')
     expect(terminal.error).toBe('startFailed')
     expect(calls).toBe(1) // start failure → distinct code immediately, no retry
+  })
+
+  it('#530: a latched start failure the OS loader caused surfaces the engineCannotRun code, not startFailed', async () => {
+    let calls = 0
+    const translator: Translator = {
+      modelId: 'translategemma-12b-it-q4',
+      contextWindow: () => 4096,
+      async translate() {
+        calls += 1
+        throw new TranslationStartError(
+          new EngineCannotRunError('llama-server', {
+            family: 'llama_cpp',
+            reason: 'library-missing',
+            os: 'linux',
+            name: 'libgomp.so.1',
+            exit: 'exit code 127'
+          })
+        )
+      },
+      async stop() {},
+      async suspend() {}
+    }
+    registerTranslateIpc(ctxFor(), service({ translator }))
+    const event = makeEvent()
+    const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
+    const terminal = await waitForTerminal(event, initial.jobId)
+    expect(terminal.state).toBe('failed')
+    expect(terminal.error).toBe('engineCannotRun')
+    expect(calls).toBe(1)
   })
 
   it('a retry after a transiently-failed attempt does NOT duplicate the streamed text (F-1)', async () => {

@@ -26,6 +26,8 @@ export interface ImageTurn {
 // it is what makes adding codes main-side skew-safe (#123).
 const ERR_KEY: Partial<Record<VisionErrorCode, MessageKey>> = {
   runtimeFailed: 'images.err.runtimeFailed',
+  // #530: the OS refused to start the engine program — another model would not help.
+  engineCannotRun: 'images.err.engineCannotRun',
   emptyResponse: 'images.err.emptyResponse',
   emptyQuestion: 'images.err.emptyQuestion',
   timedOut: 'images.err.timedOut',

@@ -10,6 +10,7 @@ import {
 } from '../services/workspace-vault'
 import { prepareFirstBenchmark, scheduleFirstBenchmark } from './registerBenchmarkIpc'
 import { maybeAutoStartActiveModel } from './registerModelIpc'
+import { healEngineLoadState } from '../services/engine-health'
 import { maybeStartLocalApi } from '../services/local-api/lifecycle'
 import { startKnowledgePackSession } from '../services/zim/session'
 import { inFlightStreams, awaitInFlightStreamsSettled } from './inflight'
@@ -187,6 +188,9 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
       // background, then the benchmark's MEASUREMENT scheduled behind that start's settlement so
       // its drive probe never contends with the weight hash + load and its speed leg sees the
       // runtime. The handler never awaits the scheduler.
+      // #530: first heal what an engine load refusal wrote before the fix (a compatibility-mode
+      // flag that blamed the GPU, raw loader lines on failed documents) — the auto-start reads it.
+      healEngineLoadState(ctx)
       const firstBenchmark = prepareFirstBenchmark(ctx)
       // #380: the auto-start waits for the session's probe (≈1 s idle; resolved at once with no
       // binary), so the ladder finds a settled device list instead of racing the weight upload
@@ -299,6 +303,7 @@ export function registerWorkspaceIpc(ctx: AppContext): void {
         // The same P7 sequence as unlock (above): a fresh workspace has never been benchmarked
         // and has no active model yet — the auto-start is a no-op then and the measurement runs
         // at once — but a re-created vault that restored settings gets the full order.
+        healEngineLoadState(ctx) // #530: the same heal as the unlock seam above
         const firstBenchmark = prepareFirstBenchmark(ctx)
         // #380: the auto-start waits for the session's probe, as on the unlock seam above.
         const autoStarted = firstBenchmark.probed.then(() => maybeAutoStartActiveModel(ctx))

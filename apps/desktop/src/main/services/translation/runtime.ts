@@ -5,6 +5,7 @@ import {
   isStartAbortError,
   type LlamaServerOptions
 } from '../runtime/sidecar'
+import { isEngineCannotRunError } from '../runtime/engine-load'
 import { readCompletionSSE, type CompletionFinal } from './completion'
 import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCode } from './prompt'
 import type { TranslationDeviceStatus } from '../../../shared/types'
@@ -265,9 +266,15 @@ export const TRANSLATION_START_FAILED_CODE = 'translationStartFailed'
  */
 export class TranslationStartError extends Error {
   readonly code = TRANSLATION_START_FAILED_CODE
+  /**
+   * #530: the cause was the OS refusing to start the engine program — the consumers show the
+   * engine copy instead of the "free memory / restart" one, which would send the user the wrong way.
+   */
+  readonly engineCannotRun: boolean
   constructor(cause: Error) {
     super(cause.message)
     this.name = 'TranslationStartError'
+    this.engineCannotRun = isEngineCannotRunError(cause)
   }
 }
 
@@ -592,6 +599,14 @@ export class TranslationRuntime {
       // RAW (not a TranslationStartError), so the consumers' transient-retry paths still treat it
       // as the retryable class it is (and the retry re-attempts the SAME device posture).
       if (isBindRaceError(error.message)) throw error
+      // #530: the OS refused to start the program — not a device fault (no GPU-fallback latch,
+      // no CPU retry: the same program is refused again). Latched like any load fault; the
+      // consumers read `engineCannotRun` for the copy, and "Check again" re-arms the slot.
+      if (isEngineCannotRunError(error)) {
+        const startError = new TranslationStartError(error)
+        this.startFailed = startError
+        throw startError
+      }
       if (device === 'auto') {
         this.noteDeviceFallback(`translation sidecar GPU-attempt start failed: ${error.message}`)
         // A lock/quit that began while the GPU attempt was failing must not cold-load ~10 GB on

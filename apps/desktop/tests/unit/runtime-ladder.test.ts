@@ -31,7 +31,8 @@ import type { ModelPrefetch, PrefetchOutcome } from '../../src/main/services/run
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
-import type { GpuDevice } from '../../src/shared/types'
+import type { EngineProblem, GpuDevice } from '../../src/shared/types'
+import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
 import { hangPolls } from '../helpers/hang-budget'
 
 // Phase 15 start ladder (architecture.md GPU record §5.2). Zero binaries, zero GPUs:
@@ -64,6 +65,8 @@ function ladderHarness(config: {
   failMessage?: string
   /** #312: per-attempt override of `failMessage` (index = spawn order across all models). */
   failMessages?: string[]
+  /** #530: per-attempt ERROR to throw instead (an `EngineCannotRunError`), index = spawn order. */
+  failErrors?: Array<Error | undefined>
   /** #312: fired at the top of every fake start(), before the fail check (cancel windows). */
   onStart?: (index: number) => void | Promise<void>
   /** #312: `onGpuFailure` also flips the auto-disable signal — stands in for persistGpuFailure. */
@@ -103,6 +106,8 @@ function ladderHarness(config: {
   const failures: string[] = []
   /** #312: every `onModelLoadFailure` the ladder raised (the model blamed, not the device). */
   const modelLoadFailures: Array<{ modelId: string; reason: string }> = []
+  /** #530: every `onEngineCannotRun` the ladder raised (the engine named, neither GPU nor model). */
+  const engineFailures: Array<{ modelId: string; problem: EngineProblem }> = []
   const selected: Array<{ kind: string; reason: string }> = []
   const crashes: Array<{ opts: RuntimeStartOptions; info: UnexpectedExitInfo }> = []
   const warmups: Array<{ event: string; detail?: string }> = []
@@ -141,6 +146,8 @@ function ladderHarness(config: {
         if (stderr != null) rung?.onStderrData?.(stderr)
         await config.onStart?.(index)
         if (index < (config.failFirst ?? 0)) {
+          const custom = config.failErrors?.[index]
+          if (custom) throw custom
           throw new Error(
             config.failMessages?.[index] ?? config.failMessage ?? `rung ${index + 1} failed to start`
           )
@@ -197,6 +204,7 @@ function ladderHarness(config: {
     onPrefetch: (_o, event, detail) => prefetchEvents.push({ event, detail }),
     onSpeculative: (_o, event, detail) => speculative.push({ event, detail }),
     onModelLoadFailure: (o, reason) => modelLoadFailures.push({ modelId: o.modelId, reason }),
+    onEngineCannotRun: (o, problem) => engineFailures.push({ modelId: o.modelId, problem }),
     makePrefetch,
     gpu: {
       getGpuMode: () => config.gpuMode ?? 'auto',
@@ -218,6 +226,7 @@ function ladderHarness(config: {
     calls,
     failures,
     modelLoadFailures,
+    engineFailures,
     selected,
     crashes,
     warmups,
@@ -1736,11 +1745,110 @@ describe('#372 wiring pin: ctx.onModelInstalled re-arms the model before the tra
     expect(handlerSrc.length).toBeGreaterThan(0)
   })
 
-  it('clearModelLoadLatch(modelId) runs before the shouldReplaceTranslator return', () => {
+  // #530 moved the translator rule (and its early return) into `ctx.refreshTranslatorSlot`, shared
+  // with the engine re-arm; the handler now CALLS it, so the pin asserts the latch clears first.
+  it('clearModelLoadLatch(modelId) runs before the translator refresh (whose rule returns early)', () => {
     const clearAt = handlerSrc.indexOf('clearModelLoadLatch(modelId)')
-    const returnAt = handlerSrc.indexOf('shouldReplaceTranslator(')
+    const refreshAt = handlerSrc.indexOf('refreshTranslatorSlot?.(')
     expect(clearAt).toBeGreaterThanOrEqual(0)
-    expect(returnAt).toBeGreaterThan(clearAt)
+    expect(refreshAt).toBeGreaterThan(clearAt)
+    const ruleStart = indexSrc.indexOf('ctx.refreshTranslatorSlot = () => {')
+    expect(ruleStart).toBeGreaterThanOrEqual(0)
+    expect(indexSrc.slice(ruleStart, indexSrc.indexOf('\n  }\n', ruleStart))).toContain(
+      'shouldReplaceTranslator(ctx.translator)'
+    )
     expect(handlerSrc).toMatch(/ctx\.onModelInstalled = \(modelId\)/)
+  })
+})
+
+describe('#530 — a program the OS loader refused is neither a GPU nor a model fault', () => {
+  beforeEach(() => {
+    clearSpeculativeSuppression()
+    clearModelLoadLatches()
+  })
+
+  const GOMP: EngineProblem = {
+    family: 'llama_cpp',
+    reason: 'library-missing',
+    os: 'linux',
+    name: 'libgomp.so.1',
+    exit: 'exit code 127'
+  }
+  const refused = (): EngineCannotRunError => new EngineCannotRunError('llama-server', GOMP)
+  /** A model fault on a forced-CPU rung, for the mixed case. */
+  const MODEL_LOAD_REASON =
+    'llama-server exited before becoming healthy (code 1) — last output: ' +
+    'llama_model_load: error loading model: unknown model architecture: audit fixture'
+
+  it('a prepared Kit (rungs 1, 2, 3 all refused): the ENGINE is named — no GPU flag, no model latch', async () => {
+    // Before #530 the cpu/ build's different path made rung 3's signature differ, so the ladder
+    // persisted gpuAutoDisabled — and the next start then latched the MODEL.
+    const h = ladderHarness({ failFirst: 3, probe: null, failErrors: [refused(), refused(), refused()], latchGpuFailures: true })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(3)
+    expect(h.failures).toEqual([])
+    expect(h.modelLoadFailures).toEqual([])
+    expect(h.engineFailures).toEqual([{ modelId: 'm', problem: GOMP }])
+    expect(runtime.backend).toBe('mock')
+    expect(modelLoadLatchReason('m')).toBeNull()
+
+    // The next start walks the full ladder again (GPU rung included) and still blames nothing —
+    // so installing the library and choosing Check again (or restarting) finds a clean slate.
+    const again = ladderHarness({ failFirst: 3, probe: null, failErrors: [refused(), refused(), refused()] })
+    await again.factory(opts).start()
+    expect(again.calls).toHaveLength(3)
+    expect(again.failures).toEqual([])
+    expect(again.modelLoadFailures).toEqual([])
+    expect(again.engineFailures).toHaveLength(1)
+  })
+
+  it('an in-app install or a DIY drive (no cpu/ build): the engine, not the model', async () => {
+    const h = ladderHarness({ failFirst: 2, probe: null, cpuBin: null, failErrors: [refused(), refused()] })
+    await h.factory(opts).start()
+    expect(h.calls).toHaveLength(2)
+    expect(h.modelLoadFailures).toEqual([])
+    expect(h.engineFailures).toHaveLength(1)
+    expect(modelLoadLatchReason('m')).toBeNull()
+  })
+
+  it('acceleration off: the engine is named, the model is not latched', async () => {
+    const h = ladderHarness({ failFirst: 2, gpuMode: 'off', failErrors: [refused(), refused()] })
+    await h.factory(opts).start()
+    expect(h.modelLoadFailures).toEqual([])
+    expect(h.engineFailures).toHaveLength(1)
+    expect(modelLoadLatchReason('m')).toBeNull()
+  })
+
+  it('never latches the MTP rung off for it — the flags were not the problem', async () => {
+    const h = ladderHarness({ failFirst: 4, probe: [RTX], failErrors: [refused(), refused(), refused(), refused()] })
+    await h.factory({ ...opts, speculativeDecoding: 'mtp', weightBytes: 1024 * 1024 * 1024 }).start()
+    expect(isSpeculativeSuppressed('m')).toBe(false)
+    expect(h.engineFailures).toHaveLength(1)
+    expect(h.failures).toEqual([])
+  })
+
+  it('a Windows Kit whose main folder lost a DLL: the cpu/ build runs — CPU, and no gpuAutoDisabled', async () => {
+    const h = ladderHarness({ failFirst: 2, probe: null, failErrors: [refused(), refused()] })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(h.calls).toHaveLength(3)
+    expect(h.calls[2].binPath).toBe('/bin/cpu/llama-server')
+    expect(runtime.backend).toBe('cpu')
+    expect(h.failures).toEqual([]) // the GPU was never the suspect
+    expect(h.engineFailures).toEqual([]) // the chat runs; the verdict store (not the ladder) keeps the refusal
+  })
+
+  it('a refused GPU rung beside a model fault on the CPU rungs: the #312 model verdict stands', async () => {
+    const h = ladderHarness({
+      failFirst: 3,
+      probe: null,
+      failErrors: [refused()],
+      failMessage: MODEL_LOAD_REASON
+    })
+    await h.factory(opts).start()
+    expect(h.failures).toEqual([])
+    expect(h.engineFailures).toEqual([])
+    expect(h.modelLoadFailures).toHaveLength(1)
   })
 })

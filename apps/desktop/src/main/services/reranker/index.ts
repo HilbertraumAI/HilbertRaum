@@ -61,6 +61,11 @@ export interface Reranker {
   stop?(): Promise<void>
   /** Stop the sidecar but allow a lazy restart on next use. Called on workspace lock. */
   suspend?(): Promise<void>
+  /**
+   * #530: re-arm the failed-start latch (it survives `suspend()` by design) — the chat engine was
+   * just installed, or "Check again" found that the engine runs now.
+   */
+  resetStartFailure?(): void
 }
 
 export { LlamaReranker, createLlamaReranker } from './llama'

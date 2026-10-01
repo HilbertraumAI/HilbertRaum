@@ -199,6 +199,13 @@ export interface AppContext {
    */
   onModelInstalled?: (modelId: string) => void
   /**
+   * Re-compose the translator slot when it is empty or holds a latched failed start — the
+   * BE-7 rule (`shouldReplaceTranslator`), never a live sidecar. Shared by `onModelInstalled` and
+   * the #530 engine re-arm (a chat-engine install, a successful "Check again"). Optional so partial
+   * test contexts stay valid; never throws.
+   */
+  refreshTranslatorSlot?: () => void
+  /**
    * Wave 8 ruling (a): the per-call counter of `startModelRuntime` calls presently awaiting the
    * reranker's single-flight suspend after committing to a REAL model switch — shared between
    * `registerModelIpc.ts` (which increments/decrements it) and the reranker's posture/scope

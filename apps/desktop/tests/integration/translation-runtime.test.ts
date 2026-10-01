@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
   TranslationRuntime,
@@ -8,6 +8,7 @@ import {
 } from '../../src/main/services/translation/runtime'
 import { createSelectedTranslator } from '../../src/main/services/translation/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import { EngineCannotRunError, engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { testBudgetMs } from '../helpers/hang-budget'
 
 // TG-2 fake-server tests for the real TranslationRuntime (plan §4 TG-2): launch args (NO --jinja,
@@ -1257,6 +1258,78 @@ describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
     await rt.translate(translateOpts)
     expect(rt.deviceStatus()?.device).toBe('cpu')
     expect(rt.gpuOccupied()).toBe(false)
+    await rt.stop()
+  })
+})
+
+// #530: a program the OS loader refuses is not a device fault — no CPU retry, no fallback note, a
+// latched TranslationStartError flagged `engineCannotRun` that the consumers map to the engine copy.
+describe('TranslationRuntime — OS loader refusal (#530)', () => {
+  afterEach(() => resetEngineProblemsForTest())
+
+  const LOADER_LINE =
+    '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
+
+  function loaderSpawn() {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      const stderr = new EventEmitter()
+      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
+      queueMicrotask(() => {
+        stderr.emit('data', LOADER_LINE)
+        child.emit('exit', 127, null)
+        child.emit('close', 127, null)
+      })
+      return child
+    }
+    return { spawn, calls }
+  }
+  const refusingFetch = (async () => {
+    throw new Error('connection refused')
+  }) as unknown as typeof fetch
+
+  it('on the GPU posture: ONE spawn, no CPU retry, no device-fallback note, latched engineCannotRun', async () => {
+    const { spawn, calls } = loaderSpawn()
+    const fallbacks: string[] = []
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: refusingFetch,
+      onDeviceFallback: (reason) => fallbacks.push(reason)
+    })
+    const err = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(err)).toBe(true)
+    expect((err as { engineCannotRun?: boolean }).engineCannotRun).toBe(true)
+    expect((err as { code?: string }).code).toBe(TRANSLATION_START_FAILED_CODE)
+    expect(calls.length).toBe(1) // the same program would be refused again on the CPU rung
+    expect(fallbacks).toEqual([]) // not a device fault
+    expect(rt.isStartFailed()).toBe(true)
+    expect(engineProblemFor('llama_cpp')?.name).toBe('libgomp.so.1')
+
+    // A later call rethrows the latched error without spawning.
+    const again = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(again)).toBe(true)
+    expect((again as { engineCannotRun?: boolean }).engineCannotRun).toBe(true)
+    expect(calls.length).toBe(1)
+    await rt.stop()
+  })
+
+  it('a non-loader start failure keeps the old shape: engineCannotRun false, CPU rung walked', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      queueMicrotask(() => child.emit('exit', 1, null)) // dies with no loader text
+      return child
+    }
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: refusingFetch })
+    const err = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(err)).toBe(true)
+    expect((err as { engineCannotRun?: boolean }).engineCannotRun).toBe(false)
+    expect(calls.length).toBe(2)
+    expect(err).not.toBeInstanceOf(EngineCannotRunError)
     await rt.stop()
   })
 })

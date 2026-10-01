@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
@@ -11,6 +11,11 @@ import {
 } from '../../src/main/services/rag/device-posture'
 import { DEFAULT_SETTINGS, type GpuDevice } from '../../src/shared/types'
 import { resolveRerankProfile, rerankScopeFor, type RerankerDevice } from '../../src/main/services/rag/rerank-profile'
+import {
+  engineProblemFor,
+  isEngineCannotRunError,
+  resetEngineProblemsForTest
+} from '../../src/main/services/runtime/engine-load'
 import type { RuntimeManager } from '../../src/main/services/runtime'
 
 // Wave 8 (step 4-8, resolving the scoped Opus review of step 4-7's finding C3): option B', the
@@ -965,5 +970,69 @@ describe('Wave 8 scenarios S1-S5, S9 (option B\', the analysis §4)', () => {
     }
     const scope = rerankScopeFor(resolveRerankProfile(input), input, posture)
     expect(scope).toBe('all')
+  })
+})
+
+// ---- #530: the OS loader refused the engine program ---------------------------------------------
+
+describe('#530: OS loader refusal is not a device fault', () => {
+  afterEach(() => resetEngineProblemsForTest())
+
+  /** A child that prints the loader's line and exits 127 (then closes, as a real pipe does). */
+  class LoaderRefusedChild extends FakeChild {
+    stderr = new EventEmitter()
+    constructor() {
+      super()
+      queueMicrotask(() => {
+        this.stderr.emit(
+          'data',
+          '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
+        )
+        this.emit('exit', 127, null)
+        this.emit('close', 127, null)
+      })
+    }
+  }
+
+  const refusingFetch = (async () => {
+    throw new Error('connection refused')
+  }) as unknown as typeof fetch
+
+  it('on the gpu posture: ONE spawn, no CPU retry, gpuDemoted stays false, the latch holds', async () => {
+    const { spawn, calls } = fakeSpawnOf(() => new LoaderRefusedChild())
+    const fallbacks: string[] = []
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl: refusingFetch,
+      devicePosture: () => 'gpu',
+      onDeviceFallback: (reason) => fallbacks.push(reason)
+    })
+    const err = await reranker.rerank('q', docs(1)).catch((e: unknown) => e)
+    expect(isEngineCannotRunError(err)).toBe(true)
+    expect(calls.length).toBe(1) // the same program would be refused again on the CPU rung
+    expect(reranker.gpuDemoted()).toBe(false)
+    expect(fallbacks).toEqual([])
+    expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'library-missing', name: 'libgomp.so.1' })
+
+    await expect(reranker.rerank('q2', docs(1))).rejects.toThrow() // latched
+    expect(calls.length).toBe(1) // no second spawn
+    await reranker.stop()
+  })
+
+  it('resetStartFailure() re-arms the latch: the next rerank spawns again', async () => {
+    const { spawn, calls } = fakeSpawnOf(() => new LoaderRefusedChild())
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl: refusingFetch,
+      devicePosture: () => 'gpu'
+    })
+    await expect(reranker.rerank('q', docs(1))).rejects.toThrow()
+    expect(calls.length).toBe(1)
+    reranker.resetStartFailure()
+    await expect(reranker.rerank('q2', docs(1))).rejects.toThrow() // still refused, but it TRIED
+    expect(calls.length).toBe(2)
+    await reranker.stop()
   })
 })

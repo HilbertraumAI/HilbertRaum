@@ -26,6 +26,9 @@ export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   'main.ingest.audioEngineUnsupported',
   'main.ingest.audioUnreadable',
   'main.ingest.audioTranscriptionFailed',
+  // #530: the OS refused to start the AI engine / the voice engine (no library named).
+  'main.ingest.engineCannotRun',
+  'main.ingest.voiceEngineCannotRun',
   'main.ingest.imageNeedsOcr',
   'main.ingest.imageNoText',
   'main.ingest.imageOcrFailed',
@@ -80,7 +83,10 @@ export const INTERPOLATED_MAP_KEYS: readonly MessageKey[] = [
   'main.ingest.unsupportedType',
   'main.benchmark.warnVeryLowTokens',
   'main.benchmark.warnSlowRead',
-  'main.benchmark.warnRecommendationLowered'
+  'main.benchmark.warnRecommendationLowered',
+  // #530: the engine cannot run because this system library is missing — the library's file
+  // NAME is the one interpolated value (never a path: the raw loader line is never stored).
+  'main.ingest.engineLibraryMissing'
 ]
 
 /** Build a `^…$` regex from an English template by escaping it and turning each `{param}`
@@ -102,6 +108,7 @@ const WARN_VERY_LOW_TOKENS_RE = templateToRegex(en['main.benchmark.warnVeryLowTo
 const WARN_SLOW_READ_RE = templateToRegex(en['main.benchmark.warnSlowRead'], 'mbps')
 // Issue #95 (§6.5): the recommendation-lowered warning carries TWO values — the measured
 // figure and the model id — in that order in the English template.
+const ENGINE_LIBRARY_MISSING_RE = templateToRegex(en['main.ingest.engineLibraryMissing'], 'library')
 const WARN_RECOMMENDATION_LOWERED_RE = templateToRegex(
   en['main.benchmark.warnRecommendationLowered'],
   'tps',
@@ -181,6 +188,8 @@ export function localizeServerCopy(t: BoundT, raw: string): string {
   if (lowered) {
     return t('main.benchmark.warnRecommendationLowered', { tps: lowered[1], model: lowered[2] })
   }
+  const library = ENGINE_LIBRARY_MISSING_RE.exec(raw)?.[1]
+  if (library != null) return t('main.ingest.engineLibraryMissing', { library })
   const busy = en['main.chat.docTaskBusy']
   if (raw.includes(busy)) return raw.replace(busy, t('main.chat.docTaskBusy'))
   return localizeCitationMarkers(t, raw)

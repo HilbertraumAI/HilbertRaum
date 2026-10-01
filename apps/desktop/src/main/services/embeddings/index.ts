@@ -50,6 +50,11 @@ export interface Embedder {
    * latch would make every post-lock/unlock embed fail.
    */
   suspend?(): Promise<void>
+  /**
+   * #530: re-arm a latched failed start without a lock/unlock — the chat engine was just
+   * installed, or "Check again" found that the engine runs now. Optional: the mock holds nothing.
+   */
+  resetStartFailure?(): void
 }
 
 export interface VectorSearchHit {

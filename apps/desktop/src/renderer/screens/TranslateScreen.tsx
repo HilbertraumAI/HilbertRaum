@@ -61,6 +61,8 @@ const ERR_KEY: Partial<Record<ClientTranslateError, MessageKey>> = {
   docTaskBusy: 'translate.err.docTaskBusy',
   runtimeFailed: 'translate.err.runtimeFailed',
   startFailed: 'translate.err.startFailed',
+  // #530: the OS refused to start the engine program — not a memory problem.
+  engineCannotRun: 'translate.err.engineCannotRun',
   empty: 'translate.err.empty',
   sameLang: 'translate.err.sameLang',
   tooLong: 'translate.err.tooLong'

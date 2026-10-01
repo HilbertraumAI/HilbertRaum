@@ -12,6 +12,7 @@ import { LOCAL_API_SETTINGS_KEYS } from '../../shared/local-api'
 import { runPreflight } from '../services/preflight'
 import { machineRamGb } from '../services/models'
 import { log, readLogTail, readLogFull } from '../services/logging'
+import { engineProblems } from '../services/runtime/engine-load'
 import { saveTextExport } from './save-export'
 import { notifyPerformanceChanged, PERFORMANCE_SETTINGS_KEYS } from './performance-notify'
 import { RERANKER_POSTURE_SETTINGS_KEYS, rerankerPostureInputsChanged } from '../services/rag/device-posture'
@@ -68,6 +69,9 @@ export function registerCoreIpc(ctx: AppContext): void {
       // #527: which piece is missing, so the hint names it. Stored with the slot, never
       // recomputed here — the shell polls this handler, and the reason needs a manifest walk.
       transcriberMissing: ctx.transcriber != null ? null : (ctx.transcriberMissing ?? 'model'),
+      // #530: engines on the drive that the OS refused to start this session (the chat engine
+      // first) — a session verdict held in memory, never persisted; empty while nothing failed.
+      engineProblems: engineProblems(),
       // OCR is availability-driven too — gates "Make searchable (OCR)" + the photo hint. Reads
       // the engine's execution state, not mere presence (#232): false while a packaged build's
       // startup probe runs and after a worker failure. `ocrState` tells the renderer why.

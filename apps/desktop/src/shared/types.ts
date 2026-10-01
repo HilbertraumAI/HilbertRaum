@@ -45,6 +45,54 @@ export type OcrRefreshOutcome = 'activated' | 'restartRequired' | 'unchanged' | 
  */
 export type TranscriberMissing = 'model' | 'engine' | 'model-and-engine' | 'engine-unsupported'
 
+/**
+ * Why an engine that IS on the drive cannot run on this computer (#530): the operating system
+ * refused to start the program before it printed a single line of its own.
+ *   - `'library-missing'`    — a system library it needs is not installed (Linux: `libgomp.so.1`);
+ *   - `'system-too-old'`     — the system predates what the engine was built for (Linux: a
+ *                              `GLIBC_2.34` / `GLIBCXX_3.4.30` version, or OpenSSL 3, is missing);
+ *   - `'files-damaged'`      — a library the ENGINE ships next to its program is missing or broken;
+ *   - `'vc-runtime-missing'` — Windows lacks the Microsoft Visual C++ runtime every engine imports;
+ *   - `'blocked'`            — Windows code integrity (Smart App Control) refused the program.
+ */
+export type EngineProblemReason =
+  | 'library-missing'
+  | 'system-too-old'
+  | 'files-damaged'
+  | 'vc-runtime-missing'
+  | 'blocked'
+
+/**
+ * The engine families an {@link EngineProblem} can name (#530). The knowledge-pack tools are
+ * deliberately not one: their Linux and macOS builds are static, and the Windows case is a
+ * documented limitation.
+ */
+export type EngineProblemFamily = 'llama_cpp' | 'whisper_cpp'
+
+/**
+ * A session verdict (#530, `architecture.md` "Engine load failures"): this engine cannot run on
+ * this computer. Held in memory only — never persisted, so a restart after the fix starts clean —
+ * and never a GPU or a model fault. Carries no path: `name` is a file NAME or a version tag.
+ */
+export interface EngineProblem {
+  family: EngineProblemFamily
+  reason: EngineProblemReason
+  /** The system that refused it; the copy differs per OS. */
+  os: 'win' | 'mac' | 'linux'
+  /**
+   * What the loader named, when it named something: a library file name (`libgomp.so.1`,
+   * `msvcp140.dll`) or a version requirement (`GLIBC_2.34`). Never a path.
+   */
+  name?: string
+  /** Diagnostics only (guidelines §7): how the program ended, e.g. `exit code 127`, `exit code 0xC0000135`. */
+  exit: string
+}
+
+/** What "Check again" (`engine:recheck`, #530) found: the problems still present after the check. */
+export interface EngineRecheckResult {
+  problems: EngineProblem[]
+}
+
 export interface AppStatus {
   appName: string
   appVersion: string
@@ -72,6 +120,11 @@ export interface AppStatus {
    * shape); a renderer that finds it absent falls back to the speech-model copy.
    */
   transcriberMissing?: TranscriberMissing | null
+  /**
+   * Engines on the drive that cannot run on this computer (#530) — the chat engine first. Empty
+   * while nothing has failed to load this session. Optional so older status fixtures stay valid.
+   */
+  engineProblems?: EngineProblem[]
   /**
    * Local text recognition (OCR) is available: the language files exist in the drive's `ocr/`
    * dir and the recognizer can run in this build (#232: false while a packaged build's startup
@@ -877,13 +930,15 @@ export type ImageJobState = 'queued' | 'starting' | 'analyzing' | 'done' | 'fail
  * fresh analysis); `emptyQuestion` is a blank question (an input problem — distinct from
  * `emptyResponse`, which means the model returned nothing). Renderers must keep an
  * unknown-code fallback (AnswerThread falls back to the `runtimeFailed` copy), so adding
- * codes here stays skew-safe (#123 / #120).
+ * codes here stays skew-safe (#123 / #120). `engineCannotRun` (#530): the operating system
+ * refused to start the AI engine program — another model would not help.
  */
 export type VisionErrorCode =
   | 'tooLarge'
   | 'unsupportedType'
   | 'decodeFailed'
   | 'runtimeFailed'
+  | 'engineCannotRun'
   | 'emptyResponse'
   | 'emptyQuestion'
   | 'timedOut'
@@ -1338,6 +1393,8 @@ export type TranslateJobState = 'queued' | 'translating' | 'done' | 'failed' | '
  * transient memory pressure from the co-resident chat model; the UI asks the user to restart the
  * app or free memory — F-7 / FA-4 option c). `tooLong`: the pasted text exceeds
  * `TRANSLATE_MAX_TEXT_CHARS` (#160 BE-3 — the document path handles big inputs).
+ * `engineCannotRun` (#530): the operating system refused to start the AI engine program — memory
+ * is not the cause, so the `startFailed` copy would send the user the wrong way.
  */
 export type TranslateErrorCode =
   | 'noModel'
@@ -1346,6 +1403,7 @@ export type TranslateErrorCode =
   | 'docTaskBusy'
   | 'runtimeFailed'
   | 'startFailed'
+  | 'engineCannotRun'
   | 'empty'
   | 'cancelled'
   | 'tooLong'

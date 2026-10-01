@@ -647,6 +647,18 @@ re-verifies each archive before extraction.
 | `llama-b11146-bin-ubuntu-vulkan-x64.tar.gz` | `d3ce40fce7403cc93bcf5718fc46c6efb61ed9709f8e5d9f10c86bf0e30e8fb3` | MIT; Vulkan full build (default linux build) |
 | `llama-b11146-bin-ubuntu-x64.tar.gz` | `c150306eb16b5ab696f76a8bdf810c35fd98a24e82158742e6fa28f420ff8410` | MIT; pure-CPU safety net |
 
+**What these builds need from the host system** (#530, read with `objdump -T` / `readelf -d`
+and run in stock Ubuntu containers, 2026-10-01; `architecture.md` "Engine load failures"):
+- **Both Linux builds** need glibc ≥ 2.34, libstdc++ with `GLIBCXX_3.4.30` (GCC 12), OpenSSL 3
+  (`libssl.so.3` / `libcrypto.so.3`) for `llama-server`, and the system's GCC OpenMP runtime
+  `libgomp.so.1`, which is not bundled: desktop images ship `libgomp1`. `libvulkan.so.1` is needed
+  for the GPU path only; the backend is `dlopen`ed.
+- **Both Windows builds** import the Microsoft Visual C++ 2015–2022 runtime (`msvcp140.dll`,
+  `vcruntime140.dll`, `vcruntime140_1.dll`), which is not bundled. The whisper.cpp and kiwix-tools
+  Windows builds import it too.
+
+Together that is the documented Linux minimum: Ubuntu 22.04, Debian 12, Fedora 36 and newer.
+
 **License-review record — llama.cpp b9849 runtime assets (HISTORICAL — the prior pin; status:
 approved, reviewed 2026-07-01):** the pin was bumped b9585 → **b9849** (2026-06-30, upstream commit
 `799fcc0`) as the **Qwen3.5 compatibility gate**. Licensing is unchanged from the b9585 review
@@ -703,6 +715,11 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   (`architecture.md` GPU record "llama.cpp facts"), write the licence record above, and
 >   regenerate `DRIVE-NOTICES.md` — as a deliberate, reviewed change. A real-hash mismatch makes
 >   `fetch-runtime` delete the archive and fail.
+>   **Re-read the host requirements too (#530):** `objdump -T` / `readelf -d` the new Linux
+>   binaries for their GLIBC / GLIBCXX / OpenSSL / libgomp needs, and the Windows DLL imports.
+>   If the floor moves, update the record above, `known-limitations.md` and the user-facing
+>   minimum (README, `user-guide.md` §1, `troubleshooting.md`, `launchers/READ ME FIRST.txt`,
+>   the `models.engineProblem.systemTooOldLinux` copy).
 
 ## The whisper.cpp transcriber family
 

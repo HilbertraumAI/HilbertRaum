@@ -747,6 +747,8 @@ const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.noModelRunning',
   'main.translation.noModel',
   'main.translation.startFailed',
+  // #530: the translation handler's copy when the OS refused to start the engine program.
+  'main.engine.cannotRun',
   'main.model.contextExceeded',
   'main.task.refusedChatStreaming',
   'main.task.documentNotReady',

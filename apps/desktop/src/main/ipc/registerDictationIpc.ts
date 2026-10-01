@@ -6,7 +6,9 @@ import { IPC } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import { documentsDir } from '../services/ingestion'
 import { shredFile, workspaceAdmitsWork } from '../services/workspace-vault'
+import { t } from '../../shared/i18n'
 import { tMain } from '../services/i18n'
+import { isEngineCannotRunError } from '../services/runtime/engine-load'
 import { log } from '../services/logging'
 import {
   describeDictationLevel,
@@ -34,22 +36,22 @@ import {
 /** Friendly refusal when no transcriber is selected (binary or weights absent). The
  *  renderer shows the "not installed" mic in this state, so this is a defensive backstop. It
  *  names neither piece (#527): the engine can be the missing one, and the hint says which. */
-export const DICTATION_UNAVAILABLE_MESSAGE =
-  'Voice dictation is not available on this drive yet — the AI Model screen shows what is missing.'
+export const DICTATION_UNAVAILABLE_MESSAGE = t('en', 'main.dictation.unavailable')
 
-/** Friendly catch-all for a failed transcription (never the raw CLI error). */
-export const DICTATION_FAILED_MESSAGE = 'Could not transcribe that — try again.'
+/** Friendly catch-all for a failed transcription (never the raw CLI error). The four refusal
+ *  constants are the canonical English (tests compare against them); the handler throws the
+ *  user's language via tMain (#530 — they were English-only literals before). */
+export const DICTATION_FAILED_MESSAGE = t('en', 'main.dictation.failed')
 
 /** Refusal for an implausibly large recording. 64 MB ≈ 35 min of 16 kHz mono PCM16 —
  *  far past any composer dictation; anything bigger belongs in a document import. */
 export const DICTATION_MAX_BYTES = 64 * 1024 * 1024
-export const DICTATION_TOO_LONG_MESSAGE =
-  'That recording is too long for dictation. For long recordings, import the audio file as a document instead.'
+export const DICTATION_TOO_LONG_MESSAGE = t('en', 'main.dictation.tooLong')
 
 /** Refusal when a dictation is already transcribing (REL-3 concurrency guard). The
  *  renderer disables the mic while one is in flight; this is the defensive backstop that
  *  keeps rapid mic presses from spawning N concurrent whisper children. */
-export const DICTATION_BUSY_MESSAGE = 'Still transcribing the last dictation — one moment.'
+export const DICTATION_BUSY_MESSAGE = t('en', 'main.dictation.busy')
 
 /**
  * Wall-clock ceiling for a single dictation (REL-3). The recording is already capped at
@@ -87,14 +89,14 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
     // multi-second lock teardown, so a bare check would still let that WAV land mid-lock.
     if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.dictation.locked'))
     const transcriber = ctx.transcriber
-    if (!transcriber) throw new Error(DICTATION_UNAVAILABLE_MESSAGE)
+    if (!transcriber) throw new Error(tMain('main.dictation.unavailable'))
     // IPC delivers the renderer's Uint8Array as a Buffer (a Uint8Array subclass).
     if (!(audio instanceof Uint8Array) || audio.byteLength === 0) {
-      throw new Error(DICTATION_FAILED_MESSAGE)
+      throw new Error(tMain('main.dictation.failed'))
     }
-    if (audio.byteLength > DICTATION_MAX_BYTES) throw new Error(DICTATION_TOO_LONG_MESSAGE)
+    if (audio.byteLength > DICTATION_MAX_BYTES) throw new Error(tMain('main.dictation.tooLong'))
     // Refuse a concurrent dictation BEFORE touching disk or spawning (no double-spawn).
-    if (inFlight) throw new Error(DICTATION_BUSY_MESSAGE)
+    if (inFlight) throw new Error(tMain('main.dictation.busy'))
     // #497: refuse a recording with no usable signal BEFORE the temp write and the whisper
     // spawn — the pinned whisper hallucinates a word ("you") on digital silence rather than
     // returning nothing. The renderer applies the same rule first (`assertUsableDictation`)
@@ -140,7 +142,8 @@ export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptio
       // The reason is for the local log only (stderr tails, never content); the
       // renderer gets the friendly copy (timeout included — a wedged child is a failure).
       log.warn('Dictation transcription failed', { error: String(err) })
-      throw new Error(DICTATION_FAILED_MESSAGE)
+      // #530: the OS refused to start the voice engine — say so; a retry would not help.
+      throw new Error(tMain(isEngineCannotRunError(err) ? 'main.dictation.engineCannotRun' : 'main.dictation.failed'))
     } finally {
       clearTimeout(timer)
       shredFile(tempPath)

@@ -35,6 +35,7 @@ import type {
   DriveStatus,
   EngineDownloadJob,
   EngineDownloadRequest,
+  EngineRecheckResult,
   EngineStatus,
   EvidenceExportRecord,
   EvidenceLinkInput,
@@ -212,6 +213,14 @@ const api = {
   /** Cancel an in-flight engine download. */
   cancelEngineDownload: (jobId: string): Promise<EngineDownloadJob> =>
     ipcRenderer.invoke(IPC.cancelEngineDownload, jobId),
+  /** #530 "Check again": re-start each engine the OS refused; resolves the problems still present. */
+  recheckEngine: (): Promise<EngineRecheckResult> => ipcRenderer.invoke(IPC.recheckEngine),
+  /** #530: subscribe to the payload-free "the engine verdict changed" push; returns an unsubscribe fn. */
+  onEngineProblemsChanged: (cb: () => void): (() => void) => {
+    const handler = () => cb()
+    ipcRenderer.on(EVENTS.engineProblemsChanged, handler)
+    return () => ipcRenderer.removeListener(EVENTS.engineProblemsChanged, handler)
+  },
 
   // ---- In-app OCR language-file install (#410) ----
   /** The OCR install dialog facts + whether the action can be offered (pinned languages, sizes,
@@ -877,9 +886,10 @@ const api = {
     ipcRenderer.on(ch, handler)
     return () => ipcRenderer.removeListener(ch, handler)
   },
-  /** Subscribe to one-line runtime notices (e.g. the compatibility-mode fallback). */
-  onRuntimeNotice: (cb: (message: string) => void): (() => void) => {
-    const handler = (_e: unknown, message: string) => cb(message)
+  /** Subscribe to one-line runtime notices (e.g. the compatibility-mode fallback). `target` (#530)
+   *  names where the notice's button leads: absent = Diagnostics, 'models' = the AI Model screen. */
+  onRuntimeNotice: (cb: (message: string, target?: 'models') => void): (() => void) => {
+    const handler = (_e: unknown, message: string, target?: unknown) => cb(message, target === 'models' ? 'models' : undefined)
     ipcRenderer.on(EVENTS.runtimeNotice, handler)
     return () => ipcRenderer.removeListener(EVENTS.runtimeNotice, handler)
   },

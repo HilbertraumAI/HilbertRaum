@@ -221,6 +221,12 @@ export const IPC = {
   getEngineJob: 'engine:getJob',
   /** Cancel an in-flight engine download. */
   cancelEngineDownload: 'engine:cancel',
+  /**
+   * #530 "Check again": start each engine the OS refused once more; the ones it now accepts lose
+   * their verdict and every latch the refusal left is re-armed. Resolves `EngineRecheckResult`.
+   * Takes no payload. Spawns only drive-local programs — no network.
+   */
+  recheckEngine: 'engine:recheck',
   // In-app OCR language-file install (#410) — its own narrow installer, not an engine family.
   // Same gates as model/engine downloads. Never the `OCR_RASTER` channels (the rasterizer window).
   /** The dialog facts: pinned languages + sizes + installed, bytes to fetch, source host, licence. */
@@ -612,5 +618,11 @@ export const EVENTS = {
    * without navigating away and back. A consumer ignores an event whose `epoch` is below the last
    * one it saw (an old session's late announcement).
    */
-  knowledgePacksChanged: 'packs:changed'
+  knowledgePacksChanged: 'packs:changed',
+  /**
+   * Payload-free (#530): the session's engine verdict changed — an engine on the drive turned out
+   * not to run on this computer, or "Check again" found that it runs now. Broadcast to every live
+   * window; a mounted screen re-reads `AppStatus.engineProblems`.
+   */
+  engineProblemsChanged: 'engine:problemsChanged'
 } as const
