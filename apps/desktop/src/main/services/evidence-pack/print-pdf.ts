@@ -81,7 +81,8 @@ const FOOTER_FONT_STACK =
  * — verified against the local `electron.d.ts`, not assumed; re-smoked on the 39.8.10 packaged
  * build in DEP-1 P4, and again on the 43.4.0 / Chromium 150 packaged build in DEP-4 P4
  * 2026-08-18: every option accepted, valid `%PDF-1.4 … %%EOF`, and `generateTaggedPDF`
- * emitted real `StructTreeRoot`/`MarkInfo` structures — still Experimental upstream, so this
+ * emitted real `StructTreeRoot`/`MarkInfo` structures; the real-Electron smoke passed the same
+ * on 43.7.7 in DEP-5, 2026-10-01 — still Experimental upstream, so this
  * remains a best-effort accessibility claim and NOT a PDF/UA conformance claim).
  * Exported so the unit suite
  * pins the literals: a dropped `preferCSSPageSize` or a template `@font-face` would

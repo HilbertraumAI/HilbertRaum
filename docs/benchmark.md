@@ -1198,6 +1198,13 @@ the load window — `started`/`skipped`, then the settle outcome `done`/`aborted
 and the `ingest_*` phase marks (`start`, `copy_done`, `parse_done`, `chunks_committed`,
 `embed_done`, `indexed`).
 
+**Electron 43.7.2 moved the startup baseline.** From 43.7.2 on, the first window of a process
+gets its first frame later, an upstream change shipped with Chromium security fixes. On the
+reference desktop, packaged medians (n = 5, warm profile) moved from 1,165 to 1,229 ms for
+`window_ready_to_show` and from 1,193 to 1,278 ms for `gate_visible`; the unpackaged dev app moved
+from 491 to 926 ms. A comparison across that Electron boundary shows this shift without any app
+change. Re-measure it at each Electron bump (`architecture.md` "Electron 43.4.0 → 43.7.7" §3).
+
 ### `discover_manifests` / `performance_get` — the #333 pair
 
 `discover_manifests` fires once per `discoverManifests` call — all thirteen call sites, not just
