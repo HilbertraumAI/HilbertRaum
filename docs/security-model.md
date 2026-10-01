@@ -26,7 +26,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 
 | Control | Where |
 |---|---|
-| Context isolation, no node integration, sandboxed renderer | `main/index.ts` `webPreferences` |
+| Context isolation, no node integration, sandboxed renderer (the Linux AppImage can run without the OS-level sandbox — [`known-limitations.md`](known-limitations.md) "Security & privacy") | `main/window-security.ts` `SECURE_WINDOW_WEB_PREFERENCES`, used by every window |
 | Renderer talks only to a typed `contextBridge` (`window.api`) | `preload/index.ts` |
 | **Every `ipcMain.handle` checks the sender** — the handler body runs only for the main window's `webContents.id` (#252); a bare registration under `src/main/ipc/**` is banned by `repo-hygiene.test.ts` | `main/ipc/guarded-handle.ts`, set populated in `main/index.ts` `createWindow` |
 | `will-navigate` **and `will-redirect`** block remote origins (SEC-3) | `services/navigation-guard.ts`, installed in `main/index.ts` + OCR window |

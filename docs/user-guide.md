@@ -37,7 +37,9 @@ type or import ever leaves the drive.
 3. **First-time security warning?** The very first time you run an app from a USB drive, your
    computer may show a warning ("Windows protected your PC" / "macOS cannot open the app"). This is
    normal. On Windows click **More info → Run anyway**; on macOS **right-click the app → Open**. You
-   usually only do this once. (On a signed commercial drive it won't appear.)
+   usually only do this once. (On a signed commercial drive it won't appear.) Linux shows no such
+   warning; if nothing starts there, see "Linux: the AppImage does not start" in
+   [`troubleshooting.md`](troubleshooting.md).
 4. The app opens its own window. The first launch may take a few extra seconds. If the drive is
    read-only, low on space, or slow, Home shows a friendly note — it won't stop you.
 
@@ -58,8 +60,8 @@ prepared drive:
 2. The same first-time security warning as above may appear (the release builds are unsigned for
    now) — see [`troubleshooting.md`](troubleshooting.md) for the exact clicks, including the newer
    macOS **System Settings → Privacy & Security → "Open Anyway"** flow. On Linux there is no such
-   warning, but newer distributions can stop the AppImage for a missing FUSE library or a sandbox
-   error; see "Linux: the AppImage does not start" in the same file for both fixes.
+   warning; if the AppImage does not start (on newer distributions usually because the FUSE 2
+   library is missing), see "Linux: the AppImage does not start" in the same file.
 3. A fresh download has **no AI models yet** — the app starts in demo mode. Get the models either
    with the `prepare-drive --with-assets` script (README step 2) or from inside the app on the
    **AI Model** screen (each download asks first and is checksum-verified).
