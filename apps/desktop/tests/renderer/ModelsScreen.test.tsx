@@ -91,7 +91,7 @@ function stub(opts: {
     getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, activeModelId: opts.activeModelId ?? null })),
     getPolicy: vi.fn(async () => opts.policy ?? policyStatus({ downloadsAllowed: true, settingOn: true })),
     getAppStatus: vi.fn(async () => ({ ...appStatus, ...opts.appStatus })),
-    ...(opts.engine ? { getEngineStatus: vi.fn(async () => opts.engine) } : {}),
+    ...(opts.engine ? { getEngineStatus: vi.fn(async (): Promise<EngineStatus> => opts.engine as EngineStatus) } : {}),
     downloadModel: (opts.downloadModel ?? vi.fn()),
     getDownloadJob: (opts.getDownloadJob ?? vi.fn()),
     // #314: the mount-time adopt read and the main-side dismissal. Idle by default — these
