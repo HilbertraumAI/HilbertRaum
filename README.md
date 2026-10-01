@@ -129,6 +129,8 @@ polished release is manual release testing: signed installers and a live demo ru
 Prebuilt packages are published on the [Releases page](../../releases/latest): a portable
 Windows `.exe`, a macOS (Apple Silicon) `.app.zip`, and a Linux AppImage, each with SHA-256
 checksums. If no release is listed yet, build from source below; the result is the same app.
+On Linux, run `chmod +x HilbertRaum-<version>.AppImage` once before starting it; if it does not
+start, see [Linux: the AppImage does not start](docs/troubleshooting.md#linux-the-appimage-does-not-start).
 
 - The download is the app only. A working chat needs two more downloads, both offered on the
   **AI Model** screen inside the app: the AI engine (the `llama.cpp` runtime; the screen shows

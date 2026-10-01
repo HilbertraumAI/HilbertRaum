@@ -147,6 +147,15 @@ Key config points:
   once the desktop package was renamed to the scoped name). The explicit `executableName` gives every
   platform a path-safe binary name. **Keep it in sync with `productName`** (both are `HilbertRaum`);
   `tests/integration/packaging.test.ts` asserts they match and that the name carries no `@`.
+- **The Linux AppImage uses electron-builder's legacy FUSE 2 toolset**, because
+  `electron-builder.yml` sets no `toolsets.appimage`. Three consequences, read off the v0.1.62
+  artifact on 2026-10-01: its runtime `dlopen`s `libfuse.so.2`, which Ubuntu 22.04 and later do not
+  install by default; its `.desktop` entry is `Exec=AppRun --no-sandbox %U`, the legacy toolset's
+  default when `linux.executableArgs` is unset; and the generated `AppRun` runs `unshare -Ur true`
+  and adds `--no-sandbox` when that fails. User-facing side: `troubleshooting.md` "Linux: the
+  AppImage does not start" and `known-limitations.md` "Security & privacy". The static-runtime
+  toolset (`toolsets.appimage: 1.0.3`) would drop the host `libfuse2` requirement and the
+  desktop-entry flag but keeps the same `AppRun` probe; it has not been tried here.
 - **The renderer CSP `<meta>` tags are generated at build time** (BE-2, ocr-audit 2026-07-18):
   the `hilbertraum:csp-meta` transform in `electron.vite.config.ts` rewrites the
   `Content-Security-Policy` meta in `index.html`/`ocr.html` from the single source of truth

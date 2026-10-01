@@ -25,7 +25,22 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Changed
+
+- **Help for Linux when the AppImage does not start.** The user guide and the README now give the
+  exact commands to make a downloaded AppImage executable and run it, and Troubleshooting has a
+  new entry, "Linux: the AppImage does not start". It covers the FUSE 2 library that newer
+  distributions leave out (which package to install on Ubuntu, Debian, Linux Mint and Fedora, and
+  how to start the app without it when you have no administrator rights), and why a prepared
+  drive is started with its launcher rather than the AppImage itself.
+
+### Security
+
+- **Documented: on Linux, the AppImage can run without Chromium's sandbox.** On distributions
+  that restrict unprivileged user namespaces, Ubuntu 24.04 and later among them, the AppImage
+  starts with Chromium's operating-system sandbox switched off instead of refusing to start, and a
+  desktop shortcut built from the AppImage's own menu entry always starts it that way. Nothing in
+  the app changed; Windows and macOS are not affected. Details in the known limitations.
 
 ## [0.1.62] — 2026-09-28
 

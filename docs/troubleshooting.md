@@ -44,6 +44,48 @@ should not appear at all.
 
 ---
 
+## Linux: the AppImage does not start
+
+**On a prepared drive, start the launcher, not the AppImage.** `start-hilbertraum.sh` makes the
+AppImage executable for you and points the app at the drive's workspace. Started on its own, the
+AppImage does not find the drive and opens a separate, empty workspace in your home folder; your
+data on the drive is untouched, so quit and use the launcher. If double-clicking the launcher opens
+it in a text editor or does nothing, open a terminal in the drive's top folder and run
+`./start-hilbertraum.sh`. The terminal also shows any error message that a double-click hides.
+
+**A downloaded AppImage does nothing on double-click.** A downloaded file is not executable yet,
+and a double-click hides any error message. Make it executable once, then start it from a
+terminal:
+
+```bash
+chmod +x HilbertRaum-<version>.AppImage
+./HilbertRaum-<version>.AppImage
+```
+
+**"dlopen(): error loading libfuse.so.2" / "AppImages require FUSE to run".** AppImages need the
+older FUSE 2 library, which newer distributions no longer install by default. Install it once:
+
+- Ubuntu 24.04 and later: `sudo apt install libfuse2t64`
+- Ubuntu 22.04, Debian, Linux Mint: `sudo apt install libfuse2`
+- Fedora: `sudo dnf install fuse-libs`
+
+No administrator rights on this computer? Start the app without FUSE instead. It then unpacks
+itself into a temporary folder on every start (about 430 MB, listed file by file in the terminal,
+and removed again when the app quits), so starting takes longer:
+
+```bash
+APPIMAGE_EXTRACT_AND_RUN=1 ./start-hilbertraum.sh            # prepared drive
+APPIMAGE_EXTRACT_AND_RUN=1 ./HilbertRaum-<version>.AppImage   # downloaded AppImage
+```
+
+**You do not need `--no-sandbox`.** Advice for other Electron apps often says to add it when an
+AppImage aborts with a `chrome-sandbox` or "SUID sandbox helper" error. HilbertRaum's AppImage
+checks for that situation itself (it arises on Ubuntu 24.04 and later, for example) and starts
+without the sandbox instead of aborting. What that means for security is described in
+[`known-limitations.md`](known-limitations.md) under "Security & privacy".
+
+---
+
 ## I downloaded the app from GitHub — where are the models?
 
 A release download is **the app only**. It starts in **demo mode** (simulated placeholder answers)
@@ -345,6 +387,7 @@ pages (png, jpg, jpeg — needs the OCR files). Other files in the same import s
   `.exe`/`.app` directly — the launcher points the app at the drive's workspace.
 - If you saw a security warning, follow **"Windows protected your PC" / "macOS cannot open the app"**
   above.
+- On Linux, see **"Linux: the AppImage does not start"** above.
 - On Windows, the portable `.exe` may take a few seconds on first launch — wait for the window.
 - Check that the drive has free space and is writable. The app shows a friendly note on the Home
   screen if the drive is read-only, low on space, or slow (none of these block you).

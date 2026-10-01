@@ -26,7 +26,9 @@ HilbertRaum is a **local-first, offline** application. Full details live in
 ### Primary mitigations
 - **No network in the core path** — no cloud, telemetry, or remote endpoints.
 - **Context-isolated, sandboxed renderer** — the UI has no direct Node/file/network access; it only
-  calls a typed, audited bridge.
+  calls a typed, audited bridge. On Linux distributions that restrict unprivileged user namespaces
+  (Ubuntu 24.04 and later among them), the AppImage starts without Chromium's operating-system
+  sandbox; see [`docs/known-limitations.md`](docs/known-limitations.md) "Security & privacy".
 - **Strict Content-Security-Policy** — no remote origins are permitted.
 - **Deny-by-default renderer permissions** (Phase 31) — geolocation, notifications, camera, and
   screen capture are refused; the single exception is microphone access for voice dictation.
