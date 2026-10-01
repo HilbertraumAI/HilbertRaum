@@ -2548,7 +2548,7 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   so it keeps its old text.
 - **No reinstall button for an engine that is present but broken.** For "damaged engine files"
   the troubleshooting entry describes deleting the engine folder and installing it again. The
-  in-app reinstall belongs to #516.
+  in-app reinstall is #532.
 
 ## GPU acceleration ([`architecture.md`](architecture.md) GPU record)
 

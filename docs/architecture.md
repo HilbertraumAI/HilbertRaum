@@ -3912,8 +3912,9 @@ Design record: [`design-guidelines.md`](design-guidelines.md) §11.17.
 
 - Knowledge packs keep their old wording for a Windows VC++ refusal (out of scope; kiwix is static
   on Linux and macOS).
-- No reinstall button for a present-but-broken engine (#516 territory). The demo runtime still
-  counts as "engine in use" for an in-app reinstall.
+- No reinstall button for a present-but-broken engine: **#532** (it shares a "re-install a present
+  family" mechanism with #516's update offer). The demo runtime still counts as "engine in use"
+  for an in-app reinstall.
 - macOS classification is unmeasured on hardware.
 - The Windows VC++ check is presence-only. An outdated Redistributable whose DLLs are present reads
   as damaged engine files; the troubleshooting entry covers both causes.
