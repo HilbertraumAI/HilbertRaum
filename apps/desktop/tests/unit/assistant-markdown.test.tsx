@@ -1,5 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, afterEach } from 'vitest'
+import { readFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { cleanup, render } from '@testing-library/react'
 import { AssistantMarkdown } from '../../src/renderer/chat/AssistantMarkdown'
 
@@ -66,9 +68,10 @@ describe('AssistantMarkdown security posture', () => {
 
   it('renders a ```mermaid fence as a plain code block — the mermaid plugin stays absent', () => {
     // DEP-3 (2026-08-09) judged the mermaid/DOMPurify Dependabot alerts unreachable because no
-    // mermaid plugin is passed (mdPlugins = { math }); wiring one in makes that chain a live
-    // attack surface — this pin fails and forces a re-triage. Ledger: architecture.md
-    // "Dependabot triage — design record (wave DEP-3)".
+    // mermaid plugin is passed (mdPlugins = { math }). Since streamdown 2.6 (#550) mermaid is not
+    // installed at all; adopting `@streamdown/mermaid` would bring it, and DOMPurify, back as live
+    // code — this pin fails and forces that decision (packaging.test.ts guards the dependency
+    // graph). Ledger: architecture.md "Dependabot triage — design record (wave DEP-3)".
     const { container } = render(
       <AssistantMarkdown text={'```mermaid\ngraph TD; A-->B\n```'} />
     )
@@ -76,6 +79,58 @@ describe('AssistantMarkdown security posture', () => {
     // async behind Suspense, so asserting on <svg> would never fire).
     expect(container.querySelector('[data-streamdown="mermaid-block"]')).toBeNull()
     expect(container.querySelector('code')?.textContent).toContain('graph TD; A-->B')
+  })
+
+  // streamdown 2.6 (#550) changed its sanitize schema twice; neither change may reach the DOM here.
+  it('an incomplete streamed link renders as text, never as a link (2.6 lets `streamdown:` through)', () => {
+    // remend completes a dangling `[text](https://exa` to `[text](streamdown:incomplete-link)`, and
+    // 2.6's schema allows that scheme. The app's `a` override is the gate: only http(s) links.
+    const { container } = render(
+      <AssistantMarkdown streaming text={'See [the report](https://exa'} />
+    )
+    expect(container.querySelector('a')).toBeNull()
+    expect(container.textContent).toContain('the report')
+  })
+
+  it('every id taken from the model text keeps its user-content- prefix (2.6 stopped re-prefixing)', () => {
+    // 2.6 sets sanitize's clobberPrefix to '', leaving remark-rehype as the only prefixer. Names
+    // like `api` or `document` must never become bare ids that could clobber a window global.
+    const { container } = render(
+      <AssistantMarkdown text={'Two claims[^api][^document].\n\n[^api]: One.\n\n[^document]: Two.'} />
+    )
+    const ids = [...container.querySelectorAll('[id]')].map((e) => e.id)
+    expect(ids).toContain('user-content-fn-api')
+    // `footnote-label` is remark-rehype's fixed heading id, not taken from the text.
+    expect(ids.filter((id) => id !== 'footnote-label' && !id.startsWith('user-content-'))).toEqual([])
+    expect(container.querySelector('[name]')).toBeNull()
+  })
+})
+
+// Streamdown styles its chrome with Tailwind utilities, which this app does not load, so any
+// layout it leaves to a utility class has to be supplied here. jsdom computes no layout: these pin
+// the inputs; the measured proof (a real Electron render) is in architecture.md's DEP-6 record.
+describe('AssistantMarkdown layout without Tailwind (#550)', () => {
+  it('caps neither tables nor code blocks (2.6 defaults would let a tall one draw over what follows)', () => {
+    const table = '| # | Name |\n|---|---|\n' + Array.from({ length: 20 }, (_, i) => `| ${i} | Row ${i} |`).join('\n')
+    const code = '```js\n' + Array.from({ length: 30 }, (_, i) => `const a${i} = ${i}`).join('\n') + '\n```'
+    const { container } = render(<AssistantMarkdown text={`${table}\n\n${code}`} />)
+    const tableWrapper = container.querySelector('table')?.parentElement
+    const codeBody = container.querySelector('[data-streamdown="code-block-body"]') as HTMLElement | null
+    expect(tableWrapper).toBeTruthy()
+    expect(codeBody).toBeTruthy()
+    expect(tableWrapper!.style.maxHeight).toBe('')
+    expect(codeBody!.style.maxHeight).toBe('')
+  })
+
+  it('styles.css breaks a code block into its lines (Streamdown leaves that to `block`)', () => {
+    const stylesCss = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'styles.css'), 'utf8')
+    expect(stylesCss).toMatch(
+      /\[data-streamdown="code-block-body"\] code > span\s*\{\s*display:\s*block;\s*\}/
+    )
+    // …and those are the elements Streamdown renders one per line.
+    const { container } = render(<AssistantMarkdown text={'```js\nconst a = 1\n\nconst b = 2\n```'} />)
+    const lines = container.querySelectorAll('[data-streamdown="code-block-body"] code > span')
+    expect([...lines].map((l) => l.textContent)).toEqual(['const a = 1', '\n', 'const b = 2'])
   })
 })
 

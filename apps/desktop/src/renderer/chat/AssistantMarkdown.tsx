@@ -427,6 +427,11 @@ export const AssistantMarkdown = memo(function AssistantMarkdown({
       rehypePlugins={mdRehypePlugins}
       controls={false}
       linkSafety={{ enabled: false }}
+      // streamdown 2.6 caps code blocks at 400 px and tables at 300 px, and relies on Tailwind's
+      // overflow utilities (not loaded here) to scroll the rest: a tall table drew over everything
+      // below it. 0 turns the caps off, so both grow with their content as before (#550).
+      codeBlockMaxHeight={0}
+      tableMaxHeight={0}
       components={mdComponents}
     >
       {normalizeMathDelimiters(text)}
