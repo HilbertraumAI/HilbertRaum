@@ -88,6 +88,9 @@ from its first public `1.0.0` release onward.
   first. **Workspaces open exactly as before**, also with an older copy of the app, and the
   minimum operating systems are unchanged. The window can take a moment longer to appear at
   start, under a tenth of a second on our test PC. That change comes with the security fixes.
+- **Dependency advisories cleared in the build tools** (`undici`, `brace-expansion`, `fast-uri`),
+  and in `dompurify`, which the dependency graph lists but the app does not include. None of these
+  packages is part of the app you run, so nothing changes in use.
 
 ## [0.1.62] — 2026-09-28
 

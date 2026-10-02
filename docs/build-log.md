@@ -27,6 +27,23 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-02 — the closed 2026-09-18 #478 table-delivery entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-02 (preamble budget, making room for the DEP-6 entry). PR #479 is merged (2026-09-19)
+and issue #478 closed; the record is unchanged: `docs/rag-design.md` §17 "Table delivery". Citations of the form "BUILD_STATE
+2026-09-18 entry" for table delivery now resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-18 — **Table delivery (issue #478, draft PR #479, `feat/zim-deliver-tables`) — READ DONE, six floors hold,
+table-delivery endpoint VOID.** `html.ts` parses a kept `<table>` into a bounded grid of retrievable "key: value"
+units instead of dropping it (`tables.ts`; design `rag-design.md` §17 "Table delivery"). The one authorised `core200`
+acceptance read ran: all six PR-B floors PASS — the measured acceptance of this change. The pre-registered `tables32`
+delivery endpoint is void — neither a pass nor a miss: its identification script required every line of a captured
+unit's own text to be table-introduced, while the chunking step delivers single-line units (0 of 32,257 captured units
+contains a literal newline), so the script could only return 0 for any input and never tested the hypothesis; the
+scored result of record stays 0 of 32. This is not a precedent for setting aside an endpoint whose instrument worked.
+Four pre-read Opus fix passes landed before the read; CI green at the read's head. The change stays a draft until the
+maintainer marks it ready.
+
 ## 2026-10-01 — the closed 2026-09-18 #444 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-01 (preamble budget, making room for the #530 entry). PR #444 is merged and its
