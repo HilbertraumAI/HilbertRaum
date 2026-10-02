@@ -12335,7 +12335,10 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   unmeasured rows, a narrow window, the name filter, and the "Recently added" order.
   react-virtual 3.14.13 and the previous 3.14.4 (renderer rebuilt from the integrity-checked old
   tarballs) gave identical figures: 24/24, a maximum deviation of 2.0–2.4 px, and 259.2 px of
-  scroll compensation. *Packaged exe:* Smart App Control still blocks a fresh unsigned
+  scroll compensation. Titles ellipsize rather than wrap, so a row changes height with its state.
+  A failed scan row placed mid-viewport (100.4 px) shrank in place to 56.0 px when its
+  **Make searchable (OCR)** button ran a real OCR job. The rows above did not move, the rows below
+  moved by exactly −44.4 px, and the list stayed contiguous (11/11). *Packaged exe:* Smart App Control still blocks a fresh unsigned
   `package:win` (CodeIntegrity 3077/3118). The built app under the repo Electron passed the DEP-6
   smoke 10/10 again: PDF, DOCX and CSV text on pdf.js 6.3, and OCR through the rasterizer window.
   pdf.js running from inside `app.asar` stays open on #551.
