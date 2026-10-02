@@ -12095,6 +12095,11 @@ surviving source._
    layout, or against a real `app.asar` listing, would close it.
 4. Vitest 5 (5.0.3 at the time) was offered and not taken. On top of everything in §5 it turns
    `clearMocks` on by default, fails unawaited async assertions and makes `vi.mock` hoisting strict.
+5. **streamdown 2.6** (first proposed in Dependabot's #541) drops the hard mermaid dependency: 113
+   packages leave the tree, so the mermaid exclusion block in `electron-builder.yml`, its
+   `packaging.test.ts` closure (which expects more than 50 mermaid-only packages) and the DEP-3
+   mermaid notes can shrink. On #541's tree three tests' `String.prototype.isWellFormed` calls also
+   stopped type-checking (the tsconfig `lib` is ES2022); the cause was not traced.
 
 ### §4 Suite parity
 
@@ -12195,8 +12200,13 @@ DEP-6 were six hand-rolled batches. What the file does, and why:
 - **Electron stays outside the groups.** A 43.x patch also needs `electronVersion` in
   `electron-builder.yml` (`packaging.test.ts` fails until it matches) and the first-paint re-measure
   of item 18(g), so it should not ride in with unrelated bumps.
-- **`versioning-strategy: increase-if-necessary`:** an in-range update touches only the lockfile, so
-  a manifest floor keeps meaning "the version a wave verified".
+- **`versioning-strategy: lockfile-only`** (corrected after the first run). Manifests are never
+  edited, so a floor keeps meaning "the version a wave verified" and a deliberate exact or tilde pin
+  stays a wave's decision: the Radix primitives (D-UI1, exact, with their transitive set
+  license-reviewed), `tesseract.js` (exact) and `katex` (`~0.16`, so one copy serves both
+  `rehype-katex` and the CSS). PR C shipped `increase-if-necessary` on the belief that it does the
+  same; its first run (#540, #541) instead raised every caret floor, moved the four Radix pins and
+  took `katex` to `~0.18.9`. Majors are ignored anyway, so `lockfile-only` gives up nothing else.
 - **`cooldown: default-days: 7`:** a newly published version waits a week before it is proposed.
 - **npm only** (owner ruling): the SHA-pinned GitHub Actions stay manual.
 - **Lockfile caveat:** Dependabot writes the lockfile with its own npm, not the pinned 11.6.2. The
