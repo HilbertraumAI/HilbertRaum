@@ -27,6 +27,20 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-02 — the closed 2026-09-27 #517 scorer entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-02 (preamble budget, making room for the streamdown 2.6 entry). Issue #517 is
+closed (2026-09-27) and its re-score done the same day; the record is unchanged: `model-benchmarks.md` §6.6 "#512 amendment".
+Citations of the form "BUILD_STATE 2026-09-27 entry" for the #517 scorer now resolve here. Text below is byte-identical to what
+was removed.
+
+_2026-09-27 — **#517 — the grounded-QA scorer reads the German "not stated" forms (`fix/517-scorer-german-abstentions`).**
+Detector v4 (`tests/eval/text.mjs`): sentence-scoped "nennt … nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet"
+when the sentence names the sources; pinned on the three #514 gate answers in `score.test.ts`. Test harness only. Record:
+`model-benchmarks.md` §6.6 "#512 amendment" (v4 note). Re-score DONE the same day (owner option A, `fix/517-rescore-v4`): every
+dump carries a `*-quality-rescored.csv`, four move (21 German refusals in `512-b*` / `pr6-*`), the five v3 files reproduce byte-for-byte,
+the 2026-07-09 ruling kept; `architecture.md` §52 CODE-1 row noted. Open: none. The closed #460 entry retired for the preamble budget._
+
 ## 2026-10-02 — the closed 2026-09-27 #518 fixtures entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-02 (preamble budget, making room for the #548–#551 entry). PR #522 is merged
