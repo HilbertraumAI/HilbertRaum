@@ -12099,7 +12099,14 @@ surviving source._
    packages leave the tree, so the mermaid exclusion block in `electron-builder.yml`, its
    `packaging.test.ts` closure (which expects more than 50 mermaid-only packages) and the DEP-3
    mermaid notes can shrink. On #541's tree three tests' `String.prototype.isWellFormed` calls also
-   stopped type-checking (the tsconfig `lib` is ES2022); the cause was not traced.
+   stopped type-checking (the tsconfig `lib` is ES2022). #543, the same group without the Radix and
+   katex moves, failed identically. The cause, traced with `tsc --explainFiles`: on master the ES2024
+   lib reaches the test program only through streamdown 2.5's types → `mermaid` →
+   `type-fest/source/basic.d.ts`, which carries `/// <reference lib="esnext"/>`. streamdown 2.6 drops
+   `mermaid`, and with it that lib. So the latent defect is ours: three tests call an ES2024 API
+   under an ES2022 `lib`. Whoever takes streamdown 2.6 raises the `lib` (or adds
+   `es2024.string`) first. Until then `@dependabot ignore streamdown minor version` (posted on
+   #543) keeps 2.6.x out of the production group.
 
 ### §4 Suite parity
 
@@ -12206,13 +12213,17 @@ DEP-6 were six hand-rolled batches. What the file does, and why:
 - **Electron stays outside the groups.** A 43.x patch also needs `electronVersion` in
   `electron-builder.yml` (`packaging.test.ts` fails until it matches) and the first-paint re-measure
   of item 18(g), so it should not ride in with unrelated bumps.
-- **`versioning-strategy: lockfile-only`** (corrected after the first run). Manifests are never
-  edited, so a floor keeps meaning "the version a wave verified" and a deliberate exact or tilde pin
-  stays a wave's decision: the Radix primitives (D-UI1, exact, with their transitive set
+- **`versioning-strategy: lockfile-only`** (corrected twice after the first run). It keeps a
+  deliberate exact or tilde pin a wave's decision: an update that would need the pin changed is not
+  proposed. That covers the Radix primitives (D-UI1, exact, with their transitive set
   license-reviewed), `tesseract.js` (exact) and `katex` (`~0.16`, so one copy serves both
-  `rehype-katex` and the CSS). PR C shipped `increase-if-necessary` on the belief that it does the
-  same; its first run (#540, #541) instead raised every caret floor, moved the four Radix pins and
-  took `katex` to `~0.18.9`. Majors are ignored anyway, so `lockfile-only` gives up nothing else.
+  `rehype-katex` and the CSS). PR C shipped `increase-if-necessary`, and its first run (#541) moved
+  the four Radix pins and took `katex` to `~0.18.9`; after #542 the replacement group PR (#543)
+  left both alone. What `lockfile-only` does **not** do, contrary to its documentation ("leaving
+  manifests unchanged"): it still raises the caret floor of each package a grouped PR bumps (#540,
+  #543), so after a merge that floor is the version the PR's CI ran, not one a wave verified. #542
+  had claimed manifests are never edited; that was wrong. Majors are ignored anyway, so
+  `lockfile-only` gives up nothing else.
 - **`cooldown: default-days: 7`:** a newly published version waits a week before it is proposed.
 - **npm only** (owner ruling): the SHA-pinned GitHub Actions stay manual.
 - **Lockfile caveat:** Dependabot writes the lockfile with its own npm, not the pinned 11.6.2. The
