@@ -12167,7 +12167,13 @@ changes below would have made the suite quietly prove less, and neither is in th
   `[vitest-worker]: Timeout calling "onTaskUpdate"` failure can no longer end a run, and nothing else
   does when the main process stops answering. `ci.yml` had no job timeout (GitHub's default is 6 h),
   so `build-and-test` now has `timeout-minutes: 30`; the slowest leg takes about 9 minutes. The forks
-  cap stays, because it is about runner pressure.
+  cap stays, because it is about runner pressure. **Its successor flake (found after the merge):**
+  4.x sends worker console output as an unawaited call and rejects it at worker teardown, so a test
+  whose async work logs after the file ends fails an all-green run (`Closing rpc while
+  "onUserConsoleLog" was pending`, vitest-dev/vitest#11153; 3.2.6 sent it as an event). Seen once,
+  on Dependabot's #540 windows leg. A full-suite run with a temporary late-console-write detector
+  found exactly one writer, `vision-security.test.ts` (four tests let an image's history write
+  outlive them), and none after the fix. `packaging.md` has the disposition and the detector recipe.
 - **Coverage.** 4.x removed `coverage.all`, so `test:coverage` would have listed only the files the
   tests load. `coverage.include: ['src/**/*.{ts,tsx}']` (declarations excluded) keeps a file nothing
   imports in the report at 0 %. On a one-file run all 368 source files were listed.

@@ -775,6 +775,20 @@ no lever on these legs is trusted without its log line). Since vitest 4 the work
 timeout at all, so `Timeout calling "onTaskUpdate"` can no longer end a run; a starved main process
 now shows up as a slow leg, and `ci.yml` caps each leg at 30 minutes so a hang still fails.
 
+**Vitest 4's own all-green red: `EnvironmentTeardownError: [vitest-worker]: Closing rpc while
+"onUserConsoleLog" was pending`** (vitest-dev/vitest#11153). Vitest 3 sent console output from a
+worker as a fire-and-forget event; vitest 4 sends it as a call it never awaits, and when the worker
+closes it rejects any such call still pending. So **a test whose async work outlives it and then
+logs** (here: through `log.*`, which writes to the console) can fail a run in which every test
+passed, on whichever leg is slow enough. The file the error names is the one that was closing. The
+first case (a Dependabot PR's windows leg, 2026-10-02) was `vision-security.test.ts`: four tests
+let an image's history write run on after they ended, into the database the file had already closed.
+They now wait for the streamed done event. **What to do on a run:** re-run the failed job once. If
+it comes back, find the writer: a temporary setup file that wraps `console.*` and records any write
+made after the file's last `afterAll` (setup-file hooks run last), run over the full suite through a
+`mergeConfig` copy of `vitest.config.ts`, names it with a stack. `--detectAsyncLeaks` is too blunt
+for this, reporting about 360 leaks, nearly all promises that never log.
+
 **When a test depends on a budget inside the PRODUCT, add a seam instead of loosening the
 assertion.** The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run
 `34659678616`): the arm's title lookup and document-frequency probes ran against a real 3 s
