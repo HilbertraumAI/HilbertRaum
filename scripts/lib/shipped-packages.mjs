@@ -7,8 +7,8 @@
 // What ships (see apps/desktop/electron-builder.yml + docs/packaging.md):
 //   app.asar = the production dependency closure of apps/desktop (electron-builder's
 //   collector walks package-lock.json exactly like npm's node_modules resolution),
-//   MINUS the `files:` negation globs in electron-builder.yml (the never-imported
-//   mermaid chain + the @napi-rs/canvas native optional dep). The Vite-compiled
+//   MINUS the `files:` negation globs in electron-builder.yml (the @napi-rs/canvas
+//   native optional dep, pdfjs-dist's standard fonts). The Vite-compiled
 //   renderer/main bundles inline a SUBSET of those same production dependencies
 //   (react, katex, streamdown, …), so the closure already covers them.
 //
