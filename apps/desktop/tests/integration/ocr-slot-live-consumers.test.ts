@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, type Mock } from 'vitest'
 import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -50,7 +50,7 @@ function driveWithOcrFiles(): string {
 }
 
 interface FakeInstallEngine extends OcrEngine {
-  probe: ReturnType<typeof vi.fn>
+  probe: Mock
   recognizeCalls: number
 }
 

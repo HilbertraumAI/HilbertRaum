@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach, type Mock } from 'vitest'
 import { act, render, screen, cleanup, within, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import {
@@ -79,8 +79,8 @@ function stub(opts: {
   models?: ModelInfo[]
   policy?: PolicyStatus
   activeModelId?: string | null
-  downloadModel?: ReturnType<typeof vi.fn>
-  getDownloadJob?: ReturnType<typeof vi.fn>
+  downloadModel?: Mock
+  getDownloadJob?: Mock
   /** Overrides on the base status (#527: `transcriberMissing`). */
   appStatus?: Partial<AppStatus>
   /** The engine status (#527 banner cases); absent = the bridge has none (reads as null). */
@@ -1326,15 +1326,15 @@ describe('ModelsScreen — terminal download results stay visible (PR #302 F2, B
     downloadModel?: (id: string, o?: { licenseAccepted?: boolean }) => Promise<DownloadJob>
     getDownloadJob?: (jobId: string) => Promise<DownloadJob>
     listModels?: () => Promise<ModelInfo[]>
-    useModel?: ReturnType<typeof vi.fn>
+    useModel?: Mock
     /** #314: what the MAIN process still holds — what a reloaded screen adopts on mount. */
     listDownloadJobs?: () => Promise<DownloadJob[]>
   }): {
-    listModels: ReturnType<typeof vi.fn>
-    downloadModel: ReturnType<typeof vi.fn>
-    getDownloadJob: ReturnType<typeof vi.fn>
-    listDownloadJobs: ReturnType<typeof vi.fn>
-    dismissDownloadJob: ReturnType<typeof vi.fn>
+    listModels: Mock
+    downloadModel: Mock
+    getDownloadJob: Mock
+    listDownloadJobs: Mock
+    dismissDownloadJob: Mock
   } {
     const listModels = vi.fn(opts.listModels ?? (async () => opts.models()))
     const downloadModel = vi.fn(opts.downloadModel ?? (async () => opts.job!()))
@@ -2288,8 +2288,8 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
     models: () => ModelInfo[]
     activeModelId?: string | null
     machineRamGb?: number
-    useModel?: ReturnType<typeof vi.fn>
-  }): { listModels: ReturnType<typeof vi.fn> } {
+    useModel?: Mock
+  }): { listModels: Mock } {
     const listModels = vi.fn(async () => opts.models())
     stubApi({
       listModels,
@@ -2767,7 +2767,7 @@ describe('lazy verification + "Check all model files" (#382)', () => {
 
   /** Stubs the screen's bridge and hands back the listModels spy + the progress emitter. */
   function stubVerify(models: ModelInfo[]): {
-    listModels: ReturnType<typeof vi.fn>
+    listModels: Mock
     emit: (p: Partial<ModelVerifyProgress>) => void
   } {
     const listModels = vi.fn(async () => models)
@@ -2872,8 +2872,8 @@ describe('cancelling "Check all model files" (#420)', () => {
 
   /** Like the #382 stub, but the full pass is held open so a Cancel can land mid-pass. */
   function stubCancellable(models: ModelInfo[]): {
-    listModels: ReturnType<typeof vi.fn>
-    cancelModelVerify: ReturnType<typeof vi.fn>
+    listModels: Mock
+    cancelModelVerify: Mock
     /** Let the held-open full pass resolve, as main does after an abort. */
     settleFullPass: () => void
     emit: (p: Partial<ModelVerifyProgress>) => void

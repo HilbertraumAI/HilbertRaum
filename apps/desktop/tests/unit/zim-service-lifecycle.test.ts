@@ -1,4 +1,4 @@
-import { describe, expect, it, vi, beforeEach } from 'vitest'
+import { describe, expect, it, vi, afterEach, beforeEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { appendFileSync, existsSync, mkdirSync, mkdtempSync, readdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -98,6 +98,13 @@ function addManageZimFile(dir: string, leaf: string): string {
     trailing: `body of ${leaf}`
   })
 }
+
+// Several tests spy on `log.warn` and count its calls. Since vitest 4, `vi.spyOn` on a method
+// that is still a spy returns THAT spy, earlier tests' calls included, so each test must start
+// from the real method.
+afterEach(() => {
+  vi.restoreAllMocks()
+})
 
 describe('kiwixManageAdd — verifier, PID registry, abort, settle-before-cleanup (M9, P3a)', () => {
   beforeEach(() => {

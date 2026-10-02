@@ -1,13 +1,17 @@
 import { createHash } from 'node:crypto'
 import { resolve } from 'node:path'
-import type { File } from 'vitest'
+import type { TestModule, TestSpecification, Vitest } from 'vitest/node'
+import { BaseSequencer } from 'vitest/node'
 import { describe, expect, it } from 'vitest'
 import { FullSuiteGuard, listTestFiles, parseShard, shardTestFiles } from '../full-suite-guard'
 
 /** A literal backslash, spelled without one so no codegen pass can mangle it. */
 const BACKSLASH = String.fromCharCode(92)
 
-const file = (name: string): File => ({ name }) as File
+const file = (relativeModuleId: string): TestModule => ({ relativeModuleId }) as TestModule
+
+/** Calls the guard's hook the way vitest does when a run ends. */
+const finish = (guard: FullSuiteGuard, modules: TestModule[]): void => void guard.onTestRunEnd(modules, [], 'passed')
 
 describe('listTestFiles', () => {
   it('walks the test tree and returns posix-relative *.test.{ts,tsx} paths including this file', () => {
@@ -25,25 +29,25 @@ describe('FullSuiteGuard', () => {
 
   it('passes silently when every expected file was collected', () => {
     const guard = new FullSuiteGuard(expected)
-    expect(() => guard.onFinished(expected.map(file))).not.toThrow()
+    expect(() => finish(guard, expected.map(file))).not.toThrow()
   })
 
   it('throws naming the dropped files when vitest under-collects', () => {
     const guard = new FullSuiteGuard(expected)
     const collected = [file('tests/unit/a.test.ts')] // b and c silently dropped
-    expect(() => guard.onFinished(collected)).toThrow(/collected 1 of 3 test files/)
-    expect(() => guard.onFinished(collected)).toThrow(/tests\/integration\/b\.test\.ts/)
-    expect(() => guard.onFinished(collected)).toThrow(/tests\/renderer\/c\.test\.tsx/)
+    expect(() => finish(guard, collected)).toThrow(/collected 1 of 3 test files/)
+    expect(() => finish(guard, collected)).toThrow(/tests\/integration\/b\.test\.ts/)
+    expect(() => finish(guard, collected)).toThrow(/tests\/renderer\/c\.test\.tsx/)
   })
 
   it('normalises Windows backslash paths from vitest before comparing', () => {
     const guard = new FullSuiteGuard(['tests/unit/a.test.ts'])
-    expect(() => guard.onFinished([file('tests\\unit\\a.test.ts')])).not.toThrow()
+    expect(() => finish(guard, [file('tests\\unit\\a.test.ts')])).not.toThrow()
   })
 
   it('no-ops on a filtered/subset run (expected = null), never false-failing', () => {
     const guard = new FullSuiteGuard(null)
-    expect(() => guard.onFinished([])).not.toThrow()
+    expect(() => finish(guard, [])).not.toThrow()
   })
 })
 
@@ -75,7 +79,7 @@ describe('parseShard', () => {
   })
 })
 
-describe('shardTestFiles — reproduces vitest 3.2.6 BaseSequencer.shard', () => {
+describe('shardTestFiles — reproduces vitest 4.1.11 BaseSequencer.shard', () => {
   const root = resolve(__dirname, '..', '..')
   const files = listTestFiles(root, resolve(root, 'tests'))
 
@@ -84,8 +88,25 @@ describe('shardTestFiles — reproduces vitest 3.2.6 BaseSequencer.shard', () =>
       const shards = Array.from({ length: count }, (_, i) => shardTestFiles(files, { index: i + 1, count }))
       expect(new Set(shards.flat()).size, `count=${count} union`).toBe(files.length)
       expect(shards.reduce((n, s) => n + s.length, 0), `count=${count} no overlap`).toBe(files.length)
-      // vitest's `ceil` slice: every shard is full except possibly the last.
-      expect(shards.slice(0, -1).every((s) => s.length === Math.ceil(files.length / count)), `count=${count} sizes`).toBe(true)
+      // vitest 4's `calculateShardRange`: the first `length % count` shards take one extra file.
+      const base = Math.floor(files.length / count)
+      const sizes = shards.map((s) => s.length)
+      expect(sizes, `count=${count} sizes`).toEqual(sizes.map((_, i) => (i < files.length % count ? base + 1 : base)))
+    }
+  })
+
+  // The pin that would have caught the vitest 3 → 4 change by itself: run vitest's OWN
+  // sequencer (the installed version) over the real suite and demand the same split. A future
+  // vitest that changes the algorithm fails here, at the desk, rather than on the sharded legs.
+  it('assigns every file to the same shard as the installed vitest BaseSequencer', async () => {
+    const posixRoot = '/repo'
+    const specs = files.map((f) => ({ moduleId: `${posixRoot}/${f}` }) as TestSpecification)
+    for (const count of [2, 3, 4, 5]) {
+      for (let index = 1; index <= count; index++) {
+        const ctx = { config: { root: posixRoot, shard: { index, count } } } as unknown as Vitest
+        const theirs = (await new BaseSequencer(ctx).shard(specs)).map((s) => s.moduleId.slice(posixRoot.length + 1))
+        expect(shardTestFiles(files, { index, count }), `shard ${index}/${count}`).toEqual(theirs)
+      }
     }
   })
 
@@ -131,14 +152,14 @@ describe('FullSuiteGuard under sharding', () => {
 
   it('passes when a shard collected exactly its own subset, and fails when that shard drops one', () => {
     const mine = shardTestFiles(files, { index: 1, count: 2 })
-    expect(() => new FullSuiteGuard(mine).onFinished(mine.map(file))).not.toThrow()
-    expect(() => new FullSuiteGuard(mine).onFinished(mine.slice(1).map(file))).toThrow(/were dropped/)
+    expect(() => finish(new FullSuiteGuard(mine), mine.map(file))).not.toThrow()
+    expect(() => finish(new FullSuiteGuard(mine), mine.slice(1).map(file))).toThrow(/were dropped/)
   })
 
   // The failure this whole section exists to prevent: enforcing the WHOLE suite against a
   // shard. Pinned so nobody "simplifies" the config back to passing `allTestFiles`.
   it('would fail every sharded run if handed the whole suite instead of the shard', () => {
     const mine = shardTestFiles(files, { index: 1, count: 2 })
-    expect(() => new FullSuiteGuard(files).onFinished(mine.map(file))).toThrow(/were dropped/)
+    expect(() => finish(new FullSuiteGuard(files), mine.map(file))).toThrow(/were dropped/)
   })
 })

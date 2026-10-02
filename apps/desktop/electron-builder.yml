@@ -114,6 +114,9 @@ files:
   - '!**/node_modules/@braintree/**'
   - '!**/node_modules/@iconify/**'
   - '!**/node_modules/@antfu/**'
+  # tinyexec: @antfu/install-pkg's copy, hoisted to the top level since vitest 4 (DEP-6) needs
+  # the same major; still reachable in the production graph only via mermaid.
+  - '!**/node_modules/tinyexec/**'
   - '!**/node_modules/@chevrotain/**'
   - '!**/node_modules/@upsetjs/**'
 # NOTE: `includeSubNodeModules: true` was REMOVED in electron-builder 26 (it now errors as an

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DiagnosticsTab } from '../../src/renderer/screens/settings/DiagnosticsTab'
@@ -41,9 +41,9 @@ const appStatus = {
 
 function stubDiag(
   over: {
-    runBenchmark?: ReturnType<typeof vi.fn>
+    runBenchmark?: Mock
     settings?: typeof DEFAULT_SETTINGS
-    tryGpuAgain?: ReturnType<typeof vi.fn>
+    tryGpuAgain?: Mock
   } = {}
 ): void {
   stubApi({

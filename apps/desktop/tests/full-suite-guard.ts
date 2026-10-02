@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { readdirSync } from 'node:fs'
 import { relative, resolve } from 'node:path'
-import type { File, Reporter } from 'vitest'
+import type { Reporter } from 'vitest/node'
 
 // Full-suite collection guard.
 //
@@ -10,8 +10,14 @@ import type { File, Reporter } from 'vitest'
 // and a green exit (we saw 164/168 instead of 168/168 during the 2026-06-19 merge). A dropped
 // suite that "passes" by not running is a false green. This reporter turns that into a hard
 // failure: it walks the test tree on disk and asserts vitest collected every file. If any are
-// missing it throws from `onFinished`, which vitest surfaces as a fatal error and a non-zero
-// exit (verified: a throw here exits 1; setting `process.exitCode` does NOT stick).
+// missing it throws from `onTestRunEnd`, which vitest surfaces as an error and a non-zero exit
+// (verified on vitest 4.1.11 with a probe config that drops one file: exit 1, and exit 0 when
+// nothing is missing).
+//
+// Vitest 4 removed the `onFinished` hook this guard implemented until DEP-6. The old method
+// still type-checked (a class may carry methods its interface lacks), so the guard went
+// silently inert: under 4.1.11 a run missing a file exited 0. The hook is therefore typed
+// THROUGH `Reporter['onTestRunEnd']`, so the next such removal fails typecheck instead.
 //
 // It only enforces when handed an `expected` list (the full unfiltered suite). Filtered runs
 // (`vitest run tests/unit`, a name pattern, watch mode) pass `null` and the guard no-ops, so
@@ -34,9 +40,11 @@ export function listTestFiles(root: string, testsDir: string): string[] {
 export class FullSuiteGuard implements Reporter {
   constructor(private readonly expected: readonly string[] | null) {}
 
-  onFinished(files: File[] = []): void {
+  onTestRunEnd: NonNullable<Reporter['onTestRunEnd']> = (testModules = []) => {
     if (!this.expected) return // filtered / subset / watch run — nothing to assert against
-    const collected = new Set(files.map((f) => f.name.split('\\').join('/')))
+    // `relativeModuleId` is the old `File.name`. Vitest leaves a spec whose module never
+    // reported back (the dropped file) out of `testModules`, so it shows up as missing here.
+    const collected = new Set(testModules.map((m) => m.relativeModuleId.split('\\').join('/')))
     const missing = this.expected.filter((f) => !collected.has(f))
     if (missing.length === 0) return
     const msg =
@@ -45,7 +53,7 @@ export class FullSuiteGuard implements Reporter {
       `collection — likely a pool worker died under load). A dropped suite must NOT pass ` +
       `as green. Re-run the suite. Missing files:\n` +
       missing.map((f) => `  - ${f}`).join('\n')
-    // A throw from onFinished is the only mechanism that reliably forces a non-zero exit.
+    // A throw is the mechanism that reliably forces a non-zero exit.
     throw new Error(msg)
   }
 }
@@ -64,12 +72,16 @@ export class FullSuiteGuard implements Reporter {
 //
 // So reproduce vitest's own split and assert the shard's expected SUBSET. The union of the
 // shards is still every file, so nothing is given up: a dropped file fails whichever shard
-// owned it. Kept deliberately faithful to vitest 3.2.6 `BaseSequencer.shard`:
+// owned it. Kept deliberately faithful to vitest 4.1.11 `BaseSequencer.shard`:
 //
-//   const shardSize = Math.ceil(files.length / count)
+//   const [shardStart, shardEnd] = this.calculateShardRange(files.length, index, count)
 //   files.map((spec) => ({ spec, hash: hash('sha1', specPath, 'hex') }))
 //        .sort(byHashAscending)
-//        .slice(shardSize * (index - 1), shardSize * index)
+//        .slice(shardStart, shardEnd)
+//
+// `calculateShardRange` (new in vitest 4) gives the first `length % count` shards one extra
+// file each; vitest 3.2.6 sliced every shard at `ceil(length / count)`. The two agree for
+// `count = 2`, the CI split, so the windows halves did not move with the upgrade.
 //
 // The one detail that matters, and that cost a wrong first implementation here: `specPath` is
 //
@@ -119,10 +131,19 @@ export function parseShard(argv: readonly string[]): Shard | null {
  * sequencer assigns to `shard`. Order is vitest's (hash-ascending), not the input order.
  */
 export function shardTestFiles(files: readonly string[], shard: Shard): string[] {
-  const shardSize = Math.ceil(files.length / shard.count)
+  const [start, end] = shardRange(files.length, shard)
   return [...files]
     .map((file) => ({ file, hash: createHash('sha1').update(`/${file}`).digest('hex') }))
     .sort((a, b) => (a.hash < b.hash ? -1 : a.hash > b.hash ? 1 : 0))
-    .slice(shardSize * (shard.index - 1), shardSize * shard.index)
+    .slice(start, end)
     .map(({ file }) => file)
+}
+
+/** vitest 4.1.11 `BaseSequencer.calculateShardRange`: `[start, end)` of shard `index` of `count`. */
+function shardRange(length: number, { index, count }: Shard): [number, number] {
+  const base = Math.floor(length / count)
+  const remainder = length % count
+  if (remainder >= index) return [(base + 1) * (index - 1), (base + 1) * index]
+  const start = remainder * (base + 1) + (index - remainder - 1) * base
+  return [start, start + base]
 }

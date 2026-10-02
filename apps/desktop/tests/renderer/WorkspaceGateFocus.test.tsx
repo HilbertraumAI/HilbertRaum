@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate } from '../../src/renderer/screens/WorkspaceGate'
@@ -22,7 +22,7 @@ const UNINITIALIZED: WorkspaceStateInfo = {
 }
 const UNLOCKED: WorkspaceStateInfo = { ...UNINITIALIZED, state: 'unlocked', mode: 'encrypted' }
 
-const okCreate = (): ReturnType<typeof vi.fn> =>
+const okCreate = (): Mock =>
   vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED }))
 
 /** Advance create: welcome → password → submit a valid password (lands on finishing). */

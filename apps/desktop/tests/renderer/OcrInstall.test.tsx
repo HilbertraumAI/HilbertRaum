@@ -5,7 +5,7 @@
 // (never hand-typed strings) the way DocumentsScreen.test.tsx / ModelsScreen.test.tsx /
 // KnowledgePacks.test.tsx / GermanSmoke.test.tsx already do.
 
-import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, within, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
@@ -421,8 +421,8 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
   function stubModels(opts: {
     status?: OcrInstallStatus
     policy?: PolicyStatus
-    installOcr?: ReturnType<typeof vi.fn>
-    getOcrInstallJob?: ReturnType<typeof vi.fn>
+    installOcr?: Mock
+    getOcrInstallJob?: Mock
   } = {}): void {
     stubApi({
       listModels: vi.fn(async () => []),

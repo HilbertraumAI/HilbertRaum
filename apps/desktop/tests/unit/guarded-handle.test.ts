@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, type Mock } from 'vitest'
 import type { IpcMainInvokeEvent } from 'electron'
 
 // #252: every `ipcMain.handle` in the main process is registered through `guardedHandle`,
@@ -38,7 +38,7 @@ import { makeEvent } from '../helpers/ipc'
 
 const SECRET_ARG = 'ARG_SENTINEL_never_logged'
 
-function quietLog(): { warn: ReturnType<typeof vi.fn>; lines: string[] } {
+function quietLog(): { warn: Mock; lines: string[] } {
   const lines: string[] = []
   const warn = vi.fn((msg: string, meta?: unknown) => {
     lines.push(`${msg} ${JSON.stringify(meta ?? null)}`)
