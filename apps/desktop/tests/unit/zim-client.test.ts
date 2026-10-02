@@ -700,10 +700,15 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
   const raw = (encodedKey: string): string => `/raw/${NAME}/content/${encodedKey}`
   const ENTRY_URL = raw('Treibhauseffekt')
   const ALIAS_URL = raw('CO2-%C3%84quivalent')
-  /** The shrunk per-attempt budget (the production one is `ARTICLE_READ_TIMEOUT_MS` = 4 s).
-   *  Long enough that a healthy loopback answer lands inside it even under fork load. */
-  const STALL_TIMEOUT_MS = 300
-  /** A generous ceiling that still proves the read did NOT sit out a 15 s default. */
+  /** The shrunk per-attempt budgets, shaped like production's (`ARTICLE_READ_IDLE_MS` = 1 s inside
+   *  `ARTICLE_READ_TIMEOUT_MS` = 4 s). The IDLE timer cuts a stalled body; it is armed by the
+   *  headers, so an attempt it cuts has received them by construction. The TOTAL budget only has
+   *  to outlast a stalled machine: with a 300 ms total, a full-suite run once timed a stall out
+   *  before its headers arrived, and a healthy answer was exposed the same way (#549). Only a
+   *  `'silent'` attempt, which never sends headers, sits the total out. */
+  const STALL_IDLE_MS = 300
+  const ATTEMPT_TOTAL_MS = 3_000
+  /** Less than the three attempts' total budgets: proves the idle timer cut each attempt. */
   const ALL_ATTEMPTS_BUDGET_MS = 5_000
 
   /** Answers `url` with `queue.shift()` on each request, so "stalls once, then answers" is
@@ -713,7 +718,7 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
   }
   const rawLog = (): string[] => requestLog.filter((u) => u.startsWith('/raw/'))
   const read = (signal?: AbortSignal): Promise<string | null> =>
-    fetchArticleHtml(port, NAME, ENTRY, signal, { timeoutMs: STALL_TIMEOUT_MS })
+    fetchArticleHtml(port, NAME, ENTRY, signal, { timeoutMs: ATTEMPT_TOTAL_MS, idleMs: STALL_IDLE_MS })
 
   beforeEach(() => {
     resetRequestLog()
@@ -747,6 +752,7 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
     })
     expect(caught).toBeInstanceOf(KiwixTimeoutError)
     expect((caught as KiwixTimeoutError).name).toBe('KiwixTimeoutError')
+    expect((caught as KiwixTimeoutError).kind).toBe('idle')
     // The partial body is on the error as diagnosis, never as a result.
     expect((caught as KiwixTimeoutError).headersReceived).toBe(true)
     expect((caught as KiwixTimeoutError).bytesReceived).toBe(Buffer.byteLength(TRUNCATED_PARTIAL))
@@ -828,7 +834,10 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
       [ENTRY_URL]: [TRUNCATED, { status: 200, body: HTML }]
     })
     await expect(
-      fetchArticleHtml(port, NAME, ALIAS, undefined, { timeoutMs: STALL_TIMEOUT_MS })
+      fetchArticleHtml(port, NAME, ALIAS, undefined, {
+        timeoutMs: ATTEMPT_TOTAL_MS,
+        idleMs: STALL_IDLE_MS
+      })
     ).resolves.toBe(HTML)
     expect(rawLog()).toEqual([ALIAS_URL, ENTRY_URL, ENTRY_URL])
     expect(parkedClosedByClient).toContain(ENTRY_URL)
@@ -838,9 +847,8 @@ describe('fetchArticleHtml retries a stalled /raw read (#301 P7 T19)', () => {
     // The stall retry is scoped to `/raw`; a probe timeout is still one request and an unknown.
     suggestHook = () => 'park'
     resetRequestLog()
-    await expect(
-      probeSearchable(port, 'parked', undefined, { timeoutMs: STALL_TIMEOUT_MS })
-    ).resolves.toBeNull()
+    // Parked: the timeout IS the expected outcome, so a short budget cannot flake.
+    await expect(probeSearchable(port, 'parked', undefined, { timeoutMs: 300 })).resolves.toBeNull()
     expect(requestLog.filter((u) => u.startsWith('/suggest'))).toHaveLength(1)
     suggestHook = null
 

@@ -24,6 +24,7 @@ import { resolveWorkerScriptPath, type TesseractModule } from '../../src/main/se
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import { planOcrDownloads, sha256Of } from '../../src/main/services/assets'
 import { makePdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import { sha256File } from '../../src/main/services/models'
 
 // Phase 38 — scanned-PDF detection (step 0), the OCR engine seam + offline wiring
@@ -570,9 +571,17 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
     }
   }
 
-  /** A tesseract.js-shaped module whose worker throws while LOADING (the packaged asar gap). */
-  function loadFailingModule(): TesseractModule {
-    return {
+  /**
+   * A tesseract.js-shaped module whose worker throws while LOADING (the packaged asar gap).
+   * `exited` settles when that worker has died, so a test can time the engine's reaction from the
+   * failure rather than from the spawn: starting a thread is what full-suite load slows down (#549).
+   */
+  function loadFailingModule(): { mod: TesseractModule; exited: Promise<void> } {
+    let markExited: () => void = () => undefined
+    const exited = new Promise<void>((resolve) => {
+      markExited = resolve
+    })
+    const mod: TesseractModule = {
       createWorker: async () => {
         const worker = new Worker(
           'throw new Error("worker module load failed: cannot find hoisted dependency")',
@@ -580,9 +589,12 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
         )
         // The browser idiom tesseract.js sets — inert on a Node Worker.
         ;(worker as unknown as { onerror: unknown }).onerror = (): void => undefined
+        // 'exit' only: an 'error' listener here would hide the pinned crash from the capture.
+        worker.once('exit', () => markExited())
         return new Promise<never>(() => undefined) // never settles, like createWorker.js:243
       }
     }
+    return { mod, exited }
   }
 
   /** A module whose worker starts fine and then dies on its first recognition message. */
@@ -633,20 +645,23 @@ describe('TesseractOcrEngine — worker boundary (#232)', () => {
 
   it('a worker that fails at LOAD rejects recognize() per document, reports unavailable, and never escapes as an uncaught exception', async () => {
     await withUncaughtCapture(async (captured) => {
+      const { mod, exited } = loadFailingModule()
       const engine = new TesseractOcrEngine({
         ...base,
-        loadTesseract: async () => loadFailingModule(),
+        loadTesseract: async () => mod,
         workerStartTimeoutMs: 5_000
       })
       // Pre-fix the recognition HANGS (createWorker never settles) while the load failure
       // reaches the process as uncaughtException — race it against a short clock so the pin
-      // fails fast instead of at the vitest budget.
+      // fails fast instead of at the vitest budget. The clock starts once the worker has DIED
+      // (#549): the engine rejects on the worker's 'error', which comes before its 'exit', so the
+      // fixed version has settled by then however long the thread took to start.
       const outcome = await Promise.race([
         engine.recognize(Buffer.from('img')).then(
           () => 'resolved' as const,
           (err: unknown) => err
         ),
-        new Promise<'hung'>((r) => setTimeout(() => r('hung'), 2_000))
+        exited.then(() => new Promise<'hung'>((r) => setTimeout(() => r('hung'), hangBudgetMs(2_000))))
       ])
       expect(outcome).toBeInstanceOf(Error)
       expect((outcome as Error).message).toMatch(/hoisted dependency/)
