@@ -16,6 +16,11 @@
 // packaging.test.ts (which keeps the yml negations honest against the lockfile);
 // if you change the resolution semantics here, check that test's copy too.
 //
+// The negations are matched against lockfile paths here, but electron-builder applies them to
+// the RE-HOISTED layout it packs, where a nested package can move to the top level (#548).
+// third-party-notices.test.ts checks that this set equals the packed one, so a package that
+// escapes a negation fails the gate instead of shipping without its notice.
+//
 // Deliberately OUT of scope (not "bundled npm deps"):
 //   - Electron itself: electron-builder ships Electron's own LICENSE.electron.txt +
 //     LICENSES.chromium.html beside the executable.

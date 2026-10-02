@@ -8,4 +8,5 @@ export interface ShippedPackage {
   lockPath: string
 }
 export declare const RENDERER_BUNDLED_DEV_DEPS: string[]
+export declare function builderFileNegations(repoRoot: string): RegExp[]
 export declare function computeShippedPackages(repoRoot: string): ShippedPackage[]
