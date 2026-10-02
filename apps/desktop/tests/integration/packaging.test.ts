@@ -1,9 +1,17 @@
 import { describe, it, expect } from 'vitest'
 import { readdirSync, readFileSync } from 'node:fs'
-import { join } from 'node:path'
+import { join, resolve } from 'node:path'
 import { parse } from 'yaml'
 // The glob → RegExp translation is shared with asar-unpack-closure.test.ts (#232).
 import { globToRegExp } from '../helpers/globs'
+import {
+  asarPackageDirs,
+  lockId,
+  packedNodeModules,
+  resolveLockPath,
+  type LockPackages,
+  type PackedPackage
+} from '../helpers/asar-layout'
 
 // L18 (audit-2026-06-13): @napi-rs/canvas is an OPTIONAL transitive dep of pdfjs-dist —
 // a platform-specific native `.node` (Skia) the app never imports. With
@@ -34,39 +42,18 @@ function loadBuilderConfig(): BuilderConfig {
   return parse(readFileSync(BUILDER_YML, 'utf8')) as BuilderConfig
 }
 
-interface LockPackage {
-  dependencies?: Record<string, string>
-  optionalDependencies?: Record<string, string>
-  peerDependencies?: Record<string, string>
-  peerDependenciesMeta?: Record<string, { optional?: boolean }>
-  dev?: boolean
-}
-
 /**
- * Walk the production dependency graph of apps/desktop exactly like electron-builder's
- * collector would (npm's node_modules resolution over package-lock entries), optionally
- * refusing to step INTO `mermaid`. The difference between the two closures is the set of
- * packages that exist ONLY because of mermaid.
+ * Walk the production dependency graph of apps/desktop over package-lock entries (npm's
+ * node_modules resolution), optionally refusing to step INTO `mermaid`. The difference between
+ * the two closures is the set of packages that exist ONLY because of mermaid. It answers WHICH
+ * packages ship; WHERE electron-builder puts them is `packedNodeModules` (#548).
  */
-function prodClosure(packages: Record<string, LockPackage>, skipMermaid: boolean): Set<string> {
-  const resolveDep = (fromPath: string, name: string): string | null => {
-    let p = fromPath
-    for (;;) {
-      const cand = (p ? p + '/' : '') + 'node_modules/' + name
-      if (packages[cand]) return cand
-      const i = p.lastIndexOf('/node_modules/')
-      if (i === -1) {
-        const root = 'node_modules/' + name
-        return p !== '' && packages[root] ? root : null
-      }
-      p = p.slice(0, i)
-    }
-  }
+function prodClosure(packages: LockPackages, skipMermaid: boolean): Set<string> {
   const rootDeps = packages['apps/desktop']?.dependencies ?? {}
   const seen = new Set<string>()
   const queue: string[] = []
   for (const d of Object.keys(rootDeps)) {
-    const r = resolveDep('apps/desktop', d)
+    const r = resolveLockPath(packages, 'apps/desktop', d)
     if (r) queue.push(r)
   }
   while (queue.length > 0) {
@@ -83,11 +70,16 @@ function prodClosure(packages: Record<string, LockPackage>, skipMermaid: boolean
       if (!entry.peerDependenciesMeta?.[d]?.optional) deps[d] = d
     }
     for (const d of Object.keys(deps)) {
-      const r = resolveDep(cur, d)
+      const r = resolveLockPath(packages, cur, d)
       if (r && !seen.has(r)) queue.push(r)
     }
   }
   return seen
+}
+
+/** Lockfile paths → their `name@version` identities (several copies may share one). */
+function idsOf(packages: LockPackages, lockPaths: Set<string>): Set<string> {
+  return new Set([...lockPaths].map((p) => lockId(packages, p)))
 }
 
 describe('electron-builder packaging excludes the @napi-rs/canvas native binary (L18)', () => {
@@ -191,13 +183,23 @@ describe('electron-builder packaging excludes pdfjs-dist standard fonts', () => 
 // mermaid must stay excluded, and nothing excluded may be needed by the production graph
 // outside mermaid (if a future dep starts using e.g. dayjs, the negation must be removed —
 // this goes red instead of the packaged app silently missing a runtime dep).
+//
+// #548: both checks run where electron-builder PACKS each package, not at its lockfile path. The
+// collector re-hoists the production graph and applies the negations there, so a package nested
+// under a negated parent can land at `node_modules/<name>` and ship past the parent's negation
+// (`tinyexec`, until #536). `packedNodeModules` (tests/helpers/asar-layout.ts) replays it.
 describe('electron-builder packaging excludes the never-imported mermaid chain', () => {
-  const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as {
-    packages: Record<string, LockPackage>
-  }
+  const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as { packages: LockPackages }
   const negations = (loadBuilderConfig().files ?? [])
     .filter((f) => f.startsWith('!') && !f.includes('@napi-rs'))
     .map((f) => globToRegExp(f.slice(1)))
+  const negated = (dir: string): boolean => negations.some((rx) => rx.test(dir + '/x.js'))
+  const needed = idsOf(lock.packages, prodClosure(lock.packages, true))
+  const mermaidOnly = new Set(
+    [...idsOf(lock.packages, prodClosure(lock.packages, false))].filter((id) => !needed.has(id))
+  )
+  const packed = packedNodeModules(lock.packages)
+  const label = (p: PackedPackage): string => `${p.dest} (${p.id})`
 
   it('mermaid itself and its parser are negated', () => {
     for (const p of ['node_modules/mermaid/dist/mermaid.js', 'node_modules/@mermaid-js/parser/x.js']) {
@@ -208,24 +210,83 @@ describe('electron-builder packaging excludes the never-imported mermaid chain',
     }
   })
 
-  it('every mermaid-only package in the lockfile is covered by a negation', () => {
-    const withMermaid = prodClosure(lock.packages, false)
-    const withoutMermaid = prodClosure(lock.packages, true)
-    const mermaidOnly = [...withMermaid].filter((p) => !withoutMermaid.has(p))
-    expect(mermaidOnly.length).toBeGreaterThan(50) // sanity: the chain is really in the lock
-    const uncovered = mermaidOnly.filter((p) => !negations.some((rx) => rx.test(p + '/x.js')))
-    expect(uncovered, 'mermaid-only packages missing a files negation').toEqual([])
+  it('every mermaid-only package is negated where app.asar would hold it (#548)', () => {
+    expect(mermaidOnly.size).toBeGreaterThan(50) // sanity: the chain is really in the lock
+    const shipped = packed.filter((p) => mermaidOnly.has(p.id) && !negated(p.dest))
+    expect(
+      shipped.map(label),
+      'mermaid-only packages that app.asar would ship — negate each one by its own name'
+    ).toEqual([])
   })
 
-  it('no negation covers a package the production graph needs WITHOUT mermaid', () => {
-    const withoutMermaid = prodClosure(lock.packages, true)
-    const wronglyExcluded = [...withoutMermaid].filter((p) =>
-      negations.some((rx) => rx.test(p + '/x.js'))
-    )
+  it('no negation removes a package the production graph needs WITHOUT mermaid', () => {
+    const wronglyExcluded = packed.filter((p) => needed.has(p.id) && negated(p.dest))
     expect(
-      wronglyExcluded,
+      wronglyExcluded.map(label),
       'these packages are needed by the production graph but excluded from app.asar — remove their negation'
     ).toEqual([])
+  })
+})
+
+// #548: the layout model itself. The two fixtures are the shapes that decide where a nested
+// package lands; the last check compares the model with a real build when one is pointed at.
+describe('the app.asar layout model (#548)', () => {
+  const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as { packages: LockPackages }
+
+  it('hoists a nested package to the top when only a dev package held that slot (the tinyexec escape)', () => {
+    // The pre-#536 shape: vitest 3's tinyexec 0.3 held the top-level slot, so @antfu/install-pkg's
+    // 1.2.4 sat nested under the negated `@antfu/` in the lockfile.
+    const packages: LockPackages = {
+      'apps/desktop': { name: 'app', dependencies: { streamdown: '^1.0.0' } },
+      'node_modules/streamdown': { version: '1.0.0', dependencies: { mermaid: '^1.0.0' } },
+      'node_modules/mermaid': { version: '1.0.0', dependencies: { '@antfu/install-pkg': '^1.0.0' } },
+      'node_modules/@antfu/install-pkg': { version: '1.0.0', dependencies: { tinyexec: '^1.0.0' } },
+      'node_modules/@antfu/install-pkg/node_modules/tinyexec': { version: '1.2.4' },
+      'node_modules/tinyexec': { version: '0.3.2', dev: true }
+    }
+    const antfu = globToRegExp('**/node_modules/@antfu/**')
+    // What the lockfile-path check saw…
+    expect(antfu.test('node_modules/@antfu/install-pkg/node_modules/tinyexec/x.js')).toBe(true)
+    // …and where electron-builder put it.
+    const tinyexec = packedNodeModules(packages).find((p) => p.id === 'tinyexec@1.2.4')
+    expect(tinyexec?.dest).toBe('node_modules/tinyexec')
+    expect(antfu.test(`${tinyexec?.dest}/x.js`)).toBe(false)
+  })
+
+  it('keeps a conflicting copy nested under its parent', () => {
+    const packages: LockPackages = {
+      'apps/desktop': { name: 'app', dependencies: { streamdown: '^1.0.0', 'react-markdown': '^1.0.0' } },
+      'node_modules/streamdown': { version: '1.0.0', dependencies: { marked: '^17.0.0', mermaid: '^1.0.0' } },
+      'node_modules/react-markdown': { version: '1.0.0', dependencies: { marked: '^17.0.0' } },
+      'node_modules/marked': { version: '17.0.6' },
+      'node_modules/mermaid': { version: '1.0.0', dependencies: { marked: '^16.0.0' } },
+      'node_modules/mermaid/node_modules/marked': { version: '16.4.2' }
+    }
+    const dests = Object.fromEntries(packedNodeModules(packages).map((p) => [p.id, p.dest]))
+    expect(dests['marked@17.0.6']).toBe('node_modules/marked')
+    expect(dests['marked@16.4.2']).toBe('node_modules/mermaid/node_modules/marked')
+  })
+
+  it('places only packages of the production graph', () => {
+    const all = idsOf(lock.packages, prodClosure(lock.packages, false))
+    const packed = packedNodeModules(lock.packages)
+    expect(packed.length).toBeGreaterThan(200)
+    expect(packed.filter((p) => !all.has(p.id)).map((p) => p.id)).toEqual([])
+  })
+
+  // Run it after a package build:
+  // HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts
+  const packedAsar = process.env.HILBERTRAUM_PACKED_ASAR
+  it.skipIf(!packedAsar)('names exactly the package directories of a real app.asar', () => {
+    const negations = (loadBuilderConfig().files ?? [])
+      .filter((f) => f.startsWith('!'))
+      .map((f) => globToRegExp(f.slice(1)))
+    const predicted = packedNodeModules(lock.packages)
+      .map((p) => p.dest)
+      .filter((dest) => !negations.some((rx) => rx.test(dest + '/x.js')))
+    expect(asarPackageDirs(resolve(__dirname, '..', '..', packedAsar!))).toEqual(
+      [...new Set(predicted)].sort()
+    )
   })
 })
 

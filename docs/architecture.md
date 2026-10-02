@@ -12085,14 +12085,14 @@ surviving source._
 ### §3 Follow-ups
 
 1. ~~PR C (`.github/dependabot.yml`) lands under this record.~~ Landed, §6.
-2. `ocr.test.ts` "a worker that fails at LOAD …" races a real `worker_threads` Worker against a
+2. ~~`ocr.test.ts` "a worker that fails at LOAD …" races a real `worker_threads` Worker against a
    fixed 2 s clock. Under full-suite load on this desk it once lost (`'hung'`) and passed on the
    re-run and 3 of 3 isolated runs. No DEP-6 package is on that path; the fixed clock is the
-   load-sensitive part.
-3. `packaging.test.ts` checks the mermaid exclusion against **lockfile** paths, but electron-builder
+   load-sensitive part.~~ Fixed with the `zim-client` race (#549), §8.
+3. ~~`packaging.test.ts` checks the mermaid exclusion against **lockfile** paths, but electron-builder
    26 lays a nested package out at the top of `app.asar`, past a negation written for its parent.
    That is how master shipped `tinyexec` (§5) without the test noticing. A check against the packed
-   layout, or against a real `app.asar` listing, would close it.
+   layout, or against a real `app.asar` listing, would close it.~~ Fixed (#548), §8.
 4. Vitest 5 (5.0.3 at the time) was offered and not taken. On top of everything in §5 it turns
    `clearMocks` on by default, fails unawaited async assertions and makes `vi.mock` hoisting strict.
 5. **streamdown 2.6** (first proposed in Dependabot's #541) drops the hard mermaid dependency: 113
@@ -12106,7 +12106,8 @@ surviving source._
    `mermaid`, and with it that lib. So the latent defect is ours: three tests call an ES2024 API
    under an ES2022 `lib`. Whoever takes streamdown 2.6 raises the `lib` (or adds
    `es2024.string`) first. Until then `@dependabot ignore streamdown minor version` (posted on
-   #543) keeps 2.6.x out of the production group.
+   #543) keeps 2.6.x out of the production group. **The `lib` half is fixed (#550, §8);** taking
+   streamdown 2.6 itself stays open, as its own change.
 
 ### §4 Suite parity
 
@@ -12284,7 +12285,73 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   and 3118). The same CDP smoke on the built app under the repo's Electron passed 10/10: PDF, DOCX
   and CSV text, and "Make searchable (OCR)" on a JPEG scan through the sandboxed rasterizer window,
   recognised word for word. **Not verified:** the packaged exe at runtime (pdf.js and its worker
-  loading from `app.asar`); the Documents list's scrolling on react-virtual 3.14.13.
+  loading from `app.asar`), still open on #551; the Documents list's scrolling on react-virtual
+  3.14.13, since verified (§8).
+
+### §8 The DEP-6 residuals #548–#551 (`fix/dep6-residuals-548-551`)
+
+- **#548: the packaging gates check the layout electron-builder packs.** Its npm collector does not
+  copy the lockfile layout. It reads `npm list --omit dev` (one node per `name@version`; edges are
+  `dependencies` + `optionalDependencies`; children in npm's alphabetical order), re-hoists that
+  graph with Yarn's hoister (`app-builder-lib/out/node-module-collector/hoist`), and matches the
+  `files:` negations against each package's destination (`moduleFullFilePath`), not its source
+  path. `tests/helpers/asar-layout.ts` (`packedNodeModules`) replays this with electron-builder's own
+  hoister. On a fresh `package:win` of master `12ec7bd0` it names the archive's 226 package
+  directories exactly; on the pre-#536 lockfile it reports `node_modules/tinyexec`
+  (`tinyexec@1.2.4`), the escape the lockfile-path check passed. Order matters, because the hoister
+  breaks ties by input order. `marked` is one: streamdown needs 17.0.6 and mermaid 16.4.2, one
+  dependent each. In npm's order 17.x takes the top slot and mermaid's copy stays under the
+  negated `mermaid/`; in reverse order 16.x would ship. `packaging.test.ts` now runs the mermaid
+  checks on packed destinations, pins the model with two fixtures (the tinyexec shape; a
+  conflicting copy staying nested), and compares it with a real build when
+  `HILBERTRAUM_PACKED_ASAR` names one (`packaging.md`). Two sibling gates made the same assumption.
+  `third-party-notices.test.ts` now requires the notices' shipped set to equal the packed set:
+  before #536 the Kit shipped `tinyexec` 1.2.4 (MIT) without its notice, and on that tree the check
+  reports exactly that package. `asar-unpack-closure.test.ts` also checks each worker module at its
+  packed destination, not only at the two guessed ones.
+- **#549: two load races, fixed by the clock's shape, not its size.** Both widening helpers act on
+  CI only, and both flakes lost at a desk. `ocr.test.ts`'s hang clock now starts at the failing
+  worker's `'exit'`. The engine rejects on its `'error'`, which comes first, so thread start-up no
+  longer counts. A worker that takes 3 s to fail reproduces the reported failure on the old test
+  and passes the new one; an engine that never hooks the worker still fails in 2.1 s. The issue's
+  premise for `zim-client` was off: the T19 block's per-attempt total was the shrunk 300 ms, not
+  4 s, and it sat under the default 1 s idle timer, the reverse of production (1 s idle inside 4 s).
+  The block now runs production's shape: a 300 ms idle timer, which only the headers arm, inside a
+  3 s total. A 500 ms freeze in the fixture server failed 6 of the block's 8 tests on the old shape
+  ((b), plus the unreported (a), (d), (d2), (e) and (f)) and none on the new. Cost: (a) sits out one
+  3 s total. Same class, not seen failing, left as is: the D-Z22 block's (3b) drips every 75 ms
+  under a 150 ms idle timer, so a freeze of more than about 150 ms between two chunks would cut it.
+  A third case came out of a later full run: `dictation-ipc.test.ts` "a wedged child …" hung for its
+  whole 120 s budget. The handler arms its 30 ms deadline before awaiting the WAV write, and the
+  fake only waited for a future `'abort'` event. A deadline that fired during the write therefore
+  left it unsettled for good. Its earlier 15 s and 60 s timeouts, put down to starved runners, fit
+  this too. The fake now checks `signal.aborted` first, as the real transcriber does
+  (`transcriber/cli.ts`). With a 1 ms deadline the old fake hung 3 of 3 times; the new one passed
+  5 of 5. A read-only sweep of the other test fakes that subscribe to `'abort'` found none exposed.
+  It also found two minor production gaps, not fixed here: `zim/serve.ts` misses a caller's cancel
+  that lands during its `await this.stop()`, and `model-slot-arbiter.ts` can miss an abort in the
+  microtask after the handoff. Both leave the release to the caller's `finally`; neither hangs.
+- **#550: the `lib` is ES2024 in both programs.** Every runtime has ES2024: Electron 43 (Node 24,
+  Chromium 150) and Node 22.12, the engines floor that runs the tests and `out/tools`. ES2025 is
+  not available everywhere (Node 22 lacks `Promise.try` and `RegExp.escape`). With type-fest's
+  `esnext` reference removed, as streamdown 2.6's tree removes it, ES2022 gives exactly the three
+  `isWellFormed` errors and ES2024 gives none, in both programs. Until streamdown 2.6 lands, the web
+  program still gets `esnext` by accident. Taking 2.6 (`@dependabot unignore streamdown`, then
+  shrinking the mermaid block, its tests and the DEP-3 notes) stays its own change.
+- **#551: the manual checks.** *Documents list:* a CDP harness drove the built app under the repo
+  Electron (320 documents, 20 of them failed rows). After every frame or step it checked that rows
+  are contiguous, that the viewport has no blank band, and that a row under the viewport moves by
+  exactly the requested scroll delta. Scenarios: fast scrolling both ways, wheel steps into
+  unmeasured rows, a narrow window, the name filter, and the "Recently added" order.
+  react-virtual 3.14.13 and the previous 3.14.4 (renderer rebuilt from the integrity-checked old
+  tarballs) gave identical figures: 24/24, a maximum deviation of 2.0–2.4 px, and 259.2 px of
+  scroll compensation. Titles ellipsize rather than wrap, so a row changes height with its state.
+  A failed scan row placed mid-viewport (100.4 px) shrank in place to 56.0 px when its
+  **Make searchable (OCR)** button ran a real OCR job. The rows above did not move, the rows below
+  moved by exactly −44.4 px, and the list stayed contiguous (11/11). *Packaged exe:* Smart App Control still blocks a fresh unsigned
+  `package:win` (CodeIntegrity 3077/3118). The built app under the repo Electron passed the DEP-6
+  smoke 10/10 again: PDF, DOCX and CSV text on pdf.js 6.3, and OCR through the rasterizer window.
+  pdf.js running from inside `app.asar` stays open on #551.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

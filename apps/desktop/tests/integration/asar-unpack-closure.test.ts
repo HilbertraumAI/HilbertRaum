@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { builtinModules, createRequire } from 'node:module'
-import { join, sep } from 'node:path'
+import { join, relative, sep } from 'node:path'
 import { parse } from 'yaml'
+import { lockId, packedNodeModules, type LockPackages } from '../helpers/asar-layout'
 import { globToRegExp } from '../helpers/globs'
 import { TESSERACT_WORKER_ENTRY } from '../../src/main/services/ocr/tesseract'
 
@@ -114,6 +115,29 @@ describe('asarUnpack closure — the tesseract.js worker require graph (#232)', 
     // Print the offenders by package so the fix is a glob per line, not a guess.
     const offendingPackages = [...new Set(uncovered.map(packageOf))].sort()
     expect(offendingPackages, `uncovered by asarUnpack: ${uncovered.join(', ')}`).toEqual([])
+  })
+
+  // #548: the two candidates above are a guess at electron-builder's layout. This checks the place
+  // its hoister actually gives each package, which can also be under a different parent.
+  it('every module the worker can require is unpacked at the destination electron-builder packs it to', () => {
+    const repoRoot = join(APP_DIR, '..', '..')
+    const lock = JSON.parse(readFileSync(join(repoRoot, 'package-lock.json'), 'utf8')) as {
+      packages: LockPackages
+    }
+    const packed = packedNodeModules(lock.packages)
+    const uncovered: string[] = []
+    for (const file of files) {
+      const lockRel = relative(repoRoot, file).split(sep).join('/')
+      const m = /^(.*node_modules\/(?:@[^/]+\/)?[^/]+)\/(.+)$/.exec(lockRel)
+      expect(m, `${lockRel} is inside a package`).not.toBeNull()
+      const id = lockId(lock.packages, m![1])
+      const dests = packed.filter((p) => p.id === id).map((p) => p.dest)
+      expect(dests, `${id} is packed`).not.toEqual([])
+      for (const dest of dests) {
+        if (!covered(`${dest}/${m![2]}`)) uncovered.push(`${dest}/${m![2]}`)
+      }
+    }
+    expect(uncovered).toEqual([])
   })
 
   it('unresolved specifiers are only the known optional try/catch deps (a new one fails the walk)', () => {

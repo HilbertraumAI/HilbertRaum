@@ -318,13 +318,12 @@ describe('registerDictationIpc', () => {
   // REL-3 (TEST-4): a wedged child must not hang the mic spinner forever — the wall-clock
   // ceiling aborts it (→ kills the whisper child) and the renderer gets the friendly copy.
   //
-  // Explicit 120 s timeout — the #84/#97/#101/vault-lock-cipher starved-runner class, second
-  // occurrence for this test: PR #100's run flaked it at the old 15 s budget (pure fork
-  // starvation, windows leg only), and the 2026-08-09 master push run 31337902509 (version-
-  // bump-only diff, PR-green same content, 3/4 legs green) blew even the 60 s CI budget on
-  // windows/24.x while the leg ran ~2× the ubuntu legs. The test's OWN ceiling is the
-  // injected 30 ms maxDurationMs below — every assertion is semantic, so the wide budget
-  // loosens nothing; it only outlasts a frozen runner.
+  // The timeouts this test hit (15 s on PR #100, 60 s on master run 31337902509, 120 s at a desk
+  // in wave DEP-6) were a hang in the fake, not a starved runner (#549). The handler arms its
+  // 30 ms deadline BEFORE awaiting the WAV write, so under load the signal can be aborted before
+  // `transcribe` runs; a fake that only waits for a future 'abort' event then never settles. It
+  // now checks `signal.aborted` first, as the real whisper transcriber does
+  // (services/transcriber/cli.ts). With a 1 ms deadline the old fake hung 3 of 3 times.
   it('a wedged child rejects on the wall-clock timeout, not a hang (REL-3)', async () => {
     const workspacePath = freshWorkspacePath()
     // Only settles when the dictation timeout aborts the signal (mimics a killed child).
@@ -332,11 +331,9 @@ describe('registerDictationIpc', () => {
       id: 'wedged',
       transcribe: (_filePath: string, opts: TranscribeOptions) =>
         new Promise<never>((_resolve, reject) => {
-          opts.signal?.addEventListener(
-            'abort',
-            () => reject(new Error('Transcription was cancelled.')),
-            { once: true }
-          )
+          const cancelled = (): void => reject(new Error('Transcription was cancelled.'))
+          if (opts.signal?.aborted) cancelled()
+          else opts.signal?.addEventListener('abort', cancelled, { once: true })
         })
     }
     registerDictationIpc(ctxWith(workspacePath, transcriber).ctx, { maxDurationMs: 30 })

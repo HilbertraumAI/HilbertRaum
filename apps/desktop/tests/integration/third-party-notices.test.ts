@@ -2,8 +2,13 @@ import { describe, it, expect } from 'vitest'
 import { existsSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
-import { computeShippedPackages } from '../../../../scripts/lib/shipped-packages.mjs'
+import {
+  builderFileNegations,
+  computeShippedPackages,
+  RENDERER_BUNDLED_DEV_DEPS
+} from '../../../../scripts/lib/shipped-packages.mjs'
 import { KNOWN_EXTRA_NOTICES, LEPTONICA_LICENSE } from '../../../../scripts/lib/extra-notices.mjs'
+import { packedNodeModules, type LockPackages } from '../helpers/asar-layout'
 
 // LIC-2 (full-audit 2026-07-12, owner-approved): packaged builds bundle ~226 npm packages
 // (app.asar production closure + the Vite-inlined renderer libs, which are a subset of it) —
@@ -39,6 +44,25 @@ describe('THIRD-PARTY-NOTICES.md ships and stays fresh (LIC-2)', () => {
       listed,
       `THIRD-PARTY-NOTICES.md is STALE (shipped dependency set changed) — ${REGEN}`
     ).toEqual(computed)
+  })
+
+  // #548: the notices decide "shipped" from lockfile paths minus the negations, while
+  // electron-builder applies the negations to the RE-HOISTED layout it packs. Before #536 the two
+  // disagreed: app.asar carried tinyexec 1.2.4, which the notices left out with the mermaid chain.
+  it('names exactly the packages electron-builder packs into app.asar (#548)', () => {
+    const lock = JSON.parse(readFileSync(join(REPO_ROOT, 'package-lock.json'), 'utf8')) as {
+      packages: LockPackages
+    }
+    const negations = builderFileNegations(REPO_ROOT)
+    const packed = packedNodeModules(lock.packages)
+      .filter((p) => !negations.some((rx) => rx.test(p.dest + '/x.js')))
+      .map((p) => p.id)
+    const noticed = computeShippedPackages(REPO_ROOT)
+      .filter((p) => !RENDERER_BUNDLED_DEV_DEPS.includes(p.name))
+      .map((p) => `${p.name}@${p.version}`)
+    expect(noticed.sort(), 'the notices and app.asar disagree about what ships').toEqual(
+      [...new Set(packed)].sort()
+    )
   })
 
   it('every shipped package has its own license section', () => {

@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-02 — the closed 2026-09-27 #518 fixtures entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-02 (preamble budget, making room for the #548–#551 entry). PR #522 is merged
+(2026-09-27) and issue #518 closed; the re-captured fixtures and their provenance notes are in the repo. Citations of the
+form "BUILD_STATE 2026-09-27 entry" for the #518 fixtures now resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-27 — **#518 — the `--list-devices` and vision SSE fixtures re-captured on the b11146 pin (`fix/518-recapture-fixtures-b11146`, F-40).**
+K: test drive, i9-14900K / RTX 3080 Ti: `list-devices-b11146-vulkan-rtx3080ti.txt` now lists two devices (the card, 12,084 / 11,316 MiB,
+and the UHD 770 iGPU, which `looksIntegrated` sorts) and `vision/vision-sse-b11146.txt` (a synthetic "Müller & Söhne" invoice, `<drive>`
+redacted) replaces the b9585 samples; assertions and provenance notes moved with them. Closes §5 item 7 TS-3 (h). Open: none._
+
 ## 2026-10-02 — the closed 2026-09-18 #478 table-delivery entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-02 (preamble budget, making room for the DEP-6 entry). PR #479 is merged (2026-09-19)

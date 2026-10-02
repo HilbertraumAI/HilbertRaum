@@ -1,10 +1,13 @@
 {
   // Renderer (browser context) + the test suite (renderer tests use jsdom/RTL; service
   // tests import main code, which type-checks fine here too). DOM lib is available.
+  // ES2024: see tsconfig.node.json. While streamdown 2.5 is installed this program also gets
+  // `esnext` by accident (streamdown → mermaid → type-fest's `/// <reference lib="esnext"/>`),
+  // so an ES2025 API type-checks here and breaks once that chain goes (#550).
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
-    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "lib": ["ES2024", "DOM", "DOM.Iterable"],
     "jsx": "react-jsx"
   },
   "include": ["src/renderer", "tests"]
