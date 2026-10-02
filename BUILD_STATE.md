@@ -28,6 +28,11 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (`fix/dep6-lockfile-patch-batch`, PR A of three).**
+Lockfile-only through the pinned npm 11.6.2, no collateral: undici 6.29.0 / 7.30.0, brace-expansion ×7, fast-uri 3.1.8 and dompurify
+3.4.16 clear alerts 96, 97 and 102–123. All are dev toolchain or not shipped (dompurify absent from `out/` and `app.asar`); alert 104's
+`BalancedPool` is unused and the app's own `fetch` is Electron's undici 7.29.1. `npm audit` 7 → 3. Record: `architecture.md` "Dependabot
+triage — design record (wave DEP-6)". Open: PR B, vitest 3.2.6 → 4.1.11 (alerts 91/92/94); PR C, `.github/dependabot.yml` (§5 18(a))._
 _2026-10-01 — **DEP-5 — Electron 43.4.0 → 43.7.7 clears the four high Dependabot alerts 98–101 (`fix/dependabot-electron-43-7-7`).**
 Three are unreachable here (no custom protocol, no `<webview>`, every window denies popups); the preload-cache one (alert 98) needs a
 renderer exploit first. Lockfile-only; Node 24.21.0, SQLite 3.53.4. Suite parity, the sqlite tests under Electron itself, a packaged
@@ -139,17 +144,6 @@ bounded by the prefix) — but the plan call DECODES 53–71 tokens, so the whol
 expander untouched. The trap inverted: `forcing full` DID
 appear on the non-MTP 9B start. The retired #399 entry's "#447 … bounded by inference" sentence is frozen in `build-log.md`;
 this entry supersedes it._
-_2026-09-18 — **Table delivery (issue #478, draft PR #479, `feat/zim-deliver-tables`) — READ DONE, six floors hold,
-table-delivery endpoint VOID.** `html.ts` parses a kept `<table>` into a bounded grid of retrievable "key: value"
-units instead of dropping it (`tables.ts`; design `rag-design.md` §17 "Table delivery"). The one authorised `core200`
-acceptance read ran: all six PR-B floors PASS — the measured acceptance of this change. The pre-registered `tables32`
-delivery endpoint is void — neither a pass nor a miss: its identification script required every line of a captured
-unit's own text to be table-introduced, while the chunking step delivers single-line units (0 of 32,257 captured units
-contains a literal newline), so the script could only return 0 for any input and never tested the hypothesis; the
-scored result of record stays 0 of 32. This is not a precedent for setting aside an endpoint whose instrument worked.
-Four pre-read Opus fix passes landed before the read; CI green at the read's head. The change stays a draft until the
-maintainer marks it ready.
-
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -190,7 +184,8 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 2026-09-27 (preamble budget, making room for the #515 entry), and the closed 2026-09-13 #460 test-harness entry on
 2026-09-27 (preamble budget, making room for the #517 scorer entry), and the closed 2026-09-13 #467 entry on 2026-10-01
 (preamble budget, making room for the #527 entry), and the closed 2026-09-18 #444 Documents-declutter entry on
-2026-10-01 (preamble budget, making room for the #530 entry) — citations of the form "BUILD_STATE <date> entry" /
+2026-10-01 (preamble budget, making room for the #530 entry), and the closed 2026-09-18 #478 table-delivery entry on
+2026-10-02 (preamble budget, making room for the DEP-6 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

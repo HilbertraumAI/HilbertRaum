@@ -12036,7 +12036,67 @@ a real workspace, so scratch roots were used); the first-paint cost on slower ha
 3. Unchanged and not in this wave: `.github/dependabot.yml` (DEP-4 §5 item 1); Electron 44 (item
    4); the medium vitest alerts 91 / 92 / 94, which need vitest 3.2.6 → 4.1.11, a major;
    `npm audit` also flags brace-expansion, undici and fast-uri (dev toolchain) and dompurify (not
-   shipped, DEP-3 §1).
+   shipped, DEP-3 §1). All of item 3 is picked up by wave DEP-6 (record below).
+
+## Dependabot triage — design record (wave DEP-6)
+
+_Wave DEP-6 (2026-10-02) clears what DEP-5 left: **14 open** Dependabot alerts (1 high, 8 medium,
+5 low) and **13 auto-dismissed** ones (7 high, 6 medium), which together are the 7 packages
+`npm audit` flagged on master `70b635d0`. Three PRs: **A**, the lockfile-only patch batch
+(undici, brace-expansion, fast-uri, dompurify); **B**, vitest 3.2.6 → 4.1.11, a major, kept apart
+because a test-runner change can quietly change what the suite proves; **C**, the
+`.github/dependabot.yml` that DEP-4 approved (D-4). Every alert is patched, reachable or not; the
+verdicts below say which were reachable. The working notes were git-ignored; this record is the
+surviving source._
+
+### §1 Alert ledger + dispositions
+
+| Alerts | Package (locked → fixed) | Scope | Disposition + verdict |
+|---|---|---|---|
+| alert 104 (high, open) | undici 7.29.0 → **7.30.0** (two copies: jsdom `^7.25.0`; @electron/get `^7.24.4`, an optional dep) | development | **Fixed (PR A). Unreachable.** GHSA-w293-vg96-wgc3: `BalancedPool` drops a function-valued `connect`/`tls` option, so a custom `checkServerIdentity` is skipped. Nothing in `node_modules` outside undici itself uses `BalancedPool` (DEP-5), and the app's own `fetch` is the undici built into Electron's Node, **7.29.1** on 43.7.7 (read off the binary again for this wave), the first patched version. |
+| alerts 103, 105, 106, 111, 112 (open: 3 low, 2 medium); 97, 102, 107, 109 (auto-dismissed: 1 high, 3 medium) | undici 7.29.0 → **7.30.0** (the same two copies) | development | **Fixed (PR A). Unreachable.** Each class needs undici talking to a hostile server: WebSocket subprotocol, permessage-deflate and `WebSocketStream` close handling, unbounded decompression, the retry, dump and cache interceptors, shared-cache `Set-Cookie`. jsdom is the vitest renderer environment only, and the tests talk to no server. @electron/get loads undici only in `dist/proxy.js`, for `EnvHttpProxyAgent` when a proxy environment variable is set while the Electron binary downloads from GitHub over TLS. Nothing ships: the built `out/` has no undici at all. |
+| alert 110 (open, low); 96, 108 (auto-dismissed: 1 high, 1 medium) | undici 6.28.0 → **6.29.0** (electron-builder → @electron/rebuild → node-gyp `^6.25.0`) | development | **Fixed (PR A). Never executed here.** node-gyp only runs when electron-builder rebuilds a native addon, and `electron-builder.yml` sets `npmRebuild: false` (the app has none: `node:sqlite` is built into Electron and no package in the tree carries a `binding.gyp`). |
+| alerts 119–121 (open, medium); 113–118 (auto-dismissed, high) | brace-expansion, all seven copies: 1.1.18 → **1.1.21** (×3), 2.1.4 → **2.1.7** (×3), 5.0.9 → **5.0.12** | development | **Fixed (PR A). Unreachable.** GHSA-q2hr-2g5m-vwhr (quadratic `{a},b}` rewrite), GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (recursion stack exhaustion): CPU and stack denial of service on a crafted pattern. The callers are minimatch/glob under @electron/asar, @electron/universal, dir-compare, filelist (ejs → jake) and test-exclude (coverage), whose patterns come from this repo's own config. |
+| alert 122 (auto-dismissed, medium) | fast-uri 3.1.7 → **3.1.8** (app-builder-lib → ajv `^3.0.1`) | development | **Fixed (PR A). Unreachable.** GHSA-hrr3-gc8f-f4qj: a percent-encoded host in a scheme-relative reference escapes case folding, so a case-sensitive host allowlist can be evaded. ajv uses fast-uri to resolve the `$id`s of electron-builder's own config schema; no host decision is made on it. |
+| alert 123 (open, low) | dompurify 3.4.13 → **3.4.16** (streamdown → mermaid `^3.3.3`) | runtime (npm graph) | **Fixed (PR A). Not shipped, re-verified.** GHSA-p98j-92pf-mc4p needs `IN_PLACE` plus an `afterSanitize*` hook that removes a node; DOMPurify is called nowhere in the app (the markdown sanitizer is rehype-sanitize). The DEP-3 §1 proof was redone on the bumped tree: no `dompurify`/`DOMPurify` in the built `out/`, and the package is absent from the packaged `app.asar` (`!**/node_modules/dompurify/**` in `electron-builder.yml`, pinned by `packaging.test.ts`); the mermaid-fence pin in `assistant-markdown.test.tsx` still passes. |
+| alerts 91, 92, 94 (open, medium) | vitest + @vitest/mocker 3.2.6 → 4.1.11 (direct devDependencies; @vitest/coverage-v8 moves with them) | development (test runner) | **Open: PR B.** GHSA-82fw-gwwq-j7x9: a redirect mock registered over the Vite dev server's WebSocket reads any file. Unreachable here: the suite only runs `vitest run` in the node and jsdom environments, with no browser mode and no dev server. |
+
+### §2 Wave facts (PR A)
+
+- **Mechanism:** `npm update <pkg> --package-lock-only`, one package at a time, through the
+  pinned npm 11.6.2 (`packageManager`; the local npm is 11.17 and `npx` is blocked, so a packed
+  copy ran from the scratchpad). No `npm audit fix`, no lockfile regeneration, no `overrides`, no
+  manifest edit.
+- **Lockfile diff:** exactly the 12 targeted entries, three lines each (version, resolved,
+  integrity; 36 + / 36 −), every integrity equal to the registry's. **No collateral.** undici lands
+  on 7.30.0 / 6.29.0, the newest its parents' ranges allow; the first patched 7.29.1 / 6.28.1
+  would have needed `overrides`. Both are backport-only releases (decompression backpressure, HTTP/2
+  WebSocket close, retry body settlement, diagnostics), with no API change.
+- **THIRD-PARTY-NOTICES.md:** not regenerated. No shipped package moved (the mermaid chain is
+  excluded from the notices by design), and the freshness test passes unchanged.
+- **Gates:** fresh `npm ci`, typecheck, build, full suite at baseline parity (§4). `npm audit`:
+  7 → **3**, the vitest trio PR B clears.
+
+- **Not shipped, measured on the bumped tree:** the built `out/` has no `dompurify`, `DOMPurify` or
+  `undici` text. A fresh `package:win` `app.asar` (4,234 entries) has no `dompurify`, `undici`,
+  `brace-expansion`, `fast-uri`, `mermaid`, `vitest` or `jsdom` entries, and none of its JS or HTML
+  contains DOMPurify text. As a positive control, the same listing does find `yaml`, `pdfjs-dist`,
+  `streamdown` and `rehype-sanitize`.
+
+### §3 Follow-ups
+
+1. PR B (vitest 4.1.11) and PR C (`.github/dependabot.yml`) land under this record.
+2. `ocr.test.ts` "a worker that fails at LOAD …" races a real `worker_threads` Worker against a
+   fixed 2 s clock. Under full-suite load on this desk it once lost (`'hung'`) and passed on the
+   re-run and 3 of 3 isolated runs. No DEP-6 package is on that path; the fixed clock is the
+   load-sensitive part.
+
+### §4 Suite parity
+
+Baseline on master `70b635d0` (fresh `npm ci`): 478 files (453 passed / 25 skipped), 7,898 passed /
+86 skipped / 7,985, the real-Electron `evidence-pack-pdf-smoke` 8/8 included. **PR A**, after a fresh
+`npm ci`: the same totals and identical per-file passed and skipped counts for all 478 files (the
+first run lost the §3 item 2 race; the counted run is the second).
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
