@@ -94,6 +94,9 @@ export function generateDataKey(): Buffer {
  * denial-of-service on the vault. Tampering cannot disclose data (a wrong
  * key still fails the verifier); these bounds just keep the failure mode sane.
  */
+/** Upper bound for a descriptor's argon2id `m`, in KiB (2 GiB). */
+const ARGON2_MAX_M_KIB = 2 ** 21
+
 function validateKdfBounds(params: KdfParams): void {
   if (params.keyLen !== 32) {
     throw new Error(`KDF keyLen must be 32 (AES-256), got ${String(params.keyLen)}`)
@@ -106,7 +109,7 @@ function validateKdfBounds(params: KdfParams): void {
   }
   if (params.algo === 'argon2id') {
     const { m, t, p } = params
-    if (!m || !t || !p || m < 8 || m > 2 ** 21 || t < 1 || t > 64 || p < 1 || p > 16) {
+    if (!m || !t || !p || m < 8 || m > ARGON2_MAX_M_KIB || t < 1 || t > 64 || p < 1 || p > 16) {
       throw new Error('argon2id parameters out of bounds (descriptor may be corrupt or tampered)')
     }
   }
@@ -137,7 +140,15 @@ export function deriveKey(password: string, salt: Buffer, params: KdfParams = DE
     }
     validateKdfBounds(params)
     // Pure-JS, audited @noble/hashes — no native build. m = memory (KiB), t = iterations.
-    const out = argon2id(password, salt, { m: params.m, t: params.t, p: params.p, dkLen: params.keyLen })
+    // `maxmem` (bytes) is set at the bound above: @noble/hashes 2.4 lowered its default to
+    // 1 GiB, which would refuse descriptors that validateKdfBounds accepts.
+    const out = argon2id(password, salt, {
+      m: params.m,
+      t: params.t,
+      p: params.p,
+      dkLen: params.keyLen,
+      maxmem: ARGON2_MAX_M_KIB * 1024
+    })
     return Buffer.from(out)
   }
   throw new Error(`Unsupported KDF algorithm: ${String(params.algo)}`)

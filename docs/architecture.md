@@ -12232,6 +12232,60 @@ DEP-6 were six hand-rolled batches. What the file does, and why:
 Validated against the SchemaStore `dependabot-2.0` schema before it landed (a deliberately broken
 copy failed); GitHub's own parse runs once it is on `master`.
 
+### §7 Dependabot's first production group (#545): pdf.js 6.3 and six more
+
+Dependabot's #545 (after `@dependabot ignore streamdown minor version`, §3 item 5) carried seven
+shipped packages: `pdfjs-dist` 6.2.108 → 6.3.289, `mammoth` 1.12.0 → 1.12.3, `papaparse` 5.5.3 →
+5.7.0, `@noble/hashes` 2.2.0 → 2.4.0, `@tanstack/react-virtual` 3.14.4 → 3.14.13 (+ `virtual-core`),
+`jszip` 3.10.1 → 3.10.2, `yaml` 2.9.0 → 2.9.1. Its lockfile is byte-identical to what the pinned
+npm 11.6.2 writes, every integrity matches the registry, and nothing else moved. Its manifest floors
+rose to those versions (§6); they are the versions this section verified. Landed as a replacement
+PR on top of Dependabot's commit. What the review found, none of it visible to CI:
+
+- **`getMarkInfo()` returns a `Map` since pdf.js 6.3** (upstream #21834; the 6.3 typings still
+  declare an object, so typecheck cannot see it). The real-Electron `evidence-pack-pdf-smoke` read
+  `markInfo?.Marked` and its tagged-PDF check failed; CI skips that file. The reader now takes both
+  shapes. The app itself calls none of the getters 6.3 turned into Maps or Sets.
+- **The bundled Liberation Sans fonts are GPL v2, not OFL.** `pdfjs-dist/standard_fonts/` holds
+  Liberation Sans **1.07.4** (pdf.js corrected `LICENSE_LIBERATION` from OFL 1.1 to the 1.07.4
+  licence, upstream commit `4315a4be31`; the font files are byte-identical in 6.2 and 6.3). That
+  licence is GPL v2 with exceptions, one of them for distribution "in a physical product", and
+  every Kit build so far shipped those files in `app.asar` under an OFL notice. pdf.js reads them
+  only through `standardFontDataUrl`, which the app never sets. **Owner ruling: exclude them.**
+  `electron-builder.yml` negates `**/node_modules/pdfjs-dist/standard_fonts/**`, `packaging.test.ts`
+  pins the glob and that no source sets `standardFontDataUrl`, and the notices generator now skips
+  license files inside excluded paths (`builderFileNegations`, `scripts/lib/shipped-packages.mjs`).
+- **The notices generator borrowed KaTeX's OFL text from pdf.js.** It copied the OFL 1.1 body for
+  the KaTeX fonts out of that same `LICENSE_LIBERATION`, and skipped it silently once the file
+  changed. The text is now pinned in `scripts/lib/extra-notices.mjs` (`OFL_1_1_LICENSE`), equal to
+  what the notices published before except two dashes that file had lost to an encoding error. Net
+  notices change: the seven version labels, pdf.js's `standard_fonts/` licenses gone, its `qcms`
+  license now MIT (an upstream correction), one KaTeX line reworded.
+- **`@noble/hashes` 2.4 caps argon2id memory at 1 GiB by default** (2.2 did not), while the vault's
+  descriptor bound allows 2 GiB. `deriveKey` now passes `maxmem` at the bound (one constant,
+  `ARGON2_MAX_M_KIB`). The default KDF derives the same key on 2.2.0 and 2.4.0 (three known-answer
+  vectors); `crypto.test.ts` pins one, `crypto-argon2-maxmem.test.ts` pins the option.
+- **pdf.js 6.3 no longer needs `DOMMatrix` at import** (upstream #21721, the cause of the old
+  packaged-drive failure). The polyfill stays; its comments now say why.
+- **The other packages:** `mammoth` brings fixes against crafted DOCX (prototype pollution, regex
+  backtracking); `yaml` limits recursive merge aliases (skill manifests are user-supplied);
+  `papaparse`'s delimiter-detection change is moot (the app pins the delimiter); `jszip` is a type
+  detection fix; `react-virtual` fixes row measurement and scroll drift in the Documents list (not
+  checked visually).
+- **Verification:** fresh `npm ci`, typecheck, build, full suite **479 files, 7,903 passed / 86
+  skipped / 7,990**, which is PR B's tree plus the four new tests, per-file counts otherwise
+  identical. The first run lost a `zim-client` timing race; the counted run is the second. The
+  real-Electron PDF smoke passed 8/8 with the Map-aware reader. The real-data PDF gold set gave
+  **identical** results on 6.2.108 and 6.3.289: 80/85 rows, 2/3 statements complete, 0
+  over-extracted. The `package:win` `app.asar` has no `standard_fonts/` entry and keeps pdf.js's
+  build, wasm and cmaps. The other entry changes are `@noble/hashes` and `jszip` no longer
+  publishing source maps, and the rebuilt renderer chunks. The packaged exe itself could not be
+  started: Smart App Control blocked the freshly built unsigned binary (CodeIntegrity events 3077
+  and 3118). The same CDP smoke on the built app under the repo's Electron passed 10/10: PDF, DOCX
+  and CSV text, and "Make searchable (OCR)" on a JPEG scan through the sandboxed rasterizer window,
+  recognised word for word. **Not verified:** the packaged exe at runtime (pdf.js and its worker
+  loading from `app.asar`); the Documents list's scrolling on react-virtual 3.14.13.
+
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
 _The 2026-08-18 wave that made the loaded chat model available to **other programs on the same

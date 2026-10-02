@@ -5,7 +5,7 @@ import {
 } from '../../src/main/services/ingestion/parsers/dommatrix-polyfill'
 
 // Guards the "DOMMatrix is not defined" PDF-import failure from a packaged drive: pdfjs-dist
-// v6 evaluates `new DOMMatrix()` at import time and, in Node, only polyfills it from
+// 6.0–6.2 evaluated `new DOMMatrix()` at import time (6.3 does it lazily) and, in Node, only polyfills it from
 // `@napi-rs/canvas`, which we exclude from the bundle. The parser installs this pure-JS
 // matrix first. These tests pin (a) the math pdf.js relies on and (b) the install contract.
 

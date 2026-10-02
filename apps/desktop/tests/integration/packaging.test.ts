@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { parse } from 'yaml'
 // The glob → RegExp translation is shared with asar-unpack-closure.test.ts (#232).
@@ -135,6 +135,52 @@ describe('electron-builder packaging excludes the @napi-rs/canvas native binary 
     ]) {
       expect(rx.test(p), `exclusion should match ${p}`).toBe(true)
     }
+  })
+})
+
+// Wave DEP-6: pdfjs-dist's standard_fonts/ does not ship. pdf.js reads those files only
+// through `standardFontDataUrl`, which the app never sets, and the LiberationSans files in
+// it are Liberation 1.07.4 under GPL v2 with a physical-product clause (pdfjs-dist 6.3
+// corrected their notice from OFL). Starting to load standard fonts means revisiting both.
+describe('electron-builder packaging excludes pdfjs-dist standard fonts', () => {
+  const exclusion = (loadBuilderConfig().files ?? []).find(
+    (f) => f.startsWith('!') && f.includes('pdfjs-dist/standard_fonts')
+  )
+
+  it('negates standard_fonts/ and nothing else of pdfjs-dist', () => {
+    expect(exclusion, 'expected a "!**/node_modules/pdfjs-dist/standard_fonts/**" exclusion').toBeTruthy()
+    const rx = globToRegExp(exclusion!.slice(1))
+    for (const p of [
+      'node_modules/pdfjs-dist/standard_fonts/LiberationSans-Regular.ttf',
+      'node_modules/pdfjs-dist/standard_fonts/FoxitSerif.pfb',
+      'node_modules/pdfjs-dist/standard_fonts/LICENSE_LIBERATION'
+    ]) {
+      expect(rx.test(p), `should exclude ${p}`).toBe(true)
+    }
+    for (const p of [
+      'node_modules/pdfjs-dist/package.json',
+      'node_modules/pdfjs-dist/legacy/build/pdf.mjs',
+      'node_modules/pdfjs-dist/legacy/build/pdf.worker.mjs',
+      'node_modules/pdfjs-dist/wasm/openjpeg.wasm',
+      'node_modules/pdfjs-dist/cmaps/Identity-H.bcmap'
+    ]) {
+      expect(rx.test(p), `should keep ${p}`).toBe(false)
+    }
+  })
+
+  it('the app never points pdf.js at standard fonts (the exclusion is only safe while so)', () => {
+    const offenders: string[] = []
+    const walk = (dir: string): void => {
+      for (const e of readdirSync(dir, { withFileTypes: true })) {
+        const p = join(dir, e.name)
+        if (e.isDirectory()) walk(p)
+        else if (/\.(ts|tsx|mjs|js|html)$/.test(e.name) && /standardFontDataUrl|standard_fonts/.test(readFileSync(p, 'utf8'))) {
+          offenders.push(p)
+        }
+      }
+    }
+    walk(join(__dirname, '..', '..', 'src'))
+    expect(offenders).toEqual([])
   })
 })
 
