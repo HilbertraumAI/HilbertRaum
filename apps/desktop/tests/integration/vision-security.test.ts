@@ -133,6 +133,10 @@ async function waitForTerminal(jobId: string): Promise<ImageJob> {
  * so when it ran out on a starved CI worker the next assertion failed with an opaque
  * `expected [] to have a length of 1` instead of saying what had not happened (#458, run
  * 34664328086). Its budget is `hangPolls`, so it widens on CI like every other detector.
+ *
+ * Every test whose analyze SUCCEEDS awaits this, even when it inspects no rows: otherwise the
+ * history write can outlive the file, hit its closed database and log a warning during worker
+ * teardown, which vitest 4 turns into a failed run with every test green (vitest-dev/vitest#11153).
  */
 async function waitForDoneEvent(event: { sender: { send: { mock: { calls: unknown[][] } } } }, jobId: string): Promise<void> {
   for (let i = 0; i < hangPolls(200, 5); i++) {
@@ -202,6 +206,7 @@ describe('vision security sentinel', () => {
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, sentinelReq())) as ImageJob
     const done = await waitForTerminal(initial.jobId)
+    await waitForDoneEvent(event, initial.jobId)
     expect(done.state).toBe('done')
     expect(done.answer).toBe(SENTINEL_ANSWER)
 
@@ -329,6 +334,7 @@ describe('vision security sentinel', () => {
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, sentinelReq())) as ImageJob
     const done = await waitForTerminal(initial.jobId)
+    await waitForDoneEvent(event, initial.jobId)
     expect(done.state).toBe('done')
     // The answer genuinely streamed back through the REAL SSE parser (proving the runtime ran)…
     expect(done.answer).toBe(SENTINEL_ANSWER)
@@ -405,8 +411,10 @@ describe('vision security sentinel', () => {
     })
     registerImagesIpc(ctxFor(audit), service)
 
-    const initial = (await invoke(handlers, IPC.imageAnalyze, sentinelReq())).result as ImageJob
+    const { result, event } = await invoke(handlers, IPC.imageAnalyze, sentinelReq())
+    const initial = result as ImageJob
     const done = await waitForTerminal(initial.jobId)
+    await waitForDoneEvent(event, initial.jobId)
     expect(done.answer).toBe(SENTINEL_ANSWER) // the answer is resident…
 
     await service.stop() // …workspace lock / quit teardown
@@ -427,8 +435,10 @@ describe('vision security sentinel', () => {
 
     const ids: string[] = []
     for (let i = 0; i < 20; i++) {
-      const initial = (await invoke(handlers, IPC.imageAnalyze, sentinelReq())).result as ImageJob
+      const { result, event } = await invoke(handlers, IPC.imageAnalyze, sentinelReq())
+      const initial = result as ImageJob
       await waitForTerminal(initial.jobId)
+      await waitForDoneEvent(event, initial.jobId)
       ids.push(initial.jobId)
     }
     // The earliest jobs were evicted (cap 16); the most recent are still retained.
