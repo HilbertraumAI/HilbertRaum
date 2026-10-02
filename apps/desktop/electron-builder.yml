@@ -84,8 +84,9 @@ files:
   # tests/integration/packaging.test.ts recomputes that from package-lock.json and fails if a
   # future dep starts needing one of these (remove that negation then) or if mermaid stops being
   # excluded. It checks each package where electron-builder packs it, which for a nested package
-  # can be the top level (#548): negate a package by its own name, not only through its parent. If the mermaid plugin is ever adopted, delete this block and its tests — the
-  # packaging.test.ts closure block AND the DEP-3 mermaid-fence pin in assistant-markdown.test.tsx.
+  # can be the top level (#548): negate a package by its own name, not only through its parent.
+  # If the mermaid plugin is ever adopted, delete this block and its tests — the packaging.test.ts
+  # closure block AND the DEP-3 mermaid-fence pin in assistant-markdown.test.tsx.
   - '!**/node_modules/mermaid/**'
   - '!**/node_modules/@mermaid-js/**'
   - '!**/node_modules/cytoscape*/**'
