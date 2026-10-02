@@ -139,6 +139,41 @@ describe('KiwixServer', () => {
     expect(registeredSidecarPids('kiwix_tools')).not.toContain(pid)
   })
 
+  // #554: superseding a live child for a DIFFERENT library.xml awaits stop() between the entry
+  // abort check and the 'abort' subscription. 'abort' fires once, so a cancel that lands during
+  // that teardown must be caught by a re-check, or the new child spawns and health-checks anyway.
+  it('honours a cancel that lands while a superseding start awaits stop(): no spawn, no latch (#554)', async () => {
+    const { server, calls } = makeServer({})
+    await server.ensureStarted()
+    expect(calls).toHaveLength(1)
+    const controller = new AbortController()
+    const realStop = server.stop.bind(server)
+    // By ordering, not a timer: the cancel lands while ensureStarted is parked on this teardown.
+    const stopSpy = vi.spyOn(server, 'stop').mockImplementationOnce(() => {
+      const teardown = realStop()
+      controller.abort()
+      return teardown
+    })
+    const other = '/ws/.zim-library.2.xml'
+    try {
+      const outcome = await server
+        .ensureStarted({ libraryXmlPath: other, signal: controller.signal })
+        .catch((err: unknown) => err)
+      expect(stopSpy).toHaveBeenCalledTimes(1) // the supersede branch ran
+      expect(calls).toHaveLength(1) // nothing new spawned
+      expect(outcome).toBeInstanceOf(DOMException)
+      expect((outcome as DOMException).name).toBe('AbortError')
+      expect(server.alive()).toBe(false)
+      // An aborted start never latches: the same path without an abort still starts.
+      await expect(server.ensureStarted({ libraryXmlPath: other })).resolves.toMatchObject({ port: 8101 })
+      expect(calls).toHaveLength(2)
+      expect(calls[1]?.args).toContain(other)
+    } finally {
+      stopSpy.mockRestore()
+      await server.stop()
+    }
+  })
+
   it('cold-starts again after the server died on its own', async () => {
     const { server, calls, children } = makeServer({})
     await server.ensureStarted()

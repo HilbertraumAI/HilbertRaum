@@ -1956,7 +1956,11 @@ sentinel-tested), zero native deps.
   at once (removing the waiter from the queue and giving back its holder slot, and dropping the
   pause when it was the last waiter — so the builder doesn't park for a chat that's gone).
   `withChatStream` treats that rejection like a no-token Stop: it resolves cleanly via `done`
-  with an empty message rather than surfacing `chat:error`. The **R-T1 probe**
+  with an empty message rather than surfacing `chat:error`. The handoff wait drops its own
+  abort listener when it resolves, one microtask before the holding-phase listener exists, so
+  `acquireForChat` checks `signal.aborted` once more at that point: an abort in that gap
+  releases the slot and rejects the same way, instead of waiting for `withChatStream`'s
+  `finally` (#555, PR #556). The **R-T1 probe**
   (`tests/manual/server-concurrency-probe.test.ts`, `HILBERTRAUM_CONCURRENCY_PROBE`) showed the
   pinned b9585 would serve two requests on PARALLEL slots at our default args — the
   app-side guard is the only serialization, which is exactly why it exists.
@@ -6780,7 +6784,7 @@ lives in **this section**. This ledger is the durable index — resolve a code c
 | BL-3 (Med, de-AT target) | 1 | **fixed** — `wordIncludes` gained a one-sided **compound** mode; the unambiguous DE keywords (`gebühr`/`gehalt`/`überweisung`/`bargeld`) opt in via `compound: true` so `Kontoführungsgebühr`→Fees, while English tokens + ambiguous `lohn` stay strict (no C-1 regression); `categorizeRow` + `prefilterCategory` thread the flag (C-1 invariant held) | arch §8 (`wordIncludes` paragraph); known-limitations |
 | **REL-1** (Med) | 2 | **fixed** — `LlamaServer.start` retries `doStart` **once** on a bind-class immediate exit (`isBindRaceError`) on a fresh port (covers chat AND embedder/reranker/vision, which had no retry); the ladder no longer persists `gpuAutoDisabled` on a bind race vs a device fault, so a port collision can't disable GPU for the session | arch GPU record §5.5 |
 | REL-2 (Med) | 2 | **fixed** — `killWithEscalation` mirrors `LlamaServer.stop()` (SIGTERM → SIGKILL after `killGraceMs`, grace timer unref'd/cleared), wired into the whisper watchdog/abort/`stop()` kill sites; `suspend()`/`stop()` bound the cleanup await (`suspendTimeoutMs`, crash-sweep is the shred backstop) so a SIGTERM-ignoring child can't hang quit/lock | known-limitations "Audio transcription" (SIGKILL/teardown residual); this ledger |
-| REL-3 (Med) | 2 | **fixed** — `acquireForChat(signal?)` threads the turn's abort signal (new `waitForHandoff`); a Stop during a deep-index slot park rejects at once (removes the waiter, returns its `chatHolders` slot, drops the pause if last), resolved cleanly via `done` not `chat:error`; all 7 chat/rag call sites forward `controller.signal` | arch doc-task / model-slot-arbiter record; this ledger |
+| REL-3 (Med) | 2 | **fixed** — `acquireForChat(signal?)` threads the turn's abort signal (new `waitForHandoff`); a Stop during a deep-index slot park rejects at once (removes the waiter, returns its `chatHolders` slot, drops the pause if last), resolved cleanly via `done` not `chat:error`; all 7 chat/rag call sites forward `controller.signal`. Gap closed later: an abort one microtask after the handoff (#555, PR #556) | arch doc-task / model-slot-arbiter record; this ledger |
 | **DOC-2** (Low) | 2 | **fixed (docs)** — GPU table "60 s health timeout" → "180 s (3 min)" (`DEFAULT_HEALTH_TIMEOUT_MS`; chat runtime never overrides it) | arch GPU record §8 table |
 | TEST-2 (Med) | 3 | **fixed (test-only)** — `binary-verify-spawn.test.ts` drives the **real** `verifyBinaryBeforeSpawn` at all three spawn seams (`LlamaServer.start`, GPU `--list-devices` probe, `whisper-cli`) with packaged enforcement ON + a hash-mismatched marker → each refuses to spawn; matching-marker positive control; teeth-checked per seam | arch "Test-enforcement seams — design record (Phase 3)" TEST-2 |
 | TEST-3 (Med) | 3 | **fixed (test-only)** — `rag.test.ts` proves a fresh failing embedder over a non-empty corpus makes `generateGroundedAnswer` **reject** (doesn't masquerade as NO_DOCUMENT_CONTEXT) | arch test-enforcement record TEST-3 |
@@ -12335,6 +12339,8 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   It also found two minor production gaps, not fixed here: `zim/serve.ts` misses a caller's cancel
   that lands during its `await this.stop()`, and `model-slot-arbiter.ts` can miss an abort in the
   microtask after the handoff. Both leave the release to the caller's `finally`; neither hangs.
+  Filed as #554 and #555 and fixed in PR #556: each re-checks `signal.aborted` after the await,
+  and each regression test lands the abort in the gap by ordering, not by a timer.
 - **#550: the `lib` is ES2024 in both programs.** Every runtime has ES2024: Electron 43 (Node 24,
   Chromium 150) and Node 22.12, the engines floor that runs the tests and `out/tools`. ES2025 is
   not available everywhere (Node 22 lacks `Promise.try` and `RegExp.escape`). With type-fest's

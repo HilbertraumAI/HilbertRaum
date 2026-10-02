@@ -274,6 +274,9 @@ export class KiwixServer {
     if (this.starting || live) {
       // A different configuration is wanted: the old one must be gone before the new spawn.
       await this.stop()
+      // #554: a cancel during that teardown fired its one 'abort' before the subscription
+      // below exists, so check again or the new child spawns anyway.
+      if (cfg?.signal?.aborted) throw abortError('kiwix-serve start aborted')
     }
     if (this.startFailure) throw this.startFailure
 

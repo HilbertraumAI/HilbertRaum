@@ -236,6 +236,13 @@ export class ModelSlotArbiter {
       signal?.removeEventListener('abort', release)
       this.releaseOneChat()
     }
+    // #555: on the slow path waitForHandoff's onWake has already removed its abort listener, and
+    // 'abort' fires only once, so an abort that landed before this line would reach neither
+    // listener. Give the slot back through the same latch and unwind like the entry check.
+    if (signal?.aborted) {
+      release()
+      throw new SlotAbortedError('Chat slot acquire aborted')
+    }
     signal?.addEventListener('abort', release, { once: true })
     return release
   }

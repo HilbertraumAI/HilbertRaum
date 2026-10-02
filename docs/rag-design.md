@@ -2541,7 +2541,10 @@ the figures they support are quoted in the text.
   the teardown then reports that outcome rather than "complete", which is exactly what
   the lock and quit paths must surface too, never a silent "cleanup complete". A start
   failure latches by revision until the pack set changes; an aborted start never
-  latches.
+  latches. When `KiwixServer.ensureStarted` supersedes a server for a different
+  `library.xml`, it checks the caller's signal again after its `stop()`: `'abort'` fires
+  once, so a cancel during that teardown would otherwise be missed, and the new child would
+  spawn and health-check for nothing (#554, PR #556).
   `kiwix-manage` (`tools.ts`) runs under the same pre-spawn verifier — a hashless
   install marker resolves `skip-legacy` and keeps launching under a logged warning
   rather than integrity verification (residual R-1, CLOSED for an in-app install at P8-1 —
