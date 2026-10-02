@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-02 — **#551 — the packaged exe on pdf.js 6.3, and black-and-white scans become searchable (`fix/551-packaged-pdfjs-check`).** Smart App Control
+blocks each fresh unsigned exe, so the packaged layout ran on a renamed stock `electron.exe` (code sections byte-identical, same fuses): all four #551 boxes
+pass. Found on the way: since Phase 38 the rasterizer set no `wasmUrl`, so pdf.js could not load its CCITT/JBIG2/JPEG 2000 decoders and such scans OCR'd as
+blank pages. Fixed: the build ships the decoders under their names and the page passes `wasmUrl`; `ocr-decoder-assets.test.ts` pins it. Record: `architecture.md` DEP-6 §10._
 _2026-10-02 — **#554 / #555 — two missed aborts across an await (`fix/554-555-missed-abort`, PR #556).** `KiwixServer.ensureStarted` re-checks the signal
 after superseding `stop()`; `acquireForChat` re-checks it after the handoff and releases the slot itself. Each test lands the abort in the gap by microtask
 ordering, failed on the old code and passes now. No user-visible change, so no CHANGELOG. Record: `architecture.md` DEP-6 §8 (#549 bullet)._
@@ -38,7 +42,7 @@ ran its lines together (Tailwind `block` again); a `styles.css` rule restores th
 _2026-10-02 — **#548–#551 — the DEP-6 residuals (`fix/dep6-residuals-548-551`).** #548: the packaging gates check the negations where electron-builder
 packs each package (its own hoister replayed on the lockfile; it names a real `app.asar`'s 226 package directories exactly), and the notices must name exactly that set.
 #549: both load races fixed by where the clock starts and which timer trips, not by a bigger budget. #550: `lib` ES2024 in both programs; taking streamdown 2.6 stays its own change.
-#551: the Documents list on react-virtual 3.14.13 measures identical to 3.14.4 (CDP A/B). Open: the packaged exe (SAC-blocked). Record: `architecture.md` DEP-6 §8._
+#551: the Documents list on react-virtual 3.14.13 measures identical to 3.14.4 (CDP A/B). The packaged exe: the #551 entry above. Record: `architecture.md` DEP-6 §8._
 _2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (PRs #535, #536, #537 merged).**
 PR A, lockfile-only through the pinned npm 11.6.2 with no collateral (undici 6.29.0 / 7.30.0, brace-expansion ×7, fast-uri 3.1.8, dompurify
 3.4.16), cleared alerts 96, 97 and 102–123: all dev toolchain or not shipped, and the app's own `fetch` is Electron's undici 7.29.1. PR B
@@ -48,11 +52,6 @@ full-suite guard's `onFinished` hook is gone (now `onTestRunEnd`) and `vi.spyOn`
 alert is open (91–123 `fixed`) and `npm audit` is 0. Dependabot's first production group (#545: pdf.js 6.3 + six) lands via a replacement PR:
 pdf.js's never-loaded Liberation fonts (GPL v2, not OFL) leave the Kit (owner ruling), argon2id gets an explicit `maxmem`. Record: `architecture.md`
 "Dependabot triage — design record (wave DEP-6)" §7; its §3 holds the residuals._
-_2026-10-01 — **DEP-5 — Electron 43.4.0 → 43.7.7 clears the four high Dependabot alerts 98–101 (`fix/dependabot-electron-43-7-7`).**
-Three are unreachable here (no custom protocol, no `<webview>`, every window denies popups); the preload-cache one (alert 98) needs a
-renderer exploit first. Lockfile-only; Node 24.21.0, SQLite 3.53.4. Suite parity, the sqlite tests under Electron itself, a packaged
-smoke, cross-version workspaces and the OCR window's runtime CSP (open since DEP-1) all pass. Cost: from 43.7.2 the first window paints
-later (packaged +64 ms; owner accepted). Record: `architecture.md` "Electron 43.4.0 → 43.7.7". Open: macOS/Linux at runtime; §5 18(g)._
 _2026-10-01 — **#530 — an engine the OS refuses to start is named as such, never as a GPU, model or memory fault (`fix/530-engine-load-failure`).**
 One classifier (`runtime/engine-load.ts`: Linux ld.so text, Windows NTSTATUS + a System32 VC++ check, macOS dyld) at every spawn site, a
 session verdict (never persisted) fed by the startup probe and every refusal, `AppStatus.engineProblems`, `engine:recheck` ("Check again")

@@ -251,6 +251,20 @@ Key config points:
   PR #77)" §5. Dev-mode OCR was never affected (the raster → IPC → recognize pipeline was proven
   end to end on Electron 39); the other runtime-only-failure smokes above (parsers, encrypted
   workspace) still apply.
+- **The OCR rasterizer ships pdf.js's image decoders under their own names (#551).** pdf.js 6
+  decodes CCITT fax, JBIG2 and JPEG 2000 images only through modules it loads at run time as
+  `${wasmUrl}<file name>`. The renderer build therefore emits pdfjs-dist's `wasm/` jbig2 and openjpeg
+  modules (wasm and plain JS) unhashed into `out/renderer/pdfjs-wasm/`, and `ocr.html` passes that
+  directory as `wasmUrl`. Without them a black-and-white office scan rendered blank and OCR found no
+  text. `tests/integration/ocr-decoder-assets.test.ts` pins both. Run the recognition smoke on a
+  black-and-white (CCITT) scan as well: a JPEG scan decodes without these modules, so it cannot
+  catch their loss.
+- **A packaged build that Smart App Control will not start.** SAC refuses each fresh unsigned
+  `HilbertRaum.exe` (CodeIntegrity 3077/3118) but runs the repo's
+  `node_modules/electron/dist/electron.exe`. The packaged exe is that binary with a rewritten resource
+  section: the same code sections and fuse wire (measured on 43.7.7, #551). So a copy of `win-unpacked` with that
+  binary copied in as `HilbertRaum.exe` runs the packaged app's code against its `app.asar`, with
+  `app.isPackaged` true. Re-check the fuse wire after an Electron bump or a fuse change.
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
   `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are

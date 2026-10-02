@@ -15,9 +15,19 @@
 // further forward can only keep it that way.
 import * as pdfjs from 'pdfjs-dist/legacy/build/pdf.mjs'
 import pdfWorkerUrl from 'pdfjs-dist/legacy/build/pdf.worker.mjs?url'
+// pdf.js decodes CCITT fax, JBIG2 and JPEG 2000 images only through these modules: the wasm
+// build first, the plain-JS build if that fails. It loads them as `${wasmUrl}<file name>`, so
+// without `wasmUrl` such a scan (the usual black-and-white office scan is CCITT G4) rendered
+// blank and OCR found no text (#551). The build keeps their names, in one directory
+// (electron.vite.config.ts); tests/integration/ocr-decoder-assets.test.ts pins both.
+import jbig2WasmUrl from 'pdfjs-dist/wasm/jbig2.wasm?url'
+import 'pdfjs-dist/wasm/jbig2_nowasm_fallback.js?url'
+import 'pdfjs-dist/wasm/openjpeg.wasm?url'
+import 'pdfjs-dist/wasm/openjpeg_nowasm_fallback.js?url'
 import type { PDFDocumentProxy } from 'pdfjs-dist/legacy/build/pdf.mjs'
 
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorkerUrl
+const DECODERS_URL = new URL('./', new URL(jbig2WasmUrl, document.baseURI)).href
 
 /**
  * Target render resolution: 300 DPI equivalent (PDF user units are 72/inch) — the
@@ -75,7 +85,7 @@ window.ocrRaster.onOpen((req) => {
       // Copy into a SAME-REALM Uint8Array: the bytes arrive through the contextBridge
       // from the preload's isolated world, and pdf.js's instanceof checks reject a
       // cross-realm typed array ("hashOriginal.toHex is not a function").
-      const task = pdfjs.getDocument({ data: new Uint8Array(req.pdf) })
+      const task = pdfjs.getDocument({ data: new Uint8Array(req.pdf), wasmUrl: DECODERS_URL })
       doc = await task.promise
       window.ocrRaster.opened(doc.numPages)
     } catch (e) {
