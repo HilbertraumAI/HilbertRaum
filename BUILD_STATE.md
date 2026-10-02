@@ -28,13 +28,13 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
-_2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (PR A #535 merged; PR B `fix/dep6-vitest-4`).**
+_2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (PRs #535, #536 merged; PR C `fix/dep6-dependabot-config`).**
 PR A, lockfile-only through the pinned npm 11.6.2 with no collateral (undici 6.29.0 / 7.30.0, brace-expansion ×7, fast-uri 3.1.8, dompurify
 3.4.16), cleared alerts 96, 97 and 102–123: all dev toolchain or not shipped, and the app's own `fetch` is Electron's undici 7.29.1. PR B
 moves vitest 3.2.6 → 4.1.11 (alerts 91/92/94; `npm audit` 0). Two 4.x changes the migration guide omits would have weakened the suite: the
 full-suite guard's `onFinished` hook is gone (now `onTestRunEnd`) and `vi.spyOn` returns a live spy with its history. Also `maxWorkers`, a
-30-minute CI job cap, coverage `include`, and a `tinyexec` asar leak closed. Record: `architecture.md` "Dependabot triage — design record
-(wave DEP-6)". Open: PR C, `.github/dependabot.yml` (§5 18(a))._
+30-minute CI job cap, coverage `include`, and a `tinyexec` asar leak closed. PR C adds `.github/dependabot.yml` (§5 18(a)). After #536 no
+alert is open (91–123 `fixed`) and `npm audit` is 0. Record: `architecture.md` "Dependabot triage — design record (wave DEP-6)"; its §3 holds the residuals._
 _2026-10-01 — **DEP-5 — Electron 43.4.0 → 43.7.7 clears the four high Dependabot alerts 98–101 (`fix/dependabot-electron-43-7-7`).**
 Three are unreachable here (no custom protocol, no `<webview>`, every window denies popups); the preload-cache one (alert 98) needs a
 renderer exploit first. Lockfile-only; Node 24.21.0, SQLite 3.53.4. Suite parity, the sqlite tests under Electron itself, a packaged
@@ -617,9 +617,9 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     39.8.10 → 43.4.0 — Chromium 142 → 150, Node 22.22.1 → 24.18.1, SQLite 3.51.2 → 3.53.1;
     `extract-zip` is gone from the tree and `npm audit` is clean. OS floors unchanged
     (Win 10+/macOS 12+), no on-disk format change. Open items:
-    (a) **`.github/dependabot.yml`** — DEP-1 §5 #4, owner-APPROVED during this wave (D-4) to
-    land as its **own PR**; this was the fourth hand-rolled dependency batch. Supersedes item
-    16(d).
+    (a) ~~**`.github/dependabot.yml`**~~ **LANDED 2026-10-02** (DEP-6 PR C; record "Dependabot
+    triage — wave DEP-6" §6): weekly grouped npm minor/patch PRs, every major ignored (owner
+    ruling), Electron outside the groups. Supersedes item 16(d).
     (b) **Packaged-OCR fix bundle** — unchanged, still open; see item 16(b). DEP-4 did not touch
     it (the defect is an `asarUnpack` gap, not a runtime-version effect). **⟶ LANDED 2026-09-02
     (audit Phase 1, PRs #268 + #269; see 16(b)); what remains is the 18(c) measurement.**
