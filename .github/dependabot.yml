@@ -1,0 +1,47 @@
+# Dependabot VERSION updates for npm: grouped minor/patch PRs once a week. Approved as decision
+# D-4 in wave DEP-4 and landed in wave DEP-6; the reasoning is in docs/architecture.md
+# "Dependabot triage — design record (wave DEP-6)" §6.
+#
+# Security ALERTS do not depend on this file: they are raised whatever it says. Dependabot
+# security-update PRs are switched off for this repo, so an alert stays an alert.
+#
+# A Dependabot PR goes through the usual gate (green `ci-success`, a human merge). Dependabot
+# writes the lockfile with its own npm, not the pinned npm 11.6.2 (`packageManager`): if the
+# lockfile diff moves more than the bumped packages, redo the update with the pinned npm.
+version: 2
+updates:
+  - package-ecosystem: npm
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    # In-range updates change only the lockfile, so a manifest floor keeps meaning "the version a
+    # wave verified"; a range moves only when an update needs it.
+    versioning-strategy: increase-if-necessary
+    # A newly published version waits a week before it is proposed (supply-chain hygiene).
+    # Security alerts are not delayed by this.
+    cooldown:
+      default-days: 7
+    commit-message:
+      prefix: chore
+      include: scope
+    groups:
+      development:
+        dependency-type: development
+        update-types: [minor, patch]
+        # Electron gets a PR of its own: every bump also needs `electronVersion` in
+        # electron-builder.yml (packaging.test.ts fails until it matches) and the first-paint
+        # re-measure of BUILD_STATE §5 item 18(g).
+        exclude-patterns: [electron]
+      production:
+        dependency-type: production
+        update-types: [minor, patch]
+    ignore:
+      # Electron 44 drops macOS 12, 32-bit Windows and Linux armv7l: a customer-facing decision
+      # (BUILD_STATE §5 item 18(d)) that must never arrive as a Dependabot PR. Its own entry, so
+      # it survives any later change to the rule below.
+      - dependency-name: electron
+        update-types: ['version-update:semver-major']
+      # Every other major is a deliberate wave decision too (owner ruling, wave DEP-6).
+      - dependency-name: '*'
+        update-types: ['version-update:semver-major']

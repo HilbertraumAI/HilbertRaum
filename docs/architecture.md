@@ -12084,7 +12084,7 @@ surviving source._
 
 ### §3 Follow-ups
 
-1. PR C (`.github/dependabot.yml`) lands under this record.
+1. ~~PR C (`.github/dependabot.yml`) lands under this record.~~ Landed, §6.
 2. `ocr.test.ts` "a worker that fails at LOAD …" races a real `worker_threads` Worker against a
    fixed 2 s clock. Under full-suite load on this desk it once lost (`'hung'`) and passed on the
    re-run and 3 of 3 isolated runs. No DEP-6 package is on that path; the fixed clock is the
@@ -12103,7 +12103,13 @@ Baseline on master `70b635d0` (fresh `npm ci`): 478 files (453 passed / 25 skipp
 `npm ci`: the same totals and identical per-file passed and skipped counts for all 478 files (the
 first run lost the §3 item 2 race; the counted run is the second). **PR B**, after a fresh `npm ci`:
 478 files (453 / 25), 7,899 passed / 86 skipped / 7,986, which is the baseline plus the one new
-sequencer pin. Per-file counts are identical except `full-suite-guard.test.ts` (16 → 17).
+sequencer pin. Per-file counts are identical except `full-suite-guard.test.ts` (16 → 17). On CI
+(run 36946863141) every leg matches PR A's run plus that one test: the ubuntu legs 7,903 passed /
+82 skipped, the windows shards 239 + 239 files with 23 and 66 skipped, and each windows leg logged
+the forks cap.
+
+**After both merges** (master `435b4869`): Dependabot lists alerts 91–123 as `fixed`, auto-dismissed
+ones included; none is open; `npm audit` reports 0.
 
 ### §5 PR B: vitest 3.2.6 → 4.1.11
 
@@ -12172,6 +12178,32 @@ changes below would have made the suite quietly prove less, and neither is in th
   Library `findBy*` / `waitFor` options); `environmentMatchGlobs`, `poolMatchGlobs`, `deps.*`, `workspace` (none
   used); `invocationCallOrder` now starting at 1 (only compared relatively); the
   `// @vitest-environment jsdom` docblocks; `npm test -- <file>` and the CI shard flags.
+
+### §6 PR C: `.github/dependabot.yml`
+
+Decision D-4 of wave DEP-4 (BUILD_STATE §5 item 18(a)), approved then and never landed; DEP-1 to
+DEP-6 were six hand-rolled batches. What the file does, and why:
+
+- **Version updates only.** Security alerts are raised whatever the file says, and this repo has
+  Dependabot security-update PRs switched off, so no `ignore` rule can hide an advisory.
+- **Weekly, grouped:** one PR for the development and one for the production dependencies' minor
+  and patch updates, plus Electron's own (below).
+- **Every major is ignored** (owner ruling): 12 were pending when it landed (React 19,
+  TypeScript 7, Vite 8, Vitest 5, jsdom 30 among them), and each is a migration to decide in a wave,
+  as Vitest 4 was here. Electron majors also have an entry of their own, so Electron 44 (BUILD_STATE
+  §5 item 18(d)) stays ignored even if the general rule is ever relaxed.
+- **Electron stays outside the groups.** A 43.x patch also needs `electronVersion` in
+  `electron-builder.yml` (`packaging.test.ts` fails until it matches) and the first-paint re-measure
+  of item 18(g), so it should not ride in with unrelated bumps.
+- **`versioning-strategy: increase-if-necessary`:** an in-range update touches only the lockfile, so
+  a manifest floor keeps meaning "the version a wave verified".
+- **`cooldown: default-days: 7`:** a newly published version waits a week before it is proposed.
+- **npm only** (owner ruling): the SHA-pinned GitHub Actions stay manual.
+- **Lockfile caveat:** Dependabot writes the lockfile with its own npm, not the pinned 11.6.2. The
+  file's header says what to do when a PR's lockfile diff moves more than the bumped packages.
+
+Validated against the SchemaStore `dependabot-2.0` schema before it landed (a deliberately broken
+copy failed); GitHub's own parse runs once it is on `master`.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
