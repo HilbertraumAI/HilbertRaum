@@ -12100,8 +12100,13 @@ surviving source._
    `packaging.test.ts` closure (which expects more than 50 mermaid-only packages) and the DEP-3
    mermaid notes can shrink. On #541's tree three tests' `String.prototype.isWellFormed` calls also
    stopped type-checking (the tsconfig `lib` is ES2022). #543, the same group without the Radix and
-   katex moves, fails identically, so the cause is one of its eight bumps; streamdown 2.6 is the
-   likely one (the only bump that reshapes the tree) but that is not confirmed.
+   katex moves, failed identically. The cause, traced with `tsc --explainFiles`: on master the ES2024
+   lib reaches the test program only through streamdown 2.5's types → `mermaid` →
+   `type-fest/source/basic.d.ts`, which carries `/// <reference lib="esnext"/>`. streamdown 2.6 drops
+   `mermaid`, and with it that lib. So the latent defect is ours: three tests call an ES2024 API
+   under an ES2022 `lib`. Whoever takes streamdown 2.6 raises the `lib` (or adds
+   `es2024.string`) first. Until then `@dependabot ignore streamdown minor version` (posted on
+   #543) keeps 2.6.x out of the production group.
 
 ### §4 Suite parity
 
