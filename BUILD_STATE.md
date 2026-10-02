@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-02 — **#550 follow-up — streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on the #548–#551 PR).** The mermaid chain (110 lockfile entries)
+leaves the tree, and with it DEP-3's ~40 `files:` negations; a guard keeps mermaid out of the production graph. 2.6's new 400/300 px caps on code blocks and
+tables need Tailwind (not loaded): a tall table drew 1,128 px over what followed, so both are off. Also fixed: since 2026-06-30 every multi-line code block
+ran its lines together (Tailwind `block` again); a `styles.css` rule restores them. Real-app measured. Record: `architecture.md` DEP-6 §9._
 _2026-10-02 — **#548–#551 — the DEP-6 residuals (`fix/dep6-residuals-548-551`).** #548: the packaging gates check the negations where electron-builder
 packs each package (its own hoister replayed on the lockfile; it names a real `app.asar`'s 226 package directories exactly), and the notices must name exactly that set.
 #549: both load races fixed by where the clock starts and which timer trips, not by a bigger budget. #550: `lib` ES2024 in both programs; taking streamdown 2.6 stays its own change.
@@ -57,12 +61,6 @@ _2026-10-01 — **#527 — the greyed-out mic names the missing piece and its bu
 build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
 screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
 `data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
-_2026-09-27 — **#517 — the grounded-QA scorer reads the German "not stated" forms (`fix/517-scorer-german-abstentions`).**
-Detector v4 (`tests/eval/text.mjs`): sentence-scoped "nennt … nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet"
-when the sentence names the sources; pinned on the three #514 gate answers in `score.test.ts`. Test harness only. Record:
-`model-benchmarks.md` §6.6 "#512 amendment" (v4 note). Re-score DONE the same day (owner option A, `fix/517-rescore-v4`): every
-dump carries a `*-quality-rescored.csv`, four move (21 German refusals in `512-b*` / `pr6-*`), the five v3 files reproduce byte-for-byte,
-the 2026-07-09 ruling kept; `architecture.md` §52 CODE-1 row noted. Open: none. The closed #460 entry retired for the preamble budget._
 _2026-09-27 — **#515 — the #312 model-vs-device check compares the first error line; the sidecars log uncoloured (`fix/515-failure-signature`).**
 `failureSignature` read the last tail line — a per-process timestamp, or on Windows a bare colour reset (stdout is NUL, which
 `--log-colors auto` takes for a terminal) — so rungs never matched, or always did. Now the first `E` line, prefix stripped; `--log-colors
@@ -190,7 +188,8 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 (preamble budget, making room for the #527 entry), and the closed 2026-09-18 #444 Documents-declutter entry on
 2026-10-01 (preamble budget, making room for the #530 entry), and the closed 2026-09-18 #478 table-delivery entry on
 2026-10-02 (preamble budget, making room for the DEP-6 entry), and the closed 2026-09-27 #518 fixtures entry on 2026-10-02
-(preamble budget, making room for the #548–#551 entry) — citations of the form "BUILD_STATE <date> entry" /
+(preamble budget, making room for the #548–#551 entry), and the closed 2026-09-27 #517 scorer entry on 2026-10-02 (preamble
+budget, making room for the streamdown 2.6 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

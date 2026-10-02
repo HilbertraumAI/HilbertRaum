@@ -76,57 +76,11 @@ files:
   # physical-product clause (pdfjs-dist 6.3 corrected their notice from OFL), so they stay out
   # of the Kit (wave DEP-6, owner ruling). tests/integration/packaging.test.ts pins this.
   - '!**/node_modules/pdfjs-dist/standard_fonts/**'
-  # streamdown hard-depends on mermaid (~136 MB unpacked with its cytoscape/d3/dagre/roughjs
-  # chain), but the @streamdown/mermaid plugin is NOT installed, so none of it is ever imported —
-  # Vite keeps it out of the renderer bundle, yet electron-builder would fold the whole chain into
-  # app.asar (production deps). Dead weight on a runs-from-a-USB-drive artifact. Every negation
-  # below is a package reachable in the apps/desktop production dependency graph ONLY via mermaid;
-  # tests/integration/packaging.test.ts recomputes that from package-lock.json and fails if a
-  # future dep starts needing one of these (remove that negation then) or if mermaid stops being
-  # excluded. It checks each package where electron-builder packs it, which for a nested package
-  # can be the top level (#548): negate a package by its own name, not only through its parent.
-  # If the mermaid plugin is ever adopted, delete this block and its tests — the packaging.test.ts
-  # closure block AND the DEP-3 mermaid-fence pin in assistant-markdown.test.tsx.
-  - '!**/node_modules/mermaid/**'
-  - '!**/node_modules/@mermaid-js/**'
-  - '!**/node_modules/cytoscape*/**'
-  - '!**/node_modules/cose-base/**'
-  - '!**/node_modules/layout-base/**'
-  - '!**/node_modules/d3/**'
-  - '!**/node_modules/d3-*/**'
-  - '!**/node_modules/@types/d3*/**'
-  - '!**/node_modules/@types/geojson/**'
-  - '!**/node_modules/@types/trusted-types/**'
-  - '!**/node_modules/delaunator/**'
-  - '!**/node_modules/robust-predicates/**'
-  - '!**/node_modules/internmap/**'
-  - '!**/node_modules/dagre-d3-es/**'
-  - '!**/node_modules/roughjs/**'
-  - '!**/node_modules/hachure-fill/**'
-  - '!**/node_modules/path-data-parser/**'
-  - '!**/node_modules/points-on-curve/**'
-  - '!**/node_modules/points-on-path/**'
-  - '!**/node_modules/khroma/**'
-  - '!**/node_modules/dompurify/**'
-  - '!**/node_modules/es-toolkit/**'
-  - '!**/node_modules/dayjs/**'
-  - '!**/node_modules/lodash-es/**'
-  - '!**/node_modules/uuid/**'
-  - '!**/node_modules/stylis/**'
-  - '!**/node_modules/ts-dedent/**'
-  - '!**/node_modules/rw/**'
-  - '!**/node_modules/iconv-lite/**'
-  - '!**/node_modules/safer-buffer/**'
-  - '!**/node_modules/import-meta-resolve/**'
-  - '!**/node_modules/package-manager-detector/**'
-  - '!**/node_modules/@braintree/**'
-  - '!**/node_modules/@iconify/**'
-  - '!**/node_modules/@antfu/**'
-  # tinyexec: @antfu/install-pkg's copy, hoisted to the top level since vitest 4 (DEP-6) needs
-  # the same major; still reachable in the production graph only via mermaid.
-  - '!**/node_modules/tinyexec/**'
-  - '!**/node_modules/@chevrotain/**'
-  - '!**/node_modules/@upsetjs/**'
+  # The DEP-3 block that kept the never-imported mermaid chain out (~40 negations) retired with
+  # streamdown 2.6, which no longer depends on mermaid (#550); packaging.test.ts goes red if
+  # mermaid re-enters the production graph. A new negation must name each package itself:
+  # electron-builder matches negations against the re-hoisted layout, where a package nested
+  # under a negated parent can sit at the top level (#548).
 # NOTE: `includeSubNodeModules: true` was REMOVED in electron-builder 26 (it now errors as an
 # unknown property). v26's reworked dependency collector already follows hoisted/nested
 # node_modules trees by default, so mammoth's transitive deps still come along — and it lays

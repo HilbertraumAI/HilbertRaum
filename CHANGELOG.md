@@ -37,9 +37,18 @@ from its first public `1.0.0` release onward.
   Fedora 36, or newer; Windows needs Microsoft's Visual C++ runtime, which most PCs already have.
   The README, the user guide, the drive's "READ ME FIRST" and a new Troubleshooting entry, "The AI
   engine can't run on this computer", give the exact package to install (#530).
+- **The formatting of answers is updated.** Streamdown, which lays out the assistant's answers,
+  moves to version 2.6. It no longer brings along the Mermaid diagram library, which HilbertRaum
+  never used or shipped, so about 110 unused packages leave the project. While an answer is still
+  being written, a few edge cases format better: a product like `2*3*4` no longer shows a stray
+  asterisk after it. Answers otherwise look as before (#550).
 
 ### Fixed
 
+- **Code in answers keeps its line breaks.** A code block showed all of its lines run together on
+  one line, everywhere the app formats text: chat and image answers, translations, document
+  summaries and the preview of Markdown files. Each line of code now starts on its own line, and
+  blank lines between them stay.
 - **The greyed-out microphone now says what is really missing, and its button goes there.**
   Voice dictation needs two things on the drive: the speech model and the voice engine that runs
   it. The note under the greyed-out mic used to blame the speech model every time. On Linux it

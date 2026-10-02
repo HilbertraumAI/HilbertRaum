@@ -869,6 +869,11 @@ code, pre, kbd { font-family: var(--font-mono); }
 }
 .code-block:hover .code-block-actions,
 .code-block-actions:focus-within { opacity: 1; }
+/* Streamdown renders each line of a code block as a <span class="block …"> with no newline
+   between them, and leaves the line breaks to Tailwind's `block` utility, which this app does not
+   load: without this rule every line of a block ran together into one. A blank line is a span
+   holding "\n", which keeps a full line height inside the pre. */
+[data-streamdown="code-block-body"] code > span { display: block; }
 
 /* Composer footer affordances: quiet text-style menu/popover triggers. */
 .footer-menu-btn {

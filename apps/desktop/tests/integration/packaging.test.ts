@@ -44,11 +44,10 @@ function loadBuilderConfig(): BuilderConfig {
 
 /**
  * Walk the production dependency graph of apps/desktop over package-lock entries (npm's
- * node_modules resolution), optionally refusing to step INTO `mermaid`. The difference between
- * the two closures is the set of packages that exist ONLY because of mermaid. It answers WHICH
- * packages ship; WHERE electron-builder puts them is `packedNodeModules` (#548).
+ * node_modules resolution). It answers WHICH packages ship; WHERE electron-builder puts them is
+ * `packedNodeModules` (#548).
  */
-function prodClosure(packages: LockPackages, skipMermaid: boolean): Set<string> {
+function prodClosure(packages: LockPackages): Set<string> {
   const rootDeps = packages['apps/desktop']?.dependencies ?? {}
   const seen = new Set<string>()
   const queue: string[] = []
@@ -59,7 +58,6 @@ function prodClosure(packages: LockPackages, skipMermaid: boolean): Set<string> 
   while (queue.length > 0) {
     const cur = queue.pop()!
     if (seen.has(cur)) continue
-    if (skipMermaid && cur.replace(/^.*node_modules\//, '') === 'mermaid') continue
     seen.add(cur)
     const entry = packages[cur]
     const deps = { ...entry.dependencies, ...entry.optionalDependencies }
@@ -176,53 +174,39 @@ describe('electron-builder packaging excludes pdfjs-dist standard fonts', () => 
   })
 })
 
-// streamdown hard-depends on mermaid, but the @streamdown/mermaid plugin is not installed, so
-// the whole ~136 MB mermaid/cytoscape/d3/dagre/roughjs chain is never imported. Vite keeps it
-// out of the renderer bundle; only electron-builder's app.asar collection would ship it. The
-// yml negates the chain — these tests keep the negations HONEST against package-lock.json:
-// mermaid must stay excluded, and nothing excluded may be needed by the production graph
-// outside mermaid (if a future dep starts using e.g. dayjs, the negation must be removed —
-// this goes red instead of the packaged app silently missing a runtime dep).
-//
-// #548: both checks run where electron-builder PACKS each package, not at its lockfile path. The
-// collector re-hoists the production graph and applies the negations there, so a package nested
-// under a negated parent can land at `node_modules/<name>` and ship past the parent's negation
-// (`tinyexec`, until #536). `packedNodeModules` (tests/helpers/asar-layout.ts) replays it.
-describe('electron-builder packaging excludes the never-imported mermaid chain', () => {
-  const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as { packages: LockPackages }
-  const negations = (loadBuilderConfig().files ?? [])
-    .filter((f) => f.startsWith('!') && !f.includes('@napi-rs'))
-    .map((f) => globToRegExp(f.slice(1)))
-  const negated = (dir: string): boolean => negations.some((rx) => rx.test(dir + '/x.js'))
-  const needed = idsOf(lock.packages, prodClosure(lock.packages, true))
-  const mermaidOnly = new Set(
-    [...idsOf(lock.packages, prodClosure(lock.packages, false))].filter((id) => !needed.has(id))
-  )
-  const packed = packedNodeModules(lock.packages)
-  const label = (p: PackedPackage): string => `${p.dest} (${p.id})`
-
-  it('mermaid itself and its parser are negated', () => {
-    for (const p of ['node_modules/mermaid/dist/mermaid.js', 'node_modules/@mermaid-js/parser/x.js']) {
-      expect(
-        negations.some((rx) => rx.test(p)),
-        `expected a files negation covering ${p}`
-      ).toBe(true)
-    }
+// streamdown 2.6 dropped its hard dependency on mermaid (#550), and with it the ~136 MB
+// mermaid/cytoscape/d3/dagre/roughjs chain that DEP-3 kept out of app.asar with ~40 `files:`
+// negations. Mermaid diagrams are an opt-in streamdown plugin now (`@streamdown/mermaid`), which
+// this app does not install (mdPlugins = { math }; assistant-markdown.test.tsx pins the fence).
+// If mermaid re-enters the production graph (that plugin adopted, or a dependency pulling it in),
+// app.asar would carry the whole chain and DOMPurify would be live in the renderer: this goes red
+// so that is decided rather than inherited. The DEP-3 negation block is in git history.
+describe('mermaid stays out of the production graph (streamdown 2.6, #550)', () => {
+  it('no mermaid package is reachable from apps/desktop', () => {
+    const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as { packages: LockPackages }
+    const names = [...prodClosure(lock.packages)].map((p) => p.replace(/^.*node_modules\//, ''))
+    expect(names).toContain('streamdown') // the walk does reach the chat renderer
+    expect(names.filter((n) => n === 'mermaid' || n.startsWith('@mermaid-js/'))).toEqual([])
   })
+})
 
-  it('every mermaid-only package is negated where app.asar would hold it (#548)', () => {
-    expect(mermaidOnly.size).toBeGreaterThan(50) // sanity: the chain is really in the lock
-    const shipped = packed.filter((p) => mermaidOnly.has(p.id) && !negated(p.dest))
+// #548: a negation is checked where electron-builder PACKS each package, not at its lockfile path.
+// The collector re-hoists the production graph and applies the negations to that layout, so a
+// package nested under a negated parent can land at `node_modules/<name>` and ship past the
+// parent's negation (`tinyexec`, until #536). `packedNodeModules` (tests/helpers/asar-layout.ts)
+// replays it. Every packed package is a production one, so no package-level negation may cover
+// one, except the deliberate L18 canvas exclusion (an optional native dep the app never imports).
+describe('files negations never remove a package the app needs (#548)', () => {
+  it('no negation but the canvas one covers a package where electron-builder packs it', () => {
+    const lock = JSON.parse(readFileSync(LOCKFILE, 'utf8')) as { packages: LockPackages }
+    const negations = (loadBuilderConfig().files ?? [])
+      .filter((f) => f.startsWith('!') && !f.includes('@napi-rs/canvas'))
+      .map((f) => globToRegExp(f.slice(1)))
+    const removed = packedNodeModules(lock.packages).filter((p) =>
+      negations.some((rx) => rx.test(p.dest + '/x.js'))
+    )
     expect(
-      shipped.map(label),
-      'mermaid-only packages that app.asar would ship — negate each one by its own name'
-    ).toEqual([])
-  })
-
-  it('no negation removes a package the production graph needs WITHOUT mermaid', () => {
-    const wronglyExcluded = packed.filter((p) => needed.has(p.id) && negated(p.dest))
-    expect(
-      wronglyExcluded.map(label),
+      removed.map((p: PackedPackage) => `${p.dest} (${p.id})`),
       'these packages are needed by the production graph but excluded from app.asar — remove their negation'
     ).toEqual([])
   })
@@ -268,7 +252,7 @@ describe('the app.asar layout model (#548)', () => {
   })
 
   it('places only packages of the production graph', () => {
-    const all = idsOf(lock.packages, prodClosure(lock.packages, false))
+    const all = idsOf(lock.packages, prodClosure(lock.packages))
     const packed = packedNodeModules(lock.packages)
     expect(packed.length).toBeGreaterThan(200)
     expect(packed.filter((p) => !all.has(p.id)).map((p) => p.id)).toEqual([])
@@ -294,8 +278,8 @@ describe('the app.asar layout model (#548)', () => {
 // screenshot-verify preview harness (incl. staged demo chats) to out/preview/, and
 // `electron-vite build` clears only out/main|preload|renderer — without a negation a local
 // `npm run package` after a screenshot run folds the whole harness into app.asar (dead weight
-// plus a discoverable staged demo chat inside a released artifact). Pin the negation the same
-// way the mermaid block is pinned: it must exist AND actually match the harness output paths
+// plus a discoverable staged demo chat inside a released artifact). Pin the negation like the
+// standard-fonts one above: it must exist AND actually match the harness output paths
 // while leaving the real out/main|preload|renderer bundles packaged.
 describe('electron-builder packaging excludes the dev-only preview harness (CODE-1)', () => {
   it('negates out/preview and only out/preview', () => {

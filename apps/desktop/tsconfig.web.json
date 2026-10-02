@@ -1,9 +1,9 @@
 {
   // Renderer (browser context) + the test suite (renderer tests use jsdom/RTL; service
   // tests import main code, which type-checks fine here too). DOM lib is available.
-  // ES2024: see tsconfig.node.json. While streamdown 2.5 is installed this program also gets
-  // `esnext` by accident (streamdown → mermaid → type-fest's `/// <reference lib="esnext"/>`),
-  // so an ES2025 API type-checks here and breaks once that chain goes (#550).
+  // ES2024: see tsconfig.node.json. Until streamdown 2.6 this program also got `esnext` by
+  // accident (streamdown → mermaid → type-fest's `/// <reference lib="esnext"/>`), which hid an
+  // ES2024 API in three tests (#550); `tsc --explainFiles` shows which libs actually load.
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "composite": true,

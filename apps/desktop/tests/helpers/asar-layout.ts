@@ -14,9 +14,10 @@ import { join } from 'node:path'
  * #536. `packedNodeModules` replays those steps on `package-lock.json` with electron-builder's own
  * hoister, so the gate sees what `npm run package` packs.
  *
- * The child order matters: the hoister breaks ties by it. `marked` is one today (streamdown needs
- * 17.x and mermaid 16.x, one dependent each); in npm's order 17.x takes the top slot and mermaid's
- * copy stays nested under the negated `mermaid/`, in the reverse order 16.x would ship.
+ * The child order matters: the hoister breaks ties by it. `marked` was one until streamdown 2.6
+ * dropped mermaid (#550): streamdown needed 17.x and mermaid 16.x, one dependent each; in npm's
+ * order 17.x took the top slot and mermaid's copy stayed nested under the negated `mermaid/`, in
+ * the reverse order 16.x would have shipped.
  *
  * Checked against a real `package:win` `app.asar` (master `12ec7bd0`, 2026-10-02): the model names
  * its 226 package directories exactly. Platform-specific optional packages are all modelled (only

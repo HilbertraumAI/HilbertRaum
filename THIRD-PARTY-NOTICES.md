@@ -4,8 +4,8 @@ HilbertRaum is licensed under GPL-3.0-or-later (see `LICENSE`). A packaged
 HilbertRaum artifact additionally contains the third-party npm packages listed
 below — the production dependency closure of `apps/desktop` that electron-builder
 bundles into `app.asar`, minus what its `files:` negations exclude (the
-never-imported mermaid chain, the `@napi-rs/canvas` native optional dep, and
-pdfjs-dist's never-loaded standard fonts),
+`@napi-rs/canvas` native optional dep and pdfjs-dist's never-loaded standard
+fonts),
 which is a superset of everything Vite inlines into the compiled renderer/main
 bundles. This file reproduces each package's license text and copyright notice
 as found in the shipped package, plus the SIL OFL 1.1 notice for the KaTeX fonts.
@@ -212,13 +212,13 @@ remark-math@6.0.0
 remark-parse@11.0.0
 remark-rehype@11.1.2
 remark-stringify@11.0.0
-remend@1.3.0
+remend@1.3.1
 safe-buffer@5.1.2
 scheduler@0.23.2
 setimmediate@1.0.5
 space-separated-tokens@2.0.2
 sprintf-js@1.0.3
-streamdown@2.5.0
+streamdown@2.6.0
 string_decoder@1.1.1
 stringify-entities@4.0.4
 style-to-js@1.1.21
@@ -7530,7 +7530,7 @@ OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
 ```
 
-### remend@1.3.0
+### remend@1.3.1
 
 - License: Apache-2.0
 - Author: Hayden Bleasel <hayden.bleasel@vercel.com>
@@ -7716,7 +7716,7 @@ ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT
 SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 ```
 
-### streamdown@2.5.0
+### streamdown@2.6.0
 
 - License: Apache-2.0
 - Author: Hayden Bleasel <hayden.bleasel@vercel.com>

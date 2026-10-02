@@ -197,21 +197,20 @@ Key config points:
   **These are externalized, so a missing one only fails at RUNTIME, not in the green gate — after
   packaging, smoke-test importing a PDF, a DOCX, and a CSV, AND creating/unlocking an encrypted
   workspace (exercises `@noble/hashes` argon2id), from the produced `.exe`.**
-- **The never-imported mermaid chain is excluded from `app.asar`** via `files` negations in
-  `electron-builder.yml`: `streamdown` (the chat Markdown renderer) hard-depends on `mermaid`
-  (~136 MB unpacked incl. cytoscape / the d3 suite / dagre-d3-es / roughjs), but the
-  `@streamdown/mermaid` plugin is not installed, so none of it is ever imported — Vite keeps it out
-  of the renderer bundle and the negations keep it out of the asar (app.asar ≈ 68 MB vs ≈ 204 MB
-  without). `tests/integration/packaging.test.ts` recomputes the "reachable only via mermaid" set
-  from `package-lock.json`, so a future dep that genuinely needs an excluded package turns the green
-  gate red (remove that negation then). It checks each package **where electron-builder packs it**:
-  the collector re-hoists the production graph and matches the negations against that layout, so a
-  package nested under a negated parent can land at `node_modules/<name>` and ship (#548; `tinyexec`
-  did until #536). Negate a package by its own name. `tests/helpers/asar-layout.ts` replays the
-  hoisting with electron-builder's own hoister; after a package build,
+- **The mermaid chain is not in the tree at all** (since streamdown 2.6, #550). `streamdown` (the
+  chat Markdown renderer) used to hard-depend on `mermaid` (~136 MB unpacked incl. cytoscape / the
+  d3 suite / dagre-d3-es / roughjs) without ever importing it, and ~40 `files` negations kept that
+  chain out of `app.asar` (DEP-3; ≈ 68 MB vs ≈ 204 MB without). 2.6 made mermaid an opt-in plugin
+  (`@streamdown/mermaid`, not installed), so the chain and its negations are gone.
+  `tests/integration/packaging.test.ts` fails if mermaid re-enters the production graph (adopting
+  the plugin is a decision, not an accident), and checks every remaining negation **where
+  electron-builder packs each package**: the collector re-hoists the production graph and matches
+  the negations against that layout, so a package nested under a negated parent can land at
+  `node_modules/<name>` and ship (#548; `tinyexec` did until #536). Negate a package by its own name.
+  `tests/helpers/asar-layout.ts` replays the hoisting with electron-builder's own hoister; after a
+  package build,
   `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts`
-  compares it with the real archive. If the mermaid plugin is ever adopted, delete the negation
-  block and its test.
+  compares it with the real archive.
 - **The dev-only screenshot-verify preview harness is excluded from `app.asar`** via a
   `!out/preview/**` negation (CODE-1, full-audit 2026-07-12b): `npm run preview:build`/`screenshot`
   emit it to `out/preview/` and `electron-vite build` clears only `out/main|preload|renderer`, so a
@@ -311,8 +310,8 @@ only the electron-vite **output** format is a choice. As built:
   wrapper (`AssistantMarkdownLazy.tsx`, re-exported as `AssistantMarkdown` from the chat barrel), so
   that weight loads as a **separate async chunk on first answer render**. Initial `index-*.js`:
   **3,196 kB → 1,194 kB (−63%)**. The async chunk is Vite-named `mermaid-*` after a streamdown
-  internal module but contains only streamdown+katex — no real mermaid/cytoscape/d3 (still excluded
-  from the asar, see the mermaid negation above). The fallback renders the raw text in a `.md`
+  internal module but contains only streamdown+katex — no real mermaid/cytoscape/d3 (no longer in
+  the tree at all since streamdown 2.6, see above). The fallback renders the raw text in a `.md`
   container during the (local, offline, few-ms) load — no blank flash. Tests render markdown
   synchronously: `vitest.config.ts` aliases `./AssistantMarkdownLazy` → the real component so render
   assertions don't have to await Suspense.

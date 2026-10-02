@@ -11609,6 +11609,10 @@ majors, no `overrides`, no dismissals** — plus seven high **auto-dismissed** a
 This record is the durable per-alert ledger; the DEP-1 record above holds the wave conventions
 (pinned-npm lockfile writes, build-before-test gate order) that this wave reused._
 
+_**Superseded in part (2026-10-02):** the mermaid exclusion this wave relied on (the `files:` negation
+block, its `packaging.test.ts` closure) retired with streamdown 2.6, which no longer depends on
+mermaid. See the DEP-6 record §9. The mermaid-fence pin stays._
+
 ### §1 Alert ledger + dispositions
 
 | Alerts | Package (locked → fixed) | Scope | Disposition + in-context verdict |
@@ -12106,8 +12110,8 @@ surviving source._
    `mermaid`, and with it that lib. So the latent defect is ours: three tests call an ES2024 API
    under an ES2022 `lib`. Whoever takes streamdown 2.6 raises the `lib` (or adds
    `es2024.string`) first. Until then `@dependabot ignore streamdown minor version` (posted on
-   #543) keeps 2.6.x out of the production group. **The `lib` half is fixed (#550, §8);** taking
-   streamdown 2.6 itself stays open, as its own change.
+   #543) keeps 2.6.x out of the production group. **The `lib` half is fixed (#550, §8); streamdown
+   2.6 is taken, §9.**
 
 ### §4 Suite parity
 
@@ -12352,6 +12356,56 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   `package:win` (CodeIntegrity 3077/3118). The built app under the repo Electron passed the DEP-6
   smoke 10/10 again: PDF, DOCX and CSV text on pdf.js 6.3, and OCR through the rasterizer window.
   pdf.js running from inside `app.asar` stays open on #551.
+
+### §9 streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on §8)
+
+- **Version and tree.** 2.6.0 (2026-08-24) is the issue's target and is outside the 7-day cooldown;
+  2.7.0 (2026-09-30) is not. Written by the pinned npm 11.6.2
+  (`install streamdown@2.6.0 --package-lock-only -w apps/desktop`; a second pass is byte-identical).
+  Floor `^2.5.0` → `^2.6.0`. The lockfile loses 110 entries: the mermaid chain (109 prod, 1
+  optional), including mermaid's own nested `katex`, `marked` 16 and `commander`. It adds none, and
+  changes only `streamdown`, `remend` 1.3.0 → 1.3.1 (an exact dependency of streamdown) and
+  `tinyexec`, which is now dev-only. Both new integrities match the registry. Neither 2.5 nor 2.6
+  imports the `mermaid` package at runtime: their `mermaid-*.js` is a 60-byte local re-export. 2.5
+  only declared mermaid, and its types imported it.
+- **What retired.** The DEP-3 `files:` negation block (~40 globs, plus DEP-6's `tinyexec`) and its
+  `packaging.test.ts` closure. In their place:
+  - a guard that mermaid is not in the production graph (adopting `@streamdown/mermaid` becomes a
+    decision; the DEP-3 fence pin stays);
+  - the §8 rule as a general check: no package-level negation except the L18 canvas one may cover
+    a packed package.
+  The notices change only in streamdown's and remend's version labels and the header sentence
+  (226 packages). The web program's `esnext` lib is gone; `@types/node`'s `esnext.disposable` and
+  `esnext.float16` remain, as in the node program.
+- **The packaged artifact.** A fresh `package:win` gives an `app.asar` of 4,172 entries (master's
+  count) and 71,780,797 bytes (+24 KB: streamdown 2.6 and its renderer chunk). It has no
+  mermaid-chain entry, and the §8 model names its package directories exactly.
+- **What changed on screen, measured.** I rendered a 26-sample corpus of reply Markdown with the
+  app's `AssistantMarkdown`, static and streaming (52 renders), on 2.5 and 2.6. 15 of the 52 differ:
+  - code blocks gain `dir="ltr"`;
+  - footnote ids lose the doubled `user-content-` prefix, and the heading's becomes `footnote-label`;
+  - images lose the hover overlay (`controls={false}` now covers images);
+  - a streamed `2*3*4` loses a stray `*` (remend);
+  - **code blocks and tables gain a height cap**: `codeBlockMaxHeight` 400 px and `tableMaxHeight`
+    300 px are new defaults.
+
+  The cap's scrolling relies on Tailwind's `overflow-y-auto`, which this app does not load. In the
+  real app (the Documents preview of a `.md` file, built app under the repo Electron), a 40-row
+  table drew 1,128 px over the paragraphs and the code block that followed it. `AssistantMarkdown`
+  now passes `0` for both caps, which is 2.5's layout. Two schema changes cannot reach the DOM:
+  2.6's sanitize lets `streamdown:` hrefs through, but the app's `a` override still links only
+  http(s); and `clobberPrefix: ''` leaves remark-rehype as the one prefixer. Tests pin both, and
+  removing the caps fails a pin on `300px`.
+- **A defect older than 2.6, found by the same probe.** Streamdown renders each line of a code block
+  as a `<span class="block …">` with no newline between lines, and leaves the line break to
+  Tailwind's `block`. Since the 2026-06-30 adoption, every multi-line code block (in chat and image
+  answers, translations, summaries and Markdown previews) showed its lines run together on one line.
+  This is measured identically on 2.5 in the real app. `styles.css` now gives
+  `[data-streamdown="code-block-body"] code > span` `display: block`. Verified: an 8-line block with
+  a blank line shows 9 rows at a 26 px step, and a 60-line block 60 rows (1,582 px), with nothing
+  overlapping. A file-parse test pins the rule.
+- **After merge:** comment `@dependabot unignore streamdown` on a Dependabot PR. The `minor version`
+  ignore posted on #543 otherwise keeps future streamdown minors out of the production group.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
