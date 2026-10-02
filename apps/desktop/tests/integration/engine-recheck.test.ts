@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -58,12 +58,12 @@ function driveRoot(opts: { llama?: boolean; whisper?: boolean } = {}): string {
 
 interface Fakes {
   ctx: AppContext
-  probe: ReturnType<typeof vi.fn> & { invalidate: ReturnType<typeof vi.fn> }
-  embedderReset: ReturnType<typeof vi.fn>
-  rerankerReset: ReturnType<typeof vi.fn>
-  visionReset: ReturnType<typeof vi.fn>
-  refreshTranslatorSlot: ReturnType<typeof vi.fn>
-  restartChat: ReturnType<typeof vi.fn>
+  probe: Mock & { invalidate: Mock }
+  embedderReset: Mock
+  rerankerReset: Mock
+  visionReset: Mock
+  refreshTranslatorSlot: Mock
+  restartChat: Mock
 }
 
 /** `probeBehavior` runs inside the fake device probe (e.g. re-report the problem). `db` null = locked workspace. */

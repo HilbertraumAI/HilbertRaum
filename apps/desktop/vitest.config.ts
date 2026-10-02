@@ -26,7 +26,7 @@ const isFullRun = process.argv.includes('run') && positionals.length === 0
 const allTestFiles = isFullRun ? listTestFiles(__dirname, resolve(__dirname, 'tests')) : null
 const expectedFiles = allTestFiles && shard ? shardTestFiles(allTestFiles, shard) : allTestFiles
 
-// See `poolOptions` below (#458 residual).
+// See `maxWorkers` below (#458 residual).
 const capWindowsCiForks = Boolean(process.env.CI) && process.platform === 'win32'
 if (capWindowsCiForks) console.log('[vitest.config] windows CI leg: forks capped at 2 (#458)')
 
@@ -55,6 +55,10 @@ export default defineConfig({
     globalSetup: ['./tests/global-temp-roots.ts'],
     globals: true,
     reporters: ['default', new FullSuiteGuard(expectedFiles)],
+    // `npm run test:coverage` (optional, not a CI gate). Vitest 4 removed `coverage.all`: with
+    // no `include`, the report lists only the files the tests happened to load, so a source file
+    // nothing imports vanishes instead of showing 0 %. Naming the source tree keeps it visible.
+    coverage: { include: ['src/**/*.{ts,tsx}'], exclude: ['src/**/*.d.ts'] },
     // Pin the pool explicitly (don't ride vitest's default) so collection behaviour is
     // deterministic across vitest upgrades. `forks` keeps each suite in its own process —
     // required here because parts of the suite touch native bindings (node:sqlite, llama)
@@ -66,7 +70,7 @@ export default defineConfig({
     // the machine is full before Defender and the runner agent take their share. Everything
     // above buys TOLERANCE for a starved fork; nothing above helps the MAIN process, and the
     // failure that survived steps 1-3 is the main process going unanswered: a fork's
-    // `onTaskUpdate` RPC to it times out at birpc's hardcoded 60 s (vitest 3.2.6 exposes no
+    // `onTaskUpdate` RPC to it timed out at birpc's hardcoded 60 s (vitest 3.2.6 exposed no
     // knob), and the run exits 1 with every test green — 3 of the 4 first-push reds in the
     // week after the fixes landed (runs 34723764047, 35038224383, 35335961954; the 4th, run
     // 35099769260, was a fork starved the same way — see `testBudgetMs`). Those runs show four
@@ -76,7 +80,13 @@ export default defineConfig({
     // alone — neither has ever shown the failure, and the cap costs wall clock.
     // The line it prints is the run-log evidence that the cap applied: step 2's first sharded
     // run silently did nothing, so a lever on these legs is not trusted until the log shows it.
-    poolOptions: capWindowsCiForks ? { forks: { maxForks: 2 } } : undefined,
+    //
+    // DEP-6 (vitest 3 → 4): vitest 4 removed `poolOptions`, so `poolOptions.forks.maxForks`
+    // became the top-level `maxWorkers`; the old key would have been ignored, with the log
+    // line above still printing. Vitest 4 also creates the worker-side RPC with no timeout
+    // (`createRuntimeRpc`: `timeout: -1`), so the 60 s `onTaskUpdate` error above can no
+    // longer fire. The cap stays: it is about runner pressure, and #458 measured it there.
+    maxWorkers: capWindowsCiForks ? 2 : undefined,
     // The full parallel suite on a loaded machine starves the heavy integration/
     // renderer tests of CPU and trips vitest's 5 s default timeout (historically
     // 1–2 flakes per run, a different test each time; all pass in isolation). 3×

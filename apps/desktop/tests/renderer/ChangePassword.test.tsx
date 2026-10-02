@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
@@ -21,8 +21,8 @@ function settings(over: Partial<AppSettings> = {}): AppSettings {
 
 function stubSettings(opts: {
   settings?: AppSettings
-  changeWorkspacePassword?: ReturnType<typeof vi.fn>
-}): ReturnType<typeof vi.fn> {
+  changeWorkspacePassword?: Mock
+}): Mock {
   const change =
     opts.changeWorkspacePassword ??
     vi.fn(

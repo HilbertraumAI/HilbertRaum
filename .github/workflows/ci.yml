@@ -54,6 +54,10 @@ jobs:
     # "(windows-latest, 22.x, --shard=1/2)".
     name: build-and-test (${{ matrix.label }})
     runs-on: ${{ matrix.os }}
+    # A hang must fail the leg, not hold it for GitHub's 6 h default. Vitest 4 removed the 60 s
+    # worker-side RPC timeout that used to end a run whose main process stopped answering (wave
+    # DEP-6), so this cap is now the only bound. The slowest leg takes ~9 min.
+    timeout-minutes: 30
     strategy:
       # Report every leg even if one fails — the ci-success gate below aggregates them
       # (a matrix job's `result` is success only when ALL legs succeeded).
@@ -87,7 +91,7 @@ jobs:
         # correlation, not proven cause). Widening the vitest budgets (step 1, `hookTimeout` /
         # `testTimeout`) is still what buys TOLERANCE against a starved fork. Since the #458
         # residual fix each windows shard runs TWO forks, not vitest's default three
-        # (`vitest.config.ts` `poolOptions`, keyed on CI + win32 — nothing to pass here); the
+        # (`vitest.config.ts` `maxWorkers`, keyed on CI + win32 — nothing to pass here); the
         # Test step prints "[vitest.config] windows CI leg: forks capped at 2" as evidence.
         #
         # WHY UBUNTU STAYS WHOLE — not just cost. One leg per node version still runs all 449

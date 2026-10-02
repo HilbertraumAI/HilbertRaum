@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach, beforeEach, beforeAll } from 'vitest'
+import { describe, it, expect, vi, afterEach, beforeEach, beforeAll, type Mock } from 'vitest'
 import { act, render, screen, cleanup, waitFor, within } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { EngineProblemNotice, ToastProvider } from '../../src/renderer/components'
@@ -265,10 +265,10 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
 
   function stubModels(opts: {
     problems: () => EngineProblem[]
-    recheckEngine?: ReturnType<typeof vi.fn>
+    recheckEngine?: Mock
     engine?: EngineStatus
     runtime?: RuntimeStatus
-  }): { push: () => void; recheckEngine: ReturnType<typeof vi.fn> } {
+  }): { push: () => void; recheckEngine: Mock } {
     let subscriber: (() => void) | null = null
     const recheckEngine = opts.recheckEngine ?? vi.fn(async (): Promise<EngineRecheckResult> => ({ problems: opts.problems() }))
     stubApi({

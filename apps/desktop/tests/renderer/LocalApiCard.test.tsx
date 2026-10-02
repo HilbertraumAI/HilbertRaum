@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { LocalApiCard } from '../../src/renderer/screens/settings/LocalApiCard'
@@ -60,10 +60,10 @@ interface StubOpts {
   runtime?: RuntimeStatus
   maskedKey?: string | null
   port?: number
-  updateSettings?: ReturnType<typeof vi.fn>
-  copyLocalApiKey?: ReturnType<typeof vi.fn>
-  regenerateLocalApiToken?: ReturnType<typeof vi.fn>
-  copyToClipboard?: ReturnType<typeof vi.fn>
+  updateSettings?: Mock
+  copyLocalApiKey?: Mock
+  regenerateLocalApiToken?: Mock
+  copyToClipboard?: Mock
 }
 
 function renderCard(opts: StubOpts = {}): { current: AppSettings } {

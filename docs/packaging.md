@@ -626,8 +626,8 @@ absent on the other shard. A higher count is a new leak — worth a look, not a 
 asserts vitest actually collected every file it should, which is what makes a silently dropped
 suite fail instead of passing by not running. A shard legitimately collects half, so the guard
 reproduces **vitest's own split** (`shardTestFiles`) and asserts the shard's expected subset; the
-union of the shards is still every file, so a dropped file fails whichever shard owned it. Two
-traps, both already paid for:
+union of the shards is still every file, so a dropped file fails whichever shard owned it. Three
+traps, all already paid for:
 
 - **Never "shard" by passing a path** (`npm test -- tests/unit`). A positional argument reads as a
   filter, so the guard switches itself **off silently** — retiring the exact protection it exists
@@ -641,6 +641,12 @@ traps, both already paid for:
   did exactly that and agreed with a real `--shard=1/2` run on 109 of 225 files, i.e. chance.
   Fixed sha1 vectors in `tests/unit/full-suite-guard.test.ts` pin the hashed string so the
   mistake cannot return unnoticed on a machine where `sep === '/'`.
+- **A vitest upgrade can switch the guard off without a type error.** Vitest 4 removed the
+  `onFinished` hook the guard implemented; the old method still compiled, and the guard went
+  inert until it was ported (wave DEP-6, `architecture.md` "Dependabot triage — wave DEP-6" §5).
+  The hook is now typed through `Reporter['onTestRunEnd']`, and a unit test compares
+  `shardTestFiles` with the installed vitest's own `BaseSequencer.shard`, so either kind of drift
+  fails at the desk instead of on the sharded legs.
 
 **Passing a flag through `npm test` needs the root script's trailing `--` (#458).** The root
 `test` script forwards to the workspace — `npm run test --workspace apps/desktop --` — and that
@@ -755,18 +761,19 @@ on CI 4× and never under the CI default. When adding a per-test timeout, use it
 
 **The windows CI legs run one fork fewer (#458 residual).** Everything above buys tolerance for a
 starved *fork*. The failure that survived it is the *main* process going unanswered: a fork's
-`onTaskUpdate` RPC times out at birpc's hardcoded 60 s (vitest 3.2.6 has no knob for it) and the
-run exits 1 with **every test green** — 3 of the 4 first-push reds in the week after steps 1–3
+`onTaskUpdate` RPC timed out at birpc's hardcoded 60 s (vitest 3.2.6 had no knob for it) and the
+run exited 1 with **every test green** — 3 of the 4 first-push reds in the week after steps 1–3
 landed (27 of 31 first attempts green, against ~74 % before the wave; runs `34723764047`,
 `35038224383`, `35335961954` — always a `1 of 2` shard, on both Node versions). Those logs show
 four whole-runner output gaps of 16–45 s where a healthy shard shows at most one: a noisy host.
 The suite cannot fix the host, but it can stop filling every core, so `vitest.config.ts` sets
-`poolOptions.forks.maxForks: 2` when `CI` is set on `win32` — ubuntu and the desk keep the
-default. **What to look for on a run:** the Test step of a windows leg prints
-`[vitest.config] windows CI leg: forks capped at 2 (#458)`; if that line is missing the cap did not
-apply (step 2's first sharded run silently did nothing, so no lever on these legs is trusted
-without its log line). A red whose only error is `Timeout calling "onTaskUpdate"` after this is
-new information — record it on the issue rather than re-running by reflex.
+`maxWorkers: 2` when `CI` is set on `win32` (`poolOptions.forks.maxForks` until vitest 4 removed
+`poolOptions`, wave DEP-6) — ubuntu and the desk keep the default. **What to look for on a run:**
+the Test step of a windows leg prints `[vitest.config] windows CI leg: forks capped at 2 (#458)`;
+if that line is missing the cap did not apply (step 2's first sharded run silently did nothing, so
+no lever on these legs is trusted without its log line). Since vitest 4 the worker-side RPC has no
+timeout at all, so `Timeout calling "onTaskUpdate"` can no longer end a run; a starved main process
+now shows up as a slow leg, and `ci.yml` caps each leg at 30 minutes so a hang still fails.
 
 **When a test depends on a budget inside the PRODUCT, add a seam instead of loosening the
 assertion.** The sixth flake of this wave was `zim-arm`'s `collectPackCandidates` L3-b case (run

@@ -951,10 +951,12 @@ describe('knowledge packs across the session boundary (#301 P3b, H4/M4)', () => 
 
         // A session that is no longer admitted does nothing at all when its timer fires.
         h.ctrl.beginLock()
-        const second = vi.spyOn(h.svc, 'reconcile')
+        // A fresh observation window. Spying again is no longer one: since vitest 4 it returns
+        // the same spy, with the pass above still in its history.
+        pass.mockClear()
         startKnowledgePackSession(h.ctx)
         for (let i = 0; i < 30; i++) await tick()
-        expect(second).not.toHaveBeenCalled()
+        expect(pass).not.toHaveBeenCalled()
         h.ctrl.cancelLock()
       } finally {
         await h.close()

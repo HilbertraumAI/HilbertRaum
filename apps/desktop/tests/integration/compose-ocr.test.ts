@@ -1,4 +1,4 @@
-import { describe, it, expect, vi } from 'vitest'
+import { describe, it, expect, vi, type Mock } from 'vitest'
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -29,9 +29,9 @@ function addLanguages(root: string, langs: string[]): void {
 }
 
 interface FakeEngine extends OcrEngine {
-  probe: ReturnType<typeof vi.fn>
-  stop: ReturnType<typeof vi.fn>
-  suspend: ReturnType<typeof vi.fn>
+  probe: Mock
+  stop: Mock
+  suspend: Mock
 }
 
 /** A fake engine whose probe settles `availability()` like the real one (#232). */

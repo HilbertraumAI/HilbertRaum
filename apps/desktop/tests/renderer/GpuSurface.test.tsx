@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
@@ -64,12 +64,12 @@ function stubDiagnostics(opts: {
   settings?: AppSettings
   runtime?: RuntimeStatus
   install?: { version: string; backend: string; os: string; arch: string } | null
-  updateSettings?: ReturnType<typeof vi.fn>
-  tryGpuAgain?: ReturnType<typeof vi.fn>
+  updateSettings?: Mock
+  tryGpuAgain?: Mock
   /** The eligible display device the snapshot reports (#327); default: none. */
   currentGpu?: PerformanceSnapshot['currentGpu']
   /** Replaces the whole `performance:get` stub — for the rejecting case. */
-  getPerformance?: ReturnType<typeof vi.fn>
+  getPerformance?: Mock
 }): void {
   stubApi({
     getAppStatus: vi.fn(async () => appStatus),
@@ -203,7 +203,7 @@ describe('Settings → Diagnostics (advanced) — Acceleration (Phase 16)', () =
     // The retry PERSISTS the cleared flags, and the tab re-reads its status afterwards (#327
     // follow-through), so the settings stub must reflect the persisted change like main does —
     // `stubDiagnostics` reads `opts.settings` on every call, so a mutable holder is enough.
-    const stub = { settings: settings({ gpuAutoDisabled: true }), updateSettings: update, tryGpuAgain: undefined as ReturnType<typeof vi.fn> | undefined }
+    const stub = { settings: settings({ gpuAutoDisabled: true }), updateSettings: update, tryGpuAgain: undefined as Mock | undefined }
     const tryAgain = vi.fn(async () => {
       stub.settings = settings({ gpuAutoDisabled: false, gpuLastError: null })
       return stub.settings

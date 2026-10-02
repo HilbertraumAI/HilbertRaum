@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, afterEach } from 'vitest'
+import { describe, it, expect, vi, afterEach, type Mock } from 'vitest'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { WorkspaceGate, passwordStrength } from '../../src/renderer/screens/WorkspaceGate'
@@ -53,7 +53,7 @@ function chatModel(state: ModelInfo['state']): ModelInfo {
   }
 }
 
-const okCreate = (): ReturnType<typeof vi.fn> =>
+const okCreate = (): Mock =>
   vi.fn(async (): Promise<WorkspaceActionResult> => ({ ok: true, state: UNLOCKED }))
 
 /** Walk from the welcome step to the password step. */

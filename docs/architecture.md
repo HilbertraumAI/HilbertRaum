@@ -12059,7 +12059,7 @@ surviving source._
 | alerts 119–121 (open, medium); 113–118 (auto-dismissed, high) | brace-expansion, all seven copies: 1.1.18 → **1.1.21** (×3), 2.1.4 → **2.1.7** (×3), 5.0.9 → **5.0.12** | development | **Fixed (PR A). Unreachable.** GHSA-q2hr-2g5m-vwhr (quadratic `{a},b}` rewrite), GHSA-6j4f-fj2g-mc7p and GHSA-qhr7-859c-m2p7 (recursion stack exhaustion): CPU and stack denial of service on a crafted pattern. The callers are minimatch/glob under @electron/asar, @electron/universal, dir-compare, filelist (ejs → jake) and test-exclude (coverage), whose patterns come from this repo's own config. |
 | alert 122 (auto-dismissed, medium) | fast-uri 3.1.7 → **3.1.8** (app-builder-lib → ajv `^3.0.1`) | development | **Fixed (PR A). Unreachable.** GHSA-hrr3-gc8f-f4qj: a percent-encoded host in a scheme-relative reference escapes case folding, so a case-sensitive host allowlist can be evaded. ajv uses fast-uri to resolve the `$id`s of electron-builder's own config schema; no host decision is made on it. |
 | alert 123 (open, low) | dompurify 3.4.13 → **3.4.16** (streamdown → mermaid `^3.3.3`) | runtime (npm graph) | **Fixed (PR A). Not shipped, re-verified.** GHSA-p98j-92pf-mc4p needs `IN_PLACE` plus an `afterSanitize*` hook that removes a node; DOMPurify is called nowhere in the app (the markdown sanitizer is rehype-sanitize). The DEP-3 §1 proof was redone on the bumped tree: no `dompurify`/`DOMPurify` in the built `out/`, and the package is absent from the packaged `app.asar` (`!**/node_modules/dompurify/**` in `electron-builder.yml`, pinned by `packaging.test.ts`); the mermaid-fence pin in `assistant-markdown.test.tsx` still passes. |
-| alerts 91, 92, 94 (open, medium) | vitest + @vitest/mocker 3.2.6 → 4.1.11 (direct devDependencies; @vitest/coverage-v8 moves with them) | development (test runner) | **Open: PR B.** GHSA-82fw-gwwq-j7x9: a redirect mock registered over the Vite dev server's WebSocket reads any file. Unreachable here: the suite only runs `vitest run` in the node and jsdom environments, with no browser mode and no dev server. |
+| alerts 91, 92, 94 (open, medium) | vitest + @vitest/mocker 3.2.6 → **4.1.11** (direct devDependencies; @vitest/coverage-v8 moves with them) | development (test runner) | **Fixed (PR B, §5). Unreachable.** GHSA-82fw-gwwq-j7x9: a redirect mock registered over the Vite dev server's WebSocket reads any file. The suite only runs `vitest run` in the node and jsdom environments, with no browser mode and no dev server. |
 
 ### §2 Wave facts (PR A)
 
@@ -12076,7 +12076,6 @@ surviving source._
   excluded from the notices by design), and the freshness test passes unchanged.
 - **Gates:** fresh `npm ci`, typecheck, build, full suite at baseline parity (§4). `npm audit`:
   7 → **3**, the vitest trio PR B clears.
-
 - **Not shipped, measured on the bumped tree:** the built `out/` has no `dompurify`, `DOMPurify` or
   `undici` text. A fresh `package:win` `app.asar` (4,234 entries) has no `dompurify`, `undici`,
   `brace-expansion`, `fast-uri`, `mermaid`, `vitest` or `jsdom` entries, and none of its JS or HTML
@@ -12085,18 +12084,94 @@ surviving source._
 
 ### §3 Follow-ups
 
-1. PR B (vitest 4.1.11) and PR C (`.github/dependabot.yml`) land under this record.
+1. PR C (`.github/dependabot.yml`) lands under this record.
 2. `ocr.test.ts` "a worker that fails at LOAD …" races a real `worker_threads` Worker against a
    fixed 2 s clock. Under full-suite load on this desk it once lost (`'hung'`) and passed on the
    re-run and 3 of 3 isolated runs. No DEP-6 package is on that path; the fixed clock is the
    load-sensitive part.
+3. `packaging.test.ts` checks the mermaid exclusion against **lockfile** paths, but electron-builder
+   26 lays a nested package out at the top of `app.asar`, past a negation written for its parent.
+   That is how master shipped `tinyexec` (§5) without the test noticing. A check against the packed
+   layout, or against a real `app.asar` listing, would close it.
+4. Vitest 5 (5.0.3 at the time) was offered and not taken. On top of everything in §5 it turns
+   `clearMocks` on by default, fails unawaited async assertions and makes `vi.mock` hoisting strict.
 
 ### §4 Suite parity
 
 Baseline on master `70b635d0` (fresh `npm ci`): 478 files (453 passed / 25 skipped), 7,898 passed /
 86 skipped / 7,985, the real-Electron `evidence-pack-pdf-smoke` 8/8 included. **PR A**, after a fresh
 `npm ci`: the same totals and identical per-file passed and skipped counts for all 478 files (the
-first run lost the §3 item 2 race; the counted run is the second).
+first run lost the §3 item 2 race; the counted run is the second). **PR B**, after a fresh `npm ci`:
+478 files (453 / 25), 7,899 passed / 86 skipped / 7,986, which is the baseline plus the one new
+sequencer pin. Per-file counts are identical except `full-suite-guard.test.ts` (16 → 17).
+
+### §5 PR B: vitest 3.2.6 → 4.1.11
+
+The floor is 4.1.11, the first patched 4.x (owner ruling; 5.x was declined, §3 item 4). The
+migration guide lists most of what changed, but not everything that mattered here: two of the
+changes below would have made the suite quietly prove less, and neither is in the guide.
+
+- **Lockfile.** `vitest` and `@vitest/coverage-v8` go `^3.2.6 → ^4.1.11` in
+  `apps/desktop/package.json`, written by the pinned npm 11.6.2. The plain bump installed vitest 4
+  under `apps/desktop/node_modules`: `@vitest/coverage-v8` 3.2.6 requires exactly `vitest` 3.2.6, so
+  while it is still in the tree npm cannot replace the root copy. That layout broke the suite,
+  because `@testing-library/jest-dom/vitest` sits at the root and imports `vitest` without declaring
+  it. So the bump ran in two steps (drop `@vitest/coverage-v8` and raise `vitest`, then add
+  `@vitest/coverage-v8` back), which puts vitest at the root. Diff: 17 entries move (the vitest
+  family and its 4.x dependencies), 2 are added (`obug`, `@standard-schema/spec`), 38 are removed
+  (3.x only: `vite-node`, `tinypool`, `tinyspy`, `loupe`, the old `test-exclude` / `glob` chain with
+  one brace-expansion copy, …). One collateral: `@antfu/install-pkg` (mermaid chain, not shipped)
+  gives up its nested `tinyexec` 1.2.4 for the root 1.3.1 that vitest now also uses. Re-running
+  `npm install --package-lock-only` leaves the lockfile byte-identical. `npm audit`: **0**.
+- **The full-suite guard went inert (not in the guide).** Vitest 4 removed the `onFinished`
+  reporter hook that `tests/full-suite-guard.ts` implemented. The method still type-checked, so with
+  the guard unported a probe config expecting one file more than it ran exited **0**. Ported to
+  `onTestRunEnd` (`relativeModuleId` is the old `File.name`; vitest leaves a module that never
+  reported back out of the list), and typed through `Reporter['onTestRunEnd']` so the next removal
+  fails typecheck. The same probe now exits **1** naming the missing file, and **0** when nothing is
+  missing.
+- **`vi.spyOn` now returns an existing spy (not in the guide).** On a method that is still a spy,
+  4.x `spyOn` returns that spy, call history included; 3.2.6 made a fresh one. A test that spied
+  without restoring could hand its calls to the next test, which could then pass on calls it never
+  made. Two places did this, and both failed loudly: `zim-service-lifecycle.test.ts` (three tests
+  left a `log.warn` spy installed; the file now restores spies after each test, as 56 others
+  already did) and a second `spyOn` inside one `zim-ipc-session.test.ts` test (now an explicit
+  `mockClear()`). To rule out a quiet case, the full suite ran once more with a temporary setup file
+  that wrapped `vi.spyOn` and logged every spy handed back with calls in it: **none** in 7,986
+  tests (a positive control logged exactly one).
+- **Mock types.** A bare `vi.fn()` that TypeScript has to fit to a function type now types as
+  `Mock<Procedure | Constructable>`, and `ReturnType<typeof vi.fn>` means the same; neither is
+  assignable to a typed function slot. 52 typecheck errors in 13 test files, none at runtime. In
+  those files `ReturnType<typeof vi.fn>` became vitest's `Mock`, whose default parameter is exactly
+  what it meant under 3.2.6. The idiom stays in files that still compile.
+- **Sharding.** 4.x replaced 3.2.6's `ceil(n / count)` slice with `calculateShardRange` (the first
+  `n % count` shards take one extra file). The two agree for `count = 2`, so CI's halves did not
+  move. `shardTestFiles` now follows 4.1.11, and a new unit test runs the installed vitest's own
+  `BaseSequencer.shard` over the real suite for 2 to 5 shards and demands the same assignment.
+- **The windows CI forks cap.** 4.x removed `poolOptions`, so `poolOptions.forks.maxForks: 2` would
+  have been ignored while its log line kept printing. It is now `maxWorkers: 2`. Resolved through
+  vitest's own `createVitest`, it reads 2 with `CI=1` on win32 and is unset without `CI` (vitest's
+  default `availableParallelism() − 1`, as in 3.2.6).
+- **No worker RPC timeout.** 4.x creates the worker-side RPC with `timeout: -1`, so the #458
+  `[vitest-worker]: Timeout calling "onTaskUpdate"` failure can no longer end a run, and nothing else
+  does when the main process stops answering. `ci.yml` had no job timeout (GitHub's default is 6 h),
+  so `build-and-test` now has `timeout-minutes: 30`; the slowest leg takes about 9 minutes. The forks
+  cap stays, because it is about runner pressure.
+- **Coverage.** 4.x removed `coverage.all`, so `test:coverage` would have listed only the files the
+  tests load. `coverage.include: ['src/**/*.{ts,tsx}']` (declarations excluded) keeps a file nothing
+  imports in the report at 0 %. On a one-file run all 368 source files were listed.
+- **Packaging.** Root `tinyexec` 1.3.1 is now reachable in the production graph only through
+  mermaid, so `packaging.test.ts` demanded a negation and `electron-builder.yml` gained
+  `!**/node_modules/tinyexec/**`. That also ends a **pre-existing leak**: master's `app.asar` carried
+  `@antfu/install-pkg`'s `tinyexec` 1.2.4 as `/node_modules/tinyexec` (6 entries), never imported
+  (§3 item 3). A fresh `package:win` of this PR: its `app.asar` entry list is PR A's minus exactly
+  those 6 entries (4,234 → 4,228), and no other flattened package escapes a negation.
+  `THIRD-PARTY-NOTICES.md` is unchanged: it never listed `tinyexec`, since the notices leave the
+  mermaid chain out by design.
+- **Checked, nothing to change:** test options as a third argument (the 21 lookalikes are Testing
+  Library `findBy*` / `waitFor` options); `environmentMatchGlobs`, `poolMatchGlobs`, `deps.*`, `workspace` (none
+  used); `invocationCallOrder` now starting at 1 (only compared relatively); the
+  `// @vitest-environment jsdom` docblocks; `npm test -- <file>` and the CI shard flags.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
