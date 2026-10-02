@@ -204,7 +204,13 @@ Key config points:
   of the renderer bundle and the negations keep it out of the asar (app.asar ≈ 68 MB vs ≈ 204 MB
   without). `tests/integration/packaging.test.ts` recomputes the "reachable only via mermaid" set
   from `package-lock.json`, so a future dep that genuinely needs an excluded package turns the green
-  gate red (remove that negation then). If the mermaid plugin is ever adopted, delete the negation
+  gate red (remove that negation then). It checks each package **where electron-builder packs it**:
+  the collector re-hoists the production graph and matches the negations against that layout, so a
+  package nested under a negated parent can land at `node_modules/<name>` and ship (#548; `tinyexec`
+  did until #536). Negate a package by its own name. `tests/helpers/asar-layout.ts` replays the
+  hoisting with electron-builder's own hoister; after a package build,
+  `HILBERTRAUM_PACKED_ASAR=release/win-unpacked/resources/app.asar npm test -- tests/integration/packaging.test.ts`
+  compares it with the real archive. If the mermaid plugin is ever adopted, delete the negation
   block and its test.
 - **The dev-only screenshot-verify preview harness is excluded from `app.asar`** via a
   `!out/preview/**` negation (CODE-1, full-audit 2026-07-12b): `npm run preview:build`/`screenshot`
@@ -223,7 +229,7 @@ Key config points:
   `webidl-conversions` — nested under node-fetch in the source tree but FLATTENED to top level
   inside the asar by electron-builder 26's collector, so the test checks every module at both
   destinations (the PR #269 review caught a source-path-only check passing while those three sat
-  packed at top level). History (#232, PRs #268/#269;
+  packed at top level), and at the one electron-builder's hoister actually gives it (#548). History (#232, PRs #268/#269;
   merged 2026-09-02): with only the two tesseract packages listed, the worker's **hoisted** deps stayed
   inside `app.asar` (measured 2026-07-19 on a real packaged Windows build) and the load failure
   **killed the whole app** while `ocrAvailable` still reported `true` — tesseract.js sets the
@@ -819,6 +825,19 @@ same 4×/45 s contract in steps. Where a counted loop can fall through, prefer f
 after it (`vision-security`'s `waitForDoneEvent` is the pattern); `waitForTerminal` in the same
 file already did. **When adding a poll loop, bound it in wall-clock terms through one of these
 two helpers and make its exhaustion an error, never a `break` into the next assertion.**
+
+**Widening does not help a race the desk loses too: start the clock at the event (#549).** Both
+helpers widen only on CI, and wave DEP-6's two flakes lost at a desk under full-suite load.
+`ocr.test.ts`'s worker-load case raced a 2 s clock that started before the Worker spawned, so
+thread start-up counted against it; the clock now starts at the dead worker's `'exit'`, which comes
+after the engine has already rejected on its `'error'`. A worker that takes 3 s to fail reproduces
+the old failure and passes the new shape. `zim-client`'s T19 stall block ran a 300 ms per-attempt
+total under the default 1 s idle timer, the reverse of production's 1 s idle inside 4 s, so a
+stalled machine timed attempts out before their headers arrived, and healthy answers were exposed
+the same way. It now runs production's shape (a 300 ms idle timer, armed by the headers, inside a
+3 s total); a 500 ms freeze in the fixture server failed six of the block's tests before and none
+after. **Choose where the clock starts and which timer trips so that only the behaviour under test
+can trip it; size it after that.**
 
 **What CI does NOT cover — the manual `HILBERTRAUM_*` matrix stays a separate human gate.** A green
 CI run says **nothing** about the real-`spawn` / real-binary / real-weights surface: that is the

@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-02 — **#548–#551 — the DEP-6 residuals (`fix/dep6-residuals-548-551`).** #548: the packaging gates check the negations where electron-builder
+packs each package (its own hoister replayed on the lockfile; it names a real `app.asar`'s 226 package directories exactly), and the notices must name exactly that set.
+#549: both load races fixed by where the clock starts and which timer trips, not by a bigger budget. #550: `lib` ES2024 in both programs; taking streamdown 2.6 stays its own change.
+#551: the Documents list on react-virtual 3.14.13 measures identical to 3.14.4 (CDP A/B). Open: the packaged exe (SAC-blocked). Record: `architecture.md` DEP-6 §8._
 _2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (PRs #535, #536, #537 merged).**
 PR A, lockfile-only through the pinned npm 11.6.2 with no collateral (undici 6.29.0 / 7.30.0, brace-expansion ×7, fast-uri 3.1.8, dompurify
 3.4.16), cleared alerts 96, 97 and 102–123: all dev toolchain or not shipped, and the app's own `fetch` is Electron's undici 7.29.1. PR B
@@ -53,10 +57,6 @@ _2026-10-01 — **#527 — the greyed-out mic names the missing piece and its bu
 build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
 screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
 `data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
-_2026-09-27 — **#518 — the `--list-devices` and vision SSE fixtures re-captured on the b11146 pin (`fix/518-recapture-fixtures-b11146`, F-40).**
-K: test drive, i9-14900K / RTX 3080 Ti: `list-devices-b11146-vulkan-rtx3080ti.txt` now lists two devices (the card, 12,084 / 11,316 MiB,
-and the UHD 770 iGPU, which `looksIntegrated` sorts) and `vision/vision-sse-b11146.txt` (a synthetic "Müller & Söhne" invoice, `<drive>`
-redacted) replaces the b9585 samples; assertions and provenance notes moved with them. Closes §5 item 7 TS-3 (h). Open: none._
 _2026-09-27 — **#517 — the grounded-QA scorer reads the German "not stated" forms (`fix/517-scorer-german-abstentions`).**
 Detector v4 (`tests/eval/text.mjs`): sentence-scoped "nennt … nicht", and "nicht … angegeben/genannt/festgelegt/erwähnt/beantwortet"
 when the sentence names the sources; pinned on the three #514 gate answers in `score.test.ts`. Test harness only. Record:
@@ -189,7 +189,8 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 2026-09-27 (preamble budget, making room for the #517 scorer entry), and the closed 2026-09-13 #467 entry on 2026-10-01
 (preamble budget, making room for the #527 entry), and the closed 2026-09-18 #444 Documents-declutter entry on
 2026-10-01 (preamble budget, making room for the #530 entry), and the closed 2026-09-18 #478 table-delivery entry on
-2026-10-02 (preamble budget, making room for the DEP-6 entry) — citations of the form "BUILD_STATE <date> entry" /
+2026-10-02 (preamble budget, making room for the DEP-6 entry), and the closed 2026-09-27 #518 fixtures entry on 2026-10-02
+(preamble budget, making room for the #548–#551 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---
