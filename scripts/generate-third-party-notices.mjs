@@ -22,13 +22,13 @@
 import { readFileSync, readdirSync, writeFileSync, existsSync, statSync } from 'node:fs'
 import { join, relative, dirname } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { computeShippedPackages } from './lib/shipped-packages.mjs'
+import { builderFileNegations, computeShippedPackages } from './lib/shipped-packages.mjs'
 // LIC-3 (full-audit 2026-07-12b): verbatim license texts pinned from upstream at review
 // time for shipped packages whose published tarball carries no license file, plus the
 // leptonica license that tesseract.js-core's WASM statically links but does not
 // reproduce. Kept in a lib so the freshness gate imports the same texts (see the file's
 // doc comment for the pinning convention).
-import { KNOWN_EXTRA_NOTICES, LEPTONICA_LICENSE } from './lib/extra-notices.mjs'
+import { KNOWN_EXTRA_NOTICES, LEPTONICA_LICENSE, OFL_1_1_LICENSE } from './lib/extra-notices.mjs'
 
 const repoRoot = join(dirname(fileURLToPath(import.meta.url)), '..')
 const OUT_PATH = join(repoRoot, 'THIRD-PARTY-NOTICES.md')
@@ -139,8 +139,18 @@ for (const p of notInstalled) {
 }
 
 // Pre-scan license/notice files so the header can state the NOTICE situation truthfully.
+// A file inside a package that an electron-builder `files:` negation excludes does not ship,
+// so its license is not reproduced (pdfjs-dist's standard_fonts/ since wave DEP-6).
+const negations = builderFileNegations(repoRoot)
+const shipsFile = (f) => {
+  const rel = relative(repoRoot, f).split('\\').join('/')
+  return !negations.some((rx) => rx.test(rel))
+}
 const licenseFilesByPkg = new Map(
-  packages.map((p) => [p, notInstalled.has(p) ? [] : findLicenseFiles(join(repoRoot, p.lockPath))])
+  packages.map((p) => [
+    p,
+    notInstalled.has(p) ? [] : findLicenseFiles(join(repoRoot, p.lockPath)).filter(shipsFile)
+  ])
 )
 const noticeCount = [...licenseFilesByPkg.values()]
   .flat()
@@ -152,8 +162,9 @@ lines.push('')
 lines.push('HilbertRaum is licensed under GPL-3.0-or-later (see `LICENSE`). A packaged')
 lines.push('HilbertRaum artifact additionally contains the third-party npm packages listed')
 lines.push('below — the production dependency closure of `apps/desktop` that electron-builder')
-lines.push('bundles into `app.asar`, minus the packages its `files:` negations exclude (the')
-lines.push('never-imported mermaid chain and the `@napi-rs/canvas` native optional dep),')
+lines.push('bundles into `app.asar`, minus what its `files:` negations exclude (the')
+lines.push('never-imported mermaid chain, the `@napi-rs/canvas` native optional dep, and')
+lines.push('pdfjs-dist\'s never-loaded standard fonts),')
 lines.push('which is a superset of everything Vite inlines into the compiled renderer/main')
 lines.push('bundles. This file reproduces each package\'s license text and copyright notice')
 lines.push('as found in the shipped package, plus the SIL OFL 1.1 notice for the KaTeX fonts.')
@@ -247,8 +258,9 @@ for (const p of packages) {
   // KaTeX's package LICENSE is MIT, but the font files it ships (dist/fonts/KaTeX_*)
   // are licensed under the SIL Open Font License 1.1 — the copyright + license lines
   // below are taken verbatim from the fonts' own name tables (e.g.
-  // KaTeX_Main-Regular.ttf). The full OFL 1.1 body is reproduced from the OFL copy
-  // shipped in this same artifact (pdfjs-dist/standard_fonts/LICENSE_LIBERATION).
+  // KaTeX_Main-Regular.ttf). The full OFL 1.1 body is pinned in lib/extra-notices.mjs
+  // (until wave DEP-6 it was copied from pdfjs-dist's Liberation font licence, which
+  // pdfjs-dist 6.3 corrected to GPL v2).
   if (p.name === 'katex') {
     lines.push('')
     lines.push('#### KaTeX fonts (`dist/fonts/KaTeX_*`) — SIL Open Font License 1.1')
@@ -265,18 +277,10 @@ for (const p of packages) {
           'This license is available with a FAQ at: http://scripts.sil.org/OFL'
       )
     )
-    const oflSource = join(repoRoot, 'node_modules', 'pdfjs-dist', 'standard_fonts', 'LICENSE_LIBERATION')
-    if (existsSync(oflSource)) {
-      const ofl = cleanText(readFileSync(oflSource, 'utf8'), oflSource)
-      const start = ofl.indexOf('SIL OPEN FONT LICENSE Version 1.1')
-      if (start !== -1) {
-        lines.push('')
-        lines.push('The full SIL Open Font License, Version 1.1 (as also reproduced under')
-        lines.push('`pdfjs-dist` above for the Liberation fonts):')
-        lines.push('')
-        lines.push(fence(ofl.slice(start)))
-      }
-    }
+    lines.push('')
+    lines.push('The full SIL Open Font License, Version 1.1:')
+    lines.push('')
+    lines.push(fence(cleanText(OFL_1_1_LICENSE, 'OFL_1_1_LICENSE')))
   }
 
   // tesseract.js-core's WASM binaries statically link the leptonica image-processing

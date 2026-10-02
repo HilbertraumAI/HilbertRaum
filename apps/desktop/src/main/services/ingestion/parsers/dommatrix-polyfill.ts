@@ -1,6 +1,6 @@
 // Minimal, correct 2D-affine `DOMMatrix` polyfill for the Electron MAIN process.
 //
-// WHY THIS EXISTS. pdfjs-dist v6's legacy build evaluates a module-level
+// WHY THIS EXISTS. pdfjs-dist 6.0–6.2's legacy build evaluated a module-level
 // `const SCALE_MATRIX = new DOMMatrix()` at import time, and in Node it only sets
 // `globalThis.DOMMatrix` by `require("@napi-rs/canvas")`. We DELIBERATELY exclude
 // `@napi-rs/canvas` from the packaged app (electron-builder.yml `files` negation — a
@@ -9,7 +9,9 @@
 // require fails, `globalThis.DOMMatrix` stays undefined, and `import`ing pdfjs throws
 // "DOMMatrix is not defined" → PDF import breaks. In `npm run dev` the dep is present, so
 // pdf.js polyfills itself and the bug is invisible — which is why it only surfaced from a
-// built drive.
+// built drive. pdfjs-dist 6.3 creates that matrix lazily (upstream pdf.js #21721), so its
+// import no longer throws without one. The polyfill stays (wave DEP-6): it keeps pdf.js off
+// the `@napi-rs/canvas` path and guards against a later release reintroducing the import-time use.
 //
 // pdf.js guards with `if (!globalThis.DOMMatrix)`, so installing this BEFORE the pdfjs
 // import makes it skip the `@napi-rs/canvas` path entirely. Our main-process path does

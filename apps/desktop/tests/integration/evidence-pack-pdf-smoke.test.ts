@@ -153,14 +153,15 @@ async function readPdfFacts(pdfPath: string): Promise<PdfFacts> {
     }
   }
   walk(outline, 1)
-  const markInfo = (await doc.getMarkInfo()) as { Marked?: boolean } | null
+  // pdfjs 6.3 returns a Map here; 6.2 returned a plain object, and the 6.3 typings still say so.
+  const markInfo = (await doc.getMarkInfo()) as Map<string, boolean> | { Marked?: boolean } | null
   const facts: PdfFacts = {
     numPages: doc.numPages,
     text,
     compact: text.replace(/\s+/g, ''),
     outlineTitles: titles,
     outlineDepth: depth,
-    marked: markInfo?.Marked === true
+    marked: (markInfo instanceof Map ? markInfo.get('Marked') : markInfo?.Marked) === true
   }
   await loadingTask.destroy()
   return facts

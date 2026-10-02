@@ -70,6 +70,12 @@ files:
   # the pure-JS / cross-OS portable posture (a Windows .node on a macOS/Linux drive).
   # Exclude every platform variant. tests/integration/packaging.test.ts asserts this stays.
   - '!**/node_modules/@napi-rs/canvas*/**'
+  # pdfjs-dist ships standard-font data (`standard_fonts/`: Foxit Type 1 + Liberation Sans
+  # TrueType) that pdf.js loads only through `standardFontDataUrl`, which this app never sets,
+  # so nothing reads them. The LiberationSans files are Liberation 1.07.4 under GPL v2 with a
+  # physical-product clause (pdfjs-dist 6.3 corrected their notice from OFL), so they stay out
+  # of the Kit (wave DEP-6, owner ruling). tests/integration/packaging.test.ts pins this.
+  - '!**/node_modules/pdfjs-dist/standard_fonts/**'
   # streamdown hard-depends on mermaid (~136 MB unpacked with its cytoscape/d3/dagre/roughjs
   # chain), but the @streamdown/mermaid plugin is NOT installed, so none of it is ever imported —
   # Vite keeps it out of the renderer bundle, yet electron-builder would fold the whole chain into

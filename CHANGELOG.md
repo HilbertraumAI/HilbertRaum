@@ -92,6 +92,12 @@ from its first public `1.0.0` release onward.
   `fast-uri`, and the test runner Vitest), and in `dompurify`, which the dependency graph lists but
   the app does not include. None of these packages is part of the app you run, so nothing changes in
   use.
+- **The document readers are updated.** The Word (DOCX) reader now withstands two kinds of crafted
+  file, one that could change how it reads a document and one that could stall it. The YAML reader
+  behind skills limits how often a file can refer back to itself. PDF reading moves to pdf.js 6.3,
+  which extracts text better from documents that use certain fonts without embedding them. The app
+  also no longer carries pdf.js's standard font files, which it never used. **Workspaces open
+  exactly as before.**
 
 ## [0.1.62] — 2026-09-28
 

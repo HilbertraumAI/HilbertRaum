@@ -163,4 +163,14 @@ describe('password verifier', () => {
     const key = deriveKey('real-default-kdf', salt, DEFAULT_KDF)
     expect(verifyKey(key, makeVerifier(key))).toBe(true)
   })
+
+  // Existing vaults must keep unlocking across library updates: the default KDF has to
+  // derive exactly the key it derived before. Vector computed with @noble/hashes 2.2.0
+  // and 2.4.0 (identical); a KDF library change that alters it fails here, not at unlock.
+  it('derives the known key for a fixed password + salt with the default KDF', () => {
+    const salt = Buffer.from('000102030405060708090a0b0c0d0e0f', 'hex')
+    expect(deriveKey('correct horse battery staple', salt, DEFAULT_KDF).toString('hex')).toBe(
+      '818259b6310026a8e0dbac5d2e6927abcfdb07b32258fac4f61b18b80f929085'
+    )
+  })
 })

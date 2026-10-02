@@ -50,6 +50,20 @@ function globToRegExp(glob) {
 }
 
 /**
+ * The `files:` negations of apps/desktop/electron-builder.yml as RegExps over repo-relative
+ * POSIX paths (`node_modules/pdfjs-dist/standard_fonts/x.ttf`). A path that matches one does
+ * not ship in app.asar — a whole package, or part of one.
+ */
+export function builderFileNegations(repoRoot) {
+  const builder = parse(
+    readFileSync(join(repoRoot, 'apps', 'desktop', 'electron-builder.yml'), 'utf8')
+  )
+  return (builder.files ?? [])
+    .filter((f) => typeof f === 'string' && f.startsWith('!'))
+    .map((f) => globToRegExp(f.slice(1)))
+}
+
+/**
  * Walk the production dependency graph of apps/desktop over package-lock entries,
  * exactly like electron-builder's collector (npm node_modules resolution).
  * Returns the set of lockfile paths ("node_modules/foo", "apps/desktop/node_modules/katex", …).
@@ -110,12 +124,7 @@ function prodClosure(packages) {
  */
 export function computeShippedPackages(repoRoot) {
   const lock = JSON.parse(readFileSync(join(repoRoot, 'package-lock.json'), 'utf8'))
-  const builder = parse(
-    readFileSync(join(repoRoot, 'apps', 'desktop', 'electron-builder.yml'), 'utf8')
-  )
-  const negations = (builder.files ?? [])
-    .filter((f) => typeof f === 'string' && f.startsWith('!'))
-    .map((f) => globToRegExp(f.slice(1)))
+  const negations = builderFileNegations(repoRoot)
 
   const closure = prodClosure(lock.packages)
   const shippedPaths = [...closure].filter(
