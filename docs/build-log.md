@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-02 — the closed 2026-10-01 DEP-5 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-02 (preamble budget, making room for the #551 entry). PR #534 is merged
+(2026-10-01) and alerts 98–101 are fixed; the record is unchanged: `architecture.md` "Electron 43.4.0 → 43.7.7". Citations
+of the form "BUILD_STATE 2026-10-01 entry" for DEP-5 now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-01 — **DEP-5 — Electron 43.4.0 → 43.7.7 clears the four high Dependabot alerts 98–101 (`fix/dependabot-electron-43-7-7`).**
+Three are unreachable here (no custom protocol, no `<webview>`, every window denies popups); the preload-cache one (alert 98) needs a
+renderer exploit first. Lockfile-only; Node 24.21.0, SQLite 3.53.4. Suite parity, the sqlite tests under Electron itself, a packaged
+smoke, cross-version workspaces and the OCR window's runtime CSP (open since DEP-1) all pass. Cost: from 43.7.2 the first window paints
+later (packaged +64 ms; owner accepted). Record: `architecture.md` "Electron 43.4.0 → 43.7.7". Open: macOS/Linux at runtime; §5 18(g)._
+
 ## 2026-10-02 — the closed 2026-09-27 #517 scorer entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-02 (preamble budget, making room for the streamdown 2.6 entry). Issue #517 is

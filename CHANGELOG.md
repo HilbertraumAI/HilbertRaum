@@ -45,6 +45,12 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **"Make searchable (OCR)" now reads black-and-white scans.** Most office scanners and fax
+  machines save black-and-white pages in a compact format (CCITT fax or JBIG2), and some scans
+  use JPEG 2000. The app showed such a page to the text recognition as an empty white page, so
+  the scan stayed unsearchable with the message that no readable text was found. This has been the
+  case since text recognition for scans was added. These scans are now recognised like any other.
+  Run **Make searchable (OCR)** again on a scan that failed this way (#551).
 - **Code in answers keeps its line breaks.** A code block showed all of its lines run together on
   one line, everywhere the app formats text: chat and image answers, translations, document
   summaries and the preview of Markdown files. Each line of code now starts on its own line, and

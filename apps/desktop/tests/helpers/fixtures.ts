@@ -102,7 +102,18 @@ export const TINY_JPEG: Buffer = Buffer.from(
   'base64'
 )
 
-type FixturePage = { kind: 'text'; lines: string[] } | { kind: 'image' }
+/** An image XObject: its dictionary entries (without `/Length`) and its raw stream bytes. */
+interface FixtureImage {
+  dict: string
+  bin: Buffer
+}
+
+const JPEG_IMAGE: FixtureImage = {
+  dict: '/Width 120 /Height 160 /ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode',
+  bin: TINY_JPEG
+}
+
+type FixturePage = { kind: 'text'; lines: string[] } | { kind: 'image'; image?: FixtureImage }
 
 /**
  * Build a PDF mixing real-text pages and image-only pages (binary-safe — the JPEG
@@ -135,11 +146,10 @@ export function makeMixedPdf(pages: FixturePage[]): Buffer {
       )
       kidRefs.push(`${pageNum} 0 R`)
     } else {
+      const image = p.image ?? JPEG_IMAGE
       const imgNum = add({
-        head:
-          '<< /Type /XObject /Subtype /Image /Width 120 /Height 160 ' +
-          `/ColorSpace /DeviceRGB /BitsPerComponent 8 /Filter /DCTDecode /Length ${TINY_JPEG.length} >>\nstream\n`,
-        bin: TINY_JPEG,
+        head: `<< /Type /XObject /Subtype /Image ${image.dict} /Length ${image.bin.length} >>\nstream\n`,
+        bin: image.bin,
         tail: '\nendstream'
       })
       const content = 'q 612 0 0 792 0 0 cm /Im0 Do Q'
@@ -200,6 +210,38 @@ export function makeHybridPdf(): Buffer {
       ]
     },
     { kind: 'image' }
+  ])
+}
+
+// ---- CCITT fax scan (#551) ------------------------------------------------------------
+//
+// Black-and-white office scans usually store each page as a CCITT Group 4 (fax) image, and
+// pdf.js 6 decodes those only through a module it loads separately (`wasmUrl`). These 16
+// bytes are a 64×16 test pattern encoded by Windows' TIFF encoder (WIC,
+// `TiffCompressOption.Ccitt4`, one strip, WhiteIsZero, so PDF needs no `/BlackIs1`).
+export const CCITT_SCAN_WIDTH = 64
+export const CCITT_SCAN_HEIGHT = 16
+const TINY_CCITT_G4: Buffer = Buffer.from('Km//Mwav/////8f/wAQAQA==', 'base64')
+
+/** The pattern's black pixels: a box over rows 4–11 × columns 8–39, a full-height bar over columns 50–53. */
+export function ccittScanIsBlack(x: number, y: number): boolean {
+  return (y >= 4 && y <= 11 && x >= 8 && x <= 39) || (x >= 50 && x <= 53)
+}
+
+/** A one-page scan whose only content is the CCITT G4 image: no text layer. */
+export function makeCcittScanPdf(): Buffer {
+  const w = CCITT_SCAN_WIDTH
+  const h = CCITT_SCAN_HEIGHT
+  return makeMixedPdf([
+    {
+      kind: 'image',
+      image: {
+        dict:
+          `/Width ${w} /Height ${h} /ColorSpace /DeviceGray /BitsPerComponent 1 ` +
+          `/Filter /CCITTFaxDecode /DecodeParms << /K -1 /Columns ${w} /Rows ${h} >>`,
+        bin: TINY_CCITT_G4
+      }
+    }
   ])
 }
 

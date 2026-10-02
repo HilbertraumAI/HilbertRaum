@@ -12293,7 +12293,7 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   and 3118). The same CDP smoke on the built app under the repo's Electron passed 10/10: PDF, DOCX
   and CSV text, and "Make searchable (OCR)" on a JPEG scan through the sandboxed rasterizer window,
   recognised word for word. **Not verified:** the packaged exe at runtime (pdf.js and its worker
-  loading from `app.asar`), still open on #551; the Documents list's scrolling on react-virtual
+  loading from `app.asar`), since verified (§10); the Documents list's scrolling on react-virtual
   3.14.13, since verified (§8).
 
 ### §8 The DEP-6 residuals #548–#551 (`fix/dep6-residuals-548-551`)
@@ -12361,7 +12361,7 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   moved by exactly −44.4 px, and the list stayed contiguous (11/11). *Packaged exe:* Smart App Control still blocks a fresh unsigned
   `package:win` (CodeIntegrity 3077/3118). The built app under the repo Electron passed the DEP-6
   smoke 10/10 again: PDF, DOCX and CSV text on pdf.js 6.3, and OCR through the rasterizer window.
-  pdf.js running from inside `app.asar` stays open on #551.
+  pdf.js running from inside `app.asar` stayed open on #551 until §10.
 
 ### §9 streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on §8)
 
@@ -12412,6 +12412,49 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   overlapping. A file-parse test pins the rule.
 - **After merge:** comment `@dependabot unignore streamdown` on a Dependabot PR. The `minor version`
   ignore posted on #543 otherwise keeps future streamdown minors out of the production group.
+
+### §10 #551 closed: the packaged run, and the scan decoders pdf.js loads at run time (`fix/551-packaged-pdfjs-check`)
+
+- **Running the packaged app when Smart App Control blocks it.** SAC refuses each freshly built,
+  unsigned `HilbertRaum.exe` (a new hash; CodeIntegrity 3033/3077/3118), but it runs
+  `node_modules/electron/dist/electron.exe`, which is unsigned too. The packaged exe is that binary
+  with its resource section rewritten. The code sections are byte-identical: all 78,585 differing
+  bytes lie in `.rsrc` and the seven header fields that size it. The fuse wire is the same
+  (`101100011`: no embedded asar integrity check, no only-load-from-asar). A copy of `win-unpacked`
+  with the stock binary renamed to `HilbertRaum.exe` therefore runs the packaged app's own code
+  against its `app.asar`, with `app.isPackaged` true, because that test is name-based.
+- **The #551 boxes, on master `1d91cd8b`'s package.** Driven over CDP: encrypted workspace; a text
+  PDF, DOCX and CSV extracted; "Make searchable (OCR)" on a JPEG scan recognised word for word;
+  lock and unlock keep every document; no ERROR line in the Diagnostics log tail; no renderer error.
+- **Found: CCITT, JBIG2 and JPEG 2000 scans rendered blank.** Since 6.0 (the app's first version,
+  6.0.227), pdf.js has no built-in decoder for these images. It loads one at run time as
+  `${wasmUrl}<file name>`: `jbig2.wasm` for CCITT fax and JBIG2, `openjpeg.wasm` for JPEG 2000,
+  and for each a plain-JS build (`*_nowasm_fallback.js`) if the wasm fails. The rasterizer set no
+  `wasmUrl`. Its worker warned `Ensure that the wasmUrl API parameter is provided`, then
+  `Failed to resolve module specifier 'nulljbig2_nowasm_fallback.js'`, and dropped every such
+  image (`JBig2 failed to initialize`), so the page rendered white. A CCITT G4 scan, the encoding
+  office scanners write for black-and-white pages (here made with the Windows TIFF encoder), failed
+  "Make searchable (OCR)" with "no readable text" and logged an ERROR. The DEP-6 smokes passed
+  because their JPEG scan decodes natively. Every release since OCR shipped (Phase 38, v0.1.8) has
+  this defect, as the code of 6.0.227, 6.2.108 and 6.3.289 shows; old builds were not run. Text
+  extraction is unaffected, because `getTextContent` decodes no images.
+- **Fix.** The rasterizer passes `wasmUrl`. The renderer build emits pdfjs-dist's `wasm/` jbig2 and
+  openjpeg modules, both the wasm and the JS builds, under their own names into
+  `out/renderer/pdfjs-wasm/` (`assetFileNames`, chosen by `originalFileNames`; about 0.95 MB). pdf.js
+  then tries the wasm and falls back to the JS build itself. Nothing else is shipped: pdf.js uses
+  qcms (ICC colour) only with `useWorkerFetch`, which stays off while `cMapUrl` and
+  `standardFontDataUrl` are unset, and it uses quickjs only for scripting, which is off too. Every
+  other renderer asset keeps its name, as a file-list diff against master showed.
+- **Verification.** On the packaged layout the G4 scan is recognised word for word. pdf.js loads
+  the wasm build: no `#instantiateWasm` warning appears, while the same capture records the pre-fix
+  warnings. With `useWasm: false` forced, the JS build does the same, 15/15. In CI,
+  `ocr-decoder-assets.test.ts` pins three links: the installed pdf.js decodes a 64×16 G4 pattern
+  pixel for pixel through either build and decodes nothing without `wasmUrl`; the build ships every
+  file the bundled worker names, byte for byte; and the page passes `wasmUrl`. Three mutations, a
+  dropped decoder import, a dropped `wasmUrl` and hashed names, each fail exactly the guard for
+  their link. Suite: 480 files, 7,920 passed / 87 skipped / 8,008, which is master's 479 / 8,001 plus
+  the new file's 7. Not covered end to end: JBIG2 and JPEG 2000 scans (no encoder on this machine).
+  They use the same loader, and JBIG2 shares `jbig2.*` with CCITT.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
