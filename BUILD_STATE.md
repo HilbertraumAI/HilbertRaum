@@ -28,6 +28,9 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-02 — **#554 / #555 — two missed aborts across an await (`fix/554-555-missed-abort`, PR #556).** `KiwixServer.ensureStarted` re-checks the signal
+after superseding `stop()`; `acquireForChat` re-checks it after the handoff and releases the slot itself. Each test lands the abort in the gap by microtask
+ordering, failed on the old code and passes now. No user-visible change, so no CHANGELOG. Record: `architecture.md` DEP-6 §8 (#549 bullet)._
 _2026-10-02 — **#550 follow-up — streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on the #548–#551 PR).** The mermaid chain (110 lockfile entries)
 leaves the tree, and with it DEP-3's ~40 `files:` negations; a guard keeps mermaid out of the production graph. 2.6's new 400/300 px caps on code blocks and
 tables need Tailwind (not loaded): a tall table drew 1,128 px over what followed, so both are off. Also fixed: since 2026-06-30 every multi-line code block

@@ -351,6 +351,35 @@ describe('ModelSlotArbiter', () => {
     expect(resumed).toBe(true)
   })
 
+  // #555: on the SLOW path, waitForHandoff's onWake removes its abort listener and resolves, and
+  // acquireForChat installs the holding-phase listener only on the next microtask. 'abort' fires
+  // once, so an abort in that gap reached neither listener and the parked build waited for
+  // withChatStream's `finally`.
+  it('an abort right after the builder s handoff still releases the slot (#555)', async () => {
+    const a = mkArbiter()
+    a.registerBuild('job1')
+    const controller = new AbortController()
+    const acquire = a.acquireForChat(controller.signal)
+    const outcome = acquire.then(
+      () => 'resolved',
+      (err: unknown) => err
+    )
+    await tick()
+    expect(a.shouldYield()).toBe(true) // parked in waitForHandoff
+    // By ordering, not a timer: this microtask is queued BEFORE the handoff, so it runs after
+    // onWake's resolve and before acquireForChat's continuation.
+    queueMicrotask(() => controller.abort())
+    let resumed = false
+    const parked = a.reacquire('job1').then(() => (resumed = true)) // onWake fires synchronously
+    await tick()
+    // The caller never calls a release fn: the abort alone must give the slot back.
+    passDelay()
+    await tick()
+    expect(resumed).toBe(true)
+    await parked
+    expect(await outcome).toBeInstanceOf(SlotAbortedError)
+  })
+
   // ---- #399 D3(a): the post-chat resume delay -----------------------------------------
   //
   // Why the delay exists: on 11 of our 14 chat models an evicted chat prefix is re-prefilled
