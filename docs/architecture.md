@@ -12321,6 +12321,16 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   ((b), plus the unreported (a), (d), (d2), (e) and (f)) and none on the new. Cost: (a) sits out one
   3 s total. Same class, not seen failing, left as is: the D-Z22 block's (3b) drips every 75 ms
   under a 150 ms idle timer, so a freeze of more than about 150 ms between two chunks would cut it.
+  A third case came out of a later full run: `dictation-ipc.test.ts` "a wedged child …" hung for its
+  whole 120 s budget. The handler arms its 30 ms deadline before awaiting the WAV write, and the
+  fake only waited for a future `'abort'` event. A deadline that fired during the write therefore
+  left it unsettled for good. Its earlier 15 s and 60 s timeouts, put down to starved runners, fit
+  this too. The fake now checks `signal.aborted` first, as the real transcriber does
+  (`transcriber/cli.ts`). With a 1 ms deadline the old fake hung 3 of 3 times; the new one passed
+  5 of 5. A read-only sweep of the other test fakes that subscribe to `'abort'` found none exposed.
+  It also found two minor production gaps, not fixed here: `zim/serve.ts` misses a caller's cancel
+  that lands during its `await this.stop()`, and `model-slot-arbiter.ts` can miss an abort in the
+  microtask after the handoff. Both leave the release to the caller's `finally`; neither hangs.
 - **#550: the `lib` is ES2024 in both programs.** Every runtime has ES2024: Electron 43 (Node 24,
   Chromium 150) and Node 22.12, the engines floor that runs the tests and `out/tools`. ES2025 is
   not available everywhere (Node 22 lacks `Promise.try` and `RegExp.escape`). With type-fest's

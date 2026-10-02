@@ -837,7 +837,11 @@ stalled machine timed attempts out before their headers arrived, and healthy ans
 the same way. It now runs production's shape (a 300 ms idle timer, armed by the headers, inside a
 3 s total); a 500 ms freeze in the fixture server failed six of the block's tests before and none
 after. **Choose where the clock starts and which timer trips so that only the behaviour under test
-can trip it; size it after that.**
+can trip it; size it after that.** A fake that waits for an `AbortSignal` must check
+`signal.aborted` before it subscribes: when the code under test arms its deadline and then awaits
+something, the abort can land first, and `'abort'` is not dispatched twice. `dictation-ipc`'s
+"wedged child" fake hung that way for a whole 120 s budget, and its earlier timeouts had been put
+down to starved runners.
 
 **What CI does NOT cover — the manual `HILBERTRAUM_*` matrix stays a separate human gate.** A green
 CI run says **nothing** about the real-`spawn` / real-binary / real-weights surface: that is the
