@@ -1,10 +1,13 @@
 {
   // Main + preload (Node/Electron context). NO DOM lib — a browser global (document,
   // localStorage, …) leaking into the main process is a type error here.
+  // ES2024 is the floor every runtime has: Electron 43 (Node 24, Chromium 150) and Node 22.12,
+  // the engines floor that runs the tests and out/tools. ES2025 is not (Node 22 lacks
+  // Promise.try and RegExp.escape). Keep tsconfig.web.json on the same version (#550).
   "extends": "./tsconfig.base.json",
   "compilerOptions": {
     "composite": true,
-    "lib": ["ES2022"]
+    "lib": ["ES2024"]
   },
   "include": ["src/main", "src/preload", "electron.vite.config.ts", "vite.tools.config.ts", "vitest.config.ts"]
 }
