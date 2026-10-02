@@ -15,11 +15,12 @@ updates:
     schedule:
       interval: weekly
       day: monday
-    # Manifests are never edited: an in-range update lands in the lockfile only, so a floor keeps
-    # meaning "the version a wave verified", and a deliberate exact or tilde pin (the Radix
-    # primitives, decision D-UI1; tesseract.js; katex ~0.16, one copy with @streamdown/math's)
-    # stays a wave's decision. `increase-if-necessary` did not do this: its first run raised
-    # every caret floor and moved the Radix and katex pins (#540, #541).
+    # Keeps a deliberate exact or tilde pin a wave's decision: an update that would need the pin
+    # changed is not proposed (the Radix primitives, decision D-UI1; tesseract.js; katex ~0.16,
+    # one copy with @streamdown/math's). `increase-if-necessary` proposed them and moved the Radix
+    # and katex pins (#541). Contrary to its documentation, `lockfile-only` still raises the caret
+    # floor of each package a grouped PR bumps (#540, #543), so after a merge that floor is the
+    # version the PR's CI ran, not one a wave verified.
     versioning-strategy: lockfile-only
     # A newly published version waits a week before it is proposed (supply-chain hygiene).
     # Security alerts are not delayed by this.
