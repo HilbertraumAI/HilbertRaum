@@ -88,16 +88,34 @@ the intersection of both**. All four policy strings live in `main/window-securit
    `buildMetaCsp(false, …)` byte-for-byte (CI builds before it tests).
 
 - **Production header** (strict): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
-  connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; base-uri 'none';
-  frame-ancestors 'none'; form-action 'none'`. No remote origins are reachable from the renderer. The production
+  connect-src 'self'; img-src 'self' data:; font-src 'self'; worker-src 'none'; object-src 'none'; base-uri 'none';
+  frame-ancestors 'none'; form-action 'none'`. No remote origin is reachable from any renderer
+  **execution context** (see the worker note below for why that qualifier is now true, and the
+  one remaining `file://` **read** residual in "Residual egress channels"). The production
   **meta** policies match the checked-in page metas minus the localhost entries (the `ocr` page
-  keeps `worker-src 'self' blob:` / `img-src 'self' data: blob:` — the bundled pdfjs allowances;
-  its worker itself resolves as a plain same-origin asset, and a packaged-build rasterization
-  was verified under the stricter header intersection). **Header/meta parity (#266):** every
-  baked meta, dev and prod, carries the same hardening tail as the production header — `object-src 'none';
-  base-uri 'none'; frame-ancestors 'none'; form-action 'none'` — so the fallback layer denies
-  the same things if the header wiring ever regresses; `form-action 'none'` is the second,
-  independent refusal of a form submit (the navigation guard is the first).
+  keeps `img-src 'self' data: blob:` — a bundled-pdfjs allowance). **Header/meta parity (#266,
+  extended fix/ocr-pdfjs-in-page):** every baked meta, dev and prod, carries the same hardening
+  tail as the production header — `worker-src 'none'; object-src 'none'; base-uri 'none';
+  frame-ancestors 'none'; form-action 'none'` — so the fallback layer denies the same things if
+  the header wiring ever regresses; `form-action 'none'` is the second, independent refusal of a
+  form submit (the navigation guard is the first).
+- **Workers — `worker-src 'none'`, and why pdf.js runs in-page (fix/ocr-pdfjs-in-page).** No
+  renderer window starts a worker. The OCR rasterizer used to run pdf.js in a dedicated
+  `file://` **module worker**, and that worker was under **no CSP at all**: Chromium takes a
+  dedicated worker's policy from its own script's **response headers**, and a `file://` response
+  has none (local-scheme — blob:/data: — workers inherit the creator's policy, but a `file://`
+  worker does not); meanwhile the session `onHeadersReceived` header that covers `file://`
+  **documents** does not reach a `file://` worker's script. Measured on the packaged build:
+  inside that worker `new Function`, `WebAssembly.compile`, a `fetch` to an arbitrary host, and a
+  `fetch`/XHR of any local file all succeeded, with no policy string on any violation — pdf.js
+  parsed untrusted PDF bytes there outside every script and network control. The rasterizer now
+  imports pdf.js's worker module for its side effect (`globalThis.pdfjsWorker`) and pdf.js uses
+  its in-page "fake worker", so all of it — the parser included — runs on the OCR page's main
+  thread under that page's header ∩ meta. With no worker anywhere, `worker-src 'none'` on both
+  pages (and the prod header) removes the one CSP-free context a script already running in either
+  window could otherwise reach with a single `new Worker(<any file:// script>)` (measured: that
+  construction is now refused). The image decoders load as same-origin `script-src 'self'`
+  modules (`useWasm: false`, JS build — the page CSP has no `'wasm-unsafe-eval'`).
   **Why prod keeps `style-src 'unsafe-inline'` (audit 2026-07-16 F-39 — investigated, kept):** it is
   load-bearing for **KaTeX** math. `katex.renderToString` (used via `@streamdown/math` → rehype-katex
   in `AssistantMarkdown`) emits many per-expression inline `style="height:…;vertical-align:…"`
@@ -2411,6 +2429,17 @@ it.
   clipboard history or cross-device sync. See "What lives or passes outside the drive" above.
   Accepted as documented — owner decision #227 ruled "document only" on 2026-09-03 (#250 closed);
   no timed clear ships.
+- **(v) `file://` read access inside the renderer (reachable only after a compromise).** The
+  renderer is served from `file://` with Electron's `GrantFileProtocolExtraPrivileges` fuse on,
+  so `connect-src 'self'` matches every `file://` URL: a script running in either window can
+  `fetch`/XHR the bytes of any file the OS account can read (measured). On its own this reads, it
+  does not send — `connect-src 'self'` blocks every remote fetch/XHR/WebSocket, and the only
+  un-CSP'd egress left is WebRTC ((iii), itself post-compromise). It matters as the second half of
+  a renderer code-execution bug: read local files (including the unlocked workspace's decrypted
+  working DB) and pair with (iii) to exfiltrate. The proper fix is to serve the renderer from a
+  custom `app://` protocol and turn `GrantFileProtocolExtraPrivileges` off (Electron's security
+  checklist); it touches every window and the per-origin browser storage, so it is its own change
+  (drafted follow-up). Recorded in `known-limitations.md` "Security & privacy".
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

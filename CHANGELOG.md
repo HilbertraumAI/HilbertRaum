@@ -25,6 +25,14 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Security
+
+- **The PDF reader that powers "Make searchable (OCR)" now runs fully inside the app's strict
+  content-security sandbox.** When a scanned PDF is prepared for text recognition, the component
+  that reads it previously ran in a helper that was not covered by the app's content-security
+  policy. It now runs under the same strict policy as the rest of the app, which blocks any
+  attempt to reach the network or run generated code. OCR and the text it produces are unchanged.
+
 ### Changed
 
 - **Help for Linux when the AppImage does not start.** The user guide and the README now give the

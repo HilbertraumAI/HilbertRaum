@@ -64,13 +64,20 @@ export function buildCsp(isDev: boolean): string {
         "style-src 'self' 'unsafe-inline'; connect-src 'self' ws://localhost:* http://localhost:*; " +
         "img-src 'self' data:; font-src 'self'; form-action 'none'"
     : "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-        "connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; " +
-        "base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+        "connect-src 'self'; img-src 'self' data:; font-src 'self'; worker-src 'none'; " +
+        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 }
 
 /** The hardening tail every baked meta carries, dev and prod (#266): the meta is the
- *  fallback layer if the header wiring ever regresses, so it denies the same things. */
-const META_CSP_TAIL = "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+ *  fallback layer if the header wiring ever regresses, so it denies the same things.
+ *  `worker-src 'none'` (fix/ocr-pdfjs-in-page): since the OCR rasterizer runs pdf.js
+ *  in-page (no worker), NO window starts a worker — and a `file://` dedicated worker
+ *  escapes the CSP entirely (Chromium takes a worker's policy from its own script
+ *  response, which a `file://` response has none of; measured, security-model.md). So
+ *  refusing workers outright removes a CSP-free context any already-running script could
+ *  otherwise reach with one `new Worker`. */
+const META_CSP_TAIL =
+  "worker-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 
 /**
  * The CSP that ships INSIDE the HTML (`<meta http-equiv="Content-Security-Policy">`) of
@@ -91,11 +98,11 @@ const META_CSP_TAIL = "object-src 'none'; base-uri 'none'; frame-ancestors 'none
  *
  * Prod therefore strips the `ws://localhost:*` / `http://localhost:*` connect-src
  * entries; every other directive is byte-identical to the dev policy of the same page.
- * The `ocr` page keeps `worker-src 'self' blob:` and `img-src … data: blob:` — the
- * bundled pdfjs's allowances (its worker itself loads as a plain 'self' asset; measured:
- * packaged rasterization runs under the stricter header intersection) — so this meta
- * never becomes the directive that breaks rasterization only in packaged builds, the one
- * place CI cannot see. Pinned by tests/unit/window-security.test.ts and by the
+ * The `ocr` page keeps `img-src … data: blob:` (a bundled-pdfjs allowance). `worker-src`
+ * is `'none'` on BOTH pages, in the shared tail (fix/ocr-pdfjs-in-page): the rasterizer
+ * runs pdf.js in-page with no worker, so refusing workers closes the one CSP-free context
+ * a `file://` dedicated worker would be — see `buildCsp`/`META_CSP_TAIL` and
+ * security-model.md. Pinned by tests/unit/window-security.test.ts and by the
  * built-output test tests/integration/csp-build-output.test.ts (no `localhost` in a
  * built meta, ever).
  */
@@ -105,7 +112,7 @@ export function buildMetaCsp(isDev: boolean, page: 'index' | 'ocr'): string {
     ? `default-src 'self'; script-src 'self'; connect-src ${connectSrc}; ` +
         `img-src 'self' data:; style-src 'self' 'unsafe-inline'; font-src 'self'; ${META_CSP_TAIL}`
     : `default-src 'self'; script-src 'self'; connect-src ${connectSrc}; ` +
-        `img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; ${META_CSP_TAIL}`
+        `img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; ${META_CSP_TAIL}`
 }
 
 /**

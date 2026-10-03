@@ -29,7 +29,13 @@ HilbertRaum is a **local-first, offline** application. Full details live in
   calls a typed, audited bridge. On Linux distributions that restrict unprivileged user namespaces
   (Ubuntu 24.04 and later among them), the AppImage starts without Chromium's operating-system
   sandbox; see [`docs/known-limitations.md`](docs/known-limitations.md) "Security & privacy".
-- **Strict Content-Security-Policy** — no remote origins are permitted.
+- **Strict Content-Security-Policy** — no remote origin is reachable from any renderer execution
+  context. The policy is enforced as a response header and a per-page `<meta>` fallback, and
+  `worker-src 'none'` keeps every window worker-free (the OCR rasterizer runs pdf.js on its own
+  page, not in a worker, so no context escapes the policy). The renderer can still read local
+  files it is pointed at — a defence-in-depth residual, not a network path; see
+  [`docs/security-model.md`](docs/security-model.md) "Residual egress channels" and
+  [`docs/known-limitations.md`](docs/known-limitations.md).
 - **Deny-by-default renderer permissions** (Phase 31) — geolocation, notifications, camera, and
   screen capture are refused; the single exception is microphone access for voice dictation.
 - **The one inbound surface is opt-in and loopback-bound** — the optional local API (Settings →

@@ -12455,6 +12455,65 @@ PR on top of Dependabot's commit. What the review found, none of it visible to C
   their link. Suite: 480 files, 7,920 passed / 87 skipped / 8,008, which is master's 479 / 8,001 plus
   the new file's 7. Not covered end to end: JBIG2 and JPEG 2000 scans (no encoder on this machine).
   They use the same loader, and JBIG2 shares `jbig2.*` with CCITT.
+- **Superseded by §11 (`fix/ocr-pdfjs-in-page`).** Two statements above are no longer true: pdf.js
+  no longer runs in a worker (the rasterizer's `pdf.worker-*.mjs` ran outside the CSP on `file://`,
+  the gap §11 closes), and the build no longer ships the `.wasm` decoders — only the
+  `*_nowasm_fallback.js` builds, loaded under `useWasm: false`. The decoder loader and the
+  `wasmUrl`/`pdfjs-wasm/` mechanism are otherwise unchanged; `ocr-decoder-assets.test.ts` now reads
+  the decoder names from the OCR page chunk (the worker is bundled into it) and asserts no `.wasm`
+  and no separate worker asset ship.
+
+### §11 The OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pdfjs-in-page`)
+
+_Defence-in-depth hardening of the OCR rasterizer (2026-10-03). No known exploit; pdf.js 6.3 has
+no eval path. Measured on packaged master `66ad007e` (Electron 43.7.7 / Chromium 150) through the
+§10 SAC workaround; analysis in the git-ignored working paper, this is the durable record._
+
+- **The gap.** The hidden OCR window (`ocr.html`) ran pdf.js in a dedicated `file://` **module
+  worker** (`GlobalWorkerOptions.workerSrc`). That worker was under **no CSP**: Chromium takes a
+  dedicated worker's policy from its own script's response headers, and a `file://` response has
+  none (only blob:/data: workers inherit the creator's policy); the session `onHeadersReceived`
+  header that reaches `file://` **documents** (§CSP in security-model) does not reach a `file://`
+  worker's script. Measured inside that worker on the packaged build: `new Function`,
+  `WebAssembly.compile`, a `fetch` to an arbitrary loopback host, and `fetch`/XHR of an arbitrary
+  local file all **succeeded**, no policy on any violation. pdf.js parses untrusted PDF bytes
+  there, so a future pdf.js code-execution bug (the CVE-2024-4367 class) would have become "read
+  any local file and send it out", with no second step. The page and main window themselves were
+  correctly under the header ∩ meta (eval/wasm/remote-fetch blocked); only the worker escaped.
+  Dev (`http://localhost:5173`) did not show it — over http the worker script goes through the
+  network service and the header attaches.
+- **The fix.** Run pdf.js **in the OCR page**, not a worker. `ocr/main.ts` imports
+  `pdfjs-dist/legacy/build/pdf.worker.mjs` for its side effect (it sets `globalThis.pdfjsWorker`),
+  and pdf.js then uses its in-page "fake worker" (`PDFWorker #initialize` →
+  `#mainThreadWorkerMessageHandler`); no `workerSrc` is set, so no `Worker` is constructed. All of
+  pdf.js — the parser included — runs on the page thread under its header ∩ meta.
+- **JS decoders only.** The page CSP has no `'wasm-unsafe-eval'` (and must not), so the rasterizer
+  passes `useWasm: false` and the build ships only the `*_nowasm_fallback.js` decoders (no
+  `.wasm`); pdf.js loads them as same-origin `script-src 'self'` modules from `pdfjs-wasm/`. This
+  also removes pdf.js's PDF-steered wasm compilation (Type 4 PostScript functions) from the app.
+- **`worker-src 'none'`, both pages and the prod header.** With no worker anywhere (the main
+  window's bundles contain none either), refusing workers closes the one CSP-free context any
+  already-running script could otherwise reach with `new Worker(<any file:// script>)` — measured
+  before the fix: such a worker ran with no policy; after: the construction is refused. It joins
+  `META_CSP_TAIL` (header/meta parity, #266). This is the only change to the main window's CSP,
+  and its cost is nil (no worker is used anywhere).
+- **Measured, packaged, after.** Smoke 18/18; **0 pdf.js worker targets** (was 1 per OCR task);
+  the OCR page's probe blocked eval, wasm, every remote fetch and `new Worker`; **0 loopback
+  hits**; CCITT G4 + JPEG scans recognised; a 20-page CCITT scan completed 21/21 with the OCR
+  window's JS heap flat at ~7 MB (BE-7 `page.cleanup()` still runs in-page); cancel tears the
+  window down and a fresh OCR works; the 60 s step timeout, cancel and render-process-gone paths
+  are main-side and unchanged. Same on the built app under the repo Electron and under
+  `npm run dev`. Built `ocr-*.js` is ~0.3 MB larger (the worker is bundled in) and one
+  `Setting up fake worker.` warning prints per document.
+- **Remaining, out of scope (drafted follow-up).** The renderer's `file://` read access
+  (`GrantFileProtocolExtraPrivileges` on + `connect-src 'self'` on a `file://` origin) is
+  unchanged; the proper fix is a custom `app://` protocol with the fuse off. See
+  known-limitations and security-model "Residual egress channels" (v).
+- **Guards.** `window-security.test.ts` (prod header + both metas carry `worker-src 'none'`;
+  the OCR meta no longer carries `worker-src 'self' blob:`), `csp-build-output.test.ts` (byte-exact
+  built metas), `ocr-decoder-assets.test.ts` (OCR chunk sets `globalThis.pdfjsWorker`, no separate
+  `pdf.worker-*.mjs` asset, `pdfjs-wasm/` holds exactly the two JS fallbacks and no `.wasm`,
+  `getDocument` passes `useWasm: false`, nothing sets `workerSrc`/`workerPort`).
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

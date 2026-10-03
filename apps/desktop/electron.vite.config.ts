@@ -90,14 +90,16 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html'),
-          // Hidden OCR rasterizer page (Phase 38): bundles pdfjs + its worker locally
-          // — the sentinel test proves no CDN host ever enters these bundles.
+          // Hidden OCR rasterizer page (Phase 38): bundles pdfjs AND its worker code into
+          // the page chunk (pdf.js runs in-page, no Worker — fix/ocr-pdfjs-in-page) — the
+          // sentinel test proves no CDN host ever enters these bundles.
           ocr: resolve(__dirname, 'src/renderer/ocr.html')
         },
         output: {
-          // pdf.js loads its image decoders as `${wasmUrl}<fixed file name>` (#551), so the
-          // rasterizer's copies of pdfjs-dist/wasm/ keep their names, together in one
-          // directory. Every other asset keeps Vite's default hashed name.
+          // pdf.js loads its JS image decoders as `${wasmUrl}<fixed file name>` (#551,
+          // fix/ocr-pdfjs-in-page: JS build only, `useWasm: false`), so the rasterizer's
+          // copies of pdfjs-dist/wasm/ (`*_nowasm_fallback.js`) keep their names, together in
+          // one directory. Every other asset keeps Vite's default hashed name.
           assetFileNames: (asset) =>
             asset.originalFileNames.some((f) => f.includes('pdfjs-dist/wasm/'))
               ? 'pdfjs-wasm/[name][extname]'

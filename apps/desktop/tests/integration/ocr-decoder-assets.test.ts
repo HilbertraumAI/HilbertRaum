@@ -14,10 +14,15 @@ import {
 // #551: pdf.js 6 decodes CCITT fax, JBIG2 and JPEG 2000 images only through modules it loads at
 // run time from `wasmUrl` (pdfjs-dist/wasm/: a wasm build, and a plain-JS build it falls back
 // to). The OCR rasterizer passed no `wasmUrl`, so a black-and-white office scan (CCITT G4)
-// rendered as a blank page and "Make searchable (OCR)" found no text. Three links keep it
-// working, one block each: the installed pdf.js decodes such a scan given `wasmUrl`; the
-// renderer build ships every module the bundled worker asks for, under the name it asks for;
-// and the rasterizer page passes `wasmUrl`.
+// rendered as a blank page and "Make searchable (OCR)" found no text.
+//
+// fix/ocr-pdfjs-in-page: pdf.js now runs IN the OCR page, not a worker, under the page's CSP —
+// which has no `'wasm-unsafe-eval'`, so the rasterizer forces the JS decoders (`useWasm: false`)
+// and the build ships ONLY the `*_nowasm_fallback.js` modules (no `.wasm`). The links kept here,
+// one block each: the installed pdf.js decodes such a scan through either build given `wasmUrl`;
+// the renderer build ships exactly the JS decoders the in-page worker names, byte for byte, with
+// no `.wasm` and no separate `pdf.worker-*.mjs` asset; and the page passes `wasmUrl` +
+// `useWasm: false` and sets no `workerSrc`.
 
 const req = createRequire(__filename)
 const PDFJS_WASM_DIR = join(dirname(req.resolve('pdfjs-dist/package.json')), 'wasm')
@@ -112,13 +117,20 @@ const builtFile = (re: RegExp): string => {
   return readFileSync(join(ASSETS, hits[0]!), 'utf8')
 }
 
-describe.skipIf(!built)('the renderer build ships the decoders the bundled pdf.js worker loads (#551)', () => {
-  it('every module the worker names sits in pdfjs-wasm/ under that name, byte for byte', () => {
-    const worker = builtFile(/^pdf\.worker-.*\.mjs$/)
-    const named = [...worker.matchAll(/_(?:noWasm)?[fF]ilename = "([^"]+)"/g)].map((m) => m[1]!)
-    expect(named).toEqual(
-      expect.arrayContaining(['jbig2.wasm', 'jbig2_nowasm_fallback.js', 'openjpeg.wasm', 'openjpeg_nowasm_fallback.js'])
-    )
+describe.skipIf(!built)('the renderer build ships the JS decoders the in-page pdf.js worker loads (#551)', () => {
+  // The worker code is bundled into the OCR page chunk now (fix/ocr-pdfjs-in-page), so the decoder
+  // names are read from it, not from a separate pdf.worker asset — which must no longer be emitted.
+  const ocrChunk = builtFile(/^ocr-.*\.js$/)
+  const JS_DECODERS = ['jbig2_nowasm_fallback.js', 'openjpeg_nowasm_fallback.js']
+
+  it('the OCR chunk bundles the worker (sets globalThis.pdfjsWorker) — no separate worker asset is emitted', () => {
+    expect(ocrChunk).toContain('globalThis.pdfjsWorker')
+    expect(readdirSync(ASSETS).filter((f) => /^pdf\.worker-.*\.mjs$/.test(f))).toEqual([])
+  })
+
+  it('every JS decoder the chunk names sits in pdfjs-wasm/ under that name, byte for byte', () => {
+    const named = [...ocrChunk.matchAll(/_noWasmFilename = "([^"]+)"/g)].map((m) => m[1]!)
+    expect(named).toEqual(expect.arrayContaining(JS_DECODERS))
     for (const name of named) {
       const shipped = join(DECODERS, name)
       expect(existsSync(shipped), `out/renderer/pdfjs-wasm/${name}`).toBe(true)
@@ -126,17 +138,31 @@ describe.skipIf(!built)('the renderer build ships the decoders the bundled pdf.j
     }
   })
 
+  it('pdfjs-wasm/ holds exactly those JS fallbacks and no .wasm (the page CSP forbids wasm)', () => {
+    expect(readdirSync(DECODERS).sort()).toEqual([...JS_DECODERS].sort())
+  })
+
   it('the rasterizer page derives its wasmUrl from that directory', () => {
-    expect(builtFile(/^ocr-.*\.js$/)).toContain('"../pdfjs-wasm/jbig2.wasm"')
+    expect(ocrChunk).toContain('"../pdfjs-wasm/jbig2_nowasm_fallback.js"')
   })
 })
 
-describe('the rasterizer page hands pdf.js its decoders (#551)', () => {
-  it('src/renderer/ocr/main.ts passes wasmUrl to getDocument', () => {
-    const src = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'ocr', 'main.ts'), 'utf8')
+describe('the rasterizer page hands pdf.js its decoders in-page, under the CSP (#551, fix/ocr-pdfjs-in-page)', () => {
+  const src = readFileSync(join(__dirname, '..', '..', 'src', 'renderer', 'ocr', 'main.ts'), 'utf8')
+
+  it('getDocument passes wasmUrl AND useWasm: false (JS decoders, no wasm compilation)', () => {
     const calls = src.split('\n').filter((line) => line.includes('pdfjs.getDocument('))
     expect(calls).toHaveLength(1)
     expect(calls[0]).toMatch(/\bwasmUrl: DECODERS_URL\b/)
+    expect(calls[0]).toMatch(/\buseWasm: false\b/)
+  })
+
+  it('nothing sets workerSrc or workerPort — pdf.js uses its in-page fake worker', () => {
+    // A `file://` dedicated worker escapes the renderer CSP; the whole point is to start none.
+    // Match the ways pdf.js takes a worker (an assignment or an option), not the word in a
+    // comment: `GlobalWorkerOptions.workerSrc = …`, `workerSrc:`/`workerPort:` in getDocument.
+    expect(src).not.toMatch(/GlobalWorkerOptions/)
+    expect(src).not.toMatch(/\bworker(Src|Port)\s*[:=]/)
   })
 
   it('the build-output checks above actually ran on CI', () => {
