@@ -1486,8 +1486,8 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   EvidenceExportFormat`, meta gains `format` — so the cover/Integrity "Format" line
   states what the artifact IS: `packExport.meta.formatValuePdf` on PDFs, the P3
   `formatValue` on HTML; exactly ONE line branches — pinned by a byte-level swap test —
-  and cancel renders nothing) → [PDF only, P6: `renderPdf(html, {packId,
-  sourceHtmlPath})` — the injected hidden-window print, fed the render output VERBATIM]
+  and cancel renders nothing) → [PDF only, P6: `renderPdf(html, {packId})` — the injected
+  hidden-window print, fed the render output VERBATIM; #563 dropped `sourceHtmlPath`]
   → `writePackFileAtomic(dest, content, packId)` (tmp
   sibling → fsync → hash the READ-BACK on-disk bytes → rename; accepts string OR Buffer —
   the SAME tail serves both formats; failure removes the tmp and rethrows — no half-written
@@ -1495,31 +1495,35 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   hashed, spec §20.3; bare `file_name`, the EFFECTIVE format, resolved options into
   `options_json`). `renderPdf` is REQUIRED (a missing printer can never silently degrade a
   PDF request).
-  **Every transient sibling is named PER EXPORT, never from the destination alone
-  (AUD-17):** `printSourcePath(dest, packId)` → `${dest}.<packId token>.print.tmp.html` and
-  `packTmpPath(dest, packId)` → `${dest}.<packId token>.tmp`, both minted by one private
-  `exportToken` helper (the pack id's alphanumerics, capped at a UUID's 32 hex characters;
+  **The transient sibling is named PER EXPORT, never from the destination alone
+  (AUD-17):** `packTmpPath(dest, packId)` → `${dest}.<packId token>.tmp`, minted by the private
+  `exportToken` helper: the pack id's alphanumerics, capped at a UUID's 32 hex characters;
   an id that sanitises away falls back to a random token — no content can reach a file
-  name). Two exports saving to the SAME path must share no transient at all: they used to
+  name. (Until #563 it also named the PDF print source, `printSourcePath` →
+  `${dest}.<packId token>.print.tmp.html`.) Two exports saving to the SAME path must share no transient at all: they used to
   share both, and the collision — documented at the time as "the loser fails cleanly" — in
   fact let one export read back, hash, and rename the OTHER review's bytes under its own
   `evidence_exports` row, while the PDF seam let a print pick up the other pack entirely.
   `writePackFileAtomic` therefore takes `packId` as a REQUIRED third argument: the
   read-back hash is only trustworthy if nothing else can write that file between the fsync
   and the read. What two same-destination exports still share is the DESTINATION itself
-  (later rename wins — the user's own instruction). The print source stays a SIBLING in the
-  user-sanctioned directory (never an OS temp dir), removed by the harness in `finally`
-  with one retry and an ids-only `log.warn` on failure (AUD-16).
+  (later rename wins — the user's own instruction). Since #563 the PDF print writes no file at
+  all (harness block below); the AUD-16 cleanup (one retry + an ids-only `log.warn`) went with
+  the file.
   Encoding (string content): UTF-8 **without** BOM (unlike md/txt/csv `bomFor` — the
   `<meta charset>` is the contract; recorded hash = on-disk bytes).
   `suggestedPackFileName(title, format)` slugs the review title (content — which is why
   path/name never reach audit) + the format's extension.
 ✅ **PDF print harness (P6, `main/services/evidence-pack/print-pdf.ts` — plan §11/D-1):**
-  `printEvidencePackHtmlToPdf(html, {packId, sourceHtmlPath})` → PDF `Buffer`. Dedicated
+  `printEvidencePackHtmlToPdf(html, {packId})` → PDF `Buffer`. Dedicated
   hidden `BrowserWindow` per print — `SECURE_WINDOW_WEB_PREFERENCES` spread (sandboxed),
   **no preload at all** (no IPC surface; wiring-pinned in `window-security.test.ts`),
-  window-open + will-navigate/will-redirect ALL denied; writes the source html sibling,
-  `loadFile` (= did-finish-load) → `document.fonts.ready` → `printToPDF` with the FULL
+  window-open + will-navigate/will-redirect ALL denied; holds the page in memory
+  (#563: `printPages.open(html)` in `app-protocol.ts` → `{url: hilbertraum://print/<64 hex>,
+  release}`; served once by the scheme handler with `EVIDENCE_PACK_CSP`, `nosniff`,
+  `no-store`; at most `PRINT_MAX_PENDING` = 4 slots, a fifth print throws before any window;
+  `release` in `finally`), `loadURL` (= did-finish-load) → `document.fonts.ready` →
+  `printToPDF` with the FULL
   D-1 option set (verified supported by the installed Electron 43 types, and re-smoked on
   the packaged Electron 43.4.0 / Chromium 150 build — DEP-4 P4, 2026-08-18: every option
   accepted, output a valid `%PDF-1.4 … %%EOF`, and `generateTaggedPDF` produced actual
@@ -1675,12 +1679,13 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   chip joins Ready), `GermanSmoke` (outdated overlay DE). Review renderer test files
   (incl. `lockPurge.test.ts`'s review leg) stub the refresh structurally via
   `stubReviewApi` (`tests/helpers/evidenceReview.ts`).
-✅ **Phase-6 tests (PDF):** `tests/unit/evidence-pack-print-pdf.test.ts` ×9 (fake
+✅ **Phase-6 tests (PDF):** `tests/unit/evidence-pack-print-pdf.test.ts` ×9, ×12 since #563 (fake
   electron: the D-1 option literals + footer no-@font-face/escaping pins, preload-free
   sandboxed posture + deny-all navigation, teardown on success/print-failure/load-failure/
   app-quit-mid-print/step-timeout — runs everywhere incl. CI) + `evidence-pack-export.
   test.ts` P6 describe ×6 (seam contract: verbatim html + the per-export
-  `${dest}.<packId token>.print.tmp.html` + the
+  `${dest}.<packId token>.print.tmp.html` (since #563: `{packId}` only, and nothing but the
+  PDF beside the destination) + the
   PDF self-description line; extension-override both directions incl. the format line
   following the EFFECTIVE format; cancel-under-PDF ⇒ no render/no print/no file/no row;
   killed-print ⇒ no file/no siblings/no row; outdated-refusal BEFORE dialog AND print;

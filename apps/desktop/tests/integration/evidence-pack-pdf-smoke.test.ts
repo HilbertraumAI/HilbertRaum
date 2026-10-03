@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll } from 'vitest'
 import { spawn } from 'node:child_process'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { createRequire } from 'node:module'
 import { tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -17,6 +17,12 @@ import { ensureDomMatrixPolyfill } from '../../src/main/services/ingestion/parse
 // the `generateTaggedPDF` mark, the kill-mid-print teardown (app quit after load →
 // rejection, no output), and the no-network posture across the whole run at TWO layers
 // (every Chromium request url + the app's real offline connect-guard).
+//
+// #563: the page is printed FROM MEMORY on the app's own scheme (`hilbertraum://print/<token>`),
+// set up in the child exactly as the app does it. Checked here: exactly one request per print,
+// to a print-host URL; no print page left held afterwards; a pack padded past 8 MB (a `data:`
+// URL caps near 2 MB) prints; and no file anywhere under the run's directory, the Electron
+// profile included, holds the pack's text except the inputs this test wrote.
 //
 // GATING (honest, not silent): CI installs no Electron binary at all
 // (ELECTRON_SKIP_BINARY_DOWNLOAD=1 in ci.yml — "nothing here launches Electron"), so
@@ -91,13 +97,20 @@ const AR_EN_PACK_ID = 'SMOKE-PACK-ID-AR-EN-2b3c4d5e'
 const AR_DE_PACK_ID = 'SMOKE-PACK-ID-AR-DE-6f7a8b9c'
 const ARCHIVE_PACK_ID_EN = '5c9a7e21-4b6d-4f38-9a0c-1d2e3f4a5b6c'
 const ARCHIVE_PACK_ID_DE = '7e2d4c60-8a19-4b53-bc71-0f5a6d3e2c14'
+/** #563: the padded pack's comment size — four times what a data: URL could carry. */
+const LARGE_PAD_BYTES = 8 * 1024 * 1024
 
 interface SmokeJobResult {
   name: string
   ok: boolean
   error: string | null
-  sourceHtmlRemoved: boolean
   outExists: boolean
+  pendingAfter: number
+  requests: string[]
+  ms: number
+  htmlBytes: number
+  peakBrowserKiB: number
+  peakRendererKiB: number
 }
 interface SmokeResult {
   fatal: string | null
@@ -173,12 +186,14 @@ let enPdf = ''
 let dePdf = ''
 let arEnPdf = ''
 let arDePdf = ''
+let largePdf = ''
 let killOut = ''
-let killSource = ''
+const inputHtml: string[] = []
 let en: PdfFacts | null = null
 let de: PdfFacts | null = null
 let arEn: PdfFacts | null = null
 let arDe: PdfFacts | null = null
+let large: PdfFacts | null = null
 
 describe.skipIf(!enabled)(
   'evidence-pack PDF smoke — REAL Electron printToPDF + pdfjs (skips where the Electron binary/display is absent, e.g. CI)',
@@ -211,19 +226,32 @@ describe.skipIf(!enabled)(
           .replaceAll('TIMESTAMP', '2026-07-18 12:00 UTC')
         const p = join(root, name)
         writeFileSync(p, html, 'utf8')
+        inputHtml.push(p)
         return p
       }
       const enHtml = prepare('relevance.html', EN_PACK_ID, 'en.html')
       const deHtml = prepare('german.html', DE_PACK_ID, 'de.html')
       const arEnHtml = prepare('archive-mixed.html', AR_EN_PACK_ID, 'archive-en.html')
       const arDeHtml = prepare('archive-mixed-de.html', AR_DE_PACK_ID, 'archive-de.html')
+      // #563: the EN pack padded past 8 MB with an HTML comment — no layout cost, but a
+      // response four times the size a `data:` URL could carry.
+      const largeHtml = join(root, 'large.html')
+      writeFileSync(
+        largeHtml,
+        readFileSync(enHtml, 'utf8').replace(
+          '</body>',
+          `<!-- ${'padding '.repeat(LARGE_PAD_BYTES / 8)} --></body>`
+        ),
+        'utf8'
+      )
+      inputHtml.push(largeHtml)
 
       enPdf = join(root, 'en.pdf')
       dePdf = join(root, 'de.pdf')
       arEnPdf = join(root, 'archive-en.pdf')
       arDePdf = join(root, 'archive-de.pdf')
+      largePdf = join(root, 'large.pdf')
       killOut = join(root, 'killed.pdf')
-      killSource = join(root, 'killed.pdf.print.tmp.html')
       const resultPath = join(root, 'result.json')
       const jobFile = join(root, 'jobs.json')
       writeFileSync(
@@ -235,36 +263,37 @@ describe.skipIf(!enabled)(
               name: 'en',
               htmlPath: enHtml,
               packId: EN_PACK_ID,
-              outPdfPath: enPdf,
-              sourceHtmlPath: join(root, 'en.pdf.print.tmp.html')
+              outPdfPath: enPdf
             },
             {
               name: 'de',
               htmlPath: deHtml,
               packId: DE_PACK_ID,
-              outPdfPath: dePdf,
-              sourceHtmlPath: join(root, 'de.pdf.print.tmp.html')
+              outPdfPath: dePdf
             },
             {
               name: 'archive-en',
               htmlPath: arEnHtml,
               packId: AR_EN_PACK_ID,
-              outPdfPath: arEnPdf,
-              sourceHtmlPath: join(root, 'archive-en.pdf.print.tmp.html')
+              outPdfPath: arEnPdf
             },
             {
               name: 'archive-de',
               htmlPath: arDeHtml,
               packId: AR_DE_PACK_ID,
-              outPdfPath: arDePdf,
-              sourceHtmlPath: join(root, 'archive-de.pdf.print.tmp.html')
+              outPdfPath: arDePdf
+            },
+            {
+              name: 'large',
+              htmlPath: largeHtml,
+              packId: EN_PACK_ID,
+              outPdfPath: largePdf
             },
             {
               name: 'kill',
               htmlPath: enHtml,
               packId: EN_PACK_ID,
               outPdfPath: killOut,
-              sourceHtmlPath: killSource,
               kill: true
             }
           ]
@@ -307,6 +336,13 @@ describe.skipIf(!enabled)(
       de = await readPdfFacts(dePdf)
       arEn = await readPdfFacts(arEnPdf)
       arDe = await readPdfFacts(arDePdf)
+      large = await readPdfFacts(largePdf)
+      // For the record (#563 design record): time and memory per print.
+      for (const r of result.results) {
+        console.log(
+          `[pdf-smoke] ${r.name}: ${r.ms} ms, html ${r.htmlBytes} B, peak browser ${r.peakBrowserKiB} KiB, peak renderer ${r.peakRendererKiB} KiB`
+        )
+      }
     }, 240_000)
 
     afterAll(() => {
@@ -316,7 +352,7 @@ describe.skipIf(!enabled)(
     it('EN pack: real multi-section PDF — %PDF magic, pages, question/answer/pack-id sentinels, footer page numbers', () => {
       const enResult = result!.results.find((r) => r.name === 'en')!
       expect(enResult.ok, enResult.error ?? '').toBe(true)
-      expect(enResult.sourceHtmlRemoved).toBe(true)
+      expect(enResult.pendingAfter).toBe(0)
       expect(readFileSync(enPdf).subarray(0, 5).toString('latin1')).toBe('%PDF-')
       expect(en!.numPages).toBeGreaterThan(0)
       // Sentinels from the CURRENT catalog + the golden's fixture content. CONTAINS, not
@@ -346,7 +382,7 @@ describe.skipIf(!enabled)(
     it('DE pack: German sentinels from the CURRENT catalog (P5-final strings), umlauts/ß intact, DE outline', () => {
       const deResult = result!.results.find((r) => r.name === 'de')!
       expect(deResult.ok, deResult.error ?? '').toBe(true)
-      expect(deResult.sourceHtmlRemoved).toBe(true)
+      expect(deResult.pendingAfter).toBe(0)
       expect(de!.numPages).toBeGreaterThan(0)
       expect(de!.text).toContain(t('de', 'packExport.docTitle')) // "Nachweispaket"
       expect(de!.text).toContain(t('de', 'packExport.qa.question')) // "Frage"
@@ -368,7 +404,7 @@ describe.skipIf(!enabled)(
     it('EN archive pack: the article title, the archive title, the pack id and the article path all survive print + text extraction; the archive card carries the archive warning, not the legacy unresolved one', () => {
       const job = result!.results.find((r) => r.name === 'archive-en')!
       expect(job.ok, job.error ?? '').toBe(true)
-      expect(job.sourceHtmlRemoved).toBe(true)
+      expect(job.pendingAfter).toBe(0)
       expect(readFileSync(arEnPdf).subarray(0, 5).toString('latin1')).toBe('%PDF-')
       expect(arEn!.numPages).toBeGreaterThan(0)
       // Provenance: the article title, the pack line, and the mono locator (pack UUID + entry
@@ -405,7 +441,7 @@ describe.skipIf(!enabled)(
     it('DE archive pack: the German archive strings, the pack id and the umlaut/ß article path survive print + text extraction; the archive card carries the archive warning, not the legacy unresolved one', () => {
       const job = result!.results.find((r) => r.name === 'archive-de')!
       expect(job.ok, job.error ?? '').toBe(true)
-      expect(job.sourceHtmlRemoved).toBe(true)
+      expect(job.pendingAfter).toBe(0)
       expect(arDe!.numPages).toBeGreaterThan(0)
       expect(arDe!.text).toContain(t('de', 'packExport.docTitle')) // "Nachweispaket"
       expect(arDe!.text).toContain('Treibhausgas')
@@ -446,14 +482,60 @@ describe.skipIf(!enabled)(
       expect(kill.error).toBeTruthy()
       expect(kill.outExists).toBe(false)
       expect(existsSync(killOut)).toBe(false)
-      expect(kill.sourceHtmlRemoved).toBe(true)
-      expect(existsSync(killSource)).toBe(false)
+      // The killed print gave its page back too.
+      expect(kill.pendingAfter).toBe(0)
     })
 
-    it('no network across the entire run: every Chromium request is file://, the offline guard stayed silent', () => {
+    it('#563: a pack past 8 MB prints from memory (no navigation-size cap, unlike a data: URL)', () => {
+      const job = result!.results.find((r) => r.name === 'large')!
+      expect(job.ok, job.error ?? '').toBe(true)
+      expect(job.htmlBytes).toBeGreaterThan(LARGE_PAD_BYTES)
+      expect(job.pendingAfter).toBe(0)
+      expect(readFileSync(largePdf).subarray(0, 5).toString('latin1')).toBe('%PDF-')
+      // The padding is a comment: the printed pack is the EN pack, complete.
+      expect(large!.text).toContain('Termination requires 30 days notice.')
+      expect(large!.compact).toContain(`1/${large!.numPages}`)
+      expect(large!.numPages).toBe(en!.numPages)
+    })
+
+    it('#563: each print requested its page exactly once, on the print host, under its own token', () => {
+      const PRINT_URL = /^hilbertraum:\/\/print\/[0-9a-f]{64}$/
+      const tokens = new Set<string>()
+      for (const job of result!.results) {
+        expect(job.requests, job.name).toHaveLength(1)
+        expect(job.requests[0], job.name).toMatch(PRINT_URL)
+        tokens.add(job.requests[0]!)
+      }
+      expect(tokens.size).toBe(result!.results.length)
+    })
+
+    it('#563: no file under the run directory holds the pack text except the inputs this test wrote — the Electron profile included', () => {
+      // Sentinels from the EN and DE packs, as UTF-8 bytes. The PDFs carry their text in
+      // compressed streams; they are the outputs and are listed as such.
+      const sentinels = ['Termination requires 30 days notice.', 'Die Kündigungsfrist beträgt 30 Tage.'].map(
+        (t) => Buffer.from(t, 'utf8')
+      )
+      const outputs = new Set([enPdf, dePdf, arEnPdf, arDePdf, largePdf])
+      const holders: string[] = []
+      const walk = (dir: string): void => {
+        for (const name of readdirSync(dir)) {
+          const full = join(dir, name)
+          const st = statSync(full)
+          if (st.isDirectory()) walk(full)
+          else if (st.isFile() && !outputs.has(full) && !inputHtml.includes(full)) {
+            const bytes = readFileSync(full)
+            if (sentinels.some((sv) => bytes.includes(sv))) holders.push(full.slice(root.length))
+          }
+        }
+      }
+      walk(root)
+      expect(holders).toEqual([])
+    })
+
+    it('no network across the entire run: every Chromium request is a print page, the offline guard stayed silent', () => {
       expect(result!.requestedUrls.length).toBeGreaterThan(0) // the loads themselves
-      const nonFile = result!.requestedUrls.filter((u) => !u.startsWith('file://'))
-      expect(nonFile).toEqual([])
+      const other = result!.requestedUrls.filter((u) => !u.startsWith('hilbertraum://print/'))
+      expect(other).toEqual([])
       expect(result!.offlineViolations).toEqual([])
     })
   }

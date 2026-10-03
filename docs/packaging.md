@@ -316,9 +316,9 @@ false }` (plus `resetAdHocDarwinSignature: true`, which re-signs a macOS arm64 b
 the flip, before any Developer ID signature; not measured, no Mac). With the fuse off, `file://` pages
 lose Electron's extra privileges (`fetch`/XHR of any local file, among others). The app's own pages
 moved to `hilbertraum://app/` for this: with the fuse off, the old `file://` layout's module scripts
-are refused by CORS from origin `null` (measured), so do not move a page back to `file://`. The
-evidence-pack print window still loads a `file://` page; it runs no script and loads nothing, and
-its real-Electron smoke passes with the fuse off.
+are refused by CORS from origin `null` (measured), so do not move a page back to `file://`. Since
+#563 no window loads `file://` at all: the evidence-pack print window prints from memory on
+`hilbertraum://print/<token>`.
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
 Decode it with the library, not by hand. Expected for 43.7.7: `101100001`.

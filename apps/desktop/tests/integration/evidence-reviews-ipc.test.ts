@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard'
@@ -24,14 +24,23 @@ const ipcState = vi.hoisted(() => ({
   // the loaded file, whether the print source existed on disk at load time).
   pdf: {
     bytes: new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]), // "%PDF-"
-    loadedPath: undefined as string | undefined,
-    sourceExistedAtLoad: false
+    loadedUrl: undefined as string | undefined,
+    /** What the app's scheme handler served for that URL at load time (#563). */
+    servedAtLoad: undefined as { status: number; body: string } | undefined
   }
 }))
 vi.mock('electron', async () => {
-  const { existsSync } = await import('node:fs')
   // P6: a constructible hidden-window fake — the REAL printEvidencePackHtmlToPdf drives
-  // it (loadFile → fonts → printToPDF → destroy); only Electron itself is faked.
+  // it (loadURL → fonts → printToPDF → destroy); only Electron itself is faked. #563: the load
+  // fetches its URL through the app's REAL scheme handler, as Chromium would.
+  const { createAppProtocolHandler, printPages } = await import('../../src/main/app-protocol')
+  const handler = createAppProtocolHandler({
+    files: new Set(),
+    readFile: async () => {
+      throw new Error('no app files in this test')
+    },
+    printPages
+  })
   class BrowserWindow {
     static getFocusedWindow(): null {
       return null
@@ -43,9 +52,10 @@ vi.mock('electron', async () => {
       executeJavaScript: async (): Promise<boolean> => true,
       printToPDF: async (): Promise<Uint8Array> => ipcState.pdf.bytes
     }
-    async loadFile(path: string): Promise<void> {
-      ipcState.pdf.loadedPath = path
-      ipcState.pdf.sourceExistedAtLoad = existsSync(path)
+    async loadURL(url: string): Promise<void> {
+      ipcState.pdf.loadedUrl = url
+      const res = await handler(new Request(url))
+      ipcState.pdf.servedAtLoad = { status: res.status, body: await res.text() }
     }
     isDestroyed(): boolean {
       return this.destroyed
@@ -620,8 +630,8 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     ipcState.saveDialog.canceled = true
     ipcState.saveDialog.filePath = undefined
     ipcState.saveDialog.lastOptions = undefined
-    ipcState.pdf.loadedPath = undefined
-    ipcState.pdf.sourceExistedAtLoad = false
+    ipcState.pdf.loadedUrl = undefined
+    ipcState.pdf.servedAtLoad = undefined
   })
 
   it('exports a READY review: file written, record returned, exports on the detail, audit ids-only, no model/no network', async () => {
@@ -789,14 +799,13 @@ describe('evidence-pack export over IPC (plan §8.3 — the 15th channel)', () =
     ])
     expect(String(ipcState.saveDialog.lastOptions?.defaultPath)).toMatch(/\.pdf$/)
 
-    // The REAL print harness ran: it loaded the transient `.print.tmp.html` SIBLING of
-    // the destination (present on disk at load time), and removed it afterwards. The name
-    // carries this export's pack id — a random UUID's 32 hex characters — so two exports
-    // to the same destination never load and print the same file (AUD-17).
-    const loaded = String(ipcState.pdf.loadedPath)
-    expect(loaded.slice(dest.length)).toMatch(/^\.[0-9a-f]{32}\.print\.tmp\.html$/)
-    expect(ipcState.pdf.sourceExistedAtLoad).toBe(true)
-    expect(existsSync(loaded)).toBe(false)
+    // The REAL print harness ran: it loaded the pack FROM MEMORY on the print host under a
+    // random token (#563), served once by the app's own scheme handler — and nothing beside the
+    // destination but the destination itself.
+    expect(String(ipcState.pdf.loadedUrl)).toMatch(/^hilbertraum:\/\/print\/[0-9a-f]{64}$/)
+    expect(ipcState.pdf.servedAtLoad?.status).toBe(200)
+    expect(ipcState.pdf.servedAtLoad?.body.startsWith('<!DOCTYPE html>')).toBe(true)
+    expect(readdirSync(h.root).filter((f) => f.startsWith('pack.pdf'))).toEqual(['pack.pdf'])
 
     // The destination holds the printer's bytes; the row + audit record 'pdf'.
     expect(new Uint8Array(readFileSync(dest))).toEqual(ipcState.pdf.bytes)

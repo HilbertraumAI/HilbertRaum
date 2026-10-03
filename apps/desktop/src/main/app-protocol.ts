@@ -20,11 +20,18 @@
 // explicit (the OS registry can map `.js` to `text/plain`, which breaks module scripts under
 // nosniff); an extension it does not know is refused, and the built-output test fails CI first.
 //
+// A second host, `hilbertraum://print/<token>` (#563), serves the evidence-pack print page from
+// memory instead of a transient plaintext file beside the export. It is a different origin from
+// `hilbertraum://app`, so the app's own pages cannot read it (no CORS, and their CSP refuses other
+// origins). The map of pending pages IS its allowlist: a page is held for one print, served at
+// most once, and dropped in the print's `finally`. See `PrintPages`.
+//
 // Deliberately no runtime `electron` import (type-only is fine): the module must be unit-testable
 // under plain vitest (the window-security.ts pattern). The Electron glue is install-app-protocol.ts.
 
+import { randomBytes } from 'node:crypto'
 import type { Privileges } from 'electron'
-import { buildCsp } from './window-security'
+import { buildCsp, EVIDENCE_PACK_CSP } from './window-security'
 
 export const APP_SCHEME = 'hilbertraum'
 export const APP_HOST = 'app'
@@ -123,17 +130,125 @@ export function appResponseHeaders(contentType?: string): Record<string, string>
   }
 }
 
+/** The host of the in-memory print pages (#563). */
+export const PRINT_HOST = 'print'
+/** Their origin — not `APP_ORIGIN`, so the app's pages cannot read a print page. */
+export const PRINT_ORIGIN = `${APP_SCHEME}://${PRINT_HOST}`
+/** At most this many prints hold a page at once. Each holds one rendered pack in memory and a
+ *  hidden window; four concurrent exports already take four save dialogs. */
+export const PRINT_MAX_PENDING = 4
+
+/** A print token: 32 random bytes, lowercase hex. */
+const PRINT_TOKEN = /^[0-9a-f]{64}$/
+
+/** A page held for one print: the URL its window loads, and the release its `finally` calls. */
+export interface PrintPageSlot {
+  url: string
+  release: () => void
+}
+
+/**
+ * The pending print pages (#563), keyed by a random token — the print host's allowlist. A slot
+ * runs from `open` to `release` (the print's `finally`). Its page is served AT MOST ONCE: the
+ * handler's `take` removes it, so a reload or a second request gets a 404. Printing renders the
+ * document already loaded and does not fetch it again (measured).
+ */
+export class PrintPages {
+  private readonly pages = new Map<string, string>()
+  private readonly slots = new Set<string>()
+
+  constructor(
+    private readonly max: number = PRINT_MAX_PENDING,
+    private readonly newToken: () => string = () => randomBytes(32).toString('hex')
+  ) {}
+
+  /** Hold `html` for one print. Throws, before anything else happens, when `max` prints already
+   *  hold a slot. */
+  open(html: string): PrintPageSlot {
+    if (this.slots.size >= this.max) throw new Error('evidence pdf: too many prints at once')
+    const token = this.newToken()
+    if (!PRINT_TOKEN.test(token) || this.slots.has(token)) {
+      throw new Error('evidence pdf: could not mint a print token')
+    }
+    this.slots.add(token)
+    this.pages.set(token, html)
+    let released = false
+    return {
+      url: `${PRINT_ORIGIN}/${token}`,
+      release: () => {
+        if (released) return
+        released = true
+        this.pages.delete(token)
+        this.slots.delete(token)
+      }
+    }
+  }
+
+  /** The handler's read: the page for `token`, removed as it is returned (one-shot). */
+  take(token: string): string | null {
+    const html = this.pages.get(token)
+    if (html === undefined) return null
+    this.pages.delete(token)
+    return html
+  }
+
+  /** Prints currently holding a slot. */
+  get pending(): number {
+    return this.slots.size
+  }
+}
+
+/** The app's one registry: the handler serves from it, `print-pdf.ts` opens slots in it. */
+export const printPages = new PrintPages()
+
+/**
+ * The print host's syntax layer: the token a request names, or `null` (refuse). Exactly the
+ * scheme and the print host, no credentials or port, GET, and a path of `/` plus one token —
+ * nothing else, not even a query. Whether the token is pending is `PrintPages.take`'s call.
+ */
+export function resolvePrintToken(rawUrl: string, method: string): string | null {
+  if (method !== 'GET') return null
+  let url: URL
+  try {
+    url = new URL(rawUrl)
+  } catch {
+    return null
+  }
+  if (url.protocol !== `${APP_SCHEME}:` || url.host !== PRINT_HOST) return null
+  if (url.username !== '' || url.password !== '' || url.port !== '' || url.search !== '') return null
+  const token = url.pathname.slice(1)
+  return url.pathname.startsWith('/') && PRINT_TOKEN.test(token) ? token : null
+}
+
+/** The headers of a served print page: the pack's own policy, no sniffing, nothing cached. */
+export function printResponseHeaders(): Record<string, string> {
+  return {
+    'Content-Type': 'text/html; charset=utf-8',
+    'Content-Security-Policy': EVIDENCE_PACK_CSP,
+    'X-Content-Type-Options': 'nosniff',
+    'Cache-Control': 'no-store'
+  }
+}
+
 export interface AppProtocolHandlerDeps {
   /** Root-relative paths of every servable file (see `listAppAssets`). */
   files: ReadonlySet<string>
   /** Read one of those files; `relPath` is always a member of `files`. */
   readFile: (relPath: string) => Promise<Uint8Array<ArrayBuffer>>
+  /** The pending print pages (#563); the print host serves nothing without them. */
+  printPages?: Pick<PrintPages, 'take'>
 }
 
 /** The `protocol.handle` callback. A refused request — or a read that fails — is a 404 with an
  *  empty body: the reason never leaks to the page. */
 export function createAppProtocolHandler(deps: AppProtocolHandlerDeps): (request: Request) => Promise<Response> {
   return async (request) => {
+    const token = resolvePrintToken(request.url, request.method)
+    if (token !== null) {
+      const html = deps.printPages?.take(token) ?? null
+      if (html !== null) return new Response(html, { status: 200, headers: printResponseHeaders() })
+      return new Response(null, { status: 404, headers: appResponseHeaders() })
+    }
     const hit = resolveAppAsset(request.url, request.method, deps.files)
     if (hit) {
       try {
