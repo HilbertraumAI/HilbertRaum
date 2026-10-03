@@ -61,6 +61,20 @@ export function appPageUrl(page: AppPage): string {
   return `${APP_ORIGIN}/${page}.html`
 }
 
+/**
+ * The dev server's URL (electron-vite sets `ELECTRON_RENDERER_URL` under `npm run dev`), or
+ * `undefined`. A packaged build never honours it (#562): the variable would otherwise let anyone
+ * who can set the process environment point a window, the OCR rasterizer's included, at a server
+ * of their choosing. The one place that reads it; both window loaders call this.
+ */
+export function devRendererUrl(
+  isPackaged: boolean,
+  env: Readonly<Record<string, string | undefined>> = process.env
+): string | undefined {
+  if (isPackaged) return undefined
+  return env['ELECTRON_RENDERER_URL'] || undefined
+}
+
 /** Content types by extension — exactly what the renderer build emits. An extension missing here
  *  is refused; tests/integration/app-protocol-assets.test.ts fails when the build emits one. */
 export const APP_MIME_TYPES: Readonly<Record<string, string>> = Object.freeze({

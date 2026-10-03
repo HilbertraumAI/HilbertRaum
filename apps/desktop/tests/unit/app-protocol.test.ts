@@ -10,6 +10,7 @@ import {
   appResponseHeaders,
   createAppProtocolHandler,
   createMainWindowNavigationPredicate,
+  devRendererUrl,
   listAppAssets,
   resolveAppAsset,
   type AssetDirReader
@@ -312,5 +313,23 @@ describe('createMainWindowNavigationPredicate — the main window may navigate o
 
   it('a malformed dev-server URL denies everything', () => {
     expect(createMainWindowNavigationPredicate('::not a url::')('http://localhost:5173/')).toBe(false)
+  })
+})
+
+describe('devRendererUrl — only an unpackaged build follows the dev server (#562)', () => {
+  const env = { ELECTRON_RENDERER_URL: 'http://localhost:5173' }
+
+  it('unpackaged: the dev server electron-vite names', () => {
+    expect(devRendererUrl(false, env)).toBe('http://localhost:5173')
+  })
+
+  it('packaged: never, whatever the environment says', () => {
+    expect(devRendererUrl(true, env)).toBeUndefined()
+    expect(devRendererUrl(true, { ELECTRON_RENDERER_URL: 'http://127.0.0.1:8080' })).toBeUndefined()
+  })
+
+  it('unset or empty: no dev server', () => {
+    expect(devRendererUrl(false, {})).toBeUndefined()
+    expect(devRendererUrl(false, { ELECTRON_RENDERER_URL: '' })).toBeUndefined()
   })
 })
