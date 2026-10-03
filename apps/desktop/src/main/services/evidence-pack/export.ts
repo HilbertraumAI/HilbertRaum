@@ -30,11 +30,12 @@ import { renderEvidencePackHtml } from './render-html'
 // No model runtime, no network, no re-retrieval anywhere on this path (spec FR-2/FR-12 —
 // pinned by the no-model/no-network test assertions).
 //
-// CONCURRENCY (AUD-17): every transient file an export creates beside the destination — the
-// PDF print source and the atomic writer's tmp sibling — is named from the export's own
-// pack id (`printSourcePath` / `packTmpPath`), never from the destination alone. Two exports
-// saving to the SAME path therefore share no file at all. They used to share both, and the
-// collision was documented here as failing cleanly; it did not. The loser did not lose — both
+// CONCURRENCY (AUD-17): the one transient file an export creates beside the destination — the
+// atomic writer's tmp sibling — is named from the export's own pack id (`packTmpPath`), never
+// from the destination alone, and the PDF print page is held in memory under its own random
+// token (#563; until then a print-source FILE named the same way). Two exports saving to the
+// SAME path therefore share nothing. They used to share both, and the collision was documented
+// here as failing cleanly; it did not. The loser did not lose — both
 // exports succeeded, and one wrote a file whose bytes belonged to the OTHER review while its
 // `evidence_exports` row named its own, silently. That is provenance corruption of a
 // signed-off artifact, so the shared resources were removed rather than contended on. What
@@ -92,11 +93,10 @@ export interface EvidencePackExportDeps {
    * harness (`printEvidencePackHtmlToPdf`). REQUIRED, not optional: the pipeline cannot
    * be wired without deciding PDF, so a missing printer can never silently degrade a
    * requested PDF into something else. Only called when the effective format is 'pdf'.
-   * `sourceHtmlPath` is the transient print-source sibling this pipeline chose — unique per
-   * export (`printSourcePath`), so concurrent prints share no file; the printer owns its
-   * write→load→remove lifecycle.
+   * The printer holds the page in memory for the print (#563) — no file beside the
+   * destination, nothing for this pipeline to name or remove.
    */
-  renderPdf: (html: string, opts: { packId: string; sourceHtmlPath: string }) => Promise<Buffer>
+  renderPdf: (html: string, opts: { packId: string }) => Promise<Buffer>
   /** Pack-id mint (defaults to randomUUID) — injectable for deterministic goldens. */
   newPackId?: () => string
   /** Generation timestamp (defaults to now, ISO) — injectable for deterministic goldens. */
@@ -154,9 +154,8 @@ export function suggestedPackFileName(title: string, format: EvidenceExportForma
 }
 
 /**
- * The per-export uniqueness token every transient sibling of the destination carries
- * (AUD-17). One helper, so the print source and the atomic writer's tmp file cannot drift
- * apart in how they are named or sanitised.
+ * The per-export uniqueness token the atomic writer's transient sibling carries (AUD-17).
+ * (The PDF print source carried it too until #563 moved the print page into memory.)
  *
  * It can never leak content: only the pack id's ALPHANUMERICS are used (a random UUID
  * reduces to its 32 hex characters), capped to that length so no id can grow the path
@@ -169,33 +168,12 @@ function exportToken(packId: string): string {
 }
 
 /**
- * The transient print-source sibling for ONE export (AUD-17).
- *
- * This used to be a fixed `${destPath}.print.tmp.html`, derived from the DESTINATION alone —
- * so two exports running at the same time against the same destination wrote, loaded and
- * printed the SAME file. `loadFile` resolving is not the moment Chromium is finished with
- * the document: an overwrite that lands in a later main-process turn is picked up and
- * printed successfully. The loser therefore did not "fail cleanly": BOTH exports succeeded,
- * and one produced a file whose bytes were the other review's pack while the
- * `evidence_exports` row it recorded named its own review — silent provenance corruption of
- * a signed-off artifact. Removing the shared resource is preferable to contending on it, so
- * the name now carries the per-export token.
- *
- * The `.print.tmp.html` tail is unchanged: the `.html` extension is load-bearing for
- * file:// MIME sniffing, and crash residue stays recognisable as the same class the atomic
- * writer's tmp sibling belongs to.
- */
-export function printSourcePath(destPath: string, packId: string): string {
-  return `${destPath}.${exportToken(packId)}.print.tmp.html`
-}
-
-/**
  * The atomic writer's tmp sibling for ONE export (AUD-17, second seam).
  *
- * Same defect, same shape, one seam later: while the print source was shared, `${destPath}.tmp`
- * was too — and unlike the print source this one is on the path of EVERY export, HTML
- * included (an HTML export renders no print source at all, so the fix above cannot reach
- * it). Two concurrent exports to one destination raced inside `writePackFileAtomic`: the
+ * Same defect, same shape, one seam later: while the PDF print source was a shared file (until
+ * AUD-17 named it per export; since #563 there is no such file), `${destPath}.tmp` was shared
+ * too — and unlike the print source this one is on the path of EVERY export, HTML included.
+ * Two concurrent exports to one destination raced inside `writePackFileAtomic`: the
  * second `open(tmp, 'w')` truncates the first's bytes, so the first can read back — and
  * hash, and rename onto the destination — content it never wrote. Its `evidence_exports`
  * row then names its own review while the recorded SHA-256 describes the other review's
@@ -331,13 +309,8 @@ export async function exportEvidencePackToFile(
   const html = renderEvidencePackHtml(model)
   const content =
     format === 'pdf'
-      ? await deps.renderPdf(html, {
-          packId: model.packId,
-          // A SIBLING of the destination: the transient print source lives in the one
-          // directory the user already sanctioned for this content (never an OS temp dir).
-          // Named per EXPORT, not per destination — see `printSourcePath` (AUD-17).
-          sourceHtmlPath: printSourcePath(destPath, model.packId)
-        })
+      ? // Printed from memory (#563): no transient copy of the pack beside the destination.
+        await deps.renderPdf(html, { packId: model.packId })
       : html
   const fileSha256 = await writePackFileAtomic(destPath, content, model.packId)
   // Row only AFTER the final file exists and is hashed (spec §20.3). Bare name only —

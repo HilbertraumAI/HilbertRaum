@@ -42,8 +42,8 @@ electronVersion: 43.7.7
 # Electron fuses (#560), flipped in the packaged binary by @electron/fuses before signing.
 # GrantFileProtocolExtraPrivileges OFF: `file://` pages lose the extra privileges Electron gives
 # them by default (fetch/XHR of any local file, among others). The app's own pages are served from
-# `hilbertraum://app/` (src/main/app-protocol.ts), which does not need them; the only `file://`
-# page left, the evidence-pack print window, runs no script and loads nothing. Turning the fuse
+# `hilbertraum://app/` (src/main/app-protocol.ts), which does not need them; since #563 the
+# evidence-pack print window prints from memory on `hilbertraum://print/` too. Turning the fuse
 # off with the pages still on `file://` breaks them (module scripts refused by CORS from origin
 # `null`, measured), so the scheme and this line go together. ONLY this fuse is set; the others
 # stay at Electron's defaults (see docs/packaging.md "Electron fuses"). resetAdHocDarwinSignature:

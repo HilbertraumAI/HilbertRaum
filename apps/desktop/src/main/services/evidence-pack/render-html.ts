@@ -2,6 +2,7 @@ import { t, tCount, type MessageKey, type UiLanguage } from '../../../shared/i18
 import { CITE_CODE_SPLIT_RE, CITE_MARKER_RE } from '../../../shared/citation-markers'
 import type { ReviewDecision } from '../../../shared/types'
 import type { EvidencePackModel, EvidencePackSource } from './pack-model'
+import { EVIDENCE_PACK_CSP } from '../../window-security'
 
 // Evidence-pack HTML renderer (EP-1 plan §8.2, pure): ONE fixed local template turning an
 // `EvidencePackModel` into a SELF-CONTAINED document — zero scripts, zero remote
@@ -192,9 +193,9 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   push('<head>')
   push('<meta charset="utf-8">')
   // Self-containment made structural (#253): a pack opened in a browser outside the app can
-  // load or run nothing but its own embedded stylesheet. The print window renders the same
-  // string under this policy.
-  push(`<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'">`)
+  // load or run nothing but its own embedded stylesheet. The print page is served with the
+  // same policy as its response header (#563); the string lives in window-security.ts.
+  push(`<meta http-equiv="Content-Security-Policy" content="${EVIDENCE_PACK_CSP}">`)
   push('<meta name="viewport" content="width=device-width, initial-scale=1">')
   push(`<title>${esc(model.title)} — ${s('packExport.docTitle')}</title>`)
   push(`<style>${PACK_CSS}</style>`)
