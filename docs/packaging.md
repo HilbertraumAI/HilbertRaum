@@ -409,6 +409,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm ci` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise; `npm ci` = lockfile-exact, never rewrites `package-lock.json` — issue #49, the dev half of hardening L-8) + build + test smoke. |
 | `release-issues-section.sh` | Not drive prep: `.github/workflows/release.yml` runs it while building a tag and appends its output to the release notes. It emits an "Issues resolved" section — the ISSUES closed by the PRs merged since the last **published** release (the same baseline GitHub's own generated "What's Changed" uses, so the two agree), resolved via each commit's associated PRs + `closingIssuesReferences` rather than by parsing "(#N)" out of subjects (which would miss true merge commits). Read-only `gh` API calls, so it is locally testable: `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`. Best-effort by design — a failure is downgraded to a workflow warning, so release notes can never block a release build. |
 | `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Detects a genuine HALF-EXTRACT — `path.txt`/`dist/version` present but the platform binary missing or zero-length (the silent NTFS-on-Linux failure) — force-re-extracts it, and otherwise fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Since wave DEP-4 it is **version-aware**: on Electron ≥ 42 an absent `path.txt` is NORMAL (lazy download) and the script exits 0 silently; on ≤ 41, which still ships the postinstall, an absent `path.txt` is still a broken install. Cross-platform Node (not a shell mirror); the decision half is pure and unit-tested in `tests/unit/verify-electron.test.ts`. Skips via `HILBERTRAUM_SKIP_ELECTRON_CHECK` / `ELECTRON_OVERRIDE_DIST_PATH` / `ELECTRON_SKIP_BINARY_DOWNLOAD` (the last honoured by this script only — Electron ≥ 42 ignores it). |
+| `verify-mac-build.sh` + `lib/packaged-app-probe.mjs` | Not drive prep, not CI: the owner-run check of a packaged build (#560, #562). On a Mac the shell script builds (or takes) the `.app`, checks the fuse wire, the signature, the entitlements and the `app.asar` integrity hash, exercises the fuses, then launches the app and runs the probe; on Windows and Linux the probe runs alone against a packaged build started with `--remote-debugging-port` on a scratch drive root. "Verifying a packaged build on macOS" below. |
 
 The asset **download / verify / plan** logic is mirrored from the unit-tested
 `apps/desktop/src/main/services/assets.ts` (the canonical reference for *that* logic — keep in sync),
@@ -1027,6 +1028,85 @@ run one real-model session covering:
    **Fail** = a workspace that refuses every unlock or opens torn. The unplug lands at an
    arbitrary point of the lock, so record the outcome as evidence, not a proof. Record machine,
    OS, date and outcome in the release notes (`drive-layout.md` **Filesystem** for the caveat).
+10. **Scheme and fuse verification on each shipping platform (#560, #562):** run
+   `scripts/verify-mac-build.sh` on a Mac, and on Windows and Linux start the packaged build with
+   `--remote-debugging-port` on a scratch drive root and run `scripts/lib/packaged-app-probe.mjs`
+   against it (next section).
+
+### Platform verification of the app scheme and the fuses (#560, #562)
+
+What has been run, per platform, on the build that carries both changes. That build is the
+`release.yml` `workflow_dispatch` run on `fix/562-electron-fuses` (run 37135092030, 2026-10-03:
+real artifacts, nothing published) plus the local `electron-builder --win dir` build of the same
+branch.
+
+| check | Windows 11 (packaged exe) | Linux (the real AppImage, `ubuntu:24.04` container, non-root, `APPIMAGE_EXTRACT_AND_RUN=1`) | macOS arm64 (the real `.app.zip`) |
+|---|---|---|---|
+| fuse wire, decoded with `@electron/fuses` | `001011001` | `001011001` (the inner binary) | `001011001` (Electron Framework) |
+| `ELECTRON_RUN_AS_NODE` / `--inspect` / `NODE_OPTIONS=--require` | ignored / no debugger / not loaded | ignored / no debugger / not loaded | not run |
+| asar integrity: a changed byte in `app.asar` | the app ends ("ASAR Integrity Violation") | **not detected** (Electron has no Linux check) | `Info.plist` `ElectronAsarIntegrity` = the recomputed header hash; not run |
+| only `app.asar` loads (planted `resources/app/`, `app.asar` removed) | the planted code does not run | the planted code does not run | not run |
+| signature | unsigned (stage 0) | n/a | ad-hoc: `codesign --verify` "valid on disk, satisfies its Designated Requirement" on the runner, after `release.yml`'s own `codesign --force --deep --sign -`; `resetAdHocDarwinSignature` alone not tested |
+| page on `hilbertraum://app`; local `fetch`/XHR and a planted script refused; 13 traversal vectors 404 | pass | pass | not run |
+| KaTeX fonts, fake-mic `getUserMedia`, Copy through the bridge | pass | KaTeX, mic pass (clipboard not run) | not run |
+| PDF text, OCR of a JPEG and a CCITT G4 scan through the OCR page on the scheme | pass | PDF text and CCITT OCR pass | not run |
+| encrypted workspace: create, lock, unlock | pass | pass | not run |
+| evidence-pack PDF export | pass (dialog stubbed) | pass, through the real GTK save dialog (xdotool), PDF text checked | not run |
+| AppRun `--no-sandbox` when user namespaces are unavailable | n/a | unchanged (main process carries it; `.desktop` `Exec=AppRun --no-sandbox %U`) | n/a |
+
+The Windows column is the #562 record's measurement plus `packaged-app-probe.mjs` (13 pass,
+the export skipped). The Linux column ran a scratch harness with the same checks.
+
+**Found on the way, filed as #567:** at every start the Linux AppImage requests Chromium's Hunspell
+dictionary (`https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic`), and the Windows
+build probes `http://wpad/wpad.dat`. Both requests come from Chromium's own network stack and were
+measured with `--log-net-log`. The v0.1.62 AppImage does the same. See `security-model.md`
+"Chromium background fetches".
+
+### Verifying a packaged build on macOS (owner-run, #560, #562)
+
+There is no Mac in the project's test setup, so this is the protocol for one. From a checkout
+with `npm ci` done, on macOS with Node ≥ 22.12:
+
+```bash
+# build `--mac dir` from the checkout and verify it (no Developer ID: tests resetAdHocDarwinSignature)
+scripts/verify-mac-build.sh
+# or verify an existing build / the release download
+scripts/verify-mac-build.sh ~/Downloads/HilbertRaum-<version>-mac-arm64.app.zip
+# with OCR (a drive's ocr/ folder) and a real black-and-white office scan
+HILBERTRAUM_OCR_DIR=/Volumes/HILBERTRAUM/ocr PROBE_ARGS='--scan ~/scan.pdf --scan-words "INVOICE"' scripts/verify-mac-build.sh
+```
+
+It works in scratch folders under `$TMPDIR`, never on a real drive. It prints PASS / FAIL / NOTE
+lines for:
+1. **The fuse wire**, expected `001011001`.
+2. **The signature:** `codesign -dv` (ad hoc, and whether the hardened-runtime flag is set) and
+   `codesign --verify --deep --strict`.
+3. **The entitlements:** whether `com.apple.security.device.audio-input` is present.
+4. **Asar integrity:** `Info.plist`'s `ElectronAsarIntegrity` against the recomputed hash of
+   `app.asar`'s header.
+5. **The fuses at work:** `ELECTRON_RUN_AS_NODE` ignored, `--inspect` without a debugger, a changed
+   byte in a copy's `app.asar` ending the app, and a planted `resources/app/` that does not run.
+6. **The running app over CDP** (`packaged-app-probe.mjs`):
+   - the page on `hilbertraum://app`;
+   - local reads and a planted script refused, the traversal vectors;
+   - KaTeX fonts;
+   - the **microphone**: a real macOS prompt, allow it;
+   - Copy through the bridge read back with `pbpaste`;
+   - PDF text, OCR of a drawn JPEG scan (and `--scan`);
+   - an **evidence-pack PDF**: a save dialog opens, save it exactly where the script says;
+   - lock and unlock, no `[ERROR]` lines.
+
+Report the output, plus two things only eyes see: which app the microphone prompt names (the drive
+launcher starts the binary from Terminal, as this script does), and whether Gatekeeper interfered
+with the first launch.
+
+**Expected to need attention on a signed build:** the stage-1 build (Developer ID, notarized) is
+signed with the hardened runtime (`hardenedRuntime: true`). Under the hardened runtime, Apple
+requires the `com.apple.security.device.audio-input` entitlement for microphone access, and
+`build/entitlements.mac.plist` does not grant it. Dictation is therefore expected to be refused on
+that build until it is added. Unverified (no Mac). The stage-0 build is re-signed ad hoc without
+the hardened-runtime option, so it is not affected.
 
 ### The canonical USB demo (original spec §17)
 

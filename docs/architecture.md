@@ -12692,6 +12692,19 @@ files. The build emitting an unknown asset type fails `app-protocol-assets.test.
   the scheme, local-file reads and a planted script refused, 13 traversal vectors 404, KaTeX fonts,
   fake-mic `getUserMedia`, PDF text, CCITT G4 OCR through `hilbertraum://app/ocr.html` (9/9). Not an
   AppImage build, and not a stock desktop.
+  **Platform round, 2026-10-03, on the #562 build** (`release.yml` dispatched on
+  `fix/562-electron-fuses`; the record is the table in `packaging.md` "Platform verification of the
+  app scheme and the fuses"):
+  - **Linux:** the real **AppImage** in `ubuntu:24.04` (non-root, `APPIMAGE_EXTRACT_AND_RUN=1`).
+    13/13 app checks pass: the scheme, reads refused, traversal, KaTeX, mic, PDF, CCITT OCR, lock and
+    unlock, an evidence-pack PDF through the real GTK dialog, AppRun's `--no-sandbox` unchanged.
+    Fuse wire `001011001`; RunAsNode, `--inspect` and `--require` refused; only `app.asar` loads; a
+    changed byte in `app.asar` goes undetected (Linux has no integrity check).
+  - **macOS:** the real arm64 `.app` inspected, not run. Fuse wire `001011001`, `Info.plist`
+    integrity hash equal to the recomputed header hash, ad-hoc signature verified on the runner.
+    The owner-run `scripts/verify-mac-build.sh` covers the rest.
+  - Found on the way: Chromium's background requests, the Linux dictionary download and Windows
+    WPAD (#567, security-model "Chromium background fetches").
 - **Not changed here:** the WebRTC residual (#254); the print window's transient plaintext source
   beside the export destination (serving the print page from memory on a second host would remove
   it — #563); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
