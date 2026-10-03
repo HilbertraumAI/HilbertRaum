@@ -12752,7 +12752,7 @@ The wire goes `101100001` → **`001011001`** (decoded with `@electron/fuses`; i
   checked against a pinned SHA-256, so such a CA cannot change what a download delivers.
 - **Turning it off later** needs the downloaders to trust the OS store first: Node 24's
   `tls.setDefaultCACertificates` with the system certificates, or Electron's `net.fetch`
-  (Chromium's stack). Either changes trust semantics, so it is its own change.
+  (Chromium's stack). Either changes trust semantics, so it is its own change (#564).
 
 ### §4 Asar integrity (D4 + D5)
 
@@ -12834,7 +12834,7 @@ fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPa
   worker closure against the header's own per-file hashes before the worker starts. Not built.
 - Linux: no asar integrity (from source); the other fuses were not measured on Linux here.
 - macOS: unmeasured (no Mac), including `resetAdHocDarwinSignature` after the larger flip.
-- Fuse 2 on until the downloaders trust the OS store (§3).
+- Fuse 2 on until the downloaders trust the OS store (§3, #564).
 - `--remote-debugging-port` has no fuse. Refusing it in a packaged build would also refuse the
   packaged smoke harnesses.
 

@@ -49,7 +49,7 @@ electronVersion: 43.7.7
 #    packaged app already ignores NODE_OPTIONS except two parser flags; what the fuse still governs
 #    is NODE_EXTRA_CA_CERTS, and TLS-scanning antivirus (Norton, measured) and corporate proxies
 #    export their root that way. Off, the in-app engine and model downloads fail with "fetch
-#    failed" on such machines (measured). Turn it off only once the downloaders trust the OS store.
+#    failed" on such machines (measured). Turn it off only once the downloaders trust the OS store (#564).
 #  - enableEmbeddedAsarIntegrityValidation + onlyLoadAppFromAsar ON: a modified app.asar ends the
 #    app ("ASAR Integrity Violation"), and an `app/` folder planted beside a removed app.asar is
 #    never loaded. electron-builder writes the header hash on every build (the Windows exe resource,

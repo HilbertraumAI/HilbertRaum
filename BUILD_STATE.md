@@ -31,7 +31,7 @@
 _2026-10-03 — **#562 — packaged fuses: RunAsNode + `--inspect` off, asar integrity + only-asar on; NODE_OPTIONS stays on (`fix/562-electron-fuses`).** Wire
 `001011001`. Owner: fuse 2 stays on (off drops `NODE_EXTRA_CA_CERTS`; the engine download then failed behind Norton). Packaged OCR no longer follows
 `ELECTRON_RENDERER_URL`. Measured before/after: smoke 22/22, robustness 4/4, upgrade 11/11, tamper matrix, first paint unchanged. Record:
-`architecture.md` "Electron fuses" (#562). Open: `app.asar.unpacked` unchecked; Linux/macOS legs (platform PR); fuse 2 needs an OS-trust-store downloader._
+`architecture.md` "Electron fuses" (#562). Open: `app.asar.unpacked` unchecked; Linux/macOS legs (platform PR); fuse 2 needs an OS-trust-store downloader (#564)._
 _2026-10-03 — **#560 — the app's pages load from `hilbertraum://app/`, and the packaged exe turns `GrantFileProtocolExtraPrivileges` off (`fix/560-app-protocol`).**
 On `file://`, `'self'` matched every local file: a script could read any file and run a planted one (measured). Allowlist file server
 (`app-protocol.ts`), `standard` + `secure` only, CSP + nosniff on every response, exact-page navigation, local API refuses the app's origin.

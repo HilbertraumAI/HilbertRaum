@@ -100,7 +100,7 @@ password recovery — are documented in
   engine and models would fail on such computers. The flip side: a program that can set the
   user's environment can add a certificate the app's downloads will trust. That cannot change what
   a download installs, because every engine, model and OCR file is checked against a fixed SHA-256
-  checksum before use.
+  checksum before use. Making the downloads trust the operating system's certificates instead is #564.
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
