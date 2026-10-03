@@ -334,7 +334,7 @@ The nine positions on Electron 43.7.7: 0 RunAsNode (on), 1 EnableCookieEncryptio
 6 LoadBrowserProcessSpecificV8Snapshot (off), **7 GrantFileProtocolExtraPrivileges (off since
 #560)**, 8 (unnamed in `@electron/fuses` 1.8.0; the binary carries `WasmTrapHandlersEnabled`) (on).
 A flipped binary has a new hash; under Smart App Control see "A packaged build that Smart App
-Control will not start" above. Further fuse flips are their own change.
+Control will not start" above. Further fuse flips are their own change (#562).
 
 ### Launching from a drive
 Copy the portable `.exe` to the drive root next to the prepared layout, then launch it with

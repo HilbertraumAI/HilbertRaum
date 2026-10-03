@@ -12559,8 +12559,8 @@ execution from a file an attacker could place on disk.
 | D3 | resolver = a syntax layer + an allowlist enumerated at startup + an explicit MIME table; every refusal a 404 with an empty body | §4: Chromium passes encoded separators, NUL, drive letters and NTFS stream names through |
 | D4 | `buildCsp(false)` + `nosniff` on every response, refusals included; the session hook stays | §5: both attach; the hook still covers the dev server and the print page |
 | D5 | main-window navigation: exactly `hilbertraum://app/index.html` (prod), the dev server's exact origin (dev) | the old prefix checks admitted any `file://` URL and `http://localhost.<anything>` |
-| D6 | the print window stays on `file://` | it runs no script and loads nothing (§6); serving it from memory is a separate improvement (§9) |
-| D7 | `electronFuses: { grantFileProtocolExtraPrivileges: false, resetAdHocDarwinSignature: true }`, that fuse only | §6; the others are a separate proposal (§9) |
+| D6 | the print window stays on `file://` | it runs no script and loads nothing (§6); serving it from memory is a separate improvement (#563) |
+| D7 | `electronFuses: { grantFileProtocolExtraPrivileges: false, resetAdHocDarwinSignature: true }`, that fuse only | §6; the others are a separate proposal (#562) |
 | D8 | the local API's `checkOrigin` refuses any `hilbertraum:` origin | a `file://` page sent NO `Origin` (admitted); the scheme sends `hilbertraum://app` (would have been admitted as a custom scheme) |
 | D9 | the four UI-preference `localStorage` keys reset once on the upgrade — **owner decision 2026-10-03** | a page cannot read the old origin's storage once the fuse is off (§3); only parsing Chromium's LevelDB would carry them |
 
@@ -12694,8 +12694,8 @@ files. The build emitting an unknown asset type fails `app-protocol-assets.test.
   AppImage build, and not a stock desktop.
 - **Not changed here:** the WebRTC residual (#254); the print window's transient plaintext source
   beside the export destination (serving the print page from memory on a second host would remove
-  it — proposed separately); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar
-  integrity pair (proposed separately).
+  it — #563); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
+  plus the OCR rasterizer honouring `ELECTRON_RENDERER_URL` in a packaged build (#562).
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
