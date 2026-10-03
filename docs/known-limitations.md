@@ -68,17 +68,25 @@ password recovery — are documented in
   system's containment of a compromised renderer process; context isolation, the CSP, the
   navigation guards and the deny-by-default permissions are unaffected. Windows and macOS are not
   affected. Build detail: [`packaging.md`](packaging.md) "Portable build".
-- **The renderer can read local files (defence-in-depth residual, not a network path).** The UI
-  is served from `file://` with Electron's `GrantFileProtocolExtraPrivileges` fuse on, so a script
-  running in a window can read the bytes of any file the OS account can read — including, while a
-  workspace is unlocked, its decrypted working database. This reads, it does not send: the CSP's
-  `connect-src 'self'` blocks every remote fetch, and no window runs a worker (`worker-src 'none'`;
-  the OCR rasterizer runs pdf.js in-page, not in a `file://` worker that would escape the CSP —
-  `security-model.md` "Content-Security-Policy"). It matters only paired with a renderer
-  code-execution bug (read local files, then exfiltrate via the WebRTC residual, egress channel
-  (iii)). The proper fix — serve the renderer from a custom `app://` protocol and turn the fuse
-  off — touches every window and the per-origin browser storage, so it is tracked as its own
-  change. See `security-model.md` "Residual egress channels" (v).
+- **Display preferences reset once, on the update that moved the app to its own scheme (#560;
+  owner decision 2026-10-03: accepted).** The app's pages moved from `file://` to
+  `hilbertraum://app/` so that a script in a window can no longer read arbitrary local files
+  (`security-model.md` "The app's own scheme"). The browser keeps preferences per origin, so on the
+  first launch after that update: the unlock screen follows the operating system's language until
+  the first unlock applies the language from Settings again, and the chat list, the Documents side
+  rail and its "more locations" list open in their default state. Nothing in the workspace is
+  affected. The values could not be carried over: once the packaged build turns
+  `GrantFileProtocolExtraPrivileges` off, a `file://` page cannot read its storage at all
+  (measured), and parsing Chromium's storage files directly was not worth it for four UI
+  preferences. The old values stay unread in the host profile ("What lives or passes outside the
+  drive").
+- **The custom scheme and the fuse-off build are measured on Windows only (#560).** On macOS,
+  flipping a fuse invalidates the ad-hoc signature of an Apple-silicon binary; the build re-signs
+  it ad hoc right after (`resetAdHocDarwinSignature` in `electron-builder.yml`), and a Developer ID
+  signature, when one is configured, comes later. No Mac was available, so neither the launch nor
+  the scheme has been checked there. On Linux the app was run unpackaged on a fuse-off Electron in
+  an Ubuntu 24.04 container (pages, file-read refusals, OCR: all as on Windows); an AppImage build
+  has not been run with this change.
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.

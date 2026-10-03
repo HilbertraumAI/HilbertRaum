@@ -395,7 +395,7 @@ export function DiagnosticsTab(): JSX.Element {
   /** Copy a plain-text report to the clipboard, confirming with a transient toast — so a
    *  user can hand technical details to support without retyping (guidelines §6). Uses
    *  Electron's native clipboard (window.api.copyToClipboard), not navigator.clipboard,
-   *  which is unreliable in the file://-loaded renderer. */
+   *  which is unreliable in the packaged renderer. */
   const copyReport = useCallback(
     (text: string): void => {
       void window.api

@@ -113,7 +113,7 @@ export function registerCoreIpc(ctx: AppContext): void {
 
   // Copy text to the OS clipboard. Done in MAIN because the sandboxed preload has no access
   // to Electron's `clipboard` module and `navigator.clipboard` is unreliable in the
-  // file://-loaded renderer (it threw the "can't copy" error). Returns false on failure so
+  // packaged renderer (it threw the "can't copy" error). Returns false on failure so
   // the renderer can show a friendly message rather than throw.
   ipcHandle(IPC.writeClipboard, (_e, text: string): boolean => {
     try {

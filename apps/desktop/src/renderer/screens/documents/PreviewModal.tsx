@@ -103,7 +103,7 @@ export function PreviewModal({
       alive = false
     }
   }, [preview.id, summary])
-  // Copy the raw summary Markdown to the OS clipboard (via MAIN — the file://-loaded
+  // Copy the raw summary Markdown to the OS clipboard (via MAIN — the packaged
   // renderer can't use navigator.clipboard). Confirmation is a transient toast.
   function onCopySummary(): void {
     if (!summary) return

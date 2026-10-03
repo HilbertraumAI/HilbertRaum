@@ -5,6 +5,7 @@ import { OCR_RASTER } from '../../../shared/ipc'
 import { log } from '../logging'
 import { installNavigationGuard } from '../navigation-guard'
 import { SECURE_WINDOW_WEB_PREFERENCES } from '../../window-security'
+import { appPageUrl } from '../../app-protocol'
 import { assertPageWithinByteCap } from './page-cap'
 import { pipelinePages } from './pipeline'
 import { resolveIngestionLimits } from '../ingestion/limits'
@@ -207,14 +208,10 @@ export async function rasterizePdfWithHiddenWindow(
   }
 
   try {
-    // Load the window's page: dev server in dev, the bundled file in prod (the main
-    // window's exact pattern).
+    // Load the window's page: dev server in dev, the app's own scheme otherwise (the main
+    // window's pattern; #560 moved it off `file://` — app-protocol.ts).
     const devUrl = process.env['ELECTRON_RENDERER_URL']
-    if (devUrl) {
-      await win.loadURL(`${devUrl}/ocr.html`)
-    } else {
-      await win.loadFile(join(__dirname, '../renderer/ocr.html'))
-    }
+    await win.loadURL(devUrl ? `${devUrl}/ocr.html` : appPageUrl('ocr'))
     if (opts.signal?.aborted) throw abortError()
 
     const openedP = slot.expect(OCR_RASTER.opened)

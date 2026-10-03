@@ -32,8 +32,20 @@ from its first public `1.0.0` release onward.
   that reads it previously ran in a helper that was not covered by the app's content-security
   policy. It now runs under the same strict policy as the rest of the app, which blocks any
   attempt to reach the network or run generated code. OCR and the text it produces are unchanged.
+- **The app's windows can no longer read other files on your computer.** The app's screens used to
+  be loaded as local files, and in that mode the browser engine behind them could read any file
+  your user account can open. Nothing in the app did so, but a future bug that let content run code
+  in a window could have used it. The screens now load from the app's own private address, which
+  reaches the app's bundled files and nothing else, and the app has given up that extra file access
+  altogether (#560).
 
 ### Changed
+
+- **Some display preferences are reset once after this update.** Because the app's screens moved
+  to their own address, the browser engine treats them as new and forgets four display
+  preferences once: the unlock screen appears in your computer's language until you unlock (it
+  then follows your language setting again), and the chat list and the Documents side panels open
+  in their default state. Your workspace, documents and settings are not affected (#560).
 
 - **Help for Linux when the AppImage does not start.** The user guide and the README now give the
   exact commands to make a downloaded AppImage executable and run it, and Troubleshooting has a

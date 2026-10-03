@@ -130,7 +130,8 @@ function fakeCheckSession(): {
 }
 
 describe('installPermissionCheckHandler', () => {
-  const ORIGIN = 'file://'
+  // The app's own origin since #560 (the predicate is keyed on the WebContents, not the origin).
+  const ORIGIN = 'hilbertraum://app'
 
   it('denies every permission check when no microphone allow is configured', () => {
     const { session, getHandler } = fakeCheckSession()

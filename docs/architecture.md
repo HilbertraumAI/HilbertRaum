@@ -62,8 +62,12 @@ a future move to Tauri/Rust is a localized swap.
 - **Main**: owns all file I/O, the database, the model runtime, and the llama.cpp sidecars. Bundled
   as **ESM** (`out/main/index.mjs`).
 - **CSP**: same-origin only; no remote origins. Applied as both an `index.html` meta tag and a
-  response header (`session.webRequest.onHeadersReceived`) — strict in production, HMR-compatible in
-  dev. See [`security-model.md`](security-model.md).
+  response header — strict in production, HMR-compatible in dev. In production the pages load from
+  the app's own `hilbertraum://app/` scheme, whose handler sets the header on every response, and
+  the session hook (`session.webRequest.onHeadersReceived`) adds a second copy; the packaged build
+  turns Electron's `GrantFileProtocolExtraPrivileges` fuse off. See
+  [`security-model.md`](security-model.md) and "App scheme `hilbertraum://app/` — design record
+  (#560)" below.
 
 ## Swappable interfaces (spec §9.2)
 - `ModelRuntime` — `MockRuntime` **or** `LlamaRuntime`, chosen per `start()` by availability (Phase 10).
@@ -12511,7 +12515,9 @@ no eval path. Measured on packaged master `66ad007e` (Electron 43.7.7 / Chromium
 - **Remaining, out of scope (drafted follow-up).** The renderer's `file://` read access
   (`GrantFileProtocolExtraPrivileges` on + `connect-src 'self'` on a `file://` origin) is
   unchanged; the proper fix is a custom `app://` protocol with the fuse off. See
-  known-limitations and security-model "Residual egress channels" (v).
+  known-limitations and security-model "Residual egress channels" (v). **Closed by #560**
+  (2026-10-03): the pages load from `hilbertraum://app/` and the packaged build turns the fuse
+  off — "App scheme `hilbertraum://app/` — design record (#560)" below.
 - **Guards.** `window-security.test.ts` (prod header + both metas carry `worker-src 'none'`;
   the OCR meta no longer carries `worker-src 'self' blob:`), `csp-build-output.test.ts` (byte-exact
   built metas), `ocr-decoder-assets.test.ts` (OCR chunk sets `globalThis.pdfjsWorker`, no separate
@@ -12520,6 +12526,176 @@ no eval path. Measured on packaged master `66ad007e` (Electron 43.7.7 / Chromium
   on master `d08763b7`: six mutations, each failing only the guards for its own link (a `?url`
   worker → 3, `useWasm: false` dropped → 1, hashed decoder names → 3, a `.wasm` shipped → 1, the
   OCR meta back to `worker-src 'self' blob:` → 4, the header without `worker-src 'none'` → 2).
+
+## App scheme `hilbertraum://app/` — design record (#560)
+
+_The app's own pages (the main window's `index.html`, the OCR rasterizer's `ocr.html`) moved from
+`file://` to a custom scheme, and the packaged binary turns Electron's
+`GrantFileProtocolExtraPrivileges` fuse off (2026-10-03, `fix/560-app-protocol`). Measured on Electron
+43.7.7 / Chromium 150, Windows 11, i9-14900K; the analysis is a git-ignored working paper, this is the
+durable record. It is a record of its own, not a DEP-6 section: it is not a dependency change, it
+touches every window's load path, and code comments cite its §-anchors. DEP-6 §11 named it as the
+follow-up._
+
+### §1 The gap
+
+On a `file://` origin the CSP's `'self'` matches **every** `file://` URL, and the fuse (on by default)
+gives `file://` pages extra privileges. Measured on packaged master `fa661947` in both windows: a
+script could `fetch` and XHR any file the OS account can read (with a workspace unlocked, that
+includes the decrypted working DB), and `<script src="file:///…/planted.js">` **ran**, under the
+production header and the meta. No way for untrusted content to run script was found (assistant
+markdown drops `rehype-raw` and keeps `rehype-sanitize`; KaTeX runs with `trust: false`; the renderer has no
+`innerHTML`/`srcdoc`/`iframe` sink; knowledge-pack articles arrive as converter text; pdf.js runs
+in-page under `script-src 'self'`, DEP-6 §11). So this was the second half of a future bug: reading
+files, then sending them out over WebRTC (#254), or turning any markup injection into script
+execution from a file an attacker could place on disk.
+
+### §2 Decisions
+
+| # | decision | why |
+|---|---|---|
+| D1 | scheme `hilbertraum`, one host `app`; pages at `hilbertraum://app/index.html` and `/ocr.html` | the app's own name, not the generic `app://` other local Electron clients use, so the local API can refuse it (D8) |
+| D2 | privileges `standard` + `secure`, every other one `false` | §3: nothing else is needed; `bypassCSP` and `allowServiceWorkers` must stay false |
+| D3 | resolver = a syntax layer + an allowlist enumerated at startup + an explicit MIME table; every refusal a 404 with an empty body | §4: Chromium passes encoded separators, NUL, drive letters and NTFS stream names through |
+| D4 | `buildCsp(false)` + `nosniff` on every response, refusals included; the session hook stays | §5: both attach; the hook still covers the dev server and the print page |
+| D5 | main-window navigation: exactly `hilbertraum://app/index.html` (prod), the dev server's exact origin (dev) | the old prefix checks admitted any `file://` URL and `http://localhost.<anything>` |
+| D6 | the print window stays on `file://` | it runs no script and loads nothing (§6); serving it from memory is a separate improvement (§9) |
+| D7 | `electronFuses: { grantFileProtocolExtraPrivileges: false, resetAdHocDarwinSignature: true }`, that fuse only | §6; the others are a separate proposal (§9) |
+| D8 | the local API's `checkOrigin` refuses any `hilbertraum:` origin | a `file://` page sent NO `Origin` (admitted); the scheme sends `hilbertraum://app` (would have been admitted as a custom scheme) |
+| D9 | the four UI-preference `localStorage` keys reset once on the upgrade — **owner decision 2026-10-03** | a page cannot read the old origin's storage once the fuse is off (§3); only parsing Chromium's LevelDB would carry them |
+
+### §3 What was measured before choosing
+
+A standalone probe app on the repo's Electron (fuse on) and on a fuse-flipped copy:
+
+- **`standard` is required:** without it `'self'` does not match the scheme and every script and
+  stylesheet is refused. **`standard` + `secure` are sufficient:** module scripts with
+  `crossorigin`, dynamic `import()` (pdf.js loads its decoders that way), stylesheets, `@font-face`
+  woff2, XHR of the scheme, `localStorage`, a secure context (`getUserMedia`, `crypto.randomUUID`,
+  the clipboard API present). `fetch()` of the scheme needs `supportFetchAPI` ("URL scheme not
+  supported"); nothing in the app uses it, so a compromised page cannot `fetch()` the bundles either.
+- **The fuse cannot go off while the pages are on `file://`:** with the fuse off, the `file://`
+  page's module script and stylesheet are refused by CORS from origin `null`, and its
+  `localStorage` throws `SecurityError`. On the scheme, fuse on or off behave identically.
+- **The scheme alone closes the reads** (fuse on): `fetch`/XHR of a local file fail and a planted
+  script is refused. The fuse is the second layer.
+- **Origin at the local API** (CSP removed for the measurement): a `file://` page sent no `Origin`
+  header and, with the fuse on, could read the cross-origin loopback response; the scheme page sends
+  `Origin: hilbertraum://app` and a JSON POST from it needs a preflight.
+
+### §4 The handler: a file server with two layers
+
+`src/main/app-protocol.ts` (pure, unit-tested) + `src/main/install-app-protocol.ts` (Electron glue:
+`registerSchemesAsPrivileged` before `ready`, `protocol.handle` on the default session before the
+first window). What Chromium hands the handler (probe, `net.fetch`):
+
+| request | the handler sees |
+|---|---|
+| `…/a/../x`, `…/%2e%2e/x`, `…/..\x`, host `APP` | resolved / lower-cased before the handler |
+| `..%2f`, `..%5c`, `%252e`, `%00`, `ind%65x.html` | unchanged (still encoded) |
+| `C:/Windows/…`, `//server/share/…`, `index.html::$DATA` | unchanged; a naive `existsSync` + `statSync` handler served the NTFS stream form |
+| `user:pw@app` | stripped by Chromium on the way |
+| `:8080` | dropped |
+
+1. **Syntax:** scheme `hilbertraum:` and host `app` exactly; no username, password or port; GET;
+   no `%` anywhere in the path (no asset name needs encoding, so encoded separators, NUL and double
+   encoding are out in one rule); every segment from `[A-Za-z0-9._-]`; no empty, `.` or `..`
+   segment. Query and fragment never select a file.
+2. **Allowlist:** the joined path must name a file enumerated under `out/renderer` at install time
+   (regular files via `lstat`, so a symlink is never followed; folders never listed; 87 files in
+   3–7 ms). No request data reaches a `path.join`.
+3. **Content type:** an explicit table (html, js, mjs, css, svg, woff2, woff, ttf), never the OS
+   registry; an unknown extension is refused, and `app-protocol-assets.test.ts` fails CI first.
+4. **Headers:** `Content-Type`, `Content-Security-Policy: buildCsp(false)`,
+   `X-Content-Type-Options: nosniff`. A refusal is a 404 with an empty body and the same two
+   security headers; a read error is a refusal (the path never leaks).
+
+### §5 CSP on the scheme
+
+The session `onHeadersReceived` hook fires for `protocol.handle` responses on 43.7.7 (every scheme
+request passed through it; electron/electron#45865 does not reproduce here). Both headers attach and
+both are enforced: a packaged page carries the handler's and the hook's `buildCsp(false)` plus its
+meta, and each violation fires once per policy (6 violations → 12 header events + 6 meta events). In
+an unpackaged build the hook's copy is the dev string and the handler's production header is the
+binding one. Method note (security-model "Content-Security-Policy"): count events per policy; the two
+header layers are indistinguishable by string in a packaged build.
+
+### §6 The fuse and the print window
+
+`electron-builder.yml` `electronFuses` (packaging "Electron fuses"); the built exe's wire is
+`101100001` (stock `101100011`), decoded with `@electron/fuses`. The evidence-pack print window is the
+only `file://` page left. It runs no script and loads no subresource, and its CSP meta allows inline
+styles only. The real-Electron smoke (`evidence-pack-pdf-smoke.test.ts`, 8/8) passed on a fuse-off
+binary. `resetAdHocDarwinSignature` re-signs a macOS arm64 binary ad hoc after the flip; not
+measured (no Mac).
+
+### §7 Measured, packaged, before → after
+
+Smart App Control refused the fuse-flipped `HilbertRaum.exe` (CodeIntegrity 3077/3118) while it ran
+a fresh master build, so the after-run used the packaging workaround: the branch's `win-unpacked`
+with a fuse-flipped copy of the stock `electron.exe` (wire `101100001`, the built exe's).
+`tmp`-harness `csp-matrix.mjs`, extended for #560:
+
+| probe (main window and OCR page alike) | before (master `fa661947`) | after |
+|---|---|---|
+| page origin | `file://` | `hilbertraum://app` |
+| `fetch` / XHR of an arbitrary local file | **read** / **read** | failed / failed |
+| `<script src>` of a planted local file | **ran** | refused |
+| `new Worker(<file:// script>)` | error event (`worker-src 'none'`) | refused at construction |
+| eval, wasm, loopback fetch | blocked | blocked |
+| 20 traversal vectors against the scheme | (scheme unknown) | 404 each; only `index.html` 200 |
+| header ∩ meta policies per violation | 1 header + 1 meta | 2 header + 1 meta |
+| WebRTC ICE to a LAN host (#254) | gathered | gathered (unchanged, out of scope) |
+| worker targets / loopback hits | 0 / 0 | 0 / 0 |
+| smoke: PDF/DOCX/CSV text, OCR of a JPEG scan, a CCITT G4 scan and a 3-page G4 scan, encrypted lock + unlock, no ERROR lines, no renderer errors | 22/22 | 22/22 |
+| fake-mic `getUserMedia`, Copy via the bridge read back from the OS clipboard, KaTeX stylesheet + fonts | pass | pass |
+
+**First paint** (BUILD_STATE §5 item 18(g); perf log, warm profile, interleaved, medians). On this
+machine a binary's identity dominates: the stock `electron.exe` shows its window at ~500–530 ms, any
+modified copy at ~1,150–1,240 ms (master's own built exe, the stock binary with one byte appended,
+the fuse-flipped copy), whatever the app code. Like for like, the scheme costs nothing measurable
+(stock binary, n = 5: master 497 / 545 ms `window_ready_to_show` / `gate_visible`, branch 502 / 537),
+and installing the handler takes 3–7 ms. The fuse costs nothing either (branch `app.asar`, both
+binaries non-stock, n = 7: fuse on 1,182 / 1,222, fuse off 1,163 / 1,194). Master's own built exe
+against the fuse-off copy read 1,148 / 1,182 vs 1,210 / 1,270 (n = 7), inside the ~90 ms spread
+seen between two non-stock binaries running the same code (1,153 vs 1,240). The identity cost
+also explains DEP-5's ~1.2 s packaged figure ("Electron 43.4.0 → 43.7.7" §3), which was measured on
+a built exe; a timing A/B must compare like binaries (packaging "Smart App Control").
+
+### §8 Guards
+
+`tests/unit/app-protocol.test.ts` (privileges pinned exactly; the traversal matrix, the host and
+method refusals, the syntax layer tested on its own against an allowlist that names each hostile
+path; the MIME table; CSP + `nosniff` on 200, 404 and read-failure responses; the enumeration; the
+navigation predicate), `tests/integration/app-protocol-assets.test.ts` (the real build: every file
+servable, every page and stylesheet reference resolves, nothing beside the root),
+`window-security.test.ts` (#560 wiring: registration before `ready`, handler before the first
+window, no `loadFile`/`startsWith('file:` in the two loaders, no other scheme or privilege literal
+under `src/main`), `navigation-guard.test.ts`, `ocr-rasterizer-harness.test.ts` (the OCR page via
+`loadURL`), `local-api-server.test.ts` (own origin 403), `packaging.test.ts` (the `electronFuses`
+block and electron-builder's mapping of it). Mutation-tested: fifteen mutations, each failing only
+the guards of its own link. Dropping the syntax layer, dropping the allowlist, `bypassCSP: true`,
+the predicate widened to the whole origin, the CSP header dropped, `nosniff` dropped, and the
+enumeration listing non-files each fail `app-protocol.test.ts`. The fuse line dropped fails
+`packaging.test.ts`; `checkOrigin` admitting its own scheme fails `local-api-server.test.ts`. A
+prefix predicate in `index.ts`, the main window back on `loadFile`, and the handler no longer
+installed each fail `window-security.test.ts`. The OCR window back on `loadFile` fails the rasterizer
+harness and `window-security.test.ts`. `.woff2` dropped from the MIME table fails both app-protocol
+files. The build emitting an unknown asset type fails `app-protocol-assets.test.ts`.
+
+### §9 Residuals and follow-ups
+
+- **One-time preference reset** on the upgrade (D9, owner-accepted; `known-limitations.md`). The old
+  `file://` origin's values stay unread in the host profile.
+- **macOS is unmeasured** (no Mac; `known-limitations.md`). **Linux, partly:** the branch's built
+  app, unpackaged, on a fuse-flipped Linux Electron 43.7.7 in an `ubuntu:24.04` container — page on
+  the scheme, local-file reads and a planted script refused, 13 traversal vectors 404, KaTeX fonts,
+  fake-mic `getUserMedia`, PDF text, CCITT G4 OCR through `hilbertraum://app/ocr.html` (9/9). Not an
+  AppImage build, and not a stock desktop.
+- **Not changed here:** the WebRTC residual (#254); the print window's transient plaintext source
+  beside the export destination (serving the print page from memory on a second host would remove
+  it — proposed separately); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar
+  integrity pair (proposed separately).
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
@@ -12636,7 +12812,9 @@ model through **five** lanes: chat/RAG, doc tasks, skill runs, the benchmark, an
   what closes the DNS-rebinding backstop.
 - **Origin**: `http(s)` with a non-loopback host ⇒ 403, `Origin: null` ⇒ 403; absent and
   custom-scheme origins (`app://`, `vscode-webview://`) pass, because that is exactly what the
-  Electron-based clients this feature targets send. **No CORS header is ever emitted** and
+  Electron-based clients this feature targets send — except HilbertRaum's own `hilbertraum:`
+  origin, refused since #560 (its renderer talks to main over IPC; "App scheme
+  `hilbertraum://app/` — design record (#560)" §2). **No CORS header is ever emitted** and
   `OPTIONS` is refused, so browser JavaScript is structurally locked out regardless.
 - **Auth**: SHA-256 digests compared with `timingSafeEqual`; with the key requirement off a
   present `Authorization` header is ignored rather than validated (SDKs always send one).

@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-03 — **#560 — the app's pages load from `hilbertraum://app/`, and the packaged exe turns `GrantFileProtocolExtraPrivileges` off (`fix/560-app-protocol`).**
+On `file://`, `'self'` matched every local file: a script could read any file and run a planted one (measured). Allowlist file server
+(`app-protocol.ts`), `standard` + `secure` only, CSP + nosniff on every response, exact-page navigation, local API refuses the app's origin.
+Packaged after-run 22/22, all reads + 20 traversal vectors refused; first paint unchanged. Owner: the 4 UI prefs reset once. Record: `architecture.md` "App scheme" (#560). Open: macOS, an AppImage run._
 _2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pdfjs-in-page`).** The hidden OCR window ran pdf.js in a
 `file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
 has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
@@ -643,6 +647,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     the portable `.exe` starts by double-click on a prepared drive.
     (g) **DEP-5 (2026-10-01, Electron 43.7.7; record "Electron 43.4.0 → 43.7.7" §3):** from 43.7.2
     the first window paints later (packaged +64 ms, dev +435 ms). Re-measure at every 43.x bump.
+    #560 (2026-10-03): any non-stock binary paints ~600 ms later on that desktop; compare like binaries.
 17. **STR-1 follow-up register (owner-facing; registered at the 2026-07-20 close-out; durable
     ledger = `docs/architecture.md` "Skills & tools architecture review (2026-07-19) — design
     record (wave STR-1, 2026-07-20)"):** (a) **Issue #80** — the constrained

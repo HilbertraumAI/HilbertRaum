@@ -39,6 +39,22 @@ executableName: HilbertRaum
 # package-lock.json and satisfies the declared caret range. Edit both or the green gate fails.
 electronVersion: 43.7.7
 
+# Electron fuses (#560), flipped in the packaged binary by @electron/fuses before signing.
+# GrantFileProtocolExtraPrivileges OFF: `file://` pages lose the extra privileges Electron gives
+# them by default (fetch/XHR of any local file, among others). The app's own pages are served from
+# `hilbertraum://app/` (src/main/app-protocol.ts), which does not need them; the only `file://`
+# page left, the evidence-pack print window, runs no script and loads nothing. Turning the fuse
+# off with the pages still on `file://` breaks them (module scripts refused by CORS from origin
+# `null`, measured), so the scheme and this line go together. ONLY this fuse is set; the others
+# stay at Electron's defaults (see docs/packaging.md "Electron fuses"). resetAdHocDarwinSignature:
+# flipping a fuse invalidates the ad-hoc signature of a macOS arm64 binary, so re-sign it ad hoc
+# right after (a Developer ID signature, when configured, is applied afterwards) — not measured,
+# no Mac here. tests/integration/packaging.test.ts pins this block. Re-check the built binary's
+# fuse wire after an Electron bump or a change here (docs/packaging.md).
+electronFuses:
+  grantFileProtocolExtraPrivileges: false
+  resetAdHocDarwinSignature: true
+
 directories:
   # buildResources holds icons etc. (optional; defaults are used if absent).
   buildResources: build

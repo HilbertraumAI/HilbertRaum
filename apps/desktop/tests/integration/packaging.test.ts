@@ -36,6 +36,7 @@ interface BuilderConfig {
   // Deliberately loose: a YAML scalar like `43.0` parses as a NUMBER, and the DEP-4 parity
   // test below must be able to CATCH that mistake rather than be typed out of it.
   electronVersion?: string | number
+  electronFuses?: Record<string, unknown>
 }
 
 function loadBuilderConfig(): BuilderConfig {
@@ -437,5 +438,37 @@ describe('electron-builder.yml electronVersion tracks the electron devDependency
     expect(installed, 'a stale node_modules would package a runtime nobody tested').toBe(
       String(loadBuilderConfig().electronVersion)
     )
+  })
+})
+
+// #560: the packaged binary turns Electron's GrantFileProtocolExtraPrivileges fuse OFF — `file://`
+// pages lose fetch/XHR of arbitrary local files (and the rest of the fuse's extra privileges). The
+// app's own pages are on `hilbertraum://app/` (src/main/app-protocol.ts), which is what makes the
+// fuse removable. electron-builder flips it via @electron/fuses before signing; an option name it
+// does not map is IGNORED SILENTLY (the fuse would stay on), hence the exact pin and the mapping
+// check. Only this fuse changes here; the built exe's wire is re-checked by hand (docs/packaging.md
+// "Electron fuses").
+describe('electron-builder.yml electronFuses (#560)', () => {
+  it('turns GrantFileProtocolExtraPrivileges off, and sets no other fuse', () => {
+    expect(loadBuilderConfig().electronFuses).toEqual({
+      grantFileProtocolExtraPrivileges: false,
+      resetAdHocDarwinSignature: true
+    })
+  })
+
+  it("the installed electron-builder still maps that option to the fuse (a rename would be a silent no-op)", () => {
+    let src: string
+    try {
+      src = readFileSync(
+        join(LOCKFILE, '..', 'node_modules', 'app-builder-lib', 'out', 'platformPackager.js'),
+        'utf8'
+      )
+    } catch {
+      return // no electron-builder installed (slimmed context) — the yml pin above still holds
+    }
+    expect(src).toMatch(
+      /config\[FuseV1Options\.GrantFileProtocolExtraPrivileges\]\s*=\s*fuses\.grantFileProtocolExtraPrivileges/
+    )
+    expect(src).toMatch(/resetAdHocDarwinSignature:\s*fuses\.resetAdHocDarwinSignature/)
   })
 })

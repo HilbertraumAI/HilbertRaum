@@ -179,7 +179,20 @@ Key config points:
   tests, so the guard runs on every PR). Measured on a packaged Windows build (2026-07-18): the
   `onHeadersReceived` response-header CSP **does attach and enforce on `file://` loads** in both
   windows, so the header is the load-bearing prod policy and the meta is the defence-in-depth
-  second layer — see `docs/security-model.md` "Content-Security-Policy".
+  second layer — see `docs/security-model.md` "Content-Security-Policy". Since #560 the pages load
+  from `hilbertraum://app/` instead (next point), where the scheme's handler and the session hook
+  each attach the header (measured 2026-10-03).
+- **The app's pages are served from `hilbertraum://app/`, and the packaged binary turns the
+  `GrantFileProtocolExtraPrivileges` fuse off (#560).** `src/main/app-protocol.ts` serves the
+  built `out/renderer` (inside `app.asar`) from an allowlist taken at startup, with a content-type
+  table of its own: html, js/mjs, css, svg, woff2, woff and ttf.
+  **A new asset type in the renderer build needs a row there**:
+  `tests/integration/app-protocol-assets.test.ts` fails the gate when the build emits a file the
+  handler would not serve, or when a page or stylesheet references one. The fuse is set in
+  `electron-builder.yml` `electronFuses`, which electron-builder flips with `@electron/fuses` before
+  signing; `tests/integration/packaging.test.ts` pins the block and checks that the installed
+  electron-builder still maps the option (an unmapped name is ignored silently). Only this fuse is
+  set; the others keep Electron's defaults. See "Electron fuses" below.
 - **Electron ≥ 37 (Node 22.x)** is required so the packaged main process has `node:sqlite`
   (`electron` is pinned `^39.8.5`). A downgraded/stripped runtime would lose it — do not downgrade.
   Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,
@@ -261,12 +274,22 @@ Key config points:
   found no text. `tests/integration/ocr-decoder-assets.test.ts` pins both (and that no `.wasm` and
   no separate `pdf.worker-*.mjs` asset ship). Run the recognition smoke on a black-and-white
   (CCITT) scan as well: a JPEG scan decodes without these modules, so it cannot catch their loss.
-- **A packaged build that Smart App Control will not start.** SAC refuses each fresh unsigned
-  `HilbertRaum.exe` (CodeIntegrity 3077/3118) but runs the repo's
-  `node_modules/electron/dist/electron.exe`. The packaged exe is that binary with a rewritten resource
-  section: the same code sections and fuse wire (measured on 43.7.7, #551). So a copy of `win-unpacked` with that
-  binary copied in as `HilbertRaum.exe` runs the packaged app's code against its `app.asar`, with
-  `app.isPackaged` true. Re-check the fuse wire after an Electron bump or a fuse change.
+- **A packaged build that Smart App Control will not start.** SAC refuses fresh unsigned
+  `HilbertRaum.exe` builds (CodeIntegrity 3077/3118), though not every time: on 2026-10-03 it ran
+  a fresh master build and refused the fuse-flipped #560 build. It runs the repo's
+  `node_modules/electron/dist/electron.exe`. Up to #560 the packaged exe was that binary with a
+  rewritten resource section: the same code sections and fuse wire (measured on 43.7.7, #551). So a
+  copy of `win-unpacked` with that binary copied in as `HilbertRaum.exe` runs the packaged app's
+  code against its `app.asar`, with `app.isPackaged` true. **Since #560 the packaged exe has one
+  fuse off** (wire `101100001`, the stock binary `101100011`), so that copy runs the packaged app
+  with the fuse ON, which is fine for everything except the fuse itself. For the fuse-off state,
+  flip a copy of the stock binary with `@electron/fuses` (index 7 →
+  `GrantFileProtocolExtraPrivileges` off; then decode the wire, below). SAC ran such a copy on
+  2026-10-03; probe first. **Do not compare startup timings across binaries.** On the reference
+  desktop any binary whose hash differs from the stock `electron.exe` (the real packaged exe, the
+  flipped copy, even the stock binary with one byte appended) shows its first window about
+  600–700 ms later than the stock binary, whatever the app code. A timing A/B must run both sides
+  on equally modified binaries (`architecture.md` #560 record §7).
 - **`model-manifests/` ship as `extraResources`** (beside `app.asar`). The packaged main process
   finds them via `resolveManifestsDir(app.getAppPath())`, which walks up to `resources/model-manifests`;
   `HILBERTRAUM_MANIFESTS_DIR` overrides. Weights + sidecar binaries + the `ocr/` language files are
@@ -286,6 +309,32 @@ Key config points:
   context, so without this entry the artifact would carry the GPL only as the `package.json` SPDX
   string. `third-party-notices.test.ts` pins the entry.
 - The build output goes to `apps/desktop/release/` (git-ignored).
+
+### Electron fuses (#560)
+`electron-builder.yml` sets exactly one fuse: `electronFuses: { grantFileProtocolExtraPrivileges:
+false }` (plus `resetAdHocDarwinSignature: true`, which re-signs a macOS arm64 binary ad hoc after
+the flip, before any Developer ID signature; not measured, no Mac). With the fuse off, `file://` pages
+lose Electron's extra privileges (`fetch`/XHR of any local file, among others). The app's own pages
+moved to `hilbertraum://app/` for this: with the fuse off, the old `file://` layout's module scripts
+are refused by CORS from origin `null` (measured), so do not move a page back to `file://`. The
+evidence-pack print window still loads a `file://` page; it runs no script and loads nothing, and
+its real-Electron smoke passes with the fuse off.
+
+**Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
+Decode it with the library, not by hand. Expected for 43.7.7: `101100001`.
+
+```bash
+# from the repo root; prints index → state ('0' off, '1' on)
+node -e "require('@electron/fuses').getCurrentFuseWire(process.argv[1]).then((w) => console.log(Object.keys(w).filter((k) => /^\d+$/.test(k)).map((k) => String.fromCharCode(w[k])).join('')))" apps/desktop/release/win-unpacked/HilbertRaum.exe
+```
+
+The nine positions on Electron 43.7.7: 0 RunAsNode (on), 1 EnableCookieEncryption (off),
+2 EnableNodeOptionsEnvironmentVariable (on), 3 EnableNodeCliInspectArguments (on),
+4 EnableEmbeddedAsarIntegrityValidation (off), 5 OnlyLoadAppFromAsar (off),
+6 LoadBrowserProcessSpecificV8Snapshot (off), **7 GrantFileProtocolExtraPrivileges (off since
+#560)**, 8 (unnamed in `@electron/fuses` 1.8.0; the binary carries `WasmTrapHandlersEnabled`) (on).
+A flipped binary has a new hash; under Smart App Control see "A packaged build that Smart App
+Control will not start" above. Further fuse flips are their own change.
 
 ### Launching from a drive
 Copy the portable `.exe` to the drive root next to the prepared layout, then launch it with

@@ -1245,6 +1245,9 @@ inside the encrypted workspace, so before you unlock it the app can't know your 
 The interface language works the same way: **Settings → Language** offers **System**,
 **English**, and **Deutsch** — *System* follows your operating system's language (German
 systems get Deutsch, everything else English), and a change applies right away, no restart.
+Before you unlock, the lock screen uses the language you last used on this computer. The first
+time, it uses your operating system's language, and it does so once more after the update that
+moved the app's screens to their own address (#560), until you unlock.
 
 ---
 

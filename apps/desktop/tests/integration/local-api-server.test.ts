@@ -230,7 +230,7 @@ describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => 
     expect(raw).toContain('403')
   })
 
-  it('rejects web origins and Origin: null; allows absent + custom app schemes', async () => {
+  it("rejects web origins, Origin: null and the app's own scheme; allows absent + other custom app schemes", async () => {
     const h = await makeHarness()
     const web = await fetch(`${h.base}/v1/models`, {
       headers: { ...authed(h.token), origin: 'https://evil.example' }
@@ -244,6 +244,13 @@ describe('LocalApiServer — Host / Origin / content-type / auth matrix', () => 
       headers: { ...authed(h.token), origin: 'app://obsidian.md' }
     })
     expect(appScheme.status).toBe(200)
+    // #560: this app's OWN renderer origin is refused even with a valid key — it talks to main
+    // over IPC; only its CSP stood in the way before this second layer.
+    for (const own of ['hilbertraum://app', 'HILBERTRAUM://app', 'hilbertraum://other']) {
+      const res = await fetch(`${h.base}/v1/models`, { headers: { ...authed(h.token), origin: own } })
+      expect(res.status, own).toBe(403)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe('forbidden_origin')
+    }
     const loopbackWeb = await fetch(`${h.base}/v1/models`, {
       headers: { ...authed(h.token), origin: `http://127.0.0.1:${h.port}` }
     })

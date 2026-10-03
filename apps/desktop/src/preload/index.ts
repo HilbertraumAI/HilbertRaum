@@ -445,7 +445,7 @@ const api = {
   /** Copy text to the OS clipboard. The write happens in MAIN (`clipboard:write`) — the
    *  sandboxed preload has no access to Electron's `clipboard` module, and
    *  `navigator.clipboard` needs a secure context + focused document and is unreliable in a
-   *  file://-loaded renderer (it threw the "Zwischenablage" copy error). Resolves to whether
+   *  packaged renderer (it threw the "Zwischenablage" copy error). Resolves to whether
    *  the write succeeded. */
   copyToClipboard: (text: string): Promise<boolean> =>
     ipcRenderer.invoke(IPC.writeClipboard, text),

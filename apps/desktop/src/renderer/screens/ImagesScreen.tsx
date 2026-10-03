@@ -378,7 +378,7 @@ export function ImagesScreen({
   function onCopy(text: string): void {
     // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter needs a
     // secure context + focused document and is denied (`clipboard-sanitized-write`) in the
-    // file://-loaded renderer. full-audit 2026-07-11 CODE-36: a failed/refused copy used to give
+    // packaged renderer. full-audit 2026-07-11 CODE-36: a failed/refused copy used to give
     // NO feedback at all — mirror PreviewModal.onCopySummary's both-outcome toast.
     void Promise.resolve(window.api?.copyToClipboard?.(text))
       .then((ok) => showToast(ok ? t('images.answer.copied') : t('images.answer.copyFailed')))

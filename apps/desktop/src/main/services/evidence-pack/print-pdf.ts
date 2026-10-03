@@ -56,6 +56,12 @@ import { escapeHtml } from './render-html'
 // line when the removal fails (AUD-16, see `removePrintSource`); crash residue matches the
 // `${dest}.tmp` class the atomic writer already accepts.
 //
+// Since #560 this is the only window that loads `file://`: the app's own pages moved to
+// `hilbertraum://app/` and the packaged build turns Electron's GrantFileProtocolExtraPrivileges
+// fuse off. This page needs none of those privileges — it runs no script and loads no
+// subresource (its own CSP meta, render-html.ts, allows inline styles and nothing else); the
+// real-Electron smoke passed on a fuse-off binary (docs/architecture.md, the #560 record).
+//
 // No network anywhere: the pack HTML is self-contained (golden-pinned: zero remote refs),
 // the window denies every navigation/window-open, and the smoke suite watches the
 // session's request log + the offline connect-guard across a real print.
