@@ -251,14 +251,16 @@ Key config points:
   PR #77)" §5. Dev-mode OCR was never affected (the raster → IPC → recognize pipeline was proven
   end to end on Electron 39); the other runtime-only-failure smokes above (parsers, encrypted
   workspace) still apply.
-- **The OCR rasterizer ships pdf.js's image decoders under their own names (#551).** pdf.js 6
-  decodes CCITT fax, JBIG2 and JPEG 2000 images only through modules it loads at run time as
-  `${wasmUrl}<file name>`. The renderer build therefore emits pdfjs-dist's `wasm/` jbig2 and openjpeg
-  modules (wasm and plain JS) unhashed into `out/renderer/pdfjs-wasm/`, and `ocr.html` passes that
-  directory as `wasmUrl`. Without them a black-and-white office scan rendered blank and OCR found no
-  text. `tests/integration/ocr-decoder-assets.test.ts` pins both. Run the recognition smoke on a
-  black-and-white (CCITT) scan as well: a JPEG scan decodes without these modules, so it cannot
-  catch their loss.
+- **The OCR rasterizer ships pdf.js's JS image decoders under their own names (#551,
+  fix/ocr-pdfjs-in-page).** pdf.js 6 decodes CCITT fax, JBIG2 and JPEG 2000 images only through
+  modules it loads at run time as `${wasmUrl}<file name>`. The rasterizer runs pdf.js in-page under
+  the OCR page's CSP, which has no `'wasm-unsafe-eval'`, so it forces the **JS** build
+  (`useWasm: false`) and the renderer build emits only pdfjs-dist's `*_nowasm_fallback.js` jbig2 and
+  openjpeg modules (no `.wasm`) unhashed into `out/renderer/pdfjs-wasm/`, with `ocr.html` passing
+  that directory as `wasmUrl`. Without them a black-and-white office scan rendered blank and OCR
+  found no text. `tests/integration/ocr-decoder-assets.test.ts` pins both (and that no `.wasm` and
+  no separate `pdf.worker-*.mjs` asset ship). Run the recognition smoke on a black-and-white
+  (CCITT) scan as well: a JPEG scan decodes without these modules, so it cannot catch their loss.
 - **A packaged build that Smart App Control will not start.** SAC refuses each fresh unsigned
   `HilbertRaum.exe` (CodeIntegrity 3077/3118) but runs the repo's
   `node_modules/electron/dist/electron.exe`. The packaged exe is that binary with a rewritten resource

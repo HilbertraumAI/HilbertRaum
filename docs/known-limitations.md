@@ -68,6 +68,17 @@ password recovery — are documented in
   system's containment of a compromised renderer process; context isolation, the CSP, the
   navigation guards and the deny-by-default permissions are unaffected. Windows and macOS are not
   affected. Build detail: [`packaging.md`](packaging.md) "Portable build".
+- **The renderer can read local files (defence-in-depth residual, not a network path).** The UI
+  is served from `file://` with Electron's `GrantFileProtocolExtraPrivileges` fuse on, so a script
+  running in a window can read the bytes of any file the OS account can read — including, while a
+  workspace is unlocked, its decrypted working database. This reads, it does not send: the CSP's
+  `connect-src 'self'` blocks every remote fetch, and no window runs a worker (`worker-src 'none'`;
+  the OCR rasterizer runs pdf.js in-page, not in a `file://` worker that would escape the CSP —
+  `security-model.md` "Content-Security-Policy"). It matters only paired with a renderer
+  code-execution bug (read local files, then exfiltrate via the WebRTC residual, egress channel
+  (iii)). The proper fix — serve the renderer from a custom `app://` protocol and turn the fuse
+  off — touches every window and the per-origin browser storage, so it is tracked as its own
+  change. See `security-model.md` "Residual egress channels" (v).
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.

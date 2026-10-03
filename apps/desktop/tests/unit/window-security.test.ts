@@ -40,8 +40,8 @@ describe('buildCsp', () => {
   it('production CSP matches the contract string exactly', () => {
     expect(buildCsp(false)).toBe(
       "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; " +
-        "connect-src 'self'; img-src 'self' data:; font-src 'self'; object-src 'none'; " +
-        "base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+        "connect-src 'self'; img-src 'self' data:; font-src 'self'; worker-src 'none'; " +
+        "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
     )
   })
 
@@ -81,7 +81,10 @@ describe('buildMetaCsp (BE-2, ocr-audit 2026-07-18 — the meta tags baked into 
   // the built HTML matches these strings byte for byte.
   // #266: both metas carry the header's hardening tail (`object-src`/`base-uri`/
   // `frame-ancestors`) plus `form-action`, so the fallback layer denies the same things.
-  const TAIL = "object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+  // fix/ocr-pdfjs-in-page: `worker-src 'none'` joins the tail — no window starts a worker now
+  // (the OCR rasterizer runs pdf.js in-page), and a `file://` worker would be CSP-free.
+  const TAIL =
+    "worker-src 'none'; object-src 'none'; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
 
   it('index page: prod is the dev policy with the localhost connect-src entries stripped', () => {
     expect(buildMetaCsp(false, 'index')).toBe(
@@ -94,14 +97,14 @@ describe('buildMetaCsp (BE-2, ocr-audit 2026-07-18 — the meta tags baked into 
     )
   })
 
-  it('ocr page: same split, plus the pdfjs allowances (worker-src blob:, img-src blob:)', () => {
+  it('ocr page: same split, plus the pdfjs img-src blob: allowance; worker-src is none (in TAIL)', () => {
     expect(buildMetaCsp(false, 'ocr')).toBe(
       "default-src 'self'; script-src 'self'; connect-src 'self'; " +
-        `img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; ${TAIL}`
+        `img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; ${TAIL}`
     )
     expect(buildMetaCsp(true, 'ocr')).toBe(
       "default-src 'self'; script-src 'self'; connect-src 'self' ws://localhost:* http://localhost:*; " +
-        `img-src 'self' data: blob:; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; ${TAIL}`
+        `img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; ${TAIL}`
     )
   })
 
@@ -137,9 +140,9 @@ describe('CSP hardening tail — header/meta parity (#266)', () => {
           return [name, rest.join(' ')] as [string, string]
         })
     )
-  const TAIL = ['object-src', 'base-uri', 'frame-ancestors', 'form-action']
+  const TAIL = ['worker-src', 'object-src', 'base-uri', 'frame-ancestors', 'form-action']
 
-  it("the production header refuses plugins, base changes, framing and form submits ('none' each)", () => {
+  it("the production header refuses workers, plugins, base changes, framing and form submits ('none' each)", () => {
     const header = directives(buildCsp(false))
     for (const name of TAIL) expect(header.get(name), name).toBe("'none'")
   })
@@ -159,9 +162,12 @@ describe('CSP hardening tail — header/meta parity (#266)', () => {
     }
   })
 
-  it('the KaTeX style allowance and the pdfjs worker allowance survive', () => {
+  it('the KaTeX style allowance survives; both pages refuse workers (fix/ocr-pdfjs-in-page)', () => {
     expect(directives(buildCsp(false)).get('style-src')).toBe("'self' 'unsafe-inline'")
-    expect(directives(buildMetaCsp(false, 'ocr')).get('worker-src')).toBe("'self' blob:")
+    // The OCR rasterizer runs pdf.js in-page now, so no window needs a worker — and a
+    // `file://` worker would run outside the CSP. Both metas (and the prod header) deny it.
+    expect(directives(buildMetaCsp(false, 'ocr')).get('worker-src')).toBe("'none'")
+    expect(directives(buildMetaCsp(false, 'index')).get('worker-src')).toBe("'none'")
   })
 })
 

@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pdfjs-in-page`).** The hidden OCR window ran pdf.js in a
+`file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
+has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
+pages + prod header. Measured packaged: 18/18 smoke, 0 worker targets, 0 loopback. Record: `architecture.md` DEP-6 §11. Suite 7,920→7,923._
 _2026-10-02 — **#551 — the packaged exe on pdf.js 6.3, and black-and-white scans become searchable (`fix/551-packaged-pdfjs-check`).** Smart App Control
 blocks each fresh unsigned exe, so the packaged layout ran on a renamed stock `electron.exe` (code sections byte-identical, same fuses): all four #551 boxes
 pass. Found on the way: since Phase 38 the rasterizer set no `wasmUrl`, so pdf.js could not load its CCITT/JBIG2/JPEG 2000 decoders and such scans OCR'd as
@@ -136,18 +140,6 @@ reading of the research packet alone (+9.04 pp — descriptive, not the shipped 
 refusal-repair fallback that is not authorised to ship are also recorded, with the standing
 AI-only disclosure and the citation-agreement figure (κ₂ 0.504) that closes further judged
 rounds until the rubric is repaired._
-_2026-09-18 — **#447 MEASURED — the ZIM query expander DOES evict the prefix, every pack-scoped turn; D-Z20 stands**
-(`eval/447-zim-expander-cache`; record `model-benchmarks.md` §6.6 methodological-warning paragraph, `known-limitations.md`
-"The one chat slot and the prompt cache"; evidence `eval/results/hardware/i9-9900x-rtx-3090-24gb-128gb/issue447-zim-expander.*`).
-Measurement only, no product code. Leg B's tee-wrapper method, skills off, one small English ZIM, `--cache-ram 0` read from the OS
-argv. **16 of 16** pack-scoped turns (`qwen3.8-27b-ud-q5km` MTP + `qwen3.5-9b-ud-q4kxl` non-MTP) ran ONE extra task and the answer
-kept **0**, against **227 on 8 of 8** control turns — the plan prompt and the answer prompt share 3 tokens and erase each other's
-context checkpoint. Cost per turn: 369–373 extra prefilled tokens, ≈ 1.2 s prefill on the 27B (inside the classifier proxy,
-bounded by the prefix) — but the plan call DECODES 53–71 tokens, so the whole call is **≈ 2.6–3.2 s per turn** (9B ≈ 1.6–1.8 s).
-**Owner ruling 2026-09-18: D-Z20 "always" stands** — the decode was already accepted (#423), only the bounded cache part is new;
-expander untouched. The trap inverted: `forcing full` DID
-appear on the non-MTP 9B start. The retired #399 entry's "#447 … bounded by inference" sentence is frozen in `build-log.md`;
-this entry supersedes it._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -191,7 +183,8 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 2026-10-01 (preamble budget, making room for the #530 entry), and the closed 2026-09-18 #478 table-delivery entry on
 2026-10-02 (preamble budget, making room for the DEP-6 entry), and the closed 2026-09-27 #518 fixtures entry on 2026-10-02
 (preamble budget, making room for the #548–#551 entry), and the closed 2026-09-27 #517 scorer entry on 2026-10-02 (preamble
-budget, making room for the streamdown 2.6 entry) — citations of the form "BUILD_STATE <date> entry" /
+budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #447 expander-cache entry on 2026-10-03
+(preamble budget, making room for the OCR-rasterizer-CSP entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---
