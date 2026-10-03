@@ -38,6 +38,11 @@ from its first public `1.0.0` release onward.
   in a window could have used it. The screens now load from the app's own private address, which
   reaches the app's bundled files and nothing else, and the app has given up that extra file access
   altogether (#560).
+- **The app can no longer be used to run other programs' code, and it checks its own files.**
+  The HilbertRaum program could be started as a general-purpose script runner, or with a debugging
+  port, by anything that could already start programs on your computer. Both are switched off now.
+  On Windows and macOS the app also stops if its main program files have been changed since it
+  was built. Nothing changes in how you use the app (#562).
 
 ### Changed
 
