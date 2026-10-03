@@ -12503,8 +12503,11 @@ no eval path. Measured on packaged master `66ad007e` (Electron 43.7.7 / Chromium
   window's JS heap flat at ~7 MB (BE-7 `page.cleanup()` still runs in-page); cancel tears the
   window down and a fresh OCR works; the 60 s step timeout, cancel and render-process-gone paths
   are main-side and unchanged. Same on the built app under the repo Electron and under
-  `npm run dev`. Built `ocr-*.js` is ~0.3 MB larger (the worker is bundled in) and one
-  `Setting up fake worker.` warning prints per document.
+  `npm run dev`. An A4 300-DPI G4 page OCRs in the same time (packaged, runs alternated: master
+  3,151 / 3,216 ms, after 3,160 / 3,239 ms). In the packaged `app.asar` the OCR page chunk grows
+  from 1.03 MB to 3.38 MB because the worker code moves into it, but the separate 2.40 MB
+  `pdf.worker-*.mjs` and the two `.wasm` decoders leave, so the OCR assets total 3.97 MB, 0.40 MB
+  less than before. One `Setting up fake worker.` warning prints per document.
 - **Remaining, out of scope (drafted follow-up).** The renderer's `file://` read access
   (`GrantFileProtocolExtraPrivileges` on + `connect-src 'self'` on a `file://` origin) is
   unchanged; the proper fix is a custom `app://` protocol with the fuse off. See
@@ -12513,7 +12516,10 @@ no eval path. Measured on packaged master `66ad007e` (Electron 43.7.7 / Chromium
   the OCR meta no longer carries `worker-src 'self' blob:`), `csp-build-output.test.ts` (byte-exact
   built metas), `ocr-decoder-assets.test.ts` (OCR chunk sets `globalThis.pdfjsWorker`, no separate
   `pdf.worker-*.mjs` asset, `pdfjs-wasm/` holds exactly the two JS fallbacks and no `.wasm`,
-  `getDocument` passes `useWasm: false`, nothing sets `workerSrc`/`workerPort`).
+  `getDocument` passes `useWasm: false`, nothing sets `workerSrc`/`workerPort`). Mutation-tested
+  on master `d08763b7`: six mutations, each failing only the guards for its own link (a `?url`
+  worker → 3, `useWasm: false` dropped → 1, hashed decoder names → 3, a `.wasm` shipped → 1, the
+  OCR meta back to `worker-src 'self' blob:` → 4, the header without `worker-src 'none'` → 2).
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 
