@@ -250,7 +250,7 @@ export function PacksPanel({ onAskPack }: Props = {}): JSX.Element {
   // The empty state's quiet second action (§11.16): the library address on the clipboard. The
   // app never opens a browser itself; a failed copy still names the address in the toast.
   // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter needs a
-  // secure context + focused document and is unreliable in the file://-loaded renderer. A
+  // secure context + focused document and is unreliable in the packaged renderer. A
   // refused write (`ok === false`) gets the failure toast too (the CH-5 / #148 class).
   async function onCopyLibrary(): Promise<void> {
     try {

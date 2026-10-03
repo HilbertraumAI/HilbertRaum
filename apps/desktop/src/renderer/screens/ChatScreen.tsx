@@ -1893,7 +1893,7 @@ export function ChatScreen({
 
   function onCopyMessage(content: string): void {
     // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter needs
-    // a secure context + focused document and is unreliable in the file://-loaded renderer.
+    // a secure context + focused document and is unreliable in the packaged renderer.
     // CH-5 (#148): a refused write (`ok === false`) or a rejection gets feedback too — the
     // failure used to be an unhandled rejection / pure silence (the images CODE-36 class).
     void Promise.resolve(window.api?.copyToClipboard(content))

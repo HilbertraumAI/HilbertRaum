@@ -1313,7 +1313,7 @@ existed. Nothing on Home or in the chat's scope picker led to packs when there w
    one primary per view) and a ghost "Copy the library address": the app never opens a browser
    from an offline surface, it puts the address on the clipboard and says so in a toast. The write
    goes through MAIN (`window.api.copyToClipboard` → `clipboard:write`) like every other copy in the
-   app — `navigator.clipboard` is unreliable in the file://-loaded renderer — and a refused write
+   app — `navigator.clipboard` is unreliable in the packaged renderer — and a refused write
    names the address in the toast instead.
 7. **Entry points where packs are used.** Home's readiness card gains a fourth row (`book` glyph)
    with three honest states — none registered ("Add packs" → `documents:packs`), registered but
@@ -1580,10 +1580,11 @@ stuff staying put", so it stays **rare** — a role accent, never a surface.
   one) — **not** a JS theme read, so it works **pre-unlock in the gate** (which follows the OS
   theme via the `data-theme` attribute set at startup). `BrandMark` clamps size ≥16 (dev-warns
   below; the kit's raster floor), bakes clear-space ≥ the dot diameter, and is decorative by
-  default. **Asset `src` MUST be RELATIVE** (`brand/…`, not `/brand/…`): the production renderer is
-  `loadFile`'d over `file://`, where an absolute path resolves to the filesystem root and renders
-  broken; the single-page renderer has no router, so a relative path resolves next to `index.html`
-  under both dev (`http://localhost`) and prod (`file://`).
+  default. **Asset `src` MUST be RELATIVE** (`brand/…`, not `/brand/…`): the single-page renderer has
+  no router, so a relative path resolves next to `index.html` under both dev (`http://localhost`)
+  and prod (`hilbertraum://app/` since #560). The rule dates from the `file://` load, where an
+  absolute path resolved to the filesystem root and rendered broken; keep it, because a relative path
+  works under any base.
 - **Placements:** rail brand slot (`App.tsx`, `size 24`) and the gate (`WorkspaceGate.tsx`,
   `size 36`, above the "HilbertRaum Lite" edition line). **Never inside the chat transcript** — the
   conversation stays the centre of gravity. The `◈` glyph is gone from `src/` entirely.

@@ -221,7 +221,8 @@ if (!res.ok) {
 **Browser JavaScript cannot use this endpoint, by design** — see [§8](#8-security-posture). A
 plugin running in an Electron/VS Code *main* or extension-host process can (its requests carry no
 `http(s)` origin, or a custom-scheme one such as `vscode-webview://`, both of which pass); a web
-page's `fetch` cannot.
+page's `fetch` cannot. Neither can HilbertRaum's own windows: their `hilbertraum://app` origin is
+refused (#560). The app talks to its engine directly and never needs this endpoint.
 
 ### Asking for JSON in a fixed shape
 
@@ -361,7 +362,7 @@ All errors are OpenAI-shaped: `{"error": {"message": …, "type": …, "code": �
 | 400 | `context_overflow` | Prompt + answer do not fit the context window | Send less text |
 | 401 | `invalid_api_key` | Missing or wrong access key | Re-copy the key from the card |
 | 403 | `forbidden_host` | `Host` was absent, or not a loopback name for this port | Use the printed base URL |
-| 403 | `forbidden_origin` | A web-page origin (or `Origin: null`) | Browsers are locked out by design |
+| 403 | `forbidden_origin` | A web-page origin, `Origin: null`, or HilbertRaum's own `hilbertraum:` origin (#560) | Browsers, and the app's own windows, are locked out by design |
 | 403 | `no_cors` | An `OPTIONS` preflight | Same |
 | 404 | `unknown_route` | Only the two routes above exist | — |
 | 413 | `body_too_large` | Body exceeded 1 MB (counted as bytes arrive) | Send less |

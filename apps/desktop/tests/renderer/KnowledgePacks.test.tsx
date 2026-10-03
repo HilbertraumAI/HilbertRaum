@@ -961,7 +961,7 @@ describe('PacksPanel', () => {
     expect(screen.getAllByRole('button', { name: 'Add packs…' })).toHaveLength(1)
     // The copy goes through MAIN (`clipboard:write`), never `navigator.clipboard`: user-event
     // installs a working stub of the latter, so asserting on it would pass in the test and
-    // still fail in the file://-loaded renderer (the "Zwischenablage" error, preload/index.ts).
+    // still fail in the packaged renderer (the "Zwischenablage" error, preload/index.ts).
     const writeText = vi.spyOn(navigator.clipboard, 'writeText')
     await user.click(screen.getByRole('button', { name: 'Copy the library address' }))
     expect(copyToClipboard).toHaveBeenCalledWith('https://library.kiwix.org')

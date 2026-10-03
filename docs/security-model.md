@@ -31,7 +31,8 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | **Every `ipcMain.handle` checks the sender** — the handler body runs only for the main window's `webContents.id` (#252); a bare registration under `src/main/ipc/**` is banned by `repo-hygiene.test.ts` | `main/ipc/guarded-handle.ts`, set populated in `main/index.ts` `createWindow` |
 | `will-navigate` **and `will-redirect`** block remote origins (SEC-3) | `services/navigation-guard.ts`, installed in `main/index.ts` + OCR window |
 | `setWindowOpenHandler` denies every in-app open; an http(s) link reaches the OS browser only through a native confirmation that names the site and shows the URL, Cancel the default, one dialog at a time (#236) | `main/window-security.ts` (policy) + `main/external-open.ts` (consent), wired in `main/index.ts` |
-| **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts` + `electron.vite.config.ts` |
+| **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts`, `main/app-protocol.ts` + `electron.vite.config.ts` |
+| **The app's pages come from its own `hilbertraum://app/` scheme, not `file://`; the packaged build turns `GrantFileProtocolExtraPrivileges` off** (#560) | `main/app-protocol.ts` (privileges, resolver, headers), `main/install-app-protocol.ts`, `electron-builder.yml` `electronFuses` |
 | **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
@@ -39,7 +40,8 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 
 ### Content-Security-Policy (dev vs prod)
 Two CSP layers cover every renderer page (`index.html` in the main window, `ocr.html` in the
-hidden OCR rasterizer window — both windows share the default session); the **effective policy is
+hidden OCR rasterizer window — both windows share the default session, and since #560 both pages
+load from the app's own `hilbertraum://app/` scheme, below); the **effective policy is
 the intersection of both**. All four policy strings live in `main/window-security.ts`
 (`buildCsp` for the header, `buildMetaCsp` for the per-page meta tags), pinned by
 `tests/unit/window-security.test.ts`.
@@ -75,6 +77,18 @@ the intersection of both**. All four policy strings live in `main/window-securit
    task, its meta was byte-exact to `buildMetaCsp(false, 'ocr')`, a `blob:` image the meta
    allows was blocked with the header's `originalPolicy`, and rasterization completed under
    that intersection (`architecture.md` "Electron 43.4.0 → 43.7.7" §4).
+   **Since #560 the pages load from `hilbertraum://app/`, and the header arrives twice.** The
+   scheme's handler sets `buildCsp(false)` on every response it returns, refusals included
+   (`main/app-protocol.ts`), and the session hook still fires for the scheme — measured on
+   Electron 43.7.7: every scheme request passed through `onHeadersReceived`, so
+   electron/electron#45865 (webRequest not running for intercepted protocols) does not reproduce
+   for `protocol.handle`. A packaged page therefore carries two byte-identical header policies plus
+   its meta, and each violation fires once per policy (packaged, 2026-10-03: 6 violations → 12
+   header events + 6 meta events in each window). In an unpackaged build the hook's copy is the
+   dev string, so the handler's production header is the stricter of the two. Method note for this
+   layout: count the events per policy; the handler's and the hook's are indistinguishable by
+   string in a packaged build, and two header events per violation is the evidence that both
+   layers attached.
 2. **`<meta http-equiv="Content-Security-Policy">`** in each page — `buildMetaCsp(isDev, page)`,
    **generated at build time** by the `hilbertraum:csp-meta` transform in
    `electron.vite.config.ts`. The checked-in HTML carries the dev policy (Vite HMR needs the
@@ -90,8 +104,9 @@ the intersection of both**. All four policy strings live in `main/window-securit
 - **Production header** (strict): `default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline';
   connect-src 'self'; img-src 'self' data:; font-src 'self'; worker-src 'none'; object-src 'none'; base-uri 'none';
   frame-ancestors 'none'; form-action 'none'`. No remote origin is reachable from any renderer
-  **execution context** (see the worker note below for why that qualifier is now true, and the
-  one remaining `file://` **read** residual in "Residual egress channels"). The production
+  **execution context** (see the worker note below for why that qualifier is now true), and since
+  #560 `'self'` names the app's own bundled files only — on the old `file://` origin it matched
+  every local file ("The app's own scheme" below; "Residual egress channels" (v)). The production
   **meta** policies match the checked-in page metas minus the localhost entries (the `ocr` page
   keeps `img-src 'self' data: blob:` — a bundled-pdfjs allowance). **Header/meta parity (#266,
   extended fix/ocr-pdfjs-in-page):** every baked meta, dev and prod, carries the same hardening
@@ -136,6 +151,54 @@ the intersection of both**. All four policy strings live in `main/window-securit
   relaxation is the ONLY dev/prod difference in the meta layer, and no policy in either layer
   ever names a non-localhost origin (test-pinned).
 
+### The app's own scheme: `hilbertraum://app/` (#560)
+Until #560 the packaged main and OCR windows loaded their pages from `file://`, with Electron's
+`GrantFileProtocolExtraPrivileges` fuse on. On a `file://` origin the CSP's `'self'` matches
+**every** `file://` URL. Measured on the packaged build in both windows: a script could `fetch`
+and XHR the bytes of any file the OS account can read (with a workspace unlocked, that includes
+its decrypted working database), and a `<script src>` pointing at any local `.js` file **ran**. No
+path for untrusted content to run script was found, so this was the second half of a future bug,
+not a vulnerability on its own. Now:
+
+- **The pages load from `hilbertraum://app/index.html` and `/ocr.html`** (`main/app-protocol.ts`,
+  glue in `main/install-app-protocol.ts`). On that origin `'self'` is the app's bundled renderer
+  only. Measured, packaged, both windows: `fetch`/XHR of a local file fails ("Not allowed to load
+  local resource" plus a `connect-src` violation), the planted script is refused, and a `Worker`
+  from a `file://` script is refused at construction. The scheme name is the app's own, not the
+  generic `app://` other local Electron clients use, so the local API can tell it apart (below).
+- **The handler is a file server, so it has two independent layers.** (1) Syntax: the exact scheme
+  and host, no credentials or port, GET only, no `%` anywhere in the path, every segment from
+  `[A-Za-z0-9._-]`, no empty, `.` or `..` segment. (2) An allowlist: the path must name a file
+  enumerated under the renderer root (inside `app.asar`) when the handler was installed; folders
+  and symlinks are never listed. Chromium canonicalises `..`, `%2e%2e`, a literal backslash and the
+  host's case before the handler sees a request, but it passes encoded `/` and `\`, NUL, double
+  encoding, drive letters, UNC prefixes and NTFS stream names through unchanged (measured), so the
+  handler refuses all of those itself. A naive `existsSync` + `statSync` handler served
+  `index.html::$DATA` in the probe. Content types come from an explicit table, never the OS registry
+  (Windows can map `.js` to `text/plain`, which breaks module scripts under `nosniff`); an unknown
+  extension is refused. Every response, refusals included, carries `buildCsp(false)` and
+  `X-Content-Type-Options: nosniff`. A refusal is a 404 with an empty body.
+- **Privileges: `standard` and `secure` only.** `standard` makes `'self'` match the scheme and
+  relative URLs resolve (without it every script is refused, measured). `secure` makes the pages a
+  secure context (`getUserMedia` for dictation, `crypto.randomUUID`). `bypassCSP`,
+  `allowServiceWorkers`, `supportFetchAPI`, `corsEnabled`, `stream`, `codeCache` and
+  `allowExtensions` are all `false` and pinned (`tests/unit/app-protocol.test.ts`).
+- **The fuse is off in packaged builds** (`electron-builder.yml` `electronFuses`; wire `101100011`
+  → `101100001`). With the fuse off, `file://` pages lose their extra privileges. The old layout
+  could not have survived that: its module scripts are refused by CORS from origin `null`, and a
+  `file://` document loses `localStorage` (both measured). So the scheme move and the fuse flip
+  belong to the same change. The scheme alone already closes the reads (measured with the fuse
+  on); the fuse is the second layer. The only `file://` page left is the evidence-pack print
+  window, which runs no script and loads nothing, and its real-Electron smoke passes with the fuse
+  off.
+- **Navigation:** the main window may navigate only to exactly `hilbertraum://app/index.html` (the
+  dev server's exact origin under `npm run dev`). The old `startsWith('file://')` check let any
+  local file through, a dropped file for example. See "In-app navigation" below.
+- **The local API refuses the app's own origin.** A `file://` page sent no `Origin` header at all
+  (measured with the CSP removed), which `checkOrigin` admits. A page on the scheme sends
+  `Origin: hilbertraum://app`, and `checkOrigin` refuses any `hilbertraum:` origin; the renderer
+  has no reason to call the API, and its CSP already blocks the request.
+
 ### Renderer permissions: deny by default, one scoped exception — request *and* check (Phases 31 + 37; SEC-2)
 Electron's default with **no** permission handler installed is to **GRANT** every permission
 (geolocation, notifications, media, …) — found by the 2026-06-11 wave-3 plan audit. `services/
@@ -163,14 +226,17 @@ The check handler does **not** log denials: the check path is high-frequency (e.
 query` polling) and the request handler already records denials.
 
 ### In-app navigation: block remote origins on *both* navigation events (SEC-3)
-A strict prod CSP + `file://` origin already bound what the renderer can reach, but the standard
-hardening is to refuse any top-level navigation the window has no business making.
+A strict prod CSP on the app's own origin already bounds what the renderer can reach, but the
+standard hardening is to refuse any top-level navigation the window has no business making.
 `services/navigation-guard.ts` `installNavigationGuard` attaches one deny-by-default predicate to
 **both** `will-navigate` **and `will-redirect`** (SEC-3, backend-audit-2026-06-27). The pair must
 be guarded together: a server-side (3xx) or `<meta http-equiv="refresh">` redirect can reach a
 remote origin via `will-redirect` **without ever firing `will-navigate`** — guarding only
 `will-navigate` (the prior state) left the redirect path on Electron's default (allow). The **main
-window** allows only its own shell (Vite's localhost in dev, the bundled `file://` page in prod);
+window** allows only its own shell: exactly `hilbertraum://app/index.html` in prod, and the dev
+server's exact origin under `npm run dev` (`app-protocol.ts` `createMainWindowNavigationPredicate`).
+Before #560 these were prefix checks: `startsWith('file://')` admitted any local file, and
+`startsWith('http://localhost')` also matched `http://localhost.example`;
 the **OCR rasterizer's hidden window** — which renders untrusted PDF bytes and only ever loads
 `ocr.html` — denies *all* navigation (`() => false`). The installer is unit-tested with a fake
 WebContents that proves both events are registered and a remote redirect is prevented.
@@ -186,7 +252,8 @@ advisories went unwatched.
 **Electron itself has the same exposure, and Dependabot understates it.** Electron is a
 devDependency in npm terms but the runtime of every packaged build. Dependabot files its alerts as
 `development` scope, and `npm audit --omit=dev` leaves it out. Triage each Electron advisory
-against the window posture: no custom protocol or scheme, no `<webview>`, every window denies
+against the window posture: one custom scheme (`hilbertraum://app/`, `standard` + `secure` only,
+served from an allowlist, #560), no `<webview>`, every window denies
 `window.open`, every window sandboxed (preloads only in the main and OCR windows). Patch even
 when nothing is reachable, because each 43.x patch release also carries Chromium security
 backports that never raise an alert. The 2026-09-29 batch is triaged in `architecture.md`
@@ -366,7 +433,7 @@ running as you**. Two doors exist:
 | **Exists only while unlocked** | A locked vault serves nothing — settings and the access key live inside it, and lock/quit tear the listener down before the sidecars. |
 | **Binds `127.0.0.1` + `::1` only** | Anything off-machine. There is no LAN mode, no `0.0.0.0`, no proxy or forward capability, and no setting that could produce one. Test-pinned. |
 | **`Host` header validation (absent ⇒ 403)** | DNS rebinding — a page that resolves an attacker domain to 127.0.0.1 still fails the Host check. |
-| **`http(s)` non-loopback `Origin` and `Origin: null` refused; `OPTIONS` refused; no CORS header ever emitted; JSON content-type required** | Drive-by browser access. A loopback-origin page is not refused by the Origin check itself — the refused preflight and the absent CORS headers are what stop a browser reading any response. Absent and custom-scheme origins (`app://`, `vscode-webview://`) pass, because that is what Electron-based local clients send. |
+| **`http(s)` non-loopback `Origin` and `Origin: null` refused; `OPTIONS` refused; no CORS header ever emitted; JSON content-type required** | Drive-by browser access. A loopback-origin page is not refused by the Origin check itself — the refused preflight and the absent CORS headers are what stop a browser reading any response. Absent and custom-scheme origins (`app://`, `vscode-webview://`) pass, because that is what Electron-based local clients send — except this app's own `hilbertraum:` scheme, refused since #560 (its renderer talks to main over IPC). |
 | **Bearer access key, on by default, constant-time compared** | Casual use by any other program on the machine. Turning it off is a confirmed user choice. |
 | **Chat completions + a one-model listing, no other routes** | Everything else: documents, conversations, the vector index, settings, the audit log. There is no route to them, so there is nothing to authorize. (`GET /v1/models` is auth-gated like the completion route and consumes no admission slot — it is the cheap "is it up" probe clients expect.) |
 | **Counts-only accounting; nothing logged** | A record of what was asked or answered. Request and response text is held in memory for the request and dropped. |
@@ -1441,7 +1508,9 @@ worth naming so "everything stays on the drive" is not read as "nothing touches 
   and a few collapsed/expanded panel states (`hilbertraum.uiLanguage`,
   `hilbertraum.chat.listCollapsed`, `hilbertraum.docs.railCollapsed`,
   `hilbertraum.docs.locationsMoreOpen`; the set is pinned by `tests/unit/renderer-storage-keys.test.ts`)
-  — never document or chat content. When no prepared drive is found, the workspace itself falls
+  — never document or chat content. Web storage is per origin: since #560 these keys live under
+  the renderer's `hilbertraum://app` origin, and the copies the old `file://` origin wrote stay in
+  the profile, unread, until the profile is cleared. When no prepared drive is found, the workspace itself falls
   back to this same folder (`PRIVACY.md` says so). Nothing here is cleared on lock: owner decision
   #231 keeps "document only" as the default and records clearing the profile on lock as the
   alternative.
@@ -2429,17 +2498,16 @@ it.
   clipboard history or cross-device sync. See "What lives or passes outside the drive" above.
   Accepted as documented — owner decision #227 ruled "document only" on 2026-09-03 (#250 closed);
   no timed clear ships.
-- **(v) `file://` read access inside the renderer (reachable only after a compromise).** The
-  renderer is served from `file://` with Electron's `GrantFileProtocolExtraPrivileges` fuse on,
-  so `connect-src 'self'` matches every `file://` URL: a script running in either window can
-  `fetch`/XHR the bytes of any file the OS account can read (measured). On its own this reads, it
-  does not send — `connect-src 'self'` blocks every remote fetch/XHR/WebSocket, and the only
-  un-CSP'd egress left is WebRTC ((iii), itself post-compromise). It matters as the second half of
-  a renderer code-execution bug: read local files (including the unlocked workspace's decrypted
-  working DB) and pair with (iii) to exfiltrate. The proper fix is to serve the renderer from a
-  custom `app://` protocol and turn `GrantFileProtocolExtraPrivileges` off (Electron's security
-  checklist); it touches every window and the per-origin browser storage, so it is its own change
-  (drafted follow-up). Recorded in `known-limitations.md` "Security & privacy".
+- **(v) `file://` read access inside the renderer — closed (#560).** The renderer used to be served
+  from `file://` with Electron's `GrantFileProtocolExtraPrivileges` fuse on, so `connect-src 'self'`
+  matched every `file://` URL. A script running in either window could `fetch`/XHR the bytes of any
+  file the OS account can read, including the unlocked workspace's decrypted working DB, and pair
+  that with (iii) to send them out. Both windows now load from the app's own `hilbertraum://app/`
+  scheme, and the packaged build turns the fuse off ("The app's own scheme" above). Measured on
+  the packaged build: both reads fail in both windows, and so does running a planted local script.
+  What remains: the evidence-pack print window still loads a `file://` page, but that page runs no
+  script; under `npm run dev` the renderer is `http://localhost`, which never had the read. The
+  fuse-off build is unmeasured on macOS and Linux (`known-limitations.md`).
 
 ## Out of scope (MVP)
 - OS-level firewall enforcement (offline is by design + policy/UX, not a hard network block).

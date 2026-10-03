@@ -9,6 +9,8 @@ import { onEngineProblemsChanged } from './services/runtime/engine-load'
 import { createExternalOpener } from './external-open'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
+import { appPageUrl, createMainWindowNavigationPredicate } from './app-protocol'
+import { installAppProtocol, registerAppSchemePrivileges } from './install-app-protocol'
 import {
   SECURE_WINDOW_WEB_PREFERENCES,
   buildCsp,
@@ -141,6 +143,10 @@ if (!isPrimaryInstance) {
 // dev. Set once here so every spawn seam (chat/embedder/reranker/vision sidecars, the GPU
 // probe, whisper-cli) shares one decision.
 initBinaryVerification(isDev)
+
+// #560: the app's pages are served from `hilbertraum://app/` (app-protocol.ts), not `file://`.
+// Electron accepts scheme privileges only before `ready`; the handler is installed in whenReady.
+registerAppSchemePrivileges()
 
 let mainWindow: BrowserWindow | null = null
 // WebContents ids allowed to invoke `handle` channels (#252): the main window's, added in
@@ -880,7 +886,10 @@ function createWindow(): void {
 
   // Content-Security-Policy as a response header (defence in depth on top of the
   // index.html meta tag, spec §3.5). The strings live in window-security.ts (TS-2),
-  // pinned by tests/unit/window-security.test.ts — edit them THERE.
+  // pinned by tests/unit/window-security.test.ts — edit them THERE. This session hook covers
+  // the dev server and the print window's `file://` page; the app's own scheme sets the
+  // production header itself (app-protocol.ts), and this hook adds a second, identical one
+  // there in packaged builds (both measured attaching, #560).
   const csp = buildCsp(isDev)
   trustedSenders.add(mainWindow.webContents.id)
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {
@@ -936,17 +945,13 @@ function createWindow(): void {
   // Block in-app navigation to remote origins (defence in depth). SEC-3
   // (backend-audit-2026-06-27): the guard covers BOTH `will-navigate` and `will-redirect`
   // (a server/<meta> redirect reaches a remote origin via `will-redirect` without firing
-  // `will-navigate`). Only the app's own shell may navigate — Vite's localhost in dev, the
-  // bundled `file://` page in prod.
-  installNavigationGuard(mainWindow.webContents, (url) =>
-    isDev ? url.startsWith('http://localhost') : url.startsWith('file://')
-  )
+  // `will-navigate`). Only the app's own shell may navigate — the dev server's exact origin in
+  // dev, exactly `hilbertraum://app/index.html` otherwise (app-protocol.ts; #560 replaced the
+  // `file://` prefix check, which let any local file through).
+  const devServerUrl = isDev ? process.env.ELECTRON_RENDERER_URL : undefined
+  installNavigationGuard(mainWindow.webContents, createMainWindowNavigationPredicate(devServerUrl))
 
-  if (isDev && process.env.ELECTRON_RENDERER_URL) {
-    void mainWindow.loadURL(process.env.ELECTRON_RENDERER_URL)
-  } else {
-    void mainWindow.loadFile(join(__dirname, '../renderer/index.html'))
-  }
+  void mainWindow.loadURL(devServerUrl ?? appPageUrl('index'))
 }
 
 // The `will-quit` / `activate` handlers live in `./shutdown` over ONE shared `isShuttingDown`
@@ -987,6 +992,10 @@ app.whenReady().then(() => {
   ipcMain.on(IPC.perfMark, (_e, event: unknown) => {
     if (event === 'gate_visible') perfMark('gate_visible')
   })
+  // #560: serve the built renderer on `hilbertraum://app/` before the first window loads it.
+  const protocolT0 = performance.now()
+  const appFiles = installAppProtocol(join(__dirname, '../renderer'))
+  perfMark('app_protocol_installed', { ms: perfMs(protocolT0), files: appFiles })
   createWindow()
 
   app.on('activate', lifecycle.onActivate)

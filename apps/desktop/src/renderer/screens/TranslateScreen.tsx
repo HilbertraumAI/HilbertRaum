@@ -288,7 +288,7 @@ export function TranslateScreen({
 
   function onCopy(textToCopy: string): void {
     // Copy via MAIN (preload → clipboard:write), not navigator.clipboard — the latter is denied in
-    // the file://-loaded renderer. Mirrors ImagesScreen.onCopy / ChatScreen.onCopyMessage.
+    // the packaged renderer. Mirrors ImagesScreen.onCopy / ChatScreen.onCopyMessage.
     void window.api
       ?.copyToClipboard?.(textToCopy)
       ?.then?.((ok) => {

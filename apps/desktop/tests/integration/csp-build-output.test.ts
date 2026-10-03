@@ -3,9 +3,10 @@ import { existsSync, readFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { buildMetaCsp } from '../../src/main/window-security'
 
-// BE-2 (ocr-audit 2026-07-18), OCR-R P5: packaged builds load index.html/ocr.html over
-// `file://`, where the CSP <meta> tag — not the buildCsp() response header — is the
-// effective policy. The checked-in HTML carries the DEV policy (Vite HMR needs
+// BE-2 (ocr-audit 2026-07-18), OCR-R P5: the CSP <meta> tag baked into index.html/ocr.html
+// is the layer that still holds if the response-header wiring ever regresses (packaged
+// builds load the pages from `hilbertraum://app/` since #560; the headers were measured
+// attaching there and, before, on `file://`). The checked-in HTML carries the DEV policy (Vite HMR needs
 // `ws://localhost:*` / `http://localhost:*` in connect-src); the `hilbertraum:csp-meta`
 // transform in electron.vite.config.ts rewrites the tag at build time from
 // `buildMetaCsp(isDev, page)`. This test guards the transform forever: the BUILT

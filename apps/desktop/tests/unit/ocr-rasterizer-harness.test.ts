@@ -34,7 +34,7 @@ const fake = vi.hoisted(() => {
     /** ipcMain.on registry — teardown leaves every channel EMPTY (asserted per test). */
     ipcListeners: new Map<string, Array<(event: unknown, payload: unknown) => void>>(),
     /** Behavior knobs, reset per test. */
-    loadFile: undefined as ((path: string) => Promise<void>) | undefined,
+    load: undefined as ((url: string) => Promise<void>) | undefined,
     constructorThrows: false,
     /** The scripted fake renderer: reacts to webContents.send(channel, payload). */
     onSend: undefined as
@@ -54,10 +54,12 @@ vi.mock('electron', () => {
     opts: Record<string, unknown>
     webContents: FakeWebContents
     destroyed = false
-    loadFile = vi.fn(async (path: string) => {
-      await (state.loadFile?.(path) ?? Promise.resolve())
+    // #560: the page loads over loadURL (the app's own scheme, or the dev server); loadFile is
+    // kept on the fake only so a test can assert it is never used again.
+    loadFile = vi.fn(async () => {})
+    loadURL = vi.fn(async (url: string) => {
+      await (state.load?.(url) ?? Promise.resolve())
     })
-    loadURL = vi.fn(async () => {})
     constructor(opts: Record<string, unknown>) {
       if (state.constructorThrows) throw new Error('window construction failed')
       this.opts = opts
@@ -117,10 +119,10 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47])
 beforeEach(() => {
   fake.state.windows = []
   fake.state.ipcListeners = new Map()
-  fake.state.loadFile = undefined
+  fake.state.load = undefined
   fake.state.constructorThrows = false
   fake.state.onSend = undefined
-  // Force the prod loadFile branch (a dev-server env var would divert to loadURL).
+  // Force the app-scheme branch (a dev-server env var would divert to the dev server's URL).
   delete process.env['ELECTRON_RENDERER_URL']
 })
 
@@ -175,8 +177,20 @@ describe('rasterizePdfWithHiddenWindow — window creation and hardening wiring'
     const prefs = win.opts.webPreferences as Record<string, unknown>
     expect(prefs).toEqual({ preload: prefs.preload, ...SECURE_WINDOW_WEB_PREFERENCES })
     expect(String(prefs.preload)).toMatch(/[\\/]preload[\\/]ocr\.js$/)
-    expect(win.loadFile).toHaveBeenCalledTimes(1)
-    expect(String(win.loadFile.mock.calls[0]![0])).toMatch(/[\\/]renderer[\\/]ocr\.html$/)
+    // #560: the OCR page comes from the app's own scheme, never file://.
+    expect(win.loadURL).toHaveBeenCalledExactlyOnceWith('hilbertraum://app/ocr.html')
+    expect(win.loadFile).not.toHaveBeenCalled()
+  })
+
+  it('under the dev server the page comes from the dev server instead', async () => {
+    process.env['ELECTRON_RENDERER_URL'] = 'http://localhost:5173'
+    try {
+      wellBehavedRenderer(1)
+      await rasterizePdfWithHiddenWindow(PDF, { onPage: () => {} })
+      expect(lastWin().loadURL).toHaveBeenCalledExactlyOnceWith('http://localhost:5173/ocr.html')
+    } finally {
+      delete process.env['ELECTRON_RENDERER_URL']
+    }
   })
 
   it('denies window-open and BOTH navigation events (SEC-3: the worker page never navigates)', async () => {

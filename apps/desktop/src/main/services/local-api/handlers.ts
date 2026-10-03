@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from 'node:crypto'
 import type { IncomingMessage, ServerResponse } from 'node:http'
 import { isStrictLoopbackHostname } from '../../../shared/local-api'
+import { APP_SCHEME } from '../../app-protocol'
 
 // Local-API request pipeline (local-api wave P3): the pure(ish) checks and the OpenAI
 // envelope/error synthesis. The ORDER of the checks is part of the security contract —
@@ -69,7 +70,9 @@ export function checkHost(req: IncomingMessage, port: number): ApiErrorBody | nu
  * `http(s)://` Origin — reject any whose host is not loopback, and reject the literal
  * `null` Origin (sandboxed iframes/redirect chains; no legitimate local client sends it).
  * ABSENT Origin (curl, Python, most native code) and custom schemes (`app://`,
- * `vscode-webview://` — the Electron-based local clients this feature targets) pass.
+ * `vscode-webview://` — the Electron-based local clients this feature targets) pass — except
+ * this app's OWN scheme (#560): its renderer is `hilbertraum://app` and has no business here (it
+ * talks to main over IPC). Its CSP already blocks the request; this is the second layer.
  */
 export function checkOrigin(req: IncomingMessage): ApiErrorBody | null {
   const origin = req.headers.origin
@@ -79,6 +82,9 @@ export function checkOrigin(req: IncomingMessage): ApiErrorBody | null {
     return errorBody('Forbidden origin', 'permission_error', 'forbidden_origin')
   }
   const lower = value.toLowerCase()
+  if (lower.startsWith(`${APP_SCHEME}:`)) {
+    return errorBody('Forbidden origin', 'permission_error', 'forbidden_origin')
+  }
   if (lower.startsWith('http://') || lower.startsWith('https://')) {
     try {
       // WHATWG quirk: `URL.hostname` returns IPv6 literals WITH brackets (`[::1]`) —

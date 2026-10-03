@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { installNavigationGuard } from '../../src/main/services/navigation-guard'
+import { createMainWindowNavigationPredicate } from '../../src/main/app-protocol'
 
 // SEC-3 (backend-audit-2026-06-27): in-app navigation must be blocked on BOTH `will-navigate`
 // AND `will-redirect`. A server-side (3xx) or <meta refresh> redirect reaches a remote origin
@@ -45,22 +46,25 @@ describe('installNavigationGuard', () => {
 
   it('blocks a remote-origin will-redirect (the SEC-3 case) on the main-window predicate', () => {
     const wc = fakeWebContents()
-    // The prod main-window predicate: only the bundled file:// shell may navigate.
-    installNavigationGuard(wc.target, (url) => url.startsWith('file://'))
+    // The prod main-window predicate (index.ts): only the app's own shell may navigate. #560
+    // replaced the `startsWith('file://')` prefix check, under which any local file passed.
+    installNavigationGuard(wc.target, createMainWindowNavigationPredicate(undefined))
 
     // A server/meta redirect to a remote origin → prevented on will-redirect.
     expect(wc.fire('will-redirect', 'https://evil.example/phish').prevented).toBe(true)
     // The same predicate also blocks a remote will-navigate…
     expect(wc.fire('will-navigate', 'https://evil.example/phish').prevented).toBe(true)
+    // …and a local file (a dropped file, a relative link resolved against the old file:// page)…
+    expect(wc.fire('will-navigate', 'file:///C:/Users/me/Downloads/dropped.html').prevented).toBe(true)
     // …and ALLOWS the app's own shell on both events.
-    expect(wc.fire('will-redirect', 'file:///app/renderer/index.html').prevented).toBe(false)
-    expect(wc.fire('will-navigate', 'file:///app/renderer/index.html').prevented).toBe(false)
+    expect(wc.fire('will-redirect', 'hilbertraum://app/index.html').prevented).toBe(false)
+    expect(wc.fire('will-navigate', 'hilbertraum://app/index.html').prevented).toBe(false)
   })
 
   it('a deny-all worker window (OCR rasterizer) blocks every navigation/redirect', () => {
     const wc = fakeWebContents()
     installNavigationGuard(wc.target, () => false)
-    expect(wc.fire('will-navigate', 'file:///ocr.html').prevented).toBe(true)
+    expect(wc.fire('will-navigate', 'hilbertraum://app/ocr.html').prevented).toBe(true)
     expect(wc.fire('will-redirect', 'https://evil.example/').prevented).toBe(true)
   })
 })

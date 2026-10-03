@@ -1886,7 +1886,7 @@ whole renderer-visible surface.
   a no-op, never an error. Not gated on an unlocked workspace, like `stopRuntime`: it only stops
   work already running and touches no database), `onScopeNotice(conversationId, cb)`
   (filename auto-scope one-shot), `copyToClipboard(text): Promise<boolean>` (main-process
-  clipboard — the renderer's `navigator.clipboard` is denied in the `file://` context).
+  clipboard — the renderer's `navigator.clipboard` is denied in the packaged renderer).
 
 ### Channel-surface completion sweep (2026-08-20, docs/code audit E-1)
 
@@ -1906,8 +1906,9 @@ one's behaviour stays owned by the design record named beside it.
   of two buttons led to chatting (`registerModelIpc.ts`; design-guidelines §11.10).
 - **`copyToClipboard(text): Promise<boolean>`** (`clipboard:write`) — main-side clipboard write,
   resolving to whether it succeeded. Not a convenience wrapper: `navigator.clipboard` needs a
-  secure context and a focused document, and is unreliable in a `file://`-loaded renderer, where it
-  produced a user-visible copy error.
+  secure context and a focused document, and is unreliable in the packaged renderer, where it
+  produced a user-visible copy error (then served from `file://`; from `hilbertraum://app/` since
+  #560).
 - **`setConversationDefaultSkill(conversationId, installId | null): Promise<void>`**
   (`chat:setDefaultSkill`) — persists a conversation's sticky default skill; `null` clears it
   (skills plan §10.1).

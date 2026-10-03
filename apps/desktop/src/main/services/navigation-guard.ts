@@ -1,7 +1,7 @@
 // In-app navigation hardening (SEC-3, backend-audit-2026-06-27).
 //
 // Electron lets renderer content drive the WebContents to a new URL via top-level
-// navigation. Production runs `file://` + a strict CSP, so this is defence in depth, but
+// navigation. Production serves `hilbertraum://app/` + a strict CSP, so this is defence in depth, but
 // the standard hardening is to refuse any navigation the window has no business making.
 //
 // CRUCIAL: there are TWO events, and BOTH must be guarded. `will-navigate` fires for a
@@ -28,8 +28,9 @@ interface PreventableEvent {
 /**
  * Attach a deny-by-default navigation guard to BOTH `will-navigate` AND `will-redirect`
  * (SEC-3) on a WebContents. `isAllowed(url)` returns `true` only for the navigations the
- * window may legitimately perform (e.g. its own `file://` shell in prod, the Vite dev
- * server in dev); every other navigation/redirect is prevented. A worker window that
+ * window may legitimately perform (e.g. its own page in prod, the Vite dev server in dev —
+ * app-protocol.ts `createMainWindowNavigationPredicate`); every other navigation/redirect is
+ * prevented. A worker window that
  * should never navigate at all passes `() => false`.
  */
 export function installNavigationGuard(

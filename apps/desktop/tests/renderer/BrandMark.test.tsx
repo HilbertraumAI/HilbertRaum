@@ -23,7 +23,7 @@ describe('BrandMark', () => {
     const { container } = render(<BrandMark size={24} />)
     const light = container.querySelector('img.brand-img-light') as HTMLImageElement
     const dark = container.querySelector('img.brand-img-dark') as HTMLImageElement
-    // Relative (no leading slash) so it resolves under the production file:// load too.
+    // Relative (no leading slash) so it resolves under the production hilbertraum://app/ load too.
     expect(light?.getAttribute('src')).toBe('brand/mark-on-light.svg')
     expect(dark?.getAttribute('src')).toBe('brand/mark-on-dark.svg')
   })

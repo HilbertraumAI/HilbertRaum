@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
-import { readFileSync } from 'node:fs'
+import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   SECURE_WINDOW_WEB_PREFERENCES,
@@ -258,5 +258,56 @@ describe('call-site wiring (the flags cannot be re-inlined)', () => {
     // Unlike the other two windows, the print page has no IPC surface at all — a
     // `preload:` appearing in print-pdf.ts would silently widen it.
     expect(printPdfSrc).not.toMatch(/preload\s*:/)
+  })
+})
+
+describe('#560 wiring: the app pages load from hilbertraum://app, never file://', () => {
+  // The policy (privileges, resolver, headers, predicate) is pinned behaviourally in
+  // tests/unit/app-protocol.test.ts; these source pins hold the Electron glue to it. Brittle by
+  // design, like the block above — re-check them whenever the call sites move.
+  const read = (rel: string): string => readFileSync(join(__dirname, '../../src/main', rel), 'utf8')
+  const indexSrc = read('index.ts')
+  const rasterizerSrc = read('services/ocr/rasterizer.ts')
+  const glueSrc = read('install-app-protocol.ts')
+
+  it('registers the scheme from the pinned privileges, before ready, and serves it before the first window', () => {
+    expect(glueSrc).toContain(
+      'protocol.registerSchemesAsPrivileged([{ scheme: APP_SCHEME, privileges: { ...APP_SCHEME_PRIVILEGES } }])'
+    )
+    expect(glueSrc).toMatch(/protocol\.handle\(\s*APP_SCHEME,\s*createAppProtocolHandler\(/)
+    const register = indexSrc.indexOf('registerAppSchemePrivileges()')
+    const whenReady = indexSrc.indexOf('app.whenReady()')
+    expect(register).toBeGreaterThan(-1)
+    expect(register).toBeLessThan(whenReady)
+    const install = indexSrc.indexOf("installAppProtocol(join(__dirname, '../renderer'))")
+    expect(install).toBeGreaterThan(whenReady)
+    expect(install).toBeLessThan(indexSrc.indexOf('createWindow()', install))
+  })
+
+  it('the main and OCR windows load the scheme; the main window navigates only to its own page', () => {
+    expect(indexSrc).toContain("void mainWindow.loadURL(devServerUrl ?? appPageUrl('index'))")
+    expect(indexSrc).toContain('createMainWindowNavigationPredicate(devServerUrl)')
+    expect(rasterizerSrc).toContain("appPageUrl('ocr')")
+    for (const src of [indexSrc, rasterizerSrc]) {
+      expect(src).not.toMatch(/\.loadFile\(/)
+      expect(src).not.toMatch(/startsWith\(\s*['"]file:/)
+    }
+  })
+
+  it('no other main-process file registers a scheme, a protocol handler or a privilege literal', () => {
+    const offenders: string[] = []
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name)
+        if (statSync(full).isDirectory()) walk(full)
+        else if (/\.ts$/.test(name) && !/[\\/](app-protocol|install-app-protocol)\.ts$/.test(full)) {
+          const src = readFileSync(full, 'utf8')
+          if (/registerSchemesAsPrivileged|protocol\.(handle|register\w*Protocol|intercept\w*)\(|bypassCSP|allowServiceWorkers/.test(src))
+            offenders.push(full)
+        }
+      }
+    }
+    walk(join(__dirname, '../../src/main'))
+    expect(offenders).toEqual([])
   })
 })

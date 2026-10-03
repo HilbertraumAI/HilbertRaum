@@ -92,9 +92,12 @@ const META_CSP_TAIL =
  * `onHeadersReceived` buildCsp() header DOES attach to `file://` loads in BOTH windows
  * and is ENFORCED (a fetch the meta allowed was blocked with the header string as the
  * violation's originalPolicy) — the header, not the meta, is the load-bearing prod
- * policy. The meta is the second, defence-in-depth layer (the effective policy is the
- * INTERSECTION of both), so it must not advertise localhost in prod: if the session
- * header wiring ever regresses, the meta alone must still deny every remote origin.
+ * policy. Since #560 both windows load `hilbertraum://app/` (app-protocol.ts), whose
+ * handler sets buildCsp(false) on every response; the session hook still attaches its own
+ * copy there (measured: two header policies plus the meta, each enforced). The meta is the
+ * defence-in-depth layer (the effective policy is the INTERSECTION of all of them), so it
+ * must not advertise localhost in prod: if the header wiring ever regresses, the meta alone
+ * must still deny every remote origin.
  *
  * Prod therefore strips the `ws://localhost:*` / `http://localhost:*` connect-src
  * entries; every other directive is byte-identical to the dev policy of the same page.

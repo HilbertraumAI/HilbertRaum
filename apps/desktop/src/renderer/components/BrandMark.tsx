@@ -5,7 +5,7 @@
 // data-theme attribute set at startup). The dot is always teal; the square ink flips with the
 // background. Assets are vendored same-origin under public/brand/ (offline CSP). The src is
 // RELATIVE ("brand/…", not "/brand/…") so it resolves under both the dev http://localhost
-// origin AND the production file:// load (loadFile); the renderer is a single index.html with
+// origin AND the production hilbertraum://app/ load (#560); the renderer is a single index.html with
 // no router, so a relative path always resolves next to it.
 
 const MIN_SIZE = 16 // brand minimum; below this the kit says use raster favicons.
