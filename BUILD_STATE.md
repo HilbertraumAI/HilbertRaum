@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-04 — **#567 — the browser engine sends no request of its own: no spell-check dictionary, no WPAD (`fix/567-chromium-background-fetches`).** `spellcheck: false`
+stopped only the underlining: each session fetched a `.bdic` a few ms after `ready` (Linux: every language; Windows: a language it cannot check), at every start. Now
+`setSpellCheckerLanguages([])` + off from `session-created` (and first in ready), plus `no-proxy-server`. Packaged net logs, 0 remote: Windows `--lang=pl` full probe, Linux AppImage
+(master / v0.1.62: `.bdic` + WPAD). New `scripts/check-netlog.mjs`. Record: `security-model.md` "Chromium background fetches". Open: macOS (a net log in `verify-mac-build.sh`)._
 _2026-10-03 — **#560/#562 platform round: the real AppImage passes, the macOS build is inspected only (`docs/platform-verification-560-562`).** `release.yml` dispatched on
 `fix/562`: Linux AppImage in `ubuntu:24.04` 13/13 + the fuse probes (no asar integrity on Linux, as designed); mac `.app` wire, Info.plist hash, ad-hoc
 signature OK, not run. New: `scripts/verify-mac-build.sh` + `lib/packaged-app-probe.mjs` (owner Mac run open). Found: dictionary fetch (Linux; Windows per
@@ -48,10 +52,6 @@ _2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pd
 `file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
 has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
 pages + prod header. Measured packaged: 18/18 smoke, 0 worker targets, 0 loopback. Record: `architecture.md` DEP-6 §11. Suite 7,920→7,923._
-_2026-10-02 — **#551 — the packaged exe on pdf.js 6.3, and black-and-white scans become searchable (`fix/551-packaged-pdfjs-check`).** Smart App Control
-blocks each fresh unsigned exe, so the packaged layout ran on a renamed stock `electron.exe` (code sections byte-identical, same fuses): all four #551 boxes
-pass. Found on the way: since Phase 38 the rasterizer set no `wasmUrl`, so pdf.js could not load its CCITT/JBIG2/JPEG 2000 decoders and such scans OCR'd as
-blank pages. Fixed: the build ships the decoders under their names and the page passes `wasmUrl`; `ocr-decoder-assets.test.ts` pins it. Record: `architecture.md` DEP-6 §10._
 _2026-10-02 — **#554 / #555 — two missed aborts across an await (`fix/554-555-missed-abort`, PR #556).** `KiwixServer.ensureStarted` re-checks the signal
 after superseding `stop()`; `acquireForChat` re-checks it after the handoff and releases the slot itself. Each test lands the abort in the gap by microtask
 ordering, failed on the old code and passes now. No user-visible change, so no CHANGELOG. Record: `architecture.md` DEP-6 §8 (#549 bullet)._

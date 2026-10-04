@@ -9,7 +9,7 @@
 // Deliberately no runtime `electron` import (type-only is fine): the module must be
 // unit-testable under plain vitest, like navigation-guard.ts.
 
-import type { WebPreferences } from 'electron'
+import type { Session, WebPreferences } from 'electron'
 
 /**
  * The hardening flags shared by ALL THREE windows (main + OCR rasterizer + the P6
@@ -26,15 +26,41 @@ export const SECURE_WINDOW_WEB_PREFERENCES = Object.freeze({
   nodeIntegration: false,
   sandbox: true,
   webSecurity: true,
-  // #239 (owner decision #218 unanswered → this default): Electron's
-  // spellchecker is ON by default and, on Windows and Linux, downloads Hunspell dictionaries
-  // from a Google-operated CDN on first typing — a BROWSER-PROCESS fetch that neither the page
-  // CSP nor the Node-socket offline tripwire (`offlineGuard.ts`) can see, and that the offline
-  // hard rule forbids. Off for all three windows; the composer loses red-underline spell-check
-  // (docs/known-limitations.md). If spell-check is wanted later: dictionaries on the drive +
-  // `setSpellCheckerDictionaryDownloadURL` to a no-op + a closed `setSpellCheckerLanguages`.
+  // #239 (owner decision #218 unanswered → this default): no red-underline spell-check in any
+  // window (docs/known-limitations.md). This flag only stops the underlining; the SESSION's
+  // dictionary download is stopped by `disableSpellCheckerDownloads` below (#567).
   spellcheck: false
 }) satisfies Readonly<WebPreferences>
+
+/**
+ * #567: Chromium's command-line switch for "never use a proxy". Without it the browser engine
+ * follows the OS proxy settings, and with "Automatically detect settings" on (the Windows
+ * default) it requests `http://wpad/wpad.dat` at start (4 requests and 16 name lookups in 15 s),
+ * a LAN lookup a hostile network can answer with a proxy. Nothing in the app needs Chromium's proxy
+ * settings: the in-app downloads use Node's `fetch`, which never reads them. Appended before
+ * `ready` (index.ts). A `setProxy` on any session overrides it for that session (measured), so
+ * src/main has none (pinned by tests/unit/window-security.test.ts).
+ */
+export const NO_PROXY_SWITCH = 'no-proxy-server'
+
+/**
+ * #567: stop a session's spell checker from downloading a Hunspell dictionary. The session does
+ * it on its own a few milliseconds after `ready`, with no window and whatever the windows'
+ * `spellcheck` flag says: on Linux for every language, on Windows for a language Windows cannot
+ * spell-check itself (measured: `pl-pl-3-0.bdic` from a Google-operated CDN). It is a
+ * browser-process fetch that neither the page CSP nor the offline tripwire (`offlineGuard.ts`)
+ * can see. The empty language list is what stops it (`setSpellCheckerEnabled(false)` alone does
+ * not, measured); the second call covers macOS, where the language list is a no-op. Electron
+ * refills an empty list with the locale at every start and every session has its own, so
+ * index.ts runs this from `session-created` on every start. If spell-check is wanted later (#218):
+ * a `.bdic` already in the profile's `Dictionaries/` folder is used without a request.
+ */
+export function disableSpellCheckerDownloads(
+  ses: Pick<Session, 'setSpellCheckerLanguages' | 'setSpellCheckerEnabled'>
+): void {
+  ses.setSpellCheckerLanguages([])
+  ses.setSpellCheckerEnabled(false)
+}
 
 /**
  * Content-Security-Policy for the renderer session (spec §3.5, defence in depth on top

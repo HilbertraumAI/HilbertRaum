@@ -102,9 +102,11 @@ Even with that setting on, network access is only used if a drive **policy** per
 toggle allows. The effective state is `policy AND your setting`. Telemetry is **always off** and has
 no toggle. A startup self-check logs the offline posture and flags (logs, never sends) any attempt
 to reach a remote host while offline; local-only connections (`127.0.0.1`/`localhost`) are exempt.
-The built-in browser engine's own background fetches are switched off as well: spell-checking is
-disabled, because the engine would otherwise download a spelling dictionary from a Google-operated
-server on Windows and Linux the first time you type.
+The built-in browser engine's own background requests are switched off as well. Its spell checker
+is disabled, so it does not download a spelling dictionary from a Google-operated server, and it
+does not ask the local network for proxy settings ("WPAD"). Versions up to 0.1.62 still did both
+when the app started: the dictionary on Linux, and on Windows for a language Windows cannot
+spell-check itself; the proxy lookup on Windows (#567).
 
 ## Model, engine, knowledge-pack-tool and OCR-file downloads — the app's only use of the internet
 

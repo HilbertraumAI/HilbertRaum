@@ -17,21 +17,15 @@ password recovery — are documented in
   app-wide risks breaking loopback IPC and the sidecars). Electron's own `net` module would bypass
   it. The offline guarantee is a property of the code + CSP + deny-by-default policy; the guard is
   a tripwire, not an enforcement layer.
-- **In-app spell-checking is off by design (#239).** Chromium's spellchecker
-  downloads Hunspell dictionaries from a Google-operated CDN on Windows and Linux on first typing —
-  a browser-process fetch that neither the CSP nor the offline tripwire above can see, and one the
-  offline hard rule forbids — so `spellcheck: false` is pinned for every window and the composer
-  shows no red underlines. Re-enabling needs dictionaries shipped on the drive plus a no-op
-  download URL (owner decision #218; `security-model.md` "Chromium background fetches").
-  **The download still happens (measured 2026-10-03/04, #567):** at start, the app asks Google's
-  server for the dictionary of the computer's language (for example `en-us-10-1.bdic`). On Linux
-  this happens for every language; on Windows only for a language Windows cannot spell-check
-  itself (for example Polish on a German Windows). Once a download succeeds, the file is kept on
-  the computer and not fetched again. Nothing from your workspace is sent, but the request reveals
-  the computer's address and language. Windows also probes the local network for a proxy
-  configuration (`wpad`) when Windows' "Automatically detect settings" is on. Both come from the
-  browser engine, not from the app's own code, and the fixes are measured but not shipped yet
-  (#567).
+- **In-app spell-checking is off by design (#239, #567).** Chromium's spell checker downloads a
+  Hunspell dictionary from a Google-operated CDN for the computer's language, a browser-process
+  fetch that neither the CSP nor the offline tripwire above can see, and one the offline hard rule
+  forbids. So the composer shows no red underlines (`spellcheck: false` on every window), and every
+  session's checker is switched off with an empty language list (#567). Builds up to v0.1.62 still
+  downloaded the dictionary at start: on Linux for every language, on Windows for a language
+  Windows cannot spell-check itself. Re-enabling needs dictionaries shipped on the drive and copied
+  into the profile before start (owner decision #218; `security-model.md` "Chromium background
+  fetches").
 - **`importDocuments` picker imports are token-bound; drag-drop trusts caller paths (accepted).**
   A PICKER import is bound to a one-time `pickDocuments` capability token (main imports exactly what
   it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file

@@ -598,42 +598,51 @@ loads) nor the socket tripwire (it patches Node's `net.Socket`, not Chromium's n
 can observe. Both earlier audit rounds enumerated Node sinks and the renderer CSP; neither
 enumerated this class.
 
-- **Spell-check dictionaries (#239): NOT closed (measured 2026-10-03/04, #567).** Electron's
-  spellchecker is on by default. `SECURE_WINDOW_WEB_PREFERENCES` has carried `spellcheck: false`
-  for all three windows since #239, which turns the underlining off; the composer has no
-  red-underline spell-check (`docs/known-limitations.md`). #239 recorded the dictionary download as
-  closed "by construction, not by measurement". A Chromium net log (`--log-net-log`) shows otherwise:
-  - **Linux:** the AppImage requests
-    `https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic` (the session's dictionary for
-    the locale) a few milliseconds after `ready`, before any window exists. Both the v0.1.62
-    AppImage and the #562 build do it, and so does a minimal Electron app whose only window has
-    `spellcheck: false`. A download that succeeds is kept in the profile's `Dictionaries/` folder
-    and not fetched again; one that fails (the test container's TLS-intercepting proxy) is retried
-    at every start.
-  - **Windows:** the same download for a language Windows cannot spell-check itself. With the
-    Polish locale on a German Windows, the app fetched `pl-pl-3-0.bdic`; with German, which Windows
-    checks natively, nothing. macOS uses the OS spell checker and downloads nothing (Electron's
-    documentation; not measured).
-  - **Fix, measured on a minimal app on both platforms:** `setSpellCheckerLanguages([])` is the call
-    that stops the download; `setSpellCheckerEnabled(false)` alone does not. It must run at every
-    start (Electron refills an empty language list with the locale), and in every session: a
-    second session downloads on its own. `app.on('session-created')`, registered before `ready`,
-    reaches every session in time. Not applied yet (#567).
+- **Spell-check dictionaries (#239, #567) — closed at the session, measured.** Electron's
+  spellchecker is on by default. `spellcheck: false` in `SECURE_WINDOW_WEB_PREFERENCES` (#239) stops
+  only the underlining in the three windows; the composer has no red-underline spell-check
+  (`docs/known-limitations.md`). #239 recorded the dictionary download as closed "by construction,
+  not by measurement". A Chromium net log (`--log-net-log`, 2026-10-03/04) showed that the
+  SESSION's spell checker downloads a Hunspell `.bdic` for the locale from a Google-operated CDN on
+  its own, a few milliseconds after `ready`, with no window:
+  - **Linux:** for every language (`en-us-10-1.bdic`), measured on the v0.1.62 AppImage and the
+    #562 build.
+  - **Windows:** for a language Windows cannot spell-check itself (Polish on a German Windows:
+    `pl-pl-3-0.bdic`); nothing for a language it can. **macOS** uses the OS spell checker and
+    downloads nothing (Electron's documentation; not measured).
+  - A successful download is kept in the profile's `Dictionaries/` folder and not fetched again; a
+    failed one is retried at every start. Nothing is uploaded, but the request tells Google's CDN
+    the computer's address and locale.
 
-  Nothing is uploaded: it is a download of a public dictionary. But the request tells Google's CDN
-  the computer's address and locale, and the offline posture promises no request at all. Owner
-  decision 1 (#218) can still reverse the spell-check choice: dictionaries shipped on the drive,
-  `setSpellCheckerDictionaryDownloadURL` pointed at a no-op, and a closed `setSpellCheckerLanguages`.
-- **Proxy auto-discovery on Windows (#567, measured 2026-10-03).** When the OS proxy setting
-  "Automatically detect settings" is on (the Windows default), Chromium requests
-  `http://wpad/wpad.dat`: 4 requests and 16 host-name lookups in the first 15 s, from both the
-  master and the #562 packaged builds. It is a LAN lookup, not an internet request, but a WPAD answer on a hostile network is a
-  known way to hand a client a proxy. Nothing in the app needs Chromium's proxy settings: the
-  in-app downloads use Node's `fetch`, which does not read them. On a minimal app,
-  `app.commandLine.appendSwitch('no-proxy-server')` before `ready` removes every request;
-  `setProxy({ mode: 'direct' })` at `ready` removes only half. Linux looks for `wpad` too when
-  its proxy setting asks for auto-detection, at the first request Chromium makes; the switch
-  removes that as well. Not applied yet (#567).
+  **Fix (#567):** `disableSpellCheckerDownloads` (`window-security.ts`) empties the session's
+  language list, then disables the checker. The empty list is what stops the download:
+  `setSpellCheckerEnabled(false)` alone does not (measured on both platforms), and covers macOS,
+  where the list is a no-op. Electron refills an empty list with the locale at every start, and
+  every session has its own (a second partition session downloads on its own, measured). So
+  `index.ts` registers the function on `app.on('session-created')` before `ready` (it fires for the
+  default session before the `whenReady` callback, measured), and repeats it on the default session
+  as the ready handler's first statement. Pinned by `tests/unit/window-security.test.ts`. Owner
+  decision 1 (#218) can still reverse the spell-check choice: a `.bdic` already in the profile's
+  `Dictionaries/` folder is used without a request (measured), so dictionaries shipped on the drive,
+  copied there before `ready`, with the language list limited to them, would give offline
+  spell-check.
+- **Proxy auto-discovery (#567) — closed, measured.** Chromium follows the OS proxy settings. With
+  Windows' "Automatically detect settings" on (the default) it requests `http://wpad/wpad.dat` at
+  start: 4 requests and 16 host-name lookups in the first 15 s, from both the master and the #562
+  packaged builds. Linux does the same when its proxy setting asks for auto-detection, at the first
+  request Chromium makes. It is a LAN lookup, not an internet request, but a WPAD answer on a
+  hostile network is a known way to hand a client a proxy. **Fix:**
+  `app.commandLine.appendSwitch('no-proxy-server')` before `ready` (`NO_PROXY_SWITCH`), measured at
+  zero on Windows (from the ES-module main) and Linux. `setProxy({ mode: 'direct' })` at `ready`
+  removes only half, and a `setProxy` on any session overrides the switch for that session
+  (measured), so `src/main` has none (pinned). Nothing in the app needs Chromium's proxy settings:
+  the in-app downloads use Node's `fetch`, which never reads them and ignores `HTTPS_PROXY` unless
+  `NODE_USE_ENV_PROXY=1` is set (measured). Node `fetch`, `net.fetch`, loopback pages and
+  `--remote-debugging-port` keep working with the switch.
+- **Checking a build:** `scripts/check-netlog.mjs` reads the net log of a packaged build run on a
+  scratch profile and fails on any request or host-name lookup that leaves the machine (what counts:
+  `scripts/lib/netlog-remote.mjs`). On Windows, run it once with `--lang=pl`, a language Windows
+  cannot spell-check, or the spell-check half goes untested.
 - **Channels the CSP does not govern (#254) — confirmed residual, documented.** Investigated
   (documentation-based, no probing): (i) **WebRTC** is outside CSP; the renderer never calls
   `RTCPeerConnection`, but a compromised renderer could — the candidate switches
@@ -1577,9 +1586,12 @@ worth naming so "everything stays on the drive" is not read as "nothing touches 
   back to this same folder (`PRIVACY.md` says so). Nothing here is cleared on lock: owner decision
   #231 keeps "document only" as the default and records clearing the profile on lock as the
   alternative.
-- **The spell-check dictionary — none.** Chromium's spellchecker is off (`spellcheck: false` on
-  every window, #239 / owner decision #218), so there is no Hunspell `.bdic` download and no
-  `Dictionaries/` folder under `userData`. See "Chromium background fetches" above.
+- **The spell-check dictionary — none since #567.** Builds up to v0.1.62 could download one into
+  this profile's `Dictionaries/` folder (Linux: every language; Windows: a language it cannot
+  spell-check), and Chromium's saved network state (`Network Persistent State`) then names the CDN
+  host. Both stay until the profile is cleared (#231: document only). Since #567 the profile's
+  `Preferences` file records the spell checker as off with no languages. See "Chromium background
+  fetches" above.
 - **The OS clipboard.** Eight Copy sites in seven renderer files — chat answers, document
   summaries, translations, image answers, evidence-review hashes, the two diagnostics copies and
   the local-API address — write straight to the OS clipboard through the `writeClipboard` IPC,
@@ -2552,7 +2564,8 @@ it.
   into the app; managed Windows fleets can block outbound 445/WebDAV at the host firewall
   (`known-limitations.md`).
 - **(iii) Chromium's own background fetches and form submits — landed.** The spell-check
-  dictionary download is closed by construction (`spellcheck: false`, #239), the CSP carries
+  dictionary download, recorded closed by construction in #239, was measured still happening and
+  is closed at the session since #567, together with the WPAD proxy lookup; the CSP carries
   `form-action 'none'` with header/meta parity (#266), and every `ipcMain.handle` channel checks
   its sender (#252). Two channels — WebRTC and `dns-prefetch`/`preconnect` hints — sit outside
   the CSP but need a compromised renderer first; confirmed and documented, not closed (#254). See
