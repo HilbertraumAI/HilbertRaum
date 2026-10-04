@@ -776,6 +776,8 @@ code, pre, kbd { font-family: var(--font-mono); }
 .scope-attachments { margin-top: 8px; padding-top: 8px; border-top: 1px solid var(--border); }
 .scope-attachment { cursor: default; }
 .scope-attachment.pending { opacity: 0.7; font-style: italic; }
+/* #571: an attachment that failed still scopes the chat; its chip reads "(not readable yet)". */
+.scope-attachment.failed { border-style: dashed; color: var(--text-muted); }
 .popover-reset { align-self: flex-start; }
 
 .chat-main { display: flex; flex-direction: column; min-height: 0; gap: 12px; position: relative; }
@@ -1558,6 +1560,8 @@ code, pre, kbd { font-family: var(--font-mono); }
 /* Head (§11.16): the title beside the "My documents | Knowledge packs" segmented switch. */
 .docs-head { display: flex; align-items: center; justify-content: space-between; gap: 16px; flex-wrap: wrap; margin-bottom: 12px; }
 .docs-head h1 { margin: 0; }
+/* #573: "‹ Back to chat" after a chat's "Go to Documents" — the Images/Review back-link shape. */
+.docs-back { margin-bottom: 8px; padding-left: 0; }
 /* Toolbar (§11.16): the name filter on the left, the quiet Refresh + bulk fixes + Import pair
    on the right (one primary, last in the row). Wraps on a narrow window. */
 .docs-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 10px; flex-wrap: wrap; }

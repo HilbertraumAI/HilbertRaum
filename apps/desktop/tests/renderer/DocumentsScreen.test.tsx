@@ -325,6 +325,10 @@ describe('DocumentsScreen', () => {
     expect(isRetryableFailure('Unsupported file type: .heic')).toBe(false)
     expect(isRetryableFailure(translate('en', 'main.ingest.fileTooLarge'))).toBe(false)
     expect(isRetryableFailure(translate('en', 'main.ingest.tooManyChunks'))).toBe(false)
+    // #572: a detected scan fails the same way until OCR runs; a photo that needed the OCR files
+    // DOES read after their download, so it stays retryable.
+    expect(isRetryableFailure(translate('en', 'main.ingest.pdfScanDetected'))).toBe(false)
+    expect(isRetryableFailure(translate('en', 'main.ingest.imageNeedsOcr'))).toBe(true)
     // A read/parse error or an unknown cause → retryable.
     expect(isRetryableFailure('EIO: i/o error, read')).toBe(true)
     expect(isRetryableFailure(null)).toBe(true)
@@ -749,12 +753,16 @@ describe('DocumentsScreen', () => {
     ).toBeInTheDocument()
   })
 
-  it('"Retry all" on the Failed tab confirms first, then starts the bulk job with every failed id', async () => {
+  // #572: only the rows a retry can fix — an unsupported type and a detected scan fail the same
+  // way again, so they are neither counted nor retried (their rows offer no "Try again" either).
+  it('"Retry all" on the Failed tab confirms first, then starts the bulk job with every retryable failed id', async () => {
     const user = userEvent.setup()
     window.localStorage.clear()
     const failed = [
       doc({ id: 'd1', title: 'broken.xyz', status: 'failed', errorMessage: 'Unsupported file type: .xyz', chunkCount: 0 }),
-      doc({ id: 'd2', title: 'corrupt.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 })
+      doc({ id: 'd2', title: 'corrupt.pdf', status: 'failed', errorMessage: 'EIO: i/o error, read', chunkCount: 0 }),
+      doc({ id: 'd3', title: 'locked.docx', status: 'failed', errorMessage: 'EBUSY: resource busy', chunkCount: 0 }),
+      doc({ id: 'd4', title: 'scan.pdf', status: 'failed', errorMessage: en['main.ingest.pdfScanDetected'], scanDetected: true, chunkCount: 0 })
     ]
     const listDocuments = vi.fn<() => Promise<DocumentInfo[]>>().mockResolvedValue(failed)
     const finished = { jobId: 'r1', total: 2, completed: 2, failed: 0, done: true, cancelled: false }
@@ -775,7 +783,7 @@ describe('DocumentsScreen', () => {
     expect(startReindexAll).not.toHaveBeenCalled()
 
     await user.click(dialog.getByRole('button', { name: /^retry all$/i }))
-    await waitFor(() => expect(startReindexAll).toHaveBeenCalledWith(['d1', 'd2']))
+    await waitFor(() => expect(startReindexAll).toHaveBeenCalledWith(['d2', 'd3']))
   })
 
   // ---- FE-7: poll job status only during import; refresh the list on a transition -------
@@ -1630,6 +1638,10 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     // The banner's promise and the control agree: the button renders on the failed row itself.
     const btn = await screen.findByRole('button', { name: 'Make searchable (OCR)' })
     expect(btn).toBeEnabled()
+    // #572: no "Try again" beside it — a retry re-parses the same scan and fails the same way.
+    const row = screen.getByText('scan.pdf').closest('.doc-row') as HTMLElement
+    expect(within(row).queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
+    expect(within(row).getByRole('button', { name: 'Remove' })).toBeInTheDocument()
     await user.click(btn)
     await waitFor(() =>
       expect(startDocTask).toHaveBeenCalledWith({ kind: 'ocr', documentIds: ['scan1'], params: undefined })
@@ -1668,6 +1680,8 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     await screen.findByText('scan.pdf')
     expect(await screen.findByText(/needs the OCR files/)).toBeInTheDocument()
     expect(screen.queryByRole('button', { name: 'Make searchable (OCR)' })).not.toBeInTheDocument()
+    // #572: nor "Try again" — only the OCR files and then Make searchable can help this row.
+    expect(screen.queryByRole('button', { name: 'Try again' })).not.toBeInTheDocument()
     // No files → no "could not start" banner: that copy is reserved for a recognizer that exists
     // and cannot run (#232), never for a drive that simply lacks the language files.
     expect(screen.queryByText(/could not start/)).not.toBeInTheDocument()

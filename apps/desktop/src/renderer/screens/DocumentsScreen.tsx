@@ -55,9 +55,10 @@ import {
   DOC_ROW_ESTIMATED_HEIGHT,
   DOC_ROW_OVERSCAN,
   formatSize,
-  ocrRemedyKind,
+  isRetryableFailure,
   provenanceLine
 } from './documents/format'
+import { ocrRemedyKind } from '../lib/ocrRemedy'
 import {
   RAIL_COLLAPSED_KEY,
   type DocSection,
@@ -135,6 +136,12 @@ interface Props {
    * "Add packs…") to `'packs'`. The header's segmented switch moves between them afterwards.
    */
   initialMode?: DocumentsMode
+  /**
+   * #573: set only when the user came here from a chat's "Go to Documents" (a failed attachment
+   * to make searchable) — renders "‹ Back to chat", which reopens that conversation. App's
+   * one-shot slot: any other way here leaves it unset.
+   */
+  onBackToConversation?: () => void
 }
 
 // DOC-7 (#150): the row-translate modal's remembered language pair now lives in the SHARED
@@ -173,7 +180,13 @@ function needsAttention(d: DocumentInfo): boolean {
   return matchesSmartView(d, 'failed') || matchesSmartView(d, 'needsReindex')
 }
 
-export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialMode }: Props = {}): JSX.Element {
+export function DocumentsScreen({
+  onAskSelected,
+  onAskPack,
+  onNavigate,
+  initialMode,
+  onBackToConversation
+}: Props = {}): JSX.Element {
   const { t, tCount, lang } = useT()
   const showToast = useToast()
   const [docs, setDocs] = useState<DocumentInfo[] | null>(null)
@@ -839,8 +852,13 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
   // time (FE-2). Keyed only on the inputs each derivation actually reads.
   const anyActive = useMemo(() => docs?.some((d) => ACTIVE_STATUSES.has(d.status)) ?? false, [docs])
   const staleDocs = useMemo(() => docs?.filter((d) => d.staleEmbeddings) ?? [], [docs])
-  // The 'failed' smart view (status === 'failed'): drives the "Retry all" action shown on that tab.
-  const failedDocs = useMemo(() => docs?.filter((d) => d.status === 'failed') ?? [], [docs])
+  // The 'failed' smart view (status === 'failed'): drives the "Retry all" action shown on that tab —
+  // only for the rows a retry can fix (#572): a detected scan, an unsupported type or a file too
+  // large fails the same way again, exactly like their rows' missing "Try again".
+  const failedDocs = useMemo(
+    () => docs?.filter((d) => d.status === 'failed' && isRetryableFailure(d.errorMessage)) ?? [],
+    [docs]
+  )
   const empty = docs != null && docs.length === 0
 
   // ---- Document-organization: section rail filtering + collection/project actions ----
@@ -1242,6 +1260,11 @@ export function DocumentsScreen({ onAskSelected, onAskPack, onNavigate, initialM
 
   return (
     <div className="screen docs-screen">
+      {onBackToConversation && (
+        <Button size="sm" variant="ghost" className="docs-back" onClick={onBackToConversation}>
+          ‹ {t('docs.backToChat')}
+        </Button>
+      )}
       {/* Head (§11.16): the title and the mode switch — "My documents | Knowledge packs", the
           Chat header's segmented-control pattern. A pack is not a document: the packs mode
           renders the management panel with no rail and no document affordances. */}

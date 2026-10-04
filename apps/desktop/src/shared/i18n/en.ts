@@ -698,6 +698,8 @@ export const en = {
   'docs.failed.remove': 'Remove',
   'docs.failed.removeTitle': 'Remove this failed import from the list',
   'docs.failed.retry': 'Try again',
+  // #573: shown only after a chat's "Go to Documents" — returns to that conversation.
+  'docs.backToChat': 'Back to chat',
   'docs.failed.retryTitle': 'Read and prepare this file again',
   // Per-row overflow ("⋯") menu (§11.6): one inline Preview + this menu carries the rest.
   // The trigger keeps an accessible name even though it is revealed on hover.
@@ -3109,6 +3111,11 @@ export const en = {
   // whole corpus — so the reset button says what it actually does there.
   'chat.scope.attachmentsOnlyTap': 'Just the files in this chat',
   'chat.scope.filesInChatLine': 'Files in this chat',
+  // #571: an attachment that failed (it was never filed) still scopes this chat, so it is named —
+  // marked, so "Answering from: scan.pdf" never reads as if the file were being used.
+  'chat.scope.attachmentNotReadable': '{name} (not readable yet)',
+  'chat.scope.attachmentFailedHint':
+    "A file that can't be read yet adds nothing to the answers. Documents shows why, and what to do.",
   'chat.scope.noProjects': 'No projects yet',
   // §11.16: with no pack registered the picker offers the way in instead of omitting the section.
   'chat.scope.noPacks': 'No knowledge packs on this drive yet.',
@@ -3145,6 +3152,16 @@ export const en = {
   // CH-6 (#148): the attach-import PROGRESS poll died (IPC failure) — the import itself may
   // still finish; the per-file failure banner would have been lost, so say so honestly.
   'chat.attach.trackFailed': "Couldn't follow the file import — check Documents for the result.",
+  // #570: an attachment that failed because it needs OCR — what to do in Documents, and that the
+  // file then joins this chat by itself (pinned in docs-ipc.test.ts). Rendered at display time.
+  'chat.attach.scanned':
+    "{name} looks like a scan, so it can't be read yet. In Documents, use Make searchable (OCR) on it. " +
+    'It then joins this chat by itself — no need to attach it again.',
+  'chat.attach.photoNeedsOcr':
+    '{name} is a photo of a page, and reading it needs the OCR files, which are not on this drive yet. ' +
+    'In Documents, use Download OCR files, then Try again on it. It then joins this chat by itself — ' +
+    'no need to attach it again.',
+  'chat.attach.goToDocuments': 'Go to Documents',
 
   // ---- Images — "Ask about an image" (image-understanding §5/§11, Phase V3) ----
   // Visual understanding of ONE local PNG/JPEG via a local vision model — distinct from OCR
@@ -3375,6 +3392,7 @@ export const en = {
   'translate.file.err.scanned':
     'This PDF looks like a scan with no readable text. Make it searchable first in Documents — ' +
     '"Make searchable (OCR)" — then translate it.',
+  'translate.file.err.scannedAction': 'Go to Documents',
   'translate.file.err.importFailed': "The document couldn't be read. Try again.",
   'translate.file.err.runtimeFailed': "The document couldn't be translated. Try again.",
 

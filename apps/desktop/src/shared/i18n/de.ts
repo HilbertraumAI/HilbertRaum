@@ -710,6 +710,8 @@ export const de: Record<keyof typeof en, string> = {
   'docs.failed.remove': 'Entfernen',
   'docs.failed.removeTitle': 'Diesen fehlgeschlagenen Import aus der Liste entfernen',
   'docs.failed.retry': 'Erneut versuchen',
+  // #573 — siehe en.ts.
+  'docs.backToChat': 'Zurück zum Chat',
   'docs.failed.retryTitle': 'Diese Datei noch einmal einlesen und vorbereiten',
   'docs.moreActions': 'Weitere Aktionen für {title}',
   'docs.audioConfirm.title': 'Große Audiodateien importieren?',
@@ -3091,6 +3093,11 @@ export const de: Record<keyof typeof en, string> = {
   // den ganzen Bestand — der Zurücksetzen-Knopf sagt dort, was er wirklich tut.
   'chat.scope.attachmentsOnlyTap': 'Nur die Dateien in diesem Chat',
   'chat.scope.filesInChatLine': 'Dateien in diesem Chat',
+  // #571 — siehe en.ts.
+  'chat.scope.attachmentNotReadable': '{name} (noch nicht lesbar)',
+  'chat.scope.attachmentFailedHint':
+    'Eine Datei, die noch nicht lesbar ist, trägt nichts zu den Antworten bei. Im Bereich „Dokumente“ ' +
+    'siehst du, warum – und was zu tun ist.',
   'chat.scope.noProjects': 'Noch keine Projekte',
   'chat.scope.noPacks': 'Noch keine Wissenspakete auf diesem Laufwerk.',
   'chat.scope.addPacks': 'Pakete hinzufügen…',
@@ -3123,6 +3130,16 @@ export const de: Record<keyof typeof en, string> = {
   // kann trotzdem fertig werden; ehrlich sagen, wo das Ergebnis zu finden ist.
   'chat.attach.trackFailed':
     'Der Datei-Import konnte nicht weiter verfolgt werden – das Ergebnis steht unter Dokumente.',
+  // #570 — siehe en.ts.
+  'chat.attach.scanned':
+    '{name} sieht wie ein Scan aus und kann deshalb noch nicht gelesen werden. Nutze im Bereich ' +
+    '„Dokumente“ „Durchsuchbar machen (OCR)“ dafür. Danach gehört die Datei von selbst zu diesem Chat – ' +
+    'du musst sie nicht erneut anhängen.',
+  'chat.attach.photoNeedsOcr':
+    '{name} ist das Foto einer Seite. Zum Lesen braucht es die OCR-Dateien, die noch nicht auf diesem ' +
+    'Laufwerk sind. Nutze im Bereich „Dokumente“ „OCR-Dateien herunterladen“ und danach „Erneut versuchen“ ' +
+    'für die Datei. Danach gehört sie von selbst zu diesem Chat – du musst sie nicht erneut anhängen.',
+  'chat.attach.goToDocuments': 'Zu den Dokumenten',
 
   // ---- Bilder — „Frag ein Bild" (image-understanding §5/§11, Phase V3) ----
   // Visuelles Verstehen EINES lokalen PNG/JPEG über ein lokales KI-Modell — getrennt von
@@ -3331,6 +3348,7 @@ export const de: Record<keyof typeof en, string> = {
   'translate.file.err.scanned':
     'Dieses PDF sieht aus wie ein Scan ohne lesbaren Text. Mache es zuerst unter „Dokumente“ ' +
     'durchsuchbar — „Durchsuchbar machen (OCR)“ — und übersetze es dann.',
+  'translate.file.err.scannedAction': 'Zu den Dokumenten',
   'translate.file.err.importFailed': 'Das Dokument konnte nicht gelesen werden. Versuche es erneut.',
   'translate.file.err.runtimeFailed': 'Das Dokument konnte nicht übersetzt werden. Versuche es erneut.',
 

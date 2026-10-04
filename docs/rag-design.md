@@ -648,6 +648,15 @@ semantics (`buildScopeFilter` and the retrieval path are unchanged):
     narrow/widen choice (`ScopeNarrowDialog`): *"Just this file"* narrows to an empty-explicit
     scope (`setConversationScope`), *"Whole library"* keeps the default. Sticky per conversation
     (a session asked-set; narrowing self-heals since the scope becomes explicit).
+  - **#571 amendment — a file that failed still counts.** A failed import writes no link (N4),
+    so an attach-born chat (or one narrowed by *"Just this file"*) whose file then failed — a
+    scan, a damaged file, an import cut short by a lock or a crash — resolved to the WHOLE
+    corpus: wider than the Library, since an empty scope applies no collection filter, so other
+    chats' Temporary attachments and Generated documents were in scope too. The same held while
+    the import was still running. The failed row keeps `pending_destination_json` naming the
+    chat, so `resolveScope` now unions those unfiled ids too (§13.2 rule 3): the chat answers
+    "I didn't find a match" from no documents instead. The chip names such a file *"(not readable
+    yet)"* and the popover says it adds nothing yet (design-guidelines §11.18).
 - **Always-visible scope.** The scope popover's trigger is now an *"Answering from: {source}"* /
   *"Antwortet aus: {source}"* chip (`scopeChipLabel` over the shared `scopeSources`), so the
   active scope is legible before asking and one click still opens the same picker: a single
@@ -1055,7 +1064,13 @@ Pure (reads only). Resolution order:
    that project; else the **Library** default (documents-mode default).
 3. **chat attachments** (`conversation_documents`, C3) are **always** merged into `documentIds` — a file
    dropped into the chat is answerable regardless of the rest of the scope, and the link (not Temporary
-   membership) is authoritative, so a later "Keep in Library" doesn't drop it from its chat.
+   membership) is authoritative, so a later "Keep in Library" doesn't drop it from its chat. **#571:** so
+   are the chat's **unfiled** attachments — documents whose `pending_destination_json` still names this
+   conversation (importing, or failed; not deleted, no `origin_json`), read by
+   `unfiledConversationDocuments` over the partial index `idx_documents_pending_dest`. They add no
+   chunks, but they keep an attach-born chat from widening to the whole corpus when its only file
+   failed. N4 holds (no link for a failed file); a later success files and links the document and
+   clears the intent, so it is never counted twice.
 
 `hasExplicitDocSelection` is set from the user's **hand-picked** docs **before** attachments/expansion
 are merged (N2), so filename auto-scope can tell a deliberate pick from an attachment. Result:

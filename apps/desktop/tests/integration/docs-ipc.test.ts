@@ -114,7 +114,8 @@ import {
   createCollection,
   deleteCollection,
   documentIdsInCollection,
-  getBuiltinCollection
+  getBuiltinCollection,
+  resolveScope
 } from '../../src/main/services/collections'
 import type { DocumentCipher } from '../../src/main/services/workspace-vault'
 import { createConversation } from '../../src/main/services/chat'
@@ -1926,4 +1927,84 @@ describe('registerDocsIpc — #90 export original (docs:exportOriginal)', () => 
       await new Promise((r) => setTimeout(r, 5))
     }
   })
+})
+
+// #570 / #571: a scan attached in a chat fails (scan detected) and is NOT filed — no link (N4),
+// its pending destination still naming the chat. The chat pointer's copy ("it joins this chat by
+// itself — no need to attach it again") rests on what happens next: "Make searchable (OCR)" in
+// Documents re-indexes the SAME row, and the success files it by that pending destination into
+// Temporary + the chat's link. Pinned end to end here (import IPC → OCR task → filing).
+describe('a scan attached in a chat, then made searchable in Documents (#570, #571)', () => {
+  async function scanAttachedToChat(): Promise<{
+    db: Db
+    storeDir: string
+    convId: string
+    id: string
+  }> {
+    const { db, workspacePath } = freshWorkspace()
+    registerDocsIpc(ctxWith(db, workspacePath, createMockEmbedder(), /* unlocked */ true))
+    // The attach-born chat's D71 scope: empty and explicit, narrowed by its attachments.
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
+    const file = join(workspacePath, 'scan.pdf')
+    writeFileSync(file, makeScanOnlyPdf(2))
+    const job = await runImport([file], { destination: { kind: 'conversation', conversationId: conv.id } })
+    return { db, storeDir: documentsDir(workspacePath), convId: conv.id, id: job.documentIds[0] }
+  }
+  const pendingOf = (db: Db, id: string): string | null =>
+    (db.prepare('SELECT pending_destination_json FROM documents WHERE id = ?').get(id) as {
+      pending_destination_json: string | null
+    }).pending_destination_json
+
+  it('the failed scan is unfiled, keeps the chat as its destination, and still scopes the chat (#571)', async () => {
+    const { db, convId, id } = await scanAttachedToChat()
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(listed.find((d) => d.id === id)).toMatchObject({ status: 'failed', scanDetected: true })
+    expect(conversationAttachmentIds(db, convId)).toEqual([]) // N4: no link for a failed file
+    expect(JSON.parse(pendingOf(db, id) ?? 'null')).toEqual({ kind: 'conversation', conversationId: convId })
+    // Not the whole corpus: the chat is scoped to its (unreadable) attachment.
+    expect(resolveScope(db, convId)).toMatchObject({ collectionIds: null, documentIds: [id] })
+  })
+
+  it('OCR from Documents links it to that chat by itself — Temporary, not Library, intent cleared', async () => {
+    const { db, storeDir, convId, id } = await scanAttachedToChat()
+    const engine: OcrEngine = {
+      id: 'fake-tesseract',
+      languages: ['deu', 'eng'],
+      recognize: async (image: Buffer) => ({ text: `Seite ${image[0]}: Der Vertrag endet am 1. März.`, confidence: 90 })
+    }
+    const rasterize: RasterizePdf = async (_pdf, o) => {
+      o.onPageCount?.(2)
+      for (let n = 1; n <= 2; n++) await o.onPage(n, Buffer.from([n]))
+      return { pageCount: 2 }
+    }
+    const manager = new DocTaskManager({
+      getDb: () => db,
+      getRuntime: () => null,
+      getTranslator: () => null,
+      isChatStreaming: () => false,
+      getContextTokens: () => 4096,
+      getStoreDir: () => storeDir,
+      getIngestionDeps: () => ({ embedder: createMockEmbedder() }),
+      beginDocumentWork: () => () => {},
+      getOcrEngine: () => engine,
+      rasterizePdf: rasterize
+    })
+    const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [id] })
+    const start = Date.now()
+    let state = manager.getDocTask(jobId).state
+    while (!['done', 'failed', 'cancelled'].includes(state)) {
+      if (Date.now() - start > hangBudgetMs(30_000)) throw new Error(`OCR task never finished: ${state}`)
+      await new Promise((r) => setTimeout(r, 10))
+      state = manager.getDocTask(jobId).state
+    }
+    expect(state).toBe('done')
+
+    const listed = (await invoke(handlers, IPC.listDocuments)).result as DocumentInfo[]
+    expect(listed.find((d) => d.id === id)?.status).toBe('indexed')
+    expect(conversationAttachmentIds(db, convId)).toEqual([id]) // joined the chat — no re-attach
+    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'temporary')!.id)).toContain(id)
+    expect(documentIdsInCollection(db, getBuiltinCollection(db, 'library')!.id)).not.toContain(id)
+    expect(pendingOf(db, id)).toBeNull()
+    expect(resolveScope(db, convId).documentIds).toEqual([id]) // once, now as a linked attachment
+  }, testBudgetMs(60_000))
 })

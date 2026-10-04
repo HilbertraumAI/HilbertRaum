@@ -1293,6 +1293,13 @@ function applyPragmasAndMigrations(db: Db): void {
     'CREATE INDEX IF NOT EXISTS idx_documents_status ON documents(status);'
   )
   db.exec(
+    // #571: `resolveScope` (every documents-mode ask) and `listAttachments` read the unfiled
+    // conversation attachments — the rows whose `pending_destination_json` is still set (importing,
+    // or failed). Partial, so the read is proportional to those few rows, not the library (the
+    // CODE-21 intent); here, not in SCHEMA, because the column is migrated in late.
+    'CREATE INDEX IF NOT EXISTS idx_documents_pending_dest ON documents(id) WHERE pending_destination_json IS NOT NULL;'
+  )
+  db.exec(
     // DB-7: bank_transactions.category_id (a migrated column) — joined as transaction volume grows.
     'CREATE INDEX IF NOT EXISTS idx_bank_transactions_category ON bank_transactions(category_id);'
   )

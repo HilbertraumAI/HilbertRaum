@@ -106,6 +106,21 @@ from its first public `1.0.0` release onward.
 - **No more "Open AI Model" buttons.** The English label read like the company name "OpenAI".
   On Home and in the chat's "no model is running" note the button now says **Go to AI Model**
   (#527).
+- **A scanned PDF attached in a chat now says what to do.** The chat used to show only "This PDF
+  looks like a scan" and drop the file. It now says to use **Make searchable (OCR)** in Documents,
+  offers **Go to Documents**, and tells you the file then joins the chat by itself. A photo of a
+  page attached while the drive has no OCR files gets the same kind of note. The note stays with
+  the chat you attached the file in, even if you switched chats meanwhile (#570).
+- **A chat whose attached file can't be read no longer answers from all your documents.** When
+  the only file of a chat started by attaching it failed (a scan, a damaged file, an interrupted
+  import), the chat answered from everything on the drive, including other chats' files. It now
+  answers from no documents until the file can be read, and lists it as "not readable yet" (#571).
+- **No more "Try again" on a scanned PDF's row in Documents.** Trying again read the same pictures
+  and failed the same way. The row now offers only **Make searchable (OCR)** (or **Download OCR
+  files** first), and **Retry all** skips rows a retry can't fix. The **Translate** screen's note
+  for a scanned PDF also gets a **Go to Documents** button (#572, #570).
+- **Back to your chat from Documents.** After a chat's **Go to Documents**, Documents shows **‹ Back
+  to chat**, which reopens that conversation instead of a new, empty one (#573).
 - **When your computer can't run the AI engine, the app now says so, names what is missing, and
   blames nothing else.** Sometimes the engine is on the drive but your operating system refuses
   to start it: on Linux when a system library such as `libgomp1` is missing, or the system is

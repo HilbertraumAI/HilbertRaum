@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-05 — **#570–#573 — a file attached in a chat that can't be read yet (`fix/570-chat-failed-attachment`).** The chat names a scan (or a photo without
+the OCR files) and offers Go to Documents, held for its own chat (design-guidelines §11.18); `resolveScope` / `listAttachments` count a chat's unfiled attachments, so a
+failed attach no longer widens to the whole corpus (partial index, no migration; `architecture.md` doc-org §4 #571 amendment, rag-design §13.2); scan rows lose Try
+again and Retry all skips them; one-shot "‹ Back to chat"; Translate parity. The OCR rejoin is pinned. Open: deleting a chat's only attachment still widens it._
 _2026-10-04 — **#567 — the browser engine sends no request of its own: no spell-check dictionary, no WPAD (`fix/567-chromium-background-fetches`).** `spellcheck: false`
 stopped only the underlining: each session fetched a `.bdic` a few ms after `ready` (Linux: every language; Windows: a language it cannot check), at every start. Now
 `setSpellCheckerLanguages([])` + off from `session-created` (and first in ready), plus `no-proxy-server`. Packaged net logs, 0 remote: Windows `--lang=pl` full probe, Linux AppImage
@@ -121,20 +125,6 @@ fewer tokens generated than the cap sent ⇒ window, else cap — and a legacy r
 **#501:** Pandoc's shape rule + a TeX-signal/short-span content rule; remark-math's single-`$` mode stays
 off. Open: a `<figcaption>` inside a dropped `<figure>` (the #500 capture path) still fuses sup/sub — a
 two-line change if the owner wants it; the `snake case` vs `snake_case` question-side note is recorded._
-_2026-09-21 — **#497 — dictation: the speech model activates the moment its download (or the voice
-engine's install) lands, a silent recording is refused before whisper runs, and the composer mic
-shows as "not installed" with a path to the AI Model screen instead of vanishing — plus a live
-"no sound is reaching the microphone" hint while recording (owner request)** (PR #503 MERGED
-2026-09-21, three commits; the live hint followed in its own PR; record: `architecture.md` "Voice
-dictation" — the D30 amendment + the restart-free-activation paragraph; `known-limitations.md`
-"Voice dictation"; gate rule + calibration in `shared/dictation-level.ts`). Evidence (K:, the pinned
-whisper-cli + ggml-small): digital silence under `-l auto` → the single word `you`, `-l de` →
-`[Musik]`, low noise → random-script garbage; no decoder flag covers noise, so the gate sits BEFORE
-whisper. The "captured at wiring time" premise behind the restart rule was false for the transcriber
-since 2026-06-28 (true for embedder + OCR). Owner rulings the same day (recorded on the closed
-issue): TTS out of scope; **#504 Silero VAD, dictation-only, fetched in-app** — shipped as the
-whisper manifest's second required `files[]` entry + `TranscribeOptions.vad` (`-vp 200` keeps
-quiet onsets; measured). Still open: a real-microphone calibration of the gate on the built app._
 _2026-09-20 — **Wave 13 research recorded, five PRs shipped under a new standing shipping rule, the
 v0.1.61 cut 2026-09-21.** Retrieval is deterministic across repeated asks and a cold process restart — the
 only variance measured was in answer wording, now removed by the sampler pin. Converter coverage is
@@ -192,7 +182,8 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 (preamble budget, making room for the #548–#551 entry), and the closed 2026-09-27 #517 scorer entry on 2026-10-02 (preamble
 budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #447 expander-cache entry on 2026-10-03
 (preamble budget, making room for the OCR-rasterizer-CSP entry), and the closed 2026-09-19 knowledge-pack research entry on
-2026-10-03 (preamble budget, making room for the #562 / #563 / #560-platform entries) — citations of the form "BUILD_STATE <date> entry" /
+2026-10-03 (preamble budget, making room for the #562 / #563 / #560-platform entries), and the closed 2026-09-21 #497
+dictation entry on 2026-10-05 (preamble budget, making room for the #570–#573 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

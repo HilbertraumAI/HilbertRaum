@@ -36,6 +36,7 @@ import {
   subscribeSkillRuns
 } from '../lib/skillruns'
 import { localizeServerCopy } from '../lib/displayMap'
+import { ocrRemedyKind } from '../lib/ocrRemedy'
 import { skillTitleResolver } from '../lib/skillI18n'
 import { friendlyIpcError } from '../lib/errors'
 import { fmt1 } from '../lib/format'
@@ -196,6 +197,23 @@ interface Props {
    * id (the idempotent main-side create resolves both). Absent ⇒ review entry points hide.
    */
   onOpenReview?: (target: ReviewHandoffTarget) => void
+  /**
+   * #573: open Documents from this conversation's attach pointer, so Documents can offer the way
+   * back to it (App's one-shot return slot). Absent ⇒ the pointer is a plain `'documents'` link.
+   */
+  onOpenDocumentsFrom?: (conversationId: string) => void
+}
+
+/** #570: what a failed attachment needs before it can be read — its copy names the file. */
+interface AttachRemedy {
+  kind: 'scan' | 'photo'
+  name: string
+  conversationId: string
+}
+
+const ATTACH_REMEDY_KEY: Record<AttachRemedy['kind'], MessageKey> = {
+  scan: 'chat.attach.scanned',
+  photo: 'chat.attach.photoNeedsOcr'
 }
 
 export function ChatScreen({
@@ -204,7 +222,8 @@ export function ChatScreen({
   initialScopeDocumentIds,
   initialScopePackIds,
   initialConversationId,
-  onOpenReview
+  onOpenReview,
+  onOpenDocumentsFrom
 }: Props): JSX.Element {
   const { t, lang } = useT()
   const [conversations, setConversations] = useState<Conversation[]>([])
@@ -299,7 +318,16 @@ export function ChatScreen({
   /** #46: the installId whose info card is currently open (auto on first pick, or via the picker ⓘ).
    *  Rendered only while it matches the ACTIVE pick, so changing/clearing the skill hides it. */
   const [skillInfoFor, setSkillInfoFor] = useState<string | null>(null)
-  const [error, setError] = useState<string | null>(null)
+  // #570: ONE state for the banner, so an attach failure's remedy (its copy + "Go to Documents")
+  // can never outlive its message or ride along on an unrelated error set later.
+  const [errorState, setErrorState] = useState<{ message: string; remedy?: AttachRemedy } | null>(null)
+  const error = errorState?.message ?? null
+  const setError = useCallback((message: string | null): void => {
+    setErrorState(message == null ? null : { message })
+  }, [])
+  // #570: an attach failure for a conversation the user has since left waits here, in memory, and
+  // shows when they come back to it — never over another conversation.
+  const heldAttachFailureRef = useRef<{ convId: string; state: { message: string; remedy?: AttachRemedy } } | null>(null)
   // Imported documents — drives the scope popover's titles and the empty-state nudge.
   // Best-effort: a failed load just hides both affordances.
   const [docs, setDocs] = useState<DocumentInfo[]>([])
@@ -644,7 +672,13 @@ export function ChatScreen({
   // linger over B. Placed BEFORE the history-load effect so the synchronous clear runs first: a
   // switch-induced async listMessages failure (which resolves later) still surfaces its own banner.
   useEffect(() => {
-    setError(null)
+    const held = heldAttachFailureRef.current
+    if (held && held.convId === activeId) {
+      heldAttachFailureRef.current = null
+      setErrorState(held.state)
+    } else {
+      setErrorState(null)
+    }
   }, [activeId])
 
   // Load history when the active conversation changes.
@@ -2082,18 +2116,28 @@ export function ChatScreen({
         if (!mountedRef.current) return // unmounted while the document list was loading (FE-1)
         setDocs(fresh)
         if (activeIdRef.current === convId) await refreshAttachments(convId)
-        // Per-file failure: show the friendly error (canonical English → display map).
+        // Per-file failure: show the friendly error (canonical English → display map). #570: the
+        // file whose fix is known leads — a scan, then a photo that needs the OCR files — read from
+        // the structured flag, never the stored (localized) text; its copy points to Documents.
         if (job.failed > 0) {
-          const failed = fresh.find((d) => documentIds.includes(d.id) && d.status === 'failed')
+          const failedDocs = fresh.filter((d) => documentIds.includes(d.id) && d.status === 'failed')
+          const failed =
+            failedDocs.find((d) => ocrRemedyKind(d) === 'scan') ??
+            failedDocs.find((d) => ocrRemedyKind(d) === 'photo') ??
+            failedDocs[0]
           if (failed) {
-            setError(
-              failed.errorMessage
+            const kind = ocrRemedyKind(failed)
+            const state = {
+              message: failed.errorMessage
                 ? localizeServerCopy(t, failed.errorMessage)
-                : t('chat.attach.failed', { name: failed.title })
-            )
+                : t('chat.attach.failed', { name: failed.title }),
+              ...(kind ? { remedy: { kind, name: failed.title, conversationId: convId } } : {})
+            }
+            if (activeIdRef.current === convId) setErrorState(state)
+            else heldAttachFailureRef.current = { convId, state }
           }
-        } else {
-          // UX-3: audibly confirm the attachment for the keyboard/picker path.
+        } else if (activeIdRef.current === convId) {
+          // UX-3: audibly confirm the attachment for the keyboard/picker path (in its own chat).
           setAttachStatus(t('chat.attach.added', { name: fileNames.join(', ') }))
         }
       } catch {
@@ -2467,10 +2511,32 @@ export function ChatScreen({
             its first appearance. DOC_TASK_BUSY_MESSAGE arrives canonical English on the
             wire — the display map localizes it here. */}
         <ErrorBanner
-          message={error != null ? localizeServerCopy(t, error) : null}
+          message={
+            errorState?.remedy
+              ? t(ATTACH_REMEDY_KEY[errorState.remedy.kind], { name: errorState.remedy.name })
+              : error != null
+                ? localizeServerCopy(t, error)
+                : null
+          }
           t={t}
           onDismiss={() => setError(null)}
         >
+          {/* #570: a scan (or a photo without the OCR files) is fixed in Documents. The button only
+              navigates, so it is not labelled like the row action it leads to. */}
+          {errorState?.remedy && (
+            <div className="actions">
+              <Button
+                size="sm"
+                onClick={() => {
+                  const from = errorState.remedy!.conversationId
+                  if (onOpenDocumentsFrom) onOpenDocumentsFrom(from)
+                  else onNavigate('documents')
+                }}
+              >
+                {t('chat.attach.goToDocuments')}
+              </Button>
+            </div>
+          )}
           {/* Chat refused while a document task runs: the shared
               copy comes with an actionable cancel — the task, not the chat. */}
           {error != null && error.includes(DOC_TASK_BUSY_MESSAGE) && (

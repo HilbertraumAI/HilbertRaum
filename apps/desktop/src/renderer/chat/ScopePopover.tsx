@@ -12,7 +12,8 @@ import { useT, type I18n } from '../i18n'
 // of the ticked collections + the specific documents. RD-2 (#151): an empty explicit scope
 // is "the whole corpus" ONLY in a chat with no attachments — with attachments, main-side
 // resolveScope unions them in and the empty scope means JUST the attached files (D71 /
-// CODE-31; see the reset button's label branch below).
+// CODE-31; see the reset button's label branch below). An attachment that failed is still one of
+// them (#571 — main counts the unfiled file), so it is named, marked as not readable yet.
 //
 // Temporary and Generated are NOT pickable sources (N10/D3): a generated/temporary doc is
 // reached only via "Specific documents…". Chat attachments (Phase C) are shown read-only.
@@ -157,6 +158,10 @@ export function ScopePopover({
   // the full docs list each time was pure churn. Keyed on the inputs that actually change them.
   const indexed = useMemo(() => docs.filter((d) => d.status === 'indexed'), [docs])
   const fileCount = attachments.length + pendingAttachmentNames.length
+  // #571: a failed attachment keeps the chat scoped to it but adds nothing yet — never name it bare.
+  const attachmentName = (d: DocumentInfo): string =>
+    d.status === 'failed' ? t('chat.scope.attachmentNotReadable', { name: d.title }) : d.title
+  const anyAttachmentFailed = attachments.some((d) => d.status === 'failed')
 
   const collIds = scope?.collectionIds ?? EMPTY_IDS
   const docIds = scope?.documentIds ?? EMPTY_IDS
@@ -253,7 +258,7 @@ export function ScopePopover({
     // says there is no source and how to get one back.
     if (documentsOff) {
       if (packIds.length === 0 && fileCount > 0) {
-        const names = [...attachments.map((d) => d.title), ...pendingAttachmentNames]
+        const names = [...attachments.map(attachmentName), ...pendingAttachmentNames]
         const named = names.length === 1 ? names[0] : tCount('chat.scope.filesInChat', fileCount)
         return `${named} · ${t('chat.scope.documentsOffSuffix')}`
       }
@@ -265,7 +270,7 @@ export function ScopePopover({
     // retrieval is scoped to THOSE files — never the whole corpus. Name the single file, else count them
     // (this is the single-document workflow #26 targets, so the file name is the honest answer).
     if (composedEmpty && fileCount > 0) {
-      const names = [...attachments.map((d) => d.title), ...pendingAttachmentNames]
+      const names = [...attachments.map(attachmentName), ...pendingAttachmentNames]
       return names.length === 1 ? names[0] : tCount('chat.scope.filesInChat', fileCount)
     }
     // A single specific document → name it (the #26 "ask exactly this one document" case).
@@ -525,8 +530,12 @@ export function ScopePopover({
               <p className="popover-line">{t('chat.scope.filesInChatLine')}</p>
               <div className="popover-chips">
                 {attachments.map((d) => (
-                  <span className="doc-chip scope-attachment" key={d.id} title={d.title}>
-                    {d.title}
+                  <span
+                    className={`doc-chip scope-attachment${d.status === 'failed' ? ' failed' : ''}`}
+                    key={d.id}
+                    title={d.title}
+                  >
+                    {attachmentName(d)}
                   </span>
                 ))}
                 {pendingAttachmentNames.map((name, i) => (
@@ -541,6 +550,7 @@ export function ScopePopover({
                   </span>
                 ))}
               </div>
+              {anyAttachmentFailed && <p className="hint">{t('chat.scope.attachmentFailedHint')}</p>}
             </div>
           )}
 

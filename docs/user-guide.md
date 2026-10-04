@@ -516,6 +516,13 @@ library, the app asks once whether to narrow to **just this file** or keep using
 library** — your choice sticks for that conversation. Attached files are always included and shown
 separately as **Files in this chat**.
 
+**If an attached file can't be read yet** — most often a scanned PDF, or a photo of a page while
+the drive has no OCR files — the chat says so and offers **Go to Documents**. There, use **Make
+searchable (OCR)** on the file (§7). Once that finishes, the file joins the chat by itself; you
+don't attach it again. **Back to chat** at the top of Documents takes you back to the conversation
+you came from. Until then the chat answers from no documents (never from your whole library), and
+**Files in this chat** lists the file as *not readable yet*.
+
 **Naming a file in your question works too.** If you haven't chosen documents and your
 question names one of your files — *"summarize the key dates in contract.pdf"* — the answer
 comes from **that file only**, and a small note says so: *"Answering from contract.pdf
@@ -554,7 +561,9 @@ blurry ones. If a first reading came out poorly (or you added better OCR files l
 a couple of seconds per page); you choose when. **Photos of pages** (PNG/JPG) are the
 small exception: they are read immediately on import. A photo imported while the OCR files
 were missing shows as **Failed** with the same **Download OCR files** offer; after the download,
-**Try again** on that row reads it.
+**Try again** on that row reads it. A scanned PDF's row has no **Try again**: trying again reads the
+same pictures and fails the same way, so the row offers only what helps. **Retry all** in *Needs
+attention* skips such rows too, and files of a type the app can't read or that are too large.
 
 **Each document is a compact row.** On the **Documents** screen every file is one row:
 its name and a muted line of details (type, size, sections), any **location/project tags**,

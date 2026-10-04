@@ -14,6 +14,7 @@ import type {
   SkillInfo
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { en, t } from '../../src/shared/i18n'
 
 // Phase C renderer tests: the net-new chat attach / drag-drop intake (plan §11.2 H1),
 // plain-chat drop routing (§13.5 H2), the in-flight pending chip → live attachment
@@ -450,5 +451,162 @@ describe('ChatScreen — chat attach / drag-drop intake (plan §11.2 / §13.5)',
     expect(await screen.findByText(/couldn't add that/i)).toBeInTheDocument()
     // Nothing was imported — a zero-path drop must not start a phantom import.
     expect(importDocuments).not.toHaveBeenCalled()
+  })
+})
+
+// #570: an attachment that failed because it needs OCR — a scan, or a photo while the drive has no
+// OCR files — used to leave only the stored message ("This PDF looks like a scan…") with no way on.
+// The banner now says what to do in Documents and links there. Detection is the structured flag
+// (`ocrRemedyKind`), never the stored text; the banner belongs to the chat that received the file.
+describe('ChatScreen — a failed attachment points to Documents (#570)', () => {
+  const SCAN_MESSAGE = en['main.ingest.pdfScanDetected']
+  function failedDoc(id: string, title: string, kind: 'scan' | 'photo' | 'other'): DocumentInfo {
+    return {
+      ...docInfo(id, title),
+      status: 'failed',
+      chunkCount: 0,
+      errorMessage:
+        kind === 'scan' ? SCAN_MESSAGE : kind === 'photo' ? en['main.ingest.imageNeedsOcr'] : 'EIO: i/o error, read',
+      ...(kind === 'scan' ? { scanDetected: true } : {})
+    }
+  }
+  const failedJob = (failed: number, documentIds = ['d1']): ImportJobStatus => ({
+    jobId: 'j1',
+    total: documentIds.length,
+    completed: documentIds.length - failed,
+    failed,
+    done: true
+  })
+
+  function renderAttachBorn(opts: {
+    docs: DocumentInfo[]
+    documentIds?: string[]
+    onNavigate?: (target: string) => void
+    onOpenDocumentsFrom?: (id: string) => void
+  }): void {
+    const ids = opts.documentIds ?? ['d1']
+    stubChatApi({
+      listConversations: vi.fn(async () => []),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => opts.docs),
+      createConversation: vi.fn(async () => conv({ id: 'c2', title: 'New chat', mode: 'documents' })),
+      importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ids })),
+      getImportJob: vi.fn(async () => failedJob(opts.docs.filter((d) => d.status === 'failed').length, ids)),
+      listAttachments: vi.fn(async () => [])
+    })
+    render(
+      <ToastProvider>
+        <ChatScreen onNavigate={opts.onNavigate ?? (() => {})} onOpenDocumentsFrom={opts.onOpenDocumentsFrom} />
+      </ToastProvider>
+    )
+  }
+
+  it('a scan: says what to do in Documents, and "Go to Documents" goes there', async () => {
+    const onNavigate = vi.fn()
+    renderAttachBorn({ docs: [failedDoc('d1', 'contract-scan.pdf', 'scan')], onNavigate })
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+    dropFile('contract-scan.pdf', '/tmp/contract-scan.pdf')
+
+    expect(await screen.findByText(t('en', 'chat.attach.scanned', { name: 'contract-scan.pdf' }))).toBeInTheDocument()
+    expect(screen.queryByText(SCAN_MESSAGE)).not.toBeInTheDocument()
+    await userEvent.click(screen.getByRole('button', { name: 'Go to Documents' }))
+    expect(onNavigate).toHaveBeenCalledWith('documents')
+  })
+
+  it('with the return slot wired, the button hands over the conversation it came from (#573)', async () => {
+    const onNavigate = vi.fn()
+    const onOpenDocumentsFrom = vi.fn()
+    renderAttachBorn({ docs: [failedDoc('d1', 'scan.pdf', 'scan')], onNavigate, onOpenDocumentsFrom })
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+    dropFile('scan.pdf', '/tmp/scan.pdf')
+    await userEvent.click(await screen.findByRole('button', { name: 'Go to Documents' }))
+    expect(onOpenDocumentsFrom).toHaveBeenCalledWith('c2')
+    expect(onNavigate).not.toHaveBeenCalled()
+  })
+
+  it('a photo without the OCR files gets its own copy and the same button', async () => {
+    renderAttachBorn({ docs: [failedDoc('d1', 'page.jpg', 'photo')] })
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+    dropFile('page.jpg', '/tmp/page.jpg')
+    expect(await screen.findByText(t('en', 'chat.attach.photoNeedsOcr', { name: 'page.jpg' }))).toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Go to Documents' })).toBeInTheDocument()
+  })
+
+  it('any other failure keeps its own message, with no button', async () => {
+    renderAttachBorn({ docs: [failedDoc('d1', 'broken.pdf', 'other')] })
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+    dropFile('broken.pdf', '/tmp/broken.pdf')
+    expect(await screen.findByText('EIO: i/o error, read')).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()
+  })
+
+  it('names the scan when several files failed, whatever their order', async () => {
+    renderAttachBorn({
+      docs: [
+        failedDoc('d1', 'broken.pdf', 'other'),
+        failedDoc('d2', 'page.jpg', 'photo'),
+        failedDoc('d3', 'scan.pdf', 'scan')
+      ],
+      documentIds: ['d1', 'd2', 'd3']
+    })
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+    dropFile('scan.pdf', '/tmp/scan.pdf')
+    expect(await screen.findByText(t('en', 'chat.attach.scanned', { name: 'scan.pdf' }))).toBeInTheDocument()
+  })
+
+  it('dismissing the banner takes the button with it', async () => {
+    renderAttachBorn({ docs: [failedDoc('d1', 'scan.pdf', 'scan')] })
+    await screen.findByText(/start chatting/i).catch(() => undefined)
+    dropFile('scan.pdf', '/tmp/scan.pdf')
+    await screen.findByText(t('en', 'chat.attach.scanned', { name: 'scan.pdf' }))
+    await userEvent.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText(t('en', 'chat.attach.scanned', { name: 'scan.pdf' }))).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()
+  })
+
+  it('never shows over another chat: held while the user is elsewhere, shown on return, cleared on leaving', async () => {
+    const user = userEvent.setup()
+    // An attach-born chat (D71's empty explicit scope), so the drop raises no narrow/widen prompt.
+    const a = conv({ id: 'ca', title: 'Chat A', mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
+    const b = conv({ id: 'cb', title: 'Chat B', mode: 'documents' })
+    let finished = false
+    const listDocuments = vi.fn(async () => [failedDoc('d1', 'scan.pdf', 'scan')])
+    const importDocuments = vi.fn(async () => job)
+    stubChatApi({
+      listConversations: vi.fn(async () => [a, b]),
+      getRuntimeStatus: vi.fn(async () => runningStatus),
+      listMessages: vi.fn(async () => []),
+      listDocuments,
+      importDocuments,
+      getImportJob: vi.fn(async () => (finished ? failedJob(1) : { ...failedJob(1), failed: 0, done: false })),
+      listAttachments: vi.fn(async () => [])
+    })
+    render(
+      <ToastProvider>
+        <ChatScreen onNavigate={() => {}} />
+      </ToastProvider>
+    )
+    await user.click(await screen.findByText('Chat A'))
+    dropFile('scan.pdf', '/tmp/scan.pdf')
+    await waitFor(() => expect(importDocuments).toHaveBeenCalled())
+    const docsReadsBefore = listDocuments.mock.calls.length
+    await user.click(screen.getByText('Chat B'))
+    finished = true
+    const scanCopy = t('en', 'chat.attach.scanned', { name: 'scan.pdf' })
+    // The job settles while B is open (the poll reads the document list once more): nothing shows over B.
+    await waitFor(() => expect(listDocuments.mock.calls.length).toBeGreaterThan(docsReadsBefore), { timeout: 3000 })
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByText(scanCopy)).not.toBeInTheDocument()
+    expect(screen.queryByText(SCAN_MESSAGE)).not.toBeInTheDocument()
+    // Back in A, the user learns what happened to the file they attached there.
+    await user.click(screen.getByText('Chat A'))
+    expect(await screen.findByText(scanCopy)).toBeInTheDocument()
+    // Leaving clears it (CR-6), and it does not come back a second time.
+    await user.click(screen.getByText('Chat B'))
+    await waitFor(() => expect(screen.queryByText(scanCopy)).not.toBeInTheDocument())
+    await user.click(screen.getByText('Chat A'))
+    await new Promise((r) => setTimeout(r, 50))
+    expect(screen.queryByText(scanCopy)).not.toBeInTheDocument()
   })
 })

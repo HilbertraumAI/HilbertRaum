@@ -27,6 +27,28 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-05 — the closed 2026-09-21 #497 dictation entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-05 (preamble budget, making room for the #570–#573 entry). #497 and #504 are closed
+(PRs #503, #505, #506); the record is unchanged: `architecture.md` "Voice dictation" (the D30 amendment). The real-microphone
+calibration it names stays an owner leg. Citations of the form "BUILD_STATE 2026-09-21 #497 entry" now resolve here. Text below
+is byte-identical to what was removed.
+
+_2026-09-21 — **#497 — dictation: the speech model activates the moment its download (or the voice
+engine's install) lands, a silent recording is refused before whisper runs, and the composer mic
+shows as "not installed" with a path to the AI Model screen instead of vanishing — plus a live
+"no sound is reaching the microphone" hint while recording (owner request)** (PR #503 MERGED
+2026-09-21, three commits; the live hint followed in its own PR; record: `architecture.md` "Voice
+dictation" — the D30 amendment + the restart-free-activation paragraph; `known-limitations.md`
+"Voice dictation"; gate rule + calibration in `shared/dictation-level.ts`). Evidence (K:, the pinned
+whisper-cli + ggml-small): digital silence under `-l auto` → the single word `you`, `-l de` →
+`[Musik]`, low noise → random-script garbage; no decoder flag covers noise, so the gate sits BEFORE
+whisper. The "captured at wiring time" premise behind the restart rule was false for the transcriber
+since 2026-06-28 (true for embedder + OCR). Owner rulings the same day (recorded on the closed
+issue): TTS out of scope; **#504 Silero VAD, dictation-only, fetched in-app** — shipped as the
+whisper manifest's second required `files[]` entry + `TranscribeOptions.vad` (`-vp 200` keeps
+quiet onsets; measured). Still open: a real-microphone calibration of the gate on the built app._
+
 ## 2026-10-04 — the closed 2026-10-02 #551 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-04 (preamble budget, making room for the #567 entry). #551 is closed (PR #557); the

@@ -199,6 +199,43 @@ describe('registerChatIpc', () => {
     expect(none).toEqual([])
   })
 
+  // #571: a FAILED attachment was never filed (N4 — no link), so "Files in this chat" used to forget
+  // it while the scope widened to the whole corpus. It is listed now, so the chat can say it is not
+  // readable yet; a still-importing one stays the renderer's pending chip.
+  it('listAttachments includes a failed unfiled attachment of THIS chat — not an importing one, not another chat\'s', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    const other = createConversation(db, { mode: 'documents' })
+    const now = new Date().toISOString()
+    const seed = (id: string, status: string, conversationId: string): void => {
+      db.prepare(
+        `INSERT INTO documents (id, title, status, pending_destination_json, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?)`
+      ).run(id, `${id}.pdf`, status, JSON.stringify({ kind: 'conversation', conversationId }), now, now)
+    }
+    db.prepare(
+      `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES ('ok', 'ok.pdf', 'indexed', ?, ?)`
+    ).run(now, now)
+    linkConversationDocument(db, conv.id, 'ok')
+    seed('scan', 'failed', conv.id)
+    seed('importing', 'parsing', conv.id)
+    seed('elsewhere', 'failed', other.id)
+
+    const ctx = {
+      trustedSenders: ANY_SENDER,
+      db,
+      workspace: { isUnlocked: () => true },
+      embedder: createMockEmbedder(),
+      runtime: { active: () => null, activeModelId: () => null }
+    } as unknown as AppContext
+    registerChatIpc(ctx)
+
+    const { result } = await invoke(handlers, IPC.listAttachments, conv.id)
+    const rows = result as Array<{ id: string; status: string }>
+    expect(rows.map((d) => d.id).sort()).toEqual(['ok', 'scan'])
+    expect(rows.find((d) => d.id === 'scan')?.status).toBe('failed')
+  })
+
   // ---- CODE-21 (full audit 2026-07-11): id-targeted attachment listing ---------------
   // `listAttachments` used to materialize the ENTIRE library via `listDocuments` (the PF-5
   // load-all) and filter to the attached handful. It now uses `listDocumentsByIds`, which

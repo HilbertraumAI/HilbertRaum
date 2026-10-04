@@ -24,7 +24,8 @@ import {
   renameCollection,
   resolveScope,
   setCollectionArchived,
-  setDocumentsLifecycle
+  setDocumentsLifecycle,
+  unfiledConversationDocuments
 } from '../../src/main/services/collections'
 import {
   createConversation,
@@ -459,6 +460,104 @@ describe('resolveScope', () => {
       hasExplicitDocSelection: true
     })
     expect(resolveScope(db, on.id).noDocuments).toBeUndefined()
+  })
+})
+
+// #571: a chat born from an attachment (D71's empty explicit scope) whose file then FAILED used to
+// resolve to the whole corpus — the failed import writes no link (N4), and an empty scope with no
+// attachments means "everything" (RD-2). The unfiled attachment (its pending destination still
+// names the chat) now counts as one of the chat's attachments.
+describe('resolveScope — unfiled conversation attachments (#571)', () => {
+  const pendingFor = (db: Db, id: string, destination: unknown): void => {
+    db.prepare('UPDATE documents SET pending_destination_json = ? WHERE id = ?').run(
+      typeof destination === 'string' ? destination : JSON.stringify(destination),
+      id
+    )
+  }
+  const attachBorn = (db: Db): string =>
+    createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [] } }).id
+
+  it.each(['failed', 'queued'])(
+    'an attach-born chat whose only file is %s resolves to that file, never the whole corpus',
+    (status) => {
+      const db = freshDb()
+      const lib = getBuiltinCollection(db, 'library')!
+      addToCollection(db, [seedDoc(db, 'library-doc')], lib.id, 'source')
+      const conv = attachBorn(db)
+      seedDoc(db, 'scan', { status })
+      pendingFor(db, 'scan', { kind: 'conversation', conversationId: conv })
+
+      const scope = resolveScope(db, conv)
+      expect(scope.collectionIds).toBeNull()
+      expect(scope.documentIds).toEqual(['scan'])
+      expect(scope.hasExplicitDocSelection).toBe(false) // an attachment is not a hand-pick (N2)
+      // N4 holds: still no link row for a file that never indexed.
+      expect(conversationAttachmentIds(db, conv)).toEqual([])
+    }
+  )
+
+  it('the same after "Just this file" narrowed an existing chat whose file then failed', () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    setScope(db, conv.id, { collectionIds: [], documentIds: [] })
+    seedDoc(db, 'scan', { status: 'failed' })
+    pendingFor(db, 'scan', { kind: 'conversation', conversationId: conv.id })
+    expect(resolveScope(db, conv.id)).toMatchObject({ collectionIds: null, documentIds: ['scan'] })
+  })
+
+  it('unions with linked attachments and leaves a Library-default chat on the Library', () => {
+    const db = freshDb()
+    const lib = getBuiltinCollection(db, 'library')!
+    const conv = createConversation(db, { mode: 'documents' })
+    seedDoc(db, 'ok')
+    linkConversationDocument(db, conv.id, 'ok')
+    seedDoc(db, 'scan', { status: 'failed' })
+    pendingFor(db, 'scan', { kind: 'conversation', conversationId: conv.id })
+    const scope = resolveScope(db, conv.id)
+    expect(scope.collectionIds).toEqual([lib.id])
+    expect(scope.documentIds).toEqual(['ok', 'scan'])
+  })
+
+  it('ignores another chat, a non-conversation destination, a malformed row, a deleted row and a generated document', () => {
+    const db = freshDb()
+    const conv = attachBorn(db)
+    const other = attachBorn(db)
+    seedDoc(db, 'other-chat', { status: 'failed' })
+    pendingFor(db, 'other-chat', { kind: 'conversation', conversationId: other })
+    seedDoc(db, 'to-temporary', { status: 'failed' })
+    pendingFor(db, 'to-temporary', { kind: 'temporary' })
+    seedDoc(db, 'malformed', { status: 'failed' })
+    pendingFor(db, 'malformed', '{not json')
+    seedDoc(db, 'deleted', { status: 'deleted' })
+    pendingFor(db, 'deleted', { kind: 'conversation', conversationId: conv })
+    seedDoc(db, 'generated', { status: 'failed', origin: JSON.stringify({ kind: 'summary' }) })
+    pendingFor(db, 'generated', { kind: 'conversation', conversationId: conv })
+
+    // Nothing of this chat's own: the explicit "All documents" meaning is unchanged.
+    expect(resolveScope(db, conv)).toMatchObject({ collectionIds: null, documentIds: null })
+    expect(unfiledConversationDocuments(db, other)).toEqual([{ id: 'other-chat', status: 'failed' }])
+  })
+
+  it('a successful filing links the document and clears the intent — counted once', () => {
+    const db = freshDb()
+    const conv = attachBorn(db)
+    seedDoc(db, 'scan', { status: 'indexed' })
+    pendingFor(db, 'scan', { kind: 'conversation', conversationId: conv })
+    fileFromPendingDestination(db, 'scan')
+    expect(conversationAttachmentIds(db, conv)).toEqual(['scan'])
+    expect(unfiledConversationDocuments(db, conv)).toEqual([])
+    expect(resolveScope(db, conv).documentIds).toEqual(['scan'])
+  })
+
+  it('the unfiled read is served by the partial index, not a scan of the library', () => {
+    const db = freshDb()
+    const plan = db
+      .prepare(
+        `EXPLAIN QUERY PLAN SELECT id, status, pending_destination_json FROM documents
+         WHERE pending_destination_json IS NOT NULL AND origin_json IS NULL AND status != 'deleted'`
+      )
+      .all() as Array<{ detail: string }>
+    expect(plan.map((r) => r.detail).join(' | ')).toMatch(/USING INDEX idx_documents_pending_dest/)
   })
 })
 

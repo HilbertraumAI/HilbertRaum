@@ -20,10 +20,10 @@ import {
   badgeFor,
   isRetryableFailure,
   metaLine,
-  ocrRemedyKind,
   provenanceLine,
   rowChips
 } from './format'
+import { ocrRemedyKind } from '../../lib/ocrRemedy'
 
 /**
  * One document row (perf audit PERF-5): the checkbox + name/meta/provenance column + the trailing

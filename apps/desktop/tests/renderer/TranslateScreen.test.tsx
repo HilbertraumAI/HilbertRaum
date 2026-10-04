@@ -572,7 +572,8 @@ describe('TranslateScreen — document translation (TG-5)', () => {
       failedDoc({ scanDetected: true, errorMessage: en['main.ingest.pdfScanDetected'] })
     ])
     stubApi({ ...f.api, getImportJob: importFailedJob(), listDocuments })
-    render(<TranslateScreen onNavigate={() => {}} />)
+    const onNavigate = vi.fn()
+    render(<TranslateScreen onNavigate={onNavigate} />)
     await screen.findByLabelText(t('en', 'translate.input.label'))
 
     act(() => dropOnZone([new File(['%PDF'], 'a.pdf', { type: 'application/pdf' })]))
@@ -581,6 +582,9 @@ describe('TranslateScreen — document translation (TG-5)', () => {
     expect(
       await screen.findByText(t('en', 'translate.file.err.scanned'), {}, { timeout: 8000 })
     ).toBeInTheDocument()
+    // #570 parity: and a button takes the user there.
+    fireEvent.click(screen.getByRole('button', { name: t('en', 'translate.file.err.scannedAction') }))
+    expect(onNavigate).toHaveBeenCalledWith('documents')
     // And NONE of the misleading "Try a PDF, Word, Markdown, or text file." unsupported copy.
     expect(screen.queryByText(t('en', 'translate.file.err.unsupported'))).not.toBeInTheDocument()
     // No translation task runs over a document that has no text.
@@ -615,6 +619,10 @@ describe('TranslateScreen — document translation (TG-5)', () => {
         await screen.findByText(t('de', 'main.ingest.parseTimeout'), {}, { timeout: 8000 })
       ).toBeInTheDocument()
       expect(screen.queryByText(en['main.ingest.parseTimeout'])).not.toBeInTheDocument()
+      // Not a scan: no button to Documents (the fix is not there).
+      expect(
+        screen.queryByRole('button', { name: t('de', 'translate.file.err.scannedAction') })
+      ).not.toBeInTheDocument()
       expect(screen.queryByText(t('de', 'translate.file.err.unsupported'))).not.toBeInTheDocument()
     } finally {
       window.localStorage.removeItem(UI_LANGUAGE_STORAGE_KEY)

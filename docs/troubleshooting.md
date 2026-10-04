@@ -421,6 +421,11 @@ text locally (German + English; needs the drive's `ocr/` language files; runs a 
 seconds per page). PDFs that mix real text pages with scanned pages index their text pages
 only — they are not detected as scans.
 
+A scan attached in a **chat** fails the same way, and the chat offers **Go to Documents**: run
+**Make searchable (OCR)** on its row there, and the file joins that chat by itself — no need to
+attach it again. **Back to chat** at the top of Documents returns you to the conversation. Such
+a row has no **Try again**: it would read the same pictures and fail again.
+
 If the row says *"…needs the OCR files, which are not on this drive"*, the drive has no OCR
 language files yet (commercially-built drives already include them). Use the row's **Download
 OCR files** button (or *"Text recognition for scans and photos (optional)"* on the **AI Model**

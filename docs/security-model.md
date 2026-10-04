@@ -1225,7 +1225,8 @@ per-process job map for the life of the job and in renderer memory (`lib/transla
   materialized translation are written through the same `DocumentCipher` as any other document. The
   dropped path is resolved in the preload (`getDroppedFilePath`) and **hardened in main**
   (canonicalize + reject symlinks — an OS drop carries no picker token, `registerDocsIpc`), the same
-  drag-drop seam DocumentsScreen/Chat use; the picker path carries the one-time `pickerToken` (D1).
+  drag-drop seam Chat uses (DocumentsScreen has no drop target — it imports through the pickers
+  only); the picker path carries the one-time `pickerToken` (D1).
   The renderer store (`lib/fileTranslateSession.ts`) holds only the materialized preview — a
   Generated document that already lives in the workspace — and drops it on lock via the same
   App-level `purgeSessionStores()` seam described above (`clearFileTranslate`; TA-2). No new IPC,
