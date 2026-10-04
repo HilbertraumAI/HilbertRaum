@@ -1093,8 +1093,8 @@ dictionary (`https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic`; in
 every start, because the download kept failing), and the Windows build probes
 `http://wpad/wpad.dat`. Windows downloads a dictionary too, for a language it cannot spell-check
 itself (measured later with Polish). Both requests come from Chromium's own network stack and were
-measured with `--log-net-log`. The v0.1.62 AppImage does the same. See `security-model.md`
-"Chromium background fetches".
+measured with `--log-net-log`. The v0.1.62 AppImage does the same. Fixed in #567 (spell checker
+off in every session, `no-proxy-server`); see `security-model.md` "Chromium background fetches".
 
 ### Verifying a packaged build on macOS (owner-run, #560, #562)
 
@@ -1129,6 +1129,10 @@ lines for:
    - PDF text, OCR of a drawn JPEG scan (and `--scan`);
    - an **evidence-pack PDF**: a save dialog opens, save it exactly where the script says;
    - lock and unlock, no `[ERROR]` lines.
+7. **No request off the machine** during that session: the app runs with `--log-net-log`, and
+   `scripts/check-netlog.mjs` fails on any request or host-name lookup that leaves it (#567).
+   Expected on macOS: none (no spell-check dictionary; WPAD only with "Auto Proxy Discovery" on,
+   which `no-proxy-server` should silence; not measured).
 
 Report the output, plus two things only eyes see: which app the microphone prompt names (the drive
 launcher starts the binary from Terminal, as this script does), and whether Gatekeeper interfered

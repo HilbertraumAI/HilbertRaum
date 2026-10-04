@@ -113,7 +113,9 @@ if [ -f "$WORK/planted-ran" ]; then fail "a planted resources/app/ ran without a
 ROOT="$WORK/root"
 mkdir -p "$ROOT/ocr" "$WORK/exports"
 if [ -n "${HILBERTRAUM_OCR_DIR:-}" ]; then cp "$HILBERTRAUM_OCR_DIR"/{deu,eng}.traineddata.gz "$ROOT/ocr/"; fi
-PID=$(start_bg "$WORK/app.log" env HILBERTRAUM_DRIVE_ROOT="$ROOT" "$BIN" --remote-debugging-port=9333 --user-data-dir="$WORK/ud")
+# The Chromium net log records the browser engine's own requests for the offline check below (#567).
+PID=$(start_bg "$WORK/app.log" env HILBERTRAUM_DRIVE_ROOT="$ROOT" "$BIN" --remote-debugging-port=9333 --user-data-dir="$WORK/ud" \
+  --log-net-log="$WORK/netlog.json")
 # bash 3.2 (the macOS default) + `set -u`: an empty array needs the ${a[@]+...} form below.
 EXTRA=()
 if [ -n "${PROBE_ARGS:-}" ]; then eval "EXTRA=(${PROBE_ARGS})"; fi
@@ -126,6 +128,12 @@ PROBE_FAILS=$?
 set -e
 stop_bg "$PID"
 FAILS=$((FAILS + PROBE_FAILS))
+# ---- 5. no request left the machine during that session (#567) ------------------------------
+set +e
+node "$REPO/scripts/check-netlog.mjs" "$WORK/netlog.json"
+NETLOG_FAILS=$?
+set -e
+FAILS=$((FAILS + NETLOG_FAILS))
 echo "--- summary: $FAILS check(s) failed; logs in $WORK ---"
 echo "Also report by eye: which app the microphone prompt named (HilbertRaum or Terminal),"
 echo "and whether Gatekeeper interfered with the first launch."
