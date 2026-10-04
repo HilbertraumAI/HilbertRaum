@@ -1,34 +1,35 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, readdirSync } from 'node:fs'
+import { mkdtempSync, readFileSync, readdirSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 // AUD-17 — two concurrent PDF exports to the SAME destination must not print each other's
 // pack.
 //
-// The transient print source used to be named from the DESTINATION alone
+// The transient print source used to be a FILE named from the DESTINATION alone
 // (`${destPath}.print.tmp.html`), so two exports saving to the same file wrote, loaded and
 // printed ONE shared file. `loadFile` resolving is not the point at which Chromium has
 // finished with the document: an overwrite that lands in a later main-process turn is
 // picked up and printed successfully (measured on the installed Electron: 12 of 12 runs).
-// The loser therefore does not "fail cleanly" as the module comment claimed — both exports
-// SUCCEED, and one of them writes a file whose bytes are the other review's pack while the
-// `evidence_exports` row it records names its own review. That is provenance corruption of
-// a signed-off artifact, with no error anywhere.
+// The loser therefore did not "fail cleanly" — both exports SUCCEEDED, and one of them wrote
+// a file whose bytes were the other review's pack while the `evidence_exports` row it recorded
+// named its own review. AUD-17 named the file per export; #563 removed it: the print page is
+// now held in memory under a random token and served once on `hilbertraum://print/<token>`.
 //
 // What this harness reproduces and what it cannot: the electron BOUNDARY is faked (a
 // constructible hidden-window class), but everything above it is the shipped code — the
-// real `printEvidencePackHtmlToPdf` lifecycle, the real export pipeline, real SQLite, real
-// files on disk. The fake window models the one Chromium behaviour the incident turns on:
-// `printToPDF` renders whatever is at the loaded PATH at PRINT time, not a snapshot taken
-// when `loadFile` resolved. Chromium's own timing is not reproduced here — that is the
-// env-gated real-Electron smoke's territory — so this suite proves the file-level race and
-// its removal, not the browser internals.
+// real `printEvidencePackHtmlToPdf` lifecycle, the real scheme handler and print-page
+// registry, the real export pipeline, real SQLite, real files on disk. The fake window loads
+// its URL through that handler, the way Chromium does, and prints what it was served.
+// Chromium's own timing is not reproduced here — that is the env-gated real-Electron smoke's
+// territory.
 
 const electron = vi.hoisted(() => ({
-  windows: [] as Array<{ loadedPath: string | null; printedContent: string | null }>,
-  /** Called when a window enters `loadFile`; the returned promise parks the load. */
-  onLoad: null as ((index: number) => Promise<void>) | null
+  windows: [] as Array<{ loadedUrl: string | null; printedContent: string | null }>,
+  /** Called once a window has fetched its page; the returned promise parks the load. */
+  onLoad: null as ((index: number) => Promise<void>) | null,
+  /** Fetches a URL through the app's real scheme handler (installed after the imports). */
+  fetchPage: null as ((url: string) => Promise<Response>) | null
 }))
 
 // The SECOND shared transient (AUD-17, `writePackFileAtomic`'s tmp sibling) is on the tail
@@ -59,36 +60,34 @@ vi.mock('node:fs/promises', async () => {
   return { ...actual, readFile, rename }
 })
 
-vi.mock('electron', async () => {
-  const { existsSync, readFileSync } = await import('node:fs')
+vi.mock('electron', () => {
   class BrowserWindow {
     static getFocusedWindow(): null {
       return null
     }
     private readonly index: number
+    private document: string | null = null
     destroyed = false
     webContents: Record<string, unknown>
     constructor() {
       this.index = electron.windows.length
-      electron.windows.push({ loadedPath: null, printedContent: null })
+      electron.windows.push({ loadedUrl: null, printedContent: null })
       const slot = electron.windows[this.index]!
       this.webContents = {
         setWindowOpenHandler: (): void => {},
         on: (): void => {},
         executeJavaScript: async (): Promise<boolean> => true,
-        // The load-bearing detail: the document is read from the loaded PATH at print
-        // time. A later overwrite of that path is what gets printed.
+        // Prints the document this window was SERVED at load time.
         printToPDF: async (): Promise<Uint8Array> => {
-          const path = slot.loadedPath!
-          slot.printedContent = existsSync(path)
-            ? readFileSync(path, 'utf8')
-            : '<<print-source-missing>>'
+          slot.printedContent = this.document ?? '<<nothing-served>>'
           return new TextEncoder().encode(slot.printedContent)
         }
       }
     }
-    async loadFile(path: string): Promise<void> {
-      electron.windows[this.index]!.loadedPath = path
+    async loadURL(url: string): Promise<void> {
+      electron.windows[this.index]!.loadedUrl = url
+      const res = await electron.fetchPage!(url)
+      this.document = res.status === 200 ? await res.text() : null
       await electron.onLoad?.(this.index)
     }
     isDestroyed(): boolean {
@@ -107,14 +106,21 @@ vi.mock('electron', async () => {
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
 import { createEvidenceReviewFromMessage } from '../../src/main/services/evidence-pack/snapshot'
-import {
-  exportEvidencePackToFile,
-  packTmpPath,
-  printSourcePath
-} from '../../src/main/services/evidence-pack/export'
+import { exportEvidencePackToFile, packTmpPath } from '../../src/main/services/evidence-pack/export'
 import { printEvidencePackHtmlToPdf } from '../../src/main/services/evidence-pack/print-pdf'
+import { createAppProtocolHandler, printPages } from '../../src/main/app-protocol'
 import { sha256Of } from '../../src/main/services/assets'
 
+// The app's real handler over the app's real print-page registry (install-app-protocol.ts's pair).
+const handler = createAppProtocolHandler({
+  files: new Set(),
+  readFile: async () => {
+    throw new Error('no app files in this test')
+  },
+  printPages
+})
+
+const PRINT_URL = /^hilbertraum:\/\/print\/[0-9a-f]{64}$/
 const PACK_ID_A = '11111111-1111-4111-8111-111111111111'
 const PACK_ID_B = '22222222-2222-4222-8222-222222222222'
 const NOW = '2026-07-18T12:00:00.000Z'
@@ -125,6 +131,7 @@ let db: Db
 beforeEach(() => {
   electron.windows = []
   electron.onLoad = null
+  electron.fetchPage = (url) => handler(new Request(url))
   fsGate.beforeReadFile = null
   fsGate.beforeRename = null
   root = mkdtempSync(join(tmpdir(), 'hilbertraum-epconc-'))
@@ -154,7 +161,7 @@ function seedReview(marker: string): string {
 }
 
 describe('concurrent same-destination PDF exports (AUD-17)', () => {
-  it('each export prints ITS OWN pack and cleans up only its own print source', async () => {
+  it('each export prints ITS OWN pack from its own page, and leaves nothing beside the destination', async () => {
     const reviewA = seedReview('ALPHA')
     const reviewB = seedReview('BRAVO')
     const dest = join(root, 'pack.pdf')
@@ -192,8 +199,8 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
     // load-order semantics, not a timing proof — nothing is loosened by waiting longer.
     const exportA = startExport(reviewA, PACK_ID_A)
     await vi.waitFor(() => expect(entered).toContain(0), { timeout: 30_000 })
-    // …then B writes its own print source and parks too. This is the exact window in which
-    // the shared-name build had already replaced the bytes A was about to print.
+    // …then B holds its own page and parks too. This is the exact window in which the
+    // shared-file build had already replaced the bytes A was about to print.
     const exportB = startExport(reviewB, PACK_ID_B)
     await vi.waitFor(() => expect(entered).toContain(1), { timeout: 30_000 })
 
@@ -209,23 +216,25 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
       return {
         alpha: printed.includes('ALPHA-ANSWER-BODY.'),
         bravo: printed.includes('BRAVO-ANSWER-BODY.'),
-        // With a shared print-source name, A's cleanup removed the file B was about to
-        // print — the second export could not even find its own source.
-        sourceMissing: printed === '<<print-source-missing>>'
+        // A page that was not served (missing, or already taken) prints nothing.
+        nothingServed: printed === '<<nothing-served>>'
       }
     }
-    expect(whatWasPrinted(0)).toEqual({ alpha: true, bravo: false, sourceMissing: false })
-    expect(whatWasPrinted(1)).toEqual({ alpha: false, bravo: true, sourceMissing: false })
+    expect(whatWasPrinted(0)).toEqual({ alpha: true, bravo: false, nothingServed: false })
+    expect(whatWasPrinted(1)).toEqual({ alpha: false, bravo: true, nothingServed: false })
 
-    // The two exports never shared a file.
-    const paths = electron.windows.map((w) => w.loadedPath)
-    expect(new Set(paths).size).toBe(2)
-    for (const path of paths) {
-      expect(path!.endsWith('.print.tmp.html')).toBe(true)
-      expect(path!.startsWith(`${dest}.`)).toBe(true)
-      // Both transient sources were removed; neither export deleted the other's.
-      expect(existsSync(path!)).toBe(false)
+    // The two exports never shared a page: two print-host URLs, each a random token, and both
+    // pages gone once the prints ended.
+    const urls = electron.windows.map((w) => w.loadedUrl)
+    expect(new Set(urls).size).toBe(2)
+    for (const url of urls) {
+      expect(url).toMatch(PRINT_URL)
+      expect((await handler(new Request(url!))).status).toBe(404)
     }
+    expect(printPages.pending).toBe(0)
+    // Nothing was written beside the destination but the destination itself (#563: no print
+    // source, and the atomic writer's tmp siblings were renamed away).
+    expect(readdirSync(root).filter((f) => f.startsWith('pack.pdf'))).toEqual(['pack.pdf'])
 
     // Provenance: each recorded row describes the bytes that export actually wrote.
     expect(recordA.reviewId).toBe(reviewA)
@@ -242,7 +251,7 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
     expect(sha256Of(readFileSync(dest))).toBe(recordB.fileSha256)
   })
 
-  it('the print-source name carries the pack id and no review content', async () => {
+  it('the print page URL carries a random token, never the pack id or review content', async () => {
     const reviewId = seedReview('CHARLIE')
     const dest = join(root, 'CHARLIE-REVIEW.pdf')
     electron.onLoad = null
@@ -259,32 +268,21 @@ describe('concurrent same-destination PDF exports (AUD-17)', () => {
       }
     )
 
-    const path = electron.windows[0]!.loadedPath!
-    // The uniqueness token is the pack id's alphanumerics — a random UUID, no content.
-    expect(path).toBe(`${dest}.${PACK_ID_A.replace(/-/g, '')}.print.tmp.html`)
-    // Whatever else the name contains comes from the destination the USER chose; the
-    // uniqueness suffix itself adds nothing but hex.
-    expect(path.slice(dest.length)).toMatch(/^\.[0-9a-f]{32}\.print\.tmp\.html$/)
-    // …and it is the naming rule the pipeline documents, not an incidental string.
-    expect(path).toBe(printSourcePath(dest, PACK_ID_A))
+    const url = electron.windows[0]!.loadedUrl!
+    expect(url).toMatch(PRINT_URL)
+    expect(url).not.toContain(PACK_ID_A.replace(/-/g, ''))
+    expect(url).not.toContain('CHARLIE')
+    // It printed the right pack all the same.
+    expect(electron.windows[0]!.printedContent).toContain('CHARLIE-ANSWER-BODY.')
   })
 
-  it('the naming rule keeps a hostile pack id out of the file system', () => {
+  it('the tmp-sibling naming rule keeps a hostile pack id out of the file system', () => {
     const dest = join(root, 'pack.pdf')
-    // Distinct ids never collide…
-    expect(printSourcePath(dest, PACK_ID_A)).not.toBe(printSourcePath(dest, PACK_ID_B))
-    // …separators and traversal characters are dropped, not passed through…
-    expect(printSourcePath(dest, '../../etc/passwd')).toBe(`${dest}.etcpasswd.print.tmp.html`)
-    expect(printSourcePath(dest, 'a b/c\\d:e')).toBe(`${dest}.abcde.print.tmp.html`)
-    // …an id that sanitises away entirely (only reachable through an injected mint) still
-    // yields a usable unique name rather than a bare dot…
-    const empty = printSourcePath(dest, '///')
-    expect(empty.slice(dest.length)).toMatch(/^\.[0-9a-f]{32}\.print\.tmp\.html$/)
-    expect(printSourcePath(dest, '///')).not.toBe(empty)
-    // …and an over-long id cannot grow the path without bound.
-    expect(printSourcePath(dest, 'z'.repeat(500))).toBe(`${dest}.${'z'.repeat(32)}.print.tmp.html`)
-    // The atomic writer's scratch sibling is minted by the SAME rule — one helper, so the
-    // two transients cannot drift apart in naming or sanitising.
+    // An id that sanitises away entirely (only reachable through an injected mint) still yields
+    // a unique hex name rather than a bare dot.
+    const empty = packTmpPath(dest, '///')
+    expect(empty.slice(dest.length)).toMatch(/^\.[0-9a-f]{32}\.tmp$/)
+    expect(packTmpPath(dest, '///')).not.toBe(empty)
     expect(packTmpPath(dest, PACK_ID_A)).toBe(`${dest}.${PACK_ID_A.replace(/-/g, '')}.tmp`)
     expect(packTmpPath(dest, PACK_ID_A)).not.toBe(packTmpPath(dest, PACK_ID_B))
     expect(packTmpPath(dest, '../../etc/passwd')).toBe(`${dest}.etcpasswd.tmp`)

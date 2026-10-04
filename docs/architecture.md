@@ -11021,7 +11021,7 @@ preferCSSPageSize, printBackground, displayHeaderFooter, footerTemplate: packId 
 pageNumber/totalPages, generateDocumentOutline, generateTaggedPDF })`. D-1 pitfalls
 ACTUALLY hit and designed around in P6: header/footer templates run in a bare print
 context (system fonts + inline styles only; an **empty-span `headerTemplate`** must
-suppress Chromium's default date/title header); the print source must be a real file with
+suppress Chromium's default date/title header); the print source had to be a real file with
 an **`.html` extension** (Chromium sniffs file:// MIME from it; a data: URL has a ~2 MB
 cap) — it is a transient `.print.tmp.html` SIBLING of the user-chosen destination (already
 sanctioned plaintext ground, never an OS temp dir), removed in the same `finally`. **Its
@@ -11035,6 +11035,9 @@ its own `evidence_exports` row. Two same-destination exports must therefore shar
 transient at all; only the destination itself is shared (later rename wins, as any second
 save to one path does). Removal is retried once and a still-present source is logged, ids
 only (AUD-16) — a failed cleanup used to leave a plaintext copy of the pack with no trace.
+**Superseded by #563 (2026-10-03):** the page is printed from memory on
+`hilbertraum://print/<token>` ("#563 amendment" below); the file, its naming rule
+(`printSourcePath`) and its cleanup are gone, and the AUD-17 race is closed by a token per print.
 The
 real-Electron smoke runner needs a **`window-all-closed` no-op** (Electron's default quit
 otherwise races the print) and an **isolated `--user-data-dir`** (profile singleton); the
@@ -11178,7 +11181,41 @@ N.
   contract is unchanged: same tmp sibling, same fsync BEFORE the rename, same hash of the
   on-disk bytes. The handle is closed on every path including failure — on Windows an open
   handle keeps the tmp file locked and would defeat the cleanup that restores the "no file,
-  no row" invariant. The transient print-source write in the PDF harness moved with it.
+  no row" invariant. The transient print-source write in the PDF harness moved with it (#563
+  removed that write altogether: there is no print-source file any more).
+
+**#563 amendment (2026-10-03): the print page is served from memory.** The PDF print no longer
+writes a `.print.tmp.html` file beside the destination. `print-pdf.ts` holds the rendered pack in
+`printPages` (`app-protocol.ts`) under a random 32-byte token, and the hidden window loads
+`hilbertraum://print/<token>`, the app's own scheme (#560) on a host of its own.
+- **Design.** The pending pages are the print host's allowlist. A page is held from `open` to the
+  print's `finally` (`release`), served at most once (the handler's `take` removes it, so a
+  second request is a 404), and at most four prints hold one at a time; a fifth fails before
+  any window opens. The resolver takes exactly `GET hilbertraum://print/<64 lowercase hex>`:
+  no credentials, port or query. The response carries `text/html; charset=utf-8`, the pack's own
+  CSP (`EVIDENCE_PACK_CSP` in `window-security.ts`, the same string `render-html.ts` puts in
+  the pack's `<meta>`), `nosniff` and `Cache-Control: no-store`. `renderPdf(html, { packId })`
+  lost its `sourceHtmlPath`; `printSourcePath` is gone. The D-1 order is unchanged:
+  `loadURL` resolves on did-finish-load like `loadFile`, then `document.fonts.ready`, then
+  `printToPDF`.
+- **Records.** AUD-15's print-source write, AUD-16's cleanup (one retry + log) and AUD-17's
+  print-source half had nothing left to act on and were deleted deliberately, together with
+  `evidence-pack-print-cleanup.test.ts`. AUD-17's tmp-sibling half (`packTmpPath`) stands. The
+  AUD-17 race test now models URLs: each export prints from its own token.
+- **Measured.** Real-Electron smoke (11/11 on the #560 fuse-off binary): one request per print, to
+  the print host; no page held afterwards, the killed print included; a pack padded to 8.4 MB
+  printed (a `data:` URL caps near 2 MB); and no file under the run directory, Electron profile
+  included, holds the pack text. Same binary, interleaved, n = 5 medians: EN golden 1,257 →
+  1,249 ms; 8 MB pack 1,283 → 1,249 ms, peak renderer 118 → 123 MiB, browser 121 → 124 MiB.
+  Packaged export with the save dialog stubbed through the inspector (master's allowed exe with
+  each build's `app.asar`): master's export folder briefly held `…print.tmp.html` and its print
+  window loaded `file:///…print.tmp.html`; the branch's folder held only the atomic `.tmp`, and
+  its print window loaded `hilbertraum://print/<token>`; 1,211 → 1,207 ms. From a page on
+  `hilbertraum://app` with a print pending, under the production headers, `fetch`, XHR and iframe
+  are all refused by its CSP, and the page is still servable afterwards. With that CSP removed,
+  `fetch` fails ("scheme not supported"), XHR is blocked by CORS, and an iframe loads with the
+  parent reading `null`, but such a request uses up the one-shot page: a script that already
+  had the token could fail that print, never read it.
 
 ### §-anchor legend (historical spec/plan citations)
 
@@ -12560,7 +12597,7 @@ execution from a file an attacker could place on disk.
 | D3 | resolver = a syntax layer + an allowlist enumerated at startup + an explicit MIME table; every refusal a 404 with an empty body | §4: Chromium passes encoded separators, NUL, drive letters and NTFS stream names through |
 | D4 | `buildCsp(false)` + `nosniff` on every response, refusals included; the session hook stays | §5: both attach; the hook still covers the dev server and the print page |
 | D5 | main-window navigation: exactly `hilbertraum://app/index.html` (prod), the dev server's exact origin (dev) | the old prefix checks admitted any `file://` URL and `http://localhost.<anything>` |
-| D6 | the print window stays on `file://` | it runs no script and loads nothing (§6); serving it from memory is a separate improvement (#563) |
+| D6 | the print window stays on `file://` | it runs no script and loads nothing (§6); serving it from memory is a separate improvement (#563) — **superseded by #563**: it prints from memory on `hilbertraum://print/<token>` (EP-1 record, "#563 amendment") |
 | D7 | `electronFuses: { grantFileProtocolExtraPrivileges: false, resetAdHocDarwinSignature: true }`, that fuse only | §6; the others are a separate proposal (#562) |
 | D8 | the local API's `checkOrigin` refuses any `hilbertraum:` origin | a `file://` page sent NO `Origin` (admitted); the scheme sends `hilbertraum://app` (would have been admitted as a custom scheme) |
 | D9 | the four UI-preference `localStorage` keys reset once on the upgrade — **owner decision 2026-10-03** | a page cannot read the old origin's storage once the fuse is off (§3); only parsing Chromium's LevelDB would carry them |
@@ -12628,7 +12665,8 @@ header layers are indistinguishable by string in a packaged build.
 only `file://` page left. It runs no script and loads no subresource, and its CSP meta allows inline
 styles only. The real-Electron smoke (`evidence-pack-pdf-smoke.test.ts`, 8/8) passed on a fuse-off
 binary. `resetAdHocDarwinSignature` re-signs a macOS arm64 binary ad hoc after the flip; not
-measured (no Mac).
+measured (no Mac). Since #563 no `file://` page is left: the print window loads its page from
+memory on `hilbertraum://print/<token>`.
 
 ### §7 Measured, packaged, before → after
 
@@ -12695,7 +12733,7 @@ files. The build emitting an unknown asset type fails `app-protocol-assets.test.
   AppImage build, and not a stock desktop.
 - **Not changed here:** the WebRTC residual (#254); the print window's transient plaintext source
   beside the export destination (serving the print page from memory on a second host would remove
-  it — #563); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
+  it — #563; done, EP-1 record "#563 amendment"); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
   plus the OCR rasterizer honouring `ELECTRON_RENDERER_URL` in a packaged build (#562; done, see
   "Electron fuses — design record (#562)" below: NODE_OPTIONS stays on by owner decision).
 

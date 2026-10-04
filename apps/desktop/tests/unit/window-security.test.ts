@@ -2,6 +2,7 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  EVIDENCE_PACK_CSP,
   SECURE_WINDOW_WEB_PREFERENCES,
   buildCsp,
   buildMetaCsp,
@@ -325,5 +326,32 @@ describe('#560 wiring: the app pages load from hilbertraum://app, never file://'
     }
     walk(join(__dirname, '../../src/main'))
     expect(readers).toEqual([])
+  })
+})
+
+describe('#563 wiring: the evidence-pack print page is served from memory, never written to disk', () => {
+  const read = (rel: string): string => readFileSync(join(__dirname, '../../src/main', rel), 'utf8')
+  const printPdfSrc = read('services/evidence-pack/print-pdf.ts')
+  const renderSrc = read('services/evidence-pack/render-html.ts')
+  const glueSrc = read('install-app-protocol.ts')
+
+  it("the pack's own policy is inline styles only, and one string serves the meta and the print header", () => {
+    expect(EVIDENCE_PACK_CSP).toBe("default-src 'none'; style-src 'unsafe-inline'")
+    expect(renderSrc).toContain('content="${EVIDENCE_PACK_CSP}"')
+    expect(renderSrc).not.toContain('default-src') // the literal lives only in window-security.ts
+  })
+
+  it('the print harness holds the page in the registry, loads its URL and releases it — no file, no fs', () => {
+    expect(printPdfSrc).toContain('printPages.open(html)')
+    expect(printPdfSrc).toContain('win.loadURL(page.url)')
+    expect(printPdfSrc).toMatch(/finally \{[\s\S]*page\.release\(\)[\s\S]*\}\s*\}\s*$/)
+    expect(printPdfSrc).not.toMatch(/\.loadFile\(/)
+    expect(printPdfSrc).not.toMatch(/from 'node:fs|from 'fs|require\('(node:)?fs/)
+    // The slot is taken before the window exists, so a print over the cap opens no window.
+    expect(printPdfSrc.indexOf('printPages.open(html)')).toBeLessThan(printPdfSrc.indexOf('new BrowserWindow('))
+  })
+
+  it('the scheme handler is given the same registry', () => {
+    expect(glueSrc).toMatch(/createAppProtocolHandler\(\{[^}]*printPages\s*\}\)/)
   })
 })

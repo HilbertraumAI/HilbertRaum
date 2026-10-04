@@ -6,7 +6,8 @@ import {
   APP_SCHEME,
   APP_SCHEME_PRIVILEGES,
   createAppProtocolHandler,
-  listAppAssets
+  listAppAssets,
+  printPages
 } from './app-protocol'
 
 // Electron glue for the app's own scheme (#560). The policy — privileges, resolver, headers — is
@@ -19,9 +20,9 @@ export function registerAppSchemePrivileges(): void {
 
 /**
  * Serve `rendererRoot` (out/renderer, inside app.asar when packaged) on the default session — the
- * one all three windows use. The file list is taken once, here: the packaged root is read-only,
- * and under the dev server no window loads it (it serves whatever was last built, or nothing).
- * Returns the number of files.
+ * one all three windows use — and the evidence-pack print pages from memory (#563). The file list
+ * is taken once, here: the packaged root is read-only, and under the dev server no window loads it
+ * (it serves whatever was last built, or nothing). Returns the number of files.
  */
 export function installAppProtocol(rendererRoot: string): number {
   const files = listAppAssets(
@@ -38,7 +39,7 @@ export function installAppProtocol(rendererRoot: string): number {
   )
   protocol.handle(
     APP_SCHEME,
-    createAppProtocolHandler({ files, readFile: (relPath) => readFile(join(rendererRoot, relPath)) })
+    createAppProtocolHandler({ files, readFile: (relPath) => readFile(join(rendererRoot, relPath)), printPages })
   )
   return files.size
 }

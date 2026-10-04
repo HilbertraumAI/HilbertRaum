@@ -336,9 +336,8 @@ Key config points:
 - `grantFileProtocolExtraPrivileges: false` (#560): `file://` pages lose Electron's extra privileges
   (`fetch`/XHR of any local file, among others). The app's own pages moved to `hilbertraum://app/`
   for this; with the fuse off, the old `file://` layout's module scripts are refused by CORS from
-  origin `null` (measured), so do not move a page back to `file://`. The evidence-pack print window
-  still loads a `file://` page; it runs no script and loads nothing, and its real-Electron smoke
-  passes with the fuse off.
+  origin `null` (measured), so do not move a page back to `file://`. Since #563 no window loads
+  `file://` at all: the evidence-pack print window prints from memory on `hilbertraum://print/<token>`.
 - `resetAdHocDarwinSignature: true` re-signs a macOS arm64 binary ad hoc after the flip, before any
   Developer ID signature (not measured, no Mac).
 

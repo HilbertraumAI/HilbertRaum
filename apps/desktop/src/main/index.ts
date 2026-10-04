@@ -887,9 +887,9 @@ function createWindow(): void {
   // Content-Security-Policy as a response header (defence in depth on top of the
   // index.html meta tag, spec §3.5). The strings live in window-security.ts (TS-2),
   // pinned by tests/unit/window-security.test.ts — edit them THERE. This session hook covers
-  // the dev server and the print window's `file://` page; the app's own scheme sets the
-  // production header itself (app-protocol.ts), and this hook adds a second, identical one
-  // there in packaged builds (both measured attaching, #560).
+  // the dev server; the app's own scheme sets its production headers itself (app-protocol.ts:
+  // the app pages and, since #563, the print pages), and this hook adds its own copy there in
+  // packaged builds (both measured attaching on the app pages, #560).
   const csp = buildCsp(isDev)
   trustedSenders.add(mainWindow.webContents.id)
   mainWindow.webContents.session.webRequest.onHeadersReceived((details, callback) => {

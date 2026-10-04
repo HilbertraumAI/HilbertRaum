@@ -60,7 +60,8 @@ electronVersion: 43.7.7
 #    gives them by default (fetch/XHR of any local file, among others). The app's own pages are served
 #    from `hilbertraum://app/` (src/main/app-protocol.ts); with the fuse off the old `file://` layout's
 #    module scripts are refused by CORS from origin `null` (measured), so the scheme and this line go
-#    together. The evidence-pack print window, the only `file://` page left, runs no script.
+#    together. Since #563 the evidence-pack print window prints from memory on `hilbertraum://print/`,
+#    so no page is on `file://` any more.
 #  - resetAdHocDarwinSignature: flipping a fuse invalidates the ad-hoc signature of a macOS arm64
 #    binary, so re-sign it ad hoc right after (a Developer ID signature, when configured, comes
 #    afterwards) — not measured, no Mac here.

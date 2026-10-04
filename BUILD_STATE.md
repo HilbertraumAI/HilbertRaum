@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-03 — **#563 — evidence-pack PDFs print from memory: `hilbertraum://print/<token>`, no `.print.tmp.html` beside the export (`fix/563-print-from-memory`).**
+One-shot token page in `app-protocol.ts` (`PrintPages`, cap 4, `no-store`, the pack CSP from `window-security.ts`); AUD-15/16/17-print-source code + test deleted
+as moot. Measured: real smoke 11/11 incl. an 8.4 MB pack, one request per print, no pack text on disk; packaged export before/after; no time cost.
+Record: `architecture.md` EP-1 "#563 amendment". Open: the smoke on the stock binary (Smart App Control refused it that day)._
 _2026-10-03 — **#562 — packaged fuses: RunAsNode + `--inspect` off, asar integrity + only-asar on; NODE_OPTIONS stays on (`fix/562-electron-fuses`).** Wire
 `001011001`. Owner: fuse 2 stays on (off drops `NODE_EXTRA_CA_CERTS`; the engine download then failed behind Norton). Packaged OCR no longer follows
 `ELECTRON_RENDERER_URL`. Measured before/after: smoke 22/22, robustness 4/4, upgrade 11/11, tamper matrix, first paint unchanged. Record:
