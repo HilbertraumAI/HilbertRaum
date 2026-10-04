@@ -588,8 +588,8 @@ enumerated this class.
   `setSpellCheckerDictionaryDownloadURL` pointed at a no-op, and a closed `setSpellCheckerLanguages`.
 - **Proxy auto-discovery on Windows (#567, measured 2026-10-03).** When the OS proxy setting
   "Automatically detect settings" is on (the Windows default), Chromium requests
-  `http://wpad/wpad.dat`: 12 times in the first 15 s, from both the master and the #562 packaged
-  builds. It is a LAN lookup, not an internet request, but a WPAD answer on a hostile network is a
+  `http://wpad/wpad.dat`: 4 requests and 16 host-name lookups in the first 15 s, from both the
+  master and the #562 packaged builds. It is a LAN lookup, not an internet request, but a WPAD answer on a hostile network is a
   known way to hand a client a proxy. Nothing in the app needs Chromium's proxy settings: the
   in-app downloads use Node's `fetch`, which does not read them. On a minimal app,
   `app.commandLine.appendSwitch('no-proxy-server')` before `ready` removes every request;
