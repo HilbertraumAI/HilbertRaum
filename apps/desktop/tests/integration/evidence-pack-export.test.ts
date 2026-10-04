@@ -581,14 +581,14 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
     const reviewId = seedSimpleReview(db)
     const dest = join(root, 'pack.pdf')
     const suggested: Array<[string, string]> = []
-    let printed: { html: string; packId: string; sourceHtmlPath: string } | null = null
+    let printed: { html: string; opts: Record<string, unknown> } | null = null
     const record = await exportEvidencePackToFile(db, reviewId, { format: 'pdf' }, {
       chooseDestination: async (name, format) => {
         suggested.push([name, format])
         return dest
       },
       renderPdf: async (html, opts) => {
-        printed = { html, ...opts }
+        printed = { html, opts: { ...opts } }
         return PDF_BYTES
       },
       newPackId: () => FIXED_PACK_ID,
@@ -603,17 +603,13 @@ describe('PDF format (P6 plan §11 — same pipeline, same atomic tail)', () => 
     // "Self-contained HTML" claim, on the artifact a verifier actually reads.
     expect(printed!.html).toContain(t('en', 'packExport.meta.formatValuePdf', { version: 1 }))
     expect(printed!.html).not.toContain(t('en', 'packExport.meta.formatValue', { version: 1 }))
-    // …the pipeline's pack id for the footer, and a `.html` print-source SIBLING of the
-    // destination (file:// MIME is sniffed from the extension) whose name carries THIS
-    // export's pack id — two exports to the same destination must not share the file they
-    // load and print (AUD-17).
-    expect(printed!.packId).toBe(FIXED_PACK_ID)
-    expect(printed!.sourceHtmlPath).toBe(
-      `${dest}.${FIXED_PACK_ID.replace(/-/g, '')}.print.tmp.html`
-    )
-    // The destination holds the PRINTER's bytes, atomically, hash-of-file recorded.
+    // …and the pipeline's pack id for the footer — nothing else: no print-source path, because
+    // the printer holds the page in memory (#563; it used to be a `.print.tmp.html` sibling).
+    expect(printed!.opts).toEqual({ packId: FIXED_PACK_ID })
+    // The destination holds the PRINTER's bytes, atomically, hash-of-file recorded — and it is
+    // the only file the export left beside it.
     expect(readFileSync(dest)).toEqual(PDF_BYTES)
-    expect(readdirSync(root).filter((f) => f.endsWith('.tmp'))).toEqual([])
+    expect(readdirSync(root).filter((f) => f.startsWith('pack.pdf'))).toEqual(['pack.pdf'])
     expect(record).not.toBeNull()
     expect(record!.format).toBe('pdf')
     expect(record!.fileName).toBe('pack.pdf')

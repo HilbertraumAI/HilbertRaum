@@ -10,11 +10,19 @@ import {
   appResponseHeaders,
   createAppProtocolHandler,
   createMainWindowNavigationPredicate,
+  devRendererUrl,
   listAppAssets,
+  PRINT_HOST,
+  PRINT_MAX_PENDING,
+  PRINT_ORIGIN,
+  PrintPages,
+  printPages,
+  printResponseHeaders,
   resolveAppAsset,
+  resolvePrintToken,
   type AssetDirReader
 } from '../../src/main/app-protocol'
-import { buildCsp } from '../../src/main/window-security'
+import { buildCsp, EVIDENCE_PACK_CSP } from '../../src/main/window-security'
 
 // #560: the app's pages are served from `hilbertraum://app/` by a protocol handler — a file server,
 // so the new attack surface. These pins hold the policy (privileges, resolver, headers, navigation)
@@ -284,6 +292,8 @@ describe('createMainWindowNavigationPredicate — the main window may navigate o
       'hilbertraum://other/index.html',
       'hilbertraum://user@app/index.html',
       'hilbertraum://app:1/index.html',
+      // #563: the print host is another origin; the main window never goes there.
+      `hilbertraum://print/${'a'.repeat(64)}`,
       // The old prefix check let every one of these through:
       'file:///C:/app/out/renderer/index.html',
       'file:///C:/Users/me/Downloads/dropped.html',
@@ -312,5 +322,181 @@ describe('createMainWindowNavigationPredicate — the main window may navigate o
 
   it('a malformed dev-server URL denies everything', () => {
     expect(createMainWindowNavigationPredicate('::not a url::')('http://localhost:5173/')).toBe(false)
+  })
+})
+
+// #563: the evidence-pack print page is served from memory on a second host of the scheme.
+describe('the print host — hilbertraum://print/<token> (#563)', () => {
+  const TOKEN = 'a'.repeat(64)
+  const OTHER = 'b'.repeat(64)
+  const page = (token: string): string => `${PRINT_ORIGIN}/${token}`
+
+  it('is a different origin from the app pages (so they cannot read it; corsEnabled stays off)', () => {
+    expect(PRINT_HOST).toBe('print')
+    expect(PRINT_ORIGIN).toBe('hilbertraum://print')
+    // Node's URL gives a non-special scheme the opaque origin 'null'; Chromium, with the scheme
+    // registered `standard`, uses scheme + host (measured in the packaged smoke). Different hosts.
+    expect(new URL(page(TOKEN)).host).toBe(PRINT_HOST)
+    expect(PRINT_HOST).not.toBe(APP_HOST)
+    expect(PRINT_ORIGIN).not.toBe(APP_ORIGIN)
+    expect(APP_SCHEME_PRIVILEGES.corsEnabled).toBe(false)
+  })
+
+  it('PrintPages: a slot is a print-host URL with a fresh random token, and the page is served once', () => {
+    const pages = new PrintPages()
+    const a = pages.open('<p>A</p>')
+    const b = pages.open('<p>B</p>')
+    expect(a.url).toMatch(/^hilbertraum:\/\/print\/[0-9a-f]{64}$/)
+    expect(b.url).not.toBe(a.url)
+    const tokenA = a.url.slice(PRINT_ORIGIN.length + 1)
+    expect(pages.take(tokenA)).toBe('<p>A</p>')
+    expect(pages.take(tokenA)).toBeNull() // one-shot: a reload or a second request gets nothing
+    expect(pages.pending).toBe(2) // served is not released: the print still holds its slot
+    a.release()
+    b.release()
+    expect(pages.pending).toBe(0)
+    expect(pages.take(b.url.slice(PRINT_ORIGIN.length + 1))).toBeNull() // released, never served
+  })
+
+  it('PrintPages: release is idempotent and cannot free another print', () => {
+    const pages = new PrintPages()
+    const a = pages.open('A')
+    const b = pages.open('B')
+    a.release()
+    a.release()
+    expect(pages.pending).toBe(1)
+    expect(pages.take(b.url.slice(PRINT_ORIGIN.length + 1))).toBe('B')
+    b.release()
+  })
+
+  it(`PrintPages: at most ${PRINT_MAX_PENDING} prints hold a slot; the next is refused until one ends`, () => {
+    const pages = new PrintPages()
+    const slots = Array.from({ length: PRINT_MAX_PENDING }, (_, i) => pages.open(String(i)))
+    expect(() => pages.open('one too many')).toThrow('too many prints at once')
+    expect(pages.pending).toBe(PRINT_MAX_PENDING)
+    slots[0]!.release()
+    const again = pages.open('fits again')
+    for (const s of [...slots, again]) s.release()
+    expect(pages.pending).toBe(0)
+  })
+
+  it('PrintPages: a malformed or repeated token from the mint is refused, never stored', () => {
+    for (const bad of ['', 'A'.repeat(64), 'a'.repeat(63), 'g'.repeat(64), '../' + 'a'.repeat(61)]) {
+      expect(() => new PrintPages(4, () => bad).open('x'), JSON.stringify(bad)).toThrow('could not mint')
+    }
+    const same = new PrintPages(4, () => TOKEN)
+    const first = same.open('x')
+    expect(() => same.open('y')).toThrow('could not mint')
+    expect(same.pending).toBe(1)
+    first.release()
+  })
+
+  it('resolvePrintToken: exactly GET hilbertraum://print/<64 lowercase hex>', () => {
+    expect(resolvePrintToken(page(TOKEN), 'GET')).toBe(TOKEN)
+    expect(resolvePrintToken(`${page(TOKEN)}#frag`, 'GET')).toBe(TOKEN) // a fragment never reaches a server
+    for (const url of [
+      `hilbertraum://app/${TOKEN}`, // the app host is not the print host
+      `hilbertraum://printx/${TOKEN}`,
+      `hilbertraum://user@print/${TOKEN}`,
+      `hilbertraum://print:1/${TOKEN}`,
+      `${page(TOKEN)}?x=1`, // no query, not even an empty-valued one
+      `${page(TOKEN)}/`,
+      `${page(TOKEN)}/index.html`,
+      `${PRINT_ORIGIN}/`,
+      `${PRINT_ORIGIN}/${'A'.repeat(64)}`, // uppercase hex is not a minted token
+      `${PRINT_ORIGIN}/${'a'.repeat(63)}`,
+      `${PRINT_ORIGIN}/${'a'.repeat(65)}`,
+      `${PRINT_ORIGIN}/%61${'a'.repeat(63)}`,
+      `file:///${TOKEN}`,
+      'not a url'
+    ]) {
+      expect(resolvePrintToken(url, 'GET'), url).toBeNull()
+    }
+    for (const method of ['POST', 'HEAD', 'PUT', 'OPTIONS']) {
+      expect(resolvePrintToken(page(TOKEN), method), method).toBeNull()
+    }
+  })
+
+  it('the handler serves a pending page once: 200 with the pack policy, nosniff, no-store; then 404', async () => {
+    const pages = new PrintPages(4, () => TOKEN)
+    const slot = pages.open('<!DOCTYPE html><p>pack</p>')
+    const handler = createAppProtocolHandler({ files: FILES, readFile: vi.fn(), printPages: pages })
+    const res = await handler(new Request(slot.url))
+    expect(res.status).toBe(200)
+    expect(await res.text()).toBe('<!DOCTYPE html><p>pack</p>')
+    expect(res.headers.get('content-type')).toBe('text/html; charset=utf-8')
+    expect(res.headers.get('content-security-policy')).toBe(EVIDENCE_PACK_CSP)
+    expect(res.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(res.headers.get('cache-control')).toBe('no-store')
+    expect(printResponseHeaders()).toEqual({
+      'Content-Type': 'text/html; charset=utf-8',
+      'Content-Security-Policy': EVIDENCE_PACK_CSP,
+      'X-Content-Type-Options': 'nosniff',
+      'Cache-Control': 'no-store'
+    })
+    const again = await handler(new Request(slot.url))
+    expect(again.status).toBe(404)
+    expect(await again.text()).toBe('')
+    slot.release()
+  })
+
+  it('the handler refuses unknown, released or malformed print requests with the plain 404, and never reads a file', async () => {
+    const pages = new PrintPages(4, () => TOKEN)
+    const readFile = vi.fn()
+    const handler = createAppProtocolHandler({ files: FILES, readFile, printPages: pages })
+    const slot = pages.open('<p>pack</p>')
+    for (const req of [
+      new Request(page(OTHER)), // never opened
+      new Request(`${slot.url}?x`), // malformed
+      new Request(slot.url, { method: 'POST', body: 'x' })
+    ]) {
+      const res = await handler(req)
+      expect(res.status).toBe(404)
+      expect(res.headers.get('content-security-policy')).toBe(buildCsp(false))
+    }
+    expect(pages.take(TOKEN)).toBe('<p>pack</p>') // the refusals above did not consume it
+    slot.release()
+    expect((await handler(new Request(slot.url))).status).toBe(404)
+    // Without a registry the print host serves nothing at all.
+    const bare = createAppProtocolHandler({ files: FILES, readFile })
+    expect((await bare(new Request(page(TOKEN)))).status).toBe(404)
+    expect(readFile).not.toHaveBeenCalled()
+  })
+
+  it('the app host is unaffected: a print token is not an app file, and app files are not print pages', async () => {
+    const pages = new PrintPages(4, () => TOKEN)
+    const slot = pages.open('<p>pack</p>')
+    const handler = createAppProtocolHandler({
+      files: FILES,
+      readFile: async () => new TextEncoder().encode('<!doctype html>'),
+      printPages: pages
+    })
+    expect((await handler(new Request(at(TOKEN)))).status).toBe(404)
+    expect((await handler(new Request(`${PRINT_ORIGIN}/index.html`))).status).toBe(404)
+    expect((await handler(new Request(at('index.html')))).status).toBe(200)
+    expect(pages.take(TOKEN)).toBe('<p>pack</p>')
+    slot.release()
+  })
+
+  it('the app registry starts empty', () => {
+    expect(printPages.pending).toBe(0)
+  })
+})
+
+describe('devRendererUrl — only an unpackaged build follows the dev server (#562)', () => {
+  const env = { ELECTRON_RENDERER_URL: 'http://localhost:5173' }
+
+  it('unpackaged: the dev server electron-vite names', () => {
+    expect(devRendererUrl(false, env)).toBe('http://localhost:5173')
+  })
+
+  it('packaged: never, whatever the environment says', () => {
+    expect(devRendererUrl(true, env)).toBeUndefined()
+    expect(devRendererUrl(true, { ELECTRON_RENDERER_URL: 'http://127.0.0.1:8080' })).toBeUndefined()
+  })
+
+  it('unset or empty: no dev server', () => {
+    expect(devRendererUrl(false, {})).toBeUndefined()
+    expect(devRendererUrl(false, { ELECTRON_RENDERER_URL: '' })).toBeUndefined()
   })
 })

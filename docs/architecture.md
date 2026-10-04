@@ -67,7 +67,8 @@ a future move to Tauri/Rust is a localized swap.
   the session hook (`session.webRequest.onHeadersReceived`) adds a second copy; the packaged build
   turns Electron's `GrantFileProtocolExtraPrivileges` fuse off. See
   [`security-model.md`](security-model.md) and "App scheme `hilbertraum://app/` — design record
-  (#560)" below.
+  (#560)" below. The packaged binary's other fuses (no `ELECTRON_RUN_AS_NODE`, no `--inspect`,
+  `app.asar` integrity) are in "Electron fuses — design record (#562)".
 
 ## Swappable interfaces (spec §9.2)
 - `ModelRuntime` — `MockRuntime` **or** `LlamaRuntime`, chosen per `start()` by availability (Phase 10).
@@ -11020,7 +11021,7 @@ preferCSSPageSize, printBackground, displayHeaderFooter, footerTemplate: packId 
 pageNumber/totalPages, generateDocumentOutline, generateTaggedPDF })`. D-1 pitfalls
 ACTUALLY hit and designed around in P6: header/footer templates run in a bare print
 context (system fonts + inline styles only; an **empty-span `headerTemplate`** must
-suppress Chromium's default date/title header); the print source must be a real file with
+suppress Chromium's default date/title header); the print source had to be a real file with
 an **`.html` extension** (Chromium sniffs file:// MIME from it; a data: URL has a ~2 MB
 cap) — it is a transient `.print.tmp.html` SIBLING of the user-chosen destination (already
 sanctioned plaintext ground, never an OS temp dir), removed in the same `finally`. **Its
@@ -11034,6 +11035,9 @@ its own `evidence_exports` row. Two same-destination exports must therefore shar
 transient at all; only the destination itself is shared (later rename wins, as any second
 save to one path does). Removal is retried once and a still-present source is logged, ids
 only (AUD-16) — a failed cleanup used to leave a plaintext copy of the pack with no trace.
+**Superseded by #563 (2026-10-03):** the page is printed from memory on
+`hilbertraum://print/<token>` ("#563 amendment" below); the file, its naming rule
+(`printSourcePath`) and its cleanup are gone, and the AUD-17 race is closed by a token per print.
 The
 real-Electron smoke runner needs a **`window-all-closed` no-op** (Electron's default quit
 otherwise races the print) and an **isolated `--user-data-dir`** (profile singleton); the
@@ -11177,7 +11181,41 @@ N.
   contract is unchanged: same tmp sibling, same fsync BEFORE the rename, same hash of the
   on-disk bytes. The handle is closed on every path including failure — on Windows an open
   handle keeps the tmp file locked and would defeat the cleanup that restores the "no file,
-  no row" invariant. The transient print-source write in the PDF harness moved with it.
+  no row" invariant. The transient print-source write in the PDF harness moved with it (#563
+  removed that write altogether: there is no print-source file any more).
+
+**#563 amendment (2026-10-03): the print page is served from memory.** The PDF print no longer
+writes a `.print.tmp.html` file beside the destination. `print-pdf.ts` holds the rendered pack in
+`printPages` (`app-protocol.ts`) under a random 32-byte token, and the hidden window loads
+`hilbertraum://print/<token>`, the app's own scheme (#560) on a host of its own.
+- **Design.** The pending pages are the print host's allowlist. A page is held from `open` to the
+  print's `finally` (`release`), served at most once (the handler's `take` removes it, so a
+  second request is a 404), and at most four prints hold one at a time; a fifth fails before
+  any window opens. The resolver takes exactly `GET hilbertraum://print/<64 lowercase hex>`:
+  no credentials, port or query. The response carries `text/html; charset=utf-8`, the pack's own
+  CSP (`EVIDENCE_PACK_CSP` in `window-security.ts`, the same string `render-html.ts` puts in
+  the pack's `<meta>`), `nosniff` and `Cache-Control: no-store`. `renderPdf(html, { packId })`
+  lost its `sourceHtmlPath`; `printSourcePath` is gone. The D-1 order is unchanged:
+  `loadURL` resolves on did-finish-load like `loadFile`, then `document.fonts.ready`, then
+  `printToPDF`.
+- **Records.** AUD-15's print-source write, AUD-16's cleanup (one retry + log) and AUD-17's
+  print-source half had nothing left to act on and were deleted deliberately, together with
+  `evidence-pack-print-cleanup.test.ts`. AUD-17's tmp-sibling half (`packTmpPath`) stands. The
+  AUD-17 race test now models URLs: each export prints from its own token.
+- **Measured.** Real-Electron smoke (11/11 on the #560 fuse-off binary): one request per print, to
+  the print host; no page held afterwards, the killed print included; a pack padded to 8.4 MB
+  printed (a `data:` URL caps near 2 MB); and no file under the run directory, Electron profile
+  included, holds the pack text. Same binary, interleaved, n = 5 medians: EN golden 1,257 →
+  1,249 ms; 8 MB pack 1,283 → 1,249 ms, peak renderer 118 → 123 MiB, browser 121 → 124 MiB.
+  Packaged export with the save dialog stubbed through the inspector (master's allowed exe with
+  each build's `app.asar`): master's export folder briefly held `…print.tmp.html` and its print
+  window loaded `file:///…print.tmp.html`; the branch's folder held only the atomic `.tmp`, and
+  its print window loaded `hilbertraum://print/<token>`; 1,211 → 1,207 ms. From a page on
+  `hilbertraum://app` with a print pending, under the production headers, `fetch`, XHR and iframe
+  are all refused by its CSP, and the page is still servable afterwards. With that CSP removed,
+  `fetch` fails ("scheme not supported"), XHR is blocked by CORS, and an iframe loads with the
+  parent reading `null`, but such a request uses up the one-shot page: a script that already
+  had the token could fail that print, never read it.
 
 ### §-anchor legend (historical spec/plan citations)
 
@@ -12559,7 +12597,7 @@ execution from a file an attacker could place on disk.
 | D3 | resolver = a syntax layer + an allowlist enumerated at startup + an explicit MIME table; every refusal a 404 with an empty body | §4: Chromium passes encoded separators, NUL, drive letters and NTFS stream names through |
 | D4 | `buildCsp(false)` + `nosniff` on every response, refusals included; the session hook stays | §5: both attach; the hook still covers the dev server and the print page |
 | D5 | main-window navigation: exactly `hilbertraum://app/index.html` (prod), the dev server's exact origin (dev) | the old prefix checks admitted any `file://` URL and `http://localhost.<anything>` |
-| D6 | the print window stays on `file://` | it runs no script and loads nothing (§6); serving it from memory is a separate improvement (#563) |
+| D6 | the print window stays on `file://` | it runs no script and loads nothing (§6); serving it from memory is a separate improvement (#563) — **superseded by #563**: it prints from memory on `hilbertraum://print/<token>` (EP-1 record, "#563 amendment") |
 | D7 | `electronFuses: { grantFileProtocolExtraPrivileges: false, resetAdHocDarwinSignature: true }`, that fuse only | §6; the others are a separate proposal (#562) |
 | D8 | the local API's `checkOrigin` refuses any `hilbertraum:` origin | a `file://` page sent NO `Origin` (admitted); the scheme sends `hilbertraum://app` (would have been admitted as a custom scheme) |
 | D9 | the four UI-preference `localStorage` keys reset once on the upgrade — **owner decision 2026-10-03** | a page cannot read the old origin's storage once the fuse is off (§3); only parsing Chromium's LevelDB would carry them |
@@ -12627,7 +12665,8 @@ header layers are indistinguishable by string in a packaged build.
 only `file://` page left. It runs no script and loads no subresource, and its CSP meta allows inline
 styles only. The real-Electron smoke (`evidence-pack-pdf-smoke.test.ts`, 8/8) passed on a fuse-off
 binary. `resetAdHocDarwinSignature` re-signs a macOS arm64 binary ad hoc after the flip; not
-measured (no Mac).
+measured (no Mac). Since #563 no `file://` page is left: the print window loads its page from
+memory on `hilbertraum://print/<token>`.
 
 ### §7 Measured, packaged, before → after
 
@@ -12708,8 +12747,148 @@ files. The build emitting an unknown asset type fails `app-protocol-assets.test.
     fetches").
 - **Not changed here:** the WebRTC residual (#254); the print window's transient plaintext source
   beside the export destination (serving the print page from memory on a second host would remove
-  it — #563); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
-  plus the OCR rasterizer honouring `ELECTRON_RENDERER_URL` in a packaged build (#562).
+  it — #563; done, EP-1 record "#563 amendment"); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,
+  plus the OCR rasterizer honouring `ELECTRON_RENDERER_URL` in a packaged build (#562; done, see
+  "Electron fuses — design record (#562)" below: NODE_OPTIONS stays on by owner decision).
+
+## Electron fuses — design record (#562)
+
+_The packaged binary turns off `RunAsNode` and `EnableNodeCliInspectArguments`, turns on
+`EnableEmbeddedAsarIntegrityValidation` and `OnlyLoadAppFromAsar`, and keeps
+`EnableNodeOptionsEnvironmentVariable` on. The OCR rasterizer stops following
+`ELECTRON_RENDERER_URL` in a packaged build (2026-10-03, `fix/562-electron-fuses`). Measured on
+Electron 43.7.7 / Node 24.21.0, app-builder-lib 26.16.1, Windows 11 with Smart App Control and a
+TLS-scanning antivirus (Norton). The analysis is a git-ignored working paper; this is the durable
+record. It follows "App scheme `hilbertraum://app/` — design record (#560)", which turned off
+`GrantFileProtocolExtraPrivileges` and named this as its follow-up._
+
+### §1 Threat class
+
+Every fuse here guards against someone who can already set the app's environment or command line,
+or write into its program folder. That is a local attacker with the user's rights, so this is
+defence in depth. The main process holds the unlocked workspace, and a signed binary that runs
+arbitrary Node code is a ready-made loader for malware. Nothing found lets untrusted content run
+code.
+
+### §2 Decisions
+
+| # | fuse | wire before → after | decision and why |
+|---|---|---|---|
+| D1 | 0 `RunAsNode` | on → **off** | `ELECTRON_RUN_AS_NODE=1 HilbertRaum.exe -e …` ran Node 24.21.0; nothing in the app, launchers, drive builders or docs uses it (tesseract.js runs on `worker_threads`, which this fuse does not touch) |
+| D2 | 3 `EnableNodeCliInspectArguments` | on → **off** | `--inspect` / `--inspect-brk` opened a debugger on the main process; nothing uses it. Chromium's `--remote-debugging-port` is not covered and keeps working, so the CDP harnesses are unaffected |
+| D3 | 2 `EnableNodeOptionsEnvironmentVariable` | on → **on** (owner decision 2026-10-03) | §3: off breaks the in-app downloads behind TLS-scanning antivirus and proxies; the residual it leaves is small |
+| D4 | 4 `EnableEmbeddedAsarIntegrityValidation` | off → **on** | §4: detects a modified `app.asar`; no measurable cost |
+| D5 | 5 `OnlyLoadAppFromAsar` | off → **on** | §4: without it, removing `app.asar` and planting `resources/app/` bypasses D4 |
+| D6 | `ELECTRON_RENDERER_URL` | — | `devRendererUrl(isPackaged)` in `app-protocol.ts` is its only reader; both window loaders pass `app.isPackaged` |
+| D7 | 1 cookie encryption, 6 browser-process snapshot | unchanged (off) | no cookies; a separate snapshot needs its own build step |
+
+The wire goes `101100001` → **`001011001`** (decoded with `@electron/fuses`; index 8, unnamed in
+1.8.0, is `WasmTrapHandlersEnabled`).
+
+### §3 Why fuse 2 stays on
+
+- A packaged app already drops `NODE_OPTIONS` apart from `--http-parser` and `--max-http-header-size`.
+  `NODE_OPTIONS=--require=planted.cjs` did not load on master ("Most NODE_OPTIONs are not supported
+  in packaged apps"), so the issue's example was not reachable.
+- What the fuse still governs is `NODE_EXTRA_CA_CERTS`; with the fuse off Electron unsets it
+  (43-x-y `node_bindings.cc`). The main-process `fetch` that every in-app downloader uses trusts
+  Node's bundled roots plus that file. The OS store is not used (`tls.getCACertificates`: default
+  121 = bundled 121 + extra; the system store's 103 are not in it).
+- Norton sets `NODE_EXTRA_CA_CERTS` machine-wide and re-signs `github.com`,
+  `*.githubusercontent.com`, `huggingface.co` and `download.kiwix.org` (`cdn.jsdelivr.net` is
+  spared). Real app, in-app engine download (llama.cpp from github.com), started then cancelled:
+  master with the variable 9.1 of 32 MB received; master without it `fetch failed`; the fuse-off
+  build `fetch failed`. The OCR download from jsDelivr worked on all three, which is why it cannot
+  prove this.
+- The residual is a CA added for the main process's TLS. Every engine, model and OCR file is
+  checked against a pinned SHA-256, so such a CA cannot change what a download delivers.
+- **Turning it off later** needs the downloaders to trust the OS store first: Node 24's
+  `tls.setDefaultCACertificates` with the system certificates, or Electron's `net.fetch`
+  (Chromium's stack). Either changes trust semantics, so it is its own change (#564).
+
+### §4 Asar integrity (D4 + D5)
+
+Facts (Electron 43-x-y source; marked where measured):
+- electron-builder writes the header hash on every build, whatever the fuse says: the exe's
+  `INTEGRITY/ELECTRONASAR` resource on Windows ("updating asar integrity executable resource"),
+  `ElectronAsarIntegrity` in `Info.plist` on macOS. `asar: true` and no `disableAsarIntegrity` are
+  therefore required. Without the hash an integrity-enabled binary stops with `LOG(FATAL)`; that
+  part is from source, not measured, because Smart App Control refused every fresh stock-exe copy
+  that day.
+- The header hash is checked when the archive opens, and each file's block hashes on every read.
+  The `hilbertraum://` handler's reads are checked too (measured).
+- **Unpacked files are skipped:** `FillFileInfoWithNode` returns before loading integrity for an
+  `unpacked` entry. Measured: a tesseract worker in `app.asar.unpacked` with a marker-write line
+  added ran on the integrity-enabled build. The packaged OCR execution probe starts that worker at
+  every launch with language files present.
+- **Windows and macOS only.** On Linux `HeaderIntegrity()` returns nothing and the fuse does
+  nothing.
+- The search order is `app.asar`, `app`, `default_app.asar`; with D5 it is `app.asar` alone.
+
+Measured on the real packaged trees (hard-linked copies, every modified file copied first):
+
+| case | before (4/5 off) | after (4/5 on) |
+|---|---|---|
+| tree moved to another folder (space + non-ASCII in the path) | starts | starts |
+| one byte changed in `out/renderer/index.html` inside `app.asar` | page loads | "ASAR Integrity Violation", the app ends, no page |
+| one byte changed in `out/main/index.mjs` | starts | violation at startup |
+| `resources/app/` planted beside `app.asar` | ignored (asar first) | ignored |
+| `app.asar` removed + `resources/app/` planted | **the planted code ran** | nothing loads |
+| the unpacked tesseract worker modified | modified code ran | **modified code ran** (not covered) |
+
+Value by platform: the Windows portable exe unpacks into a per-launch temp folder. The macOS
+launcher unpacks the ditto-zip once into `~/Library/Caches/HilbertRaum/<version>/` and runs it from
+there every time, a lasting copy any program running as the user can change, which is where this
+matters most (unmeasured, no Mac). Linux gets nothing. Costs: a modified or corrupted asset that is
+read lazily ends the app mid-session through `LOG(FATAL)`. No JS handler runs then, so an unlocked
+workspace's working DB stays on disk until the next launch's crash sweep, as with any native crash.
+And the Smart App Control workaround changes: the stock-binary swap still runs, since its fuse 4 is
+off, but a copy with the shipped fuses also needs the integrity resource (packaging "A packaged
+build that Smart App Control will not start").
+
+### §5 Measured, packaged, before → after
+
+Master `748cfadd` and the branch, both `electron-builder --win dir`, both run by Smart App Control
+that day (`tmp/562` harnesses):
+
+| probe | before (`101100001`) | after (`001011001`) |
+|---|---|---|
+| `ELECTRON_RUN_AS_NODE=1 … -e` | Node 24.21.0 ran | variable ignored, the app started |
+| `NODE_OPTIONS=--require=…` | not loaded (packaged filter) | not loaded |
+| `--inspect` / `--inspect-brk` | Node debugger answered | no debugger |
+| `--remote-debugging-port` | CDP answered | CDP answered (no fuse covers it) |
+| OCR window with `ELECTRON_RENDERER_URL=<local server>` | fetched `/ocr.html` from that server; the scan failed | no request; the scan was recognised |
+| #560 CSP matrix + smoke (reads refused, 20 traversal vectors, PDF/DOCX/CSV, JPEG + CCITT OCR, lock/unlock, mic, clipboard, KaTeX fonts) | 22/22 | 22/22, same results |
+| OCR robustness (cancel, next OCR, 20-page CCITT, bounded heap) | 4/4 | 4/4 |
+| upgrade: master profile + encrypted workspace opened by the branch | — | 11/11: `localStorage` kept (same origin, no storage change), old password unlocks, documents preview |
+| first paint, warm, interleaved, n = 7 (`window_ready_to_show` / `gate_visible`) | 1,156 / 1,200 ms | 1,151 / 1,201 ms |
+
+### §6 Guards
+
+`packaging.test.ts`: the exact `electronFuses` block (fuse 2 explicitly `true`); `asar: true` and
+no `disableAsarIntegrity`; one mapping check per option against the installed
+`platformPackager.js`; and that electron-builder still computes the hash and writes it where
+Electron reads it (the Windows resource and the macOS `Info.plist` key).
+`app-protocol.test.ts` covers `devRendererUrl`. `ocr-rasterizer-harness.test.ts` checks that a
+packaged build ignores the variable. `window-security.test.ts` checks that both loaders call
+`devRendererUrl(app.isPackaged)` and that nothing else under `src/main` reads the variable.
+Mutation-tested: fourteen mutations, each failing only its own link's guards. Each fuse line
+dropped or flipped (including fuse 2 turned off against the decision), `disableAsarIntegrity`,
+`asar: false`, and an upstream option rename or dropped `Info.plist` writer in the installed
+electron-builder each fail `packaging.test.ts`. The rasterizer reading the variable directly
+fails the harness and `window-security.test.ts`; `devRendererUrl` ignoring `isPackaged` fails
+`app-protocol.test.ts` and the harness; `index.ts` reading it directly fails
+`window-security.test.ts`.
+
+### §7 Residuals
+
+- `app.asar.unpacked` is outside the integrity check (§4). Closing it would mean checking the
+  worker closure against the header's own per-file hashes before the worker starts. Not built.
+- Linux: no asar integrity (from source); the other fuses were not measured on Linux here.
+- macOS: unmeasured (no Mac), including `resetAdHocDarwinSignature` after the larger flip.
+- Fuse 2 on until the downloaders trust the OS store (§3, #564).
+- `--remote-debugging-port` has no fuse. Refusing it in a packaged build would also refuse the
+  packaged smoke harnesses.
 
 ## Local API endpoint — design record (wave local-api, PR #184, §1–§9)
 

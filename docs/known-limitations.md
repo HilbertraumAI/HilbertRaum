@@ -101,6 +101,20 @@ password recovery — are documented in
   A Developer ID build, signed with the hardened runtime, is expected to refuse dictation's
   microphone until `com.apple.security.device.audio-input` is added to the entitlements. This is
   unverified; the current ad-hoc build is not affected.
+- **The app checks its own program archive, but not all of its program files (#562).** A packaged
+  build stops with "ASAR Integrity Violation" if a byte of its main program archive (`app.asar`)
+  has changed. The OCR engine's files sit beside that archive, unpacked, because its worker cannot
+  read from inside it, and they are not checked: a changed OCR worker still runs (measured). The
+  check exists only on Windows and macOS; Linux has none. macOS is unmeasured. Someone who can
+  change the app's files can usually replace the app outright, so this narrows a local attack; it
+  does not prevent it.
+- **The app still honours `NODE_EXTRA_CA_CERTS` (#562; owner decision 2026-10-03).** Antivirus
+  products that inspect encrypted connections (Norton, measured) and corporate proxies set this
+  variable so that programs trust them. If the app ignored it, its built-in downloads of the AI
+  engine and models would fail on such computers. The flip side: a program that can set the
+  user's environment can add a certificate the app's downloads will trust. That cannot change what
+  a download installs, because every engine, model and OCR file is checked against a fixed SHA-256
+  checksum before use. Making the downloads trust the operating system's certificates instead is #564.
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.
@@ -2474,13 +2488,13 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   template ("PDF — printed from the same evidence-pack template · pack schema v1") — one
   template renders both formats by design; only that self-description line differs.
 - **A destination very close to Windows' 260-character path limit can refuse an export
-  (post-AUD-17).** Every export writes its transients as SIBLINGS of the chosen destination,
+  (post-AUD-17).** Every export writes its temporary file as a SIBLING of the chosen destination,
   named with a per-export token so two same-destination exports can never share a file
-  (AUD-17 closed a silent provenance swap). The token makes the longest transient name up to
-  ~48 characters longer than the destination itself (~37 for HTML's tmp sibling; ~15/~4
-  pre-fix), so on a default Windows setup (`LongPathsEnabled` off) a destination within that
-  margin of the 260-character limit now fails at the transient's creation where it previously
-  succeeded. The failure is clean and honest — no destination file, no export row, a real
+  (AUD-17 closed a silent provenance swap). The token makes that name ~37 characters longer than
+  the destination itself (~4 pre-fix; a PDF export's print source added ~48 until #563, which
+  prints from memory and writes no such file), so on a default Windows setup
+  (`LongPathsEnabled` off) a destination within that margin of the 260-character limit fails at
+  the temporary file's creation. The failure is clean and honest — no destination file, no export row, a real
   error — and the trade (an edge-case refusal vs. a silently mislabelled signed-off pack) is
   deliberate. Recovery: save under a shorter path.
 

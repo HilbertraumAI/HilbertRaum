@@ -1,11 +1,11 @@
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { BrowserWindow, ipcMain } from 'electron'
+import { app, BrowserWindow, ipcMain } from 'electron'
 import { OCR_RASTER } from '../../../shared/ipc'
 import { log } from '../logging'
 import { installNavigationGuard } from '../navigation-guard'
 import { SECURE_WINDOW_WEB_PREFERENCES } from '../../window-security'
-import { appPageUrl } from '../../app-protocol'
+import { appPageUrl, devRendererUrl } from '../../app-protocol'
 import { assertPageWithinByteCap } from './page-cap'
 import { pipelinePages } from './pipeline'
 import { resolveIngestionLimits } from '../ingestion/limits'
@@ -209,8 +209,9 @@ export async function rasterizePdfWithHiddenWindow(
 
   try {
     // Load the window's page: dev server in dev, the app's own scheme otherwise (the main
-    // window's pattern; #560 moved it off `file://` — app-protocol.ts).
-    const devUrl = process.env['ELECTRON_RENDERER_URL']
+    // window's pattern; #560 moved it off `file://` — app-protocol.ts). A packaged build
+    // ignores the dev-server variable (#562).
+    const devUrl = devRendererUrl(app.isPackaged)
     await win.loadURL(devUrl ? `${devUrl}/ocr.html` : appPageUrl('ocr'))
     if (opts.signal?.aborted) throw abortError()
 
