@@ -12703,8 +12703,9 @@ files. The build emitting an unknown asset type fails `app-protocol-assets.test.
   - **macOS:** the real arm64 `.app` inspected, not run. Fuse wire `001011001`, `Info.plist`
     integrity hash equal to the recomputed header hash, ad-hoc signature verified on the runner.
     The owner-run `scripts/verify-mac-build.sh` covers the rest.
-  - Found on the way: Chromium's background requests, the Linux dictionary download and Windows
-    WPAD (#567, security-model "Chromium background fetches").
+  - Found on the way: Chromium's background requests, the spell-check dictionary download (Linux;
+    Windows for a language it cannot check) and WPAD (#567, security-model "Chromium background
+    fetches").
 - **Not changed here:** the WebRTC residual (#254); the print window's transient plaintext source
   beside the export destination (serving the print page from memory on a second host would remove
   it — #563); the other fuses — RunAsNode, NODE_OPTIONS, `--inspect` and the asar integrity pair,

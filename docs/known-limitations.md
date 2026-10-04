@@ -23,10 +23,12 @@ password recovery — are documented in
   offline hard rule forbids — so `spellcheck: false` is pinned for every window and the composer
   shows no red underlines. Re-enabling needs dictionaries shipped on the drive plus a no-op
   download URL (owner decision #218; `security-model.md` "Chromium background fetches").
-  **On Linux the download still happens (measured 2026-10-03, #567):** at every start the app asks
-  Google's server for the dictionary of the computer's language (for example
-  `en-us-10-1.bdic`). Nothing from your workspace is sent, but the request reveals the computer's
-  address and language. Windows makes no such request, but probes the local network for a proxy
+  **The download still happens (measured 2026-10-03/04, #567):** at start, the app asks Google's
+  server for the dictionary of the computer's language (for example `en-us-10-1.bdic`). On Linux
+  this happens for every language; on Windows only for a language Windows cannot spell-check
+  itself (for example Polish on a German Windows). Once a download succeeds, the file is kept on
+  the computer and not fetched again. Nothing from your workspace is sent, but the request reveals
+  the computer's address and language. Windows also probes the local network for a proxy
   configuration (`wpad`) when Windows' "Automatically detect settings" is on. Both come from the
   browser engine, not from the app's own code, and the fixes are measured but not shipped yet
   (#567).

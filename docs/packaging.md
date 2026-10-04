@@ -1057,9 +1057,11 @@ branch.
 The Windows column is the #562 record's measurement plus `packaged-app-probe.mjs` (13 pass,
 the export skipped). The Linux column ran a scratch harness with the same checks.
 
-**Found on the way, filed as #567:** at every start the Linux AppImage requests Chromium's Hunspell
-dictionary (`https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic`), and the Windows
-build probes `http://wpad/wpad.dat`. Both requests come from Chromium's own network stack and were
+**Found on the way, filed as #567:** at start the Linux AppImage requests Chromium's Hunspell
+dictionary (`https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic`; in the container at
+every start, because the download kept failing), and the Windows build probes
+`http://wpad/wpad.dat`. Windows downloads a dictionary too, for a language it cannot spell-check
+itself (measured later with Polish). Both requests come from Chromium's own network stack and were
 measured with `--log-net-log`. The v0.1.62 AppImage does the same. See `security-model.md`
 "Chromium background fetches".
 

@@ -560,21 +560,27 @@ loads) nor the socket tripwire (it patches Node's `net.Socket`, not Chromium's n
 can observe. Both earlier audit rounds enumerated Node sinks and the renderer CSP; neither
 enumerated this class.
 
-- **Spell-check dictionaries (#239): NOT closed on Linux (measured 2026-10-03, #567).** Electron's
+- **Spell-check dictionaries (#239): NOT closed (measured 2026-10-03/04, #567).** Electron's
   spellchecker is on by default. `SECURE_WINDOW_WEB_PREFERENCES` has carried `spellcheck: false`
   for all three windows since #239, which turns the underlining off; the composer has no
   red-underline spell-check (`docs/known-limitations.md`). #239 recorded the dictionary download as
   closed "by construction, not by measurement". A Chromium net log (`--log-net-log`) shows otherwise:
-  - **Linux:** at every start, the AppImage requests
-    `https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic` (the default session's
-    dictionary for the locale), with no window touched. Both the v0.1.62 AppImage and the #562
-    build do it, and so does a minimal Electron 43.7.7 app whose only window has
-    `spellcheck: false`.
-  - **Fix, measured on that minimal app:** `session.defaultSession.setSpellCheckerEnabled(false)`
-    plus `setSpellCheckerLanguages([])` at `ready` brings the requests to zero. Not applied yet
-    (#567).
-  - **Windows:** no dictionary request. Electron uses the OS spell checker there, as on macOS
-    (macOS not measured).
+  - **Linux:** the AppImage requests
+    `https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic` (the session's dictionary for
+    the locale) a few milliseconds after `ready`, before any window exists. Both the v0.1.62
+    AppImage and the #562 build do it, and so does a minimal Electron app whose only window has
+    `spellcheck: false`. A download that succeeds is kept in the profile's `Dictionaries/` folder
+    and not fetched again; one that fails (the test container's TLS-intercepting proxy) is retried
+    at every start.
+  - **Windows:** the same download for a language Windows cannot spell-check itself. With the
+    Polish locale on a German Windows, the app fetched `pl-pl-3-0.bdic`; with German, which Windows
+    checks natively, nothing. macOS uses the OS spell checker and downloads nothing (Electron's
+    documentation; not measured).
+  - **Fix, measured on a minimal app on both platforms:** `setSpellCheckerLanguages([])` is the call
+    that stops the download; `setSpellCheckerEnabled(false)` alone does not. It must run at every
+    start (Electron refills an empty language list with the locale), and in every session: a
+    second session downloads on its own. `app.on('session-created')`, registered before `ready`,
+    reaches every session in time. Not applied yet (#567).
 
   Nothing is uploaded: it is a download of a public dictionary. But the request tells Google's CDN
   the computer's address and locale, and the offline posture promises no request at all. Owner
@@ -587,7 +593,9 @@ enumerated this class.
   known way to hand a client a proxy. Nothing in the app needs Chromium's proxy settings: the
   in-app downloads use Node's `fetch`, which does not read them. On a minimal app,
   `app.commandLine.appendSwitch('no-proxy-server')` before `ready` removes every request;
-  `setProxy({ mode: 'direct' })` at `ready` removes only half. Not applied yet (#567).
+  `setProxy({ mode: 'direct' })` at `ready` removes only half. Linux looks for `wpad` too when
+  its proxy setting asks for auto-detection, at the first request Chromium makes; the switch
+  removes that as well. Not applied yet (#567).
 - **Channels the CSP does not govern (#254) — confirmed residual, documented.** Investigated
   (documentation-based, no probing): (i) **WebRTC** is outside CSP; the renderer never calls
   `RTCPeerConnection`, but a compromised renderer could — the candidate switches
