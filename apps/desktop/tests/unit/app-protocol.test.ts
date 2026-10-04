@@ -10,6 +10,7 @@ import {
   appResponseHeaders,
   createAppProtocolHandler,
   createMainWindowNavigationPredicate,
+  devRendererUrl,
   listAppAssets,
   PRINT_HOST,
   PRINT_MAX_PENDING,
@@ -479,5 +480,23 @@ describe('the print host — hilbertraum://print/<token> (#563)', () => {
 
   it('the app registry starts empty', () => {
     expect(printPages.pending).toBe(0)
+  })
+})
+
+describe('devRendererUrl — only an unpackaged build follows the dev server (#562)', () => {
+  const env = { ELECTRON_RENDERER_URL: 'http://localhost:5173' }
+
+  it('unpackaged: the dev server electron-vite names', () => {
+    expect(devRendererUrl(false, env)).toBe('http://localhost:5173')
+  })
+
+  it('packaged: never, whatever the environment says', () => {
+    expect(devRendererUrl(true, env)).toBeUndefined()
+    expect(devRendererUrl(true, { ELECTRON_RENDERER_URL: 'http://127.0.0.1:8080' })).toBeUndefined()
+  })
+
+  it('unset or empty: no dev server', () => {
+    expect(devRendererUrl(false, {})).toBeUndefined()
+    expect(devRendererUrl(false, { ELECTRON_RENDERER_URL: '' })).toBeUndefined()
   })
 })

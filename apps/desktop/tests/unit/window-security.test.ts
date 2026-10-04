@@ -311,6 +311,22 @@ describe('#560 wiring: the app pages load from hilbertraum://app, never file://'
     walk(join(__dirname, '../../src/main'))
     expect(offenders).toEqual([])
   })
+
+  it('#562: both loaders take the dev server only through devRendererUrl(app.isPackaged); nothing else reads the variable', () => {
+    for (const src of [indexSrc, rasterizerSrc]) expect(src).toContain('devRendererUrl(app.isPackaged)')
+    const readers: string[] = []
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name)
+        if (statSync(full).isDirectory()) walk(full)
+        else if (/\.ts$/.test(name) && !/[\\/]app-protocol\.ts$/.test(full)) {
+          if (readFileSync(full, 'utf8').includes('ELECTRON_RENDERER_URL')) readers.push(full)
+        }
+      }
+    }
+    walk(join(__dirname, '../../src/main'))
+    expect(readers).toEqual([])
+  })
 })
 
 describe('#563 wiring: the evidence-pack print page is served from memory, never written to disk', () => {

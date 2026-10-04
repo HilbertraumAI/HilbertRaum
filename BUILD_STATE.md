@@ -32,6 +32,10 @@ _2026-10-03 — **#563 — evidence-pack PDFs print from memory: `hilbertraum://
 One-shot token page in `app-protocol.ts` (`PrintPages`, cap 4, `no-store`, the pack CSP from `window-security.ts`); AUD-15/16/17-print-source code + test deleted
 as moot. Measured: real smoke 11/11 incl. an 8.4 MB pack, one request per print, no pack text on disk; packaged export before/after; no time cost.
 Record: `architecture.md` EP-1 "#563 amendment". Open: the smoke on the stock binary (Smart App Control refused it that day)._
+_2026-10-03 — **#562 — packaged fuses: RunAsNode + `--inspect` off, asar integrity + only-asar on; NODE_OPTIONS stays on (`fix/562-electron-fuses`).** Wire
+`001011001`. Owner: fuse 2 stays on (off drops `NODE_EXTRA_CA_CERTS`; the engine download then failed behind Norton). Packaged OCR no longer follows
+`ELECTRON_RENDERER_URL`. Measured before/after: smoke 22/22, robustness 4/4, upgrade 11/11, tamper matrix, first paint unchanged. Record:
+`architecture.md` "Electron fuses" (#562). Open: `app.asar.unpacked` unchecked; Linux/macOS legs (platform PR); fuse 2 needs an OS-trust-store downloader (#564)._
 _2026-10-03 — **#560 — the app's pages load from `hilbertraum://app/`, and the packaged exe turns `GrantFileProtocolExtraPrivileges` off (`fix/560-app-protocol`).**
 On `file://`, `'self'` matched every local file: a script could read any file and run a planted one (measured). Allowlist file server
 (`app-protocol.ts`), `standard` + `secure` only, CSP + nosniff on every response, exact-page navigation, local API refuses the app's origin.
@@ -139,15 +143,6 @@ prompt collapses it. Merged this wave: #492, #491, #494, #495, #496 (all 2026-09
 `docs/rag-design.md` §17 and CHANGELOG's `[0.1.61]`; the v0.1.61 tag was cut 2026-09-21.
 Next items since shipped in v0.1.62: the converter PR for #487/#493 and captions (#500); the
 cut-off-badge residual (#498, via #509)._
-_2026-09-19 — **The knowledge-pack retrieval research is recorded closed: the pre-registered
-primary did not pass** (`docs/zim-phase3-record`; record `rag-design.md` §18). A candidate
-retrieval bundle measured +2.69 pp [−3.10, +8.59] against its own ≥ +10 pp pre-registered rule
-on a 260-question confirmation set graded by two AI raters — not passed, both clauses fail. The
-bundle does not become the product default; the retrieval design in §17 stays. A secondary
-reading of the research packet alone (+9.04 pp — descriptive, not the shipped product) and a
-refusal-repair fallback that is not authorised to ship are also recorded, with the standing
-AI-only disclosure and the citation-agreement figure (κ₂ 0.504) that closes further judged
-rounds until the rubric is repaired._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -192,7 +187,8 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 2026-10-02 (preamble budget, making room for the DEP-6 entry), and the closed 2026-09-27 #518 fixtures entry on 2026-10-02
 (preamble budget, making room for the #548–#551 entry), and the closed 2026-09-27 #517 scorer entry on 2026-10-02 (preamble
 budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #447 expander-cache entry on 2026-10-03
-(preamble budget, making room for the OCR-rasterizer-CSP entry) — citations of the form "BUILD_STATE <date> entry" /
+(preamble budget, making room for the OCR-rasterizer-CSP entry), and the closed 2026-09-19 knowledge-pack research entry on
+2026-10-03 (preamble budget, making room for the #562 / #563 / #560-platform entries) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

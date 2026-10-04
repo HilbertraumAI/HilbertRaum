@@ -87,6 +87,20 @@ password recovery — are documented in
   the scheme has been checked there. On Linux the app was run unpackaged on a fuse-off Electron in
   an Ubuntu 24.04 container (pages, file-read refusals, OCR: all as on Windows); an AppImage build
   has not been run with this change.
+- **The app checks its own program archive, but not all of its program files (#562).** A packaged
+  build stops with "ASAR Integrity Violation" if a byte of its main program archive (`app.asar`)
+  has changed. The OCR engine's files sit beside that archive, unpacked, because its worker cannot
+  read from inside it, and they are not checked: a changed OCR worker still runs (measured). The
+  check exists only on Windows and macOS; Linux has none. macOS is unmeasured. Someone who can
+  change the app's files can usually replace the app outright, so this narrows a local attack; it
+  does not prevent it.
+- **The app still honours `NODE_EXTRA_CA_CERTS` (#562; owner decision 2026-10-03).** Antivirus
+  products that inspect encrypted connections (Norton, measured) and corporate proxies set this
+  variable so that programs trust them. If the app ignored it, its built-in downloads of the AI
+  engine and models would fail on such computers. The flip side: a program that can set the
+  user's environment can add a certificate the app's downloads will trust. That cannot change what
+  a download installs, because every engine, model and OCR file is checked against a fixed SHA-256
+  checksum before use. Making the downloads trust the operating system's certificates instead is #564.
 - **Archive extraction trusts verified archives.** `fetch-runtime` rejects `extract_to` escapes,
   and archives are SHA-256-verified before extraction — but member paths inside an archive are only
   as trustworthy as the pinned hash in `runtime-sources.yaml`.

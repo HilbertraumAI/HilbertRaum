@@ -33,6 +33,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | `setWindowOpenHandler` denies every in-app open; an http(s) link reaches the OS browser only through a native confirmation that names the site and shows the URL, Cancel the default, one dialog at a time (#236) | `main/window-security.ts` (policy) + `main/external-open.ts` (consent), wired in `main/index.ts` |
 | **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts`, `main/app-protocol.ts` + `electron.vite.config.ts` |
 | **The app's pages come from its own `hilbertraum://app/` scheme, not `file://`; the packaged build turns `GrantFileProtocolExtraPrivileges` off** (#560) | `main/app-protocol.ts` (privileges, resolver, headers), `main/install-app-protocol.ts`, `electron-builder.yml` `electronFuses` |
+| **Packaged fuses: no `ELECTRON_RUN_AS_NODE`, no `--inspect`, `app.asar` integrity-checked and the only app source** (#562); a packaged build ignores the dev-server URL | `electron-builder.yml` `electronFuses`, `main/app-protocol.ts` `devRendererUrl` |
 | **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
@@ -184,7 +185,8 @@ not a vulnerability on its own. Now:
   `allowServiceWorkers`, `supportFetchAPI`, `corsEnabled`, `stream`, `codeCache` and
   `allowExtensions` are all `false` and pinned (`tests/unit/app-protocol.test.ts`).
 - **The fuse is off in packaged builds** (`electron-builder.yml` `electronFuses`; wire `101100011`
-  → `101100001`). With the fuse off, `file://` pages lose their extra privileges. The old layout
+  → `101100001`, and `001011001` since #562, next section). With the fuse off, `file://` pages lose
+  their extra privileges. The old layout
   could not have survived that: its module scripts are refused by CORS from origin `null`, and a
   `file://` document loses `localStorage` (both measured). So the scheme move and the fuse flip
   belong to the same change. The scheme alone already closes the reads (measured with the fuse
@@ -198,6 +200,42 @@ not a vulnerability on its own. Now:
   (measured with the CSP removed), which `checkOrigin` admits. A page on the scheme sends
   `Origin: hilbertraum://app`, and `checkOrigin` refuses any `hilbertraum:` origin; the renderer
   has no reason to call the API, and its CSP already blocks the request.
+
+### The packaged binary's fuses (#560, #562)
+Electron's fuses are switches compiled into the binary; `electron-builder.yml` `electronFuses` sets
+them before signing. They guard against someone who can already run programs as the user, set the
+app's environment or command line, or write into its program folder. That is a local attacker, so
+the fuses are defence in depth, not a remote boundary. Measured on packaged 43.7.7 builds, before
+and after (`architecture.md` "Electron fuses — design record (#562)"):
+
+- **`RunAsNode` off.** `ELECTRON_RUN_AS_NODE=1 HilbertRaum.exe -e …` used to run a plain Node.js
+  runtime under the app's name; now the variable is ignored and the app starts normally.
+- **`EnableNodeCliInspectArguments` off.** `--inspect` and `--inspect-brk` used to open a Node
+  debugger on the main process, which holds the unlocked workspace; now no debugger opens.
+  Chromium's `--remote-debugging-port` is a different switch that no fuse covers. It still works,
+  and the packaged smoke harnesses use it. It gives control of the renderer, not of Node.
+- **`EnableNodeOptionsEnvironmentVariable` stays on (owner decision).** A packaged app already
+  ignores `NODE_OPTIONS` except `--http-parser` and `--max-http-header-size` (`--require` was
+  measured not loading). What the fuse still governs is `NODE_EXTRA_CA_CERTS`. TLS-scanning
+  antivirus (Norton, measured) and corporate proxies install that variable so Node trusts their
+  root. With the fuse off, the in-app engine download from github.com failed with "fetch failed"
+  on such a machine, and models and knowledge-pack tools come from intercepted hosts too. A CA
+  added this way cannot change what a download delivers: every engine, model and OCR file is
+  checked against a pinned SHA-256.
+- **`EnableEmbeddedAsarIntegrityValidation` + `OnlyLoadAppFromAsar` on.** electron-builder stores
+  the hash of `app.asar`'s header in the exe (a Windows resource) or in `Info.plist` (macOS), and the
+  header holds a hash per file. A changed byte in `app.asar` now ends the app ("ASAR Integrity
+  Violation"), at startup for the main bundle or when the renderer page is served. Removing
+  `app.asar` and planting a `resources/app/` folder no longer runs code; before, it did. Limits: the
+  check covers **`app.asar` only**. Files in `app.asar.unpacked` (the tesseract.js OCR worker
+  and its dependencies, #232) are not checked, and a modified worker still ran at startup in the
+  measurement. Linux has no integrity check at all. macOS is unmeasured.
+- **`GrantFileProtocolExtraPrivileges` off** (#560, the section above).
+- **The OCR rasterizer no longer follows `ELECTRON_RENDERER_URL` in a packaged build** (#562). The
+  variable names electron-vite's dev server; the main window honoured it only in an unpackaged
+  build, but the OCR window loaded `${ELECTRON_RENDERER_URL}/ocr.html` whenever it was set (measured:
+  a packaged build fetched the page from a local server named that way). Both windows now ask
+  `devRendererUrl(app.isPackaged)` in `app-protocol.ts`, the only reader of the variable.
 
 ### Renderer permissions: deny by default, one scoped exception — request *and* check (Phases 31 + 37; SEC-2)
 Electron's default with **no** permission handler installed is to **GRANT** every permission
