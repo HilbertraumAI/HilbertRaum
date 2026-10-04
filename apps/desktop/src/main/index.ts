@@ -1,4 +1,4 @@
-import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, shell } from 'electron'
+import { app, BrowserWindow, dialog, ipcMain, nativeTheme, powerMonitor, session, shell } from 'electron'
 import { existsSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -12,9 +12,11 @@ import { installNavigationGuard } from './services/navigation-guard'
 import { appPageUrl, createMainWindowNavigationPredicate } from './app-protocol'
 import { installAppProtocol, registerAppSchemePrivileges } from './install-app-protocol'
 import {
+  NO_PROXY_SWITCH,
   SECURE_WINDOW_WEB_PREFERENCES,
   buildCsp,
-  createWindowOpenPolicy
+  createWindowOpenPolicy,
+  disableSpellCheckerDownloads
 } from './window-security'
 import { getSettings, updateSettings } from './services/settings'
 import { effectiveContextWindow } from './services/chat'
@@ -147,6 +149,14 @@ initBinaryVerification(isDev)
 // #560: the app's pages are served from `hilbertraum://app/` (app-protocol.ts), not `file://`.
 // Electron accepts scheme privileges only before `ready`; the handler is installed in whenReady.
 registerAppSchemePrivileges()
+
+// #567: two requests the browser engine makes on its own, which neither the CSP nor the offline
+// tripwire sees — the WPAD proxy lookup and the spell checker's dictionary download
+// (window-security.ts). Both before `ready`: the switch is read when the network context is
+// created, and `session-created` reaches every session, the default one before the whenReady
+// callback runs (measured).
+app.commandLine.appendSwitch(NO_PROXY_SWITCH)
+app.on('session-created', disableSpellCheckerDownloads)
 
 let mainWindow: BrowserWindow | null = null
 // WebContents ids allowed to invoke `handle` channels (#252): the main window's, added in
@@ -971,6 +981,10 @@ const lifecycle = createAppLifecycleHandlers({
 })
 
 app.whenReady().then(() => {
+  // #567 second layer, first and synchronous: the dictionary download starts a few milliseconds
+  // after `ready`. Repeating the `session-created` call costs nothing and holds even if the
+  // default session ever exists before that listener does.
+  disableSpellCheckerDownloads(session.defaultSession)
   // #208 belt: `app.exit` above is immediate, but if ready ever races it, a secondary
   // instance must not reach initBackend() — its workspace.init() crash-sweep is the very
   // thing that shreds the primary's live working DB.

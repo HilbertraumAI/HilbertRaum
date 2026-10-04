@@ -2,10 +2,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { readFileSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  NO_PROXY_SWITCH,
   SECURE_WINDOW_WEB_PREFERENCES,
   buildCsp,
   buildMetaCsp,
-  createWindowOpenPolicy
+  createWindowOpenPolicy,
+  disableSpellCheckerDownloads
 } from '../../src/main/window-security'
 
 // TS-2 (full-audit 2026-07-10): the BrowserWindow hardening flags, the CSP strings, and
@@ -308,6 +310,69 @@ describe('#560 wiring: the app pages load from hilbertraum://app, never file://'
       }
     }
     walk(join(__dirname, '../../src/main'))
+    expect(offenders).toEqual([])
+  })
+})
+
+describe('#567: the browser engine makes no request of its own (WPAD, spell-check dictionary)', () => {
+  const mainDir = join(__dirname, '../../src/main')
+  // LF-normalised: a Windows checkout has CRLF, and the patterns below are line-anchored.
+  const indexSrc = readFileSync(join(mainDir, 'index.ts'), 'utf8').replace(/\r\n/g, '\n')
+  const mainSources = (): Array<{ file: string; src: string }> => {
+    const out: Array<{ file: string; src: string }> = []
+    const walk = (dir: string): void => {
+      for (const name of readdirSync(dir)) {
+        const full = join(dir, name)
+        if (statSync(full).isDirectory()) walk(full)
+        else if (/\.ts$/.test(name)) out.push({ file: full, src: readFileSync(full, 'utf8') })
+      }
+    }
+    walk(mainDir)
+    return out
+  }
+
+  it('empties the language list BEFORE disabling: the list stops the download, the flag covers macOS', () => {
+    const calls: Array<[string, unknown]> = []
+    disableSpellCheckerDownloads({
+      setSpellCheckerLanguages: (languages) => calls.push(['setSpellCheckerLanguages', languages]),
+      setSpellCheckerEnabled: (enable) => calls.push(['setSpellCheckerEnabled', enable])
+    })
+    expect(calls).toEqual([
+      ['setSpellCheckerLanguages', []],
+      ['setSpellCheckerEnabled', false]
+    ])
+  })
+
+  it('the switch is Chromium\'s "never use a proxy"', () => {
+    expect(NO_PROXY_SWITCH).toBe('no-proxy-server')
+  })
+
+  it('index.ts appends the switch and hooks session-created at module level, before ready', () => {
+    const ready = indexSrc.indexOf('app.whenReady().then(')
+    expect(ready).toBeGreaterThan(0)
+    for (const line of [
+      'app.commandLine.appendSwitch(NO_PROXY_SWITCH)',
+      "app.on('session-created', disableSpellCheckerDownloads)"
+    ]) {
+      // A whole unindented line = module level: inside a function it could run after `ready`.
+      expect(indexSrc.split('\n')).toContain(line)
+      expect(indexSrc.indexOf(line)).toBeLessThan(ready)
+    }
+  })
+
+  it('the ready handler repeats the call on the default session as its FIRST statement', () => {
+    // The download starts a few milliseconds after `ready`; anything awaited first could lose the race.
+    expect(indexSrc).toMatch(
+      /app\.whenReady\(\)\.then\(\(\) => \{\n(?:\s*\/\/[^\n]*\n)*\s*disableSpellCheckerDownloads\(session\.defaultSession\)\n/
+    )
+  })
+
+  it('nothing in src/main re-enables a spell checker or sets a proxy (setProxy overrides the switch per session)', () => {
+    const offenders = mainSources()
+      .filter(({ file }) => !/[\\/]window-security\.ts$/.test(file))
+      .flatMap(({ file, src }) =>
+        [/\.setSpellChecker\w*\(/, /\.setProxy\(/, /appendSwitch\(\s*['"]proxy-/].filter((re) => re.test(src)).map((re) => `${file}: ${re}`)
+      )
     expect(offenders).toEqual([])
   })
 })

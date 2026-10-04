@@ -38,6 +38,13 @@ from its first public `1.0.0` release onward.
   in a window could have used it. The screens now load from the app's own private address, which
   reaches the app's bundled files and nothing else, and the app has given up that extra file access
   altogether (#560).
+- **The app no longer contacts Google for a spelling dictionary, or the local network for proxy
+  settings.** Spell-checking has been off in the app for several versions, but the browser engine
+  inside it still downloaded a spelling dictionary from a Google server when the app started: on
+  Linux for every language, on Windows for a language Windows cannot spell-check itself. Nothing
+  from your workspace was sent, but the request told the server your computer's address and
+  language. On Windows the engine also asked the local network for proxy settings, which a hostile
+  network could answer. Both requests are gone now. Nothing changes in how you use the app (#567).
 
 ### Changed
 

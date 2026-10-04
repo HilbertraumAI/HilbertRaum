@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-04 — the closed 2026-10-02 #551 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-04 (preamble budget, making room for the #567 entry). #551 is closed (PR #557); the
+record is unchanged: `architecture.md` DEP-6 §10. Citations of the form "BUILD_STATE 2026-10-02 #551 entry" now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-02 — **#551 — the packaged exe on pdf.js 6.3, and black-and-white scans become searchable (`fix/551-packaged-pdfjs-check`).** Smart App Control
+blocks each fresh unsigned exe, so the packaged layout ran on a renamed stock `electron.exe` (code sections byte-identical, same fuses): all four #551 boxes
+pass. Found on the way: since Phase 38 the rasterizer set no `wasmUrl`, so pdf.js could not load its CCITT/JBIG2/JPEG 2000 decoders and such scans OCR'd as
+blank pages. Fixed: the build ships the decoders under their names and the page passes `wasmUrl`; `ocr-decoder-assets.test.ts` pins it. Record: `architecture.md` DEP-6 §10._
+
 ## 2026-10-03 — the closed 2026-09-18 #447 expander-cache entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-03 (preamble budget, making room for the OCR-rasterizer-CSP entry). The
