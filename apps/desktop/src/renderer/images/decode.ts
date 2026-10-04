@@ -85,6 +85,13 @@ export function isHeicName(name: string): boolean {
   return lower.endsWith('.heic') || lower.endsWith('.heif')
 }
 
+/** A PDF by extension or MIME type (#539): never accepted here — this screen reads one picture —
+ *  but detected at intake so the copy can point a scanned PDF to Make searchable (OCR) under
+ *  Documents instead of the generic unsupported banner. */
+export function isPdfName(name: string, mimeType?: string): boolean {
+  return mimeType === 'application/pdf' || name.toLowerCase().endsWith('.pdf')
+}
+
 /**
  * PRE-decode prescreen (#118): the main-side header parse, run BEFORE `createImageBitmap`, so
  * an absurd decoded size is refused before the decode memory is spent. Returns `tooLarge` above

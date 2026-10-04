@@ -149,8 +149,10 @@ blocks you.
    Browse models with its count — a family-only reset sits beside **Clear filters**. Task groups
    are Chat, Document search (including rerankers), Translation, Images, and Voice. Each compact
    row shows the purpose, storage size, minimum memory,
-   status, and available action. Expand **Technical details** for its description, automatic-use
-   explanation, paths, and verification controls.
+   status, and available action. A model that works on its own — document search, voice,
+   translation, images — has nothing to start, so its row says where it is used; the installed
+   vision model's row has a **Go to Images** button. Expand **Technical details** for its
+   description, paths, and verification controls.
    Quantization variants of the same model share one entry. The installed/recommended choice
    leads — and where several versions are equally good picks, the one you can actually download
    is the one shown; **Show all variants** reveals the other exact versions. A group that contains
@@ -514,7 +516,9 @@ attach button): a chat started this way answers from **that file only** by defau
 have to touch the scope picker. If you drop a file into a chat that was answering from your whole
 library, the app asks once whether to narrow to **just this file** or keep using the **whole
 library** — your choice sticks for that conversation. Attached files are always included and shown
-separately as **Files in this chat**.
+separately as **Files in this chat**. Chat models read **text** only: an attached picture
+(PNG/JPG) is read as text through OCR (§7), so the chat sees the words on it, not the picture. To
+ask what a picture shows, use the **Images** screen (§8).
 
 **Naming a file in your question works too.** If you haven't chosen documents and your
 question names one of your files — *"summarize the key dates in contract.pdf"* — the answer
@@ -548,7 +552,9 @@ step reads *"Finishing — making the text searchable…"* while the recognized 
 indexed. When it finishes, the document is a normal searchable document; answers cite it
 **by page**, and **Preview** shows the recognized text per page with a *"Text recognized
 on this drive (OCR)"* note — recognition is good on clean scans but can contain errors on
-blurry ones. If a first reading came out poorly (or you added better OCR files later),
+blurry ones. **Sideways or upside-down pages** are not turned upright yet, so their text comes out
+as nonsense. Until that changes, turn the pages in a PDF viewer until the text reads normally, save
+the file, add the saved copy, and use **Make searchable (OCR)** on it. If a first reading came out poorly (or you added better OCR files later),
 **Read again (OCR)** in the document's **⋯** menu reads the pages again — unlike
 **Re-index**, which reuses the stored reading. Reading a scan is never automatic (it takes
 a couple of seconds per page); you choose when. **Photos of pages** (PNG/JPG) are the
@@ -611,7 +617,7 @@ A few honest notes:
 **Translate a document.** Every Ready document also offers **Translate** in its **⋯** menu.
 Translation uses the dedicated **TranslateGemma** translation model (see the download note
 above) — if it is not installed yet, the menu shows **Get the translation model…** instead,
-which takes you straight to the AI Model screen. Pick the document's language and the
+which takes you straight to the translation model on the AI Model screen. Pick the document's language and the
 language you want — **51 languages** are supported, source and target, the same list as the
 Translate screen (§7a); the app does not guess the source language — and the model writes a
 translated copy, fully on this drive. The result is a
@@ -863,8 +869,8 @@ either way; the original you dropped is kept as a **temporary** document.)
 Everything stays on the drive — your text and its translation are **never uploaded**. Typed text is
 transient: leave the screen (or lock the workspace) and it is gone. A translated **document**,
 though, is saved (that's the point) — you'll find it under **Documents**. If the translation model
-isn't installed, the screen shows a short note with a **Go to AI Model** button to download it (see
-the download note in §6); machine translations can contain errors. While a document task is running,
+isn't installed, the screen shows a short note with a **Go to AI Model** button that opens the AI
+Model screen on the translation model (see the download note in §6); machine translations can contain errors. While a document task is running,
 translating here is **declined with a short note** ("A document task is running…") — nothing is
 queued behind it; wait for the task to finish (or cancel it), then translate.
 
@@ -949,7 +955,7 @@ different tool from reading scanned documents (that's **Make searchable (OCR)** 
 §7) and it never creates or edits pictures — it only *looks at* the one you give it.
 
 1. Open **Images** from the sidebar (between **Translate** and **AI Model**).
-2. **Drop an image** onto the screen, or click **choose an image** — **PNG or JPEG**. A preview
+2. **Drop an image** onto the screen, or click **choose an image** — **PNG, JPEG or WEBP**. A preview
    appears with its name, size, and dimensions; **Remove / Replace** swaps it.
 3. Type a question, or tap one of the **suggestion chips** (*Summarize this image*, *Extract
    visible text*, *Explain this chart*, *Read this form*, …) to fill the box — you can still edit
@@ -967,17 +973,19 @@ can reopen or **delete** any of them at any time.
 A few honest notes:
 
 - **It needs a vision model on the drive.** If there isn't one, the screen explains what's missing
-  and offers **Go to AI Model** (vision models are an optional download, like the larger chat
-  models). Without one, the rest of the app is unaffected.
+  and offers **Go to AI Model**, which opens the AI Model screen on the vision model (vision models
+  are an optional download, like the larger chat models). There is nothing to start: once it is
+  downloaded, this screen uses it. Without one, the rest of the app is unaffected.
 - **The first question about a big image can take a while** — reading a full-resolution picture is
   real work for a laptop processor. Follow-up questions about the *same* image are quicker. A
   graphics card speeds it up where available.
-- **One image at a time**, **PNG or JPEG**, and **one question runs at a time** — wait for the
+- **One image at a time**, **PNG, JPEG or WEBP**, and **one question runs at a time** — wait for the
   current answer (or press **Stop**) before asking the next; a question asked while one is still
   running is declined, not queued. It answers from what's **visible** and says so when text is
   unclear — it won't invent hidden details.
-- **It's not OCR.** For a scanned PDF or a long document you want to search, use **Make searchable
-  (OCR)** under Documents (§7) instead.
+- **It's not OCR, and it doesn't read PDFs.** For a scanned PDF or a long document you want to
+  search, use **Make searchable (OCR)** under Documents (§7) instead. Drop a PDF here and the screen
+  says so, with a **Go to Documents** button; nothing is imported from here.
 
 ---
 

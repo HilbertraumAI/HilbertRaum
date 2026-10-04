@@ -332,16 +332,18 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
         })
       ]
     })
-    render(<ModelsScreen />)
+    render(<ModelsScreen onNavigate={vi.fn()} />)
     await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
-    // Downloadable in-app, and explained as a Images-tab capability — not the chat slot.
+    // Downloadable in-app, and explained as an Images-screen capability — not the chat slot.
     expect(screen.getByRole('button', { name: /download/i })).toBeInTheDocument()
-    expect(screen.getByText(/available in the Images tab once installed/i)).toBeInTheDocument()
+    expect(screen.getByText(/used automatically on the Images screen once installed/i)).toBeVisible()
     expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
+    // #539: nothing to go to before the download.
+    expect(screen.queryByRole('button', { name: 'Go to Images' })).not.toBeInTheDocument()
   })
 
-  it('an installed vision model points to the Images tab — never Select/Start', async () => {
+  it('an installed vision model points to the Images screen — never Select/Start', async () => {
     stub({
       models: [
         model({
@@ -356,7 +358,7 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
     render(<ModelsScreen />)
     await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
     expect(screen.getByText('Installed')).toBeInTheDocument()
-    expect(screen.getByText(/ready in the Images tab/i)).toBeInTheDocument()
+    expect(screen.getByText(/used automatically on the Images screen/i)).toBeVisible()
     // Selecting/starting a vision model would claim the CHAT runtime slot and throw
     // (registerModelIpc rejects a non-chat role) — those actions must not exist here.
     expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
@@ -424,6 +426,88 @@ describe('ModelsScreen — automatic roles (Phase 36: reranker/transcriber)', ()
     expect(screen.queryByRole('button', { name: /^select$/i })).not.toBeInTheDocument()
     expect(screen.queryByRole('button', { name: /start.*runtime/i })).not.toBeInTheDocument()
     expect(screen.getByText(/used automatically/i)).toBeInTheDocument()
+  })
+})
+
+// #539: an automatic role has no action of its own, so its card says where it is used — visibly,
+// not behind the closed Technical details (design-guidelines §15 amendment). The installed vision
+// card also gets the one click there.
+describe('ModelsScreen — where an automatic model is used (#539)', () => {
+  const card = (name: string): HTMLElement => screen.getByText(name).closest('.model-card') as HTMLElement
+  const vision = (over: Partial<ModelInfo> = {}): ModelInfo =>
+    model({
+      id: 'qwen2.5-vl-3b-instruct-q4',
+      displayName: 'Qwen2.5-VL 3B Instruct Q4',
+      role: 'vision',
+      sizeOnDiskGb: 3.27,
+      ...over
+    })
+
+  it.each([
+    { role: 'embeddings', installed: 'models.automatic.installed', missing: 'models.automatic.notInstalled' },
+    { role: 'reranker', installed: 'models.automatic.installed', missing: 'models.automatic.notInstalled' },
+    { role: 'transcriber', installed: 'models.automatic.installed', missing: 'models.automatic.notInstalled' },
+    { role: 'translation', installed: 'models.translation.installed', missing: 'models.translation.notInstalled' },
+    { role: 'vision', installed: 'models.vision.installed', missing: 'models.vision.notInstalled' }
+  ] as const)('the $role card shows its usage line once, without opening Technical details', async (row) => {
+    for (const state of ['installed', 'missing'] as const) {
+      stub({ models: [model({ id: `m-${row.role}`, displayName: `The ${row.role} model`, role: row.role, state })] })
+      const { unmount } = render(<ModelsScreen />)
+      await screen.findByText(`The ${row.role} model`)
+      const lines = screen.getAllByText(t('en', state === 'installed' ? row.installed : row.missing))
+      expect(lines).toHaveLength(1)
+      expect(lines[0]).toBeVisible()
+      expect(lines[0].closest('details')).toBeNull()
+      unmount()
+    }
+  })
+
+  it('a chat card carries no usage line', async () => {
+    stub({ models: [model({ state: 'installed' })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen3 4B Instruct')
+    expect(screen.queryByText(/used automatically/i)).not.toBeInTheDocument()
+  })
+
+  it('the installed vision card offers Go to Images — its only button, no Download, no Use', async () => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    stub({ models: [vision({ state: 'installed' })] })
+    render(<ModelsScreen onNavigate={onNavigate} />)
+    await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
+    const visionCard = within(card('Qwen2.5-VL 3B Instruct Q4'))
+    await user.click(visionCard.getByRole('button', { name: 'Go to Images' }))
+    expect(onNavigate).toHaveBeenCalledWith('images')
+    expect(visionCard.queryByRole('button', { name: 'Download' })).not.toBeInTheDocument()
+    expect(visionCard.queryByRole('button', { name: 'Use this model' })).not.toBeInTheDocument()
+  })
+
+  it('no other automatic card gets the button, and without onNavigate the vision card has none', async () => {
+    stub({
+      models: [
+        vision({ state: 'installed' }),
+        model({ id: 'tg', displayName: 'Translation model', role: 'translation', state: 'installed' })
+      ]
+    })
+    const { unmount } = render(<ModelsScreen onNavigate={vi.fn()} />)
+    await screen.findByText('Translation model')
+    expect(screen.getAllByRole('button', { name: /^go to/i })).toHaveLength(1)
+    expect(within(card('Translation model')).queryByRole('button', { name: /^go to/i })).not.toBeInTheDocument()
+    unmount()
+
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
+    expect(screen.queryByRole('button', { name: 'Go to Images' })).not.toBeInTheDocument()
+  })
+
+  it('the vision model’s plain hint says what it does, not the chat size tier', async () => {
+    const user = userEvent.setup()
+    stub({ models: [vision({ state: 'installed' })] })
+    render(<ModelsScreen />)
+    await screen.findByText('Qwen2.5-VL 3B Instruct Q4')
+    await user.click(screen.getByText('Technical details'))
+    expect(screen.getByText(t('en', 'models.hint.vision'))).toBeVisible()
+    expect(screen.queryByText(t('en', 'models.hint.balanced'))).not.toBeInTheDocument()
   })
 })
 
@@ -723,6 +807,82 @@ describe('ModelsScreen — the speech-model deep link (#527)', () => {
     stub({ models: library() })
     render(<ModelsScreen focus="voice" />)
     await screen.findByText('Whisper Small (multilingual transcriber)')
+    await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'all')
+    expect(screen.getByText('Another chat model')).toBeVisible()
+  })
+})
+
+// #539: the #527 landing, generalised — the Images and Translate availability cards and the
+// Documents row's "Get the translation model…" open the screen on that model, not on "On this
+// drive". Both models run on the AI engine, so only its banner keeps the screen at the top.
+describe.each([
+  { focus: 'images', task: 'vision', role: 'vision', name: 'Qwen2.5-VL 3B Instruct Q4' },
+  { focus: 'translation', task: 'translation', role: 'translation', name: 'TranslateGemma 12B (Q4_K_M)' }
+] as const)('ModelsScreen — the $focus deep link (#539)', ({ focus, task, role, name }) => {
+  const library = (): ModelInfo[] => [
+    model({ id: 'chat-installed', displayName: 'Installed chat model', state: 'installed' }),
+    model({ id: 'chat-missing', displayName: 'Another chat model', state: 'missing' }),
+    model({ id: `${role}-model`, displayName: name, role, state: 'missing' })
+  ]
+
+  it(`opens Browse filtered to the ${task} task, even on a drive with installed models`, async () => {
+    stub({ models: library() })
+    render(<ModelsScreen focus={focus} />)
+    expect(await screen.findByText(name)).toBeVisible()
+    expect(screen.getByRole('radio', { name: 'Browse models' })).toHaveAttribute('aria-checked', 'true')
+    expect(screen.getByRole('combobox', { name: 'Task' })).toHaveValue(task)
+    expect(screen.queryByText('Another chat model')).not.toBeInTheDocument()
+    expect(screen.getByRole('button', { name: 'Download' })).toBeInTheDocument()
+  })
+
+  describe('scrolls the library into view — unless the AI engine banner is the first thing to act on', () => {
+    let scrolled: Element[]
+    beforeEach(() => {
+      scrolled = []
+      Element.prototype.scrollIntoView = vi.fn(function (this: Element) {
+        scrolled.push(this)
+      })
+    })
+    afterEach(() => {
+      delete (Element.prototype as { scrollIntoView?: unknown }).scrollIntoView
+    })
+    const engine = (missing: string[]): EngineStatus => ({
+      installed: missing.length === 0,
+      available: true,
+      version: 'btest',
+      backend: 'vulkan',
+      missingFamilies: missing
+    })
+
+    it('only the model missing: the library is scrolled to, once', async () => {
+      stub({ models: library(), engine: engine([]) })
+      render(<ModelsScreen focus={focus} />)
+      await screen.findByText(name)
+      await waitFor(() => expect(scrolled).toHaveLength(1))
+      expect(scrolled[0]).toBe(screen.getByRole('region', { name: t('en', 'models.library.title') }))
+    })
+
+    it('the AI engine missing: stays at the top, where its banner is', async () => {
+      stub({ models: library(), engine: engine(['llama_cpp']) })
+      render(<ModelsScreen focus={focus} />)
+      expect(await screen.findByText(t('en', 'models.engine.title'))).toBeInTheDocument()
+      expect(screen.getByText(name)).toBeInTheDocument()
+      expect(scrolled).toHaveLength(0)
+    })
+
+    it('only the voice engine missing: its banner is not about this model, so the library is scrolled to', async () => {
+      stub({ models: library(), engine: engine(['whisper_cpp']) })
+      render(<ModelsScreen focus={focus} />)
+      expect(await screen.findByText(t('en', 'models.voiceEngine.title'))).toBeInTheDocument()
+      await waitFor(() => expect(scrolled).toHaveLength(1))
+    })
+  })
+
+  it('the screen’s own controls take over after the deep link', async () => {
+    const user = userEvent.setup()
+    stub({ models: library() })
+    render(<ModelsScreen focus={focus} />)
+    await screen.findByText(name)
     await user.selectOptions(screen.getByRole('combobox', { name: 'Task' }), 'all')
     expect(screen.getByText('Another chat model')).toBeVisible()
   })
@@ -2393,7 +2553,7 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
         state: 'checksum_failed'
       })
       stubLibrary({ models: () => [chat, damaged] })
-      render(<ModelsScreen />)
+      render(<ModelsScreen onNavigate={vi.fn()} />)
       await screen.findByText(damaged.displayName)
 
       expect(screen.getByRole('radio', { name: 'On this drive' })).toHaveAttribute(
@@ -2404,6 +2564,8 @@ describe('ModelsScreen — repair visibility and group face (PR #302 F3/F5, C1)'
       expect(card.getByRole('button', { name: 'Download' })).toBeEnabled()
       // Automatic roles never gain Select/Start from being visible here.
       expect(card.queryByRole('button', { name: 'Use this model' })).not.toBeInTheDocument()
+      // #539: a damaged vision model cannot run, so nothing points to Images from it.
+      expect(card.queryByRole('button', { name: 'Go to Images' })).not.toBeInTheDocument()
     }
   )
 

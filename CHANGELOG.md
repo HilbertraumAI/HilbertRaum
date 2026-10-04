@@ -79,6 +79,11 @@ from its first public `1.0.0` release onward.
   never used or shipped, so about 110 unused packages leave the project. While an answer is still
   being written, a few edge cases format better: a product like `2*3*4` no longer shows a stray
   asterisk after it. Answers otherwise look as before (#550).
+- **The AI Model screen says where each automatic model is used.** The models that work on their
+  own (document search, voice, translation and the vision model) have no **Use** button, and the
+  one sentence that explained this was hidden under **Technical details**. It now shows on each
+  model's card. The vision model's card says it is used on the **Images** screen and, once
+  downloaded, has a **Go to Images** button (#539).
 
 ### Fixed
 
@@ -106,6 +111,15 @@ from its first public `1.0.0` release onward.
 - **No more "Open AI Model" buttons.** The English label read like the company name "OpenAI".
   On Home and in the chat's "no model is running" note the button now says **Go to AI Model**
   (#527).
+- **Buttons about a missing vision or translation model open the AI Model screen on that model.**
+  **Go to AI Model** on the Images and Translate screens, and **Get the translation model…** in a
+  document's menu, opened the list of installed models, which cannot show a model that is not
+  installed. They now open the list to download from, filtered to Images or Translation, as the
+  speech-model button already does (#539).
+- **A PDF dropped on the Images screen is named as one.** The Images screen reads one picture, and
+  a PDF got the general "That file type isn't supported" message. It now says so, points a scanned
+  PDF to **Make searchable (OCR)** under Documents, and offers **Go to Documents**. The pointer to
+  Make searchable also stays under the drop area once the vision model is installed (#539).
 - **When your computer can't run the AI engine, the app now says so, names what is missing, and
   blames nothing else.** Sometimes the engine is on the drive but your operating system refuses
   to start it: on Linux when a system library such as `libgomp1` is missing, or the system is

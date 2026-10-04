@@ -2302,6 +2302,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   near-perfect in the R-O3 probes (103/104 words, umlauts/ß exact); a degraded ~80-DPI
   JPEG still lost 3 of 104 words. The per-page text is searchable content, not a
   notarized record — Preview shows exactly what was recognized.
+- **Sideways and upside-down pages are not turned upright (#538).** Pages are rendered with
+  only the rotation stored in the PDF (`/Rotate`), not the real orientation of the scanned
+  content, so a page scanned sideways reaches recognition sideways and its text comes out as
+  nonsense. The task still ends "done" when any page produced text, and Tesseract's confidence
+  is computed but not kept, so the app cannot yet warn about a poor reading (both #538). Until
+  then: turn the pages in a PDF viewer until the text reads normally, save, add the saved copy,
+  and run OCR on it (user guide §7). Measured 2026-10-05 on a rendered test page: sideways 0 of 36
+  words, the same page saved with `/Rotate` upright 36 of 36, upside down 0 of 36.
 - **Hybrid PDFs (some text pages, some scanned pages) are not detected as scans.**
   Their real text pages index normally; the scanned pages stay invisible to search.
   Detection only catches documents with NO readable text — per-page hybrid OCR is a
@@ -2391,6 +2399,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   original-bytes re-encode fallback is disabled for WEBP (those bytes would be rejected
   main-side). **HEIC/HEIF stays unsupported** (no Chromium decode; a decoder would break the
   no-new-native-dep rule) but is detected by extension with specific "convert to JPEG" copy.
+  A **PDF** is refused too, by extension or type (#539): its banner points a scanned PDF to Make
+  searchable (OCR) under Documents and offers **Go to Documents**; the PDF is not imported.
   There is **no fixed dimension reject** any more (also 2026-08-09, #118): the renderer's old
   post-decode 4096 px hard reject — which refused a routine 48 MP phone photo AFTER already
   paying the decode — is gone; a pre-decode header prescreen (the same parse as main's D4
@@ -2409,8 +2419,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   browsable history, never indexed for retrieval/search — and there is no auto-OCR.
 - **Image understanding is NOT OCR and NOT image generation.** It reads/interprets one image with a
   vision-language model; scanned **documents** still belong to Documents → "Make searchable (OCR)"
-  (tesseract.js), which is untouched. The Images screen never silently OCRs or routes to OCR, and the
-  feature never generates/edits images (a permanent non-goal).
+  (tesseract.js), which is untouched. The Images screen never OCRs anything and never sends a file
+  to OCR on its own: it only points there (the OCR line under the drop zone, and the PDF banner's
+  **Go to Documents** button, #539), and the user starts OCR in Documents. The feature never
+  generates/edits images (a permanent non-goal).
 - **Context is capped at 4096 tokens** (vs the model's 128 000 train context) — fine for a single
   image + a short question/thread in MVP; long multi-turn threads about one image are not a v1 promise.
 - **`imageReadBytes` takes an opaque token, not a path** (`security-model.md` D2).

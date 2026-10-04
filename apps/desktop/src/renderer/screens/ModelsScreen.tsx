@@ -19,6 +19,7 @@ import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useKnowledgePackToolsInstall } from '../lib/useKnowledgePackToolsInstall'
 import { useOcrInstall } from '../lib/useOcrInstall'
 import { useEngineProblems } from '../lib/useEngineProblems'
+import type { ModelsFocus } from '../navigation'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import type {
@@ -50,6 +51,15 @@ const TASKS: { value: ModelTask; label: MessageKey }[] = [
   { value: 'vision', label: 'models.library.images' },
   { value: 'transcriber', label: 'models.library.voice' }
 ]
+
+// A deep link about a missing optional model lands on that model (#527, #539): Browse, filtered to
+// its task. `engineFamilies`: an install banner for one of these sits at the top of the screen and
+// is the first thing to act on, so the library is then not scrolled into view.
+const FOCUS: Record<ModelsFocus, { task: ModelTask; engineFamilies: readonly string[] }> = {
+  voice: { task: 'transcriber', engineFamilies: ['llama_cpp', 'whisper_cpp'] },
+  images: { task: 'vision', engineFamilies: ['llama_cpp'] },
+  translation: { task: 'translation', engineFamilies: ['llama_cpp'] }
+}
 
 // Status pills: icon + word, never color-only (guidelines §6). Label values are
 // MessageKeys resolved at render (i18n record §5).
@@ -107,9 +117,19 @@ function plainHintKey(m: ModelInfo): MessageKey {
   if (m.role === 'reranker') return 'models.hint.reranker'
   if (m.role === 'transcriber') return 'models.hint.transcriber'
   if (m.role === 'translation') return 'models.hint.translation'
+  if (m.role === 'vision') return 'models.hint.vision'
   if (m.sizeOnDiskGb <= 1.5) return 'models.hint.small'
   if (m.sizeOnDiskGb <= 6) return 'models.hint.balanced'
   return 'models.hint.large'
+}
+
+/** Where an automatic role is used: on its card, outside the disclosure (#539). */
+function automaticUsageKey(m: ModelInfo, installed: boolean): MessageKey {
+  if (m.role === 'vision') return installed ? 'models.vision.installed' : 'models.vision.notInstalled'
+  if (m.role === 'translation') {
+    return installed ? 'models.translation.installed' : 'models.translation.notInstalled'
+  }
+  return installed ? 'models.automatic.installed' : 'models.automatic.notInstalled'
 }
 
 /**
@@ -215,22 +235,26 @@ export function __resetModelsScreenMemoryForTests(seed?: {
 
 export interface ModelsScreenProps {
   /**
-   * Open on one task's Browse list instead of the default view (#527): `'voice'` is the
-   * composer's dictation hint ("Get the speech model") — Browse, because the speech model is
-   * the missing piece there, filtered to the Voice task so it is the row in view. Read at mount;
-   * the screen's own controls take over from there (the `documents:packs` pattern).
+   * Open on one task's Browse list instead of the default view (#527, #539): `'voice'` is the
+   * composer's dictation hint ("Get the speech model"), `'images'` / `'translation'` the Images
+   * and Translate availability cards and the Documents row's "Get the translation model…" —
+   * Browse, because the model is the missing piece there, filtered to its task so it is the row
+   * in view. Read at mount; the screen's own controls take over from there (the
+   * `documents:packs` pattern).
    */
-  focus?: 'voice' | null
+  focus?: ModelsFocus | null
+  /** Navigation out of the screen (#539: the vision card's "Go to Images"). Without it, no button. */
+  onNavigate?: (target: string) => void
 }
 
-export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Element {
+export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {}): JSX.Element {
   const { t, tCount, lang } = useT()
   const [models, setModels] = useState<ModelInfo[] | null>(null)
   const [libraryView, setLibraryView] = useState<'installed' | 'browse' | null>(
-    focus === 'voice' ? 'browse' : null
+    focus !== null ? 'browse' : null
   )
   const [query, setQuery] = useState('')
-  const [task, setTask] = useState<ModelTask | 'all'>(focus === 'voice' ? 'transcriber' : 'all')
+  const [task, setTask] = useState<ModelTask | 'all'>(focus !== null ? FOCUS[focus].task : 'all')
   const [family, setFamily] = useState('all')
   // F3/C1: group expansion is DERIVED by default — a group holding a damaged (`checksum_failed`)
   // variant starts expanded, so the repair row is reachable without first guessing that it hides
@@ -316,18 +340,18 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
     }
   }, [])
 
-  // #527: the 'voice' deep link lands ON the speech model. The library sits below the engine
+  // #527, #539: a deep link lands ON the missing model. The library sits below the engine
   // banners, the OCR row and the context card, so once the first load is in, it is scrolled into
   // view, unless an engine banner is showing: then an engine is part of what is missing, and the
   // banner at the top is the first thing to act on. Once per visit, never after the user scrolled.
   const libraryRef = useRef<HTMLElement>(null)
   const focusScrolledRef = useRef(false)
   useEffect(() => {
-    if (focus !== 'voice' || models === null || focusScrolledRef.current) return
+    if (focus === null || models === null || focusScrolledRef.current) return
     focusScrolledRef.current = true
     const engineBannerShown =
       engine?.available === true &&
-      (engine.missingFamilies.includes('llama_cpp') || engine.missingFamilies.includes('whisper_cpp'))
+      FOCUS[focus].engineFamilies.some((f) => engine.missingFamilies.includes(f))
     if (!engineBannerShown) libraryRef.current?.scrollIntoView?.({ block: 'start' })
   }, [focus, models, engine])
 
@@ -899,6 +923,7 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
     // so neither those actions NOR the "Active" badge are shown (only the chat model has a
     // user-chosen active slot). Starting a non-chat model claims the CHAT runtime slot and throws
     // (`registerModelIpc` rejects a non-`chat` role), so these roles must never reach Select/Start.
+    // With no action to explain them, their card says where they are used, visibly (#539).
     const automatic =
       m.role === 'embeddings' ||
       m.role === 'reranker' ||
@@ -932,6 +957,7 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
               {' · '}{t('models.usesSpace', { size: fmtGb(null, m.sizeOnDiskGb, lang) })}
               {' · '}{t('models.library.memory', { size: fmtGbNum(m.recommendedMinRamGb, lang) })}
             </div>
+            {automatic && <p className="hint hint-tight">{t(automaticUsageKey(m, installed))}</p>}
           </div>
           <div className="badges">
             {active && (
@@ -1015,6 +1041,15 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
           )
         )}
 
+        {/* #539: the vision model has nothing to start; the one thing to do is use it on Images. */}
+        {m.role === 'vision' && installed && onNavigate && (
+          <div className="model-actions">
+            <Button size="sm" onClick={() => onNavigate('images')}>
+              {t('models.vision.goToImages')}
+            </Button>
+          </div>
+        )}
+
         {/* While the panel above owns this model's job — live progress OR a retained terminal
             result — the row must not repeat it. After Dismiss the row's own status/recovery UI
             (Resume, the unverified note) comes back exactly as before. */}
@@ -1028,15 +1063,6 @@ export function ModelsScreen({ focus = null }: ModelsScreenProps = {}): JSX.Elem
           <div className="tech-details-body">
             <p className="hint">{t(plainHintKey(m))}</p>
             {ramTooLow && <Banner tone="warning">{ramHint}</Banner>}
-            {automatic && (
-              <p className="hint hint-tight">
-                {m.role === 'vision'
-                  ? installed ? t('models.vision.installed') : t('models.vision.notInstalled')
-                  : m.role === 'translation'
-                    ? installed ? t('models.translation.installed') : t('models.translation.notInstalled')
-                    : installed ? t('models.automatic.installed') : t('models.automatic.notInstalled')}
-              </p>
-            )}
             <dl className="kv">
               <dt>{t('models.tech.id')}</dt>
               <dd>

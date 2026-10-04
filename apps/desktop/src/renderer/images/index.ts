@@ -14,6 +14,7 @@ export {
   imageMimeFromName,
   imageMimeOfFile,
   isHeicName,
+  isPdfName,
   ImageDecodeError,
   MAX_IMAGE_BYTES,
   type DecodedImage,

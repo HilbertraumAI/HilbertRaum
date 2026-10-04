@@ -6,6 +6,8 @@ import type { VisionUnavailableReason } from '@shared/types'
 // The §5.1 availability card: reason-adaptive note + a CTA that routes to AI Model (which
 // owns the triple-gated downloader — no invented downloads here) + a quiet OCR pointer.
 // Calm, human copy only; the technical reason stays in the local log (never surfaced).
+// The CTA lands on the vision model for every reason (#539): with the engine missing, its
+// banner sits on top of that view; with an engine too old, the model's row says so.
 
 const REASON_NOTE: Record<VisionUnavailableReason, MessageKey> = {
   'no-model': 'images.avail.noModel',
@@ -26,7 +28,7 @@ export function VisionUnavailable({
       title={t(REASON_NOTE[reason])}
       line={t('images.avail.ocrPointer')}
       action={
-        <Button variant="primary" onClick={() => onNavigate('models')}>
+        <Button variant="primary" onClick={() => onNavigate('models:images')}>
           {t('images.avail.cta')}
         </Button>
       }

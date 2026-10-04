@@ -16,6 +16,7 @@ import type {
 } from '../../src/shared/types'
 import type { PreloadApi } from '../../src/preload'
 import { stubApi } from '../helpers/renderer'
+import { t } from '../../src/shared/i18n'
 
 // F-41 (audit-2026-07-16): stub payloads are typed against the real PreloadApi bridge contract
 // (no `as never` erasure). The status/history builders return the real shared types, and
@@ -113,10 +114,10 @@ describe('ImagesScreen — availability (§5.6)', () => {
     expect(
       await screen.findByText('Image understanding needs a local vision model on this drive.')
     ).toBeInTheDocument()
-    // The OCR pointer + the CTA to AI Model.
+    // The OCR pointer + the CTA to AI Model — on the vision model itself (#539).
     expect(screen.getByText(/Make searchable \(OCR\) under Documents/)).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: 'Go to AI Model' }))
-    expect(onNavigate).toHaveBeenCalledWith('models')
+    expect(onNavigate).toHaveBeenCalledWith('models:images')
   })
 
   it('adapts the note for the no-runtime reason', async () => {
@@ -125,6 +126,17 @@ describe('ImagesScreen — availability (§5.6)', () => {
     expect(
       await screen.findByText('Image understanding needs the AI engine installed first.')
     ).toBeInTheDocument()
+  })
+
+  // #539: one target for all three reasons — with the engine missing its banner leads that view,
+  // with an engine too old the vision model's row says so.
+  it.each(['no-runtime', 'incompatible'] as const)('the %s CTA lands on the vision model too', async (reason) => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    stubApi({ imageGetStatus: vi.fn(async () => unavailable(reason)) })
+    render(<ImagesScreen onNavigate={onNavigate} decodeImpl={fakeDecode} />)
+    await user.click(await screen.findByRole('button', { name: 'Go to AI Model' }))
+    expect(onNavigate).toHaveBeenCalledWith('models:images')
   })
 })
 
@@ -190,6 +202,85 @@ describe('ImagesScreen — empty / selected (§5.2/§5.3)', () => {
     ).toBeInTheDocument()
     // Still on the drop zone — nothing was taken.
     expect(screen.getByText('Drop an image here')).toBeInTheDocument()
+  })
+
+  // #539: a PDF is never taken here (and never imported from here), but it is named: the banner
+  // points a scanned PDF to Make searchable (OCR), with a button to Documents.
+  const PDF_COPY = t('en', 'images.err.pdf')
+
+  it.each([
+    ['by extension', new File([new Uint8Array([1])], 'Scan 2026.PDF', { type: '' })],
+    ['by type', new File([new Uint8Array([1])], 'scan', { type: 'application/pdf' })]
+  ])('a dropped PDF (%s) points to OCR in Documents, with a button there', async (_how, pdf) => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    const decodeSpy = vi.fn(fakeDecode)
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), importDocuments: vi.fn() })
+    render(<ImagesScreen onNavigate={onNavigate} decodeImpl={decodeSpy} />)
+    const zone = await findImageZone()
+    await act(async () => {
+      fireDrop(zone, [pdf])
+    })
+    expect(await screen.findByText(PDF_COPY)).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'images.err.unsupported'))).not.toBeInTheDocument()
+    expect(decodeSpy).not.toHaveBeenCalled()
+    expect(window.api.importDocuments).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Go to Documents' }))
+    expect(onNavigate).toHaveBeenCalledWith('documents')
+  })
+
+  it('a picked PDF ("All files" in the picker) gets the same pointer, and its bytes are never read', async () => {
+    const user = userEvent.setup()
+    const onNavigate = vi.fn()
+    const picks = pickStubs('contract-scan.pdf')
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE), ...picks })
+    render(<ImagesScreen onNavigate={onNavigate} decodeImpl={fakeDecode} />)
+    await user.click(await screen.findByRole('button', { name: 'or choose an image' }))
+    expect(await screen.findByText(PDF_COPY)).toBeInTheDocument()
+    expect(picks.imageReadBytes).not.toHaveBeenCalled()
+    await user.click(screen.getByRole('button', { name: 'Go to Documents' }))
+    expect(onNavigate).toHaveBeenCalledWith('documents')
+  })
+
+  it('dismissing the PDF banner takes its button with it; another unsupported file keeps the generic copy', async () => {
+    const user = userEvent.setup()
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const zone = await findImageZone()
+    await act(async () => {
+      fireDrop(zone, [new File([new Uint8Array([1])], 'scan.pdf', { type: 'application/pdf' })])
+    })
+    await screen.findByText(PDF_COPY)
+    await user.click(screen.getByRole('button', { name: 'Dismiss' }))
+    expect(screen.queryByText(PDF_COPY)).not.toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()
+
+    await act(async () => {
+      fireDrop(zone, [new File([new Uint8Array([1])], 'notes.docx', { type: '' })])
+    })
+    expect(await screen.findByText(t('en', 'images.err.unsupported'))).toBeInTheDocument()
+    expect(screen.queryByRole('button', { name: 'Go to Documents' })).not.toBeInTheDocument()
+  })
+
+  it('a multi-drop that includes a PDF is still a multi-drop', async () => {
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    const zone = await findImageZone()
+    await act(async () => {
+      fireDrop(zone, [
+        new File([new Uint8Array([1])], 'scan.pdf', { type: 'application/pdf' }),
+        new File([new Uint8Array([1])], 'a.png', { type: 'image/png' })
+      ])
+    })
+    expect(await screen.findByText('Drop one image at a time.')).toBeInTheDocument()
+    expect(screen.queryByText(PDF_COPY)).not.toBeInTheDocument()
+  })
+
+  it('keeps the OCR pointer under the drop zone while the vision model is available (#539)', async () => {
+    stubApi({ imageGetStatus: vi.fn(async () => AVAILABLE) })
+    render(<ImagesScreen onNavigate={vi.fn()} decodeImpl={fakeDecode} />)
+    await findImageZone()
+    expect(screen.getByText(t('en', 'images.avail.ocrPointer'))).toBeVisible()
   })
 
   it('rejects a multi-drop with a friendly banner rather than taking the first file', async () => {

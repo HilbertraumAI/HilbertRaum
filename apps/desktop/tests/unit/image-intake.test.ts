@@ -2,6 +2,7 @@ import { describe, it, expect } from 'vitest'
 import {
   imageMimeFromName,
   isHeicName,
+  isPdfName,
   outputMimeFor,
   prescreenPixelCount,
   DOWNSCALE_TARGET
@@ -100,5 +101,21 @@ describe('WEBP intake + HEIC detection (#124)', () => {
     expect(isHeicName('img.heif')).toBe(true)
     expect(isHeicName('img.jpg')).toBe(false)
     expect(isHeicName('heic.png')).toBe(false)
+  })
+})
+
+describe('PDF detection (#539)', () => {
+  it('isPdfName detects a PDF by extension (any case) or by its MIME type', () => {
+    expect(isPdfName('scan.pdf')).toBe(true)
+    expect(isPdfName('Scan 2026.PDF')).toBe(true)
+    expect(isPdfName('scan', 'application/pdf')).toBe(true)
+    expect(isPdfName('scan.pdf', '')).toBe(true)
+    expect(isPdfName('pdf.png')).toBe(false)
+    expect(isPdfName('notes.pdf.docx')).toBe(false)
+    expect(isPdfName('photo.jpg', 'image/jpeg')).toBe(false)
+  })
+
+  it('a PDF is never an accepted image type — the detection is a separate branch', () => {
+    expect(imageMimeFromName('scan.pdf')).toBeNull()
   })
 })
