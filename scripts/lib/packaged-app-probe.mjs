@@ -276,8 +276,9 @@ if (exportPdf) {
     `return Promise.race([window.api.exportEvidencePack(${JSON.stringify(review.id)}, { format: 'pdf', language: 'en' }).then((r) => ({ ok: true, format: r && r.format }), (e) => ({ ok: false, e: e.message })), new Promise((ok) => setTimeout(() => ok({ ok: false, e: 'no save in 5 min' }), 300000))])`
   )
   const magic = existsSync(exportPdf) ? readFileSync(exportPdf).subarray(0, 5).toString('latin1') : '(no file)'
+  // Since #563 the pack prints from memory: a `.print.tmp` file beside the export is a regression.
   const siblings = existsSync(dirname(exportPdf)) ? readdirSync(dirname(exportPdf)).filter((f) => f.includes('.print.tmp')) : []
-  check('an evidence pack exports as PDF', res.ok && res.format === 'pdf' && magic === '%PDF-', `${JSON.stringify(res)} magic=${magic} print-source residue=${JSON.stringify(siblings)}`)
+  check('an evidence pack exports as PDF', res.ok && res.format === 'pdf' && magic === '%PDF-' && siblings.length === 0, `${JSON.stringify(res)} magic=${magic} print-source residue=${JSON.stringify(siblings)}`)
 } else check('an evidence pack exports as PDF', null, 'pass --export-pdf <path>')
 
 const before = (await evaluate('return window.api.listDocuments()')).length
