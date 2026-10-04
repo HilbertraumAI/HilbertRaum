@@ -23,6 +23,15 @@ password recovery — are documented in
   offline hard rule forbids — so `spellcheck: false` is pinned for every window and the composer
   shows no red underlines. Re-enabling needs dictionaries shipped on the drive plus a no-op
   download URL (owner decision #218; `security-model.md` "Chromium background fetches").
+  **The download still happens (measured 2026-10-03/04, #567):** at start, the app asks Google's
+  server for the dictionary of the computer's language (for example `en-us-10-1.bdic`). On Linux
+  this happens for every language; on Windows only for a language Windows cannot spell-check
+  itself (for example Polish on a German Windows). Once a download succeeds, the file is kept on
+  the computer and not fetched again. Nothing from your workspace is sent, but the request reveals
+  the computer's address and language. Windows also probes the local network for a proxy
+  configuration (`wpad`) when Windows' "Automatically detect settings" is on. Both come from the
+  browser engine, not from the app's own code, and the fixes are measured but not shipped yet
+  (#567).
 - **`importDocuments` picker imports are token-bound; drag-drop trusts caller paths (accepted).**
   A PICKER import is bound to a one-time `pickDocuments` capability token (main imports exactly what
   it returned), so a compromised renderer can't forge a picker-origin read of an arbitrary file
@@ -80,13 +89,18 @@ password recovery — are documented in
   (measured), and parsing Chromium's storage files directly was not worth it for four UI
   preferences. The old values stay unread in the host profile ("What lives or passes outside the
   drive").
-- **The custom scheme and the fuse-off build are measured on Windows only (#560).** On macOS,
-  flipping a fuse invalidates the ad-hoc signature of an Apple-silicon binary; the build re-signs
-  it ad hoc right after (`resetAdHocDarwinSignature` in `electron-builder.yml`), and a Developer ID
-  signature, when one is configured, comes later. No Mac was available, so neither the launch nor
-  the scheme has been checked there. On Linux the app was run unpackaged on a fuse-off Electron in
-  an Ubuntu 24.04 container (pages, file-read refusals, OCR: all as on Windows); an AppImage build
-  has not been run with this change.
+- **The custom scheme and the packaged fuses are measured on Windows and on a Linux AppImage, not
+  run on macOS (#560, #562).** The real AppImage of the #562 build ran in an Ubuntu 24.04 container
+  with everything as on Windows except one thing: Linux has no check of the program archive
+  (`packaging.md` "Platform verification of the app scheme and the fuses"). No Mac was available.
+  The macOS build was inspected but never started: its fuses, its `Info.plist` archive hash, and
+  the ad-hoc signature that GitHub's Mac runner verified. On macOS, flipping a fuse invalidates the
+  ad-hoc signature of an Apple-silicon binary; the build re-signs it right after
+  (`resetAdHocDarwinSignature`), and the release workflow signs it ad hoc again. A Mac owner can
+  run `scripts/verify-mac-build.sh` (`packaging.md` "Verifying a packaged build on macOS").
+  A Developer ID build, signed with the hardened runtime, is expected to refuse dictation's
+  microphone until `com.apple.security.device.audio-input` is added to the entitlements. This is
+  unverified; the current ad-hoc build is not affected.
 - **The app checks its own program archive, but not all of its program files (#562).** A packaged
   build stops with "ASAR Integrity Violation" if a byte of its main program archive (`app.asar`)
   has changed. The OCR engine's files sit beside that archive, unpacked, because its worker cannot

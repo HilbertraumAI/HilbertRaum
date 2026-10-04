@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-03 — **#560/#562 platform round: the real AppImage passes, the macOS build is inspected only (`docs/platform-verification-560-562`).** `release.yml` dispatched on
+`fix/562`: Linux AppImage in `ubuntu:24.04` 13/13 + the fuse probes (no asar integrity on Linux, as designed); mac `.app` wire, Info.plist hash, ad-hoc
+signature OK, not run. New: `scripts/verify-mac-build.sh` + `lib/packaged-app-probe.mjs` (owner Mac run open). Found: dictionary fetch (Linux; Windows per
+language) + WPAD (#567, docs corrected). Signed mac builds likely need the `audio-input` entitlement. Record: `packaging.md` "Platform verification"._
 _2026-10-03 — **#563 — evidence-pack PDFs print from memory: `hilbertraum://print/<token>`, no `.print.tmp.html` beside the export (`fix/563-print-from-memory`).**
 One-shot token page in `app-protocol.ts` (`PrintPages`, cap 4, `no-store`, the pack CSP from `window-security.ts`); AUD-15/16/17-print-source code + test deleted
 as moot. Measured: real smoke 11/11 incl. an 8.4 MB pack, one request per print, no pack text on disk; packaged export before/after; no time cost.
