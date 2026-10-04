@@ -39,19 +39,41 @@ executableName: HilbertRaum
 # package-lock.json and satisfies the declared caret range. Edit both or the green gate fails.
 electronVersion: 43.7.7
 
-# Electron fuses (#560), flipped in the packaged binary by @electron/fuses before signing.
-# GrantFileProtocolExtraPrivileges OFF: `file://` pages lose the extra privileges Electron gives
-# them by default (fetch/XHR of any local file, among others). The app's own pages are served from
-# `hilbertraum://app/` (src/main/app-protocol.ts), which does not need them; the only `file://`
-# page left, the evidence-pack print window, runs no script and loads nothing. Turning the fuse
-# off with the pages still on `file://` breaks them (module scripts refused by CORS from origin
-# `null`, measured), so the scheme and this line go together. ONLY this fuse is set; the others
-# stay at Electron's defaults (see docs/packaging.md "Electron fuses"). resetAdHocDarwinSignature:
-# flipping a fuse invalidates the ad-hoc signature of a macOS arm64 binary, so re-sign it ad hoc
-# right after (a Developer ID signature, when configured, is applied afterwards) — not measured,
-# no Mac here. tests/integration/packaging.test.ts pins this block. Re-check the built binary's
-# fuse wire after an Electron bump or a change here (docs/packaging.md).
+# Electron fuses (#560, #562), flipped in the packaged binary by @electron/fuses before signing.
+# Measured on 43.7.7; the record is docs/architecture.md "Electron fuses — design record (#562)".
+#  - runAsNode OFF: ELECTRON_RUN_AS_NODE no longer turns HilbertRaum.exe into a plain Node runtime.
+#    Nothing uses it (tesseract.js runs on worker_threads, which this fuse does not touch).
+#  - enableNodeCliInspectArguments OFF: --inspect / --inspect-brk / SIGUSR1 open no debugger on the
+#    main process. Chromium's --remote-debugging-port is a different switch and still works.
+#  - enableNodeOptionsEnvironmentVariable stays ON, deliberately (owner decision 2026-10-03). A
+#    packaged app already ignores NODE_OPTIONS except two parser flags; what the fuse still governs
+#    is NODE_EXTRA_CA_CERTS, and TLS-scanning antivirus (Norton, measured) and corporate proxies
+#    export their root that way. Off, the in-app engine and model downloads fail with "fetch
+#    failed" on such machines (measured). Turn it off only once the downloaders trust the OS store (#564).
+#  - enableEmbeddedAsarIntegrityValidation + onlyLoadAppFromAsar ON: a modified app.asar ends the
+#    app ("ASAR Integrity Violation"), and an `app/` folder planted beside a removed app.asar is
+#    never loaded. electron-builder writes the header hash on every build (the Windows exe resource,
+#    the macOS Info.plist key), so `asar: true` and NO `disableAsarIntegrity` are required — without
+#    the hash the binary refuses to start. Windows and macOS only (Linux has no integrity check),
+#    and files in app.asar.unpacked (the OCR worker closure below) are not checked.
+#  - grantFileProtocolExtraPrivileges OFF (#560): `file://` pages lose the extra privileges Electron
+#    gives them by default (fetch/XHR of any local file, among others). The app's own pages are served
+#    from `hilbertraum://app/` (src/main/app-protocol.ts); with the fuse off the old `file://` layout's
+#    module scripts are refused by CORS from origin `null` (measured), so the scheme and this line go
+#    together. The evidence-pack print window, the only `file://` page left, runs no script.
+#  - resetAdHocDarwinSignature: flipping a fuse invalidates the ad-hoc signature of a macOS arm64
+#    binary, so re-sign it ad hoc right after (a Developer ID signature, when configured, comes
+#    afterwards) — not measured, no Mac here.
+# The other fuses keep Electron's defaults. tests/integration/packaging.test.ts pins this block and
+# checks that the installed electron-builder still maps every option (an unmapped name is ignored
+# silently). Re-check the built binary's fuse wire after an Electron bump or a change here
+# (docs/packaging.md "Electron fuses"); expected for 43.7.7: 001011001.
 electronFuses:
+  runAsNode: false
+  enableNodeOptionsEnvironmentVariable: true
+  enableNodeCliInspectArguments: false
+  enableEmbeddedAsarIntegrityValidation: true
+  onlyLoadAppFromAsar: true
   grantFileProtocolExtraPrivileges: false
   resetAdHocDarwinSignature: true
 
@@ -131,7 +153,8 @@ extraResources:
   - from: ../../LICENSE
     to: LICENSE.txt
 
-# Asar keeps the app a single archive; node:sqlite + the parser libs work from it.
+# Asar keeps the app a single archive; node:sqlite + the parser libs work from it. The asar
+# integrity fuses above require it (onlyLoadAppFromAsar loads nothing else).
 asar: true
 # tesseract.js spawns its Node OCR worker via worker_threads, which loads the worker
 # SCRIPT (and the WASM core it requires) through real filesystem reads — those cannot
@@ -146,6 +169,8 @@ asar: true
 # smoke (BUILD_STATE §5 item 18(c)) remains the executable proof. `node-fetch` is only
 # reached behind `global.fetch ||` (never on Electron's Node) but is unpacked anyway.
 # Dev-mode OCR is unaffected. User-facing text: docs/known-limitations.md.
+# Unpacked files sit outside the asar integrity check (#562, measured): keep this list to the
+# worker closure, nothing else.
 asarUnpack:
   - 'node_modules/tesseract.js/**'
   - 'node_modules/tesseract.js-core/**'

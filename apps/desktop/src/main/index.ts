@@ -9,7 +9,7 @@ import { onEngineProblemsChanged } from './services/runtime/engine-load'
 import { createExternalOpener } from './external-open'
 import { installPermissionRequestHandler, installPermissionCheckHandler } from './services/permissions'
 import { installNavigationGuard } from './services/navigation-guard'
-import { appPageUrl, createMainWindowNavigationPredicate } from './app-protocol'
+import { appPageUrl, createMainWindowNavigationPredicate, devRendererUrl } from './app-protocol'
 import { installAppProtocol, registerAppSchemePrivileges } from './install-app-protocol'
 import {
   SECURE_WINDOW_WEB_PREFERENCES,
@@ -948,7 +948,7 @@ function createWindow(): void {
   // `will-navigate`). Only the app's own shell may navigate — the dev server's exact origin in
   // dev, exactly `hilbertraum://app/index.html` otherwise (app-protocol.ts; #560 replaced the
   // `file://` prefix check, which let any local file through).
-  const devServerUrl = isDev ? process.env.ELECTRON_RENDERER_URL : undefined
+  const devServerUrl = devRendererUrl(app.isPackaged)
   installNavigationGuard(mainWindow.webContents, createMainWindowNavigationPredicate(devServerUrl))
 
   void mainWindow.loadURL(devServerUrl ?? appPageUrl('index'))

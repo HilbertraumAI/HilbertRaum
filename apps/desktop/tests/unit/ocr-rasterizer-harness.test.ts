@@ -36,6 +36,8 @@ const fake = vi.hoisted(() => {
     /** Behavior knobs, reset per test. */
     load: undefined as ((url: string) => Promise<void>) | undefined,
     constructorThrows: false,
+    /** `app.isPackaged` as the rasterizer reads it (#562: a packaged build ignores the dev server). */
+    isPackaged: false,
     /** The scripted fake renderer: reacts to webContents.send(channel, payload). */
     onSend: undefined as
       | ((win: FakeWin, channel: string, payload: Record<string, unknown>) => void)
@@ -91,6 +93,11 @@ vi.mock('electron', () => {
     }
   }
   return {
+    app: {
+      get isPackaged(): boolean {
+        return state.isPackaged
+      }
+    },
     BrowserWindow,
     ipcMain: {
       on: (channel: string, fn: (event: unknown, payload: unknown) => void): void => {
@@ -121,6 +128,7 @@ beforeEach(() => {
   fake.state.ipcListeners = new Map()
   fake.state.load = undefined
   fake.state.constructorThrows = false
+  fake.state.isPackaged = false
   fake.state.onSend = undefined
   // Force the app-scheme branch (a dev-server env var would divert to the dev server's URL).
   delete process.env['ELECTRON_RENDERER_URL']
@@ -188,6 +196,18 @@ describe('rasterizePdfWithHiddenWindow — window creation and hardening wiring'
       wellBehavedRenderer(1)
       await rasterizePdfWithHiddenWindow(PDF, { onPage: () => {} })
       expect(lastWin().loadURL).toHaveBeenCalledExactlyOnceWith('http://localhost:5173/ocr.html')
+    } finally {
+      delete process.env['ELECTRON_RENDERER_URL']
+    }
+  })
+
+  it('a packaged build ignores the dev-server variable and loads the scheme (#562)', async () => {
+    fake.state.isPackaged = true
+    process.env['ELECTRON_RENDERER_URL'] = 'http://127.0.0.1:8080'
+    try {
+      wellBehavedRenderer(1)
+      await rasterizePdfWithHiddenWindow(PDF, { onPage: () => {} })
+      expect(lastWin().loadURL).toHaveBeenCalledExactlyOnceWith('hilbertraum://app/ocr.html')
     } finally {
       delete process.env['ELECTRON_RENDERER_URL']
     }
