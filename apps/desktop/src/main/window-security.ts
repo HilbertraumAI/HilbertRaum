@@ -145,6 +145,15 @@ export function buildMetaCsp(isDev: boolean, page: 'index' | 'ocr'): string {
 }
 
 /**
+ * The evidence pack's own Content-Security-Policy: inline styles, nothing else. One string, two
+ * uses (#563): the `<meta>` every rendered pack carries (`render-html.ts` — a pack opened in a
+ * browser outside the app can load or run nothing but its embedded stylesheet, #253), and the
+ * response header of the in-memory print page (`app-protocol.ts`, `hilbertraum://print/…`). The
+ * goldens pin the meta byte for byte, so changing this string changes every exported pack.
+ */
+export const EVIDENCE_PACK_CSP = "default-src 'none'; style-src 'unsafe-inline'"
+
+/**
  * Main-window window-open policy: open external links in the OS browser, never inside
  * the app window — but only safe web schemes. Handing an arbitrary renderer-supplied
  * URL (e.g. file://, smb://) to the OS handler is a known Electron pitfall, so anything

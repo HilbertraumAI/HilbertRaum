@@ -33,6 +33,7 @@ posture (spec §3.6), how the privacy policy is loaded and enforced, and the **e
 | `setWindowOpenHandler` denies every in-app open; an http(s) link reaches the OS browser only through a native confirmation that names the site and shows the URL, Cancel the default, one dialog at a time (#236) | `main/window-security.ts` (policy) + `main/external-open.ts` (consent), wired in `main/index.ts` |
 | **Content-Security-Policy** (response header + build-time-generated meta tag) | `main/window-security.ts` (both policies), applied in `main/index.ts`, `main/app-protocol.ts` + `electron.vite.config.ts` |
 | **The app's pages come from its own `hilbertraum://app/` scheme, not `file://`; the packaged build turns `GrantFileProtocolExtraPrivileges` off** (#560) | `main/app-protocol.ts` (privileges, resolver, headers), `main/install-app-protocol.ts`, `electron-builder.yml` `electronFuses` |
+| **Packaged fuses: no `ELECTRON_RUN_AS_NODE`, no `--inspect`, `app.asar` integrity-checked and the only app source** (#562); a packaged build ignores the dev-server URL | `electron-builder.yml` `electronFuses`, `main/app-protocol.ts` `devRendererUrl` |
 | **Deny-by-default permission handlers** — both the *request* and the *check* path (Phase 31; single scoped microphone allow added in Phase 37; check handler added SEC-2) | `services/permissions.ts`, installed in `main/index.ts` |
 | **No network in the core path** + startup self-check tripwire | `services/offlineGuard.ts` |
 | No model weights / user data in version control | `.gitignore` |
@@ -184,13 +185,14 @@ not a vulnerability on its own. Now:
   `allowServiceWorkers`, `supportFetchAPI`, `corsEnabled`, `stream`, `codeCache` and
   `allowExtensions` are all `false` and pinned (`tests/unit/app-protocol.test.ts`).
 - **The fuse is off in packaged builds** (`electron-builder.yml` `electronFuses`; wire `101100011`
-  → `101100001`). With the fuse off, `file://` pages lose their extra privileges. The old layout
+  → `101100001`, and `001011001` since #562, next section). With the fuse off, `file://` pages lose
+  their extra privileges. The old layout
   could not have survived that: its module scripts are refused by CORS from origin `null`, and a
   `file://` document loses `localStorage` (both measured). So the scheme move and the fuse flip
   belong to the same change. The scheme alone already closes the reads (measured with the fuse
-  on); the fuse is the second layer. The only `file://` page left is the evidence-pack print
-  window, which runs no script and loads nothing, and its real-Electron smoke passes with the fuse
-  off.
+  on); the fuse is the second layer. No window loads `file://` any more: the evidence-pack print
+  window, the last one, prints from memory on `hilbertraum://print/` since #563 ("Evidence-pack
+  export boundary").
 - **Navigation:** the main window may navigate only to exactly `hilbertraum://app/index.html` (the
   dev server's exact origin under `npm run dev`). The old `startsWith('file://')` check let any
   local file through, a dropped file for example. See "In-app navigation" below.
@@ -198,6 +200,42 @@ not a vulnerability on its own. Now:
   (measured with the CSP removed), which `checkOrigin` admits. A page on the scheme sends
   `Origin: hilbertraum://app`, and `checkOrigin` refuses any `hilbertraum:` origin; the renderer
   has no reason to call the API, and its CSP already blocks the request.
+
+### The packaged binary's fuses (#560, #562)
+Electron's fuses are switches compiled into the binary; `electron-builder.yml` `electronFuses` sets
+them before signing. They guard against someone who can already run programs as the user, set the
+app's environment or command line, or write into its program folder. That is a local attacker, so
+the fuses are defence in depth, not a remote boundary. Measured on packaged 43.7.7 builds, before
+and after (`architecture.md` "Electron fuses — design record (#562)"):
+
+- **`RunAsNode` off.** `ELECTRON_RUN_AS_NODE=1 HilbertRaum.exe -e …` used to run a plain Node.js
+  runtime under the app's name; now the variable is ignored and the app starts normally.
+- **`EnableNodeCliInspectArguments` off.** `--inspect` and `--inspect-brk` used to open a Node
+  debugger on the main process, which holds the unlocked workspace; now no debugger opens.
+  Chromium's `--remote-debugging-port` is a different switch that no fuse covers. It still works,
+  and the packaged smoke harnesses use it. It gives control of the renderer, not of Node.
+- **`EnableNodeOptionsEnvironmentVariable` stays on (owner decision).** A packaged app already
+  ignores `NODE_OPTIONS` except `--http-parser` and `--max-http-header-size` (`--require` was
+  measured not loading). What the fuse still governs is `NODE_EXTRA_CA_CERTS`. TLS-scanning
+  antivirus (Norton, measured) and corporate proxies install that variable so Node trusts their
+  root. With the fuse off, the in-app engine download from github.com failed with "fetch failed"
+  on such a machine, and models and knowledge-pack tools come from intercepted hosts too. A CA
+  added this way cannot change what a download delivers: every engine, model and OCR file is
+  checked against a pinned SHA-256.
+- **`EnableEmbeddedAsarIntegrityValidation` + `OnlyLoadAppFromAsar` on.** electron-builder stores
+  the hash of `app.asar`'s header in the exe (a Windows resource) or in `Info.plist` (macOS), and the
+  header holds a hash per file. A changed byte in `app.asar` now ends the app ("ASAR Integrity
+  Violation"), at startup for the main bundle or when the renderer page is served. Removing
+  `app.asar` and planting a `resources/app/` folder no longer runs code; before, it did. Limits: the
+  check covers **`app.asar` only**. Files in `app.asar.unpacked` (the tesseract.js OCR worker
+  and its dependencies, #232) are not checked, and a modified worker still ran at startup in the
+  measurement. Linux has no integrity check at all. macOS is unmeasured.
+- **`GrantFileProtocolExtraPrivileges` off** (#560, the section above).
+- **The OCR rasterizer no longer follows `ELECTRON_RENDERER_URL` in a packaged build** (#562). The
+  variable names electron-vite's dev server; the main window honoured it only in an unpackaged
+  build, but the OCR window loaded `${ELECTRON_RENDERER_URL}/ocr.html` whenever it was set (measured:
+  a packaged build fetched the page from a local server named that way). Both windows now ask
+  `devRendererUrl(app.isPackaged)` in `app-protocol.ts`, the only reader of the variable.
 
 ### Renderer permissions: deny by default, one scoped exception — request *and* check (Phases 31 + 37; SEC-2)
 Electron's default with **no** permission handler installed is to **GRANT** every permission
@@ -757,47 +795,43 @@ boundary is made explicit and everything around it stays inside the data-class r
   export wrote if nothing else can write the file in between. A destination-derived name
   did not give that — two exports saving to one path shared the scratch file, and the
   second `open(…, 'w')` truncated the first's bytes, so the first hashed and committed the
-  other review's pack under its own `evidence_exports` row with no error (AUD-17; the same
-  defect on the PDF seam is described below). A failure AFTER the rename
+  other review's pack under its own `evidence_exports` row with no error (AUD-17; the PDF print
+  page, below, now shares nothing at all). A failure AFTER the rename
   (the `evidence_exports` row cannot be written — workspace-DB error, or the review was
   deleted in another window during the dialog) **unlinks the just-created file** and
   rejects with distinct honest copy: an unrecorded pack would make its own printed
   "hash is recorded" integrity note false, which is worse than no file. If even that
   unlink fails, the error explicitly states the file exists without a history record —
-  a residual state, named, never silent (the PDF print source below is the other one).
-- **PDF print source — an acknowledged residue window:** a PDF export first writes the
-  rendered pack to a transient `.print.tmp.html` SIBLING of the destination, because the
-  hidden print window must load a real file with an `.html` extension (Chromium sniffs
-  `file://` MIME from the extension) and a `data:` URL would cap out on a large pack. The
-  file is deliberately placed in the directory the user already sanctioned for this content
-  (never an OS temp dir), it is **plaintext for as long as it exists**, and it is removed in
-  the print harness's `finally` on every path — success, failure, timeout, quit. Two things
-  are true and are stated rather than glossed:
-  - The name is unique **per export** (it carries the export's freshly minted pack id, by
-    the same rule as the tmp sibling above), so two exports to the same destination never
-    load, print, or delete the same file. A name derived from the destination alone let a
-    concurrent export's overwrite be printed — both exports then succeeded, one of them
-    writing another review's pack under its own `evidence_exports` row. Two same-destination
-    exports now share no transient at all; what they do still share is the **destination**,
-    where the later rename replaces the earlier file — that is any second save to one path,
-    and each row still records the hash of the bytes its own export wrote.
-  - Removal can genuinely fail. On Windows an antivirus scanner or the search indexer may
-    hold a handle without `FILE_SHARE_DELETE` and the unlink throws; the harness waits
-    briefly and **retries once**, which clears the usual case. If it still fails — or the
-    app is killed mid-print — a plaintext copy of that pack remains next to the exported
-    file until the user or the OS removes it. This is the same residue class as the atomic
-    writer's tmp sibling, and it is now **logged** (`log.warn`, ids only: the pack id and
-    the OS error code — never the path, whose file name is seeded from the review title,
-    and never a byte of content). It used to be swallowed by an empty `catch` in a module
-    that imported no logger, so the copy could linger with no trace at all.
-    One consequence of the per-export naming is stated rather than glossed: residue no
-    longer self-heals. The old destination-derived names meant the NEXT export to the same
-    destination truncated and renamed the stale sibling away; a per-export name is never
-    written again, so each app-kill mid-export strands its own copy — residue can
-    accumulate across crashes, one file per killed export, and nothing but the user (or the
-    OS) ever removes it. The app cannot sweep here: the files sit in a user-chosen
-    directory outside the workspace, which the startup `shredStalePlaintext` sweep must
-    never touch.
+  a residual state, named, never silent (until #563 the PDF print source below was the other one).
+- **PDF print page — printed from memory, no copy beside the export (#563):** the hidden print
+  window loads the rendered pack from `hilbertraum://print/<token>`, the app's own scheme on a
+  host of its own (`main/app-protocol.ts` `PrintPages`). The token is 32 random bytes, so it
+  says nothing about the review. The page is held in memory for one print, served at most once
+  (a second request is a 404), and dropped in the print's `finally`, whatever happened. It goes
+  with `Cache-Control: no-store`, `nosniff` and the pack's own CSP (inline styles only, the same
+  string as the pack's `<meta>`). At most four prints hold a page at once; a fifth fails before
+  any window opens. Measured in real Electron: one request per print; a pack padded past 8 MB
+  prints (a `data:` URL caps near 2 MB); and after a run nothing under its directory, the
+  Electron profile included, holds the pack's text.
+  - **Until #563** the page was a transient `.print.tmp.html` file beside the destination:
+    plaintext for the length of the print, removed in `finally` with one retry and a log line
+    (AUD-16). An app kill mid-print, or a scanner handle that outlasted the retry, left it
+    there, one file per killed export, and nothing but the user removed it (the app cannot
+    sweep a user-chosen directory). That residue class is gone with the file. What can still
+    be left behind is the atomic writer's tmp sibling of the final file (above), as for any
+    export.
+  - **The app's own pages cannot read a print page.** It is a different origin from
+    `hilbertraum://app`, and the scheme does not enable CORS. Measured from a page on
+    `hilbertraum://app` with a print pending: under the production headers its `fetch`, XHR
+    and iframe of the print URL are refused by the page's CSP, and nothing reaches the handler.
+    With that CSP removed, `fetch` is refused (the scheme has no fetch support), XHR is
+    refused by CORS, and an iframe loads but the parent reads nothing. Such a request does use
+    up the one-shot page, so a script that already knew the 256-bit token could make that
+    print fail; it could not read it. The token never reaches any renderer.
+  - Two exports to the same destination print from two tokens, so they share nothing (AUD-17's
+    print-source half). They still share the **destination**, where the later rename replaces
+    the earlier file, as any second save to one path does; each row records the hash of the
+    bytes its own export wrote.
 - **Audit:** `evidence_pack_exported` records `{reviewId, format}` and nothing else — not
   the path, not the file name, not the title (which seeds the suggested name and is
   content). Sentinel-swept in `audit-ipc.test.ts` with a path-sentinel destination.
@@ -1544,7 +1578,11 @@ worth naming so "everything stays on the drive" is not read as "nothing touches 
   `hilbertraum.docs.locationsMoreOpen`; the set is pinned by `tests/unit/renderer-storage-keys.test.ts`)
   — never document or chat content. Web storage is per origin: since #560 these keys live under
   the renderer's `hilbertraum://app` origin, and the copies the old `file://` origin wrote stay in
-  the profile, unread, until the profile is cleared. When no prepared drive is found, the workspace itself falls
+  the profile, unread, until the profile is cleared. A PDF evidence-pack export leaves nothing
+  there either: its print page is served from memory with `Cache-Control: no-store`, and after the
+  real-Electron print smoke no file in its profile holds the pack's text (#563). Until #563 the
+  print also put a temporary plaintext copy of the pack next to the exported file, wherever the
+  user saved it. When no prepared drive is found, the workspace itself falls
   back to this same folder (`PRIVACY.md` says so). Nothing here is cleared on lock: owner decision
   #231 keeps "document only" as the default and records clearing the profile on lock as the
   alternative.
@@ -2543,8 +2581,7 @@ it.
   that with (iii) to send them out. Both windows now load from the app's own `hilbertraum://app/`
   scheme, and the packaged build turns the fuse off ("The app's own scheme" above). Measured on
   the packaged build: both reads fail in both windows, and so does running a planted local script.
-  What remains: the evidence-pack print window still loads a `file://` page, but that page runs no
-  script; under `npm run dev` the renderer is `http://localhost`, which never had the read. The
+  What remains: under `npm run dev` the renderer is `http://localhost`, which never had the read. The
   fuse-off build is unmeasured on macOS and Linux (`known-limitations.md`).
 
 ## Out of scope (MVP)

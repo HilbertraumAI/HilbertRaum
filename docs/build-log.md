@@ -38,6 +38,22 @@ blocks each fresh unsigned exe, so the packaged layout ran on a renamed stock `e
 pass. Found on the way: since Phase 38 the rasterizer set no `wasmUrl`, so pdf.js could not load its CCITT/JBIG2/JPEG 2000 decoders and such scans OCR'd as
 blank pages. Fixed: the build ships the decoders under their names and the page passes `wasmUrl`; `ocr-decoder-assets.test.ts` pins it. Record: `architecture.md` DEP-6 §10._
 
+## 2026-10-03 — the closed 2026-09-19 knowledge-pack retrieval-research entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-03 (preamble budget, making room for the #562, #563 and #560 platform-verification
+entries, which land as three parallel PRs). The research is closed; the record is unchanged: `rag-design.md` §18.
+Citations of the form "BUILD_STATE 2026-09-19 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-19 — **The knowledge-pack retrieval research is recorded closed: the pre-registered
+primary did not pass** (`docs/zim-phase3-record`; record `rag-design.md` §18). A candidate
+retrieval bundle measured +2.69 pp [−3.10, +8.59] against its own ≥ +10 pp pre-registered rule
+on a 260-question confirmation set graded by two AI raters — not passed, both clauses fail. The
+bundle does not become the product default; the retrieval design in §17 stays. A secondary
+reading of the research packet alone (+9.04 pp — descriptive, not the shipped product) and a
+refusal-repair fallback that is not authorised to ship are also recorded, with the standing
+AI-only disclosure and the citation-agreement figure (κ₂ 0.504) that closes further judged
+rounds until the rubric is repaired._
+
 ## 2026-10-03 — the closed 2026-09-18 #447 expander-cache entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-03 (preamble budget, making room for the OCR-rasterizer-CSP entry). The

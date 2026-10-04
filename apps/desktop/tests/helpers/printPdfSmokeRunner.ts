@@ -1,22 +1,31 @@
 import { readFileSync, writeFileSync, existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { app, session, BrowserWindow } from 'electron'
 import { printEvidencePackHtmlToPdf } from '../../src/main/services/evidence-pack/print-pdf'
 import { installOfflineNetworkGuard } from '../../src/main/services/offlineGuard'
+import { installAppProtocol, registerAppSchemePrivileges } from '../../src/main/install-app-protocol'
+import { printPages } from '../../src/main/app-protocol'
 
 // REAL-Electron smoke runner (EP-1 plan §11 tests) — NOT a test file. The pdf-smoke suite
 // bundles this entry with esbuild and spawns it under the locally installed Electron
 // binary; it drives the REAL `printEvidencePackHtmlToPdf` (the same module the app ships,
 // bundled from source — no reimplementation that could drift) against real Chromium and
 // reports machine-checkable facts back through a result JSON:
-//   per job — the PDF bytes written (normal jobs) or the rejection (kill job), plus
-//   whether the transient print source was cleaned up;
+//   per job — the PDF bytes written (normal jobs) or the rejection (kill job), the print
+//   pages still held afterwards (#563: none), the requests Chromium made during the job, the
+//   time it took and the peak memory of the app's processes while it ran;
 //   globally — EVERY url Chromium requested during the run (the network tripwire at the
 //   layer node's connect-guard cannot see) and the node-side offline-guard violations.
 //
-// Job file (argv[argv.length - 1]):
-//   { resultPath, jobs: [{ name, htmlPath, packId, outPdfPath, sourceHtmlPath, kill? }] }
+// #563: the print page is served from memory on the app's own scheme, so this runner sets the
+// scheme up exactly as the app does: `registerAppSchemePrivileges()` before `ready`, then
+// `installAppProtocol(...)` (its renderer root does not exist here: the app host serves nothing,
+// the print host serves the pending pages).
 //
-// The kill job pins the app-quit teardown: `BrowserWindow.prototype.loadFile` is wrapped
+// Job file (argv[argv.length - 1]):
+//   { resultPath, jobs: [{ name, htmlPath, packId, outPdfPath, kill? }] }
+//
+// The kill job pins the app-quit teardown: `BrowserWindow.prototype.loadURL` is wrapped
 // to emit `before-quit` the moment the load finishes — the harness's quit hook must
 // destroy the hidden window mid-flight (after load, before print bytes exist), the
 // promise must REJECT, and no output may be written. Deterministic: the emit is
@@ -34,7 +43,6 @@ interface SmokeJob {
   htmlPath: string
   packId: string
   outPdfPath: string
-  sourceHtmlPath: string
   kill?: boolean
 }
 
@@ -42,28 +50,50 @@ interface SmokeJobResult {
   name: string
   ok: boolean
   error: string | null
-  sourceHtmlRemoved: boolean
   outExists: boolean
+  /** Print pages still holding a slot after the job (#563: always 0). */
+  pendingAfter: number
+  /** The URLs Chromium requested while this job ran. */
+  requests: string[]
+  ms: number
+  htmlBytes: number
+  /** Peak working set (KiB) of the browser process / of any renderer while the job ran. */
+  peakBrowserKiB: number
+  peakRendererKiB: number
 }
+
+// Electron accepts scheme privileges only before `ready` — at module load, like index.ts.
+registerAppSchemePrivileges()
+
+const requestedUrls: string[] = []
 
 async function runJob(job: SmokeJob): Promise<SmokeJobResult> {
   const html = readFileSync(job.htmlPath, 'utf8')
-  const origLoadFile = BrowserWindow.prototype.loadFile
+  const origLoadURL = BrowserWindow.prototype.loadURL
   if (job.kill) {
-    BrowserWindow.prototype.loadFile = async function (this: BrowserWindow, ...args) {
-      await origLoadFile.apply(this, args as [string])
+    BrowserWindow.prototype.loadURL = async function (this: BrowserWindow, ...args) {
+      await origLoadURL.apply(this, args as [string])
       // Load finished — the print step is next. Quit NOW: the harness's before-quit
       // hook must tear the hidden window down and fail the print.
       app.emit('before-quit')
     }
   }
+  const firstRequest = requestedUrls.length
+  let peakBrowserKiB = 0
+  let peakRendererKiB = 0
+  const sample = (): void => {
+    for (const m of app.getAppMetrics()) {
+      const kib = m.memory.workingSetSize
+      if (m.type === 'Browser') peakBrowserKiB = Math.max(peakBrowserKiB, kib)
+      if (m.type === 'Tab') peakRendererKiB = Math.max(peakRendererKiB, kib)
+    }
+  }
+  const sampler = setInterval(sample, 50)
+  const t0 = performance.now()
   let ok = false
   let error: string | null = null
   try {
-    const bytes = await printEvidencePackHtmlToPdf(html, {
-      packId: job.packId,
-      sourceHtmlPath: job.sourceHtmlPath
-    })
+    const bytes = await printEvidencePackHtmlToPdf(html, { packId: job.packId })
     // Plain write: the atomic tail has its own suite; this smoke targets the harness +
     // Chromium fidelity. The parent inspects these bytes with pdfjs.
     writeFileSync(job.outPdfPath, bytes)
@@ -71,14 +101,21 @@ async function runJob(job: SmokeJob): Promise<SmokeJobResult> {
   } catch (e) {
     error = e instanceof Error ? e.message : String(e)
   } finally {
-    BrowserWindow.prototype.loadFile = origLoadFile
+    BrowserWindow.prototype.loadURL = origLoadURL
+    clearInterval(sampler)
+    sample()
   }
   return {
     name: job.name,
     ok,
     error,
-    sourceHtmlRemoved: !existsSync(job.sourceHtmlPath),
-    outExists: existsSync(job.outPdfPath)
+    outExists: existsSync(job.outPdfPath),
+    pendingAfter: printPages.pending,
+    requests: requestedUrls.slice(firstRequest),
+    ms: Math.round(performance.now() - t0),
+    htmlBytes: Buffer.byteLength(html, 'utf8'),
+    peakBrowserKiB,
+    peakRendererKiB
   }
 }
 
@@ -88,7 +125,6 @@ async function main(): Promise<void> {
     resultPath: string
     jobs: SmokeJob[]
   }
-  const requestedUrls: string[] = []
   const offlineViolations: string[] = []
   const results: SmokeJobResult[] = []
   let fatal: string | null = null
@@ -101,8 +137,10 @@ async function main(): Promise<void> {
   })
   try {
     await app.whenReady()
+    // The app's own scheme, as index.ts installs it (no renderer build here: an empty app host).
+    installAppProtocol(join(resultPath, '..', 'no-renderer-build'))
     // Chromium-level tripwire: record EVERY request the session makes across all prints.
-    // The parent asserts nothing but file:// ever appears (the pack is self-contained).
+    // The parent asserts nothing but the print pages ever appears (the pack is self-contained).
     session.defaultSession.webRequest.onBeforeRequest((details, callback) => {
       requestedUrls.push(details.url)
       callback({})

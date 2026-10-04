@@ -37,6 +37,8 @@ interface BuilderConfig {
   // test below must be able to CATCH that mistake rather than be typed out of it.
   electronVersion?: string | number
   electronFuses?: Record<string, unknown>
+  asar?: unknown
+  disableAsarIntegrity?: unknown
 }
 
 function loadBuilderConfig(): BuilderConfig {
@@ -441,34 +443,75 @@ describe('electron-builder.yml electronVersion tracks the electron devDependency
   })
 })
 
-// #560: the packaged binary turns Electron's GrantFileProtocolExtraPrivileges fuse OFF — `file://`
-// pages lose fetch/XHR of arbitrary local files (and the rest of the fuse's extra privileges). The
-// app's own pages are on `hilbertraum://app/` (src/main/app-protocol.ts), which is what makes the
-// fuse removable. electron-builder flips it via @electron/fuses before signing; an option name it
-// does not map is IGNORED SILENTLY (the fuse would stay on), hence the exact pin and the mapping
-// check. Only this fuse changes here; the built exe's wire is re-checked by hand (docs/packaging.md
-// "Electron fuses").
-describe('electron-builder.yml electronFuses (#560)', () => {
-  it('turns GrantFileProtocolExtraPrivileges off, and sets no other fuse', () => {
+// #560 + #562: the packaged binary's fuses. electron-builder flips them via @electron/fuses before
+// signing; an option name it does not map is IGNORED SILENTLY (the fuse would keep its default),
+// hence the exact pin and one mapping check per option. Measured, with the reasons, in
+// docs/architecture.md "Electron fuses — design record (#562)"; the built exe's wire is re-checked
+// by hand (docs/packaging.md "Electron fuses").
+const FUSE_OPTIONS: ReadonlyArray<readonly [yamlKey: string, fuse: string]> = [
+  ['runAsNode', 'RunAsNode'],
+  ['enableNodeOptionsEnvironmentVariable', 'EnableNodeOptionsEnvironmentVariable'],
+  ['enableNodeCliInspectArguments', 'EnableNodeCliInspectArguments'],
+  ['enableEmbeddedAsarIntegrityValidation', 'EnableEmbeddedAsarIntegrityValidation'],
+  ['onlyLoadAppFromAsar', 'OnlyLoadAppFromAsar'],
+  ['grantFileProtocolExtraPrivileges', 'GrantFileProtocolExtraPrivileges']
+]
+
+/** A file of the installed electron-builder, or null in a slimmed context without it. */
+function builderSource(...rel: string[]): string | null {
+  try {
+    return readFileSync(join(LOCKFILE, '..', 'node_modules', 'app-builder-lib', 'out', ...rel), 'utf8')
+  } catch {
+    return null
+  }
+}
+
+describe('electron-builder.yml electronFuses (#560, #562)', () => {
+  it('pins the fuse set exactly', () => {
     expect(loadBuilderConfig().electronFuses).toEqual({
+      // #562: ELECTRON_RUN_AS_NODE and --inspect no longer reach the main process.
+      runAsNode: false,
+      enableNodeCliInspectArguments: false,
+      // #562, owner decision: stays ON — off, NODE_EXTRA_CA_CERTS is dropped and the in-app
+      // downloads fail behind TLS-scanning antivirus / proxies (measured).
+      enableNodeOptionsEnvironmentVariable: true,
+      // #562: a modified app.asar ends the app; only app.asar is ever loaded.
+      enableEmbeddedAsarIntegrityValidation: true,
+      onlyLoadAppFromAsar: true,
+      // #560: file:// pages lose the extra privileges (the app's pages are on hilbertraum://app).
       grantFileProtocolExtraPrivileges: false,
       resetAdHocDarwinSignature: true
     })
   })
 
-  it("the installed electron-builder still maps that option to the fuse (a rename would be a silent no-op)", () => {
-    let src: string
-    try {
-      src = readFileSync(
-        join(LOCKFILE, '..', 'node_modules', 'app-builder-lib', 'out', 'platformPackager.js'),
-        'utf8'
-      )
-    } catch {
-      return // no electron-builder installed (slimmed context) — the yml pin above still holds
+  it('keeps what the integrity fuses need: an asar, and the header hash electron-builder writes', () => {
+    const cfg = loadBuilderConfig()
+    // onlyLoadAppFromAsar loads nothing but app.asar; without the hash the binary refuses to start.
+    expect(cfg.asar).toBe(true)
+    expect(cfg.disableAsarIntegrity).toBeUndefined()
+  })
+
+  it('the installed electron-builder still maps every option to its fuse (a rename would be a silent no-op)', () => {
+    const src = builderSource('platformPackager.js')
+    if (src === null) return // no electron-builder installed — the yml pin above still holds
+    for (const [key, fuse] of FUSE_OPTIONS) {
+      const assignment = String.raw`config\[FuseV1Options\.` + fuse + String.raw`\]\s*=\s*fuses\.` + key + String.raw`\b`
+      expect(src, key).toMatch(new RegExp(assignment))
     }
-    expect(src).toMatch(
-      /config\[FuseV1Options\.GrantFileProtocolExtraPrivileges\]\s*=\s*fuses\.grantFileProtocolExtraPrivileges/
-    )
     expect(src).toMatch(/resetAdHocDarwinSignature:\s*fuses\.resetAdHocDarwinSignature/)
+  })
+
+  it('the installed electron-builder still computes the asar hash and writes it where Electron reads it', () => {
+    const packager = builderSource('platformPackager.js')
+    const framework = builderSource('electron', 'ElectronFramework.js')
+    const mac = builderSource('electron', 'electronMac.js')
+    const win = builderSource('electron', 'electronWin.js')
+    if (packager === null || framework === null || mac === null || win === null) return
+    expect(packager).toMatch(/asarIntegrity\s*=\s*await \(0, integrity_1\.computeData\)/)
+    // Windows: the exe's INTEGRITY/ELECTRONASAR resource; macOS: Info.plist ElectronAsarIntegrity.
+    expect(framework).toMatch(/addWinAsarIntegrity\)\(executable, options\.asarIntegrity\)/)
+    expect(win).toMatch(/type:\s*"INTEGRITY"/)
+    expect(win).toMatch(/id:\s*"ELECTRONASAR"/)
+    expect(mac).toMatch(/appPlist\.ElectronAsarIntegrity\s*=/)
   })
 })

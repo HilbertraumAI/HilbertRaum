@@ -191,8 +191,8 @@ Key config points:
   handler would not serve, or when a page or stylesheet references one. The fuse is set in
   `electron-builder.yml` `electronFuses`, which electron-builder flips with `@electron/fuses` before
   signing; `tests/integration/packaging.test.ts` pins the block and checks that the installed
-  electron-builder still maps the option (an unmapped name is ignored silently). Only this fuse is
-  set; the others keep Electron's defaults. See "Electron fuses" below.
+  electron-builder still maps the option (an unmapped name is ignored silently). Since #562 the block
+  also sets four more fuses; see "Electron fuses" below.
 - **Electron ≥ 37 (Node 22.x)** is required so the packaged main process has `node:sqlite`
   (`electron` is pinned `^39.8.5`). A downgraded/stripped runtime would lose it — do not downgrade.
   Because `electron` is pinned as a **range** and hoisted to the repo-root `node_modules`,
@@ -263,7 +263,8 @@ Key config points:
   2 in [`architecture.md`](architecture.md) "Dependency remediation — design record (wave DEP-1,
   PR #77)" §5. Dev-mode OCR was never affected (the raster → IPC → recognize pipeline was proven
   end to end on Electron 39); the other runtime-only-failure smokes above (parsers, encrypted
-  workspace) still apply.
+  workspace) still apply. Unpacked files sit outside the asar integrity check (#562, measured), so
+  keep this list to the worker closure and nothing else.
 - **The OCR rasterizer ships pdf.js's JS image decoders under their own names (#551,
   fix/ocr-pdfjs-in-page).** pdf.js 6 decodes CCITT fax, JBIG2 and JPEG 2000 images only through
   modules it loads at run time as `${wasmUrl}<file name>`. The rasterizer runs pdf.js in-page under
@@ -280,12 +281,17 @@ Key config points:
   `node_modules/electron/dist/electron.exe`. Up to #560 the packaged exe was that binary with a
   rewritten resource section: the same code sections and fuse wire (measured on 43.7.7, #551). So a
   copy of `win-unpacked` with that binary copied in as `HilbertRaum.exe` runs the packaged app's
-  code against its `app.asar`, with `app.isPackaged` true. **Since #560 the packaged exe has one
-  fuse off** (wire `101100001`, the stock binary `101100011`), so that copy runs the packaged app
-  with the fuse ON, which is fine for everything except the fuse itself. For the fuse-off state,
-  flip a copy of the stock binary with `@electron/fuses` (index 7 →
-  `GrantFileProtocolExtraPrivileges` off; then decode the wire, below). SAC ran such a copy on
-  2026-10-03; probe first. **Do not compare startup timings across binaries.** On the reference
+  code against its `app.asar`, with `app.isPackaged` true. **The packaged exe's fuses differ from
+  the stock binary's** (since #562 wire `001011001`, the stock binary `101100011`), so that copy
+  runs the packaged app with Electron's default fuses. That is fine for everything except the
+  fuses themselves: no asar integrity check, RunAsNode and `--inspect` still honoured. To
+  reproduce the shipped fuses, first add electron-builder's integrity resource to the copy
+  (app-builder-lib `addWinAsarIntegrity` with `computeData` over its `resources/`), then flip it
+  with `@electron/fuses` and decode the wire (below). A copy with the integrity fuse on but no
+  resource refuses to start. Smart App Control's verdict is per file: on 2026-10-03 it ran the
+  fresh master and branch builds, and refused every new copy of the stock `electron.exe`,
+  byte-identical ones included. A file it has once allowed keeps running, and so do hard links to
+  it. Probe first. **Do not compare startup timings across binaries.** On the reference
   desktop any binary whose hash differs from the stock `electron.exe` (the real packaged exe, the
   flipped copy, even the stock binary with one byte appended) shows its first window about
   600–700 ms later than the stock binary, whatever the app code. A timing A/B must run both sides
@@ -310,31 +316,56 @@ Key config points:
   string. `third-party-notices.test.ts` pins the entry.
 - The build output goes to `apps/desktop/release/` (git-ignored).
 
-### Electron fuses (#560)
-`electron-builder.yml` sets exactly one fuse: `electronFuses: { grantFileProtocolExtraPrivileges:
-false }` (plus `resetAdHocDarwinSignature: true`, which re-signs a macOS arm64 binary ad hoc after
-the flip, before any Developer ID signature; not measured, no Mac). With the fuse off, `file://` pages
-lose Electron's extra privileges (`fetch`/XHR of any local file, among others). The app's own pages
-moved to `hilbertraum://app/` for this: with the fuse off, the old `file://` layout's module scripts
-are refused by CORS from origin `null` (measured), so do not move a page back to `file://`. The
-evidence-pack print window still loads a `file://` page; it runs no script and loads nothing, and
-its real-Electron smoke passes with the fuse off.
+### Electron fuses (#560, #562)
+`electron-builder.yml` `electronFuses` sets six fuses, measured and explained in `architecture.md`
+"Electron fuses — design record (#562)":
+
+- `runAsNode: false`: `ELECTRON_RUN_AS_NODE` no longer turns the exe into a Node.js runtime.
+- `enableNodeCliInspectArguments: false`: `--inspect`, `--inspect-brk` and SIGUSR1 open no
+  debugger. Chromium's `--remote-debugging-port`, which the CDP harnesses use, is a different
+  switch and still works.
+- `enableNodeOptionsEnvironmentVariable: true`, deliberately (owner decision 2026-10-03). Off, the
+  exe drops `NODE_EXTRA_CA_CERTS`, and the in-app downloads then fail behind TLS-scanning antivirus
+  and corporate proxies (measured with Norton). A packaged app ignores `NODE_OPTIONS` itself except
+  two parser flags.
+- `enableEmbeddedAsarIntegrityValidation: true` + `onlyLoadAppFromAsar: true`: a modified `app.asar`
+  ends the app, and only `app.asar` is ever loaded. They need `asar: true` and the header hash that
+  electron-builder writes on every build: the exe's integrity resource on Windows, `Info.plist` on
+  macOS. **Never set `disableAsarIntegrity`**: the binary would refuse to start. Windows and macOS
+  only; files in `app.asar.unpacked` are not checked.
+- `grantFileProtocolExtraPrivileges: false` (#560): `file://` pages lose Electron's extra privileges
+  (`fetch`/XHR of any local file, among others). The app's own pages moved to `hilbertraum://app/`
+  for this; with the fuse off, the old `file://` layout's module scripts are refused by CORS from
+  origin `null` (measured), so do not move a page back to `file://`. Since #563 no window loads
+  `file://` at all: the evidence-pack print window prints from memory on `hilbertraum://print/<token>`.
+- `resetAdHocDarwinSignature: true` re-signs a macOS arm64 binary ad hoc after the flip, before any
+  Developer ID signature (not measured, no Mac).
+
+`tests/integration/packaging.test.ts` pins the block, checks that the installed electron-builder
+maps every option and still writes the integrity hash, and fails on `asar: false` or
+`disableAsarIntegrity`.
 
 **Re-check the built binary's fuse wire** after an Electron bump or a change to `electronFuses`.
-Decode it with the library, not by hand. Expected for 43.7.7: `101100001`.
+Decode it with the library, not by hand. Expected for 43.7.7: `001011001`.
 
 ```bash
 # from the repo root; prints index → state ('0' off, '1' on)
 node -e "require('@electron/fuses').getCurrentFuseWire(process.argv[1]).then((w) => console.log(Object.keys(w).filter((k) => /^\d+$/.test(k)).map((k) => String.fromCharCode(w[k])).join('')))" apps/desktop/release/win-unpacked/HilbertRaum.exe
 ```
 
-The nine positions on Electron 43.7.7: 0 RunAsNode (on), 1 EnableCookieEncryption (off),
-2 EnableNodeOptionsEnvironmentVariable (on), 3 EnableNodeCliInspectArguments (on),
-4 EnableEmbeddedAsarIntegrityValidation (off), 5 OnlyLoadAppFromAsar (off),
-6 LoadBrowserProcessSpecificV8Snapshot (off), **7 GrantFileProtocolExtraPrivileges (off since
-#560)**, 8 (unnamed in `@electron/fuses` 1.8.0; the binary carries `WasmTrapHandlersEnabled`) (on).
-A flipped binary has a new hash; under Smart App Control see "A packaged build that Smart App
-Control will not start" above. Further fuse flips are their own change (#562).
+The nine positions on Electron 43.7.7, as shipped: **0 RunAsNode (off, #562)**,
+1 EnableCookieEncryption (off), 2 EnableNodeOptionsEnvironmentVariable (on),
+**3 EnableNodeCliInspectArguments (off, #562)**, **4 EnableEmbeddedAsarIntegrityValidation (on,
+#562)**, **5 OnlyLoadAppFromAsar (on, #562)**, 6 LoadBrowserProcessSpecificV8Snapshot (off),
+**7 GrantFileProtocolExtraPrivileges (off, #560)**, 8 (unnamed in `@electron/fuses` 1.8.0; the
+binary carries `WasmTrapHandlersEnabled`) (on). A flipped binary has a new hash; under Smart App
+Control see "A packaged build that Smart App Control will not start" above.
+
+**Check a packaged build's fuses by behaviour too** (manual, Windows; the CDP harnesses do it):
+`ELECTRON_RUN_AS_NODE=1 HilbertRaum.exe -e "console.log(1)"` must start the app instead of
+printing, `--inspect=127.0.0.1:9229` must leave `http://127.0.0.1:9229/json/version` unanswered,
+and a copy of the build with one byte changed inside `app.asar` must stop with "ASAR Integrity
+Violation".
 
 ### Launching from a drive
 Copy the portable `.exe` to the drive root next to the prepared layout, then launch it with
@@ -409,6 +440,7 @@ out on a fresh machine with no Node/npm); their layout + config shapes mirror th
 | `setup-dev.{ps1,sh}` | Dev bootstrap: `NODE_OPTIONS=--use-system-ca npm ci` (R6, set only when Node ≥ 22.15 supports the flag; skipped gracefully otherwise; `npm ci` = lockfile-exact, never rewrites `package-lock.json` — issue #49, the dev half of hardening L-8) + build + test smoke. |
 | `release-issues-section.sh` | Not drive prep: `.github/workflows/release.yml` runs it while building a tag and appends its output to the release notes. It emits an "Issues resolved" section — the ISSUES closed by the PRs merged since the last **published** release (the same baseline GitHub's own generated "What's Changed" uses, so the two agree), resolved via each commit's associated PRs + `closingIssuesReferences` rather than by parsing "(#N)" out of subjects (which would miss true merge commits). Read-only `gh` API calls, so it is locally testable: `scripts/release-issues-section.sh HilbertraumAI/HilbertRaum master`. Best-effort by design — a failure is downgraded to a workflow warning, so release notes can never block a release build. |
 | `verify-electron.mjs` | Root **`postinstall`** (runs on every `npm install`). Detects a genuine HALF-EXTRACT — `path.txt`/`dist/version` present but the platform binary missing or zero-length (the silent NTFS-on-Linux failure) — force-re-extracts it, and otherwise fails with an actionable message instead of leaving the opaque electron-vite `Electron uninstall` error for later. Since wave DEP-4 it is **version-aware**: on Electron ≥ 42 an absent `path.txt` is NORMAL (lazy download) and the script exits 0 silently; on ≤ 41, which still ships the postinstall, an absent `path.txt` is still a broken install. Cross-platform Node (not a shell mirror); the decision half is pure and unit-tested in `tests/unit/verify-electron.test.ts`. Skips via `HILBERTRAUM_SKIP_ELECTRON_CHECK` / `ELECTRON_OVERRIDE_DIST_PATH` / `ELECTRON_SKIP_BINARY_DOWNLOAD` (the last honoured by this script only — Electron ≥ 42 ignores it). |
+| `verify-mac-build.sh` + `lib/packaged-app-probe.mjs` | Not drive prep, not CI: the owner-run check of a packaged build (#560, #562). On a Mac the shell script builds (or takes) the `.app`, checks the fuse wire, the signature, the entitlements and the `app.asar` integrity hash, exercises the fuses, then launches the app and runs the probe; on Windows and Linux the probe runs alone against a packaged build started with `--remote-debugging-port` on a scratch drive root. "Verifying a packaged build on macOS" below. |
 
 The asset **download / verify / plan** logic is mirrored from the unit-tested
 `apps/desktop/src/main/services/assets.ts` (the canonical reference for *that* logic — keep in sync),
@@ -1027,6 +1059,87 @@ run one real-model session covering:
    **Fail** = a workspace that refuses every unlock or opens torn. The unplug lands at an
    arbitrary point of the lock, so record the outcome as evidence, not a proof. Record machine,
    OS, date and outcome in the release notes (`drive-layout.md` **Filesystem** for the caveat).
+10. **Scheme and fuse verification on each shipping platform (#560, #562):** run
+   `scripts/verify-mac-build.sh` on a Mac, and on Windows and Linux start the packaged build with
+   `--remote-debugging-port` on a scratch drive root and run `scripts/lib/packaged-app-probe.mjs`
+   against it (next section).
+
+### Platform verification of the app scheme and the fuses (#560, #562)
+
+What has been run, per platform, on the build that carries both changes. That build is the
+`release.yml` `workflow_dispatch` run on `fix/562-electron-fuses` (run 37135092030, 2026-10-03:
+real artifacts, nothing published) plus the local `electron-builder --win dir` build of the same
+branch.
+
+| check | Windows 11 (packaged exe) | Linux (the real AppImage, `ubuntu:24.04` container, non-root, `APPIMAGE_EXTRACT_AND_RUN=1`) | macOS arm64 (the real `.app.zip`) |
+|---|---|---|---|
+| fuse wire, decoded with `@electron/fuses` | `001011001` | `001011001` (the inner binary) | `001011001` (Electron Framework) |
+| `ELECTRON_RUN_AS_NODE` / `--inspect` / `NODE_OPTIONS=--require` | ignored / no debugger / not loaded | ignored / no debugger / not loaded | not run |
+| asar integrity: a changed byte in `app.asar` | the app ends ("ASAR Integrity Violation") | **not detected** (Electron has no Linux check) | `Info.plist` `ElectronAsarIntegrity` = the recomputed header hash; not run |
+| only `app.asar` loads (planted `resources/app/`, `app.asar` removed) | the planted code does not run | the planted code does not run | not run |
+| signature | unsigned (stage 0) | n/a | ad-hoc: `codesign --verify` "valid on disk, satisfies its Designated Requirement" on the runner, after `release.yml`'s own `codesign --force --deep --sign -`; `resetAdHocDarwinSignature` alone not tested |
+| page on `hilbertraum://app`; local `fetch`/XHR and a planted script refused; 13 traversal vectors 404 | pass | pass | not run |
+| KaTeX fonts, fake-mic `getUserMedia`, Copy through the bridge | pass | KaTeX, mic pass (clipboard not run) | not run |
+| PDF text, OCR of a JPEG and a CCITT G4 scan through the OCR page on the scheme | pass | PDF text and CCITT OCR pass | not run |
+| encrypted workspace: create, lock, unlock | pass | pass | not run |
+| evidence-pack PDF export | pass (dialog stubbed) | pass, through the real GTK save dialog (xdotool), PDF text checked | not run |
+| AppRun `--no-sandbox` when user namespaces are unavailable | n/a | unchanged (main process carries it; `.desktop` `Exec=AppRun --no-sandbox %U`) | n/a |
+
+The Windows column is the #562 record's measurement plus `packaged-app-probe.mjs` (13 pass,
+the export skipped). The Linux column ran a scratch harness with the same checks.
+
+**Found on the way, filed as #567:** at start the Linux AppImage requests Chromium's Hunspell
+dictionary (`https://redirector.gvt1.com/edgedl/chrome/dict/en-us-10-1.bdic`; in the container at
+every start, because the download kept failing), and the Windows build probes
+`http://wpad/wpad.dat`. Windows downloads a dictionary too, for a language it cannot spell-check
+itself (measured later with Polish). Both requests come from Chromium's own network stack and were
+measured with `--log-net-log`. The v0.1.62 AppImage does the same. See `security-model.md`
+"Chromium background fetches".
+
+### Verifying a packaged build on macOS (owner-run, #560, #562)
+
+There is no Mac in the project's test setup, so this is the protocol for one. From a checkout
+with `npm ci` done, on macOS with Node ≥ 22.12:
+
+```bash
+# build `--mac dir` from the checkout and verify it (no Developer ID: tests resetAdHocDarwinSignature)
+scripts/verify-mac-build.sh
+# or verify an existing build / the release download
+scripts/verify-mac-build.sh ~/Downloads/HilbertRaum-<version>-mac-arm64.app.zip
+# with OCR (a drive's ocr/ folder) and a real black-and-white office scan
+HILBERTRAUM_OCR_DIR=/Volumes/HILBERTRAUM/ocr PROBE_ARGS='--scan ~/scan.pdf --scan-words "INVOICE"' scripts/verify-mac-build.sh
+```
+
+It works in scratch folders under `$TMPDIR`, never on a real drive. It prints PASS / FAIL / NOTE
+lines for:
+1. **The fuse wire**, expected `001011001`.
+2. **The signature:** `codesign -dv` (ad hoc, and whether the hardened-runtime flag is set) and
+   `codesign --verify --deep --strict`.
+3. **The entitlements:** whether `com.apple.security.device.audio-input` is present.
+4. **Asar integrity:** `Info.plist`'s `ElectronAsarIntegrity` against the recomputed hash of
+   `app.asar`'s header.
+5. **The fuses at work:** `ELECTRON_RUN_AS_NODE` ignored, `--inspect` without a debugger, a changed
+   byte in a copy's `app.asar` ending the app, and a planted `resources/app/` that does not run.
+6. **The running app over CDP** (`packaged-app-probe.mjs`):
+   - the page on `hilbertraum://app`;
+   - local reads and a planted script refused, the traversal vectors;
+   - KaTeX fonts;
+   - the **microphone**: a real macOS prompt, allow it;
+   - Copy through the bridge read back with `pbpaste`;
+   - PDF text, OCR of a drawn JPEG scan (and `--scan`);
+   - an **evidence-pack PDF**: a save dialog opens, save it exactly where the script says;
+   - lock and unlock, no `[ERROR]` lines.
+
+Report the output, plus two things only eyes see: which app the microphone prompt names (the drive
+launcher starts the binary from Terminal, as this script does), and whether Gatekeeper interfered
+with the first launch.
+
+**Expected to need attention on a signed build:** the stage-1 build (Developer ID, notarized) is
+signed with the hardened runtime (`hardenedRuntime: true`). Under the hardened runtime, Apple
+requires the `com.apple.security.device.audio-input` entitlement for microphone access, and
+`build/entitlements.mac.plist` does not grant it. Dictation is therefore expected to be refused on
+that build until it is added. Unverified (no Mac). The stage-0 build is re-signed ad hoc without
+the hardened-runtime option, so it is not affected.
 
 ### The canonical USB demo (original spec §17)
 

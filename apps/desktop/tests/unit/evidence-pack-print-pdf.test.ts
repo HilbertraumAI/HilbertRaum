@@ -1,17 +1,19 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 // EP-1 Phase 6 (plan §11 item 1) — the PDF print harness against a FAKE electron: the
 // D-1 option set is pinned LITERALLY (a dropped `preferCSSPageSize` or a footer
 // `@font-face` would otherwise ship green — the D-1 pitfall list is the whole reason
 // these literals exist), and the lifecycle discipline is driven end to end: hidden
 // sandboxed preload-free window, deny-all navigation, print only after load + fonts,
-// destroy in `finally` on success AND failure AND app quit, transient print-source file
-// always removed, before-quit listener never leaked. What a fake electron CANNOT prove —
-// that Chromium really honors the options — is the env-gated real-Electron smoke's job
-// (evidence-pack-pdf-smoke.test.ts).
+// destroy in `finally` on success AND failure AND app quit, before-quit listener never leaked.
+//
+// #563: the page is served FROM MEMORY on `hilbertraum://print/<token>` — no file is written.
+// The fake window's `loadURL` fetches its URL through the REAL scheme handler
+// (`createAppProtocolHandler` over the app's one `printPages` registry), the way Chromium would,
+// so these tests see exactly what the handler serves: the verbatim pack at load time, a 404
+// afterwards, and an empty registry once every print has ended, however it ended. What a fake
+// electron CANNOT prove — that Chromium really honors the options and loads the scheme — is the
+// env-gated real-Electron smoke's job (evidence-pack-pdf-smoke.test.ts).
 
 interface FakeWebContents {
   setWindowOpenHandler: ReturnType<typeof vi.fn>
@@ -24,6 +26,9 @@ interface FakeWin {
   opts: Record<string, unknown>
   webContents: FakeWebContents
   destroyed: boolean
+  /** What the handler served this window at load time (status + body), like a renderer's document. */
+  served: { status: number; body: string; headers: Headers } | null
+  loadURL: ReturnType<typeof vi.fn>
   loadFile: ReturnType<typeof vi.fn>
   isDestroyed: () => boolean
   destroy: () => void
@@ -33,11 +38,15 @@ const fake = vi.hoisted(() => {
   const state = {
     windows: [] as FakeWin[],
     appListeners: new Map<string, Array<(...a: unknown[]) => void>>(),
-    /** Behavior knobs, reset per test. */
-    loadFile: undefined as ((path: string) => Promise<void>) | undefined,
+    /** Behavior knobs, reset per test. Runs AFTER the page was fetched; may throw or park. */
+    afterFetch: undefined as ((url: string) => Promise<void>) | undefined,
+    /** When set, the load fails BEFORE anything is fetched (a did-fail-load with no request). */
+    failBeforeFetch: undefined as Error | undefined,
     printToPDF: undefined as ((options: unknown) => Promise<Uint8Array>) | undefined,
     /** Pending printToPDF rejectors — destroy() rejects them like a real killed window. */
-    pendingPrintRejects: [] as Array<(e: Error) => void>
+    pendingPrintRejects: [] as Array<(e: Error) => void>,
+    /** The page fetcher — the real handler, installed below once the module is importable. */
+    fetchPage: undefined as ((url: string) => Promise<Response>) | undefined
   }
   const emitApp = (event: string): void => {
     for (const fn of [...(state.appListeners.get(event) ?? [])]) fn()
@@ -51,9 +60,16 @@ vi.mock('electron', () => {
     opts: Record<string, unknown>
     webContents: FakeWebContents
     destroyed = false
-    loadFile = vi.fn(async (path: string) => {
-      await (fake.state.loadFile?.(path) ?? Promise.resolve())
+    served: FakeWin['served'] = null
+    // The renderer side of a navigation: fetch the URL through the scheme handler, keep the body.
+    loadURL = vi.fn(async (url: string) => {
+      if (state.failBeforeFetch) throw state.failBeforeFetch
+      const res = await state.fetchPage!(url)
+      this.served = { status: res.status, body: await res.text(), headers: res.headers }
+      await (state.afterFetch?.(url) ?? Promise.resolve())
     })
+    // Kept only so a test can assert the harness never loads a FILE again (#563).
+    loadFile = vi.fn(async () => {})
     constructor(opts: Record<string, unknown>) {
       this.opts = opts
       this.webContents = {
@@ -118,37 +134,42 @@ import {
   printEvidencePackHtmlToPdf,
   PRINT_STEP_TIMEOUT_MS
 } from '../../src/main/services/evidence-pack/print-pdf'
-import { SECURE_WINDOW_WEB_PREFERENCES } from '../../src/main/window-security'
+import {
+  createAppProtocolHandler,
+  printPages,
+  PRINT_MAX_PENDING
+} from '../../src/main/app-protocol'
+import { EVIDENCE_PACK_CSP, SECURE_WINDOW_WEB_PREFERENCES } from '../../src/main/window-security'
 
 const HTML = '<!DOCTYPE html><html><head><meta charset="utf-8"></head><body>pack</body></html>'
 const PACK_ID = '00000000-0000-4000-8000-00000000e9a1'
+const PRINT_URL = /^hilbertraum:\/\/print\/[0-9a-f]{64}$/
 
-// Captured at module scope, before any test installs the fake clock: the step-timeout test
-// has to wait for a REAL filesystem write while `setTimeout`/`Date` are faked, and only the
-// originals can buy real wall-clock time. `sleepReal` is the yield; `realNow` the deadline.
-const realSetTimeout = globalThis.setTimeout
-const realNow = Date.now
-const sleepReal = (ms: number): Promise<void> =>
-  new Promise((resolve) => {
-    realSetTimeout(resolve, ms)
-  })
-
-let root = ''
-let sourceHtmlPath = ''
+// The app's real handler over the app's real registry — the same pair install-app-protocol.ts
+// wires. No app files: only the print host matters here.
+const handler = createAppProtocolHandler({
+  files: new Set(),
+  readFile: async () => {
+    throw new Error('no app files in this test')
+  },
+  printPages
+})
+const fetchPage = (url: string): Promise<Response> => handler(new Request(url))
 
 beforeEach(() => {
   fake.state.windows = []
   fake.state.appListeners = new Map()
-  fake.state.loadFile = undefined
+  fake.state.afterFetch = undefined
+  fake.state.failBeforeFetch = undefined
   fake.state.printToPDF = undefined
   fake.state.pendingPrintRejects = []
-  root = mkdtempSync(join(tmpdir(), 'hilbertraum-printpdf-'))
-  sourceHtmlPath = join(root, 'pack.pdf.print.tmp.html')
+  fake.state.fetchPage = fetchPage
 })
 
 afterEach(() => {
   vi.useRealTimers()
-  rmSync(root, { recursive: true, force: true })
+  // Every print, however it ended, gave its slot back.
+  expect(printPages.pending).toBe(0)
 })
 
 const lastWin = (): FakeWin => {
@@ -196,37 +217,53 @@ describe('D-1 print option set (pinned literals)', () => {
   })
 })
 
-describe('print flow (hidden window lifecycle)', () => {
-  it('writes the source html, loads it, waits for fonts, prints, tears everything down', async () => {
+describe('print flow (hidden window lifecycle, page served from memory — #563)', () => {
+  it('loads the page from memory, waits for fonts, prints, tears everything down', async () => {
     const pdfBytes = new Uint8Array([0x25, 0x50, 0x44, 0x46, 0x2d]) // "%PDF-"
-    let htmlOnDiskAtLoad = ''
-    fake.state.loadFile = async (path) => {
-      // The print source must exist ON DISK with the verbatim html BEFORE the load.
-      htmlOnDiskAtLoad = readFileSync(path, 'utf8')
-    }
     fake.state.printToPDF = async () => pdfBytes
 
-    const result = await printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID, sourceHtmlPath })
+    const result = await printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })
 
     expect(Buffer.compare(result, Buffer.from(pdfBytes))).toBe(0)
     const win = lastWin()
-    expect(win.loadFile).toHaveBeenCalledWith(sourceHtmlPath)
-    expect(htmlOnDiskAtLoad).toBe(HTML)
-    // did-finish-load (the loadFile await) THEN fonts THEN print — D-1 order.
+    // One load, of a print-host URL carrying a random token — never a file.
+    expect(win.loadURL).toHaveBeenCalledTimes(1)
+    const url = String(win.loadURL.mock.calls[0]![0])
+    expect(url).toMatch(PRINT_URL)
+    expect(url).not.toContain(PACK_ID)
+    expect(win.loadFile).not.toHaveBeenCalled()
+    // The handler served the VERBATIM pack at load time, under the pack's own policy.
+    expect(win.served?.status).toBe(200)
+    expect(win.served?.body).toBe(HTML)
+    expect(win.served?.headers.get('Content-Type')).toBe('text/html; charset=utf-8')
+    expect(win.served?.headers.get('Content-Security-Policy')).toBe(EVIDENCE_PACK_CSP)
+    expect(win.served?.headers.get('X-Content-Type-Options')).toBe('nosniff')
+    expect(win.served?.headers.get('Cache-Control')).toBe('no-store')
+    // did-finish-load (the loadURL await) THEN fonts THEN print — D-1 order.
     expect(win.webContents.executeJavaScript).toHaveBeenCalledWith(
       'document.fonts.ready.then(() => true)'
     )
     expect(win.webContents.printToPDF).toHaveBeenCalledWith(
       buildEvidencePackPrintOptions(PACK_ID)
     )
-    // Teardown: window destroyed, transient source removed, quit hook detached.
+    // Teardown: window destroyed, the page gone (a second request is a 404), quit hook detached.
     expect(win.destroyed).toBe(true)
-    expect(existsSync(sourceHtmlPath)).toBe(false)
+    expect((await fetchPage(url)).status).toBe(404)
     expect(fake.state.appListeners.get('before-quit') ?? []).toHaveLength(0)
   })
 
+  it('serves the page at most once: a second request during the print is a 404', async () => {
+    let second: number | null = null
+    fake.state.afterFetch = async (url) => {
+      second = (await fetchPage(url)).status
+    }
+    await printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })
+    expect(lastWin().served?.status).toBe(200)
+    expect(second).toBe(404)
+  })
+
   it('creates a hidden, sandboxed, preload-FREE window and denies every navigation', async () => {
-    await printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID, sourceHtmlPath })
+    await printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })
     const win = lastWin()
     expect(win.opts.show).toBe(false)
     expect(win.opts.skipTaskbar).toBe(true)
@@ -254,33 +291,32 @@ describe('print flow (hidden window lifecycle)', () => {
     }
   })
 
-  it('a print failure tears down the window AND the source file, then rethrows', async () => {
+  it('a print failure tears down the window and drops the page, then rethrows', async () => {
     fake.state.printToPDF = async () => {
       throw new Error('printToPDF failed')
     }
-    await expect(
-      printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID, sourceHtmlPath })
-    ).rejects.toThrow('printToPDF failed')
+    await expect(printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })).rejects.toThrow(
+      'printToPDF failed'
+    )
     expect(lastWin().destroyed).toBe(true)
-    expect(existsSync(sourceHtmlPath)).toBe(false)
     expect(fake.state.appListeners.get('before-quit') ?? []).toHaveLength(0)
   })
 
-  it('a load failure (did-fail-load) cleans up the same way', async () => {
-    fake.state.loadFile = async () => {
-      throw new Error('ERR_FILE_NOT_FOUND')
-    }
-    await expect(
-      printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID, sourceHtmlPath })
-    ).rejects.toThrow('ERR_FILE_NOT_FOUND')
-    expect(lastWin().destroyed).toBe(true)
-    expect(existsSync(sourceHtmlPath)).toBe(false)
+  it('a load failure before any request (did-fail-load) releases the never-served page', async () => {
+    fake.state.failBeforeFetch = new Error('ERR_UNKNOWN_URL_SCHEME')
+    await expect(printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })).rejects.toThrow(
+      'ERR_UNKNOWN_URL_SCHEME'
+    )
+    const win = lastWin()
+    expect(win.destroyed).toBe(true)
+    // The page was never fetched, and the finally dropped it: its URL is a 404 now.
+    expect((await fetchPage(String(win.loadURL.mock.calls[0]![0]))).status).toBe(404)
   })
 
   it('app quit mid-print destroys the hidden window and fails the print (kill-mid-print)', async () => {
     // A print that never settles on its own — only the destroy can end it.
     fake.state.printToPDF = () => new Promise<Uint8Array>(() => {})
-    const printing = printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID, sourceHtmlPath })
+    const printing = printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })
     // Let the flow reach the pending printToPDF, then quit the app.
     await vi.waitFor(() => {
       expect(lastWin().webContents.printToPDF).toHaveBeenCalled()
@@ -288,51 +324,56 @@ describe('print flow (hidden window lifecycle)', () => {
     fake.emitApp('before-quit')
     await expect(printing).rejects.toThrow('Object has been destroyed')
     expect(lastWin().destroyed).toBe(true)
-    expect(existsSync(sourceHtmlPath)).toBe(false)
     expect(fake.state.appListeners.get('before-quit') ?? []).toHaveLength(0)
   })
 
   it('a wedged renderer fails the step timeout instead of hanging the export', async () => {
     vi.useFakeTimers()
-    fake.state.loadFile = () => new Promise<void>(() => {}) // never finishes loading
-    const printing = printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID, sourceHtmlPath })
+    fake.state.afterFetch = () => new Promise<void>(() => {}) // never finishes loading
+    const printing = printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })
     const failed = expect(printing).rejects.toThrow(/load step took too long/)
-    // A print whose SOURCE write fails never reaches the load step at all. Record that
-    // rejection so the wait below ends on it with an honest message instead of spinning to
-    // its deadline and reporting a bare window-count mismatch. Both handlers are attached
-    // up front: `failed` is only awaited at the end, and an early `throw` here must not
-    // leave it as an unhandled rejection.
-    let printError: unknown = null
-    void printing.catch((err: unknown) => {
-      printError = err
-    })
-    void failed.catch(() => {})
-    // The print SOURCE is written asynchronously (a multi-MB synchronous write on the main
-    // thread used to stall the whole process), so the window — and with it the load step's
-    // timeout timer — only exists once that write has landed. Wait for it in REAL time, and
-    // never on the fake clock: advancing that before the timer is armed would leave the step
-    // waiting on a deadline that is already in the past.
-    //
-    // A turn COUNT is not a budget (2026-08-22, master CI windows leg: "expected +0 to be
-    // 1"). This loop used to spin 1000 × `advanceTimersByTimeAsync(0)`, whose yield is one
-    // real `setImmediate` — ~4 µs — so the whole budget was ~4 ms of wall clock. Locally the
-    // write lands in a fraction of that; a loaded CI runner (four forks, an antivirus
-    // scanner on a freshly created .html) can take longer, and the test then failed for
-    // reasons that had nothing to do with the print harness. Real sleeps against a real
-    // deadline are the fix: the same fast path when the write is quick, ~10 s of patience
-    // when it is not, and still far inside the 15 s local / 60 s CI test budget.
-    const deadline = realNow() + 10_000
-    while (fake.state.windows.length === 0 && printError === null && realNow() < deadline) {
-      await sleepReal(1)
-    }
-    if (printError !== null) throw new Error(`the print source write failed: ${printError}`)
-    expect(fake.state.windows.length).toBe(1)
+    // No file is written any more (#563), so the window and its load-step timer exist as soon
+    // as the load has started — no real-time wait for a disk write.
+    await vi.waitFor(() => expect(lastWin().loadURL).toHaveBeenCalled())
     await vi.advanceTimersByTimeAsync(PRINT_STEP_TIMEOUT_MS + 1)
     await failed
     expect(lastWin().destroyed).toBe(true)
-    // The removal is awaited inside the harness's `finally`, so the rejection above already
-    // implies it has settled — no extra yield needed (and a fake-clock turn could not buy
-    // one anyway, per the note above).
-    expect(existsSync(sourceHtmlPath)).toBe(false)
+  })
+})
+
+describe('the print-page registry around the harness (#563)', () => {
+  it(`two concurrent prints get two tokens, and each window loads its own pack (AUD-17, in memory)`, async () => {
+    const gates: Array<() => void> = []
+    fake.state.afterFetch = () => new Promise<void>((resolve) => gates.push(resolve))
+    const a = printEvidencePackHtmlToPdf('<p>ALPHA</p>', { packId: 'A' })
+    const b = printEvidencePackHtmlToPdf('<p>BRAVO</p>', { packId: 'B' })
+    await vi.waitFor(() => expect(gates).toHaveLength(2))
+    const [winA, winB] = fake.state.windows
+    expect(winA!.loadURL.mock.calls[0]![0]).not.toBe(winB!.loadURL.mock.calls[0]![0])
+    expect(winA!.served?.body).toBe('<p>ALPHA</p>')
+    expect(winB!.served?.body).toBe('<p>BRAVO</p>')
+    for (const g of gates) g()
+    await Promise.all([a, b])
+  })
+
+  it(`over ${PRINT_MAX_PENDING} prints at once, the next fails before any window or held page`, async () => {
+    const gates: Array<() => void> = []
+    fake.state.afterFetch = () => new Promise<void>((resolve) => gates.push(resolve))
+    const running = Array.from({ length: PRINT_MAX_PENDING }, (_, i) =>
+      printEvidencePackHtmlToPdf(`<p>${i}</p>`, { packId: String(i) })
+    )
+    await vi.waitFor(() => expect(gates).toHaveLength(PRINT_MAX_PENDING))
+    expect(printPages.pending).toBe(PRINT_MAX_PENDING)
+    await expect(printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })).rejects.toThrow(
+      'too many prints at once'
+    )
+    expect(fake.state.windows).toHaveLength(PRINT_MAX_PENDING) // no window for the refused one
+    for (const g of gates) g()
+    await Promise.all(running)
+    // The slots came back: a fresh print runs again.
+    fake.state.afterFetch = undefined
+    await expect(printEvidencePackHtmlToPdf(HTML, { packId: PACK_ID })).resolves.toBeInstanceOf(
+      Buffer
+    )
   })
 })
