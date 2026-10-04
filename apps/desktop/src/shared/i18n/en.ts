@@ -1189,6 +1189,7 @@ export const en = {
   'models.hint.transcriber':
     'Turns audio recordings into searchable text — and unlocks the 🎤 voice-dictation button in chat.',
   'models.hint.translation': 'Translates your documents and text between languages, entirely offline.',
+  'models.hint.vision': "Answers your questions about one picture at a time. It doesn't read PDFs or make scans searchable.",
   'models.hint.small': 'Small and quick — fast answers on nearly any machine.',
   'models.hint.balanced': 'Balanced — works well on most laptops.',
   'models.hint.large': 'Large — strongest answers; needs a powerful machine.',
@@ -1320,8 +1321,10 @@ export const en = {
   // presented as if it enabled dictation on its own.
   'models.transcriber.engineUnsupported':
     'On this operating system the app cannot install the voice engine yet, so this model does not enable voice dictation or audio import here.',
-  'models.vision.installed': 'Installed — ready in the Images tab. Nothing to start here.',
-  'models.vision.notInstalled': 'Available in the Images tab once installed — no setup needed.',
+  // #539: these "where it is used" lines show on the card itself, not in Technical details.
+  'models.vision.installed': 'Installed — used automatically on the Images screen. Nothing to start here.',
+  'models.vision.notInstalled': 'Used automatically on the Images screen once installed — no setup needed.',
+  'models.vision.goToImages': 'Go to Images',
   'models.translation.installed': 'Installed — used automatically for translation. Nothing to start here.',
   'models.translation.notInstalled': 'Used automatically for translation once installed — no setup needed.',
   // Beta #27 (D70): the Select + Start pair collapsed into ONE primary action per installed chat
@@ -3208,6 +3211,9 @@ export const en = {
   'images.err.unsupported': "That file type isn't supported. Choose a PNG, JPEG, or WEBP.",
   // #124: HEIC detected by extension — specific remedy instead of the generic unsupported copy.
   'images.err.heic': "iPhone HEIC photos aren't supported yet. Convert the photo to JPEG first.",
+  // #539: a PDF detected by extension or type — points to OCR, with a button to Documents.
+  'images.err.pdf': 'This screen reads one picture, not a PDF. For a scanned PDF, use Make searchable (OCR) under Documents.',
+  'images.err.pdfAction': 'Go to Documents',
   'images.err.decodeFailed':
     "That image couldn't be opened. It may be damaged or in an unsupported format.",
   'images.err.multiDrop': 'Drop one image at a time.',

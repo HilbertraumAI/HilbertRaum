@@ -79,7 +79,7 @@ import { useEngineProblems } from './lib/useEngineProblems'
 import { purgeSessionStores } from './lib/lockPurge'
 import { flushReviewSession, type ReviewHandoffTarget } from './lib/reviewSession'
 import { I18nProvider, useT, type I18n } from './i18n'
-import { resolveNavTarget, type ScreenId, type SettingsTab } from './navigation'
+import { resolveNavTarget, type ModelsFocus, type ScreenId, type SettingsTab } from './navigation'
 import type { MessageKey } from '@shared/i18n'
 import type { WorkspaceStateInfo } from '@shared/types'
 
@@ -146,10 +146,10 @@ function AppShell(): JSX.Element {
   // "Add packs…") opens the knowledge-pack panel. The screen's own header switch takes over
   // once mounted.
   const [documentsMode, setDocumentsMode] = useState<'documents' | 'packs'>('documents')
-  // Which library the AI Model screen opens on (#527): the 'models:voice' deep link (the
-  // composer's dictation hint) opens Browse filtered to the speech model; plain 'models'
+  // Which library the AI Model screen opens on (#527, #539): a 'models:voice' / 'models:images' /
+  // 'models:translation' deep link opens Browse filtered to that missing model; plain 'models'
   // navigation opens the screen's own default. Read once at mount, like `documentsMode`.
-  const [modelsFocus, setModelsFocus] = useState<'voice' | null>(null)
+  const [modelsFocus, setModelsFocus] = useState<ModelsFocus | null>(null)
   // EP-1 P5 (plan §10): the conversation the Chat screen should open with — set ONLY by the
   // review screen's "Back to chat" so it returns to the ORIGINATING conversation. One-shot
   // by construction: every normal chat navigation (navigate below) clears it.
@@ -555,7 +555,7 @@ function AppShell(): JSX.Element {
             )}
             {screen === 'translate' && <TranslateScreen onNavigate={navigate} />}
             {screen === 'images' && <ImagesScreen onNavigate={navigate} />}
-            {screen === 'models' && <ModelsScreen focus={modelsFocus} />}
+            {screen === 'models' && <ModelsScreen focus={modelsFocus} onNavigate={navigate} />}
             {screen === 'performance' && <PerformanceScreen onNavigate={navigate} />}
             {screen === 'settings' && (
               <SettingsScreen tab={settingsTab} onTabChange={setSettingsTab} />

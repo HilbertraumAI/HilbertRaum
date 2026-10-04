@@ -8,6 +8,9 @@
 //     the header's "My documents | Knowledge packs" switch; plain 'documents' opens My documents)
 //   - 'models:voice'           → AI Model screen opened on Browse, filtered to the Voice task (#527 —
 //     the composer's dictation hint; plain 'models' opens the screen's own default view)
+//   - 'models:images' / 'models:translation' → the same, filtered to the Images / Translation task
+//     (#539 — the Images and Translate availability cards and the Documents row's "Get the
+//     translation model…"): a button about a missing optional model lands on that model
 //   - 'settings:privacy'       → Settings, "Privacy & data" tab
 //   - 'settings:diagnostics'   → Settings, "Diagnostics (advanced)" tab
 //   - 'settings:skills' / 'skills' → Settings, "Skills" tab (rail rework 2026-09-05: Skills
@@ -43,9 +46,12 @@ export interface NavResolution {
   chatMode?: 'chat' | 'documents'
   /** Set when the target picks the Documents screen's mode (plain 'documents' = My documents). */
   documentsMode?: 'documents' | 'packs'
-  /** Set when the target opens the AI Model screen on one task's Browse list (#527). */
-  modelsFocus?: 'voice'
+  /** Set when the target opens the AI Model screen on one task's Browse list (#527, #539). */
+  modelsFocus?: ModelsFocus
 }
+
+/** The AI Model screen's deep-link focus: the task whose missing model the link is about. */
+export type ModelsFocus = 'voice' | 'images' | 'translation'
 
 export function resolveNavTarget(target: string): NavResolution {
   switch (target) {
@@ -57,6 +63,10 @@ export function resolveNavTarget(target: string): NavResolution {
       return { screen: 'documents', documentsMode: 'packs' }
     case 'models:voice':
       return { screen: 'models', modelsFocus: 'voice' }
+    case 'models:images':
+      return { screen: 'models', modelsFocus: 'images' }
+    case 'models:translation':
+      return { screen: 'models', modelsFocus: 'translation' }
     case 'chat':
       return { screen: 'chat', chatMode: 'chat' }
     case 'settings':

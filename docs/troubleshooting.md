@@ -582,10 +582,16 @@ the saved copy before you share it. If something you expected wasn't handled:
 
 The **Images** screen ("ask about an image") uses a separate **vision model** that may not be on
 your drive. If the screen shows a calm *"Image understanding needs a local vision model on this
-drive"* card, open **AI Model** (the screen's button takes you there) and add a vision model — it's
-an optional download, like the larger chat models, so internet access must be enabled in Settings
-(see the User Guide §5). This is **not** OCR: for a scanned PDF or a document you want to search,
-use the document's **Make searchable (OCR)** action instead (above).
+drive"* card, choose **Go to AI Model**: it opens the AI Model screen on the vision model. Download
+it there — it's an optional download, like the larger chat models, so internet access must be
+enabled in Settings (see the User Guide §5). There is nothing to start afterwards: the vision model
+has no **Use** button, and its row says it is used automatically on the Images screen. This is
+**not** OCR: for a scanned PDF or a document you want to search, use the document's **Make
+searchable (OCR)** action instead (above).
+
+If you drop a PDF on the Images screen, it says *"This screen reads one picture, not a PDF"* and
+offers **Go to Documents**. Add the PDF there; if it is a scan, use **Make searchable (OCR)** on
+its row.
 
 ---
 

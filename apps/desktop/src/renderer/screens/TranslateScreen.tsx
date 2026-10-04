@@ -434,13 +434,14 @@ export function TranslateScreen({
     }
     if (!available) {
       // The O2 install path: a friendly, actionable refusal with a deep link to the AI Model
-      // screen (the ChatScreen / VisionUnavailable no-model precedent).
+      // screen (the ChatScreen / VisionUnavailable no-model precedent), on the translation
+      // model itself (#539).
       return (
         <EmptyState
           title={t('translate.avail.noModel')}
           line={t('translate.avail.hint')}
           action={
-            <Button variant="primary" onClick={() => onNavigate('models')}>
+            <Button variant="primary" onClick={() => onNavigate('models:translation')}>
               {t('translate.avail.cta')}
             </Button>
           }

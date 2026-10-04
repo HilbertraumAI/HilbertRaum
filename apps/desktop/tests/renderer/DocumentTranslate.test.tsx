@@ -245,7 +245,8 @@ describe('DocumentsScreen — Translate action (Phase 34, TG-3 selects)', () => 
     await waitFor(() => expect(translateItem).toHaveAttribute('aria-disabled', 'true'))
     // The friendly path: a sibling item that jumps to the AI Model screen.
     await user.click(screen.getByRole('menuitem', { name: /get the translation model/i }))
-    expect(onNavigate).toHaveBeenCalledWith('models')
+    // #539: on the translation model itself, not the screen's default view.
+    expect(onNavigate).toHaveBeenCalledWith('models:translation')
   })
 
   it('shows the provenance line and Export only on materialized documents; Export saves', async () => {

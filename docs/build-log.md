@@ -27,6 +27,25 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-05 — the closed 2026-09-20 wave-13 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-05 (preamble budget, making room for the #539 entry). Wave 13 is closed (its five PRs and the
+v0.1.61 tag, 2026-09-21); the record is unchanged: `rag-design.md` §17 and CHANGELOG `[0.1.61]`. Citations of the form "BUILD_STATE
+2026-09-20 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-20 — **Wave 13 research recorded, five PRs shipped under a new standing shipping rule, the
+v0.1.61 cut 2026-09-21.** Retrieval is deterministic across repeated asks and a cold process restart — the
+only variance measured was in answer wording, now removed by the sampler pin. Converter coverage is
+93–99% on ordinary prose-shaped content; a lower figure on giant list-style tables is a size/row cap by
+design, not a defect. Nothing breaks on seven non-Wikipedia test archives; two converter gaps were
+confirmed there. 21 open issues were triaged with a disposition each. A tooling survey confirms the
+converter's own design. A three-arm English read found that naming a pack's archive language only when
+it differs from the question's carries the gain, while dropping the word "Wikipedia" from the planner
+prompt collapses it. Merged this wave: #492, #491, #494, #495, #496 (all 2026-09-20) — recorded in
+`docs/rag-design.md` §17 and CHANGELOG's `[0.1.61]`; the v0.1.61 tag was cut 2026-09-21.
+Next items since shipped in v0.1.62: the converter PR for #487/#493 and captions (#500); the
+cut-off-badge residual (#498, via #509)._
+
 ## 2026-10-04 — the closed 2026-10-02 #551 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-04 (preamble budget, making room for the #567 entry). #551 is closed (PR #557); the
