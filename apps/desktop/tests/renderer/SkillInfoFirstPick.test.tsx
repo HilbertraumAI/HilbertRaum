@@ -1,9 +1,9 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
-import { render, screen, cleanup, waitFor } from '@testing-library/react'
+import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { resetSkillDetailRequestForTests } from '../../src/renderer/lib/skillDetailRequest'
+import { clearSkillDetailRequest, consumeSkillDetailRequest } from '../../src/renderer/lib/skillDetailRequest'
 import { DEFAULT_SETTINGS, type Conversation, type RuntimeStatus, type SkillInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 
@@ -67,7 +67,7 @@ beforeAll(() => {
 afterEach(() => {
   cleanup()
   vi.restoreAllMocks()
-  resetSkillDetailRequestForTests()
+  clearSkillDetailRequest()
   window.localStorage.clear()
 })
 
@@ -75,8 +75,9 @@ afterEach(() => {
 async function mount(
   seen: string[],
   over: { onNavigate?: (screen: string) => void } = {}
-): Promise<{ updateSettings: ReturnType<typeof vi.fn>; user: ReturnType<typeof userEvent.setup> }> {
+): Promise<{ updateSettings: ReturnType<typeof vi.fn>; getSettings: ReturnType<typeof vi.fn>; user: ReturnType<typeof userEvent.setup> }> {
   const user = userEvent.setup()
+  const getSettings = vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: seen }))
   const updateSettings = vi.fn(async (patch: Record<string, unknown>) => ({
     ...DEFAULT_SETTINGS,
     ...patch
@@ -91,12 +92,12 @@ async function mount(
     listRunnableTools: vi.fn(async () => ({ tools: [], documentIds: [] })),
     listAttachments: vi.fn(async () => []),
     setConversationDefaultSkill: vi.fn(async () => {}),
-    getSettings: vi.fn(async () => ({ ...DEFAULT_SETTINGS, skillInfoSeen: seen })),
+    getSettings,
     updateSettings
   })
   render(<ChatScreen onNavigate={over.onNavigate ?? (() => {})} />)
   await user.click(await screen.findByText('My chat'))
-  return { updateSettings, user }
+  return { updateSettings, getSettings, user }
 }
 
 const pickerTrigger = (): HTMLElement => screen.getByRole('button', { name: /^skill:/i })
@@ -118,8 +119,12 @@ describe('ChatScreen — first-selection skill info card (#46)', () => {
   })
 
   it('an already-seen skill shows NO automatic card; the picker ⓘ re-opens and closes it', async () => {
-    const { updateSettings, user } = await mount(['bank-statement'])
+    const { updateSettings, getSettings, user } = await mount(['bank-statement'])
     await pickSkill(user)
+    // Gate the negatives on the settings read having RESOLVED: an unresolved read (seen === null) also
+    // suppresses the card and the write, which would make them pass for the wrong reason.
+    await waitFor(() => expect(getSettings).toHaveBeenCalled())
+    await act(async () => {})
     expect(screen.queryByRole('note', { name: /about “bank statement helper”/i })).not.toBeInTheDocument()
     expect(updateSettings).not.toHaveBeenCalled()
     // The ⓘ affordance re-opens the card on demand…
@@ -145,5 +150,6 @@ describe('ChatScreen — first-selection skill info card (#46)', () => {
     await screen.findByRole('note', { name: /about “bank statement helper”/i })
     await user.click(screen.getByRole('button', { name: 'Learn more' }))
     expect(onNavigate).toHaveBeenCalledWith('skills')
+    expect(consumeSkillDetailRequest()).toBe('app:bank-statement')
   })
 })

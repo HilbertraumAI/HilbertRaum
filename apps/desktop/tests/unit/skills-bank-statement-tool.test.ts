@@ -5,13 +5,8 @@ import {
   extractTransactionsWithStats,
   extractStatementBalances,
   assessCompleteness,
-  isStatementComplete,
-  parseAmount,
-  parseDate,
-  detectCurrency,
   reconcileBalances,
   categorizeRow,
-  categorizeRows,
   summarizeCashflow,
   transactionsToCsv,
   buildStatementJson,
@@ -24,15 +19,9 @@ import {
   type ExtractTransactionsOutput,
   type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
-import {
-  detectDocumentCurrency,
-  inferDateAnchor,
-  inferDateOrder,
-  inferDateOrderResult
-} from '../../src/main/services/skills/tools/money'
+import { inferDateOrder } from '../../src/main/services/skills/tools/money'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
-import { prefilterCategory } from '../../src/main/services/skills/categorizer'
-import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
+import type { AuditEventType, DocumentChunkRead, SkillTool, SkillToolContext } from '../../src/shared/types'
 
 // architecture.md "Skills — design record" §8 (S11a) — the bank-statement extract_transactions tool, proven in
 // isolation: the deterministic/offline parser (dates, amounts, currency), the honest "drop ambiguous
@@ -61,95 +50,16 @@ function makeCtx(
 function chunk(text: string, page: number | null = 1, index = 0): DocumentChunkRead {
   return { text, page, index }
 }
-
-describe('bank-statement parser helpers', () => {
-  it('parseDate normalizes ISO + day-first dotted/slashed, rejects invalid/2-digit-year', () => {
-    expect(parseDate('2026-01-31')).toBe('2026-01-31')
-    expect(parseDate('31.01.2026')).toBe('2026-01-31')
-    expect(parseDate('31/01/2026')).toBe('2026-01-31')
-    expect(parseDate('2026-13-01')).toBeNull() // bad month
-    expect(parseDate('31.02.2026')).toBeNull() // Feb 31 doesn't exist
-    expect(parseDate('31.01.26')).toBeNull() // 2-digit year unsupported WITHOUT a document anchor (R5)
-    expect(parseDate('not-a-date')).toBeNull()
-  })
-
-  it('parseDate — anchor-gated 2-digit-year / bare completion + cross-year rollover (R5, §5.7)', () => {
-    const janAnchor = { year: 2026, month: 1 } // a January-anchored (period) statement
-    // No anchor ⇒ a 2-digit-year or bare date is DROPPED, exactly as before (drop-don't-guess).
-    expect(parseDate('05.01.26')).toBeNull()
-    expect(parseDate('28.12.')).toBeNull()
-    // 2-digit year ⇒ the anchor's century window.
-    expect(parseDate('05.01.26', 'dmy', janAnchor)).toBe('2026-01-05')
-    expect(parseDate('05.01.99', 'dmy', { year: 1998, month: 1 })).toBe('1999-01-05')
-    // Bare date ⇒ the anchor year; a December row on a January statement is the PREVIOUS year (rollover),
-    // and a January row on a December statement is the NEXT year.
-    expect(parseDate('15.06.', 'dmy', { year: 2026, month: 6 })).toBe('2026-06-15')
-    expect(parseDate('28.12.', 'dmy', janAnchor)).toBe('2025-12-28')
-    expect(parseDate('03.01.', 'dmy', { year: 2025, month: 12 })).toBe('2026-01-03')
-    // A 2-digit-year date is NOT rolled (its year is explicit); only bare dates roll.
-    expect(parseDate('28.12.25', 'dmy', janAnchor)).toBe('2025-12-28')
-    // A bare decimal (no SECOND separator) is never a date — a price stays a price.
-    expect(parseDate('28.12', 'dmy', janAnchor)).toBeNull()
-    // mdy anchor path: US 2-digit year completes month-first.
-    expect(parseDate('01.05.26', 'mdy', { year: 2026, month: 1 })).toBe('2026-01-05')
-  })
-
-  it('inferDateAnchor — first fully-printed year+month, order-aware, null without one (R5)', () => {
-    expect(inferDateAnchor('Kontoauszug Zeitraum 05.01.2026 - 31.01.2026\n28.12. Miete -900,00')).toEqual({
-      year: 2026,
-      month: 1
-    })
-    // Order-aware: a US mm/dd/yyyy anchor reads month-first.
-    expect(inferDateAnchor('Invoice date 03/15/2026', 'mdy')).toEqual({ year: 2026, month: 3 })
-    // No fully-printed 4-digit-year date ⇒ no anchor (a grouped amount is never mistaken for one).
-    expect(inferDateAnchor('28.12. Miete -900,00 2.500,00\n05.01. Gehalt 1.234,56')).toBeNull()
-  })
-
-  it('inferDateOrderResult — evidence vs the day-first default (R5, §5.7)', () => {
-    // All-ambiguous doc (every leading date field ≤ 12): day-first is applied with NO evidence ⇒ 'default'
-    // (caveat-worthy). The dates LEAD their money rows — the booking-column vote scope (FIN-4).
-    const ambiguous = inferDateOrderResult('03.05.2026 Grocery -45,90\n04.06.2026 Salary 2.500,00')
-    expect(ambiguous.order).toBe('dmy')
-    expect(ambiguous.inferred).toBe('default')
-    // An unambiguous leading date (a field > 12) fixes the order ⇒ 'evidence' (no caveat).
-    expect(inferDateOrderResult('31.01.2026 Grocery -45,90\n15.02.2026 Salary 2.500,00').inferred).toBe('evidence')
-    expect(inferDateOrderResult('12/31/2026 Grocery -45,90').order).toBe('mdy')
-    expect(inferDateOrderResult('12/31/2026 Grocery -45,90').inferred).toBe('evidence')
-    // Only ISO dates ⇒ the day-first guess is moot ⇒ 'evidence' (never a spurious caveat).
-    expect(inferDateOrderResult('2026-03-05 Coffee -3,50 100,00').inferred).toBe('evidence')
-  })
-
-  it('inferDateOrderResult — 2-digit-year / bare ambiguous dates also drive the flag (R5 fix, §5.7)', () => {
-    // The dd.mm.yy / bare cohort R5 newly PARSES (day-first) must register in the order sniff too — else a
-    // genuinely day-first-guessed statement neither infers the right order nor flags 'default' (the caveat
-    // would silently miss the exact rows it protects). yy rows leading money lines are order-ambiguous:
-    expect(inferDateOrderResult('03.05.26 Grocery -45,90\n04.06.26 Salary 2.500,00').inferred).toBe('default')
-    // A bare de-AT day>12 date is day-first EVIDENCE (28 can only be a day) — previously ignored entirely.
-    expect(inferDateOrderResult('28.12. Miete -900,00').order).toBe('dmy')
-    expect(inferDateOrderResult('28.12. Miete -900,00').inferred).toBe('evidence')
-    // A US mm/dd/yy row (second field > 12) is month-first evidence — previously mis-defaulted to dmy and
-    // then dropped every row (day 12, month 31 = invalid).
-    expect(inferDateOrderResult('12/31/26 Grocery -45,90').order).toBe('mdy')
-  })
-
-  it('parseAmount handles US + German separators, signs, parens, trailing minus', () => {
-    expect(parseAmount('1,234.56')).toBe(1234.56) // US thousands + decimal
-    expect(parseAmount('1.234,56')).toBe(1234.56) // German thousands + decimal
-    expect(parseAmount('-12.00')).toBe(-12)
-    expect(parseAmount('12,00-')).toBe(-12) // trailing minus (German bank style)
-    expect(parseAmount('(45.00)')).toBe(-45) // parentheses-negative
-    expect(parseAmount('1,234')).toBe(1234) // single sep + 3 digits ⇒ thousands, not decimal
-    expect(parseAmount('12,50')).toBe(12.5) // single sep + 2 digits ⇒ decimal
-    expect(parseAmount('abc')).toBeNull()
-  })
-
-  it('detectCurrency reads an allowlisted code or known symbol, ignores random 3-letter words', () => {
-    expect(detectCurrency('Total EUR 100,00')).toBe('EUR')
-    expect(detectCurrency('Saldo €100,00')).toBe('EUR')
-    expect(detectCurrency('$50.00')).toBe('USD')
-    expect(detectCurrency('THE CAT SAT')).toBeNull() // not an ISO code
-  })
-})
+// The Unicode look-alikes a de-AT / Swiss PDF prints (R1, audit §5.3): a MINUS / EN DASH / NON-BREAKING
+// HYPHEN sign, NBSP / narrow NBSP / FIGURE SPACE thousands separators, a U+2019 apostrophe group. Built
+// from code points so the fixtures stay visible.
+const MINUS = String.fromCharCode(0x2212)
+const ENDASH = String.fromCharCode(0x2013)
+const NBHYPHEN = String.fromCharCode(0x2011)
+const NBSP = String.fromCharCode(0x00a0)
+const NNBSP = String.fromCharCode(0x202f)
+const FIGSP = String.fromCharCode(0x2007)
+const RSQUO = String.fromCharCode(0x2019)
 
 describe('extractTransactionRows', () => {
   it('extracts date/description/amount/currency + balance + sourcePage; drops non-transaction lines', () => {
@@ -171,11 +81,7 @@ describe('extractTransactionRows', () => {
       sourcePage: 2
     })
     expect(rows[1]).toMatchObject({ date: '2026-01-03', amount: 2500, balanceAfter: 4454.1 })
-  })
-
-  it('drops a row with no detectable currency (never invents one)', () => {
-    const rows = extractTransactionRows([chunk('2026-01-02 Mystery -45,90', 1)], null)
-    expect(rows).toEqual([])
+    expect(rows[0].valueDate).toBeUndefined() // a single-date row captures no value date (BL-1)
   })
 
   it('omits sourcePage when the chunk has no page', () => {
@@ -219,13 +125,6 @@ describe('extractTransactionRows', () => {
     expect(rows.reduce((s, r) => s + r.amount, 0)).toBeCloseTo(2454.1, 2)
   })
 
-  it('captures the value date only when a SECOND leading date is present (single-date rows unchanged)', () => {
-    // A plain single-date row is byte-identical to before the BL-1 fix — `valueDate` stays undefined.
-    const single = extractTransactionRows([chunk('2026-01-02 Grocery -45,90 1.954,10', 1)], 'EUR')
-    expect(single[0].valueDate).toBeUndefined()
-    expect(single[0]).toMatchObject({ date: '2026-01-02', description: 'Grocery', amount: -45.9 })
-  })
-
   it('ReDoS regression: a giant digit/separator run is scanned linearly (no main-process freeze)', () => {
     // vuln-scan-2026-06-21: the shared MONEY_RE used to backtrack quadratically (O(N²)) on a long
     // run of digits/separators with no valid `[.,]\d{2}` tail — a hostile statement whose chunk is
@@ -239,21 +138,78 @@ describe('extractTransactionRows', () => {
   })
 })
 
-describe('extractStatementBalances + isStatementComplete (completeness gate — §3.5 / D56)', () => {
-  it('reads the printed opening and closing balances (EN + DE labels), last figure on the line', () => {
-    const en = chunk('Opening balance 2.000,00\n... rows ...\nClosing balance 4.454,10')
-    expect(extractStatementBalances([en])).toEqual({ openingBalance: 2000, closingBalance: 4454.1 })
-    const de = chunk('Alter Kontostand 2.000,00\nNeuer Kontostand 4.454,10')
-    expect(extractStatementBalances([de])).toEqual({ openingBalance: 2000, closingBalance: 4454.1 })
-  })
-
-  it('skips a date earlier on the balance line and reads the trailing figure', () => {
-    const c = chunk('Saldovortrag 01.01.2024 1.234,56')
-    expect(extractStatementBalances([c]).openingBalance).toBe(1234.56)
-  })
-
-  it('returns nothing when no balance label is present (gate then downgrades)', () => {
-    expect(extractStatementBalances([chunk('2026-01-02 Coffee -3,50 100,00')])).toEqual({})
+describe('extractStatementBalances (the completeness-gate inputs — §3.5 / D56)', () => {
+  // `toEqual` per row: an absent balance is ABSENT (no key), never a guessed value.
+  it.each<[string, string, { openingBalance?: number; closingBalance?: number }]>([
+    [
+      'EN labels, last figure on the line',
+      'Opening balance 2.000,00\n... rows ...\nClosing balance 4.454,10',
+      { openingBalance: 2000, closingBalance: 4454.1 }
+    ],
+    [
+      'DE labels',
+      'Alter Kontostand 2.000,00\nNeuer Kontostand 4.454,10',
+      { openingBalance: 2000, closingBalance: 4454.1 }
+    ],
+    ['a date earlier on the balance line is skipped, the trailing figure is read', 'Saldovortrag 01.01.2024 1.234,56', { openingBalance: 1234.56 }],
+    ['no balance label ⇒ nothing (the gate then downgrades)', '2026-01-02 Coffee -3,50 100,00', {}],
+    // R2 (audit §5.4): `per` / `am` / `zum` are all in use across AT/DE banks; recognizing only `per`
+    // silently lost the completeness gate on an `am`/`zum` statement.
+    [
+      'R2: `Kontostand am` is a dual-role balance label too',
+      'Kontostand am 31.03.2025 35.037,04\n... rows ...\nKontostand am 23.06.2025 30.647,07',
+      { openingBalance: 35037.04, closingBalance: 30647.07 }
+    ],
+    [
+      'R2: `Kontostand zum` is a dual-role balance label too',
+      'Kontostand zum 01.01.2026 1.000,00\n... rows ...\nKontostand zum 31.01.2026 2.500,50',
+      { openingBalance: 1000, closingBalance: 2500.5 }
+    ],
+    // BEFORE (BL-N2): the closing read the last money token '30.06.20' → 3006.20 (the date as the balance).
+    [
+      'BL-N2: a trailing-date closing line reads the FIGURE, not the date, as the balance',
+      [
+        'Kontoauszug EUR',
+        'Anfangssaldo 2.000,00',
+        '2026-01-02 Grocery -45,90 1.954,10',
+        '2026-01-03 Salary 2.500,00 4.454,10',
+        'Endsaldo 4.454,10 EUR per 30.06.2026'
+      ].join('\n'),
+      { openingBalance: 2000, closingBalance: 4454.1 }
+    ],
+    // `Endsaldo 1.234,56 EUR per 31.03.26` read closing 3103.26 before (the 2-digit year was invisible to
+    // the scrub); the opening's `per 01.03.26` likewise read 103.26.
+    [
+      'R7 SKA-2: a dd.mm.yy TRAILING date on a balance line is scrubbed — the printed figure wins',
+      [
+        'Zeitraum 01.03.2026 bis 31.03.2026',
+        'Anfangssaldo 1.000,00 EUR per 01.03.26',
+        'Endsaldo 1.234,56 EUR per 31.03.26'
+      ].join('\n'),
+      { openingBalance: 1000, closingBalance: 1234.56 }
+    ],
+    [
+      'R7 review: a PUNCTUATION-trailed dd.mm.yy balance date is scrubbed too',
+      'Zeitraum 01.03.2026 bis 31.03.2026\nEndsaldo 1.234,56 EUR per 31.03.26.',
+      { closingBalance: 1234.56 }
+    ],
+    // U1 (audit §2.3): bare integers MONEY_RE rejects; `lastMoneyOnLine` falls back to the shared
+    // `lastCurrencyAdjacentInteger`, mirroring the invoice `totalsMoney` fallback.
+    [
+      'U1: a ROUND balance printed with no decimal, currency-adjacent',
+      'Opening balance 914 $\n... rows ...\nClosing balance 1 000 $',
+      { openingBalance: 914, closingBalance: 1000 }
+    ],
+    ['U1: the SIGN of a currency-adjacent round balance is kept (a credit-note closing)', 'Closing balance -50 EUR', { closingBalance: -50 }],
+    ['U1: a bare integer touching no currency marker is not read (drop-don’t-guess)', 'Opening balance 914', {}],
+    // The balance readers run over the SAME normalized text as the row extractor.
+    [
+      'R1: NBSP-grouped Kontostand balances read in full',
+      `Kontostand per 01.01.2026 1${NBSP}000,00\nKontostand per 31.01.2026 2${NBSP}500,50`,
+      { openingBalance: 1000, closingBalance: 2500.5 }
+    ]
+  ])('reads the printed balances: %s', (_label, text, expected) => {
+    expect(extractStatementBalances([chunk(text)])).toEqual(expected)
   })
 
   it('disambiguates the dual-role `Kontostand per` label by DATE: earliest = opening, latest = closing (audit C-4)', () => {
@@ -261,26 +217,6 @@ describe('extractStatementBalances + isStatementComplete (completeness gate — 
     // `Kontostand per <date>`. The earliest-dated line is the opening; the latest-dated is the closing.
     const c = chunk('Kontostand per 31.03.2025 35.037,04\n... rows ...\nKontostand per 23.06.2025 30.647,07')
     expect(extractStatementBalances([c])).toEqual({ openingBalance: 35037.04, closingBalance: 30647.07 })
-  })
-
-  it('R2: recognizes `Kontostand am` / `Kontostand zum` as dual-role balance labels too (audit §5.4)', () => {
-    // `per` / `am` / `zum` are all in use across AT/DE banks; recognizing only `per` silently lost the
-    // completeness gate (and left phantom transactions) on an `am`/`zum` statement.
-    const am = chunk('Kontostand am 31.03.2025 35.037,04\n... rows ...\nKontostand am 23.06.2025 30.647,07')
-    expect(extractStatementBalances([am])).toEqual({ openingBalance: 35037.04, closingBalance: 30647.07 })
-    const zum = chunk('Kontostand zum 01.01.2026 1.000,00\n... rows ...\nKontostand zum 31.01.2026 2.500,50')
-    expect(extractStatementBalances([zum])).toEqual({ openingBalance: 1000, closingBalance: 2500.5 })
-  })
-
-  it('R2: an `am`/`zum` Kontostand line is dropped from the transaction stream, not read as a phantom row (§5.4)', () => {
-    const text = [
-      'Kontoauszug EUR',
-      '2026-01-02 Kaffeehaus -3,50 996,50',
-      'Kontostand am 31.01.2026 996,50'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(1) // the balance line is a summary, not a transaction
-    expect(rows[0]).toMatchObject({ description: 'Kaffeehaus', amount: -3.5 })
   })
 
   it('a SINGLE `Kontostand per` line is CLOSING only — opening stays undefined (audit C-4)', () => {
@@ -301,34 +237,6 @@ describe('extractStatementBalances + isStatementComplete (completeness gate — 
     expect(assessCompleteness({ rows, openingBalance, closingBalance, reconcile: reconcileBalances(rows) })).toBe(
       'unverified'
     )
-  })
-
-  it('is complete only when opening + Σamounts == closing within half a cent', () => {
-    const rows = [
-      { date: '2026-01-02', description: 'Grocery', amount: -45.9, currency: 'EUR' },
-      { date: '2026-01-03', description: 'Salary', amount: 2500, currency: 'EUR' }
-    ]
-    const reconcile = reconcileBalances(rows)
-    expect(
-      isStatementComplete({ rows, openingBalance: 2000, closingBalance: 4454.1, reconcile })
-    ).toBe(true)
-    // A closing balance that doesn't tie out → NOT complete (no proof).
-    expect(
-      isStatementComplete({ rows, openingBalance: 2000, closingBalance: 9999.99, reconcile })
-    ).toBe(false)
-    // Missing either balance → NOT complete (the per-row chain alone is never the proof).
-    expect(isStatementComplete({ rows, closingBalance: 4454.1, reconcile })).toBe(false)
-    expect(isStatementComplete({ rows, openingBalance: 2000, reconcile })).toBe(false)
-  })
-
-  it('a per-row balance MISMATCH can never be complete (a mismatch is a read error)', () => {
-    const rows = [
-      { date: '2026-01-02', description: 'Alpha', amount: -10, currency: 'EUR', balanceAfter: 100 },
-      { date: '2026-01-03', description: 'Beta', amount: -10, currency: 'EUR', balanceAfter: 200 } // can't follow 100−10
-    ]
-    const reconcile = reconcileBalances(rows)
-    // Even if some opening/closing pair were supplied, the contradicting chain forbids completeness.
-    expect(isStatementComplete({ rows, openingBalance: 110, closingBalance: 90, reconcile })).toBe(false)
   })
 })
 
@@ -370,12 +278,6 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
     expect(assessCompleteness({ rows, openingBalance: 110, closingBalance: 90, reconcile })).toBe('contradicted')
   })
 
-  it('isStatementComplete is exactly the boolean projection of the complete status', () => {
-    const reconcile = reconcileBalances(ROWS)
-    expect(isStatementComplete({ rows: ROWS, openingBalance: 2000, closingBalance: 4454.1, reconcile })).toBe(true)
-    expect(isStatementComplete({ rows: ROWS, reconcile })).toBe(false) // unverified ⇒ not 'complete'
-  })
-
   it("'unverified' for a MIXED-currency statement — never a meaningless cross-currency tie (audit BL-2/TEST-6)", () => {
     // Σ over rows in different currencies is a meaningless figure to compare against ONE opening/closing
     // pair, so the gate must never claim 'complete' OR 'contradicted' from it — the honest verdict is
@@ -393,7 +295,6 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
     expect(assessCompleteness({ rows: mixed, openingBalance: 100, closingBalance: 9999.99, reconcile })).toBe(
       'unverified'
     )
-    expect(isStatementComplete({ rows: mixed, openingBalance: 100, closingBalance: 86.5, reconcile })).toBe(false)
   })
 
   it("sums in INTEGER CENTS so float drift over many rows can't flip a tying statement to contradicted (audit C-3)", () => {
@@ -420,185 +321,156 @@ describe('assessCompleteness — the three-outcome refinement (§3.5 / D56)', ()
 })
 
 describe('extractTransactionRows — date correctness (R5, §5.7)', () => {
-  it('completes dd.mm.yy rows against a 4-digit anchor date in the document', () => {
-    const text = [
-      'Kontoauszug Zeitraum 01.01.2026 - 31.01.2026', // the 4-digit-year anchor
-      '05.01.26 Gehalt ACME 2.500,00 3.500,00',
-      '06.01.26 Miete -900,00 2.600,00'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(2)
-    expect(rows[0].date).toBe('2026-01-05')
-    expect(rows[1].date).toBe('2026-01-06')
-  })
-
-  it('drops dd.mm.yy rows when the document has NO 4-digit anchor (posture preserved — asserted explicitly)', () => {
-    const text = ['05.01.26 Gehalt ACME 2.500,00 3.500,00', '06.01.26 Miete -900,00 2.600,00'].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(0) // no anchor ⇒ no guess ⇒ zero rows (the drop-don't-guess posture stands)
-  })
-
-  it('cross-year: a bare 28.12. row on a January-anchored statement gets the PREVIOUS year', () => {
-    const text = [
-      'Kontoauszug Zeitraum 01.01.2026 - 31.01.2026',
-      '05.01.2026 Gehalt ACME 2.500,00 3.500,00',
-      '28.12. Miete -900,00 2.600,00'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    const december = rows.find((r) => r.description.includes('Miete'))
-    expect(december?.date).toBe('2025-12-28') // NOT 2026-12-28 (the naive page-year stamp)
+  it.each<[string, string[], string[]]>([
+    [
+      'completes dd.mm.yy rows against a 4-digit anchor date in the document',
+      [
+        'Kontoauszug Zeitraum 01.01.2026 - 31.01.2026', // the 4-digit-year anchor
+        '05.01.26 Gehalt ACME 2.500,00 3.500,00',
+        '06.01.26 Miete -900,00 2.600,00'
+      ],
+      ['2026-01-05', '2026-01-06']
+    ],
+    [
+      'drops dd.mm.yy rows when the document has NO 4-digit anchor (no guess ⇒ zero rows — posture asserted explicitly)',
+      ['05.01.26 Gehalt ACME 2.500,00 3.500,00', '06.01.26 Miete -900,00 2.600,00'],
+      []
+    ],
+    [
+      'cross-year: a bare 28.12. row on a January-anchored statement gets the PREVIOUS year (not the naive page-year stamp)',
+      [
+        'Kontoauszug Zeitraum 01.01.2026 - 31.01.2026',
+        '05.01.2026 Gehalt ACME 2.500,00 3.500,00',
+        '28.12. Miete -900,00 2.600,00'
+      ],
+      ['2026-01-05', '2025-12-28']
+    ]
+  ])('%s', (_label, lines, dates) => {
+    const rows = extractTransactionRows([chunk(lines.join('\n'), 1)], 'EUR')
+    expect(rows.map((r) => r.date)).toEqual(dates)
   })
 })
 
 describe('extractTransactionRows — wrapped descriptions (R6, §5.7)', () => {
-  it('appends a dateless/money-less follower line to the prior row (merchant name survives)', () => {
+  // `chunks` are one page each: a continuation never crosses a chunk boundary (`pending` is per-segment).
+  it.each<[string, string[], Array<Record<string, unknown>>]>([
     // A SEPA row whose payee prints on the line below: before R6 the `NETFLIX…` line was dropped (the row
-    // kept only `SEPA-Lastschrift`), degrading the categorizer and the listing. R6 appends the wrapped
-    // payee line to the row's description (the plain-text mirror of the geometry multi-baseline association).
-    const text = [
-      '2026-03-01 SEPA-Lastschrift -12,99 1.000,00',
-      'NETFLIX INTERNATIONAL B.V.'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].description).toContain('NETFLIX')
-    expect(rows[0]).toMatchObject({ amount: -12.99, balanceAfter: 1000, description: 'SEPA-Lastschrift NETFLIX INTERNATIONAL B.V.' })
-  })
-
-  it('is BOUNDED to one continuation line — a third dateless line does not glue', () => {
-    const text = [
-      '2026-03-01 SEPA-Lastschrift -12,99 1.000,00',
-      'NETFLIX INTERNATIONAL B.V.', // absorbed (1st continuation)
-      'Amsterdam NL' // NOT absorbed — past the single-line bound
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].description).toBe('SEPA-Lastschrift NETFLIX INTERNATIONAL B.V.')
-    expect(rows[0].description).not.toContain('Amsterdam')
-  })
-
-  it('does NOT glue a balance-label line or a following transaction to the prior row', () => {
-    // A balance-label line (a summary) and a genuine next transaction each CLOSE the pending row rather
-    // than being absorbed as description text — the continuation is strictly a dateless/money-less wrap.
-    const text = [
-      '2026-03-01 Kaffeehaus -3,50 996,50',
-      'Kontostand am 31.03.2026 996,50', // balance label — read by extractStatementBalances, never glued
-      '2026-03-02 Bäckerei -2,00 994,50'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(2)
-    expect(rows[0].description).toBe('Kaffeehaus')
-    expect(rows[1].description).toBe('Bäckerei')
-  })
-
-  it('does NOT glue a figure-bearing follower line (a stray annotation is not payee text)', () => {
-    // The continuation is strictly dateless AND money-less. A bare figure line (an FX/annotation remnant)
-    // carries a money token, so it CLOSES the pending row instead of being absorbed into the description.
-    const text = ['2026-03-01 Kaffeehaus -3,50 996,50', '1,50'].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].description).toBe('Kaffeehaus') // NOT "Kaffeehaus 1,50"
-  })
-
-  it('does NOT carry a continuation across a chunk/page boundary (each chunk is one page)', () => {
-    // A wrapped payee prints on the SAME page as its booking row; `pending` is scoped per-segment, so a
-    // page-2 repeated column header must NOT glue onto page-1's last row (the multi-page common case).
-    const rows = extractTransactionRows(
+    // kept only `SEPA-Lastschrift`), degrading the categorizer and the listing.
+    [
+      'appends a dateless/money-less follower line to the prior row (merchant name survives)',
+      ['2026-03-01 SEPA-Lastschrift -12,99 1.000,00\nNETFLIX INTERNATIONAL B.V.'],
+      [{ amount: -12.99, balanceAfter: 1000, description: 'SEPA-Lastschrift NETFLIX INTERNATIONAL B.V.' }]
+    ],
+    [
+      'is BOUNDED to one continuation line — a third dateless line does not glue',
+      ['2026-03-01 SEPA-Lastschrift -12,99 1.000,00\nNETFLIX INTERNATIONAL B.V.\nAmsterdam NL'],
+      [{ description: 'SEPA-Lastschrift NETFLIX INTERNATIONAL B.V.' }]
+    ],
+    // A balance-label line (a summary) and a genuine next transaction each CLOSE the pending row.
+    [
+      'does NOT glue a balance-label line or a following transaction to the prior row',
+      ['2026-03-01 Kaffeehaus -3,50 996,50\nKontostand am 31.03.2026 996,50\n2026-03-02 Bäckerei -2,00 994,50'],
+      [{ description: 'Kaffeehaus' }, { description: 'Bäckerei' }]
+    ],
+    // A bare figure line (an FX/annotation remnant) carries a money token, so it closes the pending row.
+    [
+      'does NOT glue a figure-bearing follower line (a stray annotation is not payee text)',
+      ['2026-03-01 Kaffeehaus -3,50 996,50\n1,50'],
+      [{ description: 'Kaffeehaus' }] // NOT "Kaffeehaus 1,50"
+    ],
+    [
+      'does NOT carry a continuation across a chunk/page boundary (a page-2 column header is not absorbed)',
       [
-        chunk('2026-03-01 Kaffeehaus -3,50 996,50', 1, 0),
-        chunk('Buchungstag Valuta Buchungstext Betrag Saldo\n2026-03-02 Bäckerei -2,00 994,50', 2, 1)
+        '2026-03-01 Kaffeehaus -3,50 996,50',
+        'Buchungstag Valuta Buchungstext Betrag Saldo\n2026-03-02 Bäckerei -2,00 994,50'
       ],
+      [{ description: 'Kaffeehaus' }, { description: 'Bäckerei' }]
+    ],
+    [
+      'R2: an `am`/`zum` Kontostand line is dropped from the transaction stream, not read as a phantom row (§5.4)',
+      ['Kontoauszug EUR\n2026-01-02 Kaffeehaus -3,50 996,50\nKontostand am 31.01.2026 996,50'],
+      [{ description: 'Kaffeehaus', amount: -3.5 }]
+    ]
+  ])('%s', (_label, texts, expected) => {
+    const rows = extractTransactionRows(
+      texts.map((t, i) => chunk(t, i + 1, i)),
       'EUR'
     )
-    expect(rows).toHaveLength(2)
-    expect(rows[0].description).toBe('Kaffeehaus') // page-2 header NOT absorbed across the boundary
-    expect(rows[1].description).toBe('Bäckerei')
+    expect(rows).toHaveLength(expected.length)
+    expect(rows).toMatchObject(expected)
   })
 })
 
 describe('BANK_EXTRACTOR_VERSION (A9 staleness stamp)', () => {
   it('is at 11 — the IA-3 shared date-order classifier change (invoice-audit-2026-07-06 T-6)', () => {
-    // The constant gates A9 re-extraction: any statement stamped < this is STALE and re-extracted. R1
-    // added the `normalizeExtractionText` pre-pass (v4); R2 extended the dual-role balance label (v5); R5
-    // completes 2-digit-year / bare dates + cross-year rollover (v6); R6 appends wrapped continuations (v7);
-    // U1 records `droppedRowCount` + reads a currency-adjacent round balance (v8); R7 (skills-audit-
-    // 2026-07-03 SKA-1/2/13) date-blanks the row money scan, widens the date scrub to dd.mm.yy, and
-    // column-gates the geometry `d.dd` classification (v9). IA-2 (v10) reads a leading `-` as a sign only
-    // when GLUED to the figure/paren, so a spaced `GUTSCHRIFT - 34,39` reads +34,39 (a credit), not −34,39.
-    // IA-3 (v11) is the shared-parser twin of the invoice T-6 fix: `inferDateOrderResult` now classifies a
-    // line by the date-scrubbed `hasMoneyToken`, so a money-less period header (`Kontoauszug 01.01.2026 -
-    // 31.03.2026`) votes on its dates — which can change the inferred order (and persisted dates). Each
-    // change re-extracts older rows, so v10 (and older) rows MUST re-extract once this reads 11.
+    // The constant gates A9 re-extraction: any statement stamped lower is STALE and re-extracted. The
+    // per-version changelog lives on the constant in bank-statement.ts; a deliberate bump updates this literal.
     expect(BANK_EXTRACTOR_VERSION).toBe(11)
   })
 })
 
 describe('extractTransactionsWithStats — droppedRowCount (U1, audit §2.3)', () => {
-  it('is 0 on a clean statement (every money line parsed) — the "whole statement" claim stands', () => {
-    const text = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
-    expect(extractTransactionsWithStats([chunk(text, 1)], 'EUR').droppedRowCount).toBe(0)
-  })
-
-  it('counts a currency-less money-bearing row the parser rejected', () => {
-    // The second row prints a money token but NO detectable currency (null statement currency, no symbol/
-    // code) → parseLine drops it; it is a money-bearing line the parser could not read → counted.
-    const text = '2026-01-02 Grocery -45,90\n2026-01-03 Mystery -12,00'
-    const stats = extractTransactionsWithStats([chunk(text, 1)], null)
-    expect(stats.rows).toHaveLength(0) // both rows currency-less → dropped
-    expect(stats.droppedRowCount).toBe(2)
-  })
-
-  it('does NOT count a money-LESS header/period line (it never looked like a transaction)', () => {
-    const text = 'Kontoauszug Zeitraum 01.01.2026 - 31.03.2026\n2026-01-02 Grocery -45,90 1.954,10'
-    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
-    expect(stats.rows).toHaveLength(1)
-    expect(stats.droppedRowCount).toBe(0) // the period header carries no money-shaped token after date-scrub
-  })
-
-  it('counts a booking row dropped for a DATE-parse failure (malformed / no-anchor date) — SHAPE not parse', () => {
-    // "31.02.2026" is date-SHAPED but not a valid calendar date → parseLine drops the row; it is still a
-    // booking-row shape the parser couldn't read, so it IS counted (a parse-gated check would silently miss
-    // it and let the answer keep its "whole statement" claim over a genuinely-dropped row).
-    const text = '2026-01-02 Grocery -45,90 1.954,10\n31.02.2026 Payee 90,00 EUR'
-    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
-    expect(stats.rows).toHaveLength(1) // the malformed-date row dropped
-    expect(stats.droppedRowCount).toBe(1) // …but counted (date-SHAPE test, not date-PARSE)
-  })
-
-  it('a money-bearing line whose DESCRIPTION leads (no date-shaped token) is NOT counted (FX/memo exclusion)', () => {
-    // The plain-path mirror of the geometry Valuta/FX second baseline: a follower line with a figure but no
-    // leading date token is a memo/reference, never a transaction — counting it would falsely gate the read.
-    const text = '2026-01-02 Grocery -45,90 1.954,10\nAuftraggeber Hausverwaltung 12,50 CHF'
-    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
-    expect(stats.droppedRowCount).toBe(0)
-  })
-
-  it('extractTransactionRows stays the rows-only wrapper (byte-identical array result)', () => {
-    const text = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10'
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toEqual(extractTransactionsWithStats([chunk(text, 1)], 'EUR').rows)
-    expect(rows).toHaveLength(1)
+  it.each<[string, string, string | null, number, number]>([
+    [
+      'is 0 on a clean statement (every money line parsed) — the "whole statement" claim stands',
+      'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10',
+      'EUR',
+      2,
+      0
+    ],
+    // No detectable currency (null statement currency, no symbol/code) → parseLine drops both rows; each
+    // is a money-bearing line the parser could not read → counted.
+    ['counts a currency-less money-bearing row the parser rejected', '2026-01-02 Grocery -45,90\n2026-01-03 Mystery -12,00', null, 0, 2],
+    [
+      'does NOT count a money-LESS header/period line (it never looked like a transaction)',
+      'Kontoauszug Zeitraum 01.01.2026 - 31.03.2026\n2026-01-02 Grocery -45,90 1.954,10',
+      'EUR',
+      1,
+      0 // the period header carries no money-shaped token after date-scrub
+    ],
+    // "31.02.2026" is date-SHAPED but not a valid calendar date → parseLine drops the row; it IS counted (a
+    // parse-gated check would silently miss it and keep the answer's "whole statement" claim over a drop).
+    [
+      'counts a booking row dropped for a DATE-parse failure (malformed / no-anchor date) — SHAPE not parse',
+      '2026-01-02 Grocery -45,90 1.954,10\n31.02.2026 Payee 90,00 EUR',
+      'EUR',
+      1,
+      1
+    ],
+    // The plain-path mirror of the geometry Valuta/FX second baseline: a figure with no leading date token
+    // is a memo/reference, never a transaction — counting it would falsely gate the read.
+    [
+      'a money-bearing line whose DESCRIPTION leads (no date-shaped token) is NOT counted (FX/memo exclusion)',
+      '2026-01-02 Grocery -45,90 1.954,10\nAuftraggeber Hausverwaltung 12,50 CHF',
+      'EUR',
+      1,
+      0
+    ]
+  ])('%s', (_label, text, currency, rowCount, dropped) => {
+    const stats = extractTransactionsWithStats([chunk(text, 1)], currency)
+    expect(stats.rows).toHaveLength(rowCount)
+    expect(stats.droppedRowCount).toBe(dropped)
   })
 })
 
 describe('R7 — a mid-line/trailing date is never an amount (skills-audit-2026-07-03 SKA-1/SKA-2)', () => {
-  it('a period line `01.04.2026 bis 30.04.2026` no longer invents a "bis" transaction (SKA-1)', () => {
-    // splitLeadingDates consumes only the LEADING date; the un-blanked money scan then read the second
-    // date's `30.04` as the amount → {date: 2026-04-01, description: "bis", amount: 30.04}.
-    const text = 'Statement EUR\n01.04.2026 bis 30.04.2026\n02.04.2026 Grocery -45,90'
+  // `splitLeadingDates` consumes only the LEADING date; the un-blanked money scan then read the second
+  // date's `30.04` as the amount → {date: 2026-04-01, description: "bis", amount: 30.04}. `31.03.26` is
+  // money-shaped whole (→ 3103.26); with the widened scrub the blanked scan sees nothing.
+  it.each([
+    [
+      'a period line `01.04.2026 bis 30.04.2026` no longer invents a "bis" transaction (SKA-1)',
+      'Statement EUR\n01.04.2026 bis 30.04.2026\n02.04.2026 Grocery -45,90'
+    ],
+    [
+      'the dd.mm.yy period variant no longer invents a 3103.26-style transaction (SKA-1 + SKA-2)',
+      '01.03.2026 bis 31.03.2026\n15.03.26 bis 31.03.26 Zinsperiode\n02.03.2026 Grocery -45,90 EUR'
+    ]
+  ])('%s', (_label, text) => {
     const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
     expect(stats.rows).toHaveLength(1)
     expect(stats.rows[0].description).toBe('Grocery')
     expect(stats.droppedRowCount).toBe(0) // the period line carries NO money token → never counted
-  })
-
-  it('the dd.mm.yy period variant no longer invents a 3103.26-style transaction (SKA-1 + SKA-2)', () => {
-    // `31.03.26` is money-shaped whole (→ 3103.26); with the widened scrub the blanked scan sees nothing.
-    const text = '01.03.2026 bis 31.03.2026\n15.03.26 bis 31.03.26 Zinsperiode\n02.03.2026 Grocery -45,90 EUR'
-    const stats = extractTransactionsWithStats([chunk(text, 1)], 'EUR')
-    expect(stats.rows).toHaveLength(1)
-    expect(stats.rows[0].description).toBe('Grocery')
-    expect(stats.droppedRowCount).toBe(0)
   })
 
   it('a TRAILING date on a booking row is not a phantom balance column (SKA-1)', () => {
@@ -610,38 +482,27 @@ describe('R7 — a mid-line/trailing date is never an amount (skills-audit-2026-
     expect(rows[0].description).toBe('Miete')
   })
 
-  it('the SKA-1 blanking is SAME-LENGTH: description slicing and figure-region currency stay byte-correct', () => {
-    // A mid-line date LEFT of the figure stays in the description byte-exact (the slice uses ORIGINAL
-    // text at blanked-scan indices), and the figure-region slice still sees the adjacent foreign code.
-    const rows = extractTransactionRows(
-      [chunk('05.03.2026 Ref 31.12.2026 Gutschrift 100,00 USD 1.100,00', 1)],
-      'EUR'
-    )
+  // The SKA-1 blanking is SAME-LENGTH: a mid-line date LEFT of the figure stays in the description
+  // byte-exact (the slice uses ORIGINAL text at blanked-scan indices), and the figure-region slice still
+  // sees the adjacent foreign code. The second row pins the date ADJACENT to the figure: the blanked date's
+  // tail sits inside MONEY_RE's up-to-4-space leading gap (`\s{0,4}`), so a raw `match.index` slice would
+  // chop `…31.03.26` bytes out of the description.
+  it.each<[string, string, Record<string, unknown>]>([
+    [
+      'the SKA-1 blanking is SAME-LENGTH: description slicing and figure-region currency stay byte-correct',
+      '05.03.2026 Ref 31.12.2026 Gutschrift 100,00 USD 1.100,00',
+      // currency: figure-region detection unshifted (BL-2 slice intact)
+      { description: 'Ref 31.12.2026 Gutschrift', currency: 'USD', amount: 100, balanceAfter: 1100 }
+    ],
+    [
+      'the figureStart trim is pinned with the date ADJACENT to the figure (R7 review)',
+      '05.03.2026 Zinsen bis 31.03.26 100,00 1.100,00',
+      { description: 'Zinsen bis 31.03.26', amount: 100, balanceAfter: 1100 }
+    ]
+  ])('%s', (_label, line, expected) => {
+    const rows = extractTransactionRows([chunk(line, 1)], 'EUR')
     expect(rows).toHaveLength(1)
-    expect(rows[0].description).toBe('Ref 31.12.2026 Gutschrift') // byte-exact incl. the untouched date
-    expect(rows[0].currency).toBe('USD') // figure-region currency detection unshifted (BL-2 slice intact)
-    expect(rows[0].amount).toBe(100)
-    expect(rows[0].balanceAfter).toBe(1100)
-  })
-
-  it('a dd.mm.yy TRAILING date on a balance line is scrubbed — the printed figure wins (SKA-2, the BL-N2 twin)', () => {
-    // `Endsaldo 1.234,56 EUR per 31.03.26` read closing 3103.26 before (the 2-digit year was invisible
-    // to the scrub); the opening's `per 01.03.26` likewise read 103.26.
-    const text = [
-      'Zeitraum 01.03.2026 bis 31.03.2026',
-      'Anfangssaldo 1.000,00 EUR per 01.03.26',
-      'Endsaldo 1.234,56 EUR per 31.03.26'
-    ].join('\n')
-    const balances = extractStatementBalances([chunk(text, 1)])
-    expect(balances.openingBalance).toBe(1000)
-    expect(balances.closingBalance).toBe(1234.56)
-  })
-
-  it('a PUNCTUATION-trailed dd.mm.yy balance date is scrubbed too (R7 review)', () => {
-    const balances = extractStatementBalances([
-      chunk('Zeitraum 01.03.2026 bis 31.03.2026\nEndsaldo 1.234,56 EUR per 31.03.26.', 1)
-    ])
-    expect(balances.closingBalance).toBe(1234.56) // was 3103.26 with the plain (?![\d.,']) lookahead
+    expect(rows[0]).toMatchObject(expected)
   })
 
   it('a blanked date RANGE after the amount is not a spaced trailing debit minus (R7 review — sign-flip guard)', () => {
@@ -680,46 +541,25 @@ describe('R7 — a mid-line/trailing date is never an amount (skills-audit-2026-
     expect(flagged.droppedRowCount).toBe(1)
   })
 
-  it('the figureStart trim is pinned with the date ADJACENT to the figure (R7 review — the \\s{0,4} window)', () => {
-    // The blanked date's tail sits inside MONEY_RE's up-to-4-space leading gap, so a raw `match.index`
-    // slice would chop `…31.03.26` bytes out of the description.
-    const rows = extractTransactionRows([chunk('05.03.2026 Zinsen bis 31.03.26 100,00 1.100,00', 1)], 'EUR')
-    expect(rows).toHaveLength(1)
-    expect(rows[0].description).toBe('Zinsen bis 31.03.26') // byte-exact, date intact
-    expect(rows[0].amount).toBe(100)
-    expect(rows[0].balanceAfter).toBe(1100)
-  })
-
-  it('dd.mm.yy rows with a per-row currency CELL keep their document currency vote (R7 review — zero-rows regression)', () => {
-    // The `<date> <desc> EUR <amount>` layout's only EUR sits LEFT of the amount; the SKA-2 scrub
-    // removed its accidental vote (the date used to be the first "money" match). The figure-ADJACENT
-    // code now votes deliberately, so the whole pipeline still extracts every row.
+  it('dd.mm.yy rows with a per-row currency CELL keep their document currency vote (R7 review — zero-rows regression)', async () => {
+    // The `<date> <desc> EUR <amount>` layout's only EUR sits LEFT of the amount; the SKA-2 scrub removed its
+    // accidental vote (the date used to be the first "money" match). The figure-ADJACENT code now votes
+    // deliberately, so the whole tool still extracts every row — a lost vote leaves a null currency and every
+    // row is dropped.
     const text = ['01.06.2026 Miete EUR 850,00-', '15.06.26 REWE Markt EUR 19,15-', '20.06.26 Gutschrift EUR 250,00'].join('\n')
-    const joined = text
-    const currency = detectDocumentCurrency(joined)
-    expect(currency).toBe('EUR')
-    const stats = extractTransactionsWithStats([chunk(text, 1)], currency)
-    expect(stats.rows.map((r) => r.amount)).toEqual([-850, -19.15, 250])
-    expect(stats.droppedRowCount).toBe(0)
-  })
-})
-
-describe('extractStatementBalances — currency-adjacent round balance (U1, audit §2.3)', () => {
-  it('reads a ROUND opening/closing balance printed with NO decimal, currency-adjacent (was lost before)', () => {
-    // "Opening balance 914 $" / "Closing balance 1 000 EUR": bare integers MONEY_RE rejects, so the §3.5
-    // completeness gate silently lost these. `lastMoneyOnLine` now falls back to the shared
-    // `lastCurrencyAdjacentInteger`, mirroring the invoice `totalsMoney` fallback.
-    const c = chunk('Opening balance 914 $\n... rows ...\nClosing balance 1 000 $')
-    expect(extractStatementBalances([c])).toEqual({ openingBalance: 914, closingBalance: 1000 })
-  })
-
-  it('keeps the SIGN of a currency-adjacent round balance (a credit-note closing)', () => {
-    expect(extractStatementBalances([chunk('Closing balance -50 EUR')])).toEqual({ closingBalance: -50 })
-  })
-
-  it('does NOT read a bare integer that touches no currency marker (drop-don’t-guess)', () => {
-    // "Opening balance 914" (no symbol, no code) stays unread — a stray reference integer is not a balance.
-    expect(extractStatementBalances([chunk('Opening balance 914')])).toEqual({})
+    const { ctx } = makeCtx([chunk(text, 1)])
+    const result = await runSkillTool(extractTransactionsTool, {
+      skillId: 'app:bank-statement',
+      input: { documentId: 'd1' },
+      ctx
+    })
+    expect(result.ok).toBe(true)
+    if (result.ok) {
+      const out = result.output as ExtractTransactionsOutput
+      expect(out.currency).toBe('EUR')
+      expect(out.transactions.map((r) => r.amount)).toEqual([-850, -19.15, 250])
+      expect(out.droppedRowCount).toBe(0)
+    }
   })
 })
 
@@ -756,19 +596,6 @@ describe('extract_transactions through the gate', () => {
     })
     expect(result.ok).toBe(false)
   })
-
-  it('reads only via readDocumentChunks — an out-of-scope id yields no rows', async () => {
-    // The tool asks for d1 (in scope); a context whose read returns [] for everything models an
-    // out-of-scope read. The tool never has a DB/FS handle to go wider.
-    const { ctx } = makeCtx([], { readDocumentChunks: () => [] })
-    const result = await runSkillTool(extractTransactionsTool, {
-      skillId: 'app:bank-statement',
-      input: { documentId: 'd1' },
-      ctx
-    })
-    expect(result.ok).toBe(true)
-    if (result.ok) expect((result.output as ExtractTransactionsOutput).transactions).toEqual([])
-  })
 })
 
 // architecture.md "Skills — design record" §8 (S11c) — the downstream tools, proven as PURE functions + through the
@@ -792,77 +619,67 @@ function downstreamCtx(): SkillToolContext {
 }
 
 describe('validate_statement_balances (S11c)', () => {
-  it('reconcileBalances: baseline row is unknown, only a genuine predecessor-comparison is ok', () => {
-    const rows = [
-      tx({ amount: -45.9, balanceAfter: 1954.1 }),
-      tx({ amount: 2500, balanceAfter: 4454.1 })
+  // The first row has nothing to compare against (a baseline → unknown); only a genuine comparison with a
+  // predecessor's printed balance counts as `ok`, and a statement that verified nothing is never `reconciled`.
+  it.each<[string, TransactionInput[], string[], boolean]>([
+    [
+      'the baseline row is unknown, only a genuine predecessor-comparison is ok',
+      [tx({ amount: -45.9, balanceAfter: 1954.1 }), tx({ amount: 2500, balanceAfter: 4454.1 })],
+      ['unknown', 'ok'],
+      true
+    ],
+    [
+      // The lone printed balance is a baseline with no predecessor — it must NOT count as a pass.
+      'a single-transaction statement verifies nothing ⇒ not reconciled (honesty)',
+      [tx({ amount: -45.9, balanceAfter: 1954.1 })],
+      ['unknown'],
+      false
+    ],
+    [
+      'flags a mismatch and an unknown (no printed balance), never invents',
+      [
+        tx({ amount: -45.9, balanceAfter: 1954.1 }),
+        tx({ amount: 2500, balanceAfter: 9999.99 }), // wrong running balance vs predecessor
+        tx({ amount: -5, balanceAfter: undefined }) // no balance printed → unknown
+      ],
+      ['unknown', 'mismatch', 'unknown'],
+      false
+    ],
+    [
+      // The running chain would add a USD amount onto a EUR balance — meaningless; nothing is genuinely
+      // checked, so no spurious `mismatch` flows into the completeness gate (BL-2).
+      'a MIXED-currency statement is all-unknown, never a cross-currency mismatch (BL-2)',
+      [
+        tx({ amount: -45.9, currency: 'EUR', balanceAfter: 1954.1 }),
+        tx({ amount: -10, currency: 'USD', balanceAfter: 1944.1 }) // a same-currency chain would 'mismatch'
+      ],
+      ['unknown', 'unknown'],
+      false
+    ],
+    [
+      // No predecessor ever has a balance: the whole statement is unchecked, never silently "reconciled".
+      'all-baseline (no row prints a balance) ⇒ not reconciled',
+      [tx(), tx()],
+      ['unknown', 'unknown'],
+      false
+    ],
+    [
+      // C1 (balance-less gap rows): both gap amounts are carried forward to the next printed balance —
+      // 1.000,00 → (−10) → (−20) → (−50) == 920,00 — so the accumulator spans the WHOLE gap.
+      'C1: TWO consecutive balance-less gap rows still tie out (the accumulator spans the gap)',
+      [
+        tx({ amount: 5, balanceAfter: 1000 }),
+        tx({ amount: -10 }),
+        tx({ amount: -20 }),
+        tx({ amount: -50, balanceAfter: 920 })
+      ],
+      ['unknown', 'unknown', 'unknown', 'ok'],
+      true
     ]
+  ])('reconcileBalances: %s', (_label, rows, statuses, reconciled) => {
     const res = reconcileBalances(rows)
-    // The first row has nothing to compare against (baseline → unknown); the second row IS a genuine
-    // check against its predecessor's printed balance, so it reconciles.
-    expect(res.reconciled).toBe(true)
-    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
-  })
-
-  it('reconcileBalances: a single-transaction statement verifies nothing ⇒ not reconciled (honesty)', () => {
-    // The lone printed balance is a baseline with no predecessor — it must NOT count as a pass, or
-    // the statement would claim `reconciled: true` having checked nothing (the fix for over-reporting).
-    const res = reconcileBalances([tx({ amount: -45.9, balanceAfter: 1954.1 })])
-    expect(res.reconciled).toBe(false)
-    expect(res.rows.map((r) => r.status)).toEqual(['unknown'])
-  })
-
-  it('reconcileBalances: flags a mismatch and an unknown (no printed balance), never invents', () => {
-    const rows = [
-      tx({ amount: -45.9, balanceAfter: 1954.1 }),
-      tx({ amount: 2500, balanceAfter: 9999.99 }), // wrong running balance vs predecessor
-      tx({ amount: -5, balanceAfter: undefined }) // no balance printed → unknown
-    ]
-    const res = reconcileBalances(rows)
-    expect(res.reconciled).toBe(false)
-    // Row 0 is the baseline (unknown); row 1 is a genuine comparison that disagrees (mismatch).
-    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'mismatch', 'unknown'])
-  })
-
-  it('reconcileBalances: genuine mismatch alone ⇒ not reconciled', () => {
-    const rows = [
-      tx({ amount: 100, balanceAfter: 100 }),
-      tx({ amount: 50, balanceAfter: 999 }) // expected 150 → mismatch
-    ]
-    const res = reconcileBalances(rows)
-    expect(res.reconciled).toBe(false)
-    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'mismatch'])
-  })
-
-  it('reconcileBalances: a MIXED-currency statement is all-unknown, never a cross-currency mismatch (BL-2)', () => {
-    // The running chain `prevBalance + amount` would add a USD amount onto a EUR balance — meaningless.
-    // Every row is reported `unknown` (nothing genuinely checked), so the statement is never reconciled
-    // and no spurious `mismatch` flows into the completeness gate.
-    const rows = [
-      tx({ amount: -45.9, currency: 'EUR', balanceAfter: 1954.1 }),
-      tx({ amount: -10, currency: 'USD', balanceAfter: 1944.1 }) // a same-currency chain would 'mismatch'
-    ]
-    const res = reconcileBalances(rows)
-    expect(res.reconciled).toBe(false)
-    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'unknown'])
-  })
-
-  it('reconcileBalances: all-baseline (no predecessor ever has a balance) ⇒ not reconciled', () => {
-    // Every row prints no balance, so there is never a predecessor balance to compare against — the
-    // whole statement is unchecked, never silently "reconciled".
-    const res = reconcileBalances([tx(), tx()])
-    expect(res.reconciled).toBe(false)
-    expect(res.rows.every((r) => r.status === 'unknown')).toBe(true)
-  })
-
-  it('runs through the gate with schema-valid output', async () => {
-    const result = await runSkillTool(validateStatementBalancesTool, {
-      skillId: 'app:bank-statement',
-      input: { transactions: [tx({ amount: -45.9, balanceAfter: 1954.1 })] },
-      ctx: downstreamCtx()
-    })
-    expect(result.ok).toBe(true)
-    if (result.ok) expect(validateToolOutput(validateStatementBalancesTool, result.output)).toEqual([])
+    expect(res.rows.map((r) => r.status)).toEqual(statuses)
+    expect(res.reconciled).toBe(reconciled)
   })
 })
 
@@ -888,24 +705,6 @@ describe('categorize_transactions (S11c)', () => {
     // The keyword as its OWN word still matches.
     expect(categorizeRow(tx({ description: 'Coffee and a fee', amount: -3.5 }))).toBe('Fees')
   })
-
-  it('categorizeRows returns one assignment per row, in order', () => {
-    const out = categorizeRows([tx({ amount: 5 }), tx({ description: 'fee', amount: -1 })])
-    expect(out).toEqual([
-      { index: 0, category: 'Income' },
-      { index: 1, category: 'Fees' }
-    ])
-  })
-
-  it('runs through the gate with schema-valid output', async () => {
-    const result = await runSkillTool(categorizeTransactionsTool, {
-      skillId: 'app:bank-statement',
-      input: { transactions: [tx()] },
-      ctx: downstreamCtx()
-    })
-    expect(result.ok).toBe(true)
-    if (result.ok) expect(validateToolOutput(categorizeTransactionsTool, result.output)).toEqual([])
-  })
 })
 
 describe('summarize_cashflow (S11c)', () => {
@@ -919,28 +718,22 @@ describe('summarize_cashflow (S11c)', () => {
     expect(s.currency).toBeUndefined()
     expect(s.net).toBe(5)
   })
-
-  it('runs through the gate with schema-valid output', async () => {
-    const result = await runSkillTool(summarizeCashflowTool, {
-      skillId: 'app:bank-statement',
-      input: { transactions: [tx({ amount: 5 })] },
-      ctx: downstreamCtx()
-    })
-    expect(result.ok).toBe(true)
-    if (result.ok) expect(validateToolOutput(summarizeCashflowTool, result.output)).toEqual([])
-  })
 })
 
 describe('export_transactions_csv (S11c)', () => {
   it('transactionsToCsv writes a header + escaped rows, fixed-dp amounts, blanks for nulls', () => {
     const csv = transactionsToCsv([
       tx({ date: '2026-01-02', description: 'Café, Vienna', amount: -4.5, balanceAfter: 100 }),
-      tx({ date: '2026-01-03', description: 'Salary', amount: 2500, valueDate: '2026-01-03', sourcePage: 2 })
+      tx({ date: '2026-01-03', description: 'Salary', amount: 2500, valueDate: '2026-01-03', sourcePage: 2 }),
+      // S12 audit F4: a formula-shaped description is prefixed with a quote so a spreadsheet reads it as
+      // text (the per-cell cases live in money.test.ts › csvField; this is the wiring through the column).
+      tx({ description: '=HYPERLINK("http://evil","click")', amount: -1 })
     ])
     const lines = csv.trimEnd().split('\r\n')
     expect(lines[0]).toBe('date,valueDate,description,amount,currency,balanceAfter,sourcePage')
     expect(lines[1]).toBe('2026-01-02,,"Café, Vienna",-4.50,EUR,100.00,') // comma field quoted; nulls blank
     expect(lines[2]).toBe('2026-01-03,2026-01-03,Salary,2500.00,EUR,,2')
+    expect(lines[3]).toBe('2026-01-02,,"\'=HYPERLINK(""http://evil"",""click"")",-1.00,EUR,,') // amount never neutralized
   })
 
   it('emits the category column ONLY when a row carries one (presence gate, result-tables D62)', () => {
@@ -970,53 +763,32 @@ describe('export_transactions_csv (S11c)', () => {
     const plain = JSON.parse(buildStatementJson({ rows: [tx()], summary: summarizeCashflow([tx()]) }))
     expect('category' in plain.transactions[0]).toBe(false) // never-categorized → stable prior shape
   })
+})
 
-  it('neutralizes spreadsheet formula injection in text fields (S12 audit F4)', () => {
-    // A description beginning with a formula trigger is prefixed with a single quote so a
-    // spreadsheet reads the cell as text — and a leading-= field with a comma is also quoted.
-    const csv = transactionsToCsv([
-      tx({ description: '=HYPERLINK("http://evil","click")', amount: -1 }),
-      tx({ description: '+1+2', amount: -2 }),
-      tx({ description: '@cmd', amount: -3 }),
-      tx({ description: '-leading minus, with comma', amount: -4 })
-    ])
-    const lines = csv.trimEnd().split('\r\n')
-    expect(lines[1]).toBe('2026-01-02,,"\'=HYPERLINK(""http://evil"",""click"")",-1.00,EUR,,')
-    expect(lines[2]).toBe("2026-01-02,,'+1+2,-2.00,EUR,,")
-    expect(lines[3]).toBe("2026-01-02,,'@cmd,-3.00,EUR,,")
-    expect(lines[4]).toBe('2026-01-02,,"\'-leading minus, with comma",-4.00,EUR,,')
-    // The numeric amount column is formatted separately and is never neutralized.
-    expect(lines[2]).toContain(',-2.00,')
-  })
-
-  it('neutralizes a formula hidden behind leading whitespace (post-S12 hardening)', () => {
-    // Some importers trim leading spaces before evaluating, so " =cmd" is dangerous too.
-    const csv = transactionsToCsv([
-      tx({ description: '  =1+1', amount: -1 }),
-      tx({ description: '\t@cmd', amount: -2 }),
-      tx({ description: 'safe text', amount: -3 })
-    ])
-    const lines = csv.trimEnd().split('\r\n')
-    expect(lines[1]).toBe('2026-01-02,,\'  =1+1,-1.00,EUR,,') // quote prefixed before the spaces
-    expect(lines[2]).toBe('2026-01-02,,\'\t@cmd,-2.00,EUR,,') // leading tab is neutralized (not a quote trigger)
-    expect(lines[3]).toBe('2026-01-02,,safe text,-3.00,EUR,,') // ordinary text untouched
-  })
-
-  it('is the only confirm-gated tool: the gate refuses it without confirmation', async () => {
-    const refused = await runSkillTool(exportTransactionsCsvTool, {
+// Each downstream tool runs THROUGH the gate and emits output that passes its own outputSchema.
+// export_transactions_csv is the only confirm-gated tool (its refusal without confirmation is pinned in
+// skills-run.test.ts "export refuses without confirmation"; the generic gate in skills-tool-registry.test.ts),
+// so it runs confirmed here.
+describe('the downstream tools through the gate (S11c)', () => {
+  it.each<[string, SkillTool, unknown, boolean]>([
+    [
+      'validate_statement_balances',
+      validateStatementBalancesTool,
+      { transactions: [tx({ amount: -45.9, balanceAfter: 1954.1 })] },
+      false
+    ],
+    ['categorize_transactions', categorizeTransactionsTool, { transactions: [tx()] }, false],
+    ['summarize_cashflow', summarizeCashflowTool, { transactions: [tx({ amount: 5 })] }, false],
+    ['export_transactions_csv (confirmed)', exportTransactionsCsvTool, { transactions: [tx()] }, true]
+  ])('%s runs with schema-valid output', async (_name, tool, input, confirmed) => {
+    const result = await runSkillTool(tool, {
       skillId: 'app:bank-statement',
-      input: { transactions: [tx()] },
-      ctx: downstreamCtx()
-    })
-    expect(refused.ok).toBe(false)
-    const ok = await runSkillTool(exportTransactionsCsvTool, {
-      skillId: 'app:bank-statement',
-      input: { transactions: [tx()] },
+      input,
       ctx: downstreamCtx(),
-      confirmed: true
+      confirmed
     })
-    expect(ok.ok).toBe(true)
-    if (ok.ok) expect(validateToolOutput(exportTransactionsCsvTool, ok.output)).toEqual([])
+    expect(result.ok).toBe(true)
+    if (result.ok) expect(validateToolOutput(tool, result.output)).toEqual([])
   })
 })
 
@@ -1024,45 +796,29 @@ describe('export_transactions_csv (S11c)', () => {
 // the REAL entry points (extractTransactionRows / extractStatementBalances / reconcileBalances /
 // assessCompleteness), not pre-isolated tokens (TEST-N2). Each pins a fixed reproduction from §2.
 describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
-  it('BL-N1: a US-ordered statement is inferred month-first — no dropped rows, correct month', () => {
-    // The 12/31 row has day 31 > 12, so it can ONLY be mm/dd → the whole document infers month-first;
-    // the otherwise-ambiguous 03/05 then resolves to the US reading (3 March → '2026-03-05').
-    const us = [
-      'Statement USD',
-      '12/31/2026 Year-end fee -5,00 95,00',
-      '03/05/2026 Service charge -6,00 89,00'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(us, 1)], 'USD')
-    expect(rows).toHaveLength(2) // BEFORE: 12/31 → null → the whole row was SILENTLY DROPPED (length 1)
-    expect(rows[0].date).toBe('2026-12-31') // not dropped
-    expect(rows[1].date).toBe('2026-03-05') // US month — BEFORE: '2026-05-03' (a confidently-wrong May)
-  })
-
-  it('BL-N1: the de-AT day-first default holds on an EU statement (and when nothing disambiguates)', () => {
-    const eu = [
-      'Statement EUR',
-      '31/12/2026 Jahresgebühr -5,00 95,00', // day 31 > 12 confirms day-first
-      '03/05/2026 Lastschrift -6,00 89,00' // ⇒ 5 May, the de-AT reading
-    ].join('\n')
-    expect(extractTransactionRows([chunk(eu, 1)], 'EUR').map((r) => r.date)).toEqual([
-      '2026-12-31',
-      '2026-05-03'
-    ])
-  })
-
-  it('BL-N2: a trailing-date closing line reads the FIGURE, not the date, as the balance', () => {
-    const c = chunk(
-      'Kontoauszug EUR\nAnfangssaldo 2.000,00\n' +
-        '2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10\n' +
-        'Endsaldo 4.454,10 EUR per 30.06.2026'
-    )
-    // BEFORE: the closing read the last money token '30.06.20' → 3006.20 (the date mis-read as the balance).
-    expect(extractStatementBalances([c])).toEqual({ openingBalance: 2000, closingBalance: 4454.1 })
-  })
-
-  it('BL-N2: the de-AT date-FIRST `Kontostand per <date> <figure>` shape is unaffected', () => {
-    const c = chunk('Kontostand per 31.03.2025 35.037,04\n... rows ...\nKontostand per 23.06.2025 30.647,07')
-    expect(extractStatementBalances([c])).toEqual({ openingBalance: 35037.04, closingBalance: 30647.07 })
+  // The 12/31 row has day 31 > 12, so it can ONLY be mm/dd → the whole document infers month-first and the
+  // otherwise-ambiguous 03/05 resolves to the US reading; the EU twin keeps the de-AT day-first default.
+  it.each<[string, string[], string, string[]]>([
+    [
+      'BL-N1: a US-ordered statement is inferred month-first — no dropped rows, correct month',
+      ['Statement USD', '12/31/2026 Year-end fee -5,00 95,00', '03/05/2026 Service charge -6,00 89,00'],
+      'USD',
+      // BEFORE: 12/31 → null → the whole row was SILENTLY DROPPED, and 03/05 read '2026-05-03' (a wrong May)
+      ['2026-12-31', '2026-03-05']
+    ],
+    [
+      'BL-N1: the de-AT day-first default holds on an EU statement (and when nothing disambiguates)',
+      [
+        'Statement EUR',
+        '31/12/2026 Jahresgebühr -5,00 95,00', // day 31 > 12 confirms day-first
+        '03/05/2026 Lastschrift -6,00 89,00' // ⇒ 5 May, the de-AT reading
+      ],
+      'EUR',
+      ['2026-12-31', '2026-05-03']
+    ]
+  ])('%s', (_label, lines, currency, dates) => {
+    const rows = extractTransactionRows([chunk(lines.join('\n'), 1)], currency)
+    expect(rows.map((r) => r.date)).toEqual(dates)
   })
 
   it('BL-N3: a money-shaped token in the description does not steal the amount (column by position)', () => {
@@ -1076,43 +832,45 @@ describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
     expect(rows[0]).toMatchObject({ amount: -100, balanceAfter: 900 })
   })
 
-  it('TEST-N2: a bare grouped figure with no 2-dp tail is read as thousands, not €1 (DECISION 2)', () => {
-    // de-AT '.' = thousands. BEFORE: MONEY_RE grabbed '1.00' out of '1.000' → €1 (a 1000× understatement).
-    const rows = extractTransactionRows([chunk('Statement EUR\n2026-01-02 Miete 1.000 9.000', 1)], 'EUR')
-    expect(rows[0]).toMatchObject({ amount: 1000, balanceAfter: 9000 })
-  })
-
-  it('TEST-N2: space-grouped and apostrophe-grouped amounts are read whole (DECISION 2)', () => {
-    const space = extractTransactionRows(
-      [chunk('Statement EUR\n2026-01-02 Bonus 1 234 567,89 1 300 000,00', 1)],
-      'EUR'
-    )
-    expect(space[0].amount).toBe(1234567.89) // BEFORE: 567.89 (only the trailing space-group survived)
-    const apo = extractTransactionRows(
-      [chunk("Statement CHF\n2026-01-02 Zahlung 1'234.56 9'999.00", 1)],
-      'CHF'
-    )
-    expect(apo[0].amount).toBe(1234.56) // BEFORE: 234.56 (the apostrophe group was dropped)
-  })
-
-  it('TEST-N2: space grouping does not merge across a digit boundary (the pdf-layout continuation hazard)', () => {
-    // A reference number's 3-digit TAIL must not fuse with a following amount across a space — the
-    // `(?<!\d)` anchor on MONEY_RE prevents "…778899 300,00" from reading "899 300,00" → 899300.
-    const rows = extractTransactionRows(
-      [chunk('Statement EUR\n2026-01-02 Sender GmbH Auftrag 778899 300,00 1.255,00', 1)],
-      'EUR'
-    )
-    expect(rows[0]).toMatchObject({ amount: 300, balanceAfter: 1255 })
-  })
-
-  it('TEST-N2: space grouping does not fuse a LETTER-preceded digit tail with the amount (adversarial review)', () => {
-    // A reference like "Ref123" abuts a space-grouped amount: the `(?<![A-Za-z0-9])` boundary on the
-    // space-grouped form prevents "Ref123 456,78" from reading "123 456,78" → 123456.78.
-    const rows = extractTransactionRows(
-      [chunk('Statement EUR\n2026-01-02 Zahlung Ref123 456,78 1.000,00', 1)],
-      'EUR'
-    )
-    expect(rows[0]).toMatchObject({ amount: 456.78, balanceAfter: 1000 })
+  // The shared MONEY_RE token boundary, read through the real extractor (DECISION 2).
+  it.each<[string, string, string, Record<string, number>]>([
+    [
+      // de-AT '.' = thousands. BEFORE: MONEY_RE grabbed '1.00' out of '1.000' → €1 (a 1000× understatement).
+      'TEST-N2: a bare grouped figure with no 2-dp tail is read as thousands, not €1',
+      'Statement EUR\n2026-01-02 Miete 1.000 9.000',
+      'EUR',
+      { amount: 1000, balanceAfter: 9000 }
+    ],
+    [
+      // BEFORE: 567.89 (only the trailing space-group survived)
+      'TEST-N2: a space-grouped amount is read whole',
+      'Statement EUR\n2026-01-02 Bonus 1 234 567,89 1 300 000,00',
+      'EUR',
+      { amount: 1234567.89 }
+    ],
+    [
+      // BEFORE: 234.56 (the apostrophe group was dropped)
+      'TEST-N2: an apostrophe-grouped amount is read whole',
+      "Statement CHF\n2026-01-02 Zahlung 1'234.56 9'999.00",
+      'CHF',
+      { amount: 1234.56 }
+    ],
+    [
+      // The `(?<!\d)` anchor stops "…778899 300,00" reading "899 300,00" → 899300 (the pdf-layout hazard).
+      'TEST-N2: space grouping does not merge across a digit boundary',
+      'Statement EUR\n2026-01-02 Sender GmbH Auftrag 778899 300,00 1.255,00',
+      'EUR',
+      { amount: 300, balanceAfter: 1255 }
+    ],
+    [
+      // The `(?<![A-Za-z0-9])` boundary stops "Ref123 456,78" reading "123 456,78" → 123456.78.
+      'TEST-N2: space grouping does not fuse a LETTER-preceded digit tail with the amount (adversarial review)',
+      'Statement EUR\n2026-01-02 Zahlung Ref123 456,78 1.000,00',
+      'EUR',
+      { amount: 456.78, balanceAfter: 1000 }
+    ]
+  ])('%s', (_label, text, currency, expected) => {
+    expect(extractTransactionRows([chunk(text, 1)], currency)[0]).toMatchObject(expected)
   })
 
   it('TEST-N2 e2e: a TYING statement stays complete through a trailing-date closing + in-description money', () => {
@@ -1134,19 +892,6 @@ describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
     const reconcile = reconcileBalances(rows)
     expect(assessCompleteness({ rows, openingBalance, closingBalance, reconcile })).toBe('complete')
   })
-
-  it('BL-N5: reconcileBalances compares in integer cents (consistent with assessCompleteness, audit C-3)', () => {
-    // A clean per-row chain still reconciles; the comparison is now cent-exact rather than a float epsilon
-    // (no realistic 2-dp input distinguishes the two — this is the consistency the audit asked for; the
-    // teeth are structural: reconcile and assessCompleteness now use the identical Math.round(x*100) path).
-    const rows: TransactionInput[] = [
-      tx({ amount: -45.9, balanceAfter: 1954.1 }),
-      tx({ amount: 2500, balanceAfter: 4454.1 })
-    ]
-    const res = reconcileBalances(rows)
-    expect(res.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
-    expect(res.reconciled).toBe(true)
-  })
 })
 
 // full-audit-2026-06-29 Phase 1 (financial correctness): BL-1/BL-2/BL-3 — adversarial WHOLE-STRING
@@ -1154,71 +899,80 @@ describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
 // / categorizeRow), not pre-isolated tokens. Each pins a fixed reproduction from the audit §2.
 describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
   // ---- BL-1: a leading-minus figure must not steal the previous figure's sign ----
-  it('BL-1: a leading-minus running balance keeps its sign; the credit before it stays positive', () => {
-    // "2.500,00 -500,00" = a +2500 credit into an overdrawn account, new balance −500. BEFORE the fix
-    // MONEY_RE's trailing `-?` ate the balance's leading minus ACROSS the separating space → amount −2500,
-    // balance +500 (BOTH signs flipped). The chain still tied out internally, so `reconcileBalances`
-    // reported `ok` on the WRONG figures — the safety net could not catch it.
-    const text = [
-      'Kontoauszug EUR',
-      '2026-01-02 Gehalt ACME 2.500,00 -500,00', // credit INTO an overdrawn account (balance still −500)
-      '2026-01-03 Supermarkt Billa -45,90 -545,90' // debit; balance stays negative (−500 − 45,90)
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(2)
-    // BEFORE: rows[0] = { amount: −2500, balanceAfter: +500 } — a +€2500 credit became a −€2500 debit
-    // and a −€500 overdraft became +€500.
-    expect(rows[0]).toMatchObject({ amount: 2500, balanceAfter: -500 })
-    expect(rows[1]).toMatchObject({ amount: -45.9, balanceAfter: -545.9 })
-    // The running-balance chain ties out on the CORRECT signs (−500 + −45,90 == −545,90) — reconcile `ok`.
+  // BEFORE the fix MONEY_RE's trailing `-?` ate the balance's leading minus ACROSS the separating space, so
+  // BOTH signs flipped. The chain still tied out internally, so `reconcileBalances` reported `ok` on the
+  // WRONG figures — the safety net could not catch it.
+  it.each<
+    [string, string[], number[], number[], { totalIn: number; totalOut: number; net: number }]
+  >([
+    [
+      // "2.500,00 -500,00" = a +2500 credit into an overdrawn account, new balance −500.
+      'BL-1: a leading-minus running balance keeps its sign; the credit before it stays positive',
+      [
+        'Kontoauszug EUR',
+        '2026-01-02 Gehalt ACME 2.500,00 -500,00', // credit INTO an overdrawn account (balance still −500)
+        '2026-01-03 Supermarkt Billa -45,90 -545,90' // debit; balance stays negative (−500 − 45,90)
+      ],
+      [2500, -45.9], // BEFORE: rows[0] = { amount: −2500, balanceAfter: +500 }
+      [-500, -545.9],
+      // The headline is right: the credit is inflow, not outflow (BEFORE: net −2545,90).
+      { totalIn: 2500, totalOut: 45.9, net: 2454.1 }
+    ],
+    [
+      // With EVERY balance leading-minus and EVERY amount positive the bug flipped the WHOLE chain
+      // consistently (prevBal+amount==bal still held with every sign negated) — reconcile false-green.
+      'BL-1: a fully-negative-balance chain is no longer silently sign-flipped (reconcile false-green)',
+      [
+        'Kontoauszug EUR',
+        '2026-01-02 Einzahlung 1.000,00 -2.000,00', // +1000 into a −3000 overdraft → −2000
+        '2026-01-03 Einzahlung 1.500,00 -500,00' // +1500 → −500
+      ],
+      [1000, 1500], // BEFORE: [−1000, −1500]
+      [-2000, -500], // BEFORE: [+2000, +500]
+      { totalIn: 2500, totalOut: 0, net: 2500 }
+    ]
+  ])('%s', (_label, lines, amounts, balances, summary) => {
+    const rows = extractTransactionRows([chunk(lines.join('\n'), 1)], 'EUR')
+    expect(rows.map((r) => r.amount)).toEqual(amounts)
+    expect(rows.map((r) => r.balanceAfter)).toEqual(balances)
+    // The chain ties out on the CORRECT signs (−500 + −45,90 == −545,90).
     const reconcile = reconcileBalances(rows)
     expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
     expect(reconcile.reconciled).toBe(true)
-    // The headline figure is right: the credit is inflow, not outflow (BEFORE: net −2545,90).
-    expect(summarizeCashflow(rows)).toMatchObject({ totalIn: 2500, totalOut: 45.9, net: 2454.1 })
+    expect(summarizeCashflow(rows)).toMatchObject(summary)
   })
 
-  it('BL-1: a fully-negative-balance chain is no longer silently sign-flipped (reconcile false-green)', () => {
-    // The audit's core insight: with EVERY balance leading-minus and EVERY amount positive, the bug
-    // flipped the WHOLE chain consistently (prevBal+amount==bal still held with every sign negated), so
-    // reconcile reported `ok` on confidently-wrong figures. Now the signs are read correctly.
-    const text = [
-      'Kontoauszug EUR',
-      '2026-01-02 Einzahlung 1.000,00 -2.000,00', // +1000 into a −3000 overdraft → −2000
-      '2026-01-03 Einzahlung 1.500,00 -500,00' // +1500 → −500
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows.map((r) => r.amount)).toEqual([1000, 1500]) // BEFORE: [−1000, −1500]
-    expect(rows.map((r) => r.balanceAfter)).toEqual([-2000, -500]) // BEFORE: [+2000, +500]
-    const reconcile = reconcileBalances(rows)
-    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
-    expect(summarizeCashflow(rows)).toMatchObject({ totalIn: 2500, totalOut: 0, net: 2500 })
-  })
-
-  it('BL-1: the de-AT GLUED trailing minus is preserved even when a balance figure follows', () => {
-    // The de-AT debit convention prints the sign as a GLUED trailing minus ("45,90-"), and a running-
-    // balance column normally follows it. The fix must keep reading the glued minus as a debit while NOT
-    // stealing a SEPARATED leading minus (the BL-1 case above). The disambiguator is the SPACE: a glued
-    // "-" belongs to the figure on its left; a "-<digit>" after a space is the next figure's leading sign.
-    // (A blanket trailing-minus lookahead would mis-read this de-AT debit as +45,90 — the reason the fix
-    // is space-aware rather than the audit's first-pass `(?:-(?!\s*[-+(]?\d))?` suggestion.)
-    const text = [
-      'Kontoauszug EUR',
-      '2026-01-02 Miete 45,90- 1.908,20', // glued trailing-minus debit; positive running balance
-      '2026-01-03 Bargeld 200,00- 1.708,20' // glued trailing-minus debit again (1.908,20 − 200 = 1.708,20)
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows[0]).toMatchObject({ amount: -45.9, balanceAfter: 1908.2 })
-    expect(rows[1]).toMatchObject({ amount: -200, balanceAfter: 1708.2 })
-    const reconcile = reconcileBalances(rows)
-    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
-  })
-
-  it('BL-1: a glued trailing-minus debit at END of line still reads negative (no following figure)', () => {
-    // The lone-figure de-AT debit "12,00-" (parseAmount-level fixture line 71) read through the real
-    // extractor: a trailing minus with nothing after it is unambiguously the figure's own sign.
-    const rows = extractTransactionRows([chunk('Statement EUR\n2026-01-02 Auszahlung 500,00-', 1)], 'EUR')
-    expect(rows[0]).toMatchObject({ amount: -500 })
+  // The de-AT debit convention prints the sign as a GLUED trailing minus ("45,90-"), usually followed by a
+  // running-balance column. The fix keeps reading the glued minus as a debit while NOT stealing a SEPARATED
+  // leading minus (the BL-1 case above). The disambiguator is the SPACE: a glued "-" belongs to the figure on
+  // its left; a "-<digit>" after a space is the next figure's leading sign. (A blanket trailing-minus
+  // lookahead would mis-read this debit as +45,90 — the reason the fix is space-aware.)
+  it.each<[string, string[], Array<Record<string, number>>, string[]]>([
+    [
+      'BL-1: the de-AT GLUED trailing minus is preserved even when a balance figure follows',
+      [
+        'Kontoauszug EUR',
+        '2026-01-02 Miete 45,90- 1.908,20', // glued trailing-minus debit; positive running balance
+        '2026-01-03 Bargeld 200,00- 1.708,20' // glued trailing-minus debit again (1.908,20 − 200 = 1.708,20)
+      ],
+      [
+        { amount: -45.9, balanceAfter: 1908.2 },
+        { amount: -200, balanceAfter: 1708.2 }
+      ],
+      ['unknown', 'ok']
+    ],
+    [
+      // The lone-figure de-AT debit "12,00-": a trailing minus with nothing after it is the figure's own sign.
+      'BL-1: a glued trailing-minus debit at END of line still reads negative (no following figure)',
+      ['Statement EUR', '2026-01-02 Auszahlung 500,00-'],
+      [{ amount: -500 }],
+      ['unknown']
+    ]
+  ])('%s', (_label, lines, expected, statuses) => {
+    const rows = extractTransactionRows([chunk(lines.join('\n'), 1)], 'EUR')
+    expect(rows).toHaveLength(expected.length)
+    expect(rows).toMatchObject(expected)
+    expect(reconcileBalances(rows).rows.map((r) => r.status)).toEqual(statuses)
   })
 
   // ---- BL-2: a currency token in a payee description must not disable totals/reconciliation ----
@@ -1277,39 +1031,6 @@ describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
     expect(categorizeRow(tx({ description: 'Gehaltszahlung Juni', amount: 2500 }))).toBe('Income')
     expect(categorizeRow(tx({ description: 'Bargeldbehebung Bankomat', amount: -150 }))).toBe('Cash')
   })
-
-  it('BL-3: the LLM prefilter agrees with categorizeRow on the CONFIDENT German compounds (audit C-1 invariant)', () => {
-    // Both deterministic paths share `wordIncludes` + the same compound flag, so a CONFIDENT compound that
-    // categorizes deterministically must ALSO be confidently pre-filtered (kept off the model). Only the
-    // unambiguous buckets qualify — transfer-boilerplate (sepa/überweisung) is deliberately excluded now
-    // (see the divergence test below, R3 / audit §5.5).
-    for (const desc of ['Kontoführungsgebühr', 'Gehaltszahlung Juni']) {
-      expect(prefilterCategory(tx({ description: desc, amount: -3 }))).toBe(categorizeRow(tx({ description: desc, amount: -3 })))
-      expect(prefilterCategory(tx({ description: desc, amount: -3 }))).not.toBeNull()
-    }
-  })
-
-  it('R3 / §5.5 + SKA-44: transfer boilerplate DIVERGES — categorizeRow labels Transfer, but the prefilter sends it to the model', () => {
-    // `sepa`/`überweisung` (R3) and the EN `transfer` twin (SKA-44, R9) are `confident: false`: they
-    // describe the payment rails, not the merchant. The deterministic NO-model fallback still buckets
-    // them 'Transfer', but the LLM prefilter must return null so a runtime can assign the richer
-    // 15-category taxonomy instead.
-    for (const desc of ['SEPA-Überweisung Miete', 'Dauerüberweisung Sparen', 'SEPA-Lastschrift NETFLIX', 'TRANSFER TO NETFLIX']) {
-      expect(categorizeRow(tx({ description: desc, amount: -12 }))).toBe('Transfer')
-      expect(prefilterCategory(tx({ description: desc, amount: -12 }))).toBeNull()
-    }
-  })
-
-  it('BL-3: the C-1 English/ambiguous guards still hold (no reintroduced false positives)', () => {
-    // The relaxation is German-only: short English tokens keep the strict two-sided boundary, and 'lohn'
-    // (the ambiguous DE token — muehlohn/Belohnung) stays strict too (salary is covered by the positive-
-    // amount sign fallback). So a coincidental substring is still NOT mis-filed.
-    expect(categorizeRow(tx({ description: 'Coffee shop', amount: -3.5 }))).not.toBe('Fees')
-    expect(categorizeRow(tx({ description: 'Atmosphere Bar', amount: -12 }))).not.toBe('Cash')
-    expect(categorizeRow(tx({ description: 'Baeckerei Muehlohn', amount: -3.1 }))).not.toBe('Income')
-    expect(prefilterCategory(tx({ description: 'Coffee Fellows', amount: -4.2 }))).toBeNull()
-    expect(prefilterCategory(tx({ description: 'ATMOS Sportswear', amount: -89 }))).toBeNull()
-  })
 })
 
 // full-audit-2026-06-29-postmerge Phase 1 (money-parser correctness): F1 (unmatched amount column →
@@ -1320,65 +1041,49 @@ describe('financial correctness (full-audit-2026-06-29 Phase 1)', () => {
 describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', () => {
   // ---- F1: on a BALANCE-COLUMN statement an uncaptured amount must not let the balance be read as the
   //      amount; the keep/drop is statement-context-aware so a no-balance numeric-payee listing survives.
-  it('F1: on a balance-column statement, a whole-euro amount + 2-dp balance row is DROPPED', () => {
-    // `Sparen 50 1.234,56`: the amount `50` is a bare whole-euro integer MONEY_RE rejects (no 2-dp tail,
-    // not grouped), so the row collapses to ONE money match — the BALANCE `1.234,56`. BEFORE (F1 bug):
-    // amount = matches[0] = 1234.56 (the running balance silently read as the movement amount — the
-    // cardinal "confidently-wrong money" harm, off by the whole running-balance magnitude). NOW: the
-    // statement HAS a balance column (the Grocery row prints one), so the ambiguous row — one money token
-    // with a bare number abutting it on the left — is DROPPED rather than promote the balance (§22-D1).
+  // The amount is a bare whole-euro integer (`50`) or a single-decimal figure (`12,5`) MONEY_RE rejects, so the
+  // row collapses to ONE money match — the BALANCE. BEFORE (F1 bug): amount = matches[0] = the running balance
+  // (the cardinal "confidently-wrong money" harm, off by the whole balance magnitude). NOW: the statement HAS a
+  // balance column (the Grocery row prints one), so the ambiguous row — one money token with a bare number
+  // abutting it on the left — is DROPPED rather than promote the balance (§22-D1).
+  it.each<[string, string, number]>([
+    ['F1: on a balance-column statement, a whole-euro amount + 2-dp balance row is DROPPED', '2026-01-02 Sparen 50 1.234,56', 1234.56],
+    ['F1: on a balance-column statement, a single-decimal amount row is DROPPED', '2026-01-03 Zinsen 12,5 1.000,00', 1000]
+  ])('%s', (_label, ambiguousRow, balanceFigure) => {
     const text = [
       'Kontoauszug EUR',
       '2026-01-01 Grocery -45,90 1.954,10', // a normal 2-figure row → establishes the balance column
-      '2026-01-02 Sparen 50 1.234,56' // amount `50` uncaptured; `1.234,56` is the BALANCE → drop
+      ambiguousRow
     ].join('\n')
     const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
     expect(rows).toHaveLength(1)
     expect(rows[0]).toMatchObject({ description: 'Grocery', amount: -45.9, balanceAfter: 1954.1 })
-    expect(rows.some((r) => r.amount === 1234.56)).toBe(false) // the balance never becomes an amount
+    expect(rows.some((r) => r.amount === balanceFigure)).toBe(false) // the balance never becomes an amount
   })
 
-  it('F1: on a balance-column statement, a single-decimal amount row is DROPPED', () => {
-    // `Zinsen 12,5 1.000,00`: `12,5` is a single-decimal figure MONEY_RE rejects (it needs a 2-digit minor
-    // tail), so only the balance `1.000,00` matches. BEFORE: amount = 1000 (the balance). NOW: dropped.
-    const text = [
-      'Kontoauszug EUR',
-      '2026-01-01 Grocery -45,90 1.954,10',
-      '2026-01-03 Zinsen 12,5 1.000,00'
-    ].join('\n')
+  // The crucial false-positive guard. No row prints a running balance → the statement has no balance column →
+  // a single money token is the AMOUNT, even when the payee ends in a store id (the HVB "Umsätze" shape the
+  // geometry feature was built for). Dropping the numeric-payee row here would regress the flagship real case.
+  it.each<[string, string, Array<Record<string, unknown>>]>([
+    [
+      'F1: a NO-balance "Umsätze" listing keeps a numeric-ending payee (the lone token IS the amount)',
+      [
+        'Kontoumsaetze EUR',
+        '2026-01-20 KARTENZAHLUNG REWE SAGT DANKE 1234 -19,15',
+        '2026-01-29 SEPA-GUTSCHRIFT Arbeitgeber 34,39'
+      ].join('\n'),
+      [{ description: 'KARTENZAHLUNG REWE SAGT DANKE 1234', amount: -19.15 }, { amount: 34.39 }]
+    ],
+    [
+      'F1: a genuine single-figure no-balance row (description has no trailing number) still parses',
+      'Kontoauszug EUR\n2026-01-02 Mystery shop -45,90',
+      [{ description: 'Mystery shop', amount: -45.9 }]
+    ]
+  ])('%s', (_label, text, expected) => {
     const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows.map((r) => r.description)).toEqual(['Grocery'])
-    expect(rows.some((r) => r.amount === 1000)).toBe(false)
-  })
-
-  it('F1: a NO-balance "Umsätze" listing keeps a numeric-ending payee (the lone token IS the amount)', () => {
-    // The crucial false-positive guard. No row prints a running balance → the statement has no balance
-    // column → a single money token is the AMOUNT, even when the payee ends in a store id. This is the HVB
-    // "Umsätze" shape the geometry feature was built for; dropping the numeric-payee row here would regress
-    // the flagship real case. `REWE … 1234 -19,15` parses with amount −19,15, NOT a dropped/blanked row.
-    const text = [
-      'Kontoumsaetze EUR',
-      '2026-01-20 KARTENZAHLUNG REWE SAGT DANKE 1234 -19,15',
-      '2026-01-29 SEPA-GUTSCHRIFT Arbeitgeber 34,39'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(2)
-    expect(rows[0]).toMatchObject({ description: 'KARTENZAHLUNG REWE SAGT DANKE 1234', amount: -19.15 })
-    expect(rows[1]).toMatchObject({ amount: 34.39 })
-  })
-
-  it('F1: a genuine single-figure no-balance row (description has no trailing number) still parses', () => {
-    const rows = extractTransactionRows([chunk('Kontoauszug EUR\n2026-01-02 Mystery shop -45,90', 1)], 'EUR')
-    expect(rows).toHaveLength(1)
-    expect(rows[0]).toMatchObject({ description: 'Mystery shop', amount: -45.9 })
-    expect(rows[0].balanceAfter).toBeUndefined()
-  })
-
-  it('F1: the normal 2-figure de-AT row is byte-identical to before (no over-drop on a real amount column)', () => {
-    // The fix must not touch the common `<desc> <amount> <balance>` row: both figures match MONEY_RE, so
-    // there is no uncaptured column and the position logic stands unchanged.
-    const rows = extractTransactionRows([chunk('Kontoauszug EUR\n2026-01-02 Grocery -45,90 1.954,10', 1)], 'EUR')
-    expect(rows[0]).toMatchObject({ description: 'Grocery', amount: -45.9, balanceAfter: 1954.1 })
+    expect(rows).toHaveLength(expected.length)
+    expect(rows).toMatchObject(expected)
+    expect(rows.every((r) => r.balanceAfter === undefined)).toBe(true)
   })
 
   // ---- T4: parens-negative through the REAL MONEY_RE scanner (not a pre-isolated parseAmount token) ----
@@ -1407,21 +1112,8 @@ describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', (
 // the LEADING date column only, so a memo date can't day/month-swap every row). Adversarial WHOLE-STRING
 // fixtures through the real `detectDocumentCurrency` / `extractTransactionsTool` / `extractTransactionRows`.
 describe('financial correctness (full-audit-2026-06-29 follow-up Phase 1)', () => {
-  // ---- FIN-1: detectDocumentCurrency (the figure-adjacent majority vote that replaces detectCurrency(joined)) ----
-  it('FIN-1: detectDocumentCurrency ignores a currency word LEFT of the amount but reads a header declaration', () => {
-    // The contamination source: a stray code in a payee memo (LEFT of the figure). A money line votes only
-    // on its figure region; a non-money line (a header/label) votes on its whole text. BEFORE the fix the
-    // tool used detectCurrency(joined) = "first code ANYWHERE wins" → the memo USD (earlier in the text) won.
-    expect(detectDocumentCurrency('Kontoauszug\n02.01.2026 USD Memo -12,00 100,00\nWährung EUR')).toBe('EUR')
-  })
-
-  it('FIN-1: detectDocumentCurrency reads a figure-adjacent foreign currency, majority-votes, breaks ties by order', () => {
-    expect(detectDocumentCurrency('Hotel -120,00 USD 880,00')).toBe('USD') // adjacent foreign code
-    expect(detectDocumentCurrency('A 100,00 USD\nB 50,00 USD\nNote EUR')).toBe('USD') // majority wins
-    expect(detectDocumentCurrency('Saldo 100,00 EUR\nPay in USD or CHF')).toBe('EUR') // tie → first appearance
-    expect(detectDocumentCurrency('No money here\nJust prose')).toBeNull() // no code in any voting region
-  })
-
+  // ---- FIN-1: the document currency is a figure-adjacent MAJORITY vote (the `detectDocumentCurrency` cells
+  //      live in money.test.ts); the tests below drive the tool end to end ----
   it('FIN-1: a stray code in a payee memo no longer stamps the whole statement (wrong-currency total)', async () => {
     // A bare-amount EUR statement: the only figure-adjacent code is the EUR on the closing line; a payee
     // memo carries "USD" to the LEFT of its amount, EARLIER in document order. BEFORE: detectCurrency(joined)
@@ -1485,14 +1177,6 @@ describe('financial correctness (full-audit-2026-06-29 follow-up Phase 1)', () =
     const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
     expect(rows.map((r) => r.date)).toEqual(['2026-03-05', '2026-03-07', '2026-03-11'])
   })
-
-  it('FIN-4: a GENUINE US statement (rows LEAD with mm/dd) still flips to month-first', () => {
-    // The leading-column restriction must not break real US detection: a leading `12/31/2026` (second field
-    // 31 → US) still votes, so the otherwise-ambiguous rows resolve month-first.
-    const text = ['Statement USD', '12/31/2026 Year-end fee -5,00 95,00', '03/05/2026 Service -6,00 89,00'].join('\n')
-    expect(inferDateOrder(text)).toBe('mdy')
-    expect(extractTransactionRows([chunk(text, 1)], 'USD').map((r) => r.date)).toEqual(['2026-12-31', '2026-03-05'])
-  })
 })
 
 // full-audit-2026-06-30 Phase A (financial correctness): C1 (reconcile breaks the running-balance chain
@@ -1535,23 +1219,6 @@ describe('financial correctness (full-audit-2026-06-30 Phase A)', () => {
     expect(assessCompleteness({ rows, openingBalance, closingBalance, reconcile })).toBe('complete')
   })
 
-  it('C1: TWO consecutive balance-less gap rows still tie out (the accumulator spans the whole gap)', () => {
-    // Same-day grouping can print the balance only on the day's LAST line, leaving several rows balance-less.
-    // 1.000,00 → (−10) → (−20) → 970,00: both gap amounts must be carried forward to the next printed balance.
-    const text = [
-      'Kontoauszug EUR',
-      '2026-01-02 Startbuchung 5,00 1.000,00', // baseline balance 1.000,00 (its own amount resets the gap accumulator)
-      '2026-01-03 Coffee -10,00', // gap 1
-      '2026-01-03 Tea -20,00', // gap 2 (same day)
-      '2026-01-03 Lunch -50,00 920,00' // 1.000,00 + (−10) + (−20) + (−50) == 920,00
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(4)
-    const reconcile = reconcileBalances(rows)
-    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'unknown', 'unknown', 'ok'])
-    expect(reconcile.reconciled).toBe(true)
-  })
-
   it('C1: a GENUINELY broken chain is still a `mismatch` (the accumulator does not paper over read errors)', () => {
     // The fix must not become a rubber stamp: a printed balance that does NOT equal the correct running
     // total (even after carrying the gap amount) is still flagged. Correct would be 1.924,10; the statement
@@ -1567,33 +1234,6 @@ describe('financial correctness (full-audit-2026-06-30 Phase A)', () => {
     expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'unknown', 'mismatch'])
     expect(reconcile.reconciled).toBe(false)
     expect(assessCompleteness({ rows, reconcile })).toBe('contradicted')
-  })
-
-  it('C1 regression: the normal 2-figure de-AT row is BYTE-IDENTICAL (no gap → no accumulator effect)', () => {
-    // Two balance-bearing rows, no gap: the baseline is `unknown`, the second is a genuine `ok`. This is the
-    // pre-fix behaviour unchanged — the accumulator stays at zero across a row that prints its own balance.
-    const rows = extractTransactionRows(
-      [chunk('Kontoauszug EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10', 1)],
-      'EUR'
-    )
-    const reconcile = reconcileBalances(rows)
-    expect(reconcile.rows.map((r) => r.status)).toEqual(['unknown', 'ok'])
-    expect(reconcile.reconciled).toBe(true)
-  })
-
-  it('C1 regression: the HVB no-balance "Umsätze" listing stays all-unknown / not reconciled (BYTE-IDENTICAL)', () => {
-    // No row prints a running balance, so the accumulator runs but is never compared against a printed
-    // balance — okCount stays 0 → not reconciled, every row `unknown`, exactly as before the fix.
-    const text = [
-      'Kontoumsaetze EUR',
-      '2026-01-20 KARTENZAHLUNG REWE SAGT DANKE 1234 -19,15',
-      '2026-01-29 SEPA-GUTSCHRIFT Arbeitgeber 34,39'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(2)
-    const reconcile = reconcileBalances(rows)
-    expect(reconcile.rows.every((r) => r.status === 'unknown')).toBe(true)
-    expect(reconcile.reconciled).toBe(false)
   })
 
   // ---- C5: a zero-amount row must be classified consistently across the summary and the breakdown ----
@@ -1627,87 +1267,52 @@ describe('financial correctness (full-audit-2026-06-30 Phase A)', () => {
 // These construct realistic layouts with the real codepoints and execute the REAL extractor.
 // ---------------------------------------------------------------------------------------------------
 describe('R1 — Unicode normalization at the extractor entry (audit §5.3)', () => {
-  const MINUS = '\u2212' // MINUS SIGN
-  const ENDASH = '\u2013' // EN DASH
-  const NBHYPHEN = '\u2011' // NON-BREAKING HYPHEN
-  const NBSP = '\u00A0' // NO-BREAK SPACE
-  const NNBSP = '\u202F' // NARROW NO-BREAK SPACE
-  const FIGSP = '\u2007' // FIGURE SPACE
-  const RSQUO = '\u2019' // RIGHT SINGLE QUOTATION MARK (Swiss apostrophe grouping)
-
-  it('a U+2212 minus signs the amount negative (a debit is no longer read as a credit)', () => {
-    const rows = extractTransactionRows([chunk(`2026-01-02 Grocery Store ${MINUS}45,90 1.954,10`, 1)], 'EUR')
-    expect(rows[0]).toMatchObject({ amount: -45.9, currency: 'EUR', balanceAfter: 1954.1 })
-  })
-
-  it('an EN-DASH trailing minus (de-AT glued debit sign) signs the amount negative', () => {
-    const rows = extractTransactionRows([chunk(`2026-01-02 Lastschrift 45,90${ENDASH} 1.954,10`, 1)], 'EUR')
-    expect(rows[0].amount).toBe(-45.9)
-  })
-
-  it('a NON-BREAKING-HYPHEN trailing minus is normalized the same way', () => {
-    const rows = extractTransactionRows([chunk(`2026-01-02 Lastschrift 45,90${NBHYPHEN} 1.954,10`, 1)], 'EUR')
-    expect(rows[0].amount).toBe(-45.9)
-  })
-
-  it('an NBSP-grouped amount reads its FULL magnitude (1 234,56 → 1234.56, not 234.56)', () => {
-    const rows = extractTransactionRows(
-      [chunk(`2026-01-02 Big Payment ${MINUS}1${NBSP}234,56 5${NBSP}678,90`, 1)],
-      'EUR'
-    )
-    expect(rows[0]).toMatchObject({ amount: -1234.56, balanceAfter: 5678.9 })
-  })
-
-  it('a NARROW NBSP (U+202F) grouping is normalized identically', () => {
-    const rows = extractTransactionRows([chunk(`2026-01-02 Rent ${MINUS}1${NNBSP}000,00 4${NNBSP}454,10`, 1)], 'EUR')
-    expect(rows[0]).toMatchObject({ amount: -1000, balanceAfter: 4454.1 })
-  })
-
-  it('a Swiss U+2019 apostrophe group reads 1’234.56 → 1234.56 (not truncated)', () => {
-    const rows = extractTransactionRows(
-      [chunk(`2026-01-02 Zahlung ${MINUS}1${RSQUO}234.56 5${RSQUO}678.90`, 1)],
-      'CHF'
-    )
-    expect(rows[0]).toMatchObject({ amount: -1234.56, balanceAfter: 5678.9, currency: 'CHF' })
-  })
-
-  it('a full statement of NBSP / figure-space rows parses correctly end-to-end (Σ from clean magnitudes)', () => {
-    const text = [
-      'Kontoauszug EUR',
-      `2026-01-02 Supermarkt Billa ${MINUS}1${NBSP}234,56 8${FIGSP}765,44`,
-      `2026-01-03 Gehalt ACME 2${NBSP}500,00 11${NBSP}265,44`
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 1)], 'EUR')
-    expect(rows).toHaveLength(2)
-    expect(rows[0]).toMatchObject({ amount: -1234.56, balanceAfter: 8765.44 })
-    expect(rows[1]).toMatchObject({ amount: 2500, balanceAfter: 11265.44 })
-    // The net follows from the clean magnitudes — NOT the 1000×-truncated 2500 − 234.56 ≈ 2265.44.
-    expect(rows.reduce((s, r) => s + r.amount, 0)).toBeCloseTo(1265.44, 2)
-  })
-
-  it('extractStatementBalances normalizes too: NBSP-grouped Kontostand balances read in full', () => {
-    // The balance readers (`lastMoneyOnLine`) run over the SAME normalized text, so a Raiffeisen
-    // `Kontostand per <date>` pair with NBSP-grouped balances brackets the period with full magnitudes.
-    const text = [
-      `Kontostand per 01.01.2026 1${NBSP}000,00`,
-      `Kontostand per 31.01.2026 2${NBSP}500,50`
-    ].join('\n')
-    expect(extractStatementBalances([chunk(text, 1)])).toEqual({
-      openingBalance: 1000,
-      closingBalance: 2500.5
-    })
-  })
-
-  it('ASCII inputs are unaffected (the normalization is a no-op for clean text)', () => {
-    // The acceptance guard: an all-ASCII statement produces the exact same rows as before R1.
-    const text = [
-      'Account statement EUR',
-      '2026-01-02 Grocery Store -45,90 1.954,10',
-      '2026-01-03 Salary ACME 2.500,00 4.454,10'
-    ].join('\n')
-    const rows = extractTransactionRows([chunk(text, 2)], 'EUR')
-    expect(rows).toHaveLength(2)
-    expect(rows[0]).toMatchObject({ amount: -45.9, balanceAfter: 1954.1 })
-    expect(rows[1]).toMatchObject({ amount: 2500, balanceAfter: 4454.1 })
+  it.each<[string, string, string, Record<string, unknown>]>([
+    [
+      'a U+2212 minus signs the amount negative (a debit is no longer read as a credit)',
+      `2026-01-02 Grocery Store ${MINUS}45,90 1.954,10`,
+      'EUR',
+      { amount: -45.9, currency: 'EUR', balanceAfter: 1954.1 }
+    ],
+    [
+      'an EN-DASH trailing minus (de-AT glued debit sign) signs the amount negative',
+      `2026-01-02 Lastschrift 45,90${ENDASH} 1.954,10`,
+      'EUR',
+      { amount: -45.9 }
+    ],
+    [
+      'a NON-BREAKING-HYPHEN trailing minus is normalized the same way',
+      `2026-01-02 Lastschrift 45,90${NBHYPHEN} 1.954,10`,
+      'EUR',
+      { amount: -45.9 }
+    ],
+    [
+      'an NBSP-grouped amount reads its FULL magnitude (1 234,56 → 1234.56, not 234.56)',
+      `2026-01-02 Big Payment ${MINUS}1${NBSP}234,56 5${NBSP}678,90`,
+      'EUR',
+      { amount: -1234.56, balanceAfter: 5678.9 }
+    ],
+    [
+      'a NARROW NBSP (U+202F) grouping is normalized identically',
+      `2026-01-02 Rent ${MINUS}1${NNBSP}000,00 4${NNBSP}454,10`,
+      'EUR',
+      { amount: -1000, balanceAfter: 4454.1 }
+    ],
+    [
+      'a Swiss U+2019 apostrophe group reads 1’234.56 → 1234.56 (not truncated)',
+      `2026-01-02 Zahlung ${MINUS}1${RSQUO}234.56 5${RSQUO}678.90`,
+      'CHF',
+      { amount: -1234.56, balanceAfter: 5678.9, currency: 'CHF' }
+    ],
+    // The only extractor-level U+2007 input in this suite (balance side).
+    [
+      'a FIGURE-SPACE (U+2007) balance group is normalized too',
+      `2026-01-02 X ${MINUS}1${NBSP}234,56 8${FIGSP}765,44`,
+      'EUR',
+      { amount: -1234.56, balanceAfter: 8765.44 }
+    ]
+  ])('%s', (_label, line, currency, expected) => {
+    const rows = extractTransactionRows([chunk(line, 1)], currency)
+    expect(rows[0]).toMatchObject(expected)
   })
 })

@@ -44,6 +44,7 @@ import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import { IPC } from '../../src/shared/ipc'
 import { t } from '../../src/shared/i18n'
+import { getToolDescriptor } from '../../src/shared/skill-tools'
 import type { AppContext } from '../../src/main/services/context'
 import type { SkillRunState, StartSkillRunResult } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -277,6 +278,7 @@ describe('startSkillRun — the model-lane guard (#186)', () => {
     )
     await pollUntilTerminal(startedHandle(await startRun(h, 'extract_transactions')))
 
+    expect(getToolDescriptor('categorize_transactions')?.modelLane).toBe('doctask') // declared, so no span
     const start = await startRun(h, 'categorize_transactions')
     expect(start.started).toBe(true)
     expect(h.runtime.occupancy.held('skill-run')).toBe(false)

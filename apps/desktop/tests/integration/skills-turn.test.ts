@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -6,16 +6,15 @@ import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
+import type { ChatMessage } from '../../src/main/services/runtime'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
 import { deleteSkill } from '../../src/main/services/skills/installer'
 import { resolveTurnSkill } from '../../src/main/services/skills/turn'
 import {
   appendMessage,
-  buildChatMessages,
   BASE_SYSTEM_PROMPT,
   createConversation,
   generateAssistantMessage,
-  getLatestMessage,
   listMessages,
   setConversationDefaultSkill
 } from '../../src/main/services/chat'
@@ -146,40 +145,7 @@ describe('resolveTurnSkill (skills plan §10.1/§10.3)', () => {
   })
 })
 
-// CB-6 (chat-docs audit 2026-07-07) — buildTurnFence sizes a turn against the final message's content,
-// now read via getLatestMessage (a LIMIT-1 twin of listMessages) instead of paging the whole history.
-// The twin must be byte-identical even when the tail is a SKILL-STAMPED assistant (the skills JOIN
-// column is populated), or the fence budget — and thus stamp decisions — would silently drift.
-describe('getLatestMessage twins listMessages(...).at(-1) for fence sizing (CB-6)', () => {
-  it('matches on a skill-stamped assistant tail (JOIN column exercised)', async () => {
-    const { db, installId } = envWithSkill()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Summarize.' })
-    // Produce a skill-stamped assistant reply so the tail carries a non-null skill_id / skill_title.
-    await generateAssistantMessage(db, runtime(), conv.id, {
-      skill: { installId, title: 'Skill bank', body: 'Quote totals.' }
-    })
-    const twin = getLatestMessage(db, conv.id)
-    expect(twin).toEqual(listMessages(db, conv.id).at(-1))
-    expect(twin?.skillId).toBe(installId)
-    expect(twin?.skillTitle).toBe('Skill bank')
-  })
-})
-
 describe('fence placement (§11.2/§22-H2)', () => {
-  it('plain chat brackets the fence in the SYSTEM message — base first, guard last', () => {
-    const { db } = envWithSkill()
-    const conv = createConversation(db, {})
-    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Hello' })
-    const fence = '--- BEGIN LOCAL SKILL ---\nSkill instructions:\nDo it.\n--- END LOCAL SKILL ---\n' + SKILL_GUARD_LINE
-    const messages = buildChatMessages(db, conv.id, undefined, fence)
-    const system = messages[0]
-    expect(system.role).toBe('system')
-    expect(system.content.startsWith(BASE_SYSTEM_PROMPT)).toBe(true)
-    expect(system.content).toContain('BEGIN LOCAL SKILL')
-    expect(system.content.trimEnd().endsWith(SKILL_GUARD_LINE)).toBe(true)
-  })
-
   it('grounded answers put the fence in the USER turn, never in system (untrusted reference text)', () => {
     const { db } = envWithSkill()
     const conv = createConversation(db, {})
@@ -216,11 +182,27 @@ describe('assistant-row stamping (DS16/§22-A5) + the deleted-skill provenance (
     const { db, installId } = envWithSkill()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Summarize.' })
-    await generateAssistantMessage(db, runtime(), conv.id, {
+    // The mock runtime echoes only the last user turn, so wrap it: record what the model is actually
+    // sent and make the "model" echo the fence end back (the persisted reply must be stripped of it).
+    const rt = runtime()
+    const original = rt.chatStream.bind(rt)
+    let sent: ChatMessage[] = []
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* (messages, options) {
+      sent = messages
+      yield* original(messages, options)
+      yield '\n--- END LOCAL SKILL ---'
+    })
+    await generateAssistantMessage(db, rt, conv.id, {
       skill: { installId, title: 'Skill bank', body: 'Quote totals.' }
     })
+    // Fence placement through the real turn (§11.2/§22-H2): base prompt first, skill body, guard last.
+    expect(sent[0].role).toBe('system')
+    expect(sent[0].content.startsWith(BASE_SYSTEM_PROMPT)).toBe(true)
+    expect(sent[0].content).toContain('Quote totals.')
+    expect(sent[0].content.trimEnd().endsWith(SKILL_GUARD_LINE)).toBe(true)
     const msgs = listMessages(db, conv.id)
     const assistant = msgs[msgs.length - 1]
+    expect(assistant.content).not.toContain('--- END LOCAL SKILL ---')
     expect(assistant.role).toBe('assistant')
     expect(assistant.skillId).toBe(installId)
     expect(assistant.skillTitle).toBe('Skill bank')

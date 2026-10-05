@@ -9,7 +9,7 @@ import {
   pickConversationRun,
   hasRunningRunElsewhere,
   getReattachConversationId,
-  resetSkillRunStoreForTests,
+  clearSkillRunSession,
   type SkillRunEntry
 } from '../../src/renderer/lib/skillruns'
 import type { SkillRunState } from '../../src/shared/types'
@@ -44,11 +44,16 @@ function setApi(api: Api): void {
   ;(window as unknown as { api: Api }).api = api
 }
 
+// The one test that subscribes keeps its unsubscribe here so the clear below notifies no listener.
+let unsubscribe: (() => void) | null = null
+
 beforeEach(() => {
   vi.useFakeTimers()
 })
 afterEach(() => {
-  resetSkillRunStoreForTests()
+  unsubscribe?.()
+  unsubscribe = null
+  clearSkillRunSession()
   vi.useRealTimers()
   delete (window as unknown as { api?: unknown }).api
 })
@@ -125,7 +130,7 @@ describe('skill-run store — poll resilience (SKA-39/40)', () => {
       getSkillRun: async () => ({ ...running, progress: { ...running.progress } }) // a fresh object, identical fields
     })
     const listener = vi.fn()
-    subscribeSkillRuns(listener)
+    unsubscribe = subscribeSkillRuns(listener)
     await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'extract_transactions', conversationId: 'conv-1', documentId: 'doc-1' })
     await vi.advanceTimersByTimeAsync(0) // settle the immediate refresh poll (identical → no notify)
     const after = listener.mock.calls.length // one notify from adopt

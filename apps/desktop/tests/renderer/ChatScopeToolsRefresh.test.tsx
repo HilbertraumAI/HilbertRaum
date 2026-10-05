@@ -15,6 +15,7 @@ import type {
   SkillInfo
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // CH-1 + CH-2 (frontend audit 2026-08-09, issues #139/#140).
 //
@@ -106,6 +107,10 @@ function skill(): SkillInfo {
 
 const unsub = (): (() => void) => () => {}
 
+// The run-bar offer button for a read-only tool (SkillRunBar labels it from the tool name).
+const RUN_BUTTON = { name: 'Extract transactions' }
+const RUNNABLE = { name: 'extract_transactions', requiresConfirmation: false }
+
 beforeAll(() => {
   Object.defineProperty(window.HTMLElement.prototype, 'scrollTo', {
     configurable: true,
@@ -184,10 +189,15 @@ describe('ChatScreen — scope-popover rapid toggles do not race (CH-1, #139)', 
 })
 
 describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, #140)', () => {
-  it('re-fetches listRunnableTools after a successful scope write', async () => {
+  it('the run button appears after a successful scope write (the offer re-resolves)', async () => {
     const user = userEvent.setup()
     const docConv = conv()
-    const listRunnableTools = vi.fn(async () => ({ tools: [], documentIds: [] }))
+    // State-keyed stub: main only reports the tool once the scope write has landed, so the button's
+    // appearance proves the offer re-resolved AFTER the write — not that a call count was reached.
+    let scopeWritten = false
+    const listRunnableTools = vi.fn(async () =>
+      scopeWritten ? { tools: [RUNNABLE], documentIds: ['d1'] } : { tools: [], documentIds: [] }
+    )
     stubApi({
       listConversations: vi.fn(async () => [docConv]),
       getRuntimeStatus: vi.fn(async () => runningStatus),
@@ -199,26 +209,35 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
       suggestSkills: vi.fn(async () => []),
       listSkillRuns: vi.fn(async () => []),
       listRunnableTools,
-      setConversationScope: vi.fn(async () => docConv)
+      setConversationScope: vi.fn(async () => {
+        scopeWritten = true
+        return docConv
+      })
     })
     render(<ChatScreen onNavigate={() => {}} />)
     await user.click(await screen.findByText('Doc Q&A'))
     // Pick the skill — the effect resolves the offer once for (skill, conversation).
     await user.click(await screen.findByRole('button', { name: /^skill:/i }))
     await user.click(await screen.findByRole('menuitemradio', { name: /bank statement helper/i }))
-    await waitFor(() => expect(listRunnableTools).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(listRunnableTools).toHaveBeenCalled())
+    expect(screen.queryByRole('button', RUN_BUTTON)).not.toBeInTheDocument()
 
     // Edit the scope: after the write resolves, the offer must re-resolve — before the fix the
     // effect (keyed only on skill + conversation ids) never re-fired and the run bar stayed stale.
     await user.click(screen.getByRole('button', { name: /answering from/i }))
     await user.click(await screen.findByRole('checkbox', { name: /library/i }))
-    await waitFor(() => expect(listRunnableTools).toHaveBeenCalledTimes(2))
+    expect(await screen.findByRole('button', RUN_BUTTON, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
   })
 
-  it('re-fetches listRunnableTools when an attach-job settles (the #44 invisible-run-button class)', async () => {
+  it('the run button appears when an attach-job settles (the #44 invisible-run-button class)', async () => {
     const user = userEvent.setup()
     const docConv = conv({ scope: { collectionIds: [], documentIds: ['d0'] } })
-    const listRunnableTools = vi.fn(async () => ({ tools: [], documentIds: [] }))
+    // State-keyed: the tool is only reported once the import job has settled (main resolves in-scope
+    // docs at fetch time), so a fetch at pick time yields no button.
+    let jobSettled = false
+    const listRunnableTools = vi.fn(async () =>
+      jobSettled ? { tools: [RUNNABLE], documentIds: ['d0'] } : { tools: [], documentIds: [] }
+    )
     const job: ImportJob = { jobId: 'j1', documentIds: ['d9'] }
     const jobDone: ImportJobStatus = { jobId: 'j1', total: 1, completed: 1, failed: 0, done: true }
     const droppedPaths = new WeakMap<object, string>()
@@ -234,7 +253,10 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
       listSkillRuns: vi.fn(async () => []),
       listRunnableTools,
       importDocuments: vi.fn(async () => job),
-      getImportJob: vi.fn(async () => jobDone),
+      getImportJob: vi.fn(async () => {
+        jobSettled = true
+        return jobDone
+      }),
       getDroppedFilePath: vi.fn((file: File): string => droppedPaths.get(file) ?? '')
     })
     render(
@@ -245,7 +267,8 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
     await user.click(await screen.findByText('Doc Q&A'))
     await user.click(await screen.findByRole('button', { name: /^skill:/i }))
     await user.click(await screen.findByRole('menuitemradio', { name: /bank statement helper/i }))
-    await waitFor(() => expect(listRunnableTools).toHaveBeenCalledTimes(1))
+    await waitFor(() => expect(listRunnableTools).toHaveBeenCalled())
+    expect(screen.queryByRole('button', RUN_BUTTON)).not.toBeInTheDocument()
 
     // Drop a statement into the chat; when the import job settles, the offer must re-resolve —
     // main resolves in-scope docs at fetch time, and before the fix the only fetch happened at
@@ -256,8 +279,6 @@ describe('ChatScreen — runnable-tool offer re-resolves on scope change (CH-2, 
     droppedPaths.set(file, '/tmp/statement.pdf')
     fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } })
 
-    await waitFor(() => expect(listRunnableTools.mock.calls.length).toBeGreaterThanOrEqual(2), {
-      timeout: 3000
-    })
+    expect(await screen.findByRole('button', RUN_BUTTON, { timeout: hangBudgetMs(3000) })).toBeInTheDocument()
   })
 })

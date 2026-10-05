@@ -1,8 +1,8 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   CLASSIFY_MAX_TOKENS,
   CLASSIFY_NONE,
-  buildClassifyMessages,
+  CLASSIFY_TIMEOUT_MS,
   classifyResponseSchema,
   classifySkillPointer,
   type ClassifyCandidate
@@ -65,10 +65,6 @@ describe('classifyResponseSchema — the D55 enum contract', () => {
     expect(schema.required).toEqual(['skill'])
     expect(schema.properties?.skill?.enum).toEqual(['app:bank-statement', 'app:invoice', CLASSIFY_NONE])
   })
-
-  it('none is present even over an empty candidate list (the enum can never be empty)', () => {
-    expect(classifyResponseSchema([]).properties?.skill?.enum).toEqual([CLASSIFY_NONE])
-  })
 })
 
 describe('classifySkillPointer — the single bounded call', () => {
@@ -92,6 +88,8 @@ describe('classifySkillPointer — the single bounded call', () => {
     expect(system.content).toContain('"none"')
     expect(system.content).toContain('app:bank-statement')
     expect(system.content).toContain('Bank Statement Analysis')
+    expect(system.content).toContain('app:invoice')
+    expect(system.content).toContain('Invoice Analysis')
     expect(user.content).toContain('kategorisiere alle transaktionen')
   })
 
@@ -138,7 +136,7 @@ describe('classifySkillPointer — the single bounded call', () => {
     expect(await classifySkillPointer('q', CANDIDATES, deps(midAbort, ctrl.signal))).toBeNull()
   })
 
-  it('a runtime that hangs is cut off by the wall-clock bound (null, no throw)', async () => {
+  it('a runtime that hangs is cut off by the real wall-clock bound (null, no throw)', async () => {
     const hanging: ModelRuntime = {
       ...scripted(),
       async *chatStream(_m: ChatMessage[], options?: RuntimeChatOptions) {
@@ -149,9 +147,21 @@ describe('classifySkillPointer — the single bounded call', () => {
         })
       }
     }
-    const t0 = Date.now()
-    expect(await classifySkillPointer('q', CANDIDATES, { ...deps(hanging), timeoutMs: 30 })).toBeNull()
-    expect(Date.now() - t0).toBeLessThan(5_000) // bounded — never the vitest budget
+    vi.useFakeTimers()
+    try {
+      let settled = false
+      const pending = classifySkillPointer('q', CANDIDATES, deps(hanging)).then((r) => {
+        settled = true
+        return r
+      })
+      await vi.advanceTimersByTimeAsync(CLASSIFY_TIMEOUT_MS - 1)
+      expect(settled).toBe(false) // still waiting one tick before the bound
+      await vi.advanceTimersByTimeAsync(1)
+      expect(settled).toBe(true) // cut off AT the bound — a longer bound fails here instead of hanging
+      expect(await pending).toBeNull()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('a throwing runtime degrades to null (dead sidecar mid-turn)', async () => {
@@ -185,13 +195,5 @@ describe('classifySkillPointer — the single bounded call', () => {
     const mock = new MockRuntime({ modelId: 'mock-model', modelPath: 'x', contextTokens: 4096 })
     await mock.start()
     expect(await classifySkillPointer('categorize all transactions', CANDIDATES, deps(mock))).toBeNull()
-  })
-
-  it('buildClassifyMessages lists every candidate with id AND title', () => {
-    const [system] = buildClassifyMessages('q', CANDIDATES)
-    for (const c of CANDIDATES) {
-      expect(system.content).toContain(c.installId)
-      expect(system.content).toContain(c.title)
-    }
   })
 })

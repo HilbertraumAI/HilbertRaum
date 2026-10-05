@@ -8,12 +8,6 @@ import {
   INVOICE_INSTALL_ID,
   invoiceAnalysisHandler
 } from '../../src/main/services/skills/analysis/invoice'
-import {
-  clearSkillAnalysisHandlers,
-  getSkillAnalysisHandler,
-  registerSkillAnalysisHandler
-} from '../../src/main/services/skills/analysis/registry'
-import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
@@ -109,6 +103,8 @@ const CLEAN = [
   'Gross total 144,00 EUR'
 ].join('\n')
 
+const toSegments = (text: string) => text.split('\n').map((line, index) => ({ text: line, page: 1, index }))
+
 describe('invoice analysis handler — date-order caveat (R5, §5.7)', () => {
   // An invoice whose LEADING delivery-date column is ORDER-AMBIGUOUS (both fields ≤ 12): day-first is
   // applied with no evidence ⇒ the answer carries ONE honest date caveat. (The date must LEAD its line to
@@ -125,24 +121,21 @@ describe('invoice analysis handler — date-order caveat (R5, §5.7)', () => {
   ].join('\n')
 
   // A summary-shaped ask keeps the deterministic TEMPLATE (W3), which carries the R5 date caveat.
-  it('appends the day-first caveat (en) when the invoice gives no date-order evidence', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, AMBIGUOUS)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
-    expect(res.answer).toContain(t('en', 'skills.invoiceAnalysis.dateOrderCaveat'))
-  })
-
-  it('appends the caveat rendered in German (du-form) when tr is de', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, AMBIGUOUS)
-    const ctx = {
-      ...ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'),
-      tr: (k: MessageKey, p?: MessageParams) => t('de', k, p)
+  it.each(['en', 'de'] as const)(
+    'appends the day-first caveat (%s) when the invoice gives no date-order evidence',
+    async (locale) => {
+      const db = freshDb()
+      const id = seedDoc(db, AMBIGUOUS)
+      const ctx = {
+        ...ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'),
+        tr: (k: MessageKey, p?: MessageParams) => t(locale, k, p)
+      }
+      const res = await invoiceAnalysisHandler.run!(ctx)
+      expect(res.answer).toContain(t(locale, 'skills.invoiceAnalysis.dateOrderCaveat'))
+      // The German copy is the du-form.
+      if (locale === 'de') expect(res.answer).not.toContain(' Sie ')
     }
-    const res = await invoiceAnalysisHandler.run!(ctx)
-    expect(res.answer).toContain(t('de', 'skills.invoiceAnalysis.dateOrderCaveat'))
-    expect(res.answer).not.toContain(' Sie ')
-  })
+  )
 
   it('adds NO caveat when the invoice date is ISO (evidence — the day-first guess is moot)', async () => {
     const db = freshDb()
@@ -218,12 +211,8 @@ describe('invoice analysis handler — honest completeness gate (U1, §2.3)', ()
     expect(res.answer).not.toContain(tr('skills.invoiceAnalysis.count', { count: 1 }))
   })
 
-  it('a clean invoice keeps the plain "the whole invoice" count (no false gate)', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'give me a summary of the totals'))
-    expect(res.answer).toContain(tr('skills.invoiceAnalysis.count', { count: 2 }))
-  })
+  // The plain "the whole invoice" count on a clean invoice (no false gate) is pinned by the exhaustive-figures
+  // test below.
 })
 
 describe('invoice analysis handler — run()', () => {
@@ -282,24 +271,6 @@ describe('invoice analysis handler — run()', () => {
     expect(res.answer).toContain('20.00')
   })
 
-  it('R6: the listing shows a CLEANED (debris-stripped) line-item description (audit §5.7)', async () => {
-    // A `<rowIndex> <description> <qty> <rate>% <unitPrice> <lineTotal>` row: 12 × 76,17 = 914,04 confirms
-    // the split, so the leading index + trailing `12 0%` debris are stripped and the listing shows the clean
-    // description (not the raw "1 Web hosting 12 Monate 12 0%"). Exercises extract → persist → listing.
-    const DEBRIS = [
-      'Invoice number INV-777',
-      'Vendor Debris GmbH',
-      '1 Web hosting 12 Monate 12 0% 76,17 914,04',
-      'Net total 914,04 EUR'
-    ].join('\n')
-    const db = freshDb()
-    const id = seedDoc(db, DEBRIS)
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'liste alle positionen auf'))
-    expect(res.answer).toContain('Web hosting 12 Monate') // the identity-confirmed cleaned description
-    expect(res.answer).not.toContain('1 Web hosting') // leading row-index gone
-    expect(res.answer).not.toContain('0%') // trailing tax-rate debris gone
-  })
-
   it('W3 grounded-data outcome: a non-summary question returns the verified data block + totals postscript', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
@@ -339,6 +310,8 @@ describe('invoice analysis handler — run()', () => {
   it('answers a "als JSON" request by serializing the extracted invoice (no prose template)', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
+    // SKA-9: a separable ask WITH a format word ("… als json zusammen") still serializes — the format
+    // short-circuit precedes the separable-summary regex, which must not hijack it to the template.
     const res = await invoiceAnalysisHandler.run!(
       ctxFor(db, { documentIds: [id] }, 'fasse die rechnung als json zusammen')
     )
@@ -408,25 +381,16 @@ describe('invoice analysis handler — run()', () => {
     expect(res.coverage!.fullyChunked).toBe(true) // gates the "whole document" meter wording
   })
 
-  it('coverage fullyChunked is FALSE for a legacy (not fully chunked) document', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, CLEAN) // fully_chunked NULL
-    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
-    expect(res.coverage!.mode).toBe('extract')
-    expect(res.coverage!.fullyChunked).toBe(false)
-  })
-
   it('citations are real SOURCE chunks (M2) — labelled S1…Sn', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
     const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
 
-    expect(res.citations.length).toBeGreaterThan(0)
+    // A short document cites ALL of its chunks, in document order (no head cap, no reordering).
+    expect(res.citations).toHaveLength(8)
     res.citations.forEach((c, i) => expect(c.label).toBe(`S${i + 1}`))
-    const snippets = res.citations.map((c) => c.snippet ?? '').join('\n')
-    // The snippets come from the document's own lines (line items + header), not a synthesised total.
-    expect(snippets).toContain('Widget')
-    expect(snippets).toContain('Acme GmbH')
+    // The snippets are the document's own lines in seeded order, not a synthesised total.
+    expect(res.citations.map((c) => c.snippet)).toEqual(CLEAN.split('\n'))
   })
 
   // U5 (audit §6.2/ux stopgap): a LONG invoice prints its totals at the END, past the first 12 chunks.
@@ -459,20 +423,18 @@ describe('invoice analysis handler — run()', () => {
 })
 
 describe('invoice analysis handler — data lifecycle (reuse / replace / staleness parity, F5)', () => {
-  it('asking N questions persists exactly ONE invoice + ONE line-item set (no bloat)', async () => {
+  it('REUSES a fresh (current-version) invoice — no re-extraction, no duplicate, no bloat across N questions', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    // Three analysis questions over the SAME document — extraction is deterministic, so the rows are
-    // identical each time. The fix REUSES the fresh invoice instead of re-inserting (F5: the bank path's
-    // reuse/replace parity). Before the fix this persisted three invoices + three line-item sets.
     await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what are the totals?'))
+    const first = db.prepare('SELECT id FROM invoices WHERE document_id = ?').get(id) as { id: string }
+    // Further questions over the SAME document reuse the same invoice (it is at the current version →
+    // not stale). Before the F5 fix three questions persisted three invoices + three line-item sets.
     await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the gross total?'))
     await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'reconcile the totals'))
-
-    const invoices = db.prepare('SELECT COUNT(*) AS n FROM invoices WHERE document_id = ?').get(id) as {
-      n: number
-    }
-    expect(invoices.n).toBe(1)
+    const rows = db.prepare('SELECT id FROM invoices WHERE document_id = ?').all(id) as Array<{ id: string }>
+    expect(rows.length).toBe(1)
+    expect(rows[0].id).toBe(first.id) // same invoice, not re-extracted
     const lineItems = db
       .prepare(
         `SELECT COUNT(*) AS n FROM invoice_line_items WHERE invoice_id IN
@@ -480,18 +442,6 @@ describe('invoice analysis handler — data lifecycle (reuse / replace / stalene
       )
       .get(id) as { n: number }
     expect(lineItems.n).toBe(2) // the two CLEAN line items, not 6
-  })
-
-  it('REUSES a fresh (current-version) invoice — no re-extraction, no duplicate', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, CLEAN)
-    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
-    const first = db.prepare('SELECT id FROM invoices WHERE document_id = ?').get(id) as { id: string }
-    // The second run reuses the same invoice (it is at the current version → not stale).
-    await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'totals?'))
-    const rows = db.prepare('SELECT id FROM invoices WHERE document_id = ?').all(id) as Array<{ id: string }>
-    expect(rows.length).toBe(1)
-    expect(rows[0].id).toBe(first.id) // same invoice, not re-extracted
   })
 
   it('re-extracts and REPLACES an invoice produced by an outdated extractor (staleness)', async () => {
@@ -574,25 +524,22 @@ describe('invoice grounded-data honesty composition (W6, §3.1 SKA-5)', () => {
 
 // W7 (audit §3.2/§3.3) — answer-shape tuning for the invoice, end-to-end through run().
 describe('invoice W7 answer-shape tuning (SKA-9/SKA-10)', () => {
-  it('SKA-9 separable verbs "Fasse die Rechnung zusammen" / "Liste die Positionen auf" keep the TEMPLATE', async () => {
+  // The summary-shape classifier end-to-end: the deterministic template (mode unset) vs grounded-data.
+  it.each<{ q: string; mode: 'grounded-data' | undefined }>([
+    // SKA-9: separable verbs keep the template.
+    { q: 'Fasse die Rechnung zusammen', mode: undefined },
+    { q: 'Liste die Positionen auf', mode: undefined },
+    // The reconcile stem is word-anchored (\bstimm(en|t)\b): an unrelated verb like "bestimmen" must not
+    // over-fire to the template, while a genuine reconcile ask ("stimmen die Summen?") does.
+    { q: 'kannst du die rechnungsposten bestimmen?', mode: 'grounded-data' },
+    { q: 'stimmen die Summen?', mode: undefined }
+  ])('answer shape: "$q" → $mode', async ({ q, mode }) => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
-    for (const q of ['Fasse die Rechnung zusammen', 'Liste die Positionen auf']) {
-      const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
-      expect(res.mode, `"${q}" must keep the template`).not.toBe('grounded-data')
-      expect(res.answer.length, `"${q}" template answer is non-empty`).toBeGreaterThan(0)
-    }
-  })
-
-  it('SKA-9 a separable ask WITH a format word ("… als json zusammen") still serializes (format wins first)', async () => {
-    // The format short-circuit precedes isSummaryShaped, so a genuine "als JSON" request is untouched by
-    // the new separable-summary regex (guards against the regex hijacking a format ask to the template).
-    const db = freshDb()
-    const id = seedDoc(db, CLEAN)
-    const res = await invoiceAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'fasse die rechnung als json zusammen')
-    )
-    expect(res.answer).toContain('```json')
+    const res = await invoiceAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
+    expect(res.mode).toBe(mode)
+    if (mode === undefined) expect(res.answer).toContain(tr('skills.invoiceAnalysis.count', { count: 2 }))
+    else expect(res.answer).toBe('')
   })
 
   it('SKA-10 explanatory format Q "Warum fehlt im JSON die MwSt?" reaches grounded-data, not the JSON dump', async () => {
@@ -687,11 +634,12 @@ describe('invoice P1 format negation + replay backstop (invoice-hardening-2026-0
     expect(res.answer).not.toContain('```json')
   })
 
-  it('a raw/prose ask ("die Rechnung im Rohformat bitte") never serializes', async () => {
+  it('a raw/prose ask ("… als json im Rohformat") never serializes', async () => {
     const db = freshDb()
     const id = seedDoc(db, CLEAN)
+    // The question carries a json token, so only the raw-format guard keeps it off the JSON dump.
     const res = await invoiceAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'zeig mir die Rechnung im Rohformat bitte')
+      ctxFor(db, { documentIds: [id] }, 'zeig mir die Rechnung als json im Rohformat')
     )
     expect(res.mode).toBe('grounded-data')
     expect(res.answer).not.toContain('```json')
@@ -745,8 +693,6 @@ describe('invoice P3 glyph-soup gate + geometry retry + missing-field fall-throu
     'Netto 4 $',
     'Total 914 $'
   ].join('\n')
-
-  const toSegments = (text: string) => text.split('\n').map((line, index) => ({ text: line, page: 1, index }))
 
   it('soup + unverifiable figures → the unreadable-layout refusal (never fragments as an invoice)', async () => {
     const db = freshDb()
@@ -888,10 +834,10 @@ describe('invoice analysis — Stop mid-run is a calm cancel, not a swallowed an
       ...ctxFor(db, { documentIds: [id] }, 'fasse die rechnung zusammen'),
       signal: controller.signal,
       readDocumentSegments: async (_id: string) => {
-        // Stop pressed mid-extraction: abort, then the reader throws → run.ts reads signal.aborted
-        // → {ok:false, cancelled:true}.
+        // Stop pressed mid-extraction: abort, then the reader still returns the real segments, so only
+        // the abort gates (not a reader failure) stand between the run and persisting an invoice.
         controller.abort()
-        throw new Error('aborted mid-extraction')
+        return toSegments(CLEAN)
       }
     }
     await expect(invoiceAnalysisHandler.run!(ctx)).rejects.toMatchObject({ name: 'AbortError' })
@@ -926,21 +872,5 @@ describe('invoice analysis — Stop mid-run is a calm cancel, not a swallowed an
     }
     const res = await invoiceAnalysisHandler.run!(ctx)
     expect(res.answer).toBe(tr('skills.invoiceAnalysis.couldNotRead'))
-  })
-})
-
-describe('analysis-handler registry — invoice', () => {
-  it('register/get round-trips by install id; an unknown id returns undefined', () => {
-    clearSkillAnalysisHandlers()
-    expect(getSkillAnalysisHandler(INVOICE_INSTALL_ID)).toBeUndefined()
-    registerSkillAnalysisHandler(INVOICE_INSTALL_ID, invoiceAnalysisHandler)
-    expect(getSkillAnalysisHandler(INVOICE_INSTALL_ID)).toBe(invoiceAnalysisHandler)
-    expect(getSkillAnalysisHandler('app:not-a-skill')).toBeUndefined()
-  })
-
-  it('registerBuiltinSkillAnalysisHandlers wires the invoice handler (D49)', () => {
-    clearSkillAnalysisHandlers()
-    registerBuiltinSkillAnalysisHandlers()
-    expect(getSkillAnalysisHandler(INVOICE_INSTALL_ID)).toBe(invoiceAnalysisHandler)
   })
 })

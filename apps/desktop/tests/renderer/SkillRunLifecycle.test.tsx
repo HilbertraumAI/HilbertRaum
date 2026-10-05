@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import { startSkillRun, resetSkillRunStoreForTests } from '../../src/renderer/lib/skillruns'
+import { startSkillRun, clearSkillRunSession } from '../../src/renderer/lib/skillruns'
 import type { Conversation, Message, RuntimeStatus, SkillInfo, SkillRunState, StartSkillRunRequest, StartSkillRunResult, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 import { appStatus } from '../helpers/status'
@@ -54,8 +54,9 @@ beforeAll(() => {
 })
 
 afterEach(() => {
-  resetSkillRunStoreForTests()
+  // Unmount first: it unsubscribes the store listener, so the clear notifies nothing (no act() warning).
   cleanup()
+  clearSkillRunSession()
   vi.restoreAllMocks()
   window.localStorage.clear()
 })

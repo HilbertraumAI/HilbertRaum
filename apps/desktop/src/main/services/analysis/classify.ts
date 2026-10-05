@@ -133,7 +133,7 @@ function parseClassifyReply(text: string, candidates: readonly ClassifyCandidate
 export async function classifySkillPointer(
   question: string,
   candidates: readonly ClassifyCandidate[],
-  deps: { runtime: ModelRuntime | null; signal: AbortSignal; timeoutMs?: number }
+  deps: { runtime: ModelRuntime | null; signal: AbortSignal }
 ): Promise<ClassifyCandidate | null> {
   const { runtime, signal } = deps
   if (!runtime || candidates.length === 0 || signal.aborted) return null
@@ -143,7 +143,7 @@ export async function classifySkillPointer(
   const inner = new AbortController()
   const onOuterAbort = (): void => inner.abort()
   signal.addEventListener('abort', onOuterAbort)
-  const timer = setTimeout(() => inner.abort(), deps.timeoutMs ?? CLASSIFY_TIMEOUT_MS)
+  const timer = setTimeout(() => inner.abort(), CLASSIFY_TIMEOUT_MS)
 
   try {
     let text = ''

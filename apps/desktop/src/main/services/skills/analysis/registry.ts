@@ -18,8 +18,3 @@ export function registerSkillAnalysisHandler(installId: string, handler: SkillAn
 export function getSkillAnalysisHandler(installId: string): SkillAnalysisHandler | undefined {
   return REGISTRY.get(installId)
 }
-
-/** Drop all registrations (tests only — keeps a suite's registry state isolated). */
-export function clearSkillAnalysisHandlers(): void {
-  REGISTRY.clear()
-}

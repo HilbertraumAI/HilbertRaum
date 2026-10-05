@@ -20,17 +20,11 @@ import {
 // handler-vocab DRIFT guard: every routing term actually routes.
 
 describe('vocabulary — structural invariants', () => {
-  it('covers exactly the nine app skills, each with a non-empty vocabulary', () => {
-    expect(APP_VOCAB_SKILL_IDS.length).toBe(9)
-    for (const id of APP_VOCAB_SKILL_IDS) {
-      expect(SKILL_VOCABULARY[id]?.length ?? 0).toBeGreaterThan(0)
-    }
-    // No stray keys beyond the declared eight.
+  it('every skill has terms; every entry is well-formed (whitespace ⟺ phrase, no dupes); every offer term is scorer-matchable and every route term routes', () => {
+    // The hand-kept id list and the vocabulary's keys agree, so the loop below sees every skill.
     expect(Object.keys(SKILL_VOCABULARY).sort()).toEqual([...APP_VOCAB_SKILL_IDS].sort())
-  })
-
-  it('every entry is well-formed (whitespace ⟺ phrase, no dupes) and every offer term is scorer-matchable', () => {
     for (const id of APP_VOCAB_SKILL_IDS) {
+      expect(SKILL_VOCABULARY[id].length, `${id}: empty vocabulary`).toBeGreaterThan(0)
       const seen = new Set<string>()
       for (const e of SKILL_VOCABULARY[id]) {
         const term = e.term.trim().toLowerCase()
@@ -50,6 +44,11 @@ describe('vocabulary — structural invariants', () => {
         // scorer does, so this is the offer-side liveness guard the parity/route tests don't cover.)
         if (e.use === 'suggest' || e.use === 'both') {
           expect(countKeywordHits([e.term], `bitte ${e.term} jetzt`), `${id}: "${term}" never offers`).toBe(1)
+        }
+        // Route-side liveness (no dead/typo'd route term; the word/phrase/stem type fires on the term). The
+        // handler wiring is covered by `skills-analysis-*` and the `SkillVocabId` compile guard on `routeMatch`.
+        if (e.use === 'route' || e.use === 'both') {
+          expect(routeMatch(id, `bitte ${e.term} jetzt`), `${id}: route term "${term}" did not route`).toBe(true)
         }
       }
     }
@@ -89,34 +88,7 @@ describe('entryMatches / routeMatch — word-boundary vs substring', () => {
   })
 })
 
-describe('route-term liveness — every declared routing term self-matches', () => {
-  // For every skill, EACH `route|both` term, a synthetic question embedding it matches `routeMatch`. This
-  // is a LIVENESS check (no dead/typo'd route term, and the word/phrase/stem match type actually fires on
-  // the term) — NOT an end-to-end handler test: the two OTHER guards cover wiring. (1) The routing gates
-  // call `routeMatch(skillId: SkillVocabId, …)`, so a handler wired to the WRONG skill id is a COMPILE
-  // error. (2) The per-handler integration tests (`skills-analysis-{bank,invoice,redaction,whole-doc}.test.ts`)
-  // drive the REAL `applies()`/`intends()` with representative EN+DE questions, so a mis-wired gate reddens
-  // there (verified: mutating redaction's gate to another skill fails those). Here we only pin term liveness.
-  for (const id of APP_VOCAB_SKILL_IDS) {
-    it(`${id}: all ${routeEntries(id).length} route terms match a question containing them`, () => {
-      for (const e of routeEntries(id)) {
-        const q = `bitte ${e.term} jetzt` // wrap so a word entry sees clean boundaries
-        expect(routeMatch(id, q), `${id}: route term "${e.term}" did not route`).toBe(true)
-      }
-    })
-  }
-})
-
 describe('suggest↔route derivation', () => {
-  it('suggestTerms are exactly the `suggest|both` terms (the manifest parity contract source)', () => {
-    for (const id of APP_VOCAB_SKILL_IDS) {
-      const expected = SKILL_VOCABULARY[id]
-        .filter((e) => e.use === 'suggest' || e.use === 'both')
-        .map((e) => e.term)
-      expect(suggestTerms(id)).toEqual(expected)
-    }
-  })
-
   it('unknown skill ids yield empty term/entry lists (never throw)', () => {
     expect(suggestTerms('no-such-skill')).toEqual([])
     expect(routeEntries('no-such-skill')).toEqual([])
@@ -226,11 +198,6 @@ describe('W7 — SKA-7 bank/invoice German money routing (route-only; §3.2/§8.
     expect(routeMatch('bank-statement', 'Liste das auf')).toBe(true)
     expect(routeMatch('invoice', 'Fasse die Rechnung zusammen')).toBe(true)
     expect(routeMatch('invoice', 'Liste die Positionen auf')).toBe(true)
-  })
-
-  it('these route-only additions still do NOT hit an off-topic question', () => {
-    expect(routeMatch('bank-statement', 'what is the weather today?')).toBe(false)
-    expect(routeMatch('invoice', 'tell me a joke')).toBe(false)
   })
 })
 

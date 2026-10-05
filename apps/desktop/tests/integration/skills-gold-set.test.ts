@@ -4,11 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import {
-  runDocumentRedaction,
-  runDocumentEdit,
-  type OriginalDocumentBytes
-} from '../../src/main/services/skills/run'
+import { runDocumentEdit, type OriginalDocumentBytes } from '../../src/main/services/skills/run'
 import { redactWithEntities } from '../../src/main/services/skills/tools/redaction'
 import { verifyAndSpliceEdits } from '../../src/main/services/skills/tools/document-edit'
 import { readDocxTextLayer } from '../../src/main/services/export/docx-rewrite'
@@ -18,11 +14,12 @@ import type { AuditEventType } from '../../src/shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 
 // GOLD-SET locate-pass fixtures (beta-feedback-2026-07 Phase 10 close-out; plan §13). The synthetic
-// lawyer-shaped documents in `tests/fixtures/gold-set/legal-corpus.ts` are driven through the FULL redaction
-// and edit pipelines two ways: (1) at the PURE level (`redactWithEntities` / `verifyAndSpliceEdits`), which
-// exposes the drop-unverifiable count + the span union directly; (2) through the run SEAM with a scripted
-// (mock) runtime replaying the fixture's model reply, which proves the same guarantees end-to-end incl. the
-// Phase-9 same-format DOCX round-trip. No real model runs here — that is a PAID_* manual harness
+// lawyer-shaped documents in `tests/fixtures/gold-set/legal-corpus.ts` are driven through the redaction and
+// edit pipelines at the PURE level (`redactWithEntities` / `verifyAndSpliceEdits`), which exposes the
+// drop-unverifiable count + the span union directly, and the edit gold also through the run SEAM with a
+// scripted (mock) runtime replaying the fixture's model reply (the Phase-9 same-format DOCX round-trip over
+// several length-changing edits in different paragraphs). The redaction run seam, incl. its DOCX round-trip,
+// is covered by skills-redaction.test.ts. No real model runs here — that is a PAID_* manual harness
 // (model-benchmarks.md §12); this file pins the STRUCTURAL guarantees (verbatim verify, all-occurrence sweep,
 // occurrence precision, drop-unverifiable, DOCX formatting byte-identity), never model judgement quality.
 
@@ -65,7 +62,6 @@ function capturingAudit(): { audit: (t: AuditEventType, m?: Record<string, unkno
   return { audit: () => {} }
 }
 
-const REDACT_INSTALL = 'app:document-redaction'
 const EDIT_INSTALL = 'app:document-edit'
 
 // ---- Redaction gold set — the pure verify+sweep pipeline ----
@@ -90,77 +86,6 @@ describe('gold set — redaction locate → verify → sweep (pure)', () => {
       expect(result.text.split('\n')).toHaveLength(text.split('\n').length)
     })
   }
-})
-
-// ---- Redaction gold set — through the run seam (mock-runtime replay) ----
-
-describe('gold set — redaction through the run seam (scripted runtime)', () => {
-  it('vollmacht: DOCX in → DOCX out, located names swept + floor masked, formatting byte-identical', async () => {
-    const gold = REDACTION_GOLD.find((g) => g.id === 'vollmacht')!
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, 'ignored — the DOCX branch reads the injected original bytes')
-    const original = await makeDocx(gold.paragraphs)
-    const { audit } = capturingAudit()
-    const runtime = scriptedRuntime(JSON.stringify({ entities: gold.located }))
-    let saved: Uint8Array | null = null
-    let textCalled = false
-    const res = await runDocumentRedaction(db, { skillInstallId: REDACT_INSTALL, documentId: docId }, {
-      audit,
-      confirmed: true,
-      runtime,
-      instruction: gold.instruction,
-      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
-      saveBinaryFile: async (_name, bytes) => {
-        saved = bytes
-        return true
-      },
-      saveTextFile: async () => {
-        textCalled = true
-        return true
-      }
-    })
-    expect(res.ok).toBe(true)
-    expect(res.resultKind).toBe('redacted') // the model ran ⇒ not the degraded floor discriminator
-    expect(res.redactionCount).toBe(gold.expectedFloor + gold.expectedEntityOccurrences)
-    expect(textCalled).toBe(false) // same-format .docx, never the .txt path
-
-    const layer = await readDocxTextLayer(saved!)
-    for (const masked of gold.mustMask) expect(layer.text, `${masked} must be masked`).not.toContain(masked)
-    for (const kept of gold.mustKeep) expect(layer.text, `${kept} must survive`).toContain(kept)
-    expect(layer.text).toContain('█')
-    // Styles/formatting untouched — every non-document.xml zip part byte-identical (the D77 guarantee).
-    const before = await otherDocxParts(original)
-    const after = await otherDocxParts(saved!)
-    for (const [path, b64] of before) expect(after.get(path), `${path} byte-identical`).toBe(b64)
-  })
-
-  it('mandantenbrief: .txt path masks names/PII, keeps the city, drops the mis-cased proposal', async () => {
-    const gold = REDACTION_GOLD.find((g) => g.id === 'mandantenbrief')!
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, gold.paragraphs.join('\n'))
-    const { audit } = capturingAudit()
-    const runtime = scriptedRuntime(JSON.stringify({ entities: gold.located }))
-    let written = ''
-    const res = await runDocumentRedaction(db, { skillInstallId: REDACT_INSTALL, documentId: docId }, {
-      audit,
-      confirmed: true,
-      runtime,
-      instruction: gold.instruction,
-      saveTextFile: async (_name, content) => {
-        written = content
-        return true
-      }
-    })
-    expect(res.ok).toBe(true)
-    expect(res.resultKind).toBe('redacted')
-    expect(res.redactionCount).toBe(gold.expectedFloor + gold.expectedEntityOccurrences)
-    for (const masked of gold.mustMask) expect(written, `${masked} must be masked`).not.toContain(masked)
-    for (const kept of gold.mustKeep) expect(written, `${kept} must survive`).toContain(kept)
-    // The drop-unverifiable count is only observable at the pure level (the seam surfaces a content-free
-    // total) — pin it there so the mis-cased proposal provably never masked anything.
-    const pure = redactWithEntities(gold.paragraphs.join('\n'), gold.located, 'perChar')
-    expect(pure.droppedEntities).toBe(gold.expectedDropped)
-  })
 })
 
 // ---- Edit gold set — occurrence-precise verify + splice ----

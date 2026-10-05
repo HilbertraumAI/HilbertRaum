@@ -32,11 +32,7 @@ export type {
   SkillAnalysisInput,
   SkillAnalysisResult
 } from './types'
-export {
-  getSkillAnalysisHandler,
-  registerSkillAnalysisHandler,
-  clearSkillAnalysisHandlers
-} from './registry'
+export { getSkillAnalysisHandler, registerSkillAnalysisHandler } from './registry'
 export { BANK_STATEMENT_INSTALL_ID, bankStatementAnalysisHandler, buildBankAnswer } from './bank-statement'
 export { INVOICE_INSTALL_ID, invoiceAnalysisHandler, buildInvoiceAnswer } from './invoice'
 export { DOCUMENT_REDACTION_INSTALL_ID, documentRedactionAnalysisHandler } from './redaction'

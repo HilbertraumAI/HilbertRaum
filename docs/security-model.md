@@ -1901,14 +1901,14 @@ boundary), content-class isolation (`bank_*` + `skill_runs` never logged/audited
 only audit, and `requireUnlocked` on every DB-backed channel. **No CRITICAL/HIGH.** One LOW was fixed
 (the CSV formula-injection above); the scattered S10/S11 sentinel tests were consolidated into a single
 `skills-privacy-guard.test.ts` that drives one secret through every sink (import error, loader, all five
-tool runs, the CSV export, the IPC `SkillRunState`) **plus a console spy** and proves absence in
-audit/log/console/run-metadata while confirming the deliberate exceptions (content-class tables + the
-user-chosen CSV). Two LOW residuals were accepted + documented in
+tool runs, the CSV export, the polled `SkillRunState` snapshot) **plus a console spy** and proves
+absence in audit/log/console/run-metadata while confirming the deliberate exceptions (content-class
+tables + the user-chosen CSV). Two LOW residuals were accepted + documented in
 [`known-limitations.md`](known-limitations.md): prompt text-injection is contained by the structural
-ceiling (not by escaping the fence delimiter), and a user skill's `triggers.filenamePatterns` are compiled
-to a bounded RegExp run only on a user action (no auto-fire). The §14 **unchanged guarantees** held — CSP,
-the deny-by-default permission handler, the offline guard, the encryption posture, and packaging were not
-touched.
+ceiling (not by escaping the fence delimiter), and a user skill's `triggers.filenamePatterns` are
+compiled to a bounded RegExp run only on a user action (no auto-fire). The §14 **unchanged guarantees**
+held — CSP, the deny-by-default permission handler, the offline guard, the encryption posture, and
+packaging were not touched.
 
 **Post-S12 audit follow-ups (2026-06-17).** A second multi-persona audit found **no CRITICAL/HIGH**; the
 hardening landed behind this same ceiling (full record: architecture.md "Skills — design record" §13).

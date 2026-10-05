@@ -2563,12 +2563,13 @@ holds SYNTHETIC, lawyer-shaped German documents (a Vollmacht, a Mandantenbrief c
 names/addresses/IBAN/email/phone/dates — **never real user data**, same rule as the §10.1 real-layout
 corpus), each with the exact model reply a scripted (mock) runtime replays.
 [`tests/integration/skills-gold-set.test.ts`](../apps/desktop/tests/integration/skills-gold-set.test.ts)
-drives them through the FULL redaction and edit pipelines — at the pure level
+drives them through the redaction and edit pipelines at the pure level
 (`redactWithEntities` / `verifyAndSpliceEdits`, which expose the drop-unverifiable count + the span
-union) AND through the run seam with the scripted runtime, incl. the Phase-9 same-format DOCX
-round-trip. It pins the STRUCTURAL guarantees only: verbatim verify, every-occurrence sweep (D75),
-occurrence precision (D76), the drop-unverifiable path, per-char masks preserving line length (D74),
-and every non-`document.xml` DOCX part byte-identical (D77). It **never** asserts model judgement —
+union), and the edit case also through the run seam with the scripted runtime, incl. the Phase-9
+same-format DOCX round-trip (the redaction run seam is covered by `skills-redaction.test.ts`). It
+pins the STRUCTURAL guarantees only: verbatim verify, every-occurrence sweep (D75), occurrence
+precision (D76), the drop-unverifiable path, per-char masks preserving line length (D74), and every
+non-`document.xml` DOCX part byte-identical (D77). It **never** asserts model judgement —
 the scripted reply IS the "model", so this proves the app around the model, not the model.
 
 ### 12.2 The real-model manual harness (`PAID_*`, not CI)

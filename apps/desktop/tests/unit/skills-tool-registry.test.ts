@@ -1,19 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import {
   validateJsonSchema,
-  validateToolInput,
-  validateToolOutput,
   toolRequiresConfirmation,
   getRegisteredTool,
   listRegisteredToolNames,
   resolveWiredTools,
   runSkillTool
 } from '../../src/main/services/skills/tool-registry'
-import {
-  SKILL_TOOL_DESCRIPTORS,
-  WIRED_TOOL_NAMES,
-  getToolDescriptor
-} from '../../src/shared/skill-tools'
+import { SKILL_TOOL_DESCRIPTORS, getToolDescriptor } from '../../src/shared/skill-tools'
 import type {
   AuditEventType,
   SkillTool,
@@ -95,6 +89,11 @@ describe('validateJsonSchema (subset)', () => {
     expect(validateJsonSchema({ type: 'string', pattern: '^[A-Z]{3}$' }, 'eur').length).toBe(1)
     expect(validateJsonSchema({ type: 'array', items: { type: 'string' }, minItems: 1 }, ['a'])).toEqual([])
     expect(validateJsonSchema({ type: 'array', items: { type: 'string' } }, [1]).length).toBe(1)
+    expect(validateJsonSchema({ type: 'string', minLength: 3 }, 'ab').length).toBe(1)
+    expect(validateJsonSchema({ type: 'string', maxLength: 3 }, 'abcd').length).toBe(1)
+    expect(validateJsonSchema({ type: 'string', maxLength: 3 }, 'abc')).toEqual([])
+    expect(validateJsonSchema({ type: 'array', maxItems: 1 }, [1, 2]).length).toBe(1)
+    expect(validateJsonSchema({ type: 'array', maxItems: 1 }, [1])).toEqual([])
     expect(validateJsonSchema({ enum: ['a', 'b'] }, 'a')).toEqual([])
     expect(validateJsonSchema({ enum: ['a', 'b'] }, 'c').length).toBe(1)
   })
@@ -122,34 +121,6 @@ describe('validateJsonSchema (subset)', () => {
 })
 
 describe('registry + resolveWiredTools', () => {
-  it('ships the reference tool + the bank tools + the invoice tools + the redaction tool', () => {
-    // `count_selected_documents` is the gate's test-only CANARY — registered but never wired (X-2, kept
-    // deliberately; the "not wired to a run seam" half is pinned in skills-tool-run-ipc.test.ts).
-    expect(listRegisteredToolNames()).toEqual([
-      'count_selected_documents',
-      'extract_transactions',
-      'validate_statement_balances',
-      'categorize_transactions',
-      'summarize_cashflow',
-      'export_transactions_csv',
-      // Invoice — the SECOND Tier-2 domain (same gate, second content class).
-      'extract_invoice',
-      'validate_invoice_totals',
-      'export_invoice_csv',
-      'export_invoice_json',
-      'export_invoice_xml',
-      // Redaction — the read-transform-export shape (confirm-gated; no content-class table).
-      'redact_document',
-      // Document-edit — the same read-transform-export shape for targeted find→replace edits (Phase 8).
-      'apply_document_edits'
-    ])
-    expect(getRegisteredTool('export_transactions_csv')).toBeDefined()
-    expect(getRegisteredTool('extract_invoice')).toBeDefined()
-    expect(getRegisteredTool('redact_document')).toBeDefined()
-    expect(getRegisteredTool('apply_document_edits')).toBeDefined()
-    expect(getRegisteredTool('__proto__')).toBeUndefined() // own-property lookup only
-  })
-
   it('resolves declared ∩ registry ∩ wired; drops the unwired canary + unregistered names; dedups; keeps order', () => {
     // A2 (audit §6.4-low): the vestigial `userGrant` leg is gone — the set is declared ∩ registry ∩ wired.
     // `count_selected_documents` is REGISTERED but not WIRED (the X-2 canary), so it is dropped here.
@@ -178,11 +149,7 @@ describe('self-describing tool registry (A2)', () => {
     }
     const registeredWithoutDescriptor = listRegisteredToolNames().filter((n) => !getToolDescriptor(n))
     expect(registeredWithoutDescriptor).toEqual(['count_selected_documents'])
-  })
-
-  it('WIRED_TOOL_NAMES equals the descriptor order and excludes the canary', () => {
-    expect(WIRED_TOOL_NAMES).toEqual(SKILL_TOOL_DESCRIPTORS.map((d) => d.name))
-    expect(WIRED_TOOL_NAMES).not.toContain('count_selected_documents')
+    expect(getRegisteredTool('__proto__')).toBeUndefined() // own-property lookup only
   })
 
   it('descriptor.confirm agrees with the permission-derived toolRequiresConfirmation (no drift)', () => {
@@ -192,34 +159,11 @@ describe('self-describing tool registry (A2)', () => {
     }
   })
 
-  it('every export tool carries a save dialog; non-export tools carry none', () => {
-    for (const d of SKILL_TOOL_DESCRIPTORS) {
-      if (d.seamKind === 'export') expect(d.dialog, `${d.name} export needs a dialog`).toBeDefined()
-      else expect(d.dialog, `${d.name} is not an export and must not carry a dialog`).toBeUndefined()
-    }
-  })
-
   it('each result-shape descriptor carries the copy keys its shape needs', () => {
     for (const d of SKILL_TOOL_DESCRIPTORS) {
       if (d.resultShape === 'reconcile') expect(d.reconcileKeys, `${d.name} reconcile keys`).toBeDefined()
       if (d.resultShape === 'redaction') expect(d.redactionKeys, `${d.name} redaction keys`).toBeDefined()
-    }
-  })
-
-  it('the document-transform tools carry a same-format DOCX save dialog (Phase 9, D77)', () => {
-    for (const name of ['redact_document', 'apply_document_edits']) {
-      const d = SKILL_TOOL_DESCRIPTORS.find((x) => x.name === name)!
-      // The .txt fallback dialog is a text file…
-      expect(d.dialog!.extensions).toEqual(['txt'])
-      // …and the DOCX-output dialog offers a .docx (its own filter, so a Word source stays a Word doc).
-      expect(d.docxDialog, `${name} needs a docx dialog`).toBeDefined()
-      expect(d.docxDialog!.extensions).toEqual(['docx'])
-    }
-    // Only the two document-transform tools have a docxDialog; the CSV/JSON/XML exports do not.
-    for (const d of SKILL_TOOL_DESCRIPTORS) {
-      if (d.name !== 'redact_document' && d.name !== 'apply_document_edits') {
-        expect(d.docxDialog, `${d.name} must not carry a docx dialog`).toBeUndefined()
-      }
+      if (d.resultShape === 'edit') expect(d.editKeys, `${d.name} edit keys`).toBeDefined()
     }
   })
 })
@@ -303,6 +247,7 @@ describe('runSkillTool — confirmation gate', () => {
     const tool: SkillTool = { ...writeTool, async run() { ran = true; return { ok: true, output: { length: 0 } } } }
     const result = await runSkillTool(tool, { skillId: 's', input: { note: 'x' }, ctx })
     expect(result.ok).toBe(false)
+    if (!result.ok) expect(result.error).toMatch(/confirm/i)
     expect(ran).toBe(false)
     expect(events).toEqual([])
   })
@@ -316,7 +261,7 @@ describe('runSkillTool — confirmation gate', () => {
 })
 
 describe('runSkillTool — narrow context + cancellation', () => {
-  it('hands the tool a FROZEN documentIds it cannot widen, and no fs/net/sql handle', async () => {
+  it('hands the tool the caller\'s narrow context with a FROZEN documentIds it cannot widen', async () => {
     const { ctx } = makeCtx({ documentIds: ['d1', 'd2'] })
     let captured: SkillToolContext | undefined
     const tool: SkillTool = {
@@ -334,13 +279,9 @@ describe('runSkillTool — narrow context + cancellation', () => {
     const result = await runSkillTool(tool, { skillId: 's', input: { note: 'x' }, ctx })
     expect(result).toEqual({ ok: true, output: { length: 2 } }) // scope not widened
     expect(Object.isFrozen(captured!.documentIds)).toBe(true)
-    // The whole reach of a tool: documentIds + the scope-bounded readDocumentChunks + signal + audit
-    // (+ optional onProgress). No db/fs/net/sql handle.
-    const keys = Object.keys(captured!).sort()
-    expect(keys).toEqual(['audit', 'documentIds', 'readDocumentChunks', 'signal'])
-    for (const forbidden of ['db', 'fs', 'net', 'sql', 'fetch', 'exec']) {
-      expect(keys).not.toContain(forbidden)
-    }
+    // The gate passes the caller's context through: documentIds + the scope-bounded readDocumentChunks +
+    // signal + audit (+ optional onProgress). Withholding db/fs/net handles is the seam builders' job.
+    expect(Object.keys(captured!).sort()).toEqual(['audit', 'documentIds', 'readDocumentChunks', 'signal'])
   })
 
   it('refuses to start when the signal is already aborted (the tool never runs)', async () => {
@@ -407,15 +348,5 @@ describe('runSkillTool — content-class sentinel grep (§22-M1)', () => {
     for (const e of events) {
       expect(e.meta).toEqual({ skillId: 'user:secret', toolName: 'echo_note_test_only', documentCount: 1 })
     }
-  })
-})
-
-describe('validateToolInput / validateToolOutput helpers', () => {
-  it('thread through to the tool schemas', () => {
-    const tool = getRegisteredTool('count_selected_documents')!
-    expect(validateToolInput(tool, {})).toEqual([])
-    expect(validateToolInput(tool, { x: 1 }).length).toBeGreaterThan(0)
-    expect(validateToolOutput(tool, { documentCount: 2 })).toEqual([])
-    expect(validateToolOutput(tool, { documentCount: -1 }).length).toBeGreaterThan(0)
   })
 })

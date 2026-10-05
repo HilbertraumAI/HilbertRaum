@@ -73,7 +73,8 @@ describe('localizeSkillNote (SKA-35 — note code → localized copy)', () => {
     expect(localizeSkillNote(tDe, 'fallback', { code: 'someFutureCode' } as unknown as SkillNoteRef)).toBe('fallback')
   })
 
-  it('every mapped note code resolves to real EN + DE copy (no dead keys)', () => {
+  // Completeness (every SkillNoteCode has a key) is enforced by the Record<SkillNoteCode, …> type.
+  it('every mapped note code resolves to real EN + DE copy with no unresolved placeholder', () => {
     const params = { field: 'triggers.keywords', max: 16, value: 'denied' }
     for (const key of Object.values(IMPORT_NOTE_KEY)) {
       expect(t('en', key, params)).not.toBe(key)

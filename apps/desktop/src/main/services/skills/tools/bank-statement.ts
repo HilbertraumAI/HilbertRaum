@@ -27,11 +27,6 @@ import {
 } from './money'
 import { tableToCsv, type TableColumn, type TableSpec } from '../../tables'
 
-// The deterministic money/date/CSV parsing primitives are shared with the invoice tools (one parser
-// per locale rule, §8). Re-exported here so existing import sites (`tools/bank-statement`) and the
-// unit tests keep resolving `parseAmount`/`parseDate`/`detectCurrency` from this module.
-export { detectCurrency, parseAmount, parseDate } from './money'
-
 // Bank-statement Tier-2 tools (architecture.md "Skills — design record" §8, Phase S11a). Kept OUT of the generic
 // `tool-registry.ts` so bank specifics never leak into the skills infrastructure (skills-plan §13);
 // the registry merely imports the finished `SkillTool` and lists it. S11a ships ONLY
@@ -512,23 +507,6 @@ export function assessCompleteness(args: {
   const toCents = (n: number): number => Math.round(n * 100)
   const sumCents = rows.reduce((acc, r) => acc + toCents(r.amount), 0)
   return toCents(openingBalance) + sumCents === toCents(closingBalance) ? 'complete' : 'contradicted'
-}
-
-/**
- * The boolean "provably WHOLE" predicate — `assessCompleteness(...) === 'complete'`. Retained because
- * the gate's hardest property (a clean chain is necessary-not-sufficient; a printed-but-contradicted
- * balance is never complete) is pinned by name in the unit tests, and a `'complete'` total is the only
- * one presented as the verified statement total. When this returns false the caller MUST NOT present a
- * total AS the statement total — it either honestly downgrades (`'contradicted'`) or presents a clearly
- * labelled sum of the rows read (`'unverified'`); see `buildBankAnswer`.
- */
-export function isStatementComplete(args: {
-  rows: TransactionInput[]
-  openingBalance?: number
-  closingBalance?: number
-  reconcile: ReconcileResult
-}): boolean {
-  return assessCompleteness(args) === 'complete'
 }
 
 /**

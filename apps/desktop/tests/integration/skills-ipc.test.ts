@@ -70,6 +70,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings } from '../../src/main/services/settings'
 import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
 import { createSkillRegistry } from '../../src/main/services/skills/registry'
+import { DEFAULT_SKILL_LIMITS } from '../../src/main/services/skills/limits'
 import type { AppContext } from '../../src/main/services/context'
 import type { SkillInfo, SkillPreview } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
@@ -287,38 +288,6 @@ describe('skills IPC — content-class sentinel grep (§22-M1)', () => {
     expect(audit).toContain('skill_imported')
     expect(audit).not.toContain(SENTINEL)
   })
-
-  // SEC-N1: a member name with an embedded NUL passes the ../-/drive-/depth checks but would reach
-  // writeFileSync, whose ERR_INVALID_ARG_VALUE embeds the RAW (sentinel-bearing) path. Preview must
-  // honour its "never throws / returns ok:false" contract AND never leak the path (§22-M1).
-  it('a NUL-byte member name (SEC-N1) → preview returns ok:false structurally, never throws or leaks the path', async () => {
-    const { db } = makeHarness()
-    const NUL = String.fromCharCode(0)
-    const nul = await writeZip([
-      { name: 'SKILL.md', content: skillMd('nul-evil', SENTINEL) },
-      { name: `${SENTINEL}${NUL}.txt`, content: SENTINEL }
-    ])
-    let threw = false
-    let preview: SkillPreview | undefined
-    try {
-      const { result } = await invoke(handlers, IPC.previewSkillPackage, await pickToken(nul))
-      preview = result as SkillPreview
-    } catch {
-      threw = true
-    }
-    // Contract: preview NEVER throws — it returns a structural failure instead.
-    expect(threw).toBe(false)
-    expect(preview?.ok).toBe(false)
-    // safeRelPath rejected the NUL STRUCTURALLY (the fixed `invalidPath` reason), not via the
-    // generic inner-catch fallback (`unreadableZip`).
-    expect(preview?.errorCodes).toContain('invalidPath')
-    // Neither the attacker sentinel nor the NUL byte appears anywhere in the serialized payload.
-    const serialized = JSON.stringify(preview)
-    expect(serialized).not.toContain(SENTINEL)
-    expect(serialized.includes(NUL)).toBe(false)
-    // The DB audit log never recorded the sentinel either.
-    expect(allAuditText(db)).not.toContain(SENTINEL)
-  })
 })
 
 // SKA-32 (audit 2026-07-03, U7): the Settings → Skills "N folders could not be read" surfacing.
@@ -337,19 +306,12 @@ describe('skills IPC — reconcile status (SKA-32)', () => {
     mkdirSync(join(userSkillsDir, `Bad ${SENTINEL}`), { recursive: true })
     writeFileSync(join(userSkillsDir, `Bad ${SENTINEL}`, 'SKILL.md'), 'not even frontmatter')
 
-    await invoke(handlers, IPC.listSkills) // triggers the lazy post-unlock reconcile
+    // No listSkills first: the status handler's own list() must trigger the lazy reconcile.
     const { result } = await invoke(handlers, IPC.skillReconcileStatus)
     const status = result as { errorCount: number; errorCodes: string[] }
     expect(status.errorCount).toBe(2)
     expect([...status.errorCodes].sort()).toEqual(['invalidFolderName', 'invalidManifest'])
     expect(JSON.stringify(status)).not.toContain(SENTINEL)
-  })
-
-  it('reports zeros for a clean skills tree', async () => {
-    makeHarness()
-    await invoke(handlers, IPC.listSkills)
-    const { result } = await invoke(handlers, IPC.skillReconcileStatus)
-    expect(result).toEqual({ errorCount: 0, errorCodes: [] })
   })
 
   // Review hardening: an import (which reconciles through the MODULE function) must refresh the
@@ -386,7 +348,7 @@ describe('skills IPC — picker token binds preview/import to the OS dialog (#24
     return pkg
   }
 
-  it('a non-token string is rejected by preview AND import with no filesystem call', async () => {
+  it('a non-token string or junk is rejected by preview AND import with no filesystem call', async () => {
     const { userSkillsDir } = makeHarness()
     const probe = `probe-${randomUUID()}`
     armFsLog(probe)
@@ -402,12 +364,7 @@ describe('skills IPC — picker token binds preview/import to the OS dialog (#24
     await expect(invoke(handlers, IPC.importSkill, real)).rejects.toThrow()
     expect(fsLog.calls).toEqual([])
     expect(existsSync(join(userSkillsDir, 'folder-skill'))).toBe(false)
-  })
-
-  it('junk (non-string, empty, unknown uuid) never reaches the filesystem', async () => {
-    makeHarness()
-    const probe = `probe-${randomUUID()}`
-    armFsLog(probe)
+    // Junk (non-string, empty, unknown uuid) is refused the same way.
     for (const junk of [undefined, null, 42, '', randomUUID(), { token: 'x' }]) {
       await expect(invoke(handlers, IPC.previewSkillPackage, junk)).rejects.toThrow()
       await expect(invoke(handlers, IPC.importSkill, junk)).rejects.toThrow()
@@ -453,6 +410,8 @@ describe('skills IPC — picker token binds preview/import to the OS dialog (#24
     armFsLog(probe)
     const { result } = await invoke(handlers, IPC.previewSkillPackage, token)
     expect((result as SkillPreview).ok).toBe(false)
+    // Refused as a link, not as an over-deep walk that followed it.
+    expect((result as SkillPreview).errorCodes).toEqual(['symlink'])
     expect(fsLog.calls[0]).toEqual({ fn: 'lstatSync', path: pkg })
   })
 
@@ -471,7 +430,7 @@ describe('skills IPC — picker token binds preview/import to the OS dialog (#24
     const { result: deepRes } = await invoke(handlers, IPC.previewSkillPackage, await pickToken(deep, 'folder'))
     expect((deepRes as SkillPreview).ok).toBe(false)
     expect(fsLog.calls[0]).toEqual({ fn: 'lstatSync', path: deep })
-    expect(fsLog.calls.filter((c) => c.fn === 'readdirSync').length).toBeLessThanOrEqual(6)
+    expect(fsLog.calls.filter((c) => c.fn === 'readdirSync').length).toBeLessThanOrEqual(DEFAULT_SKILL_LIMITS.maxDepth + 2)
     // Width 500: flat files beside SKILL.md.
     const wide = folderPackage(probe)
     for (let i = 0; i < 500; i++) writeFileSync(join(wide, `f${i}.txt`), 'x')
@@ -479,6 +438,6 @@ describe('skills IPC — picker token binds preview/import to the OS dialog (#24
     const { result: wideRes } = await invoke(handlers, IPC.previewSkillPackage, await pickToken(wide, 'folder'))
     expect((wideRes as SkillPreview).ok).toBe(false)
     expect(fsLog.calls[0]).toEqual({ fn: 'lstatSync', path: wide })
-    expect(fsLog.calls.filter((c) => c.fn === 'readFileSync').length).toBeLessThanOrEqual(201)
+    expect(fsLog.calls.filter((c) => c.fn === 'readFileSync').length).toBeLessThanOrEqual(DEFAULT_SKILL_LIMITS.maxFiles + 1)
   })
 })

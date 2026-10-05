@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, vi } from 'vitest'
 import {
   detectionShadow,
   maskEmails,
@@ -15,6 +15,7 @@ import {
 } from '../../src/main/services/skills/tools/redaction'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
 import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // architecture.md "Skills — design record" §8 — the document-redaction Tier-2 tool, the
 // read-transform-export shape, proven in isolation: each deterministic detector masks a clearly-shaped
@@ -141,16 +142,30 @@ describe('redactText (the full deterministic pass)', () => {
     for (const token of Object.values(MASK_TOKENS)) expect(text).toContain(token)
   })
 
-  it('a no-PII document yields zero redactions and unchanged text', () => {
-    const plain = 'This memo discusses the quarterly roadmap and team morale. Nothing sensitive here.'
+  it.each([
+    [
+      'a plain memo',
+      'This memo discusses the quarterly roadmap and team morale. Nothing sensitive here.'
+    ],
+    // Names and postal addresses are NOT detected (best-effort posture, known-limitations.md
+    // "Document redaction"): the floor prefers a miss over eating prose.
+    ['name-and-address prose', 'Jane Doe, 42 Main Street, Springfield, signed the contract.']
+  ])('a no-PII document yields zero redactions and unchanged text: %s', (_label, plain) => {
     const { text, counts, totalRedactions } = redactText(plain)
     expect(totalRedactions).toBe(0)
     expect(counts).toEqual({ email: 0, phone: 0, iban: 0, card: 0, date: 0, url: 0 })
     expect(text).toBe(plain)
   })
 
-  it('is idempotent — re-running over masked text masks nothing more', () => {
-    const once = redactText(PII_TEXT)
+  it.each([
+    ['the full PII document', PII_TEXT],
+    [
+      'a Unicode-variant document (SKA-3 R8)',
+      'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Tel +43 664\u20111234567.'
+    ]
+  ])('is idempotent — re-running over masked text masks nothing more: %s', (_label, input) => {
+    const once = redactText(input)
+    expect(once.totalRedactions).toBeGreaterThan(0)
     const twice = redactText(once.text)
     expect(twice.totalRedactions).toBe(0)
     expect(twice.text).toBe(once.text)
@@ -165,7 +180,7 @@ describe('redactText (the full deterministic pass)', () => {
     const start = Date.now()
     const { totalRedactions } = redactText(giant)
     expect(totalRedactions).toBe(0) // nothing is a real e-mail — and importantly, fast
-    expect(Date.now() - start).toBeLessThan(1000)
+    expect(Date.now() - start).toBeLessThan(hangBudgetMs(1000))
   })
 })
 
@@ -204,15 +219,19 @@ describe('redact_document through the gate', () => {
     expect(refused.ok).toBe(false)
   })
 
-  it('refuses invalid input (no documentId) without running', async () => {
-    const { ctx } = makeCtx([])
+  it.each([
+    ['no documentId', {}],
+    // Phase 6 (D74): the strategy is enum-validated input.
+    ['an unknown strategy value', { documentId: 'd1', strategy: 'rot13' }]
+  ])('the gate refuses invalid redaction input (%s) without running', async (_label, input) => {
+    const { ctx } = makeCtx([chunk(PII_TEXT, 1)])
     const result = await runSkillTool(redactDocumentTool, {
       skillId: 'app:document-redaction',
-      input: {},
+      input,
       ctx,
       confirmed: true
     })
-    expect(result.ok).toBe(false)
+    expect(result.ok).toBe(false) // input validation fails before the tool runs
   })
 
   it('reads only via readDocumentChunks — an out-of-scope id yields an empty, clean result', async () => {
@@ -230,9 +249,11 @@ describe('redact_document through the gate', () => {
   it('cancellation: an aborted signal returns a content-free cancelled result, no work done', async () => {
     const controller = new AbortController()
     controller.abort()
-    const { ctx } = makeCtx([chunk(PII_TEXT, 1)], { signal: controller.signal })
+    const readDocumentChunks = vi.fn(() => [chunk(PII_TEXT, 1)])
+    const { ctx } = makeCtx([], { signal: controller.signal, readDocumentChunks })
     const result = await redactDocumentTool.run({ documentId: 'd1' }, ctx)
-    expect(result.ok).toBe(false)
+    expect(result).toEqual({ ok: false, error: 'This action was cancelled.' })
+    expect(readDocumentChunks).not.toHaveBeenCalled()
   })
 })
 
@@ -257,17 +278,6 @@ describe('redaction coverage (full-audit-2026-06-28 Phase 1)', () => {
     })
   })
 
-  it('TEST-N6: documented under-detection is pinned — names/addresses unmasked, US-ordered date leaks', () => {
-    // No name/address detection (best-effort posture; known-limitations.md "Document redaction").
-    const r = redactText('Jane Doe, 42 Main Street, Springfield, signed the contract.')
-    expect(r.totalRedactions).toBe(0)
-    expect(r.text).toContain('Jane Doe') // names are NOT masked (accepted limitation)
-    expect(r.text).toContain('42 Main Street') // postal addresses are NOT masked (accepted limitation)
-    // U2 (audit §5.7): the BL-N6 locale asymmetry is CLOSED — redaction now masks a date that parses in
-    // EITHER order, so both the EU-ordered and the US-ordered form mask (over-masking is fine here).
-    expect(maskDates('signed 31/12/2026').text).toBe('signed [DATE]')
-    expect(maskDates('signed 12/31/2026').text).toBe('signed [DATE]') // was the documented US-order leak
-  })
 })
 
 // U2 (audit §5.7 redaction bullet / §3.4): card PANs, the 0-leading phone false positive, either-order
@@ -284,11 +294,21 @@ describe('redaction U2 additions', () => {
     expect(text).not.toContain('4111')
   })
 
-  it('scanRedactionCandidates returns the same counts as a real redaction, leaking no text', () => {
-    const input = 'Mail jane@example.com, card 4111 1111 1111 1111, IBAN AT61 1904 3002 3457 3201.'
-    expect(scanRedactionCandidates(input)).toEqual(redactText(input).counts)
-    // The scan reports counts only (email 1, card 1, iban 1) — the return type carries no text field.
-    expect(scanRedactionCandidates(input)).toEqual({ email: 1, phone: 0, iban: 1, card: 1, date: 0, url: 0 })
+  // The dry-run/share-safe invariant: the pre-scan and the real redaction share ONE pipeline, so a
+  // typographically-set document can no longer scan as "0 IBANs / 0 phones" while containing both.
+  it.each([
+    [
+      'ASCII',
+      'Mail jane@example.com, card 4111 1111 1111 1111, IBAN AT61 1904 3002 3457 3201.',
+      { email: 1, phone: 0, iban: 1, card: 1, date: 0, url: 0 }
+    ],
+    [
+      'Unicode print variants (SKA-3 R8)',
+      'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Karte 4111\u20071111\u20071111\u20071111, Tel (555) 123-4567.',
+      { email: 0, phone: 1, iban: 1, card: 1, date: 0, url: 0 }
+    ]
+  ])('scanRedactionCandidates returns the real-run counts, leaking no text: %s', (_label, input, expected) => {
+    expect(scanRedactionCandidates(input)).toEqual(expected)
   })
 
   it('SKA-3 R8: masks the Unicode print variants of exactly the identifiers it exists to mask', () => {
@@ -418,22 +438,6 @@ describe('redaction U2 additions', () => {
     expect(text).toBe('Karte [CARD], Tel [PHONE].')
   })
 
-  it('SKA-3 R8: scanRedactionCandidates counts the Unicode variants identically to a real run', () => {
-    // The dry-run/share-safe invariant: the pre-scan and the real redaction share ONE pipeline, so a
-    // typographically-set document can no longer scan as "0 IBANs / 0 phones" while containing both.
-    const input =
-      'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Karte 4111\u20071111\u20071111\u20071111, Tel (555) 123-4567.'
-    expect(scanRedactionCandidates(input)).toEqual(redactText(input).counts)
-    expect(scanRedactionCandidates(input)).toEqual({ email: 0, phone: 1, iban: 1, card: 1, date: 0, url: 0 })
-  })
-
-  it('SKA-3 R8: redaction stays idempotent over a Unicode-variant document', () => {
-    const once = redactText('IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Tel +43 664\u20111234567.')
-    const twice = redactText(once.text)
-    expect(twice.totalRedactions).toBe(0)
-    expect(twice.text).toBe(once.text)
-  })
-
   it('Phase 6 (D74): the perChar strategy plumbs through the gate to █ masks, counts unchanged', async () => {
     const { ctx } = makeCtx([chunk(PII_TEXT, 1)])
     const result = await runSkillTool(redactDocumentTool, {
@@ -468,31 +472,4 @@ describe('redaction U2 additions', () => {
     }
   })
 
-  it('Phase 6 (D74): the gate refuses an unknown strategy value (enum-validated input)', async () => {
-    const { ctx } = makeCtx([chunk(PII_TEXT, 1)])
-    const refused = await runSkillTool(redactDocumentTool, {
-      skillId: 'app:document-redaction',
-      input: { documentId: 'd1', strategy: 'rot13' },
-      ctx,
-      confirmed: true
-    })
-    expect(refused.ok).toBe(false) // input validation fails before the tool runs
-  })
-
-  it('the card category rides through the tool output schema', async () => {
-    const { ctx } = makeCtx([chunk('Card on file 4111 1111 1111 1111.', 1)])
-    const result = await runSkillTool(redactDocumentTool, {
-      skillId: 'app:document-redaction',
-      input: { documentId: 'd1' },
-      ctx,
-      confirmed: true
-    })
-    expect(result.ok).toBe(true)
-    if (result.ok) {
-      const out = result.output as RedactDocumentOutput
-      expect(out.counts.card).toBe(1)
-      expect(out.redactedText).toContain('[CARD]')
-      expect(validateToolOutput(redactDocumentTool, result.output)).toEqual([])
-    }
-  })
 })

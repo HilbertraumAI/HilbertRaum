@@ -6,7 +6,7 @@ import {
   PER_CHAR_MASK,
   type TransformSpan
 } from '../../src/main/services/skills/tools/span-transform'
-import { detectionShadow, redactText } from '../../src/main/services/skills/tools/redaction'
+import { redactText } from '../../src/main/services/skills/tools/redaction'
 
 // architecture.md "Skills — design record" §20 — the span-transform engine (Phase 6, D74), the shared
 // substrate the C-wave phases (LLM-located redaction #22, targeted edits #23) locate spans for and
@@ -111,15 +111,6 @@ describe('redactText perChar strategy (D74) — length- and layout-preserving ma
     'More at https://example.com/profile.'
   ].join('\n')
 
-  it('token strategy reproduces the current [EMAIL]-style masks exactly (default is token)', () => {
-    const def = redactText(PII)
-    const tok = redactText(PII, 'token')
-    expect(tok.text).toBe(def.text)
-    expect(tok.text).toContain('[EMAIL]')
-    expect(tok.text).toContain('[IBAN]')
-    expect(tok.counts).toEqual({ email: 1, phone: 1, iban: 1, card: 0, date: 1, url: 1 })
-  })
-
   it('perChar preserves total length AND the line count, and leaks no original', () => {
     const per = redactText(PII, 'perChar')
     expect(per.text.length).toBe(PII.length) // every mask is same-length as what it replaced
@@ -146,19 +137,14 @@ describe('redactText perChar strategy (D74) — length- and layout-preserving ma
     expect(twice.text).toBe(once.text)
   })
 
-  it('perChar holds the SKA-3 same-length shadow invariant on a Unicode-set document', () => {
-    // The masked output must still satisfy shadow === detectionShadow(text): a █ run maps to itself
-    // (not a shadow separator), and the surrounding NBSP/narrow-NBSP survive verbatim (byte-identity).
+  it('perChar holds the SKA-3 same-length invariant on a Unicode-set document', () => {
+    // The IBAN span (NBSP-grouped, 24 chars) becomes █; the NBSP / narrow-NBSP prose separators outside it
+    // survive verbatim (byte-identity). Escapes, so an editor normalization cannot defeat the fixture.
     const input =
-      'Zahlung fällig. IBAN AT61 1904 3002 3457 3201. Danke sehr.'
+      'Zahlung\u00a0fällig. IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201. Danke\u202fsehr.'
     const per = redactText(input, 'perChar')
     expect(per.text.length).toBe(input.length)
-    expect(detectionShadow(per.text).length).toBe(per.text.length)
-    // The IBAN span became █; the NBSP prose separators are untouched.
-    expect(per.text).toContain('Zahlung fällig.')
-    expect(per.text).toContain('Danke sehr.')
-    expect(per.text).not.toContain('AT61')
-    expect(per.text).toContain(PER_CHAR_MASK)
+    expect(per.text).toBe('Zahlung\u00a0fällig. IBAN ' + '█'.repeat(24) + '. Danke\u202fsehr.')
   })
 })
 
@@ -201,18 +187,5 @@ describe('locateOccurrences — verbatim, occurrence-anchored find (D75/D76)', (
 
   it('matches non-overlapping (advances past each match)', () => {
     expect(locateOccurrences('aaaa', 'aa')).toHaveLength(2) // positions 0 and 2, not 0/1/2
-  })
-
-  it('composes with applySpans: locate → build spans → splice (the C-wave pipeline shape)', () => {
-    const spans: TransformSpan[] = locateOccurrences(TEXT, 'Vollmachtgeber').map((h) => ({
-      start: h.start,
-      length: h.length,
-      replacement: 'Vollmachtgeberin'
-    }))
-    const r = applySpans(TEXT, spans)
-    expect(r.applied).toHaveLength(3)
-    expect(r.text).toContain('der Vollmachtgeberin A')
-    expect(r.text).toContain('kein Treffer') // the untouched line is byte-identical
-    expect(r.text).not.toMatch(/Vollmachtgeber(?!in)/) // no bare "Vollmachtgeber" remains
   })
 })

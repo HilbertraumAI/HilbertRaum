@@ -131,15 +131,9 @@ describe('skills registry — discovery', () => {
     // A non-file SKILL.md is "not a skill package" — skipped quietly, not an error.
     expect(res.errors).toHaveLength(0)
     expect(res.errorCodes).toHaveLength(0)
-  })
-
-  it('a directory-SKILL.md folder does not break reconcile (good skills insert — SKA-16)', () => {
+    // Reconcile has no guard of its own around discovery: both good skills still land in the DB.
     const db = freshDb()
-    const dirs = makeDirs()
-    writeSkill(dirs.userSkillsDir, 'good-one')
-    mkdirSync(join(dirs.userSkillsDir, 'foo', 'SKILL.md'), { recursive: true })
-    const res = reconcileSkills(db, opts(dirs))
-    expect(res.inserted).toBe(1)
+    expect(reconcileSkills(db, opts(dirs)).inserted).toBe(2)
     expect(getSkill(db, skillInstallId('user', 'good-one'))).not.toBeNull()
   })
 
@@ -314,10 +308,15 @@ describe('skills registry — reconcile', () => {
   it('caches triggers + compatibility into manifest_json (re-derivable cache, §22-C2)', () => {
     const db = freshDb()
     const dirs = makeDirs()
-    writeSkill(dirs.userSkillsDir, 'tagged', { keywords: ['invoice', 'receipt'] })
+    writeSkill(dirs.userSkillsDir, 'tagged', {
+      keywords: ['invoice', 'receipt'],
+      extraFrontmatter: '  autoFire: true\nanalysis: compare'
+    })
     reconcileSkills(db, opts(dirs))
     const rec = getSkill(db, 'user:tagged')!
     expect(rec.manifest.triggers.keywords).toEqual(['invoice', 'receipt'])
+    expect(rec.manifest.triggers.autoFire).toBe(true) // D6/#59: survives the DB round trip
+    expect(rec.manifest.analysis).toBe('compare') // A3
   })
 
   it('is idempotent — a second run over unchanged disk changes nothing', () => {

@@ -6,7 +6,8 @@ import { join } from 'node:path'
 // Skill-whole-doc engine, Follow-up B — the CHAT wiring for a 2-document compare: `askDocuments`
 // routes a compare-shaped question for the `grounded-whole-doc-compare` skill (what-changed) to a
 // MODEL answer over BOTH documents read whole (budget split, capped coverage, fence applied), REFUSES
-// when either doc is not fully chunked, and does NOT fire on a single-doc scope (keeps relevance).
+// when either doc is not fully chunked (a 1- or 3-doc scope gets the "select exactly two" answer in
+// rag-skill-analysis.test.ts).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
@@ -28,7 +29,7 @@ import { createQueuedDocument, documentsDir, processDocument } from '../../src/m
 import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
-import { registerBuiltinSkillAnalysisHandlers, clearSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
+import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
@@ -141,7 +142,6 @@ async function makeHarness(opts: { bothFullyChunked?: boolean } = {}): Promise<H
 }
 
 beforeEach(() => {
-  clearSkillAnalysisHandlers()
   inFlightStreams.clear()
 })
 
@@ -302,20 +302,5 @@ describe('askDocuments — grounded-whole-doc-compare routing (what-changed, Fol
     // Honest coverage: truncated because a half overflowed.
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(true)
-  })
-
-  it('does NOT fire on a single-doc scope (needs exactly two) — keeps the relevance path', async () => {
-    const h = await makeHarness({ bothFullyChunked: true })
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId([h.docA]),
-      'what changed between these two versions?',
-      WHAT_CHANGED_INSTALL_ID
-    )
-    const msg = result as Message
-    // The compare path did NOT fire (needs exactly two in-scope docs) ⇒ no capped coverage stamped;
-    // the turn took the ordinary relevance path instead.
-    expect(msg.coverage).toBeUndefined()
   })
 })

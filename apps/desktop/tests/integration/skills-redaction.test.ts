@@ -163,14 +163,48 @@ describe('document-redaction — the dispatch surfaces one confirm-gated tool', 
     ])
   })
 
-  it('buildToolRunner needs the save capability (null without it, non-null with it)', () => {
+  // U5 / §6.2 + Phase 9 (D77): the redacted copy gets its OWN "Save redacted copy" dialog, and a Word
+  // source its own .docx filter. buildToolRunner must hand the matching metadata to the save capability.
+  it.each([
+    [
+      'a .txt source',
+      false,
+      { titleKey: 'main.dialog.exportRedacted', filterNameKey: 'main.dialog.filterText', extensions: ['txt'] }
+    ],
+    [
+      'a .docx source',
+      true,
+      { titleKey: 'main.dialog.exportRedacted', filterNameKey: 'main.dialog.filterDocx', extensions: ['docx'] }
+    ]
+  ])('buildToolRunner delivers the save dialog for %s', async (_label, isDocx, expected) => {
     const db = freshDb()
+    const docId = seedDocWithChunks(db, PII_TEXT)
     const { audit } = capturingAudit()
-    const args = { skillInstallId: 'app:document-redaction', conversationId: '', documentId: 'd1' }
-    expect(buildToolRunner(db, 'redact_document', args, audit)).toBeNull()
-    expect(
-      buildToolRunner(db, 'redact_document', args, audit, { saveTextFile: async () => true })
-    ).not.toBeNull()
+    const original = isDocx ? await makeDocx(['Contact jane.doe@example.com now.']) : null
+    const textDialogs: unknown[] = []
+    const binaryDialogs: unknown[] = []
+    const runner = buildToolRunner(
+      db,
+      'redact_document',
+      { skillInstallId: 'app:document-redaction', conversationId: '', documentId: docId, confirmed: true },
+      audit,
+      {
+        saveTextFile: async (_name, _content, dialog) => {
+          textDialogs.push(dialog)
+          return true
+        },
+        saveBinaryFile: async (_name, _bytes, dialog) => {
+          binaryDialogs.push(dialog)
+          return true
+        },
+        readOriginalDocument: async (): Promise<OriginalDocumentBytes> =>
+          original ? { format: 'docx', bytes: original } : { format: 'other' }
+      }
+    )
+    const outcome = await runner!({ signal: new AbortController().signal, onProgress: () => {} })
+    expect(outcome.ok).toBe(true)
+    expect(isDocx ? binaryDialogs : textDialogs).toEqual([expected])
+    expect(isDocx ? textDialogs : binaryDialogs).toEqual([]) // the other save path was not used
   })
 })
 
@@ -388,31 +422,6 @@ describe('document-redaction — Phase 7 LLM locate pass (D73/D75/D78)', () => {
     expect(calls[0].options?.temperature).toBe(0)
   })
 
-  it('drops an unverifiable (hallucinated) proposed span and never masks it', async () => {
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, 'Dear Jane Doe, welcome aboard.')
-    const { audit } = capturingAudit()
-    // The model proposes a name that is NOT in the document verbatim — it must be dropped (D75), and a
-    // real one that IS present is masked. Hallucination cannot reach the output.
-    const runtime = scriptedRuntime(() =>
-      JSON.stringify({ entities: [{ text: 'John Smith', category: 'name', line: 1 }, { text: 'Jane Doe', category: 'name', line: 1 }] })
-    )
-    let written = ''
-    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
-      audit,
-      confirmed: true,
-      runtime,
-      saveTextFile: async (_name, content) => {
-        written = content
-        return true
-      }
-    })
-    expect(res.ok).toBe(true)
-    expect(res.redactionCount).toBe(1) // only the verifiable 'Jane Doe' masked; 'John Smith' dropped
-    expect(written).not.toContain('Jane Doe')
-    expect(written).not.toContain('John Smith') // was never in the source — nothing to leak either way
-  })
-
   it('a cancel during the locate pass writes nothing and reports it calmly (cancelled, not failed)', async () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, NAME_DOC)
@@ -534,31 +543,6 @@ describe('document-redaction — Phase 9 same-format DOCX export (D77)', () => {
     for (const [path, b64] of before) expect(after.get(path), `${path} byte-identical`).toBe(b64)
   })
 
-  it('a DOCX source with a running model sweeps a located name into the .docx (resultKind redacted)', async () => {
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, 'ignored')
-    const original = await makeDocx(['Prepared by Jane Doe.', 'Please thank Jane Doe again.'])
-    const { audit } = capturingAudit()
-    const runtime = scriptedRuntime(() => JSON.stringify({ entities: [{ text: 'Jane Doe', category: 'name', line: 1 }] }))
-    let savedBinary: Uint8Array | null = null
-    const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
-      audit,
-      confirmed: true,
-      runtime,
-      readOriginalDocument: async (): Promise<OriginalDocumentBytes> => ({ format: 'docx', bytes: original }),
-      saveBinaryFile: async (_name, bytes) => {
-        savedBinary = bytes
-        return true
-      },
-      saveTextFile: async () => true
-    })
-    expect(res.ok).toBe(true)
-    expect(res.resultKind).toBe('redacted') // the model ran ⇒ not the degraded floor discriminator
-    const layer = await readDocxTextLayer(savedBinary!)
-    expect(layer.text).not.toContain('Jane Doe') // BOTH occurrences swept across the paragraphs (D75)
-    expect(layer.text).toContain('█')
-  })
-
   // #129 (skills-pipeline audit 2026-08-09, RUN-2): the audit's lawyer scenario. A "redacted" DOCX used
   // to carry the PII verbatim in every part outside the body `<w:t>` walk: header/footer letterhead,
   // tracked-changes DELETED text, comment text + authors, hyperlink targets (`mailto:` in the rels
@@ -596,6 +580,7 @@ describe('document-redaction — Phase 9 same-format DOCX export (D77)', () => {
       saveTextFile: async () => true
     })
     expect(res.ok).toBe(true)
+    expect(res.resultKind).toBe('redacted') // the model ran ⇒ not the degraded floor discriminator
     const out = savedBinary! as Uint8Array
     // The name is gone from EVERY text part — body, header, footer, comments, deleted text.
     for (const path of [
