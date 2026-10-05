@@ -1,0 +1,64 @@
+: Captured llama-server SSE body — a WEDGED prefill on the pinned b11146 (system_fingerprint b11146-7fe450e19), Windows
+: CPU release, the same request and argv as chat-sse-progress-b11146.txt (return_progress:true; --threads 6 --batch-size
+: 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek -lv 4 -np 1 --cache-ram 4088 --device none), qwen3-4b-
+: instruct-q4, a 6,381-token prompt, i7-8700 (DesktopDiT), 2026-10-06. Right after the first batch's progress event the
+: busiest llama-server thread was suspended (SuspendThread on one compute thread, never the process): the compute loop
+: stopped while the HTTP thread kept writing a `:` ping every ~30 s (an earlier run of this repro: /health 200 in 62 ms
+: during the wedge). The capture ends at +520 s with the server still wedged; it was then resumed and killed.
+: Each `: +<ms> ms` line is the arrival time of the socket read below it (ms after the request was sent; de-chunked,
+: otherwise verbatim). The model path was scrubbed to <drive>/…; nothing else was edited. These colon lines are SSE
+: comments (the reader ignores them), like the server's own `:` pings.
+: +18 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791239832,"id":"chatcmpl-YVWAnMXXVDZCi0N6jvzOueSyz775UGFv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b11146-7fe450e19","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":0,"time_ms":0}}
+
+: +30269 ms
+:
+
+: +41833 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791239874,"id":"chatcmpl-YVWAnMXXVDZCi0N6jvzOueSyz775UGFv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b11146-7fe450e19","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":2048,"time_ms":41815}}
+
+: +72099 ms
+:
+
+: +102311 ms
+:
+
+: +132534 ms
+:
+
+: +162747 ms
+:
+
+: +192994 ms
+:
+
+: +223206 ms
+:
+
+: +253447 ms
+:
+
+: +283705 ms
+:
+
+: +313946 ms
+:
+
+: +344152 ms
+:
+
+: +374400 ms
+:
+
+: +404602 ms
+:
+
+: +434809 ms
+:
+
+: +464994 ms
+:
+
+: +495269 ms
+:
+

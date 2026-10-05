@@ -1,0 +1,42 @@
+: Captured llama-server SSE body — the previous pin b9849 (system_fingerprint b9849-799fcc04a; still on drives that have not
+: taken the #516 update), Windows Vulkan release forced to CPU (`--device none`, as the ladder does), with the same request
+: as chat-sse-progress-b11146.txt (the app's chat body plus #598's return_progress:true) and the app's chat argv:
+: --ctx-size 8192 --threads 6 --log-colors off --batch-size 2048 --ubatch-size 2048 --jinja --reasoning-format deepseek
+: -lv 4 -np 1 --cache-ram 4088 --device none. qwen3-4b-instruct-q4, a 6,381-token prompt, i7-8700 (DesktopDiT),
+: 2026-10-06. Response headers at +28 ms. It pins that b9849 sends the same per-batch prompt_progress events and pings as
+: b11146. TRUNCATED after the first read that carries answer text: the rest of the (1,000+ read) answer is omitted, so the
+: stream here ends without [DONE]. Each `: +<ms> ms` line is the arrival time of the socket read below it (ms after the
+: request was sent; de-chunked, otherwise verbatim). The model path was scrubbed to <drive>/…; nothing else was edited.
+: These colon lines are SSE comments (the reader ignores them), like the server's own `:` pings.
+: +29 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791241591,"id":"chatcmpl-MGMvyZjcfqNvKZGIbKzkDvt9txu50Atv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":0,"time_ms":0}}
+
+: +30245 ms
+:
+
+: +46738 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791241637,"id":"chatcmpl-MGMvyZjcfqNvKZGIbKzkDvt9txu50Atv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":2048,"time_ms":46711}}
+
+: +76954 ms
+:
+
+: +106682 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791241697,"id":"chatcmpl-MGMvyZjcfqNvKZGIbKzkDvt9txu50Atv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":4096,"time_ms":106655}}
+
+: +136908 ms
+:
+
+: +167126 ms
+:
+
+: +178868 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791241769,"id":"chatcmpl-MGMvyZjcfqNvKZGIbKzkDvt9txu50Atv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":6144,"time_ms":178843}}
+
+: +189267 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791241780,"id":"chatcmpl-MGMvyZjcfqNvKZGIbKzkDvt9txu50Atv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":6381,"time_ms":189242}}
+
+: +189268 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791241780,"id":"chatcmpl-MGMvyZjcfqNvKZGIbKzkDvt9txu50Atv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk"}
+
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":"The"}}],"created":1791241780,"id":"chatcmpl-MGMvyZjcfqNvKZGIbKzkDvt9txu50Atv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b9849-799fcc04a","object":"chat.completion.chunk"}
+
