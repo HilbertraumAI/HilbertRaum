@@ -5049,9 +5049,12 @@ lower version is refused unless developer mode (DS15). **Delete** clears the sti
 then removes the folder; `messages.skill_id` is deliberately KEPT — the per-message stamp is
 provenance, the JOIN title resolves to NULL and the renderer shows "(removed skill)", so the glyph
 + the "answer without it" undo survive deletion. App skills refuse. **Enable**
-enforces **one-active-per-id**. The registry handle reconciles disk→DB **once per session on the first
-read after unlock** (a `reconciledThisSession` guard, not an unlock hook); the importer/deleter call
-`reconcile()` explicitly after mutating disk. Audit events
+enforces **one-active-per-id**. The registry handle reconciles disk→DB **once per app process**: the
+startup pass when the DB is already open (plaintext dev), else the first read after the first unlock
+(a `reconciledThisSession` guard, not an unlock hook; it is never reset, so a later lock and unlock does
+not re-scan). The importer/deleter call `reconcile()` explicitly after mutating disk. A skill folder
+copied onto the drive while the app is running therefore appears only after a restart (or the next
+import/delete). Audit events
 (`skill_imported`/`deleted`/`enabled`/`disabled`) carry **ids/counts only**.
 
 ### §5 Selection & prompt integration (S6+S7)
