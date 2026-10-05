@@ -7,6 +7,7 @@ import {
   detectDocumentCurrency,
   hasMoneyToken,
   lastCurrencyAdjacentInteger,
+  inferDateAnchor,
   inferDateOrder,
   inferDateOrderResult,
   normalizeExtractionText,
@@ -72,17 +73,13 @@ describe('money.ts — parseAmount (boundary cells)', () => {
     ['single sep + 2 digits ⇒ decimal', '12,50', 12.5],
     ['>2-dp both-separator rounds to the cent (T5)', '1.234,567', 1234.57],
     ['apostrophe thousands, no decimal', "1'234", 1234],
+    ['single comma + 3 digits ⇒ thousands, not decimal', '1,234', 1234],
+    ['space-grouped thousands + decimal', '1 234 567,89', 1234567.89],
+    ['sub-cent-looking 0,005 is the 3-digit thousands rule', '0,005', 5],
     ['not a number', 'abc', null],
     ['empty', '   ', null]
   ])('parseAmount(%s)', (_label, input, expected) => {
     expect(parseAmount(input)).toBe(expected)
-  })
-
-  it('every parsed figure is exactly 2-dp (the integer-cent invariant)', () => {
-    for (const raw of ['1.234,567', '0,005', '99,994', '1 234 567,89']) {
-      const v = parseAmount(raw)
-      if (v !== null) expect(v).toBe(Math.round(v * 100) / 100)
-    }
   })
 })
 
@@ -124,6 +121,8 @@ describe('money.ts — MONEY_RE leading-sign glue gate (T-1)', () => {
   it('a SPACED leading dash is a separator, not a sign ⇒ POSITIVE (plain path)', () => {
     expect(firstMoney('Beratung – 1.500,00 EUR')).toBe(1500) // Word en-dash → '-' via the R1 pre-pass
     expect(firstMoney('GUTSCHRIFT - 34,39')).toBe(34.39) // an ASCII dash-separated credit reads +34,39
+    // The geometry path (pdf-layout.test.ts) agrees: `LASTSCHRIFT - 3,99` stays positive there too.
+    expect(firstMoney('LASTSCHRIFT - 3,99')).toBe(3.99)
   })
 
   it('a GLUED leading dash is still the negative sign', () => {
@@ -145,19 +144,17 @@ describe('money.ts — MONEY_RE leading-sign glue gate (T-1)', () => {
     expect(lastCurrencyAdjacentInteger('Gesamtbetrag €914')).toBe(914) // symbol-adjacent, positive
     expect(lastCurrencyAdjacentInteger('Betrag $914-')).toBe(-914) // symbol + trailing glued minus signs
   })
-
-  it('plain path AGREES with the geometry path on `LASTSCHRIFT - 3,99` (both positive — the far dash is not a sign)', () => {
-    // Mirror of pdf-layout.test.ts (`14.01.2025 LASTSCHRIFT - 3,99` stays positive on the geometry path).
-    expect(firstMoney('LASTSCHRIFT - 3,99')).toBe(3.99)
-  })
 })
 
 describe('money.ts — detectCurrency / detectDocumentCurrency', () => {
-  it('detectCurrency reads an allowlisted code or symbol, ignores a random 3-letter word', () => {
-    expect(detectCurrency('Total EUR 100,00')).toBe('EUR')
-    expect(detectCurrency('Saldo €100,00')).toBe('EUR')
-    expect(detectCurrency('$50.00')).toBe('USD')
-    expect(detectCurrency('THE CAT SAT')).toBeNull()
+  it.each([
+    ['an allowlisted code', 'Total EUR 100,00', 'EUR'],
+    ['a currency symbol', 'Saldo €100,00', 'EUR'],
+    ['a dollar sign', '$50.00', 'USD'],
+    ['a random 3-letter word is not a code', 'THE CAT SAT', null],
+    ['a non-currency 3-letter token does not block a later code', 'Rechnung INV-2026 Betrag EUR 100,00', 'EUR']
+  ])('detectCurrency(%s)', (_label, input, expected) => {
+    expect(detectCurrency(input)).toBe(expected)
   })
 
   it.each([
@@ -165,6 +162,11 @@ describe('money.ts — detectCurrency / detectDocumentCurrency', () => {
     ['majority over voting lines', 'A 100,00 USD\nB 50,00 USD\nNote EUR', 'USD'],
     ['tie broken by first appearance', 'Saldo 100,00 EUR\nPay in USD or CHF', 'EUR'],
     ['a code LEFT of the amount (a memo) does not vote; a header does', 'USD Memo -12,00 100,00\nWährung EUR', 'EUR'],
+    [
+      'a date-led memo line: the code LEFT of the amount still never votes',
+      'Kontoauszug\n02.01.2026 USD Memo -12,00 100,00\nWährung EUR',
+      'EUR'
+    ],
     ['no code in any voting region ⇒ null', 'No money here\nJust prose', null]
   ])('detectDocumentCurrency(%s)', (_label, input, expected) => {
     expect(detectDocumentCurrency(input)).toBe(expected)
@@ -181,24 +183,81 @@ describe('money.ts — inferDateOrder / parseDate / splitLeadingDates / stripDat
     expect(inferDateOrder(input)).toBe(expected)
   })
 
-  it('T-6: a money-less dotted header date votes ⇒ inferred = default (invoice-audit-2026-07-06)', () => {
-    // Raw MONEY_RE read `Datum: 05.03.2026` as a transaction row (its `05.03` fragment matches), whose
-    // leading token `Datum:` is not a date → it never voted, so a day-first-GUESSED document silently
-    // missed the caveat. Classifying by date-scrubbed `hasMoneyToken` sends the money-less date line to the
-    // header/label branch, where its order-ambiguous date votes and flags `'default'`.
-    expect(inferDateOrderResult('Datum: 05.03.2026').inferred).toBe('default')
-    // A money-less DOTTED period header now VOTES (the shared bank consequence — BANK_EXTRACTOR_VERSION
-    // bumped for this): before T-6 its `03.31` fragment made it a voteless transaction row (→ default dmy);
-    // now it reaches the header branch and its unambiguous 03.31 (second field 31) forces month-first.
-    expect(inferDateOrderResult('Statement period 03.31.2026 - 04.15.2026').order).toBe('mdy')
+  // `inferred` is 'default' when the day-first guess was applied with NO evidence (caveat-worthy) and
+  // 'evidence' when a field > 12 (or an ISO-only document) fixed the order. Dates must LEAD their money
+  // rows to vote — the booking-column scope (FIN-4).
+  it.each<[string, string, { order?: string; inferred?: string }]>([
+    [
+      'all-ambiguous leading dates ⇒ day-first with NO evidence',
+      '03.05.2026 Grocery -45,90\n04.06.2026 Salary 2.500,00',
+      { order: 'dmy', inferred: 'default' }
+    ],
+    [
+      'an unambiguous leading date (a field > 12) ⇒ evidence',
+      '31.01.2026 Grocery -45,90\n15.02.2026 Salary 2.500,00',
+      { inferred: 'evidence' }
+    ],
+    ['a US mm/dd/yyyy leading date ⇒ month-first evidence', '12/31/2026 Grocery -45,90', { order: 'mdy', inferred: 'evidence' }],
+    ['ISO-only dates ⇒ the guess is moot, never a spurious caveat', '2026-03-05 Coffee -3,50 100,00', { inferred: 'evidence' }],
+    [
+      'ambiguous dd.mm.yy rows also drive the flag (R5)',
+      '03.05.26 Grocery -45,90\n04.06.26 Salary 2.500,00',
+      { inferred: 'default' }
+    ],
+    ['a bare de-AT day > 12 date is day-first evidence', '28.12. Miete -900,00', { order: 'dmy', inferred: 'evidence' }],
+    ['a US mm/dd/yy row (second field > 12) is month-first', '12/31/26 Grocery -45,90', { order: 'mdy' }],
+    // T-6 (invoice-audit-2026-07-06): raw MONEY_RE read `Datum: 05.03.2026` as a transaction row (its
+    // `05.03` fragment matches) whose leading `Datum:` is not a date, so it never voted and a day-first-
+    // GUESSED document silently missed the caveat. Classifying by date-scrubbed `hasMoneyToken` sends the
+    // money-less date line to the header branch, where its ambiguous date votes and flags 'default'.
+    ['T-6: a money-less dotted header date votes ⇒ default', 'Datum: 05.03.2026', { inferred: 'default' }],
+    // A money-less DOTTED period header now VOTES (BANK_EXTRACTOR_VERSION bumped): its unambiguous 03.31
+    // (second field 31) forces month-first; before T-6 it was a voteless transaction row (→ default dmy).
+    ['T-6: a money-less dotted period header votes', 'Statement period 03.31.2026 - 04.15.2026', { order: 'mdy' }]
+  ])('inferDateOrderResult(%s)', (_label, input, expected) => {
+    expect(inferDateOrderResult(input)).toMatchObject(expected)
   })
 
-  it('parseDate honours the order parameter and rejects 2-digit years / impossible dates', () => {
-    expect(parseDate('2026-01-31')).toBe('2026-01-31')
-    expect(parseDate('05/03/2026', 'dmy')).toBe('2026-03-05')
-    expect(parseDate('05/03/2026', 'mdy')).toBe('2026-05-03')
-    expect(parseDate('31.02.2026')).toBeNull() // Feb 31
-    expect(parseDate('31.01.26')).toBeNull() // 2-digit year
+  it.each<[string, string, string | undefined, { year: number; month: number } | undefined, string | null]>([
+    ['ISO passes through', '2026-01-31', undefined, undefined, '2026-01-31'],
+    ['day-first dotted is the default order', '31.01.2026', undefined, undefined, '2026-01-31'],
+    ['day-first slashed is the default order', '31/01/2026', undefined, undefined, '2026-01-31'],
+    ['order dmy', '05/03/2026', 'dmy', undefined, '2026-03-05'],
+    ['order mdy', '05/03/2026', 'mdy', undefined, '2026-05-03'],
+    ['month 13 is rejected', '2026-13-01', undefined, undefined, null],
+    ['Feb 31 is rejected', '31.02.2026', undefined, undefined, null],
+    ['a 2-digit year without an anchor is rejected', '31.01.26', undefined, undefined, null],
+    ['garbage is rejected', 'not-a-date', undefined, undefined, null],
+    // R5: anchor-gated 2-digit-year / bare completion + cross-year rollover. No anchor ⇒ dropped, never guessed.
+    ['a bare dd.mm. without an anchor is dropped', '28.12.', undefined, undefined, null],
+    ['2-digit year ⇒ the anchor century window', '05.01.26', 'dmy', { year: 2026, month: 1 }, '2026-01-05'],
+    ['2-digit year across the century window', '05.01.99', 'dmy', { year: 1998, month: 1 }, '1999-01-05'],
+    ['a bare date takes the anchor year', '15.06.', 'dmy', { year: 2026, month: 6 }, '2026-06-15'],
+    ['a December row on a January statement is the PREVIOUS year', '28.12.', 'dmy', { year: 2026, month: 1 }, '2025-12-28'],
+    ['a January row on a December statement is the NEXT year', '03.01.', 'dmy', { year: 2025, month: 12 }, '2026-01-03'],
+    ['a 2-digit-year date is NOT rolled (its year is explicit)', '28.12.25', 'dmy', { year: 2026, month: 1 }, '2025-12-28'],
+    ['a bare decimal (no second separator) is never a date', '28.12', 'dmy', { year: 2026, month: 1 }, null],
+    ['mdy anchor path: US 2-digit year completes month-first', '01.05.26', 'mdy', { year: 2026, month: 1 }, '2026-01-05']
+  ])('parseDate(%s)', (_label, input, order, anchor, expected) => {
+    expect(parseDate(input, order as 'dmy' | 'mdy' | undefined, anchor)).toBe(expected)
+  })
+
+  it.each<[string, string, 'dmy' | 'mdy' | undefined, { year: number; month: number } | null]>([
+    [
+      'the first fully-printed year+month wins',
+      'Kontoauszug Zeitraum 05.01.2026 - 31.01.2026\n28.12. Miete -900,00',
+      undefined,
+      { year: 2026, month: 1 }
+    ],
+    ['order-aware: a US mm/dd/yyyy anchor reads month-first', 'Invoice date 03/15/2026', 'mdy', { year: 2026, month: 3 }],
+    [
+      'no fully-printed 4-digit-year date ⇒ no anchor (a grouped amount is never mistaken for one)',
+      '28.12. Miete -900,00 2.500,00\n05.01. Gehalt 1.234,56',
+      undefined,
+      null
+    ]
+  ])('inferDateAnchor(%s)', (_label, text, order, expected) => {
+    expect(inferDateAnchor(text, order)).toEqual(expected)
   })
 
   it('splitLeadingDates consumes the leading date run (capped at 2), leaving the rest', () => {
@@ -213,6 +272,8 @@ describe('money.ts — inferDateOrder / parseDate / splitLeadingDates / stripDat
 
   it('stripDateTokens removes a date at EITHER end, so the money scan reads the figure', () => {
     expect(stripDateTokens('Endsaldo 1.234,56 EUR per 30.06.2026')).not.toContain('30.06.2026')
+    expect(stripDateTokens('30.06.2026 Endsaldo 1.234,56 EUR')).not.toContain('30.06.2026') // leading
+    expect(stripDateTokens('30.06.2026 Endsaldo 1.234,56 EUR')).toContain('1.234,56')
     // A grouped figure is NOT a date token, so scrubbing never eats a real amount.
     expect(stripDateTokens('Kontostand 35.037,04')).toContain('35.037,04')
   })
@@ -299,6 +360,8 @@ describe('money.ts — csvField (formula-injection neutralization × quoting)', 
     ['double-quote ⇒ doubled + quoted', 'a"b', '"a""b"'],
     ['formula lead = ⇒ prefixed (no comma ⇒ unquoted)', '=cmd', "'=cmd"],
     ['formula lead @ ⇒ prefixed', '@cmd', "'@cmd"],
+    ['formula lead + ⇒ prefixed', '+1+2', "'+1+2"],
+    ['formula lead - WITH a comma ⇒ prefixed AND quoted', '-leading minus, with comma', `"'-leading minus, with comma"`],
     ['leading-whitespace formula ⇒ prefixed before the spaces', '  =1+1', "'  =1+1"],
     ['leading tab control char ⇒ prefixed', '\t@x', "'\t@x"],
     ['formula lead WITH a comma ⇒ prefixed AND quoted', '=a,b', '"\'=a,b"']

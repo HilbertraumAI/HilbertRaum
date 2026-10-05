@@ -76,6 +76,16 @@ describe('parseTableRequest', () => {
     expect(await parseTableRequest('x', { runtime: junk, signal: sig() })).toBeNull()
   })
 
+  it('a reply with more than four columns keeps only the first four (the grammar is not trusted to cap it)', async () => {
+    const runtime = scriptedRuntime(() =>
+      JSON.stringify({
+        derivedColumns: ['Payee', 'Region', 'Channel', 'Tag', 'Extra'].map((name) => ({ name }))
+      })
+    )
+    const cols = await parseTableRequest('x', { runtime, signal: sig() })
+    expect(cols?.map((c) => c.name)).toEqual(['Payee', 'Region', 'Channel', 'Tag'])
+  })
+
   it('the parse schema bounds the request (≤4 columns, short names)', () => {
     const schema = tableRequestSchema() as never as {
       properties: { derivedColumns: { maxItems: number; items: { properties: { name: { maxLength: number } } } } }
