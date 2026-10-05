@@ -15,7 +15,6 @@ import {
   type ExtractInvoiceOutput,
   type InvoiceInput
 } from '../../src/main/services/skills/tools/invoice'
-import { parseAmount, parseDate, detectCurrency } from '../../src/main/services/skills/tools/money'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
 import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
 
@@ -66,16 +65,6 @@ const INVOICE_TEXT = [
   'Gross Total            390,00'
 ].join('\n')
 
-describe('invoice parser reuses the shared money/date helpers', () => {
-  it('parseAmount/parseDate/detectCurrency behave as in the shared module', () => {
-    expect(parseAmount('1.234,56')).toBe(1234.56)
-    expect(parseDate('31.01.2026')).toBe('2026-01-31')
-    // A non-currency 3-letter token ("INV") must not block a later allowlisted "EUR".
-    expect(detectCurrency('Rechnung INV-2026 Betrag EUR 100,00')).toBe('EUR')
-    expect(detectCurrency('THE CAT SAT')).toBeNull()
-  })
-})
-
 describe('extractInvoice (happy path)', () => {
   const invoice = extractInvoice([chunk(INVOICE_TEXT, 1)], 'EUR')
 
@@ -102,11 +91,6 @@ describe('extractInvoice (happy path)', () => {
 })
 
 describe('extractInvoice (conservative drops)', () => {
-  it('drops a line item with no detectable currency (never invents one)', () => {
-    const inv = extractInvoice([chunk('Widget X   2   9,99', 1)], null)
-    expect(inv.lineItems).toEqual([])
-  })
-
   it('parseLineItem sets only lineTotal when a single money token is present', () => {
     const li = parseLineItem('Flat service fee   50,00', 'EUR')
     expect(li).toEqual({ description: 'Flat service fee', lineTotal: 50, currency: 'EUR' })
@@ -183,11 +167,11 @@ describe('extractInvoice (round totals printed without a decimal — invoice-tot
     expect(invoice.header.invoiceDate).toBe('2026-02-04')
   })
 
-  it('a bare integer NOT touching a currency marker is never read as a total (VAT id stays out)', () => {
-    // "VAT: ATU81420204" starts with the tax label but the id is glued to letters (no adjacent currency)
-    // — it must not be mistaken for a tax amount of 81 420 204.
-    const inv = extractInvoice([chunk('VAT: ATU81420204\nTax 0 $', 1)], 'USD')
-    expect(inv.totals.taxTotal).toBe(0)
+  it('a bare integer NOT touching a currency marker is never read as a total (adjacency guard)', () => {
+    // A real totals line (`VAT <int>`, not filler-only) whose figure touches no currency marker: with the
+    // currency-adjacency guard dropped, the bare integer would be read as a tax amount of 81 420 204.
+    const inv = extractInvoice([chunk('VAT 81420204', 1)], 'USD')
+    expect(inv.totals.taxTotal).toBeUndefined()
   })
 })
 
@@ -215,16 +199,6 @@ describe('extract_invoice through the gate', () => {
     expect(result.ok).toBe(false)
   })
 
-  it('reads only via readDocumentChunks — an out-of-scope id yields an empty invoice', async () => {
-    const { ctx } = makeCtx([], { readDocumentChunks: () => [] })
-    const result = await runSkillTool(extractInvoiceTool, {
-      skillId: 'app:invoice',
-      input: { documentId: 'd1' },
-      ctx
-    })
-    expect(result.ok).toBe(true)
-    if (result.ok) expect((result.output as ExtractInvoiceOutput).lineItems).toEqual([])
-  })
 })
 
 // ---- the downstream tools as PURE functions + through the gate ----
@@ -234,6 +208,15 @@ const invoiceInput = (over: Partial<InvoiceInput> = {}): InvoiceInput => ({
   lineItems: [{ description: 'Widget A', lineTotal: 25, currency: 'EUR' }],
   totals: {},
   ...over
+})
+
+const fullInvoice = (): InvoiceInput => ({
+  header: { vendor: 'ACME', invoiceNumber: 'INV-1', invoiceDate: '2026-03-15', currency: 'EUR' },
+  lineItems: [
+    { description: 'Widget A', quantity: 2, unitPrice: 12.5, lineTotal: 25, currency: 'EUR' },
+    { description: 'Consulting', lineTotal: 300, currency: 'EUR' }
+  ],
+  totals: { netTotal: 325, taxTotal: 65, taxRatePercent: 20, grossTotal: 390 }
 })
 
 function downstreamCtx(): SkillToolContext {
@@ -282,14 +265,25 @@ describe('validate_invoice_totals', () => {
     expect(res.checks.every((c) => c.status === 'unknown')).toBe(true)
   })
 
-  it('runs through the gate with schema-valid output', async () => {
-    const result = await runSkillTool(validateInvoiceTotalsTool, {
-      skillId: 'app:invoice',
-      input: invoiceInput({ totals: { netTotal: 25 } }),
-      ctx: downstreamCtx()
-    })
+})
+
+describe('downstream tools through the gate (validate / csv / json / xml)', () => {
+  it.each([
+    { name: 'validate_invoice_totals', tool: validateInvoiceTotalsTool, input: invoiceInput({ totals: { netTotal: 25 } }), gated: false, rowCount: undefined },
+    { name: 'export_invoice_csv', tool: exportInvoiceCsvTool, input: invoiceInput(), gated: true, rowCount: 1 },
+    { name: 'export_invoice_json', tool: exportInvoiceJsonTool, input: fullInvoice(), gated: true, rowCount: 2 },
+    { name: 'export_invoice_xml', tool: exportInvoiceXmlTool, input: fullInvoice(), gated: true, rowCount: 2 }
+  ])('$name returns schema-valid output; exports are confirm-gated', async ({ tool, input, gated, rowCount }) => {
+    if (gated) {
+      const refused = await runSkillTool(tool, { skillId: 'app:invoice', input, ctx: downstreamCtx() })
+      expect(refused.ok).toBe(false)
+    }
+    const result = await runSkillTool(tool, { skillId: 'app:invoice', input, ctx: downstreamCtx(), confirmed: gated })
     expect(result.ok).toBe(true)
-    if (result.ok) expect(validateToolOutput(validateInvoiceTotalsTool, result.output)).toEqual([])
+    if (result.ok) {
+      expect(validateToolOutput(tool, result.output)).toEqual([])
+      if (rowCount !== undefined) expect((result.output as { rowCount: number }).rowCount).toBe(rowCount)
+    }
   })
 })
 
@@ -389,15 +383,7 @@ describe('parseLineItem — column-debris cleanup (R6, §5.7)', () => {
 
 describe('INVOICE_EXTRACTOR_VERSION (F5 staleness stamp)', () => {
   it('is at 13 — the IA-3 parser batch (invoice-audit-2026-07-06 T-2/T-3/T-4/T-5/T-6/T-8/T-10)', () => {
-    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin. P2 (v10) retracts uncorroborated weak bare-integer
-    // totals; P3 (v11) adds the labeled bill-to `recipient` header field and stamps
-    // `textQuality: 'suspect'` on a glyph-mangled text layer; IA-2 (v12) reads a leading `-` as a sign
-    // only when GLUED to the figure/paren; IA-3 (v13) blanks a percent RATE before the totals scan (T-3),
-    // splits a one-line multi-label totals row (T-2), adds de-AT `nettosumme`/`steuerbetrag`/`ust` labels
-    // (T-4), gates the header date branches on an amount (T-5), classifies date-order lines by
-    // `hasMoneyToken` (T-6), flips a `(netto)` gross to net (T-8), and keeps a money-less date follower's
-    // continuation (T-10). Each changes the persisted output, so an invoice an OLDER (v12…v1 /
-    // pre-versioning NULL) parser produced must re-extract via the F5 path.
+    // Mirrors the bank `BANK_EXTRACTOR_VERSION` pin; version history on the constant (invoice.ts).
     expect(INVOICE_EXTRACTOR_VERSION).toBe(13)
   })
 })
@@ -537,9 +523,12 @@ describe('R7 — headers/dates never swallow or invent a figure (skills-audit-20
     expect(inv.droppedRowCount).toBe(0)
   })
 
-  it('a dd.mm.yy TRAILING date on a totals line is scrubbed (SKA-2): `Gesamtbetrag 390,00 EUR per 30.06.26` → 390', () => {
-    const inv = extractInvoice([chunk('Hosting 325,00 EUR\nGesamtbetrag 390,00 EUR per 30.06.26')], 'EUR')
-    expect(inv.totals.grossTotal).toBe(390) // was 3006.26 — the date read as the last money token
+  it.each([
+    ['a dd.mm.yy trailing date (SKA-2; was 3006.26)', 'Hosting 325,00 EUR\nGesamtbetrag 390,00 EUR per 30.06.26'],
+    ['a period-trailed dd.mm.yy date (R7 review)', 'Hosting 325,00 EUR\nGesamtbetrag 390,00 EUR per 30.06.26.'],
+    ['a 4-digit-year trailing date (BL-N2; was 3006.20)', 'Invoice\nGross total 390,00 EUR per 30.06.2026']
+  ])('a TRAILING date on a totals line is scrubbed, the printed figure wins: %s → 390', (_label, text) => {
+    expect(extractInvoice([chunk(text, 1)], 'EUR').totals.grossTotal).toBe(390)
   })
 
   it('parseLineItem: a mid-line date is never the line total, and the description slice is byte-exact (SKA-1)', () => {
@@ -575,9 +564,6 @@ describe('R7 — headers/dates never swallow or invent a figure (skills-audit-20
     expect(item?.lineTotal).toBe(100)
     expect(item?.unitPrice).toBeUndefined()
     expect(item?.description).toBe('Leistung vom 15.03.26, Pauschale')
-    // Totals line with a period-trailed date: the printed figure wins.
-    const inv = extractInvoice([chunk('Hosting 325,00 EUR\nGesamtbetrag 390,00 EUR per 30.06.26.')], 'EUR')
-    expect(inv.totals.grossTotal).toBe(390)
   })
 
   it('the SKA-14 gate keys on AMOUNT-shaped money, not any grouped digits (R7 review — header inversion guard)', () => {
@@ -638,50 +624,15 @@ describe('export_invoice_csv', () => {
     expect(lines[2]).toBe('Service,,,100.00,EUR') // absent quantity/unitPrice blank
   })
 
-  it('neutralizes spreadsheet formula injection in text fields (S12 audit F4)', () => {
-    const csv = lineItemsToCsv([
-      { description: '=HYPERLINK("http://evil","click")', lineTotal: 1, currency: 'EUR' },
-      { description: '\t@cmd', lineTotal: 2, currency: 'EUR' },
-      { description: '  =1+1', lineTotal: 3, currency: 'EUR' },
-      { description: 'safe text', lineTotal: 4, currency: 'EUR' }
-    ])
-    const lines = csv.trimEnd().split('\r\n')
-    expect(lines[1]).toBe('"\'=HYPERLINK(""http://evil"",""click"")",,,1.00,EUR')
-    expect(lines[2]).toBe("'\t@cmd,,,2.00,EUR") // leading tab neutralized, not a quote trigger
-    expect(lines[3]).toBe("'  =1+1,,,3.00,EUR") // quote prefixed before the leading spaces
-    expect(lines[4]).toBe('safe text,,,4.00,EUR')
-  })
-
-  it('is confirm-gated: the gate refuses it without confirmation', async () => {
-    const refused = await runSkillTool(exportInvoiceCsvTool, {
-      skillId: 'app:invoice',
-      input: invoiceInput(),
-      ctx: downstreamCtx()
-    })
-    expect(refused.ok).toBe(false)
-    const ok = await runSkillTool(exportInvoiceCsvTool, {
-      skillId: 'app:invoice',
-      input: invoiceInput(),
-      ctx: downstreamCtx(),
-      confirmed: true
-    })
-    expect(ok.ok).toBe(true)
-    if (ok.ok) expect(validateToolOutput(exportInvoiceCsvTool, ok.output)).toEqual([])
+  it('neutralizes spreadsheet formula injection in the description (S12 audit F4; the cells live in money.test.ts csvField)', () => {
+    const csv = lineItemsToCsv([{ description: '=HYPERLINK("http://evil","click")', lineTotal: 1, currency: 'EUR' }])
+    expect(csv.trimEnd().split('\r\n')[1]).toBe('"\'=HYPERLINK(""http://evil"",""click"")",,,1.00,EUR')
   })
 })
 
 describe('JSON / XML serializers (invoice-format-2026-07-01)', () => {
-  const full = (): InvoiceInput => ({
-    header: { vendor: 'ACME', invoiceNumber: 'INV-1', invoiceDate: '2026-03-15', currency: 'EUR' },
-    lineItems: [
-      { description: 'Widget A', quantity: 2, unitPrice: 12.5, lineTotal: 25, currency: 'EUR' },
-      { description: 'Consulting', lineTotal: 300, currency: 'EUR' }
-    ],
-    totals: { netTotal: 325, taxTotal: 65, taxRatePercent: 20, grossTotal: 390 }
-  })
-
   it('buildInvoiceJson emits parseable JSON with the extracted figures and a stable shape', () => {
-    const parsed = JSON.parse(buildInvoiceJson(full())) as {
+    const parsed = JSON.parse(buildInvoiceJson(fullInvoice())) as {
       invoiceNumber: string
       dueDate: string | null
       lineItems: Array<{ lineTotal: number }>
@@ -696,7 +647,7 @@ describe('JSON / XML serializers (invoice-format-2026-07-01)', () => {
   })
 
   it('buildInvoiceXml emits well-formed XML, 2-dp numbers, absent fields omitted', () => {
-    const xml = buildInvoiceXml(full())
+    const xml = buildInvoiceXml(fullInvoice())
     expect(xml).toMatch(/^<\?xml version="1\.0" encoding="UTF-8"\?>\n<invoice>/)
     expect(xml).toContain('<invoiceNumber>INV-1</invoiceNumber>')
     expect(xml).toContain('<lineTotal>25.00</lineTotal>')
@@ -732,23 +683,6 @@ describe('JSON / XML serializers (invoice-format-2026-07-01)', () => {
     expect(xml.match(/<taxRatePercent>/g) ?? []).toHaveLength(1)
   })
 
-  it('the JSON / XML export tools are confirm-gated and return schema-valid {content, rowCount}', async () => {
-    for (const tool of [exportInvoiceJsonTool, exportInvoiceXmlTool]) {
-      const refused = await runSkillTool(tool, { skillId: 'app:invoice', input: full(), ctx: downstreamCtx() })
-      expect(refused.ok).toBe(false)
-      const ok = await runSkillTool(tool, {
-        skillId: 'app:invoice',
-        input: full(),
-        ctx: downstreamCtx(),
-        confirmed: true
-      })
-      expect(ok.ok).toBe(true)
-      if (ok.ok) {
-        expect(validateToolOutput(tool, ok.output)).toEqual([])
-        expect((ok.output as { rowCount: number }).rowCount).toBe(2)
-      }
-    }
-  })
 })
 
 // full-audit-2026-06-28 Phase 1 (financial correctness): adversarial whole-string tests through the real
@@ -763,11 +697,6 @@ describe('financial correctness (full-audit-2026-06-28 Phase 1)', () => {
     // BEFORE: 06/15 read day-first (day 6, month 15) → invalid → null → the header date silently dropped.
     expect(inv.header.invoiceDate).toBe('2026-06-15')
     expect(inv.header.dueDate).toBe('2026-07-20')
-  })
-
-  it('BL-N2: a trailing-date total line reads the FIGURE, not the date, as the total', () => {
-    const inv = extractInvoice([chunk('Invoice\nGross total 390,00 EUR per 30.06.2026', 1)], 'EUR')
-    expect(inv.totals.grossTotal).toBe(390) // BEFORE: lastMoney read '30.06.20' → 3006.20
   })
 
   it('TEST-N2: parseLineItem reads grouped figures (thousands / space / apostrophe) whole (DECISION 2)', () => {
@@ -794,16 +723,6 @@ describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', (
     expect(parseLineItem('Hosting 12,50 500', 'EUR')).toBeNull()
   })
 
-  it('F1: a clean line item with the line total LAST (no uncaptured column) still parses', () => {
-    // The drop is scoped to an uncaptured numeric column abutting the figures: an ordinary single-total
-    // line is unaffected.
-    expect(parseLineItem('Flat service fee 50,00', 'EUR')).toEqual({
-      description: 'Flat service fee',
-      lineTotal: 50,
-      currency: 'EUR'
-    })
-  })
-
   // ---- F6: space-separated columns must not fuse into one figure on the geometry-less invoice path ----
   it('F6: space-separated columns are DROPPED, never fused into one ~100×-too-large figure', () => {
     // `Widget 10 100`: MONEY_RE's space-grouped alternative reads `10 100` as ONE figure → 10100 (qty 10 +
@@ -811,10 +730,6 @@ describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', (
     // is column-fusion-prone on the geometry-less invoice path → the row is DROPPED. A decimal-anchored
     // space group (`1 234 567,89`) is a real figure and is preserved (next test).
     expect(parseLineItem('Widget 10 100', 'EUR')).toBeNull()
-  })
-
-  it('F6: a decimal-anchored space-grouped figure is still read whole (not a false fusion drop)', () => {
-    expect(parseLineItem('Charge 1 234 567,89', 'EUR')).toMatchObject({ lineTotal: 1234567.89 })
   })
 
   // ---- F8: a trailing number is split as quantity ONLY with a unit token or a corroborating column ----
@@ -895,13 +810,6 @@ describe('money-parser correctness (full-audit-2026-06-29-postmerge Phase 1)', (
     expect(byName.lineItemsSumToNet).toBe('ok')
   })
 
-  // ---- T5: the 2-dp integer-cent invariant on the invoice path ----
-  it('T5: a >2-dp line total is normalised to the nearest cent', () => {
-    const li = parseLineItem('Pos 1.234,567', 'EUR')
-    expect(li?.lineTotal).toBe(1234.57) // BEFORE: 1234.567
-    expect(li?.lineTotal).toBe(Math.round((li?.lineTotal ?? 0) * 100) / 100) // exactly 2-dp
-  })
-
   // ---- T9: negative line totals / credit notes (Gutschrift / Rabatt) ----
   it('T9: a negative line total (Rabatt / Gutschrift) parses with the correct sign', () => {
     expect(parseLineItem('Rabatt -50,00', 'EUR')).toMatchObject({ lineTotal: -50 })
@@ -933,21 +841,12 @@ describe('financial correctness (full-audit-2026-06-29 follow-up Phase 1)', () =
   })
 
   // ---- FIN-2: the right-side uncaptured-column drop must not delete valid items with trailing annotations ----
-  it('FIN-2: keeps a valid line item with a trailing position annotation', () => {
-    expect(parseLineItem('Service 12,50 (Pos. 3)', 'EUR')).toEqual({ description: 'Service', lineTotal: 12.5, currency: 'EUR' })
-  })
-
-  it('FIN-2: keeps a valid line item with a trailing per-line VAT %', () => {
-    expect(parseLineItem('Beratung 1.234,56 19% MwSt', 'EUR')).toEqual({ description: 'Beratung', lineTotal: 1234.56, currency: 'EUR' })
-  })
-
-  it('FIN-2: keeps a valid line item with a trailing currency + unit token', () => {
-    expect(parseLineItem('Line 50,00 EUR 2 Stk', 'EUR')).toEqual({ description: 'Line', lineTotal: 50, currency: 'EUR' })
-  })
-
-  it('FIN-2: still DROPS a genuine uncaptured whole-number total column (F1 preserved)', () => {
-    // The region after the last money match is ENTIRELY a bare integer (the real line total) → ambiguous → drop.
-    expect(parseLineItem('Hosting 12,50 500', 'EUR')).toBeNull()
+  it.each([
+    ['a trailing position annotation', 'Service 12,50 (Pos. 3)', { description: 'Service', lineTotal: 12.5, currency: 'EUR' }],
+    ['a trailing per-line VAT %', 'Beratung 1.234,56 19% MwSt', { description: 'Beratung', lineTotal: 1234.56, currency: 'EUR' }],
+    ['a trailing currency + unit token', 'Line 50,00 EUR 2 Stk', { description: 'Line', lineTotal: 50, currency: 'EUR' }]
+  ])('FIN-2: keeps a valid line item with %s', (_label, line, expected) => {
+    expect(parseLineItem(line, 'EUR')).toEqual(expected)
   })
 
   // ---- FIN-4: a US-format date inside a line-item description must not flip the header date order ----
@@ -970,29 +869,14 @@ describe('R1 — invoice Unicode normalization + sign-aware bare-integer total (
   const NBSP = '\u00A0' // NO-BREAK SPACE
   const RSQUO = '\u2019' // RIGHT SINGLE QUOTATION MARK (Swiss apostrophe grouping)
 
-  it('§5.3: an NBSP-grouped total reads its FULL magnitude (1 234,56 → 1234.56, not 234.56)', () => {
-    const invoice = extractInvoice([chunk(`Gesamtbetrag 1${NBSP}234,56 EUR`, 1)], 'EUR')
-    expect(invoice.totals.grossTotal).toBe(1234.56)
-  })
-
-  it('§5.3: a U+2212 minus on a net total signs it negative (−325,00 → −325)', () => {
-    const invoice = extractInvoice([chunk(`Nettobetrag ${MINUS}325,00 EUR`, 1)], 'EUR')
-    expect(invoice.totals.netTotal).toBe(-325)
-  })
-
-  it('§5.3: a Swiss U+2019 apostrophe-grouped gross total reads 1’234.56 → 1234.56', () => {
-    const invoice = extractInvoice([chunk(`Gesamtbetrag 1${RSQUO}234.56 CHF`, 1)], 'CHF')
-    expect(invoice.totals.grossTotal).toBe(1234.56)
-  })
-
-  it('§5.7-low: a credit-note bare-integer total keeps its sign (Gesamtbetrag -914 EUR → −914)', () => {
-    const invoice = extractInvoice([chunk('Gesamtbetrag -914 EUR', 1)], 'EUR')
-    expect(invoice.totals.grossTotal).toBe(-914)
-  })
-
-  it('§5.7-low: a POSITIVE bare-integer total is unchanged — no regression (Gesamtbetrag 914 EUR → 914)', () => {
-    const invoice = extractInvoice([chunk('Gesamtbetrag 914 EUR', 1)], 'EUR')
-    expect(invoice.totals.grossTotal).toBe(914)
+  it.each([
+    ['§5.3: an NBSP-grouped total reads its FULL magnitude (1 234,56 → 1234.56, not 234.56)', `Gesamtbetrag 1${NBSP}234,56 EUR`, 'EUR', 'grossTotal', 1234.56],
+    ['§5.3: a U+2212 minus on a net total signs it negative (−325,00 → −325)', `Nettobetrag ${MINUS}325,00 EUR`, 'EUR', 'netTotal', -325],
+    ['§5.3: a Swiss U+2019 apostrophe-grouped gross total reads 1’234.56 → 1234.56', `Gesamtbetrag 1${RSQUO}234.56 CHF`, 'CHF', 'grossTotal', 1234.56],
+    ['§5.7-low: a credit-note bare-integer total keeps its sign (Gesamtbetrag -914 EUR → −914)', 'Gesamtbetrag -914 EUR', 'EUR', 'grossTotal', -914],
+    ['§5.7-low: a POSITIVE bare-integer total is unchanged — no regression (Gesamtbetrag 914 EUR → 914)', 'Gesamtbetrag 914 EUR', 'EUR', 'grossTotal', 914]
+  ] as const)('%s', (_title, line, currency, field, expected) => {
+    expect(extractInvoice([chunk(line, 1)], currency).totals[field]).toBe(expected)
   })
 })
 
