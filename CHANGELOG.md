@@ -116,6 +116,14 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A chat whose AI model stops responding before it begins its answer now ends after two minutes
+  with a clear message.** When the model's engine accepted a question and then went silent, the
+  chat waited for five minutes and then showed only "fetch failed". Meanwhile the app counted the
+  model as busy, so actions such as the engine update were refused. The chat now ends after two
+  minutes with "The AI model stopped responding", and the model is free again. Apps connected through
+  the local API get their documented `runtime_unresponsive` error within the same two minutes. An
+  answer that stops partway through ends after 30 seconds without new text. With the current AI
+  engine, its keep-alive messages could postpone that (#594).
 - **"Install voice engine" installs only the voice engine.** On a drive with an older AI engine, the
   button also tried to download the AI engine again, and while a model was running it then refused
   with "The AI engine can't be replaced while a model is running". It now installs only what is

@@ -28,13 +28,17 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-05 — **#594 — a chat request whose sidecar never sends its response headers ends after 120 s (`fix/594-chat-header-timeout`).** Both pins send the headers
+when the slot starts, before prefill (upstream `is_begin`; b11146 measured: 14 ms, first token 320.9 s for a CPU 9B); the wait used to end only at undici's 300 s
+(304.8 s in Electron 43.7.7, a raw "fetch failed"), holding every busy signal. `LlamaRuntime.chatStream` gives it CB-5's 120 s (owner); b11146's 30 s SSE pings
+no longer re-arm the stream budget once tokens flow. Record: `architecture.md` CB-5 "#594 amendment". Open: #598 (prefill liveness), #599, #600._
 _2026-10-05 — **#516 — the app reports engines older than its pin and updates them (`feat/516-engine-update`).** `EngineStatus.engineVersions` (numeric tag order;
 `older`/`current`/`newer`/`unknown`, `cpu/` net included); `update: true` replaces only `older` installs + an older `cpu/` net; every engine job now downloads + verifies all
 archives first, then (updates) pauses the model + llama helpers for the swap and restarts the model; a spawn gate holds the family's starts through every swap (closes the
 CODE-13 race). Fixed: the plain install re-installed outdated engines (refused while a model ran; a downgrade of newer ones) — now missing only. Quiet notice (§11.20),
 Diagnostics row, `fetch-runtime` note. Owner: offer + report, pause/resume, cpu/ too, Kits same gates. Real app verified twice (b9849 → b11146, ~5–6 s downtime;
 busy refusal; the 1070 Ti's b9849 hung mid-chat, b11146 answered). Record: `architecture.md` "In-app engine updates". Open: a quick translation in flight at the
-pause is cut off; found, pre-existing: a chat sidecar hung before its response headers escapes the CB-5 watchdog (record §5; no issue yet)._
+pause is cut off. Found, pre-existing, now fixed: a chat sidecar hung before its response headers escaped the CB-5 watchdog (record §5; #594)._
 _2026-10-05 — **#580 — redaction masks the union of overlapping proposals (`fix/580-redaction-overlap`).** "Jane" before "Jane Doe" left the surname visible (.txt + DOCX),
 and a partial overlap ("Anna Berg" + "Berg GmbH") left " GmbH" in either order: `applySpans` keeps the first of two overlapping spans. `verifyAndSweepEntities` now merges
 occurrences into disjoint regions; counts are regions; the edit tool's comment corrected. Record: Skills record §21 "#580 amendment". Open: none._

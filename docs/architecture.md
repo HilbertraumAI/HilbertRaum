@@ -1392,7 +1392,57 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
     byte-identical). A timeout cancels the reader and rejects `RuntimeUnresponsiveError`; a user Stop
     (signal abort) still wins first, so a hang is never converted to an abort (the partial persists as
     today) or vice-versa. **Scope:** post-response streaming only — a hang in the initial `server.fetch`
-    is a separate seam, deferred.
+    is a separate seam, deferred. *(Closed by the #594 amendment below.)*
+    - **#594 amendment (2026-10-05) — the header wait, and pings.** The facts, on the pinned builds:
+      - **Headers go out when the slot starts, before prefill.** That is the `is_begin` result in
+        upstream `server-context.cpp:3416-3424`, at b9849 and b11146 alike. Measured on the b11146 CPU
+        build with the 9B and the app's argv (a 6,394-token prompt): headers after 14 ms, first token
+        after 320.9 s. So a legitimate header wait is tokenisation plus the wait for the one slot. It
+        is long only behind a cancelled request's batch, which takes ≈100 s per 2048 tokens for that 9B.
+      - **The old wait ended only at undici's limit.** Electron 43.7.7's `fetch` gave up after 304.8 s
+        (`UND_ERR_HEADERS_TIMEOUT`), and the user saw a raw "fetch failed". Until then the turn held
+        every busy signal, which refused the #516 engine update, and the local API kept its one slot.
+      - **b11146 writes an SSE comment `:` after every ~30 s of silence** (`--sse-ping-interval`,
+        default 30, polled each second; b9849 has none). The per-read timer re-armed on each ping.
+
+      **As built.** `LlamaRuntime.chatStream` gives the headers `PREFILL_IDLE_MS`, 120 s (owner call).
+      - It uses `combineSignals`. On arrival a new `disarmTimeout()` stops only the timer: the request
+        keeps following the caller, so a Stop tears the stream down as before.
+      - Expiry → `RuntimeUnresponsiveError`; a Stop wins a tie.
+      - The deadline stays armed over an error response's body, so a stalled error body leaves only
+        the status.
+      - In `readChatSSE`, after the first chunk the stream budget counts only time spent *waiting*
+        since the last model output, on the monotonic clock. Model output is any bytes that are not
+        a blank line or a comment, including the start of a line split across reads. Pings no
+        longer count; the consumer's time between pulls still doesn't.
+      - Before the first chunk, pings still re-arm the prefill budget, on purpose (owner call): a real
+        CPU prefill runs for minutes, and on b11146 the pings are its only sign.
+
+      **Accepted (owner, with the 120 s):** the header clock includes any queueing for the server's
+      one slot (`-np 1`).
+      - A re-ask right after a Stop waits for the cancelled request's batch to finish. On a slow CPU
+        that batch can take longer than 120 s, which ends the re-ask with this error; a retry then
+        works.
+      - Two in-app answers on one model would queue the same way. The UI rules that out:
+        `ConversationList` disables the other conversations while one streams, and `onSend`
+        refuses.
+
+      **Left open:**
+      - **#598:** a hung prefill on b11146 stays unbounded, and b9849 cuts a long one at 120 s.
+      - **#599:** a running server's liveness is never re-checked.
+      - **#600:** a model stop mid-answer shows "fetch failed".
+
+      **Real app** (2026-10-05, DesktopDiT, dev build, b11146 Vulkan, the 4B on the GTX 1070 Ti). The
+      sidecar was frozen with `NtSuspendProcess` just before a chat.
+      - On master, the chat ended after 305.9 s with "fetch failed".
+      - With the fix, it ended after 120.0 s with `main.chat.runtimeUnresponsive`.
+      - Both times the engine update was refused as busy until the chat ended, then accepted.
+      - Once the process was resumed, the next chat answered in 0.2 s.
+
+      **Tests.** `llama-runtime.test.ts` "the wait for the response headers (#594)" (a real loopback
+      socket and real `fetch`), `read-chat-sse.test.ts` "SSE comment pings in the stream phase
+      (#594)", `combine-signals.test.ts` `disarmTimeout()`, and `local-api-server.test.ts` "502
+      runtime_unresponsive, slot freed".
   - **Friendly-error chain** in `withChatStream` (rethrow-friendly, mapped copy on BOTH the `chat:error`
     event and the invoke rejection): `RuntimeUnresponsiveError` → `main.chat.runtimeUnresponsive`,
     `EmptyCompletionError` → `main.chat.emptyCompletion`, overflow → `main.model.contextExceeded`, else
@@ -4336,10 +4386,12 @@ voice engine was missing.
   missing copy only, and their spawn sites are not behind the spawn gate (no in-app update replaces them).
 - **The ModelsScreen runtime poll** (see "Engine load failures" §8) can show the card's earlier state
   until the next refresh when the restart begins late.
-- **A chat sidecar that hangs before its response headers is not caught** (this existed before #516
-  and is not part of it; found in the §4 second run). The CB-5 watchdog in `readChatSSE` covers only
-  the body. `LlamaRuntime`'s `await this.server.fetch('/v1/chat/completions', …)` has no bound, so
-  the chat waits until the model is stopped (`fetch failed`, `ECONNRESET`).
+- **A chat sidecar that hangs before its response headers — fixed by #594** (found in the §4 second
+  run; it existed before #516).
+  - The CB-5 watchdog in `readChatSSE` covered only the body, so the turn waited until the model was
+    stopped (`fetch failed`, `ECONNRESET`) or undici gave up after 300 s.
+  - While it waited, its busy signals refused this update with `main.engine.updateBusy`.
+  - The header wait now has CB-5's 120 s (chat backend robustness, CB-5 "#594 amendment").
 
 Tests:
 - `assets.test.ts`: the version-order table, the relation (the pin in another backend is current).
@@ -8391,7 +8443,7 @@ Per-finding disposition (fixed → session@commit / deferred·declined·accepted
 | **CB-2** | LOW | S5 `b38f819` | **fixed** — `withRegenerateGuard` restores the prior reply on an unpersisted-empty resolve (`content === ''`, the Stop-before-first-token path), re-inserting the original id/timestamp and returning it via `getLatestMessage` so `chat:done` re-shows the answer. Composes with CB-4. |
 | **CB-3** | LOW | S5 `b38f819` | **fixed** — compaction trigger capped at `min(COMPACT_THRESHOLD·window, window − reserve)` so small (2048/4096) windows compact before L1 drops history (≥6827 keeps `0.85·window` byte-identical); pre-pass estimate folds in the real summary-pair + system-prompt + a caller-supplied `reservedTokens` (fence built before compaction). |
 | **CB-4** | LOW | S5 `b38f819` | **fixed** — completed, non-aborted, **zero-token** stream throws `EmptyCompletionError` (friendly-mapped) instead of a silent blank; abort-before-first-token and all-`<think>`/fence-echo empties stay the benign silent-empty (`receivedAnyToken`/`caughtAbort` narrowing). |
-| **CB-5** | LOW | S5 `b38f819` | **fixed** — `readChatSSE` races each read against a two-phase idle watchdog (`PREFILL_IDLE_MS` 120 s → `STREAM_IDLE_MS` 30 s; reasoning deltas reset it) → `RuntimeUnresponsiveError` on a hung sidecar; a user Stop still wins first. Post-response streaming only. |
+| **CB-5** | LOW | S5 `b38f819` | **fixed** — `readChatSSE` races each read against a two-phase idle watchdog (`PREFILL_IDLE_MS` 120 s → `STREAM_IDLE_MS` 30 s; reasoning deltas reset it) → `RuntimeUnresponsiveError` on a hung sidecar; a user Stop still wins first. Post-response streaming only — until #594 (2026-10-05) gave the response headers the same 120 s and stopped b11146's SSE pings from re-arming the stream budget (the CB-5 bullet's #594 amendment). |
 | **CB-6** | LOW | S4 `b5c46cb` | **fixed** — `buildTurnFence` sizes the fence via a new `LIMIT 1` `getLatestMessage` twin instead of paging the whole history; `generateAssistantMessage` reads `getSettings` once (threaded `compactionOn` default param). |
 | **CB-7** | LOW | S5 (deferred) | **DEFERRED — decision #1.** Per-token IPC batching NOT implemented: the renderer already coalesces re-renders (the flush timer), the residual is a structured-clone of a short string, and batching would add a lifecycle seam to the safety-sensitive stream teardown for an unmeasured gain. Revisit only if profiling shows contextBridge volume is a real bottleneck. Docs note in the streaming record. |
 | **CR-1** | MED | S2 `6e89879` | **fixed** — draft restored on a pre-persist send failure (`stream` returns whether the user turn persisted; `restoreDraft` = `setInput((cur) => cur === '' ? text : cur)`, newer in-flight typing wins), never on a stopped-but-persisted turn. |
