@@ -40,6 +40,7 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } fr
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
 import { MAX_REDUCE_CONTINUATIONS, streamWholeDocMapReduce } from '../../src/main/services/rag/whole-doc-tree'
 import { SKILL_GUARD_LINE, stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
+import { DATA_END, GROUNDED_DATA_GUARD_LINE } from '../../src/main/services/rag/grounded-data'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import {
   createQueuedDocument,
@@ -47,7 +48,7 @@ import {
   processDocument
 } from '../../src/main/services/ingestion'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
-import { scriptedRuntime } from '../helpers/scripted-runtime'
+import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
 
 function freshDb(): Db {
   return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-')), 'test.sqlite'))
@@ -514,14 +515,17 @@ describe('retrieve', () => {
 
 // #583: of the four call sites that scrub echoed skill-fence framing before persisting (plain chat,
 // generateGroundedAnswer, streamWholeDocMapReduce, generateGroundedDataAnswer) the last two had no
-// test; the whole-document core is shared by the tree rescue and the over-budget map-reduce.
+// test; the whole-document core is shared by the tree rescue and the over-budget map-reduce. The
+// grounded-data answer also carries its own data-block framing, which must not persist either.
 describe('echoed fence framing never persists (#583)', () => {
   // A model that closes its answer by echoing the app-authored fence end marker and guard line.
-  const ECHOING_REPLY = 'Answer body.\n\n--- END LOCAL SKILL ---\n' + SKILL_GUARD_LINE
+  const FENCE_ECHO = ['--- END LOCAL SKILL ---', SKILL_GUARD_LINE]
+  const ECHOING_REPLY = ['Answer body.', '', ...FENCE_ECHO].join('\n')
 
   it.each([
     {
       site: 'streamWholeDocMapReduce',
+      echoed: FENCE_ECHO,
       answer: async (): Promise<string> => {
         const db = freshDb()
         const conv = createConversation(db, { mode: 'documents' })
@@ -545,6 +549,7 @@ describe('echoed fence framing never persists (#583)', () => {
     },
     {
       site: 'generateGroundedDataAnswer',
+      echoed: FENCE_ECHO,
       answer: async (): Promise<string> => {
         const db = freshDb()
         const conv = createConversation(db, { mode: 'documents' })
@@ -557,12 +562,30 @@ describe('echoed fence framing never persists (#583)', () => {
         expect(listMessages(db, conv.id).at(-1)?.content).toBe(msg.content)
         return msg.content
       }
+    },
+    {
+      site: 'generateGroundedDataAnswer, data block',
+      echoed: [DATA_END, GROUNDED_DATA_GUARD_LINE],
+      answer: async (): Promise<string> => {
+        const db = freshDb()
+        const conv = createConversation(db, { mode: 'documents' })
+        appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
+        const calls: ScriptedCall[] = []
+        const reply = ['Answer body.', '', DATA_END, GROUNDED_DATA_GUARD_LINE].join('\n')
+        await generateGroundedDataAnswer(db, scriptedRuntime(reply, calls), conv.id, 'who is the vendor?', {
+          dataBlock: '{"vendor":"Acme GmbH"}',
+          postscript: '',
+          citations: []
+        })
+        // The echoed pair is the one that closes the data block of the turn the model was given.
+        expect(calls[0].messages.at(-1)?.content).toContain(`${DATA_END}\n${GROUNDED_DATA_GUARD_LINE}`)
+        return listMessages(db, conv.id).at(-1)?.content ?? ''
+      }
     }
-  ])('$site persists the answer without the echoed end marker or guard line', async ({ answer }) => {
+  ])('$site persists the answer without the echoed end marker or guard line', async ({ echoed, answer }) => {
     const persisted = await answer()
     expect(persisted).toContain('Answer body.')
-    expect(persisted).not.toContain('--- END LOCAL SKILL ---')
-    expect(persisted).not.toContain(SKILL_GUARD_LINE)
+    for (const line of echoed) expect(persisted).not.toContain(line)
   })
 })
 
