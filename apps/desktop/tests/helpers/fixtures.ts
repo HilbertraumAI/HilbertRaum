@@ -345,10 +345,13 @@ function makeZip(entries: ZipEntry[]): Buffer {
 export function makeDocx(paragraphs: string[]): Buffer {
   const xmlEscape = (s: string): string =>
     s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-  const body = paragraphs
-    .map((p) => `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(p)}</w:t></w:r></w:p>`)
-    .join('')
+  return makeDocxFromBody(
+    paragraphs.map((p) => `<w:p><w:r><w:t xml:space="preserve">${xmlEscape(p)}</w:t></w:r></w:p>`).join('')
+  )
+}
 
+/** Build a minimal valid .docx whose `<w:body>` is `body`, raw WordprocessingML (the caller escapes). */
+export function makeDocxFromBody(body: string): Buffer {
   const contentTypes =
     '<?xml version="1.0" encoding="UTF-8" standalone="yes"?>' +
     '<Types xmlns="http://schemas.openxmlformats.org/package/2006/content-types">' +

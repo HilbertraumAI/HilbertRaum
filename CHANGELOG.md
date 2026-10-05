@@ -109,6 +109,11 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Word documents no longer leave some of their text out of search.** Text inside custom XML
+  (used by some forms and templates) and text moved with Track Changes was skipped when a `.docx`
+  was added, so questions about it found nothing. The updated Word reader (mammoth 1.13.0) reads
+  both, and counts moved text once, at its new place. To pick it up in a document added before
+  this update, use **Re-index** on it (#585).
 - **Sideways and upside-down scans are read the right way up.** A page scanned the wrong way round
   came out as nonsense text, and the task still ended as done. Text recognition now notices a
   page it reads poorly, checks which way up the text is, and reads it again turned upright. This

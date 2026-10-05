@@ -28,6 +28,9 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-05 — **#585 — mammoth 1.12.3 → 1.13.0, replacement PR (`chore/mammoth-1.13`).** Notices regenerated (226 → 224: `bluebird` out, `path-is-absolute` dev-only;
+packed `app.asar` agrees). 1.12.3 dropped `w:customXml`/`w:moveTo`/`w:moveFrom` with their text; 1.13 reads custom XML + moved text once (pinned in `ingestion.test.ts`;
+old docs need Re-index). Packaged DOCX import verified. Record: `architecture.md` DEP-6 §12. Open: none._
 _2026-10-05 — **#532 — "Install the AI engine again" for an engine whose own files are damaged (`fix/532-engine-reinstall`).** `downloadEngine({ families,
 reinstall: true })`, admitted only for a `files-damaged` verdict; the demo runtime no longer counts as "engine in use" (CODE-13 polish, also first installs); the
 model restarts on the engine after any chat-engine install; a fresh copy refused again carries `afterInstall` (no loop; Windows → VC++ hint). Owner: offline Kits

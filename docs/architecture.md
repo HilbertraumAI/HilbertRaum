@@ -12806,6 +12806,43 @@ no eval path. Measured on packaged master `66ad007e` (Electron 43.7.7 / Chromium
   worker → 3, `useWasm: false` dropped → 1, hashed decoder names → 3, a `.wasm` shipped → 1, the
   OCR meta back to `worker-src 'self' blob:` → 4, the header without `worker-src 'none'` → 2).
 
+### §12 mammoth 1.12.3 → 1.13.0 (#585, landed as a replacement PR)
+
+Dependabot's production group #585 carried one package, `mammoth` (the DOCX reader). Its CI was
+red on every leg: two `third-party-notices.test.ts` gates. Dependabot does not regenerate
+`THIRD-PARTY-NOTICES.md`, and 1.13.0 changes the shipped set. It landed, as §7 did, as a
+replacement PR on top of Dependabot's commit.
+
+- **The lockfile** is byte-identical to what the pinned npm 11.6.2 writes, and the `mammoth`
+  integrity matches the registry. The only other change is that `bluebird` 3.4.7 leaves the tree
+  and `path-is-absolute` 1.0.1 becomes dev-only.
+- **The notices:** regenerated, so 226 → 224 shipped packages (`bluebird` and
+  `path-is-absolute` out, mammoth's label updated). On a `--win dir` build, the packaging gates
+  run against that build's `app.asar` (`HILBERTRAUM_PACKED_ASAR`) and agree: neither package
+  is packed, and mammoth's new `lib/fs.js` is.
+- **Native promises instead of bluebird.** The app calls one API, `extractRawText({ buffer })`,
+  and awaits it. The buffer path is unchanged, so the promise change cannot reach the app.
+- **What reaches the index changes** (read from the source diff of `lib/docx/body-reader.js`).
+  1.12.3 treated `w:customXml`, `w:moveTo` and `w:moveFrom` as unrecognised elements, and an
+  unrecognised element is dropped with everything inside it. So text inside custom XML (some
+  forms and templates) and text moved with Track Changes never reached search. 1.13.0 reads the
+  children of `customXml` and `moveTo`, and ignores `moveFrom` the way it ignores `w:del`.
+  Moved text now counts once, at its new place.
+  - `ingestion.test.ts` pins this through `DocxParser`, with a body built by the new
+    `makeDocxFromBody`. The same document through 1.12.3 yields only the plain paragraph, plus
+    three "unrecognised element" warnings.
+  - A document indexed before the update keeps its old text until it is re-indexed.
+- **Unaffected:** the same-format DOCX export (`docx-rewrite.ts`) reads its own `<w:t>` text
+  layer and re-anchors against it (D77), so mammoth's output is not its input. Redaction still
+  rewrites every `<w:t>` node, including a moved-from copy. The Markdown writer's new escaping
+  is unused: the app never converts to Markdown or HTML.
+- **Verification:**
+  - a fresh `npm ci`, typecheck, build and the full suite;
+  - the packaged `--win dir` exe on DesktopDiT (Smart App Control off) imported that DOCX
+    through `importDocuments`; the preview showed exactly its three segments, and the log had no
+    errors;
+  - on quit only `hilbertraum.sqlite.enc` remained.
+
 ## App scheme `hilbertraum://app/` — design record (#560)
 
 _The app's own pages (the main window's `index.html`, the OCR rasterizer's `ocr.html`) moved from
