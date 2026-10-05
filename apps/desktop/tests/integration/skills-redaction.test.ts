@@ -101,6 +101,8 @@ describe('document-redaction — committed SKILL.md is a Tier-2 tool skill', () 
     // v1 permission ceiling holds.
     expect(m.permissions.network).toBe('denied')
     expect(m.permissions.documents).toBe('selected_only')
+    // Intent-driven, not filename-driven: a filename pattern would widen its silent auto-fire surface.
+    expect(m.triggers.filenamePatterns).toEqual([])
   })
 })
 

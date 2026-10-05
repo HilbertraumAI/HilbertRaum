@@ -100,38 +100,9 @@ describe('S13 corpus is well-formed', () => {
 // listed deviations. A new miss or false offer goes red with the row id in the title; a FIXED deviation
 // goes red too (its entry is stale and must be removed).
 describe('suggestion — every corpus row gives its expected offer (production suggestSkillsForTurn)', () => {
-  it.each(corpus)('$id offers $expected', (row) => {
-    expect(harness.offerFor(row)).toBe(KNOWN_SUGGESTION_DEVIATIONS[row.id] ?? row.expected)
-  })
-})
-
-// MEASUREMENT: print the two production paths' aggregates so `npm test` surfaces the numbers (recorded in
-// the `architecture.md` §18 record). KEPT as a measurement — the hard gates live in their own blocks below
-// so the printout survives even if a bar regresses. Metrics and confusion only: NO question text.
-describe('S13 measurement — production paths (recorded in architecture.md §18)', () => {
-  it('prints the suggestion and auto-fire precision/recall/confusion', () => {
-    const nonDeviating = corpus.filter((c) => !(c.id in KNOWN_AUTOFIRE_DEVIATIONS))
-    const results = [
-      scoreCorpus(corpus, (r) => harness.offerFor(r), 'suggestion', 'suggestSkillsForTurn, all rows'),
-      scoreCorpus(
-        nonDeviating,
-        (r) => harness.autoFireFor(r),
-        'auto-fire (gate)',
-        'resolveAutoFireSkill, rows minus the accepted deviations (the gate set)'
-      ),
-      scoreCorpus(
-        corpus,
-        (r) => harness.autoFireFor(r),
-        'auto-fire (deviations wrong)',
-        'resolveAutoFireSkill, all rows — the accepted deviations counted as wrong fires'
-      )
-    ]
-    // eslint-disable-next-line no-console
-    console.log('\n' + formatReport(results, corpus.length) + '\n')
-    for (const r of results) {
-      const c = r.confusion
-      expect(c.firedCorrect + c.firedWrong + c.missed + c.correctlyAbstained).toBe(r.perItem.length)
-    }
+  const rows = corpus.map((row) => ({ row, id: row.id, want: KNOWN_SUGGESTION_DEVIATIONS[row.id] ?? row.expected }))
+  it.each(rows)('$id offers $want', ({ row, want }) => {
+    expect(harness.offerFor(row)).toBe(want)
   })
 })
 
@@ -139,20 +110,37 @@ describe('S13 measurement — production paths (recorded in architecture.md §18
 // decision must clear D1 on the corpus. A MISS is fine (the inert offer is the fallback); firing a
 // DIFFERENT skill than the label — or firing at all where the label is 'none' — is a wrong fire. The two
 // accepted deviations must fire exactly the listed skill; any other row's outcome is its label or nothing.
+// It first prints the two production paths' aggregates (recorded in architecture.md §18) — metrics and
+// confusion only, NO question text — so the numbers surface even when a bar below regresses.
 describe('S13b gate — production auto-fire clears the ratified D1 precision bar', () => {
   it('fires nothing wrong AND precision ≥ 0.95; deviation rows fire exactly the listed skill', () => {
+    const gateSet = corpus.filter((c) => !(c.id in KNOWN_AUTOFIRE_DEVIATIONS))
+    const result = scoreCorpus(gateSet, (r) => harness.autoFireFor(r), 'auto-fire (gate)', 'resolveAutoFireSkill, rows minus the accepted deviations (the gate set)')
+    const report = [
+      scoreCorpus(corpus, (r) => harness.offerFor(r), 'suggestion', 'suggestSkillsForTurn, all rows'),
+      result,
+      scoreCorpus(corpus, (r) => harness.autoFireFor(r), 'auto-fire (deviations wrong)', 'resolveAutoFireSkill, all rows — the accepted deviations counted as wrong fires')
+    ]
+    // eslint-disable-next-line no-console
+    console.log('\n' + formatReport(report, corpus.length) + '\n')
+
     for (const [id, fires] of Object.entries(KNOWN_AUTOFIRE_DEVIATIONS)) {
       expect(harness.autoFireFor(byId(id)), `${id}: accepted deviation still fires ${fires}`).toBe(fires)
     }
-    const gateSet = corpus.filter((c) => !(c.id in KNOWN_AUTOFIRE_DEVIATIONS))
-    const result = scoreCorpus(gateSet, (r) => harness.autoFireFor(r), 'auto-fire', 'gate')
     const wrongIds = result.perItem.filter((p) => p.predicted !== 'none' && p.predicted !== p.expected).map((p) => p.id)
     expect(wrongIds).toEqual([])
-    const c = result.confusion
-    expect(c.firedCorrect + c.firedWrong + c.missed + c.correctlyAbstained).toBe(gateSet.length)
-    expect(c.firedCorrect).toBeGreaterThan(0)
+    expect(result.confusion.firedCorrect).toBeGreaterThan(0)
+    // The ratified D1 wording; with zero wrong fires above, precision is 1 by construction.
     expect(result.precision).not.toBeNull()
     expect(result.precision!).toBeGreaterThanOrEqual(0.95)
+  })
+
+  it('never auto-fires on a document that is merely in the Library (U4 narrowing, #130 doc-signal gate)', () => {
+    // A whole-corpus doc is not an explicit selection, so it lends auto-fire no corroboration: these rows
+    // must abstain even when their label is a skill (dropping the narrowing or the doc-signal gate makes
+    // them fire their CORRECT label, which the wrong-fire gate above cannot see).
+    const fired = corpus.filter((c) => c.scope === 'whole-corpus' && harness.autoFireFor(c) !== 'none').map((c) => c.id)
+    expect(fired).toEqual([])
   })
 })
 
@@ -160,13 +148,12 @@ describe('S13b gate — production auto-fire clears the ratified D1 precision ba
 // keyword hit is mandatory, doc signals only corroborate. Two bars: (1) precision ≥ 0.95 OVERALL on the
 // whole corpus (matching the auto-fire bar, so a broad regression on the non-confusion majority reddens CI),
 // and (2) ZERO wrong fires and ZERO misses on the cross-skill CONFUSION set. Recomputed from the production
-// offer; the per-row table above additionally pins every single row.
+// offer. The per-row table above pins every single row; these bars stay as the BOUND on the deviation map
+// (no confusion row may become a deviation, and the wrong-offer deviations cannot grow past the 0.95 bar).
 describe('W5 gate — the suggestion policy clears the precision bar (§4.2/§8.3)', () => {
   it('precision ≥ 0.95 overall AND fired-wrong == 0 and missed == 0 on the confusion pairs', () => {
     const overall = scoreCorpus(corpus, (r) => harness.offerFor(r), 'suggestion', 'overall')
-    const o = overall.confusion
-    expect(o.firedCorrect + o.firedWrong + o.missed + o.correctlyAbstained).toBe(corpus.length)
-    expect(o.firedCorrect).toBeGreaterThan(0)
+    expect(overall.confusion.firedCorrect).toBeGreaterThan(0)
     expect(overall.precision).not.toBeNull()
     expect(overall.precision!).toBeGreaterThanOrEqual(0.95)
 
@@ -181,8 +168,8 @@ describe('W5 gate — the suggestion policy clears the precision bar (§4.2/§8.
 
 // U4 gate (audit §2.4/§4.4) — bank/invoice/meeting-protocol are autoFire-eligible (the setting is still
 // default-off). The same meeting question auto-fires once the doc is EXPLICITLY in scope; the whole-corpus
-// siblings (a Library-style collection doc, not selected) are covered by the per-row tables above and the
-// S13b gate: their suggestion is offered while auto-fire never wrongly fires.
+// siblings (a Library-style collection doc, not selected) still get the offer (per-row table) and never
+// auto-fire (the Library-abstention test in the S13b block).
 describe('U4 gate — explicit scope auto-fires (§2.4)', () => {
   it('wc-meeting-attached-01 (explicitly in scope) auto-fires meeting-protocol', () => {
     expect(harness.autoFireFor(byId('wc-meeting-attached-01'))).toBe('meeting-protocol')

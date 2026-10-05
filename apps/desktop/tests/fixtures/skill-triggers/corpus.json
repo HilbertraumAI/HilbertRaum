@@ -857,7 +857,6 @@
       "question": "Bitte dieses Dokument anonymisieren.",
       "inScopeDocs": [],
       "expected": "document-redaction",
-      "confusion": true,
       "note": "carried from tests/integration/skills-professional-documents.test.ts 'a pure redaction request still suggests the redaction TOOL, not the share-safe advisory' - \"anonymisieren\" must beat the share-safe advisory"
     },
     {
@@ -865,7 +864,6 @@
       "question": "Erstelle bitte ein Protokoll dieser Besprechung.",
       "inScopeDocs": [],
       "expected": "meeting-protocol",
-      "confusion": true,
       "note": "carried from tests/integration/skills-professional-documents.test.ts 'a meeting question does not suggest contract-brief (no cross-contamination)' - \"Protokoll\" + \"Besprechung\" must not drift to contract-brief"
     },
     {
@@ -873,7 +871,6 @@
       "question": "Prüfe die Beträge auf dieser Rechnung.",
       "inScopeDocs": [],
       "expected": "invoice",
-      "confusion": true,
       "note": "carried from tests/integration/skills-professional-documents.test.ts 'an invoice question does not suggest contract-brief' - \"Rechnung\" must not drift to contract-brief"
     },
     {
@@ -881,8 +878,7 @@
       "question": "Welche Kündigungsfrist muss ich einhalten?",
       "inScopeDocs": [],
       "expected": "deadline-obligation-finder",
-      "confusion": true,
-      "note": "carried from tests/integration/skills-professional-documents.test.ts 'a German Kündigungsfrist question goes to the deadline finder, not contract-brief' - \"kündigungsfrist\" + \"frist\" must outscore the bare \"kündigung\" tie"
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'a German Kündigungsfrist question goes to the deadline finder, not contract-brief' - word-boundary matching: only \"kündigungsfrist\" hits, so contract-brief scores 0 (no contest)"
     },
     {
       "id": "cf-whatchanged-contract-v2-pd-01",
@@ -897,7 +893,7 @@
       "question": "What's the weather?",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "carried from tests/integration/skills-suggest.test.ts 'meeting-protocol - German triggers fire against the real selector (neutral leg)' - a neutral English question offers nothing"
+      "note": "carried from tests/integration/skills-suggest.test.ts 'offers meeting-protocol for a German protocol question; nothing for a neutral one' (neutral leg) - a neutral English question offers nothing"
     },
     {
       "id": "tn-neutral-time-de-sg-01",
@@ -961,6 +957,83 @@
       "inScopeDocs": [],
       "expected": "document-edit",
       "note": "carried from tests/integration/skills-document-edit.test.ts 'covers the English + German find-and-replace triggers' - the keyword \"replace all\""
+    },
+    {
+      "id": "tp-meeting-de-aufgaben-01",
+      "question": "Welche Aufgaben wurden verteilt?",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"aufgaben\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-meeting-de-aufgabe-01",
+      "question": "Wer übernimmt welche Aufgabe?",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"aufgabe\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-meeting-de-besprechung-01",
+      "question": "Wie lief die Besprechung?",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"besprechung\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-meeting-de-protokoll-01",
+      "question": "Schreib ein kurzes Protokoll.",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"protokoll\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-invoice-de-rechnungsnummer-01",
+      "question": "Wie lautet die Rechnungsnummer?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"rechnungsnummer\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-invoice-de-mehrwertsteuer-01",
+      "question": "Wie hoch ist die Mehrwertsteuer?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"mehrwertsteuer\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-invoice-de-netto-01",
+      "question": "Was ist der Endbetrag netto?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"netto\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-invoice-de-brutto-01",
+      "question": "Was kostet das brutto?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"brutto\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-redaction-en-removepd-01",
+      "question": "Please remove personal data from the export.",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "carried from tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"remove personal data\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-redaction-de-anonymisierung-01",
+      "question": "Bitte eine Anonymisierung durchführen.",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "carried from tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"anonymisierung\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-redaction-de-schwaerzung-01",
+      "question": "Ist eine Schwärzung der Namen möglich?",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "carried from tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"schwärzung\" (the only keyword this question hits)"
     }
   ]
 }

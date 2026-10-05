@@ -5759,7 +5759,7 @@ deleted at S13 close — text in git history) holds the baseline tables; this is
 **The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
 deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
 the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
-no-user-data corpus of 127 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+no-user-data corpus of 138 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
 through the **production** `suggestSkillsForTurn` / `resolveAutoFireSkill` on a real temporary
 database with the committed app skills reconciled (`tests/eval/skill-triggers.ts` + `.test.ts`),
 reporting precision/recall + a confusion matrix. Still no model and no network. The
@@ -5786,9 +5786,9 @@ expected offer except the rows listed in `KNOWN_SUGGESTION_DEVIATIONS` in
 fails). Two rows are listed today: `tp-redaction-en-02` (the vocabulary knows only the exact phrase
 "remove personal data", and U4 dropped the legal word "gdpr", so a GDPR phrasing offers nothing,
 #583) and `adv-meeting-schedule-01` (a scheduling question that merely names a meeting still offers
-meeting-protocol, the precision ceiling of a one-keyword offer). Measured on the 127 rows: suggestion
-precision 98.9%, recall 98.9% (91 correct, 1 wrong, 1 missed), confusion set 0 wrong / 0 missed. The
-printout (`S13 measurement` block, `formatReport`) shows the two production paths: `suggestion`
+meeting-protocol, the precision ceiling of a one-keyword offer). Measured on the 138 rows: suggestion
+precision 99.0%, recall 99.0% (102 correct, 1 wrong, 1 missed), confusion set 0 wrong / 0 missed. The
+printout (`formatReport`, at the start of the S13b gate) shows the two production paths: `suggestion`
 (all rows) and `auto-fire`, the latter twice, once over the gate set and once with the accepted
 deviations counted as wrong. Question text is scored but never logged. The numbers the deleted
 `skills-s13-plan.md §3.3` used to hold now live here — **this record is their durable home**.
@@ -5799,9 +5799,12 @@ belongs to both share-safe-review and document-redaction, and only redaction is 
 The scan answer is honest (it says names and addresses are not detected). The D1 gate therefore
 counts the rows in `KNOWN_AUTOFIRE_DEVIATIONS` (`tp-sharesafe-de-01`, `tp-sharesafe-de-02`)
 separately: they must fire exactly `document-redaction`, and over the other rows `fired-wrong == 0`
-and `precision ≥ 0.95`. Measured auto-fire precision is 100% (29 correct, 0 wrong, 61 missed, recall
-32.2%) over the gate set, and 93.5% (29 correct, 2 wrong, 61 missed) with the two deviations counted
-as wrong fires. The optional product fix is tracked in #583.
+and `precision ≥ 0.95`; a row whose document is only in the Library (not explicitly selected) must
+never auto-fire (the U4 narrowing and the #130 doc-signal gate). Measured auto-fire precision is 100%
+(29 correct, 0 wrong, 72 missed, recall 28.7%) over the gate set, and 93.5% (29 correct, 2 wrong,
+72 missed) with the two deviations counted as wrong fires. The same mechanism applies to
+"personenbezogene Daten", also a keyword of both skills; the corpus pins only the "sensible Daten"
+rows. The optional product fix is tracked in #583.
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
@@ -5840,13 +5843,14 @@ turns it on (S13c). The §14 ceilings + the S12 sentinel guard are unchanged: a 
 a worse answer + a one-click undo, never an unauthorized action; the undo is a re-run, not a new
 capability; no auto-fire path adds an audit event or logs the question.
 
-**First opted-in product skill (D6).** `document-redaction` declares `triggers.autoFire: true` (the
-only bundled skill to do so). Once a user enables auto-fire, an "anonymize/redact"-style turn over a
-selected pdf/plain/markdown document auto-applies it: keyword (2) + the in-scope-doc MIME signal (1) =
-3, clearing `AUTOFIRE_SCORE_THRESHOLD`. It is proven at 100% precision on the S13a corpus (the
-production `resolveAutoFireSkill` gate, accepted deviations aside). A "selected" document is one in the conversation's persisted scope, so
-`inScopeDocSignals` surfaces its MIME main-side (§22-C4) — the same phrase with no document in scope
-scores 2 and does **not** fire (regression-tested in `skills-autofire.test.ts`).
+**First opted-in product skill (D6).** `document-redaction` declares `triggers.autoFire: true` (the only
+bundled skill to do so). Once a user enables auto-fire, an "anonymize/redact"-style turn over a selected
+pdf/plain/markdown document auto-applies it: keyword (2) + the in-scope-doc MIME signal (1) = 3,
+clearing `AUTOFIRE_SCORE_THRESHOLD`. It is proven at 100% precision on the S13a corpus (the production
+`resolveAutoFireSkill` gate, accepted deviations aside). A "selected" document is one in the
+conversation's persisted scope, so `inScopeDocSignals` surfaces its MIME main-side (§22-C4) — the same
+phrase with no document in scope scores 2 and does **not** fire (regression-tested in
+`skills-autofire.test.ts`).
 
 ### §19 Full-document analysis for tool skills (2026-06-19, D44–D49)
 
@@ -6646,12 +6650,13 @@ comment's `audit <ID>` citation through it:
   behaviour (`skills-tool-run-ipc.test.ts`, Phases 5/6), the whole-batch-drop / retry-once / char-cap /
   21 rows ⇒ 2 calls categorizer cases (`skills-categorizer.test.ts`, Phase 2), and the C-3/C-4
   completeness numerics (`skills-bank-statement-tool.test.ts`, Phase 3).
-- **R-1 — auto-fire corpus is intentionally narrow (no rows invented).** `document-redaction` is STILL the
-  ONLY app skill opting into `triggers.autoFire`, and the eval gate already covers it: the harness's
-  `APP_SKILL_IDS` and the 127-turn `tests/fixtures/skill-triggers/corpus.json` (the original four `document-redaction`
-  turns among them) drive the S13b gate (`fired-wrong == 0` AND `precision ≥ 0.95`). Per the plan's
-  explicit fallback, since NO new skill opts in, no corpus rows were added — the corpus is deliberately
-  scoped to the auto-fire surface and the eval gate is unchanged. (See §18 for the auto-fire contract.)
+- **R-1 — auto-fire corpus is intentionally narrow (no rows invented).** `document-redaction` is STILL
+  the ONLY app skill opting into `triggers.autoFire`, and the eval gate already covers it: the harness's
+  `APP_SKILL_IDS` and the 33-turn `tests/fixtures/skill-triggers/corpus.json` (138 turns since
+  2026-10-05, §18; the original four `document-redaction` turns among them) drive the S13b gate
+  (`fired-wrong == 0` AND `precision ≥ 0.95`). Per the plan's explicit fallback, since NO new skill opts
+  in, no corpus rows were added — the corpus is deliberately scoped to the auto-fire surface and the
+  eval gate is unchanged. (See §18 for the auto-fire contract.)
 - **R-2 — run-surface eyeball deferred (re-affirmed, surfaced for opt-in).** The live `SkillRunBar`
   Playwright walk (a `walk-skills-runbar.mjs`, to be modelled on `apps/desktop/scripts/walk-skills-composer.mjs`) needs
   a GUI session a test harness cannot drive; every visual state stays unit-covered by
@@ -8381,7 +8386,7 @@ here; everything is Low, none flip-blocking):
 above. The design "as built" lives where each phase folded it: security-model's "Lock failure &
 durability" + troubleshooting's "Could not lock" (CODE-1/10/14), the GPU record §5.6 "Shutdown
 latch + cancellable start" (CODE-2/3/11), rag-design §11 "Trigger sync is rowid-targeted" (CODE-4)
-and the §14 mode-d joint-budget note (CODE-5), this doc's §18 "Suggestion-selector baseline"
+and the §14 mode-d joint-budget note (CODE-5), this doc's §18 "Suggestion-selector bar"
 (DOC-6) and the updated §4 skill-delete prose (GAP-1), the "Checksum cache (two tiers)" record +
 `shared/types.ts` comment (CODE-15), `renderer/lib/errors.ts` `runAndSurface` (CODE-26…29), the
 catalog-hygiene and NUL-ban nets in the test suite (CODE-8, CODE-24), and the swept launch docs
