@@ -51,6 +51,20 @@ describe('combineSignals — timeout timer lifecycle (REL-4)', () => {
     expect(vi.getTimerCount()).toBe(0)
   })
 
+  it('disarmTimeout() cancels only the timer: the signal never times out but still follows a caller Stop (#594)', () => {
+    // The chat request's deadline covers its response headers; after them a Stop must still tear the stream down.
+    vi.useFakeTimers()
+    const caller = new AbortController()
+    const { signal, disarmTimeout, clear } = combineSignals(caller.signal, 1000)
+    disarmTimeout()
+    vi.advanceTimersByTime(5000)
+    expect(signal.aborted).toBe(false)
+    caller.abort(new DOMException('stopped by user', 'AbortError'))
+    expect(signal.aborted).toBe(true)
+    expect((signal.reason as DOMException).message).toBe('stopped by user')
+    clear()
+  })
+
   it('clear() is idempotent (double-clear is a no-op, never throws)', () => {
     vi.useFakeTimers()
     const { clear } = combineSignals(new AbortController().signal, 1000)

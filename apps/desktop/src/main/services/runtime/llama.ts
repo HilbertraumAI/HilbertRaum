@@ -9,7 +9,7 @@ import type {
   RuntimeStartOptions
 } from './index'
 import type { RuntimeTimings } from './index'
-import { LlamaServer, type LlamaServerOptions } from './sidecar'
+import { LlamaServer, combineSignals, type LlamaServerOptions } from './sidecar'
 
 // Real local inference (spec §3.2, §7.5). `LlamaRuntime` drops in behind
 // the existing `ModelRuntime` interface: it spawns a `llama.cpp` `llama-server` sidecar
@@ -263,6 +263,14 @@ function parseSseLine(line: string): {
   return {}
 }
 
+/** #594: does this SSE text hold anything but blank lines and comments (`:`, b11146's keep-alive ping)? */
+function isModelOutput(text: string): boolean {
+  return text.split('\n').some((line) => {
+    const t = line.trim()
+    return t !== '' && !t.startsWith(':')
+  })
+}
+
 /**
  * CB-5 — the only cancellation source on the completion stream used to be the user's AbortSignal, so
  * a sidecar that *hangs* (GPU driver stall, deadlocked slot) left `readChatSSE` awaiting the next SSE
@@ -317,11 +325,17 @@ export function isChatStreamError(err: unknown): boolean {
  * the FIRST chunk — legitimately slow on a near-window regenerate (the sidecar re-reads a long prompt
  * before emitting a token) — after which inter-chunk gaps are milliseconds, so a much tighter STREAM
  * budget means "wedged". Reasoning deltas count as chunks, so a long "thinking" phase is safe.
+ *
+ * #594: the PREFILL budget also bounds the wait for the response HEADERS (`LlamaRuntime.chatStream`).
+ * Both pinned builds (b9849, b11146) send the headers when the slot STARTS, before any prompt batch is
+ * decoded (`is_begin`, upstream `server-context.cpp`); measured on b11146: headers 14 ms after the
+ * request, first token 320.9 s later (9B on CPU, 6,394 tokens). So the header wait is tokenisation
+ * plus the wait for the one slot, and only exceeds seconds behind a cancelled request's batch.
  */
 export interface IdleWatchdog {
-  /** Max wait for the first chunk (token or reasoning delta). */
+  /** Max wait for the response headers, then (again) for the first chunk (token or reasoning delta). */
   prefillMs: number
-  /** Max wait between chunks once streaming has started. */
+  /** Max wait between chunks once streaming has started. SSE comment pings do not count (#594). */
   streamMs: number
 }
 const PREFILL_IDLE_MS = 120_000
@@ -337,14 +351,16 @@ function abortReadError(): Error {
 
 /**
  * Race one `reader.read()` against an idle timer (CB-5). Resolves with the read result, rejects with
- * `RuntimeUnresponsiveError` if the budget elapses first (cancelling the reader), or rejects with the
+ * `RuntimeUnresponsiveError` if `waitMs` elapses first (cancelling the reader), or rejects with the
  * read's own error. A user Stop wins first: an aborted `signal` rejects with an `AbortError` so the
  * partial persists exactly as today — a hang is NEVER converted to an abort or vice-versa. A `settled`
- * guard makes the first outcome authoritative (no double-settle).
+ * guard makes the first outcome authoritative (no double-settle). `idleMs` is the budget the error
+ * names: in the stream phase `waitMs` is only what is LEFT of it after pings (#594).
  */
 function readWithIdleTimeout<T>(
   reader: ReadableStreamDefaultReader<T>,
-  budgetMs: number,
+  waitMs: number,
+  idleMs: number,
   signal?: AbortSignal
 ): ReturnType<ReadableStreamDefaultReader<T>['read']> {
   return new Promise((resolve, reject) => {
@@ -355,8 +371,8 @@ function readWithIdleTimeout<T>(
       cleanup()
       // A wedged sidecar: cancel the reader so undici releases the socket, then surface the timeout.
       void reader.cancel().catch(() => {})
-      reject(new RuntimeUnresponsiveError(budgetMs))
-    }, budgetMs)
+      reject(new RuntimeUnresponsiveError(idleMs))
+    }, Math.max(0, waitMs))
     const onAbort = (): void => {
       if (settled) return
       settled = true
@@ -409,6 +425,14 @@ function readWithIdleTimeout<T>(
  * production default keeps behaviour byte-identical on any live stream) so a HUNG sidecar rejects with
  * `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop still wins first.
  *
+ * #594: b11146 sends an SSE comment ping (`:`) after every ~30 s of silence (`--sse-ping-interval`,
+ * default 30; b9849 has none). A ping is the server's HTTP thread, not the model, so once the first
+ * chunk has landed it no longer resets the stream budget: the budget counts the time spent WAITING
+ * since the last model output — any bytes but blank lines and comments, a split line's start
+ * included — on the monotonic clock (time the consumer spends between pulls never counts).
+ * Before the first chunk a ping still re-arms the prefill budget, deliberately: a real CPU prefill
+ * runs for minutes (320.9 s measured, above) and on b11146 the pings are the only sign of it.
+ *
  * #290/#291: the server's top-level `timings` block is remembered from whichever chunk carries it
  * (the `finish_reason` chunk at the pinned b9849 — captured in `tests/fixtures/chat-sse-timings-b9849.txt`,
  * #298; a chunk with no `choices` is tolerated too) and handed up with the finish reason ONCE, at the `[DONE]` sentinel or the clean
@@ -431,6 +455,8 @@ export async function* readChatSSE(
   // The FIRST chunk gets the generous prefill budget; once any chunk (token OR reasoning delta) has
   // landed, later reads get the tighter stream budget. Re-armed per read, so a steady stream resets it.
   let sawChunk = false
+  // #594: stream phase only — time spent waiting since the model's last output (pings don't count).
+  let quietMs = 0
   // The finish reason + the last timings block seen, handed up together at the sentinel/close.
   let finishReason: string | undefined
   let timings: RuntimeTimings | undefined
@@ -440,13 +466,20 @@ export async function* readChatSSE(
   try {
     for (;;) {
       if (signal?.aborted) return
+      const streaming = sawChunk
+      const waitStart = performance.now() // monotonic: a wall-clock step must not eat the budget
       const { done, value } = await readWithIdleTimeout(
         reader,
-        sawChunk ? idle.streamMs : idle.prefillMs,
+        streaming ? idle.streamMs - quietMs : idle.prefillMs,
+        streaming ? idle.streamMs : idle.prefillMs,
         signal
       )
       if (done) break
+      quietMs += performance.now() - waitStart
       buffer += decoder.decode(value, { stream: true })
+      // Anything but a blank line or an SSE comment is the model's output (#594) — the start of
+      // one split across reads included.
+      if (isModelOutput(buffer)) quietMs = 0
       let nl: number
       while ((nl = buffer.indexOf('\n')) >= 0) {
         const line = buffer.slice(0, nl)
@@ -602,24 +635,45 @@ export class LlamaRuntime implements ModelRuntime {
         : {})
     })
 
-    const res = await this.server.fetch('/v1/chat/completions', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body,
-      signal: options?.signal
-    })
-    if (!res.ok) {
-      // Read the body for the REASON: llama-server returns a JSON error
-      // (`{error:{message,type}}`) that explains the failure — most importantly
-      // `exceed_context_size_error` when the prompt is larger than the model's context
-      // window. Surfacing it turns an opaque "HTTP 400" into an actionable error and
-      // drains the body so undici releases the connection. (readBody handles no-body.)
-      throw await chatRequestError(res)
+    // #594: CB-5's watchdog starts at `res.body`, so a sidecar that took the request and never sent
+    // its headers left the turn — and every busy signal it holds — waiting until undici's own
+    // headers timeout ended it after 300 s (304.8 s measured in Electron 43.7.7) as a raw "fetch
+    // failed". The headers now get the prefill budget (see `IdleWatchdog`); the request keeps
+    // following the caller after they arrive, so a user Stop tears the stream down as before.
+    const request = combineSignals(options?.signal, DEFAULT_IDLE.prefillMs)
+    try {
+      let res: Response
+      try {
+        res = await this.server.fetch('/v1/chat/completions', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          signal: request.signal
+        })
+      } catch (err) {
+        // Only the deadline aborts the request while the caller's signal is clear; a Stop wins a tie.
+        if (request.signal.aborted && !options?.signal?.aborted) {
+          throw new RuntimeUnresponsiveError(DEFAULT_IDLE.prefillMs)
+        }
+        throw err
+      }
+      if (!res.ok) {
+        // Read the body for the REASON: llama-server returns a JSON error
+        // (`{error:{message,type}}`) that explains the failure — most importantly
+        // `exceed_context_size_error` when the prompt is larger than the model's context
+        // window. Surfacing it turns an opaque "HTTP 400" into an actionable error and
+        // drains the body so undici releases the connection. (readBody handles no-body.)
+        // Still under the deadline: a stalled error body leaves only the status (#594).
+        throw await chatRequestError(res)
+      }
+      if (!res.body) {
+        throw new ChatRequestError(res.status, 'empty response body', '')
+      }
+      request.disarmTimeout() // the SSE body has CB-5's own watchdog
+      yield* readChatSSE(res.body, options?.signal, options?.onReasoning, options?.onFinish)
+    } finally {
+      request.clear()
     }
-    if (!res.body) {
-      throw new ChatRequestError(res.status, 'empty response body', '')
-    }
-    yield* readChatSSE(res.body, options?.signal, options?.onReasoning, options?.onFinish)
   }
 }
 

@@ -2,6 +2,7 @@ import { describe, it, expect, afterEach } from 'vitest'
 import net from 'node:net'
 import { RuntimeManager, type RuntimeChatOptions } from '../../src/main/services/runtime'
 import { LocalApiServer, PortInUseError } from '../../src/main/services/local-api/server'
+import { RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { manualSource, type ManualSource } from '../helpers/manual-stream'
 import { hangBudgetMs } from '../helpers/hang-budget'
 
@@ -536,6 +537,23 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     const res = await post(h, { messages: [{ role: 'user', content: 'x' }] })
     expect(res.status).toBe(503)
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('workspace_locked')
+  })
+
+  // #594: a sidecar that never answers now ends in CB-5's error within 120 s (it used to hold the one external slot until
+  // undici gave up at 300 s). Before the first token both modes owe the documented 502, and the slot must free.
+  it.each([false, true])('the runtime stops responding before its first token → 502 runtime_unresponsive, slot freed (stream: %s)', async (stream) => {
+    const h = await makeHarness({ echo: false })
+    const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream })
+    await waitFor(() => h.sources.length === 1)
+    h.sources[0].fail(new RuntimeUnresponsiveError(120_000))
+    const res = await resPromise
+    expect(res.status).toBe(502)
+    expect(((await res.json()) as { error: { code: string } }).error.code).toBe('runtime_unresponsive')
+    const next = post(h, { messages: [{ role: 'user', content: 'again' }] })
+    await waitFor(() => h.sources.length === 2) // admitted, not 429
+    h.sources[1].push('ok')
+    h.sources[1].end()
+    expect((await next).status).toBe(200)
   })
 
   it('pre-emption mid-stream: preempted_by_user error frame, close WITHOUT [DONE]', async () => {
