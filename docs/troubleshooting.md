@@ -418,8 +418,10 @@ Everything keeps working; responses may just be a bit slower.
 Some PDFs are scanned images with no embedded text. The app detects this and marks the file
 *"This PDF looks like a scan"* — use the row's **Make searchable (OCR)** action to read the
 text locally (German + English; needs the drive's `ocr/` language files; runs a couple of
-seconds per page). PDFs that mix real text pages with scanned pages index their text pages
-only — they are not detected as scans.
+seconds per page). A PDF that mixes real text pages with scanned pages indexes its text pages
+right away, and its row says how many pages are scanned without readable text yet; **Make
+searchable (OCR)** in the row's **⋯** menu reads just those pages. A PDF added before the app
+could do this shows its scanned pages after one **Re-index**.
 
 A scan attached in a **chat** fails the same way, and the chat offers **Go to Documents**: run
 **Make searchable (OCR)** on its row there, and the file joins that chat by itself — no need to
@@ -429,7 +431,7 @@ a row has no **Try again**: it would read the same pictures and fail again.
 If the row says *"…needs the OCR files, which are not on this drive"*, the drive has no OCR
 language files yet (commercially-built drives already include them). Use the row's **Download
 OCR files** button (or *"Text recognition for scans and photos (optional)"* on the **AI Model**
-screen): confirm the two files (German + English, about 4 MB), and once they are downloaded and
+screen): confirm the files (German, English and the page-orientation data, about 8 MB), and once they are downloaded and
 checked, text recognition starts **without a restart** — the row then offers **Make searchable
 (OCR)**. A photo that failed for the same reason reads with **Try again** afterwards. The download
 follows the usual gates: if the button is greyed out, the drive policy or **Settings → Allow
@@ -443,6 +445,27 @@ If the row names only this setup route and offers no download button, the drive 
 OCR download list — its `model-manifests/runtime-sources.yaml` pins different OCR files than this
 version of the app accepts (the app checks the files against checksums built into it); use the
 script route, or update the app.
+
+---
+
+## OCR text is nonsense, or the row says "Text recognition was unsure"
+
+Text recognition reports how sure it was of each page. When it was unsure of some, the
+document's row says so and its **Preview** names the usual causes:
+
+- **The page is sideways or upside down.** The app turns such pages upright by itself when the
+  drive has the page-orientation data (`ocr/osd.traineddata.gz`). On a drive with only the
+  German and English files, the **AI Model** screen offers it as *"Turning sideways scans upright
+  needs one more OCR file"*; download it, then use **Read again (OCR)**. For a very faint or nearly
+  empty page the check cannot decide; turn the page in a PDF viewer until the text reads normally,
+  save, add the saved copy, and run **Make searchable (OCR)** on it.
+- **The original is blurry, skewed or handwritten.** Scan it again at a higher resolution (300
+  DPI is a good default) and add the new scan; handwriting is read poorly in general.
+- **The text is in another language.** Only German and English are included; other languages,
+  and especially other scripts, read poorly or not at all.
+
+**Read again (OCR)** reads the pages again with what is on the drive now; it helps after you added
+the orientation data, not on an unchanged blurry scan.
 
 ---
 

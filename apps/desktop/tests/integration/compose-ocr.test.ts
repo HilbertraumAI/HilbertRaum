@@ -160,6 +160,17 @@ describe('refreshOcrSlot — an existing engine (#410, D2 rules 2 and 3)', () =>
     expect(live.probe).not.toHaveBeenCalled()
   })
 
+  it("'available' and the orientation file just installed: activated — no restart, same engine (#538)", async () => {
+    const root = tempDrive(['deu', 'eng', 'osd'])
+    const live = fakeEngine(['deu', 'eng'], { state: 'available' })
+    const ctx = slot(root, live)
+    // osd is not a language, so the set is unchanged; the engine looks for the file at each
+    // detection, so the install is in use at once.
+    expect(await refreshOcrSlot(ctx)).toBe('activated')
+    expect(ctx.ocrEngine).toBe(live)
+    expect(live.probe).not.toHaveBeenCalled()
+  })
+
   it("'probing' (the startup proof still running) with the same set: unchanged, no second probe", async () => {
     const root = tempDrive(['deu', 'eng'])
     const pending = fakeEngine(['deu', 'eng'], { state: 'probing' })

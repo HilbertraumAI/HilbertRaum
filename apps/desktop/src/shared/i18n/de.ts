@@ -678,6 +678,7 @@ export const de: Record<keyof typeof en, string> = {
   // werden (bessere Dateien / ein schlechter erster Durchlauf) — anders als „Neu indexieren“,
   // das die gespeicherte Erkennung WEITERVERWENDET.
   'docs.makeSearchableAgain': 'Erneut lesen (OCR)',
+  'docs.makeSearchableAgainPhotoTitle': 'Das Foto erneut mit der lokalen Texterkennung lesen',
   'docs.makeSearchableAgainTitle':
     'Die lokale Texterkennung erneut ausführen und die gespeicherte Erkennung ersetzen — ' +
     '„Neu indexieren“ verwendet sie weiter',
@@ -746,6 +747,27 @@ export const de: Record<keyof typeof en, string> = {
   'docs.previewModal.ocrInfo.other':
     'Auf diesem Laufwerk erkannter Text (OCR) — {count} Seiten. Die Erkennung kann Fehler ' +
     'enthalten.',
+  'docs.previewModal.ocrInfoPhoto':
+    'Auf diesem Laufwerk aus diesem Foto erkannter Text (OCR). Die Erkennung kann Fehler enthalten.',
+  'docs.previewModal.ocrInfoPartial':
+    'Auf diesem Laufwerk erkannter Text (OCR) auf {count} von {total} Seiten. Die Erkennung kann ' +
+    'Fehler enthalten.',
+  'docs.previewModal.ocrInfoNone.one':
+    'Die Texterkennung (OCR) hat auf diesem Laufwerk {count} gescannte Seite gelesen und darauf ' +
+    'keinen Text gefunden.',
+  'docs.previewModal.ocrInfoNone.other':
+    'Die Texterkennung (OCR) hat auf diesem Laufwerk {count} gescannte Seiten gelesen und darauf ' +
+    'keinen Text gefunden.',
+  'docs.ocr.unsure.page': 'Die Texterkennung war bei dieser Seite unsicher.',
+  'docs.ocr.unsure.onlyRecognized': 'Die Texterkennung war bei der einzigen erkannten Seite unsicher.',
+  'docs.ocr.unsure.photo': 'Die Texterkennung war bei diesem Foto unsicher.',
+  'docs.ocr.unsure.some': 'Die Texterkennung war auf {count} der {total} erkannten Seiten unsicher.',
+  'docs.ocr.unsure.all': 'Die Texterkennung war auf allen {count} erkannten Seiten unsicher.',
+  'docs.ocr.scannedPages': 'Gescannte Seiten noch ohne lesbaren Text: {count} von {total}.',
+  'docs.ocr.scannedPagesNeedsOcr': 'Zum Lesen werden die OCR-Dateien benötigt (Bildschirm KI-Modell).',
+  'docs.ocr.unsure.causes':
+    'Unscharfe, schiefe oder handschriftliche Vorlagen werden schlecht erkannt, ebenso andere ' +
+    'Sprachen als Deutsch und Englisch.',
   'docs.previewModal.summary': 'Zusammenfassung',
   'docs.previewModal.generatedBy': 'Erstellt von {model}',
   'docs.previewModal.truncated':
@@ -1298,20 +1320,23 @@ export const de: Record<keyof typeof en, string> = {
   'models.packTools.install': 'Installieren…',
   // #410: die ruhige OCR-Zeile und der In-App-Download der OCR-Dateien.
   'models.ocr.row': 'Texterkennung für Scans und Fotos (optional)',
+  'models.ocr.rowOrientation':
+    'Damit quer liegende Scans richtig herum gelesen werden, fehlt noch eine OCR-Datei (optional)',
   'ocr.install.action': 'OCR-Dateien herunterladen',
   'ocr.install.actionTitle':
     'Die Sprachdateien der Texterkennung (OCR) für Scans und Fotos herunterladen',
   'ocr.install.confirm.title': 'OCR-Dateien herunterladen?',
   'ocr.install.confirm.explain':
     'Die Texterkennung (OCR) liest gescannte PDFs und fotografierte Seiten auf diesem ' +
-    'Computer. Dafür braucht sie die unten genannten Sprachdateien auf diesem Laufwerk — sonst ' +
+    'Computer. Dafür braucht sie die unten genannten Dateien auf diesem Laufwerk — sonst ' +
     'wird nichts heruntergeladen, und deine Dokumente verlassen diesen Computer nie.',
-  'ocr.install.confirm.languages': 'Sprachen',
+  'ocr.install.confirm.languages': 'Dateien',
   'ocr.install.confirm.hint':
     'Jede Datei wird vor der Nutzung mit ihrer erwarteten Prüfsumme verglichen.',
   'ocr.install.confirm.start': 'Herunterladen',
   'ocr.install.lang.deu': 'Deutsch',
   'ocr.install.lang.eng': 'Englisch',
+  'ocr.install.lang.osd': 'Seitenausrichtung (dreht quer liegende Seiten richtig herum)',
   'ocr.install.starting': 'Download wird gestartet…',
   'ocr.install.progress': 'OCR-Dateien werden heruntergeladen… {pct} %',
   'ocr.install.verifying': 'OCR-Dateien werden geprüft…',
@@ -2603,7 +2628,8 @@ export const de: Record<keyof typeof en, string> = {
     'Die Texterkennung (OCR) ist in dieser Version nicht verfügbar: Die OCR-Dateien liegen auf ' +
     'diesem Laufwerk, aber die Erkennung konnte nicht gestartet werden.',
   'main.task.ocrNotAScan':
-    'Nur ein PDF, das als Scan erkannt wurde, kann auf diesem Weg durchsuchbar gemacht werden.',
+    'Nur ein PDF, das als Scan erkannt wurde oder gescannte Seiten enthält, kann auf diesem Weg ' +
+    'durchsuchbar gemacht werden.',
   'main.task.ocrNoText':
     'In diesem Scan wurde kein lesbarer Text gefunden. Die Seiten sind vielleicht leer oder ' +
     'zu unscharf.',

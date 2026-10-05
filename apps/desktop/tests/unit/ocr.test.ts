@@ -21,9 +21,10 @@ import {
   type OcrEngine
 } from '../../src/main/services/ocr'
 import { resolveWorkerScriptPath, type TesseractModule } from '../../src/main/services/ocr/tesseract'
+import { imageOrientation } from '../../src/main/services/ocr/orientation'
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import { planOcrDownloads, sha256Of } from '../../src/main/services/assets'
-import { makePdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
+import { makeMixedPdf, makePdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { sha256File } from '../../src/main/services/models'
 
@@ -52,6 +53,40 @@ describe('image-only PDF detection (step 0)', () => {
     expect(parsed.segments.length).toBe(1)
     expect(parsed.segments[0].pageNumber).toBe(1)
     expect(parsed.segments[0].text).toContain('real text layer')
+  })
+
+  // #575 — a text PDF's scanned pages: under the text threshold AND painting an image. A blank page
+  // and a short title page paint none and are not offered OCR. Reported only when import asks.
+  const LETTER: Parameters<typeof makeMixedPdf>[0] = [
+    { kind: 'text', lines: ['Dear customer, this letter confirms your annual statement.'] },
+    { kind: 'image' },
+    { kind: 'blank' },
+    { kind: 'text', lines: ['Anhang'] },
+    { kind: 'image' }
+  ]
+
+  it('#575: reports a text PDF’s scanned pages — not its blank or short title pages — when asked', async () => {
+    const p = join(tmp(), 'letter.pdf')
+    writeFileSync(p, makeMixedPdf(LETTER))
+    expect((await PdfParser.parse(p, { detectScannedPages: true })).scannedPages).toEqual([2, 5])
+    expect((await PdfParser.parse(p)).scannedPages).toBeUndefined()
+  })
+
+  it('#575: a scanned page that OCR read contributes its recognition; text pages keep their own text', async () => {
+    const p = join(tmp(), 'letter.pdf')
+    writeFileSync(p, makeMixedPdf(LETTER))
+    const parsed = await PdfParser.parse(p, {
+      ocrPages: [
+        { pageNumber: 1, text: 'NOT USED: page 1 has a text layer' },
+        { pageNumber: 2, text: 'Unterschrift Max Mustermann' },
+        { pageNumber: 5, text: '' } // read, nothing found: the page stays without a segment
+      ]
+    })
+    expect(parsed.segments.map((s) => [s.pageNumber, s.text])).toEqual([
+      [1, 'Dear customer, this letter confirms your annual statement.'],
+      [2, 'Unterschrift Max Mustermann'],
+      [4, 'Anhang']
+    ])
   })
 
   it('parses a normal text PDF unchanged', async () => {
@@ -233,6 +268,9 @@ describe('OCR factory (availability-driven, D9: null — never a mock)', () => {
     const dir = ocrAssetsDir(root)
     const { mkdirSync } = require('node:fs') as typeof import('node:fs')
     mkdirSync(dir, { recursive: true })
+    // #538: the orientation data is not a language — read with, it would fail the LSTM-only start.
+    writeFileSync(join(dir, 'osd.traineddata.gz'), 'x')
+    expect(createSelectedOcrEngine({ rootPath: root })).toBeNull()
     writeFileSync(join(dir, 'eng.traineddata.gz'), 'x')
     writeFileSync(join(dir, 'deu.traineddata.gz'), 'x')
     writeFileSync(join(dir, 'notes.txt'), 'not a language file')
@@ -525,6 +563,85 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
     }
     const real = new TesseractOcrEngine({ langDir: '/ocr', languages: ['eng'] })
     expect(real.id).toBe(`tesseract.js-${version}`)
+  })
+
+  // #538 — orientation detection runs in a SECOND worker: the legacy-capable core over the drive's
+  // `osd.traineddata.gz`. It is optional in every sense: no file, no worker; its answer becomes the
+  // turn the recognizer applies to the bytes; and the will-quit teardown ends both workers.
+  it('orientation detection: a lazily started legacy-core worker over osd, its turn applied to the reading (#538)', async () => {
+    const langDir = tmp()
+    const calls: Array<{ langs: string[]; oem: number; options: Record<string, unknown> }> = []
+    const recognized: Buffer[] = []
+    let terminated = 0
+    const mod: TesseractModule = {
+      createWorker: async (langs, oem, options) => {
+        calls.push({ langs, oem, options })
+        return {
+          recognize: async (img: Buffer) => {
+            recognized.push(img)
+            return { data: { text: 'ok', confidence: 90 } }
+          },
+          detect: async () => ({ data: { orientation_degrees: 270, orientation_confidence: 2.4 } }),
+          terminate: async () => {
+            terminated += 1
+          }
+        }
+      }
+    }
+    const engine = new TesseractOcrEngine({ langDir, languages: ['deu', 'eng'], loadTesseract: async () => mod })
+
+    // No orientation file on the drive: no answer, and no worker is started for it.
+    expect(await engine.detectOrientation(TINY_PNG)).toBeNull()
+    expect(calls).toEqual([])
+
+    writeFileSync(join(langDir, 'osd.traineddata.gz'), 'x') // installed mid-session: used at once
+    expect(await engine.detectOrientation(TINY_PNG)).toEqual({ turn: 270, confidence: 2.4 })
+    expect(calls).toHaveLength(1)
+    expect(calls[0].langs).toEqual(['osd'])
+    expect(calls[0].oem).toBe(0) // the legacy engine — OSD runs on nothing else
+    expect(calls[0].options).toMatchObject({
+      legacyCore: true,
+      legacyLang: true,
+      langPath: langDir,
+      gzip: true,
+      cacheMethod: 'none'
+    })
+
+    // The recognizer applies the turn to the bytes it reads (an orientation marker).
+    await engine.recognize(TINY_PNG, { turn: 270 })
+    expect(recognized[0]).not.toBe(TINY_PNG)
+    expect(imageOrientation(recognized[0])).toBe(8)
+
+    await engine.stop()
+    expect(terminated).toBe(2) // the recognizer AND the orientation worker
+    expect(await engine.detectOrientation(TINY_PNG)).toBeNull()
+  })
+
+  it('an orientation worker that cannot start switches detection off and leaves text recognition available (#538)', async () => {
+    const langDir = tmp()
+    writeFileSync(join(langDir, 'osd.traineddata.gz'), 'x')
+    let osdStarts = 0
+    const mod: TesseractModule = {
+      createWorker: async (langs) => {
+        if (langs[0] === 'osd') {
+          osdStarts += 1
+          throw new Error('legacy core missing from this build')
+        }
+        return {
+          recognize: async () => ({ data: { text: 'ok', confidence: 50 } }),
+          terminate: async () => undefined
+        }
+      }
+    }
+    const engine = new TesseractOcrEngine({ langDir, languages: ['eng'], loadTesseract: async () => mod })
+    // Two detections in flight at once (a photo import during an OCR task): the one queued behind
+    // the failed start does not start the worker again.
+    expect(await Promise.all([engine.detectOrientation(TINY_PNG), engine.detectOrientation(TINY_PNG)])).toEqual([null, null])
+    expect(await engine.detectOrientation(TINY_PNG)).toBeNull()
+    expect(osdStarts).toBe(1) // not retried for every page
+    expect(engine.availability()).toBe('available')
+    expect((await engine.recognize(TINY_PNG)).text).toBe('ok')
+    await engine.stop()
   })
 
   it('rewrites app.asar worker paths to app.asar.unpacked (packaged app)', () => {
@@ -872,7 +989,7 @@ describe('runtime-sources.yaml ocr: block (D32)', () => {
     const r = validateRuntimeSources(raw)
     expect(r.ok).toBe(true)
     expect(r.ocr).toBeDefined()
-    expect(r.ocr?.files.map((f) => f.lang).sort()).toEqual(['deu', 'eng'])
+    expect(r.ocr?.files.map((f) => f.lang).sort()).toEqual(['deu', 'eng', 'osd'])
     for (const f of r.ocr?.files ?? []) {
       expect(f.sha256).toMatch(/^[a-f0-9]{64}$/) // real pins, no placeholders
       expect(f.dest.startsWith('ocr/')).toBe(true)

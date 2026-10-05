@@ -547,29 +547,47 @@ scanner's output) has no readable text, so the app tells you honestly: *"This PD
 like a scan — it has no readable text yet."* If your drive has the OCR files, the row
 offers a **Make searchable (OCR)** button right on the row. If it says the OCR files are
 *not on this drive*, the row offers **Download OCR files** instead: a short confirmation shows
-the two language files (German and English, about 4 MB, Apache-2.0) and where they come from,
-and once they are downloaded and checked, text recognition starts working **without a restart**
-— the row then offers **Make searchable (OCR)**. (The same download is on the **AI Model**
-screen as *"Text recognition for scans and photos (optional)"*. It follows the same rules as a
-model download: the drive policy and **Allow internet access…** must permit it. Without
-internet, add the files with `prepare-drive --with-assets` or `fetch-runtime --family ocr` —
-see the Troubleshooting guide.) The pages are read **on this drive** (no cloud OCR —
-German and English are included), with per-page progress and a Cancel button; the last
-step reads *"Finishing — making the text searchable…"* while the recognized text is
-indexed. When it finishes, the document is a normal searchable document; answers cite it
-**by page**, and **Preview** shows the recognized text per page with a *"Text recognized
-on this drive (OCR)"* note — recognition is good on clean scans but can contain errors on
-blurry ones. **Sideways or upside-down pages** are not turned upright yet, so their text comes out
-as nonsense. Until that changes, turn the pages in a PDF viewer until the text reads normally, save
-the file, add the saved copy, and use **Make searchable (OCR)** on it. If a first reading came out poorly (or you added better OCR files later),
-**Read again (OCR)** in the document's **⋯** menu reads the pages again — unlike
-**Re-index**, which reuses the stored reading. Reading a scan is never automatic (it takes
-a couple of seconds per page); you choose when. **Photos of pages** (PNG/JPG) are the
-small exception: they are read immediately on import. A photo imported while the OCR files
-were missing shows as **Failed** with the same **Download OCR files** offer; after the download,
-**Try again** on that row reads it. A scanned PDF's row has no **Try again**: trying again reads the
-same pictures and fails the same way, so the row offers only what helps. **Retry all** in *Needs
-attention* skips such rows too, and files of a type the app can't read or that are too large.
+the files (German, English and the page-orientation data, about 8 MB together, Apache-2.0) and
+where they come from, and once they are downloaded and checked, text recognition starts working
+**without a restart** — the row then offers **Make searchable (OCR)**. (The same download is on
+the **AI Model** screen as *"Text recognition for scans and photos (optional)"*; on a drive that
+has the language files but not the page-orientation data, that row says *"Turning sideways scans
+upright needs one more OCR file (optional)"*. It follows the same rules as a model download: the
+drive policy and **Allow internet access…** must permit it. Without internet, add the files with
+`prepare-drive --with-assets` or `fetch-runtime --family ocr` — see the Troubleshooting guide.)
+The pages are read **on this drive** (no cloud OCR — German and English are included), with
+per-page progress and a Cancel button; the last step reads *"Finishing — making the text
+searchable…"* while the recognized text is indexed. When it finishes, the document is a normal
+searchable document; answers cite it **by page**, and **Preview** shows the recognized text per
+page with a *"Text recognized on this drive (OCR)"* note that counts the pages on which text was
+found — recognition is good on clean scans but can contain errors on blurry ones. **Sideways or
+upside-down pages** are turned upright before they are read: when a page reads poorly, the app
+checks which way up its text is and reads it again turned that way (this uses the page-orientation
+data; without it, pages are read as they come). If some pages still read poorly, the row says
+*"Text recognition was unsure on … pages"*, and **Preview** names the usual causes — a blurry,
+skewed or handwritten original, or a language other than German or English. A sharper scan of the
+original is the real fix; for a page the orientation check could not turn (very faint or nearly
+empty pages), turning the page in a PDF viewer until the text reads normally, saving, and adding
+the saved copy still works. If a first reading came out poorly (or you added better OCR files
+later), **Read again (OCR)** in the document's **⋯** menu (or in its preview) reads the pages
+again — unlike **Re-index**, which reuses the stored reading. Reading a scan is never automatic
+(it takes a couple of seconds per page); you choose when.
+
+**A PDF with some scanned pages** — a typed letter with a scanned signature page, a report with a
+scanned attachment — is searchable through its typed pages right away, and its row says
+*"Scanned pages without readable text yet: 2 of 12."* **Make searchable (OCR)** in its **⋯** menu
+reads just those pages; the typed pages stay as they are, and answers cite the scanned ones by
+page. Blank pages and short title pages are not counted as scanned. (A PDF added before this was
+possible shows its scanned pages after one **Re-index**.)
+
+**Photos of pages** (PNG/JPG) are the small exception to "never automatic": they are read
+immediately on import, turned the right way up first (also when the phone was held sideways), and
+their preview says the text was recognized from the photo. **Read again (OCR)** on a photo reads it
+again. A photo imported while the OCR files were missing shows as **Failed** with the same
+**Download OCR files** offer; after the download, **Try again** on that row reads it. A scanned
+PDF's row has no **Try again**: trying again reads the same pictures and fails the same way, so the
+row offers only what helps. **Retry all** in *Needs attention* skips such rows too, and files of a
+type the app can't read or that are too large.
 
 **Each document is a compact row.** On the **Documents** screen every file is one row:
 its name and a muted line of details (type, size, sections), any **location/project tags**,
@@ -646,7 +664,7 @@ A few honest notes about translations:
   others — like a part the model cut off mid-sentence — are marked right away, because a
   second identical attempt would only repeat the same result.)
 - If a **page of the original contains no readable text** (for example a scanned page inside
-  an otherwise normal PDF), the result **marks that page in place** — *"Page 3 of the original
+  an otherwise normal PDF that has not been made searchable yet), the result **marks that page in place** — *"Page 3 of the original
   could not be translated…"* — and the Translate screen shows a warning naming the affected
   pages, so a shorter output never goes unnoticed.
 - The translation is a snapshot: if you re-import or re-index the **original**, the

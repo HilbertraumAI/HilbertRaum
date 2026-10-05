@@ -769,7 +769,7 @@ sha256-verified files (no extraction, no marker — the hash is the install stat
 The OCR engine itself (tesseract.js + its WASM core) ships INSIDE the app as pinned
 npm dependencies, not as drive assets.
 
-**In-app install (#410).** The released app can fetch the same two files itself — **Download OCR
+**In-app install (#410).** The released app can fetch the same files itself — **Download OCR
 files** on a failed scan/photo row in Documents, or the quiet row on the AI Model screen — behind a
 facts-only confirmation (languages, size, Apache-2.0, source host; no acknowledgement, the licence
 is approved) and the usual gates (policy ∧ `allowNetwork`). OCR is **not** an engine family: it
@@ -806,9 +806,20 @@ upstream):
 |---|---|---|
 | `ocr/deu.traineddata.gz` | `306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b` | 1.27 MB (1,333,102 bytes) |
 | `ocr/eng.traineddata.gz` | `45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91` | 2.82 MB (2,952,873 bytes) |
+| `ocr/osd.traineddata.gz` | `be028ddaac8b03402b92cbf526075c068ec39a9f1dbbcd7536dddb9b22209934` | 4.12 MB (4,320,130 bytes) |
 
-The exact byte counts were measured on 2026-09-22 from fresh downloads of the pinned URLs, whose
-sha256 matched this table (they are what `OCR_PINS` carries).
+The exact byte counts were measured on 2026-09-22 (deu, eng) and 2026-10-05 (osd) from fresh
+downloads of the pinned URLs, whose sha256 matched this table (they are what `OCR_PINS` carries).
+
+**License-review record — OCR orientation data `osd` (status: approved, reviewed 2026-10-05,
+#538):** Tesseract's orientation-and-script-detection data, from the same tessdata source and
+under the same **Apache-2.0** licence as the language files (repackaged as
+`@tesseract.js-data/osd@1.0.0`, taken from the same `4.0.0_best_int` directory; the npm wrapper
+declares MIT, the data is Apache-2.0 upstream). It is not a recognition language: the app runs it
+with tesseract.js-core's legacy-capable WASM core (already shipped and `asarUnpack`ed) in a
+second worker, only to find which way up a page is. It holds a legacy-engine model only; the
+`4.0.0` and `4.0.0_best_int` copies differ in bytes but gave identical verdicts on every test page.
+The in-app installer offers it on a drive that already has `deu` + `eng`.
 
 ## Sidecar binaries — kiwix-tools (knowledge packs, #301; family contract #339 P8-1)
 

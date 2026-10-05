@@ -1,7 +1,10 @@
+import { existsSync } from 'node:fs'
+import { join } from 'node:path'
 import { createSelectedEmbedder } from './embeddings/factory'
 import { createSelectedReranker } from './reranker'
 import { createSelectedTranscriber, transcriberMissingReason } from './transcriber'
 import { createSelectedOcrEngine, listOcrLanguages, ocrAssetsDir, type OcrSelectionDeps } from './ocr'
+import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 import { createSelectedTranslator } from './translation'
 import { resolveModelByRole } from './resolve-model'
 import { discoverManifests, type DiscoveredManifest } from './models'
@@ -318,6 +321,8 @@ function sameLanguageSet(a: readonly string[], b: readonly string[]): boolean {
  *     `'restartRequired'`. Its languages are fixed at construction, and it is never replaced
  *     mid-session: `stop()` latches permanently, tesseract.js leaves pending jobs hanging on
  *     terminate, and an un-stopped old worker would survive the lock teardown;
+ *   - an available engine with the orientation file on the drive → `'activated'`: the engine looks
+ *     for that file at each detection, so a just-installed one is in use without a restart (#538);
  *   - otherwise `'unchanged'`.
  * The probe is awaited, bounded by the engine's own start timeout. NEVER throws: a fault is
  * logged and reads as `'startFailed'`.
@@ -337,8 +342,15 @@ export async function refreshOcrSlot(
     }
     const onDisk = (deps.listLanguages ?? listOcrLanguages)(ocrAssetsDir(rootPath))
     if (!sameLanguageSet(current.languages, onDisk)) return 'restartRequired'
-    if ((current.availability?.() ?? 'available') === 'unavailable') {
+    const availability = current.availability?.() ?? 'available'
+    if (availability === 'unavailable') {
       return (await probeOcrEngine(current)) ? 'activated' : 'startFailed'
+    }
+    if (
+      availability === 'available' &&
+      existsSync(join(ocrAssetsDir(rootPath), `${OCR_ORIENTATION_LANG}.traineddata.gz`))
+    ) {
+      return 'activated'
     }
     return 'unchanged'
   } catch (err) {

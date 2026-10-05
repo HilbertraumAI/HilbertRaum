@@ -1,7 +1,16 @@
+import { existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { createRequire } from 'node:module'
 import type { Worker } from 'node:worker_threads'
-import type { OcrAvailability, OcrEngine, OcrRecognizeOptions, OcrResult } from './index'
+import { log } from '../logging'
+import type {
+  OcrAvailability,
+  OcrEngine,
+  OcrOrientation,
+  OcrRecognizeOptions,
+  OcrResult
+} from './index'
+import { OCR_ORIENTATION_LANG, orientImage, type OcrTurn } from './orientation'
 
 // tesseract.js OCR backend. Node mode only: the worker script
 // and the WASM core load from the app's own pinned npm packages; image bytes are
@@ -23,10 +32,20 @@ import type { OcrAvailability, OcrEngine, OcrRecognizeOptions, OcrResult } from 
 // non-latching workspace-lock teardown — it terminates the warm worker so no decoded page
 // bytes linger in a WASM worker across the re-encrypt, but the next recognition lazily
 // respawns a fresh worker.
+//
+// Orientation (#538): a page turns upright through an orientation marker on its bytes
+// (`orientation.ts`), and `detectOrientation` runs Tesseract OSD in a SECOND, lazily started
+// worker — the legacy-capable core (`legacyCore`) over the drive's `osd.traineddata.gz`. That
+// worker is optional in every sense: no file → no detection; a failed start or a death → detection
+// is off for this engine's life and is logged, but the recognizer's availability never changes.
+// It is serialized on the same chain and torn down with the recognizer (lock, quit).
 
 /** OEM 1 = LSTM_ONLY. The vendored traineddata is LSTM-only (the WASM core
  * cannot run legacy/float models — `tessdata_best` float crashes it). */
 const OEM_LSTM_ONLY = 1
+
+/** OEM 0 = TESSERACT_ONLY: the legacy engine, the only one Tesseract OSD runs on (#538). */
+const OEM_TESSERACT_ONLY = 0
 
 /**
  * Per-PAGE recognition timeout ceiling (REL-2). A tesseract.js WASM job cannot be
@@ -131,6 +150,10 @@ export interface TesseractModule {
 
 export interface TesseractWorker {
   recognize(image: Buffer): Promise<{ data: { text: string; confidence: number } }>
+  /** Tesseract OSD (a legacy-core worker only). Optional so the recognition fakes stay minimal. */
+  detect?(image: Buffer): Promise<{
+    data: { orientation_degrees: number | null; orientation_confidence: number | null }
+  }>
   terminate(): Promise<unknown>
 }
 
@@ -179,6 +202,18 @@ export class TesseractOcrEngine implements OcrEngine {
   private readonly inflight = new Set<(err: Error) => void>()
   private readonly reprobeDelayMs: number
   private reprobeTimer: ReturnType<typeof setTimeout> | null = null
+  /** The OSD worker (#538) — same lifecycle shape as `worker`/`starting`/`liveRaw`/`inflight`. */
+  private osdWorker: TesseractWorker | null = null
+  private osdStarting: Promise<TesseractWorker> | null = null
+  private readonly osdRaw = new Set<Worker>()
+  private readonly osdInflight = new Set<(err: Error) => void>()
+  /** The OSD worker could not start, timed out or died: detection stays off for this engine. */
+  private osdBroken = false
+  /**
+   * Worker starts run one at a time: the `process.on('worker')` capture window would otherwise see
+   * both workers' threads, and a failed start reaps everything it captured.
+   */
+  private spawnTail: Promise<unknown> = Promise.resolve()
 
   constructor(opts: TesseractOcrEngineOptions) {
     this.opts = opts
@@ -213,18 +248,58 @@ export class TesseractOcrEngine implements OcrEngine {
     return this.starting
   }
 
+  /** Start the recognizer: a failed start latches `'unavailable'`, a healthy one `'available'`. */
+  private async startWorker(): Promise<TesseractWorker> {
+    let spawned: { worker: TesseractWorker; raws: Worker[] }
+    try {
+      spawned = await this.spawn([...this.opts.languages], OEM_LSTM_ONLY, {})
+    } catch (err) {
+      // The rejection reaches the caller as a per-document error.
+      this.state = 'unavailable'
+      throw err
+    }
+    // A later death then rejects the in-flight page and re-arms (`onLiveWorkerFailure`) instead of
+    // crashing the app.
+    for (const raw of spawned.raws) {
+      this.liveRaw.add(raw)
+      raw.on('error', (err) => this.onLiveWorkerFailure(raw, toError(err, 'OCR worker error')))
+      raw.on('exit', (code) =>
+        this.onLiveWorkerFailure(raw, new Error(`OCR worker exited unexpectedly (code ${code})`))
+      )
+    }
+    this.worker = spawned.worker
+    this.state = 'available'
+    return spawned.worker
+  }
+
+  /** Serialize worker starts (see `spawnTail`). */
+  private spawn(
+    langs: string[],
+    oem: number,
+    extra: Record<string, unknown>
+  ): Promise<{ worker: TesseractWorker; raws: Worker[] }> {
+    const run = this.spawnTail.then(() => this.spawnNow(langs, oem, extra))
+    this.spawnTail = run.catch(() => undefined)
+    return run
+  }
+
   /**
    * One bounded worker start (#232). tesseract.js sets the browser-only `worker.onerror` on its
    * Node Worker (inert) and never settles `createWorker()` on a load failure, so a worker that
    * dies while loading used to surface as `uncaughtException` and kill the app. Three guards:
    *   (a) `process.on('worker')` captures the raw Worker as tesseract spawns it, so `'error'` /
-   *       `'exit'` reject `starting` (and, once live, the recognition in flight);
+   *       `'exit'` reject the start;
    *   (b) a start timeout, so a hung load rejects instead of blocking every later page;
    *   (c) tesseract's `errorHandler` option, so a `status: 'reject'` never throws from its
    *       message handler.
-   * Any failure latches `'unavailable'`; a healthy start sets `'available'`.
+   * Resolves with the worker and its OWN raw thread(s), start listeners detached — the caller
+   * attaches the live-death handling. A failure reaps whatever was spawned and rejects.
    */
-  private async startWorker(): Promise<TesseractWorker> {
+  private async spawnNow(
+    langs: string[],
+    oem: number,
+    extra: Record<string, unknown>
+  ): Promise<{ worker: TesseractWorker; raws: Worker[] }> {
     const tesseract = await (this.opts.loadTesseract ?? loadRealTesseract)()
     let workerPath: string | undefined
     try {
@@ -255,7 +330,7 @@ export class TesseractOcrEngine implements OcrEngine {
     // A synchronous throw from the module becomes a rejection; a rejection settled before the
     // race below is observed must not surface as an unhandled rejection (the `.catch` branch).
     const created = (async () =>
-      tesseract.createWorker([...this.opts.languages], OEM_LSTM_ONLY, {
+      tesseract.createWorker(langs, oem, {
         // Every path explicit and LOCAL — never the CDN/cache defaults.
         langPath: this.opts.langDir,
         gzip: true,
@@ -264,6 +339,7 @@ export class TesseractOcrEngine implements OcrEngine {
         // rejects that job, and a loadLanguage/initialize reject is settled by the start timeout.
         // The handler only replaces the `throw` tesseract would otherwise do.
         errorHandler: (): void => undefined,
+        ...extra,
         ...(workerPath ? { workerPath } : {})
       }))()
     created.catch(() => undefined)
@@ -288,33 +364,26 @@ export class TesseractOcrEngine implements OcrEngine {
           ;(timer as { unref?: () => void }).unref?.()
         })
       ])
-      // Healthy: adopt OUR raw worker into the live set (tesseract exposes it as `.worker` on the
-      // resolved object; a fake without the field is adopted as-is). A later death then rejects
-      // the in-flight page and re-arms (`onLiveWorkerFailure`) instead of crashing the app.
+      // Healthy: hand back OUR raw worker (tesseract exposes it as `.worker` on the resolved
+      // object; a fake without the field is adopted as-is).
       const own = (worker as unknown as { worker?: unknown }).worker
+      const mine: Worker[] = []
       for (const raw of raws) {
         raw.off('error', onRawError)
         raw.off('exit', onRawExit)
         if (own != null && raw !== own) continue
-        this.liveRaw.add(raw)
-        raw.on('error', (err) => this.onLiveWorkerFailure(raw, toError(err, 'OCR worker error')))
-        raw.on('exit', (code) =>
-          this.onLiveWorkerFailure(raw, new Error(`OCR worker exited unexpectedly (code ${code})`))
-        )
+        mine.push(raw)
       }
-      this.worker = worker
-      this.state = 'available'
-      return worker
+      return { worker, raws: mine }
     } catch (err) {
       // Load error, tesseract reject, or timeout: reap whatever was spawned (a hung worker would
-      // otherwise linger) and latch. The rejection reaches the caller as a per-document error.
+      // otherwise linger).
       for (const raw of raws) {
         raw.off('error', onRawError)
         raw.off('exit', onRawExit)
         raw.on('error', () => undefined)
         void raw.terminate().catch(() => undefined)
       }
-      this.state = 'unavailable'
       throw err
     } finally {
       if (timer) clearTimeout(timer)
@@ -353,13 +422,164 @@ export class TesseractOcrEngine implements OcrEngine {
         throw new DOMException('OCR recognition aborted', 'AbortError')
       }
       const worker = await this.ensureWorker()
-      return this.recognizeWithTimeout(worker, image, opts.signal)
+      // #538: the turn (and the image's own EXIF orientation, in either byte order) rides on the
+      // bytes as an orientation marker the core applies exactly.
+      return this.recognizeWithTimeout(worker, orientImage(image, opts.turn ?? 0), opts.signal)
     })
     // The chain must survive a failed job (keep serializing, swallow for the chain only).
     this.chain = run.catch(() => undefined).finally(() => {
       this.queued -= 1
     })
     return run
+  }
+
+  /**
+   * Tesseract OSD over the image (#538): the clockwise turn that makes its text upright, or null —
+   * no orientation file on the drive, too little text to tell, or the OSD worker cannot run. Only
+   * an abort rejects (AbortError), so a cancelled task still cancels. Serialized on the same chain
+   * as recognitions and bounded by the same per-page timeout.
+   */
+  async detectOrientation(
+    image: Buffer,
+    opts: { signal?: AbortSignal } = {}
+  ): Promise<OcrOrientation | null> {
+    if (this.stopped || this.osdBroken) return null
+    // The file is looked for at each call until the worker has started, so a file installed in-app
+    // mid-session (#410 installer) is used without a restart.
+    if (!this.osdWorker && !existsSync(join(this.opts.langDir, `${OCR_ORIENTATION_LANG}.traineddata.gz`))) {
+      return null
+    }
+    this.queued += 1
+    const run = this.chain.then(async (): Promise<OcrOrientation | null> => {
+      if (opts.signal?.aborted) throw new DOMException('OCR recognition aborted', 'AbortError')
+      let worker: TesseractWorker
+      try {
+        worker = await this.ensureOsdWorker()
+      } catch {
+        return null // `startOsdWorker` logged it and switched detection off
+      }
+      return this.detectWithTimeout(worker, orientImage(image, 0), opts.signal)
+    })
+    this.chain = run.catch(() => undefined).finally(() => {
+      this.queued -= 1
+    })
+    return run
+  }
+
+  private ensureOsdWorker(): Promise<TesseractWorker> {
+    if (this.stopped) return Promise.reject(new Error('OCR engine is stopped'))
+    // A detection queued before a failed start or a death must not start (or reach) a worker again.
+    if (this.osdBroken) return Promise.reject(new Error('OCR orientation detection is off'))
+    if (this.osdWorker) return Promise.resolve(this.osdWorker)
+    if (!this.osdStarting) {
+      this.osdStarting = this.startOsdWorker()
+      this.osdStarting.catch(() => {
+        this.osdStarting = null
+      })
+    }
+    return this.osdStarting
+  }
+
+  private async startOsdWorker(): Promise<TesseractWorker> {
+    let spawned: { worker: TesseractWorker; raws: Worker[] }
+    try {
+      spawned = await this.spawn([OCR_ORIENTATION_LANG], OEM_TESSERACT_ONLY, {
+        legacyCore: true,
+        legacyLang: true
+      })
+    } catch (err) {
+      this.osdBroken = true
+      log.warn('OCR orientation detection could not start — pages are read as they come', {
+        error: err instanceof Error ? err.message.slice(0, 300) : String(err).slice(0, 300)
+      })
+      throw err
+    }
+    for (const raw of spawned.raws) {
+      this.osdRaw.add(raw)
+      raw.on('error', (err) => this.onOsdWorkerFailure(raw, toError(err, 'OCR orientation worker error')))
+      raw.on('exit', (code) =>
+        this.onOsdWorkerFailure(raw, new Error(`OCR orientation worker exited unexpectedly (code ${code})`))
+      )
+    }
+    this.osdWorker = spawned.worker
+    return spawned.worker
+  }
+
+  /** The OSD worker died: fail the detection in flight (it reads as null) and stop detecting. */
+  private onOsdWorkerFailure(raw: Worker, err: Error): void {
+    if (!this.osdRaw.has(raw)) return // our own terminate — expected
+    this.osdRaw.delete(raw)
+    this.osdBroken = true
+    const dead = this.osdWorker
+    this.osdWorker = null
+    this.osdStarting = null
+    if (dead) void dead.terminate().catch(() => undefined)
+    for (const reject of this.osdInflight) reject(err)
+    this.osdInflight.clear()
+    log.warn('OCR orientation worker stopped — pages are read as they come', { error: err.message.slice(0, 300) })
+  }
+
+  /**
+   * One OSD job, raced against the per-page timeout and the abort signal. A timeout, a worker
+   * death or a job error reads as null (a timeout also terminates the OSD worker and switches
+   * detection off — a page that wedges OSD would wedge it again); an abort rejects.
+   */
+  private async detectWithTimeout(
+    worker: TesseractWorker,
+    image: Buffer,
+    signal?: AbortSignal
+  ): Promise<OcrOrientation | null> {
+    if (!worker.detect) return null
+    let timer: ReturnType<typeof setTimeout> | undefined
+    let onAbort: (() => void) | undefined
+    let onWorkerDeath: ((err: Error) => void) | undefined
+    let interrupted: 'timeout' | 'abort' | null = null
+    try {
+      const result = await new Promise<Awaited<ReturnType<NonNullable<TesseractWorker['detect']>>>>(
+        (resolve, reject) => {
+          timer = setTimeout(() => {
+            interrupted = 'timeout'
+            reject(new Error(`OCR orientation detection timed out after ${this.recognizeTimeoutMs} ms`))
+          }, this.recognizeTimeoutMs)
+          onAbort = (): void => {
+            interrupted = 'abort'
+            reject(new DOMException('OCR recognition aborted', 'AbortError'))
+          }
+          if (signal?.aborted) onAbort()
+          else signal?.addEventListener('abort', onAbort, { once: true })
+          onWorkerDeath = reject
+          this.osdInflight.add(onWorkerDeath)
+          worker.detect!(image).then(resolve, reject)
+        }
+      )
+      const degrees = result.data.orientation_degrees
+      if (degrees !== 0 && degrees !== 90 && degrees !== 180 && degrees !== 270) return null
+      const confidence = result.data.orientation_confidence
+      return {
+        turn: degrees as OcrTurn,
+        confidence: typeof confidence === 'number' && Number.isFinite(confidence) ? confidence : 0
+      }
+    } catch (err) {
+      if (interrupted) await this.terminateOsdWorker()
+      if (interrupted === 'abort') throw err
+      if (interrupted === 'timeout') this.osdBroken = true
+      return null
+    } finally {
+      if (timer) clearTimeout(timer)
+      if (signal && onAbort) signal.removeEventListener('abort', onAbort)
+      if (onWorkerDeath) this.osdInflight.delete(onWorkerDeath)
+    }
+  }
+
+  /** `terminateWorker`'s twin for the OSD worker (same REL-1 handling of an in-flight start). */
+  private async terminateOsdWorker(): Promise<void> {
+    const starting = this.osdStarting
+    if (starting) await starting.catch(() => undefined)
+    const worker = this.osdWorker
+    this.osdWorker = null
+    this.osdRaw.clear()
+    if (this.osdStarting === starting) this.osdStarting = null
+    if (worker) await worker.terminate().catch(() => undefined)
   }
 
   /**
@@ -459,6 +679,7 @@ export class TesseractOcrEngine implements OcrEngine {
       this.reprobeTimer = null
     }
     await this.terminateWorker()
+    await this.terminateOsdWorker()
   }
 
   /**
@@ -469,6 +690,7 @@ export class TesseractOcrEngine implements OcrEngine {
    */
   async suspend(): Promise<void> {
     await this.terminateWorker()
+    await this.terminateOsdWorker()
   }
 
   /** Execution state (see `OcrAvailability`); a stopped engine is unavailable. */

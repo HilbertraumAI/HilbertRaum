@@ -113,7 +113,11 @@ const JPEG_IMAGE: FixtureImage = {
   bin: TINY_JPEG
 }
 
-type FixturePage = { kind: 'text'; lines: string[] } | { kind: 'image'; image?: FixtureImage }
+type FixturePage =
+  | { kind: 'text'; lines: string[] }
+  | { kind: 'image'; image?: FixtureImage }
+  // #575: a page with no content at all (an empty separator page) — neither text nor an image.
+  | { kind: 'blank' }
 
 /**
  * Build a PDF mixing real-text pages and image-only pages (binary-safe — the JPEG
@@ -132,7 +136,13 @@ export function makeMixedPdf(pages: FixturePage[]): Buffer {
   const fontNum = add('<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica >>')
 
   for (const p of pages) {
-    if (p.kind === 'text') {
+    if (p.kind === 'blank') {
+      const contentNum = add('<< /Length 0 >>\nstream\n\nendstream')
+      const pageNum = add(
+        `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Contents ${contentNum} 0 R >>`
+      )
+      kidRefs.push(`${pageNum} 0 R`)
+    } else if (p.kind === 'text') {
       const content =
         'BT /F1 12 Tf 72 720 Td 16 TL\n' +
         p.lines.map((l) => `(${l.replace(/([()\\])/g, '\\$1')}) Tj T*`).join('\n') +

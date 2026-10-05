@@ -127,6 +127,21 @@ scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
 content and never leaves the DB); `AppStatus` gained the additive
 `ocrAvailable: boolean` gate. The internal `OCR_RASTER` channels (shared/ipc.ts) bind
 ONLY the hidden rasterizer window's preload, never the app bridge.
+**#538 / #574 / #575 / #576 (2026-10-05; architecture.md "OCR quality amendment"):**
+`documents.ocr_json` pages gained optional `confidence` (0–100, the reading's mean) and `turn`
+(0/90/180/270, the clockwise turn the kept reading was made at; absent = 0). `DocumentOcrInfo`
+(= `documents.ocr_meta_json`) gained `textPageCount` (pages whose reading produced text; the
+open-time backfill re-derives older sidecars) and `lowConfidencePageCount` (text pages under 65;
+absent when no page carries a confidence) — counts only. A PHOTO row now has an `ocr_meta_json`
+(pageCount 1) with NO `ocr_json` behind it, rewritten by each import/re-index and NULLed when the
+read fails. New additive column `documents.scanned_pages_json` = `{ pages: number[], pageCount }`
+— a TEXT PDF's scanned pages (under 25 characters of text, painting an image), page numbers only,
+written at import/re-index (NULL: none, a whole scan, or not parsed since); `DocumentInfo` gained
+`scannedPages?: { count, pageCount } | null` (counts only), and the `ocr` smart view includes such
+rows. `kind: 'ocr'` now also admits a PDF with `scannedPages`, and for it reads only those pages.
+`OcrInstallLanguage` gained `role: 'language' | 'orientation'`; `ocr:status` lists the third pin
+`osd`. The internal `RasterizePdfOptions` gained `pages` (render only these). No schema-version
+change.
 **Issue #188 (wave 188):** `DocumentInfo` gained the optional `storedCopy?: 'present' | 'missing'`
 — whether the document's workspace copy is on disk right now, so the `⋯` menu can refuse to offer a
 byte-level action that would fail after the click. It is populated ONLY by callers that hold a store

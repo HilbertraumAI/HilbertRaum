@@ -270,7 +270,15 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
       // residual in the remediation plan's discoveries, deliberately not fixed in Phase G.
       'diag.bench.cores',
       // #236: "characters not shown: {hidden}" — a figure after a colon, no noun inflects.
-      'main.dialog.openLink.truncated'
+      'main.dialog.openLink.truncated',
+      // #576/#538: "on {count} of {total} pages" — the noun follows {total}, which these call sites
+      // only render when it is at least 2 (ocrNotes.ts); "all {count}" likewise only for ≥ 2 pages
+      // (a single page has its own sentence).
+      'docs.previewModal.ocrInfoPartial',
+      'docs.ocr.unsure.some',
+      'docs.ocr.unsure.all',
+      // #575: "Scanned pages without readable text yet: {count} of {total}." — figures after a colon.
+      'docs.ocr.scannedPages'
     ])
     // Scan the shipped source for plain `t('key'` consumptions (bound renderer t and the
     // shared t(lang, …) form differ in shape — the latter never matches `t('`). The read is

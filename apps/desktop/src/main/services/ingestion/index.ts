@@ -39,6 +39,7 @@ import type { Transcriber } from '../transcriber'
 import type { OcrEngine, OcrPage } from '../ocr'
 import {
   isAudioPath,
+  isImagePath,
   isPdfPath,
   readsWholeFileToString,
   selectParser,
@@ -48,7 +49,7 @@ import {
   type ParsedDocument
 } from './parsers'
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
-import { parseOcrMeta } from './ocr-meta'
+import { ocrMetaOf, parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import {
   resolveIngestionLimits,
@@ -197,6 +198,8 @@ interface DocumentRow {
   // PERF-3: cheap metadata-only sidecar for the OCR badge — `listDocuments` projects this and
   // NOT `ocr_json`, so the hot list path never parses page text. Absent on the narrow projection.
   ocr_meta_json?: string | null
+  // #575: a text PDF's scanned pages (`{ pages, pageCount }`), written at import/re-index.
+  scanned_pages_json?: string | null
   lifecycle: string | null
   source_folder_label: string | null
   tree_status: string | null
@@ -337,7 +340,16 @@ function parseOcr(json: string | null | undefined): StoredOcr | null {
       const pageNumber = (p as OcrPage)?.pageNumber
       const text = (p as OcrPage)?.text
       if (typeof pageNumber === 'number' && Number.isInteger(pageNumber) && typeof text === 'string') {
-        pages.push({ pageNumber, text })
+        // #538: carry the reading's confidence and turn through — a field not copied here is
+        // silently dropped for every reader of the stored pages.
+        const confidence = (p as OcrPage).confidence
+        const turn = (p as OcrPage).turn
+        pages.push({
+          pageNumber,
+          text,
+          ...(typeof confidence === 'number' && Number.isFinite(confidence) ? { confidence } : {}),
+          ...(turn === 90 || turn === 180 || turn === 270 ? { turn } : {})
+        })
       }
     }
     if (pages.length === 0) return null
@@ -355,12 +367,7 @@ function parseOcr(json: string | null | undefined): StoredOcr | null {
 /** Metadata-only view of a stored OCR result (never the recognized text). */
 function ocrInfoOf(stored: StoredOcr | null): DocumentOcrInfo | null {
   if (!stored) return null
-  return {
-    pageCount: stored.pages.length,
-    languages: stored.languages,
-    engineId: stored.engineId,
-    createdAt: stored.createdAt
-  }
+  return ocrMetaOf(stored.pages, stored)
 }
 
 /**
@@ -434,6 +441,7 @@ function rowToInfo(
     // exactly these rows (plus already-OCR'd PDFs for a re-run).
     scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
     ocr: ocrInfoForRow(row),
+    scannedPages: scannedPagesInfo(row.scanned_pages_json),
     // Document-organization (plan §8.2/§16): retention lifecycle (NULL ⇒ permanent) +
     // folder-import display label. Collection memberships are merged in by listDocuments
     // (it has the db handle for the join); getDocument/createQueuedDocument leave it absent.
@@ -887,6 +895,8 @@ export async function prepareDocument(
       transcriberMissing: deps.transcriberMissing,
       ocrEngine: deps.ocrEngine,
       ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
+      // #575: import and re-index find a text PDF's scanned pages (the row offers OCR for them).
+      detectScannedPages: isPdfPath(row.title),
       workDir: storeDir,
       onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent),
       // REL-1: cancellation for an unbounded audio transcription. Audio stays EXEMPT from
@@ -900,6 +910,13 @@ export async function prepareDocument(
     const parseT0 = performance.now()
     const parsed = await parseWithLimits(parser, parseSource, parseCtx, limits)
     perfMark('ingest_parse_done', { docId: documentId, ms: perfMs(parseT0) })
+    // #574: a photo is read by OCR on every import/re-index, so its OCR sidecar is rewritten each
+    // time (and cleared below when reading it fails). A scanned PDF's sidecar is the OCR task's,
+    // written with its `ocr_json`, and survives re-index — never touched here.
+    if (isImagePath(row.title)) setPhotoOcrMeta(db, documentId, parsed.ocrMeta ?? null)
+    // #575: a property of the PDF's own text layer, so the same on every parse — rewritten here
+    // keeps it right for a document imported before it existed (after one re-index).
+    if (isPdfPath(row.title)) setScannedPages(db, documentId, parsed)
 
     setStatus(db, documentId, 'chunking')
     // Over-cap gate (whole-document-analysis plan C1/C2/M13). Chunk with cap + 1 so an
@@ -1025,6 +1042,8 @@ export async function prepareDocument(
     setStatus(db, documentId, 'embedding')
     return { documentId, ready: true }
   } catch (err) {
+    // #574: a photo that could not be read carries no claim that its text was recognized.
+    if (isImagePath(row.title)) setPhotoOcrMeta(db, documentId, null)
     // #530: an engine the OS refused to start persists canonical text, never the loader's raw
     // line (it carries the absolute drive path); any other failure keeps its own message.
     setStatus(db, documentId, 'failed', failureRowMessage(err))
@@ -1076,6 +1095,9 @@ export async function finalizeDocument(
     perfMark('ingest_indexed', { docId: documentId })
     return infoOrDeleted(db, documentId)
   } catch (err) {
+    // #574: a photo that ends failed (here: its embedding) carries no claim that its text was read.
+    const row = getRow(db, documentId)
+    if (row && isImagePath(row.title)) setPhotoOcrMeta(db, documentId, null)
     // #530: an engine the OS refused to start persists canonical text, never the loader's raw
     // line (it carries the absolute drive path); any other failure keeps its own message.
     setStatus(db, documentId, 'failed', failureRowMessage(err))
@@ -1476,22 +1498,69 @@ export function setDocumentOcr(
     : null
   // PERF-3: write the cheap metadata sidecar alongside the full blob so `listDocuments` reads the
   // badge without parsing page text. Counts-only (no text) — kept in lock-step with `ocr_json`:
-  // clearing OCR (ocr === null) nulls both. `pages.length` here == the valid-page count
-  // `ocrMetaFromJson` derives from the just-written blob (engine pages are always well-formed).
-  const metaJson = ocr
-    ? JSON.stringify({
-        pageCount: ocr.pages.length,
-        languages: ocr.languages,
-        engineId: ocr.engineId,
-        createdAt
-      })
-    : null
+  // clearing OCR (ocr === null) nulls both. `ocrMetaOf` is the same derivation `ocrMetaFromJson`
+  // (the backfill) applies to the just-written blob (engine pages are always well-formed).
+  const meta = ocr ? ocrMetaOf(ocr.pages, { ...ocr, createdAt }) : null
+  const metaJson = meta ? JSON.stringify(meta) : null
   db.prepare('UPDATE documents SET ocr_json = ?, ocr_meta_json = ?, updated_at = ? WHERE id = ?').run(
     json,
     metaJson,
     nowIso(),
     documentId
   )
+}
+
+/**
+ * #574: a photo's OCR sidecar — counts only (one page, its confidence, the engine). A photo keeps
+ * no `ocr_json`: its text lives only in its chunks, and every re-index reads the photo again.
+ */
+function setPhotoOcrMeta(db: Db, documentId: string, meta: DocumentOcrInfo | null): void {
+  db.prepare('UPDATE documents SET ocr_meta_json = ? WHERE id = ?').run(
+    meta ? JSON.stringify(meta) : null,
+    documentId
+  )
+}
+
+/** #575: the stored `{ pages, pageCount }` of a text PDF's scanned pages, or null. Tolerant. */
+function parseScannedPages(json: string | null | undefined): { pages: number[]; pageCount: number } | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as { pages?: unknown; pageCount?: unknown } | null
+    if (!v || !Array.isArray(v.pages) || typeof v.pageCount !== 'number') return null
+    const pageCount = v.pageCount
+    const pages = v.pages.filter(
+      (p): p is number => typeof p === 'number' && Number.isInteger(p) && p >= 1 && p <= pageCount
+    )
+    return pages.length > 0 ? { pages, pageCount } : null
+  } catch {
+    return null
+  }
+}
+
+/** #575: the counts `DocumentInfo.scannedPages` carries (never the page list). */
+function scannedPagesInfo(json: string | null | undefined): DocumentInfo['scannedPages'] {
+  const stored = parseScannedPages(json)
+  return stored ? { count: stored.pages.length, pageCount: stored.pageCount } : null
+}
+
+/** #575: record (or clear) a parsed PDF's scanned pages. */
+function setScannedPages(db: Db, documentId: string, parsed: ParsedDocument): void {
+  const pages = parsed.scannedPages ?? []
+  db.prepare('UPDATE documents SET scanned_pages_json = ? WHERE id = ?').run(
+    pages.length > 0 ? JSON.stringify({ pages, pageCount: parsed.pageCount ?? pages[pages.length - 1] }) : null,
+    documentId
+  )
+}
+
+/**
+ * #575: the page numbers of a text PDF's scanned pages — what "Make searchable (OCR)" reads for
+ * it — or null (a whole scan, or a PDF without scanned pages: the task reads every page).
+ */
+export function getDocumentScannedPages(db: Db, documentId: string): number[] | null {
+  const row = db
+    .prepare('SELECT scanned_pages_json FROM documents WHERE id = ?')
+    .get(documentId) as unknown as { scanned_pages_json: string | null } | undefined
+  return parseScannedPages(row?.scanned_pages_json)?.pages ?? null
 }
 
 /** Read a document's stored per-page recognition, or null. The text is CONTENT. */
@@ -1737,7 +1806,7 @@ export function reconcileStuckExtracts(db: Db, beforeIso: string): number {
 // the list (rowToInfo maps it but it is dropped client-side) — included to keep the row complete.
 const LIST_DOCUMENT_COLUMNS =
   'id, title, original_path, stored_path, stored_name, mime_type, size_bytes, sha256, status, error_message, ' +
-  'summary_json, origin_json, ocr_meta_json, lifecycle, source_folder_label, tree_status, ' +
+  'summary_json, origin_json, ocr_meta_json, scanned_pages_json, lifecycle, source_folder_label, tree_status, ' +
   'tree_meta_json, fully_chunked, extract_status, created_at, updated_at'
 
 /**

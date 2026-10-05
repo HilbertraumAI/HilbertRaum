@@ -7,6 +7,8 @@ import {
   listOcrLanguages,
   ocrAssetsDir
 } from '../../src/main/services/ocr'
+import { orientImage } from '../../src/main/services/ocr/orientation'
+import { readUpright } from '../../src/main/services/ocr/upright'
 
 // MANUAL OCR smoke (Phase 38, wave-3 plan §14 R-O2/R-O3 live verification) — NOT CI.
 //
@@ -14,7 +16,7 @@ import {
 // points at a root whose ocr/ dir holds the vendored language files (the whisper-smoke
 // shape):
 //
-//   HILBERTRAUM_OCR_SMOKE=<root with ocr/deu.traineddata.gz + ocr/eng.traineddata.gz>
+//   HILBERTRAUM_OCR_SMOKE=<root with ocr/deu.traineddata.gz + ocr/eng.traineddata.gz (+ osd for #538)>
 //   HILBERTRAUM_OCR_IMAGE=<a real German scan image (png/jpg) — NEVER committed>
 //   npx vitest run tests/manual/ocr-smoke.test.ts
 //
@@ -83,6 +85,37 @@ describe.skipIf(!enabled)('HILBERTRAUM_OCR_SMOKE — real tesseract.js on a real
       } finally {
         net.Socket.prototype.connect = origConnect
       }
+    }
+  )
+
+  // #538 — the same scan presented sideways and upside down (the orientation marker turns it the
+  // way a mis-fed scanner would) must read like the upright one: an unsure reading asks Tesseract
+  // OSD (the drive's ocr/osd.traineddata.gz), which names the turn back. Needs the osd file.
+  // Measured 2026-10-05 on a rendered German letter (DesktopDiT): upright conf 95; each turn read
+  // back at the inverse turn, conf 95, 33 of 33 words (2.7–4.6 s per turned page).
+  it.skipIf(!existsSync(join(ocrAssetsDir(ROOT), 'osd.traineddata.gz')))(
+    '#538: the scan turned 90°, 180° and 270° reads back like the upright one (real OSD)',
+    { timeout: 300_000 },
+    async () => {
+      const engine = createSelectedOcrEngine({ rootPath: ROOT })!
+      const upright = readFileSync(IMAGE)
+      const words = (t: string): Set<string> => new Set(t.toLowerCase().match(/\p{L}{4,}/gu) ?? [])
+      const reference = words((await engine.recognize(upright)).text)
+      for (const turn of [90, 180, 270] as const) {
+        const turned = orientImage(upright, turn)
+        const t0 = Date.now()
+        const reading = await readUpright(engine, turned)
+        const found = words(reading.text)
+        const kept = [...reference].filter((w) => found.has(w)).length
+        // eslint-disable-next-line no-console
+        console.log(
+          `[ocr-smoke] turned ${turn}°: read at ${reading.turn}° conf=${reading.confidence} ` +
+            `words ${kept}/${reference.size} ms=${Date.now() - t0}`
+        )
+        expect(reading.turn).toBe((360 - turn) % 360)
+        expect(kept / reference.size).toBeGreaterThanOrEqual(0.9)
+      }
+      await engine.stop?.()
     }
   )
 })

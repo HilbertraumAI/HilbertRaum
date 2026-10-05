@@ -85,8 +85,8 @@ const ENG_SIZE = 2_952_873
 
 function ocrStatus(
   languages: OcrInstallLanguage[] = [
-    { lang: 'deu', sizeBytes: DEU_SIZE, installed: false },
-    { lang: 'eng', sizeBytes: ENG_SIZE, installed: false }
+    { lang: 'deu', role: 'language', sizeBytes: DEU_SIZE, installed: false },
+    { lang: 'eng', role: 'language', sizeBytes: ENG_SIZE, installed: false }
   ],
   over: Partial<OcrInstallStatus> = {}
 ): OcrInstallStatus {
@@ -327,8 +327,8 @@ describe('OcrInstall — Documents rows (#410)', () => {
       getAppStatus: vi.fn(async () => appStatusFixture({ ocrAvailable: false, ocrState: 'missing' })),
       getOcrInstallStatus: vi.fn(async () =>
         ocrStatus([
-          { lang: 'deu', sizeBytes: DEU_SIZE, installed: true },
-          { lang: 'eng', sizeBytes: ENG_SIZE, installed: true }
+          { lang: 'deu', role: 'language', sizeBytes: DEU_SIZE, installed: true },
+          { lang: 'eng', role: 'language', sizeBytes: ENG_SIZE, installed: true }
         ])
       ),
       getPolicy: vi.fn(async () => allowedPolicy()),
@@ -452,14 +452,31 @@ describe('OcrInstall — AI Model screen row (#410)', () => {
   it('13: both languages installed shows no OCR row', async () => {
     stubModels({
       status: ocrStatus([
-        { lang: 'deu', sizeBytes: DEU_SIZE, installed: true },
-        { lang: 'eng', sizeBytes: ENG_SIZE, installed: true }
+        { lang: 'deu', role: 'language', sizeBytes: DEU_SIZE, installed: true },
+        { lang: 'eng', role: 'language', sizeBytes: ENG_SIZE, installed: true }
       ])
     })
     render(<ModelsScreen />)
 
     await screen.findByRole('heading', { name: en['models.title'] })
     expect(screen.queryByText(en['models.ocr.row'])).not.toBeInTheDocument()
+  })
+
+  it('13b (#538): with both languages installed and only the orientation file missing, the row says what it adds', async () => {
+    const user = userEvent.setup()
+    stubModels({
+      status: ocrStatus([
+        { lang: 'deu', role: 'language', sizeBytes: DEU_SIZE, installed: true },
+        { lang: 'eng', role: 'language', sizeBytes: ENG_SIZE, installed: true },
+        { lang: 'osd', role: 'orientation', sizeBytes: 4_320_130, installed: false }
+      ])
+    })
+    render(<ModelsScreen />)
+
+    expect(await screen.findByText(en['models.ocr.rowOrientation'])).toBeInTheDocument()
+    expect(screen.queryByText(en['models.ocr.row'])).not.toBeInTheDocument()
+    await user.click(await screen.findByRole('button', { name: en['ocr.install.action'] }))
+    expect(within(await screen.findByRole('dialog')).getByText(en['ocr.install.lang.osd'])).toBeInTheDocument()
   })
 
   it('14: gates closed disable the row button and show why', async () => {

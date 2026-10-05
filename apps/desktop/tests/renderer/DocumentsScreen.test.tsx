@@ -1786,6 +1786,170 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     expect(screen.queryByRole('menuitem', { name: 'Read again (OCR)' })).not.toBeInTheDocument()
   })
 
+  // #576 + #538 — the OCR metadata in words. The preview counts the pages that produced text (a
+  // blank page read by OCR is not "recognized"), and pages the recognizer was unsure of are named
+  // quietly on the row and, with their causes and "Read again (OCR)", in the preview.
+  it('#576/#538: the preview counts the pages with text; an unsure reading is named on the row and in the preview, with Read again', async () => {
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'j-redo' }))
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({
+          ocr: {
+            pageCount: 3,
+            textPageCount: 2,
+            lowConfidencePageCount: 1,
+            languages: ['deu'],
+            engineId: 'tesseract.js-7.0.0',
+            createdAt: '2026-01-01T00:00:00Z'
+          }
+        })
+      ]),
+      getAppStatus: vi.fn(async () => appStatus()),
+      previewDocument: vi.fn(async () => ({
+        id: 'd1',
+        title: 'contract.pdf',
+        mimeType: 'application/pdf',
+        segments: [{ text: 'Erste Seite.', pageNumber: 1, sectionLabel: null }]
+      })),
+      startDocTask,
+      getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-redo', documentIds: ['d1'] }))
+    })
+    render(<DocumentsScreen />)
+    const unsure = translate('en', 'docs.ocr.unsure.some', { count: 1, total: 2 })
+    expect(await screen.findByText(unsure)).toBeInTheDocument() // the row caption
+
+    await user.click(screen.getByRole('button', { name: /preview/i }))
+    const dialog = await screen.findByRole('dialog')
+    expect(
+      within(dialog).getByText(translate('en', 'docs.previewModal.ocrInfoPartial', { count: 2, total: 3 }))
+    ).toBeInTheDocument()
+    expect(within(dialog).getByText(new RegExp(unsure.replace(/[.]/g, '\.')))).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: 'Read again (OCR)' }))
+    await waitFor(() =>
+      expect(startDocTask).toHaveBeenCalledWith({ kind: 'ocr', documentIds: ['d1'], params: undefined })
+    )
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+  })
+
+  // #574 — a photo read by OCR on import now carries OCR metadata: the preview says so, and its
+  // "Read again (OCR)" re-reads the stored photo — a re-index; the OCR task is PDF-only and would
+  // refuse it.
+  it('#574: a photo read by OCR has the photo caveat, and Read again (OCR) re-indexes it', async () => {
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'never' }))
+    const photo = doc({
+      id: 'p1',
+      title: 'receipt.jpg',
+      mimeType: 'image/jpeg',
+      chunkCount: 1,
+      ocr: {
+        pageCount: 1,
+        textPageCount: 1,
+        lowConfidencePageCount: 0,
+        languages: ['deu', 'eng'],
+        engineId: 'tesseract.js-7.0.0',
+        createdAt: '2026-10-05T00:00:00Z'
+      }
+    })
+    const reindexDocument = vi.fn(async () => photo)
+    stubApi({
+      listDocuments: vi.fn(async () => [photo]),
+      getAppStatus: vi.fn(async () => appStatus()),
+      previewDocument: vi.fn(async () => ({
+        id: 'p1',
+        title: 'receipt.jpg',
+        mimeType: 'image/jpeg',
+        segments: [{ text: 'Quittung über 42 Euro.', pageNumber: null, sectionLabel: null }]
+      })),
+      startDocTask,
+      reindexDocument
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('receipt.jpg')
+    await user.click(screen.getByRole('button', { name: /preview/i }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(en['docs.previewModal.ocrInfoPhoto'])).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: /close/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'More actions for receipt.jpg' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Read again (OCR)' }))
+    await waitFor(() => expect(reindexDocument).toHaveBeenCalledWith('p1'))
+    expect(startDocTask).not.toHaveBeenCalled()
+  })
+
+  // #575 — a text PDF with scanned pages: until OCR reads them, a quiet caption says how many and
+  // the ⋯ menu offers "Make searchable (OCR)"; once read, the caption goes and the preview counts
+  // the recognized pages against the whole document.
+  it('#575: scanned pages in a text PDF are named on the row and offered OCR; once read, the preview counts them against the document', async () => {
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'j-575' }))
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'unread', title: 'letter.pdf', scannedPages: { count: 2, pageCount: 3 } }),
+        doc({
+          id: 'read',
+          title: 'contract.pdf',
+          scannedPages: { count: 2, pageCount: 3 },
+          ocr: {
+            pageCount: 2,
+            textPageCount: 2,
+            languages: ['deu'],
+            engineId: 'tesseract.js-7.0.0',
+            createdAt: '2026-10-05T00:00:00Z'
+          }
+        })
+      ]),
+      getAppStatus: vi.fn(async () => appStatus()),
+      previewDocument: vi.fn(async () => ({
+        id: 'read',
+        title: 'contract.pdf',
+        mimeType: 'application/pdf',
+        segments: [{ text: 'Seite 1.', pageNumber: 1, sectionLabel: null }]
+      })),
+      startDocTask,
+      getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-575', documentIds: ['unread'] }))
+    })
+    render(<DocumentsScreen />)
+    const caption = translate('en', 'docs.ocr.scannedPages', { count: 2, total: 3 })
+    expect(await screen.findAllByText(caption)).toHaveLength(1) // the unread row only
+
+    const readRow = screen.getByText('contract.pdf').closest('.doc-row') as HTMLElement
+    await user.click(within(readRow).getByRole('button', { name: /preview/i }))
+    const dialog = await screen.findByRole('dialog')
+    expect(
+      within(dialog).getByText(translate('en', 'docs.previewModal.ocrInfoPartial', { count: 2, total: 3 }))
+    ).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: /close/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'More actions for letter.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Make searchable (OCR)' }))
+    await waitFor(() =>
+      expect(startDocTask).toHaveBeenCalledWith({ kind: 'ocr', documentIds: ['unread'], params: undefined })
+    )
+  })
+
+  // #575 review L5: only missing files earn "needs the OCR files" — files that are present but whose
+  // recognizer cannot run (or is still being proven) are not "missing".
+  it.each([
+    ['missing', true],
+    ['unavailable', false],
+    ['probing', false]
+  ] as const)('#575: with OCR %s, the scanned-pages caption names the OCR files: %s', async (ocrState, named) => {
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({ title: 'letter.pdf', scannedPages: { count: 2, pageCount: 3 } })]),
+      getAppStatus: vi.fn(async () => appStatus({ ocrAvailable: false, ocrState }))
+    })
+    render(<DocumentsScreen />)
+    const caption = translate('en', 'docs.ocr.scannedPages', { count: 2, total: 3 })
+    const row = (await screen.findByText(new RegExp(caption.replace(/[.]/g, '\\.')))).closest('p') as HTMLElement
+    await waitFor(() =>
+      expect(row.textContent?.includes(en['docs.ocr.scannedPagesNeedsOcr'])).toBe(named)
+    )
+  })
+
   it('FE-4: the OCR busy label switches to "Finishing…" on the final re-ingest step; Cancel stays enabled', async () => {
     vi.useFakeTimers()
     try {

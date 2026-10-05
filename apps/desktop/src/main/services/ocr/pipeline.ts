@@ -17,19 +17,26 @@
  * crafted PDF can declare an enormous page count, so the OCR walk honours the same M-2 cap the
  * text parser does. Enforced here (not only at the caller) so any pipeline user is bounded;
  * absent ⇒ walk every declared page (historical behaviour).
+ *
+ * #575: `pages` walks only those page numbers (a text PDF's scanned pages), ascending, each once,
+ * within the same cap; absent ⇒ every page.
  */
+export function pagesToWalk(pageCount: number, opts?: { maxPages?: number; pages?: readonly number[] }): number[] {
+  const last = opts?.maxPages != null ? Math.min(pageCount, opts.maxPages) : pageCount
+  if (!opts?.pages) return Array.from({ length: Math.max(0, last) }, (_, i) => i + 1)
+  return [...new Set(opts.pages)].filter((n) => Number.isInteger(n) && n >= 1 && n <= last).sort((a, b) => a - b)
+}
+
 export async function pipelinePages(
   pageCount: number,
   renderPage: (pageNumber: number) => Promise<Buffer>,
   onPage: (pageNumber: number, png: Buffer) => void | Promise<void>,
-  opts?: { signal?: AbortSignal; abortError?: () => Error; maxPages?: number }
+  opts?: { signal?: AbortSignal; abortError?: () => Error; maxPages?: number; pages?: readonly number[] }
 ): Promise<void> {
   const makeAbort = opts?.abortError ?? (() => new DOMException('aborted', 'AbortError'))
-  const effectivePageCount =
-    opts?.maxPages != null ? Math.min(pageCount, opts.maxPages) : pageCount
   let prevOnPage: Promise<void> | null = null
   try {
-    for (let pageNumber = 1; pageNumber <= effectivePageCount; pageNumber++) {
+    for (const pageNumber of pagesToWalk(pageCount, opts)) {
       if (opts?.signal?.aborted) throw makeAbort()
       // Render N. On every iteration after the first this runs WHILE recognize(N-1) is in
       // flight — the look-ahead overlap.

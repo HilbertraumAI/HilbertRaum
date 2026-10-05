@@ -11,7 +11,11 @@ import {
   getDocumentOcrPages,
   listDocuments
 } from '../../src/main/services/ingestion'
-import { ocrMetaFromJson, parseOcrMeta } from '../../src/main/services/ingestion/ocr-meta'
+import {
+  OCR_LOW_CONFIDENCE,
+  ocrMetaFromJson,
+  parseOcrMeta
+} from '../../src/main/services/ingestion/ocr-meta'
 
 // PERF-3 (full-audit-2026-06-29 follow-up, Phase 4): `listDocuments` must read the OCR badge from
 // the cheap `ocr_meta_json` sidecar, NEVER from the multi-MB `ocr_json` blob (which reconstructs
@@ -57,6 +61,7 @@ describe('OCR metadata sidecar (PERF-3)', () => {
     const meta = parseOcrMeta(row.ocr_meta_json)
     expect(meta).toEqual({
       pageCount: 2,
+      textPageCount: 2,
       languages: ['deu', 'eng'],
       engineId: 'tesseract.js-7.0.0',
       createdAt: expect.any(String)
@@ -69,6 +74,23 @@ describe('OCR metadata sidecar (PERF-3)', () => {
       .get(id) as { ocr_json: string | null; ocr_meta_json: string | null }
     expect(cleared.ocr_json).toBeNull()
     expect(cleared.ocr_meta_json).toBeNull()
+  })
+
+  it('counts the pages that produced text (#576) and the text pages read with low confidence (#538)', () => {
+    const db = freshDb()
+    const id = makeDoc(db)
+    setDocumentOcr(db, id, {
+      pages: [
+        { pageNumber: 1, text: 'Erste Seite.', confidence: 93 },
+        { pageNumber: 2, text: '', confidence: 0 }, // a blank page: read, no text, never "unsure"
+        { pageNumber: 3, text: 'Dritte Seite, schlecht lesbar.', confidence: OCR_LOW_CONFIDENCE - 1 }
+      ],
+      engineId: 'tesseract.js-7.0.0',
+      languages: ['deu', 'eng']
+    })
+    expect(getDocument(db, id)?.ocr).toMatchObject({ pageCount: 3, textPageCount: 2, lowConfidencePageCount: 1 })
+    // The stored pages keep each reading's confidence (parseOcr must not drop the field).
+    expect(getDocumentOcrPages(db, id)?.map((p) => p.confidence)).toEqual([93, 0, OCR_LOW_CONFIDENCE - 1])
   })
 
   it('listDocuments SQL omits ocr_json and selects ocr_meta_json (no page-text materialization)', () => {
@@ -112,6 +134,7 @@ describe('OCR metadata sidecar (PERF-3)', () => {
     const listed = listDocuments(db, null).find((d) => d.id === id)
     expect(listed?.ocr).toEqual({
       pageCount: 2,
+      textPageCount: 2,
       languages: ['deu', 'eng'],
       engineId: 'tesseract.js-7.0.0',
       createdAt: expect.any(String)
@@ -152,6 +175,7 @@ describe('OCR metadata sidecar (PERF-3)', () => {
     expect(row.ocr_meta_json).toBeTruthy()
     expect(parseOcrMeta(row.ocr_meta_json)).toEqual({
       pageCount: 2,
+      textPageCount: 2,
       languages: ['deu', 'eng'],
       engineId: 'tesseract.js-7.0.0',
       createdAt: '2026-01-01T00:00:00.000Z'
@@ -173,6 +197,29 @@ describe('OCR metadata sidecar (PERF-3)', () => {
   })
 })
 
+describe('the #576 re-derivation of an older sidecar', () => {
+  it('a sidecar written before #576 (blank pages counted as recognized) is re-derived at open', () => {
+    const path = join(tmp, 'pre-576.sqlite')
+    const db = openDatabase(path)
+    const id = makeDoc(db)
+    setDocumentOcr(db, id, {
+      pages: [...TWO_PAGES, { pageNumber: 3, text: '' }],
+      engineId: 'tesseract.js-7.0.0',
+      languages: ['deu']
+    })
+    // What the pre-#576 writer stored: pageCount = every page read, no textPageCount.
+    db.prepare('UPDATE documents SET ocr_meta_json = ? WHERE id = ?').run(
+      JSON.stringify({ pageCount: 3, languages: ['deu'], engineId: 'tesseract.js-7.0.0', createdAt: 't' }),
+      id
+    )
+    db.close()
+
+    const reopened = openDatabase(path)
+    expect(getDocument(reopened, id)?.ocr).toMatchObject({ pageCount: 3, textPageCount: 2 })
+    reopened.close()
+  })
+})
+
 describe('ocrMetaFromJson / parseOcrMeta (unit)', () => {
   it('counts only well-formed pages and never returns text', () => {
     const meta = ocrMetaFromJson(
@@ -188,7 +235,7 @@ describe('ocrMetaFromJson / parseOcrMeta (unit)', () => {
         createdAt: 'when'
       })
     )
-    expect(meta).toEqual({ pageCount: 2, languages: ['deu', 'eng'], engineId: 'e', createdAt: 'when' })
+    expect(meta).toEqual({ pageCount: 2, textPageCount: 2, languages: ['deu', 'eng'], engineId: 'e', createdAt: 'when' })
   })
 
   it('returns null for absent / malformed / empty OCR (badge then absent, mirrors parseOcr)', () => {
@@ -206,5 +253,7 @@ describe('ocrMetaFromJson / parseOcrMeta (unit)', () => {
     expect(parseOcrMeta('{ bad')).toBeNull()
     expect(parseOcrMeta(JSON.stringify({ pageCount: 0 }))).toBeNull()
     expect(parseOcrMeta(JSON.stringify({ pageCount: -1 }))).toBeNull()
+    // A count larger than the pages it counts is dropped, never shown.
+    expect(parseOcrMeta(JSON.stringify({ pageCount: 2, textPageCount: 5 }))?.textPageCount).toBeUndefined()
   })
 })

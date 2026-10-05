@@ -6,8 +6,14 @@ import { existsSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tMain } from '../../i18n'
-import { getDocument, reindexDocument, setDocumentOcr } from '../../ingestion'
-import type { OcrPage } from '../../ocr'
+import {
+  getDocument,
+  getDocumentScannedPages,
+  reindexDocument,
+  setDocumentOcr
+} from '../../ingestion'
+import type { OcrPage, OcrTurn } from '../../ocr'
+import { readUpright } from '../../ocr/upright'
 import { shredFile } from '../../workspace-vault'
 import { resolveStoredCopy } from '../../ingestion/stored-copy'
 import { isAbortError } from '../../chat'
@@ -21,6 +27,14 @@ import type { DocTaskCtx, InternalTask } from '../context'
  * only), then re-ingest — the PdfParser's ocrPages hook turns the recognition into
  * one segment per page, so page citations work unchanged.
  * Progress = pages recognized + the final re-ingest step.
+ *
+ * Each page is read the right way up (#538, `readUpright`): the turn that worked for the previous
+ * page is tried first, and the page's confidence and turn are kept with its text.
+ *
+ * A TEXT PDF with scanned pages (#575) has only those pages read; the re-ingest merges their
+ * recognition with the text layer of the others. Such a reading is persisted even when it found
+ * no text (blank backs of a scanned attachment) — the pages were read, and the offer must not
+ * come back; a whole scan with no text still fails as before (it would index nothing).
  *
  * Cancel contract (GAP-7, full-audit 2026-07-11 — decided deliberately): a cancel landing
  * anywhere BEFORE the persist point (`setDocumentOcr`) persists NOTHING — the rasterize loop,
@@ -43,12 +57,16 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
   const doc = getDocument(db, documentId)
   if (!doc) throw new Error(tMain('main.task.ocrNotAScan'))
   const signal = task.controller.signal
+  // #575: a text PDF's scanned pages, or null — a whole scan reads every page.
+  const scannedPages = doc.scanDetected ? null : getDocumentScannedPages(db, documentId)
 
   const pdf = await readStoredPdfBytes(documentId, ctx)
   const pages: OcrPage[] = []
+  let lastTurn: OcrTurn = 0
   try {
     await rasterize(pdf, {
       signal,
+      ...(scannedPages ? { pages: scannedPages } : {}),
       onPageCount: (n) => {
         // pages + persist/re-ingest as the final step.
         task.status.progress.stepsTotal = n + 1
@@ -56,8 +74,14 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
       onPage: async (pageNumber, png) => {
         // Backpressure: recognitions serialize; the rasterizer keeps at most a 1-deep
         // render look-ahead (ING-5).
-        const result = await engine.recognize(png, { signal })
-        pages.push({ pageNumber, text: result.text.trim() })
+        const reading = await readUpright(engine, png, { signal, first: lastTurn })
+        lastTurn = reading.turn
+        pages.push({
+          pageNumber,
+          text: reading.text.trim(),
+          ...(reading.confidence != null ? { confidence: reading.confidence } : {}),
+          ...(reading.turn !== 0 ? { turn: reading.turn } : {})
+        })
         task.status.progress.stepsDone += 1
         if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
       }
@@ -75,7 +99,11 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
   // actually cancels (nothing persisted). There is no await between here and `setDocumentOcr`,
   // so past this line the task is committed to completing (see the header's cancel contract).
   if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
-  if (!pages.some((p) => p.text.length > 0)) {
+  // A reading with no text is kept only for a text PDF's scanned pages read for the FIRST time (so
+  // the offer goes away); a re-run never replaces an earlier reading with nothing, and a run that
+  // read no page at all (every scanned page past the page cap) persists nothing (#575).
+  const foundText = pages.some((p) => p.text.length > 0)
+  if (!foundText && (!scannedPages || doc.ocr != null || pages.length === 0)) {
     throw new Error(tMain('main.task.ocrNoText'))
   }
 

@@ -1499,6 +1499,41 @@ back to Chat opened a new chat instead of the one the file was attached in (#573
   - main side: `collections.test.ts`, `chat-ipc.test.ts`, `rag-collections.test.ts`,
     `docs-ipc.test.ts` (the OCR rejoin).
 
+### 11.19 What OCR read, in words — design record (IMPLEMENTED 2026-10-05, #538, #574, #575, #576)
+
+_How a document's OCR metadata is said on its row and in its preview. Engineering record:
+`architecture.md` "OCR quality amendment". Code cites this section as **§11.19**._
+
+**Decisions.**
+1. **Rows stay quiet.** An indexed row keeps one inline Preview and the ⋯ menu (§11.6). Both new
+   notes are `hint doc-row-cap` captions, never banners or badges; their actions live in ⋯
+   (**Make searchable (OCR)** for unread scanned pages, **Read again (OCR)** for a done reading).
+2. **One wording module for row and preview** (`screens/documents/ocrNotes.ts`), so the two can
+   never say different things.
+3. **Count what is searchable.** The preview's OCR line counts the pages whose reading produced
+   text — *"… on 2 of 3 pages"* — against the whole document when only its scanned pages were read
+   (#575), and says *"read N scanned pages … found no text"* when none did. Nouns follow
+   `{total}`, which those sentences only render at ≥ 2, so no plural forms are needed.
+4. **"Unsure" names a place to look, not a verdict.** *"Text recognition was unsure on 1 of the 3
+   recognized pages."* / *"… of this photo"* / *"… of this page"*. The preview adds the causes
+   (blurry, skewed, handwritten, another language) and **Read again (OCR)** beside them; the row
+   caption has no button (rule 1).
+5. **Scanned pages in a text PDF** read *"Scanned pages without readable text yet: 2 of 12."* (a
+   figure after a colon, no inflection); without the OCR files it adds *"Reading them needs the
+   OCR files (AI Model screen)."* The caption goes once OCR has read them.
+6. **A photo is "this photo"**, everywhere: the preview line, the unsure note, and the **Read again
+   (OCR)** tooltip (for a photo it is a re-index).
+7. **The orientation file is named for what it does.** In the install dialog *"Page orientation
+   (turns sideways pages upright)"*; the dialog label is *Files*, not *Languages*; the AI Model row,
+   when it is the only file missing, says *"Turning sideways scans upright needs one more OCR file
+   (optional)"*.
+
+**As built:** `PreviewModal.tsx` (`.preview-ocr-unsure`: the note and its button on one wrapping
+line), `DocRow.tsx`, `ocrNotes.ts`, `ModelsScreen.tsx`, `OcrInstall.tsx`; EN + DE catalogs (German
+uses „erkannten Seiten“ and „Bildschirm KI-Modell“). Eyeballed in the real app, light and dark,
+German UI (screenshots in the PR). Tests: `DocumentsScreen.test.tsx` (#576/#538, #574, #575 cases),
+`OcrInstall.test.tsx` (13b), the CODE-8 non-grammatical list in `i18n.test.ts`.
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

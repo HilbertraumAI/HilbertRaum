@@ -50,6 +50,7 @@ import { DocRow } from './documents/DocRow'
 import { SectionRail } from './documents/SectionRail'
 import { PacksPanel } from './documents/PacksPanel'
 import { PreviewModal } from './documents/PreviewModal'
+import { isPhotoDocument } from './documents/ocrNotes'
 import {
   ACTIVE_STATUSES,
   DOC_ROW_ESTIMATED_HEIGHT,
@@ -1861,6 +1862,7 @@ export function DocumentsScreen({
         <PreviewModal
           preview={preview}
           ocr={previewDoc?.ocr ?? null}
+          documentPages={previewDoc?.scannedPages?.pageCount}
           summary={previewDoc?.summary ?? null}
           treeReady={previewDoc?.treeStatus === 'ready'}
           originLine={previewDoc ? provenanceLine(previewDoc, sourcesById, t) : null}
@@ -1874,6 +1876,17 @@ export function DocumentsScreen({
             setPreview(null)
             if (previewDoc) void onSummarizeTier(previewDoc, tier)
           }}
+          onReadAgain={
+            previewDoc?.ocr && ocrAvailable && activeTask === null && busy === null
+              ? () => {
+                  setPreview(null)
+                  // #574: a photo is read again by a re-index; a scan by the OCR task.
+                  void (isPhotoDocument(previewDoc.mimeType)
+                    ? run('reindex', previewDoc, () => window.api.reindexDocument(previewDoc.id))
+                    : onMakeSearchable(previewDoc))
+                }
+              : undefined
+          }
           onClose={() => setPreview(null)}
         />
       )}

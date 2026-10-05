@@ -29,6 +29,10 @@ declare module 'pdfjs-dist/legacy/build/pdf.mjs' {
     getViewport(params: { scale: number }): PageViewport
     /** `canvas` is an HTMLCanvasElement; typed loosely — no DOM lib in the node program. */
     render(params: { canvas: { width: number; height: number }; viewport: PageViewport }): RenderTask
+    /** #575: the page's drawing operators — the scanned-page check counts them. */
+    getOperatorList(): Promise<{ fnArray: number[] }>
+    /** Release the page's caches (fonts, decoded images). */
+    cleanup(): boolean
   }
   export interface PDFDocumentProxy {
     readonly numPages: number
