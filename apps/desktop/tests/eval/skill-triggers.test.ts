@@ -25,9 +25,13 @@ const LABEL_SPACE = new Set<string>([...APP_VOCAB_SKILL_IDS, 'none'])
  * documented deviation, not a pass: when a row is fixed its entry must be REMOVED (a stale entry fails).
  *  - adv-meeting-schedule-01: a scheduling question that merely names a meeting still offers
  *    meeting-protocol — the documented precision ceiling of a one-keyword offer.
+ *  - tp-redaction-de-pd-version-01: a German removal request that names only the data, with no removal
+ *    verb, gets no offer since the bare "personenbezogene Daten" stopped offering (#608); German removal
+ *    verbs are #602.
  */
 const KNOWN_SUGGESTION_DEVIATIONS: Record<string, string> = {
-  'adv-meeting-schedule-01': 'meeting-protocol'
+  'adv-meeting-schedule-01': 'meeting-protocol',
+  'tp-redaction-de-pd-version-01': 'none'
 }
 
 /**

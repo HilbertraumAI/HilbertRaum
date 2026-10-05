@@ -56,12 +56,17 @@ const ROUTING_CASES: RoutingCase[] = [
     handler: documentRedactionAnalysisHandler,
     installId: DOCUMENT_REDACTION_INSTALL_ID,
     // EN + DE action verbs apply; a German informational PII ask the route vocab misses
-    // ("personenbezogenen", U2 dry-run) applies too; an off-topic question keeps the relevance path.
+    // ("personenbezogenen", U2 dry-run) applies too; the bare "personenbezogene Daten" still routes a request
+    // that carries no listed phrase (#608 kept it as a route term); an off-topic question keeps the relevance
+    // path, and so does a question about what the document says on "Löschung" (#608: not a scan, not a
+    // removal request).
     applies: [
       ['Can you anonymize this doc?', true],
       ['Bitte die personenbezogenen Daten schwärzen', true],
       ['Welche personenbezogenen Daten enthält das Dokument?', true],
-      ['what is this letter about?', false]
+      ['Bitte personenbezogene Daten löschen.', true],
+      ['what is this letter about?', false],
+      ['Was sagt das Dokument zur Löschung personenbezogener Daten?', false]
     ],
     action: 'redact these',
     buttonKey: 'chat.skill.tool.redactDocument',
@@ -190,6 +195,15 @@ describe('redaction routing handler — informational dry-run (U2)', () => {
       leaks: ['+49 170 1234567']
     },
     {
+      // #608: only a word-initial "lösch…" is a removal request; asking whether it is gelöscht is not.
+      title: 'DE, asks whether the data is gelöscht',
+      locale: 'de' as const,
+      text: undefined,
+      question: 'Sind die personenbezogenen Daten schon gelöscht?',
+      counts: { email: 0, phone: 1, iban: 0, card: 0, date: 0, url: 0 },
+      leaks: ['+49 170 1234567']
+    },
+    {
       title: 'SKA-3 R8: Unicode print variants (NBSP IBAN, U+2011 phone)',
       locale: 'en' as const,
       text: 'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Tel +43 664\u20111234567.',
@@ -221,6 +235,16 @@ describe('redaction routing handler — informational dry-run (U2)', () => {
     )
     const button = tr('chat.skill.tool.redactDocument')
     expect(res.answer).toBe(tr('skills.redactionRouting.answer', { button }))
+  })
+
+  it('a German "lösche …" request is an ACTION ask too: the button, not the dry-run (#608)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db)
+    const res = await documentRedactionAnalysisHandler.run!(
+      ctxFor(db, { documentIds: [id] }, 'Lösche die personenbezogenen Daten aus dem Brief.', 'de')
+    )
+    const button = trDe('chat.skill.tool.redactDocument')
+    expect(res.answer).toBe(trDe('skills.redactionRouting.answer', { button }))
   })
 
   it('an informational ask over MULTIPLE documents falls back to the deflection (which document?)', async () => {
