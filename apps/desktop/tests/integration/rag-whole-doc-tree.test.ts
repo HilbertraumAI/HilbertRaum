@@ -214,11 +214,10 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     expect(msg!.coverage?.chunksCovered).toBe(h.chunkIds.length)
     // At least one map step + the reduce — more than the single-reduce case.
     expect(rt.calls).toBeGreaterThanOrEqual(2)
-    // The fence rode in EVERY step: the first (a map) AND the last (the reduce).
-    const firstUser = rt.turns[0].find((t) => t.startsWith('user:')) ?? ''
-    const lastUser = rt.turns[rt.turns.length - 1].find((t) => t.startsWith('user:')) ?? ''
-    expect(firstUser).toContain('structured minutes')
-    expect(lastUser).toContain('structured minutes')
+    // The fence rode in EVERY step (each map AND the reduce).
+    for (const turn of rt.turns) {
+      expect(turn.find((t) => t.startsWith('user:'))).toContain('structured minutes')
+    }
   })
 
   it('no ready tree → returns null (caller falls back to the capped path), no model call', async () => {
@@ -285,7 +284,9 @@ describe('answerWholeDocFromTree — deep-index map-reduce for an over-budget wh
     expect(reduceUser).toContain('BEGINNING of the document')
     expect(reduceUser).not.toContain('cover the WHOLE document')
     // The fence still shaped every step (the ceiling does not drop the skill).
-    expect(reduceUser).toContain('structured minutes')
+    for (const turn of rt.turns) {
+      expect(turn.find((t) => t.startsWith('user:'))).toContain('structured minutes')
+    }
   })
 
   it('notes truncated at the reduce budget → truncated stamp (the former "lies at the margin" bug)', async () => {

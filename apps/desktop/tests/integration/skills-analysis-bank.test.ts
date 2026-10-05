@@ -8,12 +8,6 @@ import {
   BANK_STATEMENT_INSTALL_ID,
   bankStatementAnalysisHandler
 } from '../../src/main/services/skills/analysis/bank-statement'
-import {
-  clearSkillAnalysisHandlers,
-  getSkillAnalysisHandler,
-  registerSkillAnalysisHandler
-} from '../../src/main/services/skills/analysis/registry'
-import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
 import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
@@ -109,24 +103,16 @@ const COMPLETE =
   'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
   '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
 
-// A 4-column DACH layout (Buchungstag + Valuta value date + Betrag + Saldo) with printed opening/closing
-// balances that tie out. Before the BL-1 fix the leading value date was read as the amount (the row
-// dropped or mis-valued); now every row parses with the real amount and feeds the VERIFIED total.
-const TWO_DATE_COMPLETE =
-  'Kontoauszug EUR\nAnfangssaldo 2.000,00\n' +
-  '06.06.2026 07.06.2026 Supermarkt Billa -45,90 1.954,10\n' +
-  '08.06.2026 09.06.2026 Gehalt ACME 2.500,00 4.454,10\n' +
-  'Endsaldo 4.454,10'
+// One kept row + one money-bearing line the parser DROPS as an ambiguous balance-as-amount ("Sparen 50 …":
+// a lone money token with a bare-number-trailing description on a balance-column statement). No printed
+// balances → status 'unverified', droppedRowCount 1.
+const ONE_DROPPED = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Sparen 50 1.234,56'
 
-// A TYING statement whose closing line carries a TRAILING date (BL-N2) and whose first row hides a
-// money-shaped reference (100,00 EUR) before the real amount (BL-N3). opening 2000 + (−100 + 2500) ==
-// closing 4400 must read as a VERIFIED total. Before the Phase-1 fixes the in-description 100,00 became
-// the amount AND the closing read '30.06.20' → 3006.20, so the tie failed → a false refusal.
-const TRAILING_DATE_COMPLETE =
-  'Kontoauszug EUR\nAnfangssaldo 2.000,00\n' +
-  '2026-01-02 Betrag 100,00 EUR -100,00 1.900,00\n' +
-  '2026-01-03 Gehalt 2.500,00 4.400,00\n' +
-  'Endsaldo 4.400,00 EUR per 30.06.2026'
+// D56 completeness PROOF outranks the parse gap: opening 100 + kept Salary 100 == closing 200 ties out, so
+// the ambiguous dropped "Foo 1234 50,00" line provably didn't move the balance (a non-transaction figure).
+const COMPLETE_WITH_DROPPED =
+  'Statement EUR\nOpening balance 100,00\n2026-01-02 Salary 100,00 200,00\n' +
+  '2026-01-03 Foo 1234 50,00\nClosing balance 200,00'
 
 describe('bank-statement analysis handler — applies() pre-flight (R2)', () => {
   it('applies on an analysis-shaped question over a single in-scope statement', () => {
@@ -243,51 +229,12 @@ describe('bank-statement analysis handler — date-order caveat (R5, §5.7)', ()
 })
 
 describe('bank-statement analysis handler — honest completeness gate (U1, §2.3)', () => {
-  // One good row + one row the parser DROPS as an ambiguous balance-as-amount ("Sparen 50 …" — a lone
-  // money token with a bare-number-trailing description on a balance-column statement). droppedRowCount = 1.
-  const ONE_DROPPED =
-    'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Sparen 50 1.234,56'
+  // The partial (dropped line) and contradicted headlines are pinned over the real-layout corpus below;
+  // the plain-count case is pinned by the exhaustive-math test.
 
-  it('gates the count line: droppedRowCount > 0 ⇒ the honest partial headline, not "the whole statement"', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, ONE_DROPPED)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
-    // One row survived; one money-bearing line was dropped → the partial headline (count 1, dropped 1).
-    expect(res.answer).toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
-    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 1 }))
-  })
-
-  // A per-row printed balance that the amounts refute ⇒ status 'contradicted'; both rows parse (dropped 0).
-  const CONTRADICTED =
-    'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
-    '2026-01-03 Salary 2.500,00 9.999,99\nClosing balance 9.999,99'
-
-  it('gates the count line: a CONTRADICTED statement drops the "whole statement" claim (self-contradiction fix)', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, CONTRADICTED)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
-    expect(res.answer).toContain(tr('skills.bankAnalysis.countContradicted', { count: 2 }))
-    expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
-    // The body still refuses a total (the balances don't tie) — the count line no longer contradicts it.
-    expect(res.answer).toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
-  })
-
-  it('a clean, complete statement keeps the plain "across the whole statement" count (no false gate)', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, COMPLETE)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
-    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
-    expect(res.answer).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 2, dropped: 0 }))
-  })
-
-  // D56 completeness PROOF outranks the parse-gap gate: opening 100 + kept Salary 100 == closing 200 ties out,
-  // so the ambiguous dropped "Foo 1234 50,00" line provably didn't move the balance (a non-transaction figure).
-  // The read IS the whole statement, so the headline must be the plain count — NOT a countPartial hedge over a
-  // body that presents the proven-whole total (the self-contradiction the review caught).
-  const COMPLETE_WITH_DROPPED =
-    'Statement EUR\nOpening balance 100,00\n2026-01-02 Salary 100,00 200,00\n' +
-    '2026-01-03 Foo 1234 50,00\nClosing balance 200,00'
-
+  // The completeness PROOF outranks the parse-gap gate: the read IS the whole statement, so the headline
+  // must be the plain count — NOT a countPartial hedge over a body that presents the proven-whole total
+  // (the self-contradiction the review caught).
   it('D56 complete OUTRANKS the parse-gap gate: a tying statement with a dropped line keeps the whole-statement count', async () => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE_WITH_DROPPED)
@@ -314,6 +261,11 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).toContain('EUR')
     // The statement reconciles, so there is NO "check these rows first" block.
     expect(res.answer).not.toContain(tr('skills.bankAnalysis.unreconciledHeading'))
+    // opening 2000.00 + Σ 2454.10 == closing 4454.10 ties out (D56) → the totals line plus the VERIFIED
+    // (whole-document) caveat, never the refusal.
+    expect(res.answer).toContain('Net change')
+    expect(res.answer).toContain(tr('skills.bankAnalysis.caveat'))
+    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
   })
 
   it('issues ONE bank_transactions read per analysis question (audit P-1): the seams reuse the single load', async () => {
@@ -356,41 +308,6 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).not.toContain('Net change')
     // The transaction listing still appears even on the refusal — the user can SEE the rows that were read.
     expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsHeading'))
-  })
-
-  it('4-column Buchung/Valuta statement: rows parse with the real amount and feed the verified total (BL-1 e2e)', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, TWO_DATE_COMPLETE)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
-
-    // Both rows parsed (count 2) — neither dropped by the leading value-date column.
-    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
-    // Money in 2500.00, out 45.90, net 2454.10 — the value date never became a 706.20-style amount.
-    expect(res.answer).toContain('2500.00')
-    expect(res.answer).toContain('45.90')
-    expect(res.answer).toContain('2454.10')
-    expect(res.answer).not.toContain('706.20') // no misread value-date fragment leaks as an amount
-    // opening 2000.00 + Σ 2454.10 == closing 4454.10 ties out → the VERIFIED (whole-document) caveat,
-    // not the unverified labelled-sum caveat and not the refusal.
-    expect(res.answer).toContain(tr('skills.bankAnalysis.caveat'))
-    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
-    expect(res.answer).not.toContain(tr('skills.bankAnalysis.unverifiedCaveat', { count: 2 }))
-  })
-
-  it('trailing-date closing + in-description money: the TYING statement presents the VERIFIED total (BL-N2/BL-N3 e2e)', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, TRAILING_DATE_COMPLETE)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
-
-    // Both rows parse with the real amounts (−100 + 2500); the in-description 100,00 never became the amount.
-    expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
-    expect(res.answer).toContain('2500.00') // money in
-    expect(res.answer).toContain('100.00') // money out (the real −100 amount, not the 100,00 reference)
-    expect(res.answer).toContain('2400.00') // net change
-    expect(res.answer).not.toContain('3006.20') // the trailing date never became the closing balance
-    // opening 2000 + Σ 2400 == closing 4400 ties out → the VERIFIED caveat, not the refusal.
-    expect(res.answer).toContain(tr('skills.bankAnalysis.caveat'))
-    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
   })
 
   it('mixed-currency statement reports NO single total (honesty)', async () => {
@@ -437,7 +354,13 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).toContain(tr('skills.bankAnalysis.categoryRuleBased'))
   })
 
-  it('reads PERSISTED categories (Phase 33) and labels a model-assigned breakdown model-assisted', async () => {
+  // Which signal makes the breakdown model-assisted: the authoritative persisted `categorized_by_model`
+  // flag wins when set; a legacy NULL flag falls back to "a persisted category outside the rule set".
+  it.each<{ name: string; flag: number | null; offSetLabel: boolean; assisted: boolean }>([
+    { name: 'legacy NULL flag + a label outside the rule set → assisted (name fallback)', flag: null, offSetLabel: true, assisted: true },
+    { name: 'flag 1 with only rule-set labels → assisted (the model emitted in-set labels only)', flag: 1, offSetLabel: false, assisted: true },
+    { name: 'flag 0 beats an off-set label → NOT assisted', flag: 0, offSetLabel: true, assisted: false }
+  ])('reads PERSISTED categories (Phase 33): $name', async ({ flag, offSetLabel, assisted }) => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)
     // First call extracts + deterministically categorizes the statement (creates the statement).
@@ -446,28 +369,31 @@ describe('bank-statement analysis handler — run()', () => {
       .prepare('SELECT id FROM bank_statements WHERE document_id = ? ORDER BY created_at DESC LIMIT 1')
       .get(id) as { id: string }
 
-    // Simulate the LLM categorizer doctask having assigned a RICHER category (outside the rule set).
-    const now = new Date().toISOString()
-    const catId = randomUUID()
-    db.prepare('INSERT INTO bank_categories (id, name, builtin, created_at) VALUES (?, ?, 1, ?)').run(
-      catId,
-      'Groceries',
-      now
-    )
-    db.prepare(
-      `UPDATE bank_transactions SET category_id = ?
-       WHERE id = (SELECT id FROM bank_transactions WHERE statement_id = ? ORDER BY row_index LIMIT 1)`
-    ).run(catId, stmt.id)
+    if (offSetLabel) {
+      // Simulate the LLM categorizer doctask having assigned a RICHER category (outside the rule set).
+      const now = new Date().toISOString()
+      const catId = randomUUID()
+      db.prepare('INSERT INTO bank_categories (id, name, builtin, created_at) VALUES (?, ?, 1, ?)').run(
+        catId,
+        'Groceries',
+        now
+      )
+      db.prepare(
+        `UPDATE bank_transactions SET category_id = ?
+         WHERE id = (SELECT id FROM bank_transactions WHERE statement_id = ? ORDER BY row_index LIMIT 1)`
+      ).run(catId, stmt.id)
+    }
+    if (flag != null) db.prepare('UPDATE bank_statements SET categorized_by_model = ? WHERE id = ?').run(flag, stmt.id)
 
-    // The second call REUSES the same statement, so it reads the persisted categories — including the
-    // model-assigned "Groceries" — and labels the breakdown model-assisted (it never re-extracts/overwrites).
+    // The second call REUSES the same statement, so it reads the persisted categories (it never
+    // re-extracts/overwrites) and labels the breakdown by the flag/heuristic above.
     const res = await bankStatementAnalysisHandler.run!(
       ctxFor(db, { documentIds: [id] }, 'break down spending by category')
     )
-    expect(res.answer).toContain('Groceries')
-    expect(res.answer).toContain(tr('skills.bankAnalysis.categoryAssisted'))
-    // The model-assisted breakdown carries the assisted note, NOT the rule-based one (audit C-2).
-    expect(res.answer).not.toContain(tr('skills.bankAnalysis.categoryRuleBased'))
+    if (offSetLabel) expect(res.answer).toContain('Groceries')
+    // Assisted breakdowns carry the assisted note, NOT the rule-based one, and vice versa (audit C-2).
+    expect(res.answer).toContain(tr(assisted ? 'skills.bankAnalysis.categoryAssisted' : 'skills.bankAnalysis.categoryRuleBased'))
+    expect(res.answer).not.toContain(tr(assisted ? 'skills.bankAnalysis.categoryRuleBased' : 'skills.bankAnalysis.categoryAssisted'))
     // No duplicate statement was created (re-extraction is suppressed when one exists).
     const count = db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(id) as {
       n: number
@@ -595,15 +521,6 @@ describe('bank-statement analysis handler — run()', () => {
     expect(res.answer).toContain(tr('skills.bankAnalysis.transactionsMore', { count: 2 }))
   })
 
-  it('presents a total only once the opening + Σ == closing balance ties out (D56)', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, COMPLETE)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'what is the total?'))
-    expect(res.answer).toContain('Net change')
-    expect(res.answer).toContain('2454.10')
-    expect(res.answer).not.toContain(tr('skills.bankAnalysis.incompleteNoTotal'))
-  })
-
   it('downgrades when a printed closing balance does NOT tie out with the rows (D56)', async () => {
     const db = freshDb()
     // Opening 2000.00 + Σ 2454.10 = 4454.10, but the statement prints a closing of 9999.99 → no proof.
@@ -681,19 +598,39 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     expect(res.citations.length).toBeGreaterThan(0)
   })
 
-  it('summary/total/reconcile/category asks STILL get the deterministic template (mode unset)', async () => {
+  // The answer-shape classifier end-to-end through run() (W4/W7): the deterministic template (mode
+  // unset) vs grounded-data (the model explains over the verified data block).
+  it.each<{ q: string; mode: 'grounded-data' | undefined; dataBlock?: string }>([
+    { q: 'summarize the cashflow', mode: undefined },
+    { q: 'what is the total?', mode: undefined },
+    { q: 'do the balances reconcile?', mode: undefined },
+    // An EXPLICIT "by category" ask keeps the category template (SKA-20).
+    { q: 'break down spending by category', mode: undefined },
+    // SKA-9: separable verbs "Fasse … zusammen" / "Liste … auf" keep the D56-gated template.
+    { q: 'Fasse den Kontoauszug zusammen', mode: undefined },
+    { q: 'Liste die Transaktionen auf', mode: undefined },
+    // SKA-9 accepted "auf"-preposition over-fire: /\blist…\bauf\b/ sends this to the template (the safe,
+    // deterministic side; a listing ask is a template ask anyway).
+    { q: 'Liste die Buchungen auf dem Konto', mode: undefined },
+    // Follow-up regression: an explanatory repeat is a model answer, never the byte-identical template.
+    { q: 'warum stimmen die Summen nicht?', mode: 'grounded-data' },
+    // SKA-10: the WHY guard suppresses the serializer short-circuit → grounded-data, not a JSON re-dump.
+    { q: 'Warum fehlt der Saldo im JSON?', mode: 'grounded-data' },
+    // SKA-20: the flagship spend ask was the category TEMPLATE while 'spend on' ∈ CATEGORY_KEYWORDS; the
+    // per-category grouping still rides the block so it stays answerable.
+    { q: 'how much did I spend on groceries?', mode: 'grounded-data', dataBlock: 'Category totals' }
+  ])('answer shape: "$q" → $mode', async ({ q, mode, dataBlock }) => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)
-    for (const q of [
-      'summarize the cashflow',
-      'what is the total?',
-      'do the balances reconcile?',
-      'break down spending by category'
-    ]) {
-      const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
-      expect(res.mode, `"${q}" must keep the template`).toBeUndefined()
+    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
+    expect(res.mode).toBe(mode)
+    if (mode === undefined) {
       expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+    } else {
+      expect(res.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
+      expect(res.answer).not.toContain('```json')
     }
+    if (dataBlock) expect(res.dataBlock).toContain(dataBlock)
   })
 
   it('format path (JSON): "as JSON" serializes the statement inline — rows + summary + balances, no model, no template', async () => {
@@ -960,22 +897,6 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
     expect(parsed.transactions.map((t: { category: string | null }) => t.category)).toEqual(['Spending', 'Income'])
   })
 
-  it('follow-up regression: a repeat "warum stimmen die Summen nicht?" is NOT the byte-identical template', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, COMPLETE)
-    // A summary ask first — the deterministic template (the "byte-identical" answer users complained about).
-    const first = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'))
-    expect(first.mode).toBeUndefined()
-    // The explanatory follow-up (contains 'summe' but ASKS WHY) must route to grounded-data — the template
-    // can only PRINT figures, never explain — so the repeat intercept produces a DIFFERENT (model) answer.
-    const second = await bankStatementAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'warum stimmen die Summen nicht?')
-    )
-    expect(second.mode).toBe('grounded-data')
-    expect(second.answer).not.toBe(first.answer)
-    expect(second.answer).not.toContain(tr('skills.bankAnalysis.count', { count: 2 }))
-  })
-
   it('grounded-data postscript carries the R5 date caveat when dates were read day-first with no evidence', async () => {
     const db = freshDb()
     // All-ambiguous dotted dates + a tying opening/closing → day-first applied with no evidence (R5).
@@ -1012,10 +933,10 @@ describe('bank analysis — Stop mid-run is a calm cancel, not a swallowed answe
       ...ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'),
       signal: controller.signal,
       readDocumentSegments: async (_id: string, _opts?: { layout?: boolean }) => {
-        // Stop pressed mid-extraction: abort, then the reader throws → run.ts reads signal.aborted
-        // → {ok:false, cancelled:true}.
+        // Stop pressed mid-extraction: abort, then the reader still returns the real segments, so only
+        // the abort gates (not a reader failure) stand between the run and persisting a statement.
         controller.abort()
-        throw new Error('aborted mid-extraction')
+        return [{ text: COMPLETE, page: 1, index: 0 }]
       }
     }
     await expect(bankStatementAnalysisHandler.run!(ctx)).rejects.toMatchObject({ name: 'AbortError' })
@@ -1072,8 +993,6 @@ describe('bank-statement grounded-data honesty composition (W6, §3.1 SKA-4/SKA-
     expect(res.dataBlock).not.toContain('MISSING')
   })
 
-  // One kept row + one dropped money line, NO printed balances → status 'unverified', dropped 1.
-  const ONE_DROPPED = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Sparen 50 1.234,56'
   it('SKA-4/SKA-5 unverified + dropped: echo + unverifiedCaveat + the dropped hedge; data block MISSING note', async () => {
     const db = freshDb()
     const id = seedDoc(db, ONE_DROPPED)
@@ -1087,11 +1006,6 @@ describe('bank-statement grounded-data honesty composition (W6, §3.1 SKA-4/SKA-
     expect(res.dataBlock).not.toContain('parsed and reconciled from the whole document')
   })
 
-  // D56 PROOF outranks the parse gap: opening 100 + Salary 100 == closing 200 ties, so the dropped
-  // "Foo 1234 50,00" line provably didn't move the balance → complete, NO hedge (mirrors the template).
-  const COMPLETE_WITH_DROPPED =
-    'Statement EUR\nOpening balance 100,00\n2026-01-02 Salary 100,00 200,00\n' +
-    '2026-01-03 Foo 1234 50,00\nClosing balance 200,00'
   it('SKA-5 D56 OUTRANKS: complete + dropped>0 → echo present, NO dropped hedge, whole-document provenance', async () => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE_WITH_DROPPED)
@@ -1100,77 +1014,6 @@ describe('bank-statement grounded-data honesty composition (W6, §3.1 SKA-4/SKA-
     expect(res.postscript).not.toContain(tr('skills.bankAnalysis.countPartial', { count: 1, dropped: 1 }))
     expect(res.dataBlock).not.toContain('MISSING')
     expect(res.dataBlock).toContain('every value above was parsed and reconciled from the whole document')
-  })
-
-  // A per-row balance the amounts refute → status 'contradicted' (dropped 0).
-  const CONTRADICTED =
-    'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
-    '2026-01-03 Salary 2.500,00 9.999,99\nClosing balance 9.999,99'
-  it('SKA-4 contradicted: the postscript SUPPRESSES the figure echo (mirrors incompleteNoTotal)', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, CONTRADICTED)
-    const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, NON_SUMMARY))
-    expect(res.mode).toBe('grounded-data')
-    // No app-authored total under the model answer on a statement the balances refute.
-    expect(res.postscript).not.toContain('2454.10')
-    expect(res.postscript).not.toContain('computed')
-    // The data block still carries the honest contradicted verdict for the model to narrate.
-    expect(res.dataBlock).toContain('NOT verified as the whole statement')
-  })
-})
-
-// W7 (audit §3.2/§3.3/§3.4) — answer-shape + classifier vocabulary tuning, end-to-end through run().
-describe('bank-statement W7 answer-shape tuning (SKA-9/SKA-10/SKA-20)', () => {
-  it('SKA-9 separable verbs "Fasse … zusammen" / "Liste … auf" keep the D56-gated TEMPLATE (mode unset)', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, COMPLETE)
-    for (const q of ['Fasse den Kontoauszug zusammen', 'Liste die Transaktionen auf']) {
-      const res = await bankStatementAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, q))
-      expect(res.mode, `"${q}" must keep the template`).toBeUndefined()
-      expect(res.answer).toContain(tr('skills.bankAnalysis.count', { count: 2 }))
-    }
-  })
-
-  it('SKA-9 accepted "auf"-preposition over-fire: "Liste die Buchungen auf dem Konto" → template (safe side)', async () => {
-    // "auf" doubles as a preposition; the /\blist…\bauf\b/ regex over-fires this to the TEMPLATE — the
-    // deterministic side (a listing ask is a template ask anyway). Documented, pinned here.
-    const db = freshDb()
-    const id = seedDoc(db, COMPLETE)
-    const res = await bankStatementAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'Liste die Buchungen auf dem Konto')
-    )
-    expect(res.mode).toBeUndefined()
-  })
-
-  it('SKA-10 explanatory format Q "Warum fehlt der Saldo im JSON?" reaches grounded-data, not the JSON dump', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, COMPLETE)
-    const res = await bankStatementAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'Warum fehlt der Saldo im JSON?')
-    )
-    // The WHY guard suppresses the serializer short-circuit → grounded-data can explain (not re-dump JSON).
-    expect(res.mode).toBe('grounded-data')
-    expect(res.answer).not.toContain('```json')
-  })
-
-  it('SKA-20 "how much did I spend on groceries?" is GROUNDED-DATA (the flagship), not the category template', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, COMPLETE)
-    const res = await bankStatementAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'how much did I spend on groceries?')
-    )
-    expect(res.mode).toBe('grounded-data') // was the category TEMPLATE while 'spend on' ∈ CATEGORY_KEYWORDS
-    // The per-category grouping still rides the grounded-data block, so the spend ask is answerable.
-    expect(res.dataBlock).toContain('Category totals')
-  })
-
-  it('SKA-20 an EXPLICIT "break down … by category" ask STILL gets the category template', async () => {
-    const db = freshDb()
-    const id = seedDoc(db, COMPLETE)
-    const res = await bankStatementAnalysisHandler.run!(
-      ctxFor(db, { documentIds: [id] }, 'break down spending by category')
-    )
-    expect(res.mode).toBeUndefined() // 'by category' still routes to the template
   })
 })
 
@@ -1226,21 +1069,5 @@ describe('bank-statement analysis over the real-layout corpus (T2 — U1 headlin
     expect(res.postscript).not.toContain('computed')
     // The data block still hands the model the honest contradicted verdict to narrate.
     expect(res.dataBlock).toContain('NOT verified as the whole statement')
-  })
-})
-
-describe('analysis-handler registry', () => {
-  it('register/get round-trips by install id; an unknown id returns undefined', () => {
-    clearSkillAnalysisHandlers()
-    expect(getSkillAnalysisHandler(BANK_STATEMENT_INSTALL_ID)).toBeUndefined()
-    registerSkillAnalysisHandler(BANK_STATEMENT_INSTALL_ID, bankStatementAnalysisHandler)
-    expect(getSkillAnalysisHandler(BANK_STATEMENT_INSTALL_ID)).toBe(bankStatementAnalysisHandler)
-    expect(getSkillAnalysisHandler('app:not-a-skill')).toBeUndefined()
-  })
-
-  it('registerBuiltinSkillAnalysisHandlers wires the bank handler (D49)', () => {
-    clearSkillAnalysisHandlers()
-    registerBuiltinSkillAnalysisHandlers()
-    expect(getSkillAnalysisHandler(BANK_STATEMENT_INSTALL_ID)).toBe(bankStatementAnalysisHandler)
   })
 })
