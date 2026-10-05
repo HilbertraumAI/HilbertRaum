@@ -4840,7 +4840,7 @@ An unresolved seen-state (settings read pending/failed) shows nothing — a miss
 re-nag. **Learn more** deep-links the Skills screen's existing detail modal through a one-shot
 renderer-side mailbox (`renderer/lib/skillDetailRequest.ts` — `requestSkillDetail(installId)` +
 `consumeSkillDetailRequest()` in `SkillsTab`'s list-load effect); nothing crosses the IPC. Tests:
-`SkillInfoCard.test.tsx` (catalog lines, description fallback, handlers), `SkillInfoFirstPick.test.tsx`
+`SkillInfoCard.test.tsx` (catalog lines, description fallback), `SkillInfoFirstPick.test.tsx`
 (ChatScreen: first-pick shows + persists, seen skill needs the ⓘ, active-pick gating, Learn-more
 navigation), `SkillsTab.test.tsx` (deep-link opens the modal / unknown id opens nothing),
 `db-settings.test.ts` (`skillInfoSeen` round-trip + junk sanitization).
@@ -4928,7 +4928,7 @@ fields are neutralized against spreadsheet formula-injection (S12 fix). The bank
 `kind:'tool'`, which makes its declared `allowedTools` effective (the SL-1 parser path keeps the list only
 for `kind:'tool'`) and uses the reconcile/validate body. **Geometry-aware PDF reading for columnar
 statements (Phase 31, D50–D58) + the opening/closing-balance completeness gate are recorded in §21**
-(the `pdf-layout.ts` layout mode + `extractStatementBalances`/`isStatementComplete` extend these same
+(the `pdf-layout.ts` layout mode + `extractStatementBalances`/`assessCompleteness` extend these same
 bank tools; in-code comments here citing `architecture.md "Skills — design record" §8` for the bank
 domain still resolve, the geometry specifics live in §21).
 The packaged `schemas/transaction.schema.json` (the machine-readable row contract that ships inside every
@@ -5193,10 +5193,10 @@ audited/exported).
   full-audit-2026-06-28 record below). This is the **line-parser fallback** (plain-text statements, CSV, and the
   invoice path — which has no geometry pass); the geometry layout's own out-of-column value-date handling
   is §21 (the booking-date column model), a separate seam. Pinned by the 4-column `Buchung Valuta Betrag
-  Saldo` fixtures (`skills-bank-statement-tool.test.ts` unit + `skills-analysis-bank.test.ts` end-to-end);
+  Saldo` fixtures (`skills-bank-statement-tool.test.ts`);
   teeth = reverting to the single-token strip drops/mis-values the rows.
-- **BL-2 — single-currency precondition on the completeness gate (`assessCompleteness` /
-  `isStatementComplete`) and `reconcileBalances`.** Both summed amounts across currencies: the gate tied
+- **BL-2 — single-currency precondition on the completeness gate (`assessCompleteness`) and
+  `reconcileBalances`.** Both summed amounts across currencies: the gate tied
   `opening + Σamounts == closing` and the reconcile chained `prevBalance + amount` regardless of currency,
   so a mixed-currency statement could be mislabelled `complete`/`contradicted` or carry a spurious
   per-row `mismatch`. Now both mirror `summarizeCashflow`'s `currencies.size === 1` guard:
@@ -5267,7 +5267,8 @@ missed the live `MONEY_RE`/`parseDate` bugs). Two owner decisions were taken bef
   `Math.abs(printed − expected) < MONEY_EPS` in **floats** while `assessCompleteness` (audit C-3) uses
   **integer cents**; a per-row `mismatch` forces `contradicted`. Reconcile now uses the IDENTICAL
   `Math.round(x*100)` integer path — a **consistency/defensive** fix (no realistic 2-dp input distinguishes
-  the two; the teeth are structural, so its test is a regression guard, not a before/after flip).
+  the two; the teeth are structural, so it is pinned by the reconcile `it.each` in
+  `skills-bank-statement-tool.test.ts`).
 - **BL-N4 — redaction under-masking (`redaction.ts`).** `PHONE_RE` matched only `+`/`0`-prefixed numbers,
   and IBAN detection was case-sensitive (`de89…` survived). Added a **PUNCTUATED** US/national 3-3-4 phone
   alternative (optional leading `1`; `[.\-]` only — so a bare 10-digit run, a prose space-triple, and a
@@ -5469,19 +5470,19 @@ the abandoned DS13 design that named one was never built.)
 ### §12 Trade-offs, residuals & the closing S12 audit
 
 S12 ran the repo's multi-persona audit over the whole surface against the untrusted-skill-as-input
-threat principle (§14). **No CRITICAL/HIGH.** One LOW was fixed (CSV spreadsheet formula-injection at the
-export boundary), and the scattered S10/S11 sentinel tests were consolidated into a single
+threat principle (§14). **No CRITICAL/HIGH.** One LOW was fixed (CSV spreadsheet formula-injection at
+the export boundary), and the scattered S10/S11 sentinel tests were consolidated into a single
 `skills-privacy-guard.test.ts` that drives one secret through every sink (import error, loader, all five
-tool runs, the CSV export, the IPC `SkillRunState`) **plus a console spy**. Accepted LOW residuals
-(documented in [`known-limitations.md`](known-limitations.md)): prompt text-injection is contained by the
-**structural ceiling**, not by escaping the fence delimiter; a user skill's `triggers.filenamePatterns`
-are matched against a title only on a user action by a **linear, non-backtracking two-pointer matcher**
-(`selector.globMatches`), and the entry length/count are capped at parse time (vuln-scan 2026-06-21
-replaced the original glob→RegExp compile entirely — see §13 S2). **Deferred:** S13 auto-fire
-(gated on an evaluation harness); native model tool-calling (stays a future option behind the same gate);
-the app-skill integrity residual (by location, not signature — same as the engine binary, §22-M2).
-**History:** the wave shipped S2–S12 (2026-06-17); the original plans: `git show <S12^>:docs/skills-plan.md`
-and `git show <S12^>:docs/skills-s11-plan.md`.
+tool runs, the CSV export, the polled `SkillRunState` snapshot) **plus a console spy**. Accepted LOW
+residuals (documented in [`known-limitations.md`](known-limitations.md)): prompt text-injection is
+contained by the **structural ceiling**, not by escaping the fence delimiter; a user skill's
+`triggers.filenamePatterns` are matched against a title only on a user action by a **linear,
+non-backtracking two-pointer matcher** (`selector.globMatches`), and the entry length/count are capped
+at parse time (vuln-scan 2026-06-21 replaced the original glob→RegExp compile entirely — see §13 S2).
+**Deferred:** S13 auto-fire (gated on an evaluation harness); native model tool-calling (stays a future
+option behind the same gate); the app-skill integrity residual (by location, not signature — same as the
+engine binary, §22-M2). **History:** the wave shipped S2–S12 (2026-06-17); the original plans:
+`git show <S12^>:docs/skills-plan.md` and `git show <S12^>:docs/skills-s11-plan.md`.
 
 ### §13 Post-S12 audit follow-ups (2026-06-17)
 
@@ -6084,16 +6085,19 @@ versions each get ~half). The two documents ride the grounded turn as **labelled
 (**`buildCompareWholeDocPrompt`** — "Document 1 — …" / "Document 2 — …", so a same-titled version pair
 stays distinguishable) with the SKILL.md fence; `[Sn]` labels run **continuously across both** so a
 citation unambiguously names its version (M2). Coverage is honest **`capped`** — `truncated:true` when
-**either** doc overflowed its share. The relevance path stays byte-unchanged for a 1- or 3-doc scope
-(`applies()` false). The §14 ceiling + the fence/guard bracketing are unchanged.
+**either** doc overflowed its share. A 1- or 3-doc compare-vocabulary ask gets the deterministic
+"select exactly two" answer (`rag-skill-analysis.test.ts`). The §14 ceiling + the fence/guard
+bracketing are unchanged.
 
 **Tests.** `rag-whole-doc-tree.test.ts` (the tree map-reduce: single-level → one fenced reduce + `tree`
 coverage + leaf citations + skill stamp; multi-level + small context → map-per-section then reduce with
 the fence at EVERY step; no-ready-tree → null + no model call). `rag-whole-doc-compare.test.ts` (IPC: the
 compare path streams a model answer with BOTH whole docs in one labelled turn + `capped` coverage +
-cross-document citations; the refuse path when a doc isn't fully chunked; a single-doc scope keeps the
-relevance path). `skills-analysis-whole-doc.test.ts` also pins the `what-changed` handler shape +
-`applies()` (compare-shaped over exactly two docs) + `splitCompareBudget` + `retrieveCompareWholeDocuments`.
+cross-document citations; the refuse path when a doc isn't fully chunked; a 1- or 3-doc
+compare-vocabulary ask gets the deterministic "select exactly two" answer
+(`rag-skill-analysis.test.ts`)). `skills-analysis-whole-doc.test.ts` also pins the `what-changed`
+handler shape + `applies()` (compare-shaped over exactly two docs) + `splitCompareBudget` +
+`retrieveCompareWholeDocuments`.
 `skills-analysis-whole-doc.test.ts` (handler-level: `mode==='grounded-whole-doc'` + no
 `run()`, `applies()` matrix EN+DE / off-topic / multi-doc / no-doc, registry wiring, and
 `retrieveWholeDocument` order + truncation + always-keep-first-chunk); `rag-whole-doc-skill.test.ts`
@@ -6233,8 +6237,7 @@ on one line), and bare `DD.MM.` per-row dates with the year only in the header a
 - **The completeness gate (D56 + the D56-R refinement).** New `extractStatementBalances` (printed
   opening/closing, EN+DE labels incl. `balance brought/carried forward`, `opening/closing balance`,
   `Anfangs-/Endsaldo`, `Kontostand per`) feeds `assessCompleteness`, the three-outcome classifier
-  (`complete` / `contradicted` / `unverified`); `isStatementComplete` is retained as its boolean
-  `=== 'complete'` projection (the unit tests pin the gate by that name).
+  (`complete` / `contradicted` / `unverified`).
   - **Cent-exact tie (audit C-3, 2026-06-26).** `assessCompleteness` sums and compares the
     `opening + Σamounts == closing` tie in **integer cents** (`Math.round(amount*100)`), not a float
     `reduce`. Every figure is exactly 2-dp, so the cent sum is exact and the tie is an exact integer test
@@ -6567,24 +6570,24 @@ figure verification is needed. The constraints that DO hold:
   `opening_balance`/`closing_balance` on Raiffeisen statements — so v1 statements re-extract via this path).
 
 **Tests:** `skills-categorizer.test.ts` (taxonomy/enum, prefilter, model path, off-list/out-of-range
-drop, unparseable-batch drop, batching, no-runtime fallback; **Phase 2:** `categorizeRow` agrees with the
-prefilter on coincidental substrings, L-1 truncation-retry-then-succeed + retry-once-then-drop, L-2
+drop, unparseable-batch drop, batching, no-runtime fallback; **Phase 2:** `categorizeRow` agrees with
+the prefilter on coincidental substrings, L-1 truncation-retry-then-succeed + retry-once-then-drop, L-2
 char-cap drop; **Phase 11 (audit T-1):** an empty input makes NO model call and returns an empty result
 (`modelAssisted:false`), and the EXACT batch boundary — exactly `CATEGORIZER_BATCH_SIZE`(20) model-bound
-rows is ONE call, 21 is two, a 1-row batch is one — pinning the off-by-one the 25-row batching test only
-brackets); `skills-bank-statement-tool.test.ts` (**Phase 2:** `categorizeRow` word-boundary matching —
-`coffee`≠Fees, compound `Kontoführungsgebühr`→Spending; **Phase 3:** the cent-exact many-row drift case
-stays `complete` (C-3), the `Kontostand per` dated pair maps opening/closing and a lone line is closing-only
-→ `unverified` (C-4), `BANK_EXTRACTOR_VERSION === 2`); `skills-run.test.ts` (**Phase 3:** a v1 statement is
-detected stale at v2, a freshly-stamped one is not); `doctasks-categorize.test.ts` (model path
-persists, deterministic fallback persists, auto-extract-then-categorize, A9 stale-statement re-extract +
-replace; **Phase 6:** an extract run leaves the doctask lane untouched and the rows uncategorized — no
-hidden model run); `skills-tool-run-ipc.test.ts` (**Phase 6:** an extract with rows enqueues NO
-`categorize` doctask — U-2); `SkillRunBar.test.tsx` (**Phase 6:** the result-row "Categorize transactions"
-offer renders only after a successful rows>0 extract and fires the categorize path with the remembered id;
-absent for a 0-row / non-extract / non-done run); `skills-analysis-bank.test.ts` (persisted model categories
-surface + the model-assisted label; **Phase 2:** the rule-based note when `modelAssisted` is false, absent
-when model-assisted; no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh
+rows is ONE call, 21 is two, a 1-row batch is one); `skills-bank-statement-tool.test.ts` (**Phase 2:**
+`categorizeRow` word-boundary matching — `coffee`≠Fees, compound `Kontoführungsgebühr`→Spending; **Phase
+3:** the cent-exact many-row drift case stays `complete` (C-3), the `Kontostand per` dated pair maps
+opening/closing and a lone line is closing-only → `unverified` (C-4), `BANK_EXTRACTOR_VERSION === 2`);
+`skills-run.test.ts` (**Phase 3:** a v1 statement is detected stale at v2, a freshly-stamped one is
+not); `doctasks-categorize.test.ts` (model path persists, deterministic fallback persists,
+auto-extract-then-categorize, A9 stale-statement re-extract + replace; **Phase 6:** an extract run
+leaves the doctask lane untouched and the rows uncategorized — no hidden model run);
+`skills-tool-run-ipc.test.ts` (**Phase 6:** an extract with rows enqueues NO `categorize` doctask —
+U-2); `SkillRunBar.test.tsx` (**Phase 6:** the result-row "Categorize transactions" offer renders only
+after a successful rows>0 extract and fires the categorize path with the remembered id; absent for a
+0-row / non-extract / non-done run); `skills-analysis-bank.test.ts` (persisted model categories surface +
+the model-assisted label; **Phase 2:** the rule-based note when `modelAssisted` is false, absent when
+model-assisted; no duplicate statement on re-ask; A9 stale statement re-extracted+replaced, fresh
 statement reused).
 
 ### §23 Skills & Tools audit (2026-06-26) — remediation close-out
@@ -6615,17 +6618,17 @@ comment's `audit <ID>` citation through it:
 
 **Phase 11 (T-1 / R-1 / R-2) — as built:**
 
-- **T-1 — backfilled only the genuinely-missing edges (no padding).** Two categorizer edges were ADDED to
-  `skills-categorizer.test.ts`: an **empty input** makes NO model call and returns an empty result
+- **T-1 — backfilled only the genuinely-missing edges (no padding).** Two categorizer edges were ADDED
+  to `skills-categorizer.test.ts`: an **empty input** makes NO model call and returns an empty result
   (`modelAssisted:false`), and the **exact batch boundary** — exactly `CATEGORIZER_BATCH_SIZE`(20)
-  model-bound rows is ONE model call, 21 is two, a 1-row batch is one — pinning the off-by-one the prior
-  25-row "batches of 20" test only *brackets*. **Teeth-verified** (a transient batch-step off-by-one made
-  the boundary test fail; reverted). The other clustered T-1 gaps were verified **already covered** by the
-  earlier phases' own tests and were **NOT re-added**: cross-lane concurrency PC-1
-  (`skills-concurrency.test.ts`, Phase 9), multi-doc `docIds[0]`/chooser + the no-title `SkillRunState`
-  privacy sentinel + the U-2 no-auto-categorize behaviour (`skills-tool-run-ipc.test.ts`, Phases 5/6), the
-  whole-batch-drop / retry-once / char-cap / 25-rows⇒2-calls categorizer cases (`skills-categorizer.test.ts`,
-  Phase 2), and the C-3/C-4 completeness numerics (`skills-bank-statement-tool.test.ts`, Phase 3).
+  model-bound rows is ONE model call, 21 is two, a 1-row batch is one. **Teeth-verified** (a transient
+  batch-step off-by-one made the boundary test fail; reverted). The other clustered T-1 gaps were
+  verified **already covered** by the earlier phases' own tests and were **NOT re-added**: cross-lane
+  concurrency PC-1 (`skills-concurrency.test.ts` + `skills-doc-lock.test.ts`, Phase 9), multi-doc
+  `docIds[0]`/chooser + the no-title `SkillRunState` privacy sentinel + the U-2 no-auto-categorize
+  behaviour (`skills-tool-run-ipc.test.ts`, Phases 5/6), the whole-batch-drop / retry-once / char-cap /
+  21 rows ⇒ 2 calls categorizer cases (`skills-categorizer.test.ts`, Phase 2), and the C-3/C-4
+  completeness numerics (`skills-bank-statement-tool.test.ts`, Phase 3).
 - **R-1 — auto-fire corpus is intentionally narrow (no rows invented).** `document-redaction` is STILL the
   ONLY app skill opting into `triggers.autoFire`, and the eval gate already covers it: the harness's
   `APP_SKILL_IDS` and the 33-turn `tests/fixtures/skill-triggers/corpus.json` (four `document-redaction`
@@ -9076,7 +9079,7 @@ phase moved):
 | **SEC-10** (H-03 · DOC-4, dictation/export transients) | MED-HIGH | 4 | #273 | **fixed** — lock and quit awaited streams, doc tasks and sidecar stops but held no registry of preview, re-index or the current prepare/parser promise; an encrypted preview decrypts to `.parse-preview-*` and shredded it only in an async `finally`, so "Lock now" reported `locked` and quit called `app.exit(0)` with a decrypted file on the drive and a parse still running (B2 reproduced across a real lock and a real `performShutdown`). Now a plaintext-operation registry `createPlaintextOps()` (`ingestion/plaintext-ops.ts:67`; kinds preview / reindex / import-prepare / dictation / export / doc-task; `register(kind, parent?)` → `{ signal, track(path), release() }`, `abortAll()`, `awaitSettled(bound)`, `sweepRegistered()` shreds every tracked path of a still-live op plus its `.tmp` stage) sits on `ctx.plaintextOps`, and every `.parse*` writer joins it — preview, re-index, import prepare, the two export readers, dictation, and the doc-task `.parse.md`/`.parse-ocr.pdf` materialisations the plan's list had missed (reviewer). "Lock now" (`registerWorkspaceIpc.ts:96` `settleAndSweepPlaintextOps`: abort with the other aborts → settle ≤ 5 s, the existing `LOCK_TASK_SETTLE_TIMEOUT_MS` → sweep) and quit (`shutdown.ts:353,368`; the sweep runs OUTSIDE the 30 s race, before the lock) apply it; the parse wall-clock timeout aborts the same signal (`ingestion/index.ts:710`); the preview IPC re-checks admission after its awaits. Photo OCR and audio honour the abort; pdfjs/mammoth/txt cannot and are sweep-bounded (documented; true cancellation needs a terminable worker — not planned). Deliberately NOT a lock-time name sweep: it would also shred `encryptFileAsync`'s `.tmp` stage — ciphertext in progress. Quit's raced middle is now 25.5 s worst case under the 30 s constant. B2 inverted: `lock-admission-race.test.ts` "#237" describes (`:733`, `:807` — parked photo preview across a real lock and a real `performShutdown`, both engine flavours, a `readdirSync` name sweep at the "locked" instant, stored copies survive); `plaintext-ops.test.ts` (8 contracts). DOC-4: `security-model.md`'s lock contract lists the kinds; the quit bullet generalised. Residual: the GUI smoke (lock mid-preview) not run. #237 closed. |
 | **SEC-12** (NEW-1 · GAP-2) | MED-HIGH | 0 | #267 | **fixed** — the re-entry branch of `will-quit` returned WITHOUT `preventDefault()` on the premise "cleanup already ran", so a second quit during a parked teardown let Electron exit with the working DB plaintext at rest and every change since the last lock lost at the next launch (B1 reproduced over an event stub). `createAppLifecycleHandlers` (`shutdown.ts:286`) now owns `will-quit`/`activate` over one closure: every `will-quit` is prevented, the exit comes only from the teardown's `finally` — which also reaps registered sidecar children (`killRegisteredSidecarChildren` had run only in the `uncaughtException` path, so a deadline-abandoned llama-server would have orphaned on Windows) — and `activate` is a no-op while shutting down (GAP-2: a Dock click no longer opens a window against a latched runtime). Rider 13 default: `SHUTDOWN_OVERALL_DEADLINE_MS = 30_000` (`:39`) races the awaited middle (`withOverallDeadline` `:211`: local-API stop ≤ 0.5 s, sidecar `allSettled` ≤ 10 s, streams 5 s, doc tasks 5 s, plaintext ops 5 s = 25.5 s worst case, 4.5 s headroom) with the lock OUTSIDE the race (`log.info('quit: locking workspace')` `:190`). Whether Electron re-emits `will-quit` after a prevented one (the macOS ⌘Q leg) stays HYPOTHESIS — the rule holds either way. B1 inverted: `shutdown.test.ts:303` "will-quit re-entry during a parked teardown (#238, B1 inverted)" and `:394` "overall teardown deadline (#238 / #230)". Record: `security-model.md` "App-shell gate & lifecycle" quit bullet. Residual: the interactive double-quit smoke not run. #238 closed. |
 | **SEC-1** | MED-HIGH | 0 | #267 | **fixed (decision 1 default)** — Electron's `webPreferences.spellcheck` defaults to true and downloads Hunspell dictionaries from a Google-operated CDN on Windows/Linux on first typing — a browser-process fetch neither the CSP nor the Node-socket tripwire can see, and a hard-rule breach. `spellcheck: false` in `SECURE_WINDOW_WEB_PREFERENCES` (`window-security.ts:36`; all three windows spread it); the five-flag exact pin plus a call-site scan banning an inline `spellcheck:` (`window-security.test.ts:21-30`, `:246`). Closed by construction, not by measurement (a network capture on a packaged build was forbidden by the round's rules). Records: `security-model.md` "3. Chromium background fetches", `PRIVACY.md`, `known-limitations.md`, CHANGELOG. Other way (#218): dictionaries on the drive + a no-op `setSpellCheckerDictionaryDownloadURL` + closed `setSpellCheckerLanguages` (Phase F). #239 closed. **Measured 2026-10-03/04, #567:** the flag stops only the underlining; the session still downloaded the dictionary (Linux; Windows for a language it cannot check). Closed by `disableSpellCheckerDownloads` on every session, plus `no-proxy-server` for WPAD (security-model "Chromium background fetches"). |
-| **SEC-9** (H-02 · NEW-2, DOC-11, DOC-12) | MED (conf) / MED (avail) | 5b — 5b-a landed, 5b-b NOT OPENED | #275 | **partial — open residual, default stands.** The accepted BUILD_STATE §8 L-4 rationale ("no network sink") was false: each renderer-controlled drop/preflight path reached `lstatSync`/`realpathSync` before any lexical check, so on Windows a UNC path with an attacker-controlled host invokes name resolution and the SMB client (and, where 445/WebDAV egress is open and outgoing NTLM unrestricted, a credential exchange — documented behaviour, never probed); the preflight walk was synchronous, uncapped and on the main thread; the skills picker returned a raw path that the installer `lstat`ed (NEW-2, B6). **5b-a:** `pickSkillPackage` (`registerSkillsIpc.ts:213`) is unlock-gated and returns `{ token, path }`; `previewSkillPackage` peeks and `importSkill` spends the token (`requirePickedSource` `:203`), so a renderer string never reaches the installer (B6 inverted: `skills-ipc.test.ts:379` — an EMPTY fs call log for a non-token string, junk or a spent token); `createPickerTokens` (`ipc/picker-tokens.ts:26`, bounded FIFO of 16, extracted from the documents handler; the images handler keeps its own older copy — a tidy-up, no defect); `MAX_DROP_PATHS = 512` (`limits.ts:84`) is refused before the first `lstat` on `hardenDroppedPaths` and on the token-less `importPreflight` (`registerDocsIpc.ts:195,606`; a picker selection is exempt — `importPreflight(paths, pickerToken?)` peeks the docs token uncapped, else a Ctrl+A over 513 documents would have died at preflight); the walk is bounded — `expandPathsBounded` (`ingestion/index.ts:2028`; `DEFAULT_WALK_BUDGET` 50 000 entries / depth 64 / 10 000 ms, env-overridable; the result is a SUBSEQUENCE of the unbounded walk, picked files after a stopped walk kept); DOC-11 (this file's rows claiming `pickSkillPackage` minted a token) and DOC-12 (BUILD_STATE §8 L-4/L-5) restated. **5b-b** — the lexical half: `isNonLocalPath` rejecting UNC `\\host` / `//host`, device `\\.\` `\\?\` `\??\` and `file:` forms BEFORE any syscall on every platform (Q21 default), also inside the walk after each `realpathSync` (a local folder holding a junction to a share), with renderer copy and a troubleshooting note — is the drop-contract change for network-share users and stayed BLOCKING on decision 5 (#222), unanswered: `hardenDroppedPaths`' first fs call is still `lstatSync` (`registerDocsIpc.ts:213`). The off-thread walk is REL-13 #274. Docs: `security-model.md` residual egress (ii) `pending #240 (owner decision #222)`, the D1 and L-3 bullets, `known-limitations.md` drag-drop bullet; containment item 4's paths half promoted verbatim at this close-out. The 5b-b change set and tests are recorded on #240. **#240 OPEN.** |
+| **SEC-9** (H-02 · NEW-2, DOC-11, DOC-12) | MED (conf) / MED (avail) | 5b — 5b-a landed, 5b-b NOT OPENED | #275 | **partial — open residual, default stands.** The accepted BUILD_STATE §8 L-4 rationale ("no network sink") was false: each renderer-controlled drop/preflight path reached `lstatSync`/`realpathSync` before any lexical check, so on Windows a UNC path with an attacker-controlled host invokes name resolution and the SMB client (and, where 445/WebDAV egress is open and outgoing NTLM unrestricted, a credential exchange — documented behaviour, never probed); the preflight walk was synchronous, uncapped and on the main thread; the skills picker returned a raw path that the installer `lstat`ed (NEW-2, B6). **5b-a:** `pickSkillPackage` (`registerSkillsIpc.ts:213`) is unlock-gated and returns `{ token, path }`; `previewSkillPackage` peeks and `importSkill` spends the token (`requirePickedSource` `:203`), so a renderer string never reaches the installer (B6 inverted: `skills-ipc.test.ts` "picker token binds preview/import to the OS dialog (#240)" — an EMPTY fs call log for a non-token string, junk or a spent token); `createPickerTokens` (`ipc/picker-tokens.ts:26`, bounded FIFO of 16, extracted from the documents handler; the images handler keeps its own older copy — a tidy-up, no defect); `MAX_DROP_PATHS = 512` (`limits.ts:84`) is refused before the first `lstat` on `hardenDroppedPaths` and on the token-less `importPreflight` (`registerDocsIpc.ts:195,606`; a picker selection is exempt — `importPreflight(paths, pickerToken?)` peeks the docs token uncapped, else a Ctrl+A over 513 documents would have died at preflight); the walk is bounded — `expandPathsBounded` (`ingestion/index.ts:2028`; `DEFAULT_WALK_BUDGET` 50 000 entries / depth 64 / 10 000 ms, env-overridable; the result is a SUBSEQUENCE of the unbounded walk, picked files after a stopped walk kept); DOC-11 (this file's rows claiming `pickSkillPackage` minted a token) and DOC-12 (BUILD_STATE §8 L-4/L-5) restated. **5b-b** — the lexical half: `isNonLocalPath` rejecting UNC `\\host` / `//host`, device `\\.\` `\\?\` `\??\` and `file:` forms BEFORE any syscall on every platform (Q21 default), also inside the walk after each `realpathSync` (a local folder holding a junction to a share), with renderer copy and a troubleshooting note — is the drop-contract change for network-share users and stayed BLOCKING on decision 5 (#222), unanswered: `hardenDroppedPaths`' first fs call is still `lstatSync` (`registerDocsIpc.ts:213`). The off-thread walk is REL-13 #274. Docs: `security-model.md` residual egress (ii) `pending #240 (owner decision #222)`, the D1 and L-3 bullets, `known-limitations.md` drag-drop bullet; containment item 4's paths half promoted verbatim at this close-out. The 5b-b change set and tests are recorded on #240. **#240 OPEN.** |
 | **SEC-9** — §52 addendum 2026-09-04 | MED (conf) / MED (avail) | F (PR 2, `docs/pf-decisions-confirmed`) | #284 | **default confirmed as a ruling — decline** (owner decision #222, `**DECISION:** decline`, 2026-09-03). 5b-b, the lexical UNC/device rejection, will not be built: the SMB/NTLM credential-exposure leg is the accepted residual. Docs rewritten from "pending #240 / #222" to accepted wording — `security-model.md` residual egress (ii), the D1 and L-3 pointers and the bounds paragraph; `known-limitations.md` (the promoted containment-item-4 paths half is now a permanent "do not drop network-share paths" line; the drag-drop bullet); BUILD_STATE §8 L-4. The off-thread walk landed in PR #283. **#240 CLOSED.** |
 | **REL-5** (H-04 · rotated log, out-of-store copies, DOC-5, DOC-14) | MED | 6 | #276 | **fixed** — the v1→v2 password change staged the DB plus `documents/*.enc` only, so image history (`images/*.enc`, written under the same cipher without the lease), legacy out-of-store stored copies and the rotated encrypted log were left under a key that was then zeroed (B3 reproduced; shipped population plausibly zero — the v2 envelope predates every distributed build). `listVaultKeyCiphertexts(vaultPaths, db)` (`workspace-vault.ts:842`) now enumerates every class: `documents/*.enc`, `images/*.enc`, out-of-store rows whose `stored_path` is a regular `.enc` file outside the store AND that have no canonical `documents/<leaf>` copy (the resolver's own order — a copied vault's sibling store is never rekeyed; the leaf rule moved to dependency-free `ingestion/stored-copy-leaf.ts`), and the rotated log (`ROTATED_ENCRYPTED_LOG_NAME` `:753`; action `delete` at commit — Q18 default, nothing reads it; a rollback keeps it). A NEW on-disk file `workspace/rekey-journal.json` (`REKEY_JOURNAL_NAME` `:757`; `{ version: 1, staged: [], remove: [] }`, written atomically BEFORE staging — `writeRekeyJournal` `:894`) lets recovery find out-of-store twins while the DB is closed; a corrupt journal is quarantined as `.corrupt`, never deleted; staged twins are keyed on `pathKey()` (resolved, lower-cased on win32) — the first draft listed one physical file under two spellings and the second swap shredded the fresh target (reviewer BLOCKING, fixed in-PR). Image writes take the document-work lease (`createImageSession(…, beginWork)` `vision/history.ts:78-83`): a save mid-change is REFUSED with `VaultBusyError`, not queued. Downgrade caveat (a pre-#276 build ignores the journal) in `security-model.md` + `data-contracts.md`. DOC-5: "Password change" enumerates the four classes; DOC-14: CHANGELOG's pre-1.0 note now says v0.1.46 (2026-07-10) was a tester pre-release whose page was removed. B3 inverted + crash cuts at every journal step over every class in both directions (`password-change.test.ts`, `CUTS` `:698`). Residuals: an out-of-store copy on a drive DETACHED during the change stays under the old key (documented); lease-less image READS can fail transiently during a v1 change (never corrupt; pre-existing). #241 closed. |
 | **REL-8** (C-01 · TQ-2) | MED | 7 | #277 | **fixed** — after a failed lock the fresh working DB is the only copy of the session delta; preservation shredded an old `.recovery`, renamed the fresh file over it, swallowed both errors, and `init()` swept unconditionally — a held `.recovery` (AV/indexer) therefore shredded the only fresh DB (B4 reproduced). `preserveNewerPlaintext` returns `'preserved' | 'not-needed' | 'failed'` (`workspace-vault.ts:685`); on `'failed'` `init()` skips the crash sweep AND the pending-rekey recovery and marks the controller blocked (`isRecoveryBlocked()` `:1548`); `unlock()` re-runs `init()` (the hold may have cleared) and, still blocked, throws `VaultRecoveryBlockedError` (`:161`) → IPC reason `vault_recovery_blocked` (`registerWorkspaceIpc.ts:187`, `shared/types.ts:218`) + EN/DE `main.workspace.recoveryBlocked` (Q24; a one-key change if reworded). The SAME loss existed on the UNLOCK leg (reviewer, fixed in-PR): once `init()` had preserved the fresh copy as `.recovery`, a hold denying the header read at unlock let the older probe-error path proceed into the stale `.enc`, and a later lock made the never-rolled-forward copy shreddable — the probe-error catch now refuses whenever `.recovery` could still be fresh and proceeds only when `.enc` is demonstrably newer. Single `.recovery` name kept (Q20). TQ-2: `vi.spyOn(fs, …)` records nothing for ESM-namespace binders and the shipped guard test's injection was never reached; it now uses the pass-through `vi.mock('node:fs')` wrapper (`rmSync`→EPERM, `writeSync`→ENOSPC) and ASSERTS each injection was hit (`vault-recovery-guards.test.ts:137` `holdRecovery`; "#242" cases `:290,327`); B4 inverted (the fresh DB survives, unlock yields the marker). The incomplete fix REL-8 completes is the **2026-07-12 round's REL-1** (`6a33f25e`, §48). #242 closed. |
@@ -9158,7 +9161,7 @@ observed `console.log` values):
 | B3 | REL-5 | `tests/integration/password-change.test.ts` "#241" describes (`CUTS` `:698`) — `legacyV1` vault, two images via the real writer, an out-of-store copy, real `changePassword`, lock, fresh controller; crash cuts at every journal step over every class | that any real user has a v1 vault (v2 envelope 2026-06-11; first public release v0.1.50 2026-07-12; the tester pre-release v0.1.46 of 2026-07-10 post-dates the envelope) |
 | B4 | REL-8 | `tests/integration/vault-recovery-guards.test.ts` "#242" cases (`:290`, `:327`; `holdRecovery` arms `openSync`→EBUSY, `rmSync`→EPERM, `renameSync`→EPERM together, hit-counted) | that a real AV/indexer hold produces exactly this fault set |
 | B5 | GAP-4 | `tests/integration/commercial-drive.test.ts:762,776` + `script-execution.test.ts` (the scripts executed) | — (the paper's "19 push sites per script" was 20; none concerned the app — the conclusion stood) |
-| B6 | SEC-9 / NEW-2 | `tests/integration/skills-ipc.test.ts:379` — EMPTY fs call log for a non-token string, junk or a spent token; `{ token, path }`; the junction-loop / depth-50 / width-500 inequalities kept | anything about UNC/SMB — no UNC string exists in any test, by rule (never pass a UNC path to a real fs call) |
+| B6 | SEC-9 / NEW-2 | `tests/integration/skills-ipc.test.ts` "picker token binds preview/import to the OS dialog (#240)" — EMPTY fs call log for a non-token string, junk or a spent token; `{ token, path }`; the junction-loop / depth-50 / width-500 inequalities kept | anything about UNC/SMB — no UNC string exists in any test, by rule (never pass a UNC path to a real fs call) |
 | B7 | SEC-5 | `tests/unit/settings-write-gate.test.ts:201-281` (A–F; A and E red before the fix) | — |
 | B8 | REL-10 | `tests/integration/sidecar-teardown-abort.test.ts` (four wrappers, fake spawn + fake timers, production defaults) | the field likelihood of a wedged cold start |
 | B9 | REL-7 | `tests/integration/launcher-execution.test.ts` (16 cases: two artifacts → refusal on all three scripts; `/check`/`--check`; controls) | behaviour on a real macOS host; a real `.cmd` launch is never performed by a test (cmd's `start` blocks under a hidden console with piped stdio — a harness artefact; the Windows walk's launch step ran detached with a visible console) |
@@ -9519,11 +9522,11 @@ flips it,** update the `skills-redaction.test.ts` written-content assertions (th
 **Tests:** `skills-span-transform.test.ts` (+18: `applySpans` byte-identity outside spans, ascending
 single-pass, out-of-bounds/zero-length/overlap skip-and-report, abutting spans; `replacementText`
 token/perChar; `redactText` perChar length + line-count + idempotent + shadow-invariant + counts-parity,
-token reproduces the current masks; `locateOccurrences` verbatim/line/nth/drop-on-mismatch/non-overlap +
-a locate→splice composition) and `skills-redaction-tool.test.ts` (+3: the `perChar` strategy plumbs
-through the gate to `█` masks with unchanged counts, the no-strategy default is byte-for-byte the token
-output, the gate refuses an unknown strategy). All prior redaction pins stay green under the token
-default. Suite 3717/47 (was 3696; +21).
+token reproduces the current masks (later consolidated); `locateOccurrences`
+verbatim/line/nth/drop-on-mismatch/non-overlap + a locate→splice composition) and
+`skills-redaction-tool.test.ts` (+3: the `perChar` strategy plumbs through the gate to `█` masks with
+unchanged counts, the no-strategy default is byte-for-byte the token output, the gate refuses an unknown
+strategy). All prior redaction pins stay green under the token default. Suite 3717/47 (was 3696; +21).
 
 
 ### §21 LLM-located redaction — locate → verify → sweep (beta-feedback-2026-07 Phase 7, D73/D75/D78)
@@ -9585,16 +9588,18 @@ principle run concurrently with a chat stream on the one llama-server. Accepted 
 per the plan (deps.runtime in the seam); routing redaction through the doctask lane like `categorize` is
 the follow-up if it bites.
 
-**Tests:** `skills-redaction-locate.test.ts` (+18: schema shape; window empty/overlap/global-numbering;
-`parseLocateReply` keep-valid/drop-off-enum/malformed; `locateEntities` per-window temp-0 schema call +
-abort; `verifyAndSweepEntities` verify/sweep-all/drop-unverifiable/drop-short/dedup; `redactWithEntities`
+**Tests:** `skills-redaction-locate.test.ts` (+18: schema shape, now in lockstep with the tool schema;
+window empty/overlap/global-numbering, now the shared `describe.each`; `parseLocateReply`
+keep-valid/drop-off-enum/malformed; `locateEntities` per-window temp-0 schema call + abort;
+`verifyAndSweepEntities` verify/sweep-all/drop-unverifiable/drop-short/dedup; `redactWithEntities`
 entities+floor/perChar-length/byte-identity/empty=floor/dropped-count), `skills-redaction.test.ts` (+5
-Phase-7 seam: locate→sweep-all-occurrences+floor with steering & temp-0 schema, drop-hallucinated,
-cancel-mid-locate, model-missing degrade leaves the name, model-failure degrade still saves; existing
-pins moved to `█` + the degraded `redactedFloor`/`cleanFloor` discriminators), `skills-privacy-guard.test.ts`
-(+1: a located name value is masked out and never touches audit/log/skill_runs) + the perChar flip on the
-existing redaction case, `skills-tool-run-ipc.test.ts` (the end-to-end redaction moved to `█` + the
-no-model `redactedFloor` discriminator). Suite 3739/47 (was 3717; +22).
+Phase-7 seam: locate→sweep-all-occurrences+floor with steering & temp-0 schema, drop-hallucinated (now
+verify/sweep in `skills-redaction-locate.test.ts`), cancel-mid-locate, model-missing degrade leaves the
+name, model-failure degrade still saves; existing pins moved to `█` + the degraded
+`redactedFloor`/`cleanFloor` discriminators), `skills-privacy-guard.test.ts` (+1: a located name value
+is masked out and never touches audit/log/skill_runs) + the perChar flip on the existing redaction case,
+`skills-tool-run-ipc.test.ts` (the end-to-end redaction moved to `█` + the no-model `redactedFloor`
+discriminator). Suite 3739/47 (was 3717; +22).
 
 
 ### §22 Format-preserving targeted edits — locate → verify → splice (beta-feedback-2026-07 Phase 8, #23, D76)
@@ -9658,7 +9663,8 @@ change — the `applySpans` guarantee). Output is `.txt` this phase; same-format
   deliberately activated (still SUGGESTED on the discriminating phrases; the suggestion offer is separate
   from auto-fire).
 
-**Tests:** `skills-document-edit-locate.test.ts` (+16: schema shape; window empty/overlap/global-numbering;
+**Tests:** `skills-document-edit-locate.test.ts` (+16: schema shape; window
+empty/overlap/global-numbering, now the shared `describe.each` in `skills-redaction-locate.test.ts`;
 `parseEditReply` keep-valid/drop-empty-find/malformed/default-line-occurrence; `locateDocumentEdits`
 per-window temp-0 schema + instruction + abort; `verifyAndSpliceEdits` occurrence-precision /
 German-agreement-multi-pair-byte-identity / drop-unverifiable / drop-wrong-line / drop-out-of-range /
@@ -9748,15 +9754,16 @@ edit locate→verify→splice.
   PDF-writing dependency (only `pdfjs-dist`, a reader, is in the tree) and — for regeneration — a shipped
   embeddable font; that is an owner decision recorded in BUILD_STATE §5.
 
-**Tests:** `docx-rewrite.test.ts` (+6: text-layer concatenation/unescape, non-document.xml parts byte-identical
-after a rewrite, only the targeted `<w:t>` text changed, a span crossing two runs splits correctly, a
-length-changing edit across runs, umlauts/UTF-8 survive), `skills-redaction.test.ts` (+4: DOCX redacted
-in place → valid `.docx` + masked layer + parts byte-equal; a located name swept across paragraphs; the
-source-format branch; corrupt-DOCX → `.txt` fallback), `skills-document-edit.test.ts` (+2: DOCX edited in
-place, occurrence-precise; source-format branch), `skills-privacy-guard.test.ts` (+2: a DOCX-redacted PII /
-DOCX-edited find-value touches no sink), `skills-tool-registry.test.ts` (+1: the two document-transform tools
-carry a `.docx` `docxDialog`; no other tool does), + the `redactText`/`redactWithEntities`/`verifyAndSpliceEdits`
-`spans` field. Suite 3788/47 (was 3773; +15).
+**Tests:** `docx-rewrite.test.ts` (+6: text-layer concatenation/unescape, non-document.xml parts
+byte-identical after a rewrite, only the targeted `<w:t>` text changed, a span crossing two runs splits
+correctly, a length-changing edit across runs, umlauts/UTF-8 survive), `skills-redaction.test.ts` (+4:
+DOCX redacted in place → valid `.docx` + masked layer + parts byte-equal; a located name swept across
+paragraphs (the #129 test); the source-format branch; corrupt-DOCX → `.txt` fallback),
+`skills-document-edit.test.ts` (+2: DOCX edited in place, occurrence-precise; source-format branch),
+`skills-privacy-guard.test.ts` (+2: a DOCX-redacted PII / DOCX-edited find-value touches no sink), the
+`buildToolRunner` dialog rows in `skills-redaction.test.ts` / `skills-document-edit.test.ts` (the two
+document-transform tools carry a `.docx` `docxDialog`), + the
+`redactText`/`redactWithEntities`/`verifyAndSpliceEdits` `spans` field. Suite 3788/47 (was 3773; +15).
 
 ### Beta feedback wave 1 (issues #22–#28, D68–D78) — close-out + §-anchor legend
 
@@ -9881,7 +9888,7 @@ review found are refinements inside the architecture (§3 below), not a change o
 > result-tables class). The accept flow itself is now end-to-end pinned on both sides (#135):
 > main (`rag-classify-offer.test.ts` accept/refusal/self-exclusion/engagement blocks, the restore
 > leg in `rag-regenerate-ipc.test.ts`) and renderer (`SkillOfferAccept.test.tsx` — the wire tuple
-> `askDocuments(convId, '', installId, true, …)` + optimistic drop; `SkillOffer.test.tsx` #132
+> `askDocuments(convId, '', installId, true, …)` + optimistic drop, and the #132
 > states). Residual (recorded): a Stop landing inside the in-slot classification window still has
 > no dedicated IPC test.
 
@@ -10585,7 +10592,7 @@ reconciliation (D1–D10 + M1; docs/comments-only; §3 of the report).
 | **T1** (Med) | F | **closed (test)** — vision teardown/cancel real-timer `sleep(N)` → injected park gates + `while(cond) await tick()`; test (2) holds the teardown IN FLIGHT so the post-`getStatus()` re-check is a live co-guard. Teeth recorded honestly (both `tearingDown` checks are co-guards → DUAL-neuter reds; the prior "single-neuter" comment corrected) | "Test-enforcement seams" Phase-F; `vision-teardown.test.ts`, `vision-cancel.test.ts` |
 | T2 (Med) | F | **closed (test)** — DocumentsScreen render-count deltas PAIRED with behavioral assertions (`toBeChecked()`+siblings / `getByRole('menu')`+item); deltas kept as a secondary perf oracle. Teeth: drop `memo(DocRow)` reds the deltas, behavior passes | "Test-enforcement seams" Phase-F; `DocumentsScreen.test.tsx` |
 | T3 (Med) | F | **closed (test)** — injected-failure ROLLBACK tests for the categorize persist + the ingestion chunk-insert loop (no partial rows + connection-not-poisoned + clean recovery; teeth-checked). **Audit correction:** `commitNode` (H11) + the extraction insert already had rollback tests — "1 of ~12" was ≥3 | "Test-enforcement seams" Phase-F; `doctasks-categorize.test.ts`, `ingestion.test.ts` |
-| **T4** (Low-Med) | **A** | **landed with Phase A** — new `tests/unit/money.test.ts`: 42 pure-function table tests (`parseAmount` incl. apostrophe-decimal + 2-dp invariant, `MONEY_RE` boundaries, `detectCurrency`/`detectDocumentCurrency`, `inferDateOrder`/`parseDate`, `wordIncludes`, `csvField`). Offline | §8; `tests/unit/money.test.ts` |
+| **T4** (Low-Med) | **A** | **landed with Phase A** — new `tests/unit/money.test.ts`: pure-function table tests (`parseAmount` incl. apostrophe-decimal + 2-dp invariant, `MONEY_RE` boundaries, `detectCurrency`/`detectDocumentCurrency`, `inferDateOrder`/`parseDate`, `wordIncludes`, `csvField`). Offline | §8; `tests/unit/money.test.ts` |
 | T5 (Low) | F | **closed (swept)** — the 3 genuine correctness-gating fixed waits (`reranker`/`e5`/`ocr-task`) → state-polls; residuals recorded (timestamp-monotonicity, absence-settle, slow-op sims); 3× timeout headroom retained | "Test-enforcement seams" Phase-F |
 | T6 (Low) | F | **closed (test)** — `changingPassword` lifecycle pinned via a property-trap on the real `changePassword` (`[true,false]` + in-flight refusal). Teeth: neuter the flag SET → red (the field-poking test could not) | "Test-enforcement seams" Phase-F; `password-change.test.ts` |
 | T7 (Low) | F | **already-mitigated; pinned, NO src change** — WHATWG `new URL` canonicalizes numeric IPv4 → dotted-decimal before the deny-regex, so the decimal/octal/hex loopback encodings are already rejected; regression-pinned in both F15 styles | "Test-enforcement seams" Phase-F; `assets.test.ts` |

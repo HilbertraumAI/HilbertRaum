@@ -6,7 +6,8 @@ import { join } from 'node:path'
 // Skill-whole-doc engine, Follow-up B — the CHAT wiring for a 2-document compare: `askDocuments`
 // routes a compare-shaped question for the `grounded-whole-doc-compare` skill (what-changed) to a
 // MODEL answer over BOTH documents read whole (budget split, capped coverage, fence applied), REFUSES
-// when either doc is not fully chunked, and does NOT fire on a single-doc scope (keeps relevance).
+// when either doc is not fully chunked (a 1- or 3-doc scope gets the "select exactly two" answer in
+// rag-skill-analysis.test.ts).
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 vi.mock('electron', () => ({
