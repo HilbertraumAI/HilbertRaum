@@ -31,8 +31,10 @@ export type { LocatedEdit } from './document-edit-locate'
  * Verify each proposed edit's `find` verbatim at its `{line, occurrence}` anchor (D75) and build the
  * replacement span for that ONE occurrence (D76 precision — never a sweep). A proposal whose `find` is
  * not present at that anchor is dropped; an overlapping span that `applySpans` cannot place is also a drop.
- * The caller applies the returned spans; overlap resolution is deterministic (leftmost-longest wins,
- * the rest skipped) — a same-occurrence duplicate edit therefore drops rather than double-splicing.
+ * The caller applies the returned spans; overlap resolution is deterministic (`applySpans`: ascending
+ * start, and an edit overlapping one already placed is skipped, so of two edits with the same start the
+ * first proposed wins) — a same-occurrence duplicate edit therefore drops rather than double-splicing.
+ * Unlike redaction (#580, which masks the union), two edits cannot be merged: their replacements differ.
  */
 export function verifyAndSpliceEdits(
   text: string,

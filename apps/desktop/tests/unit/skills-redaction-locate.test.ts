@@ -16,7 +16,7 @@ import {
   MIN_ENTITY_CHARS
 } from '../../src/main/services/skills/tools/redaction'
 import { validateToolInput } from '../../src/main/services/skills/tool-registry'
-import { applySpans } from '../../src/main/services/skills/tools/span-transform'
+import { applySpans, type ReplacementStrategy } from '../../src/main/services/skills/tools/span-transform'
 
 // Phase 7 (beta-feedback-2026-07, #22 part 2, D73/D75/D78; architecture.md "Skills — design record"
 // §21). The locate half (runtime-touching) + the verify/sweep half (deterministic, runtime-free) of
@@ -303,6 +303,29 @@ describe('redactWithEntities — entities + the deterministic floor', () => {
     const r = redactWithEntities(input, [entity('JaneDoe')], 'perChar')
     expect(r.text).toBe(`Link ${'█'.repeat(url.length)} end`)
     expect(applySpans(input, r.spans).text).toBe(r.text)
+    expect(r.totalRedactions).toBe(1)
+  })
+
+  // #580: two confirmed proposals that overlap — at the same start ("Jane", "Jane Doe"), or sharing a
+  // word (a name and an org) — are masked as their UNION, whichever came first. Proposals reach the
+  // sweep in locate-window order, and `applySpans` keeps only the first of two overlapping spans, so
+  // "Jane" before "Jane Doe" used to leave "Doe" in the redacted copy (the .txt and, per part, the DOCX).
+  const SIGNED = 'Signed by Jane Doe today.'
+  const FIRM = 'Contract with Anna Berg GmbH today.'
+  it.each<[string, ReplacementStrategy, string, LocatedEntity[], string]>([
+    ['the short name first', 'perChar', SIGNED, [entity('Jane'), entity('Jane Doe')], `Signed by ${'█'.repeat(8)} today.`],
+    ['the full name first', 'perChar', SIGNED, [entity('Jane Doe'), entity('Jane')], `Signed by ${'█'.repeat(8)} today.`],
+    ['a name, then an org sharing its surname', 'perChar', FIRM, [entity('Anna Berg'), entity('Berg GmbH', 'org')], `Contract with ${'█'.repeat(14)} today.`],
+    ['the org first', 'perChar', FIRM, [entity('Berg GmbH', 'org'), entity('Anna Berg')], `Contract with ${'█'.repeat(14)} today.`],
+    ['the short name first, as tokens', 'token', SIGNED, [entity('Jane'), entity('Jane Doe')], 'Signed by [NAME] today.'],
+    // A merged region takes the token of the occurrence that starts first.
+    ['the org first, as tokens', 'token', FIRM, [entity('Berg GmbH', 'org'), entity('Anna Berg')], 'Contract with [NAME] today.']
+  ])('#580: %s — the union is masked as one region (%s)', (_label, strategy, input, entities, masked) => {
+    const r = redactWithEntities(input, entities, strategy)
+    expect(r.text).toBe(masked)
+    // The span set the DOCX writer splices reproduces the flat text exactly…
+    expect(applySpans(input, r.spans).text).toBe(r.text)
+    // …and the content-free count is one region in either order.
     expect(r.totalRedactions).toBe(1)
   })
 

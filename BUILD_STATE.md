@@ -28,6 +28,9 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-05 — **#580 — redaction masks the union of overlapping proposals (`fix/580-redaction-overlap`).** "Jane" before "Jane Doe" left the surname visible (.txt + DOCX),
+and a partial overlap ("Anna Berg" + "Berg GmbH") left " GmbH" in either order: `applySpans` keeps the first of two overlapping spans. `verifyAndSweepEntities` now merges
+occurrences into disjoint regions; counts are regions; the edit tool's comment corrected. Record: Skills record §21 "#580 amendment". Open: none._
 _2026-10-05 — **#585 — mammoth 1.12.3 → 1.13.0, replacement PR (`chore/mammoth-1.13`).** Notices regenerated (226 → 224: `bluebird` out, `path-is-absolute` dev-only;
 packed `app.asar` agrees). 1.12.3 dropped `w:customXml`/`w:moveTo`/`w:moveFrom` with their text; 1.13 reads custom XML + moved text once (pinned in `ingestion.test.ts`;
 old docs need Re-index). Packaged DOCX import verified. Record: `architecture.md` DEP-6 §12. Open: none._
