@@ -116,6 +116,28 @@ npm run test:watch                              # watch mode (re-runs affected t
   blanket `} as never)`. A one-way ratchet (`tests/unit/as-never-ratchet.test.ts`) fails if the
   tests/ `as never` count climbs — the remaining casts get converted **fix-when-touched** (lower
   the ratchet baseline when you remove some).
+- **An eval measures production, not a copy of it.** The skill-trigger eval once scored its corpus
+  through a hand-written copy of the selector, and its auto-fire gate never compared that copy with
+  production; it stayed green while production missed the bar. Drive the production entry point —
+  `tests/eval/skill-triggers.ts` runs every row through `suggestSkillsForTurn` /
+  `resolveAutoFireSkill` on a real temp database.
+- **A negative must fail for the reason its title gives.** `not.toContain`, `toEqual([])`,
+  `toBeNull()` and "nothing persisted" checks pass just as well when the input never reaches the
+  guard you mean (a reader that throws before any persist step; an ID that a filler check rejects
+  before the totals reader). Make the input reach that guard, and break the guard once to watch the
+  test go red.
+- **Write invisible characters as `\u` escapes, never raw.** A fixture with a raw NBSP / U+2011 /
+  U+2007 looks like its ASCII sibling; whitespace normalisation (an editor, a formatter, some
+  editing tools) silently turns the Unicode row into a duplicate. Check the diff after editing such
+  a fixture.
+- **One behavioural row per listed keyword.** A parity test (SKILL.md ⇔ vocabulary) cannot see a
+  term dropped from both lists; the trigger corpus pins each listed keyword with a question that hits
+  only that keyword.
+- **Shared skills test setup lives in `tests/helpers/`** — `db-fixtures` (temp roots, fresh DBs),
+  `doc-fixtures`, `skill-fixtures` (SKILL.md packages, skill dirs), `skill-contexts`,
+  `audit-capture`, `db-spy`, `scripted-runtime`, `skills-world` (the skills-IPC and RAG-ask
+  contexts; the importing file must `vi.mock('electron', …)`) and `chat-fixtures`. Extend them
+  rather than copying setup into a new suite; keep a local copy only where it deliberately differs.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the
