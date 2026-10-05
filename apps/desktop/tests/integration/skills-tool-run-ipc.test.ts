@@ -52,7 +52,7 @@ import {
   toSkillToolAudit
 } from '../../src/main/services/skills/tool-runs'
 import type { DocTaskManager } from '../../src/main/services/doctasks'
-import { WIRED_TOOL_NAMES } from '../../src/shared/skill-tools'
+import { SKILL_TOOL_DESCRIPTORS, WIRED_TOOL_NAMES } from '../../src/shared/skill-tools'
 import { IPC } from '../../src/shared/ipc'
 import { t, type MessageKey } from '../../src/shared/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
@@ -63,6 +63,7 @@ import { createConversation } from '../../src/main/services/chat'
 import type { AppContext } from '../../src/main/services/context'
 import type { RunnableTool, RunnableToolSet, SkillRunState, StartSkillRunResult } from '../../src/shared/types'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { hangPolls } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const SENTINEL = 'XTOOLRUN_SENTINEL_secret_payee_77777'
@@ -331,7 +332,7 @@ function makeUserSkillHarness(statementText: string): Harness {
 
 const flush = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 async function pollUntilTerminal(runHandle: string): Promise<SkillRunState> {
-  for (let i = 0; i < 50; i++) {
+  for (let i = 0; i < hangPolls(50, 1); i++) {
     const { result } = await invoke(handlers, IPC.getSkillRun, runHandle)
     const state = result as SkillRunState | null
     if (state && state.state !== 'running') return state
@@ -366,16 +367,29 @@ async function runTool(
 }
 
 describe('skills tool-run IPC (S11b)', () => {
-  it('listRunnableTools surfaces all five wired tools (export confirm-gated) in declared order', async () => {
-    const { skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
+  it.each<{ skill: string; harness: (text: string) => Harness; text: string; tools: RunnableTool[] }>([
+    {
+      skill: 'bank statement (all five wired tools, export confirm-gated, declared order)',
+      harness: makeHarness,
+      text: 'EUR\n2026-01-02 Grocery -45,90',
+      tools: [
+        { name: 'extract_transactions', requiresConfirmation: false },
+        { name: 'validate_statement_balances', requiresConfirmation: false },
+        { name: 'categorize_transactions', requiresConfirmation: false },
+        { name: 'summarize_cashflow', requiresConfirmation: false },
+        { name: 'export_transactions_csv', requiresConfirmation: true }
+      ]
+    },
+    {
+      skill: 'redaction (the single tool, confirm-gated)',
+      harness: makeRedactionHarness,
+      text: 'Contact leak.source@example.com today.',
+      tools: [{ name: 'redact_document', requiresConfirmation: true }]
+    }
+  ])('listRunnableTools surfaces the $skill', async ({ harness, text, tools }) => {
+    const { skillInstallId, conversationId } = harness(text)
     const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
-    expect((result as RunnableToolSet).tools).toEqual<RunnableTool[]>([
-      { name: 'extract_transactions', requiresConfirmation: false },
-      { name: 'validate_statement_balances', requiresConfirmation: false },
-      { name: 'categorize_transactions', requiresConfirmation: false },
-      { name: 'summarize_cashflow', requiresConfirmation: false },
-      { name: 'export_transactions_csv', requiresConfirmation: true }
-    ])
+    expect((result as RunnableToolSet).tools).toEqual<RunnableTool[]>(tools)
     // U-1: the single in-scope target id rides along (ids only — no title crosses the IPC).
     expect((result as RunnableToolSet).documentIds).toHaveLength(1)
   })
@@ -522,44 +536,11 @@ describe('skills tool-run IPC (S11b)', () => {
       toolName: 'count_selected_documents',
       conversationId
     })
-    expect((result as StartSkillRunResult).started).toBe(false)
-  })
-
-  it('builds a runner for every WIRED tool (A2 dispatch parity — descriptor table ↔ buildToolRunner switch)', () => {
-    // A2 (audit §6.2): the wired-list is DERIVED from the descriptor table, and `buildToolRunner`
-    // guards on the same table. This pins the two together: every name the table declares wired must
-    // build a runner (given the export deps), and the unwired canary must not.
-    const { db, skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
-    const documentId = resolveInScopeDocumentIds(db, conversationId)[0]
-    const deps = { saveTextFile: async () => true, readDocumentSegments: async () => [] }
-    for (const name of WIRED_TOOL_NAMES) {
-      const runner = buildToolRunner(db, name, { skillInstallId, conversationId, documentId }, toSkillToolAudit(), deps)
-      expect(runner, `${name} must build a runner`).not.toBeNull()
-    }
-    expect(
-      buildToolRunner(db, 'count_selected_documents', { skillInstallId, conversationId, documentId }, toSkillToolAudit(), deps)
-    ).toBeNull()
-  })
-
-  it('keeps count_selected_documents as a registry-only canary: registered but NOT wired to a run seam (X-2)', () => {
-    // X-2 decision (audit 2026-06-26): the reference tool is kept as the gate's test-only canary. It is
-    // registered (the gate tests run it end-to-end) but deliberately exposes NO live capability — it has
-    // no dispatch case in `buildToolRunner`. This test gives that decision teeth in BOTH directions: if
-    // the tool were dropped from the registry the listing test breaks; if it were ever wired to a run
-    // seam (turning it into a live capability) this assertion breaks.
-    const { db, skillInstallId, conversationId } = makeHarness('EUR\n2026-01-02 Grocery -45,90')
-    const documentId = resolveInScopeDocumentIds(db, conversationId)[0]
-    const runner = buildToolRunner(
-      db,
-      'count_selected_documents',
-      { skillInstallId, conversationId, documentId },
-      toSkillToolAudit()
-    )
-    expect(runner).toBeNull()
+    expect(result).toEqual({ started: false, error: t('en', 'main.skills.run.unavailable') })
   })
 
   it('logs nothing: a secret in a transaction never reaches the audit (ids/counts only)', async () => {
-    const { db, skillInstallId, conversationId } = makeHarness(`EUR\n2026-01-02 ${SENTINEL} -12,00`)
+    const { db, skillInstallId, conversationId } = makeHarness(`Statement EUR\n2026-01-02 ${SENTINEL} -12,00 1.000,00`)
     const { result: startRaw } = await invoke(handlers, IPC.startSkillRun, {
       skillInstallId,
       toolName: 'extract_transactions',
@@ -568,6 +549,12 @@ describe('skills tool-run IPC (S11b)', () => {
     const start = startRaw as StartSkillRunResult
     if (!start.started) throw new Error('expected started')
     await pollUntilTerminal(start.run.runHandle)
+    // The export is a different sink path (dispatch export case + IPC saveTextFile): the secret IS in
+    // the user-chosen CSV (correct) but must never reach the audit stream.
+    const out = join(tempDir(), 'export.csv')
+    dialogState.saveResult = { canceled: false, filePath: out }
+    await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
+    expect(readFileSync(out, 'utf8')).toContain(SENTINEL)
     // The audit recorded the run lifecycle (started/done) but NEVER the transaction content.
     const auditText = listAuditEvents(db, { limit: 5000 })
       .map((e) => `${e.type} ${e.message} ${JSON.stringify(e.metadata)}`)
@@ -578,6 +565,34 @@ describe('skills tool-run IPC (S11b)', () => {
     // …and the run state the renderer polls carries no content either.
     const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, start.run.runHandle)
     expect(JSON.stringify(stateRaw)).not.toContain(SENTINEL)
+  })
+})
+
+// Service level, no IPC: `buildToolRunner` never touches the DB while building, so a bare database and
+// literal ids are enough. The single owner of descriptor table <-> dispatch switch parity.
+describe('buildToolRunner dispatch parity (A2) — service level, no IPC', () => {
+  const db = openDatabase(join(tempDir(), 't.sqlite'))
+  const args = { skillInstallId: 'app:x', conversationId: '', documentId: 'd1' }
+
+  it('builds a runner for every WIRED tool, and not for the count_selected_documents canary (X-2)', () => {
+    // A2 (audit §6.2): the wired-list is DERIVED from the descriptor table, and `buildToolRunner`
+    // guards on the same table. This pins the two together: every name the table declares wired must
+    // build a runner (given the export deps). The canary is registered (the gate tests run it) but has
+    // no dispatch case: wiring it to a run seam would turn it into a live capability and break this.
+    const deps = { saveTextFile: async () => true, readDocumentSegments: async () => [] }
+    for (const name of WIRED_TOOL_NAMES) {
+      const runner = buildToolRunner(db, name, args, toSkillToolAudit(), deps)
+      expect(runner, `${name} must build a runner`).not.toBeNull()
+    }
+    expect(buildToolRunner(db, 'count_selected_documents', args, toSkillToolAudit(), deps)).toBeNull()
+  })
+
+  it('an export seam refuses to build without saveTextFile; every other seam needs no save capability', () => {
+    for (const d of SKILL_TOOL_DESCRIPTORS) {
+      const noSave = buildToolRunner(db, d.name, args, toSkillToolAudit(), { readDocumentSegments: async () => [] })
+      if (d.seamKind === 'export') expect(noSave, `${d.name} must refuse without saveTextFile`).toBeNull()
+      else expect(noSave, `${d.name} needs no save capability`).not.toBeNull()
+    }
   })
 })
 
@@ -618,7 +633,7 @@ describe('skills tool-run IPC — SEC-1 trust gate (user kind:tool skills cannot
     const start = result as StartSkillRunResult
     expect(start.started).toBe(false)
     if (start.started) throw new Error('expected refusal')
-    expect('error' in start && start.error).toBeTruthy()
+    expect('error' in start && start.error).toBe(t('en', 'main.skills.run.unavailable'))
     // Content-free: the refusal interpolates no skill title/id/path (the imported title's sentinel
     // must not leak into the IPC payload).
     expect(JSON.stringify(start)).not.toContain(USER_SKILL_TITLE_SENTINEL)
@@ -630,16 +645,6 @@ describe('skills tool-run IPC — SEC-1 trust gate (user kind:tool skills cannot
     expect(auditText).not.toContain('skill_run_started')
     expect(auditText).not.toContain('skill_run_done')
     expect(auditText).not.toContain(USER_SKILL_TITLE_SENTINEL)
-  })
-
-  it('an APP skill with the SAME tools is unaffected — still runnable (proves the gate keys on source)', async () => {
-    // makeHarness installs the bank skill under app-skills/ (source 'app'); it must keep offering tools.
-    const { skillInstallId, conversationId } = makeHarness(STATEMENT)
-    const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
-    expect((result as RunnableToolSet).tools.length).toBeGreaterThan(0)
-    // And it runs end-to-end (the gate did not narrow app skills).
-    const final = await runTool(skillInstallId, conversationId, 'extract_transactions')
-    expect(final.state).toBe('done')
   })
 })
 
@@ -695,7 +700,7 @@ describe('skills tool-run IPC — multi-document targeting (U-1)', () => {
     const start = result as StartSkillRunResult
     expect(start.started).toBe(false)
     if (start.started) throw new Error('expected refusal')
-    expect('error' in start && start.error).toBeTruthy()
+    expect('error' in start && start.error).toBe(t('en', 'main.skills.run.documentOutOfScope'))
   })
 
   it('gracefully falls back to the single in-scope document when a STALE id is supplied (no error)', async () => {
@@ -752,20 +757,6 @@ describe('skills tool-run IPC — U6 run lifecycle (SKA-6/17/25/29)', () => {
     expect(start.started).toBe(false)
     if (start.started) throw new Error('expected a hard refusal')
     expect('error' in start && start.error).toBe(t('en', 'main.skills.run.documentOutOfScope'))
-  })
-
-  it('a READ-ONLY tool KEEPS the single-doc fallback for a stale id (contrast to SKA-29)', async () => {
-    const { skillInstallId, conversationId } = makeHarness(STATEMENT)
-    await runTool(skillInstallId, conversationId, 'extract_transactions')
-    const { result } = await invoke(handlers, IPC.startSkillRun, {
-      skillInstallId,
-      toolName: 'validate_statement_balances',
-      conversationId,
-      documentId: randomUUID() // out of scope, but read-only → convenience fallback to the one doc
-    })
-    const start = result as StartSkillRunResult
-    expect(start.started).toBe(true)
-    if (start.started) await pollUntilTerminal(start.run.runHandle)
   })
 
   it('threads the launching conversation onto the run + listSkillRuns re-adopts it (SKA-17)', async () => {
@@ -947,14 +938,13 @@ describe('skills tool-run IPC — extract does not auto-categorize (U-2)', () =>
 })
 
 describe('skills export_transactions_csv IPC (S11c)', () => {
-  it('confirm-gates the export: refuses without confirmation, asking for it', async () => {
-    const { skillInstallId, conversationId } = makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10')
-    await runTool(skillInstallId, conversationId, 'extract_transactions')
-    const { result } = await invoke(handlers, IPC.startSkillRun, {
-      skillInstallId,
-      toolName: 'export_transactions_csv',
-      conversationId
-    })
+  // The gate fires before any data is read (registerSkillsIpc), so no extract pre-step is needed.
+  it.each<{ tool: string; harness: (text: string) => Harness; text: string }>([
+    { tool: 'export_transactions_csv', harness: makeHarness, text: 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10' },
+    { tool: 'redact_document', harness: makeRedactionHarness, text: 'Contact leak.source@example.com today.' }
+  ])('confirm-gates $tool: refuses without confirmation, asking for it', async ({ tool, harness, text }) => {
+    const { skillInstallId, conversationId } = harness(text)
+    const { result } = await invoke(handlers, IPC.startSkillRun, { skillInstallId, toolName: tool, conversationId })
     expect(result).toEqual({ started: false, needsConfirmation: true })
   })
 
@@ -981,21 +971,6 @@ describe('skills export_transactions_csv IPC (S11c)', () => {
     expect(JSON.stringify(stateRaw)).not.toContain(out)
   })
 
-  it('export content never reaches the audit log (sentinel, ids/counts only)', async () => {
-    const { db, skillInstallId, conversationId } = makeHarness(`Statement EUR\n2026-01-02 ${SENTINEL} -12,00 1.000,00`)
-    await runTool(skillInstallId, conversationId, 'extract_transactions')
-    const out = join(tempDir(), 'export.csv')
-    dialogState.saveResult = { canceled: false, filePath: out }
-    await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
-    // The secret IS in the user-chosen CSV (correct) but never in the audit stream.
-    expect(readFileSync(out, 'utf8')).toContain(SENTINEL)
-    const auditText = listAuditEvents(db, { limit: 5000 })
-      .map((e) => `${e.type} ${e.message} ${JSON.stringify(e.metadata)}`)
-      .join('\n')
-    expect(auditText).toContain('skill_run_done')
-    expect(auditText).not.toContain(SENTINEL)
-  })
-
   it('a cancelled save persists no file and reports it calmly', async () => {
     const { skillInstallId, conversationId } = makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10')
     await runTool(skillInstallId, conversationId, 'extract_transactions')
@@ -1010,24 +985,6 @@ describe('skills export_transactions_csv IPC (S11c)', () => {
 
 describe('skills redact_document IPC (S11d)', () => {
   const SECRET_EMAIL = 'leak.source@example.com'
-
-  it('listRunnableTools surfaces the single redaction tool, confirm-gated', async () => {
-    const { skillInstallId, conversationId } = makeRedactionHarness(`Contact ${SECRET_EMAIL} today.`)
-    const { result } = await invoke(handlers, IPC.listRunnableTools, skillInstallId, conversationId)
-    expect((result as RunnableToolSet).tools).toEqual<RunnableTool[]>([
-      { name: 'redact_document', requiresConfirmation: true }
-    ])
-  })
-
-  it('confirm-gates the redaction: refuses without confirmation, asking for it', async () => {
-    const { skillInstallId, conversationId } = makeRedactionHarness(`Contact ${SECRET_EMAIL} today.`)
-    const { result } = await invoke(handlers, IPC.startSkillRun, {
-      skillInstallId,
-      toolName: 'redact_document',
-      conversationId
-    })
-    expect(result).toEqual({ started: false, needsConfirmation: true })
-  })
 
   it('confirmed + a chosen path → writes the redacted copy and reports the count (content-free)', async () => {
     const { skillInstallId, conversationId } = makeRedactionHarness(
@@ -1064,35 +1021,58 @@ describe('skills export save-dialog metadata (U5 / §6.2)', () => {
   const firstFilter = (): { name: string; extensions: string[] } | undefined =>
     dialogState.lastSaveOptions?.filters?.[0]
 
-  it('bank CSV export → the CSV dialog (title + .csv filter)', async () => {
-    const { skillInstallId, conversationId } = makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10')
-    await runTool(skillInstallId, conversationId, 'extract_transactions')
-    await runTool(skillInstallId, conversationId, 'export_transactions_csv', true)
-    expect(dialogState.lastSaveOptions?.title).toBe(tEn('main.dialog.exportCsv'))
-    expect(firstFilter()).toEqual({ name: tEn('main.dialog.filterCsv'), extensions: ['csv'] })
-  })
-
-  it('redaction export → the "Save redacted copy" dialog with a .txt filter, NOT the CSV dialog (the §6.2 example)', async () => {
-    const { skillInstallId, conversationId } = makeRedactionHarness('Contact leak.source@example.com today.')
-    await runTool(skillInstallId, conversationId, 'redact_document', true)
-    expect(dialogState.lastSaveOptions?.title).toBe(tEn('main.dialog.exportRedacted'))
-    expect(dialogState.lastSaveOptions?.title).not.toBe(tEn('main.dialog.exportCsv')) // the drift this fixes
-    expect(firstFilter()).toEqual({ name: tEn('main.dialog.filterText'), extensions: ['txt'] })
-  })
-
-  it('invoice JSON export → the JSON dialog (.json, not .csv)', async () => {
-    const { skillInstallId, conversationId } = makeInvoiceHarness(INVOICE_TEXT)
-    await runTool(skillInstallId, conversationId, 'extract_invoice')
-    await runTool(skillInstallId, conversationId, 'export_invoice_json', true)
-    expect(dialogState.lastSaveOptions?.title).toBe(tEn('main.dialog.exportJson'))
-    expect(firstFilter()).toEqual({ name: tEn('main.dialog.filterJson'), extensions: ['json'] })
-  })
-
-  it('invoice XML export → the XML dialog (.xml, not .csv)', async () => {
-    const { skillInstallId, conversationId } = makeInvoiceHarness(INVOICE_TEXT)
-    await runTool(skillInstallId, conversationId, 'extract_invoice')
-    await runTool(skillInstallId, conversationId, 'export_invoice_xml', true)
-    expect(dialogState.lastSaveOptions?.title).toBe(tEn('main.dialog.exportXml'))
-    expect(firstFilter()).toEqual({ name: tEn('main.dialog.filterXml'), extensions: ['xml'] })
+  it.each<{
+    name: string
+    harness: () => Harness
+    preTool?: string
+    tool: string
+    title: MessageKey
+    filter: MessageKey
+    ext: string
+    notTitle?: MessageKey
+  }>([
+    {
+      name: 'bank CSV export → the CSV dialog (title + .csv filter)',
+      harness: () => makeHarness('Statement EUR\n2026-01-02 Grocery -45,90 1.954,10'),
+      preTool: 'extract_transactions',
+      tool: 'export_transactions_csv',
+      title: 'main.dialog.exportCsv',
+      filter: 'main.dialog.filterCsv',
+      ext: 'csv'
+    },
+    {
+      name: 'redaction export → the "Save redacted copy" dialog with a .txt filter, NOT the CSV dialog (the §6.2 example)',
+      harness: () => makeRedactionHarness('Contact leak.source@example.com today.'),
+      tool: 'redact_document',
+      title: 'main.dialog.exportRedacted',
+      filter: 'main.dialog.filterText',
+      ext: 'txt',
+      notTitle: 'main.dialog.exportCsv' // the drift this fixes
+    },
+    {
+      name: 'invoice JSON export → the JSON dialog (.json, not .csv)',
+      harness: () => makeInvoiceHarness(INVOICE_TEXT),
+      preTool: 'extract_invoice',
+      tool: 'export_invoice_json',
+      title: 'main.dialog.exportJson',
+      filter: 'main.dialog.filterJson',
+      ext: 'json'
+    },
+    {
+      name: 'invoice XML export → the XML dialog (.xml, not .csv)',
+      harness: () => makeInvoiceHarness(INVOICE_TEXT),
+      preTool: 'extract_invoice',
+      tool: 'export_invoice_xml',
+      title: 'main.dialog.exportXml',
+      filter: 'main.dialog.filterXml',
+      ext: 'xml'
+    }
+  ])('$name', async ({ harness, preTool, tool, title, filter, ext, notTitle }) => {
+    const { skillInstallId, conversationId } = harness()
+    if (preTool) await runTool(skillInstallId, conversationId, preTool)
+    await runTool(skillInstallId, conversationId, tool, true)
+    expect(dialogState.lastSaveOptions?.title).toBe(tEn(title))
+    if (notTitle) expect(dialogState.lastSaveOptions?.title).not.toBe(tEn(notTitle))
+    expect(firstFilter()).toEqual({ name: tEn(filter), extensions: [ext] })
   })
 })
