@@ -424,6 +424,7 @@ const DOCUMENT_REDACTION: VocabEntry[] = [
   both('anonymized', 'en'),
   both('anonymised', 'en'),
   both('remove personal data', 'en'),
+  both('remove all personal data', 'en'),
   both('mask personal data', 'en'),
   both('anonymisieren', 'de'),
   both('anonymisierung', 'de'),

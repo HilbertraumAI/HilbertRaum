@@ -126,6 +126,9 @@ from its first public `1.0.0` release onward.
   a word ("Anna Berg" and "Berg GmbH"). Now every part of the text that any confirmed suggestion
   covers is hidden, in the `.txt` and the Word copy alike, whatever order the suggestions came in.
   Redaction stays AI-assisted best-effort: review the copy before sharing it (#580).
+- **Asking to "remove all personal data" now suggests Document Redaction.** The chat offered the
+  skill for "remove personal data" but not for the same request with "all" in it, so a question
+  like "Remove all personal data for GDPR compliance." got no suggestion (#583).
 - **Word documents no longer leave some of their text out of search.** Text inside custom XML
   (used by some forms and templates) and text moved with Track Changes was skipped when a `.docx`
   was added, so questions about it found nothing. The updated Word reader (mammoth 1.13.0) reads
