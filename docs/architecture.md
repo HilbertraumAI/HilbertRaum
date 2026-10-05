@@ -5101,9 +5101,12 @@ lower version is refused unless developer mode (DS15). **Delete** clears the sti
 then removes the folder; `messages.skill_id` is deliberately KEPT — the per-message stamp is
 provenance, the JOIN title resolves to NULL and the renderer shows "(removed skill)", so the glyph
 + the "answer without it" undo survive deletion. App skills refuse. **Enable**
-enforces **one-active-per-id**. The registry handle reconciles disk→DB **once per session on the first
-read after unlock** (a `reconciledThisSession` guard, not an unlock hook); the importer/deleter call
-`reconcile()` explicitly after mutating disk. Audit events
+enforces **one-active-per-id**. The registry handle reconciles disk→DB **once per app process**: the
+startup pass when the DB is already open (plaintext dev), else the first read after the first unlock
+(a `reconciledThisSession` guard, not an unlock hook; it is never reset, so a later lock and unlock does
+not re-scan). The importer/deleter call `reconcile()` explicitly after mutating disk. A skill folder
+copied onto the drive while the app is running therefore appears only after a restart (or the next
+import/delete). Audit events
 (`skill_imported`/`deleted`/`enabled`/`disabled`) carry **ids/counts only**.
 
 ### §5 Selection & prompt integration (S6+S7)
@@ -6138,7 +6141,8 @@ never auto-fire (the U4 narrowing and the #130 doc-signal gate). Measured auto-f
 71 missed) with the two deviations counted as wrong fires. Auto-fire recall is low by design: rows
 labelled with the five skills that never auto-fire count as misses. The same mechanism applies to
 "personenbezogene Daten", also a keyword of both skills; the corpus pins only the "sensible Daten"
-rows. The optional product fix is tracked in #583.
+rows. The fix is #608 (owner decision 2026-10-06: the bare phrase stops suggesting any skill); the
+same mechanism for "sensible Daten" / "sensitive data" is #604.
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`

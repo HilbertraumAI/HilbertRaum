@@ -407,7 +407,7 @@ npm run build      # production build
 npm test           # unit + integration tests (whole suite)
 npm run typecheck  # TypeScript checking
 npm run package:win # portable Windows .exe (electron-builder)
-# Faster iteration (from apps/desktop/): npx vitest run <file> · npx vitest -t "<name>" · npm run test:watch
+# Faster iteration (repo root; the path is relative to apps/desktop): npm test -- tests/unit/<file>.test.ts · npm test -- -t "<name>" (more in CONTRIBUTING.md)
 ```
 
 New here? Read [`BUILD_STATE.md`](BUILD_STATE.md) and [`CONTRIBUTING.md`](CONTRIBUTING.md)

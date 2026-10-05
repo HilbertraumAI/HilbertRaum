@@ -1,7 +1,7 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 // REAL-MODEL harness (Wave 3) — drives the ACTUAL whole-doc / compare / tree code paths with a real
@@ -11,17 +11,19 @@ import { randomUUID } from 'node:crypto'
 // the tree reduce) in BOTH English and German. The whole-doc/compare/tree paths read chunks IN ORDER
 // (not by embedding), so a mock embedder is enough for ingestion — only the CHAT model is real.
 //
-// GATED: it spawns a multi-GB model (RAM + minutes), so it NEVER runs in the normal suite. Run it with:
-//   HILBERTRAUM_REAL_MODEL=1 npx vitest run tests/real-model/wave3.realmodel.test.ts
-//   (just the German set:  … tests/real-model/wave3.realmodel.test.ts -t German)
-//   (PowerShell:  $env:HILBERTRAUM_REAL_MODEL=1; npx vitest run …)
-// Overrides (defaults target the D: drive): HILBERTRAUM_REAL_MODEL_PATH, HILBERTRAUM_LLAMA_BIN.
-// describe.runIf keeps it COLLECTED (FullSuiteGuard) but skipped without the flag.
+// GATED: it spawns a multi-GB model (RAM + minutes), so it NEVER runs in the normal suite. Point it at a
+// local chat GGUF and a llama-server binary and run, from the repo root:
+//   HILBERTRAUM_REAL_MODEL=1 HILBERTRAUM_REAL_MODEL_PATH=<chat .gguf> HILBERTRAUM_LLAMA_BIN=<llama-server> npm test -- tests/real-model/wave3.realmodel.test.ts
+//   (just the German set:  … npm test -- tests/real-model/wave3.realmodel.test.ts -t German)
+//   (PowerShell:  $env:HILBERTRAUM_REAL_MODEL="1"; $env:HILBERTRAUM_REAL_MODEL_PATH="<chat .gguf>"; $env:HILBERTRAUM_LLAMA_BIN="<llama-server>"; npm test -- …)
+// The assertions were tuned on Qwen3.5 4B (qwen3.5-4b-ud-q4kxl.gguf). There are no default paths: once
+// HILBERTRAUM_REAL_MODEL=1 asks for the run, BOTH paths are required and checked before anything starts
+// (a missing one fails the run instead of skipping it). describe.runIf keeps it COLLECTED (FullSuiteGuard)
+// but SKIPPED without the flag, so nothing in the default `npm test` needs a model.
 
 const RUN = process.env.HILBERTRAUM_REAL_MODEL === '1'
-const MODEL_PATH =
-  process.env.HILBERTRAUM_REAL_MODEL_PATH ?? 'D:/models/chat/qwen3.5-4b-ud-q4kxl.gguf'
-const LLAMA_BIN = process.env.HILBERTRAUM_LLAMA_BIN ?? 'D:/runtime/llama.cpp/win/llama-server.exe'
+const MODEL_PATH = process.env.HILBERTRAUM_REAL_MODEL_PATH?.trim() ?? ''
+const LLAMA_BIN = process.env.HILBERTRAUM_LLAMA_BIN?.trim() ?? ''
 const CONTEXT_TOKENS = 8192
 
 // Deep main services may import electron transitively (logging/app paths); stub it for the node run.
@@ -238,12 +240,19 @@ async function runTree(label: string, doc: string, rootSummary: string, question
 
 beforeAll(async () => {
   if (!RUN) return
+  expect(MODEL_PATH, 'HILBERTRAUM_REAL_MODEL_PATH names the chat .gguf').not.toBe('')
+  expect(LLAMA_BIN, 'HILBERTRAUM_LLAMA_BIN names the llama-server binary').not.toBe('')
   expect(existsSync(MODEL_PATH), `model weights at ${MODEL_PATH}`).toBe(true)
   expect(existsSync(LLAMA_BIN), `llama-server at ${LLAMA_BIN}`).toBe(true)
-  process.env.HILBERTRAUM_LLAMA_BIN = LLAMA_BIN
-  // Force CPU (rung 2, --device none): robust + deterministic for a harness (no GPU crash-fallback
-  // wiring here). Slower than GPU but fine for a handful of prompts.
-  const factory = createSelectingRuntimeFactory({ rootPath: 'D:/', isDev: true, gpu: { getGpuMode: () => 'off' } })
+  // Force CPU (rung 2, --device none) on exactly that binary: robust + deterministic for a harness (no GPU
+  // crash-fallback wiring here, and no rung-3 safety-net build). Slower than GPU but fine for a handful of
+  // prompts. Both binary resolvers are pinned, so no drive root is read.
+  const factory = createSelectingRuntimeFactory({
+    rootPath: dirname(LLAMA_BIN),
+    isDev: true,
+    resolveBin: () => LLAMA_BIN,
+    gpu: { getGpuMode: () => 'off', resolveCpuBin: () => null }
+  })
   manager = new RuntimeManager(factory)
   await manager.start({ modelId: 'qwen3.5-4b', modelPath: MODEL_PATH, contextTokens: CONTEXT_TOKENS })
   const active = manager.active()

@@ -2055,6 +2055,8 @@ BEGIN/END-plus-guard precedent the skill fence uses (`skills/prompt.ts`). The fr
 English (D-L6) and byte-stable across turns: only the block BETWEEN the markers varies (it already
 did), so the prompt-cache prefix posture holds. Pinned by `rag-grounded-data.test.ts` (markers +
 guard present, block strictly between them, framing byte-stable across two different blocks).
+Since #583 an echoed marker or guard line is scrubbed from the answer before it is stored, like
+the skill-fence and excerpt framing (`stripSkillFenceEcho`); no real model has been seen echoing it.
 
 **#228 (PR #293) — the ordinary RAG excerpts carry the same framing.** The relevance,
 whole-document and compare paths (`rag/index.ts` `buildGroundedPrompt`, `buildCompareWholeDocPrompt`)
