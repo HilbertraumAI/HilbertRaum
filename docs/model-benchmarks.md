@@ -2320,9 +2320,10 @@ env-gated pattern as the vision / gpu / rerank smokes (§8.1) — `describe.runI
 full-suite guard) but SKIPPED in CI, so the green gate stays zero-model / zero-network:
 
 ```powershell
-$env:SKILLS_SMOKE_MODEL = "D:\models\chat\qwen3.5-4b-ud-q4kxl.gguf"
-cd apps\desktop
-npx vitest run tests/e2e-model/skills-smoke.test.ts
+# from the repo root; <drive root> holds runtime/llama.cpp/<os>/
+$env:SKILLS_SMOKE_MODEL = "<chat .gguf>"
+$env:SKILLS_SMOKE_ROOT = "<drive root>"
+npm test -- tests/e2e-model/skills-smoke.test.ts
 ```
 
 It drives the REAL production answer paths against a local chat GGUF (CPU-pinned, `--device none`): the
@@ -2331,8 +2332,8 @@ the figure echo appended verbatim beneath) over the real-layout corpus, plus one
 minutes turn. It asserts STRUCTURE + FIGURES (the third mode engaged; the deterministic totals / cashflow
 echo rides under the model answer; whole-doc coverage is capped + not truncated; end-of-transcript items
 present) — **never prose / wording**. This is the autonomous stand-in for the manual GUI smoke of the three
-complaint flows (bank statement, invoice, minutes). Overrides: `HILBERTRAUM_LLAMA_BIN`, `SKILLS_SMOKE_ROOT`
-(defaults target `D:\`).
+complaint flows (bank statement, invoice, minutes). Both variables are required (the smoke skips
+cleanly without them); `HILBERTRAUM_LLAMA_BIN` is an optional dev override for the server binary.
 
 ---
 

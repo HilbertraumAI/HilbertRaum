@@ -14,17 +14,16 @@ import { randomUUID } from 'node:crypto'
 // model answer; the extract count is the parser's, not the model's), never prose/wording.
 //
 // GATED, opt-in: it spawns a multi-GB model (RAM + minutes) so it NEVER runs in the normal suite. Point it
-// at a local chat GGUF and run:
-//   SKILLS_SMOKE_MODEL=D:/models/chat/qwen3.5-4b-ud-q4kxl.gguf npx vitest run tests/e2e-model/skills-smoke.test.ts
-//   (PowerShell:  $env:SKILLS_SMOKE_MODEL="D:/models/chat/…gguf"; npx vitest run tests/e2e-model/skills-smoke.test.ts)
-// Overrides (defaults target the D: drive): HILBERTRAUM_LLAMA_BIN, SKILLS_SMOKE_ROOT.
-// describe.runIf keeps it COLLECTED (FullSuiteGuard) but SKIPPED with no model path set — nothing in the
-// default `npm test` needs a model or the network. Docs: model-benchmarks.md §10.
+// at a local chat GGUF and a drive root (the folder holding runtime/llama.cpp/<os>/) and run, from the repo root:
+//   SKILLS_SMOKE_MODEL=<chat .gguf> SKILLS_SMOKE_ROOT=<drive root> npm test -- tests/e2e-model/skills-smoke.test.ts
+//   (PowerShell:  $env:SKILLS_SMOKE_MODEL="<chat .gguf>"; $env:SKILLS_SMOKE_ROOT="<drive root>"; npm test -- tests/e2e-model/skills-smoke.test.ts)
+// Optional dev override: HILBERTRAUM_LLAMA_BIN. Skipped (still collected) unless BOTH variables are set.
+// describe.runIf keeps it COLLECTED (FullSuiteGuard) but SKIPPED — nothing in the default `npm test` needs
+// a model or the network. Docs: model-benchmarks.md §10.
 
-const MODEL_PATH = process.env.SKILLS_SMOKE_MODEL
-const RUN = typeof MODEL_PATH === 'string' && MODEL_PATH.length > 0
-const ROOT_PATH = process.env.SKILLS_SMOKE_ROOT ?? 'D:/'
-const LLAMA_BIN = process.env.HILBERTRAUM_LLAMA_BIN ?? 'D:/runtime/llama.cpp/win/llama-server.exe'
+const MODEL_PATH = process.env.SKILLS_SMOKE_MODEL?.trim() ?? ''
+const ROOT_PATH = process.env.SKILLS_SMOKE_ROOT?.trim() ?? ''
+const RUN = MODEL_PATH.length > 0 && ROOT_PATH.length > 0
 // The product default context (the flagship de-AT turn users hit); small fixtures never truncate at 4096.
 const CONTEXT_TOKENS = 4096
 
@@ -44,6 +43,7 @@ import { appendMessage, createConversation, type TurnSkill } from '../../src/mai
 import { generateGroundedAnswer, generateGroundedDataAnswer, ragSettingsFrom } from '../../src/main/services/rag'
 import { RuntimeManager, type ModelRuntime } from '../../src/main/services/runtime'
 import { createSelectingRuntimeFactory } from '../../src/main/services/runtime/factory'
+import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 import {
   BANK_STATEMENT_INSTALL_ID,
   bankStatementAnalysisHandler
@@ -153,13 +153,15 @@ async function runGroundedData(
 
 beforeAll(async () => {
   if (!RUN) return
-  expect(existsSync(MODEL_PATH as string), `model weights at ${MODEL_PATH}`).toBe(true)
-  expect(existsSync(LLAMA_BIN), `llama-server at ${LLAMA_BIN}`).toBe(true)
-  process.env.HILBERTRAUM_LLAMA_BIN = LLAMA_BIN
+  expect(existsSync(MODEL_PATH), `model weights at ${MODEL_PATH}`).toBe(true)
+  expect(
+    resolveLlamaServerPath(ROOT_PATH, process.platform, process.env, { isDev: true }),
+    `llama-server under ${ROOT_PATH} (or HILBERTRAUM_LLAMA_BIN)`
+  ).not.toBeNull()
   // Force CPU (--device none): robust + deterministic for a harness (no GPU crash-fallback wiring here).
   const factory = createSelectingRuntimeFactory({ rootPath: ROOT_PATH, isDev: true, gpu: { getGpuMode: () => 'off' } })
   manager = new RuntimeManager(factory)
-  await manager.start({ modelId: 'skills-smoke', modelPath: MODEL_PATH as string, contextTokens: CONTEXT_TOKENS })
+  await manager.start({ modelId: 'skills-smoke', modelPath: MODEL_PATH, contextTokens: CONTEXT_TOKENS })
   const active = manager.active()
   expect(active, 'a runtime is active').not.toBeNull()
   runtime = active as ModelRuntime

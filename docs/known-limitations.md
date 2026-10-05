@@ -481,11 +481,12 @@ password recovery — are documented in
   unless the affected `*_EXTRACTOR_VERSION` was bumped and the snapshot regenerated
   (`UPDATE_EXTRACTOR_SNAPSHOT=1 …`), the mechanical backstop for the "every behaviour change bumps the
   version" rule that green synthetic fixtures did not enforce; and (3) an env-gated opt-in real-model smoke
-  (`tests/e2e-model/skills-smoke.test.ts`, `SKILLS_SMOKE_MODEL=<gguf>`) driving one bank + one invoice (the
-  third-mode grounded-data path) + one German minutes turn against a real local model, asserting STRUCTURE +
+  (`tests/e2e-model/skills-smoke.test.ts`, `SKILLS_SMOKE_MODEL=<gguf>` + `SKILLS_SMOKE_ROOT=<drive root>`)
+  driving one bank + one invoice (the third-mode grounded-data path) + one German minutes turn against a
+  real local model, asserting STRUCTURE +
   FIGURES (the deterministic echo, the extract count) not prose. Details: [`model-benchmarks.md`](model-benchmarks.md)
   §10. **Residuals:** nothing in the default `npm test` needs a model or the network (the smoke skips cleanly
-  without a path and is NOT wired into CI — it is a manual pre-release / post-pin-bump gate); the corpus fed
+  without both variables and is NOT wired into CI — it is a manual pre-release / post-pin-bump gate); the corpus fed
   the PLAIN-TEXT extractor path only until invoice-hardening-2026-07-04 P4 added the first geometry INVOICE
   fixture (`invoice-de-geometry-columns`, through the real `reconstructPage`) — geometry BANK coverage was
   already there, and the reconstruction's own unit tests remain the deep coverage. (The corpus once surfaced

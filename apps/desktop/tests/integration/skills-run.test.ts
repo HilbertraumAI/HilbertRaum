@@ -5,6 +5,8 @@ import { createConversation, exportTranscript, appendMessage, listMessages } fro
 import {
   resolveDocumentReader,
   runBankExtraction,
+  runDocumentEdit,
+  runDocumentRedaction,
   runBalanceValidation,
   runCategorization,
   runCashflowSummary,
@@ -26,6 +28,7 @@ import type { DocumentChunkRead } from '../../src/shared/types'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { seedDocWithChunks } from '../helpers/doc-fixtures'
 import { capturingAudit } from '../helpers/audit-capture'
+import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
 import { countPrepares } from '../helpers/db-spy'
 
 /** Load a statement's rows in the `LoadedTransaction` shape the analysis handler hands to the seams as
@@ -190,24 +193,74 @@ describe('runBankExtraction (S11a)', () => {
     expect(descs).toEqual(['Grocery', 'Salary'])
   })
 
-  it('a failing verbatim re-extraction surfaces as a terminal failed run (B4)', async () => {
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, [{ text: 'EUR\n2026-01-02 Coffee -3,50', page: 1 }])
-    const { audit } = capturingAudit()
-    const res = await runBankExtraction(
-      db,
-      { skillInstallId: 'app:bank-statement', documentId: docId },
-      {
-        audit,
-        readDocumentSegments: async () => {
+  // #583: the bank row was the only one covered. The redaction and edit tools each catch the reader's
+  // throw; losing that catch would let redaction write an EMPTY redacted file reported as clean (a false
+  // "no personal data" deliverable), so every row must end as a failed run with nothing saved.
+  it.each([
+    {
+      name: 'bank extraction',
+      error: 'This statement could not be read.',
+      run: (db: Db, docId: string, readDocumentSegments: () => Promise<never>) =>
+        runBankExtraction(
+          db,
+          { skillInstallId: 'app:bank-statement', documentId: docId },
+          { audit: capturingAudit().audit, readDocumentSegments }
+        )
+    },
+    {
+      name: 'document redaction',
+      error: 'This document could not be read.',
+      run: (db: Db, docId: string, readDocumentSegments: () => Promise<never>, saveTextFile: () => Promise<boolean>) =>
+        runDocumentRedaction(
+          db,
+          { skillInstallId: 'app:document-redaction', documentId: docId },
+          { audit: capturingAudit().audit, readDocumentSegments, saveTextFile, confirmed: true }
+        )
+    },
+    {
+      name: 'document edit',
+      error: 'This document could not be read.',
+      run: (db: Db, docId: string, readDocumentSegments: () => Promise<never>, saveTextFile: () => Promise<boolean>, calls: ScriptedCall[]) =>
+        runDocumentEdit(
+          db,
+          { skillInstallId: 'app:document-edit', documentId: docId },
+          {
+            audit: capturingAudit().audit,
+            readDocumentSegments,
+            saveTextFile,
+            confirmed: true,
+            runtime: scriptedRuntime(JSON.stringify({ edits: [] }), calls),
+            instruction: 'Replace Coffee with Tea'
+          }
+        )
+    }
+  ])(
+    'a failing verbatim re-extraction surfaces as a terminal failed run (B4): $name',
+    async ({ run, error }) => {
+      const db = freshDb()
+      const docId = seedDocWithChunks(db, [{ text: 'EUR\n2026-01-02 Coffee -3,50', page: 1 }])
+      const modelCalls: ScriptedCall[] = []
+      let saves = 0
+      const res = await run(
+        db,
+        docId,
+        async () => {
           throw new Error('stored copy is gone')
-        }
-      }
-    )
-    expect(res.ok).toBe(false)
-    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
-    expect(run.status).toBe('failed')
-  })
+        },
+        async () => {
+          saves++
+          return true
+        },
+        modelCalls
+      )
+      expect(res.ok).toBe(false)
+      expect(res.error).toBe(error)
+      const row = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+      expect(row.status).toBe('failed')
+      expect(saves).toBe(0)
+      expect(modelCalls).toHaveLength(0)
+    }
+  )
 
   it('a persist failure under replaceExisting rolls back to the PREVIOUS statement — old rows survive, readable (T2)', async () => {
     // The load-bearing "a failure rolls back to the old" claim on the A9 atomic swap (run.ts:381-383):

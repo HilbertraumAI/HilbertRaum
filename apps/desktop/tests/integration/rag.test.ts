@@ -38,8 +38,8 @@ import {
 } from '../../src/main/services/chat'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from '../../src/main/services/runtime'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
-import { MAX_REDUCE_CONTINUATIONS } from '../../src/main/services/rag/whole-doc-tree'
-import { stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
+import { MAX_REDUCE_CONTINUATIONS, streamWholeDocMapReduce } from '../../src/main/services/rag/whole-doc-tree'
+import { SKILL_GUARD_LINE, stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import {
   createQueuedDocument,
@@ -47,6 +47,7 @@ import {
   processDocument
 } from '../../src/main/services/ingestion'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
 
 function freshDb(): Db {
   return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-rag-')), 'test.sqlite'))
@@ -508,6 +509,60 @@ describe('retrieve', () => {
       }
     }
     await expect(retrieve(db, failing, 'alpha beta gamma delta', SETTINGS)).rejects.toThrow(/embed boom/)
+  })
+})
+
+// #583: of the four call sites that scrub echoed skill-fence framing before persisting (plain chat,
+// generateGroundedAnswer, streamWholeDocMapReduce, generateGroundedDataAnswer) the last two had no
+// test; the whole-document core is shared by the tree rescue and the over-budget map-reduce.
+describe('echoed fence framing never persists (#583)', () => {
+  // A model that closes its answer by echoing the app-authored fence end marker and guard line.
+  const ECHOING_REPLY = 'Answer body.\n\n--- END LOCAL SKILL ---\n' + SKILL_GUARD_LINE
+
+  it.each([
+    {
+      site: 'streamWholeDocMapReduce',
+      answer: async (): Promise<string> => {
+        const db = freshDb()
+        const conv = createConversation(db, { mode: 'documents' })
+        appendMessage(db, { conversationId: conv.id, role: 'user', content: 'summarise it' })
+        const msg = await streamWholeDocMapReduce({
+          db,
+          runtime: scriptedRuntime(ECHOING_REPLY),
+          conversationId: conv.id,
+          documentId: 'doc-1',
+          question: 'summarise it',
+          contextTokens: 4096,
+          sourceTexts: ['One short source text.'],
+          citations: [],
+          chunksCovered: 1,
+          chunksTotal: 1,
+          coverageMode: 'capped'
+        })
+        expect(listMessages(db, conv.id).at(-1)?.content).toBe(msg.content)
+        return msg.content
+      }
+    },
+    {
+      site: 'generateGroundedDataAnswer',
+      answer: async (): Promise<string> => {
+        const db = freshDb()
+        const conv = createConversation(db, { mode: 'documents' })
+        appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
+        const msg = await generateGroundedDataAnswer(db, scriptedRuntime(ECHOING_REPLY), conv.id, 'who is the vendor?', {
+          dataBlock: '{"vendor":"Acme GmbH"}',
+          postscript: '',
+          citations: []
+        })
+        expect(listMessages(db, conv.id).at(-1)?.content).toBe(msg.content)
+        return msg.content
+      }
+    }
+  ])('$site persists the answer without the echoed end marker or guard line', async ({ answer }) => {
+    const persisted = await answer()
+    expect(persisted).toContain('Answer body.')
+    expect(persisted).not.toContain('--- END LOCAL SKILL ---')
+    expect(persisted).not.toContain(SKILL_GUARD_LINE)
   })
 })
 
