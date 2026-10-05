@@ -27,6 +27,33 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-05 — the closed 2026-09-21 #488/#498/#501 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-05 (preamble budget, making room for the #516 entry). #488, #498 and #501 are closed
+(2026-09-21); the records are unchanged: `rag-design.md` §17 "Prose joins the table superscript/subscript convention", the
+`architecture.md` honest-signal record + `rag-design.md` §15 amendments, and `architecture.md` "Markdown rendering" (KaTeX bullet).
+The `<figcaption>` residual it names stays an owner call. Citations of the form "BUILD_STATE 2026-09-21 #488 entry" now resolve
+here. Text below is byte-identical to what was removed.
+
+_2026-09-21 — **#488 / #498 / #501 fixed in one PR (`fix/488-498-501-prose-supsub-cutoff-badge-inline-math`):
+ZIM prose keeps superscripts/subscripts readable and retrieval folds them; the cut-off badge names no
+cause and its remedy follows which ceiling fired; inline `$…$` math renders.** Records: `rag-design.md`
+§17 "Prose joins the table superscript/subscript convention" (+ `known-limitations.md`, `zim/supsub.ts`);
+`architecture.md` honest-signal record + `rag-design.md` §15 amendments + `data-contracts.md`
+(`messages.truncated_cause`); `architecture.md` "Markdown rendering" KaTeX bullet. **#488 was measured
+twice** (`tmp/488-measurement/`, the 4-z-r harness, both packs): the first cut marked every `<sup>`/`<sub>`
+— 12,483 insertions on the 949 core200 articles, 63 % of them reference back-links (`↑ ^a ^b ^c`), 18 %
+fold-shaped — and its digit-only `_` fold split 86 real terms (`NO_x`, `pK_S`, `T_krit`); the rule became
+"mark only between alphanumerics (or before a sign), fold `^`/`_` between any two alphanumerics": 2,897
+insertions (90 % fold-shaped, 0 on back-links), 246/949 articles moved, and the invariant of record (every
+alphanumeric run ≥ 3 of the old text is still a substring of the folded new text) holds on 1,436 of 1,437
+articles. Both reads passed all six PR-B floors at the #500 read's count figures (102/143/143). **#498:**
+the runtime yields one bit (`finish_reason: 'length'`), so the cause is computed app-side — no cap sent, or
+fewer tokens generated than the cap sent ⇒ window, else cap — and a legacy row reads as the old advice.
+**#501:** Pandoc's shape rule + a TeX-signal/short-span content rule; remark-math's single-`$` mode stays
+off. Open: a `<figcaption>` inside a dropped `<figure>` (the #500 capture path) still fuses sup/sub — a
+two-line change if the owner wants it; the `snake case` vs `snake_case` question-side note is recorded._
+
 ## 2026-10-05 — the closed 2026-09-21 #497 dictation entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-05 (preamble budget, making room for the #570–#573 entry). #497 and #504 are closed

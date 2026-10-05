@@ -1562,6 +1562,36 @@ uses „erkannten Seiten“ and „Bildschirm KI-Modell“). Eyeballed in the re
 German UI (screenshots in the PR). Tests: `DocumentsScreen.test.tsx` (#576/#538, #574, #575 cases),
 `OcrInstall.test.tsx` (13b), the CODE-8 non-grammatical list in `i18n.test.ts`.
 
+### 11.20 "An update for the AI engine is available" — design record (IMPLEMENTED 2026-10-05, #516)
+
+_The AI Model screen's offer for an engine on the drive that is older than this app's pin.
+Engineering record: `architecture.md` "In-app engine updates". Code cites this section as
+**§11.20**._
+
+**Decisions.**
+1. **Quiet, not an alarm.** The engine works, and the update only brings it to the version this app
+   was tested with. So it is an `info` Banner placed after the missing-engine banners, and its
+   **Update** („Aktualisieren“) is a secondary button. The fixes for faults (§11.17's reinstall, the
+   missing-engine install) keep the primaries.
+2. **One notice, one button.** The title names what is outdated: "An update for the AI engine is
+   available", the voice-engine variant, or "Updates for the AI engine and the voice engine are
+   available". One Update covers all of them, and the `cpu/` fallback rides along.
+3. **Say what will happen.** The explanation states the order the user will see: the download comes
+   first, then the models pause for a few seconds while the files are replaced, then the selected
+   model starts again. Versions stay out of the everyday copy; Diagnostics' "Engine versions" row
+   carries them (§7).
+4. **The same controls as every engine job.** Progress and Cancel while it runs, the download gate's
+   reason under a disabled button, Try again with the error. A finished update toasts "The AI engine
+   was updated." and the notice leaves with the refreshed versions.
+5. **No contradicting neighbours.** It is not shown for an engine the OS refused (the §11.17 banner
+   leads, and a reinstall fetches the pin anyway), for a newer engine (never a downgrade), for one
+   without a version record, or for the optional knowledge-pack tools. A deep link to a missing model
+   stays at the top while the notice shows (the #539 note).
+
+**Copy:** `models.engineUpdate.*`, `diag.app.engineVersions`, `diag.engineVersion.*`,
+`main.engine.{nothingToUpdate, updateBusy}` (en + de). **Tests:** `EngineUpdate.test.tsx`,
+`ModelsScreen.test.tsx` (the deep-link row).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

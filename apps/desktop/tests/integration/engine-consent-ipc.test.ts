@@ -33,7 +33,7 @@ vi.mock('electron', () => ({
 import { IPC } from '../../src/shared/ipc'
 import { registerEngineIpc } from '../../src/main/ipc/registerEngineIpc'
 import { EngineDownloadManager, hostRuntimeArch, hostRuntimeOs, type ExtractFn } from '../../src/main/services/runtime-download'
-import { SIDECAR_FAMILY_SPECS, type FetchFn } from '../../src/main/services/assets'
+import { SIDECAR_FAMILY_SPECS, writeRuntimeMarker, type FetchFn } from '../../src/main/services/assets'
 import { llamaServerBinaryName, registerSidecarChild, unregisterSidecarChild } from '../../src/main/services/runtime/sidecar'
 import { whisperCliBinaryName } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
@@ -121,7 +121,9 @@ function demoRuntime(): { status: () => RuntimeStatus; activeModelId: () => stri
  *  over a real DB. `ctx.zim` is a stub whose `reconcile` the completed-install hook must call.
  *  `withWhisper` (#497) also pins the whisper_cpp family and provisions the speech model's
  *  manifest + weight, so only the voice ENGINE is missing — the "Install voice engine" case. */
-function makeDrive(opts: { withWhisper?: boolean; runtime?: unknown } = {}): Drive {
+function makeDrive(
+  opts: { withWhisper?: boolean; runtime?: unknown; llamaVersion?: string; extract?: ExtractFn } = {}
+): Drive {
   const root = freshRoot()
   const manifests = join(root, 'model-manifests')
   mkdirSync(manifests, { recursive: true })
@@ -144,7 +146,7 @@ function makeDrive(opts: { withWhisper?: boolean; runtime?: unknown } = {}): Dri
     join(manifests, 'runtime-sources.yaml'),
     stringify({
       llama_cpp: {
-        version: 'btest',
+        version: opts.llamaVersion ?? 'btest',
         builds: [{ os: HOST_OS, arch: HOST_ARCH, backend: 'cpu', url: 'https://example.test/llama.zip', sha256: SHA, extract_to: `runtime/llama.cpp/${HOST_OS}` }]
       },
       ...(opts.withWhisper
@@ -187,7 +189,7 @@ function makeDrive(opts: { withWhisper?: boolean; runtime?: unknown } = {}): Dri
     transcriber: null
   })
   handlers.clear()
-  const manager = new EngineDownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, extractImpl: extractAll })
+  const manager = new EngineDownloadManager({ fetchImpl: fetchSpy as unknown as FetchFn, extractImpl: opts.extract ?? extractAll })
   registerEngineIpc(ctx, manager)
   return { root, handlers, manager, fetchSpy, reconcile, ctx }
 }
@@ -465,5 +467,135 @@ describe('downloadEngine({ families, reinstall }) — the damaged-files repair (
     await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })))
     expect(runtime.stop).toHaveBeenCalledTimes(1)
     expect(runtime.stop.mock.invocationCallOrder[0]).toBeLessThan(runtime.start.mock.invocationCallOrder[0] ?? 0)
+  })
+})
+
+// #516: "Update the AI engine" through the real handler. The model keeps answering through the
+// download; only then is everything that runs from the engine folder paused, the files swapped,
+// and the model started again — and work in progress refuses the update rather than being cut off.
+describe('downloadEngine({ families, update }) — pause, update, resume (#516)', () => {
+  /** A model answering on the REAL engine; `stop`/`start` flip it the way the manager does. */
+  function liveRuntime(): { status: () => RuntimeStatus; activeModelId: () => string | null; stop: Mock; start: Mock } {
+    let running = true
+    const status = (): RuntimeStatus =>
+      running
+        ? { running: true, modelId: 'chat-test', backend: 'gpu', startingModelId: null, port: 1, healthy: true, message: 'Running' }
+        : { running: false, modelId: null, startingModelId: null, port: null, healthy: false, message: 'Stopped' }
+    return {
+      status,
+      activeModelId: () => (running ? 'chat-test' : null),
+      stop: vi.fn(async () => {
+        running = false
+      }),
+      start: vi.fn(async () => {
+        running = true
+        return status()
+      })
+    }
+  }
+  /** The engine's other users, as the pause sees them. */
+  function helpers(): Record<string, Record<string, Mock>> {
+    return {
+      embedder: { suspend: vi.fn(async () => undefined), resetStartFailure: vi.fn() },
+      reranker: { suspend: vi.fn(async () => undefined), resetStartFailure: vi.fn() },
+      vision: { stop: vi.fn(async () => undefined), releaseRuntime: vi.fn(async () => undefined), resetStartFailure: vi.fn() },
+      translator: { suspend: vi.fn(async () => undefined) }
+    }
+  }
+  /** An older chat engine on the drive (the pin is b200). */
+  function withOlderEngine(d: Drive): void {
+    const dir = join(d.root, 'runtime', 'llama.cpp', HOST_OS)
+    mkdirSync(dir, { recursive: true })
+    writeFileSync(join(dir, BIN_NAME), 'old engine')
+    writeRuntimeMarker(dir, { version: 'b150', backend: 'cpu', os: HOST_OS, arch: HOST_ARCH })
+  }
+  const versionOnDrive = (d: Drive): string =>
+    (JSON.parse(readFileSync(join(d.root, 'runtime', 'llama.cpp', HOST_OS, '.hilbertraum-runtime.json'), 'utf8')) as { version: string }).version
+
+  it('downloads first, then pauses the model and every engine helper, swaps the files and starts the model again', async () => {
+    const runtime = liveRuntime()
+    const d = makeDrive({ runtime, llamaVersion: 'b200' })
+    const h = helpers()
+    Object.assign(d.ctx, h)
+    withOlderEngine(d)
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
+    expect(result).toMatchObject({ families: ['llama_cpp'], update: true })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(versionOnDrive(d)).toBe('b200')
+    // The model kept answering through the download: it was stopped only after the archive arrived.
+    expect(runtime.stop).toHaveBeenCalledTimes(1)
+    expect(d.fetchSpy.mock.invocationCallOrder[0]).toBeLessThan(runtime.stop.mock.invocationCallOrder[0] ?? 0)
+    // …and the same model comes back on the new engine…
+    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })))
+    // …after every helper running from that folder was paused for the swap. (A model start
+    // suspends the reranker again as any switch does, so only the first call is the pause.)
+    for (const pause of [h.embedder.suspend, h.reranker.suspend, h.vision.releaseRuntime, h.translator.suspend]) {
+      expect(pause.mock.invocationCallOrder[0]).toBeLessThan(runtime.start.mock.invocationCallOrder[0] ?? 0)
+    }
+    // Vision lets its idle sidecar go; it is never the lock-time stop() that purges finished answers.
+    expect(h.vision.stop).not.toHaveBeenCalled()
+  })
+
+  it('a failed swap still brings the model back (on the engine left on the drive)', async () => {
+    const runtime = liveRuntime()
+    const d = makeDrive({
+      runtime,
+      llamaVersion: 'b200',
+      extract: async () => {
+        throw new Error('tar exited with code 1')
+      }
+    })
+    Object.assign(d.ctx, helpers())
+    withOlderEngine(d)
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('failed')
+    expect(runtime.stop).toHaveBeenCalledTimes(1)
+    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })))
+  })
+
+  it.each<[string, (ctx: AppContext) => void]>([
+    ['a document task is queued or running', (ctx) => Object.assign(ctx, { docTasks: { hasActiveTask: () => true } })],
+    ['an import is running', (ctx) => Object.assign(ctx, { ingestionActive: () => true })],
+    ['a document translation is running', (ctx) => Object.assign(ctx, { translateJobs: { getActiveJob: () => ({ jobId: 't1' }) } })],
+    ['an image analysis is running', (ctx) => Object.assign(ctx, { vision: { hasActiveJob: () => true } })],
+    // The local API's external lane holds no in-app stream and no span: only the runtime's own gate knows.
+    ['a local-API completion is streaming', (ctx) => Object.assign(ctx.runtime, { isGenerating: () => true })],
+    [
+      'a model is still starting',
+      (ctx) => {
+        const status = ctx.runtime.status.bind(ctx.runtime)
+        Object.assign(ctx.runtime, { status: () => ({ ...status(), startingModelId: 'chat-test' }) })
+      }
+    ]
+  ])('is refused while %s — nothing is fetched, nothing is paused', async (_label, busy) => {
+    const runtime = liveRuntime()
+    const d = makeDrive({ runtime, llamaVersion: 'b200' })
+    Object.assign(d.ctx, helpers())
+    withOlderEngine(d)
+    busy(d.ctx)
+    await expect(
+      invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
+    ).rejects.toThrow(/in use right now/i)
+    expect(d.fetchSpy).not.toHaveBeenCalled()
+    expect(runtime.stop).not.toHaveBeenCalled()
+  })
+
+  it('work that starts during the download refuses the swap at the pause — the old engine stays and keeps answering', async () => {
+    const runtime = liveRuntime()
+    const d = makeDrive({ runtime, llamaVersion: 'b200' })
+    Object.assign(d.ctx, helpers())
+    withOlderEngine(d)
+    let importing = false
+    Object.assign(d.ctx, { ingestionActive: () => importing })
+    d.fetchSpy.mockImplementation(async () => {
+      importing = true // an import began while the archive downloaded
+      return new Response(BODY, { status: 200, headers: { 'content-length': String(BODY.length) } })
+    })
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], update: true })
+    const job = await settle(d, result as EngineDownloadJob)
+    expect(job.status).toBe('failed')
+    expect(job.error).toMatch(/in use right now/i)
+    expect(versionOnDrive(d)).toBe('b150')
+    expect(runtime.stop).not.toHaveBeenCalled()
   })
 })

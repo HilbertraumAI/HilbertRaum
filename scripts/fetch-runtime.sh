@@ -351,6 +351,28 @@ done
 
 [[ -z "$VERSION" ]] && { echo "runtime-sources.yaml: missing $FAMILY.version (is the $FAMILY block present?)" >&2; exit 2; }
 
+# #516: the DRIVE's yaml wins over the repo's, so on a drive whose manifests predate a pin bump
+# this re-installs the OLD pin. Say so: refreshing the drive's manifests (prepare-drive) comes first.
+family_version() {
+  local file="$1" fam="$2" top="" ln
+  while IFS= read -r ln || [[ -n "$ln" ]]; do
+    ln="${ln%$'\r'}"
+    [[ "$ln" =~ ^[[:space:]]*# ]] && continue
+    if [[ "$ln" =~ ^([A-Za-z0-9_]+)[[:space:]]*:[[:space:]]*$ ]]; then top="${BASH_REMATCH[1]}"; continue; fi
+    if [[ "$top" == "$fam" && "$ln" =~ ^[[:space:]]+version[[:space:]]*:[[:space:]]*(.+)$ ]]; then
+      strip_value "${BASH_REMATCH[1]}"; return
+    fi
+  done < "$file"
+}
+REPO_SOURCES="$REPO_ROOT/model-manifests/runtime-sources.yaml"
+if [[ -f "$REPO_SOURCES" && ! "$SOURCES_FILE" -ef "$REPO_SOURCES" ]]; then
+  REPO_VERSION="$(family_version "$REPO_SOURCES" "$FAMILY")"
+  if [[ -n "$REPO_VERSION" && "$REPO_VERSION" != "$VERSION" ]]; then
+    echo "Note: the drive's runtime-sources.yaml pins $FAMILY $VERSION; this repo pins $REPO_VERSION." >&2
+    echo "      To move the drive to the repo's pin, refresh its manifests first (prepare-drive), then run fetch-runtime again." >&2
+  fi
+fi
+
 # --- Select the build (os + arch [+ backend]); default = first os/arch match
 # (vulkan on win/linux, metal on mac since Phase 14).
 # Explicit --os without --arch = cross-provisioning: take that OS's first build (any arch).

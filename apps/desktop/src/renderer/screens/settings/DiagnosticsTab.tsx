@@ -15,6 +15,8 @@ import type {
   BenchmarkResult,
   DriveStatus,
   EngineProblem,
+  EngineVersionInfo,
+  EngineVersionRelation,
   LocalApiStatus,
   PerformanceSnapshot,
   RuntimeInstallInfo,
@@ -172,6 +174,36 @@ function engineProblemLine(problem: EngineProblem, t: I18n['t']): string {
   return detail ? `${line} (${detail})` : line
 }
 
+/** Technical engine names for Diagnostics (untranslated, like the runtime-build row). */
+const ENGINE_TECH_NAME: Readonly<Record<string, string>> = {
+  llama_cpp: 'llama.cpp',
+  whisper_cpp: 'whisper.cpp',
+  kiwix_tools: 'kiwix-tools'
+}
+
+/**
+ * #516: one phrase per engine (or `cpu/` fallback) on the drive that is not this app's pinned
+ * build — older, newer or unrecorded. Empty when everything matches, so the row is hidden then.
+ */
+function engineVersionLines(versions: readonly EngineVersionInfo[] | undefined, t: I18n['t']): string[] {
+  const phrase = (engine: string, relation: EngineVersionRelation, installed: string | null, pinned: string): string | null => {
+    if (relation === 'current') return null
+    if (relation === 'unknown' || installed === null) return t('diag.engineVersion.unknown', { engine, pinned })
+    return t(relation === 'newer' ? 'diag.engineVersion.newer' : 'diag.engineVersion.older', { engine, installed, pinned })
+  }
+  const lines: string[] = []
+  for (const v of versions ?? []) {
+    const engine = ENGINE_TECH_NAME[v.family] ?? v.family
+    const main = phrase(engine, v.relation, v.installed, v.pinned)
+    if (main) lines.push(main)
+    if (v.cpuNet) {
+      const net = phrase(t('diag.engineVersion.cpuNet', { engine }), v.cpuNet.relation, v.cpuNet.installed, v.cpuNet.pinned)
+      if (net) lines.push(net)
+    }
+  }
+  return lines
+}
+
 /** #530: the label of an engine's Diagnostics line. */
 function engineProblemLabel(problem: EngineProblem, t: I18n['t']): string {
   return t(problem.family === 'whisper_cpp' ? 'diag.app.voiceEngine' : 'diag.app.engine')
@@ -184,8 +216,10 @@ function buildAppRuntimeReport(
   runtime: RuntimeStatus | null,
   currentGpu: PerformanceSnapshot['currentGpu'],
   install: RuntimeInstallInfo | null,
-  t: I18n['t']
+  t: I18n['t'],
+  versions?: readonly EngineVersionInfo[]
 ): string {
+  const versionLines = engineVersionLines(versions, t)
   return [
     t('diag.app.title'),
     `${t('diag.app.version')}: ${app ? `${app.appName} ${app.appVersion}` : t('diag.app.unknown')}`,
@@ -197,7 +231,8 @@ function buildAppRuntimeReport(
     `${t('diag.localApi.label')}: ${localApiStatusLine(app?.localApi, t)}`,
     `${t('diag.app.runtimeBuild')}: ${
       install ? `llama.cpp ${install.version} (${install.backend})` : t('diag.app.noInstallMarker')
-    }`
+    }`,
+    ...(versionLines.length > 0 ? [`${t('diag.app.engineVersions')}: ${versionLines.join('; ')}`] : [])
   ].join('\n')
 }
 
@@ -299,6 +334,9 @@ export function DiagnosticsTab(): JSX.Element {
    *  again if it fails, which reads as the CPU wording. */
   const [currentGpu, setCurrentGpu] = useState<PerformanceSnapshot['currentGpu']>(null)
   const [install, setInstall] = useState<RuntimeInstallInfo | null>(null)
+  // #516: the drive's engines against this app's pin (the "Engine versions" row).
+  const [engineVersions, setEngineVersions] = useState<EngineVersionInfo[] | undefined>(undefined)
+  const versionLines = engineVersionLines(engineVersions, t)
   const [logTail, setLogTail] = useState<string[] | null>(null)
   const [showLogs, setShowLogs] = useState(false)
   // full-audit 2026-07-11 CODE-27: "Try GPU again" was the one handler in this file without
@@ -434,6 +472,9 @@ export function DiagnosticsTab(): JSX.Element {
     // Late IPC replies are dropped after unmount via the shared mountedRef (audit FE-4).
     window.api?.getDriveStatus().then((d) => mountedRef.current && setDrive(d)).catch(() => mountedRef.current && setDrive(null))
     window.api?.getRuntimeInstall().then((i) => mountedRef.current && setInstall(i)).catch(() => mountedRef.current && setInstall(null))
+    Promise.resolve(window.api?.getEngineStatus?.())
+      .then((e) => mountedRef.current && setEngineVersions(e?.engineVersions))
+      .catch(() => undefined)
     // Show the last benchmark, if one has been run before, so the profile persists across launches.
     window.api
       ?.getSettings()
@@ -500,6 +541,12 @@ export function DiagnosticsTab(): JSX.Element {
               ? `llama.cpp ${install.version} (${install.backend})`
               : t('diag.app.noInstallMarker')}
           </dd>
+          {versionLines.length > 0 && (
+            <>
+              <dt>{t('diag.app.engineVersions')}</dt>
+              <dd>{versionLines.join('; ')}</dd>
+            </>
+          )}
         </dl>
         {settings?.gpuAutoDisabled && (
           <Banner
@@ -529,7 +576,7 @@ export function DiagnosticsTab(): JSX.Element {
           <Button
             size="sm"
             title={t('diag.copyTitle')}
-            onClick={() => copyReport(buildAppRuntimeReport(app, runtime, currentGpu, install, t))}
+            onClick={() => copyReport(buildAppRuntimeReport(app, runtime, currentGpu, install, t, engineVersions))}
           >
             {t('diag.copy')}
           </Button>

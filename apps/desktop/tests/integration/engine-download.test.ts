@@ -5,7 +5,7 @@ vi.mock('electron', () => ({
   ipcMain: { handle: vi.fn(), removeHandler: vi.fn() }
 }))
 import { createHash } from 'node:crypto'
-import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -45,6 +45,7 @@ import { chatEngineInUse, llamaSidecarInUse, whisperSidecarInUse } from '../../s
 import type { RuntimeManager } from '../../src/main/services/runtime'
 import type { EngineDownloadJob } from '../../src/shared/types'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { engineSpawnsHeld } from '../../src/main/services/runtime/spawn-gate'
 
 // In-app engine (llama.cpp sidecar) downloader: the gates (a closed gate never reaches the
 // network seam), the verify-before-trust flow (placeholder honesty, mismatch discard), the
@@ -379,26 +380,50 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
     expect(engineStatus(rootPath, manifestsDir).installed).toBe(false)
   })
 
-  it('a cancel DURING extraction is honoured — no marker write, install stays non-current', async () => {
+  // The extractor below behaves like `extractWithTar` (F-33): a cancel during the extraction makes
+  // it reject. The terminal status lands before the run settles, so both cases wait for the
+  // manager to go idle before they look at the drive.
+  const gatedExtract = (honourAbort: boolean): { extractImpl: ExtractFn; release: () => void } => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>((r) => (release = r))
+    const extractImpl: ExtractFn = async (_archive, destDir, signal) => {
+      await gate
+      if (honourAbort && signal?.aborted) throw new Error('tar extraction cancelled')
+      await writeFile(join(destDir, BIN_NAME), 'binary')
+    }
+    return { extractImpl, release }
+  }
+  const settledJob = async (mgr: EngineDownloadManager, jobId: string): Promise<EngineDownloadJob> => {
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull(), { timeout: hangBudgetMs(5000) })
+    return mgr.get(jobId)
+  }
+
+  it('a cancel DURING extraction is honoured — tar stops, no marker write, install stays non-current', async () => {
     const { rootPath, manifestsDir } = makeDrive()
-    let releaseExtract: () => void = () => undefined
-    const extractGate = new Promise<void>((r) => (releaseExtract = r))
-    const mgr = new EngineDownloadManager({
-      fetchImpl: okFetch,
-      extractImpl: async (_archive, destDir) => {
-        await extractGate
-        await writeFile(join(destDir, BIN_NAME), 'binary')
-      }
-    })
+    const { extractImpl, release } = gatedExtract(true)
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl })
     const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
     await waitForStatus(mgr, started.jobId, 'extracting')
     mgr.cancel(started.jobId) // pre-fix: dropped — 'extracting' was not a cancellable state
-    releaseExtract()
-    const job = await runToEnd(mgr, started.jobId)
-    expect(job.status).toBe('cancelled')
-    // The binary may have landed, but WITHOUT a marker the install is not "current":
-    // the next install re-runs cleanly and the pre-spawn verifier treats it as legacy.
+    release()
+    expect((await settledJob(mgr, started.jobId)).status).toBe('cancelled')
+    // Without a marker the install is not "current": the next install re-runs cleanly and the
+    // pre-spawn verifier treats a binary that landed anyway as legacy.
     expect(existsSync(markerFor(rootPath))).toBe(false)
+  })
+
+  it('a cancel that arrives after the files are complete finishes the install and records it (#516)', async () => {
+    // The old copy is already gone and the new one is whole: skipping the marker would leave a
+    // working engine without a version record, which no update offers to replace.
+    const { rootPath, manifestsDir } = makeDrive()
+    const { extractImpl, release } = gatedExtract(false)
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW })
+    await waitForStatus(mgr, started.jobId, 'extracting')
+    mgr.cancel(started.jobId)
+    release()
+    expect((await settledJob(mgr, started.jobId)).status).toBe('done')
+    expect(existsSync(markerFor(rootPath))).toBe(true)
   })
 
   it('refuses a chat-engine install while a model runtime is running — fetch never called', async () => {
@@ -508,9 +533,12 @@ describe('extraction bounds + concurrency (F-33)', () => {
     const { rootPath, manifestsDir } = makeDrive()
     let releaseExtract: () => void = () => undefined
     const wedged = new Promise<void>((r) => (releaseExtract = r))
-    // A wedged tar that ignores the signal and only settles when we let it.
-    const neverExtract: ExtractFn = async (_a, destDir) => {
+    // A wedged tar that only settles when we let it — and then, like `extractWithTar`, rejects
+    // for a job that was cancelled meanwhile (a late cancel after a COMPLETE extraction finishes
+    // the install instead, #516 — pinned below).
+    const neverExtract: ExtractFn = async (_a, destDir, signal) => {
       await wedged
+      if (signal?.aborted) throw new Error('tar extraction cancelled')
       await writeFile(join(destDir, BIN_NAME), 'binary')
     }
     const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: neverExtract })
@@ -554,12 +582,14 @@ describe('re-install invalidates the binary-verifier session cache (full-audit 2
     try {
       // The tamper is detected and the verdict lands in the session cache.
       await expect(verifyBinaryBeforeSpawn(binPath)).resolves.toBe('mismatch')
-      // Repair: re-install the engine in-app (fresh bytes + fresh marker hash).
+      // Repair: re-install the engine in-app (fresh bytes + fresh marker hash). An explicit
+      // family request: since #516 the argument-less install fetches MISSING engines only.
       const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: fakeExtract })
-      const job = await runToEnd(mgr, (await mgr.start({ rootPath, manifestsDir, gates: ALLOW })).jobId)
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'] })
+      const job = await runToEnd(mgr, started.jobId)
       expect(job.status).toBe('done')
       // Pre-fix: the cached 'mismatch' stuck until app restart (silent MockRuntime after a
-      // repair). installOne now evicts the entry, so the next spawn re-hashes → ok.
+      // repair). replaceInstall now evicts the entry, so the next spawn re-hashes → ok.
       await expect(verifyBinaryBeforeSpawn(binPath)).resolves.toBe('ok')
     } finally {
       _resetBinaryVerificationForTests()
@@ -779,8 +809,9 @@ describe('kiwix_tools — the optional two-executable family (#339 P8-1, T20-a)'
     const gate = new Promise<void>((r) => (release = r))
     const mgr = new EngineDownloadManager({
       fetchImpl: okFetch,
-      extractImpl: async (archive, destDir) => {
+      extractImpl: async (archive, destDir, signal) => {
         await gate
+        if (signal?.aborted) throw new Error('tar extraction cancelled') // as extractWithTar does
         await kiwixExtract()(archive, destDir)
       }
     })
@@ -961,5 +992,229 @@ describe('engine in-use guard, widened per family (F-32)', () => {
     const job = await runToEnd(mgr, started.jobId)
     expect(job.status).toBe('done')
     expect(existsSync(join(rootPath, 'runtime', 'llama.cpp', HOST_OS, BIN_NAME))).toBe(true)
+  })
+})
+
+// ---- #516 — engines older than the pin: status, the "missing only" default, the update ----------
+//
+// A drive set up before a pin bump keeps its engines: `engineStatus` reports each against the
+// pin, the argument-less install fetches only what is MISSING (it used to re-install every
+// engine whose marker differed — refused while a model ran, and a downgrade of a newer one), and
+// `update: true` replaces only what is OLDER, the `cpu/` net included, in two phases.
+describe('engine updates (#516)', () => {
+  const llamaDir = (root: string): string => join(root, 'runtime', 'llama.cpp', HOST_OS)
+  const cpuDir = (root: string): string => join(llamaDir(root), 'cpu')
+  const whisperDir = (root: string): string => join(root, 'runtime', 'whisper.cpp', HOST_OS)
+
+  /** The pin: llama b200 (vulkan, plus a cpu/ net) and whisper v1.8.6. */
+  function makeUpdateDrive(): { rootPath: string; manifestsDir: string } {
+    const rootPath = mkdtempSync(join(tmpdir(), 'hr-engine-update-root-'))
+    const manifestsDir = mkdtempSync(join(tmpdir(), 'hr-engine-update-manifests-'))
+    const build = (backend: string, url: string, extractTo: string) => ({
+      os: HOST_OS,
+      arch: HOST_ARCH,
+      backend,
+      url,
+      sha256: REAL_SHA,
+      extract_to: extractTo
+    })
+    const yaml = stringify({
+      llama_cpp: {
+        version: 'b200',
+        builds: [
+          build('vulkan', 'https://example.test/llama-vulkan.zip', `runtime/llama.cpp/${HOST_OS}`),
+          build('cpu', 'https://example.test/llama-cpu.zip', `runtime/llama.cpp/${HOST_OS}/cpu`)
+        ]
+      },
+      whisper_cpp: {
+        version: 'v1.8.6',
+        builds: [build('cpu', 'https://example.test/whisper.zip', `runtime/whisper.cpp/${HOST_OS}`)]
+      }
+    })
+    writeFileSync(join(manifestsDir, 'runtime-sources.yaml'), yaml)
+    return { rootPath, manifestsDir }
+  }
+
+  /** An installed engine: its binary plus a marker recording `version`/`backend`. */
+  async function installed(dir: string, bin: string, version: string, backend: string): Promise<void> {
+    await mkdir(dir, { recursive: true })
+    await writeFile(join(dir, bin), `old ${version}`)
+    writeRuntimeMarker(dir, { version, backend, os: HOST_OS, arch: HOST_ARCH })
+  }
+  const markerVersion = (dir: string): string | undefined => {
+    try {
+      return (JSON.parse(readFileSync(runtimeMarkerPath(dir), 'utf8')) as { version: string }).version
+    } catch {
+      return undefined
+    }
+  }
+  const fetchingUrls = (): { fetchImpl: FetchFn; urls: string[] } => {
+    const urls: string[] = []
+    const fetchImpl = (async (url: string | URL | Request) => {
+      urls.push(String(url))
+      return new Response(BODY, { status: 200, headers: { 'content-length': String(BODY.length) } })
+    }) as unknown as FetchFn
+    return { fetchImpl, urls }
+  }
+
+  it('engineStatus reports each engine on the drive against the pin, the cpu/ net included', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
+    await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
+    await installed(whisperDir(rootPath), WHISPER_BIN, 'v1.8.6', 'cpu')
+    expect(engineStatus(rootPath, manifestsDir).engineVersions).toEqual([
+      {
+        family: 'llama_cpp',
+        optional: false,
+        installed: 'b150',
+        installedBackend: 'vulkan',
+        pinned: 'b200',
+        pinnedBackend: 'vulkan',
+        relation: 'older',
+        cpuNet: { installed: 'b150', pinned: 'b200', relation: 'older' }
+      },
+      {
+        family: 'whisper_cpp',
+        optional: false,
+        installed: 'v1.8.6',
+        installedBackend: 'cpu',
+        pinned: 'v1.8.6',
+        pinnedBackend: 'cpu',
+        relation: 'current'
+      }
+    ])
+  })
+
+  it('the argument-less install fetches only the MISSING engine: no re-install, no downgrade, not blocked by a model', async () => {
+    for (const present of ['b150', 'b250']) {
+      const { rootPath, manifestsDir } = makeUpdateDrive()
+      await installed(llamaDir(rootPath), BIN_NAME, present, 'vulkan') // older, then newer than the pin
+      const { fetchImpl, urls } = fetchingUrls()
+      const mgr = new EngineDownloadManager({ fetchImpl, extractImpl: familyExtract })
+      // "Install voice engine" while a chat model runs: before #516 the job also took llama_cpp
+      // (its marker differed), so it was refused here with "the AI engine can't be replaced".
+      const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, chatRuntimeActive: true })
+      expect(started.families).toEqual(['whisper_cpp'])
+      expect((await runToEnd(mgr, started.jobId)).status).toBe('done')
+      expect(urls).toEqual(['https://example.test/whisper.zip'])
+      expect(markerVersion(llamaDir(rootPath))).toBe(present) // the chat engine was left alone
+    }
+  })
+
+  it('update: replaces the older main build and its older cpu/ net in one job, and says it is an update', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
+    await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
+    const { fetchImpl, urls } = fetchingUrls()
+    const mgr = new EngineDownloadManager({ fetchImpl, extractImpl: familyExtract })
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
+    expect(started).toMatchObject({ families: ['llama_cpp'], update: true })
+    expect((await runToEnd(mgr, started.jobId)).status).toBe('done')
+    expect(urls).toEqual(['https://example.test/llama-vulkan.zip', 'https://example.test/llama-cpu.zip'])
+    expect(markerVersion(llamaDir(rootPath))).toBe('b200')
+    expect(markerVersion(cpuDir(rootPath))).toBe('b200')
+    expect(engineStatus(rootPath, manifestsDir).engineVersions?.[0]).toMatchObject({
+      relation: 'current',
+      cpuNet: { relation: 'current' }
+    })
+  })
+
+  it.each([
+    ['current', 'b200'],
+    ['newer (an update never downgrades)', 'b250'],
+    ['unrecorded (no version to compare)', 'nightly']
+  ])('update: nothing to update when the engine is %s — nothing is fetched', async (_label, version) => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    await installed(llamaDir(rootPath), BIN_NAME, version, 'vulkan')
+    const { fetchImpl, urls } = fetchingUrls()
+    const mgr = new EngineDownloadManager({ fetchImpl, extractImpl: familyExtract })
+    await expect(
+      mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
+    ).rejects.toThrow(/nothing to update/i)
+    expect(urls).toEqual([])
+  })
+
+  it('two phases: every archive is verified before anything installed is touched, and a refusing pause replaces nothing', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
+    await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
+    const { fetchImpl } = fetchingUrls()
+    let seenAtPause: { archives: number; mainMarker?: string; cpuMarker?: string; held: boolean } | null = null
+    const zips = (d: string): string[] => readdirSync(d).filter((f) => f.endsWith('.zip'))
+    const mgr = new EngineDownloadManager({ fetchImpl, extractImpl: familyExtract })
+    const started = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp'],
+      update: true,
+      beforeReplace: async () => {
+        seenAtPause = {
+          archives: zips(llamaDir(rootPath)).length + zips(cpuDir(rootPath)).length,
+          mainMarker: markerVersion(llamaDir(rootPath)),
+          cpuMarker: markerVersion(cpuDir(rootPath)),
+          // From the pause to the last marker no llama program may start (spawn-gate.ts).
+          held: engineSpawnsHeld('llama_cpp')
+        }
+        throw new Error('A document task is running.')
+      }
+    })
+    const job = await runToEnd(mgr, started.jobId)
+    // The terminal status lands before the cleanup; the manager stays busy until both are done (F-33).
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    // At the pause both archives were downloaded and verified, and both old installs untouched.
+    expect(seenAtPause).toEqual({ archives: 2, mainMarker: 'b150', cpuMarker: 'b150', held: true })
+    // …and a refused pause releases the gate like every other outcome.
+    expect(engineSpawnsHeld('llama_cpp')).toBe(false)
+    // The pause refused: the job fails with its reason, the old engine stays, the archives go.
+    expect(job).toMatchObject({ status: 'failed', error: 'A document task is running.' })
+    expect(markerVersion(llamaDir(rootPath))).toBe('b150')
+    expect(readFileSync(join(llamaDir(rootPath), BIN_NAME), 'utf8')).toBe('old b150')
+    expect([...zips(llamaDir(rootPath)), ...zips(cpuDir(rootPath))]).toEqual([])
+  })
+
+  it('a job that stops part-way still reports what it replaced: the main build swapped, the cpu/ net failed', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
+    await installed(cpuDir(rootPath), BIN_NAME, 'b150', 'cpu')
+    const mgr = new EngineDownloadManager({
+      fetchImpl: okFetch,
+      extractImpl: async (archive, destDir, signal) => {
+        if (destDir === cpuDir(rootPath)) throw new Error('tar exited with code 1')
+        await familyExtract(archive, destDir, signal)
+      }
+    })
+    const installedFamilies: string[][] = []
+    mgr.onInstalled((families) => installedFamilies.push(families))
+    const started = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['llama_cpp'], update: true })
+    await runToEnd(mgr, started.jobId)
+    await vi.waitFor(() => expect(mgr.activeJob()).toBeNull())
+    expect(mgr.get(started.jobId).status).toBe('failed')
+    expect(markerVersion(llamaDir(rootPath))).toBe('b200')
+    // The new main build is on the drive, so its consumers hear of it (re-arm, probe refresh).
+    expect(installedFamilies).toEqual([['llama_cpp']])
+    expect(engineSpawnsHeld('llama_cpp')).toBe(false)
+  })
+
+  it('onSettled reports every outcome once — a done job and a failed one', async () => {
+    const { rootPath, manifestsDir } = makeUpdateDrive()
+    const mgr = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: familyExtract })
+    const settled: string[] = []
+    mgr.onSettled((j) => settled.push(`${(j.families ?? []).join('+')}:${j.status}`))
+    const first = await mgr.start({ rootPath, manifestsDir, gates: ALLOW, families: ['whisper_cpp'] })
+    await runToEnd(mgr, first.jobId)
+    await installed(llamaDir(rootPath), BIN_NAME, 'b150', 'vulkan')
+    const second = await mgr.start({
+      rootPath,
+      manifestsDir,
+      gates: ALLOW,
+      families: ['llama_cpp'],
+      update: true,
+      beforeReplace: async () => {
+        throw new Error('busy')
+      }
+    })
+    await runToEnd(mgr, second.jobId)
+    await vi.waitFor(() => expect(settled).toEqual(['whisper_cpp:done', 'llama_cpp:failed']))
   })
 })

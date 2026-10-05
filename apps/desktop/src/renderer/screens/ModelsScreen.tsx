@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import { Badge, Banner, Button, ConfirmDialog, EmptyState, EngineProblemNotice, ErrorBanner, KnowledgePackToolsDialog, OcrInstallControl, OcrInstallDialog, Progress, SegmentedControl, Spinner, useToast, type BadgeTone, type EngineProblemReinstall } from '../components'
 import {
   availableFamilies,
@@ -23,6 +23,7 @@ import type { ModelsFocus } from '../navigation'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
 import { engineProblemOffersReinstall } from '@shared/engine-problem'
+import type { RuntimeFamily } from '@shared/runtime-sources'
 import type {
   AppSettings,
   DownloadJob,
@@ -189,14 +190,19 @@ const ENGINE_JOB_LIVE: ReadonlySet<EngineDownloadJob['status']> = new Set([
 ])
 
 /**
- * #532: the engine job one surface shows. The install banners (`repair` null) show installs; an
- * "Install … again" action shows the reinstall of its own family. A job from an older main carries
- * no `reinstall` and reads as an install, as before.
+ * #532: the engine job one surface shows. The install banners (`'install'`) show installs; an
+ * "Install … again" action (its family) shows the reinstall of that family; the update notice
+ * (`'update'`, #516) shows updates. A job from an older main carries neither flag and reads as an
+ * install, as before.
  */
-function engineJobFor(job: EngineDownloadJob | null, repair: EngineProblemFamily | null): EngineDownloadJob | null {
+function engineJobFor(
+  job: EngineDownloadJob | null,
+  surface: 'install' | 'update' | EngineProblemFamily
+): EngineDownloadJob | null {
   if (!job) return null
-  if (repair === null) return job.reinstall === true ? null : job
-  return job.reinstall === true && (job.families ?? []).includes(repair) ? job : null
+  if (surface === 'install') return job.reinstall === true || job.update === true ? null : job
+  if (surface === 'update') return job.update === true ? job : null
+  return job.reinstall === true && (job.families ?? []).includes(surface) ? job : null
 }
 
 /**
@@ -340,6 +346,16 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   const voiceEngineProblem = engineProblems?.find((p) => p.family === 'whisper_cpp') ?? null
   // #532: confirms a reinstall that finished — its banner unmounts with the verdict at that moment.
   const showToast = useToast()
+  // #516: required engines on the drive older than this app's pin (or whose `cpu/` net is). An
+  // engine the OS refused shows its own banner instead — a reinstall fetches the pin anyway.
+  const updatableFamilies = useMemo(
+    () =>
+      (engine?.engineVersions ?? [])
+        .filter((v) => !v.optional && (v.relation === 'older' || v.cpuNet?.relation === 'older'))
+        .map((v) => v.family)
+        .filter((f) => !(f === 'llama_cpp' && chatEngineProblem) && !(f === 'whisper_cpp' && voiceEngineProblem)),
+    [engine, chatEngineProblem, voiceEngineProblem]
+  )
   const recheckEngine = (): Promise<EngineRecheckResult> =>
     window.api.recheckEngine().catch((err: unknown) => {
       throw new Error(friendlyIpcError(err))
@@ -374,11 +390,13 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     if (focus === null || models === null || !engineProblemsSettled || focusScrolledRef.current) return
     focusScrolledRef.current = true
     const families = FOCUS[focus].engineFamilies
+    // #516: the update notice for one of these engines sits there too (the #539 note on #516).
     const engineBannerShown =
       (engine?.available === true && families.some((f) => engine.missingFamilies.includes(f))) ||
-      (chatEngineProblem !== null && families.includes('llama_cpp'))
+      (chatEngineProblem !== null && families.includes('llama_cpp')) ||
+      updatableFamilies.some((f) => families.includes(f))
     if (!engineBannerShown) libraryRef.current?.scrollIntoView?.({ block: 'start' })
-  }, [focus, models, engine, engineProblemsSettled, chatEngineProblem])
+  }, [focus, models, engine, engineProblemsSettled, chatEngineProblem, updatableFamilies])
 
   async function refresh(): Promise<void> {
     const [m, s, p, e, rt] = await Promise.all([
@@ -563,9 +581,21 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             // CODE-28: same surfaced completion-refresh as the model-download poll above.
             void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
             // #532: a finished reinstall drops the verdict, and its banner with it — say what happened.
-            if (next.status === 'done' && next.reinstall === true) {
-              const voiceOnly = next.families?.includes('whisper_cpp') === true && !next.families.includes('llama_cpp')
-              showToast(t(voiceOnly ? 'models.engineProblem.voiceReinstalled' : 'models.engineProblem.reinstalled'))
+            // #516: likewise a finished update, whose notice leaves with the refreshed versions.
+            if (next.status === 'done' && (next.reinstall === true || next.update === true)) {
+              const chat = next.families?.includes('llama_cpp') === true
+              const voice = next.families?.includes('whisper_cpp') === true
+              const key: MessageKey =
+                next.update === true
+                  ? chat && voice
+                    ? 'models.engineUpdate.bothDone'
+                    : voice
+                      ? 'models.engineUpdate.voiceDone'
+                      : 'models.engineUpdate.done'
+                  : voice && !chat
+                    ? 'models.engineProblem.voiceReinstalled'
+                    : 'models.engineProblem.reinstalled'
+              showToast(t(key))
             }
           }
         })
@@ -578,6 +608,16 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     setError(null)
     try {
       setEngineJob(await window.api.downloadEngine())
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  /** #516: "Update" — the same job and gates; main pauses the engine's users only for the swap. */
+  async function startEngineUpdate(families: string[]): Promise<void> {
+    setError(null)
+    try {
+      setEngineJob(await window.api.downloadEngine({ families: families as RuntimeFamily[], update: true }))
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -1259,10 +1299,36 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             {t(opts.explainKey)}
           </p>
           {engineJobControls({
-            job: engineJobFor(engineJob, null),
+            job: engineJobFor(engineJob, 'install'),
             installKey: opts.installKey,
             primary: true,
             onStart: () => void startEngineDownload()
+          })}
+        </div>
+      </Banner>
+    )
+  }
+
+  /**
+   * #516: the quiet notice for engines older than this app's pin — one notice, one Update for all
+   * of them, the same job controls as the install banners. Main downloads first and pauses the
+   * engine's users only for the file swap, then starts the selected model again.
+   */
+  function engineUpdateNotice(families: string[]): JSX.Element {
+    const chat = families.includes('llama_cpp')
+    const voice = families.includes('whisper_cpp')
+    const titleKey: MessageKey =
+      chat && voice ? 'models.engineUpdate.bothTitle' : chat ? 'models.engineUpdate.title' : 'models.engineUpdate.voiceTitle'
+    return (
+      <Banner tone="info">
+        <div className="engine-install">
+          <strong>{t(titleKey)}</strong>
+          <p className="hint hint-lede">{t('models.engineUpdate.explain')}</p>
+          {engineJobControls({
+            job: engineJobFor(engineJob, 'update'),
+            installKey: 'models.engineUpdate.update',
+            primary: false,
+            onStart: () => void startEngineUpdate(families)
           })}
         </div>
       </Banner>
@@ -1447,6 +1513,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           explainKey: 'models.voiceEngine.explain',
           installKey: 'models.voiceEngine.install'
         })}
+
+      {/* #516: an engine on the drive is older than this app's pin — a quiet offer, never an alarm:
+          the engine works, the update only brings it to the version this app was tested with. */}
+      {updatableFamilies.length > 0 && engineUpdateNotice(updatableFamilies)}
 
       {/* #339 P8-2 (the owner's ruling): a QUIET row for the OPTIONAL knowledge-pack tools —
           visually lighter than the two engine banners above (a hint line, not a Banner) — shown

@@ -74,6 +74,13 @@ from its first public `1.0.0` release onward.
   note offers the same. Like every download, it needs **Allow internet access…** and a drive that
   permits downloads. If even the fresh copy will not start, the banner says its files are probably
   not the cause (on Windows, usually an outdated Visual C++ Redistributable) (#532).
+- **The app tells you when the drive's AI engine is out of date, and updates it.** A drive set up
+  before an app update keeps its older AI engine (and voice engine). The **AI Model** screen now
+  shows a quiet "An update for the AI engine is available" with an **Update** button, and
+  **Settings → Diagnostics** lists the versions. The new version downloads and is checksum-verified
+  while your model keeps answering; then the models pause for a few seconds while the files are
+  replaced, and your model starts again. The CPU fallback build is updated in the same step. A newer
+  engine than the app expects is never replaced with an older one (#516).
 - **Installing the AI engine no longer asks you to stop a model in demo mode first.** A model
   answering with simulated replies does not use the engine, so the install goes ahead, and the
   model then starts on the real engine by itself (#532).
@@ -109,6 +116,10 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **"Install voice engine" installs only the voice engine.** On a drive with an older AI engine, the
+  button also tried to download the AI engine again, and while a model was running it then refused
+  with "The AI engine can't be replaced while a model is running". It now installs only what is
+  missing; updating the AI engine is the separate, explicit **Update** (#516).
 - **A redaction or document edit no longer fails at the very end because of one long suggestion.**
   When the model suggested a passage longer than the tool accepts, the whole run stopped with "This
   tool was given input it cannot accept." after reading the entire document, and every other suggestion

@@ -1,3 +1,4 @@
+import { waitForEngineSpawns } from '../runtime/spawn-gate'
 import { spawn as nodeSpawn, type ChildProcess, type SpawnOptions } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { existsSync, readFileSync } from 'node:fs'
@@ -283,6 +284,8 @@ export class WhisperCliTranscriber implements Transcriber {
     // Re-hash whisper-cli against its install marker before spawn (vuln-scan B). A
     // packaged-build tamper is refused; the audio import then fails per-file with the
     // generic failure copy (the raw reason stays in the local log only).
+    // #516: an engine install replacing this folder holds spawns until its swap is over.
+    await waitForEngineSpawns('whisper_cpp')
     if ((await this.verifyBinary(this.binPath)) === 'mismatch') {
       throw new Error('whisper-cli failed pre-spawn integrity verification')
     }
