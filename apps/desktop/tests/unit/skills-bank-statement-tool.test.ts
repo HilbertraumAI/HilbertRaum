@@ -767,7 +767,8 @@ describe('export_transactions_csv (S11c)', () => {
 
 // Each downstream tool runs THROUGH the gate and emits output that passes its own outputSchema.
 // export_transactions_csv is the only confirm-gated tool (its refusal without confirmation is pinned in
-// skills-run.test.ts and skills-tool-registry.test.ts), so it runs confirmed here.
+// skills-run.test.ts "export refuses without confirmation"; the generic gate in skills-tool-registry.test.ts),
+// so it runs confirmed here.
 describe('the downstream tools through the gate (S11c)', () => {
   it.each<[string, SkillTool, unknown, boolean]>([
     [

@@ -96,6 +96,18 @@ describe('SkillRunController (S11b)', () => {
     expect(final.error).not.toContain('seam blew up')
   })
 
+  it('a failed outcome carries the seam\'s own error copy and code onto the polled state', async () => {
+    // The renderer maps `errorCode` to localized copy and falls back to `error`; the fixed fallback above is
+    // only for a runner that resolved no copy of its own.
+    const c = new SkillRunController()
+    const runner: ToolRunner = async () => ({ ok: false, error: 'Extract the transactions first.', errorCode: 'needsExtraction' })
+    const { runHandle } = c.start({ skillInstallId: 's', toolName: 'summarize_cashflow', documentId: 'doc-a', documentCount: 1, runner })
+    expect(await waitForTerminal(c, runHandle)).toBe('failed')
+    const final = c.get(runHandle)!
+    expect(final.error).toBe('Extract the transactions first.')
+    expect(final.errorCode).toBe('needsExtraction')
+  })
+
   it('a runner that THROWS after abort (no cancelled flag) is cancelled via the signal.aborted fallback, not failed (T2)', async () => {
     // A cancel that lands mid-work can surface as a REJECTION (an aborted fetch/write throwing) rather
     // than a calm `{ok:false, cancelled:true}` envelope. The .catch has no outcome flag to read, so
@@ -166,6 +178,7 @@ describe('SkillRunController — re-attach surface (U6)', () => {
     expect(terminal.state).toBe('done')
     expect(terminal.count).toBe(2)
     expect(terminal.conversationId).toBe('conv-b')
+    expect(terminal.documentId).toBe('doc-b') // the renderer re-pins a re-adopted run by this id
     c.cancel(live.runHandle)
   })
 

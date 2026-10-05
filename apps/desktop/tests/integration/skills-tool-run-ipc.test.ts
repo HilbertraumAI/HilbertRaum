@@ -549,6 +549,11 @@ describe('skills tool-run IPC (S11b)', () => {
     const start = startRaw as StartSkillRunResult
     if (!start.started) throw new Error('expected started')
     await pollUntilTerminal(start.run.runHandle)
+    // The run state the renderer polls carries no content either. Read it now: the export below takes
+    // over this document's slot, after which the extract run is gone.
+    const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, start.run.runHandle)
+    expect(stateRaw).not.toBeNull()
+    expect(JSON.stringify(stateRaw)).not.toContain(SENTINEL)
     // The export is a different sink path (dispatch export case + IPC saveTextFile): the secret IS in
     // the user-chosen CSV (correct) but must never reach the audit stream.
     const out = join(tempDir(), 'export.csv')
@@ -562,9 +567,6 @@ describe('skills tool-run IPC (S11b)', () => {
     expect(auditText).toContain('skill_run_started')
     expect(auditText).toContain('skill_run_done')
     expect(auditText).not.toContain(SENTINEL)
-    // …and the run state the renderer polls carries no content either.
-    const { result: stateRaw } = await invoke(handlers, IPC.getSkillRun, start.run.runHandle)
-    expect(JSON.stringify(stateRaw)).not.toContain(SENTINEL)
   })
 })
 

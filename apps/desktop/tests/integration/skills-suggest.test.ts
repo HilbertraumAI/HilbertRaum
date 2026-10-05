@@ -177,6 +177,10 @@ describe('suggestSkillsForTurn (S8)', () => {
 
     // A documents-off conversation on the SAME Db is never served the whole-corpus signals from the memo
     // (the deny-all bit is part of the scope fingerprint): no PDF in scope → the keyword-only tie-break.
+    // Prime the memo first with an explicit "All documents" scope — it resolves to the same empty ids, so
+    // only the deny-all bit keeps the two fingerprints apart.
+    const all = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
+    expect(suggestSkillsForTurn(db, all.id, q).map((s) => s.installId)).toEqual(['user:beta'])
     const off = createConversation(db, {
       mode: 'documents',
       scope: { collectionIds: [], documentIds: [], documentsOff: true }

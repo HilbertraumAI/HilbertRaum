@@ -235,7 +235,7 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
     expect(msg.coverage).toBeUndefined()
   })
 
-  it('clear small talk keeps the relevance path (A3 opt-out — no capped coverage, model still answers)', async () => {
+  it('clear small talk keeps the relevance path (A3 opt-out — no capped coverage, no whole-doc model call)', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,

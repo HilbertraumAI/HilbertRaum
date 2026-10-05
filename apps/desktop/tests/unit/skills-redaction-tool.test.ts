@@ -161,7 +161,7 @@ describe('redactText (the full deterministic pass)', () => {
     ['the full PII document', PII_TEXT],
     [
       'a Unicode-variant document (SKA-3 R8)',
-      'IBAN AT61 1904 3002 3457 3201, Tel +43 664‑1234567.'
+      'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Tel +43 664\u20111234567.'
     ]
   ])('is idempotent — re-running over masked text masks nothing more: %s', (_label, input) => {
     const once = redactText(input)
@@ -304,7 +304,7 @@ describe('redaction U2 additions', () => {
     ],
     [
       'Unicode print variants (SKA-3 R8)',
-      'IBAN AT61 1904 3002 3457 3201, Karte 4111 1111 1111 1111, Tel (555) 123-4567.',
+      'IBAN AT61\u00a01904\u00a03002\u00a03457\u00a03201, Karte 4111\u20071111\u20071111\u20071111, Tel (555) 123-4567.',
       { email: 0, phone: 1, iban: 1, card: 1, date: 0, url: 0 }
     ]
   ])('scanRedactionCandidates returns the real-run counts, leaking no text: %s', (_label, input, expected) => {

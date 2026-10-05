@@ -258,6 +258,24 @@ describe('askDocuments — invoice analysis routing (full-doc-skills Phase 4)', 
     expect(runs.n).toBe(0)
   })
 
+  it('refuse path: a not-fully-chunked invoice is refused — fixed message, no model, no partial answer', async () => {
+    // The D45 gate keys on the handler's mode, so this is the invoice handler's own proof: an exhaustive
+    // handler never answers from a legacy, partly-indexed document (the bank twin is in rag-skill-analysis).
+    const h = await makeHarness({ fullyChunked: false })
+    const { result } = await invoke(
+      handlers,
+      IPC.askDocuments,
+      h.conversationId,
+      'what is the gross total?',
+      INVOICE_INSTALL_ID
+    )
+    const msg = result as Message
+    expect(msg.content).toBe(t('en', 'skills.analysis.refusePartial'))
+    expect(h.runtime.calls).toBe(0)
+    const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
+    expect(runs.n).toBe(0)
+  })
+
   it('W2 plausibility gate: a zero-content read on a NON-invoice falls through to the grounded path', async () => {
     // The invoice skill is sticky but a plain contract is in scope: the extractor finds no line items or
     // totals, and the doc matches none of the invoice's manifest signals — so instead of the misleading

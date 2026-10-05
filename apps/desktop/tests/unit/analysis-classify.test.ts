@@ -157,6 +157,7 @@ describe('classifySkillPointer — the single bounded call', () => {
       await vi.advanceTimersByTimeAsync(CLASSIFY_TIMEOUT_MS - 1)
       expect(settled).toBe(false) // still waiting one tick before the bound
       await vi.advanceTimersByTimeAsync(1)
+      expect(settled).toBe(true) // cut off AT the bound — a longer bound fails here instead of hanging
       expect(await pending).toBeNull()
     } finally {
       vi.useRealTimers()

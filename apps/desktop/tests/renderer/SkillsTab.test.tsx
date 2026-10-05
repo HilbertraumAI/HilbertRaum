@@ -481,9 +481,15 @@ describe('SkillsTab — reconcile-error notice (SKA-32)', () => {
     expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument()
   })
 
-  it('tolerates an absent status (older main): the list still loads, no notice', async () => {
-    // No getSkillReconcileStatus stub ⇒ the call resolves undefined (the older-main shape).
-    stubApi({ listSkills: vi.fn(async () => [skill()]) })
+  it('tolerates an unreadable status (older main): the list still loads, no notice', async () => {
+    // An older main has no handler, so the status read rejects. The rejection must stay inside the
+    // best-effort read (an escaped one fails the run as an unhandled rejection).
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      getSkillReconcileStatus: vi.fn(async () => {
+        throw new Error("No handler registered for 'skills:reconcileStatus'")
+      })
+    })
     renderTab()
     await screen.findByText('Bank statement helper')
     expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument()
