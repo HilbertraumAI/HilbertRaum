@@ -4157,8 +4157,10 @@ the E: stick was only read).**
   the next refresh. #530's Check again restart has the same limit.
 - While a REAL runtime answers from the `cpu/` net beside a damaged main folder, the reinstall is
   still refused with "stop the model first": the status cannot tell rung 3 from rung 2.
-- A model started while a reinstall is in flight can still race the pre-clean (CODE-13's
-  registered residual, unchanged).
+- ~~A model started while a reinstall is in flight can still race the pre-clean~~ (CODE-13's
+  registered residual) — closed by #516: every job now downloads and verifies all its archives
+  before touching the installed folder, and holds the family's spawns from then until the last
+  marker (the spawn gate, "In-app engine updates" §3).
 - A verdict about the `cpu/` binary is repaired by re-fetching the main build, which does not
   touch `cpu/` (decision 2).
 
@@ -4168,6 +4170,189 @@ verdict gate, the demo-runtime install and restart, the payload rows), `engine-d
 `EngineProblem.test.tsx` "Install the engine again (#532)" (offer, order, progress, toast, the
 gate rows, no offer, the voice hint and its attribution, the Diagnostics line) and
 `ModelsScreen.test.tsx` (the deep-link rows).
+
+## In-app engine updates — design record (#516, 2026-10-05)
+
+_A drive set up before a pin bump keeps its engines: after #514 (llama.cpp b9849 → b11146) every
+older drive ran b9849 under the new app, and nothing said so. This record covers the detection, the
+update and its "pause, update, resume" flow, and a bug in the plain install found on the way. Code
+cites it as "In-app engine updates"._
+
+### §1 The facts it rests on
+
+- **Detection costs nothing new.** Every install writes `.hilbertraum-runtime.json` with
+  `{ version, backend }`, and the app pins its own `runtime-sources.yaml` (the bundled
+  `model-manifests`, never the drive's). Nothing compared the two; Diagnostics showed only the marker.
+- **Tags order by number, not as text.** As strings, `b9849` sorts after `b11146`. llama.cpp tags
+  are a build counter (`bNNNNN`); whisper.cpp and kiwix-tools use dotted releases (`v1.8.6`, `3.8.1`).
+- **The plain install used to update by accident.** It selected every required family "not current
+  by its marker". On a drive like the E: test stick (voice engine missing, chat engine b9849), the
+  "Install voice engine" button therefore also re-fetched the chat engine. While anything used the
+  chat engine, the whole job was refused with "the AI engine can't be replaced while a model is
+  running". Against a NEWER engine (a drive updated by a newer app), the same click downgraded it.
+- **An outdated engine is busy.** Unlike #532's broken engine, it runs. The chat model runs on it,
+  and the E5 embedder starts on the first import or document question and stays up until lock or
+  quit. The CODE-13/F-32 guard therefore refused almost every in-session replacement.
+- **The `cpu/` safety net has its own marker** (`<os>/cpu/.hilbertraum-runtime.json`), and the in-app
+  installer never wrote it. Updating only the main build would leave a Windows Kit on b11146 with a
+  b9849 fallback.
+- **`fetch-runtime` reads the drive's yaml first**, so re-running it on an old drive re-installs the
+  old pin unless `prepare-drive` refreshed the drive's manifests first (the #514 reference-drive trap).
+
+### §2 Decisions (owner, 2026-10-05)
+
+1. **Offer and report.** A quiet notice on the AI Model screen, plus the version gap in Diagnostics
+   and the Copy report.
+2. **Pause, update, resume.** The update is refused while work runs. Otherwise it stops the model and
+   the engine's helpers, replaces the files and starts the model again; the helpers restart on next use.
+3. **Chat and voice engines, and the `cpu/` net** when it is on the drive and older. The knowledge-pack
+   tools are reported only.
+4. **Commercial Kits get it too**, behind the same gates: the drive policy, Allow internet access,
+   and the click. Offline Kits see it disabled with the policy reason; signed offline updates stay
+   Phase 22 (BUILD_STATE §5 item 3).
+
+### §3 As built
+
+- **Relation per install** (`assets.ts`): `compareRuntimeVersions` orders two tags of one family
+  (null when the shapes differ or are unknown). `runtimeInstallRelation(plan)` answers:
+  - `older`: an older version;
+  - `current`: the pinned version, in whatever backend the drive owner chose (review fix: a main
+    folder provisioned with `fetch-runtime -Backend` at the pin is a choice, and "updating" it would
+    swap the backend; a CPU-era main folder is older by version anyway);
+  - `newer`;
+  - `unknown`: no readable marker, or an unorderable tag.
+
+  Only `older` is ever replaced. `engineStatus` reads each marker once.
+- **Status:** `EngineStatus.engineVersions` lists every family on the drive with a build here:
+  installed and pinned version and backend, the relation, and `cpuNet` when the drive carries the
+  `cpu/` build. `EnginePlan.cpuNet` is the yaml's `cpu` build when the default is another backend in
+  another folder.
+- **The plain install fetches MISSING engines only** (`!runtimeBinaryPresent`), which is what its
+  comment always said. An engine on the drive changes only through an explicit update or reinstall.
+  The explicit `families` path (the knowledge-pack consent) keeps "not current".
+- **The update request:** `downloadEngine({ families, update: true })`, with required families only,
+  never combined with `reinstall`. The manager takes each named family's main build when it is
+  older, plus its `cpu/` net when present and older. Nothing qualifying is `main.engine.nothingToUpdate`,
+  so it never downgrades and never replaces an unrecorded engine. The job carries `update: true`.
+- **Two phases, for every job.** `run()` downloads and verifies every archive first (`fetchArchive`),
+  leaving the installed engine untouched and usable. Only then does it call
+  `StartEngineDownloadOptions.beforeReplace` and replace each install (`replaceInstall`: pre-clean,
+  which keeps `cpu/` and the archives, then extract, flatten, completeness check, marker).
+  - A failure or cancel in phase 1 replaces nothing.
+  - Archives not yet extracted when the job stops are deleted.
+  - **The spawn gate** (`runtime/spawn-gate.ts`, review fix). From `beforeReplace` to the last
+    marker, the job holds every spawn of the families it replaces. `LlamaServer` (chat, embedder,
+    reranker, vision, translation), the GPU probe, the load check and `whisper-cli` all await
+    `waitForEngineSpawns` before they verify and spawn, bounded at 6 minutes (the extractor's
+    deadline plus a margin).
+    - Before the gate, a helper restarting by itself (the embedder on a search) or a model start that
+      was still hashing its weights when the pause ran could launch a half-extracted binary. On
+      Windows it could also hold a file the pre-clean was about to delete.
+    - The gate covers every job, so it closes CODE-13's registered "a start races the pre-clean"
+      residual for first installs and #532 reinstalls too.
+  - **A job that stops part-way still reports what it replaced** (review fix). If the main build was
+    swapped and a later step (the `cpu/` net, the voice engine) failed or was cancelled, `onInstalled`
+    fires for the replaced families, so the new binary's consumers are re-armed and the probe
+    refreshed. The job itself still ends failed or cancelled.
+  - **A cancel after the files are complete finishes the install** (review fix). A cancel during the
+    extraction kills tar (F-33), so `install()` rejects and the job is cancelled; a half-extracted
+    folder surfaces as #530 "files damaged", which the #532 reinstall repairs. A cancel that lands
+    after `install()` finished arrives too late to stop anything: the old copy is gone and the new
+    one is whole, so the marker is written and the job reports done. Skipping the marker used to
+    leave a working engine with no version record, which no update offers to replace.
+- **The pause** (`registerEngineIpc.ts` `startEngineUpdate`):
+  1. **Refused up front** while work runs (`engineUpdateBusy` → `main.engine.updateBusy`):
+     - any `modelBusyLane` (an answer, a document task, a skill run, the benchmark);
+     - any generation in either lane (`runtime.isGenerating()`: a local-API completion holds no
+       in-app stream and no span);
+     - a model that is still starting;
+     - a document translation (`translateJobs.getActiveJob()`);
+     - an image analysis (`VisionService.hasActiveJob()`);
+     - an import, re-index or knowledge-pack article save (the new `ctx.ingestionActive`: the docs
+       IPC's `processing` set plus `ctx.articleSavesActive`);
+     - for the voice engine, a live transcription.
+  2. **In `beforeReplace`**, after the last archive verified, the same check runs again: work may
+     have started during the download. A refusal fails the job with that copy, and the old engine
+     stays.
+  3. **The pause itself** remembers the running model and stops the chat runtime. It suspends the
+     embedder, reranker and translator (the lock teardown's non-latching `suspend()`), and lets
+     vision's idle sidecar go (`VisionService.releaseRuntime()`; review fix: the lock's `stop()`
+     would also purge finished answers). For the voice engine, it suspends the transcriber. It then
+     checks that no child of the family is alive.
+  4. **Then the swap.** Main checks the in-use flags here instead of at `start()` when a
+     `beforeReplace` is given.
+- **The resume.** On success, the install hook re-arms the consumers, refreshes the probe and then
+  starts the remembered model (`resumeChatModel`; skipped when the workspace locked or another start
+  is running). On failure or cancel, the new `EngineDownloadManager.onSettled` listener starts it
+  instead, on whatever engine is on the drive.
+- **Renderer:** a quiet `Banner tone="info"` in ModelsScreen after the missing-engine banners (design
+  guidelines §11.20). It has one Update for every outdated required family, through the shared
+  `engineJobControls`, attributed by `job.update`. It is hidden for a family with a #530 verdict,
+  because that banner leads and a reinstall fetches the pin anyway. It joins the deep-link no-scroll
+  predicate (the #539 note on #516), and a toast confirms a finished update. Diagnostics has an
+  "Engine versions" row (and Copy-report line) naming every engine or `cpu/` net that is not the pin.
+- **Scripts:** `fetch-runtime.{ps1,sh}` print a note when the drive's yaml pins a different version of
+  the family than the repo's, and say to refresh the manifests (`prepare-drive`) first (`packaging.md`).
+
+### §4 Real-app verification (2026-10-05, DesktopDiT, GTX 1070 Ti, dev build)
+
+The scratch root was E:'s b9849 engine copied off the stick (only read) plus a b9849 `cpu/` net
+installed with `fetch-runtime -Backend cpu`. The 4B model was running on the GPU on b9849, and the
+voice engine was missing.
+- **Status:** `engineVersions` reported llama.cpp `b9849 → b11146, older`, `cpuNet` older. The AI
+  Model screen showed "Add voice dictation" and "An update for the AI engine is available".
+- **The plain-install fix:** **Install voice engine**, with the model running, ran a job of
+  `whisper_cpp` only. It finished in 2 s, the chat engine stayed b9849, and the model kept running.
+  Before #516 this click was refused.
+- **Update:** both archives (main and `cpu/`) downloaded while the model answered (0–4 s). The model
+  stopped at ~5 s, both markers read b11146 at ~6 s, and the model was back on rung 1 (GPU) at ~11 s.
+  That is about 6 s of downtime, most of it the model reload.
+- **Afterwards:** no notice, and Diagnostics "Runtime build: llama.cpp b11146 (vulkan)" with no
+  "Engine versions" row. The finished-update toast had expired before the capture; the renderer test
+  covers it.
+- **`fetch-runtime` dry-run against E:** printed the note (`pins llama_cpp b9849; this repo pins
+  b11146`), in both the PowerShell and the bash script, and E:'s runtime folder was byte-identical
+  before and after.
+- **Second run, after the review fixes** (a fresh scratch root, again b9849 with a b9849 `cpu/` net):
+  - An update asked for while a chat answer was streaming was refused (`main.engine.updateBusy`), and
+    nothing was downloaded.
+  - The idle update downloaded both archives in ~4 s while the model kept serving. The model was
+    back on the GPU ~5 s after the pause, and both markers read b11146.
+  - **On this card the b9849 Vulkan build hung mid-chat.** Two chats on b9849 stalled: one tripped
+    the 30 s stream watchdog, and the other never received response headers (see §5). Two chats on
+    b11146, right after the update, answered in 4–6 s. The update fixed a real failure here, not only
+    a version label.
+
+### §5 Residuals
+
+- **A quick translation has no public busy signal** (the Translate screen's interactive request; only
+  a private in-flight counter). One in flight at the pause is cut off and fails, and the user retries
+  it. Document translations, image analyses, generations and article saves are all waited for.
+- **An `unknown` engine** (no marker, or an unorderable tag) is reported in Diagnostics but never
+  offered an update. The in-app installer no longer leaves one behind (a late cancel now records the
+  install). One copied by hand heals through the #532 repair if the OS refuses it, or through the
+  scripts.
+- **The knowledge-pack tools are reported, not updated** (decision 3). Their consent dialog installs a
+  missing copy only, and their spawn sites are not behind the spawn gate (no in-app update replaces them).
+- **The ModelsScreen runtime poll** (see "Engine load failures" §8) can show the card's earlier state
+  until the next refresh when the restart begins late.
+- **A chat sidecar that hangs before its response headers is not caught** (this existed before #516
+  and is not part of it; found in the §4 second run). The CB-5 watchdog in `readChatSSE` covers only
+  the body. `LlamaRuntime`'s `await this.server.fetch('/v1/chat/completions', …)` has no bound, so
+  the chat waits until the model is stopped (`fetch failed`, `ECONNRESET`).
+
+Tests:
+- `assets.test.ts`: the version-order table, the relation (the pin in another backend is current).
+- `spawn-gate.test.ts`: hold, wait, release, bound.
+- `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
+  `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
+  still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.
+- `engine-consent-ipc.test.ts` "#516": pause, swap and resume through the real handler (vision
+  released, never purged), resume after a failed swap, six busy refusals, work starting during the
+  download.
+- `EngineUpdate.test.tsx`: the notice, both engines, `cpu/` only, five no-notice rows, the
+  Diagnostics row and report.
+- `ModelsScreen.test.tsx`: the deep-link row.
 
 
 ## Internationalization — design record (Phases 39–42)

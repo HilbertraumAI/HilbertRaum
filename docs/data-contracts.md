@@ -1819,6 +1819,18 @@ whole renderer-visible surface.
   installs; absent on the synthetic unknown-job answer) and `reinstall?: boolean`, so a screen
   attributes progress to the surface that started the job. The chat-runtime guard
   (`chatRuntimeActive`) no longer counts a model answering on the demo runtime.
+  **#516 additions (engine updates; same channels, additive/optional — `architecture.md` "In-app
+  engine updates"):** `EngineStatus` gains `engineVersions?: EngineVersionInfo[]` — per family on
+  the drive with a host build: `{ family, optional, installed: string|null, installedBackend:
+  string|null, pinned, pinnedBackend, relation: 'current'|'older'|'newer'|'unknown', cpuNet?:
+  { installed, pinned, relation } }`. `EngineDownloadRequest` gains `update?: boolean` (explicit
+  REQUIRED `families`, never with `reinstall`; only `older` installs and an older `cpu/` net are
+  replaced, else `main.engine.nothingToUpdate`; refused while work runs, `main.engine.updateBusy`),
+  and `EngineDownloadJob` gains `update?: boolean`. **Behaviour change:** the argument-less
+  `downloadEngine()` now installs MISSING required families only — it used to re-install every
+  family not current by its marker. `older` compares versions only (the pin in another backend is
+  `current`). `AppContext` gains the internal `ingestionActive?: () => boolean` (the docs IPC's
+  `processing` set, plus the internal `articleSavesActive`). No new channel, no schema change.
   **#339 P8-4 additions (the corresponding-source bundle; declarative pin + a sell-gate check —
   no IPC, no preload):** `model-manifests/runtime-sources.yaml` gains a `source_bundle:` key
   under `kiwix_tools:` (dir + a `files:` list, `recipe_url`, optional `recipe_commit`) —

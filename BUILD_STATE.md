@@ -28,6 +28,13 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-05 — **#516 — the app reports engines older than its pin and updates them (`feat/516-engine-update`).** `EngineStatus.engineVersions` (numeric tag order;
+`older`/`current`/`newer`/`unknown`, `cpu/` net included); `update: true` replaces only `older` installs + an older `cpu/` net; every engine job now downloads + verifies all
+archives first, then (updates) pauses the model + llama helpers for the swap and restarts the model; a spawn gate holds the family's starts through every swap (closes the
+CODE-13 race). Fixed: the plain install re-installed outdated engines (refused while a model ran; a downgrade of newer ones) — now missing only. Quiet notice (§11.20),
+Diagnostics row, `fetch-runtime` note. Owner: offer + report, pause/resume, cpu/ too, Kits same gates. Real app verified twice (b9849 → b11146, ~5–6 s downtime;
+busy refusal; the 1070 Ti's b9849 hung mid-chat, b11146 answered). Record: `architecture.md` "In-app engine updates". Open: a quick translation in flight at the
+pause is cut off; found, pre-existing: a chat sidecar hung before its response headers escapes the CB-5 watchdog (record §5; no issue yet)._
 _2026-10-05 — **#580 — redaction masks the union of overlapping proposals (`fix/580-redaction-overlap`).** "Jane" before "Jane Doe" left the surname visible (.txt + DOCX),
 and a partial overlap ("Anna Berg" + "Berg GmbH") left " GmbH" in either order: `applySpans` keeps the first of two overlapping spans. `verifyAndSweepEntities` now merges
 occurrences into disjoint regions; counts are regions; the edit tool's comment corrected. Record: Skills record §21 "#580 amendment". Open: none._
@@ -126,24 +133,6 @@ built); contracts in `data-contracts.md` (four `ocr:*` channels, `OcrRefreshOutc
 note). Its own narrow installer, not an engine family; sha256 + exact size pinned in code (`OCR_PINS`,
 drift-tested), only the URL from the yaml; the doc-task deps now read `ctx.ocrEngine` live. Open: the owner's
 packaged-build checks (PR body); hand-copied files or a grown language set still need a restart (§5 item 15(a))._
-_2026-09-21 — **#488 / #498 / #501 fixed in one PR (`fix/488-498-501-prose-supsub-cutoff-badge-inline-math`):
-ZIM prose keeps superscripts/subscripts readable and retrieval folds them; the cut-off badge names no
-cause and its remedy follows which ceiling fired; inline `$…$` math renders.** Records: `rag-design.md`
-§17 "Prose joins the table superscript/subscript convention" (+ `known-limitations.md`, `zim/supsub.ts`);
-`architecture.md` honest-signal record + `rag-design.md` §15 amendments + `data-contracts.md`
-(`messages.truncated_cause`); `architecture.md` "Markdown rendering" KaTeX bullet. **#488 was measured
-twice** (`tmp/488-measurement/`, the 4-z-r harness, both packs): the first cut marked every `<sup>`/`<sub>`
-— 12,483 insertions on the 949 core200 articles, 63 % of them reference back-links (`↑ ^a ^b ^c`), 18 %
-fold-shaped — and its digit-only `_` fold split 86 real terms (`NO_x`, `pK_S`, `T_krit`); the rule became
-"mark only between alphanumerics (or before a sign), fold `^`/`_` between any two alphanumerics": 2,897
-insertions (90 % fold-shaped, 0 on back-links), 246/949 articles moved, and the invariant of record (every
-alphanumeric run ≥ 3 of the old text is still a substring of the folded new text) holds on 1,436 of 1,437
-articles. Both reads passed all six PR-B floors at the #500 read's count figures (102/143/143). **#498:**
-the runtime yields one bit (`finish_reason: 'length'`), so the cause is computed app-side — no cap sent, or
-fewer tokens generated than the cap sent ⇒ window, else cap — and a legacy row reads as the old advice.
-**#501:** Pandoc's shape rule + a TeX-signal/short-span content rule; remark-math's single-`$` mode stays
-off. Open: a `<figcaption>` inside a dropped `<figure>` (the #500 capture path) still fuses sup/sub — a
-two-line change if the owner wants it; the `snake case` vs `snake_case` question-side note is recorded._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -192,7 +181,8 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 2026-10-03 (preamble budget, making room for the #562 / #563 / #560-platform entries), and the closed 2026-10-02 #551 entry on
 2026-10-04 (preamble budget, making room for the #567 entry), and the closed 2026-09-20 wave-13 entry on 2026-10-05 (preamble budget, making
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
-for the #570–#573 entry) — citations of the form "BUILD_STATE <date> entry" /
+for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
+for the #516 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

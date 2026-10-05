@@ -2629,6 +2629,12 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   damaged but its `cpu/` build runs the model (a Windows Kit), the reinstall still asks to stop
   the model first: the app cannot tell that runtime from the main build running on the
   processor.
+- **Engine updates (#516) can cut off a quick translation.** The update waits for answers (in the
+  app and through the local API), imports, article saves, document translations, image questions
+  and document tasks, but a quick translation on the Translate screen that is in flight at the
+  moment the models pause is cut off and has to be asked again. The pause lasts a few seconds. An engine without a version record is never offered an update, and the
+  knowledge-pack tools are only reported. On an offline Kit the update waits for the signed
+  update bundles (Phase 22); until then the scripts update the drive.
 - **A second refusal of a fresh copy is not a damaged copy.** If the copy the app just installed
   is refused as damaged too, the banner says its files are probably not the cause (on Windows,
   usually an outdated Visual C++ Redistributable) and offers no second reinstall. That marker
