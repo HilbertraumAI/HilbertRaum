@@ -1346,7 +1346,7 @@ eligibility, the empty state's copy action, the picker's "Add packs…"), `HomeK
 (the three row states + the absent row), `GermanSmoke.test.tsx`, `InformationArchitecture.test.tsx`
 (`documents:packs`), `i18n-unused-keys.test.ts`, `zim-ui-layout-rules.test.ts`.
 
-### 11.17 "The AI engine can't run on this computer" — design record (IMPLEMENTED 2026-10-01, #530)
+### 11.17 "The AI engine can't run on this computer" — design record (IMPLEMENTED 2026-10-01, #530; reinstall 2026-10-05, #532)
 
 _How the app tells the user that an engine on the drive cannot run here: the OS refused the
 program before it started (Linux without `libgomp1`, a system too old, Windows without the Visual
@@ -1430,6 +1430,34 @@ with the absolute drive path. Each of those sends the user to the wrong fix.
   outcomes, the always-mounted hint status, German, ModelsScreen push in and out, Home, the
   App notice target, the Diagnostics line and report, the Performance tile, the Translate/Images
   codes), `live-region-nesting.test.ts`, `display-map.test.ts`.
+
+**#532 amendment — "Install the AI engine again" (2026-10-05).** Damaged engine files are the one
+refusal a fresh copy fixes, so decision 3's "one action" becomes two for that reason only.
+Engineering record: `architecture.md` "Engine load failures" §8.
+1. **The fix leads.** The banner offers **Install the AI engine again** („KI-Engine neu
+   installieren“) as its primary, with Check again beside it as a secondary (for a fix made outside
+   the app). The voice hint offers **Install the voice engine again** as a secondary, because the
+   hint stays quiet (decision 5). One click, like "Install AI engine": the drive's copy is replaced
+   only after the new archive matched its checksum.
+2. **The reason sentence names the action** when the drive allows the download: "Some of its files
+   on this drive are missing or damaged. Install it again to replace them." When the drive policy
+   forbids downloads (an offline Kit), the button shows disabled with the policy reason and the
+   sentence keeps the troubleshooting pointer. When only the Settings toggle is off, the button
+   shows disabled with that reason and the sentence still names the action, since the user can
+   turn it on. The gate's reason wraps below both buttons (`.engine-problem-actions`).
+3. **The progress is the banner's own.** While it runs, the action becomes the shared engine
+   progress bar plus Cancel, Check again is disabled (the program is being replaced), and the
+   missing-engine banner never shows this job (`EngineDownloadJob.reinstall`). When it ends, the
+   banner leaves with the verdict, and a toast confirms "The AI engine was installed again."
+4. **No loop.** If the freshly installed copy is refused as damaged too (`afterInstall`), the
+   sentence says the files are probably not the cause: on Windows it names an outdated Visual C++
+   Redistributable, elsewhere it points to the troubleshooting guide. No second reinstall is
+   offered; Check again remains. Diagnostics says "engine files reported damaged right after a
+   fresh install".
+5. **Copy:** `models.engineProblem.{filesDamagedReinstall, filesDamagedAfterInstall,
+   filesDamagedAfterInstallWin, reinstall, voiceReinstall, reinstalled, voiceReinstalled}`,
+   `diag.engine.reason.filesDamagedAfterInstall`, `main.engine.nothingToRepair` (en + de).
+   **Tests:** `EngineProblem.test.tsx` "Install the engine again (#532)".
 
 ### 11.18 A file attached in a chat that can't be read yet — design record (IMPLEMENTED 2026-10-05, #570–#573)
 

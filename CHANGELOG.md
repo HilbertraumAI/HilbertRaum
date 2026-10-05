@@ -67,6 +67,16 @@ from its first public `1.0.0` release onward.
 - **Text recognition tells you when it was unsure.** When a scan or photo reads poorly (blurry,
   skewed or handwritten, or in a language other than German or English), the document's row says
   so quietly, and its preview names the likely causes next to a **Read again (OCR)** button (#538).
+- **A damaged AI engine can be installed again from the AI Model screen.** When some of the
+  engine's own files on the drive are missing or damaged, the banner now offers **Install the AI
+  engine again** instead of a manual "delete the folder and start over". It downloads a fresh,
+  checksum-verified copy, replaces the broken one and starts your model again; the voice engine's
+  note offers the same. Like every download, it needs **Allow internet access…** and a drive that
+  permits downloads. If even the fresh copy will not start, the banner says its files are probably
+  not the cause (on Windows, usually an outdated Visual C++ Redistributable) (#532).
+- **Installing the AI engine no longer asks you to stop a model in demo mode first.** A model
+  answering with simulated replies does not use the engine, so the install goes ahead, and the
+  model then starts on the real engine by itself (#532).
 
 ### Changed
 

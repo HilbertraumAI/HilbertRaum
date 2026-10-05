@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-05 — **#532 — "Install the AI engine again" for an engine whose own files are damaged (`fix/532-engine-reinstall`).** `downloadEngine({ families,
+reinstall: true })`, admitted only for a `files-damaged` verdict; the demo runtime no longer counts as "engine in use" (CODE-13 polish, also first installs); the
+model restarts on the engine after any chat-engine install; a fresh copy refused again carries `afterInstall` (no loop; Windows → VC++ hint). Owner: offline Kits
+disabled + reason, main build only (`cpu/` kept), voice engine too, one click. Real app on DesktopDiT (DE/EN, light/dark). Record: "Engine load failures" §8, §11.17._
 _2026-10-05 — **#538/#574/#575/#576 — OCR reads sideways pages upright, says when it was unsure, gives photos OCR metadata, and reads the scanned pages
 of a text PDF (`fix/538-574-575-576-ocr`).** Tesseract OSD in a lazily started legacy-core worker over a new pinned `ocr/osd.traineddata.gz` (4.3 MB; the
 "WASM core can't run legacy" premise was wrong) + an EXIF orientation marker (little-endian phone photos 0/68 → 68/68). Per-page confidence kept;
@@ -90,7 +94,7 @@ One classifier (`runtime/engine-load.ts`: Linux ld.so text, Windows NTSTATUS + a
 session verdict (never persisted) fed by the startup probe and every refusal, `AppStatus.engineProblems`, `engine:recheck` ("Check again")
 with a full latch re-arm, and a heal at unlock (loader-caused `gpuAutoDisabled`, raw-path document rows). Owner rulings: no libgomp/VC++
 bundling, option C, kiwix out of scope. Records: `architecture.md` "Engine load failures", design-guidelines §11.17, data-contracts.
-Real-app verified (Linux container w/o libgomp1 + heal by apt; Windows en/de). Open: a stock desktop run; macOS unmeasured; reinstall button #532._
+Real-app verified (Linux container w/o libgomp1 + heal by apt; Windows en/de). Open: a stock desktop run; macOS unmeasured (reinstall button: done, #532)._
 _2026-10-01 — **#527 — the greyed-out mic names the missing piece and its button opens the AI Model screen on the speech model
 (`fix/527-dictation-hint-cause`).** Cause per drive state (`TranscriberMissing`: model / engine / both / `engine-unsupported` = no engine
 build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
@@ -526,8 +530,7 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     - the **CODE-9/TQ-6 manual-smoke-only coverage inventory** lives in item 7's TS-3 bullet
       (the labelled (a)–(g) sub-list; SSE fixtures carry b9849 provenance comments —
       re-verify on a runtime pin bump);
-    - **fix-when-touched polish candidates** (all Low; mechanisms in §47): mock-backend engine
-      first-install refusal exemption (CODE-13) · SettingsScreen mounted-guard narrowing
+    - **fix-when-touched polish candidates** (all Low; mechanisms in §47): SettingsScreen mounted-guard narrowing
       (CODE-7) · the `generateGroundedAnswer` canned-answer persist guard (CODE-18) ·
       PreviewModal `key={preview.id}` (CODE-35) · SkillsTab `setAutoFire` failure key (CODE-37) ·
       the `diag.bench.cores` plural pair (CODE-8 net allowlist) · the older DE ASCII-quote

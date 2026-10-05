@@ -120,6 +120,11 @@ INTERPOLATED `main.ingest.engineLibraryMissing` (`{library}` = the file name) �
 translated; rows that stored the raw loader line before #530 (absolute drive path included) are
 rewritten to them at every session start. Settings: a `gpuAutoDisabled` whose `gpuLastError`
 classifies as a load refusal is cleared (both fields) at every session start. No schema change.
+#532 (`architecture.md` "Engine load failures" §8): `EngineProblem` gained the additive-optional
+`afterInstall?: boolean` — a `'files-damaged'` verdict about the very program this session's
+engine install put on the drive (session-only, like the verdict; the UI then offers no second
+reinstall). The engine-downloader additions are listed under the downloader below. No new
+channel, no schema change.
 Phase 38: `kind: 'ocr'` on the same doc-task channels (one PDF; the target must be
 scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
 `DocumentInfo` gained the DERIVED `scanDetected` flag + optional `ocr: DocumentOcrInfo`
@@ -1804,6 +1809,16 @@ whole renderer-visible surface.
   (`parseEngineDownloadRequest` — an unknown name, an empty list, a duplicate or a non-object
   rejects with `main.engine.badRequest`) and passes `kiwixToolsActive` from the per-family
   sidecar PID registry (P8-1 R-e), so the install is refused while a pack is being served.
+  **#532 additions (the damaged-files repair; same channels, all additive/optional):**
+  `EngineDownloadRequest` gains `reinstall?: boolean`: install the named families although they
+  are present and current by their marker. It needs an explicit `families` list of REQUIRED
+  families and a real boolean (else `main.engine.badRequest`), and main admits it only for
+  families holding a `'files-damaged'` verdict this session (else `main.engine.nothingToRepair`).
+  `EngineStatus` gains `reinstallableFamilies?: string[]` (required families with a host build
+  whose binary IS on the drive). `EngineDownloadJob` gains `families?: string[]` (what the job
+  installs; absent on the synthetic unknown-job answer) and `reinstall?: boolean`, so a screen
+  attributes progress to the surface that started the job. The chat-runtime guard
+  (`chatRuntimeActive`) no longer counts a model answering on the demo runtime.
   **#339 P8-4 additions (the corresponding-source bundle; declarative pin + a sell-gate check —
   no IPC, no preload):** `model-manifests/runtime-sources.yaml` gains a `source_bundle:` key
   under `kiwix_tools:` (dir + a `files:` list, `recipe_url`, optional `recipe_commit`) —
