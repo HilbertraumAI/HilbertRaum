@@ -23,7 +23,7 @@ import { MarkdownParser } from '../../src/main/services/ingestion/parsers/markdo
 import { CsvParser } from '../../src/main/services/ingestion/parsers/csv'
 import { PdfParser } from '../../src/main/services/ingestion/parsers/pdf'
 import { DocxParser } from '../../src/main/services/ingestion/parsers/docx'
-import { makePdf, makeDocx } from '../helpers/fixtures'
+import { makePdf, makeDocx, makeDocxFromBody } from '../helpers/fixtures'
 
 // `save-export.ts` (the export side of the F-22/F-10 round-trip tests below) imports electron at module
 // top; on CI the electron binary is absent — mock the transport like save-export-bom.test.ts does.
@@ -237,6 +237,29 @@ describe('DocxParser', () => {
     const p = write('a.docx', makeDocx(['First paragraph.', 'Second paragraph.']))
     const out = await DocxParser.parse(p)
     expect(out.segments.map((s) => s.text)).toEqual(['First paragraph.', 'Second paragraph.'])
+  })
+
+  // mammoth 1.13.0 (#585): 1.12.3 ignored `w:customXml`, `w:moveTo` and `w:moveFrom` together with
+  // everything inside them, so that text never reached the index. Now custom-XML text and moved text
+  // are read, and the moved-FROM copy stays out the way deleted text does — moved text counts once.
+  it('reads text inside custom XML and text moved with Track Changes, once (#585)', async () => {
+    const run = (text: string): string => `<w:r><w:t xml:space="preserve">${text}</w:t></w:r>`
+    const tracked = 'w:author="Reviewer" w:date="2026-10-05T00:00:00Z"'
+    const p = write(
+      'tracked.docx',
+      makeDocxFromBody(
+        `<w:p>${run('An ordinary paragraph.')}</w:p>` +
+          `<w:customXml w:element="clause"><w:p>${run('A clause inside custom XML.')}</w:p></w:customXml>` +
+          `<w:p><w:moveFrom w:id="1" ${tracked}>${run('The moved sentence.')}</w:moveFrom></w:p>` +
+          `<w:p><w:moveTo w:id="2" ${tracked}>${run('The moved sentence.')}</w:moveTo></w:p>`
+      )
+    )
+    const out = await DocxParser.parse(p)
+    expect(out.segments.map((s) => s.text)).toEqual([
+      'An ordinary paragraph.',
+      'A clause inside custom XML.',
+      'The moved sentence.'
+    ])
   })
 })
 
