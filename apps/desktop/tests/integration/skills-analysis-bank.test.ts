@@ -925,7 +925,13 @@ describe('bank-statement analysis handler — W4 answer-shape routing (§3.1/§3
 // `couldNotRead` refusal or a full answer recomputed after cancel. A genuine (non-cancel) failure STILL
 // returns `couldNotRead`. Twin of the invoice P-3 tests.
 describe('bank analysis — Stop mid-run is a calm cancel, not a swallowed answer (P-3 / IA-4)', () => {
-  it('a Stop during the extraction rejects (AbortError) — no couldNotRead, nothing persisted', async () => {
+  it.each([
+    // The reader throws once Stop lands: run.ts must read signal.aborted and report a cancel, never couldNotRead.
+    { reader: 'throws after the abort', returnsSegments: false },
+    // The reader still returns the real segments: only the abort gates stand between the run and a
+    // persisted statement, so the count below can go red.
+    { reader: 'returns the segments after the abort', returnsSegments: true }
+  ])('a Stop during the extraction rejects (AbortError) — no couldNotRead, nothing persisted (reader $reader)', async ({ returnsSegments }) => {
     const db = freshDb()
     const id = seedDoc(db, COMPLETE)
     const controller = new AbortController()
@@ -933,9 +939,8 @@ describe('bank analysis — Stop mid-run is a calm cancel, not a swallowed answe
       ...ctxFor(db, { documentIds: [id] }, 'summarize the cashflow'),
       signal: controller.signal,
       readDocumentSegments: async (_id: string, _opts?: { layout?: boolean }) => {
-        // Stop pressed mid-extraction: abort, then the reader still returns the real segments, so only
-        // the abort gates (not a reader failure) stand between the run and persisting a statement.
-        controller.abort()
+        controller.abort() // Stop pressed mid-extraction
+        if (!returnsSegments) throw new Error('aborted mid-extraction')
         return [{ text: COMPLETE, page: 1, index: 0 }]
       }
     }

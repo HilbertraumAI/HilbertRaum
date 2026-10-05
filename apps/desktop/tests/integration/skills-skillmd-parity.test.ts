@@ -67,6 +67,12 @@ const shippedIds = readdirSync(join(REPO_ROOT, 'app-skills'), { withFileTypes: t
   .map((e) => e.name)
   .sort()
 
+// The W5 parity loop above iterates the hand-kept APP_VOCAB_SKILL_IDS; tie it to what actually ships, so
+// a new app skill without a vocabulary entry (or an empty app-skills/) cannot slip past every loop.
+it('the vocabulary covers exactly the app skills shipped in app-skills/', () => {
+  expect([...APP_VOCAB_SKILL_IDS].sort()).toEqual(shippedIds)
+})
+
 describe('SKILL.md honesty/safety rules survive the fence-trim minimum (U1 + SKA-15)', () => {
   for (const id of shippedIds) {
     it(`${id}: heading + rules are ONE paragraph — the buildSkillFence guaranteed minimum`, () => {

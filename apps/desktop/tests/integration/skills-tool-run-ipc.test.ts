@@ -1,4 +1,4 @@
-import { describe, it, expect, vi, beforeEach } from 'vitest'
+import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -573,7 +573,11 @@ describe('skills tool-run IPC (S11b)', () => {
 // Service level, no IPC: `buildToolRunner` never touches the DB while building, so a bare database and
 // literal ids are enough. The single owner of descriptor table <-> dispatch switch parity.
 describe('buildToolRunner dispatch parity (A2) — service level, no IPC', () => {
-  const db = openDatabase(join(tempDir(), 't.sqlite'))
+  let db: Db
+  beforeAll(() => {
+    db = openDatabase(join(tempDir(), 't.sqlite'))
+  })
+  afterAll(() => db.close())
   const args = { skillInstallId: 'app:x', conversationId: '', documentId: 'd1' }
 
   it('builds a runner for every WIRED tool, and not for the count_selected_documents canary (X-2)', () => {

@@ -21,6 +21,8 @@ import {
 
 describe('vocabulary — structural invariants', () => {
   it('every skill has terms; every entry is well-formed (whitespace ⟺ phrase, no dupes); every offer term is scorer-matchable and every route term routes', () => {
+    // The hand-kept id list and the vocabulary's keys agree, so the loop below sees every skill.
+    expect(Object.keys(SKILL_VOCABULARY).sort()).toEqual([...APP_VOCAB_SKILL_IDS].sort())
     for (const id of APP_VOCAB_SKILL_IDS) {
       expect(SKILL_VOCABULARY[id].length, `${id}: empty vocabulary`).toBeGreaterThan(0)
       const seen = new Set<string>()

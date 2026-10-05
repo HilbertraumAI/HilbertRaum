@@ -6099,7 +6099,8 @@ compare-vocabulary ask gets the deterministic "select exactly two" answer
 handler shape + `applies()` (compare-shaped over exactly two docs) + `splitCompareBudget` +
 `retrieveCompareWholeDocuments`.
 `skills-analysis-whole-doc.test.ts` (handler-level: `mode==='grounded-whole-doc'` + no
-`run()`, `applies()` matrix EN+DE / off-topic / multi-doc / no-doc, registry wiring, and
+`run()`, `applies()` matrix EN+DE / off-topic / multi-doc / no-doc — registry wiring now in
+`skills-analysis-registry.test.ts` — and
 `retrieveWholeDocument` order + truncation + always-keep-first-chunk); `rag-whole-doc-skill.test.ts`
 (IPC-level over the real `askDocuments`: the model IS called with `coverage.mode==='capped'` +
 the fence + the whole transcript in the user turn, the refuse path with no model call, and an off-topic
@@ -9522,8 +9523,9 @@ flips it,** update the `skills-redaction.test.ts` written-content assertions (th
 **Tests:** `skills-span-transform.test.ts` (+18: `applySpans` byte-identity outside spans, ascending
 single-pass, out-of-bounds/zero-length/overlap skip-and-report, abutting spans; `replacementText`
 token/perChar; `redactText` perChar length + line-count + idempotent + shadow-invariant + counts-parity,
-token reproduces the current masks (later consolidated); `locateOccurrences`
-verbatim/line/nth/drop-on-mismatch/non-overlap + a locate→splice composition) and
+token reproduces the current masks; `locateOccurrences` verbatim/line/nth/drop-on-mismatch/non-overlap +
+a locate→splice composition — the shadow, token-mask and composition cases were later consolidated into
+`skills-redaction-tool.test.ts` / `skills-redaction-locate.test.ts`) and
 `skills-redaction-tool.test.ts` (+3: the `perChar` strategy plumbs through the gate to `█` masks with
 unchanged counts, the no-strategy default is byte-for-byte the token output, the gate refuses an unknown
 strategy). All prior redaction pins stay green under the token default. Suite 3717/47 (was 3696; +21).

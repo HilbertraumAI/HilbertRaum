@@ -71,7 +71,10 @@ describe('loadSkillPackage parse cache', () => {
     expect(loadSkillPackage(record, opts).ok).toBe(true) // primes the cache for this dir
     rmSync(mdPath)
     expect(loadSkillPackage(record, opts).ok).toBe(false) // stat fails: friendly error, not the stale parse
-    writeFileSync(mdPath, skillMd('bank', 'Body.'), 'utf8')
-    expect(loadSkillPackage(record, opts).ok).toBe(true)
+    // Re-created with different text: the new body is served, never the pre-delete parse.
+    writeFileSync(mdPath, skillMd('bank', 'Rewritten body.'), 'utf8')
+    const again = loadSkillPackage(record, opts)
+    expect(again.ok).toBe(true)
+    expect(again.ok && again.body).toContain('Rewritten body.')
   })
 })

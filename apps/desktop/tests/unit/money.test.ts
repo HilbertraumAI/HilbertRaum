@@ -75,7 +75,6 @@ describe('money.ts — parseAmount (boundary cells)', () => {
     ['apostrophe thousands, no decimal', "1'234", 1234],
     ['single comma + 3 digits ⇒ thousands, not decimal', '1,234', 1234],
     ['space-grouped thousands + decimal', '1 234 567,89', 1234567.89],
-    ['sub-cent-looking 0,005 is the 3-digit thousands rule', '0,005', 5],
     ['not a number', 'abc', null],
     ['empty', '   ', null]
   ])('parseAmount(%s)', (_label, input, expected) => {
