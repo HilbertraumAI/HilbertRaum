@@ -28,7 +28,7 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
                                #   keyword hit) — a
                                #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). Kills
                                #   the "Summarize this meeting" miss (§2.4) once a meeting doc is attached;
-                               #   W5's expanded corpus holds the threshold-3 gate at 0-wrong / prec ≥ 0.95.
+                               #   W5's expanded corpus holds the production auto-fire gate at 0-wrong / prec ≥ 0.95.
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
   # parity test. `meeting` is word-matched (so "Summarize this meeting" both offers AND routes); the bare
   # ambiguous `minutes` (⊂ "a few minutes") is route-only. Edit the vocabulary, not this list.

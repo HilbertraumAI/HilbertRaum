@@ -1,45 +1,80 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
-import { selectSuggestion } from '../../src/main/services/skills/selector'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
+import { listSkills } from '../../src/main/services/skills/registry'
+import { APP_VOCAB_SKILL_IDS } from '../../src/main/services/skills/vocabulary'
 import {
   loadCorpus,
-  loadSkillCandidates,
-  toContext,
-  toAutoFireContext,
-  predict,
+  openTriggerHarness,
   scoreCorpus,
-  runBaseline,
   formatReport,
-  POLICIES,
-  type CorpusItem
+  type CorpusItem,
+  type TriggerHarness
 } from './skill-triggers'
 
-// Skills S13a — the offline trigger-evaluation harness over a labelled SYNTHETIC corpus
-// (skills-s13-plan.md §3). This runs as a MEASUREMENT, not yet a hard gate-assertion: it pins the
-// harness's CORRECTNESS (it agrees with the real selector, it is deterministic, its metrics are
-// well-formed, it never logs a question) and PRINTS the baseline for the owner to ratify D1/D2. The
-// precision-bar assertion is deliberately NOT added here — it lands in S13b once the owner sets D1.
+// Skills S13 — the trigger-evaluation harness over a labelled SYNTHETIC corpus (skills-s13-plan.md §3).
+// Every row runs through the PRODUCTION paths on one real database with the committed app-skills/
+// reconciled: the inert suggestion offer (`suggestSkillsForTurn`) and the silent auto-fire decision
+// (`resolveAutoFireSkill`). This file owns the per-skill offer recall (EN/DE), the precision bars and the
+// auto-fire bar over the real manifests; the pure scoring mechanics live in skills-selector.test.ts and
+// skills-autofire.test.ts. A question is CONTENT: it is scored here and never logged.
 
-const LABEL_SPACE = new Set([
-  'bank-statement',
-  'invoice',
-  'meeting-protocol',
-  'contract-brief',
-  'share-safe-review',
-  'deadline-obligation-finder',
-  'what-changed',
-  'document-redaction',
-  'document-edit',
-  'none'
-])
+/** Every app skill the vocabulary knows, plus the "nothing fires" label. */
+const LABEL_SPACE = new Set<string>([...APP_VOCAB_SKILL_IDS, 'none'])
 
-afterEach(() => {
-  vi.restoreAllMocks()
+/**
+ * Rows whose production OFFER differs from the label (id → what production offers today). An entry is a
+ * documented deviation, not a pass: when a row is fixed its entry must be REMOVED (a stale entry fails).
+ *  - tp-redaction-en-02: the vocabulary only knows the exact phrase "remove personal data", and U4 dropped
+ *    the legal word "gdpr", so "Remove all personal data for GDPR compliance." offers nothing (#583).
+ *  - adv-meeting-schedule-01: a scheduling question that merely names a meeting still offers
+ *    meeting-protocol — the documented precision ceiling of a one-keyword offer.
+ */
+const KNOWN_SUGGESTION_DEVIATIONS: Record<string, string> = {
+  'tp-redaction-en-02': 'none',
+  'adv-meeting-schedule-01': 'meeting-protocol'
+}
+
+/**
+ * Rows whose production AUTO-FIRE applies a different skill than the label (id → the skill it fires).
+ * `sensible daten` is a keyword of BOTH share-safe-review and document-redaction, and only redaction is
+ * auto-fire-eligible, so these two share-safe rows fire redaction's read-only scan. Accepted by the owner;
+ * a fixed row must be REMOVED from this map.
+ */
+const KNOWN_AUTOFIRE_DEVIATIONS: Record<string, string> = {
+  'tp-sharesafe-de-01': 'document-redaction',
+  'tp-sharesafe-de-02': 'document-redaction'
+}
+
+/** The owner accepted exactly this many wrong auto-fires (the two rows above, §18); more is a new decision. */
+const ACCEPTED_AUTOFIRE_WRONG_FIRES = 2
+
+const deviation = (map: Record<string, string>, id: string): string | undefined =>
+  Object.hasOwn(map, id) ? map[id] : undefined
+
+let harness: TriggerHarness | undefined
+const h = (): TriggerHarness => harness!
+const corpus = loadCorpus()
+const byId = (id: string): CorpusItem => {
+  const row = corpus.find((c) => c.id === id)
+  expect(row, `corpus item ${id} present`).toBeDefined()
+  return row!
+}
+/** The app skills that opted into auto-fire, as reconciled from the committed manifests. */
+const autoFireEligible = (): string[] =>
+  listSkills(h().db)
+    .filter((s) => s.source === 'app' && s.manifest.triggers.autoFire === true)
+    .map((s) => s.id)
+    .sort()
+
+beforeAll(() => {
+  harness = openTriggerHarness()
+})
+afterAll(() => {
+  harness?.close() // a failed open already reported its own error
 })
 
-describe('S13a corpus + candidates are well-formed', () => {
+describe('S13 corpus is well-formed', () => {
   it('loads a non-trivial corpus whose every label is in the app-skill label space', () => {
-    const corpus = loadCorpus()
-    expect(corpus.length).toBeGreaterThanOrEqual(80) // W5: expanded to all 8 skills + confusion pairs
+    expect(corpus.length).toBeGreaterThanOrEqual(80) // W5: expanded to all skills + confusion pairs
     const ids = new Set(corpus.map((c) => c.id))
     expect(ids.size).toBe(corpus.length) // ids are unique
     for (const item of corpus) {
@@ -51,261 +86,144 @@ describe('S13a corpus + candidates are well-formed', () => {
     // doc in scope (lone-doc-signal traps), keyword-only true positives, and cross-skill confusion pairs.
     expect(corpus.some((c) => c.expected === 'none' && c.inScopeDocs.length > 0)).toBe(true)
     expect(corpus.some((c) => c.expected !== 'none' && c.inScopeDocs.length === 0)).toBe(true)
-    expect(corpus.filter((c) => c.expected !== 'none').length).toBeGreaterThan(0)
     expect(corpus.filter((c) => c.expected === 'none').length).toBeGreaterThan(0)
-    // W5: every one of the 8 skills has ≥1 labelled true positive (the corpus covers the whole space).
-    for (const id of loadSkillCandidates().map((c) => c.installId)) {
-      expect(corpus.some((c) => c.expected === id)).toBe(true)
-    }
+    // W5: every app skill has ≥1 labelled true positive (the corpus covers the whole space).
+    for (const id of APP_VOCAB_SKILL_IDS) expect(corpus.some((c) => c.expected === id)).toBe(true)
     // W5: a non-trivial confusion set (the fired-wrong-0 bar below would be vacuous otherwise).
     expect(corpus.filter((c) => c.confusion).length).toBeGreaterThanOrEqual(6)
+    // U4: the whole-corpus scope shape is exercised (the narrowing the auto-fire path relies on).
+    expect(corpus.filter((c) => c.scope === 'whole-corpus').length).toBeGreaterThanOrEqual(5)
   })
 
-  it('loads exactly the nine real app skills as candidates', () => {
-    const candidates = loadSkillCandidates()
-    expect(candidates.map((c) => c.installId).sort()).toEqual([
-      'bank-statement',
-      'contract-brief',
-      'deadline-obligation-finder',
-      'document-edit',
-      'document-redaction',
-      'invoice',
-      'meeting-protocol',
-      'share-safe-review',
-      'what-changed'
-    ])
-    for (const c of candidates) expect(c.triggers.keywords.length).toBeGreaterThan(0)
-  })
-})
-
-describe('S13a harness is faithful to the real selector + deterministic', () => {
-  it('the keyword-required policy reproduces selectSuggestion EXACTLY for every turn (W5)', () => {
-    // W5 (audit §4.2): the RUNTIME suggestion gate now REQUIRES a keyword hit (a lone doc signal never
-    // fires) — i.e. the harness `keyword-required` policy IS `selectSuggestion`, not the old `threshold-2`.
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    const kwReq = POLICIES.find((p) => p.name === 'keyword-required')!
-    for (const item of corpus) {
-      const ctx = toContext(item)
-      const viaHarness = predict(candidates, ctx, kwReq)
-      const viaSelector = selectSuggestion(candidates, ctx)
-      const selectorId = viaSelector ? viaSelector.installId : 'none'
-      expect(viaHarness).toBe(selectorId)
-    }
+  it('reconciles exactly the real app skills, each with trigger keywords', () => {
+    const apps = listSkills(h().db).filter((s) => s.source === 'app')
+    expect(apps.map((s) => s.id).sort()).toEqual([...APP_VOCAB_SKILL_IDS].sort())
+    for (const s of apps) expect(s.manifest.triggers.keywords.length).toBeGreaterThan(0)
   })
 
-  it('is deterministic — scoring the corpus twice yields identical results', () => {
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    for (const policy of POLICIES) {
-      const a = scoreCorpus(corpus, candidates, policy)
-      const b = scoreCorpus(corpus, candidates, policy)
-      expect(a).toEqual(b)
-    }
-  })
-
-  it('produces well-formed metrics (counts sum to the corpus; rates in [0,1])', () => {
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    for (const r of runBaseline(corpus, candidates)) {
-      const c = r.confusion
-      expect(c.firedCorrect + c.firedWrong + c.missed + c.correctlyAbstained).toBe(corpus.length)
-      for (const v of [r.precision, r.recall]) {
-        if (v != null) {
-          expect(v).toBeGreaterThanOrEqual(0)
-          expect(v).toBeLessThanOrEqual(1)
-        }
+  it('every deviation names a corpus row and records an outcome other than its label (no no-op entries)', () => {
+    for (const map of [KNOWN_SUGGESTION_DEVIATIONS, KNOWN_AUTOFIRE_DEVIATIONS]) {
+      for (const [id, value] of Object.entries(map)) {
+        const row = corpus.find((c) => c.id === id)
+        expect(row, `deviation key ${id} names a corpus row`).toBeDefined()
+        expect(value, `${id}: a deviation equal to the label would silently drop the row from its gate`).not.toBe(row!.expected)
       }
     }
   })
+})
 
-  it('a stricter bar never increases fired-wrong (monotone precision pressure)', () => {
-    // Sanity on the sweep itself: raising the gate can only DROP fires, so false fires are
-    // non-increasing across threshold-2 → threshold-3 → threshold-4. Measured on the FULL doc signals
-    // (forceFullSignals) so this is a pure BAR comparison — threshold-3's U4/§4.4 auto-fire narrowing is
-    // a different axis (it can only DROP fires further) and is asserted by the auto-fire gate below.
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    const wrong = (name: string) =>
-      scoreCorpus(corpus, candidates, POLICIES.find((p) => p.name === name)!, { forceFullSignals: true })
-        .confusion.firedWrong
-    expect(wrong('threshold-3')).toBeLessThanOrEqual(wrong('threshold-2'))
-    expect(wrong('threshold-4')).toBeLessThanOrEqual(wrong('threshold-3'))
+// The recall gate AND the per-row precision gate: every row must give its expected offer, except the
+// listed deviations. A new miss or false offer goes red with the row id in the title; a FIXED deviation
+// goes red too (its entry is stale and must be removed).
+describe('suggestion — every corpus row gives its expected offer (production suggestSkillsForTurn)', () => {
+  const rows = corpus.map((row) => ({ row, id: row.id, want: deviation(KNOWN_SUGGESTION_DEVIATIONS, row.id) ?? row.expected }))
+  it.each(rows)('$id offers $want', ({ row, want }) => {
+    expect(h().offerFor(row)).toBe(want)
   })
 })
 
-describe('S13a privacy — the harness scores questions but never logs them (§6)', () => {
-  it('emits no corpus question text to any console stream when the baseline runs + prints', () => {
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
-      vi.spyOn(console, m).mockImplementation(() => {})
-    )
-    let out = ''
-    try {
-      const results = runBaseline(corpus, candidates)
-      console.log(formatReport(results, corpus.length)) // the report we transcribe into §3.3
-    } finally {
-      for (const s of spies) {
-        for (const call of s.mock.calls) out += call.map((a) => String(a)).join(' ') + '\n'
-        s.mockRestore()
-      }
-    }
-    // Not one corpus question may appear in anything written to the console.
-    for (const item of corpus) expect(out).not.toContain(item.question)
-    // …and the report we DID print is non-empty (so the assertion above isn't vacuous).
-    expect(out).toContain('Skills trigger baseline')
-  })
-})
-
-// MEASUREMENT: print the baseline so `npm test` surfaces the numbers (recorded in the
-// `architecture.md` §18 S13a record — its durable home since `skills-s13-plan.md` §3.3 was deleted at
-// S13 close). KEPT as a measurement — the hard gate-assertion lives in its own block below so the
-// printout survives even if the bar regresses.
-describe('S13a baseline — measured (recorded in architecture.md §18)', () => {
-  it('prints the precision/recall/confusion sweep', () => {
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    const results = runBaseline(corpus, candidates)
+// S13b — the HARD GATE (owner-set form, architecture.md §18 ratified contract): the production auto-fire
+// decision must clear D1 on the corpus. A MISS is fine (the inert offer is the fallback); firing a
+// DIFFERENT skill than the label — or firing at all where the label is 'none' — is a wrong fire. The two
+// accepted deviations must fire exactly the listed skill; any other row's outcome is its label or nothing.
+// It first prints the two production paths' aggregates (recorded in architecture.md §18) — metrics and
+// confusion only, NO question text — so the numbers surface even when a bar below regresses.
+describe('S13b gate — production auto-fire clears the ratified D1 precision bar', () => {
+  it('fires nothing wrong AND precision ≥ 0.95; deviation rows fire exactly the listed skill', () => {
+    const gateSet = corpus.filter((c) => deviation(KNOWN_AUTOFIRE_DEVIATIONS, c.id) === undefined)
+    const result = scoreCorpus(gateSet, (r) => h().autoFireFor(r), 'auto-fire (gate)', 'resolveAutoFireSkill, rows minus the accepted deviations (the gate set)')
+    const report = [
+      scoreCorpus(corpus, (r) => h().offerFor(r), 'suggestion', 'suggestSkillsForTurn, all rows'),
+      result,
+      scoreCorpus(corpus, (r) => h().autoFireFor(r), 'auto-fire (deviations wrong)', 'resolveAutoFireSkill, all rows — the accepted deviations counted as wrong fires')
+    ]
     // eslint-disable-next-line no-console
-    console.log('\n' + formatReport(results, corpus.length) + '\n')
-    expect(results.length).toBe(POLICIES.length)
-  })
-})
+    console.log('\n' + formatReport(report, corpus.length) + '\n')
 
-// S13b — the HARD GATE (owner-set form, architecture.md §18 ratified contract, ex-skills-s13-plan.md
-// §2.1): the ratified auto-fire policy
-// (`threshold-3` ≡ AUTOFIRE_SCORE_THRESHOLD) must clear D1 on the corpus. Asserted as
-// `fired-wrong == 0 AND precision ≥ 0.95` (NOT a brittle `== 100%`) so it survives corpus growth.
-// Any change to `scoreSkillTriggers` or the threshold now re-runs this and fails if it regresses
-// the precision bar — the harness is the ship gate the plan promised.
-describe('S13b gate — the auto-fire policy clears the ratified D1 precision bar', () => {
-  it('threshold-3 (AUTOFIRE_SCORE_THRESHOLD) fires nothing wrong AND precision ≥ 0.95 (D1)', () => {
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    const t3 = POLICIES.find((p) => p.name === 'threshold-3')!
-    const result = scoreCorpus(corpus, candidates, t3)
-    // A false fire is the costly event D1 is set against — there must be none on the corpus.
-    expect(result.confusion.firedWrong).toBe(0)
-    // And precision must clear the ratified ≥ 95% bar (it actually fired ≥ once, so precision != null).
+    for (const [id, fires] of Object.entries(KNOWN_AUTOFIRE_DEVIATIONS)) {
+      expect(h().autoFireFor(byId(id)), `${id}: accepted deviation still fires ${fires}`).toBe(fires)
+    }
+    const wrongIds = result.perItem.filter((p) => p.predicted !== 'none' && p.predicted !== p.expected).map((p) => p.id)
+    expect(wrongIds).toEqual([])
     expect(result.confusion.firedCorrect).toBeGreaterThan(0)
+    // The ratified D1 wording; with zero wrong fires above, precision is 1 by construction.
     expect(result.precision).not.toBeNull()
     expect(result.precision!).toBeGreaterThanOrEqual(0.95)
+    // The deviation map cannot grow silently: over ALL rows, the wrong fires are the accepted ones only.
+    expect(report[2].confusion.firedWrong).toBeLessThanOrEqual(ACCEPTED_AUTOFIRE_WRONG_FIRES)
+  })
+
+  it('every auto-fire-eligible app skill fires on at least one corpus row', () => {
+    // A miss is allowed per row, so without this a skill could stop auto-firing everywhere (a broken doc
+    // signal, say) while every gate above stays green. Which skills opt in is pinned by skills-autofire.
+    const eligible = autoFireEligible()
+    expect(eligible.length).toBeGreaterThan(0)
+    const fired = new Set(corpus.map((c) => h().autoFireFor(c)))
+    for (const id of eligible) expect(fired.has(id), `${id} auto-fires on some corpus row`).toBe(true)
+  })
+
+  it('never auto-fires on a document that is merely in the Library (U4 narrowing, #130 doc-signal gate)', () => {
+    // A whole-corpus doc is not an explicit selection, so it lends auto-fire no corroboration: these rows
+    // must abstain even when their label is a skill (dropping the narrowing or the doc-signal gate makes
+    // them fire their CORRECT label, which the wrong-fire gate above cannot see).
+    const eligible = autoFireEligible()
+    expect(corpus.some((c) => c.scope === 'whole-corpus' && eligible.includes(c.expected))).toBe(true) // non-vacuous
+    const fired = corpus.filter((c) => c.scope === 'whole-corpus' && h().autoFireFor(c) !== 'none').map((c) => c.id)
+    expect(fired).toEqual([])
   })
 })
 
-// W5 gate (audit §4.2/§8.3) — the SUGGESTION surface users actually see now has an asserted precision bar.
-// The shipping suggestion policy is `keyword-required` (≡ runtime `selectSuggestion`, W5): a keyword hit is
-// mandatory, doc signals only corroborate. Two bars: (1) precision ≥ 0.95 OVERALL on the whole corpus, and
-// (2) ZERO wrong fires on the cross-skill CONFUSION set (word-boundary discrimination must be exact where
-// two skills compete). The plan's stated floor was 0.80; the MEASURED value on the U4-expanded 90-item /
-// 8-skill corpus is 0.984 (63 fired-correct, 1 fired-wrong = the documented adv-meeting-schedule ceiling;
-// printed by the baseline test above and recorded in BUILD_STATE). We gate at 0.95 — matching the auto-fire
-// bar — so a broad precision regression on the non-confusion majority reddens CI instead of sliding to 0.80.
+// W5 gate (audit §4.2/§8.3) — the SUGGESTION surface users actually see has an asserted precision bar: a
+// keyword hit is mandatory, doc signals only corroborate. Two bars: (1) precision ≥ 0.95 OVERALL on the
+// whole corpus (matching the auto-fire bar, so a broad regression on the non-confusion majority reddens CI),
+// and (2) ZERO wrong fires and ZERO misses on the cross-skill CONFUSION set. Recomputed from the production
+// offer. The per-row table above pins every single row; these bars stay as the BOUND on the deviation map
+// (no confusion row may become a deviation, and the wrong-offer deviations cannot grow past the 0.95 bar).
 describe('W5 gate — the suggestion policy clears the precision bar (§4.2/§8.3)', () => {
-  it('keyword-required: precision ≥ 0.95 overall AND fired-wrong == 0 on the confusion pairs', () => {
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    const kwReq = POLICIES.find((p) => p.name === 'keyword-required')!
-
-    // (1) Overall precision gate over the whole corpus (measured 0.983; floored at 0.95, the auto-fire bar).
-    const overall = scoreCorpus(corpus, candidates, kwReq)
+  it('precision ≥ 0.95 overall AND fired-wrong == 0 and missed == 0 on the confusion pairs', () => {
+    const overall = scoreCorpus(corpus, (r) => h().offerFor(r), 'suggestion', 'overall')
     expect(overall.confusion.firedCorrect).toBeGreaterThan(0)
     expect(overall.precision).not.toBeNull()
     expect(overall.precision!).toBeGreaterThanOrEqual(0.95)
 
-    // (2) The confusion subset must fire NOTHING wrong (the word-boundary discrimination bar).
-    const confusion = corpus.filter((c) => c.confusion)
-    expect(confusion.length).toBeGreaterThanOrEqual(6) // non-vacuous
-    const confusionResult = scoreCorpus(confusion, candidates, kwReq)
-    expect(confusionResult.confusion.firedWrong).toBe(0)
-    // …and every confusion pair actually fires its expected skill (recall on the set is total).
-    expect(confusionResult.confusion.missed).toBe(0)
-  })
-
-  it('the known substring reproductions no longer fire (Netflix→net, in-10-minutes→meeting, etc.)', () => {
-    const corpus = loadCorpus()
-    const candidates = loadSkillCandidates()
-    const kwReq = POLICIES.find((p) => p.name === 'keyword-required')!
-    // These historical over-fires must all predict 'none' now (word-boundary + route-only rebinding).
-    for (const id of ['adv-net-netflix-01', 'adv-minutes-10-01', 'adv-syntax-tax-01', 'adv-bill-01', 'adv-datenschutz-01']) {
-      const item = corpus.find((c) => c.id === id)
-      expect(item, `corpus item ${id} present`).toBeDefined()
-      expect(predict(candidates, toContext(item!), kwReq)).toBe('none')
-    }
+    const confusionRows = corpus.filter((c) => c.confusion)
+    expect(confusionRows.length).toBeGreaterThanOrEqual(6) // non-vacuous
+    const confusion = scoreCorpus(confusionRows, (r) => h().offerFor(r), 'suggestion', 'confusion')
+    expect(confusion.confusion.firedWrong).toBe(0)
+    expect(confusion.confusion.missed).toBe(0)
+    expect(confusion.confusion.firedCorrect).toBeGreaterThan(0)
   })
 })
 
-// U4 gate (audit §2.4/§4.4) — the auto-fire EXPANSION proof. Bank/invoice/meeting-protocol are now
-// autoFire-eligible (the setting is still default-off), so the auto-fire gate (threshold-3) must hold on
-// the EXPANDED corpus INCLUDING whole-corpus scope shapes: the doc-signal narrowing (a Library doc that is
-// not explicitly selected contributes nothing) must prevent the "keyword + any matching PDF anywhere"
-// misfire while strong keyword intent still fires.
-describe('U4 gate — narrowed auto-fire signals + skill opt-ins (§2.4/§4.4)', () => {
-  const corpus = loadCorpus()
-  const candidates = loadSkillCandidates()
-  const t3 = POLICIES.find((p) => p.name === 'threshold-3')!
-  const kwReq = POLICIES.find((p) => p.name === 'keyword-required')!
-  const item = (id: string): CorpusItem => {
-    const it = corpus.find((c) => c.id === id)
-    expect(it, `corpus item ${id} present`).toBeDefined()
-    return it!
-  }
-
-  it('the corpus actually exercises whole-corpus scope shapes (non-vacuous)', () => {
-    const wc = corpus.filter((c) => c.scope === 'whole-corpus')
-    expect(wc.length).toBeGreaterThanOrEqual(5)
-    // …and at least one whole-corpus item that WOULD auto-fire on full signals (so the narrowing below
-    // has something to actually suppress — the assertion isn't vacuous).
-    expect(wc.some((c) => predict(candidates, toContext(c), t3) !== 'none')).toBe(true)
+// U4 gate (audit §2.4/§4.4) — bank/invoice/meeting-protocol are autoFire-eligible (the setting is still
+// default-off). The same meeting question auto-fires once the doc is EXPLICITLY in scope; the whole-corpus
+// siblings (a Library-style collection doc, not selected) still get the offer (per-row table) and never
+// auto-fire (the Library-abstention test in the S13b block).
+describe('U4 gate — explicit scope auto-fires (§2.4)', () => {
+  it('wc-meeting-attached-01 (explicitly in scope) auto-fires meeting-protocol', () => {
+    expect(h().autoFireFor(byId('wc-meeting-attached-01'))).toBe('meeting-protocol')
   })
+})
 
-  it('a whole-corpus doc signal is narrowed away for auto-fire but kept for the suggestion offer', () => {
-    // The §4.4 trap: a SINGLE keyword + a matching PDF merely present in the Library. The inert offer
-    // still fires (full scope), but auto-fire must NOT — the doc is not explicitly in front of the skill.
-    for (const id of ['wc-bank-weak-01', 'wc-invoice-weak-01', 'wc-meeting-weak-01']) {
-      const it = item(id)
-      expect(predict(candidates, toContext(it), kwReq), `${id}: suggestion offers`).toBe(it.expected)
-      expect(predict(candidates, toContext(it), t3), `${id}: WOULD fire on full signals`).toBe(it.expected)
-      expect(predict(candidates, toAutoFireContext(it), t3), `${id}: narrowed → no auto-fire`).toBe('none')
+// Privacy (skills-s13-plan.md §6): a question is CONTENT. Both production paths score it and must never
+// write it to the console — the app log mirrors every line there, so this covers the log sink too.
+describe('privacy — no question text reaches the console', () => {
+  it('runs every row through both production paths without logging the question', () => {
+    const logged: string[] = []
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation((...args: unknown[]) => {
+        logged.push(args.map(String).join(' '))
+      })
+    )
+    try {
+      for (const row of corpus) {
+        h().offerFor(row)
+        h().autoFireFor(row)
+      }
+    } finally {
+      for (const s of spies) s.mockRestore()
     }
-  })
-
-  it('the SAME meeting question auto-fires once the doc is explicitly in scope (§2.4 fix)', () => {
-    // wc-meeting-weak-01 (library only) does NOT auto-fire; wc-meeting-attached-01 (attached / hand-picked)
-    // DOES — the narrowing keys on WHETHER the user put the doc in front of the skill, not on the words.
-    expect(predict(candidates, toAutoFireContext(item('wc-meeting-weak-01')), t3)).toBe('none')
-    expect(predict(candidates, toAutoFireContext(item('wc-meeting-attached-01')), t3)).toBe('meeting-protocol')
-  })
-
-  it('#130: strong keyword intent does NOT auto-fire at whole-corpus scope (the doc-signal gate holds)', () => {
-    // SUPERSEDES the pre-#130 pin ("two distinct keywords reach the ≥3 bar on words alone, so no
-    // explicit doc is required"): that was the exact structural hole the audit confirmed — two capped
-    // hits scored 4 with zero doc signals, bypassing the U4 narrowing on the on-topic phrasings the
-    // vocabulary is built to catch. The ratified D2 contract is "keyword AND a relevant doc
-    // deliberately in scope"; keyword strength alone never suffices now. The SUGGESTION still offers
-    // (full scope, inert) — only the silent auto-fire demands the explicit doc.
-    expect(predict(candidates, toAutoFireContext(item('wc-bank-strong-01')), t3)).toBe('none')
-    expect(predict(candidates, toAutoFireContext(item('wc-invoice-strong-01')), t3)).toBe('none')
-    expect(predict(candidates, toContext(item('wc-bank-strong-01')), kwReq)).toBe('bank-statement')
-    expect(predict(candidates, toContext(item('wc-invoice-strong-01')), kwReq)).toBe('invoice')
-  })
-
-  it('the audit example never fires either path — dsgvo dropped AND the library doc narrowed away', () => {
-    const it = item('wc-dsgvo-libdoc-01') // "Was regelt die DSGVO?" + a privacy PDF in the Library
-    expect(predict(candidates, toContext(it), kwReq), 'no suggestion offer').toBe('none')
-    expect(predict(candidates, toAutoFireContext(it), t3), 'no auto-fire').toBe('none')
-  })
-
-  it('#130: threshold-3 TOTALLY ABSTAINS over the WHOLE-CORPUS subset (nothing fires without an explicit doc)', () => {
-    // SUPERSEDES the pre-#130 bar (fired-wrong==0 AND ≥1 fire): with the doc-signal gate, a
-    // whole-corpus item has its doc signals narrowed away (U4) and therefore NEVER auto-fires —
-    // strong keywords included. Zero fires ⇒ zero wrong fires; the "missed" cells here are
-    // deliberate (the user must put the doc in front of the skill — wc-meeting-attached-01, an
-    // explicitly-scoped sibling, still fires and is pinned above).
-    const wc = corpus.filter((c) => c.scope === 'whole-corpus')
-    const result = scoreCorpus(wc, candidates, t3) // scoreCorpus narrows for threshold-3
-    expect(result.confusion.firedWrong).toBe(0)
-    expect(result.confusion.firedCorrect).toBe(0)
+    const text = logged.join('\n')
+    for (const row of corpus) expect(text.includes(row.question), `${row.id}: question reached the console`).toBe(false)
   })
 })

@@ -12623,3 +12623,16 @@ screenshots were handed over. Release-wise the
 remaining work is **manual acceptance only** (§5). Consciously-accepted gaps live in
 `docs/known-limitations.md`.
 
+### BUILD_STATE §5 item 7 TS-9 — the suggestion-bar ratification (retired verbatim 2026-10-05)
+
+> The owner ratified the suggestion bar on 2026-10-05, and the skills test campaign PR (b) made it a
+> per-row production gate (see `docs/architecture.md` §18 "Suggestion-selector bar"). The sub-bullet
+> below is deleted from BUILD_STATE §5 item 7, which keeps its number. Its relative link is shown as
+> plain text.
+
+   - **TS-9 (pending owner D1):** the S13a suggestion-selector eval tier measures + prints its
+     baseline without a hard bar (the AUTO-FIRE precision bar IS a live CI gate); ratify the
+     suggestion bar (record: `docs/architecture.md` §18 "Suggestion-selector
+     baseline", the durable home since `docs/skills-s13-plan.md` §3.3 was deleted at S13 close) so
+     measurement-without-assertion doesn't silently become permanent.
+

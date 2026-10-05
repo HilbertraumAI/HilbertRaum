@@ -410,11 +410,6 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
    - **TS-7 (owner call — CI minutes):** add a `macos-latest` CI leg. The suite is offline and
      Electron-binary-free, and cross-platform path bugs have historically been caught only by the
      Ubuntu leg.
-   - **TS-9 (pending owner D1):** the S13a suggestion-selector eval tier measures + prints its
-     baseline without a hard bar (the AUTO-FIRE precision bar IS a live CI gate); ratify the
-     suggestion bar (record: [`docs/architecture.md`](docs/architecture.md) §18 "Suggestion-selector
-     baseline", the durable home since `docs/skills-s13-plan.md` §3.3 was deleted at S13 close) so
-     measurement-without-assertion doesn't silently become permanent.
    - **BE-1 rider:** the `rag*` numeric settings knobs remain deliberately unclamped (they flow
      into retrieval via `ragSettingsFrom`; clamping changes behavior for extreme-value users —
      needs its own small decision before any bound).

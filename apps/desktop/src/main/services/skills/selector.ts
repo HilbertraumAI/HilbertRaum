@@ -48,7 +48,7 @@ export const SUGGEST_SCORE_THRESHOLD = 2
  * shapes a turn, so it demands the stricter gate. The §3.3.1 baseline harness asserts this gate
  * clears the D1 ≥ 95% precision bar.
  */
-export const AUTOFIRE_SCORE_THRESHOLD = 3
+const AUTOFIRE_SCORE_THRESHOLD = 3
 
 /**
  * Match a `*statement*`-style filename glob against a title with a LINEAR, non-backtracking matcher
@@ -127,8 +127,8 @@ function firstKeywordHit(q: string, kw: string): { start: number; end: number } 
  * matched word-boundary (single token) or substring (phrase) via `firstKeywordHit`; a hit whose span is
  * contained in a longer hit's span is dropped, so "meeting minutes" counts ONCE (not `meeting minutes` +
  * `meeting` + `minutes` = three) and list-length can no longer inflate a score. Case-insensitive;
- * empty/whitespace entries ignored. Exported so the trigger eval harness measures the SAME count the
- * runtime scorer + keyword-required gate use (faithfulness by construction).
+ * empty/whitespace entries ignored. Shared by the scorer and the keyword-required gate, so both count
+ * hits the same way.
  */
 export function countKeywordHits(keywords: readonly string[], question: string): number {
   const q = question.toLowerCase()
@@ -154,7 +154,7 @@ export function countKeywordHits(keywords: readonly string[], question: string):
  * when nothing matches. Keyword hits are word-boundary/phrase matched, deduped, and CAPPED
  * (`MAX_SCORED_KEYWORD_HITS`); doc signals add at most one each. Empty/whitespace entries are ignored.
  * NOTE: this returns the raw additive score — the keyword-REQUIRED gate (a lone doc signal never fires)
- * lives in `selectByThreshold`, so `scoreSkillTriggers` stays a pure signal measure the eval can sweep.
+ * lives in `selectByThreshold`, so `scoreSkillTriggers` stays a pure signal measure.
  */
 export function scoreSkillTriggers(triggers: SkillTriggers, ctx: SkillTriggerContext): number {
   const keywordHits = countKeywordHits(triggers.keywords, ctx.question)
@@ -181,9 +181,9 @@ function hasFilenameSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): b
  * Does the scope contribute ANY doc signal for this skill (a MIME or filename hit — the exact
  * booleans `scoreSkillTriggers` weighs)? The #130 auto-fire gate: the D2 contract is "keyword AND
  * doc signal", and the score alone cannot enforce the doc-signal half (two capped keyword hits
- * reach 4 with an empty scope). Exported so the eval harness can mirror the runtime gate 1:1.
+ * reach 4 with an empty scope).
  */
-export function hasDocSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): boolean {
+function hasDocSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): boolean {
   return hasMimeSignal(triggers, ctx) || hasFilenameSignal(triggers, ctx)
 }
 

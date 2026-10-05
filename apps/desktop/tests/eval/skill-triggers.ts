@@ -1,41 +1,35 @@
 // Skills S13a — the offline trigger-evaluation harness (skills-s13-plan.md §3.2/§3.3).
 //
-// Pure measurement: it scores a labelled SYNTHETIC corpus through the EXISTING deterministic
-// selector (`scoreSkillTriggers` / `selectSuggestion` in services/skills/selector.ts) and reports
-// precision, recall, and a confusion matrix. NO model, NO network, NO DB (DS4) — so it is a normal
-// vitest target and, once a bar is ratified (D1), becomes the regression gate for any selector change.
-//
-// It changes NO runtime behaviour. The only thing beyond the real selector is a THRESHOLD SWEEP: the
-// same `scoreSkillTriggers` scores, but the fire-gate is parameterized so the owner can see where a
-// higher bar (the D2 proposal — "require a keyword hit, not a lone doc signal") would land. At the
-// current threshold the harness must agree with `selectSuggestion` exactly (a faithfulness guard in
-// the test pins this).
+// Pure measurement over a labelled SYNTHETIC corpus, driven through the PRODUCTION paths: the inert
+// suggestion offer (`suggestSkillsForTurn`) and the silent auto-fire decision (`resolveAutoFireSkill`),
+// both against a real temp database that reconciles the committed `app-skills/`. There is no second copy
+// of the selector here — a selector, vocabulary or manifest change reaches the corpus exactly as it
+// reaches a user. NO model, NO network; the database is a throw-away file under a `hilbertraum-` temp dir.
 //
 // Privacy (skills-s13-plan.md §6): a question is CONTENT — it is scored here and NEVER logged. This
 // module returns ids/labels/counts only; nothing here writes the question text to any sink.
 
-import { readFileSync } from 'node:fs'
+import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { parseSkillManifestFromDir } from '../../src/main/services/skills/manifest'
-import {
-  countKeywordHits,
-  scoreSkillTriggers,
-  selectSuggestion,
-  hasDocSignal,
-  SUGGEST_SCORE_THRESHOLD,
-  AUTOFIRE_SCORE_THRESHOLD,
-  type SkillCandidate,
-  type SkillTriggerContext
-} from '../../src/main/services/skills/selector'
+import { randomUUID } from 'node:crypto'
+import { openDatabase, type Db } from '../../src/main/services/db'
+import { updateSettings } from '../../src/main/services/settings'
+import { createConversation } from '../../src/main/services/chat'
+import { addToCollection, createCollection } from '../../src/main/services/collections'
+import { listSkills, reconcileSkills } from '../../src/main/services/skills/registry'
+import { suggestSkillsForTurn } from '../../src/main/services/skills/suggest'
+import { resolveAutoFireSkill } from '../../src/main/services/skills/autofire'
 import { APP_VOCAB_SKILL_IDS } from '../../src/main/services/skills/vocabulary'
 
 /** The repo root, four levels up from tests/eval/. */
 const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-/** W5 (audit §6.4/§8.3): ALL EIGHT real app skills form the label space (was 4 — it excluded exactly the
- *  collision-prone Professional-Documents skills). Sourced from the vocabulary so the corpus label space
- *  and the routing/suggestion vocabulary can never diverge. */
-const APP_SKILL_IDS = APP_VOCAB_SKILL_IDS
+/** The version `app.getVersion()` reports in production, so the §6.5 minAppVersion gate runs as it does
+ *  for a user (an empty version would treat every skill as compatible). */
+const APP_VERSION = (
+  JSON.parse(readFileSync(join(REPO_ROOT, 'apps', 'desktop', 'package.json'), 'utf8')) as { version: string }
+).version
 
 /** One in-scope document's matchable signals (filename + MIME). */
 export interface CorpusDoc {
@@ -57,9 +51,9 @@ export interface CorpusItem {
   /**
    * U4 (audit §4.4): the DOC-SCOPE shape. `'narrowed'` (default) — the `inScopeDocs` are EXPLICITLY in
    * scope (a chat attachment or a hand-pick), so both the suggestion AND the auto-fire path see them.
-   * `'whole-corpus'` — the `inScopeDocs` are merely present somewhere in the Library / a collection, NOT
-   * explicitly selected: the inert SUGGESTION offer still reads them (full scope), but AUTO-FIRE narrows
-   * them away (`explicitDocumentsOnly`), so they contribute no corroborating signal to a silent fire.
+   * `'whole-corpus'` — the `inScopeDocs` are merely present in a collection the conversation is scoped
+   * to, NOT explicitly selected: the inert SUGGESTION offer still reads them, but AUTO-FIRE narrows them
+   * away (`explicitDocumentsOnly`), so they contribute no corroborating signal to a silent fire.
    */
   scope?: 'narrowed' | 'whole-corpus'
   note?: string
@@ -72,128 +66,82 @@ export function loadCorpus(): CorpusItem[] {
   return parsed.items
 }
 
-/** Load the real app skills' triggers as selector candidates (installId = the skill id). */
-export function loadSkillCandidates(): SkillCandidate[] {
-  return APP_SKILL_IDS.map((id) => {
-    const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
-    if (!res.ok || !res.manifest) {
-      throw new Error(`could not parse app skill '${id}': ${res.errors.join('; ')}`)
-    }
-    return { installId: res.manifest.id, title: res.manifest.title, triggers: res.manifest.triggers }
-  })
+/** The production-path adapter: one real database, the committed app skills, one isolated scope per row. */
+export interface TriggerHarness {
+  db: Db
+  /** The skill id the inert suggestion offer ranks first for this row, or 'none'. */
+  offerFor(row: CorpusItem): string
+  /** The skill id the silent auto-fire decision applies for this row, or 'none'. */
+  autoFireFor(row: CorpusItem): string
+  /** Close the database and remove its temp directory. */
+  close(): void
 }
 
-/** Turn a corpus item into the selector's turn context (the renderer→main scope shape). Full doc
- *  signals — this is the SUGGESTION path's view (`inScopeDocSignals` reads the whole scope). */
-export function toContext(item: CorpusItem): SkillTriggerContext {
+const stripApp = (installId: string | undefined): string =>
+  installId === undefined ? 'none' : installId.replace(/^app:/, '')
+
+/**
+ * Open the harness. Every row gets its OWN scope inside the one shared database, so a row never sees
+ * another row's documents (and the resident signal cache can never hand one row's signals to another):
+ *  - docs + `narrowed` (the default): the docs as `indexed` documents + a conversation scoped to those
+ *    document ids (explicit — what an attachment or a hand-pick looks like);
+ *  - docs + `whole-corpus`: the docs in a per-row collection + a conversation scoped to that collection;
+ *  - no docs: an empty per-row collection (never the Library).
+ */
+export function openTriggerHarness(): TriggerHarness {
+  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-skill-triggers-'))
+  const db = openDatabase(join(root, 'test.sqlite'))
+  const deps = {
+    appSkillsDir: join(REPO_ROOT, 'app-skills'),
+    userSkillsDir: join(root, 'user-skills'),
+    appVersion: APP_VERSION
+  }
+  const rec = reconcileSkills(db, deps)
+  if (rec.errors.length > 0) throw new Error(`reconcileSkills reported errors: ${rec.errors.join('; ')}`)
+  // App skills install enabled (reconcile); fail loudly if a committed skill did not come up.
+  const enabled = new Set(listSkills(db).filter((s) => s.source === 'app' && s.enabled).map((s) => s.id))
+  for (const id of APP_VOCAB_SKILL_IDS) if (!enabled.has(id)) throw new Error(`app skill '${id}' is not enabled`)
+  updateSettings(db, { skillsAutoFireEnabled: true })
+
+  const convByRow = new Map<string, string>()
+  const seedDoc = (d: CorpusDoc): string => {
+    const now = new Date().toISOString()
+    const id = randomUUID()
+    db.prepare(
+      `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?, ?)`
+    ).run(id, d.title, d.mimeType, now, now)
+    return id
+  }
+  const conversationFor = (row: CorpusItem): string => {
+    const cached = convByRow.get(row.id)
+    if (cached) return cached
+    const docIds = row.inScopeDocs.map(seedDoc)
+    let convId: string
+    if (docIds.length > 0 && row.scope !== 'whole-corpus') {
+      convId = createConversation(db, {
+        mode: 'documents',
+        scope: { collectionIds: [], documentIds: docIds }
+      }).id
+    } else {
+      const coll = createCollection(db, `skill-triggers ${row.id}`)
+      if (docIds.length > 0) addToCollection(db, docIds, coll.id)
+      convId = createConversation(db, { mode: 'documents', collectionId: coll.id }).id
+    }
+    convByRow.set(row.id, convId)
+    return convId
+  }
+
   return {
-    question: item.question,
-    docTitles: item.inScopeDocs.map((d) => d.title),
-    docMimeTypes: item.inScopeDocs.map((d) => d.mimeType).filter((m) => m.length > 0)
-  }
-}
-
-/**
- * The AUTO-FIRE path's turn context (U4/audit §4.4): identical to `toContext` EXCEPT a `whole-corpus`
- * item contributes NO doc signal — modelling `inScopeDocSignals(…, {explicitDocumentsOnly:true})`, which
- * counts only EXPLICITLY scoped documents (attachments / hand-picks). A `narrowed` item (the default) is
- * unchanged: its `inScopeDocs` ARE the explicit selection. So one corpus item can carry a real matching
- * Library doc — documenting the §4.4 trap AND exercising the suggestion path with full signals — while
- * the auto-fire path correctly ignores it.
- */
-export function toAutoFireContext(item: CorpusItem): SkillTriggerContext {
-  if (item.scope === 'whole-corpus') {
-    return { question: item.question, docTitles: [], docMimeTypes: [] }
-  }
-  return toContext(item)
-}
-
-/** How many DISTINCT keyword hits a skill lands (the selector's OWN `countKeywordHits` — word-boundary +
- *  longest-match dedupe, W5). Reusing the runtime counter keeps the `keyword-required` policy identical to
- *  the production `selectSuggestion` gate, so the faithfulness guard holds by construction. */
-function keywordHits(triggers: SkillCandidate['triggers'], question: string): number {
-  return countKeywordHits(triggers.keywords, question)
-}
-
-/**
- * A fire policy: given a candidate's deterministic score and its keyword-hit count, decide whether
- * it is ELIGIBLE to fire. The score always comes from the real `scoreSkillTriggers`; the policy only
- * moves the gate. This is what the D2 sweep varies.
- */
-export interface FirePolicy {
-  name: string
-  /** Short human description for the baseline report. */
-  description: string
-  /** `docSignal` (#130): does the (policy-scoped) context contribute ≥1 MIME/filename hit — the
-   *  runtime's `hasDocSignal`, threaded so `threshold-3` can mirror `selectAutoFire`'s gate 1:1. */
-  eligible: (score: number, kwHits: number, docSignal: boolean) => boolean
-  /**
-   * U4 (audit §4.4): does this policy model the AUTO-FIRE path, which reads only EXPLICITLY scoped
-   * documents? When true, `scoreCorpus` scores it through `toAutoFireContext` (a whole-corpus item's doc
-   * signals are zeroed). The ratified auto-fire gate (`threshold-3`) sets it; the SUGGESTION policies
-   * (`threshold-2`, `keyword-required`) leave it false — the inert offer reads the full scope.
-   */
-  narrowsDocSignals?: boolean
-}
-
-/**
- * The policies the baseline sweeps. `threshold-2` reproduces today's `selectSuggestion` exactly
- * (the faithfulness guard pins this). The rest are the D2 "higher bar" candidates the owner weighs.
- *
- * Note (#130): a lone doc signal maxes at MIME(1)+filename(1)=2, so a score ≥ 3 implies a keyword
- * hit — but NOT the converse: two capped keyword hits reach 4 with zero doc signals, so the
- * threshold alone is NOT "a keyword corroborated by ≥1 doc signal". `threshold-3` therefore ALSO
- * requires the doc signal, mirroring the runtime's `selectAutoFire` gate exactly.
- * `keyword-required` is the literal old D2 proposal: require a keyword hit (≥1), reject a lone doc
- * signal, but still accept a lone strong keyword.
- */
-export const POLICIES: FirePolicy[] = [
-  {
-    name: 'threshold-2',
-    description: 'current selector (score ≥ 2): one keyword, OR MIME+filename together',
-    eligible: (score) => score >= SUGGEST_SCORE_THRESHOLD
-  },
-  {
-    name: 'keyword-required',
-    description: 'D2: require a keyword hit (≥1) — a lone doc signal never fires; a lone keyword still does',
-    eligible: (score, kwHits) => kwHits >= 1 && score >= SUGGEST_SCORE_THRESHOLD
-  },
-  {
-    // The RATIFIED auto-fire gate (D2, #130): score ≥ AUTOFIRE_SCORE_THRESHOLD AND ≥1 doc signal —
-    // "a keyword corroborated by ≥1 doc signal", now structurally (the threshold alone let two
-    // keyword hits fire doc-less). The harness and the runtime (`selectAutoFire`) share the constant
-    // AND the doc-signal requirement, so the gate-assertion below measures exactly the production
-    // gate. U4/§4.4: it also mirrors the runtime's `explicitDocumentsOnly` narrowing — a
-    // whole-corpus doc signal doesn't count here either.
-    name: 'threshold-3',
-    description: `auto-fire gate (score ≥ ${AUTOFIRE_SCORE_THRESHOLD} + ≥1 EXPLICITLY-scoped doc signal)`,
-    eligible: (score, _kwHits, docSignal) => score >= AUTOFIRE_SCORE_THRESHOLD && docSignal,
-    narrowsDocSignals: true
-  },
-  {
-    name: 'threshold-4',
-    description: 'score ≥ 4 — two keywords, or a keyword + both doc signals',
-    eligible: (score) => score >= 4
-  }
-]
-
-/**
- * Pick the single best candidate that is ELIGIBLE under `policy`, mirroring `selectSuggestion`'s
- * deterministic tie-break (higher score wins; ties break by installId ascending). Returns the skill
- * id, or 'none'.
- */
-export function predict(candidates: SkillCandidate[], ctx: SkillTriggerContext, policy: FirePolicy): string {
-  let best: SkillCandidate | null = null
-  let bestScore = 0
-  for (const c of candidates) {
-    const score = scoreSkillTriggers(c.triggers, ctx)
-    if (!policy.eligible(score, keywordHits(c.triggers, ctx.question), hasDocSignal(c.triggers, ctx))) continue
-    if (score > bestScore || (score === bestScore && best != null && c.installId < best.installId)) {
-      best = c
-      bestScore = score
+    db,
+    offerFor: (row) =>
+      stripApp(suggestSkillsForTurn(db, conversationFor(row), row.question, APP_VERSION)[0]?.installId),
+    autoFireFor: (row) =>
+      stripApp(resolveAutoFireSkill(db, deps, conversationFor(row), row.question)?.installId),
+    close: () => {
+      db.close()
+      rmSync(root, { recursive: true, force: true })
     }
   }
-  return best ? best.installId : 'none'
 }
 
 /** The four-cell confusion matrix (skills-s13-plan.md §3.2). */
@@ -204,8 +152,8 @@ export interface Confusion {
   correctlyAbstained: number
 }
 
-export interface PolicyResult {
-  policy: string
+export interface PathResult {
+  name: string
   description: string
   confusion: Confusion
   /** firedCorrect / (firedCorrect + firedWrong); null when nothing fired. */
@@ -216,29 +164,17 @@ export interface PolicyResult {
   perItem: Array<{ id: string; expected: string; predicted: string }>
 }
 
-/** Options for `scoreCorpus`. */
-export interface ScoreOptions {
-  /**
-   * Score every policy on the FULL doc signals, bypassing the auto-fire `narrowsDocSignals` narrowing.
-   * Used only by the monotonicity sanity test, which measures the BAR effect on one fixed signal basis —
-   * comparing fired-wrong across policies that treat doc signals differently is not a bar comparison.
-   */
-  forceFullSignals?: boolean
-}
-
-/** Score the whole corpus under one policy. Deterministic, content-free output. */
+/** Score `items` with a production predictor. Deterministic, content-free output. */
 export function scoreCorpus(
   items: CorpusItem[],
-  candidates: SkillCandidate[],
-  policy: FirePolicy,
-  opts: ScoreOptions = {}
-): PolicyResult {
+  predict: (row: CorpusItem) => string,
+  name: string,
+  description: string
+): PathResult {
   const confusion: Confusion = { firedCorrect: 0, firedWrong: 0, missed: 0, correctlyAbstained: 0 }
-  const perItem: PolicyResult['perItem'] = []
-  const narrow = policy.narrowsDocSignals && !opts.forceFullSignals
+  const perItem: PathResult['perItem'] = []
   for (const item of items) {
-    const ctx = narrow ? toAutoFireContext(item) : toContext(item)
-    const predicted = predict(candidates, ctx, policy)
+    const predicted = predict(item)
     const expected = item.expected
     if (predicted !== 'none' && predicted === expected) confusion.firedCorrect++
     else if (predicted !== 'none') confusion.firedWrong++ // wrong skill OR a fire where 'none' was right
@@ -249,8 +185,8 @@ export function scoreCorpus(
   const fired = confusion.firedCorrect + confusion.firedWrong
   const wanted = confusion.firedCorrect + confusion.missed
   return {
-    policy: policy.name,
-    description: policy.description,
+    name,
+    description,
     confusion,
     precision: fired > 0 ? confusion.firedCorrect / fired : null,
     recall: wanted > 0 ? confusion.firedCorrect / wanted : null,
@@ -258,30 +194,24 @@ export function scoreCorpus(
   }
 }
 
-/** Run every policy over the corpus. */
-export function runBaseline(items: CorpusItem[], candidates: SkillCandidate[]): PolicyResult[] {
-  return POLICIES.map((p) => scoreCorpus(items, candidates, p))
-}
-
 const pct = (v: number | null): string => (v == null ? '  n/a' : `${(v * 100).toFixed(1)}%`)
 
 /**
- * A human-readable baseline report (metrics + confusion only — NO question text). This is what gets
- * transcribed into the `architecture.md` §18 record (S13a suggestion-selector baseline) for the owner
- * to set D1/D2 — its durable home since `skills-s13-plan.md` §3.3 was deleted at S13 close.
+ * A human-readable measurement report (metrics + confusion only — NO question text). Its numbers are
+ * transcribed into the `architecture.md` §18 record (S13a baseline).
  */
-export function formatReport(results: PolicyResult[], corpusSize: number): string {
+export function formatReport(results: PathResult[], corpusSize: number): string {
   const lines: string[] = []
   lines.push(
-    `Skills trigger baseline — ${corpusSize} synthetic turns, ${APP_SKILL_IDS.length} app skills as the label space`
+    `Skills trigger measurement — ${corpusSize} synthetic turns, ${APP_VOCAB_SKILL_IDS.length} app skills as the label space`
   )
   lines.push('')
-  lines.push('policy            precision  recall   fired-correct  fired-wrong  missed  abstained')
+  lines.push('path                         precision  recall   fired-correct  fired-wrong  missed  abstained')
   for (const r of results) {
     const c = r.confusion
     lines.push(
       [
-        r.policy.padEnd(17),
+        r.name.padEnd(28),
         pct(r.precision).padStart(8),
         pct(r.recall).padStart(8),
         String(c.firedCorrect).padStart(14),
@@ -292,6 +222,6 @@ export function formatReport(results: PolicyResult[], corpusSize: number): strin
     )
   }
   lines.push('')
-  for (const r of results) lines.push(`  ${r.policy}: ${r.description}`)
+  for (const r of results) lines.push(`  ${r.name}: ${r.description}`)
   return lines.join('\n')
 }

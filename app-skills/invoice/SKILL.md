@@ -29,7 +29,7 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
                                #   keyword hit) — a
                                #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). The
                                #   applies() gate is already single-doc + intent-shaped; W5's expanded
-                               #   corpus holds the threshold-3 gate at 0-wrong / precision ≥ 0.95.
+                               #   corpus holds the production auto-fire gate at 0-wrong / precision ≥ 0.95.
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
   # parity test. Word-boundary matched, so bare ambiguous tokens are route-only (no `bill`→"Bill" the name,
   # `tax`→"syntax", `sum`→"assume", `steuer`→"Steuerberatung"). Edit the vocabulary, not this list.

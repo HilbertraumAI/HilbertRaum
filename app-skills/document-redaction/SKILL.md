@@ -23,8 +23,9 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
                                #   D4 default-OFF, app-only, §6.5 compatibility, and the score ≥ 3 bar
                                #   (auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory
                                #   keyword hit) — a
-                               #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). W5's
-                               #   expanded corpus holds the threshold-3 gate at 0-wrong / precision ≥ 0.95.
+                               #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). The
+                               #   eval corpus holds the auto-fire gate at 0-wrong except two accepted German
+                               #   share-safe rows that fire this skill's read-only scan (architecture.md §18).
                                #   (Comment refreshed from the stale S13a-era wording — SKA-45, U7.)
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` + `suggest`-only terms)
   # and pinned by a parity test. The action verbs (redact/anonymize/schwärzen…) both OFFER and ROUTE; the

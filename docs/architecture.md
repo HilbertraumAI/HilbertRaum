@@ -5855,9 +5855,10 @@ deleted at S13 close — text in git history) holds the baseline tables; this is
 **The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
 deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
 the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
-no-user-data corpus of 33 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
-through the **real** `scoreSkillTriggers`/`selectSuggestion` (`tests/eval/skill-triggers.ts` +
-`.test.ts`) reporting precision/recall + a confusion matrix — no model, no network, no DB (DS4). The
+no-user-data corpus of 138 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+through the **production** `suggestSkillsForTurn` / `resolveAutoFireSkill` on a real temporary
+database with the committed app skills reconciled (`tests/eval/skill-triggers.ts` + `.test.ts`),
+reporting precision/recall + a confusion matrix. Still no model and no network. The
 question is content: scored, never logged (a privacy guard extends the S12 sentinel posture).
 
 **The ratified contract (owner, 2026-06-17 — D1–D6).** D1 **≥ 95% precision**. D2 **`threshold-3`** —
@@ -5869,19 +5870,38 @@ scope — so the gate now structurally means "the user asked **and** a relevant 
 existing glyph + a one-click undo** (never a confirm-before-firing dialog). D4 **opt-in, app-skills
 only in v1**. D5 **fire only when the turn has no skill set** (never override a sticky default or a
 per-turn pick/clear). D6 additive **`triggers.autoFire?: boolean`** (only `true` opts a skill in). On
-the §3.3.1 baseline threshold-3 clears 100% / 88.2% recall; the harness asserts the owner-set form
-**`fired-wrong == 0` AND `precision ≥ 0.95`** so it survives corpus growth.
+the original §3.3.1 baseline threshold-3 cleared 100% / 88.2% recall; the harness asserts the
+owner-set form **`fired-wrong == 0` AND `precision ≥ 0.95`** so it survives corpus growth.
 
-**Suggestion-selector baseline (S13a — measured, not yet gated).** The same offline harness also
-prints the **suggestion**-bar sweep — `formatReport` over the `POLICIES` in
-`tests/eval/skill-triggers.{ts,test.ts}`: precision/recall + a confusion matrix for the §6 suggestion
-selector, question text scored-but-never-logged. The numbers the deleted `skills-s13-plan.md §3.3`
-used to hold now live here — **this record is their durable home** (the harness comments and BUILD_STATE
-§5's TS-9 item point at `architecture.md §18`, not the retired plan file). Unlike the auto-fire bar
-above, the suggestion selector's own thresholds (a D1/D2 for the *offer* bar, `SUGGEST_SCORE_THRESHOLD`)
-are **not yet ratified**, so that eval tier only measures and records — there is **no** hard CI
-assertion on it (contrast the S13b auto-fire gate) until the owner sets them. Tracked as the open
-**TS-9** item (BUILD_STATE §5 item 7) so measurement-without-a-bar can't silently become permanent.
+**Suggestion-selector bar (S13a — gated since 2026-10-05).** The same offline harness scores the
+**suggestion** path (`suggestSkillsForTurn`) over the whole corpus, one test per row. The owner
+ratified the suggestion bar (2026-10-05), and it is a hard CI gate: **precision ≥ 0.95 overall**;
+**zero wrong and zero missed on the confusion rows** (the cross-skill pairs); and every row gives its
+expected offer except the rows listed in `KNOWN_SUGGESTION_DEVIATIONS` in
+`tests/eval/skill-triggers.test.ts`, whose entry must be removed when the row is fixed (a stale entry
+fails). Two rows are listed today: `tp-redaction-en-02` (the vocabulary knows only the exact phrase
+"remove personal data", and U4 dropped the legal word "gdpr", so a GDPR phrasing offers nothing,
+#583) and `adv-meeting-schedule-01` (a scheduling question that merely names a meeting still offers
+meeting-protocol, the precision ceiling of a one-keyword offer). Measured on the 138 rows: suggestion
+precision 99.0%, recall 99.0% (102 correct, 1 wrong, 1 missed), confusion set 0 wrong / 0 missed. The
+printout (`formatReport`, at the start of the S13b gate) shows the two production paths: `suggestion`
+(all rows) and `auto-fire`, the latter twice, once over the gate set and once with the accepted
+deviations counted as wrong. Question text is scored but never logged. The numbers the deleted
+`skills-s13-plan.md §3.3` used to hold now live here — **this record is their durable home**.
+
+**Accepted auto-fire deviation (owner decision 2026-10-05).** With auto-fire on, a German share-safe
+question containing "sensible Daten" auto-fires document-redaction's read-only scan: the keyword
+belongs to both share-safe-review and document-redaction, and only redaction is auto-fire-eligible.
+The scan answer is honest (it says names and addresses are not detected). The D1 gate therefore
+counts the rows in `KNOWN_AUTOFIRE_DEVIATIONS` (`tp-sharesafe-de-01`, `tp-sharesafe-de-02`)
+separately: they must fire exactly `document-redaction`, and over the other rows `fired-wrong == 0`
+and `precision ≥ 0.95`; a row whose document is only in the Library (not explicitly selected) must
+never auto-fire (the U4 narrowing and the #130 doc-signal gate). Measured auto-fire precision is 100%
+(29 correct, 0 wrong, 72 missed, recall 28.7%) over the gate set, and 93.5% (29 correct, 2 wrong,
+72 missed) with the two deviations counted as wrong fires. Auto-fire recall is low by design: rows
+labelled with the five skills that never auto-fire count as misses. The same mechanism applies to
+"personenbezogene Daten", also a keyword of both skills; the corpus pins only the "sensible Daten"
+rows. The optional product fix is tracked in #583.
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
@@ -5920,13 +5940,15 @@ turns it on (S13c). The §14 ceilings + the S12 sentinel guard are unchanged: a 
 a worse answer + a one-click undo, never an unauthorized action; the undo is a re-run, not a new
 capability; no auto-fire path adds an audit event or logs the question.
 
-**First opted-in product skill (D6).** `document-redaction` declares `triggers.autoFire: true` (the
-only bundled skill to do so). Once a user enables auto-fire, an "anonymize/redact"-style turn over a
-selected pdf/plain/markdown document auto-applies it: keyword (2) + the in-scope-doc MIME signal (1) =
-3, clearing `AUTOFIRE_SCORE_THRESHOLD`. It is proven at 100% precision on the S13a corpus (the
-`threshold-3` gate). A "selected" document is one in the conversation's persisted scope, so
-`inScopeDocSignals` surfaces its MIME main-side (§22-C4) — the same phrase with no document in scope
-scores 2 and does **not** fire (regression-tested in `skills-autofire.test.ts`).
+**First opted-in product skill (D6).** `document-redaction` declares `triggers.autoFire: true` (the first
+bundled skill to do so; U4 later opted in bank-statement, invoice and meeting-protocol). Once a user
+enables auto-fire, an "anonymize/redact"-style turn over a selected pdf/plain/markdown document
+auto-applies it: keyword (2) + the in-scope-doc MIME signal (1) = 3, clearing
+`AUTOFIRE_SCORE_THRESHOLD`. On the corpus it fires on no row it should not, except the two accepted
+German share-safe rows ("Accepted auto-fire deviation" above). A "selected" document is one in the
+conversation's persisted scope, so `inScopeDocSignals` surfaces its MIME main-side (§22-C4) — the same
+phrase with no document in scope scores 2 and does **not** fire (regression-tested in
+`skills-autofire.test.ts`).
 
 ### §19 Full-document analysis for tool skills (2026-06-19, D44–D49)
 
@@ -8310,7 +8332,7 @@ Per-finding disposition (fixed → phase@commit / deferred·watch → where regi
 | **TS-6** | LOW | P13 `19dfbc9` | **fixed** — optional `test:coverage` (v8 provider, `@vitest/coverage-v8` devDep) + root passthrough; deliberately not CI-wired, no threshold; `coverage/` gitignored; documented in CONTRIBUTING. |
 | **TS-7** | LOW | — | **deferred → owner call** — no macOS CI leg despite first-class macOS support and a history of cross-platform path bugs; a `macos-latest` entry is cheap (the suite is offline and Electron-binary-free) but costs CI minutes. Registered in BUILD_STATE §5. |
 | **TS-8** | LOW | P13 `19dfbc9` | **fixed** — the screenshot harness polls a per-case READY condition (fonts + per-case selector + brand-`img` complete) with the old 1.8 s/4.5 s settles kept as timeout ceilings; 11-case walk 19.3 s, captures verified. |
-| **TS-9** | LOW | — | **known-open (registered)** — the S13a suggestion-selector eval tier measures and prints its baseline without a hard bar (ratification pending owner D1); the AUTO-FIRE precision bar IS a live CI gate. Registered in BUILD_STATE §5 so it doesn't silently become permanent. |
+| **TS-9** | LOW | — | **closed 2026-10-05** — the owner ratified the suggestion bar; it is now a per-row production gate with the auto-fire bar (§18 "Suggestion-selector bar"). Originally: the S13a suggestion-selector eval tier measured and printed its baseline without a hard bar. |
 | **DOC-101** | HIGH | P5 `0fba6d0` | **fixed** — the 2026-07-01 download-posture flip propagated to the four lagging docs (model-policy's canonical gate section, packaging, troubleshooting, user-guide ×3) + one architecture clause + the `policy.ts` comments; duplicated gate re-tellings replaced by pointers to the canonical model-policy section. |
 | **DOC-102** | HIGH | P5 `0fba6d0` | **fixed** — user-guide §7 "ten" translation languages → **51** (defers to §7a's list). |
 | **DOC-103** | MED | P5 `0fba6d0` | **fixed** — Translate activates as soon as the download finishes (#40); the transcriber/reranker/embedder restart requirement is now stated instead. |
@@ -8462,7 +8484,7 @@ here; everything is Low, none flip-blocking):
 above. The design "as built" lives where each phase folded it: security-model's "Lock failure &
 durability" + troubleshooting's "Could not lock" (CODE-1/10/14), the GPU record §5.6 "Shutdown
 latch + cancellable start" (CODE-2/3/11), rag-design §11 "Trigger sync is rowid-targeted" (CODE-4)
-and the §14 mode-d joint-budget note (CODE-5), this doc's §18 "Suggestion-selector baseline"
+and the §14 mode-d joint-budget note (CODE-5), this doc's §18 "Suggestion-selector bar"
 (DOC-6) and the updated §4 skill-delete prose (GAP-1), the "Checksum cache (two tiers)" record +
 `shared/types.ts` comment (CODE-15), `renderer/lib/errors.ts` `runAndSurface` (CODE-26…29), the
 catalog-hygiene and NUL-ban nets in the test suite (CODE-8, CODE-24), and the swept launch docs
@@ -10282,10 +10304,11 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
 - **TEST-6 (INFO) — answer-quality floor in CI is partial, by design.** *(Wording corrected Phase 7 / D1 —
   the original claim that the S13b bar was "owner-gated on D1 / not yet landed" went stale the moment the bar
   shipped.)* The **S13b skill-trigger precision bar IS a live CI gate**: `eval/skill-triggers.test.ts` asserts
-  the ratified `threshold-3` auto-fire policy clears D1 on the labelled corpus — `fired-wrong == 0` **AND**
-  `precision ≥ 0.95` (§18) — so any regression of `scoreSkillTriggers`/the threshold reddens CI. The
-  `eval/skill-triggers` *measurement* block (precision/recall + confusion matrix) still prints as a baseline
-  alongside it. What remains **without** an automated CI floor is **narrower**: real-model **RAG answer
+  the production `resolveAutoFireSkill` clears D1 on the labelled corpus — `fired-wrong == 0` **AND**
+  `precision ≥ 0.95` (§18, the accepted deviations counted separately) — so any regression of
+  `scoreSkillTriggers`/the threshold reddens CI. The suggestion path has its own per-row gate. The
+  `eval/skill-triggers` *measurement* block (precision/recall + confusion matrix) still prints
+  alongside them. What remains **without** an automated CI floor is **narrower**: real-model **RAG answer
   quality** (faithfulness/grounding output) and the **real-model quality benchmarks**, which are **env-gated
   out of CI by design** (they need GGUF weights CI doesn't ship; see `model-benchmarks.md` D19). Net: those
   remaining accuracy dimensions are caught **only by the manual smoke matrix** (the deliberate separate human

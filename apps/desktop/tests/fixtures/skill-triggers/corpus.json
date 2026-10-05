@@ -4,13 +4,21 @@
     "only: NO user data, no real statements, no telemetry — honours the offline/no-user-data rules.",
     "Each item: { id, question, inScopeDocs:[{title,mimeType}], expected:<skillId|'none'>, confusion?, scope?, note }.",
     "`scope` (U4/§4.4): 'narrowed' (default) = the inScopeDocs are EXPLICITLY selected (attachment / hand-pick),",
-    "seen by BOTH suggestion + auto-fire; 'whole-corpus' = they merely EXIST in the Library, so the inert",
-    "suggestion offer still reads them but AUTO-FIRE narrows them away (contributes no corroborating signal).",
+    "seen by BOTH suggestion + auto-fire; 'whole-corpus' = they merely EXIST in a collection the conversation is scoped to,",
+    "so the inert suggestion offer still reads them but AUTO-FIRE narrows them away (contributes no corroborating signal).",
     "Label space = ALL NINE real ENABLED app skills' actual triggers (W5 widened it from 4; Phase 8 added document-edit):",
     "bank-statement | invoice | meeting-protocol | contract-brief | share-safe-review |",
     "deadline-obligation-finder | what-changed | document-redaction | document-edit | none.",
-    "`confusion:true` marks a CROSS-SKILL pair the SUGGESTION bar must get right (fired-wrong 0 on the set).",
-    "`note` records WHY the label is what it is (the hard case it exercises); it is not scored.",
+    "`confusion:true` marks a CROSS-SKILL pair the SUGGESTION bar must get right (fired-wrong 0 and missed 0 on the set).",
+    "`note` records WHY the label is what it is (the hard case it exercises); it is not scored. Rows whose note starts",
+    "'carried from <test file>' were moved here verbatim from the per-skill trigger tests they replaced; rows whose note",
+    "starts 'pins a keyword listed by <test file>' are new questions that each exercise one keyword that test listed.",
+    "HOW IT RUNS: tests/eval/skill-triggers.ts scores every row through the PRODUCTION paths — `suggestSkillsForTurn`",
+    "(the offer) and `resolveAutoFireSkill` (the silent fire) — on one real temp database with the committed app-skills/",
+    "reconciled; each row gets its own isolated scope. Every row must give its expected offer. The ONLY exceptions are",
+    "the two maps in tests/eval/skill-triggers.test.ts: KNOWN_SUGGESTION_DEVIATIONS (the offer differs from the label) and",
+    "KNOWN_AUTOFIRE_DEVIATIONS (auto-fire applies a different skill than the label). A deviation that gets fixed must be",
+    "REMOVED from its map — a stale entry fails the suite.",
     "Questions are CONTENT: the harness scores them, never logs them (skills-s13-plan.md §6)."
   ],
   "items": [
@@ -183,7 +191,7 @@
       "question": "Remove all personal data for GDPR compliance.",
       "inScopeDocs": [{ "title": "customers.txt", "mimeType": "text/plain" }],
       "expected": "document-redaction",
-      "note": "True positive — 'GDPR' (suggest-only topic word) fires the offer."
+      "note": "True positive by label, but a KNOWN SUGGESTION DEVIATION (#583): U4 dropped the legal word 'gdpr', and the vocabulary only knows the exact phrase 'remove personal data' - 'Remove all personal data' does not match, so no offer fires. Kept as the honest label; the harness lists it in KNOWN_SUGGESTION_DEVIATIONS."
     },
     {
       "id": "tp-redaction-en-03",
@@ -766,6 +774,267 @@
       "inScopeDocs": [{ "title": "vertrag-v2.pdf", "mimeType": "application/pdf" }],
       "expected": "what-changed",
       "note": "W7/SKA-45 — the SINGULAR 'Änderung' now offers in its own right (plural 'änderungen' existed). One keyword + a versioned PDF → what-changed."
+    },
+
+    {
+      "id": "tp-contract-en-pd-01",
+      "question": "Please give me a contract brief before signing this agreement.",
+      "inScopeDocs": [],
+      "expected": "contract-brief",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'contract-brief fires for an English contract question' - the phrase \"contract brief\""
+    },
+    {
+      "id": "tp-deadline-en-pd-01",
+      "question": "What are the deadlines and notice periods I need to track?",
+      "inScopeDocs": [],
+      "expected": "deadline-obligation-finder",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'deadline-obligation-finder fires for an English deadlines question' - \"deadlines\" / \"notice periods\""
+    },
+    {
+      "id": "tp-whatchanged-en-pd-01",
+      "question": "What changed between these two versions of the document?",
+      "inScopeDocs": [],
+      "expected": "what-changed",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'what-changed fires for English compare/version language' - \"what changed\""
+    },
+    {
+      "id": "tp-whatchanged-en-pd-02",
+      "question": "Compare versions and show me the differences between them.",
+      "inScopeDocs": [],
+      "expected": "what-changed",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'what-changed fires for English compare/version language' - \"compare versions\""
+    },
+    {
+      "id": "tp-sharesafe-en-pd-01",
+      "question": "Is this safe to share before I send it out?",
+      "inScopeDocs": [],
+      "expected": "share-safe-review",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'share-safe-review fires for an English \"before sharing\" question' - \"safe to share\""
+    },
+    {
+      "id": "tp-meeting-en-pd-01",
+      "question": "Please write the meeting minutes with the action items.",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'meeting-protocol (Meeting Minutes) fires for an English minutes question' - \"meeting minutes\""
+    },
+    {
+      "id": "tp-contract-de-pd-01",
+      "question": "Bitte den Vertrag prüfen vor der Unterschrift.",
+      "inScopeDocs": [],
+      "expected": "contract-brief",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'contract-brief fires for a German contract question' - \"Vertrag\""
+    },
+    {
+      "id": "tp-deadline-de-pd-01",
+      "question": "Welche Fristen und Fälligkeiten muss ich beachten?",
+      "inScopeDocs": [],
+      "expected": "deadline-obligation-finder",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'deadline-obligation-finder fires for a German Fristen question' - \"Fälligkeiten\" (umlaut plural)"
+    },
+    {
+      "id": "tp-whatchanged-de-pd-01",
+      "question": "Was hat sich geändert zwischen den Versionen?",
+      "inScopeDocs": [],
+      "expected": "what-changed",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'what-changed fires for a German \"was hat sich geändert\" question' - \"was hat sich geändert\""
+    },
+    {
+      "id": "tp-sharesafe-de-pd-01",
+      "question": "Kann ich das sicher teilen?",
+      "inScopeDocs": [],
+      "expected": "share-safe-review",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'share-safe-review fires for a German \"sicher teilen\" question' - \"sicher teilen\""
+    },
+    {
+      "id": "tp-meeting-de-pd-01",
+      "question": "Erstelle ein Besprechungsprotokoll mit Beschlüssen und Aufgaben.",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'meeting-protocol fires for a German Besprechungsprotokoll question' - the compound \"Besprechungsprotokoll\" (its \"Beschlüssen\" is NOT a keyword hit: word boundary)"
+    },
+    {
+      "id": "cf-redaction-vs-sharesafe-pd-01",
+      "question": "Bitte dieses Dokument anonymisieren.",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'a pure redaction request still suggests the redaction TOOL, not the share-safe advisory' - \"anonymisieren\" must beat the share-safe advisory"
+    },
+    {
+      "id": "cf-meeting-vs-contract-pd-01",
+      "question": "Erstelle bitte ein Protokoll dieser Besprechung.",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'a meeting question does not suggest contract-brief (no cross-contamination)' - \"Protokoll\" + \"Besprechung\" must not drift to contract-brief"
+    },
+    {
+      "id": "cf-invoice-vs-contract-pd-01",
+      "question": "Prüfe die Beträge auf dieser Rechnung.",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'an invoice question does not suggest contract-brief' - \"Rechnung\" must not drift to contract-brief"
+    },
+    {
+      "id": "cf-deadline-kuendigungsfrist-pd-01",
+      "question": "Welche Kündigungsfrist muss ich einhalten?",
+      "inScopeDocs": [],
+      "expected": "deadline-obligation-finder",
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'a German Kündigungsfrist question goes to the deadline finder, not contract-brief' - word-boundary matching: only \"kündigungsfrist\" hits, so contract-brief scores 0 (no contest)"
+    },
+    {
+      "id": "cf-whatchanged-contract-v2-pd-01",
+      "question": "what changed between these two versions?",
+      "inScopeDocs": [{ "title": "contract-v2.pdf", "mimeType": "application/pdf" }],
+      "expected": "what-changed",
+      "confusion": true,
+      "note": "carried from tests/integration/skills-professional-documents.test.ts 'a version-marked \"contract-v2.pdf\" offers nothing on a doc-only turn, and what-changed WITH a keyword' - keyword half: the *-v2* filename corroborates \"what changed\" and beats the lone *contract* filename of contract-brief"
+    },
+    {
+      "id": "tn-neutral-weather-sg-01",
+      "question": "What's the weather?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "carried from tests/integration/skills-suggest.test.ts 'offers meeting-protocol for a German protocol question; nothing for a neutral one' (neutral leg) - a neutral English question offers nothing"
+    },
+    {
+      "id": "tn-neutral-time-de-sg-01",
+      "question": "Wie spät ist es?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "carried from tests/integration/skills-suggest.test.ts 'offers document-redaction for a German anonymization question; nothing for a neutral one (neutral leg)' - a neutral German question offers nothing"
+    },
+    {
+      "id": "tp-meeting-de-umlaut-01",
+      "question": "Welche Beschlüsse wurden gefasst?",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - the umlaut plural \"Beschlüsse\""
+    },
+    {
+      "id": "tp-meeting-de-singular-01",
+      "question": "Welcher Beschluss wurde gefasst?",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - the singular \"Beschluss\""
+    },
+    {
+      "id": "tp-invoice-de-plural-01",
+      "question": "Bitte prüfe meine Rechnungen.",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - the German plural \"Rechnungen\""
+    },
+    {
+      "id": "tp-invoice-en-plural-01",
+      "question": "Summarize these invoices.",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - the English plural \"invoices\""
+    },
+    {
+      "id": "tp-redaction-en-sensitive-01",
+      "question": "Remove the sensitive data from this file.",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - the PII-topic keyword \"sensitive data\""
+    },
+    {
+      "id": "adv-datenschutz-topic-01",
+      "question": "Was regelt der Datenschutz?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'U4/§4.4: the pure legal words (datenschutz/dsgvo/gdpr) are DROPPED from the manifest' - the bare legal word \"Datenschutz\" no longer offers redaction (the compound row adv-datenschutz-01 cannot pin this)"
+    },
+    {
+      "id": "adv-gdpr-consent-01",
+      "question": "What does the GDPR say about consent?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'U4/§4.4: the pure legal words (datenschutz/dsgvo/gdpr) are DROPPED from the manifest' - the bare legal word \"GDPR\" no longer offers redaction"
+    },
+    {
+      "id": "tp-edit-en-replaceall-01",
+      "question": "Replace all occurrences of the old name.",
+      "inScopeDocs": [],
+      "expected": "document-edit",
+      "note": "pins a keyword listed by tests/integration/skills-document-edit.test.ts 'covers the English + German find-and-replace triggers' - the keyword \"replace all\""
+    },
+    {
+      "id": "tp-meeting-de-aufgaben-01",
+      "question": "Welche Aufgaben wurden verteilt?",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"aufgaben\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-meeting-de-aufgabe-01",
+      "question": "Wer übernimmt welche Aufgabe?",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"aufgabe\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-meeting-de-besprechung-01",
+      "question": "Wie lief die Besprechung?",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"besprechung\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-meeting-de-protokoll-01",
+      "question": "Schreib ein kurzes Protokoll.",
+      "inScopeDocs": [],
+      "expected": "meeting-protocol",
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"protokoll\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-invoice-de-rechnungsnummer-01",
+      "question": "Wie lautet die Rechnungsnummer?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"rechnungsnummer\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-invoice-de-mehrwertsteuer-01",
+      "question": "Wie hoch ist die Mehrwertsteuer?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"mehrwertsteuer\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-invoice-de-netto-01",
+      "question": "Was ist der Endbetrag netto?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"netto\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-invoice-de-brutto-01",
+      "question": "Was kostet das brutto?",
+      "inScopeDocs": [],
+      "expected": "invoice",
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"brutto\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-redaction-en-removepd-01",
+      "question": "Please remove personal data from the export.",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"remove personal data\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-redaction-de-anonymisierung-01",
+      "question": "Bitte eine Anonymisierung durchführen.",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"anonymisierung\" (the only keyword this question hits)"
+    },
+    {
+      "id": "tp-redaction-de-schwaerzung-01",
+      "question": "Ist eine Schwärzung der Namen möglich?",
+      "inScopeDocs": [],
+      "expected": "document-redaction",
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"schwärzung\" (the only keyword this question hits)"
     }
   ]
 }
