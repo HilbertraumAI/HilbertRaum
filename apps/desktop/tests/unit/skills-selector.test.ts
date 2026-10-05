@@ -9,6 +9,7 @@ import {
   type SkillCandidate
 } from '../../src/main/services/skills/selector'
 import type { SkillTriggers } from '../../src/shared/skill-manifest'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // Skills plan §10.2 #2 (S8) — deterministic suggestion scoring. Pure, no model, no DB. Proves: a
 // topical keyword is the strong signal; a lone document signal never fires; mime+filename together
@@ -25,29 +26,6 @@ describe('scoreSkillTriggers', () => {
       question: 'Can you reconcile this BANK STATEMENT?',
       ...NO_DOCS
     })
-    expect(score).toBeGreaterThanOrEqual(SUGGEST_SCORE_THRESHOLD)
-  })
-
-  it('does NOT fire on a lone document signal (a PDF in scope is not a topical match)', () => {
-    const mimeOnly = scoreSkillTriggers(triggers({ mimeTypes: ['application/pdf'] }), {
-      question: 'hello',
-      docTitles: [],
-      docMimeTypes: ['application/pdf']
-    })
-    const fileOnly = scoreSkillTriggers(triggers({ filenamePatterns: ['*statement*'] }), {
-      question: 'hello',
-      docTitles: ['march-statement.pdf'],
-      docMimeTypes: []
-    })
-    expect(mimeOnly).toBeLessThan(SUGGEST_SCORE_THRESHOLD)
-    expect(fileOnly).toBeLessThan(SUGGEST_SCORE_THRESHOLD)
-  })
-
-  it('fires when mime AND filename match together (supporting signals combine)', () => {
-    const score = scoreSkillTriggers(
-      triggers({ mimeTypes: ['text/csv'], filenamePatterns: ['*kontoauszug*'] }),
-      { question: 'summarize', docTitles: ['2024-kontoauszug.csv'], docMimeTypes: ['text/csv'] }
-    )
     expect(score).toBeGreaterThanOrEqual(SUGGEST_SCORE_THRESHOLD)
   })
 
@@ -73,7 +51,7 @@ describe('scoreSkillTriggers', () => {
       docMimeTypes: []
     })
     expect(score).toBe(0) // the trailing '#' is absent from the title → no filename hit
-    expect(Date.now() - start).toBeLessThan(1000) // no catastrophic backtracking
+    expect(Date.now() - start).toBeLessThan(hangBudgetMs(1000)) // hang detector: backtracking is effectively infinite
   })
 
   it('a wildcard-heavy glob is now safely MATCHED (no longer refused) and returns fast', () => {
@@ -87,16 +65,7 @@ describe('scoreSkillTriggers', () => {
       docMimeTypes: []
     })
     expect(score).toBeGreaterThanOrEqual(1) // filename hit now counts (was wrongly refused before)
-    expect(Date.now() - start).toBeLessThan(1000)
-  })
-
-  it('still matches a normal handful-of-wildcards glob (the guard is generous)', () => {
-    const score = scoreSkillTriggers(triggers({ mimeTypes: ['text/csv'], filenamePatterns: ['*-statement-*.csv'] }), {
-      question: 'x',
-      docTitles: ['2024-statement-march.csv'],
-      docMimeTypes: ['text/csv']
-    })
-    expect(score).toBeGreaterThanOrEqual(SUGGEST_SCORE_THRESHOLD)
+    expect(Date.now() - start).toBeLessThan(hangBudgetMs(1000))
   })
 })
 
@@ -176,12 +145,13 @@ describe('selectSuggestion — keyword-required (W5 §4.2)', () => {
     const ctx = { question: 'hello', docTitles: ['march-statement.pdf'], docMimeTypes: ['application/pdf'] }
     expect(scoreSkillTriggers(docOnly.triggers, ctx)).toBe(2) // the signal is still measured…
     expect(selectSuggestion([docOnly], ctx)).toBeNull() // …but it never fires alone
+    // Each doc signal alone is worth exactly 1, below the threshold.
+    const mimeOnly = triggers({ mimeTypes: ['application/pdf'] })
+    const fileOnly = triggers({ filenamePatterns: ['*statement*'] })
+    expect(scoreSkillTriggers(mimeOnly, ctx)).toBe(1)
+    expect(scoreSkillTriggers(fileOnly, ctx)).toBe(1)
   })
 
-  it('still offers on a lone keyword (no doc needed)', () => {
-    const kw: SkillCandidate = { installId: 'user:bank', title: 'Bank', triggers: triggers({ keywords: ['bank statement'] }) }
-    expect(selectSuggestion([kw], { question: 'reconcile my bank statement', ...NO_DOCS })?.installId).toBe('user:bank')
-  })
 })
 
 describe('selectSuggestion', () => {
@@ -222,6 +192,7 @@ describe('globMatches (the linear, non-backtracking glob matcher)', () => {
     expect(globMatches('report.pdf', 'reportXpdf')).toBe(false) // '.' is a literal, not any-char
     expect(globMatches('*.csv', 'data.csv')).toBe(true)
     expect(globMatches('*.csv', 'data.csv.txt')).toBe(false) // anchored at both ends
+    expect(globMatches('*-statement-*.csv', '2024-statement-march.csv')).toBe(true) // a handful of wildcards
   })
 
   it('handles edge cases (empty, lone star) without throwing', () => {

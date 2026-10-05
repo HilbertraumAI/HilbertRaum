@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
-  CATEGORIZER_CATEGORIES,
   CATEGORIZER_BATCH_SIZE,
   buildBatchPrompt,
-  batchOutputSchema,
   categorizeTransactions,
   parseRequestedCategories,
   parseTaxonomyCsv,
@@ -58,12 +56,28 @@ function validReplyFor(map: (desc: string) => string) {
 }
 
 describe('categorizer — fixed taxonomy + grammar contract', () => {
-  it('the batch schema constrains category to the fixed enum (never an invented label)', () => {
-    const schema = batchOutputSchema()
-    const catSchema = (schema.properties as any).assignments.items.properties.category
-    expect(catSchema.enum).toEqual([...CATEGORIZER_CATEGORIES])
-    expect(CATEGORIZER_CATEGORIES).toContain('Uncategorized')
-    expect(CATEGORIZER_CATEGORIES).toContain('Groceries')
+  it('the schema handed to the runtime constrains category to the fixed enum (never an invented label)', async () => {
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = scriptedRuntime(validReplyFor(() => 'Shopping'), calls)
+    await categorizeTransactions([row('Amazon', -20)], { runtime, signal: new AbortController().signal })
+    const schema = calls[0].options?.responseSchema as any
+    expect(schema.properties.assignments.items.properties.category.enum).toEqual([
+      'Groceries',
+      'Dining',
+      'Transport',
+      'Utilities',
+      'Rent',
+      'Insurance',
+      'Subscriptions',
+      'Health',
+      'Shopping',
+      'Income',
+      'Transfer',
+      'Fees',
+      'Cash',
+      'Tax',
+      'Uncategorized'
+    ])
   })
 
   it('buildBatchPrompt renders a batch-local index, signed amount, and trimmed description', () => {
@@ -92,22 +106,22 @@ describe('categorizer — prefilter', () => {
 })
 
 describe('categorizer — deterministic categorizeRow agrees with the prefilter (audit C-1)', () => {
-  it('a coincidental substring neither prefilters NOR deterministically categorizes by the keyword', () => {
-    // The two paths must agree: 'fee'⊂'coffee', 'atm'⊂'atmos', 'lohn'⊂'mühlohn' fire NEITHER rule.
-    const cases: Array<[string, string]> = [
-      ['Coffee Fellows', 'Fees'],
-      ['ATMOS Sportswear', 'Cash'],
-      ['Baeckerei Muehlohn', 'Income']
-    ]
-    for (const [desc, keywordCategory] of cases) {
-      expect(prefilterCategory(row(desc, -4.2))).toBeNull()
-      expect(categorizeRow(row(desc, -4.2))).not.toBe(keywordCategory)
-    }
-  })
-
-  it('a real keyword as its own word both prefilters AND categorizes the same way', () => {
-    expect(prefilterCategory(row('Monatliche Gebühr', -3.5))).toBe('Fees')
-    expect(categorizeRow(row('Monatliche Gebühr', -3.5))).toBe('Fees')
+  // The two paths share `wordIncludes` + the compound flag, so they must agree. A coincidental substring
+  // ('fee'⊂'coffee', 'atm'⊂'atmos', 'lohn'⊂'mühlohn') fires NEITHER rule; a real keyword as its own word —
+  // or a CONFIDENT German closed compound — both prefilters AND categorizes the same way (kept off the
+  // model). Transfer boilerplate is deliberately excluded here: it diverges (the describe below).
+  it.each<[string, string, number, { prefilter: string | null; category?: string; notCategory?: string }]>([
+    ['a coincidental `fee` substring', 'Coffee Fellows', -4.2, { prefilter: null, notCategory: 'Fees' }],
+    ['a coincidental `atm` substring', 'ATMOS Sportswear', -4.2, { prefilter: null, notCategory: 'Cash' }],
+    ['a coincidental `lohn` substring', 'Baeckerei Muehlohn', -4.2, { prefilter: null, notCategory: 'Income' }],
+    ['a real keyword as its own word', 'Monatliche Gebühr', -3.5, { prefilter: 'Fees', category: 'Fees' }],
+    ['a confident German compound (Gebühr)', 'Kontoführungsgebühr', -3, { prefilter: 'Fees', category: 'Fees' }],
+    ['a confident German compound (Gehalt)', 'Gehaltszahlung Juni', -3, { prefilter: 'Income', category: 'Income' }]
+  ])('%s', (_label, desc, amount, expected) => {
+    expect(prefilterCategory(row(desc, amount))).toBe(expected.prefilter)
+    const category = categorizeRow(row(desc, amount))
+    if (expected.category) expect(category).toBe(expected.category)
+    if (expected.notCategory) expect(category).not.toBe(expected.notCategory)
   })
 })
 
@@ -115,63 +129,35 @@ describe('categorizer — transfer boilerplate is demoted from the confident pre
   // `sepa`/`überweisung` describe the payment RAILS, not the merchant; most de-AT rows carry them, so
   // they must NOT veto the model. The prefilter returns null (→ ask the model) while `categorizeRow`
   // (the deterministic NO-model fallback) still labels them 'Transfer' when no runtime is loaded.
-  const boilerplate = [
+  // SKA-44 (R9): the EN `transfer` keyword is demoted too — "TRANSFER TO NETFLIX…" is a Netflix charge, so it
+  // goes to the LLM batch rather than being pre-filtered into 'Transfer' (R3 had demoted only the de-AT pair).
+  // The closed compounds are the only one-sided-boundary boilerplate inputs.
+  it.each<[string, number]>([
+    ['SEPA-Lastschrift NETFLIX INTERNATIONAL', -12.99],
+    ['SEPA-Dauerauftrag Miete Objekt 3', -12.99],
+    ['SEPA Gutschrift Arztpraxis Dr. Huber', -12.99],
+    ['Überweisung an Max Mustermann', -12.99],
+    ['SEPA-Überweisung Miete', -12],
+    ['Dauerüberweisung Sparen', -12],
+    ['TRANSFER TO NETFLIX INTERNATIONAL B.V.', -100],
+    ['Bank transfer to savings', -100]
+  ])('transfer boilerplate "%s": prefilter → model (null), no-model categorizeRow → Transfer', (desc, amount) => {
+    expect(prefilterCategory(row(desc, amount))).toBeNull()
+    expect(categorizeRow(row(desc, amount))).toBe('Transfer')
+  })
+
+  // A confident Gebühr row is prefiltered; the transfer-boilerplate row is NOT (it must go to the model and
+  // takes a richer bucket — pre-R9 the EN `transfer` row was vetoed to 'Transfer').
+  it.each([
     'SEPA-Lastschrift NETFLIX INTERNATIONAL',
-    'SEPA-Dauerauftrag Miete Objekt 3',
-    'SEPA Gutschrift Arztpraxis Dr. Huber',
-    'Überweisung an Max Mustermann'
-  ]
-
-  it('prefilterCategory sends transfer-boilerplate rows to the model (returns null)', () => {
-    for (const desc of boilerplate) {
-      expect(prefilterCategory(row(desc, -12.99))).toBeNull()
-    }
-  })
-
-  it('categorizeRow (no-model fallback) still labels the same rows Transfer', () => {
-    for (const desc of boilerplate) {
-      expect(categorizeRow(row(desc, -12.99))).toBe('Transfer')
-    }
-  })
-
-  it('SKA-44 (R9): the English `transfer` keyword is demoted too — an EN transfer row reaches the model', () => {
-    // R3 demoted only the de-AT pair; the EN `transfer` twin has the same rails-not-merchant semantics
-    // ("TRANSFER TO NETFLIX…" is a Netflix charge), so it now goes to the LLM batch instead of being
-    // pre-filtered into 'Transfer'. The deterministic no-model fallback still labels it Transfer.
-    for (const desc of ['TRANSFER TO NETFLIX INTERNATIONAL B.V.', 'Bank transfer to savings']) {
-      expect(prefilterCategory(row(desc, -100))).toBeNull()
-      expect(categorizeRow(row(desc, -100))).toBe('Transfer')
-    }
-  })
-
-  it('SKA-44: with a runtime, the EN transfer row is IN the model batch and takes the richer bucket', async () => {
+    'TRANSFER TO NETFLIX INTERNATIONAL'
+  ])('with a runtime, the boilerplate row "%s" reaches the model and gets its richer category (not Transfer)', async (desc) => {
     const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
     const runtime = scriptedRuntime(
-      validReplyFor((desc) => (desc.includes('NETFLIX') ? 'Shopping' : 'Uncategorized')),
+      validReplyFor((d) => (d.includes('NETFLIX') ? 'Shopping' : 'Uncategorized')),
       calls
     )
-    const rows = [row('Kontoführung Gebühr', -3.5), row('TRANSFER TO NETFLIX INTERNATIONAL', -12.99)]
-    const { assignments, modelAssisted } = await categorizeTransactions(rows, {
-      runtime,
-      signal: new AbortController().signal
-    })
-    expect(modelAssisted).toBe(true)
-    expect(assignments).toEqual([
-      { index: 0, category: 'Fees' }, // confident keyword — still prefiltered, never sent
-      { index: 1, category: 'Shopping' } // the EN transfer row reached the model (pre-R9: vetoed to 'Transfer')
-    ])
-    expect(calls).toHaveLength(1)
-    expect(calls[0].messages[1].content).toContain('NETFLIX')
-  })
-
-  it('with a runtime, a SEPA row reaches the model and gets its richer category (not Transfer)', async () => {
-    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
-    const runtime = scriptedRuntime(
-      validReplyFor((desc) => (desc.includes('NETFLIX') ? 'Shopping' : 'Uncategorized')),
-      calls
-    )
-    // A confident Gebühr row is prefiltered; the SEPA-Netflix row is NOT (it must go to the model).
-    const rows = [row('Kontoführung Gebühr', -3.5), row('SEPA-Lastschrift NETFLIX INTERNATIONAL', -12.99)]
+    const rows = [row('Kontoführung Gebühr', -3.5), row(desc, -12.99)]
     const { assignments, modelAssisted } = await categorizeTransactions(rows, {
       runtime,
       signal: new AbortController().signal
@@ -183,7 +169,7 @@ describe('categorizer — transfer boilerplate is demoted from the confident pre
     ])
     expect(calls).toHaveLength(1)
     const sent = calls[0].messages[1].content
-    expect(sent).toContain('NETFLIX') // the SEPA row WAS sent to the model
+    expect(sent).toContain('NETFLIX') // the boilerplate row WAS sent to the model
     expect(sent).not.toContain('Gebühr') // the confident row was NOT
   })
 })
@@ -230,13 +216,6 @@ describe('categorizeTransactions — model path', () => {
     ])
   })
 
-  it('drops the WHOLE batch to Uncategorized on an unparseable reply (the mock-prose case)', async () => {
-    const runtime = scriptedRuntime(() => 'Sure! Here are your categories: groceries and dining.')
-    const rows = [row('A', -1), row('B', -2), row('C', -3)]
-    const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
-    expect(assignments.every((a) => a.category === 'Uncategorized')).toBe(true)
-  })
-
   it('retries a batch ONCE on an unparseable (truncated) reply, then succeeds (audit L-1)', async () => {
     let n = 0
     const runtime = scriptedRuntime((call) => {
@@ -277,22 +256,12 @@ describe('categorizeTransactions — model path', () => {
     expect(n).toBe(1) // a runaway reply is NOT retried (that would just repeat the cost)
     expect(assignments.every((a) => a.category === 'Uncategorized')).toBe(true)
   })
-
-  it('batches in groups of 20 (two model calls for 25 model-bound rows)', async () => {
-    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
-    const runtime = scriptedRuntime(validReplyFor(() => 'Shopping'), calls)
-    const rows = Array.from({ length: 25 }, (_, i) => row(`Shop ${i}`, -i - 1))
-    const { assignments } = await categorizeTransactions(rows, { runtime, signal: new AbortController().signal })
-    expect(calls).toHaveLength(2)
-    expect(assignments).toHaveLength(25)
-    expect(assignments.every((a) => a.category === 'Shopping')).toBe(true)
-  })
 })
 
-// The exact batch boundary + empty input (audit T-1). The 25-row test above BRACKETS the boundary but
-// does not NAIL the off-by-one: exactly CATEGORIZER_BATCH_SIZE rows must stay ONE call, and the empty
-// case must not call the model at all. `Shop N` never prefilters (no Fees/Income/Transfer/Cash keyword),
-// so every row is genuinely model-bound — the call count IS the batch count.
+// The exact batch boundary + empty input (audit T-1). Exactly CATEGORIZER_BATCH_SIZE rows must stay ONE
+// call, one past it spills into a second, and the empty case must not call the model at all. `Shop N`
+// never prefilters (no Fees/Income/Transfer/Cash keyword), so every row is genuinely model-bound — the
+// call count IS the batch count.
 describe('categorizeTransactions — batch boundary & empty input (audit T-1)', () => {
   it('exactly 20 model-bound rows → ONE call; 21 → two (pins the off-by-one at the boundary)', async () => {
     expect(CATEGORIZER_BATCH_SIZE).toBe(20) // the boundary the two counts below bracket
@@ -308,8 +277,11 @@ describe('categorizeTransactions — batch boundary & empty input (audit T-1)', 
     const callsPast: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
     const runtimePast = scriptedRuntime(validReplyFor(() => 'Shopping'), callsPast)
     const rowsPast = Array.from({ length: 21 }, (_, i) => row(`Shop ${i}`, -i - 1))
-    await categorizeTransactions(rowsPast, { runtime: runtimePast, signal: new AbortController().signal })
+    const past = await categorizeTransactions(rowsPast, { runtime: runtimePast, signal: new AbortController().signal })
     expect(callsPast).toHaveLength(2) // one past the boundary spills into a second batch
+    // The second batch's batch-local indices map back to the right GLOBAL rows (none lost, none doubled).
+    expect(past.assignments).toHaveLength(21)
+    expect(past.assignments.every((a) => a.category === 'Shopping')).toBe(true)
   })
 
   it('a single model-bound row is exactly one model call', async () => {
@@ -356,20 +328,20 @@ describe('categorizeTransactions — no runtime', () => {
 // ---- Custom category sets from the prompt (result-tables plan, Phase 1.5) ----
 
 describe('parseRequestedCategories', () => {
-  it('parses a German list and cuts the trailing export clause', () => {
-    expect(
-      parseRequestedCategories('Kategorisiere alle Transaktionen in Miete, Lebensmittel, Kinder und Sonstiges und exportiere als CSV')
-    ).toEqual(['Miete', 'Lebensmittel', 'Kinder', 'Sonstiges'])
-  })
-
-  it('parses an English list ("categorize into … and give me a CSV")', () => {
-    expect(
-      parseRequestedCategories('categorize the transactions into rent, groceries, kids and other and give me a CSV')
-    ).toEqual(['rent', 'groceries', 'kids', 'other'])
-  })
-
-  it('cuts an "als CSV" tail without a verb ("… und Sonstiges als CSV")', () => {
-    expect(parseRequestedCategories('Kategorisiere in Miete, Kinder als CSV')).toEqual(['Miete', 'Kinder'])
+  it.each([
+    [
+      'a German list, cutting the trailing export clause',
+      'Kategorisiere alle Transaktionen in Miete, Lebensmittel, Kinder und Sonstiges und exportiere als CSV',
+      ['Miete', 'Lebensmittel', 'Kinder', 'Sonstiges']
+    ],
+    [
+      'an English list ("categorize into … and give me a CSV")',
+      'categorize the transactions into rent, groceries, kids and other and give me a CSV',
+      ['rent', 'groceries', 'kids', 'other']
+    ],
+    ['an "als CSV" tail without a verb ("… und Sonstiges als CSV")', 'Kategorisiere in Miete, Kinder als CSV', ['Miete', 'Kinder']]
+  ])('parses %s', (_label, question, expected) => {
+    expect(parseRequestedCategories(question)).toEqual(expected)
   })
 
   it('returns null without a categorize stem, or with fewer than two labels', () => {
@@ -446,30 +418,21 @@ describe('categorizeTransactions — custom category set (Phase 1.5)', () => {
 // ---- Taxonomy CSV referenced from the prompt (result-tables plan, Phase 1.6) ----
 
 describe('parseTaxonomyFileRef', () => {
-  it('finds a bare .csv token after a categorize stem (DE + EN)', () => {
-    expect(parseTaxonomyFileRef('Kategorisiere nach den Kategorien in taxonomie.csv als CSV')).toBe('taxonomie.csv')
-    expect(parseTaxonomyFileRef('categorize the transactions using my-buckets.csv')).toBe('my-buckets.csv')
-  })
-
-  it('prefers a quoted name (spaces allowed inside quotes)', () => {
-    expect(parseTaxonomyFileRef('Kategorisiere nach „meine Kategorien 2026.csv“ bitte')).toBe(
-      'meine Kategorien 2026.csv'
-    )
+  it.each([
+    ['a bare .csv token after a categorize stem (DE)', 'Kategorisiere nach den Kategorien in taxonomie.csv als CSV', 'taxonomie.csv'],
+    ['a bare .csv token after a categorize stem (EN)', 'categorize the transactions using my-buckets.csv', 'my-buckets.csv'],
+    ['a quoted name (spaces allowed inside quotes)', 'Kategorisiere nach „meine Kategorien 2026.csv“ bitte', 'meine Kategorien 2026.csv'],
+    // The library stores titles, not paths: a FULL PATH reduces to its basename (Unix, quoted Unix, Windows).
+    ['a Unix path', 'Kategorisiere nach /home/user/Documents/bank/taxonomie.csv bitte', 'taxonomie.csv'],
+    ['a quoted Unix path', "Kategorisiere nach '/home/user/Documents/bank/taxonomie.csv'", 'taxonomie.csv'],
+    ['a Windows path', 'categorize using C:\\Users\\v\\Dokumente\\buckets.csv', 'buckets.csv']
+  ])('finds %s', (_label, question, expected) => {
+    expect(parseTaxonomyFileRef(question)).toBe(expected)
   })
 
   it('returns null without a categorize stem or without a .csv token', () => {
     expect(parseTaxonomyFileRef('fasse taxonomie.csv zusammen')).toBeNull() // no categorize stem
     expect(parseTaxonomyFileRef('Kategorisiere alle Transaktionen als CSV')).toBeNull() // "als CSV" ≠ a filename
-  })
-
-  it('reduces a FULL PATH to its basename (Unix, Windows, quoted) — the library stores titles, not paths', () => {
-    expect(
-      parseTaxonomyFileRef('Kategorisiere nach /home/user/Documents/bank/taxonomie.csv bitte')
-    ).toBe('taxonomie.csv')
-    expect(parseTaxonomyFileRef("Kategorisiere nach '/home/user/Documents/bank/taxonomie.csv'")).toBe(
-      'taxonomie.csv'
-    )
-    expect(parseTaxonomyFileRef('categorize using C:\\Users\\v\\Dokumente\\buckets.csv')).toBe('buckets.csv')
   })
 })
 

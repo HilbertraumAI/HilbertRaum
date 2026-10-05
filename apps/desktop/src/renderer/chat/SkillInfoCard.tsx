@@ -19,7 +19,7 @@ export interface SkillInfoCardProps {
   /** Hide the card (it stays available behind the picker's ⓘ). */
   onClose: () => void
   /** Open the skill's full detail on the Skills screen ("Learn more"). */
-  onLearnMore?: () => void
+  onLearnMore: () => void
 }
 
 export function SkillInfoCard({ skill, onClose, onLearnMore }: SkillInfoCardProps): JSX.Element {
@@ -54,14 +54,10 @@ export function SkillInfoCard({ skill, onClose, onLearnMore }: SkillInfoCardProp
       )}
       <p className="skill-info-foot hint">
         {t('chat.skill.info.perTurn')}
-        {onLearnMore && (
-          <>
-            {' '}
-            <button type="button" className="skill-info-more" onClick={onLearnMore}>
-              {t('chat.skill.info.learnMore')}
-            </button>
-          </>
-        )}
+        {' '}
+        <button type="button" className="skill-info-more" onClick={onLearnMore}>
+          {t('chat.skill.info.learnMore')}
+        </button>
       </p>
     </div>
   )

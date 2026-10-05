@@ -45,6 +45,7 @@ import { registerCollectionsIpc } from '../../src/main/ipc/registerCollectionsIp
 import { registerZimIpc } from '../../src/main/ipc/registerZimIpc'
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
 import { registerLocalApiIpc } from '../../src/main/ipc/registerLocalApiIpc'
+import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
 import { IPC } from '../../src/shared/ipc'
 import { initLogging } from '../../src/main/services/logging'
 import type { AppContext } from '../../src/main/services/context'
@@ -129,7 +130,9 @@ const MODULES: Array<{
   },
   // local-api wave P4: all three channels read or write the access-key table in the
   // workspace DB (mint / copy / rotate) — none may answer a locked vault.
-  { name: 'registerLocalApiIpc', register: registerLocalApiIpc, exempt: new Set<string>() }
+  { name: 'registerLocalApiIpc', register: registerLocalApiIpc, exempt: new Set<string>() },
+  // Skills: all 18 channels open with requireUnlocked(); none are exempt.
+  { name: 'registerSkillsIpc', register: registerSkillsIpc, exempt: new Set<string>() }
 ]
 
 // DX-4 (full-audit-2026-06-29 follow-up, Phase 7): the locked-vault posture of every register*Ipc
@@ -146,7 +149,6 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerImagesIpc: 'images-ipc.test.ts (locked-vault rejection)',
   registerTranslateIpc:
     'translate-ipc.test.ts (locked-vault rejection of translateStart — a start lazily respawns the suspended sidecar; cancel/getActive are safe non-DB reads, intentionally ungated)',
-  registerSkillsIpc: 'skills-ipc.test.ts (locked-vault rejection; DB-touching, requireUnlocked-gated)',
   registerWorkspaceIpc:
     'workspace-ipc.test.ts — IS the lock/unlock/create/rekey gate; unlock + getStatus MUST work pre-unlock (no requireUnlocked by design)',
   registerDictationIpc:

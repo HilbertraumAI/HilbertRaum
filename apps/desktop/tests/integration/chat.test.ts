@@ -29,6 +29,7 @@ import {
 } from '../../src/main/services/chat'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
+import { getSkill, reconcileSkills } from '../../src/main/services/skills/registry'
 import type { Db } from '../../src/main/services/db'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import type { Citation, CoverageInfo, KnowledgePackOutcome } from '../../src/shared/types'
@@ -251,6 +252,24 @@ describe('getLatestMessage — LIMIT-1 twin of listMessages (CB-6)', () => {
     const db = freshDb()
     const conv = createConversation(db, {})
     expect(getLatestMessage(db, conv.id)).toBeNull()
+  })
+
+  it('matches on a skill-stamped assistant tail (the skills JOIN column is populated)', () => {
+    const db = freshDb()
+    // Reconcile the shipped app skills so the stamped id resolves through the real skills table.
+    reconcileSkills(db, {
+      appSkillsDir: join(__dirname, '../../../../app-skills'),
+      userSkillsDir: mkdtempSync(join(tmpdir(), 'hilbertraum-chat-skills-'))
+    })
+    const skill = getSkill(db, 'app:bank-statement')!
+    expect(skill.title).toBeTruthy()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Summarize.' })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'Done.', skillId: skill.installId })
+    const twin = getLatestMessage(db, conv.id)
+    expect(twin).toEqual(listMessages(db, conv.id).at(-1))
+    expect(twin?.skillId).toBe('app:bank-statement')
+    expect(twin?.skillTitle).toBe(skill.title)
   })
 })
 

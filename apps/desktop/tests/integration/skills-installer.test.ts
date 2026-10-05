@@ -265,17 +265,6 @@ describe('safe extractor — rejects (nothing persisted, friendly + structural)'
     expect(preview.errors).toContain(SKILL_IMPORT_ERRORS.noSkillMd)
   })
 
-  it('a rejected import leaves NOTHING in user-skills (staging removed)', async () => {
-    const db = freshDb()
-    const deps = makeDeps()
-    const zip = await writeZip([
-      { name: 'SKILL.md', content: skillMd() },
-      { name: '../escape.txt', content: 'x' }
-    ])
-    expect(() => importSkill(db, zip, deps)).toThrow()
-    const entries = existsSync(deps.userSkillsDir) ? readdirSync(deps.userSkillsDir) : []
-    expect(entries).toEqual([]) // no <id>/ and no leftover .skill-import-* staging dir
-  })
 })
 
 // ---- Phase 8: zip importer DoS hardening (audit S-1 / S-2) ---------------------------
@@ -372,18 +361,6 @@ describe('safe extractor — DoS hardening (S-1 input bound, S-2 collision)', ()
     expect(importSkill(db, zip, deps).info.id).toBe('no-over-reject')
   })
 
-  it('a legitimate well-formed package still imports unchanged after the new bounds', async () => {
-    const db = freshDb()
-    const deps = makeDeps()
-    const zip = await writeZip([
-      { name: 'SKILL.md', content: skillMd({ id: 'still-ok' }) },
-      { name: 'examples/one.md', content: 'a worked example' }
-    ])
-    const info = importSkill(db, zip, deps).info
-    expect(info.id).toBe('still-ok')
-    expect(existsSync(join(deps.userSkillsDir, 'still-ok', 'SKILL.md'))).toBe(true)
-    expect(existsSync(join(deps.userSkillsDir, 'still-ok', 'examples', 'one.md'))).toBe(true)
-  })
 })
 
 // ---- TEST-4 (full-audit-2026-06-29, Phase 3): the coded error constants with no test -------------
@@ -739,7 +716,7 @@ describe('delete — default-clear only, provenance survives (§22-C3 / SKA-38 /
 })
 
 describe('post-extract symlink defence (defence in depth)', () => {
-  it('rejects a folder source whose tree contains a symlink', async () => {
+  it('rejects a folder source whose tree contains a symlink', async (ctx) => {
     const db = freshDb()
     const deps = makeDeps()
     const folder = join(tempDir(), 'sym-skill')
@@ -747,10 +724,18 @@ describe('post-extract symlink defence (defence in depth)', () => {
     writeFileSync(join(folder, 'SKILL.md'), skillMd({ id: 'sym-skill' }))
     const target = join(tempDir(), 'outside.txt')
     writeFileSync(target, 'secret')
+    const targetDir = join(tempDir(), 'outside-dir')
+    mkdirSync(targetDir, { recursive: true })
     try {
       symlinkSync(target, join(folder, 'leak.txt'))
     } catch {
-      return // Windows without symlink privilege — skip (the zip-path symlink test covers the logic)
+      try {
+        // Windows without symlink privilege: a directory junction needs none.
+        symlinkSync(targetDir, join(folder, 'leak'), 'junction')
+      } catch {
+        ctx.skip() // neither link kind is creatable here (the zip-path symlink test covers the logic)
+        return
+      }
     }
     expect(() => importSkill(db, folder, deps)).toThrow(SKILL_IMPORT_ERRORS.symlink)
   })

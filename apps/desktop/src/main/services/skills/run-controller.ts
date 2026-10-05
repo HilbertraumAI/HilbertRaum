@@ -96,17 +96,10 @@ export class SkillRunController {
   // run on that document replaces it).
   private runs = new Map<string, ActiveRun>()
 
-  /**
-   * True while a run is running (not terminal). With a `documentId`, scoped to THAT document's slot;
-   * without one, true if ANY document has a run in flight.
-   */
-  isRunning(documentId?: string): boolean {
-    if (documentId !== undefined) {
-      const r = this.runs.get(documentId)
-      return r != null && !TERMINAL.has(r.state.state)
-    }
-    for (const r of this.runs.values()) if (!TERMINAL.has(r.state.state)) return true
-    return false
+  /** True while a run on THAT document's slot is running (not terminal). */
+  isRunning(documentId: string): boolean {
+    const r = this.runs.get(documentId)
+    return r != null && !TERMINAL.has(r.state.state)
   }
 
   /**
@@ -227,30 +220,15 @@ export class SkillRunController {
     }
   }
 
-  /**
-   * Cancel a run by handle. With no handle, cancels every in-flight run — INTERNAL/TEST-ONLY since
-   * per-document concurrency (A2): the IPC boundary requires a non-empty handle (SKA-25), so a
-   * renderer can never blast every window's runs; only in-process callers/tests use the no-arg form.
-   */
-  cancel(runHandle?: string | null): void {
-    if (runHandle) {
-      const r = this.findByHandle(runHandle)
-      if (r && !TERMINAL.has(r.state.state)) r.controller.abort()
-      return
-    }
-    for (const r of this.runs.values()) if (!TERMINAL.has(r.state.state)) r.controller.abort()
+  /** Cancel one run by handle (SKA-25: the IPC boundary requires a non-empty handle). */
+  cancel(runHandle: string): void {
+    const r = this.findByHandle(runHandle)
+    if (r && !TERMINAL.has(r.state.state)) r.controller.abort()
   }
 
-  /**
-   * Drop a terminal run once the renderer has shown its outcome (the acknowledge precedent). With no
-   * handle, drops every terminal run. A still-running handle is a no-op.
-   */
-  clear(runHandle?: string | null): void {
-    if (runHandle) {
-      const r = this.findByHandle(runHandle)
-      if (r && TERMINAL.has(r.state.state)) this.runs.delete(r.documentId)
-      return
-    }
-    for (const [key, r] of this.runs) if (TERMINAL.has(r.state.state)) this.runs.delete(key)
+  /** Drop a terminal run once the renderer has shown its outcome (the acknowledge precedent). A still-running handle is a no-op. */
+  clear(runHandle: string): void {
+    const r = this.findByHandle(runHandle)
+    if (r && TERMINAL.has(r.state.state)) this.runs.delete(r.documentId)
   }
 }

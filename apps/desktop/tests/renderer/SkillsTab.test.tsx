@@ -3,7 +3,7 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup, within, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { SkillsTab } from '../../src/renderer/screens/settings/SkillsTab'
-import { requestSkillDetail, resetSkillDetailRequestForTests } from '../../src/renderer/lib/skillDetailRequest'
+import { requestSkillDetail, clearSkillDetailRequest } from '../../src/renderer/lib/skillDetailRequest'
 import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AppSettings, type SkillInfo, type SkillPreview } from '../../src/shared/types'
@@ -68,7 +68,7 @@ function renderTab(): void {
 
 afterEach(() => {
   cleanup()
-  resetSkillDetailRequestForTests()
+  clearSkillDetailRequest()
 })
 
 describe('SkillsTab — list + empty state', () => {
@@ -372,7 +372,11 @@ describe('SkillsTab — import preview (§15: permission summary before confirm)
     await user.click(await screen.findByRole('menuitem', { name: /From a file/ }))
     await user.click(within(await screen.findByRole('dialog')).getByRole('button', { name: 'Add skill' }))
     // The precise localized reason — not the generic failure toast.
-    expect(await screen.findByText(/needs developer mode|developer mode to install an older version/i)).toBeInTheDocument()
+    expect(
+      await screen.findByText(
+        'A newer version of this skill is already installed. Turn on developer mode to install an older version.'
+      )
+    ).toBeInTheDocument()
     expect(screen.queryByText('This skill couldn’t be added.')).not.toBeInTheDocument()
   })
 
@@ -467,10 +471,24 @@ describe('SkillsTab — reconcile-error notice (SKA-32)', () => {
     expect(await screen.findByText(/2 skill folders could not be read/)).toBeInTheDocument()
   })
 
-  it('shows no notice for a clean tree, and tolerates an absent status (older main)', async () => {
+  it('shows no notice for a clean tree', async () => {
     stubApi({
       listSkills: vi.fn(async () => [skill()]),
       getSkillReconcileStatus: vi.fn(async () => ({ errorCount: 0, errorCodes: [] }))
+    })
+    renderTab()
+    await screen.findByText('Bank statement helper')
+    expect(screen.queryByText(/could not be read/)).not.toBeInTheDocument()
+  })
+
+  it('tolerates an unreadable status (older main): the list still loads, no notice', async () => {
+    // An older main has no handler, so the status read rejects. The rejection must stay inside the
+    // best-effort read (an escaped one fails the run as an unhandled rejection).
+    stubApi({
+      listSkills: vi.fn(async () => [skill()]),
+      getSkillReconcileStatus: vi.fn(async () => {
+        throw new Error("No handler registered for 'skills:reconcileStatus'")
+      })
     })
     renderTab()
     await screen.findByText('Bank statement helper')

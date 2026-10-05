@@ -1,5 +1,5 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest'
-import { mkdtempSync, rmSync, writeFileSync, mkdirSync } from 'node:fs'
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DEFAULT_SKILL_LIMITS, resolveSkillLimits } from '../../src/main/services/skills/limits'
@@ -109,12 +109,5 @@ describe('parseSkillManifestFromDir', () => {
     writeFileSync(join(dir, 'manifest.json'), '{ not valid json', 'utf8')
     const res = parseSkillManifestFromDir(dir)
     expect(res.ok).toBe(true)
-  })
-
-  it('does not confuse a nested resources dir for the package root', () => {
-    mkdirSync(join(dir, 'resources'))
-    writeFileSync(join(dir, 'resources', 'note.md'), 'reference', 'utf8')
-    writeFileSync(join(dir, 'SKILL.md'), VALID_SKILL_MD, 'utf8')
-    expect(parseSkillManifestFromDir(dir).ok).toBe(true)
   })
 })

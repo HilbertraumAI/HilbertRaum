@@ -30,7 +30,7 @@ import { createQueuedDocument, documentsDir, processDocument } from '../../src/m
 import { createSkillRegistry, getSkill } from '../../src/main/services/skills/registry'
 import { createConversation, listMessages } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
-import { registerBuiltinSkillAnalysisHandlers, clearSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
+import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { SCAN_MARKER_TYPE } from '../../src/main/services/analysis/extract'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
@@ -102,6 +102,25 @@ function writeUserToolSkill(userSkillsDir: string): void {
   writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
 }
 
+// A minimal app-owned ACTION skill whose analysis handler is `mode:'routing'` (document-redaction /
+// document-edit): it reads no content, so the chat path must skip the fully-chunked refusal for it.
+function writeRoutingSkill(appSkillsDir: string, id: string, tool: string): void {
+  const d = join(appSkillsDir, id)
+  mkdirSync(d, { recursive: true })
+  const lines = [
+    '---',
+    `id: ${id}`,
+    `title: ${id}`,
+    'description: A routing action skill.',
+    'version: 1.0.0',
+    'kind: tool',
+    `allowedTools: [${tool}]`,
+    '---',
+    'Point the user at the run button.'
+  ]
+  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+}
+
 interface Harness {
   db: Db
   conversationId: string
@@ -114,7 +133,14 @@ interface Harness {
  *  analysis registry, wired through the real `askDocuments` handler. `fullyChunked: false` clears the
  *  ingestion-set marker to simulate a legacy (not exhaustively analysable) index. */
 async function makeHarness(
-  opts: { fullyChunked?: boolean; text?: string; triggers?: boolean; docFile?: string; userToolSkill?: boolean } = {}
+  opts: {
+    fullyChunked?: boolean
+    text?: string
+    triggers?: boolean
+    docFile?: string
+    userToolSkill?: boolean
+    routingSkill?: { id: string; tool: string }
+  } = {}
 ): Promise<Harness> {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ragskill-'))
   const workspacePath = join(root, 'workspace')
@@ -123,6 +149,7 @@ async function makeHarness(
   mkdirSync(appSkillsDir, { recursive: true })
   mkdirSync(userSkillsDir, { recursive: true })
   if (opts.userToolSkill) writeUserToolSkill(userSkillsDir)
+  else if (opts.routingSkill) writeRoutingSkill(appSkillsDir, opts.routingSkill.id, opts.routingSkill.tool)
   else writeBankSkill(appSkillsDir, { triggers: opts.triggers })
 
   const db = openDatabase(join(root, 'test.sqlite'))
@@ -191,7 +218,6 @@ async function makeHarness(
 }
 
 beforeEach(() => {
-  clearSkillAnalysisHandlers()
   inFlightStreams.clear()
 })
 
@@ -247,6 +273,33 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     expect(runs.n).toBe(0)
   })
 
+  // Routing handlers read no content, so the D45 refusal gate skips them: a not-fully-chunked document
+  // still gets the button-pointer answer, never refusePartial and never a model call.
+  it.each([
+    {
+      skill: { id: 'document-redaction', tool: 'redact_document' },
+      question: 'anonymize this document',
+      answerKey: 'skills.redactionRouting.answer',
+      buttonKey: 'chat.skill.tool.redactDocument'
+    },
+    {
+      skill: { id: 'document-edit', tool: 'apply_document_edits' },
+      question: 'find and replace Grocery with Shop',
+      answerKey: 'skills.editRouting.answer',
+      buttonKey: 'chat.skill.tool.applyDocumentEdits'
+    }
+  ] as const)(
+    'routing skill $skill.id: a not-fully-chunked document is NOT refused — the button pointer, no model',
+    async ({ skill, question, answerKey, buttonKey }) => {
+      const h = await makeHarness({ fullyChunked: false, routingSkill: skill })
+      const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, `app:${skill.id}`)
+      const msg = result as Message
+      expect(msg.content).toBe(t('en', answerKey, { button: t('en', buttonKey) }))
+      expect(msg.content).not.toBe(t('en', 'skills.analysis.refusePartial'))
+      expect(h.runtime.calls).toBe(0)
+    }
+  )
+
   it('relevance path is byte-unchanged for an off-topic question (no handler fire)', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
@@ -265,17 +318,6 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     // And no whole-document tool was auto-run.
     const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
     expect(runs.n).toBe(0)
-  })
-
-  it('export is never auto-run on the exhaustive path (export stays confirm-gated)', async () => {
-    const h = await makeHarness({ fullyChunked: true })
-    await invoke(handlers, IPC.askDocuments, h.conversationId, 'summarize and reconcile', BANK_INSTALL_ID)
-
-    const toolNames = h.audit.map((e) => e.meta?.toolName)
-    expect(toolNames).toContain('extract_transactions')
-    expect(toolNames).toContain('summarize_cashflow')
-    expect(toolNames).toContain('validate_statement_balances')
-    expect(toolNames).not.toContain('export_transactions_csv')
   })
 
   it('preserves the single-locked-slot streaming contract (token + done emitted, registry cleared)', async () => {
@@ -349,22 +391,6 @@ describe('askDocuments — bank grounded-data + inline format (W4)', () => {
     expect(toolNames).toContain('extract_transactions')
     expect(toolNames).toContain('validate_statement_balances')
     expect(toolNames).not.toContain('export_transactions_csv')
-  })
-
-  it('follow-up regression: an explanatory "warum stimmen die Summen nicht?" is a DIFFERENT (model) answer, not the byte-identical template', async () => {
-    const h = await makeHarness({ fullyChunked: true })
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId,
-      'warum stimmen die Summen nicht?',
-      BANK_INSTALL_ID
-    )
-    const msg = result as Message
-    expect(h.runtime.calls).toBe(1)
-    expect(msg.content).toContain('Model answer.')
-    // NOT the deterministic template's headline count line.
-    expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
   })
 
   it('format path: "as JSON" serializes the statement inline (no model)', async () => {
@@ -1070,10 +1096,9 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     'Ausgaben Statement EUR\nOpening balance 2.000,00\n2026-01-02 Miete -800,00 1.200,00\n' +
     'Closing balance 1.200,00'
 
-  it('an inflected German count question WITH extract data takes the deterministic coverage-extract route (BE-3)', async () => {
-    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
-    // Seed a __scan__ completeness marker + one 'amount' record, the shape a finished deep-index
-    // extract pass leaves behind (extractionsExistInScope gates on the marker).
+  // Seed a __scan__ completeness marker + one 'amount' record, the shape a finished deep-index
+  // extract pass leaves behind (extractionsExistInScope gates on the marker).
+  const seedAmountExtract = (h: Harness): void => {
     const chunkId = (
       h.db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(h.docId) as { id: string }
     ).id
@@ -1087,6 +1112,11 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     }
     insertRec(SCAN_MARKER_TYPE, '', 'ok')
     insertRec('amount', '45,90 EUR', '45.90')
+  }
+
+  it('an inflected German count question WITH extract data takes the deterministic coverage-extract route (BE-3)', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
+    seedAmountExtract(h)
 
     const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
     const msg = result as Message
@@ -1095,6 +1125,8 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     expect(h.runtime.calls).toBe(0)
     expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
     expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
+    // #54: a plain count question keeps its listing WITHOUT the aggregation shape hint (byte-unchanged).
+    expect(msg.content).not.toContain(t('en', 'analysis.listing.aggregationHint'))
   })
 
   it('the same German count question WITHOUT extract data leads with the deep-index hint (BE-3)', async () => {
@@ -1118,19 +1150,7 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   // reverse the ratified default-off auto-fire posture, a bare redirect would withhold data).
   it('#54: the aggregation question WITH extract data leads the listing with the shape hint + skill pointer', async () => {
     const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
-    const chunkId = (
-      h.db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(h.docId) as { id: string }
-    ).id
-    const insertRec = (recordType: string, value: string, normalized: string): void => {
-      h.db
-        .prepare(
-          `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(randomUUID(), h.docId, chunkId, recordType, value, normalized, `hash-${normalized}`, '2026-07-10T00:00:00.000Z')
-    }
-    insertRec(SCAN_MARKER_TYPE, '', 'ok')
-    insertRec('amount', '45,90 EUR', '45.90')
+    seedAmountExtract(h)
 
     const { result } = await invoke(
       handlers,
@@ -1145,29 +1165,6 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     expect(h.runtime.calls).toBe(0)
     expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
     expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
-    expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
-  })
-
-  it('#54: a plain count question keeps its listing WITHOUT the shape hint (byte-unchanged)', async () => {
-    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
-    const chunkId = (
-      h.db.prepare('SELECT id FROM chunks WHERE document_id = ? LIMIT 1').get(h.docId) as { id: string }
-    ).id
-    const insertRec = (recordType: string, value: string, normalized: string): void => {
-      h.db
-        .prepare(
-          `INSERT INTO extraction_records (id, document_id, chunk_id, record_type, value_text, normalized_value, content_hash, created_at)
-           VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
-        )
-        .run(randomUUID(), h.docId, chunkId, recordType, value, normalized, `hash-${normalized}`, '2026-07-10T00:00:00.000Z')
-    }
-    insertRec(SCAN_MARKER_TYPE, '', 'ok')
-    insertRec('amount', '45,90 EUR', '45.90')
-
-    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
-    const msg = result as Message
-    expect(h.runtime.calls).toBe(0)
-    expect(msg.content).not.toContain(t('en', 'analysis.listing.aggregationHint'))
     expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
   })
 

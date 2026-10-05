@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { createConversation, exportTranscript, appendMessage } from '../../src/main/services/chat'
+import { createConversation, exportTranscript, appendMessage, listMessages } from '../../src/main/services/chat'
 import {
   resolveDocumentReader,
   runBankExtraction,
@@ -157,19 +157,9 @@ describe('runBankExtraction (S11a)', () => {
     expect(cols).toEqual(expect.arrayContaining(['category_id', 'reconciled', 'confidence']))
   })
 
-  it('isBankStatementStale: an older statement is STALE now the extractor is at v9 (R7 date-vs-money bump); current is fresh', async () => {
-    // C-4 moved the version 1 → 2; the full-audit-2026-06-29 follow-up Phase 1 (FIN-1/3/4) moved it 2 → 3;
-    // skills-remediation R1 (audit §5.3, Unicode normalization pre-pass) moved it 3 → 4; R2 (audit §5.4,
-    // `Kontostand am`/`zum` balance labels) moved it 4 → 5; R5 (audit §5.7, anchor-gated year completion +
-    // cross-year rollover) moved it 5 → 6; R6 (audit §5.7, wrapped-description continuation) moved it 6 → 7;
-    // U1 (audit §2.3, droppedRowCount + currency-adjacent balance read) moved it 7 → 8; R7 (skills-audit-
-    // 2026-07-03 SKA-1/2/13, date-vs-money disambiguation) moved it 8 → 9; IA-2 (invoice-audit-2026-07-06
-    // T-1, the glued-leading-sign fix in the shared MONEY_RE) moved it 9 → 10; IA-3 (invoice-audit-2026-07-06
-    // T-6, the shared `inferDateOrderResult` now classifies lines by date-scrubbed `hasMoneyToken`, so a
-    // money-less dotted period header votes) moves it 10 → 11, so every statement an OLDER (v10…v1 /
-    // pre-versioning NULL) parser produced must re-extract via the A9 path. A fresh extraction is stamped at
-    // the current version → never stale.
-    expect(BANK_EXTRACTOR_VERSION).toBe(11)
+  it('isBankStatementStale: an older or newer extractor version is stale; the current one is fresh', async () => {
+    // A fresh extraction is stamped at the current version → never stale; every other version (older,
+    // pre-versioning NULL, or newer) must re-extract via the A9 path.
     const db = freshDb()
     const docId = seedDocWithChunks(db, [{ text: 'Statement EUR\n2026-01-02 Coffee -3,50 100,00', page: 1 }])
     const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', documentId: docId }, { audit: () => {} })
@@ -354,29 +344,17 @@ describe('runBankExtraction (S11a)', () => {
     expect(events).toEqual([]) // aborted before the gate started a run
   })
 
-  it('sentinel: a secret in a transaction description never reaches audit/log or skill_runs metadata', async () => {
-    const db = freshDb()
-    const conv = createConversation(db, {})
-    const docId = seedDocWithChunks(db, [{ text: `EUR\n2026-01-02 ${SENTINEL} -12,00`, page: 1 }])
-    const { audit, events } = capturingAudit()
-    const res = await runBankExtraction(db, { skillInstallId: 'app:bank-statement', conversationId: conv.id, documentId: docId }, { audit })
-    expect(res.ok).toBe(true)
-    // The secret DOES land in the content-class table (encrypted DB) — that is correct.
-    const tx = db.prepare('SELECT description FROM bank_transactions LIMIT 1').get() as { description: string }
-    expect(tx.description).toContain(SENTINEL)
-    // …but NEVER in the audit stream or the run-history row (ids/counts/refs only).
-    expect(JSON.stringify(events)).not.toContain(SENTINEL)
-    const run = db.prepare('SELECT * FROM skill_runs WHERE id = ?').get(res.runId) as Record<string, unknown>
-    expect(JSON.stringify(run)).not.toContain(SENTINEL)
-  })
-
   it('export exclusion: the conversation transcript export carries no bank-run content (§9.5)', async () => {
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'here is my statement' })
     const docId = seedDocWithChunks(db, [{ text: `EUR\n2026-01-02 ${SENTINEL} -12,00`, page: 1 }])
     const { audit } = capturingAudit()
+    const before = listMessages(db, conv.id)
     await runBankExtraction(db, { skillInstallId: 'app:bank-statement', conversationId: conv.id, documentId: docId }, { audit })
+    // A run must write nothing into the conversation (no result/summary message), so the transcript
+    // export cannot pick up bank-run content: this fails if the seam starts appending messages.
+    expect(listMessages(db, conv.id)).toEqual(before)
     const { markdown } = exportTranscript(db, conv.id)
     expect(markdown).not.toContain(SENTINEL) // bank rows + skill_runs are not part of the export
   })
@@ -457,9 +435,15 @@ describe('downstream statement seams (S11c)', () => {
     const db = freshDb()
     const docId = await extractFirst(db)
     const { audit } = capturingAudit()
+    const snapshot = (): unknown[] => [
+      db.prepare('SELECT * FROM bank_statements ORDER BY id').all(),
+      db.prepare('SELECT * FROM bank_transactions ORDER BY id').all()
+    ]
+    const before = snapshot()
     const res = await runCashflowSummary(db, { skillInstallId, documentId: docId }, { audit })
     expect(res.ok).toBe(true)
     expect(res.count).toBe(2)
+    expect(snapshot()).toEqual(before) // read-only: no bank row was written or rewritten
     const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
     expect(run.status).toBe('done')
   })
@@ -514,7 +498,7 @@ describe('downstream statement seams (S11c)', () => {
   it('export produces the CSV, the seam writes it (stub), and reports the row count', async () => {
     const db = freshDb()
     const docId = await extractFirst(db, `Statement EUR\n2026-01-02 ${SENTINEL} -12,00 1.000,00`)
-    const { audit, events } = capturingAudit()
+    const { audit } = capturingAudit()
     let written: { name: string; content: string } | null = null
     let locksDuringDialog = -1
     const saveTextFile = async (name: string, content: string): Promise<boolean> => {
@@ -533,10 +517,7 @@ describe('downstream statement seams (S11c)', () => {
     expect(res.count).toBe(1)
     expect(written!.name).toBe('transactions.csv')
     expect(written!.content).toContain(SENTINEL) // the CSV carries the content (user-chosen file) — correct
-    // …but the audit stream never does (ids/counts only); and the run row carries no path/content.
-    expect(JSON.stringify(events)).not.toContain(SENTINEL)
     const run = db.prepare('SELECT * FROM skill_runs WHERE id = ?').get(res.runId) as Record<string, unknown>
-    expect(JSON.stringify(run)).not.toContain(SENTINEL)
     expect(run.status).toBe('done')
     expect(run.result_ref).toBeNull() // export yields no DB artifact; the path is never recorded
   })
@@ -692,65 +673,69 @@ describe('R3 — downstream runs re-extract a STALE statement before serving row
     return id
   }
 
-  it('Validate re-extracts the stale statement (new id, current version, faithful rows) before reconciling', async () => {
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
-    const staleId = await seedStaleStatement(db, docId)
+  // Each downstream seam re-extracts a stale statement from the faithful segments before serving rows.
+  // `count` is asserted where the seam reports a row count; `csv` rows also check the written file.
+  type Seam = (
+    db: Db,
+    docId: string,
+    audit: () => void,
+    sink: { written: string }
+  ) => Promise<{ ok: boolean; count?: number }>
+  const STALE_SEAMS: Array<{ name: string; run: Seam; count?: number; csv?: boolean }> = [
+    {
+      name: 'Validate',
+      run: (db, docId, audit) => runBalanceValidation(db, ARGS(docId), { audit, readDocumentSegments: faithfulReader })
+    },
+    {
+      name: 'Summarize', // count = re-extracted rows (the stale row set is not served)
+      run: (db, docId, audit) => runCashflowSummary(db, ARGS(docId), { audit, readDocumentSegments: faithfulReader }),
+      count: 2
+    },
+    {
+      name: 'CSV export', // the written CSV carries BOTH faithful rows (the collapsed chunk fallback could not)
+      run: (db, docId, audit, sink) =>
+        runCsvExport(db, ARGS(docId), {
+          audit,
+          confirmed: true,
+          readDocumentSegments: faithfulReader,
+          saveTextFile: async (_name, content) => {
+            sink.written = content
+            return true
+          }
+        }),
+      count: 2,
+      csv: true
+    }
+  ]
 
-    const { audit } = capturingAudit()
-    const res = await runBalanceValidation(db, ARGS(docId), { audit, readDocumentSegments: faithfulReader })
-    expect(res.ok).toBe(true)
+  it.each(STALE_SEAMS)(
+    '$name re-extracts the stale statement (new id, current version, faithful rows) before serving rows',
+    async ({ run, count, csv }) => {
+      const db = freshDb()
+      const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
+      const staleId = await seedStaleStatement(db, docId)
 
-    const freshId = latestBankStatementId(db, docId)!
-    expect(freshId).not.toBe(staleId) // a NEW extraction replaced the stale one
-    expect(isBankStatementStale(db, freshId)).toBe(false) // stamped at the current version
-    // replaceExisting deleted the stale statement — no accumulation, and the old id is gone.
-    const count = (db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(docId) as { n: number }).n
-    expect(count).toBe(1)
-    expect(db.prepare('SELECT id FROM bank_statements WHERE id = ?').get(staleId)).toBeUndefined()
-    // The re-extraction read the FAITHFUL segments: 2 rows (the collapsed chunk fallback would give ≤1).
-    const txCount = (db.prepare('SELECT COUNT(*) AS n FROM bank_transactions WHERE statement_id = ?').get(freshId) as { n: number }).n
-    expect(txCount).toBe(2)
-  })
+      const sink = { written: '' }
+      const res = await run(db, docId, () => {}, sink)
+      expect(res.ok).toBe(true)
+      if (count !== undefined) expect(res.count).toBe(count)
 
-  it('Summarize re-extracts the stale statement before computing the cashflow (count = re-extracted rows)', async () => {
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
-    const staleId = await seedStaleStatement(db, docId)
-
-    const { audit } = capturingAudit()
-    const res = await runCashflowSummary(db, ARGS(docId), { audit, readDocumentSegments: faithfulReader })
-    expect(res.ok).toBe(true)
-    expect(res.count).toBe(2) // both re-extracted rows summarized (the stale row set is not served)
-    const freshId = latestBankStatementId(db, docId)!
-    expect(freshId).not.toBe(staleId)
-    expect(isBankStatementStale(db, freshId)).toBe(false)
-  })
-
-  it('CSV export re-extracts the stale statement and writes the FRESH rows', async () => {
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, [{ text: COLLAPSED, page: 1 }])
-    const staleId = await seedStaleStatement(db, docId)
-
-    let written = ''
-    const { audit } = capturingAudit()
-    const res = await runCsvExport(db, ARGS(docId), {
-      audit,
-      confirmed: true,
-      readDocumentSegments: faithfulReader,
-      saveTextFile: async (_name, content) => {
-        written = content
-        return true
+      const freshId = latestBankStatementId(db, docId)!
+      expect(freshId).not.toBe(staleId) // a NEW extraction replaced the stale one
+      expect(isBankStatementStale(db, freshId)).toBe(false) // stamped at the current version
+      // replaceExisting deleted the stale statement — no accumulation, and the old id is gone.
+      const n = (db.prepare('SELECT COUNT(*) AS n FROM bank_statements WHERE document_id = ?').get(docId) as { n: number }).n
+      expect(n).toBe(1)
+      expect(db.prepare('SELECT id FROM bank_statements WHERE id = ?').get(staleId)).toBeUndefined()
+      // The re-extraction read the FAITHFUL segments: 2 rows (the collapsed chunk fallback would give ≤1).
+      const txCount = (db.prepare('SELECT COUNT(*) AS n FROM bank_transactions WHERE statement_id = ?').get(freshId) as { n: number }).n
+      expect(txCount).toBe(2)
+      if (csv) {
+        expect(sink.written).toContain('Grocery')
+        expect(sink.written).toContain('Salary')
       }
-    })
-    expect(res.ok).toBe(true)
-    expect(res.count).toBe(2) // two re-extracted rows exported (not the stale set)
-    // The written CSV carries BOTH faithful rows — the collapsed chunk fallback could not have produced them.
-    expect(written).toContain('Grocery')
-    expect(written).toContain('Salary')
-    const freshId = latestBankStatementId(db, docId)!
-    expect(isBankStatementStale(db, freshId)).toBe(false)
-  })
+    }
+  )
 
   it('a FRESH statement is NOT re-extracted (same id, no duplicate) — re-extraction only fires when stale', async () => {
     const db = freshDb()

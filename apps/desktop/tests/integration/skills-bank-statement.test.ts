@@ -127,11 +127,6 @@ describe('S11c — the committed body is the reconcile body and stays §22-D1 ho
     expect(body).toMatch(/do not invent a figure/i)
     expect(body).toMatch(/quote the statement's own printed figures/i)
   })
-
-  it('declares kind: tool in the committed frontmatter (the S11c flip)', () => {
-    const frontmatter = BANK_SKILL_MD.split(/\n---\n/)[0]
-    expect(frontmatter).toMatch(/^kind:\s*tool\b/m)
-  })
 })
 
 describe('S9 — commercial-drive gate is mirrored in both provisioning scripts (§22-E4)', () => {

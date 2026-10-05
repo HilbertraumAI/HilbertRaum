@@ -31,7 +31,7 @@ import { createQueuedDocument, documentsDir, processDocument } from '../../src/m
 import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
-import { registerBuiltinSkillAnalysisHandlers, clearSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
+import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
 import type { AppContext } from '../../src/main/services/context'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
@@ -182,18 +182,22 @@ async function makeHarness(opts: { fullyChunked?: boolean; text?: string; contex
 }
 
 beforeEach(() => {
-  clearSkillAnalysisHandlers()
   inFlightStreams.clear()
 })
 
 describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc engine, Wave 2)', () => {
-  it('whole-document path: a fully-chunked doc gets a MODEL answer with capped coverage + the fence', async () => {
+  // A3 inversion: a GENERAL (non-shaped, non-chatter) question gets the whole-doc engine too. Pre-A3 an
+  // off-the-keyword-list question degraded to top-k; now the engine is the default for an active analysis
+  // skill over a single fully-chunked doc.
+  it.each(['write the meeting minutes', 'what does this document cover?'])(
+    'whole-document path (%j): a fully-chunked doc gets a MODEL answer with capped coverage + the fence',
+    async (question) => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
       IPC.askDocuments,
       h.conversationId,
-      'write the meeting minutes',
+      question,
       MEETING_INSTALL_ID
     )
     const msg = result as Message
@@ -213,7 +217,8 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
     expect(userTurn).toContain('structured minutes')
     // The WHOLE transcript reached the model (a late line, not just the top-k head).
     expect(userTurn).toContain('second reviewer')
-  })
+    }
+  )
 
   it('refuse path: a not-fully-chunked doc is refused — fixed message, no model call', async () => {
     const h = await makeHarness({ fullyChunked: false })
@@ -230,7 +235,7 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
     expect(msg.coverage).toBeUndefined()
   })
 
-  it('clear small talk keeps the relevance path (A3 opt-out — no capped coverage, model still answers)', async () => {
+  it('clear small talk keeps the relevance path (A3 opt-out — no capped coverage, no whole-doc model call)', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -243,26 +248,11 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
     // Small-talk opt-out ⇒ the whole-doc engine did NOT fire: no capped whole-document coverage claim
     // (the ordinary relevance path handled it — renderer falls back to the relevance badge).
     expect(msg.coverage).toBeUndefined()
-  })
-
-  it('A3 inversion: a GENERAL (non-shaped, non-chatter) question now gets the whole-doc engine', async () => {
-    // Pre-A3 this off-topic-to-the-keyword-list question degraded to top-k; now the whole-doc engine is
-    // the default for an active analysis skill over a single fully-chunked doc.
-    const h = await makeHarness({ fullyChunked: true })
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId,
-      'what does this document cover?',
-      MEETING_INSTALL_ID
-    )
-    const msg = result as Message
-    expect(h.runtime.calls).toBe(1)
-    // capped breadth ⇒ the model read the whole (small) document, not top-k passages.
-    expect(msg.coverage?.mode).toBe('capped')
-    // The whole transcript reached the model (a late line, not just the top-k head).
-    const userTurn = h.runtime.lastMessages.find((m) => m.role === 'user')?.content ?? ''
-    expect(userTurn).toContain('second reviewer')
+    // …and it is the relevance path's own answer: nothing matches "thanks!", so the fixed no-context reply
+    // comes back with ZERO model calls. The whole-doc engine firing here would call the model once and
+    // answer with the minutes.
+    expect(msg.content).toBe(t('en', 'main.rag.noContext'))
+    expect(h.runtime.calls).toBe(0)
   })
 })
 
@@ -272,8 +262,15 @@ describe('askDocuments — grounded-whole-doc skill routing (skill-whole-doc eng
 // the whole-doc engine — now covering the WHOLE document via the Phase-1 chunk map-reduce (capped,
 // untruncated), not a beginning-only read. Proven on one over-budget transcript at a 4096 window.
 describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
-  it('a NEEDLE ask keeps top-k (relevance path, no capped whole-doc claim)', async () => {
+  // SKA-12 (A4): the needle downgrade holds with a READY tree too. Pre-A4 the downgrade required NO ready
+  // tree, so a needle over a deep-indexed over-budget doc ran a ~13-call map-reduce over lossy node
+  // summaries. A4 drops the tree conjunct: a needle prefers top-k whenever the whole read would truncate —
+  // the tree keeps rescuing DELIVERABLES only.
+  it.each([{ tree: false }, { tree: true }])(
+    'a NEEDLE ask keeps top-k (relevance path, no capped whole-doc claim; ready tree: $tree)',
+    async ({ tree }) => {
     const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
+    if (tree) h.db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(h.docId)
     const { result } = await invoke(
       handlers,
       IPC.askDocuments,
@@ -286,7 +283,8 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
     // Downgraded to relevance ⇒ NO capped whole-document coverage claim (honest top-k badge instead).
     expect(msg.coverage?.mode).not.toBe('capped')
     expect(msg.skillId).toBe(MEETING_INSTALL_ID)
-  })
+    }
+  )
 
   it('a DELIVERABLE ask over the SAME over-budget doc covers the WHOLE doc via chunk map-reduce (Phase 1)', async () => {
     const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
@@ -305,25 +303,6 @@ describe('askDocuments — A3 needle downgrade on an over-budget doc', () => {
     expect(msg.coverage?.mode).toBe('capped')
     expect(msg.coverage?.truncated).toBe(false)
     expect(msg.coverage?.chunksCovered).toBe(msg.coverage?.chunksTotal)
-  })
-
-  it('SKA-12 (A4): a NEEDLE over an over-budget doc WITH a ready tree ALSO keeps top-k (tree conjunct dropped)', async () => {
-    // Pre-A4 the downgrade required NO ready tree, so a needle over a deep-indexed over-budget doc ran a
-    // ~13-call map-reduce over lossy node summaries. A4 drops the tree conjunct: a needle prefers top-k
-    // whenever the whole read would truncate — the tree keeps rescuing DELIVERABLES only.
-    const h = await makeHarness({ fullyChunked: true, text: bigTranscript(400), contextWindow: 4096 })
-    h.db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(h.docId)
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId,
-      'what is the decision on the budget?',
-      MEETING_INSTALL_ID
-    )
-    const msg = result as Message
-    // Downgraded to relevance despite the ready tree ⇒ NO capped whole-document coverage claim.
-    expect(msg.coverage?.mode).not.toBe('capped')
-    expect(msg.skillId).toBe(MEETING_INSTALL_ID)
   })
 
   it('SKA-23 (A4): a NEEDLE over a NOT-fully-chunked over-budget doc is served by top-k, NOT refused', async () => {

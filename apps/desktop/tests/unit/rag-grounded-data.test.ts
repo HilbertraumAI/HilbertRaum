@@ -81,6 +81,8 @@ describe('buildGroundedDataPrompt (W3 §8.1)', () => {
   it('places the skill fence between the question and the rules; omits it byte-for-byte when absent', () => {
     const withFence = buildGroundedDataPrompt('Q', 'D', '--- SKILL ---')
     expect(withFence).toContain('--- SKILL ---')
+    // The order is question → fence → rules.
+    expect(withFence.indexOf('Question:')).toBeLessThan(withFence.indexOf('--- SKILL ---'))
     expect(withFence.indexOf('--- SKILL ---')).toBeLessThan(withFence.indexOf(GROUNDED_DATA_RULES))
 
     const withNull = buildGroundedDataPrompt('Q', 'D', null)
@@ -204,10 +206,6 @@ describe('buildTotalsPostscript (W3 §8.1)', () => {
     expect(post).toContain(tr('skills.invoiceAnalysis.figureEchoGross', { value: '144.00 EUR' }))
     expect(post).toContain(tr('skills.invoiceAnalysis.countPartial', { count: 2, dropped: 2 }))
   })
-
-  it('SKA-5: droppedRowCount 0/absent is byte-identical (back-compat)', () => {
-    expect(buildTotalsPostscript(tr, CLEAN, 0)).toBe(buildTotalsPostscript(tr, CLEAN))
-  })
 })
 
 // invoice-hardening-2026-07-04 P2 — the reconciliation GATE on the grounded-data surfaces (the invoice
@@ -229,10 +227,6 @@ describe('P2 reconciliation gating (invoice-hardening-2026-07-04)', () => {
     const post = buildTotalsPostscript(tr, GARBAGE, 0, validateInvoiceTotals(GARBAGE))
     expect(post).toBe(tr('skills.invoiceAnalysis.figureEchoSuppressed'))
     expect(post).not.toContain('914')
-  })
-
-  it('a RECONCILED validation keeps the echo byte-identical (the param is additive)', () => {
-    expect(buildTotalsPostscript(tr, CLEAN, 0, validateInvoiceTotals(CLEAN))).toBe(buildTotalsPostscript(tr, CLEAN))
   })
 
   it('an all-unknown validation (no mismatch) keeps the echo — absence of proof is not contradiction', () => {

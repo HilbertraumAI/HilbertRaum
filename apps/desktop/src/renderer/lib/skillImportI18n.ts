@@ -1,4 +1,5 @@
 import { t as tCatalog, type MessageKey, type MessageParams } from '@shared/i18n'
+import type { SkillNoteCode } from '@shared/skill-manifest'
 import type { SkillNoteRef } from '@shared/types'
 
 // Localization plumbing for the skill import/preview surfaces (SkillsTab). Pure + tiny so the
@@ -63,7 +64,7 @@ export function importErrorKeyForMessage(message: string): MessageKey | null {
 }
 
 /** SKA-35: note CODE → localized copy key (params are app-fixed: a field name, a numeric cap). */
-export const IMPORT_NOTE_KEY: Record<string, MessageKey> = {
+export const IMPORT_NOTE_KEY: Record<SkillNoteCode, MessageKey> = {
   permissionNotString: 'skills.import.note.permissionNotString',
   permissionUnrecognized: 'skills.import.note.permissionUnrecognized',
   permissionClamped: 'skills.import.note.permissionClamped',

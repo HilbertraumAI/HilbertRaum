@@ -12,9 +12,9 @@ import { createConversation } from '../../src/main/services/chat'
 
 // The "Professional Documents" wave — the upgraded Meeting Minutes skill plus four NEW Tier-1
 // instruction skills (contract-brief, deadline-obligation-finder, what-changed, share-safe-review).
-// Proves, against the COMMITTED app-skills/ packages: every skill parses as a valid bundled skill;
-// the four new ones are kind:instruction reserving NO tools; the meeting-protocol id is unchanged
-// (old conversations still resolve it); English + German triggers fire the right skill on the REAL
+// Proves, against the COMMITTED app-skills/ packages: all five are kind:instruction reserving NO tools;
+// every directory id is discovered and enabled (so the meeting-protocol id is unchanged — old
+// conversations still resolve it); English + German triggers fire the right skill on the REAL
 // selector; ambiguous/neutral inputs fire nothing; share-safe-review never displaces the redaction
 // tool and what-changed fires on compare/version language.
 
@@ -41,17 +41,8 @@ function realDeps(): { appSkillsDir: string; userSkillsDir: string } {
 }
 
 describe('Professional Documents — every package is a valid bundled skill', () => {
-  it('all five skills parse with no errors', () => {
+  it('all five skills are Tier-1 instruction skills with NO tools and a German display name', () => {
     for (const id of ALL_PRO_SKILL_IDS) {
-      const parsed = parseSkillMarkdown(readSkillMd(id))
-      expect(parsed.errors, `${id} should parse cleanly`).toEqual([])
-      expect(parsed.ok).toBe(true)
-      expect(parsed.manifest!.id).toBe(id)
-    }
-  })
-
-  it('the four new skills are Tier-1 instruction skills with NO tools and a German display name', () => {
-    for (const id of NEW_SKILL_IDS) {
       const m = parseSkillMarkdown(readSkillMd(id)).manifest!
       expect(m.kind, `${id} must be instruction`).toBe('instruction')
       expect(m.allowedTools, `${id} must reserve no tools`).toEqual([])
@@ -66,21 +57,6 @@ describe('Professional Documents — every package is a valid bundled skill', ()
     }
   })
 
-  it('keeps the meeting-protocol id stable while re-titling it Meeting Minutes (backward compat)', () => {
-    const m = parseSkillMarkdown(readSkillMd('meeting-protocol')).manifest!
-    expect(m.id).toBe('meeting-protocol') // old conversations/messages still resolve it
-    expect(m.kind).toBe('instruction')
-    expect(m.allowedTools).toEqual([])
-    expect(m.title).toBe('Meeting Minutes')
-    expect(m.localized?.de?.title).toBe('Besprechungsprotokoll')
-  })
-
-  it('share-safe-review is advisory: instruction-only, declares no redaction tool', () => {
-    const m = parseSkillMarkdown(readSkillMd('share-safe-review')).manifest!
-    expect(m.kind).toBe('instruction')
-    expect(m.allowedTools).toEqual([])
-    expect(m.reservesTools).toBe(false)
-  })
 })
 
 describe('Professional Documents — discovery + reconcile (S3)', () => {
