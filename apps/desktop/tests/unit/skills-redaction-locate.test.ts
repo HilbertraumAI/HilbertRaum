@@ -1,14 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import type { ChatMessage, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
-  buildLocateWindows,
   entityLocateSchema,
   locateEntities,
   parseLocateReply,
   MAX_LOCATED_ENTITIES,
   type LocatedEntity
 } from '../../src/main/services/skills/tools/redaction-locate'
-import { buildEditWindows } from '../../src/main/services/skills/tools/document-edit-locate'
+import { buildLocateWindows } from '../../src/main/services/skills/tools/locate-windows'
 import {
   verifyAndSweepEntities,
   redactWithEntities,
@@ -42,38 +41,6 @@ describe('redaction-locate — the grammar contract (D55)', () => {
     // (category enum, text bounds) must stay structurally identical, or the gate refuses what the
     // grammar-constrained locate pass emits.
     expect((redactDocumentTool.inputSchema as any).properties.entities.items).toEqual(item)
-  })
-})
-
-// The redaction and document-edit locate passes keep line-for-line twin window builders (deliberately
-// separate modules); one table pins both.
-describe.each([
-  ['buildLocateWindows', buildLocateWindows],
-  ['buildEditWindows', buildEditWindows]
-])('locate — line-numbered overlapping windows (%s)', (_name, build) => {
-  it('empty text yields no windows', () => {
-    expect(build('')).toEqual([])
-  })
-
-  it('numbers lines globally and overlaps so a boundary entity is seen whole', () => {
-    const text = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n')
-    const windows = build(text)
-    // 50 lines, 40-line windows stepping by 32 ⇒ two windows, the second starting at global line 33.
-    expect(windows).toHaveLength(2)
-    expect(windows[0].startLine).toBe(1)
-    expect(windows[1].startLine).toBe(33)
-    // The overlap: lines 33..40 appear in BOTH windows (so an entity straddling line 40 is whole once).
-    expect(windows[0].numbered).toContain('40\tline 40')
-    expect(windows[1].numbered).toContain('33\tline 33')
-    // Global numbering: the second window's first line carries its GLOBAL number, not a window-local 1.
-    expect(windows[1].numbered.startsWith('33\t')).toBe(true)
-  })
-
-  it('a single short document is one window covering every line', () => {
-    const windows = build('a\nb\nc')
-    expect(windows).toHaveLength(1)
-    expect(windows[0]).toMatchObject({ startLine: 1, endLine: 3 })
-    expect(windows[0].numbered).toBe('1\ta\n2\tb\n3\tc')
   })
 })
 

@@ -1,5 +1,4 @@
 import type { Db } from '../db'
-import type { SkillLimits } from './limits'
 import { getSkill } from './registry'
 import { loadSkillPackage } from './loader'
 import { resolveAutoFireSkill } from './autofire'
@@ -15,7 +14,6 @@ import { getConversationDefaultSkill, type TurnSkill } from '../chat'
 export interface TurnSkillDeps {
   appSkillsDir: string
   userSkillsDir: string
-  limits?: SkillLimits
   /**
    * The running app version, for the §6.5 minAppVersion gate (§14/M1). Gating the USE-SITE (not just
    * enable) keeps the gate airtight: a skill edited on disk to need a newer app while already enabled

@@ -12,7 +12,12 @@ import {
   type ReplacementStrategy,
   type TransformSpan
 } from './span-transform'
-import { MAX_LOCATED_ENTITIES, type LocateCategory, type LocatedEntity } from './redaction-locate'
+import {
+  MAX_LOCATED_ENTITIES,
+  MAX_LOCATED_ENTITY_CHARS,
+  type LocateCategory,
+  type LocatedEntity
+} from './redaction-locate'
 
 // Re-exported so callers migrating to the shared strategy vocabulary import it from one place.
 export type { ReplacementStrategy } from './span-transform'
@@ -748,7 +753,7 @@ export const redactDocumentTool: SkillTool = {
           additionalProperties: false,
           required: ['text', 'category', 'line'],
           properties: {
-            text: { type: 'string', minLength: 1, maxLength: 160 },
+            text: { type: 'string', minLength: 1, maxLength: MAX_LOCATED_ENTITY_CHARS },
             category: { type: 'string', enum: ['name', 'address', 'org', 'other'] },
             line: { type: 'integer', minimum: 1 }
           }

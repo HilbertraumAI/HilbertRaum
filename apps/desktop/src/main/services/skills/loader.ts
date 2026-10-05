@@ -10,7 +10,6 @@ import { join } from 'node:path'
 import { statSync } from 'node:fs'
 import type { SkillParseResult } from '../../../shared/skill-manifest'
 import { parseSkillManifestFromDir } from './manifest'
-import type { SkillLimits } from './limits'
 import type { SkillRecord } from './registry'
 
 export interface SkillLoadOptions {
@@ -18,8 +17,6 @@ export interface SkillLoadOptions {
   appSkillsDir: string
   /** The user-skills directory (resolveUserSkillsDir) — needed for `source === 'user'` records. */
   userSkillsDir: string
-  /** Optional resource caps; defaults to `resolveSkillLimits()` inside the parser. */
-  limits?: SkillLimits
 }
 
 /** Absolute folder of a registry record (its source dir + the stored basename). */
@@ -43,7 +40,6 @@ export function skillRecordDir(record: SkillRecord, opts: SkillLoadOptions): str
 interface ParseCacheEntry {
   mtimeMs: number
   size: number
-  maxBodyChars: number | undefined
   result: SkillParseResult
 }
 const parseCache = new Map<string, ParseCacheEntry>()
@@ -56,25 +52,17 @@ const parseCache = new Map<string, ParseCacheEntry>()
  */
 export function loadSkillPackage(record: SkillRecord, opts: SkillLoadOptions): SkillParseResult {
   const dir = skillRecordDir(record, opts)
-  const maxBodyChars = opts.limits?.maxBodyChars
   let st: { mtimeMs: number; size: number }
   try {
     st = statSync(join(dir, 'SKILL.md'))
   } catch {
     // Missing / unreadable SKILL.md: can't key the cache — defer to the parser's friendly
     // `ok:false` (and don't poison the cache with a transient mount/permission failure).
-    return parseSkillManifestFromDir(dir, { limits: opts.limits })
+    return parseSkillManifestFromDir(dir)
   }
   const hit = parseCache.get(dir)
-  if (
-    hit &&
-    hit.mtimeMs === st.mtimeMs &&
-    hit.size === st.size &&
-    hit.maxBodyChars === maxBodyChars
-  ) {
-    return hit.result
-  }
-  const result = parseSkillManifestFromDir(dir, { limits: opts.limits })
-  parseCache.set(dir, { mtimeMs: st.mtimeMs, size: st.size, maxBodyChars, result })
+  if (hit && hit.mtimeMs === st.mtimeMs && hit.size === st.size) return hit.result
+  const result = parseSkillManifestFromDir(dir)
+  parseCache.set(dir, { mtimeMs: st.mtimeMs, size: st.size, result })
   return result
 }

@@ -5817,7 +5817,7 @@ offline, audit still ids/counts-only; no i18n surface touched):
   hint, no telemetry. Asserted in `llama-runtime.test.ts`.
 - **PERF-2 — the per-turn load is cached** (`skills/loader.ts` `loadSkillPackage`). `resolveTurnSkill`
   hit disk + re-ran the YAML parse/validate **every turn**; the result only changes when SKILL.md
-  changes, so it is now cached keyed by the file's **(mtime, size)** (+ the `maxBodyChars` limit).
+  changes, so it is now cached keyed by the file's **(mtime, size)**.
   Measured **~33 µs** cache hit vs **~650 µs** uncached (~20×) on SSD — and the win is far larger on
   the **portable drive** HilbertRaum targets, where a per-turn read dominates, and for a large user
   skill that re-parses + re-sizes (the sizing loop is O(paragraphs²): measured **~19 ms** at the
@@ -9661,12 +9661,14 @@ model pass. Builds directly on the §20 span-transform engine.
 
 - **Locate pass** (`services/skills/tools/redaction-locate.ts`, runtime-touching): the seam feeds the
   document as **overlapping, globally line-numbered windows** (40 lines, 8-line overlap so an entity
-  straddling a window edge is seen whole) to `deps.runtime` under a **grammar-constrained JSON schema**
-  (D55) — `{ entities: [{ text, category: name|address|org|other, line }] }` — at **temperature 0**. The
-  mock runtime ignores the schema, so `parseLocateReply` re-validates every field. A window's malformed
-  reply is skipped (that window contributes nothing; the floor still covers it — never a hard fail); an
-  abort throws `AbortError` (the seam maps it to a calm cancel). This is LOCATE-ONLY — the returned
-  strings are UNVERIFIED proposals.
+  straddling a window edge is seen whole; the builder is `tools/locate-windows.ts`, shared with §22) to
+  `deps.runtime` under a **grammar-constrained JSON schema** (D55) —
+  `{ entities: [{ text, category: name|address|org|other, line }] }` — at **temperature 0**. The mock
+  runtime ignores the schema, so `parseLocateReply` re-validates every field, including the tool
+  schema's `text` maxLength (160 UTF-16 units; an over-long entity is dropped, #583). A window's
+  malformed reply is skipped (that window contributes nothing; the floor still covers it — never a hard
+  fail); an abort throws `AbortError` (the seam maps it to a calm cancel). This is LOCATE-ONLY — the
+  returned strings are UNVERIFIED proposals.
 - **Verify + sweep** (`redaction.ts` `verifyAndSweepEntities`, runtime-free so it unit-tests without a
   model): each proposed string is confirmed only when it is present **verbatim** in the source
   (`locateOccurrences`, no fuzzy match); an unconfirmed / too-short (`< MIN_ENTITY_CHARS`) / letter-less
@@ -9727,7 +9729,7 @@ per the plan (deps.runtime in the seam); routing redaction through the doctask l
 the follow-up if it bites.
 
 **Tests:** `skills-redaction-locate.test.ts` (+18: schema shape, now in lockstep with the tool schema;
-window empty/overlap/global-numbering, now the shared `describe.each`; `parseLocateReply`
+window empty/overlap/global-numbering, now in `skills-locate-windows.test.ts`; `parseLocateReply`
 keep-valid/drop-off-enum/malformed; `locateEntities` per-window temp-0 schema call + abort;
 `verifyAndSweepEntities` verify/sweep-all/drop-unverifiable/drop-short/dedup; `redactWithEntities`
 entities+floor/perChar-length/byte-identity/empty=floor/dropped-count), `skills-redaction.test.ts` (+5
@@ -9751,11 +9753,13 @@ impossible** (the #23 failure mode) and **diff-verifiability holds by constructi
 change — the `applySpans` guarantee). Output is `.txt` this phase; same-format DOCX export is Phase 9.
 
 - **Locate pass** (`services/skills/tools/document-edit-locate.ts`, runtime-touching): the seam feeds the
-  document as **overlapping, globally line-numbered windows** (40 lines, 8-line overlap — identical to §21)
-  to `deps.runtime` under a **grammar-constrained JSON schema** (D55) — `{ edits: [{ line, find,
-  occurrence, replace }] }` — at **temperature 0**. The mock runtime ignores the schema, so `parseEditReply`
-  re-validates in code (empty `find` dropped; missing line/occurrence default to 1; empty `replace` = a
-  deletion). A window's malformed reply is skipped; an abort throws `AbortError` (calm cancel).
+  document as **overlapping, globally line-numbered windows** (40 lines, 8-line overlap — the same
+  `tools/locate-windows.ts` builder as §21) to `deps.runtime` under a **grammar-constrained JSON schema**
+  (D55) — `{ edits: [{ line, find, occurrence, replace }] }` — at **temperature 0**. The mock runtime
+  ignores the schema, so `parseEditReply` re-validates in code (empty `find` dropped, and so is a
+  `find`/`replace` over the tool schema's maxLength of 200 UTF-16 units, #583; missing line/occurrence
+  default to 1; empty `replace` = a deletion). A window's malformed reply is skipped; an abort throws
+  `AbortError` (calm cancel).
 - **Verify + splice** (`document-edit.ts` `verifyAndSpliceEdits`, runtime-free so it unit-tests without a
   model): each proposed `find` is confirmed only when present **verbatim at its `{line, occurrence}`
   anchor** (`locateOccurrences(text, find, {line, nth: occurrence})`, no fuzzy match); a miss / wrong-line /
@@ -9802,7 +9806,7 @@ change — the `applySpans` guarantee). Output is `.txt` this phase; same-format
   from auto-fire).
 
 **Tests:** `skills-document-edit-locate.test.ts` (+16: schema shape; window
-empty/overlap/global-numbering, now the shared `describe.each` in `skills-redaction-locate.test.ts`;
+empty/overlap/global-numbering, now in `skills-locate-windows.test.ts`;
 `parseEditReply` keep-valid/drop-empty-find/malformed/default-line-occurrence; `locateDocumentEdits`
 per-window temp-0 schema + instruction + abort; `verifyAndSpliceEdits` occurrence-precision /
 German-agreement-multi-pair-byte-identity / drop-unverifiable / drop-wrong-line / drop-out-of-range /

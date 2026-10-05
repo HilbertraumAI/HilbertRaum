@@ -123,3 +123,14 @@ export class ModelOccupancy {
     return [...this.spans.values()].map((s) => ({ lane: s.lane, heldMs: now - s.since }))
   }
 }
+
+/**
+ * The lane a new doc task refuses on (#185/#186): the oldest held span of any lane but its own. A doc
+ * task never refuses on the doc-task span — the running task holds one while the #38 tree→extract chain
+ * enqueues its follow-up; task-vs-task exclusion is the queue's job.
+ */
+export function occupiedLaneForDocTask(occupancy: ModelOccupancy): Exclude<OccupancyLane, 'doc-task'> | null {
+  const lane = occupancy.heldLane(['doc-task'])
+  // `heldLane` already skipped doc-task; the re-test only narrows the type to the dep's two lanes.
+  return lane === 'doc-task' ? null : lane
+}
