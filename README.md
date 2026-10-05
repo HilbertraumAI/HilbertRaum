@@ -145,8 +145,8 @@ start, see [Linux: the AppImage does not start](docs/troubleshooting.md#linux-th
   simulated answers) and an AI model of your choice. Two more downloads are optional: the
   kiwix-tools binaries (GPL-3.0-or-later) that power offline knowledge packs, offered from the
   **Knowledge packs** panel's tools-missing notice or a mirror on the **AI Model** screen, and the
-  text-recognition (OCR) language files (German + English, about 4 MB, Apache-2.0) that read
-  scanned PDFs and photos, offered on a scan or photo in **Documents** that needs them and on the
+  text-recognition (OCR) files (German, English and page orientation, about 8 MB, Apache-2.0)
+  that read scanned PDFs and photos, offered on a scan or photo in **Documents** that needs them and on the
   **AI Model** screen — each only once you ask for it. The only things the app ever downloads are
   AI models, the AI engine, the optional knowledge-pack tools and the optional text-recognition
   (OCR) files — each one only after you confirm it, each one verified before use. Repo users can

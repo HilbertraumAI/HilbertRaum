@@ -28,6 +28,11 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-05 — **#538/#574/#575/#576 — OCR reads sideways pages upright, says when it was unsure, gives photos OCR metadata, and reads the scanned pages
+of a text PDF (`fix/538-574-575-576-ocr`).** Tesseract OSD in a lazily started legacy-core worker over a new pinned `ocr/osd.traineddata.gz` (4.3 MB; the
+"WASM core can't run legacy" premise was wrong) + an EXIF orientation marker (little-endian phone photos 0/68 → 68/68). Per-page confidence kept;
+meta `textPageCount` / `lowConfidencePageCount`; `scanned_pages_json` + per-page merge. Dev and packaged exe on DesktopDiT (SAC off): every test page
+68/68. Record: `architecture.md` "OCR quality amendment", design-guidelines §11.19. Open: sold drives need `osd` (`fetch-runtime --family ocr`) for the gate._
 _2026-10-05 — **#570–#573 — a file attached in a chat that can't be read yet (`fix/570-chat-failed-attachment`).** The chat names a scan (or a photo without
 the OCR files) and offers Go to Documents, held for its own chat (design-guidelines §11.18); `resolveScope` / `listAttachments` count a chat's unfiled attachments, so a
 failed attach no longer widens to the whole corpus (partial index, no migration; `architecture.md` doc-org §4 #571 amendment, rag-design §13.2); scan rows lose Try
@@ -581,7 +586,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     only). (d) **BE-7 memory profile** of a real 300+-page
     scan (confirms `page.cleanup()` keeps the hidden renderer flat). (e) **pdfjs-side
     `renderer/ocr/main.ts` automated tests** (audit test-gap #4; the P5 harness covers the
-    protocol level). (f) **PreviewModal `ocrInfo` line renderer test** and a
+    protocol level). (f) ~~**PreviewModal `ocrInfo` line renderer test**~~ (done 2026-10-05, the #576
+    cases in `DocumentsScreen.test.tsx`) and a
     **two-queued-OCR-tasks-on-one-doc pin** (P6 review residuals; the behavior is benign —
     serialize + overwrite = the D33 redo — but unpinned).
 16. **DEP-1 follow-up register (owner-facing; registered at the 2026-07-19 close-out; durable
@@ -622,7 +628,8 @@ manual release acceptance, one blocked phase (22), one drafted phase (30).** In 
     `deu`+`eng` files (`ok: true`, 277 ms) — worker script, hoisted deps, WASM core and language
     init load from `app.asar.unpacked`. ⟶ 2026-10-01 (DEP-5, packaged 43.7.7, i9-14900K): the OCR
     window's runtime CSP leg PASSED, and "Make searchable (OCR)" on a scanned PDF recognised its
-    text, both IPC-driven. STILL OPEN (owner, packaged build): photo import + the UI clicks.**
+    text, both IPC-driven. ⟶ 2026-10-05 (#538 wave, packaged `--win dir`, DesktopDiT, SAC off): photo
+    import, scan OCR and the OSD worker, IPC-driven. STILL OPEN (owner, packaged build): the UI clicks.**
     (d) ⚠️ **Electron 44 is a CUSTOMER-FACING decision, not a routine bump** — it removes macOS 12
     support and drops 32-bit Windows (ia32) + Linux armv7l. **E43 is the last series shipping
     prebuilt 32-bit binaries, supported until January 2027.** Decide deliberately with the drive

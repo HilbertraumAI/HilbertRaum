@@ -89,7 +89,7 @@ HILBERTRAUM/
 │                                                #   `checkSourceBundle` fails a drive that ships the binaries without a
 │                                                #   complete, hash-matching bundle. A DIY drive built with `fetch-runtime`
 │                                                #   alone has no `source/` — that is fine until binaries actually ship.
-├── ocr/                                        # OCR language files: {deu,eng}.traineddata.gz — plain sha256-verified, git-ignored
+├── ocr/                                        # OCR data: {deu,eng,osd}.traineddata.gz — plain sha256-verified, git-ignored
 ├── zim/                                        # Knowledge packs: ZIM archives (offline Wikipedia etc.) — PLAIN read-only
 │                                                #   files, never copied into the encrypted workspace (not the document
 │                                                #   store); discovered at session start (after unlock/create/plaintext
@@ -290,7 +290,7 @@ carries ONLY the language data under `ocr/`:
   install marker. Idempotency IS the hash: present + matching sha256 ⇒ skip.
 - **In the app** (#410): a failed scan or photo row in **Documents**, or the quiet *"Text
   recognition for scans and photos (optional)"* row on the **AI Model** screen, offers
-  **Download OCR files** — a facts-only confirmation, then the pinned `deu` + `eng` files land in
+  **Download OCR files** — a facts-only confirmation, then the pinned `deu` + `eng` files (and `osd`, #538) land in
   `ocr/`. The app pins their sha256 + exact size in code (`services/ocr-install.ts`,
   drift-tested against the yaml); from the yaml it takes only the URL, never the `dest`. When
   the drive's yaml offers no usable `ocr:` block (none, or the file does not validate) it falls back
@@ -298,8 +298,11 @@ carries ONLY the language data under `ocr/`:
 - **Offline / DIY:** fetch with **`fetch-runtime --family ocr`** (`-Family ocr` on PowerShell) —
   one run covers every OS (the data is platform-independent).
 - Shipped files: `deu.traineddata.gz` (1.27 MB) + `eng.traineddata.gz` (2.82 MB), the
-  tessdata_best-integerized variant (R-O3), exactly as tesseract.js reads them
-  (`langPath` + gzip — never decompressed on the drive).
+  tessdata_best-integerized variant (R-O3), and `osd.traineddata.gz` (4.12 MB, #538) — the
+  orientation data that turns sideways pages upright, never a recognition language — exactly as
+  tesseract.js reads them (`langPath` + gzip — never decompressed on the drive). A drive with only
+  `deu` + `eng` reads pages as they come; the in-app download fetches just `osd` there, and it is
+  used at once (the engine looks for it at each orientation check).
 - A drive WITHOUT the `ocr/` files still works fully: detected scans show the friendly
   notice without the OCR offer, and photo imports fail per-file with friendly copy.
   `assertCommercialDrive` + both build-commercial-drive script gates verify the files

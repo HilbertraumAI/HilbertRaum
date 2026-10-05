@@ -56,6 +56,18 @@ from its first public `1.0.0` release onward.
   language. On Windows the engine also asked the local network for proxy settings, which a hostile
   network could answer. Both requests are gone now. Nothing changes in how you use the app (#567).
 
+### Added
+
+- **Scanned pages inside an ordinary PDF can now be made searchable.** A typed letter with a
+  scanned signature page, or a report with a scanned attachment, used to index its typed pages and
+  leave the scanned ones silently out of search. The document's row now says how many pages are
+  scanned without readable text yet, and **Make searchable (OCR)** in its **⋯** menu reads just
+  those pages; the typed pages stay as they are, and answers cite the scanned pages by page. A PDF
+  added before this update shows its scanned pages after one **Re-index** (#575).
+- **Text recognition tells you when it was unsure.** When a scan or photo reads poorly (blurry,
+  skewed or handwritten, or in a language other than German or English), the document's row says
+  so quietly, and its preview names the likely causes next to a **Read again (OCR)** button (#538).
+
 ### Changed
 
 - **Some display preferences are reset once after this update.** Because the app's screens moved
@@ -87,6 +99,21 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Sideways and upside-down scans are read the right way up.** A page scanned the wrong way round
+  came out as nonsense text, and the task still ended as done. Text recognition now notices a
+  page it reads poorly, checks which way up the text is, and reads it again turned upright. This
+  needs one more OCR file, the page-orientation data (about 4 MB, Apache-2.0): it comes with the
+  OCR files from now on, and on a drive that already has the language files, the **AI Model**
+  screen offers it. To fix a scan read before this update, use **Read again (OCR)** (#538).
+- **Photos taken with the phone held sideways are read correctly.** Many phones record which way up
+  a photo is in a form the text recognition ignored, so such a photo was read sideways. It is now
+  turned upright first (#538).
+- **A photo of a page now shows that its text came from text recognition.** Its preview says so
+  like a scanned PDF's, it appears under the OCR view in Documents, and its **⋯** menu offers
+  **Read again (OCR)** (#574).
+- **The preview counts only the pages on which text was recognized.** A scan with blank pages said
+  "10 pages" when text was found on 6; it now says "on 6 of 10 pages". Documents read before this
+  update show the corrected count after the update (#576).
 - **"Make searchable (OCR)" now reads black-and-white scans.** Most office scanners and fax
   machines save black-and-white pages in a compact format (CCITT fax or JBIG2), and some scans
   use JPEG 2000. The app showed such a page to the text recognition as an empty white page, so

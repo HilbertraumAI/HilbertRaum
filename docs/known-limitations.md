@@ -2076,8 +2076,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   loudly instead of shipping a silently incomplete document. Limits: page accounting exists only
   for formats that HAVE pages (PDF, including the stored-OCR path); txt/md/docx/audio have no
   page semantics and rely on the segment invariant alone. The remedy for a genuinely scanned
-  page inside a hybrid PDF remains out of scope here: per-page OCR for hybrids is a separate
-  feature (scan detection + "Make searchable (OCR)" fires only for FULLY image-only PDFs).
+  page inside a text PDF is "Make searchable (OCR)" on that document first (#575: its row names
+  the scanned pages); a translation started before that still marks them as gaps.
 - **Long documents take time — linearly (on CPU).** There is deliberately NO window ceiling (a
   faithful translation may not cover "the beginning" only, unlike the summary). Since issue #42
   the sidecar **auto-offloads to the GPU** under the same signals as chat (`gpuMode: 'auto'` and
@@ -2312,25 +2312,36 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   near-perfect in the R-O3 probes (103/104 words, umlauts/ß exact); a degraded ~80-DPI
   JPEG still lost 3 of 104 words. The per-page text is searchable content, not a
   notarized record — Preview shows exactly what was recognized.
-- **Sideways and upside-down pages are not turned upright (#538).** Pages are rendered with
-  only the rotation stored in the PDF (`/Rotate`), not the real orientation of the scanned
-  content, so a page scanned sideways reaches recognition sideways and its text comes out as
-  nonsense. The task still ends "done" when any page produced text, and Tesseract's confidence
-  is computed but not kept, so the app cannot yet warn about a poor reading (both #538). Until
-  then: turn the pages in a PDF viewer until the text reads normally, save, add the saved copy,
-  and run OCR on it (user guide §7). Measured 2026-10-05 on a rendered test page: sideways 0 of 36
-  words, the same page saved with `/Rotate` upright 36 of 36, upside down 0 of 36.
-- **Hybrid PDFs (some text pages, some scanned pages) are not detected as scans.**
-  Their real text pages index normally; the scanned pages stay invisible to search.
-  Detection only catches documents with NO readable text — per-page hybrid OCR is a
-  possible follow-up, not shipped.
+- **Sideways and upside-down pages are turned upright only at right angles, and only with the
+  orientation data (#538).** A page read with mean confidence under 75 gets an orientation check
+  (Tesseract OSD over `ocr/osd.traineddata.gz`) and is read again at the turn it names; the more
+  confident reading is kept. Limits: (a) without that file (a drive prepared before #538 that has
+  only the language files) pages are read as they come — the AI Model screen offers the file;
+  (b) OSD declines on very degraded or nearly empty pages ("too few characters"), which are then
+  read as they come; (c) only 90° steps are corrected — a slightly skewed page (a few degrees) is
+  read as it is; (d) a poor upright page pays one OSD run (0.15–0.7 s measured) on top of its
+  reading. A page that still reads poorly is counted as "unsure" (mean confidence under 65) and
+  named on the row and in the preview; the fallback for it is turning the page in a PDF viewer,
+  saving, and adding the saved copy (measured: a `/Rotate` saved upright reads 36 of 36 words).
+- **"Unsure" is the recognizer's own confidence, not a check of the text.** A poor but upright
+  photocopy and a page in a script the language files do not cover both score in the 50s; a
+  clean page about 92–94. The note says where to look; it cannot say which words are wrong.
+- **A PDF with some scanned pages shows them after a Re-index if it was added before #575.**
+  Scanned pages inside a text PDF (under 25 characters of text and painting an image) are found at
+  import. A PDF imported earlier carries no such record until it is parsed again. The check costs
+  about 0.1 s per scanned page at import (pdf.js decodes the image to see it), bounded at 20 s per
+  document — pages it leaves unchecked count as scanned. A page whose text layer has fewer than 25
+  characters AND an image (a logo-only cover, a full-page figure) counts as scanned too; OCR then
+  reads what text the image holds.
 - **The recognized text survives re-index; re-running OCR is the explicit redo.**
   Re-index (e.g. after an embedder switch) reuses the stored recognition rather than
   silently re-OCRing for minutes; if the recognition itself was bad, run "Make
   searchable (OCR)" again — it overwrites. **This is a PDF-only guarantee:** a photo's
   recognition is never persisted separately from the document, so re-index re-runs it
   from scratch (seconds) instead of reusing a stored reading, unlike a scanned PDF's
-  stored pages.
+  stored pages. Since #574 a photo keeps only the reading's counts (one page, its confidence,
+  the engine), rewritten by each re-index and cleared when it fails; its "Read again (OCR)" is a
+  re-index. A photo imported before #574 shows its OCR note after one re-index.
 - **A cancel that lands during the final "Finishing…" step no longer stops the task.**
   Cancel works normally while pages are being read; once recognition is done and the
   text is being persisted and re-indexed, a cancel click is deliberately ignored — the

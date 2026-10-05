@@ -2,7 +2,8 @@ import type { DocumentOcrInfo } from '@shared/types'
 import type { I18n } from '../../i18n'
 
 // The wording of a document's OCR metadata, shared by the preview and the row so both say the
-// same thing (#576, #538). Counts only — the recognized text never reaches these helpers.
+// same thing (#576, #538, #574, #575; design-guidelines §11.19). Counts only — the recognized text
+// never reaches these helpers.
 
 /** A photo of a page (#574): its OCR metadata is one page, worded as "this photo". */
 export function isPhotoDocument(mimeType: string | null | undefined): boolean {

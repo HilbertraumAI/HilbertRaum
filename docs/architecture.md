@@ -1929,6 +1929,89 @@ sentinel-tested), zero native deps.
   the hash IS the install state), fetched by `fetch-runtime --family ocr`,
   asserted by `assertCommercialDrive` (`ocrAssetsVerified`) + both script gates.
 
+### OCR quality amendment — orientation, confidence, photos, scanned pages (#538, #574, #575, #576; 2026-10-05)
+
+Owner rulings (2026-10-05): orientation by **Tesseract OSD with a pinned `osd` file** (not trial
+rotations); a text PDF's scanned pages are **short pages that paint an image** (not every short
+page); **Read again (OCR)** on a photo is a re-index.
+
+**Facts it rests on** (measured 2026-10-05 on rendered A4 letter pages, 68 distinct words,
+deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
+- Upright clean page: mean confidence 94, 68/68 words. The same page sideways: 55–62, 0/68 (and
+  3–4× slower — the garbage reading is the expensive one); upside down: 35, 0/68. A degraded but
+  UPRIGHT photocopy (150 DPI, noise, 1° skew, JPEG q50): 53, 60/68. A Cyrillic page (no `rus`
+  data): 50–56 in every orientation. So confidence alone cannot tell sideways from poor; within
+  one image the right turn always scores highest (margin ≥ 14 on the photocopy, 3–8 on a 110-DPI
+  ruin).
+- tesseract.js applies EXIF orientation with an exact right-angle turn but finds it only as a
+  BIG-endian byte run in the first 500 bytes (`setImage.js`): a little-endian (`II`) phone photo
+  held sideways read 0/68; the core's `rotateRadians` turns inside the original frame and lost
+  the top and bottom lines of a sideways page (63/68).
+- The "WASM core cannot run the legacy engine" premise (#538 option 2) was wrong: the
+  legacy-capable cores ship and are unpacked; with `osd.traineddata.gz` (4.3 MB) OSD found the
+  right turn on every clean and moderately degraded page in 0.15–0.7 s and declined ("too few
+  characters") on a 110-DPI ruin and a near-blank page. Its own confidence is unreliable (0.8–15
+  when right).
+- pdf.js `getOperatorList` tells a scanned page from a blank one: 0.3 ms for a blank page,
+  ~0.1 s for an A4 JPEG page (it decodes the image), whatever the intent.
+
+**Design as built:**
+- **Orientation marker** (`services/ocr/orientation.ts`): every turn is a big-endian EXIF
+  Orientation entry placed FIRST in the bytes (a PNG `eXIf` chunk after IHDR, a JPEG APP1 after
+  SOI), composing the image's own orientation (read in either byte order, bounds-checked) with the
+  turn. An image with nothing to say passes through untouched. `tests/unit/ocr-orientation.test.ts`
+  runs tesseract.js's own `setImage` against the markers, so a tesseract.js bump that changes how
+  orientation is found reds in CI.
+- **OSD worker** (`ocr/tesseract.ts`): a second worker, `createWorker('osd', 0, { legacyCore,
+  legacyLang })`, started lazily on the first unsure page, serialized on the recognizer's chain,
+  same per-page timeout, torn down with it (lock, quit). Optional in every sense: no file → no
+  detection (the file is looked for at each call until the worker starts, so an in-app install is
+  used at once and `refreshOcrSlot` reports `activated`); a failed start, a timeout or a death
+  switches detection off for the engine's life and never changes `availability()`. Worker starts
+  are serialized (the `process.on('worker')` capture window would otherwise see both threads).
+  `listOcrLanguages` leaves `osd` out — before, a dropped-in `osd.traineddata.gz` became a
+  "language" and failed the LSTM-only start.
+- **Reading policy** (`ocr/upright.ts`, `readUpright`): read at the expected turn; a reading at
+  confidence ≥ 75 is kept (clean scans cost exactly one reading, the bytes untouched); otherwise
+  OSD, and if it names another turn (or declines while the first turn was not upright) read there
+  too and keep the more confident reading — a wrong OSD verdict cannot make a page worse. The scan
+  task tries the previous page's turn first, so a sideways scan pays the detour once (real app,
+  300 DPI A4: 4 upright pages 6.2 s; 4 sideways 11.6 s; 4 mixed 0/90/270/180 19.3 s, all 68/68).
+  Photos use the same policy with their EXIF honoured in either byte order.
+- **Kept with each page** (`ocr_json` pages): `confidence` and `turn` (absent = 0) — `parseOcr`
+  copies both (it rebuilds pages field by field).
+- **Metadata** (`ingestion/ocr-meta.ts` `ocrMetaOf`, the one derivation for the writer, the
+  photo path and the backfill): `textPageCount` (#576 — pages whose reading produced text) and
+  `lowConfidencePageCount` (#538 — text pages under `OCR_LOW_CONFIDENCE` = 65; absent when no
+  page carries a confidence). The open-time backfill re-derives every sidecar that lacks
+  `textPageCount` (filtered in JS: a corrupt sidecar must never fail the open).
+- **Photos (#574):** the image parser returns its reading's counts as `ParsedDocument.ocrMeta`;
+  `prepareDocument` writes it as the photo's `ocr_meta_json` on each import/re-index and clears it
+  when reading fails. No `ocr_json` — a photo's text still lives only in its chunks.
+- **Scanned pages in a text PDF (#575):** with `ParseContext.detectScannedPages` (import and
+  re-index only), the PDF parser checks the pages under `PDF_TEXT_PAGE_MIN_CHARS` of a PDF that
+  has real text pages for an image-painting operator, bounded by `SCANNED_PAGE_CHECK_BUDGET_MS`
+  (20 s; unchecked pages count as scanned). Stored as `documents.scanned_pages_json`
+  (`{ pages, pageCount }`); `DocumentInfo.scannedPages` carries the counts. The OCR task admits
+  such a PDF, rasterizes only those pages (`RasterizePdfOptions.pages` → `pagesToWalk`), and
+  persists the reading even when it found no text (the pages were read; a whole scan with no text
+  still fails `ocrNoText`). The parser merges per page: a short page with stored recognition
+  contributes the recognition (its rendered layer is part of the reading), every other page keeps
+  its text layer; a whole scan keeps its old path.
+- **UI** (design-guidelines §11.19): the preview counts recognized pages ("on 2 of 3 pages",
+  against the whole document for #575, "found no text" when none); an unsure reading is a quiet
+  row caption and, in the preview, the causes plus **Read again (OCR)**; a text PDF with unread
+  scanned pages gets a caption and **Make searchable (OCR)** in its ⋯ menu; the photo variants
+  say "this photo". The AI Model OCR row names the orientation file when it is the only one
+  missing (`OcrInstallLanguage.role`).
+- **Verified in the real app on DesktopDiT** (Smart App Control off, Norton on), dev build and the
+  packaged `HilbertRaum.exe` (`electron-builder --win dir`: shipped fuses, asar integrity,
+  encrypted workspace, OSD core from `app.asar.unpacked`): the little-endian sideways photo 68/68
+  (was 0/68); a 0/90/270/180 scan 4×68/68; a text+scan+blank+title+sideways-scan letter: import
+  found pages 2 and 5 only, OCR read only those, both 68/68; a poor photocopy flagged unsure on 2 of
+  2 pages. The in-app installer fetched only `osd` (4,320,130 bytes, pin verified) behind Norton
+  and reported `activated`.
+
 ## Document tasks (Phases 33–35; OCR Phase 38; tree/extract = whole-document analysis, rag-design §14)
 - **`services/doctasks/` (barrel: `doctasks.ts`) — the shared task engine.** Split into a
   `doctasks/` directory, with the **manager keeping the pump and the handlers owning each kind**
