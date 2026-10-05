@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from 'vitest'
+import { afterEach, describe, expect, it, vi, type Mock } from 'vitest'
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { mkdir, writeFile } from 'node:fs/promises'
@@ -42,7 +42,7 @@ import { engineProblemFor, reportEngineProblem, resetEngineProblemsForTest } fro
 import { updateSettings } from '../../src/main/services/settings'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { closePerformanceFixture, ctxWith, freshRoot, seededDb } from '../helpers/performance-fixture'
-import type { EngineDownloadJob, EngineStatus } from '../../src/shared/types'
+import type { EngineDownloadJob, EngineProblem, EngineStatus, RuntimeStatus } from '../../src/shared/types'
 
 const handlers = ipcState.handlers as IpcHandlers
 const HOST_OS = hostRuntimeOs()
@@ -81,6 +81,19 @@ const WHISPER_MANIFEST = {
   license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-09-21', notes: '' }
 }
 
+/** A chat model whose weight is NOT on the drive: a developer start falls back to the demo runtime. */
+const CHAT_MANIFEST = {
+  ...WHISPER_MANIFEST,
+  id: 'chat-test',
+  display_name: 'Chat (test)',
+  family: 'qwen',
+  role: 'chat',
+  format: 'gguf',
+  runtime: 'llama_cpp',
+  recommended_context_tokens: 4096,
+  local_path: 'models/chat/chat-test.gguf'
+}
+
 interface Drive {
   root: string
   handlers: IpcHandlers
@@ -90,17 +103,38 @@ interface Drive {
   ctx: AppContext
 }
 
+/**
+ * #532: the selected chat model answering on the demo runtime — what runs while the engine is
+ * missing or refused. `stop`/`start` record the restart the completed install must make.
+ */
+function demoRuntime(): { status: () => RuntimeStatus; activeModelId: () => string; stop: Mock; start: Mock } {
+  return {
+    activeModelId: () => 'chat-test',
+    status: () => ({ running: true, modelId: 'chat-test', backend: 'mock', startingModelId: null, port: null, healthy: true, message: 'Running' }),
+    stop: vi.fn(async () => undefined),
+    start: vi.fn(async () => ({ running: true, modelId: 'chat-test', port: null, healthy: true, message: 'Running' }))
+  }
+}
+
 /** A drive whose yaml pins the chat engine + the optional kiwix_tools family for this host,
  *  with a policy that allows downloads and the network setting on; the engine IPC registered
  *  over a real DB. `ctx.zim` is a stub whose `reconcile` the completed-install hook must call.
  *  `withWhisper` (#497) also pins the whisper_cpp family and provisions the speech model's
  *  manifest + weight, so only the voice ENGINE is missing — the "Install voice engine" case. */
-function makeDrive(opts: { withWhisper?: boolean } = {}): Drive {
+function makeDrive(opts: { withWhisper?: boolean; runtime?: unknown } = {}): Drive {
   const root = freshRoot()
   const manifests = join(root, 'model-manifests')
   mkdirSync(manifests, { recursive: true })
   mkdirSync(join(root, 'config'), { recursive: true })
-  writeFileSync(join(root, 'config', 'policy.json'), JSON.stringify({ network: { allow_model_downloads: true } }))
+  // `models`: a developer may start a model whose weight is missing (the demo-runtime journey, #532).
+  writeFileSync(
+    join(root, 'config', 'policy.json'),
+    JSON.stringify({
+      network: { allow_model_downloads: true },
+      models: { allow_unverified_models: true, require_manifest: true, require_sha256_match: false }
+    })
+  )
+  writeFileSync(join(manifests, 'chat-test.yaml'), JSON.stringify(CHAT_MANIFEST))
   if (opts.withWhisper) {
     writeFileSync(join(manifests, 'whisper-test.yaml'), JSON.stringify(WHISPER_MANIFEST))
     mkdirSync(join(root, 'models', 'transcriber'), { recursive: true })
@@ -147,7 +181,7 @@ function makeDrive(opts: { withWhisper?: boolean } = {}): Drive {
   const ctx = ctxWith(root, db, {
     paths: { rootPath: root, workspacePath: join(root, 'workspace'), configPath: join(root, 'config') },
     manifestsDir: manifests,
-    runtime: { activeModelId: () => null, status: () => ({ running: false, modelId: null, startingModelId: null, port: null, healthy: false, message: '' }) },
+    runtime: opts.runtime ?? { activeModelId: () => null, status: () => ({ running: false, modelId: null, startingModelId: null, port: null, healthy: false, message: '' }) },
     zim: { reconcile },
     // #497: the startup composition found no whisper-cli, so the slot is null until an install.
     transcriber: null
@@ -256,7 +290,12 @@ describe('downloadEngine({ families }) — the consent step (#339 P8-2)', () => 
       { families: { length: 1, 0: 'kiwix_tools' } },
       'kiwix_tools',
       ['kiwix_tools'],
-      42
+      42,
+      // #532: a reinstall names its families explicitly, never reaches an optional family, and
+      // is a real boolean.
+      { reinstall: true },
+      { families: ['kiwix_tools'], reinstall: true },
+      { families: ['llama_cpp'], reinstall: 'yes' }
     ]
     for (const payload of bad) {
       await expect(invoke(d.handlers, IPC.downloadEngine, payload), JSON.stringify(payload)).rejects.toThrow(/was not understood/i)
@@ -360,5 +399,71 @@ describe('engine load verdicts over IPC (#530)', () => {
     expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
     expect(engineProblemFor('whisper_cpp')).toBeNull()
     expect(engineProblemFor('llama_cpp')).not.toBeNull()
+  })
+})
+
+// #532: "Install the AI engine again" — the repair for an engine on the drive whose own files the
+// OS loader found missing or damaged. Before it, a present engine with a current marker could never
+// be installed again, and the demo runtime standing in for it counted as "a model is running".
+describe('downloadEngine({ families, reinstall }) — the damaged-files repair (#532)', () => {
+  const DAMAGED: EngineProblem = { family: 'llama_cpp', reason: 'files-damaged', os: HOST_OS, exit: 'exit code 0xC0000135' }
+
+  /** Install the chat engine once, so it is on the drive and current by its marker. */
+  async function installChatEngine(d: Drive): Promise<void> {
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'] })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    d.fetchSpy.mockClear()
+  }
+
+  it('re-fetches a present, current engine whose files are damaged: the old copy goes, cpu/ stays, the fresh copy is remembered', async () => {
+    const d = makeDrive()
+    await installChatEngine(d)
+    const dir = join(d.root, 'runtime', 'llama.cpp', HOST_OS)
+    writeFileSync(join(dir, 'leftover-of-the-old-copy.dll'), 'old')
+    mkdirSync(join(dir, 'cpu'), { recursive: true })
+    writeFileSync(join(dir, 'cpu', BIN_NAME), 'the safety net')
+    // Without the flag a current engine is never installed again — the dead end #532 removes.
+    await expect(invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'] })).rejects.toThrow(/already installed/i)
+    reportEngineProblem(DAMAGED, llamaBin(d.root))
+
+    const { result } = await invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+    // The job says what it is, so the screen shows its progress in the banner that started it.
+    expect(result).toMatchObject({ families: ['llama_cpp'], reinstall: true })
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    expect(d.fetchSpy).toHaveBeenCalledTimes(1)
+    expect(existsSync(join(dir, 'leftover-of-the-old-copy.dll'))).toBe(false)
+    expect(readFileSync(join(dir, 'cpu', BIN_NAME), 'utf8')).toBe('the safety net') // owner: main build only
+    expect(engineProblemFor('llama_cpp')).toBeNull()
+    // The fresh copy is the program every spawn site resolves: should IT be refused as damaged
+    // too, the verdict says so — and the screen offers no second reinstall.
+    reportEngineProblem(DAMAGED, llamaBin(d.root))
+    expect(engineProblemFor('llama_cpp')?.afterInstall).toBe(true)
+  })
+
+  it.each<[string, EngineProblem | null]>([
+    ['no verdict at all', null],
+    ['a verdict a reinstall cannot fix (a missing system library)', { ...DAMAGED, reason: 'library-missing', name: 'libgomp.so.1' }],
+    ['a damaged-files verdict for the OTHER engine only', { ...DAMAGED, family: 'whisper_cpp' }]
+  ])('is refused with %s — nothing is fetched', async (_label, problem) => {
+    const d = makeDrive()
+    await installChatEngine(d)
+    if (problem) reportEngineProblem(problem)
+    await expect(
+      invoke(d.handlers, IPC.downloadEngine, { families: ['llama_cpp'], reinstall: true })
+    ).rejects.toThrow(/nothing to repair/i)
+    expect(d.fetchSpy).not.toHaveBeenCalled()
+  })
+
+  it('is admitted while the demo runtime stands in for the model, and the model restarts on the engine afterwards', async () => {
+    const runtime = demoRuntime()
+    const d = makeDrive({ runtime })
+    // The engine is missing, so the selected model answers in demo mode — before #532 the install
+    // was refused here with "stop the model first" (CODE-13's registered polish candidate).
+    const { result } = await invoke(d.handlers, IPC.downloadEngine)
+    expect((await settle(d, result as EngineDownloadJob)).status).toBe('done')
+    // As after a healed "Check again": the demo runtime is stopped and the same model started again.
+    await vi.waitFor(() => expect(runtime.start).toHaveBeenCalledWith(expect.objectContaining({ modelId: 'chat-test' })))
+    expect(runtime.stop).toHaveBeenCalledTimes(1)
+    expect(runtime.stop.mock.invocationCallOrder[0]).toBeLessThan(runtime.start.mock.invocationCallOrder[0] ?? 0)
   })
 })

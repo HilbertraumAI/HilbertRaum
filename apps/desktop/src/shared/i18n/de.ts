@@ -1293,6 +1293,15 @@ export const de: Record<keyof typeof en, string> = {
   'models.engineProblem.systemTooOld': 'Sie braucht eine neuere Version des Betriebssystems.',
   'models.engineProblem.vcRuntimeMissing': 'Windows fehlt das Microsoft Visual C++ Redistributable (x64), das sie braucht. Installiere es und wähle dann „Erneut prüfen“.',
   'models.engineProblem.filesDamaged': 'Einige ihrer Dateien auf diesem Laufwerk fehlen oder sind beschädigt. In der Anleitung zur Fehlerbehebung steht, wie du sie neu einrichtest.',
+  // #532: derselbe Fall, wenn dieser Bereich die Engine neu installieren kann (das Laufwerk erlaubt den Download).
+  'models.engineProblem.filesDamagedReinstall': 'Einige ihrer Dateien auf diesem Laufwerk fehlen oder sind beschädigt. Installiere sie neu, um die Dateien zu ersetzen.',
+  // #532: eine frische, per SHA-256 geprüfte Kopie lädt trotzdem nicht — daher keine zweite Neuinstallation.
+  'models.engineProblem.filesDamagedAfterInstall': 'Sie wurde gerade installiert und kann trotzdem nicht starten, ihre Dateien sind also wahrscheinlich nicht die Ursache. In der Anleitung zur Fehlerbehebung steht, was du sonst prüfen kannst.',
+  'models.engineProblem.filesDamagedAfterInstallWin': 'Sie wurde gerade installiert und kann trotzdem nicht starten, ihre Dateien sind also wahrscheinlich nicht die Ursache. Auch ein veraltetes Microsoft Visual C++ Redistributable (x64) kann das auslösen: Installiere das aktuelle und wähle dann „Erneut prüfen“.',
+  'models.engineProblem.reinstall': 'KI-Engine neu installieren',
+  'models.engineProblem.voiceReinstall': 'Sprach-Engine neu installieren',
+  'models.engineProblem.reinstalled': 'Die KI-Engine wurde neu installiert.',
+  'models.engineProblem.voiceReinstalled': 'Die Sprach-Engine wurde neu installiert.',
   'models.engineProblem.blocked': 'Die Windows-Sicherheit hat sie blockiert (intelligente App-Steuerung oder dein Virenschutz). In der Anleitung zur Fehlerbehebung steht, was du tun kannst.',
   'models.engineProblem.demoNote': 'Bis dahin antworten Modelle im Demo-Modus — die Antworten sind simuliert.',
   'models.engineProblem.check': 'Erneut prüfen',
@@ -1965,6 +1974,7 @@ export const de: Record<keyof typeof en, string> = {
   'diag.engine.reason.libraryMissing': 'eine Systembibliothek fehlt',
   'diag.engine.reason.systemTooOld': 'das System ist zu alt',
   'diag.engine.reason.filesDamaged': 'Engine-Dateien fehlen oder sind beschädigt',
+  'diag.engine.reason.filesDamagedAfterInstall': 'Engine-Dateien direkt nach einer frischen Installation als beschädigt gemeldet',
   'diag.engine.reason.vcRuntimeMissing': 'Visual-C++-Laufzeit fehlt',
   'diag.engine.reason.blocked': 'von der Windows-Sicherheit blockiert',
   'diag.accel.cpu': 'CPU',
@@ -2712,6 +2722,9 @@ export const de: Record<keyof typeof en, string> = {
     'Sperre den Arbeitsbereich oder warte, bis die aktuelle Frage beantwortet ist, und versuche es dann erneut – oder starte die App neu, falls der Hinweis bleibt.',
   // #339 P8-2: die downloadEngine-Anfrage nannte etwas, das keine Engine-Familie ist.
   'main.engine.badRequest': 'Die Anfrage zur Engine-Installation wurde nicht verstanden. Bitte versuche es erneut.',
+  // #532: „… neu installieren“ gibt es nur für eine Engine, deren eigene Dateien das System in dieser Sitzung als beschädigt erkannt hat.
+  'main.engine.nothingToRepair':
+    'Es gibt nichts zu reparieren: Die Engine auf diesem Laufwerk wurde nicht als beschädigt erkannt.',
   // #410: der In-App-Installer für die OCR-Sprachdateien (services/ocr-install.ts).
   'main.ocr.badRequest':
     'Die Anfrage zum Herunterladen der OCR-Dateien wurde nicht verstanden. Bitte versuche es ' +

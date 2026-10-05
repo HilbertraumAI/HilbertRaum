@@ -134,12 +134,26 @@ App & browser control → Smart App Control, or your antivirus program's setting
 the app cannot override them.
 
 **"Some of its files on this drive are missing or damaged".** A library that the engine keeps next
-to its program could not be loaded, which usually means an interrupted copy. If the AI Model screen
-installed the engine for you: quit the app, delete the engine folder on the drive
-(`runtime/llama.cpp/win`, `…/mac` or `…/linux`; for the voice engine `runtime/whisper.cpp/…`),
-start the app again and install the engine from the AI Model screen. On a drive someone prepared
-for you, ask them to copy the engine folder again. On Windows the same message can also mean an
-outdated Visual C++ Redistributable; installing the current one (above) is worth trying first.
+to its program could not be loaded, which usually means an interrupted copy. Choose **Install the
+AI engine again** in the banner (for the voice engine: **Install the voice engine again**, under
+the speech model). It downloads a fresh copy, checks it against its pinned checksum, replaces the
+engine folder and starts your model again. If the download fails or you cancel it, the copy on the
+drive stays as it was. Like every download, it needs **Allow internet access…** in Settings; if
+the button is greyed out, the line under it says why.
+
+If the drive does not allow downloads (an offline Kit), or this computer has no internet:
+- On a drive someone prepared for you, ask them to copy the engine folder again.
+- Otherwise do it by hand: quit the app, delete the engine folder on the drive
+  (`runtime/llama.cpp/win`, `…/mac` or `…/linux`; for the voice engine `runtime/whisper.cpp/…`),
+  start the app again on a computer with internet, and install the engine from the AI Model screen.
+
+**"It was just installed and still can't start".** The banner says this when a freshly installed,
+checksum-verified copy is refused as damaged too, so its files are probably not the cause, and it
+offers no second reinstall. On Windows this usually means an outdated Visual C++ Redistributable
+whose files are present: install the current one (above), then choose Check again. An antivirus
+program that removed one of the engine's files is the other common cause; its own window says
+so and lets you restore the file. On Linux and macOS, check that the drive's file system kept the
+engine's files intact (copy it to an internal disk and try from there).
 
 **macOS: "It needs a newer version of macOS".** Update macOS, then choose Check again.
 

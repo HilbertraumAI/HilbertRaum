@@ -2620,9 +2620,19 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   code writes none. Failed document rows and the GPU flags are cleaned at the next session start.
   An audio row that failed before #530 cannot be told apart from any other transcription failure,
   so it keeps its old text.
-- **No reinstall button for an engine that is present but broken.** For "damaged engine files"
-  the troubleshooting entry describes deleting the engine folder and installing it again. The
-  in-app reinstall is #532.
+- **The in-app reinstall needs a download (#532).** "Install the AI engine again" fetches the
+  pinned build. On a drive whose policy forbids downloads (an offline Kit) the button stays
+  disabled and the troubleshooting entry is the path; an offline repair would come with the
+  signed update bundles (Phase 22). It re-fetches the main build only; the `cpu/` safety net is
+  left as it is, so damage inside `cpu/` itself is not repaired by it.
+- **No reinstall while the engine's `cpu/` build answers.** When the main engine folder is
+  damaged but its `cpu/` build runs the model (a Windows Kit), the reinstall still asks to stop
+  the model first: the app cannot tell that runtime from the main build running on the
+  processor.
+- **A second refusal of a fresh copy is not a damaged copy.** If the copy the app just installed
+  is refused as damaged too, the banner says its files are probably not the cause (on Windows,
+  usually an outdated Visual C++ Redistributable) and offers no second reinstall. That marker
+  lasts until the app restarts.
 
 ## GPU acceleration ([`architecture.md`](architecture.md) GPU record)
 

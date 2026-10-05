@@ -15,8 +15,20 @@ export const LINUX_LIBRARY_PACKAGES: Readonly<Record<string, { deb: string; rpm:
   'libgomp.so.1': { deb: 'libgomp1', rpm: 'libgomp' }
 }
 
+export interface EngineProblemCopyOptions {
+  /**
+   * #532: the surface offers "Install … again" and this drive's policy allows the download (the
+   * button may still wait for the Settings toggle). The damaged-files sentence then names that
+   * action instead of pointing to the troubleshooting guide.
+   */
+  reinstall?: boolean
+}
+
 /** The sentence that says what is wrong and what to do — after the "can't run" title. */
-export function engineProblemCopy(problem: EngineProblem): {
+export function engineProblemCopy(
+  problem: EngineProblem,
+  opts: EngineProblemCopyOptions = {}
+): {
   key: MessageKey
   params?: Record<string, string>
 } {
@@ -43,7 +55,20 @@ export function engineProblemCopy(problem: EngineProblem): {
     case 'vc-runtime-missing':
       return { key: 'models.engineProblem.vcRuntimeMissing' }
     case 'files-damaged':
-      return { key: 'models.engineProblem.filesDamaged' }
+      // #532: a fresh, verified copy that still does not load — its files are not the likely
+      // cause, so no second reinstall is suggested. On Windows the known other cause is an
+      // outdated Visual C++ Redistributable whose DLLs are present (the presence-only check).
+      if (problem.afterInstall) {
+        return {
+          key:
+            problem.os === 'win'
+              ? 'models.engineProblem.filesDamagedAfterInstallWin'
+              : 'models.engineProblem.filesDamagedAfterInstall'
+        }
+      }
+      return {
+        key: opts.reinstall ? 'models.engineProblem.filesDamagedReinstall' : 'models.engineProblem.filesDamaged'
+      }
     case 'blocked':
       return { key: 'models.engineProblem.blocked' }
   }
@@ -56,6 +81,18 @@ export const ENGINE_PROBLEM_DIAG_KEY: Readonly<Record<EngineProblemReason, Messa
   'files-damaged': 'diag.engine.reason.filesDamaged',
   'vc-runtime-missing': 'diag.engine.reason.vcRuntimeMissing',
   blocked: 'diag.engine.reason.blocked'
+}
+
+/** Diagnostics' reason phrase for one verdict — a damaged-files verdict about a fresh install says so (#532). */
+export function engineProblemDiagKey(problem: EngineProblem): MessageKey {
+  return problem.reason === 'files-damaged' && problem.afterInstall
+    ? 'diag.engine.reason.filesDamagedAfterInstall'
+    : ENGINE_PROBLEM_DIAG_KEY[problem.reason]
+}
+
+/** May a surface offer "Install … again" for this verdict (#532)? Damaged files, not yet after a fresh install. */
+export function engineProblemOffersReinstall(problem: EngineProblem): boolean {
+  return problem.reason === 'files-damaged' && !problem.afterInstall
 }
 
 /** The technical detail Diagnostics shows after the reason: `libgomp.so.1, exit code 127`. */

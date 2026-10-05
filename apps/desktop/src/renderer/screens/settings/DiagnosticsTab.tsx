@@ -6,7 +6,7 @@ import { runAndSurface } from '../../lib/errors'
 import { fmt1 } from '../../lib/format'
 import { formatSize } from '../documents/format'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
-import { ENGINE_PROBLEM_DIAG_KEY, engineProblemTechnicalDetail } from '@shared/engine-problem'
+import { engineProblemDiagKey, engineProblemTechnicalDetail } from '@shared/engine-problem'
 import type {
   AppSettings,
   AppStatus,
@@ -168,7 +168,7 @@ function localApiStatusLine(api: LocalApiStatus | null | undefined, t: I18n['t']
  *  technical values untranslated (§7: the library name and the exit code live here only). */
 function engineProblemLine(problem: EngineProblem, t: I18n['t']): string {
   const detail = engineProblemTechnicalDetail(problem)
-  const line = t('diag.engine.cannotRun', { reason: t(ENGINE_PROBLEM_DIAG_KEY[problem.reason]) })
+  const line = t('diag.engine.cannotRun', { reason: t(engineProblemDiagKey(problem)) })
   return detail ? `${line} (${detail})` : line
 }
 

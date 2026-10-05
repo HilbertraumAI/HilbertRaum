@@ -1797,8 +1797,12 @@ explicitly out of scope.
   - **Unchanged on purpose.** Every chat-model and engine button (Home, the chat's no-model state,
     the #530 App notice, Performance, the first-run gate) keeps plain `models`; the default view
     shows what they are about. `resolveNavTarget('models')` stays exactly `{ screen: 'models' }`.
-  - **Not in the skip predicate.** The #530 engine-problem banner, and the AI Model banners #516
-    and #532 propose, do not suppress the scroll. They should join the predicate when they land.
+  - **In the skip predicate since #532 (2026-10-05).** The #530 "can't run" banner for the chat
+    engine, now carrying the #532 reinstall, keeps the screen at the top like a missing-engine
+    banner (all three focuses list `llama_cpp`). The voice engine's #530 notice is a hint on the
+    speech-model card, inside the library, so it does not. The decision waits for the first read
+    of the engine verdicts (`useEngineProblemsRead().settled`), and a refusal reported after that
+    read cannot move the screen. #516's banner should join the predicate when it lands.
   - **The rule** is recorded once in design-guidelines §7 ("a button about a missing optional
     model lands on that model").
 - **Permissions:** the Phase-31 deny-by-default `setPermissionRequestHandler` gained its
@@ -4037,9 +4041,8 @@ Design record: [`design-guidelines.md`](design-guidelines.md) §11.17.
 
 - Knowledge packs keep their old wording for a Windows VC++ refusal (out of scope; kiwix is static
   on Linux and macOS).
-- No reinstall button for a present-but-broken engine: **#532** (it shares a "re-install a present
-  family" mechanism with #516's update offer). The demo runtime still counts as "engine in use"
-  for an in-app reinstall.
+- ~~No reinstall button for a present-but-broken engine~~ — **built by #532** (§8 below). #516's
+  update offer can reuse its mechanism.
 - macOS classification is unmeasured on hardware.
 - The Windows VC++ check is presence-only. An outdated Redistributable whose DLLs are present reads
   as damaged engine files; the troubleshooting entry covers both causes.
@@ -4072,6 +4075,99 @@ and German, in light and dark.
 
 **The review found two things, both fixed:** the stale engine notice after a heal, and the
 voice-engine banner contradicting the chat banner.
+
+### §8 #532 amendment — "Install the AI engine again" (2026-10-05)
+
+**The gap.** For `files-damaged` (a library the engine ships is missing or broken) the banner
+could only point to the troubleshooting guide: quit, delete `runtime/llama.cpp/<os>` by hand,
+restart, install. Three things blocked an in-app repair:
+- `engineStatus` counts a family as installed when its binary exists, so no button appeared;
+- `start()` skips every family whose marker is current, so the job failed with "already
+  installed";
+- `chatEngineInUse` counted the demo runtime as a running model, so the job was refused with
+  "stop the model first". The demo runtime never executes the engine folder, and it is exactly
+  what answers while the engine is refused. This was CODE-13's registered polish candidate
+  (§47), and it also refused a FIRST install while a model answered in demo mode.
+
+**Owner decisions (2026-10-05).**
+1. **Offline Kits:** with downloads forbidden by the drive policy, the button shows disabled with
+   the policy reason and the reason sentence keeps the troubleshooting pointer. An offline repair
+   path belongs to the signed update bundles (Phase 22, BUILD_STATE §5 item 3).
+2. **Main build only.** The reinstall re-fetches the default build; the pre-clean keeps `cpu/`
+   as it always has. The in-app installer never installs `cpu/`, even on a first install, and the
+   startup check probes the main binary.
+3. **The voice engine gets the same action**, on its quiet hint (§11.17 decision 5).
+4. **One click**, like the existing "Install AI engine" button. The drive's copy is replaced only
+   after the new archive downloaded and matched its pinned SHA-256; a cancelled or failed download
+   leaves it as it was.
+
+**As built.**
+- **Request:** `downloadEngine({ families, reinstall: true })`. `parseEngineDownloadRequest`
+  requires an explicit list of REQUIRED families and a real boolean. The IPC handler then admits
+  it only for families that hold a `files-damaged` verdict this session (`repairable`), else
+  `main.engine.nothingToRepair`. `EngineDownloadManager.start` installs the named families
+  whether or not they are current; a named family with no build here is `main.engine.noHostBuild`.
+  Everything else is the ordinary flow: the gates, download, SHA-256 verify, pre-clean (keeps
+  `cpu/`), extract, marker, verifier cache invalidation.
+- **Status and job:** `EngineStatus.reinstallableFamilies` lists the required families that are on
+  the drive and have a build here. `EngineDownloadJob.families` and `.reinstall` let the screen
+  attribute a job's progress to the surface that started it (data-contracts.md).
+- **Demo runtime:** `chatEngineInUse` is `startingModelId != null || (activeModelId() !== null &&
+  status().backend !== 'mock')`. A start in flight still counts: its ladder spawns the real
+  binary.
+- **After the install** (`onInstalled`, which now also receives each family's installed program
+  path):
+  - `engineInstalled(family, binPath)` drops the verdict and remembers the fresh program for the
+    session;
+  - the llama consumers are re-armed and the probe refresh runs, as before;
+  - then `restartChatOnRealEngine` (exported from `engine-recheck.ts`; it now skips while a start
+    is in flight) brings a model the demo runtime stands in for back on the engine. This applies
+    to a first install too.
+- **A fresh copy that still fails.** A later `files-damaged` report about THAT program is stored
+  with `EngineProblem.afterInstall: true`. A report about another program of the family (the
+  `cpu/` net) and other reasons are stored as they are. The banner then says the files are
+  probably not the cause, points Windows users to the Visual C++ Redistributable (the
+  presence-only check in §7), and offers no second reinstall. Diagnostics says "reported damaged
+  right after a fresh install".
+- **Renderer:** `EngineProblemNotice` takes an optional `reinstall` slot. `ModelsScreen` fills it
+  from `engineJobControls`, the progress, Cancel, error and gate controls shared with the
+  install banners. The slot is filled only for `engineProblemOffersReinstall` (damaged files, not
+  `afterInstall`) and for a family in `reinstallableFamilies`. Check again is disabled while the
+  reinstall runs, and a toast confirms a finished one. The chat engine's banner suppresses the
+  deep-link scroll (the "Voice dictation" #539 amendment).
+
+**Real-app verification (2026-10-05, DesktopDiT, GTX 1070 Ti, dev build, scratch drive root;
+the E: stick was only read).**
+- With the engine missing and the 4B model answering in demo mode, the argument-less install was
+  admitted. The model then restarted on its own at rung 1 (GPU).
+- With `llama.dll` removed (`llama-server.exe` exits 0xC0000135, no stderr), the startup check
+  reported `files-damaged`. The German banner offered "KI-Engine neu installieren" with "Erneut
+  prüfen" beside it. One click showed the progress in the banner, with Check again disabled; the
+  verdict cleared, the toast appeared, the DLL was back and the model restarted on the GPU.
+- With the fresh copy damaged again, the verdict carried `afterInstall`. The banner showed the
+  Windows Visual C++ sentence and only Check again, and Diagnostics showed the after-install
+  phrase. Restoring the DLL and choosing Check again healed it ("Die KI-Engine läuft wieder.").
+- English, light and dark: with Allow internet access off, the button was disabled and the
+  Settings reason wrapped below both buttons. The first cut kept it beside them: `.hint`'s
+  `max-width` capped a 100 % flex-basis, so a zero-height break item now forces the line.
+
+**Residuals.**
+- The screen's runtime poll runs only while it sees a start in flight. A restart that begins
+  after its post-job refresh (a slow probe refresh) leaves the card on its earlier "running" until
+  the next refresh. #530's Check again restart has the same limit.
+- While a REAL runtime answers from the `cpu/` net beside a damaged main folder, the reinstall is
+  still refused with "stop the model first": the status cannot tell rung 3 from rung 2.
+- A model started while a reinstall is in flight can still race the pre-clean (CODE-13's
+  registered residual, unchanged).
+- A verdict about the `cpu/` binary is repaired by re-fetching the main build, which does not
+  touch `cpu/` (decision 2).
+
+Tests: `engine-consent-ipc.test.ts` "#532" (the repair through the real handler and manager, the
+verdict gate, the demo-runtime install and restart, the payload rows), `engine-download.test.ts`
+(the `chatEngineInUse` table), `engine-load.test.ts` (the `afterInstall` store rules),
+`EngineProblem.test.tsx` "Install the engine again (#532)" (offer, order, progress, toast, the
+gate rows, no offer, the voice hint and its attribution, the Diagnostics line) and
+`ModelsScreen.test.tsx` (the deep-link rows).
 
 
 ## Internationalization — design record (Phases 39–42)
@@ -8345,7 +8441,8 @@ here; everything is Low, none flip-blocking):
   start (interactive-lock path only); CODE-11 crash-bypass orphan (§5.6); CODE-13
   cancel-during-extract marker-less binary + the engine-download-vs-model-start race; the Phase-D
   torn-FTS-content-backfill observation (pre-existing); CODE-48's watch trio; DOC-13.
-- **Fix-when-touched polish candidates:** CODE-13 mock-backend first-install exemption ·
+- **Fix-when-touched polish candidates:** ~~CODE-13 mock-backend first-install exemption~~
+  (done 2026-10-05 by #532: "Engine load failures" §8) ·
   CODE-7 mounted-guard narrowing · the CODE-18 canned-answer persist site ·
   CODE-35 `key={preview.id}` · CODE-37 `setAutoFire` failure key · `diag.bench.cores` plural pair
   (CODE-8 net allowlist) · the seven-plus older DE ASCII-quote closers (CODE-25) · a direct GAP-5

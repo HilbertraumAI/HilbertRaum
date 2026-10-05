@@ -11,6 +11,7 @@ import {
   describeLoadFailure,
   engineProblemFor,
   engineProblemReportedSince,
+  engineInstalled,
   engineProblemSeq,
   engineProblems,
   isEngineCannotRunError,
@@ -321,6 +322,30 @@ describe('the session verdict store', () => {
     reportEngineProblem(gomp)
     clearEngineProblemFor('llama_cpp', '/k/runtime/llama.cpp/win/llama-server.exe')
     expect(engineProblemFor('llama_cpp')).toEqual(gomp)
+  })
+
+  // #532: a "files damaged" verdict about the program an install just put on the drive is about a
+  // fresh, SHA-256-checked copy — the UI then stops offering yet another reinstall.
+  it('after an install, marks a damaged-files verdict about the fresh program — and nothing else (#532)', () => {
+    const damaged = { family: 'llama_cpp' as const, reason: 'files-damaged' as const, os: 'linux' as const, name: 'libllama.so', exit: 'exit code 127' }
+    reportEngineProblem(damaged, LLAMA)
+    const listener = vi.fn()
+    onEngineProblemsChanged(listener)
+    engineInstalled('llama_cpp', LLAMA)
+    // The old copy's verdict no longer describes the new one; screens hear that it went.
+    expect(engineProblemFor('llama_cpp')).toBeNull()
+    expect(listener).toHaveBeenCalledTimes(1)
+    reportEngineProblem(damaged, LLAMA)
+    expect(engineProblemFor('llama_cpp')).toEqual({ ...damaged, afterInstall: true })
+    // The cpu/ safety net is another program, which the install left as it was.
+    reportEngineProblem(damaged, LLAMA_CPU)
+    expect(engineProblemFor('llama_cpp')).toEqual(damaged)
+    // A refusal no reinstall can fix is reported as it is, fresh copy or not.
+    reportEngineProblem(gomp, LLAMA)
+    expect(engineProblemFor('llama_cpp')).toEqual(gomp)
+    // Only the installed family: the voice engine's copy is not fresh.
+    reportEngineProblem({ ...damaged, family: 'whisper_cpp' }, WHISPER)
+    expect(engineProblemFor('whisper_cpp')?.afterInstall).toBeUndefined()
   })
 
   it('never lets a throwing listener break a report', () => {

@@ -86,6 +86,13 @@ export interface EngineProblem {
   name?: string
   /** Diagnostics only (guidelines §7): how the program ended, e.g. `exit code 127`, `exit code 0xC0000135`. */
   exit: string
+  /**
+   * #532: a `'files-damaged'` verdict about the very program this session's engine install just
+   * put on the drive — a fresh copy, checked against its pinned SHA-256, that still does not load.
+   * Its own files are then unlikely to be the cause (on Windows, often an outdated Visual C++
+   * Redistributable), so the UI stops offering another reinstall. Absent otherwise.
+   */
+  afterInstall?: boolean
 }
 
 /** What "Check again" (`engine:recheck`, #530) found: the problems still present after the check. */
@@ -760,6 +767,14 @@ export interface EngineDownloadJob {
   binaryPath: string | null
   /** Friendly failure reason when status === 'failed'. */
   error: string | null
+  /**
+   * The families this job installs (#532), so a screen showing more than one engine action can
+   * attribute the progress to the right one. Absent on the synthetic "unknown job" answer and
+   * from an older main.
+   */
+  families?: string[]
+  /** True for a reinstall of an engine already on the drive (#532: `reinstall: true`). */
+  reinstall?: boolean
 }
 
 /** Whether the engine binaries are installed and (if not) whether they can be fetched. */
@@ -774,6 +789,12 @@ export interface EngineStatus {
   backend: string | null
   /** Engine families with a host build but no binary yet (e.g. `llama_cpp`, `whisper_cpp`). */
   missingFamilies: string[]
+  /**
+   * REQUIRED families whose binary IS on the drive and that have a build for this host, so the
+   * installer could fetch them again (#532: the "Install … again" repair). Optional on the type
+   * so an older main simply offers no repair.
+   */
+  reinstallableFamilies?: string[]
   /**
    * OPTIONAL families (never a readiness prerequisite) with a host build but no binary yet —
    * today `kiwix_tools` (#339 P8-1). Never counted in `installed`, never listed in
@@ -815,6 +836,13 @@ export interface EngineOptionalFamily {
  */
 export interface EngineDownloadRequest {
   families?: RuntimeFamily[]
+  /**
+   * #532: install the named families again although they are on the drive and their install
+   * marker is current — the repair for an engine the OS refused because its own files are
+   * missing or damaged. Needs an explicit `families` list of REQUIRED families, each holding a
+   * `'files-damaged'` verdict this session; main refuses anything else.
+   */
+  reinstall?: boolean
 }
 
 // ---- In-app OCR language-file install (#410) ----

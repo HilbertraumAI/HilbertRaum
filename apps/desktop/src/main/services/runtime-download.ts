@@ -179,15 +179,23 @@ export function engineFamilyHasHostBuild(
 
 /**
  * Validate the renderer's `downloadEngine` payload (#339 P8-2). Renderer input is untrusted:
- * anything but "absent" or `{ families: [<known family>, …] }` is rejected with friendly copy,
- * and the parsed list is rebuilt from the code's own family names (never the caller's strings
- * echoed back). Absent / `{}` = the default install (`families` undefined).
+ * anything but "absent" or `{ families: [<known family>, …], reinstall?: boolean }` is rejected
+ * with friendly copy, and the parsed list is rebuilt from the code's own family names (never the
+ * caller's strings echoed back). Absent / `{}` = the default install (`families` undefined).
+ * `reinstall: true` (#532) needs an explicit list of REQUIRED families: the repair is never the
+ * default selection and never reaches a separately consented optional family. Whether each named
+ * family really holds a "files damaged" verdict is the IPC layer's check (`registerEngineIpc.ts`).
  */
-export function parseEngineDownloadRequest(raw: unknown): { families?: EngineFamily[] } {
+export function parseEngineDownloadRequest(raw: unknown): { families?: EngineFamily[]; reinstall?: true } {
   if (raw === undefined || raw === null) return {}
   if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error(tMain('main.engine.badRequest'))
+  const reinstall = (raw as { reinstall?: unknown }).reinstall
+  if (reinstall !== undefined && typeof reinstall !== 'boolean') throw new Error(tMain('main.engine.badRequest'))
   const families = (raw as { families?: unknown }).families
-  if (families === undefined) return {}
+  if (families === undefined) {
+    if (reinstall === true) throw new Error(tMain('main.engine.badRequest'))
+    return {}
+  }
   if (!Array.isArray(families) || families.length === 0) {
     throw new Error(tMain('main.engine.badRequest'))
   }
@@ -199,10 +207,15 @@ export function parseEngineDownloadRequest(raw: unknown): { families?: EngineFam
   }
   // A request never mixes an optional (separately consented) family with a required one: the
   // consent dialog sends the optional family alone, the engine button sends nothing. A mixed
-  // payload is not an escalation (a current family is never re-installed) but it would blur
-  // which request carried the acknowledgement, so it is refused outright.
+  // payload is not an escalation (without `reinstall` a current family is never re-installed,
+  // and `reinstall` refuses an optional family outright) but it would blur which request
+  // carried the acknowledgement, so it is refused outright.
   const optional = out.filter((f) => SIDECAR_FAMILY_SPECS.find((s) => s.family === f)?.optional === true)
   if (optional.length > 0 && optional.length !== out.length) throw new Error(tMain('main.engine.badRequest'))
+  if (reinstall === true) {
+    if (optional.length > 0) throw new Error(tMain('main.engine.badRequest'))
+    return { families: out, reinstall: true }
+  }
   return { families: out }
 }
 
@@ -231,6 +244,8 @@ export function engineStatus(
     version: llama?.version ?? null,
     backend: llama?.build.backend ?? null,
     missingFamilies: missingRequired.map((e) => e.family),
+    // #532: what an "Install … again" action could fetch — on the drive, and with a build here.
+    reinstallableFamilies: required.filter((e) => existsSync(e.plan.binaryPath)).map((e) => e.family),
     missingOptionalFamilies: missingOptional.map((e) => e.family),
     // #339 P8-2: what the consent dialog states, from the pin + the code-side spec — never copy.
     optionalFamilies: engines
@@ -401,14 +416,21 @@ export interface StartEngineDownloadOptions {
   /** Restrict the install to these families (default: every missing, fetchable family). */
   families?: EngineFamily[]
   /**
+   * #532: install `families` even when they are present and their marker is current — the repair
+   * for engine files the OS loader found missing or damaged. Requires `families`; the IPC layer
+   * admits it only for families holding a "files damaged" verdict. The flow is the ordinary one:
+   * the drive's copy is replaced only after the new archive downloaded and matched its SHA-256.
+   */
+  reinstall?: boolean
+  /**
    * True when a chat model runtime is currently RUNNING off the llama_cpp install dir
    * (full-audit 2026-07-11 CODE-13). An engine (re-)install pre-cleans that dir
    * (`install()` removes everything but the archive + `cpu/`), which on Windows fails
    * confusingly against the running binary's file lock and on POSIX silently swaps the
    * binary under the live process — so a job that would touch llama_cpp is refused with
    * friendly copy while a model runs. Installs that only touch other families (e.g. a
-   * missing whisper_cpp) are unaffected. The IPC layer passes
-   * `ctx.runtime.activeModelId() !== null`.
+   * missing whisper_cpp) are unaffected. The IPC layer passes `chatEngineInUse(ctx.runtime)`:
+   * a model running or starting on the real engine, never the built-in demo runtime (#532).
    */
   chatRuntimeActive?: boolean
   /**
@@ -439,6 +461,12 @@ export interface StartEngineDownloadOptions {
 
 const MAX_TERMINAL_JOBS = 10
 
+/** A completed-install subscriber (#323): the families installed, and each one's primary program (#532). */
+export type InstalledListener = (
+  families: EngineFamily[],
+  binaryPaths: Partial<Record<EngineFamily, string>>
+) => void
+
 /**
  * Owns the in-app engine-download job. One at a time; a single job installs every missing
  * engine family in sequence. The job lives in memory for the session (the durable truth is
@@ -457,7 +485,7 @@ export class EngineDownloadManager {
    */
   private runSettled = true
   /** Issue #323: told the families a finished job installed, AFTER `job.status = 'done'`. */
-  private readonly installedListeners = new Set<(families: EngineFamily[]) => void>()
+  private readonly installedListeners = new Set<InstalledListener>()
 
   constructor(private readonly deps: EngineDownloadDeps = {}) {}
 
@@ -468,9 +496,10 @@ export class EngineDownloadManager {
    * fails the finished job (the same rule as the model downloader's `onModelInstalled`, #40).
    * Returns the unsubscribe. The IPC layer wires this to the GPU-probe refresh: a benchmark
    * run before the chat engine existed persisted an empty probe, and installing the engine is
-   * the moment that answer can change.
+   * the moment that answer can change. `binaryPaths` (#532) names each installed family's
+   * primary program, the path every spawn site resolves for it.
    */
-  onInstalled(cb: (families: EngineFamily[]) => void): () => void {
+  onInstalled(cb: InstalledListener): () => void {
     this.installedListeners.add(cb)
     return () => {
       this.installedListeners.delete(cb)
@@ -481,7 +510,8 @@ export class EngineDownloadManager {
    * Validate the gates, resolve which engine families are missing, and start fetching them
    * in the background. Throws a friendly, cause-specific error when a gate is closed,
    * another download is running, there are no engine sources / host build, or everything is
-   * already installed + current.
+   * already installed + current. A reinstall (#532, `reinstall: true`) installs the families it
+   * names whether or not they are current.
    */
   async start(opts: StartEngineDownloadOptions): Promise<EngineDownloadJob> {
     this.pruneTerminalJobs()
@@ -502,10 +532,18 @@ export class EngineDownloadManager {
     // must not be able to reach a copyleft, separately-consented family. Only an explicit
     // `families: ['kiwix_tools']` installs it (the consent step is P8-2), and `e.optional`
     // comes from the CODE spec, never from the drive's user-writable yaml.
+    // #532: a reinstall keeps the requested families even when current — and only those, so it
+    // needs the explicit list; a family it names that has no build here cannot be repaired here.
     const wanted = opts.families
+    const reinstall = opts.reinstall === true
+    if (reinstall && (!wanted || wanted.length === 0)) throw new Error(tMain('main.engine.badRequest'))
     const installs = engines.filter(
-      (e) => (wanted ? wanted.includes(e.family) : !e.optional) && !runtimeInstallCurrent(e.plan)
+      (e) =>
+        (wanted ? wanted.includes(e.family) : !e.optional) && (reinstall || !runtimeInstallCurrent(e.plan))
     )
+    if (reinstall && installs.length < (wanted?.length ?? 0)) {
+      throw new Error(tMain('main.engine.noHostBuild'))
+    }
     if (installs.length === 0) {
       throw new Error(tMain('main.engine.alreadyInstalled'))
     }
@@ -533,7 +571,9 @@ export class EngineDownloadManager {
       totalBytes: null,
       unverified: false,
       binaryPath: null,
-      error: null
+      error: null,
+      families: installs.map((e) => e.family),
+      reinstall
     }
     this.jobs.set(job.jobId, job)
     const controller = new AbortController()
@@ -541,7 +581,8 @@ export class EngineDownloadManager {
     this.runSettled = false // F-33: busy until run() actually settles (not just until cancelled)
     this.deps.log?.('Engine download started', {
       jobId: job.jobId,
-      families: installs.map((e) => `${e.family}:${e.build.os}/${e.build.arch}/${e.build.backend}`)
+      families: installs.map((e) => `${e.family}:${e.build.os}/${e.build.arch}/${e.build.backend}`),
+      ...(reinstall ? { reinstall } : {})
     })
     void this.run(job, installs, controller).finally(() => {
       this.runSettled = true
@@ -640,9 +681,11 @@ export class EngineDownloadManager {
     // Issue #323: the install is complete and recorded — tell the subscribers which families
     // landed. Each listener is isolated: a fault there must never fail the finished job.
     const families = installs.map((e) => e.family)
+    const binaryPaths: Partial<Record<EngineFamily, string>> = {}
+    for (const e of installs) binaryPaths[e.family] = e.plan.binaryPath
     for (const listener of this.installedListeners) {
       try {
-        listener(families)
+        listener(families, binaryPaths)
       } catch (err) {
         this.deps.log?.('Engine install listener failed (install itself succeeded)', String(err))
       }

@@ -261,9 +261,12 @@ words per second" and "faster than you can read". There is nothing to install or
   banner: "The AI engine can't run on this computer". This is not a problem with the model or the
   graphics card; something the engine needs is missing from your system. The banner names it,
   typically a system library on Linux or Microsoft's Visual C++ runtime on Windows. Install it,
-  then choose **Check again** (or restart the app). Home, the chat and Diagnostics point to the
-  same banner. Step by step: [`troubleshooting.md`](troubleshooting.md), "The AI engine can't run
-  on this computer".
+  then choose **Check again** (or restart the app). When the engine's own files on the drive are
+  missing or damaged, the banner also offers **Install the AI engine again**, which downloads a
+  fresh, checksum-verified copy (the voice engine's note offers the same). Like every download, it
+  needs **Allow internet access…** in Settings and a drive that permits downloads. Home, the chat
+  and Diagnostics point to the same banner. Step by step:
+  [`troubleshooting.md`](troubleshooting.md), "The AI engine can't run on this computer".
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
   big speedups come from dedicated graphics cards.

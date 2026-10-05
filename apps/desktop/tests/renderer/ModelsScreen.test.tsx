@@ -13,6 +13,7 @@ import {
   type DownloadJob,
   type EngineDownloadJob,
   type EngineOptionalFamily,
+  type EngineProblem,
   type EngineStatus,
   type ModelInfo,
   type ModelVerifyProgress,
@@ -65,6 +66,9 @@ function policyStatus(opts: { downloadsAllowed: boolean; settingOn: boolean }): 
 }
 
 const appStatus = { machineRamGb: 32 } as unknown as AppStatus
+
+/** #532: the chat engine is on the drive, but the OS found its own files damaged. */
+const DAMAGED_ENGINE: EngineProblem = { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' }
 
 /** #410: a drive with no usable OCR source list — the AI Model screen's OCR row stays hidden. */
 const NO_OCR_SOURCES: OcrInstallStatus = {
@@ -794,6 +798,23 @@ describe('ModelsScreen — the speech-model deep link (#527)', () => {
       expect(scrolled).toHaveLength(0)
     })
 
+    // #532 (the #539 note on it): the AI engine's "can't run" banner — with its reinstall — sits at
+    // the top too. The voice engine's notice is a hint ON the speech-model card, so it does not.
+    it('the AI engine can\'t run: stays at the top, where its banner is', async () => {
+      stub({ models: library(), engine: engine([]), appStatus: { engineProblems: [DAMAGED_ENGINE] } })
+      render(<ModelsScreen focus="voice" />)
+      expect(await screen.findByText(t('en', 'models.engineProblem.title'))).toBeInTheDocument()
+      expect(screen.getByText('Whisper Small (multilingual transcriber)')).toBeInTheDocument()
+      expect(scrolled).toHaveLength(0)
+    })
+
+    it('only the voice engine can\'t run: its hint is on the speech-model card, so the library is scrolled to', async () => {
+      stub({ models: library(), engine: engine([]), appStatus: { engineProblems: [{ ...DAMAGED_ENGINE, family: 'whisper_cpp' }] } })
+      render(<ModelsScreen focus="voice" />)
+      await screen.findByText('Whisper Small (multilingual transcriber)')
+      await waitFor(() => expect(scrolled).toHaveLength(1))
+    })
+
     it('no focus: never scrolls', async () => {
       stub({ models: library(), engine: engine([]) })
       render(<ModelsScreen />)
@@ -875,6 +896,14 @@ describe.each([
       render(<ModelsScreen focus={focus} />)
       expect(await screen.findByText(t('en', 'models.voiceEngine.title'))).toBeInTheDocument()
       await waitFor(() => expect(scrolled).toHaveLength(1))
+    })
+
+    it('the AI engine can\'t run (#532): stays at the top, where its banner is', async () => {
+      stub({ models: library(), engine: engine([]), appStatus: { engineProblems: [DAMAGED_ENGINE] } })
+      render(<ModelsScreen focus={focus} />)
+      expect(await screen.findByText(t('en', 'models.engineProblem.title'))).toBeInTheDocument()
+      expect(screen.getByText(name)).toBeInTheDocument()
+      expect(scrolled).toHaveLength(0)
     })
   })
 
