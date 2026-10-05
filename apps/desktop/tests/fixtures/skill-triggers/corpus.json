@@ -1105,6 +1105,13 @@
       "inScopeDocs": [{ "title": "datenschutzhinweise.pdf", "mimeType": "application/pdf" }],
       "expected": "none",
       "note": "#608 (owner ruling 2026-10-06) — nor is the article-less 'personenbezogene daten löschen'; before #608 the bare phrase auto-fired Redaction on this deletion-duty question. Hand-written."
+    },
+    {
+      "id": "tp-redaction-de-pd-loeschen-01",
+      "question": "Bitte personenbezogene Daten löschen.",
+      "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "#608 (owner ruling 2026-10-06) — the cost of leaving out the infinitive '… daten löschen': this request only matched the bare phrase, so it is a KNOWN_SUGGESTION_DEVIATIONS row until #602 (German removal verbs). Hand-written."
     }
   ]
 }

@@ -145,11 +145,11 @@ from its first public `1.0.0` release onward.
   that mentioned "personenbezogene Daten", about the GDPR, a privacy notice or a clause in a contract,
   was offered Document Redaction. With automatic skills switched on and a PDF selected, it got a count
   of the e-mail addresses and phone numbers in the document instead of an answer. Such questions are
-  now answered normally. Asking to remove the data still offers the skill ("Bitte alle
-  personenbezogenen Daten entfernen.", "Lösche die personenbezogenen Daten …"), and with the skill
-  selected, "lösche" now points to the **Redact personal data** button like "entferne" does. A
-  request that names only the data, such as "eine Version ohne personenbezogene Daten", no longer
-  gets the suggestion: pick the skill yourself there (#608).
+  now answered normally. Asking to remove the data offers the skill when it is phrased like "Bitte
+  alle personenbezogenen Daten entfernen." or "Lösche die personenbezogenen Daten …", and with the
+  skill selected, "lösche" now points to the **Redact personal data** button like "entferne" does.
+  Other phrasings get no suggestion, including two that used to get one: "Bitte personenbezogene
+  Daten löschen." and "eine Version ohne personenbezogene Daten". Pick the skill yourself there (#608).
 - **Word documents no longer leave some of their text out of search.** Text inside custom XML
   (used by some forms and templates) and text moved with Track Changes was skipped when a `.docx`
   was added, so questions about it found nothing. The updated Word reader (mammoth 1.13.0) reads
