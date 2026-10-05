@@ -48,7 +48,7 @@ export const SUGGEST_SCORE_THRESHOLD = 2
  * shapes a turn, so it demands the stricter gate. The §3.3.1 baseline harness asserts this gate
  * clears the D1 ≥ 95% precision bar.
  */
-export const AUTOFIRE_SCORE_THRESHOLD = 3
+const AUTOFIRE_SCORE_THRESHOLD = 3
 
 /**
  * Match a `*statement*`-style filename glob against a title with a LINEAR, non-backtracking matcher
@@ -183,7 +183,7 @@ function hasFilenameSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): b
  * doc signal", and the score alone cannot enforce the doc-signal half (two capped keyword hits
  * reach 4 with an empty scope). Exported so the eval harness can mirror the runtime gate 1:1.
  */
-export function hasDocSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): boolean {
+function hasDocSignal(triggers: SkillTriggers, ctx: SkillTriggerContext): boolean {
   return hasMimeSignal(triggers, ctx) || hasFilenameSignal(triggers, ctx)
 }
 
