@@ -5802,7 +5802,8 @@ separately: they must fire exactly `document-redaction`, and over the other rows
 and `precision ≥ 0.95`; a row whose document is only in the Library (not explicitly selected) must
 never auto-fire (the U4 narrowing and the #130 doc-signal gate). Measured auto-fire precision is 100%
 (29 correct, 0 wrong, 72 missed, recall 28.7%) over the gate set, and 93.5% (29 correct, 2 wrong,
-72 missed) with the two deviations counted as wrong fires. The same mechanism applies to
+72 missed) with the two deviations counted as wrong fires. Auto-fire recall is low by design: rows
+labelled with the five skills that never auto-fire count as misses. The same mechanism applies to
 "personenbezogene Daten", also a keyword of both skills; the corpus pins only the "sensible Daten"
 rows. The optional product fix is tracked in #583.
 
@@ -5843,11 +5844,12 @@ turns it on (S13c). The §14 ceilings + the S12 sentinel guard are unchanged: a 
 a worse answer + a one-click undo, never an unauthorized action; the undo is a re-run, not a new
 capability; no auto-fire path adds an audit event or logs the question.
 
-**First opted-in product skill (D6).** `document-redaction` declares `triggers.autoFire: true` (the only
-bundled skill to do so). Once a user enables auto-fire, an "anonymize/redact"-style turn over a selected
-pdf/plain/markdown document auto-applies it: keyword (2) + the in-scope-doc MIME signal (1) = 3,
-clearing `AUTOFIRE_SCORE_THRESHOLD`. It is proven at 100% precision on the S13a corpus (the production
-`resolveAutoFireSkill` gate, accepted deviations aside). A "selected" document is one in the
+**First opted-in product skill (D6).** `document-redaction` declares `triggers.autoFire: true` (the first
+bundled skill to do so; U4 later opted in bank-statement, invoice and meeting-protocol). Once a user
+enables auto-fire, an "anonymize/redact"-style turn over a selected pdf/plain/markdown document
+auto-applies it: keyword (2) + the in-scope-doc MIME signal (1) = 3, clearing
+`AUTOFIRE_SCORE_THRESHOLD`. On the corpus it fires on no row it should not, except the two accepted
+German share-safe rows ("Accepted auto-fire deviation" above). A "selected" document is one in the
 conversation's persisted scope, so `inScopeDocSignals` surfaces its MIME main-side (§22-C4) — the same
 phrase with no document in scope scores 2 and does **not** fire (regression-tested in
 `skills-autofire.test.ts`).
@@ -6650,13 +6652,12 @@ comment's `audit <ID>` citation through it:
   behaviour (`skills-tool-run-ipc.test.ts`, Phases 5/6), the whole-batch-drop / retry-once / char-cap /
   21 rows ⇒ 2 calls categorizer cases (`skills-categorizer.test.ts`, Phase 2), and the C-3/C-4
   completeness numerics (`skills-bank-statement-tool.test.ts`, Phase 3).
-- **R-1 — auto-fire corpus is intentionally narrow (no rows invented).** `document-redaction` is STILL
-  the ONLY app skill opting into `triggers.autoFire`, and the eval gate already covers it: the harness's
-  `APP_SKILL_IDS` and the 33-turn `tests/fixtures/skill-triggers/corpus.json` (138 turns since
-  2026-10-05, §18; the original four `document-redaction` turns among them) drive the S13b gate
-  (`fired-wrong == 0` AND `precision ≥ 0.95`). Per the plan's explicit fallback, since NO new skill opts
-  in, no corpus rows were added — the corpus is deliberately scoped to the auto-fire surface and the
-  eval gate is unchanged. (See §18 for the auto-fire contract.)
+- **R-1 — auto-fire corpus is intentionally narrow (no rows invented).** `document-redaction` is STILL the
+  ONLY app skill opting into `triggers.autoFire`, and the eval gate already covers it: the harness's
+  `APP_SKILL_IDS` and the 33-turn `tests/fixtures/skill-triggers/corpus.json` (four `document-redaction`
+  turns among them) drive the S13b gate (`fired-wrong == 0` AND `precision ≥ 0.95`). Per the plan's
+  explicit fallback, since NO new skill opts in, no corpus rows were added — the corpus is deliberately
+  scoped to the auto-fire surface and the eval gate is unchanged. (See §18 for the auto-fire contract.)
 - **R-2 — run-surface eyeball deferred (re-affirmed, surfaced for opt-in).** The live `SkillRunBar`
   Playwright walk (a `walk-skills-runbar.mjs`, to be modelled on `apps/desktop/scripts/walk-skills-composer.mjs`) needs
   a GUI session a test harness cannot drive; every visual state stays unit-covered by

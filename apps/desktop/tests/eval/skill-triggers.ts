@@ -25,9 +25,11 @@ import { APP_VOCAB_SKILL_IDS } from '../../src/main/services/skills/vocabulary'
 
 /** The repo root, four levels up from tests/eval/. */
 const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-/** The label space is the app skills the vocabulary knows (plus 'none'), so the corpus labels and the
- *  routing/suggestion vocabulary can never diverge. */
-export const APP_SKILL_IDS = APP_VOCAB_SKILL_IDS
+/** The version `app.getVersion()` reports in production, so the §6.5 minAppVersion gate runs as it does
+ *  for a user (an empty version would treat every skill as compatible). */
+const APP_VERSION = (
+  JSON.parse(readFileSync(join(REPO_ROOT, 'apps', 'desktop', 'package.json'), 'utf8')) as { version: string }
+).version
 
 /** One in-scope document's matchable signals (filename + MIME). */
 export interface CorpusDoc {
@@ -89,12 +91,16 @@ const stripApp = (installId: string | undefined): string =>
 export function openTriggerHarness(): TriggerHarness {
   const root = mkdtempSync(join(tmpdir(), 'hilbertraum-skill-triggers-'))
   const db = openDatabase(join(root, 'test.sqlite'))
-  const deps = { appSkillsDir: join(REPO_ROOT, 'app-skills'), userSkillsDir: join(root, 'user-skills') }
+  const deps = {
+    appSkillsDir: join(REPO_ROOT, 'app-skills'),
+    userSkillsDir: join(root, 'user-skills'),
+    appVersion: APP_VERSION
+  }
   const rec = reconcileSkills(db, deps)
   if (rec.errors.length > 0) throw new Error(`reconcileSkills reported errors: ${rec.errors.join('; ')}`)
   // App skills install enabled (reconcile); fail loudly if a committed skill did not come up.
   const enabled = new Set(listSkills(db).filter((s) => s.source === 'app' && s.enabled).map((s) => s.id))
-  for (const id of APP_SKILL_IDS) if (!enabled.has(id)) throw new Error(`app skill '${id}' is not enabled`)
+  for (const id of APP_VOCAB_SKILL_IDS) if (!enabled.has(id)) throw new Error(`app skill '${id}' is not enabled`)
   updateSettings(db, { skillsAutoFireEnabled: true })
 
   const convByRow = new Map<string, string>()
@@ -127,7 +133,8 @@ export function openTriggerHarness(): TriggerHarness {
 
   return {
     db,
-    offerFor: (row) => stripApp(suggestSkillsForTurn(db, conversationFor(row), row.question)[0]?.installId),
+    offerFor: (row) =>
+      stripApp(suggestSkillsForTurn(db, conversationFor(row), row.question, APP_VERSION)[0]?.installId),
     autoFireFor: (row) =>
       stripApp(resolveAutoFireSkill(db, deps, conversationFor(row), row.question)?.installId),
     close: () => {
@@ -196,7 +203,7 @@ const pct = (v: number | null): string => (v == null ? '  n/a' : `${(v * 100).to
 export function formatReport(results: PathResult[], corpusSize: number): string {
   const lines: string[] = []
   lines.push(
-    `Skills trigger measurement — ${corpusSize} synthetic turns, ${APP_SKILL_IDS.length} app skills as the label space`
+    `Skills trigger measurement — ${corpusSize} synthetic turns, ${APP_VOCAB_SKILL_IDS.length} app skills as the label space`
   )
   lines.push('')
   lines.push('path                         precision  recall   fired-correct  fired-wrong  missed  abstained')

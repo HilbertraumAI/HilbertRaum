@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, it } from 'vitest'
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
 import { listSkills } from '../../src/main/services/skills/registry'
 import { APP_VOCAB_SKILL_IDS } from '../../src/main/services/skills/vocabulary'
 import {
@@ -44,19 +44,32 @@ const KNOWN_AUTOFIRE_DEVIATIONS: Record<string, string> = {
   'tp-sharesafe-de-02': 'document-redaction'
 }
 
-let harness: TriggerHarness
+/** The owner accepted exactly this many wrong auto-fires (the two rows above, §18); more is a new decision. */
+const ACCEPTED_AUTOFIRE_WRONG_FIRES = 2
+
+const deviation = (map: Record<string, string>, id: string): string | undefined =>
+  Object.hasOwn(map, id) ? map[id] : undefined
+
+let harness: TriggerHarness | undefined
+const h = (): TriggerHarness => harness!
 const corpus = loadCorpus()
 const byId = (id: string): CorpusItem => {
   const row = corpus.find((c) => c.id === id)
   expect(row, `corpus item ${id} present`).toBeDefined()
   return row!
 }
+/** The app skills that opted into auto-fire, as reconciled from the committed manifests. */
+const autoFireEligible = (): string[] =>
+  listSkills(h().db)
+    .filter((s) => s.source === 'app' && s.manifest.triggers.autoFire === true)
+    .map((s) => s.id)
+    .sort()
 
 beforeAll(() => {
   harness = openTriggerHarness()
 })
 afterAll(() => {
-  harness.close()
+  harness?.close() // a failed open already reported its own error
 })
 
 describe('S13 corpus is well-formed', () => {
@@ -83,15 +96,18 @@ describe('S13 corpus is well-formed', () => {
   })
 
   it('reconciles exactly the real app skills, each with trigger keywords', () => {
-    const apps = listSkills(harness.db).filter((s) => s.source === 'app')
+    const apps = listSkills(h().db).filter((s) => s.source === 'app')
     expect(apps.map((s) => s.id).sort()).toEqual([...APP_VOCAB_SKILL_IDS].sort())
     for (const s of apps) expect(s.manifest.triggers.keywords.length).toBeGreaterThan(0)
   })
 
-  it('every deviation key names a corpus row (a removed row cannot leave a stale entry)', () => {
-    const ids = new Set(corpus.map((c) => c.id))
-    for (const id of [...Object.keys(KNOWN_SUGGESTION_DEVIATIONS), ...Object.keys(KNOWN_AUTOFIRE_DEVIATIONS)]) {
-      expect(ids.has(id), `deviation key ${id} names a corpus row`).toBe(true)
+  it('every deviation names a corpus row and records an outcome other than its label (no no-op entries)', () => {
+    for (const map of [KNOWN_SUGGESTION_DEVIATIONS, KNOWN_AUTOFIRE_DEVIATIONS]) {
+      for (const [id, value] of Object.entries(map)) {
+        const row = corpus.find((c) => c.id === id)
+        expect(row, `deviation key ${id} names a corpus row`).toBeDefined()
+        expect(value, `${id}: a deviation equal to the label would silently drop the row from its gate`).not.toBe(row!.expected)
+      }
     }
   })
 })
@@ -100,9 +116,9 @@ describe('S13 corpus is well-formed', () => {
 // listed deviations. A new miss or false offer goes red with the row id in the title; a FIXED deviation
 // goes red too (its entry is stale and must be removed).
 describe('suggestion — every corpus row gives its expected offer (production suggestSkillsForTurn)', () => {
-  const rows = corpus.map((row) => ({ row, id: row.id, want: KNOWN_SUGGESTION_DEVIATIONS[row.id] ?? row.expected }))
+  const rows = corpus.map((row) => ({ row, id: row.id, want: deviation(KNOWN_SUGGESTION_DEVIATIONS, row.id) ?? row.expected }))
   it.each(rows)('$id offers $want', ({ row, want }) => {
-    expect(harness.offerFor(row)).toBe(want)
+    expect(h().offerFor(row)).toBe(want)
   })
 })
 
@@ -114,18 +130,18 @@ describe('suggestion — every corpus row gives its expected offer (production s
 // confusion only, NO question text — so the numbers surface even when a bar below regresses.
 describe('S13b gate — production auto-fire clears the ratified D1 precision bar', () => {
   it('fires nothing wrong AND precision ≥ 0.95; deviation rows fire exactly the listed skill', () => {
-    const gateSet = corpus.filter((c) => !(c.id in KNOWN_AUTOFIRE_DEVIATIONS))
-    const result = scoreCorpus(gateSet, (r) => harness.autoFireFor(r), 'auto-fire (gate)', 'resolveAutoFireSkill, rows minus the accepted deviations (the gate set)')
+    const gateSet = corpus.filter((c) => deviation(KNOWN_AUTOFIRE_DEVIATIONS, c.id) === undefined)
+    const result = scoreCorpus(gateSet, (r) => h().autoFireFor(r), 'auto-fire (gate)', 'resolveAutoFireSkill, rows minus the accepted deviations (the gate set)')
     const report = [
-      scoreCorpus(corpus, (r) => harness.offerFor(r), 'suggestion', 'suggestSkillsForTurn, all rows'),
+      scoreCorpus(corpus, (r) => h().offerFor(r), 'suggestion', 'suggestSkillsForTurn, all rows'),
       result,
-      scoreCorpus(corpus, (r) => harness.autoFireFor(r), 'auto-fire (deviations wrong)', 'resolveAutoFireSkill, all rows — the accepted deviations counted as wrong fires')
+      scoreCorpus(corpus, (r) => h().autoFireFor(r), 'auto-fire (deviations wrong)', 'resolveAutoFireSkill, all rows — the accepted deviations counted as wrong fires')
     ]
     // eslint-disable-next-line no-console
     console.log('\n' + formatReport(report, corpus.length) + '\n')
 
     for (const [id, fires] of Object.entries(KNOWN_AUTOFIRE_DEVIATIONS)) {
-      expect(harness.autoFireFor(byId(id)), `${id}: accepted deviation still fires ${fires}`).toBe(fires)
+      expect(h().autoFireFor(byId(id)), `${id}: accepted deviation still fires ${fires}`).toBe(fires)
     }
     const wrongIds = result.perItem.filter((p) => p.predicted !== 'none' && p.predicted !== p.expected).map((p) => p.id)
     expect(wrongIds).toEqual([])
@@ -133,13 +149,26 @@ describe('S13b gate — production auto-fire clears the ratified D1 precision ba
     // The ratified D1 wording; with zero wrong fires above, precision is 1 by construction.
     expect(result.precision).not.toBeNull()
     expect(result.precision!).toBeGreaterThanOrEqual(0.95)
+    // The deviation map cannot grow silently: over ALL rows, the wrong fires are the accepted ones only.
+    expect(report[2].confusion.firedWrong).toBeLessThanOrEqual(ACCEPTED_AUTOFIRE_WRONG_FIRES)
+  })
+
+  it('every auto-fire-eligible app skill fires on at least one corpus row', () => {
+    // A miss is allowed per row, so without this a skill could stop auto-firing everywhere (a broken doc
+    // signal, say) while every gate above stays green. Which skills opt in is pinned by skills-autofire.
+    const eligible = autoFireEligible()
+    expect(eligible.length).toBeGreaterThan(0)
+    const fired = new Set(corpus.map((c) => h().autoFireFor(c)))
+    for (const id of eligible) expect(fired.has(id), `${id} auto-fires on some corpus row`).toBe(true)
   })
 
   it('never auto-fires on a document that is merely in the Library (U4 narrowing, #130 doc-signal gate)', () => {
     // A whole-corpus doc is not an explicit selection, so it lends auto-fire no corroboration: these rows
     // must abstain even when their label is a skill (dropping the narrowing or the doc-signal gate makes
     // them fire their CORRECT label, which the wrong-fire gate above cannot see).
-    const fired = corpus.filter((c) => c.scope === 'whole-corpus' && harness.autoFireFor(c) !== 'none').map((c) => c.id)
+    const eligible = autoFireEligible()
+    expect(corpus.some((c) => c.scope === 'whole-corpus' && eligible.includes(c.expected))).toBe(true) // non-vacuous
+    const fired = corpus.filter((c) => c.scope === 'whole-corpus' && h().autoFireFor(c) !== 'none').map((c) => c.id)
     expect(fired).toEqual([])
   })
 })
@@ -152,14 +181,14 @@ describe('S13b gate — production auto-fire clears the ratified D1 precision ba
 // (no confusion row may become a deviation, and the wrong-offer deviations cannot grow past the 0.95 bar).
 describe('W5 gate — the suggestion policy clears the precision bar (§4.2/§8.3)', () => {
   it('precision ≥ 0.95 overall AND fired-wrong == 0 and missed == 0 on the confusion pairs', () => {
-    const overall = scoreCorpus(corpus, (r) => harness.offerFor(r), 'suggestion', 'overall')
+    const overall = scoreCorpus(corpus, (r) => h().offerFor(r), 'suggestion', 'overall')
     expect(overall.confusion.firedCorrect).toBeGreaterThan(0)
     expect(overall.precision).not.toBeNull()
     expect(overall.precision!).toBeGreaterThanOrEqual(0.95)
 
     const confusionRows = corpus.filter((c) => c.confusion)
     expect(confusionRows.length).toBeGreaterThanOrEqual(6) // non-vacuous
-    const confusion = scoreCorpus(confusionRows, (r) => harness.offerFor(r), 'suggestion', 'confusion')
+    const confusion = scoreCorpus(confusionRows, (r) => h().offerFor(r), 'suggestion', 'confusion')
     expect(confusion.confusion.firedWrong).toBe(0)
     expect(confusion.confusion.missed).toBe(0)
     expect(confusion.confusion.firedCorrect).toBeGreaterThan(0)
@@ -172,6 +201,29 @@ describe('W5 gate — the suggestion policy clears the precision bar (§4.2/§8.
 // auto-fire (the Library-abstention test in the S13b block).
 describe('U4 gate — explicit scope auto-fires (§2.4)', () => {
   it('wc-meeting-attached-01 (explicitly in scope) auto-fires meeting-protocol', () => {
-    expect(harness.autoFireFor(byId('wc-meeting-attached-01'))).toBe('meeting-protocol')
+    expect(h().autoFireFor(byId('wc-meeting-attached-01'))).toBe('meeting-protocol')
+  })
+})
+
+// Privacy (skills-s13-plan.md §6): a question is CONTENT. Both production paths score it and must never
+// write it to the console — the app log mirrors every line there, so this covers the log sink too.
+describe('privacy — no question text reaches the console', () => {
+  it('runs every row through both production paths without logging the question', () => {
+    const logged: string[] = []
+    const spies = (['log', 'info', 'warn', 'error', 'debug'] as const).map((m) =>
+      vi.spyOn(console, m).mockImplementation((...args: unknown[]) => {
+        logged.push(args.map(String).join(' '))
+      })
+    )
+    try {
+      for (const row of corpus) {
+        h().offerFor(row)
+        h().autoFireFor(row)
+      }
+    } finally {
+      for (const s of spies) s.mockRestore()
+    }
+    const text = logged.join('\n')
+    for (const row of corpus) expect(text.includes(row.question), `${row.id}: question reached the console`).toBe(false)
   })
 })

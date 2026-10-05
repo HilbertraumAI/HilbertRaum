@@ -11,7 +11,8 @@
     "deadline-obligation-finder | what-changed | document-redaction | document-edit | none.",
     "`confusion:true` marks a CROSS-SKILL pair the SUGGESTION bar must get right (fired-wrong 0 and missed 0 on the set).",
     "`note` records WHY the label is what it is (the hard case it exercises); it is not scored. Rows whose note starts",
-    "'carried from <test file>' were moved here verbatim from the per-skill keyword tests they replaced.",
+    "'carried from <test file>' were moved here verbatim from the per-skill trigger tests they replaced; rows whose note",
+    "starts 'pins a keyword listed by <test file>' are new questions that each exercise one keyword that test listed.",
     "HOW IT RUNS: tests/eval/skill-triggers.ts scores every row through the PRODUCTION paths — `suggestSkillsForTurn`",
     "(the offer) and `resolveAutoFireSkill` (the silent fire) — on one real temp database with the committed app-skills/",
     "reconciled; each row gets its own isolated scope. Every row must give its expected offer. The ONLY exceptions are",
@@ -907,133 +908,133 @@
       "question": "Welche Beschlüsse wurden gefasst?",
       "inScopeDocs": [],
       "expected": "meeting-protocol",
-      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - the umlaut plural \"Beschlüsse\""
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - the umlaut plural \"Beschlüsse\""
     },
     {
       "id": "tp-meeting-de-singular-01",
       "question": "Welcher Beschluss wurde gefasst?",
       "inScopeDocs": [],
       "expected": "meeting-protocol",
-      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - the singular \"Beschluss\""
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - the singular \"Beschluss\""
     },
     {
       "id": "tp-invoice-de-plural-01",
       "question": "Bitte prüfe meine Rechnungen.",
       "inScopeDocs": [],
       "expected": "invoice",
-      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - the German plural \"Rechnungen\""
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - the German plural \"Rechnungen\""
     },
     {
       "id": "tp-invoice-en-plural-01",
       "question": "Summarize these invoices.",
       "inScopeDocs": [],
       "expected": "invoice",
-      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - the English plural \"invoices\""
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - the English plural \"invoices\""
     },
     {
       "id": "tp-redaction-en-sensitive-01",
       "question": "Remove the sensitive data from this file.",
       "inScopeDocs": [],
       "expected": "document-redaction",
-      "note": "carried from tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - the PII-topic keyword \"sensitive data\""
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - the PII-topic keyword \"sensitive data\""
     },
     {
       "id": "adv-datenschutz-topic-01",
       "question": "Was regelt der Datenschutz?",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "carried from tests/integration/skills-redaction.test.ts 'U4/§4.4: the pure legal words (datenschutz/dsgvo/gdpr) are DROPPED from the manifest' - the bare legal word \"Datenschutz\" no longer offers redaction (the compound row adv-datenschutz-01 cannot pin this)"
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'U4/§4.4: the pure legal words (datenschutz/dsgvo/gdpr) are DROPPED from the manifest' - the bare legal word \"Datenschutz\" no longer offers redaction (the compound row adv-datenschutz-01 cannot pin this)"
     },
     {
       "id": "adv-gdpr-consent-01",
       "question": "What does the GDPR say about consent?",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "carried from tests/integration/skills-redaction.test.ts 'U4/§4.4: the pure legal words (datenschutz/dsgvo/gdpr) are DROPPED from the manifest' - the bare legal word \"GDPR\" no longer offers redaction"
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'U4/§4.4: the pure legal words (datenschutz/dsgvo/gdpr) are DROPPED from the manifest' - the bare legal word \"GDPR\" no longer offers redaction"
     },
     {
       "id": "tp-edit-en-replaceall-01",
       "question": "Replace all occurrences of the old name.",
       "inScopeDocs": [],
       "expected": "document-edit",
-      "note": "carried from tests/integration/skills-document-edit.test.ts 'covers the English + German find-and-replace triggers' - the keyword \"replace all\""
+      "note": "pins a keyword listed by tests/integration/skills-document-edit.test.ts 'covers the English + German find-and-replace triggers' - the keyword \"replace all\""
     },
     {
       "id": "tp-meeting-de-aufgaben-01",
       "question": "Welche Aufgaben wurden verteilt?",
       "inScopeDocs": [],
       "expected": "meeting-protocol",
-      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"aufgaben\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"aufgaben\" (the only keyword this question hits)"
     },
     {
       "id": "tp-meeting-de-aufgabe-01",
       "question": "Wer übernimmt welche Aufgabe?",
       "inScopeDocs": [],
       "expected": "meeting-protocol",
-      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"aufgabe\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"aufgabe\" (the only keyword this question hits)"
     },
     {
       "id": "tp-meeting-de-besprechung-01",
       "question": "Wie lief die Besprechung?",
       "inScopeDocs": [],
       "expected": "meeting-protocol",
-      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"besprechung\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"besprechung\" (the only keyword this question hits)"
     },
     {
       "id": "tp-meeting-de-protokoll-01",
       "question": "Schreib ein kurzes Protokoll.",
       "inScopeDocs": [],
       "expected": "meeting-protocol",
-      "note": "carried from tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"protokoll\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-meeting-protocol.test.ts 'covers English + German triggers, including umlaut singular/plural pairs' - pins the single keyword \"protokoll\" (the only keyword this question hits)"
     },
     {
       "id": "tp-invoice-de-rechnungsnummer-01",
       "question": "Wie lautet die Rechnungsnummer?",
       "inScopeDocs": [],
       "expected": "invoice",
-      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"rechnungsnummer\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"rechnungsnummer\" (the only keyword this question hits)"
     },
     {
       "id": "tp-invoice-de-mehrwertsteuer-01",
       "question": "Wie hoch ist die Mehrwertsteuer?",
       "inScopeDocs": [],
       "expected": "invoice",
-      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"mehrwertsteuer\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"mehrwertsteuer\" (the only keyword this question hits)"
     },
     {
       "id": "tp-invoice-de-netto-01",
       "question": "Was ist der Endbetrag netto?",
       "inScopeDocs": [],
       "expected": "invoice",
-      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"netto\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"netto\" (the only keyword this question hits)"
     },
     {
       "id": "tp-invoice-de-brutto-01",
       "question": "Was kostet das brutto?",
       "inScopeDocs": [],
       "expected": "invoice",
-      "note": "carried from tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"brutto\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-invoice.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"brutto\" (the only keyword this question hits)"
     },
     {
       "id": "tp-redaction-en-removepd-01",
       "question": "Please remove personal data from the export.",
       "inScopeDocs": [],
       "expected": "document-redaction",
-      "note": "carried from tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"remove personal data\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"remove personal data\" (the only keyword this question hits)"
     },
     {
       "id": "tp-redaction-de-anonymisierung-01",
       "question": "Bitte eine Anonymisierung durchführen.",
       "inScopeDocs": [],
       "expected": "document-redaction",
-      "note": "carried from tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"anonymisierung\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"anonymisierung\" (the only keyword this question hits)"
     },
     {
       "id": "tp-redaction-de-schwaerzung-01",
       "question": "Ist eine Schwärzung der Namen möglich?",
       "inScopeDocs": [],
       "expected": "document-redaction",
-      "note": "carried from tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"schwärzung\" (the only keyword this question hits)"
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"schwärzung\" (the only keyword this question hits)"
     }
   ]
 }
