@@ -1,3 +1,4 @@
+import { waitForEngineSpawns } from './runtime/spawn-gate'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { EngineProblemFamily } from '../../shared/types'
 import type { AppContext } from './context'
@@ -116,6 +117,7 @@ export async function checkProgramLoads(
   deps: LoadCheckDeps = {}
 ): Promise<LoadCheck> {
   const verify = deps.verify ?? verifyBinaryBeforeSpawn
+  await waitForEngineSpawns(family) // #516: never check a program an install is replacing
   try {
     if ((await verify(binPath)) === 'mismatch') return 'unchecked'
   } catch {

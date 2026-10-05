@@ -1,3 +1,4 @@
+import { waitForEngineSpawns } from './spawn-gate'
 import { spawn as nodeSpawn, type SpawnOptions } from 'node:child_process'
 import { randomBytes } from 'node:crypto'
 import { existsSync } from 'node:fs'
@@ -652,6 +653,9 @@ export class LlamaServer {
     // so the ladder cleanly falls to the next rung / MockRuntime. Dev + legacy drives
     // resolve skip-* and proceed. Covers the chat runtime, embedder, reranker, and vision
     // — every llama-server spawn funnels through this method.
+    // #516: an engine install replacing this folder holds spawns until its swap is over.
+    await waitForEngineSpawns('llama_cpp')
+    this.throwIfStartAborted()
     if ((await this.verifyBinary(this.opts.binPath)) === 'mismatch') {
       throw new Error('llama-server failed pre-spawn integrity verification')
     }

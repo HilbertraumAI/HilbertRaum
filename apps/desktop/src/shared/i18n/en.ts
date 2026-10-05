@@ -1286,6 +1286,15 @@ export const en = {
   'models.engineProblem.voiceReinstall': 'Install the voice engine again',
   'models.engineProblem.reinstalled': 'The AI engine was installed again.',
   'models.engineProblem.voiceReinstalled': 'The voice engine was installed again.',
+  // #516: a quiet notice for an engine on the drive that is older than this app's pin.
+  'models.engineUpdate.title': 'An update for the AI engine is available',
+  'models.engineUpdate.voiceTitle': 'An update for the voice engine is available',
+  'models.engineUpdate.bothTitle': 'Updates for the AI engine and the voice engine are available',
+  'models.engineUpdate.explain': 'This drive carries an older version than this app is built for. The update downloads the new version first; then the models pause for a few seconds while the files are replaced, and the selected model starts again.',
+  'models.engineUpdate.update': 'Update',
+  'models.engineUpdate.done': 'The AI engine was updated.',
+  'models.engineUpdate.voiceDone': 'The voice engine was updated.',
+  'models.engineUpdate.bothDone': 'The AI engine and the voice engine were updated.',
   'models.engineProblem.blocked': 'Windows security blocked it (Smart App Control or your antivirus program). The troubleshooting guide explains what you can do.',
   'models.engineProblem.demoNote': 'Until then, models answer in demo mode — the replies are simulated.',
   'models.engineProblem.check': 'Check again',
@@ -1978,6 +1987,12 @@ export const en = {
   'diag.app.acceleration': 'Acceleration',
   'diag.app.runtimeBuild': 'Runtime build',
   'diag.app.noInstallMarker': 'no install marker (manually provisioned drive)',
+  // #516: engines on the drive that are not this app's pinned build. The names stay technical.
+  'diag.app.engineVersions': 'Engine versions',
+  'diag.engineVersion.older': '{engine} {installed}, this app expects {pinned}',
+  'diag.engineVersion.newer': '{engine} {installed}, newer than this app expects ({pinned})',
+  'diag.engineVersion.unknown': '{engine}: no version recorded, this app expects {pinned}',
+  'diag.engineVersion.cpuNet': '{engine} CPU fallback',
   'diag.gpu.compat':
     'Running in compatibility mode: responses use the CPU, which works on every machine.',
   'diag.gpu.tryHint':
@@ -2739,6 +2754,12 @@ export const en = {
   // #532: "Install … again" is only for an engine whose own files the OS found damaged this session.
   'main.engine.nothingToRepair':
     'There is nothing to repair: the engine on this drive has not been found damaged.',
+  // #516: an update touches only an engine older than this app's pin, never a newer one.
+  'main.engine.nothingToUpdate':
+    'There is nothing to update: the engines on this drive are already the version this app uses, or newer.',
+  // #516: the update pauses the engine for the file swap, which would cut off work in progress.
+  'main.engine.updateBusy':
+    'The AI engine is in use right now (an answer, an import, a translation or a document task is running). Try the update again when it has finished.',
   // #410: the in-app OCR language-file installer (services/ocr-install.ts). Session-only job
   // errors and refusals, localized at emission (i18n record §3.3 rule 2).
   'main.ocr.badRequest': 'The OCR download request was not understood. Please try again.',

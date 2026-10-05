@@ -1,3 +1,4 @@
+import { waitForEngineSpawns } from './spawn-gate'
 import { spawn as nodeSpawn } from 'node:child_process'
 import type { GpuDevice } from '../../../shared/types'
 import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
@@ -113,6 +114,8 @@ export async function probeGpuDevices(binPath: string, deps: GpuProbeDeps = {}):
   const timeoutMs = deps.timeoutMs ?? DEFAULT_PROBE_TIMEOUT_MS
   const verify = deps.verify ?? verifyBinaryBeforeSpawn
 
+  // #516: an engine install replacing this folder holds spawns until its swap is over.
+  await waitForEngineSpawns('llama_cpp')
   // Refuse a tampered binary the same way a missing one reads: no GPU. Never throws.
   let verification: BinaryVerifyResult
   try {

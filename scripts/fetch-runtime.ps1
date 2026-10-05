@@ -351,6 +351,29 @@ if ($current) { $builds += $current }
 
 if (-not $version) { Write-Host "runtime-sources.yaml: missing $Family.version (is the $Family block present?)" -ForegroundColor Red; exit 2 }
 
+# #516: the DRIVE's yaml wins over the repo's, so on a drive whose manifests predate a pin bump
+# this re-installs the OLD pin. Say so: refreshing the drive's manifests (prepare-drive) comes first.
+function Get-FamilyVersion([string]$File, [string]$Fam) {
+  $top = $null
+  foreach ($raw in (Get-Content -Path $File)) {
+    $l = $raw.TrimEnd()
+    if ($l -match '^\s*#') { continue }
+    if ($l -match '^([A-Za-z0-9_]+)\s*:\s*$') { $top = $Matches[1]; continue }
+    if ($top -eq $Fam -and $l -match '^\s+version\s*:\s*(.+?)\s*$') {
+      return ($Matches[1] -replace '\s+#.*$', '').Trim().Trim('"').Trim("'")
+    }
+  }
+  return $null
+}
+$RepoSources = Join-Path $RepoRoot 'model-manifests/runtime-sources.yaml'
+if ((Test-Path $RepoSources) -and ((Resolve-Path $SourcesFile).Path -ne (Resolve-Path $RepoSources).Path)) {
+  $repoVersion = Get-FamilyVersion $RepoSources $Family
+  if ($repoVersion -and $repoVersion -ne $version) {
+    Write-Host "Note: the drive's runtime-sources.yaml pins $Family $version; this repo pins $repoVersion." -ForegroundColor Yellow
+    Write-Host "      To move the drive to the repo's pin, refresh its manifests first (prepare-drive), then run fetch-runtime again." -ForegroundColor Yellow
+  }
+}
+
 # --- Select the build (os + arch [+ backend]); default = first os/arch match
 # (vulkan on win/linux, metal on mac since Phase 14).
 # Explicit -Os without -Arch = cross-provisioning: take that OS's first build (any arch).

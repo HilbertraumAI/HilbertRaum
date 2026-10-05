@@ -1115,3 +1115,51 @@ export function runtimeInstallCurrent(plan: RuntimeDownloadPlan): boolean {
   const marker = readRuntimeMarker(plan.extractTo)
   return marker !== null && marker.version === plan.version && marker.backend === plan.backend
 }
+
+// ---- Engine versions (#516) --------------------------------------------------------------------
+
+/** An engine release tag's shape and numeric parts, or null when it has none of the known shapes. */
+function versionParts(tag: string): { kind: 'build' | 'dotted'; parts: number[] } | null {
+  // llama.cpp build tags (`b9849`, `b11146`) — one number, the build counter.
+  const build = /^b(\d+)$/.exec(tag.trim())
+  if (build) return { kind: 'build', parts: [Number(build[1])] }
+  // whisper.cpp / kiwix-tools releases (`v1.8.6`, `3.8.1`) — dotted numbers, an optional `v`.
+  const dotted = /^v?(\d+(?:\.\d+)*)$/.exec(tag.trim())
+  return dotted ? { kind: 'dotted', parts: dotted[1].split('.').map(Number) } : null
+}
+
+/**
+ * Order two engine release tags of ONE family (#516): -1 when `installed` is older than `pinned`,
+ * 0 when equal, 1 when newer, null when either tag has an unknown shape or the two shapes differ (a
+ * build counter cannot be ordered against a dotted release). Missing trailing parts count as zero.
+ */
+export function compareRuntimeVersions(installed: string, pinned: string): -1 | 0 | 1 | null {
+  const a = versionParts(installed)
+  const b = versionParts(pinned)
+  if (!a || !b || a.kind !== b.kind) return null
+  for (let i = 0; i < Math.max(a.parts.length, b.parts.length); i++) {
+    const d = (a.parts[i] ?? 0) - (b.parts[i] ?? 0)
+    if (d !== 0) return d < 0 ? -1 : 1
+  }
+  return 0
+}
+
+/**
+ * How the install a plan describes relates to the plan's pin (#516), for a binary that IS present:
+ *   - `current` — the marker records the pinned version (in whatever backend the drive owner chose);
+ *   - `older`   — an older version: installing the plan is an update;
+ *   - `newer`   — a newer version than this app pins (a drive updated by a newer app): never replaced;
+ *   - `unknown` — no readable marker, or a version this code cannot order: reported, never replaced.
+ * The backend is deliberately not compared: a main folder provisioned with `fetch-runtime -Backend`
+ * at the pin is a choice, and "updating" it would swap the backend. (A CPU-era main folder is older
+ * by version anyway.) `marker` lets a caller that already read it avoid a second read.
+ */
+export function runtimeInstallRelation(
+  plan: RuntimeDownloadPlan,
+  marker: RuntimeInstallMarker | null = readRuntimeMarker(plan.extractTo)
+): 'current' | 'older' | 'newer' | 'unknown' {
+  if (!marker) return 'unknown'
+  const order = compareRuntimeVersions(marker.version, plan.version)
+  if (order === null) return 'unknown'
+  return order > 0 ? 'newer' : order < 0 ? 'older' : 'current'
+}
