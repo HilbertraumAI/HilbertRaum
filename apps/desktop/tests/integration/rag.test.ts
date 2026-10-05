@@ -572,14 +572,15 @@ describe('echoed fence framing never persists (#583)', () => {
         appendMessage(db, { conversationId: conv.id, role: 'user', content: 'who is the vendor?' })
         const calls: ScriptedCall[] = []
         const reply = ['Answer body.', '', DATA_END, GROUNDED_DATA_GUARD_LINE].join('\n')
-        await generateGroundedDataAnswer(db, scriptedRuntime(reply, calls), conv.id, 'who is the vendor?', {
+        const msg = await generateGroundedDataAnswer(db, scriptedRuntime(reply, calls), conv.id, 'who is the vendor?', {
           dataBlock: '{"vendor":"Acme GmbH"}',
           postscript: '',
           citations: []
         })
         // The echoed pair is the one that closes the data block of the turn the model was given.
         expect(calls[0].messages.at(-1)?.content).toContain(`${DATA_END}\n${GROUNDED_DATA_GUARD_LINE}`)
-        return listMessages(db, conv.id).at(-1)?.content ?? ''
+        expect(listMessages(db, conv.id).at(-1)?.content).toBe(msg.content)
+        return msg.content
       }
     }
   ])('$site persists the answer without the echoed end marker or guard line', async ({ echoed, answer }) => {
