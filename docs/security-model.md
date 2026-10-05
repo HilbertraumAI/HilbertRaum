@@ -2033,7 +2033,7 @@ all-NBSP: now ~0.4 s, linear). No capability/trust change: same detectors, same 
 surface, no new sink. Pinned by the SKA-3 fixture family in `skills-redaction-tool.test.ts`
 (Unicode variants mask; negative controls hold; byte-identity outside masked spans; the
 review-repro prose set stays untouched; sub-span leak fixtures) and the Unicode share-safe/dry-run
-integration tests in `rag-whole-doc-truncation.test.ts` / `skills-analysis-redaction.test.ts`.
+integration tests in `rag-whole-doc-truncation.test.ts` / `skills-analysis-routing.test.ts`.
 The review also surfaced a **pre-existing** (R7-identical) super-linear backtracking hazard in
 `IBAN_CANDIDATE_RE`'s grouped alternative on hostile uppercase runs (multi-second at ~500 KB) —
 NOT introduced or worsened by R8; recorded in known-limitations as an open R-phase candidate

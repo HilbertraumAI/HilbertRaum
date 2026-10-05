@@ -68,12 +68,13 @@ import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
 import { IPC } from '../../src/shared/ipc'
 import type { Db } from '../../src/main/services/db'
 import { listAuditEvents } from '../../src/main/services/audit'
+import { getSkill, getSkillsByDeclaredId } from '../../src/main/services/skills/registry'
 import { DEFAULT_SKILL_LIMITS } from '../../src/main/services/skills/limits'
 import type { AppContext } from '../../src/main/services/context'
 import type { SkillInfo, SkillPreview } from '../../src/shared/types'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { tempRoot } from '../helpers/db-fixtures'
-import { skillMdText } from '../helpers/skill-fixtures'
+import { skillMdText, writeSkillPackage } from '../helpers/skill-fixtures'
 import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -407,5 +408,109 @@ describe('skills IPC — picker token binds preview/import to the OS dialog (#24
     expect((wideRes as SkillPreview).ok).toBe(false)
     expect(fsLog.calls[0]).toEqual({ fn: 'lstatSync', path: wide })
     expect(fsLog.calls.filter((c) => c.fn === 'readFileSync').length).toBeLessThanOrEqual(DEFAULT_SKILL_LIMITS.maxFiles + 1)
+  })
+})
+
+/** A skills world with seeded skill folders and the handlers registered over it (#583). */
+function seededHarness(
+  seed: { app?: Array<Parameters<typeof writeSkillPackage>[1]>; user?: Array<Parameters<typeof writeSkillPackage>[1]> },
+  o: { reconcile?: boolean; unlocked?: boolean } = {}
+): Harness {
+  const w = makeSkillsWorld('skill-ipc', {
+    reconcile: o.reconcile,
+    seedApp: (dir) => seed.app?.forEach((s) => writeSkillPackage(dir, s)),
+    seedUser: (dir) => seed.user?.forEach((s) => writeSkillPackage(dir, s))
+  })
+  const ctx = makeSkillsIpcContext(w, { unlocked: o.unlocked })
+  registerSkillsIpc(ctx)
+  return { ctx, db: w.db, appSkillsDir: w.appSkillsDir, userSkillsDir: w.userSkillsDir }
+}
+
+const enabledOf = (db: Db, installId: string): boolean | undefined => getSkill(db, installId)?.enabled
+
+// #583: `setSkillEnabled` is a bare UPDATE — the one-active-per-id sweep and the newer-app refusal
+// live only in this handler (the registry's reconcile safety net is a different path).
+describe('skills IPC — enableSkill policy (#583)', () => {
+  it('enabling one same-id skill disables the other, in both directions', async () => {
+    const { db } = seededHarness(
+      { app: [{ id: 'shared' }, { id: 'bystander' }], user: [{ id: 'shared' }] },
+      { reconcile: true }
+    )
+    // Precondition: the app skill is installed enabled, the user drop-in is not.
+    expect(enabledOf(db, 'app:shared')).toBe(true)
+    expect(enabledOf(db, 'user:shared')).toBe(false)
+    expect(enabledOf(db, 'app:bystander')).toBe(true)
+
+    await invoke(handlers, IPC.enableSkill, 'user:shared')
+    expect(enabledOf(db, 'user:shared')).toBe(true)
+    expect(enabledOf(db, 'app:shared')).toBe(false)
+    expect(enabledOf(db, 'app:bystander')).toBe(true)
+
+    await invoke(handlers, IPC.enableSkill, 'app:shared')
+    expect(enabledOf(db, 'app:shared')).toBe(true)
+    expect(enabledOf(db, 'user:shared')).toBe(false)
+    expect(enabledOf(db, 'app:bystander')).toBe(true)
+    expect(getSkillsByDeclaredId(db, 'shared').filter((s) => s.enabled)).toHaveLength(1)
+  })
+
+  it('refuses enabling a skill that needs a newer app and changes nothing', async () => {
+    const { db } = seededHarness({ user: [{ id: 'too-new', minAppVersion: '99.0.0' }] }, { reconcile: true })
+    expect(enabledOf(db, 'user:too-new')).toBe(false)
+    await expect(invoke(handlers, IPC.enableSkill, 'user:too-new')).rejects.toThrow(/newer version/i)
+    expect(enabledOf(db, 'user:too-new')).toBe(false)
+    expect(listAuditEvents(db, { limit: 5000 }).map((e) => e.type)).not.toContain('skill_enabled')
+  })
+})
+
+// #583: the IPC parts of the suggestion path (the scoring service is covered elsewhere).
+describe('skills IPC — suggestSkills (#583)', () => {
+  it('offers the matching enabled skill on a cold session and never an incompatible one', async () => {
+    const triggers = { keywords: ['bank statement'] }
+    // The registry here has no app version, so BOTH rows are enabled; only the handler's own
+    // `appVersion` argument can keep the too-new one out.
+    seededHarness({
+      app: [
+        { id: 'aa-new-only', minAppVersion: '99.0.0', triggers },
+        { id: 'zz-compatible', triggers }
+      ]
+    })
+    // No list/reconcile first: the handler's own `ctx.skills.list()` must populate the registry.
+    const { result } = await invoke(handlers, IPC.suggestSkills, 'c1', 'please read my bank statement')
+    expect(result).toEqual([{ installId: 'app:zz-compatible', title: 'Skill zz-compatible' }])
+  })
+
+  it('junk args return nothing; a locked workspace refuses', async () => {
+    seededHarness({ app: [{ id: 'bank', triggers: { keywords: ['bank statement'] } }] })
+    const { result } = await invoke(handlers, IPC.suggestSkills, 42, {})
+    expect(result).toEqual([])
+    ipcState.handlers.clear()
+    seededHarness({ app: [{ id: 'bank' }] }, { unlocked: false })
+    await expect(invoke(handlers, IPC.suggestSkills, 'c1', 'bank statement')).rejects.toThrow(/locked/i)
+  })
+})
+
+// #583: the round trip above only proves the skill is gone; the status refresh after a delete is the
+// handler's explicit `reconcile()`.
+describe('skills IPC — deleteSkill refreshes the reconcile status (#583)', () => {
+  it('the reconcile status refreshes after a delete', async () => {
+    const { userSkillsDir } = makeHarness()
+    const zip = await writeZip([{ name: 'SKILL.md', content: skillMd('to-delete', 'Delete me.') }])
+    const { result: imp } = await invoke(handlers, IPC.importSkill, await pickToken(zip))
+    const { installId } = imp as SkillInfo
+    const { result: before } = await invoke(handlers, IPC.skillReconcileStatus)
+    expect((before as { errorCount: number }).errorCount).toBe(0)
+
+    // Break a drop-in AFTER the session reconciled: only the delete handler's reconcile sees it.
+    mkdirSync(join(userSkillsDir, 'broken-later'), { recursive: true })
+    writeFileSync(join(userSkillsDir, 'broken-later', 'SKILL.md'), 'not even frontmatter')
+    await invoke(handlers, IPC.deleteSkill, installId)
+    const { result: after } = await invoke(handlers, IPC.skillReconcileStatus)
+    expect(after).toEqual({ errorCount: 1, errorCodes: ['invalidManifest'] })
+  })
+
+  it('deleting an unknown id resolves without error and records no audit event', async () => {
+    const { db } = makeHarness()
+    await invoke(handlers, IPC.deleteSkill, 'user:never-installed') // a throw fails the test
+    expect(listAuditEvents(db, { limit: 5000 }).map((e) => e.type)).not.toContain('skill_deleted')
   })
 })

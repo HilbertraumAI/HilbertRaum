@@ -46,7 +46,8 @@ describe('vocabulary — structural invariants', () => {
           expect(countKeywordHits([e.term], `bitte ${e.term} jetzt`), `${id}: "${term}" never offers`).toBe(1)
         }
         // Route-side liveness (no dead/typo'd route term; the word/phrase/stem type fires on the term). The
-        // handler wiring is covered by `skills-analysis-*` and the `SkillVocabId` compile guard on `routeMatch`.
+        // handler wiring is covered by `skills-analysis-{bank,invoice,routing}.test.ts` and the
+        // `SkillVocabId` compile guard on `routeMatch`.
         if (e.use === 'route' || e.use === 'both') {
           expect(routeMatch(id, `bitte ${e.term} jetzt`), `${id}: route term "${term}" did not route`).toBe(true)
         }

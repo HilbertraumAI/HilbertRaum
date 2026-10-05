@@ -1,6 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import type { Db } from '../../src/main/services/db'
 import {
+  DOCUMENT_EDIT_INSTALL_ID,
+  documentEditAnalysisHandler
+} from '../../src/main/services/skills/analysis/document-edit'
+import type { SkillAnalysisHandler } from '../../src/main/services/skills/analysis/types'
+import {
   DOCUMENT_REDACTION_INSTALL_ID,
   documentRedactionAnalysisHandler
 } from '../../src/main/services/skills/analysis/redaction'
@@ -10,9 +15,9 @@ import { openFreshDb } from '../helpers/db-fixtures'
 import { seedLineChunkDoc } from '../helpers/doc-fixtures'
 import { makeAnalysisCtx } from '../helpers/skill-contexts'
 
-// Redaction-routing handler (skills redaction-routing fix). Driven directly (no IPC). Unlike the
-// invoice/bank EXHAUSTIVE handlers, this is a `routing` handler for an ACTION skill: on a
-// redaction-shaped request over a selected document it returns a short, localized answer pointing the
+// The routing handlers of the ACTION skills (redaction-routing fix; document-edit joined in #583), driven
+// directly (no IPC). Unlike the invoice/bank EXHAUSTIVE handlers, a `routing` handler answers a
+// redaction- or edit-shaped request over a selected document with a short, localized answer pointing the
 // user at the run button — it READS NO content, runs NO tool, makes NO breadth claim (no
 // citations/coverage ⇒ no "relevant passages" badge). These tests pin that contract so the old
 // lecture/refusal + misleading footer can't regress.
@@ -20,7 +25,7 @@ import { makeAnalysisCtx } from '../helpers/skill-contexts'
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 const trDe = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
 
-const freshDb = (): Db => openFreshDb('redaction-analysis')
+const freshDb = (): Db => openFreshDb('analysis-routing')
 
 /** Seed one indexed document with a single chunk so it counts as in-scope/answerable. */
 const seedDoc = (db: Db, text = 'Dear Jane, call me at +49 170 1234567.'): string =>
@@ -29,72 +34,122 @@ const seedDoc = (db: Db, text = 'Dear Jane, call me at +49 170 1234567.'): strin
 const ctxFor = (db: Db, scope: RetrievalScope, question: string, locale: 'en' | 'de' = 'en') =>
   makeAnalysisCtx(db, scope, question, { skillInstallId: DOCUMENT_REDACTION_INSTALL_ID, locale })
 
-describe('redaction routing handler — applies() pre-flight', () => {
-  // Single in-scope document: EN + DE action verbs apply; a German informational PII ask the route vocab
-  // misses ("personenbezogenen", U2 dry-run) applies too; an off-topic question keeps the relevance path.
-  it.each([
-    ['Can you anonymize this doc?', true],
-    ['Bitte die personenbezogenen Daten schwärzen', true],
-    ['Welche personenbezogenen Daten enthält das Dokument?', true],
-    ['what is this letter about?', false]
-  ])('single in-scope document, %j: applies() is %s', (question, expected) => {
+// The two ROUTING handlers (document-redaction, document-edit) share one contract, so the pre-flight and
+// the multi-document copy are table-driven over both (#583: document-edit had only one positive row in
+// rag-skill-analysis.test.ts). Expected strings come from the i18n catalog, never from the handlers.
+interface RoutingCase {
+  name: string
+  handler: SkillAnalysisHandler
+  installId: string
+  /** [question, applies()] over ONE in-scope document */
+  applies: Array<[string, boolean]>
+  /** an action-shaped ask (EN) the handler routes */
+  action: string
+  buttonKey: MessageKey
+  answerKey: MessageKey
+  answerMultiKey: MessageKey
+}
+
+const ROUTING_CASES: RoutingCase[] = [
+  {
+    name: 'document-redaction',
+    handler: documentRedactionAnalysisHandler,
+    installId: DOCUMENT_REDACTION_INSTALL_ID,
+    // EN + DE action verbs apply; a German informational PII ask the route vocab misses
+    // ("personenbezogenen", U2 dry-run) applies too; an off-topic question keeps the relevance path.
+    applies: [
+      ['Can you anonymize this doc?', true],
+      ['Bitte die personenbezogenen Daten schwärzen', true],
+      ['Welche personenbezogenen Daten enthält das Dokument?', true],
+      ['what is this letter about?', false]
+    ],
+    action: 'redact these',
+    buttonKey: 'chat.skill.tool.redactDocument',
+    answerKey: 'skills.redactionRouting.answer',
+    answerMultiKey: 'skills.redactionRouting.answerMulti'
+  },
+  {
+    name: 'document-edit',
+    handler: documentEditAnalysisHandler,
+    installId: DOCUMENT_EDIT_INSTALL_ID,
+    applies: [
+      ['find and replace Acme with Beta', true],
+      ['Ersetze Acme durch Beta', true],
+      ['what is this letter about?', false]
+    ],
+    action: 'find and replace Acme with Beta',
+    buttonKey: 'chat.skill.tool.applyDocumentEdits',
+    answerKey: 'skills.editRouting.answer',
+    answerMultiKey: 'skills.editRouting.answerMulti'
+  }
+]
+
+describe.each(ROUTING_CASES)('$name routing handler — applies() pre-flight', (c) => {
+  it.each(c.applies)('single in-scope document, %j: applies() is %s', (question, expected) => {
     const db = freshDb()
     const id = seedDoc(db)
-    expect(documentRedactionAnalysisHandler.applies({ db, scope: { documentIds: [id] }, question })).toBe(expected)
+    expect(c.handler.applies({ db, scope: { documentIds: [id] }, question })).toBe(expected)
   })
 
   it('applies over a multi-document scope (the run UI is per-document)', () => {
     const db = freshDb()
     const a = seedDoc(db)
     const b = seedDoc(db)
-    expect(
-      documentRedactionAnalysisHandler.applies({ db, scope: { documentIds: [a, b] }, question: 'redact these' })
-    ).toBe(true)
+    expect(c.handler.applies({ db, scope: { documentIds: [a, b] }, question: c.action })).toBe(true)
   })
 
-  it('does not apply when no document is in scope (nothing to redact)', () => {
+  it('does not apply when no document is in scope (nothing to act on)', () => {
     const db = freshDb()
     seedDoc(db)
-    expect(
-      documentRedactionAnalysisHandler.applies({ db, scope: { documentIds: ['does-not-exist'] }, question: 'anonymize this' })
-    ).toBe(false)
+    expect(c.handler.applies({ db, scope: { documentIds: ['does-not-exist'] }, question: c.action })).toBe(false)
   })
 })
 
-describe('redaction routing handler — run()', () => {
-  // The routing-mode exemption from the fully-chunked refusal is proven through askDocuments in
-  // rag-skill-analysis.test.ts (routing skills on a not-fully-chunked document).
-  it.each([
-    { locale: 'en' as const, question: 'anonymize this', verb: undefined },
-    { locale: 'de' as const, question: 'schwärzen', verb: 'schwärzen' } // answers in the user’s language
-  ])('returns the localized routing answer ($locale) naming the run button, with NO citations/coverage', async ({ locale, question, verb }) => {
-    const db = freshDb()
-    const id = seedDoc(db)
-    const res = await documentRedactionAnalysisHandler.run!(ctxFor(db, { documentIds: [id] }, question, locale))
-
-    // Names the SkillRunBar's own button label, so the wording matches the affordance shown.
-    expect(res.answer).toContain((locale === 'de' ? trDe : tr)('chat.skill.tool.redactDocument'))
-    if (verb) expect(res.answer).toContain(verb)
-    // No breadth claim: empty citations ⇒ the renderer shows no coverage meter (no "relevant
-    // passages" footer); no coverage object is set.
-    expect(res.citations).toEqual([])
-    expect(res.coverage).toBeUndefined()
+describe.each(ROUTING_CASES)('$name routing handler — run() copy (#583)', (c) => {
+  it('single document: the localized routing answer names the run button, no citations/coverage (EN + DE)', async () => {
+    for (const locale of ['en', 'de'] as const) {
+      const trL = locale === 'de' ? trDe : tr
+      const db = freshDb()
+      const id = seedDoc(db)
+      const res = await c.handler.run!(
+        makeAnalysisCtx(db, { documentIds: [id] }, c.action, { skillInstallId: c.installId, locale })
+      )
+      expect(res.answer, locale).toBe(trL(c.answerKey, { button: trL(c.buttonKey) }))
+      expect(res.citations).toEqual([])
+      expect(res.coverage).toBeUndefined()
+    }
   })
 
   it('is count-honest over a MULTI-document scope (U-1): tells the user to pick which document', async () => {
     const db = freshDb()
     const a = seedDoc(db)
     const b = seedDoc(db)
-    const res = await documentRedactionAnalysisHandler.run!(ctxFor(db, { documentIds: [a, b] }, 'redact these'))
+    const res = await c.handler.run!(
+      makeAnalysisCtx(db, { documentIds: [a, b] }, c.action, { skillInstallId: c.installId })
+    )
     // The single-doc tool targets one document, so the multi-doc copy is used (and it differs from
     // the single-doc answer) — still naming the button, still content-free (no titles in the copy).
-    expect(res.answer).toBe(tr('skills.redactionRouting.answerMulti', { button: tr('chat.skill.tool.redactDocument') }))
-    expect(res.answer).not.toBe(tr('skills.redactionRouting.answer', { button: tr('chat.skill.tool.redactDocument') }))
+    const button = tr(c.buttonKey)
+    expect(res.answer).toBe(tr(c.answerMultiKey, { button }))
+    expect(res.answer).not.toBe(tr(c.answerKey, { button }))
     expect(res.citations).toEqual([])
   })
 
-  // The action deflection AND the read-only dry-run (U2) both stay tool-free and audit-free.
-  it.each(['anonymize this', 'welche personenbezogenen daten enthält das dokument?'])(
+  it('runs NO tool and emits NO audit event (the write tool stays user-initiated)', async () => {
+    const db = freshDb()
+    const id = seedDoc(db)
+    const ctx = makeAnalysisCtx(db, { documentIds: [id] }, c.action, { skillInstallId: c.installId })
+    await c.handler.run!(ctx)
+    expect(ctx.events).toEqual([])
+    expect((db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }).n).toBe(0)
+  })
+})
+
+describe('redaction routing handler — run()', () => {
+  // The localized single-document answer is pinned per handler above; the routing-mode exemption from
+  // the fully-chunked refusal is proven through askDocuments in rag-skill-analysis.test.ts. The
+  // read-only dry-run (U2) stays tool-free and audit-free too.
+  it.each(['welche personenbezogenen daten enthält das dokument?'])(
     'runs NO tool and emits NO audit event for %j (the write tool stays user-initiated)',
     async (question) => {
       const db = freshDb()
