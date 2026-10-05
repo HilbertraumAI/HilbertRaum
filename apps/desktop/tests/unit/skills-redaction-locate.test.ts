@@ -5,15 +5,17 @@ import {
   entityLocateSchema,
   locateEntities,
   parseLocateReply,
-  LOCATE_CATEGORIES,
   MAX_LOCATED_ENTITIES,
   type LocatedEntity
 } from '../../src/main/services/skills/tools/redaction-locate'
+import { buildEditWindows } from '../../src/main/services/skills/tools/document-edit-locate'
 import {
   verifyAndSweepEntities,
   redactWithEntities,
+  redactDocumentTool,
   MIN_ENTITY_CHARS
 } from '../../src/main/services/skills/tools/redaction'
+import { validateToolInput } from '../../src/main/services/skills/tool-registry'
 import { applySpans } from '../../src/main/services/skills/tools/span-transform'
 
 // Phase 7 (beta-feedback-2026-07, #22 part 2, D73/D75/D78; architecture.md "Skills — design record"
@@ -53,20 +55,28 @@ describe('redaction-locate — the grammar contract (D55)', () => {
     const schema = entityLocateSchema() as any
     const item = schema.properties.entities.items
     expect(item.required).toEqual(['text', 'category', 'line'])
-    expect(item.properties.category.enum).toEqual([...LOCATE_CATEGORIES])
     expect(item.additionalProperties).toBe(false)
     expect(item.properties.line.minimum).toBe(1)
+    // Lockstep (#134 class): the locate grammar and the redact_document tool's hand-written item schema
+    // (category enum, text bounds) must stay structurally identical, or the gate refuses what the
+    // grammar-constrained locate pass emits.
+    expect((redactDocumentTool.inputSchema as any).properties.entities.items).toEqual(item)
   })
 })
 
-describe('redaction-locate — line-numbered overlapping windows', () => {
+// The redaction and document-edit locate passes keep line-for-line twin window builders (deliberately
+// separate modules); one table pins both.
+describe.each([
+  ['buildLocateWindows', buildLocateWindows],
+  ['buildEditWindows', buildEditWindows]
+])('locate — line-numbered overlapping windows (%s)', (_name, build) => {
   it('empty text yields no windows', () => {
-    expect(buildLocateWindows('')).toEqual([])
+    expect(build('')).toEqual([])
   })
 
   it('numbers lines globally and overlaps so a boundary entity is seen whole', () => {
     const text = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n')
-    const windows = buildLocateWindows(text)
+    const windows = build(text)
     // 50 lines, 40-line windows stepping by 32 ⇒ two windows, the second starting at global line 33.
     expect(windows).toHaveLength(2)
     expect(windows[0].startLine).toBe(1)
@@ -79,7 +89,7 @@ describe('redaction-locate — line-numbered overlapping windows', () => {
   })
 
   it('a single short document is one window covering every line', () => {
-    const windows = buildLocateWindows('a\nb\nc')
+    const windows = build('a\nb\nc')
     expect(windows).toHaveLength(1)
     expect(windows[0]).toMatchObject({ startLine: 1, endLine: 3 })
     expect(windows[0].numbered).toBe('1\ta\n2\tb\n3\tc')
@@ -156,7 +166,6 @@ describe('redaction-locate — locateEntities over the runtime', () => {
   })
 
   it('#134: caps unique proposals at MAX_LOCATED_ENTITIES, reports truncated, and stops early', async () => {
-    expect(MAX_LOCATED_ENTITIES).toBe(4096) // == the redact_document schema's entities maxItems
     const text = Array.from({ length: 1300 }, (_, i) => `line ${i + 1}`).join('\n')
     const windows = buildLocateWindows(text)
     expect(windows.length).toBeGreaterThan(34) // enough saturated windows to overflow the cap
@@ -178,6 +187,9 @@ describe('redaction-locate — locateEntities over the runtime', () => {
     expect(entities).toHaveLength(MAX_LOCATED_ENTITIES) // never more than the tool gate accepts
     expect(truncated).toBe(true) // the cap is reported honestly
     expect(calls.length).toBeLessThan(windows.length) // a full cap stops paying for further windows
+    // #134's actual contract: the tool gate accepts the list the seam collected (the schema reads the same
+    // cap constant, so asserting equality with its maxItems would be a self-comparison).
+    expect(validateToolInput(redactDocumentTool, { documentId: 'd1', entities })).toEqual([])
   })
 
   it('propagates an abort as an AbortError (the seam maps it to a calm cancel)', async () => {

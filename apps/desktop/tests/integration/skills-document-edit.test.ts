@@ -130,12 +130,57 @@ describe('document-edit — discovery + dispatch', () => {
     ])
   })
 
-  it('buildToolRunner needs the save capability (null without it, non-null with it)', () => {
+  // U5 / §6.2 + Phase 9 (D77): the edited copy gets its OWN "Save edited copy" dialog, and a Word source
+  // its own .docx filter. buildToolRunner must hand the matching metadata to the save capability.
+  it.each([
+    [
+      'a .txt source',
+      false,
+      { titleKey: 'main.dialog.exportEdited', filterNameKey: 'main.dialog.filterText', extensions: ['txt'] }
+    ],
+    [
+      'a .docx source',
+      true,
+      { titleKey: 'main.dialog.exportEdited', filterNameKey: 'main.dialog.filterDocx', extensions: ['docx'] }
+    ]
+  ])('buildToolRunner delivers the save dialog for %s', async (_label, isDocx, expected) => {
     const db = freshDb()
+    const docId = seedDocWithChunks(db, 'Der Vertreter kennt den Fall.')
     const { audit } = capturingAudit()
-    const args = { skillInstallId: skillInstall, conversationId: '', documentId: 'd1' }
-    expect(buildToolRunner(db, 'apply_document_edits', args, audit)).toBeNull()
-    expect(buildToolRunner(db, 'apply_document_edits', args, audit, { saveTextFile: async () => true })).not.toBeNull()
+    const original = isDocx ? await makeDocx(['Der Vertreter kennt den Fall.']) : null
+    const textDialogs: unknown[] = []
+    const binaryDialogs: unknown[] = []
+    const runner = buildToolRunner(
+      db,
+      'apply_document_edits',
+      {
+        skillInstallId: skillInstall,
+        conversationId: '',
+        documentId: docId,
+        confirmed: true,
+        instruction: 'replace Vertreter with Anwalt'
+      },
+      audit,
+      {
+        runtime: scriptedRuntime(() =>
+          JSON.stringify({ edits: [{ line: 1, find: 'Vertreter', occurrence: 1, replace: 'Anwalt' }] })
+        ),
+        saveTextFile: async (_name, _content, dialog) => {
+          textDialogs.push(dialog)
+          return true
+        },
+        saveBinaryFile: async (_name, _bytes, dialog) => {
+          binaryDialogs.push(dialog)
+          return true
+        },
+        readOriginalDocument: async (): Promise<OriginalDocumentBytes> =>
+          original ? { format: 'docx', bytes: original } : { format: 'other' }
+      }
+    )
+    const outcome = await runner!({ signal: new AbortController().signal, onProgress: () => {} })
+    expect(outcome.ok).toBe(true)
+    expect(isDocx ? binaryDialogs : textDialogs).toEqual([expected])
+    expect(isDocx ? textDialogs : binaryDialogs).toEqual([]) // the other save path was not used
   })
 })
 

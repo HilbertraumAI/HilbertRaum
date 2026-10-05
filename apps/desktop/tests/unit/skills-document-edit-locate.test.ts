@@ -8,7 +8,8 @@ import {
   MAX_LOCATED_EDITS,
   type LocatedEdit
 } from '../../src/main/services/skills/tools/document-edit-locate'
-import { verifyAndSpliceEdits } from '../../src/main/services/skills/tools/document-edit'
+import { verifyAndSpliceEdits, applyDocumentEditsTool } from '../../src/main/services/skills/tools/document-edit'
+import { validateToolInput } from '../../src/main/services/skills/tool-registry'
 
 // Phase 8 (beta-feedback-2026-07, #23, D76/D75/D78; architecture.md "Skills — design record" §22). The
 // locate half (runtime-touching) + the verify/splice half (deterministic, runtime-free) of format-preserving
@@ -54,30 +55,9 @@ describe('document-edit-locate — the grammar contract (D55)', () => {
     expect(item.properties.replace.minLength).toBe(0) // an empty replace is a deletion
     expect(item.properties.line.minimum).toBe(1)
     expect(item.properties.occurrence.minimum).toBe(1)
-  })
-})
-
-describe('document-edit-locate — line-numbered overlapping windows', () => {
-  it('empty text yields no windows', () => {
-    expect(buildEditWindows('')).toEqual([])
-  })
-
-  it('numbers lines globally and overlaps so a boundary edit is seen whole', () => {
-    const text = Array.from({ length: 50 }, (_, i) => `line ${i + 1}`).join('\n')
-    const windows = buildEditWindows(text)
-    // 50 lines, 40-line windows stepping by 32 ⇒ two windows, the second starting at global line 33.
-    expect(windows).toHaveLength(2)
-    expect(windows[0].startLine).toBe(1)
-    expect(windows[1].startLine).toBe(33)
-    expect(windows[0].numbered).toContain('40\tline 40')
-    expect(windows[1].numbered.startsWith('33\t')).toBe(true) // GLOBAL numbering, not a window-local 1
-  })
-
-  it('a single short document is one window covering every line', () => {
-    const windows = buildEditWindows('a\nb\nc')
-    expect(windows).toHaveLength(1)
-    expect(windows[0]).toMatchObject({ startLine: 1, endLine: 3 })
-    expect(windows[0].numbered).toBe('1\ta\n2\tb\n3\tc')
+    // Lockstep (#134 class): the locate grammar and the apply_document_edits tool's hand-written item schema
+    // (find/replace bounds) must stay structurally identical, or the gate refuses what locate emits.
+    expect((applyDocumentEditsTool.inputSchema as any).properties.edits.items).toEqual(item)
   })
 })
 
@@ -166,7 +146,6 @@ describe('document-edit-locate — locateDocumentEdits over the runtime', () => 
   })
 
   it('#134: caps unique proposals at MAX_LOCATED_EDITS, reports truncated, and stops early', async () => {
-    expect(MAX_LOCATED_EDITS).toBe(4096) // == the apply_document_edits schema's edits maxItems
     const text = Array.from({ length: 1400 }, (_, i) => `line ${i + 1}`).join('\n')
     const windows = buildEditWindows(text)
     expect(windows.length).toBeGreaterThan(42) // 4096/100-per-window ⇒ 41 windows overflow the cap
@@ -191,6 +170,9 @@ describe('document-edit-locate — locateDocumentEdits over the runtime', () => 
     expect(edits).toHaveLength(MAX_LOCATED_EDITS)
     expect(truncated).toBe(true)
     expect(calls.length).toBeLessThan(windows.length)
+    // #134's actual contract: the tool gate accepts the list the seam collected (the schema reads the same
+    // cap constant, so asserting equality with its maxItems would be a self-comparison).
+    expect(validateToolInput(applyDocumentEditsTool, { documentId: 'd1', edits })).toEqual([])
   })
 
   it('propagates an abort as an AbortError (the seam maps it to a calm cancel)', async () => {
