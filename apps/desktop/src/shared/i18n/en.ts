@@ -657,6 +657,8 @@ export const en = {
   // The D33 explicit redo (OCR-R P1 FE-2): an already-OCR'd PDF can be read again (better
   // assets / a bad first pass) — distinct from Re-index, which REUSES the stored recognition.
   'docs.makeSearchableAgain': 'Read again (OCR)',
+  // #574: on a photo, "Read again (OCR)" re-reads the stored photo (a re-index).
+  'docs.makeSearchableAgainPhotoTitle': 'Read the photo again with the local text recognition',
   'docs.makeSearchableAgainTitle':
     'Run the local text recognition again and replace the stored reading — Re-index reuses it',
   'docs.summarize': 'Summarize',
@@ -734,11 +736,15 @@ export const en = {
     'Text recognized on this drive (OCR) — {count} pages. Recognition can contain errors.',
   // #576: some pages read by OCR produced no text (blank pages, separator sheets) — count only
   // the ones that did. {total} is always at least 2 here.
+  // #574: a photo of a page read by OCR on import.
+  'docs.previewModal.ocrInfoPhoto':
+    'Text recognized on this drive (OCR) from this photo. Recognition can contain errors.',
   'docs.previewModal.ocrInfoPartial':
     'Text recognized on this drive (OCR) on {count} of {total} pages. Recognition can contain errors.',
   // #538: pages the recognizer was unsure of (low mean confidence). The lead is shared by the row
   // caption and the preview; the preview adds the causes and a "Read again (OCR)" action.
   'docs.ocr.unsure.page': 'Text recognition was unsure of this page.',
+  'docs.ocr.unsure.photo': 'Text recognition was unsure of this photo.',
   'docs.ocr.unsure.some': 'Text recognition was unsure on {count} of the {total} recognized pages.',
   'docs.ocr.unsure.all': 'Text recognition was unsure on all {count} recognized pages.',
   'docs.ocr.unsure.causes':

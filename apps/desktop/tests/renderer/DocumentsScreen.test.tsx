@@ -1832,6 +1832,53 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
   })
 
+  // #574 — a photo read by OCR on import now carries OCR metadata: the preview says so, and its
+  // "Read again (OCR)" re-reads the stored photo — a re-index; the OCR task is PDF-only and would
+  // refuse it.
+  it('#574: a photo read by OCR has the photo caveat, and Read again (OCR) re-indexes it', async () => {
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'never' }))
+    const reindexDocument = vi.fn(async () => undefined)
+    const photo = doc({
+      id: 'p1',
+      title: 'receipt.jpg',
+      mimeType: 'image/jpeg',
+      chunkCount: 1,
+      ocr: {
+        pageCount: 1,
+        textPageCount: 1,
+        lowConfidencePageCount: 0,
+        languages: ['deu', 'eng'],
+        engineId: 'tesseract.js-7.0.0',
+        createdAt: '2026-10-05T00:00:00Z'
+      }
+    })
+    stubApi({
+      listDocuments: vi.fn(async () => [photo]),
+      getAppStatus: vi.fn(async () => appStatus()),
+      previewDocument: vi.fn(async () => ({
+        id: 'p1',
+        title: 'receipt.jpg',
+        mimeType: 'image/jpeg',
+        segments: [{ text: 'Quittung über 42 Euro.', pageNumber: null, sectionLabel: null }]
+      })),
+      startDocTask,
+      reindexDocument
+    })
+    render(<DocumentsScreen />)
+    await screen.findByText('receipt.jpg')
+    await user.click(screen.getByRole('button', { name: /preview/i }))
+    const dialog = await screen.findByRole('dialog')
+    expect(within(dialog).getByText(en['docs.previewModal.ocrInfoPhoto'])).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: /close/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'More actions for receipt.jpg' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Read again (OCR)' }))
+    await waitFor(() => expect(reindexDocument).toHaveBeenCalledWith('p1'))
+    expect(startDocTask).not.toHaveBeenCalled()
+  })
+
   it('FE-4: the OCR busy label switches to "Finishing…" on the final re-ingest step; Cancel stays enabled', async () => {
     vi.useFakeTimers()
     try {

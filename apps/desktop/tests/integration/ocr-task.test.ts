@@ -26,7 +26,7 @@ import type { RasterizePdf } from '../../src/main/services/ocr/rasterizer'
 import { createMockEmbedder } from '../../src/main/services/embeddings'
 import { retrieve } from '../../src/main/services/rag'
 import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
-import type { AuditEventType } from '../../src/shared/types'
+import { matchesSmartView, type AuditEventType } from '../../src/shared/types'
 import { makeScanOnlyPdf, TINY_PNG } from '../helpers/fixtures'
 import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -464,6 +464,34 @@ describe('photo import through the real pipeline', () => {
     expect(failed.status).toBe('failed')
     expect(failed.errorMessage).toBe(IMAGE_NEEDS_OCR_MESSAGE)
     expect(failed.scanDetected).toBe(false) // the OCR offer is PDF-only
+  })
+
+  // #574 — a photo read by OCR carries OCR metadata like a scanned PDF (the preview caveat, the
+  // `ocr` view, "Read again (OCR)"), but no separately stored text: its text lives only in its
+  // chunks. A re-read that fails takes the claim away again.
+  it('#574: a photo read by OCR carries its OCR metadata, without stored text; a failed re-read clears it', async () => {
+    const p = join(tmp, 'receipt.jpg')
+    writeFileSync(p, TINY_PNG)
+    const queued = createQueuedDocument(db, p)
+    const done = await processDocument(db, storeDir, queued.id, {
+      embedder: createMockEmbedder(),
+      ocrEngine: fakeEngine(() => 'Quittung über 42 Euro.')
+    })
+    expect(done.status).toBe('indexed')
+    expect(done.ocr).toEqual({
+      pageCount: 1,
+      textPageCount: 1,
+      lowConfidencePageCount: 0,
+      languages: ['deu', 'eng'],
+      engineId: 'fake-tesseract',
+      createdAt: expect.any(String)
+    })
+    expect(matchesSmartView(done, 'ocr')).toBe(true)
+    expect(getDocumentOcrPages(db, queued.id)).toBeNull()
+
+    const reread = await reindexDocument(db, storeDir, queued.id, { embedder: createMockEmbedder() })
+    expect(reread.status).toBe('failed')
+    expect(getDocument(db, queued.id)?.ocr ?? null).toBeNull()
   })
 
   // #232 / #219: the OCR files are on the drive but the

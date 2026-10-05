@@ -39,6 +39,7 @@ import type { Transcriber } from '../transcriber'
 import type { OcrEngine, OcrPage } from '../ocr'
 import {
   isAudioPath,
+  isImagePath,
   isPdfPath,
   readsWholeFileToString,
   selectParser,
@@ -904,6 +905,10 @@ export async function prepareDocument(
     const parseT0 = performance.now()
     const parsed = await parseWithLimits(parser, parseSource, parseCtx, limits)
     perfMark('ingest_parse_done', { docId: documentId, ms: perfMs(parseT0) })
+    // #574: a photo is read by OCR on every import/re-index, so its OCR sidecar is rewritten each
+    // time (and cleared below when reading it fails). A scanned PDF's sidecar is the OCR task's,
+    // written with its `ocr_json`, and survives re-index — never touched here.
+    if (isImagePath(row.title)) setPhotoOcrMeta(db, documentId, parsed.ocrMeta ?? null)
 
     setStatus(db, documentId, 'chunking')
     // Over-cap gate (whole-document-analysis plan C1/C2/M13). Chunk with cap + 1 so an
@@ -1029,6 +1034,8 @@ export async function prepareDocument(
     setStatus(db, documentId, 'embedding')
     return { documentId, ready: true }
   } catch (err) {
+    // #574: a photo that could not be read carries no claim that its text was recognized.
+    if (isImagePath(row.title)) setPhotoOcrMeta(db, documentId, null)
     // #530: an engine the OS refused to start persists canonical text, never the loader's raw
     // line (it carries the absolute drive path); any other failure keeps its own message.
     setStatus(db, documentId, 'failed', failureRowMessage(err))
@@ -1488,6 +1495,17 @@ export function setDocumentOcr(
     json,
     metaJson,
     nowIso(),
+    documentId
+  )
+}
+
+/**
+ * #574: a photo's OCR sidecar — counts only (one page, its confidence, the engine). A photo keeps
+ * no `ocr_json`: its text lives only in its chunks, and every re-index reads the photo again.
+ */
+function setPhotoOcrMeta(db: Db, documentId: string, meta: DocumentOcrInfo | null): void {
+  db.prepare('UPDATE documents SET ocr_meta_json = ? WHERE id = ?').run(
+    meta ? JSON.stringify(meta) : null,
     documentId
   )
 }

@@ -678,6 +678,7 @@ export const de: Record<keyof typeof en, string> = {
   // werden (bessere Dateien / ein schlechter erster Durchlauf) — anders als „Neu indexieren“,
   // das die gespeicherte Erkennung WEITERVERWENDET.
   'docs.makeSearchableAgain': 'Erneut lesen (OCR)',
+  'docs.makeSearchableAgainPhotoTitle': 'Das Foto erneut mit der lokalen Texterkennung lesen',
   'docs.makeSearchableAgainTitle':
     'Die lokale Texterkennung erneut ausführen und die gespeicherte Erkennung ersetzen — ' +
     '„Neu indexieren“ verwendet sie weiter',
@@ -746,10 +747,13 @@ export const de: Record<keyof typeof en, string> = {
   'docs.previewModal.ocrInfo.other':
     'Auf diesem Laufwerk erkannter Text (OCR) — {count} Seiten. Die Erkennung kann Fehler ' +
     'enthalten.',
+  'docs.previewModal.ocrInfoPhoto':
+    'Auf diesem Laufwerk aus diesem Foto erkannter Text (OCR). Die Erkennung kann Fehler enthalten.',
   'docs.previewModal.ocrInfoPartial':
     'Auf diesem Laufwerk erkannter Text (OCR) auf {count} von {total} Seiten. Die Erkennung kann ' +
     'Fehler enthalten.',
   'docs.ocr.unsure.page': 'Die Texterkennung war bei dieser Seite unsicher.',
+  'docs.ocr.unsure.photo': 'Die Texterkennung war bei diesem Foto unsicher.',
   'docs.ocr.unsure.some': 'Die Texterkennung war auf {count} der {total} erkannten Seiten unsicher.',
   'docs.ocr.unsure.all': 'Die Texterkennung war auf allen {count} erkannten Seiten unsicher.',
   'docs.ocr.unsure.causes':

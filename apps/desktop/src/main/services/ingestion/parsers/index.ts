@@ -1,6 +1,6 @@
 import { extname } from 'node:path'
 import type { Transcriber } from '../../transcriber'
-import type { TranscriberMissing } from '../../../../shared/types'
+import type { DocumentOcrInfo, TranscriberMissing } from '../../../../shared/types'
 import type { OcrEngine, OcrPage } from '../../ocr'
 
 // Document parsers (spec §7.7 / §9.2 DocumentParser interface). Each parser turns a
@@ -34,6 +34,12 @@ export interface ParsedDocument {
    * completeness accounting (translation) needs the real total to detect the gap.
    */
   pageCount?: number | null
+  /**
+   * #574: the text was recognized by OCR during this parse (a photo) — its surface metadata
+   * (page count, confidence count, languages, engine). Ingestion stores it as the document's OCR
+   * sidecar; the recognized text itself is only the segments. Absent for every other parse.
+   */
+  ocrMeta?: DocumentOcrInfo
 }
 
 /**

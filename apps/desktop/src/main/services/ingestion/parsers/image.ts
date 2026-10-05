@@ -3,6 +3,7 @@ import { t } from '../../../../shared/i18n'
 import type { DocumentParser, ParseContext, ParsedDocument } from './index'
 import { log } from '../../logging'
 import { readUpright } from '../../ocr/upright'
+import { ocrMetaOf } from '../ocr-meta'
 
 // Photo "parser": a photographed page becomes a normal corpus document by
 // running the injected OCR engine over the image bytes. Deliberate asymmetry:
@@ -61,12 +62,14 @@ export const ImageParser: DocumentParser = {
       throw new Error(IMAGE_OCR_UNAVAILABLE_MESSAGE)
     }
     let text: string
+    let confidence: number | null = null
     try {
       const image = await readFile(filePath)
       // BE-8: forward the parse context's abort signal so a cancelled import aborts the
       // recognition in flight instead of waiting it out (bounded by the 2-min ceiling).
       const reading = await readUpright(engine, image, { signal: ctx?.signal })
       text = reading.text.trim()
+      confidence = reading.confidence
     } catch (err) {
       // §11.4: the documents table gets friendly copy; the technical reason goes to
       // the LOCAL log only. Engine errors carry no recognized text (content-safe).
@@ -83,7 +86,15 @@ export const ImageParser: DocumentParser = {
     }
     return {
       segments: [{ text, pageNumber: null, sectionLabel: null }],
-      mimeType: ImageParser.mimeType
+      mimeType: ImageParser.mimeType,
+      // #574: the photo's OCR metadata (one page, its confidence, the engine) — the preview caveat,
+      // the `ocr` view and "Read again (OCR)" read it, like a scanned PDF's.
+      ocrMeta:
+        ocrMetaOf([{ text, confidence }], {
+          languages: engine.languages,
+          engineId: engine.id,
+          createdAt: new Date().toISOString()
+        }) ?? undefined
     }
   }
 }

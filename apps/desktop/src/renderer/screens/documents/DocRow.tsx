@@ -24,7 +24,7 @@ import {
   rowChips
 } from './format'
 import { ocrRemedyKind } from '../../lib/ocrRemedy'
-import { ocrUnsureLine } from './ocrNotes'
+import { isPhotoDocument, ocrUnsureLine } from './ocrNotes'
 
 /**
  * One document row (perf audit PERF-5): the checkbox + name/meta/provenance column + the trailing
@@ -185,7 +185,9 @@ export const DocRow = memo(function DocRow({
   const showOcrRedo = Boolean(d.ocr != null && ocrAvailable)
   // #538: a quiet caption when the recognizer was unsure of some pages; the remedy ("Read again
   // (OCR)") is in the "⋯" menu and, with the causes, in the preview.
-  const ocrUnsure = d.status === 'indexed' && d.ocr ? ocrUnsureLine(d.ocr, t) : null
+  // #574: a photo is read by OCR too; reading it again is a re-index (every re-index reads it).
+  const photo = isPhotoDocument(d.mimeType)
+  const ocrUnsure = d.status === 'indexed' && d.ocr ? ocrUnsureLine(d.ocr, t, photo) : null
   const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
   // OCR-R P1 FE-4: the OCR task's final step is the minutes-long re-ingest, not page reading —
   // "Reading the scan… (4/4)" through it lied. The count keeps the design record's "pages +
@@ -477,8 +479,12 @@ export const DocRow = memo(function DocRow({
                     <DropdownMenu.Item
                       className="menu-item"
                       disabled={anyTaskActive}
-                      title={t('docs.makeSearchableAgainTitle')}
-                      onSelect={() => void onMakeSearchable(d)}
+                      title={t(photo ? 'docs.makeSearchableAgainPhotoTitle' : 'docs.makeSearchableAgainTitle')}
+                      onSelect={() =>
+                        void (photo
+                          ? run('reindex', d, () => window.api.reindexDocument(d.id))
+                          : onMakeSearchable(d))
+                      }
                     >
                       {t('docs.makeSearchableAgain')}
                     </DropdownMenu.Item>
