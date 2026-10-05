@@ -191,7 +191,7 @@
       "question": "Remove all personal data for GDPR compliance.",
       "inScopeDocs": [{ "title": "customers.txt", "mimeType": "text/plain" }],
       "expected": "document-redaction",
-      "note": "True positive by label, but a KNOWN SUGGESTION DEVIATION (#583): U4 dropped the legal word 'gdpr', and the vocabulary only knows the exact phrase 'remove personal data' - 'Remove all personal data' does not match, so no offer fires. Kept as the honest label; the harness lists it in KNOWN_SUGGESTION_DEVIATIONS."
+      "note": "True positive — 'remove all personal data' (#583: the older phrase 'remove personal data' is not a substring of it, and U4 dropped the legal word 'gdpr'). customers.txt is explicitly in scope, so the text/plain signal also makes it auto-fire."
     },
     {
       "id": "tp-redaction-en-03",

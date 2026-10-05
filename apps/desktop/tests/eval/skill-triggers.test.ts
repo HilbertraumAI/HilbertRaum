@@ -23,13 +23,10 @@ const LABEL_SPACE = new Set<string>([...APP_VOCAB_SKILL_IDS, 'none'])
 /**
  * Rows whose production OFFER differs from the label (id → what production offers today). An entry is a
  * documented deviation, not a pass: when a row is fixed its entry must be REMOVED (a stale entry fails).
- *  - tp-redaction-en-02: the vocabulary only knows the exact phrase "remove personal data", and U4 dropped
- *    the legal word "gdpr", so "Remove all personal data for GDPR compliance." offers nothing (#583).
  *  - adv-meeting-schedule-01: a scheduling question that merely names a meeting still offers
  *    meeting-protocol — the documented precision ceiling of a one-keyword offer.
  */
 const KNOWN_SUGGESTION_DEVIATIONS: Record<string, string> = {
-  'tp-redaction-en-02': 'none',
   'adv-meeting-schedule-01': 'meeting-protocol'
 }
 

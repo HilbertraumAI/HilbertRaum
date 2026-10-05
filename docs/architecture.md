@@ -5879,11 +5879,11 @@ ratified the suggestion bar (2026-10-05), and it is a hard CI gate: **precision 
 **zero wrong and zero missed on the confusion rows** (the cross-skill pairs); and every row gives its
 expected offer except the rows listed in `KNOWN_SUGGESTION_DEVIATIONS` in
 `tests/eval/skill-triggers.test.ts`, whose entry must be removed when the row is fixed (a stale entry
-fails). Two rows are listed today: `tp-redaction-en-02` (the vocabulary knows only the exact phrase
-"remove personal data", and U4 dropped the legal word "gdpr", so a GDPR phrasing offers nothing,
-#583) and `adv-meeting-schedule-01` (a scheduling question that merely names a meeting still offers
-meeting-protocol, the precision ceiling of a one-keyword offer). Measured on the 138 rows: suggestion
-precision 99.0%, recall 99.0% (102 correct, 1 wrong, 1 missed), confusion set 0 wrong / 0 missed. The
+fails). One row is listed today: `adv-meeting-schedule-01` (a scheduling question that merely names
+a meeting still offers meeting-protocol, the precision ceiling of a one-keyword offer). The GDPR row
+`tp-redaction-en-02` left the list in #583, when "remove all personal data" joined the vocabulary.
+Measured on the 138 rows: suggestion precision 99.0%, recall 100.0% (103 correct, 1 wrong, 0
+missed), confusion set 0 wrong / 0 missed. The
 printout (`formatReport`, at the start of the S13b gate) shows the two production paths: `suggestion`
 (all rows) and `auto-fire`, the latter twice, once over the gate set and once with the accepted
 deviations counted as wrong. Question text is scored but never logged. The numbers the deleted
@@ -5897,8 +5897,8 @@ counts the rows in `KNOWN_AUTOFIRE_DEVIATIONS` (`tp-sharesafe-de-01`, `tp-shares
 separately: they must fire exactly `document-redaction`, and over the other rows `fired-wrong == 0`
 and `precision ≥ 0.95`; a row whose document is only in the Library (not explicitly selected) must
 never auto-fire (the U4 narrowing and the #130 doc-signal gate). Measured auto-fire precision is 100%
-(29 correct, 0 wrong, 72 missed, recall 28.7%) over the gate set, and 93.5% (29 correct, 2 wrong,
-72 missed) with the two deviations counted as wrong fires. Auto-fire recall is low by design: rows
+(30 correct, 0 wrong, 71 missed, recall 29.7%) over the gate set, and 93.8% (30 correct, 2 wrong,
+71 missed) with the two deviations counted as wrong fires. Auto-fire recall is low by design: rows
 labelled with the five skills that never auto-fire count as misses. The same mechanism applies to
 "personenbezogene Daten", also a keyword of both skills; the corpus pins only the "sensible Daten"
 rows. The optional product fix is tracked in #583.

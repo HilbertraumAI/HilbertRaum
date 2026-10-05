@@ -34,7 +34,7 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
   # DROPPED — the handler acts on none of them, so keeping them let redaction auto-fire a wrong-flavoured
   # fence on "Was regelt die DSGVO?". Edit the vocabulary, not this list.
   keywords: [redact, redaction, anonymize, anonymise, anonymized, anonymised,
-             remove personal data, mask personal data,
+             remove personal data, remove all personal data, mask personal data,
              anonymisieren, anonymisierung, anonymisiere, pseudonymisieren,
              schwärzen, schwärzung, schwärze, geschwärzt,
              personenbezogene daten, personenbezogene daten entfernen,
