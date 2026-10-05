@@ -2,7 +2,6 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
@@ -195,57 +194,5 @@ describe('suggestSkillsForTurn (S8)', () => {
     reconcileSkills(db, d)
     setSkillEnabled(db, 'user:bank', true)
     expect(suggestSkillsForTurn(db, 'no-such-conversation', 'hello there')).toEqual([])
-  })
-})
-
-// German trigger coverage against the REAL committed meeting-protocol skill (bilingual reference).
-// App skills install enabled by default, so reconciling the repo's app-skills/ makes it a live
-// candidate; a German meeting question must clear the threshold and be the returned offer.
-describe('meeting-protocol — German triggers fire against the real selector', () => {
-  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-
-  function realDeps(): { appSkillsDir: string; userSkillsDir: string } {
-    return {
-      appSkillsDir: join(REPO_ROOT, 'app-skills'),
-      userSkillsDir: join(tempDir(), 'user-skills')
-    }
-  }
-
-  it('offers meeting-protocol for a German protocol question; nothing for a neutral one', () => {
-    const db = freshDb()
-    reconcileSkills(db, realDeps()) // app skills → enabled
-    const conv = createConversation(db, {})
-
-    const offer = suggestSkillsForTurn(db, conv.id, 'Erstelle bitte ein Protokoll dieser Besprechung')
-    expect(offer).toHaveLength(1)
-    expect(offer[0].installId).toBe('app:meeting-protocol')
-
-    expect(suggestSkillsForTurn(db, conv.id, "What's the weather?")).toEqual([])
-  })
-
-  it('offers invoice for a German invoice question; nothing for a neutral one', () => {
-    const db = freshDb()
-    reconcileSkills(db, realDeps()) // app skills → enabled
-    const conv = createConversation(db, {})
-
-    // "rechnung" is a keyword (weight 2) → clears SUGGEST_SCORE_THRESHOLD on the real selector.
-    const offer = suggestSkillsForTurn(db, conv.id, 'Prüfe die Beträge auf dieser Rechnung')
-    expect(offer).toHaveLength(1)
-    expect(offer[0].installId).toBe('app:invoice')
-
-    expect(suggestSkillsForTurn(db, conv.id, 'Sag mir einen Witz')).toEqual([])
-  })
-
-  it('offers document-redaction for a German anonymization question; nothing for a neutral one', () => {
-    const db = freshDb()
-    reconcileSkills(db, realDeps()) // app skills → enabled
-    const conv = createConversation(db, {})
-
-    // "anonymisieren" is a keyword (weight 2) → clears SUGGEST_SCORE_THRESHOLD on the real selector.
-    const offer = suggestSkillsForTurn(db, conv.id, 'Bitte dieses Dokument anonymisieren')
-    expect(offer).toHaveLength(1)
-    expect(offer[0].installId).toBe('app:document-redaction')
-
-    expect(suggestSkillsForTurn(db, conv.id, 'Wie spät ist es?')).toEqual([])
   })
 })

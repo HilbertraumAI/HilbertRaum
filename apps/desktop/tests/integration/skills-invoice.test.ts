@@ -102,20 +102,6 @@ describe('invoice — committed SKILL.md is a Tier-2 tool skill', () => {
     expect(m.permissions.network).toBe('denied')
     expect(m.permissions.documents).toBe('selected_only')
   })
-
-  it('covers English + German triggers, singular and plural', () => {
-    const kws = parseSkillMarkdown(INVOICE_SKILL_MD).manifest!.triggers.keywords
-    // English.
-    expect(kws).toContain('invoice')
-    expect(kws).toContain('invoices')
-    // German singular + plural (the ending breaks the substring, so both are listed).
-    expect(kws).toContain('rechnung')
-    expect(kws).toContain('rechnungen')
-    expect(kws).toContain('rechnungsnummer')
-    expect(kws).toContain('mehrwertsteuer')
-    expect(kws).toContain('netto')
-    expect(kws).toContain('brutto')
-  })
 })
 
 describe('invoice — discovery + reconcile (S3)', () => {

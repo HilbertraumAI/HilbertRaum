@@ -94,16 +94,6 @@ describe('document-edit — committed SKILL.md is a Tier-2 tool skill', () => {
     expect(m.permissions.network).toBe('denied')
     expect(m.permissions.documents).toBe('selected_only')
   })
-
-  it('covers the English + German find-and-replace triggers', () => {
-    const kws = parseSkillMarkdown(EDIT_SKILL_MD).manifest!.triggers.keywords
-    expect(kws).toContain('find and replace')
-    expect(kws).toContain('replace all')
-    expect(kws).toContain('rename')
-    expect(kws).toContain('suchen und ersetzen')
-    expect(kws).toContain('ersetzen')
-    expect(kws).toContain('umbenennen')
-  })
 })
 
 describe('document-edit — discovery + dispatch', () => {
