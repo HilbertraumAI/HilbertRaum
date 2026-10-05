@@ -4,6 +4,7 @@ import { render, screen, cleanup } from '@testing-library/react'
 import { SkillInfoCard } from '../../src/renderer/chat'
 import { I18nProvider } from '../../src/renderer/i18n'
 import type { SkillInfo } from '../../src/shared/types'
+import { makeSkillInfo } from '../helpers/chat-fixtures'
 
 // #46 — the compact skill info card: an APP skill renders its catalog what/needs/limits lines
 // (`shared/skill-info.ts`); a user/unknown skill falls back to its own description (the app never
@@ -15,27 +16,15 @@ function withI18n(ui: React.ReactElement): React.ReactElement {
 }
 
 function skill(over: Partial<SkillInfo> = {}): SkillInfo {
-  return {
+  return makeSkillInfo({
     installId: 'app:document-edit',
     id: 'document-edit',
     title: 'Document Edit',
     description: 'Use when the user wants to make targeted find-and-replace edits to a document.',
-    version: '1.0.0',
     kind: 'tool',
     author: 'HilbertRaum',
-    language: 'en',
-    source: 'app',
-    trustedLevel: 'app',
-    enabled: true,
-    warningAck: true,
-    unavailable: false,
-    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
-    permissionSummary: 'x',
-    duplicateId: false,
-    installedAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
     ...over
-  }
+  })
 }
 
 afterEach(cleanup)

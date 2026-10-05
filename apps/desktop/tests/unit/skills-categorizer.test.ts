@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ChatMessage, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
   CATEGORIZER_BATCH_SIZE,
   buildBatchPrompt,
@@ -10,32 +10,11 @@ import {
   prefilterCategory
 } from '../../src/main/services/skills/categorizer'
 import { categorizeRow, type TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
 
 // Unit coverage for the bank-statement LLM categorizer (Phase 33). The MockRuntime IGNORES
 // `responseSchema` (exactly like the dev mock runtime), so the drop-to-Uncategorized parse + the
 // off-list/out-of-range validation are exercised here, plus the deterministic no-runtime fallback.
-
-/** A scripted runtime whose `chatStream` replies with `reply(call)` token-by-token. */
-function scriptedRuntime(
-  reply: (call: { messages: ChatMessage[]; options?: RuntimeChatOptions }) => string,
-  calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
-): ModelRuntime {
-  return {
-    modelId: 'mock',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      const call = { messages, options }
-      calls.push(call)
-      const text = reply(call)
-      for (const tok of text.match(/\S+\s*/g) ?? [text]) {
-        if (options?.signal?.aborted) return
-        yield tok
-      }
-    }
-  }
-}
 
 function row(description: string, amount: number, currency = 'EUR'): TransactionInput {
   return { date: '2026-03-01', description, amount, currency }

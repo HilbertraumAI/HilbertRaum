@@ -66,26 +66,24 @@ vi.mock('electron', () => ({
 
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
 import { IPC } from '../../src/shared/ipc'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
-import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
-import { createSkillRegistry } from '../../src/main/services/skills/registry'
+import type { Db } from '../../src/main/services/db'
+import { listAuditEvents } from '../../src/main/services/audit'
 import { DEFAULT_SKILL_LIMITS } from '../../src/main/services/skills/limits'
 import type { AppContext } from '../../src/main/services/context'
 import type { SkillInfo, SkillPreview } from '../../src/shared/types'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { tempRoot } from '../helpers/db-fixtures'
+import { skillMdText } from '../helpers/skill-fixtures'
+import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
 const SENTINEL = 'XSKILL_SENTINEL_my_secret_account_is_99999'
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-skill-ipc-'))
-}
+const tempDir = (): string => tempRoot('skill-ipc')
 
-function skillMd(id: string, body: string): string {
-  return ['---', `id: ${id}`, `title: ${id} skill`, `description: ${body}`, 'version: 1.0.0', '---', body].join('\n')
-}
+// description = body: the sentinel grep relies on the body text also landing in the description.
+const skillMd = (id: string, body: string): string => skillMdText({ id, title: `${id} skill`, description: body, body })
 
 async function writeZip(members: Array<{ name: string; content: string }>): Promise<string> {
   const zip = new JSZip()
@@ -117,25 +115,10 @@ interface Harness {
 }
 
 function makeHarness(): Harness {
-  const root = tempDir()
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const audit = createAuditRecorder(() => db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    isDev: false,
-    audit,
-    skills,
-    ocrEngine: undefined
-  } as unknown as AppContext
+  const w = makeSkillsWorld('skill-ipc', { createDirs: false })
+  const ctx = makeSkillsIpcContext(w)
   registerSkillsIpc(ctx)
-  return { ctx, db, appSkillsDir, userSkillsDir }
+  return { ctx, db: w.db, appSkillsDir: w.appSkillsDir, userSkillsDir: w.userSkillsDir }
 }
 
 function allAuditText(db: Db): string {
@@ -225,24 +208,9 @@ describe('skills IPC — round-trip lifecycle', () => {
   })
 
   it('locked workspace → friendly error, no crash', async () => {
-    const root = tempDir()
-    const db = openDatabase(join(root, 'test.sqlite'))
-    seedSettings(db)
-    const skills = createSkillRegistry({
-      getDb: () => db,
-      appSkillsDir: join(root, 'app-skills'),
-      userSkillsDir: join(root, 'user-skills')
-    })
-    const ctx = {
-      trustedSenders: ANY_SENDER,
-      db,
-      paths: { workspacePath: root },
-      workspace: { isUnlocked: () => false, documentCipher: () => null },
-      isDev: false,
-      skills,
-      ocrEngine: undefined
-    } as unknown as AppContext
-    registerSkillsIpc(ctx)
+    const w = makeSkillsWorld('skill-ipc', { createDirs: false })
+    // No `audit` key at all in this ctx (the locked-workspace test never builds a recorder).
+    registerSkillsIpc(makeSkillsIpcContext(w, { unlocked: false, audit: false }))
     await expect(invoke(handlers, IPC.listSkills)).rejects.toThrow(/locked/i)
     // The picker is gated too: no OS dialog opens while the workspace is locked (#240).
     ipcState.openDialog.canceled = false

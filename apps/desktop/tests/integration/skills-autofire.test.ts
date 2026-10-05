@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
 import { resolveTurnSkill, resolveTurnSkillFromRegistry } from '../../src/main/services/skills/turn'
 import { resolveAutoFireSkill } from '../../src/main/services/skills/autofire'
@@ -17,6 +15,8 @@ import {
 } from '../../src/main/services/chat'
 import { addToCollection, getBuiltinCollection, linkConversationDocument } from '../../src/main/services/collections'
 import { updateSettings } from '../../src/main/services/settings'
+import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
+import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Skills S13b — AUTO-FIRE mechanics (skills-s13-plan.md §2.1/§4). Proves the ratified contract:
 //   D4  off by default (the safe-merge property — inert in production) AND app-skills only.
@@ -29,16 +29,9 @@ import { updateSettings } from '../../src/main/services/settings'
 //   §6.5 an enabled-but-incompatible app skill never auto-fires.
 // All deterministic + DB-only (no model, no Electron).
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-autofire-'))
-}
-function freshDb(): Db {
-  return openDatabase(join(tempDir(), 'test.sqlite'))
-}
-function makeDirs(): { appSkillsDir: string; userSkillsDir: string } {
-  const root = tempDir()
-  return { appSkillsDir: join(root, 'app-skills'), userSkillsDir: join(root, 'user-skills') }
-}
+const tempDir = (): string => tempRoot('autofire')
+const freshDb = (): Db => openFreshDb('autofire')
+const makeDirs = (): SkillDirs => makeSkillDirs('autofire')
 
 /** Write a SKILL.md (frontmatter triggers + optional autoFire + optional minAppVersion) into `dir`. */
 function writeSkill(
@@ -52,18 +45,8 @@ function writeSkill(
     minAppVersion?: string
   }
 ): void {
-  const d = join(dir, id)
-  mkdirSync(d, { recursive: true })
-  const lines = ['---', `id: ${id}`, `title: Skill ${id}`, `description: ${id} skill`, 'version: 1.0.0']
-  if (opts.minAppVersion) lines.push('compatibility:', `  minAppVersion: ${opts.minAppVersion}`)
-  lines.push('triggers:')
-  if (opts.keywords) lines.push(`  keywords: [${opts.keywords.join(', ')}]`)
-  if (opts.mimeTypes) lines.push(`  mimeTypes: [${opts.mimeTypes.join(', ')}]`)
-  if (opts.filenamePatterns)
-    lines.push(`  filenamePatterns: [${opts.filenamePatterns.map((p) => `"${p}"`).join(', ')}]`)
-  if (opts.autoFire !== undefined) lines.push(`  autoFire: ${opts.autoFire}`)
-  lines.push('---', `Instructions for ${id}.`)
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  const { minAppVersion, ...triggers } = opts
+  writeSkillPackage(dir, { id, minAppVersion, triggers })
 }
 
 function seedIndexedDoc(db: Db, title: string, mime: string): string {

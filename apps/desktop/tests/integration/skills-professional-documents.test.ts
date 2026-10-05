@@ -1,11 +1,12 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, getSkill, skillInstallId } from '../../src/main/services/skills/registry'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { realAppSkillsDeps } from '../helpers/skill-fixtures'
 
 // The "Professional Documents" wave — the upgraded Meeting Minutes skill plus four NEW Tier-1
 // instruction skills (contract-brief, deadline-obligation-finder, what-changed, share-safe-review).
@@ -24,17 +25,10 @@ function readSkillMd(id: string): string {
   return readFileSync(join(APP_SKILLS_DIR, id, 'SKILL.md'), 'utf8')
 }
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-prodocs-')), 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('prodocs')
 
 /** Reconcile against the REAL committed app-skills/ so the live selector sees the shipped triggers. */
-function realDeps(): { appSkillsDir: string; userSkillsDir: string } {
-  return {
-    appSkillsDir: APP_SKILLS_DIR,
-    userSkillsDir: join(mkdtempSync(join(tmpdir(), 'hilbertraum-prodocs-user-')), 'user-skills')
-  }
-}
+const realDeps = () => realAppSkillsDeps('prodocs-user')
 
 describe('Professional Documents — every package is a valid bundled skill', () => {
   it('all five skills are Tier-1 instruction skills with NO tools and a German display name', () => {

@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   INVOICE_INSTALL_ID,
   invoiceAnalysisHandler
 } from '../../src/main/services/skills/analysis/invoice'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
-import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
-import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
+import type { RetrievalScope } from '../../src/shared/types'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedLineChunkDoc } from '../helpers/doc-fixtures'
+import { makeAnalysisCtx } from '../helpers/skill-contexts'
+import { countPrepares } from '../helpers/db-spy'
 
 // full-doc-skills plan §3.1, Phase 4 / D49 — the invoice analysis handler, driven DIRECTLY (no IPC,
 // no chat wiring). Mirrors skills-analysis-bank.test.ts: seeds the `chunks` table (the legacy reader
@@ -22,73 +22,14 @@ import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
 
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 
-function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-invoice-analysis-'))
-  return openDatabase(join(dir, 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('invoice-analysis')
 
-function seedDoc(db: Db, text: string, opts: { fullyChunked?: boolean } = {}): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
-     VALUES (?, 'Invoice', 'indexed', 'application/pdf', ?, ?, ?)`
-  ).run(docId, opts.fullyChunked ? now : null, now, now)
-  // One chunk per line so citations resolve against real source rows (page-addressable).
-  text.split('\n').forEach((line, i) => {
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-       VALUES (?, ?, ?, ?, 'Invoice', 1, ?)`
-    ).run(randomUUID(), docId, i, line, now)
-  })
-  return docId
-}
+// One chunk per line so citations resolve against real source rows (page-addressable).
+const seedDoc = (db: Db, text: string, o: { fullyChunked?: boolean } = {}): string =>
+  seedLineChunkDoc(db, text.split('\n'), { title: 'Invoice', fullyChunked: o.fullyChunked })
 
-function capturingAudit(): {
-  audit: (t: AuditEventType, m?: Record<string, unknown>) => void
-  events: Array<{ type: string; meta?: Record<string, unknown> }>
-} {
-  const events: Array<{ type: string; meta?: Record<string, unknown> }> = []
-  return { audit: (type, meta) => events.push({ type, meta }), events }
-}
-
-function ctxFor(
-  db: Db,
-  scope: RetrievalScope,
-  question: string,
-  conversationId: string | null = null
-): SkillAnalysisContext & {
-  events: Array<{ type: string; meta?: Record<string, unknown> }>
-} {
-  const { audit, events } = capturingAudit()
-  return {
-    db,
-    scope,
-    question,
-    skillInstallId: INVOICE_INSTALL_ID,
-    conversationId,
-    audit,
-    tr,
-    events
-  }
-}
-
-/** Count the `db.prepare` calls whose SQL matches `pattern` while `fn` runs (audit P-1 query-count). */
-async function countPrepares(db: Db, pattern: RegExp, fn: () => Promise<void>): Promise<number> {
-  const real = db.prepare.bind(db)
-  let count = 0
-  const target = db as unknown as { prepare: Db['prepare'] }
-  target.prepare = ((sql: string) => {
-    if (pattern.test(sql)) count++
-    return real(sql)
-  }) as Db['prepare']
-  try {
-    await fn()
-  } finally {
-    target.prepare = real
-  }
-  return count
-}
+const ctxFor = (db: Db, scope: RetrievalScope, question: string, conversationId: string | null = null) =>
+  makeAnalysisCtx(db, scope, question, { skillInstallId: INVOICE_INSTALL_ID, conversationId })
 
 // A clean invoice: 2 line items (100,00 + 20,00 = 120,00 net), 20% VAT (24,00), gross 144,00 — all
 // three reconciliation checks pass.

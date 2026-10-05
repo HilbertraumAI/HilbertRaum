@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ChatMessage, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
   buildEditWindows,
   editLocateSchema,
@@ -10,6 +10,7 @@ import {
 } from '../../src/main/services/skills/tools/document-edit-locate'
 import { verifyAndSpliceEdits, applyDocumentEditsTool } from '../../src/main/services/skills/tools/document-edit'
 import { validateToolInput } from '../../src/main/services/skills/tool-registry'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
 
 // Phase 8 (beta-feedback-2026-07, #23, D76/D75/D78; architecture.md "Skills — design record" §22). The
 // locate half (runtime-touching) + the verify/splice half (deterministic, runtime-free) of format-preserving
@@ -17,26 +18,6 @@ import { validateToolInput } from '../../src/main/services/skills/tool-registry'
 // `find` verbatim at its {line, occurrence} anchor and splices `replace` for that ONE occurrence (D76
 // precision). The MockRuntime ignores `responseSchema`, so `parseEditReply` re-validates in code and these
 // tests drive a scripted runtime returning fixture edits.
-
-/** A scripted runtime whose `chatStream` replies with `reply(call)` token-by-token. */
-function scriptedRuntime(
-  reply: (call: { messages: ChatMessage[]; options?: RuntimeChatOptions }) => string,
-  calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
-): ModelRuntime {
-  return {
-    modelId: 'mock',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      calls.push({ messages, options })
-      for (const tok of reply({ messages, options }).match(/\S+\s*/g) ?? []) {
-        if (options?.signal?.aborted) return
-        yield tok
-      }
-    }
-  }
-}
 
 const edit = (find: string, replace: string, line = 1, occurrence = 1): LocatedEdit => ({
   line,

@@ -1,13 +1,11 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { runBankExtraction, runCashflowSummary, runCategorization, runCsvExport, latestBankStatementId } from '../../src/main/services/skills/run'
 import { withDocumentLock, activeDocumentLockCount } from '../../src/main/services/skills/doc-lock'
 import { SkillRunController } from '../../src/main/services/skills/run-controller'
 import { hangPolls } from '../helpers/hang-budget'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedDocWithChunks } from '../helpers/doc-fixtures'
 import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
 
 // Cross-lane write safety (skills-tools-audit-2026-06-26 PC-1, §2.3). The main process is
@@ -21,24 +19,7 @@ import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
 const skillInstallId = 'app:bank-statement'
 const STATEMENT_TEXT = 'Statement EUR\n2026-01-02 Grocery -45,90 1.954,10\n2026-01-03 Salary 2.500,00 4.454,10'
 
-function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-concurrency-'))
-  return openDatabase(join(dir, 'test.sqlite'))
-}
-
-function seedDocWithChunks(db: Db, text: string): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
-     VALUES (?, 'Statement', 'indexed', 'application/pdf', ?, ?)`
-  ).run(docId, now, now)
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-     VALUES (?, ?, 0, ?, 'p', 1, ?)`
-  ).run(randomUUID(), docId, text, now)
-  return docId
-}
+const freshDb = (): Db => openFreshDb('concurrency')
 
 /** The faithful, newline-preserving segments the IPC would supply via extractDocumentPreview. */
 function segmentsFor(text: string): DocumentChunkRead[] {

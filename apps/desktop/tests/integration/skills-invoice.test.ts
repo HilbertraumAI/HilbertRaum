@@ -1,11 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomUUID } from 'node:crypto'
 import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   reconcileSkills,
   getSkill,
@@ -24,7 +22,11 @@ import {
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import { INVOICE_EXTRACTOR_VERSION } from '../../src/main/services/skills/tools/invoice'
 import type { InvoiceInput } from '../../src/main/services/skills/tools/invoice'
-import type { AuditEventType, DocumentChunkRead, RunnableTool } from '../../src/shared/types'
+import type { DocumentChunkRead, RunnableTool } from '../../src/shared/types'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { capturingAudit } from '../helpers/audit-capture'
+import { seedDocWithChunks as seedChunks } from '../helpers/doc-fixtures'
+import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // architecture.md "Skills — design record" §8 — the SECOND bundled Tier-2 skill: invoice. It mirrors
 // the bank-statement skill layer-for-layer to prove the gate generalizes to a second content-class
@@ -52,35 +54,11 @@ const INVOICE_TEXT = [
   'Gross Total            390,00'
 ].join('\n')
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-invoice-')), 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('invoice')
 
-function deps(): { appSkillsDir: string; userSkillsDir: string } {
-  return {
-    appSkillsDir: APP_SKILLS_DIR,
-    userSkillsDir: join(mkdtempSync(join(tmpdir(), 'hilbertraum-invoice-user-')), 'user-skills')
-  }
-}
+const deps = (): SkillDirs => realAppSkillsDeps('invoice-user')
 
-function seedDocWithChunks(db: Db, text: string): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
-     VALUES (?, 'Invoice', 'indexed', 'application/pdf', ?, ?)`
-  ).run(docId, now, now)
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-     VALUES (?, ?, 0, ?, 'p', 1, ?)`
-  ).run(randomUUID(), docId, text, now)
-  return docId
-}
-
-function capturingAudit(): { audit: (t: AuditEventType, m?: Record<string, unknown>) => void; events: unknown[] } {
-  const events: unknown[] = []
-  return { audit: (type, meta) => events.push({ type, meta }), events }
-}
+const seedDocWithChunks = (db: Db, text: string): string => seedChunks(db, text, { title: 'Invoice' })
 
 describe('invoice — committed SKILL.md is a Tier-2 tool skill', () => {
   it('parses with kind:tool, the three allowedTools, and reservesTools true', () => {

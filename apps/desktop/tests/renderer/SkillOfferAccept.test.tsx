@@ -6,6 +6,7 @@ import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { t } from '../../src/shared/i18n'
 import type { Conversation, Message, RuntimeStatus, SkillInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { makeSkillInfo, makeConversation } from '../helpers/chat-fixtures'
 
 // #135 (skills-pipeline audit TEST-2): the #80 offer ACCEPT flow at the ChatScreen level — the
 // feature's core promise ("re-run via the EXISTING regenerate path with the skill explicitly set")
@@ -17,18 +18,7 @@ import { stubApi } from '../helpers/renderer'
 // optimistic drop of the answered turn, and the #132 click-time availability gate as wired.
 
 function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'My documents chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'documents',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
+  return makeConversation({ title: 'My documents chat', mode: 'documents', ...over })
 }
 
 function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
@@ -36,27 +26,13 @@ function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
 }
 
 function skill(over: Partial<SkillInfo> = {}): SkillInfo {
-  return {
-    installId: 'app:bank-statement',
-    id: 'bank-statement',
+  return makeSkillInfo({
     title: 'Bank Statement Analysis',
     description: 'Analyzes a bank statement.',
-    version: '1.0.0',
     kind: 'tool',
     author: 'HilbertRaum',
-    language: 'en',
-    source: 'app',
-    trustedLevel: 'app',
-    enabled: true,
-    warningAck: true,
-    unavailable: false,
-    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
-    permissionSummary: 'x',
-    duplicateId: false,
-    installedAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
     ...over
-  }
+  })
 }
 
 const MESSAGES: Message[] = [

@@ -1,7 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 // Skill-whole-doc engine (Wave 2) — the CHAT wiring: `askDocuments` routes an analysis-shaped
 // question for a `grounded-whole-doc` INSTRUCTION skill (meeting-protocol) to a MODEL answer over the
@@ -23,21 +20,17 @@ vi.mock('electron', () => ({
 import { randomUUID } from 'node:crypto'
 import { IPC } from '../../src/shared/ipc'
 import type { Message } from '../../src/shared/types'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { SCAN_MARKER_TYPE } from '../../src/main/services/analysis/extract'
-import { seedSettings } from '../../src/main/services/settings'
-import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
-import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
-import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import type { AppContext } from '../../src/main/services/context'
-import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
-import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
+import { writeSkillPackage } from '../helpers/skill-fixtures'
+import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
+import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 import { t } from '../../src/shared/i18n'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const MEETING_INSTALL_ID = 'app:meeting-protocol'
@@ -64,121 +57,72 @@ function bigTranscript(lines: number): string {
 }
 
 function writeMeetingSkill(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'meeting-protocol')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: meeting-protocol',
-    'title: Meeting Minutes',
-    'description: Produces minutes.',
-    'version: 1.1.0',
-    'kind: instruction',
-    '---',
-    'Produce structured minutes: decisions, action items, open questions. Work only from the source.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(appSkillsDir, {
+    id: 'meeting-protocol',
+    title: 'Meeting Minutes',
+    description: 'Produces minutes.',
+    version: '1.1.0',
+    kind: 'instruction',
+    body: 'Produce structured minutes: decisions, action items, open questions. Work only from the source.'
+  })
 }
 
 /** A3: a USER-imported INSTRUCTION skill declaring `analysis: whole-doc` — it has NO app-registered
  *  handler, so it must reach the whole-doc engine via the manifest fallback (`manifestAnalysisHandler`). */
 const USER_BRIEF_INSTALL_ID = 'user:brief-reader'
 function writeUserWholeDocSkill(userSkillsDir: string): void {
-  const d = join(userSkillsDir, 'brief-reader')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: brief-reader',
-    'title: Brief Reader',
-    'description: Briefs a document.',
-    'version: 1.0.0',
-    'kind: instruction',
-    'analysis: whole-doc',
-    '---',
-    'Give a plain-language brief of the whole document. Work only from the source.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(userSkillsDir, {
+    id: 'brief-reader',
+    title: 'Brief Reader',
+    description: 'Briefs a document.',
+    kind: 'instruction',
+    analysis: 'whole-doc',
+    body: 'Give a plain-language brief of the whole document. Work only from the source.'
+  })
 }
 
 interface Harness {
   db: Db
   conversationId: string
   docId: string
-  runtime: ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
+  runtime: RecordingRuntime
 }
 
 async function makeHarness(opts: { fullyChunked?: boolean; text?: string; contextWindow?: number; userWholeDocSkill?: boolean } = {}): Promise<Harness> {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-wholedocskill-'))
-  const workspacePath = join(root, 'workspace')
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeMeetingSkill(appSkillsDir)
-  if (opts.userWholeDocSkill) writeUserWholeDocSkill(userSkillsDir)
-
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir, appVersion: '0.0.0-test' })
-  skills.reconcile() // installs app:meeting-protocol ENABLED; a user skill installs DISABLED (import-ack gated)
+  const w = makeSkillsWorld('wholedocskill', {
+    seedApp: writeMeetingSkill,
+    seedUser: (d) => {
+      if (opts.userWholeDocSkill) writeUserWholeDocSkill(d)
+    },
+    appVersion: '0.0.0-test',
+    reconcile: true // installs app:meeting-protocol ENABLED; a user skill installs DISABLED (import-ack gated)
+  })
+  const { db } = w
   if (opts.userWholeDocSkill) {
     // A user skill is reconciled DISABLED (enabled only after the import-warning ack); enable it so the
     // turn resolver picks it up — the point under test is the ENGINE resolution, not the import UX.
     db.prepare('UPDATE skills SET enabled = 1 WHERE install_id = ?').run(USER_BRIEF_INSTALL_ID)
   }
 
-  const storeDir = documentsDir(workspacePath)
-  const docPath = join(root, 'transcript.txt')
-  writeFileSync(docPath, opts.text ?? TRANSCRIPT, 'utf8')
-  const doc = createQueuedDocument(db, docPath)
-  await processDocument(db, storeDir, doc.id, { embedder: createMockEmbedder() })
-  if (opts.fullyChunked === false) {
-    db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(doc.id)
-  }
+  const docId = await ingestTextFile(w, 'transcript.txt', opts.text ?? TRANSCRIPT, {
+    fullyChunked: opts.fullyChunked
+  })
 
-  const runtime = {
-    modelId: 'mock',
-    calls: 0,
-    lastMessages: [] as ChatMessage[],
-    // Report a fixed launched window (§L0) so the A3 needle downgrade's budget calculus is deterministic;
-    // the tiny default TRANSCRIPT still fits it (not truncated), so existing expectations are unchanged.
-    contextWindow: () => opts.contextWindow ?? 4096,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[]) {
-      runtime.calls++
-      runtime.lastMessages = messages
-      yield 'Minutes: decisions, actions, open questions.'
-    }
-  } as unknown as ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
+  // Report a fixed launched window (§L0) so the A3 needle downgrade's budget calculus is deterministic;
+  // the tiny default TRANSCRIPT still fits it (not truncated), so existing expectations are unchanged.
+  const runtime = recordingRuntime('Minutes: decisions, actions, open questions.', {
+    contextWindow: opts.contextWindow ?? 4096
+  })
 
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    paths: { rootPath: root, workspacePath },
-    get db() {
-      return db
-    },
-    workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
-    embedder: createMockEmbedder(),
-    reranker: null,
-    ocrEngine: undefined,
-    manifestsDir: null,
-    isDev: true,
-    audit: () => {},
-    skills,
-    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
-    // unconditionally now (no more `??` fallback).
-    pendingModelSwitches: createPendingModelSwitchCounter()
-  } as unknown as AppContext
+  const { ctx } = makeRagAskContext(w, runtime)
 
   registerBuiltinSkillAnalysisHandlers()
   registerRagIpc(ctx)
   const conv = createConversation(db, {
     mode: 'documents',
-    scope: { collectionIds: [], documentIds: [doc.id] }
+    scope: { collectionIds: [], documentIds: [docId] }
   })
-  return { db, conversationId: conv.id, docId: doc.id, runtime }
+  return { db, conversationId: conv.id, docId, runtime }
 }
 
 beforeEach(() => {

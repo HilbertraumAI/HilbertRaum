@@ -1,17 +1,15 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { runDocumentEdit, type OriginalDocumentBytes } from '../../src/main/services/skills/run'
 import { redactWithEntities } from '../../src/main/services/skills/tools/redaction'
 import { verifyAndSpliceEdits } from '../../src/main/services/skills/tools/document-edit'
 import { readDocxTextLayer } from '../../src/main/services/export/docx-rewrite'
 import { makeDocx, otherDocxParts } from '../helpers/docx'
 import { REDACTION_GOLD, EDIT_GOLD } from '../fixtures/gold-set/legal-corpus'
-import type { AuditEventType } from '../../src/shared/types'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { SkillToolAudit } from '../../src/shared/types'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
+import { seedDocWithChunks as seedChunks } from '../helpers/doc-fixtures'
 
 // GOLD-SET locate-pass fixtures (beta-feedback-2026-07 Phase 10 close-out; plan §13). The synthetic
 // lawyer-shaped documents in `tests/fixtures/gold-set/legal-corpus.ts` are driven through the redaction and
@@ -23,44 +21,10 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 // (model-benchmarks.md §12); this file pins the STRUCTURAL guarantees (verbatim verify, all-occurrence sweep,
 // occurrence precision, drop-unverifiable, DOCX formatting byte-identity), never model judgement quality.
 
-/** A scripted runtime whose `chatStream` replies with `reply(call)` token-by-token — the locate pass sees
- *  the fixture's entities/edits (the MockRuntime ignores `responseSchema`, so this mirrors it for the seam). */
-function scriptedRuntime(reply: string): ModelRuntime {
-  return {
-    modelId: 'mock',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
-      for (const tok of reply.match(/\S+\s*/g) ?? []) {
-        if (options?.signal?.aborted) return
-        yield tok
-      }
-    }
-  }
-}
+const freshDb = (): Db => openFreshDb('goldset')
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-goldset-')), 'test.sqlite'))
-}
-
-function seedDocWithChunks(db: Db, text: string): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
-     VALUES (?, 'Gold', 'indexed', 'text/plain', ?, ?)`
-  ).run(docId, now, now)
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-     VALUES (?, ?, 0, ?, 'p', 1, ?)`
-  ).run(randomUUID(), docId, text, now)
-  return docId
-}
-
-function capturingAudit(): { audit: (t: AuditEventType, m?: Record<string, unknown>) => void } {
-  return { audit: () => {} }
-}
+const seedDocWithChunks = (db: Db, text: string): string =>
+  seedChunks(db, text, { title: 'Gold', mimeType: 'text/plain' })
 
 const EDIT_INSTALL = 'app:document-edit'
 
@@ -107,7 +71,7 @@ describe('gold set — targeted edits locate → verify → splice', () => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, 'ignored — the DOCX branch reads the injected original bytes')
     const original = await makeDocx(gold.paragraphs)
-    const { audit } = capturingAudit()
+    const audit: SkillToolAudit = () => {}
     const runtime = scriptedRuntime(JSON.stringify({ edits: gold.edits }))
     let saved: Uint8Array | null = null
     let textCalled = false

@@ -1,16 +1,14 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   DOCUMENT_REDACTION_INSTALL_ID,
   documentRedactionAnalysisHandler
 } from '../../src/main/services/skills/analysis/redaction'
-import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
-import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
+import type { RetrievalScope } from '../../src/shared/types'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedLineChunkDoc } from '../helpers/doc-fixtures'
+import { makeAnalysisCtx } from '../helpers/skill-contexts'
 
 // Redaction-routing handler (skills redaction-routing fix). Driven directly (no IPC). Unlike the
 // invoice/bank EXHAUSTIVE handlers, this is a `routing` handler for an ACTION skill: on a
@@ -22,44 +20,14 @@ import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 const trDe = (key: MessageKey, params?: MessageParams): string => t('de', key, params)
 
-function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-redaction-analysis-'))
-  return openDatabase(join(dir, 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('redaction-analysis')
 
 /** Seed one indexed document with a single chunk so it counts as in-scope/answerable. */
-function seedDoc(db: Db, text = 'Dear Jane, call me at +49 170 1234567.'): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
-     VALUES (?, 'Letter', 'indexed', 'application/pdf', NULL, ?, ?)`
-  ).run(docId, now, now)
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-     VALUES (?, ?, 0, ?, 'Letter', 1, ?)`
-  ).run(randomUUID(), docId, text, now)
-  return docId
-}
+const seedDoc = (db: Db, text = 'Dear Jane, call me at +49 170 1234567.'): string =>
+  seedLineChunkDoc(db, [text], { title: 'Letter' })
 
-function ctxFor(db: Db, scope: RetrievalScope, question: string, locale: 'en' | 'de' = 'en'): SkillAnalysisContext & {
-  events: Array<{ type: string; meta?: Record<string, unknown> }>
-} {
-  const events: Array<{ type: string; meta?: Record<string, unknown> }> = []
-  const audit = (type: AuditEventType, meta?: Record<string, unknown>): void => {
-    events.push({ type, meta })
-  }
-  return {
-    db,
-    scope,
-    question,
-    skillInstallId: DOCUMENT_REDACTION_INSTALL_ID,
-    conversationId: null,
-    audit,
-    tr: locale === 'de' ? trDe : tr,
-    events
-  }
-}
+const ctxFor = (db: Db, scope: RetrievalScope, question: string, locale: 'en' | 'de' = 'en') =>
+  makeAnalysisCtx(db, scope, question, { skillInstallId: DOCUMENT_REDACTION_INSTALL_ID, locale })
 
 describe('redaction routing handler — applies() pre-flight', () => {
   // Single in-scope document: EN + DE action verbs apply; a German informational PII ask the route vocab

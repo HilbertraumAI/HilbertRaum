@@ -8,34 +8,24 @@ import { I18nProvider } from '../../src/renderer/i18n'
 import { ToastProvider } from '../../src/renderer/components'
 import { DEFAULT_SETTINGS, type AppSettings, type SkillInfo, type SkillPreview } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { makeSkillInfo } from '../helpers/chat-fixtures'
 
 // Phase S5 — Settings → Skills UI (skills plan §15/§18.1). The renderer is a thin view over
 // the S4 IPC surface: list / enable / import-preview / delete / acknowledge. fs, dialogs and
 // validation all live main-side, so these tests stub window.api and assert the calm flows.
 
 function skill(over: Partial<SkillInfo> = {}): SkillInfo {
-  return {
+  return makeSkillInfo({
     installId: 'user:bank-statement',
-    id: 'bank-statement',
-    title: 'Bank statement helper',
     description: 'Explains a bank statement in plain language.',
-    version: '1.0.0',
-    kind: 'instruction',
-    author: 'You',
-    language: 'en',
     source: 'user',
     trustedLevel: 'user',
-    enabled: true,
-    warningAck: true,
-    unavailable: false,
-    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
     permissionSummary:
       'can read the documents you pick for a turn; cannot access the network; reads only its own bundled files.',
-    duplicateId: false,
     installedAt: '2026-06-17T00:00:00.000Z',
     updatedAt: '2026-06-17T00:00:00.000Z',
     ...over
-  }
+  })
 }
 
 function preview(over: Partial<SkillPreview> = {}): SkillPreview {

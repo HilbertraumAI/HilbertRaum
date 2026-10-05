@@ -21,35 +21,13 @@ import {
 } from '../../src/main/services/skills/tools/bank-statement'
 import { inferDateOrder } from '../../src/main/services/skills/tools/money'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
-import type { AuditEventType, DocumentChunkRead, SkillTool, SkillToolContext } from '../../src/shared/types'
+import type { SkillTool, SkillToolContext } from '../../src/shared/types'
+import { makeToolCtx as makeCtx, chunk } from '../helpers/skill-contexts'
 
 // architecture.md "Skills — design record" §8 (S11a) — the bank-statement extract_transactions tool, proven in
 // isolation: the deterministic/offline parser (dates, amounts, currency), the honest "drop ambiguous
 // rows" posture, and the tool running THROUGH the gate with schema-valid output. No DB, no Electron.
 
-interface CapturedEvent {
-  type: AuditEventType
-  meta?: Record<string, unknown>
-}
-
-function makeCtx(
-  chunks: DocumentChunkRead[],
-  over: Partial<SkillToolContext> = {}
-): { ctx: SkillToolContext; events: CapturedEvent[] } {
-  const events: CapturedEvent[] = []
-  const ctx: SkillToolContext = {
-    documentIds: ['d1'],
-    readDocumentChunks: (id) => (id === 'd1' ? chunks : []),
-    signal: new AbortController().signal,
-    audit: (type, meta) => events.push({ type, meta }),
-    ...over
-  }
-  return { ctx, events }
-}
-
-function chunk(text: string, page: number | null = 1, index = 0): DocumentChunkRead {
-  return { text, page, index }
-}
 // The Unicode look-alikes a de-AT / Swiss PDF prints (R1, audit §5.3): a MINUS / EN DASH / NON-BREAKING
 // HYPHEN sign, NBSP / narrow NBSP / FIGURE SPACE thousands separators, a U+2019 apostrophe group. Built
 // from code points so the fixtures stay visible.

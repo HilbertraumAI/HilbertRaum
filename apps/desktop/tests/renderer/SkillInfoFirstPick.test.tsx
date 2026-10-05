@@ -4,8 +4,9 @@ import { render, screen, cleanup, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { clearSkillDetailRequest, consumeSkillDetailRequest } from '../../src/renderer/lib/skillDetailRequest'
-import { DEFAULT_SETTINGS, type Conversation, type RuntimeStatus, type SkillInfo } from '../../src/shared/types'
+import { DEFAULT_SETTINGS, type RuntimeStatus, type SkillInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { makeSkillInfo, makeConversation as conv } from '../helpers/chat-fixtures'
 
 // #46 — the ChatScreen wiring for the first-selection skill info card: the FIRST pick of a skill
 // (ever, by declared id) shows the what/needs/limits card and persists the id in
@@ -13,47 +14,12 @@ import { stubApi } from '../helpers/renderer'
 // ⓘ re-opens the card on demand. The pure card component is covered in SkillInfoCard.test.tsx;
 // here we prove the real screen behavior (the SkillPerTurn test precedent).
 
-function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'My chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
-}
-
 function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
   return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
 }
 
 function skill(over: Partial<SkillInfo> = {}): SkillInfo {
-  return {
-    installId: 'app:bank-statement',
-    id: 'bank-statement',
-    title: 'Bank statement helper',
-    description: 'Explains a bank statement.',
-    version: '1.0.0',
-    kind: 'instruction',
-    author: 'HilbertRaum',
-    language: 'en',
-    source: 'app',
-    trustedLevel: 'app',
-    enabled: true,
-    warningAck: true,
-    unavailable: false,
-    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
-    permissionSummary: 'x',
-    duplicateId: false,
-    installedAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    ...over
-  }
+  return makeSkillInfo({ author: 'HilbertRaum', ...over })
 }
 
 beforeAll(() => {

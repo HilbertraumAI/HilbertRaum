@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ChatMessage, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
   buildLocateWindows,
   entityLocateSchema,
@@ -17,32 +17,13 @@ import {
 } from '../../src/main/services/skills/tools/redaction'
 import { validateToolInput } from '../../src/main/services/skills/tool-registry'
 import { applySpans, type ReplacementStrategy } from '../../src/main/services/skills/tools/span-transform'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
 
 // Phase 7 (beta-feedback-2026-07, #22 part 2, D73/D75/D78; architecture.md "Skills — design record"
 // §21). The locate half (runtime-touching) + the verify/sweep half (deterministic, runtime-free) of
 // redaction v2 — the model ONLY locates spans; the app verifies each verbatim and sweeps every
 // occurrence. The MockRuntime ignores `responseSchema`, so `parseLocateReply` re-validates in code and
 // these tests drive a scripted runtime returning fixture entities.
-
-/** A scripted runtime whose `chatStream` replies with `reply(call)` token-by-token. */
-function scriptedRuntime(
-  reply: (call: { messages: ChatMessage[]; options?: RuntimeChatOptions }) => string,
-  calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
-): ModelRuntime {
-  return {
-    modelId: 'mock',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      calls.push({ messages, options })
-      for (const tok of reply({ messages, options }).match(/\S+\s*/g) ?? []) {
-        if (options?.signal?.aborted) return
-        yield tok
-      }
-    }
-  }
-}
 
 const entity = (text: string, category: LocatedEntity['category'] = 'name', line = 1): LocatedEntity => ({
   text,

@@ -3,8 +3,9 @@ import { describe, it, expect, vi, afterEach, beforeAll } from 'vitest'
 import { render, screen, cleanup, waitFor } from '@testing-library/react'
 import userEvent from '@testing-library/user-event'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
-import type { Conversation, RuntimeStatus, SkillInfo } from '../../src/shared/types'
+import type { Conversation, RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { makeSkillInfo as skill, makeConversation as conv } from '../helpers/chat-fixtures'
 
 // U3 (audit §4.3): the ChatScreen wiring for per-turn skill application. A composer pick applies for
 // the turn only — it is NEVER silently written to the conversation's saved default (`active_skill_id`);
@@ -13,47 +14,8 @@ import { stubApi } from '../helpers/renderer'
 // reload against the user's visible session choice (the confirmed keep-checkbox-shadow finding). The
 // pure picker component is covered in SkillChat.test.tsx; here we prove the real screen behavior.
 
-function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'My chat',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'chat',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: null,
-    ...over
-  }
-}
-
 function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
   return { running: true, modelId: 'm1', port: 1234, healthy: true, message: 'ok', ...over }
-}
-
-function skill(over: Partial<SkillInfo> = {}): SkillInfo {
-  return {
-    installId: 'app:bank-statement',
-    id: 'bank-statement',
-    title: 'Bank statement helper',
-    description: 'Explains a bank statement.',
-    version: '1.0.0',
-    kind: 'instruction',
-    author: 'You',
-    language: 'en',
-    source: 'app',
-    trustedLevel: 'app',
-    enabled: true,
-    warningAck: true,
-    unavailable: false,
-    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
-    permissionSummary: 'x',
-    duplicateId: false,
-    installedAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z',
-    ...over
-  }
 }
 
 beforeAll(() => {

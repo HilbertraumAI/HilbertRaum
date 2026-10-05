@@ -7,6 +7,7 @@ import { startSkillRun, clearSkillRunSession } from '../../src/renderer/lib/skil
 import type { Conversation, Message, RuntimeStatus, SkillInfo, SkillRunState, StartSkillRunRequest, StartSkillRunResult, DocumentInfo } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 import { appStatus } from '../helpers/status'
+import { makeSkillInfo, makeConversation } from '../helpers/chat-fixtures'
 
 // SKA-6/SKA-17 (skills audit 2026-07-03, U6) — the ChatScreen wiring of the per-run store. These
 // exercise the invariants that had ZERO renderer coverage: the run bar is gated to the launching
@@ -15,18 +16,14 @@ import { appStatus } from '../helpers/status'
 // RUN's skill (C2), pinned to the RUN's document (ux-6) — resolving the pin BEFORE acknowledge.
 
 function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
+  return makeConversation({
     id: 'convA',
     title: 'Chat A',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
     mode: 'documents',
     scopeDocumentIds: ['docA'],
-    collectionId: null,
     scope: { collectionIds: [], documentIds: ['docA'] },
     ...over
-  }
+  })
 }
 
 function status(over: Partial<RuntimeStatus> = {}): RuntimeStatus {
@@ -197,26 +194,7 @@ describe('ChatScreen — routed-run relay invariants (C1/C2/ux-6)', () => {
 // conversation — else the next send persists a keep opt-in made for conversation 1 onto conversation 2.
 describe('ChatScreen — the "new"-composer pick is cleared after being carried (SKA-18)', () => {
   function skill(): SkillInfo {
-    return {
-      installId: 'app:bank-statement',
-      id: 'bank-statement',
-      title: 'Bank statement helper',
-      description: 'Explains a bank statement.',
-      version: '1.0.0',
-      kind: 'instruction',
-      author: 'You',
-      language: 'en',
-      source: 'app',
-      trustedLevel: 'app',
-      enabled: true,
-      warningAck: true,
-      unavailable: false,
-      permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
-      permissionSummary: 'x',
-      duplicateId: false,
-      installedAt: '2026-01-01T00:00:00.000Z',
-      updatedAt: '2026-01-01T00:00:00.000Z'
-    } as SkillInfo
+    return makeSkillInfo()
   }
   const pickerTrigger = (): HTMLElement => screen.getByRole('button', { name: /^skill:/i })
 

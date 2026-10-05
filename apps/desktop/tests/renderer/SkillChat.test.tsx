@@ -5,6 +5,7 @@ import userEvent from '@testing-library/user-event'
 import { SkillPicker, Transcript } from '../../src/renderer/chat'
 import { I18nProvider } from '../../src/renderer/i18n'
 import type { Message, SkillInfo } from '../../src/shared/types'
+import { makeSkillInfo } from '../helpers/chat-fixtures'
 
 // jsdom does not implement Element.scrollTo (Transcript scrolls to newest content).
 beforeAll(() => {
@@ -16,27 +17,16 @@ beforeAll(() => {
 // covered by the service tests (skills-turn.test.ts); here we prove the two UI pieces render + fire.
 
 function skill(over: Partial<SkillInfo> = {}): SkillInfo {
-  return {
+  return makeSkillInfo({
     installId: 'user:bank',
     id: 'bank',
-    title: 'Bank statement helper',
     description: 'Reads printed totals.',
-    version: '1.0.0',
-    kind: 'instruction',
-    author: 'You',
-    language: 'en',
     source: 'user',
     trustedLevel: 'user',
-    enabled: true,
-    warningAck: true,
-    unavailable: false,
-    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
-    permissionSummary: 'x',
-    duplicateId: false,
     installedAt: 't',
     updatedAt: 't',
     ...over
-  }
+  })
 }
 
 function withI18n(ui: React.ReactElement): React.ReactElement {

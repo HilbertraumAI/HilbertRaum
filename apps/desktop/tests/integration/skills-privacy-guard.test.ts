@@ -1,10 +1,8 @@
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 import JSZip from 'jszip'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   importSkill,
   previewSkillPackage,
@@ -36,8 +34,10 @@ import { resolveAutoFireSkill } from '../../src/main/services/skills/autofire'
 import { createConversation } from '../../src/main/services/chat'
 import { updateSettings } from '../../src/main/services/settings'
 import { mkdirSync } from 'node:fs'
-import type { AuditEventType, SkillToolAudit } from '../../src/shared/types'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { tempRoot, openFreshDb } from '../helpers/db-fixtures'
+import { seedDocWithChunks } from '../helpers/doc-fixtures'
+import { capturingAudit } from '../helpers/audit-capture'
 
 // Phase S12 — the CONSOLIDATED skills privacy / prompt-injection guard.
 //
@@ -58,13 +58,9 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 
 const SENTINEL = 'XGUARD_SENTINEL_secret_iban_AT99_4242_3333'
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-skill-guard-'))
-}
+const tempDir = (): string => tempRoot('skill-guard')
 
-function freshDb(): Db {
-  return openDatabase(join(tempDir(), 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('skill-guard')
 
 function makeDeps(): SkillInstallerDeps {
   const root = tempDir()
@@ -95,27 +91,6 @@ async function writeZip(members: Array<{ name: string; content: string | Buffer 
   const path = join(tempDir(), 'pkg.skill.zip')
   writeFileSync(path, buf)
   return path
-}
-
-function seedDocWithChunks(db: Db, chunks: Array<{ text: string; page: number | null }>): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
-     VALUES (?, 'Statement', 'indexed', 'application/pdf', ?, ?)`
-  ).run(docId, now, now)
-  chunks.forEach((c, i) => {
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-       VALUES (?, ?, ?, ?, 'p', ?, ?)`
-    ).run(randomUUID(), docId, i, c.text, c.page, now)
-  })
-  return docId
-}
-
-function capturingAudit(): { audit: SkillToolAudit; events: unknown[] } {
-  const events: unknown[] = []
-  return { audit: (type: AuditEventType, meta) => events.push({ type, meta }), events }
 }
 
 /** Spy on every console stream, run `fn`, and return the concatenated text of all console output. */

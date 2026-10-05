@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ChatMessage, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
   ENRICH_BATCH_SIZE,
   ENRICH_UNKNOWN,
@@ -10,26 +10,13 @@ import {
   wantsExtraColumns
 } from '../../src/main/services/skills/enricher'
 import type { TransactionInput } from '../../src/main/services/skills/tools/bank-statement'
+import { scriptedRuntime as sharedScripted, type ScriptedCall } from '../helpers/scripted-runtime'
 
 // The derived-column enricher (result-tables plan §5, Phase 3): the TableRequest parse contract,
 // the per-batch grammar schemas, the fill/unknown/blank honesty rules, and the batching bound.
 
-function scriptedRuntime(
-  reply: (call: { messages: ChatMessage[]; options?: RuntimeChatOptions }) => string,
-  calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
-): ModelRuntime {
-  return {
-    modelId: 'mock',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      const call = { messages, options }
-      calls.push(call)
-      yield reply(call)
-    }
-  }
-}
+const scriptedRuntime = (reply: (c: ScriptedCall) => string, calls: ScriptedCall[] = []) =>
+  sharedScripted(reply, calls, { tokens: 'whole' })
 
 function row(description: string, amount: number): TransactionInput {
   return { date: '2026-03-01', description, amount, currency: 'EUR' }

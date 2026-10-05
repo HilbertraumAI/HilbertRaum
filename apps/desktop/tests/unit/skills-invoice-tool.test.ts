@@ -16,36 +16,13 @@ import {
   type InvoiceInput
 } from '../../src/main/services/skills/tools/invoice'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
-import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
+import type { SkillToolContext } from '../../src/shared/types'
+import { makeToolCtx as makeCtx, chunk } from '../helpers/skill-contexts'
 
 // architecture.md "Skills — design record" §8 — the invoice Tier-2 tools, the SECOND content-class
 // domain, proven in isolation: the deterministic/offline label parser, the honest "drop ambiguous
 // data" posture, the totals reconciliation (ok/mismatch/unknown), and the CSV formula-injection
 // neutralization. The tools run THROUGH the gate with schema-valid output. No DB, no Electron.
-
-interface CapturedEvent {
-  type: AuditEventType
-  meta?: Record<string, unknown>
-}
-
-function makeCtx(
-  chunks: DocumentChunkRead[],
-  over: Partial<SkillToolContext> = {}
-): { ctx: SkillToolContext; events: CapturedEvent[] } {
-  const events: CapturedEvent[] = []
-  const ctx: SkillToolContext = {
-    documentIds: ['d1'],
-    readDocumentChunks: (id) => (id === 'd1' ? chunks : []),
-    signal: new AbortController().signal,
-    audit: (type, meta) => events.push({ type, meta }),
-    ...over
-  }
-  return { ctx, events }
-}
-
-function chunk(text: string, page: number | null = 1, index = 0): DocumentChunkRead {
-  return { text, page, index }
-}
 
 // A well-formed bilingual-friendly invoice fixture (de-AT "1.234,56" amounts, day-first not needed here).
 const INVOICE_TEXT = [

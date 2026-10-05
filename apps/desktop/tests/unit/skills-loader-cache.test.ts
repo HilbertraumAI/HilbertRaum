@@ -4,22 +4,13 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { loadSkillPackage } from '../../src/main/services/skills/loader'
 import type { SkillRecord } from '../../src/main/services/skills/registry'
+import { skillMdText } from '../helpers/skill-fixtures'
 
 // Per-turn parse cache (perf): resolveTurnSkill loads the skill on every turn, so loadSkillPackage
 // caches the parsed SKILL.md keyed by its (mtime,size). An unchanged skill is a stat+map hit (same
 // result object); an on-disk edit (DS1/DS2 — disk is the source of truth) re-parses on the next call.
 
-function skillMd(id: string, body: string): string {
-  return [
-    '---',
-    `id: ${id}`,
-    `title: Skill ${id}`,
-    `description: Test ${id}`,
-    'version: 1.0.0',
-    '---',
-    body
-  ].join('\n')
-}
+const skillMd = (id: string, body: string): string => skillMdText({ id, description: `Test ${id}`, body })
 
 function makeEnv(id: string, body: string): {
   record: SkillRecord
