@@ -112,7 +112,9 @@ describe('ChatScreen — per-turn skill apply + keep (U3, audit §4.3)', () => {
     await user.click(pickerTrigger())
     await user.click(await screen.findByRole('menuitemradio', { name: /bank statement helper/i }))
     await user.click(pickerTrigger())
-    await user.click(await screen.findByRole('menuitemcheckbox', { name: /keep for this conversation/i }))
+    const keep = await screen.findByRole('menuitemcheckbox', { name: /keep for this conversation/i })
+    expect(keep).toHaveAttribute('aria-checked', 'false')
+    await user.click(keep)
     await waitFor(() => expect(setConversationDefaultSkill).toHaveBeenCalledWith('c1', 'app:bank-statement'))
   })
 

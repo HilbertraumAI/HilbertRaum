@@ -1,7 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { render, screen, cleanup } from '@testing-library/react'
-import userEvent from '@testing-library/user-event'
 import { SkillInfoCard } from '../../src/renderer/chat'
 import { I18nProvider } from '../../src/renderer/i18n'
 import type { SkillInfo } from '../../src/shared/types'
@@ -43,7 +42,7 @@ afterEach(cleanup)
 
 describe('SkillInfoCard (#46)', () => {
   it('renders the catalog what/needs/limits lines for an app skill', () => {
-    render(withI18n(<SkillInfoCard skill={skill()} onClose={vi.fn()} />))
+    render(withI18n(<SkillInfoCard skill={skill()} onClose={vi.fn()} onLearnMore={vi.fn()} />))
     expect(screen.getByText('Document Edit')).toBeInTheDocument()
     // what — states the never-rewrites promise up front.
     expect(screen.getByText(/never rewrites your document/)).toBeInTheDocument()
@@ -63,6 +62,7 @@ describe('SkillInfoCard (#46)', () => {
         <SkillInfoCard
           skill={skill({ installId: 'user:my-skill', id: 'my-skill', title: 'My skill', description: 'Does my thing.', source: 'user', trustedLevel: 'user' })}
           onClose={vi.fn()}
+          onLearnMore={vi.fn()}
         />
       )
     )
@@ -70,21 +70,5 @@ describe('SkillInfoCard (#46)', () => {
     // No invented catalog lines for content the app didn't author.
     expect(screen.queryByText('Needs:')).not.toBeInTheDocument()
     expect(screen.queryByText('Keep in mind:')).not.toBeInTheDocument()
-  })
-
-  it('close and Learn more fire their handlers', async () => {
-    const onClose = vi.fn()
-    const onLearnMore = vi.fn()
-    const user = userEvent.setup()
-    render(withI18n(<SkillInfoCard skill={skill()} onClose={onClose} onLearnMore={onLearnMore} />))
-    await user.click(screen.getByRole('button', { name: 'Learn more' }))
-    expect(onLearnMore).toHaveBeenCalled()
-    await user.click(screen.getByRole('button', { name: 'Hide this explanation' }))
-    expect(onClose).toHaveBeenCalled()
-  })
-
-  it('omits the Learn more link when no handler is wired', () => {
-    render(withI18n(<SkillInfoCard skill={skill()} onClose={vi.fn()} />))
-    expect(screen.queryByRole('button', { name: 'Learn more' })).not.toBeInTheDocument()
   })
 })

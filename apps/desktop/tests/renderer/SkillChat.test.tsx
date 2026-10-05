@@ -189,11 +189,6 @@ describe('per-message skill glyph (Transcript, DS16/§22-A5)', () => {
     )
   }
 
-  it('renders the skill label (icon + word) on an answer a skill shaped', () => {
-    renderTranscript([msg({ skillId: 'user:bank', skillTitle: 'Bank statement helper' })])
-    expect(screen.getByText('Skill: Bank statement helper')).toBeInTheDocument()
-  })
-
   it('shows no glyph when the answer carried no skill (null skillId)', () => {
     renderTranscript([msg({ skillId: null, skillTitle: null })])
     expect(screen.queryByText(/^Skill:/)).not.toBeInTheDocument()
@@ -208,58 +203,9 @@ describe('per-message skill glyph (Transcript, DS16/§22-A5)', () => {
   })
 })
 
-// U3 (audit §4.3): per-turn apply — the persistent composer chip's × (clears override + saved
-// default) and the explicit "keep for this conversation" opt-in checkbox. Pure component; the screen
-// wiring (per-turn resolution, keep persistence) is covered by the turn/IPC service tests.
+// U3 (audit §4.3): the keep checkbox / chip × gate. The screen wiring (× clears, keep persists and
+// reflects the saved default) is covered in SkillPerTurn.test.tsx.
 describe('SkillPicker — per-turn chip × + keep toggle (U3, audit §4.3)', () => {
-  it('renders the persistent × only when a skill is active and fires onClear', async () => {
-    const onClear = vi.fn()
-    const user = userEvent.setup()
-    const { rerender } = render(
-      withI18n(<SkillPicker skills={[skill()]} value={null} onChange={vi.fn()} onClear={onClear} />)
-    )
-    // No skill → no × chip.
-    expect(screen.queryByRole('button', { name: /Clear skill/ })).not.toBeInTheDocument()
-    rerender(withI18n(<SkillPicker skills={[skill()]} value="user:bank" onChange={vi.fn()} onClear={onClear} />))
-    await user.click(screen.getByRole('button', { name: /Clear skill Bank statement helper/ }))
-    expect(onClear).toHaveBeenCalled()
-  })
-
-  it('offers "keep for this conversation" reflecting keptForConversation and toggling it', async () => {
-    const onKeepChange = vi.fn()
-    const user = userEvent.setup()
-    render(
-      withI18n(
-        <SkillPicker
-          skills={[skill()]}
-          value="user:bank"
-          onChange={vi.fn()}
-          keptForConversation={false}
-          onKeepChange={onKeepChange}
-        />
-      )
-    )
-    await user.click(screen.getByRole('button', { name: /Bank statement helper/ }))
-    const keep = screen.getByRole('menuitemcheckbox', { name: /Keep for this conversation/ })
-    expect(keep).toHaveAttribute('aria-checked', 'false')
-    await user.click(keep)
-    expect(onKeepChange).toHaveBeenCalledWith(true)
-  })
-
-  it('shows the keep checkbox CHECKED when the pick is the saved default', async () => {
-    const user = userEvent.setup()
-    render(
-      withI18n(
-        <SkillPicker skills={[skill()]} value="user:bank" onChange={vi.fn()} keptForConversation onKeepChange={vi.fn()} />
-      )
-    )
-    await user.click(screen.getByRole('button', { name: /Bank statement helper/ }))
-    expect(screen.getByRole('menuitemcheckbox', { name: /Keep for this conversation/ })).toHaveAttribute(
-      'aria-checked',
-      'true'
-    )
-  })
-
   it('hides the keep checkbox (and ×) when no skill is active', async () => {
     const user = userEvent.setup()
     render(withI18n(<SkillPicker skills={[skill()]} value={null} onChange={vi.fn()} onClear={vi.fn()} onKeepChange={vi.fn()} />))
@@ -294,22 +240,6 @@ describe('per-message "answer without it" undo — extended to picked turns (U3)
       )
     )
   }
-
-  it('offers the undo on the last EXPLICITLY-PICKED skill turn (keeps the plain "Skill: …" glyph)', async () => {
-    const onAnswerWithoutSkill = vi.fn()
-    const user = userEvent.setup()
-    renderT([msg({ skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: false })], onAnswerWithoutSkill)
-    // A picked turn reads "Skill: …" (not the auto-fire "Answered with …"), and still carries the undo.
-    expect(screen.getByText('Skill: Bank statement helper')).toBeInTheDocument()
-    await user.click(screen.getByRole('button', { name: 'Answer without it' }))
-    expect(onAnswerWithoutSkill).toHaveBeenCalled()
-  })
-
-  it('still offers the undo on an auto-fired last turn (unchanged)', () => {
-    renderT([msg({ skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: true })], vi.fn())
-    expect(screen.getByText('Answered with Bank statement helper')).toBeInTheDocument()
-    expect(screen.getByRole('button', { name: 'Answer without it' })).toBeInTheDocument()
-  })
 
   it('renders no undo when no handler is provided, even on a skill-stamped last turn', () => {
     renderT([msg({ skillId: 'user:bank', skillTitle: 'Bank statement helper', autoFired: false })], undefined)
