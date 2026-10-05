@@ -1,5 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { randomUUID } from 'node:crypto'
 import type { Db } from '../../src/main/services/db'
 import {
   INVOICE_INSTALL_ID,

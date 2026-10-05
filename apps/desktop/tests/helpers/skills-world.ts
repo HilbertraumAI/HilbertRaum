@@ -66,11 +66,13 @@ export function makeSkillsWorld(label: string, o: SkillsWorldOptions = {}): Skil
 /**
  * The AppContext the skills-IPC suites hand to registerSkillsIpc (`workspacePath` = the world root).
  * `unlocked: false` + `audit: false` reproduce skills-ipc's locked-workspace test (no `audit` key at all).
- * `extra` is spread LAST (model-occupancy overrides `paths` and adds `runtime`, `docTasks`, `manifestsDir`).
+ * `extra` is spread LAST (model-occupancy overrides `paths` and adds `runtime`, `docTasks`, `manifestsDir`). Its
+ * keys must be real AppContext keys (a misspelled override would otherwise be silently ignored); the values may be
+ * partial fakes.
  */
 export function makeSkillsIpcContext(
   w: SkillsWorld,
-  o: { unlocked?: boolean; audit?: boolean; extra?: Record<string, unknown> } = {}
+  o: { unlocked?: boolean; audit?: boolean; extra?: { [K in keyof AppContext]?: unknown } } = {}
 ): AppContext {
   const unlocked = o.unlocked ?? true
   return {

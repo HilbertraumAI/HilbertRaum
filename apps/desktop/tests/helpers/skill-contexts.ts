@@ -31,12 +31,12 @@ export function makeToolCtx(
   chunks: DocumentChunkRead[],
   over: Partial<SkillToolContext> = {}
 ): { ctx: SkillToolContext; events: CapturedAuditEvent[] } {
-  const events: CapturedAuditEvent[] = []
+  const { audit, events } = capturingAudit()
   const ctx: SkillToolContext = {
     documentIds: ['d1'],
     readDocumentChunks: (id) => (id === 'd1' ? chunks : []),
     signal: new AbortController().signal,
-    audit: (type, meta) => events.push({ type, meta }),
+    audit,
     ...over
   }
   return { ctx, events }

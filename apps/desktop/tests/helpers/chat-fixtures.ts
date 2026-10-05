@@ -1,5 +1,7 @@
-// Typed renderer fixtures: a `SkillInfo` and a `Conversation` factory (override any field). Pure data; the
-// per-file wrappers in the suites keep their own literal titles/descriptions because the DOM assertions read them.
+// Typed renderer fixtures: a `SkillInfo` and a `Conversation` factory (override any field). Pure data. Some
+// suites assert the DEFAULTS in the DOM ('Bank statement helper', 'My chat' — SkillPerTurn, SkillInfoFirstPick,
+// SkillRunLifecycle), so changing a default here means updating those assertions; other suites wrap these with
+// their own literals.
 import type { Conversation, SkillInfo } from '../../src/shared/types'
 
 /** A bundled-looking instruction skill (`app:bank-statement`); override any field. Typed (no `as SkillInfo` cast). */

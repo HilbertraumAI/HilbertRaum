@@ -2,7 +2,7 @@
 import type { Db } from '../../src/main/services/db'
 
 /**
- * Count the `db.prepare` calls whose SQL matches `pattern` while `fn` runs (audit P-1 query-count assertions).
+ * Count the `db.prepare` calls whose SQL matches `pattern` while `fn` runs (the query-count assertions).
  * Match `FROM bank_transactions` to count only row LOADS, never the reconciled/category persists. The original
  * `prepare` is restored in `finally`, so an assertion failure inside `fn` cannot leak the spy.
  */

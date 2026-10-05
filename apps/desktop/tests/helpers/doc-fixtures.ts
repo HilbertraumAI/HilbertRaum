@@ -27,12 +27,11 @@ export function seedDocWithChunks(
     `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
      VALUES (?, ?, 'indexed', ?, ?, ?)`
   ).run(docId, opts.title ?? 'Statement', opts.mimeType ?? 'application/pdf', now, now)
-  chunks.forEach((c, i) => {
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-       VALUES (?, ?, ?, ?, 'p', ?, ?)`
-    ).run(randomUUID(), docId, i, c.text, c.page, now)
-  })
+  const insertChunk = db.prepare(
+    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
+     VALUES (?, ?, ?, ?, 'p', ?, ?)`
+  )
+  chunks.forEach((c, i) => insertChunk.run(randomUUID(), docId, i, c.text, c.page, now))
   return docId
 }
 
@@ -60,12 +59,11 @@ export function seedLineChunkDoc(
     `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
      VALUES (?, ?, 'indexed', ?, ?, ?, ?)`
   ).run(docId, title, opts.mimeType ?? 'application/pdf', opts.fullyChunked ? now : null, now, now)
-  lines.forEach((line, i) => {
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-       VALUES (?, ?, ?, ?, ?, ?, ?)`
-    ).run(randomUUID(), docId, i, line, label, page, now)
-  })
+  const insertChunk = db.prepare(
+    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?)`
+  )
+  lines.forEach((line, i) => insertChunk.run(randomUUID(), docId, i, line, label, page, now))
   return docId
 }
 

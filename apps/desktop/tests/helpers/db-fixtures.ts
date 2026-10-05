@@ -4,13 +4,14 @@ import { mkdtempSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { openDatabase, type Db } from '../../src/main/services/db'
+import { TEMP_ROOT_PREFIXES } from './temp-roots'
 
 /**
  * A fresh temp root DIRECTLY under os.tmpdir() named `hilbertraum-<label>-XXXXXX`. The prefix is load-bearing:
- * `tests/setup-temp-roots.ts` only removes roots under tmpdir() starting `hilbertraum-` or `hr-` (#335).
+ * `tests/setup-temp-roots.ts` only removes roots whose name starts with one of `TEMP_ROOT_PREFIXES` (#335).
  */
 export function tempRoot(label: string): string {
-  return mkdtempSync(join(tmpdir(), `hilbertraum-${label}-`))
+  return mkdtempSync(join(tmpdir(), `${TEMP_ROOT_PREFIXES[0]}${label}-`))
 }
 
 /** A fresh workspace DB `<tempRoot(label)>/test.sqlite` (handle closed by the #460 sweep). */
