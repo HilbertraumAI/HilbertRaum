@@ -1,6 +1,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { OcrEngine } from './index'
+import { OCR_ORIENTATION_LANG } from './orientation'
 import { createTesseractOcrEngine } from './tesseract'
 
 // Availability-aware OCR selector, the transcriber/reranker pattern:
@@ -18,7 +19,9 @@ export function ocrAssetsDir(rootPath: string): string {
 /**
  * Languages available in an assets dir: every `<lang>.traineddata.gz` (the shipped
  * layout; plain `.traineddata` is NOT accepted — one layout, one code path). Sorted
- * for determinism; 'deu' and 'eng' are what the build pipeline vendors.
+ * for determinism; 'deu' and 'eng' are what the build pipeline vendors. The orientation
+ * data (`osd.traineddata.gz`, #538) is not a language and is left out: the recognizer starts
+ * LSTM-only, which cannot load it.
  */
 export function listOcrLanguages(assetsDir: string): string[] {
   if (!existsSync(assetsDir)) return []
@@ -31,7 +34,7 @@ export function listOcrLanguages(assetsDir: string): string[] {
   return names
     .filter((n) => n.endsWith('.traineddata.gz'))
     .map((n) => n.slice(0, -'.traineddata.gz'.length))
-    .filter((lang) => /^[a-z_]{3,}$/i.test(lang))
+    .filter((lang) => /^[a-z_]{3,}$/i.test(lang) && lang !== OCR_ORIENTATION_LANG)
     .sort()
 }
 

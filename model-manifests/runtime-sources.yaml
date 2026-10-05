@@ -250,7 +250,9 @@ kiwix_tools:
 # Shipped AS the .gz tesseract.js reads natively (langPath + gzip:true — one hash,
 # no decompression step in the scripts). Upstream license: Apache-2.0 (tesseract-ocr
 # traineddata; reviewed in docs/model-policy.md). The sha256 values were computed
-# from fresh downloads on 2026-06-11.
+# from fresh downloads on 2026-06-11. #538 (2026-10-05) added @tesseract.js-data/osd@1.0.0
+# from the same variant directory: the orientation data, run by the app's legacy-capable core
+# in a second worker (never a recognition language); sha256 computed from a fresh download.
 ocr:
   version: 4.0.0_best_int
   files:
@@ -262,3 +264,9 @@ ocr:
       url: https://cdn.jsdelivr.net/npm/@tesseract.js-data/eng@1.0.0/4.0.0_best_int/eng.traineddata.gz
       sha256: 45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91
       dest: ocr/eng.traineddata.gz
+    # Not a language: Tesseract's orientation data (OSD, legacy engine) — turns sideways and
+    # upside-down pages upright before they are read (#538). Same tessdata source and licence.
+    - lang: osd
+      url: https://cdn.jsdelivr.net/npm/@tesseract.js-data/osd@1.0.0/4.0.0_best_int/osd.traineddata.gz
+      sha256: be028ddaac8b03402b92cbf526075c068ec39a9f1dbbcd7536dddb9b22209934
+      dest: ocr/osd.traineddata.gz

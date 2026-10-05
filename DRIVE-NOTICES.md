@@ -2105,11 +2105,11 @@ binaries as pinned above; nothing here requires network access to read.
 
 ### OCR language data 4.0.0_best_int — Apache-2.0
 
-The `ocr/*.traineddata.gz` language files are the tesseract-ocr project's
-traineddata (the integerized tessdata_best variant, repackaged by the tesseract.js
-project as `@tesseract.js-data/*`), licensed **Apache-2.0** (license review:
-`docs/model-policy.md`). The full Apache License 2.0 text is reproduced once in the
-"Apache License 2.0" section at the end of this file.
+The `ocr/*.traineddata.gz` files (the language files and `osd`, the page-orientation
+data) are the tesseract-ocr project's traineddata (the integerized tessdata_best
+variant, repackaged by the tesseract.js project as `@tesseract.js-data/*`), licensed
+**Apache-2.0** (license review: `docs/model-policy.md`). The full Apache License 2.0
+text is reproduced once in the "Apache License 2.0" section at the end of this file.
 
 ## Model weights
 

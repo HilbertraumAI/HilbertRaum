@@ -31,10 +31,11 @@ function formatMb(bytes: number, lang: UiLanguage): string {
 
 const LANGUAGE_KEYS = {
   deu: 'ocr.install.lang.deu',
-  eng: 'ocr.install.lang.eng'
+  eng: 'ocr.install.lang.eng',
+  osd: 'ocr.install.lang.osd'
 } as const
 
-/** A pinned language's display name; an unknown code shows as-is. */
+/** A pinned file's display name (a language, or the orientation data); an unknown code shows as-is. */
 function languageName(lang: string, t: Translator): string {
   const key = (LANGUAGE_KEYS as Record<string, (typeof LANGUAGE_KEYS)[keyof typeof LANGUAGE_KEYS]>)[lang]
   return key ? t(key) : lang

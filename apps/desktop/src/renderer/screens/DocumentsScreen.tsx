@@ -1874,6 +1874,14 @@ export function DocumentsScreen({
             setPreview(null)
             if (previewDoc) void onSummarizeTier(previewDoc, tier)
           }}
+          onReadAgain={
+            previewDoc?.ocr && ocrAvailable && activeTask === null
+              ? () => {
+                  setPreview(null)
+                  void onMakeSearchable(previewDoc)
+                }
+              : undefined
+          }
           onClose={() => setPreview(null)}
         />
       )}

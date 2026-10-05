@@ -21,6 +21,7 @@ import {
 } from './assets'
 import { assertDownloadAllowed, type DownloadGates } from './downloads'
 import { ocrAssetsDir } from './ocr/factory'
+import { OCR_ORIENTATION_LANG } from './ocr/orientation'
 
 // In-app installer for the OCR language files (#410). OCR is deliberately NOT an engine family
 // (`RuntimeFamily` / `SIDECAR_FAMILY_SPECS` are archive-shaped: download → verify → clean →
@@ -59,9 +60,12 @@ import { ocrAssetsDir } from './ocr/factory'
 /** The licence of the tesseract language data (approved, docs/model-policy.md). Code-side. */
 export const OCR_LICENSE = 'Apache-2.0'
 
-/** One pinned OCR language file: what the app installs, anchored in code (#410). */
+/** One pinned OCR file: what the app installs, anchored in code (#410). */
 export interface OcrPin {
-  /** Traineddata language code — also the file name (`<lang>.traineddata.gz`). */
+  /**
+   * Traineddata code — also the file name (`<lang>.traineddata.gz`). A recognition language, or
+   * `osd`: the orientation data that turns sideways pages upright (#538), never read with.
+   */
   lang: string
   /** SHA-256 of the file AS DOWNLOADED (the gzip), lower-case hex. */
   sha256: string
@@ -70,14 +74,16 @@ export interface OcrPin {
 }
 
 /**
- * The pinned language bundle (D6: `deu` + `eng`, installed together). Hashes = the committed
- * `runtime-sources.yaml` `ocr:` block (drift-tested); sizes measured from the pinned files
- * themselves on 2026-09-22 (`@tesseract.js-data/{deu,eng}@1.0.0`, `4.0.0_best_int` — 1.27 / 2.82 MB
- * in docs/model-policy.md "The OCR asset class").
+ * The pinned bundle (D6: `deu` + `eng`, installed together; #538 added `osd`, the orientation
+ * data). Hashes = the committed `runtime-sources.yaml` `ocr:` block (drift-tested); sizes measured
+ * from the pinned files themselves (`@tesseract.js-data/{deu,eng,osd}@1.0.0`, `4.0.0_best_int` —
+ * deu/eng on 2026-09-22, osd on 2026-10-05; 1.27 / 2.82 / 4.12 MB in docs/model-policy.md "The OCR
+ * asset class"). A drive that already has deu + eng downloads only `osd` (`planOcrDownloads`).
  */
 export const OCR_PINS: readonly OcrPin[] = [
   { lang: 'deu', sha256: '306c4280d0cbed46fbff727486bd43b92730181bae80f56941a091f363bdf28b', sizeBytes: 1_333_102 },
-  { lang: 'eng', sha256: '45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91', sizeBytes: 2_952_873 }
+  { lang: 'eng', sha256: '45b4cb346724ac1774f1c36f42f182b887bcdb28ebe63e6fff90ac41f3fcff91', sizeBytes: 2_952_873 },
+  { lang: 'osd', sha256: 'be028ddaac8b03402b92cbf526075c068ec39a9f1dbbcd7536dddb9b22209934', sizeBytes: 4_320_130 }
 ]
 
 /** Headroom over a pinned size for the download body cap (the file is exact; this is framing). */
@@ -309,6 +315,7 @@ export class OcrInstallManager {
     }
     const languages: OcrInstallLanguage[] = this.pins.map((pin) => ({
       lang: pin.lang,
+      role: pin.lang === OCR_ORIENTATION_LANG ? 'orientation' : 'language',
       sizeBytes: pin.sizeBytes,
       installed: tasks.find((t) => t.lang === pin.lang)?.status === 'present-verified'
     }))

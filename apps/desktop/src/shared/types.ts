@@ -823,10 +823,15 @@ export interface EngineDownloadRequest {
 // narrow installer (`main/services/ocr-install.ts`). What is installed (language, sha256, size) is
 // pinned in code; the drive's yaml only supplies the download URL.
 
-/** One pinned OCR language as the install surfaces present it. */
+/** One pinned OCR file as the install surfaces present it. */
 export interface OcrInstallLanguage {
-  /** Traineddata language code (`deu`, `eng`). */
+  /** Traineddata code (`deu`, `eng`, `osd`). */
   lang: string
+  /**
+   * `language`: a recognition language. `orientation`: the data that turns sideways pages
+   * upright (#538) — OCR works without it, so the surfaces word a missing one differently.
+   */
+  role: 'language' | 'orientation'
   /** Exact size of the pinned file (code-side pin). */
   sizeBytes: number
   /** On the drive AND matching its pinned hash (the hash is the install state). */
@@ -1822,10 +1827,11 @@ export interface DocumentInfo {
   scanDetected?: boolean
   /**
    * Recognition METADATA when this document's text came from local OCR, or
-   * null/undefined otherwise. Parsed from `documents.ocr_json` — ids/counts only;
+   * null/undefined otherwise. Read from `documents.ocr_meta_json` — ids/counts only;
    * the recognized text itself is content and stays in the (possibly encrypted) DB.
-   * Survives re-index like `origin` (it states where the text came from); re-running
-   * the OCR task overwrites it.
+   * A scanned PDF's survives re-index like `origin` (it states where the text came from);
+   * re-running the OCR task overwrites it. A photo's (#574) is rewritten by every import or
+   * re-index, which reads the photo again, and cleared when that fails.
    */
   ocr?: DocumentOcrInfo | null
   /**
@@ -1880,8 +1886,21 @@ export interface DocumentCollectionMembership {
 
 /** Surface metadata of a stored OCR result (never the recognized text). */
 export interface DocumentOcrInfo {
-  /** Pages the recognition covered (photos: 1). */
+  /**
+   * Pages the recognition read (photos: 1; a PDF with some text pages: only its scanned pages,
+   * #575).
+   */
   pageCount: number
+  /**
+   * Pages whose reading produced text (#576) — the searchable ones. Absent only on a sidecar the
+   * open-time backfill has not reached yet; read it as `pageCount` then.
+   */
+  textPageCount?: number
+  /**
+   * Text pages the recognizer was unsure of: mean confidence below `OCR_LOW_CONFIDENCE` (#538).
+   * Absent when the reading kept no confidence (recognitions before #538).
+   */
+  lowConfidencePageCount?: number
   /** Traineddata languages used, e.g. ['deu', 'eng']. */
   languages: string[]
   /** The OCR engine id, e.g. 'tesseract.js-7.0.0'. */

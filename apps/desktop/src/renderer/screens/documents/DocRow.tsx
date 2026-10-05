@@ -24,6 +24,7 @@ import {
   rowChips
 } from './format'
 import { ocrRemedyKind } from '../../lib/ocrRemedy'
+import { ocrUnsureLine } from './ocrNotes'
 
 /**
  * One document row (perf audit PERF-5): the checkbox + name/meta/provenance column + the trailing
@@ -182,6 +183,9 @@ export const DocRow = memo(function DocRow({
   // (better assets / a bad first pass; the backend admits it). Distinct from `showOcr`: a
   // detected scan is a FAILED row and gets the inline button in the failed branch instead.
   const showOcrRedo = Boolean(d.ocr != null && ocrAvailable)
+  // #538: a quiet caption when the recognizer was unsure of some pages; the remedy ("Read again
+  // (OCR)") is in the "⋯" menu and, with the causes, in the preview.
+  const ocrUnsure = d.status === 'indexed' && d.ocr ? ocrUnsureLine(d.ocr, t) : null
   const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
   // OCR-R P1 FE-4: the OCR task's final step is the minutes-long re-ingest, not page reading —
   // "Reading the scan… (4/4)" through it lied. The count keeps the design record's "pages +
@@ -256,6 +260,7 @@ export const DocRow = memo(function DocRow({
             )}
           </p>
         )}
+        {ocrUnsure && <p className="hint doc-row-cap">{ocrUnsure}</p>}
         {d.status === 'failed' && d.errorMessage && (
           <Banner tone={d.scanDetected ? 'warning' : 'error'}>
             {/* error_message is persisted canonical English; the D-L4 display map

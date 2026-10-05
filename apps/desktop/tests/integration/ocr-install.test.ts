@@ -394,10 +394,35 @@ describe('hash-is-state (#410)', () => {
     expect(fetchSpy).not.toHaveBeenCalled()
     const status = await mgr.status(sourceOpts(root, manifests))
     expect(status.languages).toEqual([
-      { lang: 'deu', sizeBytes: FAKE_PINS[0].sizeBytes, installed: true },
-      { lang: 'eng', sizeBytes: FAKE_PINS[1].sizeBytes, installed: true }
+      { lang: 'deu', role: 'language', sizeBytes: FAKE_PINS[0].sizeBytes, installed: true },
+      { lang: 'eng', role: 'language', sizeBytes: FAKE_PINS[1].sizeBytes, installed: true }
     ])
     expect(status.totalBytes).toBe(0)
+  })
+
+  it('#538: a drive with deu + eng reports the orientation file as the one missing piece, by role', async () => {
+    const root = tempRoot()
+    const OSD_BYTES = 'osd-bytes'
+    const osdPin: OcrPin = { lang: 'osd', sha256: sha256(OSD_BYTES), sizeBytes: OSD_BYTES.length }
+    const manifests = manifestsDirWith(
+      root,
+      ocrYaml({
+        extraLangs: [
+          { lang: 'osd', url: 'https://example.test/osd.traineddata.gz', sha256: osdPin.sha256, dest: 'ocr/osd.traineddata.gz' }
+        ]
+      })
+    )
+    mkdirSync(join(root, 'ocr'), { recursive: true })
+    writeFileSync(join(root, 'ocr', 'deu.traineddata.gz'), DEU_BYTES)
+    writeFileSync(join(root, 'ocr', 'eng.traineddata.gz'), ENG_BYTES)
+    const mgr = new OcrInstallManager({ fetchImpl: correctBytesFetch, pins: [...FAKE_PINS, osdPin] })
+    const status = await mgr.status(sourceOpts(root, manifests))
+    expect(status.languages.map((l) => [l.lang, l.role, l.installed])).toEqual([
+      ['deu', 'language', true],
+      ['eng', 'language', true],
+      ['osd', 'orientation', false]
+    ])
+    expect(status.totalBytes).toBe(OSD_BYTES.length)
   })
 
   it('a present but CORRUPT file, served corrupt again: checksum mismatch, no .part, the existing file is untouched', async () => {
@@ -876,8 +901,8 @@ describe('OCR install via IPC (#410)', () => {
     const status = result as OcrInstallStatus
     expect(status.available).toBe(true)
     expect(status.languages).toEqual([
-      { lang: 'deu', sizeBytes: FAKE_PINS[0].sizeBytes, installed: false },
-      { lang: 'eng', sizeBytes: FAKE_PINS[1].sizeBytes, installed: false }
+      { lang: 'deu', role: 'language', sizeBytes: FAKE_PINS[0].sizeBytes, installed: false },
+      { lang: 'eng', role: 'language', sizeBytes: FAKE_PINS[1].sizeBytes, installed: false }
     ])
     expect(status.totalBytes).toBe(FAKE_PINS[0].sizeBytes + FAKE_PINS[1].sizeBytes)
     expect(status.sourceHost).toBe('example.test')

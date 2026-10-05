@@ -2,6 +2,7 @@ import { readFile } from 'node:fs/promises'
 import { t } from '../../../../shared/i18n'
 import type { DocumentParser, ParseContext, ParsedDocument } from './index'
 import { log } from '../../logging'
+import { readUpright } from '../../ocr/upright'
 
 // Photo "parser": a photographed page becomes a normal corpus document by
 // running the injected OCR engine over the image bytes. Deliberate asymmetry:
@@ -13,6 +14,9 @@ import { log } from '../../logging'
 // Page-less single segment, so the txt/md chunk-dedup rule applies. Re-index re-runs
 // the recognition over the stored copy (like audio re-transcription: the stored copy
 // is the source of truth; recognized text is derived).
+//
+// The photo is read the right way up (#538, `readUpright`): its own EXIF orientation is honoured
+// in either byte order, and an unsure reading triggers the orientation check.
 
 /** Photo extensions the OCR pipeline accepts (png + jpg). */
 export const IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg'] as const
@@ -61,8 +65,8 @@ export const ImageParser: DocumentParser = {
       const image = await readFile(filePath)
       // BE-8: forward the parse context's abort signal so a cancelled import aborts the
       // recognition in flight instead of waiting it out (bounded by the 2-min ceiling).
-      const result = await engine.recognize(image, { signal: ctx?.signal })
-      text = result.text.trim()
+      const reading = await readUpright(engine, image, { signal: ctx?.signal })
+      text = reading.text.trim()
     } catch (err) {
       // §11.4: the documents table gets friendly copy; the technical reason goes to
       // the LOCAL log only. Engine errors carry no recognized text (content-safe).

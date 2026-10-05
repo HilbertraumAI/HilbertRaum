@@ -24,10 +24,10 @@ function shippedOcrBlock(): OcrSources {
 }
 
 describe('OCR_PINS matches the committed runtime-sources.yaml ocr: block (#410)', () => {
-  it('the same set of languages — exactly deu + eng — on both sides', () => {
+  it('the same set of files — exactly deu + eng + the osd orientation data (#538) — on both sides', () => {
     const ocr = shippedOcrBlock()
-    expect(OCR_PINS.map((p) => p.lang).sort()).toEqual(['deu', 'eng'])
-    expect(ocr.files.map((f) => f.lang).sort()).toEqual(['deu', 'eng'])
+    expect(OCR_PINS.map((p) => p.lang).sort()).toEqual(['deu', 'eng', 'osd'])
+    expect(ocr.files.map((f) => f.lang).sort()).toEqual(['deu', 'eng', 'osd'])
   })
 
   it('the same sha256 per language', () => {
@@ -47,7 +47,7 @@ describe('OCR_PINS matches the committed runtime-sources.yaml ocr: block (#410)'
     }
   })
 
-  it('every pin: a positive integer size no larger than 8 MiB, and the total stays under it too', () => {
+  it('every pin: a positive integer size no larger than 8 MiB, and the bundle stays under 12 MiB', () => {
     let total = 0
     for (const pin of OCR_PINS) {
       expect(Number.isInteger(pin.sizeBytes)).toBe(true)
@@ -55,7 +55,7 @@ describe('OCR_PINS matches the committed runtime-sources.yaml ocr: block (#410)'
       expect(pin.sizeBytes).toBeLessThanOrEqual(8 * MiB)
       total += pin.sizeBytes
     }
-    expect(total).toBeLessThanOrEqual(8 * MiB)
+    expect(total).toBeLessThanOrEqual(12 * MiB)
   })
 
   it('every pin carries a real, lower-case 64-hex sha256 (never a placeholder)', () => {

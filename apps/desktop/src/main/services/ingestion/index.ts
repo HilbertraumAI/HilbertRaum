@@ -48,7 +48,7 @@ import {
   type ParsedDocument
 } from './parsers'
 import { PDF_SCAN_DETECTED_MESSAGE } from './parsers/pdf'
-import { parseOcrMeta } from './ocr-meta'
+import { ocrMetaOf, parseOcrMeta } from './ocr-meta'
 import { chunkSegments, MAX_CHUNKS_PER_DOCUMENT } from './chunker'
 import {
   resolveIngestionLimits,
@@ -337,7 +337,16 @@ function parseOcr(json: string | null | undefined): StoredOcr | null {
       const pageNumber = (p as OcrPage)?.pageNumber
       const text = (p as OcrPage)?.text
       if (typeof pageNumber === 'number' && Number.isInteger(pageNumber) && typeof text === 'string') {
-        pages.push({ pageNumber, text })
+        // #538: carry the reading's confidence and turn through — a field not copied here is
+        // silently dropped for every reader of the stored pages.
+        const confidence = (p as OcrPage).confidence
+        const turn = (p as OcrPage).turn
+        pages.push({
+          pageNumber,
+          text,
+          ...(typeof confidence === 'number' && Number.isFinite(confidence) ? { confidence } : {}),
+          ...(turn === 90 || turn === 180 || turn === 270 ? { turn } : {})
+        })
       }
     }
     if (pages.length === 0) return null
@@ -355,12 +364,7 @@ function parseOcr(json: string | null | undefined): StoredOcr | null {
 /** Metadata-only view of a stored OCR result (never the recognized text). */
 function ocrInfoOf(stored: StoredOcr | null): DocumentOcrInfo | null {
   if (!stored) return null
-  return {
-    pageCount: stored.pages.length,
-    languages: stored.languages,
-    engineId: stored.engineId,
-    createdAt: stored.createdAt
-  }
+  return ocrMetaOf(stored.pages, stored)
 }
 
 /**
@@ -1476,16 +1480,10 @@ export function setDocumentOcr(
     : null
   // PERF-3: write the cheap metadata sidecar alongside the full blob so `listDocuments` reads the
   // badge without parsing page text. Counts-only (no text) — kept in lock-step with `ocr_json`:
-  // clearing OCR (ocr === null) nulls both. `pages.length` here == the valid-page count
-  // `ocrMetaFromJson` derives from the just-written blob (engine pages are always well-formed).
-  const metaJson = ocr
-    ? JSON.stringify({
-        pageCount: ocr.pages.length,
-        languages: ocr.languages,
-        engineId: ocr.engineId,
-        createdAt
-      })
-    : null
+  // clearing OCR (ocr === null) nulls both. `ocrMetaOf` is the same derivation `ocrMetaFromJson`
+  // (the backfill) applies to the just-written blob (engine pages are always well-formed).
+  const meta = ocr ? ocrMetaOf(ocr.pages, { ...ocr, createdAt }) : null
+  const metaJson = meta ? JSON.stringify(meta) : null
   db.prepare('UPDATE documents SET ocr_json = ?, ocr_meta_json = ?, updated_at = ? WHERE id = ?').run(
     json,
     metaJson,

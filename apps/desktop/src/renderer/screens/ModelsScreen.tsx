@@ -329,6 +329,10 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   const ocrFilesMissing =
     ocrInstall.status?.available === true && ocrInstall.status.languages.some((l) => !l.installed)
   const ocrRowVisible = ocrFilesMissing || ocrInstall.live || ocrJobFinishedHere
+  // #538: text recognition works and only the orientation file is missing — the row says what it adds.
+  const ocrOnlyOrientationMissing =
+    ocrFilesMissing &&
+    (ocrInstall.status?.languages.every((l) => l.installed || l.role === 'orientation') ?? false)
   // Mounted flag (audit FE-4): refresh() and the download/engine polls below resolve async; a
   // parked tick can land AFTER unmount (clearing the interval doesn't abort the in-flight
   // promise). Guard every setState behind this so ModelsScreen joins the uniform FE-4 discipline.
@@ -1401,7 +1405,9 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
       {/* #410: the quiet OCR row (a hint line, like the knowledge-pack tools row above). */}
       {ocrRowVisible && (
         <div className="ocr-install-row">
-          <p className="hint">{t('models.ocr.row')}</p>
+          <p className="hint">
+            {t(ocrOnlyOrientationMissing ? 'models.ocr.rowOrientation' : 'models.ocr.row')}
+          </p>
           <OcrInstallControl install={ocrInstall} onRequestInstall={() => setOcrDialogOpen(true)} t={t} />
         </div>
       )}

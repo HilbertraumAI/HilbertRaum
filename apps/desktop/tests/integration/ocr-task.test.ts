@@ -64,6 +64,15 @@ async function importScan(): Promise<string> {
   return info.id
 }
 
+/** Import an N-page image-only PDF (a detected scan). */
+async function importScanPages(pages: number): Promise<string> {
+  const p = join(tmp, `scan-${pages}.pdf`)
+  writeFileSync(p, makeScanOnlyPdf(pages))
+  const info = createQueuedDocument(db, p)
+  expect((await processDocument(db, storeDir, info.id)).scanDetected).toBe(true)
+  return info.id
+}
+
 function fakeEngine(textForPage: (n: number) => string): OcrEngine & { calls: number } {
   const engine = {
     id: 'fake-tesseract',
@@ -300,6 +309,45 @@ describe('Make searchable (OCR) end to end', () => {
     expect(status.state).toBe('done')
     expect(getDocumentOcrPages(db, docId)?.length).toBe(2)
     expect(getDocument(db, docId)?.status).toBe('indexed')
+  })
+
+  // #538 — every page is read the right way up, the turn that worked for the previous page is tried
+  // first (a sideways scan is usually sideways throughout), and each page keeps the reading's
+  // confidence and turn. Pages 1–2 here are sideways (readable at a 270° turn), page 3 is upright.
+  it('reads sideways pages upright, tries the previous turn first, keeps confidence and turn (#538)', async () => {
+    const docId = await importScanPages(3)
+    const calls: string[] = []
+    const rightTurn = (page: number): number => (page <= 2 ? 270 : 0)
+    const engine: OcrEngine = {
+      id: 'fake-tesseract',
+      languages: ['deu'],
+      recognize: async (image, opts) => {
+        const page = image[0]
+        const turn = opts?.turn ?? 0
+        calls.push(`p${page}@${turn}`)
+        const right = turn === rightTurn(page)
+        return { text: right ? `Seite ${page} lesbar.` : 'xq vv ‚l', confidence: right ? 93 : 50 }
+      },
+      detectOrientation: async (image) => {
+        calls.push(`p${image[0]}?`)
+        return { turn: rightTurn(image[0]) as 0 | 270, confidence: 3 }
+      }
+    }
+    const manager = makeManager({ engine, rasterize: fakeRasterizer(3) })
+    const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
+    expect((await waitTerminal(manager, jobId)).state).toBe('done')
+
+    expect(calls).toEqual([
+      'p1@0', 'p1?', 'p1@270', // unsure upright → OSD → read at its turn
+      'p2@270', // the previous page's turn first: one reading
+      'p3@270', 'p3?', 'p3@0' // upright again: OSD finds it
+    ])
+    expect(getDocumentOcrPages(db, docId)).toEqual([
+      { pageNumber: 1, text: 'Seite 1 lesbar.', confidence: 93, turn: 270 },
+      { pageNumber: 2, text: 'Seite 2 lesbar.', confidence: 93, turn: 270 },
+      { pageNumber: 3, text: 'Seite 3 lesbar.', confidence: 93 }
+    ])
+    expect(getDocument(db, docId)?.ocr).toMatchObject({ pageCount: 3, textPageCount: 3, lowConfidencePageCount: 0 })
   })
 
   it('fails friendly when every recognized page is empty', async () => {

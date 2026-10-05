@@ -7,7 +7,8 @@ import { readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { tMain } from '../../i18n'
 import { getDocument, reindexDocument, setDocumentOcr } from '../../ingestion'
-import type { OcrPage } from '../../ocr'
+import type { OcrPage, OcrTurn } from '../../ocr'
+import { readUpright } from '../../ocr/upright'
 import { shredFile } from '../../workspace-vault'
 import { resolveStoredCopy } from '../../ingestion/stored-copy'
 import { isAbortError } from '../../chat'
@@ -21,6 +22,9 @@ import type { DocTaskCtx, InternalTask } from '../context'
  * only), then re-ingest — the PdfParser's ocrPages hook turns the recognition into
  * one segment per page, so page citations work unchanged.
  * Progress = pages recognized + the final re-ingest step.
+ *
+ * Each page is read the right way up (#538, `readUpright`): the turn that worked for the previous
+ * page is tried first, and the page's confidence and turn are kept with its text.
  *
  * Cancel contract (GAP-7, full-audit 2026-07-11 — decided deliberately): a cancel landing
  * anywhere BEFORE the persist point (`setDocumentOcr`) persists NOTHING — the rasterize loop,
@@ -46,6 +50,7 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
 
   const pdf = await readStoredPdfBytes(documentId, ctx)
   const pages: OcrPage[] = []
+  let lastTurn: OcrTurn = 0
   try {
     await rasterize(pdf, {
       signal,
@@ -56,8 +61,14 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
       onPage: async (pageNumber, png) => {
         // Backpressure: recognitions serialize; the rasterizer keeps at most a 1-deep
         // render look-ahead (ING-5).
-        const result = await engine.recognize(png, { signal })
-        pages.push({ pageNumber, text: result.text.trim() })
+        const reading = await readUpright(engine, png, { signal, first: lastTurn })
+        lastTurn = reading.turn
+        pages.push({
+          pageNumber,
+          text: reading.text.trim(),
+          ...(reading.confidence != null ? { confidence: reading.confidence } : {}),
+          ...(reading.turn !== 0 ? { turn: reading.turn } : {})
+        })
         task.status.progress.stepsDone += 1
         if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
       }

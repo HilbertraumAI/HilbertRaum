@@ -16,6 +16,8 @@
 // without the "Make searchable" offer. A mock would invent text and silently corrupt
 // the corpus.
 
+import type { OcrTurn } from './orientation'
+
 /** One recognized image: the text plus tesseract's 0–100 mean confidence. */
 export interface OcrResult {
   text: string
@@ -26,6 +28,18 @@ export interface OcrResult {
 export interface OcrRecognizeOptions {
   /** Abort between/before recognitions (a recognition in flight finishes its page). */
   signal?: AbortSignal
+  /**
+   * Read the image turned this far clockwise first (#538; default 0). Composed with the image's own
+   * EXIF orientation, so a photo is always read the way its camera said to show it.
+   */
+  turn?: OcrTurn
+}
+
+/** What orientation detection (Tesseract OSD) found: the clockwise turn that makes the page upright. */
+export interface OcrOrientation {
+  turn: OcrTurn
+  /** OSD's own confidence — informational only; it is often near 0 when the answer is right. */
+  confidence: number
 }
 
 /**
@@ -47,6 +61,12 @@ export interface OcrEngine {
   readonly languages: readonly string[]
   /** Recognize one image (PNG/JPEG file bytes). Reuses one warm worker across calls. */
   recognize(image: Buffer, opts?: OcrRecognizeOptions): Promise<OcrResult>
+  /**
+   * Which way up the image's text is (#538), or null when the engine cannot tell (no orientation
+   * file on the drive, too little text, or detection failed). Optional: an engine without it reads
+   * every page as it comes. Never throws for a detection failure — null instead.
+   */
+  detectOrientation?(image: Buffer, opts?: { signal?: AbortSignal }): Promise<OcrOrientation | null>
   /**
    * Execution state (#232). Optional so test fakes stay minimal — absent means `'available'`.
    * `ocrAvailable` in the app status and the image parser read this, never mere presence.
@@ -72,8 +92,13 @@ export interface OcrPage {
   /** 1-based page number (photos: 1). */
   pageNumber: number
   text: string
+  /** The reading's mean confidence (0–100) — absent on recognitions stored before #538. */
+  confidence?: number | null
+  /** The clockwise turn the page was read at (#538) — absent means 0. */
+  turn?: OcrTurn
 }
 
+export type { OcrTurn } from './orientation'
 export { TesseractOcrEngine, createTesseractOcrEngine } from './tesseract'
 export type { TesseractOcrEngineOptions } from './tesseract'
 export {

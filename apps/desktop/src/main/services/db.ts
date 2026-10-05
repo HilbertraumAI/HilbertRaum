@@ -1,6 +1,6 @@
 import { createRequire } from 'node:module'
 import { randomUUID } from 'node:crypto'
-import { ocrMetaFromJson } from './ingestion/ocr-meta'
+import { ocrMetaFromJson, parseOcrMeta } from './ingestion/ocr-meta'
 
 // SQLite storage via Node's built-in driver (no native compilation).
 // Requires the bundled Node >= 22.12; Electron is pinned ^43.7.7 (Node 24.x) so the packaged
@@ -653,23 +653,31 @@ function ensureColumn(db: Db, table: string, column: string, ddl: string): void 
  * sidecar for rows imported before that column existed. Reads each row's `ocr_json` blob ONCE,
  * extracts ONLY the surface metadata (`ocrMetaFromJson` — never page text), and writes the sidecar
  * so the hot `listDocuments` path can read the OCR badge without parsing the blob again. After the
- * first open every OCR'd row has meta, so subsequent opens select zero rows (a cheap indexed-status
- * scan). Touches ONLY the new column — `updated_at` is left alone (a transparent migration, not a
- * content edit), and no FK/lifecycle column is read or written, so an old on-disk workspace opens
- * cleanly. Batched in one transaction to amortize fsyncs on the high-latency USB drive (DB-2).
+ * first open every OCR'd row has meta, so subsequent opens re-derive nothing (they read only the
+ * small sidecars of the OCR'd rows). Touches ONLY the new column — `updated_at` is left alone (a
+ * transparent migration, not a content edit), and no FK/lifecycle column is read or written, so an
+ * old on-disk workspace opens cleanly. Batched in one transaction to amortize fsyncs on the
+ * high-latency USB drive (DB-2).
+ *
+ * #576: a sidecar written before `textPageCount` existed counted blank pages as recognized; it is
+ * re-derived from `ocr_json` the same way (once — the re-derived sidecar carries the field). A
+ * malformed sidecar is re-derived too. Filtered in JS, not with `json_extract`: a corrupt value
+ * must never make the open itself fail. (A photo's sidecar has no `ocr_json` behind it, #574, and
+ * is written whole.)
  */
 function backfillOcrMeta(db: Db): void {
-  const rows = db
-    .prepare(
-      "SELECT id, ocr_json FROM documents WHERE ocr_json IS NOT NULL AND ocr_meta_json IS NULL"
-    )
-    .all() as Array<{ id: string; ocr_json: string | null }>
-  if (rows.length === 0) return
+  const candidates = db
+    .prepare('SELECT id, ocr_meta_json FROM documents WHERE ocr_json IS NOT NULL')
+    .all() as Array<{ id: string; ocr_meta_json: string | null }>
+  const stale = candidates.filter((r) => parseOcrMeta(r.ocr_meta_json)?.textPageCount === undefined)
+  if (stale.length === 0) return
+  const read = db.prepare('SELECT ocr_json FROM documents WHERE id = ?')
   const update = db.prepare('UPDATE documents SET ocr_meta_json = ? WHERE id = ?')
   db.exec('BEGIN')
   try {
-    for (const r of rows) {
-      const meta = ocrMetaFromJson(r.ocr_json)
+    for (const r of stale) {
+      const row = read.get(r.id) as { ocr_json: string | null } | undefined
+      const meta = ocrMetaFromJson(row?.ocr_json)
       // A blob that yields no valid page leaves meta NULL (the badge was already absent); it is
       // re-examined on the next open (negligible — effectively never happens for real OCR output).
       if (meta) update.run(JSON.stringify(meta), r.id)
@@ -1099,10 +1107,11 @@ function applyPragmasAndMigrations(db: Db): void {
   // Persisted per-page OCR recognition (content — lives only in this DB).
   ensureColumn(db, 'documents', 'ocr_json', 'ocr_json TEXT')
   // PERF-3 (full-audit-2026-06-29 follow-up, Phase 4): cheap metadata-only OCR sidecar
-  // (`{ pageCount, languages, engineId, createdAt }` — a serialized DocumentOcrInfo, counts/ids
-  // only, NEVER page text). `listDocuments` reads the OCR badge from this column instead of
-  // JSON.parse-ing the multi-MB `ocr_json` blob per row. Additive + nullable (NULL = not yet
-  // backfilled OR no OCR); populated at OCR-write time and by the one-time backfill below.
+  // (`{ pageCount, textPageCount, lowConfidencePageCount?, languages, engineId, createdAt }` — a
+  // serialized DocumentOcrInfo, counts/ids only, NEVER page text). `listDocuments` reads the OCR
+  // badge from this column instead of JSON.parse-ing the multi-MB `ocr_json` blob per row. Additive
+  // + nullable (NULL = not yet backfilled OR no OCR); populated at OCR-write time, for a photo at
+  // import (#574, the one sidecar with no `ocr_json` behind it), and by the backfill below.
   ensureColumn(db, 'documents', 'ocr_meta_json', 'ocr_meta_json TEXT')
   backfillOcrMeta(db)
   // Document-organization columns (plan §8.2/§8.3). All nullable — the ensureColumn DDL
