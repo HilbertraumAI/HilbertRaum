@@ -9650,6 +9650,23 @@ model pass. Builds directly on the §20 span-transform engine.
   (`locateOccurrences`, no fuzzy match); an unconfirmed / too-short (`< MIN_ENTITY_CHARS`) / letter-less
   proposal is **dropped and counted** (D78 honesty). A confirmed string is masked at **every** occurrence
   (the model may report one). Duplicate proposals of the same string are swept once, not re-dropped.
+  - **#580 amendment (2026-10-05): overlapping proposals mask their union.** Proposals arrive in
+    locate-window order with exact-string dedupe only, so "Jane" (from "Dear Jane,") can precede
+    "Jane Doe". `applySpans` keeps the first of two overlapping spans, so the surname stayed visible in
+    both the `.txt` copy and the DOCX copy, and the regex floor does not cover names. The same held for
+    partial overlap ("Anna Berg" + "Berg GmbH" left " GmbH" in either order). The comments claimed
+    "leftmost-longest wins"; the code did first-proposed-wins.
+    - `verifyAndSweepEntities` now merges overlapping occurrences into disjoint regions
+      (`unionMaskRegions`). Every character any confirmed occurrence covers is masked, whatever the
+      proposal order.
+    - Under `token` a region takes the token of the occurrence that starts first (the longer one on a
+      tie). Touching occurrences stay separate items.
+    - `entityMaskCount` and `totalRedactions` count regions, so "Jane" + "Jane Doe" is two confirmed
+      names but one item hidden.
+    - The edit tool keeps `applySpans`' rule, because two different replacements cannot be merged; its
+      comment now says first-proposed-wins.
+    - Pinned in `skills-redaction-locate.test.ts` (both orders, `perChar` and `token`, both overlap
+      shapes; red on the pre-fix code for every order except full-name-first).
 - **Combined redaction** (`redactWithEntities`): entities are masked FIRST — verified against the pristine
   input, spliced via `applySpans` — then the six regex detectors run over the entity-masked text, so the
   floor still covers every email/IBAN/… not already inside an entity. Both passes are mechanical splices,

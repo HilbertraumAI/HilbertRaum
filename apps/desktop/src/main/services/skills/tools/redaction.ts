@@ -527,8 +527,14 @@ export const MASK_ENTITY_TOKENS: Record<LocateCategory, string> = {
  * proposal is confirmed only when its exact string is present in `text` (`locateOccurrences`, no fuzzy
  * match); an unconfirmed / too-short / letter-less / duplicate proposal is dropped. `dropped` counts
  * proposals rejected as unverifiable (a duplicate of an already-swept string is NOT a drop — it is
- * already covered). Spans may overlap between two proposals (e.g. "Main Street" and "Street"); the
- * caller's `applySpans` resolves that deterministically (leftmost-longest wins, the rest skipped).
+ * already covered).
+ *
+ * #580: occurrences of DIFFERENT proposals can overlap — "Jane" and "Jane Doe" at the same start,
+ * "Main Street" and "Street", or a name and an org sharing a word ("Anna Berg" + "Berg GmbH"). The
+ * returned spans are their UNION (`unionMaskRegions`): every character any confirmed occurrence covers
+ * is masked, whatever order the proposals came in. `applySpans` keeps only the first of two
+ * overlapping spans, so before #580 the part of the second that the first did not cover stayed visible
+ * — a proposal order of "Jane", then "Jane Doe" left the surname in the redacted copy.
  */
 export function verifyAndSweepEntities(
   text: string,
@@ -536,7 +542,7 @@ export function verifyAndSweepEntities(
   strategy: ReplacementStrategy
 ): { spans: TransformSpan[]; counts: EntityCounts; dropped: number } {
   const counts: EntityCounts = { name: 0, address: 0, org: 0, other: 0 }
-  const spans: TransformSpan[] = []
+  const ranges: MaskRange[] = []
   const swept = new Set<string>()
   let dropped = 0
   for (const e of entities) {
@@ -554,11 +560,38 @@ export function verifyAndSweepEntities(
     swept.add(needle)
     counts[e.category] += 1
     const token = MASK_ENTITY_TOKENS[e.category]
-    for (const o of occurrences) {
-      spans.push({ start: o.start, length: o.length, replacement: replacementText(strategy, token, o.length) })
-    }
+    for (const o of occurrences) ranges.push({ start: o.start, end: o.start + o.length, token })
   }
+  const spans = unionMaskRegions(ranges).map((r) => ({
+    start: r.start,
+    length: r.end - r.start,
+    replacement: replacementText(strategy, r.token, r.end - r.start)
+  }))
   return { spans, counts, dropped }
+}
+
+/** One confirmed occurrence to mask: `[start, end)` in UTF-16 code units, and its category token. */
+interface MaskRange {
+  start: number
+  end: number
+  token: string
+}
+
+/**
+ * #580: merge overlapping mask ranges into disjoint regions, ascending. A region takes the token of
+ * the range that starts first (the longer one when two start together), which only matters under
+ * `token`: `perChar` masks every character of the region alike. Ranges that merely touch stay separate
+ * regions, as two adjacent entities are two items hidden.
+ */
+function unionMaskRegions(ranges: readonly MaskRange[]): MaskRange[] {
+  const sorted = [...ranges].sort((a, b) => a.start - b.start || b.end - a.end)
+  const regions: MaskRange[] = []
+  for (const r of sorted) {
+    const last = regions[regions.length - 1]
+    if (last && r.start < last.end) last.end = Math.max(last.end, r.end)
+    else regions.push({ ...r })
+  }
+  return regions
 }
 
 export interface RedactWithEntitiesResult {
@@ -567,7 +600,11 @@ export interface RedactWithEntitiesResult {
   counts: RedactionCounts
   /** Per-category counts of the CONFIRMED located entities (names/addresses/orgs/other). */
   entityCounts: EntityCounts
-  /** Total located-entity OCCURRENCES masked (≥ the sum of entityCounts when strings repeat). */
+  /**
+   * Located-entity REGIONS masked: one per occurrence, except that overlapping occurrences of
+   * different proposals form one region (#580). Above the sum of `entityCounts` when strings repeat;
+   * below it when proposals overlap ("Jane" + "Jane Doe" = 2 confirmed names, 1 region).
+   */
   entityMaskCount: number
   /** Proposed entities dropped as unverifiable (not present verbatim / too short) — surfaced honestly. */
   droppedEntities: number
