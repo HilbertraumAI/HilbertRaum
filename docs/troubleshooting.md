@@ -554,8 +554,8 @@ A skill you add yourself — by copying a folder into the drive's `user-skills/`
 off** on purpose, so nothing a file added can run without your say-so. Open **Skills** in the sidebar,
 find it in the list, and turn it **on**. (Built-in skills are on already.) If it isn't listed at all,
 check that the folder contains a `SKILL.md` file at its top level, then close HilbertRaum and start it
-again. The app looks for new skill folders once each time it starts, so a folder you copy in while it
-is running only shows up after a restart.
+again. The app looks for new skill folders only once each time it starts (soon after you unlock), so
+a folder you copy in after that shows up only after a restart.
 
 ---
 
