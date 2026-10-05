@@ -6089,7 +6089,8 @@ never auto-fire (the U4 narrowing and the #130 doc-signal gate). Measured auto-f
 71 missed) with the two deviations counted as wrong fires. Auto-fire recall is low by design: rows
 labelled with the five skills that never auto-fire count as misses. The same mechanism applies to
 "personenbezogene Daten", also a keyword of both skills; the corpus pins only the "sensible Daten"
-rows. The optional product fix is tracked in #583.
+rows. The fix is #608 (owner decision 2026-10-06: the bare phrase stops suggesting any skill); the
+same mechanism for "sensible Daten" / "sensitive data" is #604.
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
