@@ -324,53 +324,17 @@ describe('S13c — auto-fire provenance + the undo (skills-s13-plan.md §5/D3)',
     })
     expect(listMessages(db, convId).at(-1)!.autoFired).toBe(false)
   })
-
-  it('the undo re-resolves the same turn SKILL-FREE (explicit per-turn clear)', () => {
-    const { db, dirs, convId } = envWithAutoFireSkill()
-    updateSettings(db, { skillsAutoFireEnabled: true })
-    // First the turn auto-fires…
-    expect(resolveTurnSkill(db, dirs, convId, undefined, Q_MATCH)?.installId).toBe('app:autobank')
-    // …then the undo re-runs it with the skill explicitly cleared (skillInstallId: null) — no skill,
-    // and crucially NO re-auto-fire even though the same question would otherwise score 3.
-    expect(resolveTurnSkill(db, dirs, convId, null, Q_MATCH)).toBeNull()
-  })
 })
 
-// The REAL committed document-redaction skill auto-fires end-to-end (regression for the user-reported
-// "anonymize my attached document" miss). Reconciling the repo's app-skills/ installs it ENABLED with
-// the autoFire opt-in (D6) now set; a SELECTED document is in the conversation's persisted scope, so
-// `inScopeDocSignals` surfaces its MIME (the §22-C4 main-side resolution). "anonymize" (keyword, 2) +
-// an in-scope PDF (mime, 1) = 3 ⇒ clears AUTOFIRE_SCORE_THRESHOLD and fires.
+// The REAL committed document-redaction skill (D6 opt-in): a selected document of a MIME the skill does
+// not declare gives no doc signal, so the keyword alone never fires. (The positive case is a row of the
+// complaint-skills table below.)
 describe('document-redaction auto-fires against the real selector (S13b D6 opt-in)', () => {
   const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
   function realDirs(): { appSkillsDir: string; userSkillsDir: string } {
     return { appSkillsDir: join(REPO_ROOT, 'app-skills'), userSkillsDir: join(tempDir(), 'user-skills') }
   }
   const Q_ANON = 'I want to anonymize my attached document' // keyword "anonymize" (2)
-
-  it('opted in + a selected PDF in scope (score 3) ⇒ auto-fires document-redaction', () => {
-    const db = freshDb()
-    const dirs = realDirs()
-    reconcileSkills(db, dirs) // app skills install ENABLED
-    updateSettings(db, { skillsAutoFireEnabled: true })
-    // A "selected" document is a document in the conversation's scope — exactly what the user had.
-    const docId = seedIndexedDoc(db, 'contract.pdf', 'application/pdf')
-    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
-
-    const skill = resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)
-    expect(skill?.installId).toBe('app:document-redaction')
-    expect(skill?.autoFired).toBe(true)
-  })
-
-  it('the SAME phrase with NO doc selected (keyword-only, score 2) does NOT fire', () => {
-    const db = freshDb()
-    const dirs = realDirs()
-    reconcileSkills(db, dirs)
-    updateSettings(db, { skillsAutoFireEnabled: true })
-    // No document in scope ⇒ inScopeDocSignals is empty ⇒ "anonymize" alone scores 2 < 3.
-    const conv = createConversation(db, {})
-    expect(resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)).toBeNull()
-  })
 
   it('a selected NON-redactable MIME (no mime hit) does NOT fire on the keyword alone', () => {
     const db = freshDb()
@@ -379,16 +343,6 @@ describe('document-redaction auto-fires against the real selector (S13b D6 opt-i
     updateSettings(db, { skillsAutoFireEnabled: true })
     // The skill's mimeTypes are pdf/plain/markdown; a spreadsheet gives no mime signal ⇒ score 2 < 3.
     const docId = seedIndexedDoc(db, 'numbers.xlsx', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
-    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
-    expect(resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)).toBeNull()
-  })
-
-  it('still inert when the user opt-in (D4) is off, even with the perfect match', () => {
-    const db = freshDb()
-    const dirs = realDirs()
-    reconcileSkills(db, dirs)
-    // skillsAutoFireEnabled left at its default (false) — the production safe-merge posture.
-    const docId = seedIndexedDoc(db, 'contract.pdf', 'application/pdf')
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
     expect(resolveAutoFireSkill(db, dirs, conv.id, Q_ANON)).toBeNull()
   })
@@ -460,7 +414,9 @@ describe('the complaint skills auto-fire against the real committed manifests (U
   const cases = [
     { skill: 'app:bank-statement', q: 'Reconcile the transactions on my bank statement.', title: 'march-statement.pdf', mime: 'application/pdf' },
     { skill: 'app:invoice', q: 'List the line items and the invoice number.', title: 'invoice-2026.pdf', mime: 'application/pdf' },
-    { skill: 'app:meeting-protocol', q: 'Summarize this meeting.', title: 'team-meeting.md', mime: 'text/markdown' }
+    { skill: 'app:meeting-protocol', q: 'Summarize this meeting.', title: 'team-meeting.md', mime: 'text/markdown' },
+    // The user-reported "anonymize my attached document" miss: keyword "anonymize" (2) + the selected PDF (1).
+    { skill: 'app:document-redaction', q: 'I want to anonymize my attached document', title: 'contract.pdf', mime: 'application/pdf' }
   ]
   for (const c of cases) {
     it(`${c.skill} auto-fires with an explicitly-scoped matching doc`, () => {

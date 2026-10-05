@@ -219,11 +219,8 @@ describe('askDocuments — the #80 offer cascade', () => {
     const msg = await ask(db, workspacePath, rt, skillsDirs, PARTY_AGG_ASK, docId)
 
     expect(rt.calls).toBe(1)
-    // The wire is the D55 grammar contract: enum of gated ids + none, temp 0.
-    const o = rt.options[0]
-    expect(o?.responseSchemaName).toBe('skill_pointer')
-    expect(o?.temperature).toBe(0)
-    expect(o?.responseSchema?.properties?.skill?.enum).toEqual(['app:bank-statement', 'app:invoice', 'none'])
+    // The call-site's enum is the gated candidates + none (the call shape itself is owned by analysis-classify).
+    expect(rt.options[0]?.responseSchema?.properties?.skill?.enum).toEqual(['app:bank-statement', 'app:invoice', 'none'])
     expect(msg.skillOffer).toEqual({ installId: 'app:invoice', title: 'Invoice Analysis', source: 'classifier' })
     // The classification result NEVER reaches answer content — the content is exactly the
     // deterministic listing this scope produces.
