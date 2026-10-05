@@ -45,6 +45,7 @@ export function PreviewModal({
   onRegenerate,
   onSelectTier,
   onReadAgain,
+  documentPages,
   onClose
 }: {
   preview: DocumentPreview
@@ -66,6 +67,8 @@ export function PreviewModal({
    * Absent ⇒ the note names the causes without the action.
    */
   onReadAgain?: () => void
+  /** #575: the whole document's page count when only its scanned pages were read by OCR. */
+  documentPages?: number
   onClose: () => void
 }): JSX.Element {
   const { t, tCount, lang } = useT()
@@ -145,7 +148,7 @@ export function PreviewModal({
       </p>
       {ocr && (
         <p className="hint" style={{ margin: '0 0 8px' }}>
-          {ocrInfoLine(ocr, t, tCount, photo)}
+          {ocrInfoLine(ocr, t, tCount, { photo, documentPages })}
         </p>
       )}
       {ocrUnsure && (

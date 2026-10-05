@@ -24,7 +24,7 @@ import { resolveWorkerScriptPath, type TesseractModule } from '../../src/main/se
 import { imageOrientation } from '../../src/main/services/ocr/orientation'
 import { validateRuntimeSources } from '../../src/shared/runtime-sources'
 import { planOcrDownloads, sha256Of } from '../../src/main/services/assets'
-import { makePdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
+import { makeMixedPdf, makePdf, makeScanOnlyPdf, makeHybridPdf, TINY_PNG } from '../helpers/fixtures'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { sha256File } from '../../src/main/services/models'
 
@@ -53,6 +53,40 @@ describe('image-only PDF detection (step 0)', () => {
     expect(parsed.segments.length).toBe(1)
     expect(parsed.segments[0].pageNumber).toBe(1)
     expect(parsed.segments[0].text).toContain('real text layer')
+  })
+
+  // #575 — a text PDF's scanned pages: under the text threshold AND painting an image. A blank page
+  // and a short title page paint none and are not offered OCR. Reported only when import asks.
+  const LETTER: Parameters<typeof makeMixedPdf>[0] = [
+    { kind: 'text', lines: ['Dear customer, this letter confirms your annual statement.'] },
+    { kind: 'image' },
+    { kind: 'blank' },
+    { kind: 'text', lines: ['Anhang'] },
+    { kind: 'image' }
+  ]
+
+  it('#575: reports a text PDF’s scanned pages — not its blank or short title pages — when asked', async () => {
+    const p = join(tmp(), 'letter.pdf')
+    writeFileSync(p, makeMixedPdf(LETTER))
+    expect((await PdfParser.parse(p, { detectScannedPages: true })).scannedPages).toEqual([2, 5])
+    expect((await PdfParser.parse(p)).scannedPages).toBeUndefined()
+  })
+
+  it('#575: a scanned page that OCR read contributes its recognition; text pages keep their own text', async () => {
+    const p = join(tmp(), 'letter.pdf')
+    writeFileSync(p, makeMixedPdf(LETTER))
+    const parsed = await PdfParser.parse(p, {
+      ocrPages: [
+        { pageNumber: 1, text: 'NOT USED: page 1 has a text layer' },
+        { pageNumber: 2, text: 'Unterschrift Max Mustermann' },
+        { pageNumber: 5, text: '' } // read, nothing found: the page stays without a segment
+      ]
+    })
+    expect(parsed.segments.map((s) => [s.pageNumber, s.text])).toEqual([
+      [1, 'Dear customer, this letter confirms your annual statement.'],
+      [2, 'Unterschrift Max Mustermann'],
+      [4, 'Anhang']
+    ])
   })
 
   it('parses a normal text PDF unchanged', async () => {

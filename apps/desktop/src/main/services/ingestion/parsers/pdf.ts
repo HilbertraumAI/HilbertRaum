@@ -20,6 +20,11 @@ import { reconstructPage, type LayoutWord } from './pdf-layout'
 // and arrives here as `ctx.ocrPages`: a scan-detected PDF then parses into one segment
 // per RECOGNIZED page instead of failing — re-index and preview reuse the stored
 // recognition (no silent re-OCR; re-running the task is the explicit way to redo it).
+//
+// Scanned pages inside a text PDF (#575): a page under the text threshold that carries an image
+// is a scanned page (a signed letter's signature page, a scanned attachment). Import reports
+// them (`scannedPages`) so the row can say so and offer OCR for exactly those pages; once read,
+// their recognition replaces their (empty or near-empty) text layer page by page.
 
 /**
  * Friendly notice for an image-only PDF (spec §11.4 — never "no text layer found").
@@ -37,6 +42,14 @@ export const PDF_SCAN_DETECTED_MESSAGE = t('en', 'main.ingest.pdfScanDetected')
  * page of office prose is far above this.
  */
 export const PDF_TEXT_PAGE_MIN_CHARS = 25
+
+/**
+ * Wall-clock bound on the scanned-page check (#575). Telling a scanned page from a blank or short
+ * title page means building its operator list, which decodes its image (~0.1 s for an A4 JPEG
+ * page, measured). Pages the bound leaves unchecked count as scanned: the PDF has shown plenty of
+ * image pages by then, and OCR on a page that turns out blank costs one page.
+ */
+export const SCANNED_PAGE_CHECK_BUDGET_MS = 20_000
 
 interface TextItemLike {
   str?: unknown
@@ -88,6 +101,16 @@ export const PdfParser: DocumentParser = {
     // text page, not a scan. So track the raw text-bearing pages separately from the emitted segments.
     let rawTextPageCount = 0
     let numPages = 0
+    /** Pages under the text threshold (#575: the scanned-page candidates). */
+    const shortPages: number[] = []
+    /** A text PDF's pages that look scanned (#575) — computed only when the context asks. */
+    let scannedPages: number[] | undefined
+    // The stored recognition, for the per-page merge in a text PDF (#575).
+    const recognizedText = new Map<number, string>()
+    for (const p of ctx?.ocrPages ?? []) {
+      const text = p.text.trim()
+      if (text.length > 0) recognizedText.set(p.pageNumber, text)
+    }
     try {
       // GAP-3 (full-audit 2026-07-11): the open await sits INSIDE the try so a document that fails
       // to open (corrupt/password PDF) still reaches the finally's `loadingTask.destroy()` — it used
@@ -127,6 +150,17 @@ export const PdfParser: DocumentParser = {
         }
         const rawTrimmed = raw.trim()
         if (rawTrimmed.length >= PDF_TEXT_PAGE_MIN_CHARS) rawTextPageCount++
+        else shortPages.push(pageNumber)
+
+        // #575: a short page that OCR has read contributes its recognition instead of its text
+        // layer (the rendered page shows that layer too, so nothing it held is lost). A whole
+        // scan's segments are rebuilt from the stored recognition below, as before.
+        const recognized =
+          rawTrimmed.length < PDF_TEXT_PAGE_MIN_CHARS ? recognizedText.get(pageNumber) : undefined
+        if (recognized) {
+          segments.push({ text: recognized, pageNumber })
+          continue
+        }
 
         if (ctx?.layout) {
           // Geometry reconstruction (plan §3.1): rebuild visual rows from the word coordinates pdf.js
@@ -146,6 +180,9 @@ export const PdfParser: DocumentParser = {
         }
 
         if (rawTrimmed.length > 0) segments.push({ text: rawTrimmed, pageNumber })
+      }
+      if (ctx?.detectScannedPages && rawTextPageCount > 0 && shortPages.length > 0) {
+        scannedPages = await findScannedPages(doc, shortPages, pdfjs.OPS)
       }
     } finally {
       // Release pdfjs transport/worker resources promptly.
@@ -174,6 +211,67 @@ export const PdfParser: DocumentParser = {
     // `pageCount` is the DECLARED total (issue #58): a page whose text-layer trimmed empty
     // pushed no segment above, and pages past the M-2 cap were never walked — both are real
     // content gaps the translation completeness accounting must be able to see.
-    return { segments, mimeType: 'application/pdf', pageCount: numPages }
+    return {
+      segments,
+      mimeType: 'application/pdf',
+      pageCount: numPages,
+      ...(scannedPages && scannedPages.length > 0 ? { scannedPages } : {})
+    }
   }
+}
+
+/** The pdf.js operators that paint an image — a scanned page paints at least one. */
+function imagePaintOps(ops: Record<string, number>): Set<number> {
+  return new Set(
+    [
+      ops.paintImageXObject,
+      ops.paintInlineImageXObject,
+      ops.paintInlineImageXObjectGroup,
+      ops.paintImageXObjectRepeat,
+      ops.paintImageMaskXObject,
+      ops.paintImageMaskXObjectGroup,
+      ops.paintImageMaskXObjectRepeat,
+      ops.paintSolidColorImageMask
+    ].filter((op): op is number => typeof op === 'number')
+  )
+}
+
+interface OperatorListDoc {
+  getPage(n: number): Promise<{
+    getOperatorList(): Promise<{ fnArray: number[] }>
+    cleanup(): unknown
+  }>
+}
+
+/**
+ * #575: which of a text PDF's short pages paint an image — the scanned ones. A blank page or a
+ * short title page paints none and is not offered OCR. Bounded by SCANNED_PAGE_CHECK_BUDGET_MS
+ * (pages it leaves unchecked count as scanned); a page whose operator list fails is not counted.
+ */
+async function findScannedPages(
+  doc: OperatorListDoc,
+  shortPages: readonly number[],
+  ops: Record<string, number>
+): Promise<number[]> {
+  const paintsImage = imagePaintOps(ops)
+  const deadline = performance.now() + SCANNED_PAGE_CHECK_BUDGET_MS
+  const scanned: number[] = []
+  for (const pageNumber of shortPages) {
+    if (performance.now() > deadline) {
+      scanned.push(pageNumber)
+      continue
+    }
+    try {
+      const page = await doc.getPage(pageNumber)
+      try {
+        const list = await page.getOperatorList()
+        if (list.fnArray.some((op) => paintsImage.has(op))) scanned.push(pageNumber)
+      } finally {
+        page.cleanup()
+      }
+    } catch {
+      // An unreadable page is not offered OCR on this evidence.
+    }
+  }
+  return scanned
 }

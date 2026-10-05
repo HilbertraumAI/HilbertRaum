@@ -741,12 +741,21 @@ export const en = {
     'Text recognized on this drive (OCR) from this photo. Recognition can contain errors.',
   'docs.previewModal.ocrInfoPartial':
     'Text recognized on this drive (OCR) on {count} of {total} pages. Recognition can contain errors.',
+  // #575: the scanned pages of a text PDF were read and turned out blank.
+  'docs.previewModal.ocrInfoNone.one':
+    'Text recognition (OCR) read {count} scanned page on this drive and found no text on it.',
+  'docs.previewModal.ocrInfoNone.other':
+    'Text recognition (OCR) read {count} scanned pages on this drive and found no text on them.',
   // #538: pages the recognizer was unsure of (low mean confidence). The lead is shared by the row
   // caption and the preview; the preview adds the causes and a "Read again (OCR)" action.
   'docs.ocr.unsure.page': 'Text recognition was unsure of this page.',
   'docs.ocr.unsure.photo': 'Text recognition was unsure of this photo.',
   'docs.ocr.unsure.some': 'Text recognition was unsure on {count} of the {total} recognized pages.',
   'docs.ocr.unsure.all': 'Text recognition was unsure on all {count} recognized pages.',
+  // #575: a text PDF that also holds scanned pages (no text layer, an image) — a quiet row
+  // caption; "Make searchable (OCR)" in the row's ⋯ menu reads just those pages.
+  'docs.ocr.scannedPages': 'Scanned pages without readable text yet: {count} of {total}.',
+  'docs.ocr.scannedPagesNeedsOcr': 'Reading them needs the OCR files (AI Model screen).',
   'docs.ocr.unsure.causes':
     'A blurry, skewed or handwritten original reads poorly, and so does a language other than ' +
     'German or English.',
@@ -2649,7 +2658,8 @@ export const en = {
   'main.task.ocrUnavailable':
     'Text recognition (OCR) is not available in this build: the OCR files are on this drive, but ' +
     'the recognizer could not start.',
-  'main.task.ocrNotAScan': 'Only a PDF that was detected as a scan can be made searchable this way.',
+  'main.task.ocrNotAScan':
+    'Only a PDF that was detected as a scan, or that has scanned pages, can be made searchable this way.',
   'main.task.ocrNoText':
     'No readable text was found in this scan. The pages may be blank or too blurry.',
   'main.task.ocrFailed':

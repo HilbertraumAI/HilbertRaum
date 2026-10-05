@@ -14,17 +14,23 @@ export function ocrTextPages(ocr: DocumentOcrInfo): number {
   return ocr.textPageCount ?? ocr.pageCount
 }
 
-/** The preview's "text recognized" line: it counts the pages that produced text (#576). */
+/**
+ * The preview's "text recognized" line: it counts the pages that produced text (#576). For a text
+ * PDF whose scanned pages were read (#575), `documentPages` is the whole document's page count,
+ * so "on 3 of 12 pages" counts against what the reader sees, not just the pages OCR read.
+ */
 export function ocrInfoLine(
   ocr: DocumentOcrInfo,
   t: I18n['t'],
   tCount: I18n['tCount'],
-  photo = false
+  opts: { photo?: boolean; documentPages?: number } = {}
 ): string {
-  if (photo) return t('docs.previewModal.ocrInfoPhoto')
+  if (opts.photo) return t('docs.previewModal.ocrInfoPhoto')
   const textPages = ocrTextPages(ocr)
-  if (textPages < ocr.pageCount) {
-    return t('docs.previewModal.ocrInfoPartial', { count: textPages, total: ocr.pageCount })
+  if (textPages === 0) return tCount('docs.previewModal.ocrInfoNone', ocr.pageCount)
+  const total = Math.max(ocr.pageCount, opts.documentPages ?? 0)
+  if (textPages < total) {
+    return t('docs.previewModal.ocrInfoPartial', { count: textPages, total })
   }
   return tCount('docs.previewModal.ocrInfo', ocr.pageCount)
 }

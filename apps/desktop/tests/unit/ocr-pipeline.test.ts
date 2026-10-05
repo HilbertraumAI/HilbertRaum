@@ -158,6 +158,26 @@ describe('pipelinePages (ING-5 OCR look-ahead)', () => {
     expect(recognized).toEqual([1, 2]) // min(declared, cap) — the real page count wins
   })
 
+  // #575: a text PDF's OCR reads only its scanned pages — in page order, each once, never past
+  // the cap or the document's end, and nothing else is rendered.
+  it('walks only the given pages, ascending, once each, within the cap (#575)', async () => {
+    const rendered: number[] = []
+    const recognized: number[] = []
+    await pipelinePages(
+      8,
+      async (n) => {
+        rendered.push(n)
+        return Buffer.from([n])
+      },
+      async (n) => {
+        recognized.push(n)
+      },
+      { maxPages: 6, pages: [5, 2, 5, 7, 0, 9] }
+    )
+    expect(recognized).toEqual([2, 5])
+    expect(rendered).toEqual([2, 5])
+  })
+
   it('does nothing for a zero-page document', async () => {
     let calls = 0
     await pipelinePages(0, async (n) => Buffer.from([n]), () => {

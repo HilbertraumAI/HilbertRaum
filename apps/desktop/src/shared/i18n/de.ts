@@ -752,10 +752,18 @@ export const de: Record<keyof typeof en, string> = {
   'docs.previewModal.ocrInfoPartial':
     'Auf diesem Laufwerk erkannter Text (OCR) auf {count} von {total} Seiten. Die Erkennung kann ' +
     'Fehler enthalten.',
+  'docs.previewModal.ocrInfoNone.one':
+    'Die Texterkennung (OCR) hat auf diesem Laufwerk {count} gescannte Seite gelesen und darauf ' +
+    'keinen Text gefunden.',
+  'docs.previewModal.ocrInfoNone.other':
+    'Die Texterkennung (OCR) hat auf diesem Laufwerk {count} gescannte Seiten gelesen und darauf ' +
+    'keinen Text gefunden.',
   'docs.ocr.unsure.page': 'Die Texterkennung war bei dieser Seite unsicher.',
   'docs.ocr.unsure.photo': 'Die Texterkennung war bei diesem Foto unsicher.',
   'docs.ocr.unsure.some': 'Die Texterkennung war auf {count} der {total} erkannten Seiten unsicher.',
   'docs.ocr.unsure.all': 'Die Texterkennung war auf allen {count} erkannten Seiten unsicher.',
+  'docs.ocr.scannedPages': 'Gescannte Seiten noch ohne lesbaren Text: {count} von {total}.',
+  'docs.ocr.scannedPagesNeedsOcr': 'Zum Lesen werden die OCR-Dateien benötigt (Bildschirm KI-Modell).',
   'docs.ocr.unsure.causes':
     'Unscharfe, schiefe oder handschriftliche Vorlagen werden schlecht erkannt, ebenso andere ' +
     'Sprachen als Deutsch und Englisch.',
@@ -2619,7 +2627,8 @@ export const de: Record<keyof typeof en, string> = {
     'Die Texterkennung (OCR) ist in dieser Version nicht verfügbar: Die OCR-Dateien liegen auf ' +
     'diesem Laufwerk, aber die Erkennung konnte nicht gestartet werden.',
   'main.task.ocrNotAScan':
-    'Nur ein PDF, das als Scan erkannt wurde, kann auf diesem Weg durchsuchbar gemacht werden.',
+    'Nur ein PDF, das als Scan erkannt wurde oder gescannte Seiten enthält, kann auf diesem Weg ' +
+    'durchsuchbar gemacht werden.',
   'main.task.ocrNoText':
     'In diesem Scan wurde kein lesbarer Text gefunden. Die Seiten sind vielleicht leer oder ' +
     'zu unscharf.',

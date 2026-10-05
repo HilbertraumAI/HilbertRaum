@@ -7,7 +7,7 @@ import { installNavigationGuard } from '../navigation-guard'
 import { SECURE_WINDOW_WEB_PREFERENCES } from '../../window-security'
 import { appPageUrl, devRendererUrl } from '../../app-protocol'
 import { assertPageWithinByteCap } from './page-cap'
-import { pipelinePages } from './pipeline'
+import { pagesToWalk, pipelinePages } from './pipeline'
 import { resolveIngestionLimits } from '../ingestion/limits'
 
 // ESM main bundle — `__dirname` doesn't exist; reconstruct from import.meta.url.
@@ -30,8 +30,13 @@ const __dirname = dirname(fileURLToPath(import.meta.url))
 // are unchanged from the old strictly-serial loop. See `pipelinePages`.
 
 export interface RasterizePdfOptions {
-  /** Called once, as soon as the page count is known. */
+  /**
+   * Called once, as soon as the page count is known, with the number of pages this run will
+   * render (all of them, or the `pages` that exist).
+   */
   onPageCount?: (pageCount: number) => void
+  /** #575: render only these page numbers (a text PDF's scanned pages); absent ⇒ every page. */
+  pages?: readonly number[]
   /**
    * Called per page, in order, recognitions serialized. The rasterizer renders ONE page
    * ahead while this promise is pending (1-deep look-ahead), but never starts the next
@@ -234,7 +239,7 @@ export async function rasterizePdfWithHiddenWindow(
         maxPages
       })
     }
-    opts.onPageCount?.(pageCount)
+    opts.onPageCount?.(pagesToWalk(declaredPageCount, { maxPages, pages: opts.pages }).length)
 
     // ING-5: render page N+1 while page N recognizes (1-deep look-ahead). The render itself
     // stays sequential on the shared channel (one `expect`/`send` in flight); only render and
@@ -254,7 +259,7 @@ export async function rasterizePdfWithHiddenWindow(
       },
       opts.onPage,
       // BE-6: pipelinePages enforces the same cap on the walk (min(declared, maxPages)).
-      { signal: opts.signal, abortError, maxPages }
+      { signal: opts.signal, abortError, maxPages, pages: opts.pages }
     )
     return { pageCount }
   } finally {

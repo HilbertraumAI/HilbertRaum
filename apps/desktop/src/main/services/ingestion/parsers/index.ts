@@ -40,6 +40,12 @@ export interface ParsedDocument {
    * sidecar; the recognized text itself is only the segments. Absent for every other parse.
    */
   ocrMeta?: DocumentOcrInfo
+  /**
+   * #575: the pages of a TEXT PDF that look scanned (under the text threshold, painting an image),
+   * 1-based and ascending. Set only when `ParseContext.detectScannedPages` asked and there are
+   * some; a whole scan never sets it (it is scan-detected instead).
+   */
+  scannedPages?: number[]
 }
 
 /**
@@ -72,11 +78,17 @@ export interface ParseContext {
    */
   ocrEngine?: OcrEngine | null
   /**
-   * Stored per-page OCR recognition for a scan-detected PDF: when present,
-   * the PdfParser turns an image-only PDF into one segment per recognized page
-   * instead of failing with the scan notice. Fed from `documents.ocr_json`.
+   * Stored per-page OCR recognition for a PDF: when present, the PdfParser turns an image-only
+   * PDF into one segment per recognized page instead of failing with the scan notice, and a text
+   * PDF's scanned pages (#575) into their recognition. Fed from `documents.ocr_json`.
    */
   ocrPages?: OcrPage[] | null
+  /**
+   * #575: report a text PDF's scanned pages (`ParsedDocument.scannedPages`). Set by import and
+   * re-index only — it builds the operator list of each short page, which the preview and the
+   * skill re-parses have no use for.
+   */
+  detectScannedPages?: boolean
   /**
    * Max PDF pages the text-extraction loop will walk (security audit M-2). Beyond this,
    * the PdfParser stops and logs — a crafted PDF can declare an enormous page count.

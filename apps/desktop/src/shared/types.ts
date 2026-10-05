@@ -1835,6 +1835,12 @@ export interface DocumentInfo {
    */
   ocr?: DocumentOcrInfo | null
   /**
+   * #575: a TEXT PDF that also holds scanned pages (under the text threshold, carrying an image):
+   * how many, of how many pages. Null/undefined when there are none, for a whole scan (that is
+   * `scanDetected`), and for a PDF not parsed since #575 (a re-index finds them). Counts only.
+   */
+  scannedPages?: { count: number; pageCount: number } | null
+  /**
    * Collection memberships of this document (document-organization plan §16): the
    * Library/project/Temporary collections it belongs to, for the Documents-screen chips.
    * Empty array when filed nowhere. Built by `listDocuments` from `document_collections`.
@@ -2030,7 +2036,8 @@ export type SmartViewPredicate = Exclude<SmartListView, 'all' | 'recent'>
  * - `large`        — `sizeBytes >= LARGE_FILE_BYTES`.
  * - `failed`       — import `status === 'failed'`.
  * - `audio`        — an audio file, or a generated transcript of one.
- * - `ocr`          — text came from OCR, or a scan was detected.
+ * - `ocr`          — text came from OCR, a scan was detected, or a text PDF holds scanned pages
+ *                    (#575).
  */
 export function matchesSmartView(d: DocumentInfo, view: SmartViewPredicate): boolean {
   switch (view) {
@@ -2052,7 +2059,7 @@ export function matchesSmartView(d: DocumentInfo, view: SmartViewPredicate): boo
         (d.origin != null && provenanceView(d.origin).kind === 'transcript')
       )
     case 'ocr':
-      return d.ocr != null || d.scanDetected === true
+      return d.ocr != null || d.scanDetected === true || d.scannedPages != null
   }
 }
 

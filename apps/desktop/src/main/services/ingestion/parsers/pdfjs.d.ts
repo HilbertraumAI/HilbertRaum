@@ -29,6 +29,10 @@ declare module 'pdfjs-dist/legacy/build/pdf.mjs' {
     getViewport(params: { scale: number }): PageViewport
     /** `canvas` is an HTMLCanvasElement; typed loosely — no DOM lib in the node program. */
     render(params: { canvas: { width: number; height: number }; viewport: PageViewport }): RenderTask
+    /** #575: the page's drawing operators (`fnArray` holds `OPS` codes) — the scanned-page check. */
+    getOperatorList(): Promise<{ fnArray: number[] }>
+    /** Release the page's caches (fonts, decoded images). */
+    cleanup(): boolean
   }
   export interface PDFDocumentProxy {
     readonly numPages: number
@@ -43,6 +47,8 @@ declare module 'pdfjs-dist/legacy/build/pdf.mjs' {
     [key: string]: unknown
   }): PDFDocumentLoadingTask
   export const GlobalWorkerOptions: { workerSrc: string }
+  /** The operator codes `getOperatorList().fnArray` holds, by name (#575 reads the image ones). */
+  export const OPS: Record<string, number>
 }
 
 // The rasterizer page imports the legacy worker as a bundled asset URL (vite `?url`).

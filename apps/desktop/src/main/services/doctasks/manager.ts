@@ -346,10 +346,11 @@ export class DocTaskManager {
       }
     }
     if (kind === 'ocr') {
-      // The target is a scan-DETECTED PDF (step 0 marked it), or an already-OCR'd PDF
-      // being re-run (better assets / a bad first pass). Never an ordinary document.
+      // The target is a scan-DETECTED PDF (step 0 marked it), a text PDF with scanned pages
+      // (#575), or an already-OCR'd PDF being re-run (better assets / a bad first pass). Never an
+      // ordinary document.
       const doc = getDocument(this.deps.getDb(), documentIds[0])
-      if (!doc || !isPdfPath(doc.title) || !(doc.scanDetected || doc.ocr)) {
+      if (!doc || !isPdfPath(doc.title) || !(doc.scanDetected || doc.ocr || doc.scannedPages)) {
         throw new Error(tMain('main.task.ocrNotAScan'))
       }
     } else {

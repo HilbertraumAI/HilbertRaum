@@ -1114,6 +1114,9 @@ function applyPragmasAndMigrations(db: Db): void {
   // import (#574, the one sidecar with no `ocr_json` behind it), and by the backfill below.
   ensureColumn(db, 'documents', 'ocr_meta_json', 'ocr_meta_json TEXT')
   backfillOcrMeta(db)
+  // #575: a text PDF's scanned pages (`{ pages, pageCount }` — page numbers and a count, never
+  // text), written at import/re-index; NULL = none, not a PDF, or not parsed since #575.
+  ensureColumn(db, 'documents', 'scanned_pages_json', 'scanned_pages_json TEXT')
   // Document-organization columns (plan §8.2/§8.3). All nullable — the ensureColumn DDL
   // grammar allows no DEFAULT/NOT NULL, so NULL is the sentinel, coalesced in code
   // (`lifecycle` NULL ⇒ 'permanent', the parseScope precedent).

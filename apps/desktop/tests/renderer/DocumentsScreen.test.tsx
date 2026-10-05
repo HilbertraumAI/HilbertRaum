@@ -1879,6 +1879,58 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     expect(startDocTask).not.toHaveBeenCalled()
   })
 
+  // #575 — a text PDF with scanned pages: until OCR reads them, a quiet caption says how many and
+  // the ⋯ menu offers "Make searchable (OCR)"; once read, the caption goes and the preview counts
+  // the recognized pages against the whole document.
+  it('#575: scanned pages in a text PDF are named on the row and offered OCR; once read, the preview counts them against the document', async () => {
+    const user = userEvent.setup()
+    const startDocTask = vi.fn(async () => ({ jobId: 'j-575' }))
+    stubApi({
+      listDocuments: vi.fn(async () => [
+        doc({ id: 'unread', title: 'letter.pdf', scannedPages: { count: 2, pageCount: 3 } }),
+        doc({
+          id: 'read',
+          title: 'contract.pdf',
+          scannedPages: { count: 2, pageCount: 3 },
+          ocr: {
+            pageCount: 2,
+            textPageCount: 2,
+            languages: ['deu'],
+            engineId: 'tesseract.js-7.0.0',
+            createdAt: '2026-10-05T00:00:00Z'
+          }
+        })
+      ]),
+      getAppStatus: vi.fn(async () => appStatus()),
+      previewDocument: vi.fn(async () => ({
+        id: 'read',
+        title: 'contract.pdf',
+        mimeType: 'application/pdf',
+        segments: [{ text: 'Seite 1.', pageNumber: 1, sectionLabel: null }]
+      })),
+      startDocTask,
+      getDocTask: vi.fn(async () => ocrStatus({ jobId: 'j-575', documentIds: ['unread'] }))
+    })
+    render(<DocumentsScreen />)
+    const caption = translate('en', 'docs.ocr.scannedPages', { count: 2, total: 3 })
+    expect(await screen.findAllByText(caption)).toHaveLength(1) // the unread row only
+
+    const readRow = screen.getByText('contract.pdf').closest('.doc-row') as HTMLElement
+    await user.click(within(readRow).getByRole('button', { name: /preview/i }))
+    const dialog = await screen.findByRole('dialog')
+    expect(
+      within(dialog).getByText(translate('en', 'docs.previewModal.ocrInfoPartial', { count: 2, total: 3 }))
+    ).toBeInTheDocument()
+    await user.click(within(dialog).getByRole('button', { name: /close/i }))
+    await waitFor(() => expect(screen.queryByRole('dialog')).not.toBeInTheDocument())
+
+    await user.click(screen.getByRole('button', { name: 'More actions for letter.pdf' }))
+    await user.click(await screen.findByRole('menuitem', { name: 'Make searchable (OCR)' }))
+    await waitFor(() =>
+      expect(startDocTask).toHaveBeenCalledWith({ kind: 'ocr', documentIds: ['unread'], params: undefined })
+    )
+  })
+
   it('FE-4: the OCR busy label switches to "Finishing…" on the final re-ingest step; Cancel stays enabled', async () => {
     vi.useFakeTimers()
     try {

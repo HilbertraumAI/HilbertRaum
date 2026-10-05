@@ -1862,6 +1862,7 @@ export function DocumentsScreen({
         <PreviewModal
           preview={preview}
           ocr={previewDoc?.ocr ?? null}
+          documentPages={previewDoc?.scannedPages?.pageCount}
           summary={previewDoc?.summary ?? null}
           treeReady={previewDoc?.treeStatus === 'ready'}
           originLine={previewDoc ? provenanceLine(previewDoc, sourcesById, t) : null}

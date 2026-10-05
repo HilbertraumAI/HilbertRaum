@@ -188,6 +188,10 @@ export const DocRow = memo(function DocRow({
   // #574: a photo is read by OCR too; reading it again is a re-index (every re-index reads it).
   const photo = isPhotoDocument(d.mimeType)
   const ocrUnsure = d.status === 'indexed' && d.ocr ? ocrUnsureLine(d.ocr, t, photo) : null
+  // #575: a text PDF with scanned pages that OCR has not read yet — a quiet caption, and "Make
+  // searchable (OCR)" in the ⋯ menu reads just those pages (once read, both go: `ocr` is set).
+  const unreadScans = d.status === 'indexed' && d.scannedPages && d.ocr == null ? d.scannedPages : null
+  const showOcrScannedPages = Boolean(unreadScans && ocrAvailable)
   const stale = d.origin ? generatedStaleness(d, sourcesById) : { stale: false as const }
   // OCR-R P1 FE-4: the OCR task's final step is the minutes-long re-ingest, not page reading —
   // "Reading the scan… (4/4)" through it lied. The count keeps the design record's "pages +
@@ -263,6 +267,12 @@ export const DocRow = memo(function DocRow({
           </p>
         )}
         {ocrUnsure && <p className="hint doc-row-cap">{ocrUnsure}</p>}
+        {unreadScans && (
+          <p className="hint doc-row-cap">
+            {t('docs.ocr.scannedPages', { count: unreadScans.count, total: unreadScans.pageCount })}
+            {!ocrAvailable && <> {t('docs.ocr.scannedPagesNeedsOcr')}</>}
+          </p>
+        )}
         {d.status === 'failed' && d.errorMessage && (
           <Banner tone={d.scanDetected ? 'warning' : 'error'}>
             {/* error_message is persisted canonical English; the D-L4 display map
@@ -475,6 +485,16 @@ export const DocRow = memo(function DocRow({
                   {/* OCR-R P1 FE-2: the D33 explicit redo for an already-OCR'd PDF. (The old
                       `showOcr` item here was dead code — a detected scan is a FAILED row and
                       never reaches this branch; its control is the inline button above.) */}
+                  {showOcrScannedPages && (
+                    <DropdownMenu.Item
+                      className="menu-item"
+                      disabled={anyTaskActive}
+                      title={t('docs.makeSearchableTitle')}
+                      onSelect={() => void onMakeSearchable(d)}
+                    >
+                      {t('docs.makeSearchable')}
+                    </DropdownMenu.Item>
+                  )}
                   {showOcrRedo && (
                     <DropdownMenu.Item
                       className="menu-item"

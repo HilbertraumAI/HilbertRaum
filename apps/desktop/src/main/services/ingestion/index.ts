@@ -198,6 +198,8 @@ interface DocumentRow {
   // PERF-3: cheap metadata-only sidecar for the OCR badge — `listDocuments` projects this and
   // NOT `ocr_json`, so the hot list path never parses page text. Absent on the narrow projection.
   ocr_meta_json?: string | null
+  // #575: a text PDF's scanned pages (`{ pages, pageCount }`), written at import/re-index.
+  scanned_pages_json?: string | null
   lifecycle: string | null
   source_folder_label: string | null
   tree_status: string | null
@@ -439,6 +441,7 @@ function rowToInfo(
     // exactly these rows (plus already-OCR'd PDFs for a re-run).
     scanDetected: row.status === 'failed' && row.error_message === PDF_SCAN_DETECTED_MESSAGE,
     ocr: ocrInfoForRow(row),
+    scannedPages: scannedPagesInfo(row.scanned_pages_json),
     // Document-organization (plan §8.2/§16): retention lifecycle (NULL ⇒ permanent) +
     // folder-import display label. Collection memberships are merged in by listDocuments
     // (it has the db handle for the join); getDocument/createQueuedDocument leave it absent.
@@ -892,6 +895,8 @@ export async function prepareDocument(
       transcriberMissing: deps.transcriberMissing,
       ocrEngine: deps.ocrEngine,
       ocrPages: isPdfPath(row.title) ? getDocumentOcrPages(db, documentId) : null,
+      // #575: import and re-index find a text PDF's scanned pages (the row offers OCR for them).
+      detectScannedPages: isPdfPath(row.title),
       workDir: storeDir,
       onProgress: (percent) => deps.onTranscribeProgress?.(documentId, percent),
       // REL-1: cancellation for an unbounded audio transcription. Audio stays EXEMPT from
@@ -909,6 +914,9 @@ export async function prepareDocument(
     // time (and cleared below when reading it fails). A scanned PDF's sidecar is the OCR task's,
     // written with its `ocr_json`, and survives re-index — never touched here.
     if (isImagePath(row.title)) setPhotoOcrMeta(db, documentId, parsed.ocrMeta ?? null)
+    // #575: a property of the PDF's own text layer, so the same on every parse — rewritten here
+    // keeps it right for a document imported before it existed (after one re-index).
+    if (isPdfPath(row.title)) setScannedPages(db, documentId, parsed)
 
     setStatus(db, documentId, 'chunking')
     // Over-cap gate (whole-document-analysis plan C1/C2/M13). Chunk with cap + 1 so an
@@ -1510,6 +1518,48 @@ function setPhotoOcrMeta(db: Db, documentId: string, meta: DocumentOcrInfo | nul
   )
 }
 
+/** #575: the stored `{ pages, pageCount }` of a text PDF's scanned pages, or null. Tolerant. */
+function parseScannedPages(json: string | null | undefined): { pages: number[]; pageCount: number } | null {
+  if (!json) return null
+  try {
+    const v = JSON.parse(json) as { pages?: unknown; pageCount?: unknown } | null
+    if (!v || !Array.isArray(v.pages) || typeof v.pageCount !== 'number') return null
+    const pageCount = v.pageCount
+    const pages = v.pages.filter(
+      (p): p is number => typeof p === 'number' && Number.isInteger(p) && p >= 1 && p <= pageCount
+    )
+    return pages.length > 0 ? { pages, pageCount } : null
+  } catch {
+    return null
+  }
+}
+
+/** #575: the counts `DocumentInfo.scannedPages` carries (never the page list). */
+function scannedPagesInfo(json: string | null | undefined): DocumentInfo['scannedPages'] {
+  const stored = parseScannedPages(json)
+  return stored ? { count: stored.pages.length, pageCount: stored.pageCount } : null
+}
+
+/** #575: record (or clear) a parsed PDF's scanned pages. */
+function setScannedPages(db: Db, documentId: string, parsed: ParsedDocument): void {
+  const pages = parsed.scannedPages ?? []
+  db.prepare('UPDATE documents SET scanned_pages_json = ? WHERE id = ?').run(
+    pages.length > 0 ? JSON.stringify({ pages, pageCount: parsed.pageCount ?? pages[pages.length - 1] }) : null,
+    documentId
+  )
+}
+
+/**
+ * #575: the page numbers of a text PDF's scanned pages — what "Make searchable (OCR)" reads for
+ * it — or null (a whole scan, or a PDF without scanned pages: the task reads every page).
+ */
+export function getDocumentScannedPages(db: Db, documentId: string): number[] | null {
+  const row = db
+    .prepare('SELECT scanned_pages_json FROM documents WHERE id = ?')
+    .get(documentId) as unknown as { scanned_pages_json: string | null } | undefined
+  return parseScannedPages(row?.scanned_pages_json)?.pages ?? null
+}
+
 /** Read a document's stored per-page recognition, or null. The text is CONTENT. */
 export function getDocumentOcrPages(db: Db, documentId: string): OcrPage[] | null {
   // DB-8: project ONLY `ocr_json` (this getter is the one that genuinely needs the big column;
@@ -1753,7 +1803,7 @@ export function reconcileStuckExtracts(db: Db, beforeIso: string): number {
 // the list (rowToInfo maps it but it is dropped client-side) — included to keep the row complete.
 const LIST_DOCUMENT_COLUMNS =
   'id, title, original_path, stored_path, stored_name, mime_type, size_bytes, sha256, status, error_message, ' +
-  'summary_json, origin_json, ocr_meta_json, lifecycle, source_folder_label, tree_status, ' +
+  'summary_json, origin_json, ocr_meta_json, scanned_pages_json, lifecycle, source_folder_label, tree_status, ' +
   'tree_meta_json, fully_chunked, extract_status, created_at, updated_at'
 
 /**

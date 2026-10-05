@@ -27,7 +27,7 @@ import { createMockEmbedder } from '../../src/main/services/embeddings'
 import { retrieve } from '../../src/main/services/rag'
 import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
 import { matchesSmartView, type AuditEventType } from '../../src/shared/types'
-import { makeScanOnlyPdf, TINY_PNG } from '../helpers/fixtures'
+import { makeMixedPdf, makeScanOnlyPdf, TINY_PNG } from '../helpers/fixtures'
 import { PDF_SCAN_DETECTED_MESSAGE } from '../../src/main/services/ingestion/parsers/pdf'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import {
@@ -87,11 +87,19 @@ function fakeEngine(textForPage: (n: number) => string): OcrEngine & { calls: nu
   return engine
 }
 
-/** A fake rasterizer: N pages, each "PNG" = Buffer([pageNumber]). */
-function fakeRasterizer(pages = 2, opts: { gate?: () => Promise<void> } = {}): RasterizePdf {
+/**
+ * A fake rasterizer: N pages, each "PNG" = Buffer([pageNumber]). Like the real one it renders only
+ * `o.pages` when given (#575) and reports how many pages it will render; `walked` records them.
+ */
+function fakeRasterizer(
+  pages = 2,
+  opts: { gate?: () => Promise<void>; walked?: number[] } = {}
+): RasterizePdf {
   return async (_pdf, o) => {
-    o.onPageCount?.(pages)
-    for (let n = 1; n <= pages; n++) {
+    const walk = o.pages ? [...o.pages] : Array.from({ length: pages }, (_, i) => i + 1)
+    o.onPageCount?.(walk.length)
+    for (const n of walk) {
+      opts.walked?.push(n)
       if (o.signal?.aborted) throw new DOMException('aborted', 'AbortError')
       await opts.gate?.()
       await o.onPage(n, Buffer.from([n]))
@@ -440,6 +448,60 @@ describe('Make searchable (OCR) end to end', () => {
     const r2 = second.startDocTask({ kind: 'ocr', documentIds: [docId] })
     expect((await waitTerminal(second, r2.jobId)).state).toBe('done')
     expect(getDocumentOcrPages(db, docId)?.[0].text).toBe('Neue Erkennung.')
+  })
+})
+
+// #575 — a typed letter with scanned pages: import keeps its text page searchable AND says which
+// pages are scans; "Make searchable (OCR)" reads just those pages and merges them in, page by page.
+describe('a text PDF with scanned pages (#575)', () => {
+  async function importLetter(): Promise<string> {
+    const p = join(tmp, 'letter.pdf')
+    writeFileSync(
+      p,
+      makeMixedPdf([
+        { kind: 'text', lines: ['Sehr geehrte Damen und Herren, anbei die unterschriebene Vereinbarung.'] },
+        { kind: 'image' },
+        { kind: 'image' }
+      ])
+    )
+    const info = await processDocument(db, storeDir, createQueuedDocument(db, p).id, {
+      embedder: createMockEmbedder()
+    })
+    expect(info.status).toBe('indexed')
+    expect(info.scannedPages).toEqual({ count: 2, pageCount: 3 })
+    expect(matchesSmartView(info, 'ocr')).toBe(true)
+    return info.id
+  }
+
+  it('reads only the scanned pages and merges them into the document, cited by page', async () => {
+    const docId = await importLetter()
+    const walked: number[] = []
+    const engine = fakeEngine((n) => `Seite ${n}: Unterschrift und Anlage.`)
+    const manager = makeManager({ engine, rasterize: fakeRasterizer(3, { walked }) })
+    const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
+    const status = await waitTerminal(manager, jobId)
+    expect(status.state).toBe('done')
+    expect(walked).toEqual([2, 3])
+    expect(status.progress.stepsTotal).toBe(3) // two pages + the re-ingest
+
+    const preview = await extractDocumentPreview(db, storeDir, docId, {})
+    expect(preview.segments.map((s) => [s.pageNumber, s.text])).toEqual([
+      [1, 'Sehr geehrte Damen und Herren, anbei die unterschriebene Vereinbarung.'],
+      [2, 'Seite 2: Unterschrift und Anlage.'],
+      [3, 'Seite 3: Unterschrift und Anlage.']
+    ])
+    expect(getDocument(db, docId)?.ocr).toMatchObject({ pageCount: 2, textPageCount: 2 })
+    expect(getDocument(db, docId)?.scannedPages).toEqual({ count: 2, pageCount: 3 })
+  })
+
+  it('a reading that finds no text on the scanned pages is kept — the pages were read, the offer goes', async () => {
+    const docId = await importLetter()
+    const manager = makeManager({ engine: fakeEngine(() => ''), rasterize: fakeRasterizer(3) })
+    const { jobId } = manager.startDocTask({ kind: 'ocr', documentIds: [docId] })
+    expect((await waitTerminal(manager, jobId)).state).toBe('done')
+    const doc = getDocument(db, docId)
+    expect(doc?.status).toBe('indexed') // its text page still searchable
+    expect(doc?.ocr).toMatchObject({ pageCount: 2, textPageCount: 0 })
   })
 })
 

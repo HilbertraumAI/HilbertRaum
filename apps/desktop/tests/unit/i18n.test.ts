@@ -276,7 +276,9 @@ describe('catalog hygiene (parity is otherwise enforced by typecheck)', () => {
       // (a single page has its own sentence).
       'docs.previewModal.ocrInfoPartial',
       'docs.ocr.unsure.some',
-      'docs.ocr.unsure.all'
+      'docs.ocr.unsure.all',
+      // #575: "Scanned pages without readable text yet: {count} of {total}." — figures after a colon.
+      'docs.ocr.scannedPages'
     ])
     // Scan the shipped source for plain `t('key'` consumptions (bound renderer t and the
     // shared t(lang, …) form differ in shape — the latter never matches `t('`). The read is
