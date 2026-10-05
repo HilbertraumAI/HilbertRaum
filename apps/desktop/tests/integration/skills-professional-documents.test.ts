@@ -6,7 +6,7 @@ import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
 import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, getSkill, skillInstallId } from '../../src/main/services/skills/registry'
 import { openFreshDb } from '../helpers/db-fixtures'
-import { realAppSkillsDeps } from '../helpers/skill-fixtures'
+import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // The "Professional Documents" wave — the upgraded Meeting Minutes skill plus four NEW Tier-1
 // instruction skills (contract-brief, deadline-obligation-finder, what-changed, share-safe-review).
@@ -28,7 +28,7 @@ function readSkillMd(id: string): string {
 const freshDb = (): Db => openFreshDb('prodocs')
 
 /** Reconcile against the REAL committed app-skills/ so the live selector sees the shipped triggers. */
-const realDeps = () => realAppSkillsDeps('prodocs-user')
+const realDeps = (): SkillDirs => realAppSkillsDeps('prodocs-user')
 
 describe('Professional Documents — every package is a valid bundled skill', () => {
   it('all five skills are Tier-1 instruction skills with NO tools and a German display name', () => {

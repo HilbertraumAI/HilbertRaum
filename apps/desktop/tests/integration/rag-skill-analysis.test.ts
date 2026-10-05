@@ -493,7 +493,6 @@ describe('askDocuments — A4 tool-skill inversion (SKA-7 structural)', () => {
 // narrow to the one matching statement (with an honest notice), route ("pick one" / "select two"), or —
 // for a zero-row read on a doc that doesn't even look like a statement — fall through to the grounded path.
 
-
 /** A bank skill WITH real manifest doc signals (the narrowing/gate consult filenamePatterns/mimeTypes). */
 function writeBankSkillWithTriggers(appSkillsDir: string): void {
   writeSkillPackage(appSkillsDir, {
