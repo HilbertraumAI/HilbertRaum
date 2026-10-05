@@ -120,6 +120,10 @@ from its first public `1.0.0` release onward.
   button also tried to download the AI engine again, and while a model was running it then refused
   with "The AI engine can't be replaced while a model is running". It now installs only what is
   missing; updating the AI engine is the separate, explicit **Update** (#516).
+- **A redaction or document edit no longer fails at the very end because of one long suggestion.**
+  When the model suggested a passage longer than the tool accepts, the whole run stopped with "This
+  tool was given input it cannot accept." after reading the entire document, and every other suggestion
+  was lost. Such a passage is now skipped and the rest are applied (#583).
 - **Redaction no longer leaves part of a name visible.** When the model suggested both a shorter and
   a longer form of the same name (for example "Jane" and "Jane Doe"), the redacted copy could hide
   only the first one it got and keep the surname. The same happened when a name and a company shared

@@ -1,13 +1,13 @@
 import { describe, it, expect } from 'vitest'
 import type { ChatMessage, RuntimeChatOptions } from '../../src/main/services/runtime'
 import {
-  buildEditWindows,
   editLocateSchema,
   locateDocumentEdits,
   parseEditReply,
   MAX_LOCATED_EDITS,
   type LocatedEdit
 } from '../../src/main/services/skills/tools/document-edit-locate'
+import { buildLocateWindows } from '../../src/main/services/skills/tools/locate-windows'
 import { verifyAndSpliceEdits, applyDocumentEditsTool } from '../../src/main/services/skills/tools/document-edit'
 import { validateToolInput } from '../../src/main/services/skills/tool-registry'
 import { scriptedRuntime } from '../helpers/scripted-runtime'
@@ -128,7 +128,7 @@ describe('document-edit-locate — locateDocumentEdits over the runtime', () => 
 
   it('#134: caps unique proposals at MAX_LOCATED_EDITS, reports truncated, and stops early', async () => {
     const text = Array.from({ length: 1400 }, (_, i) => `line ${i + 1}`).join('\n')
-    const windows = buildEditWindows(text)
+    const windows = buildLocateWindows(text)
     expect(windows.length).toBeGreaterThan(42) // 4096/100-per-window ⇒ 41 windows overflow the cap
     const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
     // Every window returns 100 UNIQUE anchors (keyed off its own first global line number) — dense

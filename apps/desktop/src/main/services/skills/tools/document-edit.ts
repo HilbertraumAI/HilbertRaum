@@ -1,6 +1,6 @@
 import type { DocumentChunkRead, JsonSchema, SkillTool, ToolResult } from '../../../../shared/types'
 import { applySpans, locateOccurrences, type TransformSpan } from './span-transform'
-import { MAX_LOCATED_EDITS, type LocatedEdit } from './document-edit-locate'
+import { MAX_LOCATED_EDITS, MAX_LOCATED_EDIT_CHARS, type LocatedEdit } from './document-edit-locate'
 
 // Document-edit Tier-2 tool (beta-feedback-2026-07 Phase 8, #23, D76; architecture.md "Skills — design
 // record" §22). The verify+splice half of format-preserving targeted edits — kept HERE (runtime-free) so
@@ -123,8 +123,8 @@ export const applyDocumentEditsTool: SkillTool = {
           additionalProperties: false,
           required: ['line', 'find', 'occurrence', 'replace'],
           properties: {
-            find: { type: 'string', minLength: 1, maxLength: 200 },
-            replace: { type: 'string', minLength: 0, maxLength: 200 },
+            find: { type: 'string', minLength: 1, maxLength: MAX_LOCATED_EDIT_CHARS },
+            replace: { type: 'string', minLength: 0, maxLength: MAX_LOCATED_EDIT_CHARS },
             line: { type: 'integer', minimum: 1 },
             occurrence: { type: 'integer', minimum: 1 }
           }

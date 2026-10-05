@@ -3,7 +3,11 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { readFileSync } from 'node:fs'
-import { ModelOccupancy, modelBusyMessageKey } from '../../src/main/services/runtime/occupancy'
+import {
+  ModelOccupancy,
+  modelBusyMessageKey,
+  occupiedLaneForDocTask
+} from '../../src/main/services/runtime/occupancy'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import { modelBusyLane } from '../../src/main/ipc/model-busy'
@@ -270,10 +274,7 @@ describe('DocTaskManager vs the occupancy spans', () => {
       getStoreDir: () => storeDir,
       getIngestionDeps: () => ({}),
       beginDocumentWork: () => () => {},
-      occupiedLane: () => {
-        const lane = occ.heldLane(['doc-task'])
-        return lane === 'doc-task' ? null : lane
-      },
+      occupiedLane: () => occupiedLaneForDocTask(occ),
       beginOccupancy: () => occ.begin('doc-task')
     })
   }
@@ -293,6 +294,16 @@ describe('DocTaskManager vs the occupancy spans', () => {
       t('en', 'main.busy.benchmark')
     )
     releaseBench()
+
+    // A doc-task span held FIRST must not mask a later skill run (#583): the read skips the doc-task
+    // lane, it does not stop at it.
+    const releaseTask = occ.begin('doc-task')
+    const releaseSkillAfter = occ.begin('skill-run')
+    expect(() => manager.startDocTask({ kind: 'summary', documentIds: [docId] })).toThrow(
+      t('en', 'main.busy.skillRun')
+    )
+    releaseSkillAfter()
+    releaseTask()
 
     // Nothing held ⇒ admitted as before.
     expect(manager.startDocTask({ kind: 'summary', documentIds: [docId] }).jobId).toBeTruthy()

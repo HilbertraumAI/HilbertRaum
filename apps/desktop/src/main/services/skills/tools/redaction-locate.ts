@@ -1,6 +1,7 @@
 import type { JsonSchema } from '../../../../shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../runtime'
 import { stripThinkBlocks } from '../../chat'
+import { buildLocateWindows } from './locate-windows'
 
 // LLM locate pass for document redaction v2 (beta-feedback-2026-07 Phase 7, decisions D73/D75/D78;
 // architecture.md "Skills — design record" §21, beside the §20 span-transform engine). The local model
@@ -14,9 +15,10 @@ import { stripThinkBlocks } from '../../chat'
 //   - misses shrink: the model contributes JUDGEMENT (names/addresses the deterministic regex floor
 //     cannot detect), and the sweep turns one confirmation into every-occurrence coverage (D75).
 //
-// This module holds the runtime-touching half (the model call + windowing + reply parse). It is pure
-// main-side TS otherwise — no fs/net/native (CLAUDE.md §0). The deterministic verify+sweep lives in
-// redaction.ts so it stays runtime-free and unit-testable without a model.
+// This module holds the runtime-touching half (the model call + reply parse; the windows come from
+// locate-windows.ts, shared with the document-edit pass). It is pure main-side TS otherwise — no
+// fs/net/native (CLAUDE.md §0). The deterministic verify+sweep lives in redaction.ts so it stays
+// runtime-free and unit-testable without a model.
 //
 // PRIVACY: the proposed entity strings are CONTENT. They stay in-process (the seam hands them to the
 // pure tool as structured input, which `runSkillTool` never logs/audits) and NEVER reach a log, the
@@ -41,16 +43,15 @@ export interface LocatedEntity {
 export const DEFAULT_LOCATE_DIRECTIVE =
   'Personal names, postal and street addresses, and organisation names.'
 
-/** Window sizing: line-numbered windows with overlap so an entity straddling a window edge is seen
- *  whole in at least one window. Lines-based (not char-based) so line numbers stay stable + reportable. */
-export const LOCATE_WINDOW_LINES = 40
-export const LOCATE_WINDOW_OVERLAP_LINES = 8
-
 /** Global cap on UNIQUE collected proposals (#134) — equals the `redact_document` schema's `entities`
  *  maxItems (the tool gate's hard input bound), so the seam can never hand the gate an overflowing
  *  list ("This tool was given input it cannot accept." AFTER the full multi-minute locate pass). The
  *  schema cites this constant; keep the two in lockstep. */
 export const MAX_LOCATED_ENTITIES = 4096
+
+/** The entity `text` maxLength (UTF-16 units) of the locate grammar and the `redact_document` schema, which
+ *  cites it. `parseLocateReply` re-checks it (#583): the grammar may bound code points instead. */
+export const MAX_LOCATED_ENTITY_CHARS = 160
 
 /** Per-window generation ceiling (tokens) — enough for a JSON list of the entities a 40-line window
  *  can plausibly hold. The char cap (below) is the runaway backstop the categorizer/enricher use. */
@@ -78,7 +79,7 @@ export function entityLocateSchema(): JsonSchema {
           required: ['text', 'category', 'line'],
           properties: {
             // A span is a short run of source text — a name/address/org, not a paragraph.
-            text: { type: 'string', minLength: 1, maxLength: 160 },
+            text: { type: 'string', minLength: 1, maxLength: MAX_LOCATED_ENTITY_CHARS },
             category: { type: 'string', enum: [...LOCATE_CATEGORIES] },
             line: { type: 'integer', minimum: 1 }
           }
@@ -103,42 +104,6 @@ function buildLocateSystemPrompt(directive: string): string {
     'Report only spans the scope asks for. If the scope says to KEEP something (e.g. city names), do not',
     'report it. When a line has nothing to mask, return no entity for it. Reply with JSON only.'
   ].join('\n')
-}
-
-/** Number the given lines with their GLOBAL 1-based line number, tab-separated (`12\ttext`). The
- *  global numbering lets the model's reported line map to the whole document across windows. */
-function numberWindow(lines: readonly string[], startLine: number): string {
-  return lines.map((text, i) => `${startLine + i}\t${text}`).join('\n')
-}
-
-/** One overlapping window over the document's lines: the global start/end line (1-based, inclusive)
- *  and the line-numbered text to feed the model. */
-export interface LocateWindow {
-  startLine: number
-  endLine: number
-  numbered: string
-}
-
-/**
- * Split `text` into overlapping, line-numbered windows (LOCATE_WINDOW_LINES per window, stepping by
- * LOCATE_WINDOW_LINES - LOCATE_WINDOW_OVERLAP_LINES). The overlap means an entity that would straddle
- * a plain window boundary appears WHOLE in at least one window. Empty text ⇒ no windows.
- */
-export function buildLocateWindows(text: string): LocateWindow[] {
-  if (text.length === 0) return []
-  const lines = text.split('\n')
-  const step = Math.max(1, LOCATE_WINDOW_LINES - LOCATE_WINDOW_OVERLAP_LINES)
-  const windows: LocateWindow[] = []
-  for (let start = 0; start < lines.length; start += step) {
-    const slice = lines.slice(start, start + LOCATE_WINDOW_LINES)
-    windows.push({
-      startLine: start + 1,
-      endLine: start + slice.length,
-      numbered: numberWindow(slice, start + 1)
-    })
-    if (start + LOCATE_WINDOW_LINES >= lines.length) break // the last window reached the end
-  }
-  return windows
 }
 
 /** Stream a grammar-constrained JSON reply (temp 0), or null on a runaway reply. Aborts propagate as an
@@ -166,7 +131,8 @@ async function streamLocateJson(
 }
 
 /** Parse + in-code re-validate one window's reply into entities (the mock runtime ignores the schema).
- *  A malformed reply ⇒ [] (that window contributes nothing; the floor still runs — never a hard fail). */
+ *  A malformed reply ⇒ [] (that window contributes nothing; the floor still runs — never a hard fail).
+ *  An over-long text is dropped, never clipped: one would make the gate refuse the whole list (#583). */
 export function parseLocateReply(text: string): LocatedEntity[] {
   let parsed: { entities?: unknown }
   try {
@@ -180,7 +146,7 @@ export function parseLocateReply(text: string): LocatedEntity[] {
     const value = typeof e.text === 'string' ? e.text : ''
     const category = e.category
     const line = typeof e.line === 'number' ? e.line : NaN
-    if (value.length === 0) continue
+    if (value.length === 0 || value.length > MAX_LOCATED_ENTITY_CHARS) continue
     if (!LOCATE_CATEGORIES.includes(category as LocateCategory)) continue
     out.push({ text: value, category: category as LocateCategory, line: Number.isInteger(line) && line >= 1 ? line : 1 })
   }

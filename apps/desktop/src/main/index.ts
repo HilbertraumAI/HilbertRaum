@@ -72,6 +72,7 @@ import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
 import { RuntimeManager } from './services/runtime'
+import { occupiedLaneForDocTask } from './services/runtime/occupancy'
 import {
   clearModelLoadLatch,
   createGpuCrashAutoFallback,
@@ -606,15 +607,9 @@ function initBackend(): void {
     isWorkspaceLocking: () => workspace.isLocking(),
     // #185/#186: the other half of the chat exclusion. `isChatStreaming` above sees only the
     // lanes that register in `inFlightStreams`; a skill run's LLM locate pass and the hardware
-    // benchmark's speed probe reach `chatStream` without ever appearing there. Scoped to the
-    // OTHER lanes — a doc task must never refuse on the doc-task span it holds itself (the #38
-    // tree→extract chain enqueues from inside `run()`, span still held).
-    occupiedLane: () => {
-      const lane = runtime.occupancy.heldLane(['doc-task'])
-      // `heldLane` already filtered it out; the re-test is what narrows the type to the two
-      // lanes the manager's dep accepts, so the exclusion above cannot be widened by accident.
-      return lane === 'doc-task' ? null : lane
-    },
+    // benchmark's speed probe reach `chatStream` without ever appearing there. Never the doc
+    // task's own span (see the helper).
+    occupiedLane: () => occupiedLaneForDocTask(runtime.occupancy),
     // …and the span the RUNNING task holds, so a skill run, the benchmark, and external
     // local-API admission see a multi-step task as continuously busy rather than idle in the
     // gaps between its model calls.
