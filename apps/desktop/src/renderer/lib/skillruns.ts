@@ -277,11 +277,3 @@ export function clearSkillRunSession(): void {
   snapshot = []
   notify()
 }
-
-/** Test-only: drop module-level state between renderer tests. */
-export function resetSkillRunStoreForTests(): void {
-  for (const e of entries.values()) stopTimer(e)
-  entries.clear()
-  snapshot = []
-  listeners.clear()
-}

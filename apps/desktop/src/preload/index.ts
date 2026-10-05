@@ -815,11 +815,13 @@ const api = {
   /** All runs main currently holds (running + terminal-but-unacknowledged), ids/counts only — the
    *  renderer re-adopts them on a fresh mount after a reload (SKA-17). */
   listSkillRuns: (): Promise<SkillRunState[]> => ipcRenderer.invoke(IPC.listSkillRuns),
-  /** Cancel a run by its handle; main ignores a missing or empty handle (SKA-25). */
-  cancelSkillRun: (runHandle?: string): Promise<void> =>
+  /** Cancel a run by its handle. The handle is required (SKA-25: there is no cancel-all); main also
+   *  ignores an empty one. */
+  cancelSkillRun: (runHandle: string): Promise<void> =>
     ipcRenderer.invoke(IPC.cancelSkillRun, runHandle),
-  /** Drop a terminal run main-side once its outcome has been shown (the acknowledge handshake). */
-  clearSkillRun: (runHandle?: string): Promise<void> =>
+  /** Drop a terminal run main-side once its outcome has been shown (the acknowledge handshake). The
+   *  handle is required, as for cancel. */
+  clearSkillRun: (runHandle: string): Promise<void> =>
     ipcRenderer.invoke(IPC.clearSkillRun, runHandle),
 
   /** Subscribe to streamed tokens for a request (= conversation id); returns an unsubscribe fn. */

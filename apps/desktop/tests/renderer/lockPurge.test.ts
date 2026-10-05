@@ -168,10 +168,10 @@ describe('purgeSessionStores — watcher stores (SH-4)', () => {
     const { startTask, getActiveDocTask, resetDocTaskStoreForTests } = await import(
       '../../src/renderer/lib/doctasks'
     )
-    const { startSkillRun, getSkillRunsSnapshot, resetSkillRunStoreForTests } = await import(
+    const { startSkillRun, getSkillRunsSnapshot, clearSkillRunSession } = await import(
       '../../src/renderer/lib/skillruns'
     )
-    const { requestSkillDetail, consumeSkillDetailRequest } = await import(
+    const { requestSkillDetail, consumeSkillDetailRequest, clearSkillDetailRequest } = await import(
       '../../src/renderer/lib/skillDetailRequest'
     )
     try {
@@ -221,12 +221,11 @@ describe('purgeSessionStores — watcher stores (SH-4)', () => {
       expect(getSkillRunsSnapshot()).toHaveLength(0)
       expect(consumeSkillDetailRequest()).toBeNull()
     } finally {
-      const { resetSkillDetailRequestForTests } = await import(
-        '../../src/renderer/lib/skillDetailRequest'
-      )
+      // Leave no state behind even if an assertion above failed (the production clears; nothing
+      // here subscribed to the run store, so keeping its listeners changes nothing).
       resetDocTaskStoreForTests()
-      resetSkillRunStoreForTests()
-      resetSkillDetailRequestForTests()
+      clearSkillRunSession()
+      clearSkillDetailRequest()
     }
   })
 })

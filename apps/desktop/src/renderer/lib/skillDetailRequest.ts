@@ -25,8 +25,3 @@ export function consumeSkillDetailRequest(): string | null {
 export function clearSkillDetailRequest(): void {
   pending = null
 }
-
-/** Test-only: drop any pending request so cases stay independent. */
-export function resetSkillDetailRequestForTests(): void {
-  pending = null
-}

@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
@@ -16,7 +14,7 @@ import {
 import { addToCollection, getBuiltinCollection, linkConversationDocument } from '../../src/main/services/collections'
 import { updateSettings } from '../../src/main/services/settings'
 import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
-import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
+import { makeSkillDirs, realAppSkillsDeps, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Skills S13b — AUTO-FIRE mechanics (skills-s13-plan.md §2.1/§4). Proves the ratified contract:
 //   D4  off by default (the safe-merge property — inert in production) AND app-skills only.
@@ -313,10 +311,7 @@ describe('S13c — auto-fire provenance + the undo (skills-s13-plan.md §5/D3)',
 // not declare gives no doc signal, so the keyword alone never fires. (The positive case is a row of the
 // complaint-skills table below.)
 describe('document-redaction auto-fires against the real selector (S13b D6 opt-in)', () => {
-  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-  function realDirs(): { appSkillsDir: string; userSkillsDir: string } {
-    return { appSkillsDir: join(REPO_ROOT, 'app-skills'), userSkillsDir: join(tempDir(), 'user-skills') }
-  }
+  const realDirs = (): SkillDirs => realAppSkillsDeps('autofire')
   const Q_ANON = 'I want to anonymize my attached document' // keyword "anonymize" (2)
 
   it('a selected NON-redactable MIME (no mime hit) does NOT fire on the keyword alone', () => {
@@ -390,10 +385,7 @@ describe('resolveAutoFireSkill — narrowed doc signals (U4, audit §4.4)', () =
 // triggers.autoFire in their COMMITTED SKILL.md, so they auto-fire end-to-end against the real manifests
 // with an explicitly-scoped matching document. Regression for the §2.4 "can never auto-fire" gap.
 describe('the complaint skills auto-fire against the real committed manifests (U4 D6 opt-in)', () => {
-  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-  function realDirs(): { appSkillsDir: string; userSkillsDir: string } {
-    return { appSkillsDir: join(REPO_ROOT, 'app-skills'), userSkillsDir: join(tempDir(), 'user-skills') }
-  }
+  const realDirs = (): SkillDirs => realAppSkillsDeps('autofire')
   const cases = [
     { skill: 'app:bank-statement', q: 'Reconcile the transactions on my bank statement.', title: 'march-statement.pdf', mime: 'application/pdf' },
     { skill: 'app:invoice', q: 'List the line items and the invoice number.', title: 'invoice-2026.pdf', mime: 'application/pdf' },
