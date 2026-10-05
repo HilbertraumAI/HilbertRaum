@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
 import type { Db } from '../../src/main/services/db'
 import {
@@ -21,7 +20,7 @@ import { openFreshDb } from '../helpers/db-fixtures'
 import { capturingAudit } from '../helpers/audit-capture'
 import { scriptedRuntime } from '../helpers/scripted-runtime'
 import { seedDocWithChunks as seedChunks } from '../helpers/doc-fixtures'
-import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
+import { REPO_APP_SKILLS_DIR, realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // architecture.md "Skills — design record" §8 — the THIRD bundled Tier-2 skill: document-redaction.
 // It exercises the read-transform-export shape (no content-class data table — the deliverable is a
@@ -30,9 +29,7 @@ import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 // writes the redacted copy via a stub saveTextFile, reporting only the count + a 'redacted'/'clean'
 // discriminator. The cancelled-save calm path and a write-failure are covered too.
 
-const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-const APP_SKILLS_DIR = join(REPO_ROOT, 'app-skills')
-const REDACTION_SKILL_MD = readFileSync(join(APP_SKILLS_DIR, 'document-redaction', 'SKILL.md'), 'utf8')
+const REDACTION_SKILL_MD = readFileSync(join(REPO_APP_SKILLS_DIR, 'document-redaction', 'SKILL.md'), 'utf8')
 
 const PII_TEXT = [
   'Reach Jane at jane.doe@example.com or call +43 660 1234567.',

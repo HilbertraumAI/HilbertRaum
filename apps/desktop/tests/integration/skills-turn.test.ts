@@ -44,7 +44,7 @@ function writeSkill(dir: string, id: string, body: string, version = '1.0.0'): v
 }
 
 /** A db with one ENABLED user skill `bank` (body "Quote totals.") + its install_id. */
-function envWithSkill(): { db: Db; dirs: { appSkillsDir: string; userSkillsDir: string }; installId: string } {
+function envWithSkill(): { db: Db; dirs: SkillDirs; installId: string } {
   const db = freshDb()
   const dirs = makeDirs()
   writeSkill(dirs.userSkillsDir, 'bank', 'Quote the printed totals.\n\nFlag anything you cannot verify.')

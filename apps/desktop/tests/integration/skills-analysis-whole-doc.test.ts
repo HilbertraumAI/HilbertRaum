@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import type { Db } from '../../src/main/services/db'
 import {
   contractBriefAnalysisHandler,
@@ -19,6 +18,7 @@ import {
 } from '../../src/main/services/rag'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { seedLineChunkDoc } from '../helpers/doc-fixtures'
+import { REPO_APP_SKILLS_DIR } from '../helpers/skill-fixtures'
 
 // Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2 + A3 gate inversion, §6.3/§8.2 +
 // A4/SKA-8 §3.2). Two contracts pinned here:
@@ -150,9 +150,8 @@ describe('manifestAnalysisHandler (A3) — honored for instruction skills of any
 // A3 — the bundled instruction skills DECLARE their engine in SKILL.md; pin each declaration to the mode
 // the app-registered handler actually provides (so the manifest is the honest source of truth, not decor).
 describe('SKILL.md analysis declaration ⇔ registered handler mode (A3 consistency)', () => {
-  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
   const analysisOf = (skillId: string): string | undefined => {
-    const md = readFileSync(join(REPO_ROOT, 'app-skills', skillId, 'SKILL.md'), 'utf8')
+    const md = readFileSync(join(REPO_APP_SKILLS_DIR, skillId, 'SKILL.md'), 'utf8')
     const parsed = parseSkillMarkdown(md)
     expect(parsed.ok).toBe(true)
     return parsed.manifest?.analysis

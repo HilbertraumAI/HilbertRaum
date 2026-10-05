@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
 import type { Db } from '../../src/main/services/db'
 import {
@@ -26,7 +25,7 @@ import type { DocumentChunkRead, RunnableTool } from '../../src/shared/types'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { capturingAudit } from '../helpers/audit-capture'
 import { seedDocWithChunks as seedChunks } from '../helpers/doc-fixtures'
-import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
+import { REPO_APP_SKILLS_DIR, realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // architecture.md "Skills — design record" §8 — the SECOND bundled Tier-2 skill: invoice. It mirrors
 // the bank-statement skill layer-for-layer to prove the gate generalizes to a second content-class
@@ -34,9 +33,7 @@ import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 // discover/reconcile) and the run seams on a real DB (extract → validate → export), the
 // needs-extraction guard, and the cancelled-save calm path, plus the dispatch wiring.
 
-const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-const APP_SKILLS_DIR = join(REPO_ROOT, 'app-skills')
-const INVOICE_SKILL_MD = readFileSync(join(APP_SKILLS_DIR, 'invoice', 'SKILL.md'), 'utf8')
+const INVOICE_SKILL_MD = readFileSync(join(REPO_APP_SKILLS_DIR, 'invoice', 'SKILL.md'), 'utf8')
 
 const INVOICE_TEXT = [
   'Invoice',

@@ -17,7 +17,7 @@ import {
   SKILL_GUARD_LINE
 } from '../../src/main/services/skills/prompt'
 import { openFreshDb } from '../helpers/db-fixtures'
-import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
+import { REPO_APP_SKILLS_DIR, realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Skills plan Phase S9 — the built-in bank-statement instruction stub. This is the FIRST real
 // app skill, so it exercises the whole S2→S7 path end-to-end against the COMMITTED package:
@@ -26,8 +26,7 @@ import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 // commercial-drive gate (S9 / §14) is mirrored in BOTH provisioning scripts.
 
 const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-const APP_SKILLS_DIR = join(REPO_ROOT, 'app-skills')
-const BANK_SKILL_MD = readFileSync(join(APP_SKILLS_DIR, 'bank-statement', 'SKILL.md'), 'utf8')
+const BANK_SKILL_MD = readFileSync(join(REPO_APP_SKILLS_DIR, 'bank-statement', 'SKILL.md'), 'utf8')
 
 const freshDb = (): Db => openFreshDb('s9')
 
