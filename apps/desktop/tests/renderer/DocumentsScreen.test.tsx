@@ -1838,7 +1838,6 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
   it('#574: a photo read by OCR has the photo caveat, and Read again (OCR) re-indexes it', async () => {
     const user = userEvent.setup()
     const startDocTask = vi.fn(async () => ({ jobId: 'never' }))
-    const reindexDocument = vi.fn(async () => undefined)
     const photo = doc({
       id: 'p1',
       title: 'receipt.jpg',
@@ -1853,6 +1852,7 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
         createdAt: '2026-10-05T00:00:00Z'
       }
     })
+    const reindexDocument = vi.fn(async () => photo)
     stubApi({
       listDocuments: vi.fn(async () => [photo]),
       getAppStatus: vi.fn(async () => appStatus()),
