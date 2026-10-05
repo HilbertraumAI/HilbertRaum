@@ -17,9 +17,11 @@ import { __resetKnowledgePackToolsInstallForTests } from '../../src/renderer/lib
 import { t } from '../../src/shared/i18n'
 import {
   DEFAULT_SETTINGS,
+  type EngineDownloadJob,
   type EngineProblem,
   type EngineRecheckResult,
   type EngineStatus,
+  type ModelInfo,
   type OcrInstallStatus,
   type PerformanceSnapshot,
   type PreflightResult,
@@ -29,6 +31,7 @@ import {
 } from '../../src/shared/types'
 import type { Translator } from '../../src/renderer/components/translator'
 import { stubApi } from '../helpers/renderer'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '../helpers/status'
 
 // #530: an engine program that is on the drive but that the OS loader refuses to start (Linux:
@@ -124,6 +127,9 @@ describe('EngineProblemNotice — banner reason copy (#530)', () => {
     ['system-too-old on win', { ...LIBGOMP, reason: 'system-too-old', os: 'win' }, 'models.engineProblem.systemTooOld'],
     ['vc-runtime-missing', { ...LIBGOMP, reason: 'vc-runtime-missing', os: 'win' }, 'models.engineProblem.vcRuntimeMissing'],
     ['files-damaged', { ...LIBGOMP, reason: 'files-damaged' }, 'models.engineProblem.filesDamaged'],
+    // #532: a fresh, verified copy that still does not load — the files are not the likely cause.
+    ['files-damaged after a fresh install', { ...LIBGOMP, reason: 'files-damaged', afterInstall: true }, 'models.engineProblem.filesDamagedAfterInstall'],
+    ['files-damaged after a fresh install on win', { ...LIBGOMP, reason: 'files-damaged', os: 'win', afterInstall: true }, 'models.engineProblem.filesDamagedAfterInstallWin'],
     ['blocked', { ...LIBGOMP, reason: 'blocked', os: 'win' }, 'models.engineProblem.blocked']
   ]
   it.each(CASES)('%s shows its own sentence', (_label, problem, key) => {
@@ -249,6 +255,23 @@ const IDLE_RUNTIME: RuntimeStatus = {
   healthy: false,
   message: ''
 }
+/** #532: the speech model on the drive — the card the voice engine's hint sits on. */
+const SPEECH_MODEL: ModelInfo = {
+  id: 'whisper-small',
+  displayName: 'Whisper Small',
+  family: 'whisper',
+  role: 'transcriber',
+  format: 'ggml',
+  runtime: 'whisper_cpp',
+  license: 'mit',
+  sizeOnDiskGb: 0.5,
+  recommendedMinRamGb: 2,
+  recommendedRamGb: 4,
+  recommendedContextTokens: 0,
+  localPath: 'models/transcriber/whisper-small.bin',
+  state: 'installed',
+  recommended: false
+}
 const NO_OCR_SOURCES: OcrInstallStatus = {
   available: false,
   languages: [],
@@ -268,13 +291,23 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
     recheckEngine?: Mock
     engine?: EngineStatus
     runtime?: RuntimeStatus
+    /** #532: the download gate (default: policy and setting allow). */
+    policy?: { allowModelDownloads: boolean; allowNetworkSetting: boolean }
+    models?: ModelInfo[]
+    downloadEngine?: Mock
+    getEngineJob?: Mock
   }): { push: () => void; recheckEngine: Mock } {
     let subscriber: (() => void) | null = null
     const recheckEngine = opts.recheckEngine ?? vi.fn(async (): Promise<EngineRecheckResult> => ({ problems: opts.problems() }))
+    const gate = opts.policy ?? { allowModelDownloads: true, allowNetworkSetting: true }
     stubApi({
-      listModels: vi.fn(async () => []),
+      listModels: vi.fn(async () => opts.models ?? []),
       getSettings: vi.fn(async () => DEFAULT_SETTINGS),
-      getPolicy: vi.fn(async () => makePolicyStatus({ network: { allowModelDownloads: true }, allowNetworkSetting: true })),
+      getPolicy: vi.fn(async () =>
+        makePolicyStatus({ network: { allowModelDownloads: gate.allowModelDownloads }, allowNetworkSetting: gate.allowNetworkSetting })
+      ),
+      ...(opts.downloadEngine ? { downloadEngine: opts.downloadEngine } : {}),
+      ...(opts.getEngineJob ? { getEngineJob: opts.getEngineJob } : {}),
       getAppStatus: vi.fn(async () => appStatus({ engineProblems: opts.problems() })),
       getEngineStatus: vi.fn(async () => opts.engine ?? IDLE_ENGINE),
       onEngineProblemsChanged: vi.fn((cb: () => void) => {
@@ -380,6 +413,114 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
     // The screen maps the raw error through friendlyIpcError; the banner shows whatever it returns.
     await waitFor(() => expect(screen.getByRole('button', { name: en('models.engineProblem.check') })).toBeEnabled())
     expect(screen.getByText(en('models.engineProblem.title'))).toBeInTheDocument()
+  })
+
+  // #532: damaged engine files are the one refusal a fresh copy fixes, so the banner (and the voice
+  // hint) offer "Install … again" — the same job, gates and progress as the install banners.
+  describe('Install the engine again (#532)', () => {
+    const DAMAGED: EngineProblem = { family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135' }
+    const REPAIRABLE: EngineStatus = { ...IDLE_ENGINE, reinstallableFamilies: ['llama_cpp', 'whisper_cpp'] }
+    const job = (over: Partial<EngineDownloadJob>): EngineDownloadJob => ({
+      jobId: 'r1',
+      status: 'downloading',
+      receivedBytes: 50,
+      totalBytes: 100,
+      unverified: false,
+      binaryPath: null,
+      error: null,
+      families: ['llama_cpp'],
+      reinstall: true,
+      ...over
+    })
+    const banner = (): HTMLElement =>
+      screen.getByText(en('models.engineProblem.title')).closest('.banner') as HTMLElement
+
+    it('offers it first, names it in the reason, runs the reinstall in the banner and confirms it when done', async () => {
+      const user = userEvent.setup()
+      const downloadEngine = vi.fn(async () => job({}))
+      stubModels({
+        problems: () => [DAMAGED],
+        engine: REPAIRABLE,
+        downloadEngine,
+        getEngineJob: vi.fn(async () => job({ status: 'done' }))
+      })
+      renderModels()
+      const reinstall = await screen.findByRole('button', { name: en('models.engineProblem.reinstall') })
+      const check = screen.getByRole('button', { name: en('models.engineProblem.check') })
+      expect(within(banner()).getByText(en('models.engineProblem.filesDamagedReinstall'))).toBeInTheDocument()
+      // The fix leads; Check again (for a fix made elsewhere) follows it.
+      expect(reinstall.compareDocumentPosition(check) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy()
+      await user.click(reinstall)
+      expect(downloadEngine).toHaveBeenCalledWith({ families: ['llama_cpp'], reinstall: true })
+      // The progress is this banner's: the missing-engine banner never shows a reinstall.
+      expect(await within(banner()).findByText(en('models.engine.progress', { pct: 50 }))).toBeInTheDocument()
+      expect(screen.queryByText(en('models.engine.title'))).not.toBeInTheDocument()
+      // Checking a program that is being replaced would say nothing.
+      expect(within(banner()).getByRole('button', { name: en('models.engineProblem.check') })).toBeDisabled()
+      // Main drops the verdict as the job ends, and the banner with it — the toast says what happened.
+      expect(await screen.findByText(en('models.engineProblem.reinstalled'), {}, { timeout: hangBudgetMs(4000) })).toBeInTheDocument()
+    })
+
+    it.each([
+      [
+        'the drive policy forbids downloads: disabled with the policy reason, the reason keeps the guide',
+        { allowModelDownloads: false, allowNetworkSetting: true },
+        'models.engineProblem.filesDamaged',
+        'models.downloads.blockedByPolicy'
+      ],
+      [
+        'internet access is off in Settings: disabled with that reason, the reason names the reinstall',
+        { allowModelDownloads: true, allowNetworkSetting: false },
+        'models.engineProblem.filesDamagedReinstall',
+        'models.downloads.enableInSettings'
+      ]
+    ] as const)('%s', async (_label, policy, reasonKey, gateKey) => {
+      stubModels({ problems: () => [DAMAGED], engine: REPAIRABLE, policy })
+      renderModels()
+      expect(await screen.findByRole('button', { name: en('models.engineProblem.reinstall') })).toBeDisabled()
+      await waitFor(() => expect(within(banner()).getByText(en(reasonKey))).toBeInTheDocument())
+      expect(within(banner()).getByText(en(gateKey))).toBeInTheDocument()
+      // Check again stays usable: a fix made outside the app needs no download.
+      expect(screen.getByRole('button', { name: en('models.engineProblem.check') })).toBeEnabled()
+    })
+
+    it.each<[string, EngineProblem, EngineStatus]>([
+      ['a fresh copy that failed too (afterInstall)', { ...DAMAGED, afterInstall: true }, REPAIRABLE],
+      ['a refusal a reinstall cannot fix (Windows security)', { ...DAMAGED, reason: 'blocked', exit: 'exit code 0xC0E90002' }, REPAIRABLE],
+      ['an engine the installer cannot fetch here (or an older main)', DAMAGED, IDLE_ENGINE]
+    ])('offers no reinstall for %s — only Check again', async (_label, problem, engine) => {
+      stubModels({ problems: () => [problem], engine })
+      renderModels()
+      expect(await screen.findByRole('button', { name: en('models.engineProblem.check') })).toBeInTheDocument()
+      await waitFor(() => expect(window.api.getEngineStatus).toHaveBeenCalled())
+      expect(screen.queryByRole('button', { name: en('models.engineProblem.reinstall') })).not.toBeInTheDocument()
+    })
+
+    it('the voice engine hint offers its own quieter reinstall, and its progress stays on the speech-model card', async () => {
+      const user = userEvent.setup()
+      const downloadEngine = vi.fn(async () => job({ families: ['whisper_cpp'] }))
+      stubModels({
+        problems: () => [{ ...DAMAGED, family: 'whisper_cpp' }],
+        // The AI engine is missing at the same time: its install banner is on screen too.
+        engine: { ...IDLE_ENGINE, installed: false, missingFamilies: ['llama_cpp'], reinstallableFamilies: ['whisper_cpp'] },
+        models: [SPEECH_MODEL],
+        downloadEngine,
+        getEngineJob: vi.fn(async () => job({ families: ['whisper_cpp'] }))
+      })
+      renderModels()
+      const reinstall = await screen.findByRole('button', { name: en('models.engineProblem.voiceReinstall') })
+      // The hint stays quiet (§11.17 #5): chat is unaffected, so this is no loud primary.
+      expect(reinstall).not.toHaveClass('primary')
+      expect(screen.queryByText(en('models.engineProblem.title'))).not.toBeInTheDocument()
+      const hint = reinstall.closest('.engine-problem-hint') as HTMLElement
+      const installBanner = screen.getByText(en('models.engine.title')).closest('.banner') as HTMLElement
+      await user.click(reinstall)
+      expect(downloadEngine).toHaveBeenCalledWith({ families: ['whisper_cpp'], reinstall: true })
+      expect(await within(hint).findByText(en('models.engine.progress', { pct: 50 }))).toBeInTheDocument()
+      // The install banner does not claim that job, and waits for it: one engine job at a time.
+      expect(within(installBanner).queryByText(en('models.engine.progress', { pct: 50 }))).not.toBeInTheDocument()
+      expect(within(installBanner).getByRole('button', { name: en('models.engine.install') })).toBeDisabled()
+    })
   })
 })
 
@@ -623,6 +764,16 @@ describe('Settings → Diagnostics — engine problem line (#530)', () => {
     await user.click(screen.getAllByRole('button', { name: en('diag.copy') })[0])
     await waitFor(() => expect(lastCopied).not.toBeNull())
     expect(lastCopied).toContain(`${en('diag.app.engine')}: ${line()}`)
+  })
+
+  it('damaged files reported right after a fresh install say so — support reads it off the report (#532)', async () => {
+    stubDiagnostics([{ family: 'llama_cpp', reason: 'files-damaged', os: 'win', exit: 'exit code 0xC0000135', afterInstall: true }])
+    renderDiagnostics()
+    expect(
+      await screen.findByText(
+        en('diag.engine.cannotRun', { reason: en('diag.engine.reason.filesDamagedAfterInstall') }) + ' (exit code 0xC0000135)'
+      )
+    ).toBeInTheDocument()
   })
 
   it('a voice-engine problem is labelled "Voice engine"', async () => {

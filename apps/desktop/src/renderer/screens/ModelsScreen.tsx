@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Badge, Banner, Button, ConfirmDialog, EmptyState, EngineProblemNotice, ErrorBanner, KnowledgePackToolsDialog, OcrInstallControl, OcrInstallDialog, Progress, SegmentedControl, Spinner, type BadgeTone } from '../components'
+import { Badge, Banner, Button, ConfirmDialog, EmptyState, EngineProblemNotice, ErrorBanner, KnowledgePackToolsDialog, OcrInstallControl, OcrInstallDialog, Progress, SegmentedControl, Spinner, useToast, type BadgeTone, type EngineProblemReinstall } from '../components'
 import {
   availableFamilies,
   groupModelVariants,
@@ -18,14 +18,17 @@ import { computeDownloadGate } from '../lib/downloadGate'
 import { friendlyIpcError, runAndSurface } from '../lib/errors'
 import { useKnowledgePackToolsInstall } from '../lib/useKnowledgePackToolsInstall'
 import { useOcrInstall } from '../lib/useOcrInstall'
-import { useEngineProblems } from '../lib/useEngineProblems'
+import { useEngineProblemsRead } from '../lib/useEngineProblems'
 import type { ModelsFocus } from '../navigation'
 import { useT } from '../i18n'
 import type { MessageKey, UiLanguage } from '@shared/i18n'
+import { engineProblemOffersReinstall } from '@shared/engine-problem'
 import type {
   AppSettings,
   DownloadJob,
   EngineDownloadJob,
+  EngineProblem,
+  EngineProblemFamily,
   EngineRecheckResult,
   EngineStatus,
   ModelInfo,
@@ -54,7 +57,9 @@ const TASKS: { value: ModelTask; label: MessageKey }[] = [
 
 // A deep link about a missing optional model lands on that model (#527, #539): Browse, filtered to
 // its task. `engineFamilies`: an install banner for one of these sits at the top of the screen and
-// is the first thing to act on, so the library is then not scrolled into view.
+// is the first thing to act on, so the library is then not scrolled into view. The AI engine's
+// "can't run" banner (#530, with its #532 reinstall) sits there too and counts the same way; the
+// voice engine's notice is a hint on the speech-model card, inside the library, so it does not.
 const FOCUS: Record<ModelsFocus, { task: ModelTask; engineFamilies: readonly string[] }> = {
   voice: { task: 'transcriber', engineFamilies: ['llama_cpp', 'whisper_cpp'] },
   images: { task: 'vision', engineFamilies: ['llama_cpp'] },
@@ -182,6 +187,17 @@ const ENGINE_JOB_LIVE: ReadonlySet<EngineDownloadJob['status']> = new Set([
   'verifying',
   'extracting'
 ])
+
+/**
+ * #532: the engine job one surface shows. The install banners (`repair` null) show installs; an
+ * "Install … again" action shows the reinstall of its own family. A job from an older main carries
+ * no `reinstall` and reads as an install, as before.
+ */
+function engineJobFor(job: EngineDownloadJob | null, repair: EngineProblemFamily | null): EngineDownloadJob | null {
+  if (!job) return null
+  if (repair === null) return job.reinstall === true ? null : job
+  return job.reinstall === true && (job.families ?? []).includes(repair) ? job : null
+}
 
 /**
  * The live "Check all model files" pass (#420). The pass runs in the MAIN process, so it
@@ -319,9 +335,11 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   const ocrInstall = useOcrInstall(true, () => setOcrJobFinishedHere(true))
   // #530: an engine on the drive that the OS refused to start this session (live: the push
   // re-reads it, so a refusal found after this screen mounted still shows, and a healed one goes).
-  const engineProblems = useEngineProblems()
+  const { problems: engineProblems, settled: engineProblemsSettled } = useEngineProblemsRead()
   const chatEngineProblem = engineProblems?.find((p) => p.family === 'llama_cpp') ?? null
   const voiceEngineProblem = engineProblems?.find((p) => p.family === 'whisper_cpp') ?? null
+  // #532: confirms a reinstall that finished — its banner unmounts with the verdict at that moment.
+  const showToast = useToast()
   const recheckEngine = (): Promise<EngineRecheckResult> =>
     window.api.recheckEngine().catch((err: unknown) => {
       throw new Error(friendlyIpcError(err))
@@ -348,16 +366,19 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
   // banners, the OCR row and the context card, so once the first load is in, it is scrolled into
   // view, unless an engine banner is showing: then an engine is part of what is missing, and the
   // banner at the top is the first thing to act on. Once per visit, never after the user scrolled.
+  // #532: the AI engine's "can't run" banner counts too, so the decision also waits for the first
+  // read of the engine verdicts (a refusal reported after that read still cannot move the screen).
   const libraryRef = useRef<HTMLElement>(null)
   const focusScrolledRef = useRef(false)
   useEffect(() => {
-    if (focus === null || models === null || focusScrolledRef.current) return
+    if (focus === null || models === null || !engineProblemsSettled || focusScrolledRef.current) return
     focusScrolledRef.current = true
+    const families = FOCUS[focus].engineFamilies
     const engineBannerShown =
-      engine?.available === true &&
-      FOCUS[focus].engineFamilies.some((f) => engine.missingFamilies.includes(f))
+      (engine?.available === true && families.some((f) => engine.missingFamilies.includes(f))) ||
+      (chatEngineProblem !== null && families.includes('llama_cpp'))
     if (!engineBannerShown) libraryRef.current?.scrollIntoView?.({ block: 'start' })
-  }, [focus, models, engine])
+  }, [focus, models, engine, engineProblemsSettled, chatEngineProblem])
 
   async function refresh(): Promise<void> {
     const [m, s, p, e, rt] = await Promise.all([
@@ -541,6 +562,11 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           ) {
             // CODE-28: same surfaced completion-refresh as the model-download poll above.
             void runAndSurface(refresh, (m) => mountedRef.current && setError(m))
+            // #532: a finished reinstall drops the verdict, and its banner with it — say what happened.
+            if (next.status === 'done' && next.reinstall === true) {
+              const voiceOnly = next.families?.includes('whisper_cpp') === true && !next.families.includes('llama_cpp')
+              showToast(t(voiceOnly ? 'models.engineProblem.voiceReinstalled' : 'models.engineProblem.reinstalled'))
+            }
           }
         })
         .catch(() => undefined)
@@ -552,6 +578,16 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     setError(null)
     try {
       setEngineJob(await window.api.downloadEngine())
+    } catch (e) {
+      setError(friendlyIpcError(e))
+    }
+  }
+
+  /** #532: "Install … again" — the same job and gates as the install, for an engine already here. */
+  async function startEngineRepair(family: EngineProblemFamily): Promise<void> {
+    setError(null)
+    try {
+      setEngineJob(await window.api.downloadEngine({ families: [family], reinstall: true }))
     } catch (e) {
       setError(friendlyIpcError(e))
     }
@@ -988,9 +1024,16 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
         {m.role === 'transcriber' && voiceEngineUnsupported && (
           <p className="hint">{t('models.transcriber.engineUnsupported')}</p>
         )}
-        {/* #530: the voice engine is on the drive, but the OS refused to start it. */}
+        {/* #530: the voice engine is on the drive, but the OS refused to start it. #532: damaged
+            files also offer "Install the voice engine again". */}
         {m.role === 'transcriber' && voiceEngineProblem && (
-          <EngineProblemNotice problem={voiceEngineProblem} variant="hint" onRecheck={recheckEngine} t={t} />
+          <EngineProblemNotice
+            problem={voiceEngineProblem}
+            variant="hint"
+            onRecheck={recheckEngine}
+            reinstall={engineReinstall(voiceEngineProblem)}
+            t={t}
+          />
         )}
 
         <div className="model-row-actions">
@@ -1208,12 +1251,6 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     explainKey: MessageKey
     installKey: MessageKey
   }): JSX.Element {
-    const j = engineJob
-    const live = j != null && ENGINE_JOB_LIVE.has(j.status)
-    const pct =
-      j && j.totalBytes && j.totalBytes > 0
-        ? Math.min(100, Math.round((j.receivedBytes / j.totalBytes) * 100))
-        : null
     return (
       <Banner tone={opts.tone}>
         <div className="engine-install">
@@ -1221,65 +1258,115 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           <p className="hint hint-lede">
             {t(opts.explainKey)}
           </p>
-          {live && j ? (
-            <>
-              <Progress
-                label={
-                  j.status === 'extracting'
-                    ? t('models.engine.extracting')
-                    : j.status === 'verifying'
-                      ? t('models.engine.verifying')
-                      : pct != null
-                        ? t('models.engine.progress', { pct })
-                        : t('models.engine.downloadingNoTotal')
-                }
-                value={pct != null && j.status === 'downloading' ? j.receivedBytes : undefined}
-                max={pct != null && j.status === 'downloading' ? (j.totalBytes ?? undefined) : undefined}
-              />
-              {/* SH-1 (#144): the multi-hundred-MB engine fetch was the one long-running
-                  network action with no Cancel (cancelEngineDownload had zero callers).
-                  Mirrors the model-download cancel incl. its error surfacing; main treats
-                  verifying/extracting as cancellable states (F-33), so no disable here. */}
-              <Button
-                size="sm"
-                onClick={() =>
-                  window.api
-                    .cancelEngineDownload(j.jobId)
-                    .then((next) => {
-                      rememberedEngineJob = next
-                      if (mountedRef.current) setEngineJob(next)
-                    })
-                    .catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
-                }
-              >
-                {t('models.download.cancel')}
-              </Button>
-            </>
-          ) : (
-            <>
-              {j?.status === 'failed' && j.error && (
-                <p className="hint mt-0">
-                  {j.error}
-                </p>
-              )}
-              <Button
-                size="sm"
-                variant="primary"
-                disabled={!downloadsEnabled}
-                title={downloadsBlockedReason ?? undefined}
-                onClick={() => void startEngineDownload()}
-              >
-                {j?.status === 'failed' ? t('models.engine.retry') : t(opts.installKey)}
-              </Button>
-              {downloadsBlockedReason && (
-                <p className="hint mb-0">
-                  {downloadsBlockedReason}
-                </p>
-              )}
-            </>
-          )}
+          {engineJobControls({
+            job: engineJobFor(engineJob, null),
+            installKey: opts.installKey,
+            primary: true,
+            onStart: () => void startEngineDownload()
+          })}
         </div>
       </Banner>
+    )
+  }
+
+  /**
+   * #532: what the "can't run" notice offers for damaged engine files — "Install … again" through
+   * the same job, gates and progress as the install banners. Only for that verdict (and not once a
+   * fresh copy also failed), and only for a family the installer can fetch here.
+   */
+  function engineReinstall(problem: EngineProblem | null): EngineProblemReinstall | undefined {
+    if (!problem || !engineProblemOffersReinstall(problem)) return undefined
+    if (!(engine?.reinstallableFamilies ?? []).includes(problem.family)) return undefined
+    const job = engineJobFor(engineJob, problem.family)
+    const voice = problem.family === 'whisper_cpp'
+    return {
+      control: engineJobControls({
+        job,
+        installKey: voice ? 'models.engineProblem.voiceReinstall' : 'models.engineProblem.reinstall',
+        // The chat banner's reinstall is the fix and leads; the voice hint stays quiet (§11.17 #5).
+        primary: !voice,
+        onStart: () => void startEngineRepair(problem.family)
+      }),
+      policyAllows: policy?.policy.network.allowModelDownloads === true,
+      live: job != null && ENGINE_JOB_LIVE.has(job.status)
+    }
+  }
+
+  /**
+   * The engine job's controls for one surface: its progress and Cancel while it runs, else the
+   * start button (Try again after a failure, with the error) behind the download gate, whose
+   * reason is shown. `job` is the job THIS surface shows (`engineJobFor`), or null.
+   */
+  function engineJobControls(opts: {
+    job: EngineDownloadJob | null
+    installKey: MessageKey
+    primary: boolean
+    onStart: () => void
+  }): JSX.Element {
+    const j = opts.job
+    const live = j != null && ENGINE_JOB_LIVE.has(j.status)
+    // One engine job at a time (main refuses a second): while another surface's job runs, wait.
+    const otherLive = !live && engineJob != null && ENGINE_JOB_LIVE.has(engineJob.status)
+    const pct =
+      j && j.totalBytes && j.totalBytes > 0
+        ? Math.min(100, Math.round((j.receivedBytes / j.totalBytes) * 100))
+        : null
+    return live && j ? (
+      <>
+        <Progress
+          label={
+            j.status === 'extracting'
+              ? t('models.engine.extracting')
+              : j.status === 'verifying'
+                ? t('models.engine.verifying')
+                : pct != null
+                  ? t('models.engine.progress', { pct })
+                  : t('models.engine.downloadingNoTotal')
+          }
+          value={pct != null && j.status === 'downloading' ? j.receivedBytes : undefined}
+          max={pct != null && j.status === 'downloading' ? (j.totalBytes ?? undefined) : undefined}
+        />
+        {/* SH-1 (#144): the multi-hundred-MB engine fetch was the one long-running
+            network action with no Cancel (cancelEngineDownload had zero callers).
+            Mirrors the model-download cancel incl. its error surfacing; main treats
+            verifying/extracting as cancellable states (F-33), so no disable here. */}
+        <Button
+          size="sm"
+          onClick={() =>
+            window.api
+              .cancelEngineDownload(j.jobId)
+              .then((next) => {
+                rememberedEngineJob = next
+                if (mountedRef.current) setEngineJob(next)
+              })
+              .catch((e) => mountedRef.current && setError(friendlyIpcError(e)))
+          }
+        >
+          {t('models.download.cancel')}
+        </Button>
+      </>
+    ) : (
+      <>
+        {j?.status === 'failed' && j.error && (
+          <p className="hint mt-0">
+            {j.error}
+          </p>
+        )}
+        <Button
+          size="sm"
+          variant={opts.primary ? 'primary' : undefined}
+          disabled={!downloadsEnabled || otherLive}
+          title={downloadsBlockedReason ?? undefined}
+          onClick={opts.onStart}
+        >
+          {j?.status === 'failed' ? t('models.engine.retry') : t(opts.installKey)}
+        </Button>
+        {downloadsBlockedReason && (
+          <p className="hint mb-0">
+            {downloadsBlockedReason}
+          </p>
+        )}
+      </>
     )
   }
 
@@ -1322,7 +1409,8 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
 
       {/* #530: the chat engine IS on the drive, but the OS refused to start it — the same strong
           place and shape as the missing-engine banner below (models answer in demo mode either
-          way), with the one thing the user can do here: Check again after installing the fix. */}
+          way), with what the user can do here: Check again after installing the fix, and — for
+          damaged engine files (#532) — "Install the AI engine again" first. */}
       {chatEngineProblem && (
         <EngineProblemNotice
           problem={chatEngineProblem}
@@ -1330,6 +1418,7 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           onRecheck={recheckEngine}
           // The demo note only while no real runtime answers (a `cpu/` build may run beside it).
           demoNote={!(runtime?.running === true && runtime.backend != null && runtime.backend !== 'mock')}
+          reinstall={engineReinstall(chatEngineProblem)}
           t={t}
         />
       )}

@@ -1277,6 +1277,15 @@ export const en = {
   'models.engineProblem.systemTooOld': 'It needs a newer version of the operating system.',
   'models.engineProblem.vcRuntimeMissing': 'Windows is missing the Microsoft Visual C++ Redistributable (x64) it needs. Install it, then choose Check again.',
   'models.engineProblem.filesDamaged': 'Some of its files on this drive are missing or damaged. The troubleshooting guide explains how to set it up again.',
+  // #532: the same case where this screen can install the engine again (the drive allows the download).
+  'models.engineProblem.filesDamagedReinstall': 'Some of its files on this drive are missing or damaged. Install it again to replace them.',
+  // #532: a fresh, SHA-256-checked copy still does not load — so no second reinstall is suggested.
+  'models.engineProblem.filesDamagedAfterInstall': "It was just installed and still can't start, so its files are probably not the cause. The troubleshooting guide explains what else to check.",
+  'models.engineProblem.filesDamagedAfterInstallWin': "It was just installed and still can't start, so its files are probably not the cause. An outdated Microsoft Visual C++ Redistributable (x64) can cause this too: install the current one, then choose Check again.",
+  'models.engineProblem.reinstall': 'Install the AI engine again',
+  'models.engineProblem.voiceReinstall': 'Install the voice engine again',
+  'models.engineProblem.reinstalled': 'The AI engine was installed again.',
+  'models.engineProblem.voiceReinstalled': 'The voice engine was installed again.',
   'models.engineProblem.blocked': 'Windows security blocked it (Smart App Control or your antivirus program). The troubleshooting guide explains what you can do.',
   'models.engineProblem.demoNote': 'Until then, models answer in demo mode — the replies are simulated.',
   'models.engineProblem.check': 'Check again',
@@ -1948,6 +1957,7 @@ export const en = {
   'diag.engine.reason.libraryMissing': 'a system library is missing',
   'diag.engine.reason.systemTooOld': 'the system is too old',
   'diag.engine.reason.filesDamaged': 'engine files missing or damaged',
+  'diag.engine.reason.filesDamagedAfterInstall': 'engine files reported damaged right after a fresh install',
   'diag.engine.reason.vcRuntimeMissing': 'Visual C++ runtime missing',
   'diag.engine.reason.blocked': 'blocked by Windows security',
   'diag.accel.cpu': 'CPU',
@@ -2726,6 +2736,9 @@ export const en = {
     "The knowledge-pack tools can't be replaced while a pack is being served. Lock the workspace or wait for the current question to finish, then try again — or restart the app if the notice stays.",
   // #339 P8-2: the `downloadEngine` payload named something that is not an engine family.
   'main.engine.badRequest': 'The engine install request was not understood. Please try again.',
+  // #532: "Install … again" is only for an engine whose own files the OS found damaged this session.
+  'main.engine.nothingToRepair':
+    'There is nothing to repair: the engine on this drive has not been found damaged.',
   // #410: the in-app OCR language-file installer (services/ocr-install.ts). Session-only job
   // errors and refusals, localized at emission (i18n record §3.3 rule 2).
   'main.ocr.badRequest': 'The OCR download request was not understood. Please try again.',

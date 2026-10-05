@@ -278,9 +278,21 @@ const FAMILY_ORDER: EngineProblemFamily[] = ['llama_cpp', 'whisper_cpp']
 const problems = new Map<EngineProblemFamily, StoredProblem>()
 const listeners = new Set<() => void>()
 let reportSeq = 0
+/**
+ * #532: the program each family's engine install put on the drive THIS session — a fresh copy,
+ * checked against its pinned SHA-256 before it was unpacked. A "its own files are damaged" verdict
+ * about that same program is marked `afterInstall`: installing it once more would not help.
+ */
+const freshlyInstalled = new Map<EngineProblemFamily, string>()
 
 function sameProblem(a: EngineProblem, b: EngineProblem): boolean {
-  return a.reason === b.reason && a.name === b.name && a.exit === b.exit && a.os === b.os
+  return (
+    a.reason === b.reason &&
+    a.name === b.name &&
+    a.exit === b.exit &&
+    a.os === b.os &&
+    a.afterInstall === b.afterInstall
+  )
 }
 
 function notifyListeners(): void {
@@ -296,13 +308,29 @@ function notifyListeners(): void {
 /** Record that this engine cannot run (first-hand evidence from a spawn). Never throws. */
 export function reportEngineProblem(problem: EngineProblem, binPath?: string): void {
   const previous = problems.get(problem.family)
-  problems.set(problem.family, { problem, seq: ++reportSeq, ...(binPath ? { binPath } : {}) })
-  if (!previous || !sameProblem(previous.problem, problem)) notifyListeners()
+  // #532: the classifier never sets `afterInstall`; only the store knows the program is a fresh copy.
+  const afterInstall =
+    problem.reason === 'files-damaged' && binPath != null && freshlyInstalled.get(problem.family) === binPath
+  const stored: EngineProblem = afterInstall ? { ...problem, afterInstall: true } : problem
+  problems.set(problem.family, { problem: stored, seq: ++reportSeq, ...(binPath ? { binPath } : {}) })
+  if (!previous || !sameProblem(previous.problem, stored)) notifyListeners()
 }
 
 /** The engine started (or is gone): drop its verdict. Never throws. */
 export function clearEngineProblem(family: EngineProblemFamily): void {
   if (problems.delete(family)) notifyListeners()
+}
+
+/**
+ * This family's engine was just installed (#530, #532): the old binary's verdict no longer
+ * describes the new one, so it is dropped — a refusal of the new binary re-reports itself on its
+ * next spawn. `binPath` is the program the install put on the drive, remembered for the session so
+ * that such a re-report says {@link EngineProblem.afterInstall}. Never throws.
+ */
+export function engineInstalled(family: EngineProblemFamily, binPath?: string | null): void {
+  if (binPath) freshlyInstalled.set(family, binPath)
+  else freshlyInstalled.delete(family)
+  clearEngineProblem(family)
 }
 
 /**
@@ -346,9 +374,10 @@ export function onEngineProblemsChanged(listener: () => void): () => void {
   }
 }
 
-/** Test reset: forget every verdict and listener. */
+/** Test reset: forget every verdict, listener and install. */
 export function resetEngineProblemsForTest(): void {
   problems.clear()
   listeners.clear()
+  freshlyInstalled.clear()
   reportSeq = 0
 }

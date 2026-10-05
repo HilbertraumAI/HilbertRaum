@@ -417,16 +417,26 @@ describe('cancel during verify/extract + upgrade-while-running (full-audit 2026-
   // (the manager commits `current` only after health), but the loading child is ALREADY
   // executing from the llama_cpp dir — the IPC predicate must also consult the in-flight
   // `status().startingModelId` so an engine install begun mid-start is refused too.
-  it('chatEngineInUse is true while a model is RUNNING or still STARTING (CODE-13 follow-up)', () => {
-    const rt = (active: string | null, starting: string | null): Pick<RuntimeManager, 'activeModelId' | 'status'> =>
+  it('chatEngineInUse is true while a model is RUNNING or still STARTING, never for the demo runtime (CODE-13 follow-up, #532)', () => {
+    const rt = (
+      active: string | null,
+      starting: string | null,
+      backend?: 'gpu' | 'cpu' | 'mock'
+    ): Pick<RuntimeManager, 'activeModelId' | 'status'> =>
       ({
         activeModelId: () => active,
-        status: () => ({ startingModelId: starting })
+        status: () => ({ startingModelId: starting, backend })
       }) as unknown as Pick<RuntimeManager, 'activeModelId' | 'status'>
     expect(chatEngineInUse(rt('m', null))).toBe(true) // running
+    expect(chatEngineInUse(rt('m', null, 'cpu'))).toBe(true) // running on the engine (or its cpu/ net)
     expect(chatEngineInUse(rt(null, 'm'))).toBe(true) // still loading — dir already in use
     expect(chatEngineInUse(rt('m', 'm2'))).toBe(true) // a switch underway
     expect(chatEngineInUse(rt(null, null))).toBe(false) // idle — install may proceed
+    // #532: the demo runtime never executes the engine dir — it is what answers while the engine
+    // is missing or refused, so it must not block the install or the repair that ends it…
+    expect(chatEngineInUse(rt('m', null, 'mock'))).toBe(false)
+    // …while a start beside it still does: its ladder spawns the real binary.
+    expect(chatEngineInUse(rt('m', 'm2', 'mock'))).toBe(true)
   })
 
   it('a voice-only install still proceeds while a model runs (llama_cpp already current)', async () => {

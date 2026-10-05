@@ -41,16 +41,18 @@ export function rearmLlamaConsumers(ctx: AppContext): void {
 
 /**
  * Bring the selected model back on the real engine when the demo runtime is standing in for it
- * (the walk ended on the mock because every rung was refused). Fire-and-forget from the re-check:
- * a model load takes as long as it takes, and the screens follow the runtime status as usual. The
- * same discipline as the IPC start paths: an active deep-index build is aborted first.
+ * (the walk ended on the mock because every rung was refused, or the engine was missing). Run
+ * fire-and-forget by the re-check and, since #532, after a chat-engine install: a model load takes
+ * as long as it takes, and the screens follow the runtime status as usual. The same discipline as
+ * the IPC start paths: an active deep-index build is aborted first. A start already in flight is
+ * left alone — it walks the ladder on the engine as it now is, and a second start would cut it off.
  */
-async function restartChatOnRealEngine(ctx: AppContext): Promise<void> {
+export async function restartChatOnRealEngine(ctx: AppContext): Promise<void> {
   const status = ctx.runtime.status()
   const modelId = status.modelId
-  if (status.backend !== 'mock' || !modelId) return
+  if (status.backend !== 'mock' || !modelId || status.startingModelId) return
   if (!workspaceAdmitsWork(ctx.workspace)) return
-  log.info('The AI engine runs again — restarting the selected model on it', { modelId })
+  log.info('The real AI engine is on the drive — restarting the selected model on it', { modelId })
   ctx.docTasks?.abortActiveBuild()
   await ctx.runtime.stop()
   await startModelRuntime(ctx, modelId)

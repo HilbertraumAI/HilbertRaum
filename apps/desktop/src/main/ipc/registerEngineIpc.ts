@@ -9,11 +9,16 @@ import type {
   OcrInstallJob,
   OcrInstallStatus
 } from '../../shared/types'
-import { EngineDownloadManager, engineStatus, parseEngineDownloadRequest } from '../services/runtime-download'
+import {
+  EngineDownloadManager,
+  engineStatus,
+  parseEngineDownloadRequest,
+  type EngineFamily
+} from '../services/runtime-download'
 import { OcrInstallManager, assertNoOcrInstallPayload } from '../services/ocr-install'
 import { registeredSidecarPids } from '../services/runtime/sidecar'
-import { clearEngineProblem } from '../services/runtime/engine-load'
-import { rearmLlamaConsumers, recheckEngines } from './engine-recheck'
+import { engineInstalled, engineProblemFor } from '../services/runtime/engine-load'
+import { rearmLlamaConsumers, recheckEngines, restartChatOnRealEngine } from './engine-recheck'
 import { refreshOcrSlot, refreshTranscriberSlot } from '../services/compose-services'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { getSettings } from '../services/settings'
@@ -36,10 +41,25 @@ import type { DownloadGates } from '../services/downloads'
  * null during a multi-GB load — the manager commits `current` only after health — but the
  * loading child is ALREADY executing from the llama_cpp dir, so an engine install begun
  * mid-start would still rimraf it. `status().startingModelId` names the in-flight start.
+ * A model answering on the built-in DEMO runtime does not count (#532, the CODE-13 polish
+ * candidate): the mock never executes the engine dir, and it is exactly what runs while the
+ * engine is missing or refused — so the install or the repair the user needs is no longer
+ * refused with "stop the model first". A start still counts: its ladder spawns the real binary.
  * Exported for the engine-download suite; the downloadEngine handler is the one consumer.
  */
 export function chatEngineInUse(runtime: Pick<RuntimeManager, 'activeModelId' | 'status'>): boolean {
-  return runtime.activeModelId() !== null || runtime.status().startingModelId != null
+  const status = runtime.status()
+  if (status.startingModelId != null) return true
+  return runtime.activeModelId() !== null && status.backend !== 'mock'
+}
+
+/**
+ * #532: may `family` be installed again? Only while it holds a "files damaged" verdict this session —
+ * the one refusal a fresh copy can fix. The renderer offers the action only then; this is the
+ * check that holds. Engines the verdict store does not cover (the knowledge-pack tools) never qualify.
+ */
+function repairable(family: EngineFamily): boolean {
+  return (family === 'llama_cpp' || family === 'whisper_cpp') && engineProblemFor(family)?.reason === 'files-damaged'
 }
 
 /**
@@ -88,22 +108,29 @@ export function registerEngineIpc(
   // next unlock, the next check or "Try GPU again". Installing the chat engine is the moment
   // that answer can change, so it re-runs the once-per-session probe refresh — the benchmark
   // itself is not re-run, and a probe that already lists a device is left alone.
-  engine.onInstalled((families) => {
+  engine.onInstalled((families, binaryPaths) => {
     if (families.includes('llama_cpp')) {
       // #372: a new runtime binary may load what the old one could not (a pin that adds an
       // architecture) — every model the ladder latched as unloadable this session is re-armed.
       // #530: and every other consumer's failed-start latch with it (the embedder's used to need
       // a lock/unlock), and the old binary's load verdict no longer describes the new one — a
       // refusal of the new binary re-reports itself on its first spawn (the probe just below).
-      clearEngineProblem('llama_cpp')
+      // #532: one that still says "files damaged" is then marked as about this fresh copy.
+      engineInstalled('llama_cpp', binaryPaths.llama_cpp)
       rearmLlamaConsumers(ctx)
+      // #532: a model the demo runtime stands in for comes back on the real engine, as after a
+      // healed "Check again" — after the probe refresh, so the ladder reads this computer's answer.
       void refreshGpuProbeAfterRuntimeInstall(ctx)
+        .then(() => restartChatOnRealEngine(ctx))
+        .catch((err: unknown) => {
+          log.warn('Restarting the model after the engine install failed', { error: String(err) })
+        })
     }
     // #497: the voice engine just arrived — when the speech model is already on the drive the
     // transcriber selects NOW, so the composer mic appears without a restart (the model-download
     // twin of this hook is `AppContext.onModelInstalled`). Never throws; a null slot only.
     if (families.includes('whisper_cpp')) {
-      clearEngineProblem('whisper_cpp') // #530: a new binary; a refusal re-reports on its next spawn
+      engineInstalled('whisper_cpp', binaryPaths.whisper_cpp) // #530/#532: a new binary; a refusal re-reports
       refreshTranscriberSlot(ctx)
     }
     // #339 P8-2: the knowledge-pack tools just arrived — the packs panel's status re-resolves
@@ -138,33 +165,38 @@ export function registerEngineIpc(
     (): EngineStatus => engineStatus(ctx.paths.rootPath, ctx.manifestsDir ?? null)
   )
 
-  ipcHandle(
-    IPC.downloadEngine,
-    (_e, raw?: unknown): Promise<EngineDownloadJob> =>
-      engine.start({
-        rootPath: ctx.paths.rootPath,
-        manifestsDir: ctx.manifestsDir ?? null,
-        gates: gates(),
-        // #339 P8-2: the OPTIONAL argument. Absent = the default install (required families
-        // only — the manager never reaches an optional family without it). The consent dialog
-        // sends `{ families: ['kiwix_tools'] }` after the licence acknowledgement; the payload
-        // is renderer input and is validated against the code's own family names.
-        ...parseEngineDownloadRequest(raw),
-        // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
-        // LIVE chat sidecar executes from — the manager refuses a job that would touch it
-        // while a model runtime is up OR still starting (friendly copy; stop the model first).
-        chatRuntimeActive: chatEngineInUse(ctx.runtime),
-        // F-32 (full-audit 2026-07-16): widen the guard per family — refuse a llama_cpp install
-        // while ANY llama-server sidecar (embedder/reranker/vision/translation) has a live child,
-        // and a whisper_cpp install mid-transcription/dictation. Installs touching only the other
-        // family still proceed.
-        llamaSidecarActive: llamaSidecarInUse(),
-        whisperActive: whisperSidecarInUse(),
-        // #339 P8-1 R-e / P8-2: a kiwix_tools (re-)install pre-cleans the dir a live
-        // kiwix-serve / kiwix-manage child executes from — refused while one is registered.
-        kiwixToolsActive: kiwixToolsInUse()
-      })
-  )
+  ipcHandle(IPC.downloadEngine, (_e, raw?: unknown): Promise<EngineDownloadJob> => {
+    // #339 P8-2: the OPTIONAL argument. Absent = the default install (required families
+    // only — the manager never reaches an optional family without it). The consent dialog
+    // sends `{ families: ['kiwix_tools'] }` after the licence acknowledgement; the payload
+    // is renderer input and is validated against the code's own family names.
+    const request = parseEngineDownloadRequest(raw)
+    // #532: "Install … again" re-fetches an engine that is on the drive and current by its
+    // marker — admitted only for a family whose files the OS loader found damaged this session.
+    if (request.reinstall && !(request.families ?? []).every(repairable)) {
+      throw new Error(tMain('main.engine.nothingToRepair'))
+    }
+    return engine.start({
+      rootPath: ctx.paths.rootPath,
+      manifestsDir: ctx.manifestsDir ?? null,
+      gates: gates(),
+      ...request,
+      // CODE-13 (full-audit 2026-07-11): a llama_cpp (re-)install pre-cleans the dir the
+      // LIVE chat sidecar executes from — the manager refuses a job that would touch it
+      // while a model runtime is up OR still starting (friendly copy; stop the model first).
+      // The demo runtime is not "up" here (#532): it never executes that dir.
+      chatRuntimeActive: chatEngineInUse(ctx.runtime),
+      // F-32 (full-audit 2026-07-16): widen the guard per family — refuse a llama_cpp install
+      // while ANY llama-server sidecar (embedder/reranker/vision/translation) has a live child,
+      // and a whisper_cpp install mid-transcription/dictation. Installs touching only the other
+      // family still proceed.
+      llamaSidecarActive: llamaSidecarInUse(),
+      whisperActive: whisperSidecarInUse(),
+      // #339 P8-1 R-e / P8-2: a kiwix_tools (re-)install pre-cleans the dir a live
+      // kiwix-serve / kiwix-manage child executes from — refused while one is registered.
+      kiwixToolsActive: kiwixToolsInUse()
+    })
+  })
 
   ipcHandle(IPC.getEngineJob, (_e, jobId: string): EngineDownloadJob => engine.get(jobId))
 

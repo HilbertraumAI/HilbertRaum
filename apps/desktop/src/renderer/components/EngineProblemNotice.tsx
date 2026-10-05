@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useState, type ReactNode } from 'react'
 import type { EngineProblem, EngineRecheckResult } from '@shared/types'
 import { engineProblemCopy } from '@shared/engine-problem'
 import { Banner } from './Banner'
@@ -16,6 +16,18 @@ import { englishTranslator, type Translator } from './translator'
 // The reason sentence names the library and the package; commands and exit codes stay out of it
 // (§7: error codes only in Diagnostics, commands in the troubleshooting guide). Pure like every
 // shared component: the screen supplies the re-check (`onRecheck`), this renders its outcome.
+// #532: for damaged engine files the screen may also supply an "Install … again" control (it owns
+// the engine job, its progress and the download gate); it leads the actions, Check again follows.
+
+/** #532: the reinstall the screen offers beside Check again (design-guidelines §11.17 #532 amendment). */
+export interface EngineProblemReinstall {
+  /** The control: the button, or the job's progress and Cancel while it runs. */
+  control: ReactNode
+  /** The drive's policy allows the download, so the reason sentence names the reinstall. */
+  policyAllows: boolean
+  /** The reinstall job is running: Check again would only test a program being replaced. */
+  live: boolean
+}
 
 export interface EngineProblemNoticeProps {
   problem: EngineProblem
@@ -30,6 +42,8 @@ export interface EngineProblemNoticeProps {
    * answering anyway — a Windows Kit's `cpu/` build can run beside a damaged main folder.
    */
   demoNote?: boolean
+  /** #532: offer "Install … again" (damaged engine files only). Absent = no reinstall here. */
+  reinstall?: EngineProblemReinstall
   t?: Translator
 }
 
@@ -38,12 +52,13 @@ export function EngineProblemNotice({
   variant,
   onRecheck,
   demoNote = true,
+  reinstall,
   t = englishTranslator
 }: EngineProblemNoticeProps): JSX.Element {
   const showToast = useToast()
   const [checking, setChecking] = useState(false)
   const [outcome, setOutcome] = useState<string | null>(null)
-  const copy = engineProblemCopy(problem)
+  const copy = engineProblemCopy(problem, { reinstall: reinstall?.policyAllows === true })
   const reason = t(copy.key, copy.params)
 
   const recheck = async (): Promise<void> => {
@@ -65,8 +80,8 @@ export function EngineProblemNotice({
     }
   }
 
-  const action = (
-    <Button size="sm" disabled={checking} onClick={() => void recheck()}>
+  const check = (
+    <Button size="sm" disabled={checking || reinstall?.live === true} onClick={() => void recheck()}>
       {checking ? (
         <>
           <Spinner /> {t('models.engineProblem.checking')}
@@ -75,6 +90,15 @@ export function EngineProblemNotice({
         t('models.engineProblem.check')
       )}
     </Button>
+  )
+  // #532: the reinstall leads (it is the fix); Check again stays beside it for a fix made elsewhere.
+  const actions = reinstall ? (
+    <div className="engine-problem-actions">
+      {reinstall.control}
+      {check}
+    </div>
+  ) : (
+    check
   )
 
   if (variant === 'hint') {
@@ -88,7 +112,7 @@ export function EngineProblemNotice({
         <p className="hint mt-0" role="status">
           {outcome}
         </p>
-        {action}
+        {actions}
       </div>
     )
   }
@@ -100,7 +124,7 @@ export function EngineProblemNotice({
         <p className="hint hint-lede">{reason}</p>
         {demoNote && <p className="hint mt-0">{t('models.engineProblem.demoNote')}</p>}
         {outcome && <p className="hint mt-0">{outcome}</p>}
-        {action}
+        {actions}
       </div>
     </Banner>
   )

@@ -495,6 +495,13 @@ code, pre, kbd { font-family: var(--font-mono); }
 .engine-install progress { width: 100%; accent-color: var(--accent); }
 /* #530: the voice engine cannot run — a quiet line under the speech-model card + Check again. */
 .engine-problem-hint { display: flex; flex-direction: column; align-items: flex-start; gap: 4px; }
+/* #532: "Install … again" (or its progress + Cancel) and Check again on one row; the job's error
+   and the download-gate reason wrap below both buttons instead of splitting them. */
+.engine-problem-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; align-self: stretch; }
+.engine-problem-actions > .hint { order: 1; margin: 0; }
+/* The break: `.hint`'s max-width would cap a 100 % basis and keep the line beside the buttons. */
+.engine-problem-actions:has(> .hint) { row-gap: 4px; }
+.engine-problem-actions:has(> .hint)::after { content: ''; flex-basis: 100%; height: 0; }
 .btn.sm { padding: 5px 11px; font-size: 12px; min-height: 24px; }
 /* "Technical details" disclosure (guidelines §2/§3): checksums, paths, and
    runtime internals stay one click away, closed by default. */
