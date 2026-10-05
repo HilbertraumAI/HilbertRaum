@@ -1229,7 +1229,7 @@ optional — each has a default or is only needed by its harness:
 | `HILBERTRAUM_PROMPT_CACHE_SMOKE_MTP` | `prompt-cache-smoke` | `1` adds rung 1a's MTP flags (`--spec-type draft-mtp --spec-draft-n-max 2`), for a manifest with `speculative_decoding: mtp` that the app starts that way on a GPU |
 | `HILBERTRAUM_GEMMA_MODEL` | `gemma-thinking` | the Gemma model filename (default `gemma4-12b-it-qat-q4.gguf`) |
 | `HILBERTRAUM_OCR_IMAGE` | `ocr-smoke` | a real German scan image (png/jpg) — **never committed** |
-| `HILBERTRAUM_REAL_MODEL_PATH` | `real-model/wave3` | the chat GGUF path (the assertions were tuned on `qwen3.5-4b-ud-q4kxl.gguf`); sibling `HILBERTRAUM_LLAMA_BIN` points at the binary. **No defaults:** the harness is skipped unless `HILBERTRAUM_REAL_MODEL=1` and both paths are set |
+| `HILBERTRAUM_REAL_MODEL_PATH` | `real-model/wave3` | the chat GGUF path (the assertions were tuned on `qwen3.5-4b-ud-q4kxl.gguf`); sibling `HILBERTRAUM_LLAMA_BIN` points at the binary. **No defaults:** the on-switch is `HILBERTRAUM_REAL_MODEL=1`, and once it is set both paths are required (a missing one fails the run) |
 | `HILBERTRAUM_RESIDENT_REAL_N` | `resident-cache-real` | real chunk count to embed (default 2000) |
 | `HILBERTRAUM_EVAL_DIR` | `model-eval` | override the `eval/` data dir |
 | `HILBERTRAUM_ZIM_TOOLS_DIR` | `zim-real` | a directory holding the WHOLE unzipped kiwix-tools bundle (both `kiwix-serve`/`kiwix-manage` binaries plus their ICU DLLs) — **required once `zim-real` is requested** |
