@@ -216,6 +216,12 @@ export interface CombinedAbort {
    * thousand before they age out). Idempotent.
    */
   clear(): void
+  /**
+   * Cancel ONLY the timeout timer; the signal keeps following the caller until `clear()`. For a
+   * deadline that bounds part of a request: the chat request's covers its response headers, while
+   * a user Stop must still tear the open stream down (#594). Idempotent.
+   */
+  disarmTimeout(): void
 }
 
 /**
@@ -250,6 +256,9 @@ export function combineSignals(caller: AbortSignal | undefined, timeoutMs: numbe
       cleared = true
       clearTimeout(timer)
       caller?.removeEventListener('abort', onCallerAbort)
+    },
+    disarmTimeout(): void {
+      clearTimeout(timer)
     }
   }
 }

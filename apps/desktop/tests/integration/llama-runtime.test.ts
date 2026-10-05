@@ -1,5 +1,7 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
 import {
   CHAT_SERVER_ARGS,
   ChatRequestError,
@@ -7,10 +9,12 @@ import {
   FAST_MAX_TOKENS,
   FAST_TEMPERATURE,
   isExceedContextError,
+  isRuntimeUnresponsiveError,
   LlamaRuntime,
   readChatSSE,
   requestParamsForMode
 } from '../../src/main/services/runtime/llama'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import { createSelectingRuntimeFactory } from '../../src/main/services/runtime/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
@@ -350,6 +354,167 @@ describe('LlamaRuntime', () => {
   it('isExceedContextError is false for ordinary errors and non-context HTTP failures', () => {
     expect(isExceedContextError(new Error('boom'))).toBe(false)
     expect(isExceedContextError(new ChatRequestError(503, 'service unavailable', ''))).toBe(false)
+  })
+})
+
+// ---- #594: the wait for the response headers ----------------------------------------------------------------------------
+//
+// CB-5's watchdog lived in `readChatSSE`, i.e. it started once `res.body` existed. A sidecar that took the request and
+// never answered it (seen 2026-10-05: b9849 Vulkan on a GTX 1070 Ti, 0 % CPU, /health silent too) left the turn waiting
+// until undici's own 300 s headers timeout ended it as a raw "fetch failed". Both pinned builds send the headers when the
+// slot starts, BEFORE prefill (measured on b11146: 14 ms), so the owner's budget is CB-5's 120 s first-output budget.
+
+const realSetTimeout = globalThis.setTimeout
+const realClearTimeout = globalThis.clearTimeout
+
+/** Await `p` under fake timers with a REAL-time hang detector, so a hang fails by name. */
+function within<T>(p: Promise<T>, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = realSetTimeout(() => reject(new Error(`${what} never happened`)), hangBudgetMs(5_000))
+    p.then(
+      (v) => {
+        realClearTimeout(t)
+        resolve(v)
+      },
+      (e: unknown) => {
+        realClearTimeout(t)
+        reject(e)
+      }
+    )
+  })
+}
+
+/** A loopback llama-server that answers /health and takes the chat request without ever writing its headers. */
+async function silentSidecar(): Promise<{
+  port: number
+  chatReached: Promise<void>
+  chatClosed: Promise<void>
+  close: () => Promise<void>
+}> {
+  let reached!: () => void
+  let closed!: () => void
+  const chatReached = new Promise<void>((r) => (reached = r))
+  const chatClosed = new Promise<void>((r) => (closed = r))
+  const server = createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json', connection: 'close' })
+      res.end('{"status":"ok"}')
+      return
+    }
+    res.on('close', closed) // the client tore the connection down — llama-server then frees its slot
+    req.resume()
+    req.on('end', reached) // body read; no writeHead, ever
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  return {
+    port: (server.address() as AddressInfo).port,
+    chatReached,
+    chatClosed,
+    close: () => {
+      server.closeAllConnections()
+      return new Promise<void>((r) => server.close(() => r()))
+    }
+  }
+}
+
+describe('LlamaRuntime — the wait for the response headers (#594)', () => {
+  const startOpts: RuntimeStartOptions = { modelId: 'qwen3-4b-instruct-q4', modelPath: '/models/x.gguf', contextTokens: 4096 }
+  const ask = [{ role: 'user' as const, content: 'hi' }]
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('no headers ⇒ RuntimeUnresponsiveError at exactly the 120 s budget, and the connection is closed', async () => {
+    const sidecar = await silentSidecar()
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn: fakeSpawn().spawn,
+      findPort: async () => sidecar.port,
+      healthIntervalMs: 1
+    })
+    await runtime.start() // real fetch, real socket
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let outcome: unknown = 'pending'
+    const first = runtime
+      .chatStream(ask)
+      .next()
+      .then(
+        () => (outcome = 'answered'),
+        (e: unknown) => (outcome = e)
+      )
+    await within(sidecar.chatReached, 'the chat request reaching the sidecar')
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(outcome).toBe('pending')
+    await vi.advanceTimersByTimeAsync(1)
+    await within(first, 'the header deadline firing')
+    expect(isRuntimeUnresponsiveError(outcome)).toBe(true) // CB-5's error ⇒ main.chat.runtimeUnresponsive / 502
+    await within(sidecar.chatClosed, 'the request connection closing')
+    vi.useRealTimers()
+    await runtime.stop()
+    await sidecar.close()
+  })
+
+  it('a user Stop during the header wait is a clean stop, not RuntimeUnresponsiveError', async () => {
+    const sidecar = await silentSidecar()
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn: fakeSpawn().spawn,
+      findPort: async () => sidecar.port,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    const stop = new AbortController()
+    const first = runtime.chatStream(ask, { signal: stop.signal }).next()
+    await within(sidecar.chatReached, 'the chat request reaching the sidecar')
+    stop.abort()
+    const err = await within(first.then(() => null, (e: unknown) => e), 'the Stop ending the request')
+    expect((err as Error).name).toBe('AbortError') // what isAbortError / withChatStream treat as a Stop
+    expect(isRuntimeUnresponsiveError(err)).toBe(false)
+    await within(sidecar.chatClosed, 'the request connection closing')
+    await runtime.stop()
+    await sidecar.close()
+  })
+
+  it('the deadline ends when the headers arrive: a b11146 CPU prefill (a ping every 30 s, first token at 320.9 s) answers', async () => {
+    // Replays the 2026-10-05 capture's timing. The body errors when the request is aborted, as a fetch body does — so a
+    // header deadline still armed at 120 s would cut this stream; and before the first token a ping still re-arms the
+    // prefill budget (the owner kept that: on b11146 the pings are the only sign of a minutes-long CPU prefill).
+    let sse!: ReadableStreamDefaultController<Uint8Array>
+    const enc = new TextEncoder()
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      if (String(url).endsWith('/health')) return { ok: true, status: 200 } as Response
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          sse = c
+        }
+      })
+      init?.signal?.addEventListener('abort', () => sse.error(init.signal!.reason), { once: true })
+      return { ok: true, status: 200, body } as unknown as Response
+    }) as typeof fetch
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn: fakeSpawn().spawn,
+      fetchImpl,
+      findPort: async () => 51020,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] }) // the watchdog's quiet time reads it
+    const out: string[] = []
+    const run = (async () => {
+      for await (const t of runtime.chatStream(ask)) out.push(t)
+    })()
+    for (let t = 30_000; t <= 300_000; t += 30_000) {
+      await vi.advanceTimersByTimeAsync(30_000)
+      sse.enqueue(enc.encode(':\n\n'))
+    }
+    await vi.advanceTimersByTimeAsync(20_900)
+    sse.enqueue(enc.encode(chatChunk('Answer') + 'data: [DONE]\n\n'))
+    await within(run, 'the answer finishing')
+    expect(out).toEqual(['Answer'])
+    vi.useRealTimers()
+    await runtime.stop()
   })
 })
 

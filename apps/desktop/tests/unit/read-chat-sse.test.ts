@@ -1,4 +1,4 @@
-import { describe, it, expect } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import {
   readChatSSE,
   RuntimeUnresponsiveError,
@@ -115,6 +115,99 @@ describe('readChatSSE — CB-5 idle watchdog', () => {
     )
     expect((err as Error).name).toBe('AbortError')
     expect(isRuntimeUnresponsiveError(err)).toBe(false)
+  })
+})
+
+// #594 — the pinned b11146 writes an SSE comment (`:`) after every ~30 s of silence
+// (`--sse-ping-interval`, default 30; b9849 has none). Captured 2026-10-05 on the b11146 CPU build
+// (scratch capture, not committed): `:` at 30.26 / 60.54 / 90.79 s … through a 320.9 s prefill.
+// A ping is the server's HTTP thread, not the model, so once tokens flow it must not re-arm the
+// stream budget — it did, because the timer was re-armed per READ. Fake timers: no real pacing.
+describe('readChatSSE — SSE comment pings in the stream phase (#594)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** A body the test writes into, like the sidecar's socket. */
+  function sidecarBody(): { body: ReadableStream<Uint8Array>; write: (frame: string) => void } {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c
+      }
+    })
+    return { body, write: (frame) => controller.enqueue(enc.encode(frame)) }
+  }
+
+  it('a ping after the first token does not reset the stream budget', async () => {
+    vi.useFakeTimers()
+    const { body, write } = sidecarBody()
+    const idle = { prefillMs: 120_000, streamMs: 30_000 }
+    const out: string[] = []
+    let outcome: unknown = 'pending'
+    void (async () => {
+      for await (const t of readChatSSE(body, undefined, undefined, undefined, idle)) out.push(t)
+    })().then(
+      () => (outcome = 'ended'),
+      (e: unknown) => (outcome = e)
+    )
+    write(chatChunk('hello'))
+    await vi.advanceTimersByTimeAsync(20_000)
+    write(': ping\n\n') // inside the budget: under the old per-read timer this bought 30 s more
+    await vi.advanceTimersByTimeAsync(9_999)
+    expect(outcome).toBe('pending')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(out).toEqual(['hello'])
+    expect(isRuntimeUnresponsiveError(outcome)).toBe(true)
+    expect((outcome as Error).message).toContain('30000ms') // names the budget, not the remainder
+  })
+
+  it('a model event split across reads counts as output from its first bytes', async () => {
+    vi.useFakeTimers()
+    const { body, write } = sidecarBody()
+    const gen = readChatSSE(body, undefined, undefined, undefined, { prefillMs: 120_000, streamMs: 30_000 })
+    write(chatChunk('hello'))
+    expect((await gen.next()).value).toBe('hello')
+    const next = gen.next()
+    await vi.advanceTimersByTimeAsync(20_000)
+    write(':\n\n') // 20 s of the 30 already spent waiting…
+    await vi.advanceTimersByTimeAsync(9_000)
+    write('data: {"choices":[{"delta":{"content":" wor') // …when the next event starts arriving
+    await vi.advanceTimersByTimeAsync(5_000)
+    write('ld"}}]}\n\n')
+    expect((await next).value).toBe(' world')
+    await gen.return(undefined)
+  })
+
+  it('a wall-clock step (NTP, a manual change) does not eat the stream budget', async () => {
+    vi.useFakeTimers()
+    const { body, write } = sidecarBody()
+    const gen = readChatSSE(body, undefined, undefined, undefined, { prefillMs: 120_000, streamMs: 30_000 })
+    write(chatChunk('hello'))
+    expect((await gen.next()).value).toBe('hello')
+    const next = gen.next()
+    await vi.advanceTimersByTimeAsync(10_000)
+    vi.setSystemTime(Date.now() + 60_000) // the wall clock jumps; monotonic time does not
+    write(':\n\n')
+    await vi.advanceTimersByTimeAsync(15_000)
+    write(chatChunk(' world'))
+    expect((await next).value).toBe(' world')
+    await gen.return(undefined)
+  })
+
+  it('time the consumer spends between pulls is not counted against the stream budget', async () => {
+    // The local API waits up to 15 s on a slow client's drain between pulls; that is not the model.
+    vi.useFakeTimers()
+    const { body, write } = sidecarBody()
+    const gen = readChatSSE(body, undefined, undefined, undefined, { prefillMs: 120_000, streamMs: 30_000 })
+    write(chatChunk('a'))
+    expect((await gen.next()).value).toBe('a')
+    await vi.advanceTimersByTimeAsync(45_000) // the consumer holds the generator, not pulling
+    const next = gen.next()
+    await vi.advanceTimersByTimeAsync(29_000)
+    write(chatChunk('b'))
+    expect((await next).value).toBe('b')
+    await gen.return(undefined)
   })
 })
 
