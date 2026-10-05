@@ -98,6 +98,9 @@ with the slot; `IngestionDeps`/`ParseContext` carry it to the AudioParser, and
 (`main.ingest.audioNeedsEngine`, `…audioNeedsModelAndEngine`, `…audioEngineUnsupported`,
 display-map translated; `audioNeedsTranscriber` unchanged) — no schema change. Renderer
 navigation gained the virtual target `models:voice` (the AI Model screen on Browse, Voice task).
+#539 added `models:images` and `models:translation` (the same landing, Images / Translation task);
+`NavResolution.modelsFocus` is now `ModelsFocus = 'voice' | 'images' | 'translation'` (renderer-only,
+session state, never persisted; plain `models` still resolves to exactly `{ screen: 'models' }`).
 #530 (`architecture.md` "Engine load failures — design record"): `AppStatus` gained the
 additive-optional `engineProblems?: EngineProblem[]` — `{ family: 'llama_cpp' | 'whisper_cpp',
 reason: 'library-missing' | 'system-too-old' | 'files-damaged' | 'vc-runtime-missing' |

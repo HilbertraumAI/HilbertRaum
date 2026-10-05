@@ -13,6 +13,7 @@ import {
   imageMimeFromName,
   imageMimeOfFile,
   isHeicName,
+  isPdfName,
   ImageDecodeError,
   MAX_IMAGE_BYTES,
   type ComposerChip,
@@ -37,7 +38,7 @@ import { useEventCallback } from '../lib/useEventCallback'
 import type { MessageKey } from '@shared/i18n'
 import type { ImageSessionSummary, VisionErrorCode, VisionStatus } from '@shared/types'
 
-// Images screen (image-understanding §5/§11, Phase V3). Load ONE local PNG/JPEG, ask a
+// Images screen (image-understanding §5/§11, Phase V3). Load ONE local PNG/JPEG/WEBP, ask a
 // question in plain language, get an answer from a local vision model (the V2 backend).
 //
 // The loaded image, the Q&A thread, and the live streaming answer live in the module-level
@@ -61,7 +62,9 @@ const CHIP_KEYS: { labelKey: MessageKey; promptKey: MessageKey }[] = [
 // (full-audit 2026-07-11 CODE-36/34) are UI-only too: a history entry whose open/delete IPC threw.
 // `heicUnsupported` (#124) is UI-only detection by extension: HEIC stays unsupported (no
 // Chromium decode; a decoder would be a new native dep) but gets specific "convert to JPEG"
-// copy instead of the generic unsupported banner.
+// copy instead of the generic unsupported banner. `pdfUnsupported` (#539) is the same idea for a
+// PDF: it points to Make searchable (OCR) under Documents, with a button there. The PDF is never
+// imported from here — nothing routes to OCR unless the user goes there.
 type ClientImageError =
   | VisionErrorCode
   | 'multiDrop'
@@ -69,6 +72,7 @@ type ClientImageError =
   | 'deleteFailed'
   | 'clearFailed'
   | 'heicUnsupported'
+  | 'pdfUnsupported'
 
 // Client-guard error codes → friendly banner copy (the runtime codes map inside AnswerThread).
 const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
@@ -80,7 +84,15 @@ const CLIENT_ERR_KEY: Partial<Record<ClientImageError, MessageKey>> = {
   openFailed: 'images.err.openFailed',
   deleteFailed: 'images.err.deleteFailed',
   clearFailed: 'images.err.clearFailed',
-  heicUnsupported: 'images.err.heic'
+  heicUnsupported: 'images.err.heic',
+  pdfUnsupported: 'images.err.pdf'
+}
+
+/** The format a file the screen cannot read is refused as: HEIC (#124) and PDF (#539) get their own copy. */
+function unsupportedCode(name: string, mimeType?: string): ClientImageError {
+  if (isHeicName(name)) return 'heicUnsupported'
+  if (isPdfName(name, mimeType)) return 'pdfUnsupported'
+  return 'unsupportedType'
 }
 
 export function ImagesScreen({
@@ -285,8 +297,8 @@ export function ImagesScreen({
     setScreenError(null)
     const mime = imageMimeOfFile(file)
     if (!mime) {
-      // #124: an iPhone HEIC/HEIF gets its specific "convert to JPEG" copy.
-      setScreenError(isHeicName(file.name) ? 'heicUnsupported' : 'unsupportedType')
+      // #124 / #539: a HEIC photo or a PDF gets its own copy.
+      setScreenError(unsupportedCode(file.name, file.type))
       return
     }
     if (file.size > MAX_IMAGE_BYTES) {
@@ -321,8 +333,8 @@ export function ImagesScreen({
     if (!chosen) return
     const mime = imageMimeFromName(chosen.name)
     if (!mime) {
-      // #124: an iPhone HEIC/HEIF gets its specific "convert to JPEG" copy.
-      setScreenError(isHeicName(chosen.name) ? 'heicUnsupported' : 'unsupportedType')
+      // #124 / #539: a HEIC photo or a PDF (the picker offers "All files") gets its own copy.
+      setScreenError(unsupportedCode(chosen.name))
       return
     }
     if (chosen.sizeBytes > MAX_IMAGE_BYTES) {
@@ -419,6 +431,9 @@ export function ImagesScreen({
         <>
           {analyzing && <p className="hint">{t('images.drop.busy')}</p>}
           <ImageDropZone onDropFiles={onDropFiles} onChoose={handleChoose} busy={decoding || analyzing} />
+          {/* #539: the OCR pointer stays once the vision model is installed — the state in which
+              a scan's owner is most likely to try this screen instead. */}
+          <p className="hint">{t('images.avail.ocrPointer')}</p>
           <ImageHistory
             sessions={sessions}
             running={analyzing && selected ? { title: selected.name, onOpen: () => setViewingDetail(true) } : null}
@@ -492,7 +507,15 @@ export function ImagesScreen({
         message={screenError ? t(CLIENT_ERR_KEY[screenError] ?? 'images.err.decodeFailed') : null}
         onDismiss={screenError ? () => setScreenError(null) : undefined}
         t={t}
-      />
+      >
+        {screenError === 'pdfUnsupported' && (
+          <div className="actions">
+            <Button size="sm" onClick={() => onNavigate('documents')}>
+              {t('images.err.pdfAction')}
+            </Button>
+          </div>
+        )}
+      </ErrorBanner>
       {renderBody()}
     </div>
   )

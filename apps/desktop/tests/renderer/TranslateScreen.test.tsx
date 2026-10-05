@@ -96,7 +96,8 @@ describe('TranslateScreen — availability (O2 install path)', () => {
 
     expect(await screen.findByText(t('en', 'translate.avail.noModel'))).toBeInTheDocument()
     await user.click(screen.getByRole('button', { name: t('en', 'translate.avail.cta') }))
-    expect(onNavigate).toHaveBeenCalledWith('models')
+    // #539: on the translation model itself, not the screen's default view.
+    expect(onNavigate).toHaveBeenCalledWith('models:translation')
   })
 })
 

@@ -360,6 +360,7 @@ the everyday path.
 | "Telemetry disabled." | "Nothing leaves this drive. There's no tracking to turn off." |
 | "Open AI Model" | "Go to AI Model" — never "Open" right before "AI": it reads as the company name OpenAI (#527) |
 | "Open AI Model" under "the speech model is missing" | "Get the speech model" — a hint's button names its action, and lands where the action is (#527) |
+| A button about a missing optional model opens the AI Model screen's default view | It lands on that model: Browse, filtered to its task (`models:voice` / `models:images` / `models:translation`). The default view ("On this drive") by definition does not list a missing model (#527, #539). Chat-model and engine buttons keep plain `models`: the default view shows them |
 
 **Ambient privacy signal:** subtle lock/shield glyph + "Local · Offline", neutral color.
 Hover/click popover: "Everything stays on this drive. No internet connection is used."
@@ -507,7 +508,9 @@ housekeeping; the full original phased plan is in git history —
   auto-collapsing Thinking… line.
 - **Phase 26 — IA regroup.** Nav 7→5 (Home · Chat · Documents · **AI Model** ‖ Settings);
   Privacy + Diagnostics became Settings tabs; `renderer/navigation.ts` `resolveNavTarget`
-  with virtual `settings:*` targets + legacy `privacy`/`diagnostics` aliases; Home rebuilt
+  with virtual `settings:*` targets + legacy `privacy`/`diagnostics` aliases (later joined by
+  `documents:packs` and the `models:voice` / `models:images` / `models:translation` landings on a
+  missing model — §7, #527, #539); Home rebuilt
   as the readiness hub; AI Model screen with per-card "Technical details" disclosure.
 - **Phase 27 — microcopy, ambient signal, first-run (closed the wave).**
   - *Copy sweep* (§7) across renderer + user-facing main-process strings: the stale "Models
@@ -1821,9 +1824,20 @@ screen now keeps the active chat model pinned above a compact library of alterna
   group takes its leader's rank) and variants keep their relative order inside it. There is no
   global installed-first boundary across the rendered rows — a group whose leader is installed can
   expand to needs-download siblings that sit above the next group's leader.
-- **Compact rows:** task, storage, minimum RAM, status badges and existing actions; descriptions,
-  automatic-role explanations and technical fields share the existing closed disclosure.
+- **Compact rows:** task, storage, minimum RAM, status badges and existing actions; descriptions
+  and technical fields share the existing closed disclosure.
   Rows stack at narrow widths and retain the shared screen frame and theme tokens.
+  - **#539 amendment — an automatic role says where it is used, on the card.** The embeddings,
+    reranker, speech, translation and vision models have nothing to select or start, so the
+    card used to carry no action at all, and the one sentence that explained it ("Installed —
+    ready in the Images tab") sat inside the closed disclosure. A user who downloaded the
+    vision model to fix a failed scan spent hours looking for a way to load it. Now that line
+    sits under the card's subtitle, visibly, for every automatic role. It is moved, not
+    duplicated. The installed vision card also gets **Go to Images**, its only button. The
+    vision model's plain hint, still in the disclosure, says what it does ("Answers your
+    questions about one picture at a time. It doesn't read PDFs or make scans searchable.")
+    instead of the chat size tier. Copy names the rail destination a "screen" (DE „Bereich
+    „Bilder““), never a "tab".
 - **Downloads:** live progress/cancel appears once above results, so filtering or collapsing a
   group cannot hide it. Confirmation, license acknowledgement, verification and start gates
   retain their existing behavior. Context-size settings stay in their existing location.

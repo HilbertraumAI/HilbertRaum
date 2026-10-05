@@ -128,7 +128,7 @@ interface Props {
    * alone (the pack ticked, the document corpus off). Absent ⇒ the packs panel hides the action.
    */
   onAskPack?: (packId: string) => void
-  /** Deep links out of this screen (TG-3: the translate model-missing state → 'models'). */
+  /** Deep links out of this screen (TG-3: the translate model-missing state → 'models:translation'). */
   onNavigate?: (target: string) => void
   /**
    * Which mode to open in (§11.16): the user's own files (default) or the knowledge-pack panel —
@@ -1166,8 +1166,9 @@ export function DocumentsScreen({
   const handleKeepInLibrary = useEventCallback(onKeepInLibrary)
   const handleSetLifecycle = useEventCallback(onSetLifecycle)
   const handleRemoveFromCollection = useEventCallback(onRemoveFromCollection)
-  // The translate model-missing deep link (TG-3): the DocRow install item → AI Model screen.
-  const handleOpenModels = useEventCallback(() => onNavigate?.('models'))
+  // The translate model-missing deep link (TG-3): the DocRow install item → the AI Model screen,
+  // on the translation model (#539).
+  const handleOpenModels = useEventCallback(() => onNavigate?.('models:translation'))
   // full-audit 2026-07-11 CODE-29: the row's Cancel used to call cancelActiveDocTask()
   // fire-and-forget from inside DocRow — a rejected cancel (workspace locked, backend gone)
   // left the row spinning with an unhandled rejection and zero feedback. Routed through the

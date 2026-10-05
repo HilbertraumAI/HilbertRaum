@@ -32,6 +32,10 @@ _2026-10-05 — **#570–#573 — a file attached in a chat that can't be read y
 the OCR files) and offers Go to Documents, held for its own chat (design-guidelines §11.18); `resolveScope` / `listAttachments` count a chat's unfiled attachments, so a
 failed attach no longer widens to the whole corpus (partial index, no migration; `architecture.md` doc-org §4 #571 amendment, rag-design §13.2); scan rows lose Try
 again and Retry all skips them; one-shot "‹ Back to chat"; Translate parity. The OCR rejoin is pinned. Open: deleting a chat's only attachment still widens it._
+_2026-10-05 — **#539 — every automatic model's card says where it is used, and a button about a missing vision or translation model lands on it
+(`fix/539-vision-model-hints`).** The line left Technical details for all five automatic roles (design-guidelines §15 #539 amendment); the vision card
+gets Go to Images; `models:images` / `models:translation` join `models:voice` (`architecture.md` "Voice dictation" #539 amendment; the rule in §7).
+Images names a dropped or picked PDF and points to OCR in Documents (image record §11). #538 interim: the rotate-and-re-save note. Open: #511 screenshots._
 _2026-10-04 — **#567 — the browser engine sends no request of its own: no spell-check dictionary, no WPAD (`fix/567-chromium-background-fetches`).** `spellcheck: false`
 stopped only the underlining: each session fetched a `.bdic` a few ms after `ready` (Linux: every language; Windows: a language it cannot check), at every start. Now
 `setSpellCheckerLanguages([])` + off from `session-created` (and first in ready), plus `no-proxy-server`. Packaged net logs, 0 remote: Windows `--lang=pl` full probe, Linux AppImage
@@ -125,18 +129,6 @@ fewer tokens generated than the cap sent ⇒ window, else cap — and a legacy r
 **#501:** Pandoc's shape rule + a TeX-signal/short-span content rule; remark-math's single-`$` mode stays
 off. Open: a `<figcaption>` inside a dropped `<figure>` (the #500 capture path) still fuses sup/sub — a
 two-line change if the owner wants it; the `snake case` vs `snake_case` question-side note is recorded._
-_2026-09-20 — **Wave 13 research recorded, five PRs shipped under a new standing shipping rule, the
-v0.1.61 cut 2026-09-21.** Retrieval is deterministic across repeated asks and a cold process restart — the
-only variance measured was in answer wording, now removed by the sampler pin. Converter coverage is
-93–99% on ordinary prose-shaped content; a lower figure on giant list-style tables is a size/row cap by
-design, not a defect. Nothing breaks on seven non-Wikipedia test archives; two converter gaps were
-confirmed there. 21 open issues were triaged with a disposition each. A tooling survey confirms the
-converter's own design. A three-arm English read found that naming a pack's archive language only when
-it differs from the question's carries the gain, while dropping the word "Wikipedia" from the planner
-prompt collapses it. Merged this wave: #492, #491, #494, #495, #496 (all 2026-09-20) — recorded in
-`docs/rag-design.md` §17 and CHANGELOG's `[0.1.61]`; the v0.1.61 tag was cut 2026-09-21.
-Next items since shipped in v0.1.62: the converter PR for #487/#493 and captions (#500); the
-cut-off-badge residual (#498, via #509)._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -182,8 +174,10 @@ budget, making room for the #497 dictation entry), and the closed 2026-09-10 #43
 (preamble budget, making room for the #548–#551 entry), and the closed 2026-09-27 #517 scorer entry on 2026-10-02 (preamble
 budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #447 expander-cache entry on 2026-10-03
 (preamble budget, making room for the OCR-rasterizer-CSP entry), and the closed 2026-09-19 knowledge-pack research entry on
-2026-10-03 (preamble budget, making room for the #562 / #563 / #560-platform entries), and the closed 2026-09-21 #497
-dictation entry on 2026-10-05 (preamble budget, making room for the #570–#573 entry) — citations of the form "BUILD_STATE <date> entry" /
+2026-10-03 (preamble budget, making room for the #562 / #563 / #560-platform entries), and the closed 2026-10-02 #551 entry on
+2026-10-04 (preamble budget, making room for the #567 entry), and the closed 2026-09-20 wave-13 entry on 2026-10-05 (preamble budget, making
+room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
+for the #570–#573 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

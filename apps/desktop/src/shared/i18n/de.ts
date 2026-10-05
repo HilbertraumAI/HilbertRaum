@@ -1212,6 +1212,7 @@ export const de: Record<keyof typeof en, string> = {
   'models.hint.transcriber':
     'Wandelt Audioaufnahmen in durchsuchbaren Text um — und schaltet die 🎤 Spracheingabe im Chat frei.',
   'models.hint.translation': 'Übersetzt deine Dokumente und Texte zwischen Sprachen — vollständig offline.',
+  'models.hint.vision': 'Beantwortet deine Fragen zu jeweils einem Bild. PDFs liest es nicht, und Scans macht es nicht durchsuchbar.',
   'models.hint.small': 'Klein und flott — schnelle Antworten auf fast jedem Gerät.',
   'models.hint.balanced': 'Ausgewogen — läuft gut auf den meisten Laptops.',
   'models.hint.large': 'Groß — stärkste Antworten; braucht einen leistungsstarken Rechner.',
@@ -1341,9 +1342,10 @@ export const de: Record<keyof typeof en, string> = {
     'Auf diesem Betriebssystem kann die App die Sprach-Engine noch nicht installieren — dieses ' +
     'Modell ermöglicht hier deshalb weder Spracheingabe noch Audio-Import.',
   'models.vision.installed':
-    'Installiert — bereit im Tab „Bilder“. Hier gibt es nichts zu starten.',
+    'Installiert — wird automatisch im Bereich „Bilder“ verwendet. Hier gibt es nichts zu starten.',
   'models.vision.notInstalled':
-    'Nach der Installation im Tab „Bilder“ verfügbar — keine Einrichtung nötig.',
+    'Wird nach der Installation automatisch im Bereich „Bilder“ verwendet — keine Einrichtung nötig.',
+  'models.vision.goToImages': 'Zu den Bildern',
   'models.translation.installed':
     'Installiert — wird automatisch zum Übersetzen verwendet. Hier gibt es nichts zu starten.',
   'models.translation.notInstalled':
@@ -3151,7 +3153,7 @@ export const de: Record<keyof typeof en, string> = {
   'images.avail.noRuntime': 'Bildverständnis braucht zuerst die installierte KI-Engine.',
   'images.avail.incompatible': 'Das KI-Bildmodell dieses Laufwerks braucht eine neuere KI-Engine.',
   'images.avail.cta': 'Zum KI-Modell',
-  'images.avail.ocrPointer': 'Gescannte Dokumente? Nutze „Durchsuchbar machen (OCR)“ unter Dokumente.',
+  'images.avail.ocrPointer': 'Gescannte Dokumente? Nutze „Durchsuchbar machen (OCR)“ im Bereich „Dokumente“.',
   'images.drop.title': 'Bild hier ablegen',
   'images.drop.choose': 'oder ein Bild auswählen',
   'images.drop.types': 'PNG, JPEG oder WEBP',
@@ -3195,6 +3197,10 @@ export const de: Record<keyof typeof en, string> = {
   // #124: HEIC per Endung erkannt — konkreter Hinweis statt der allgemeinen Meldung.
   'images.err.heic':
     'iPhone-HEIC-Fotos werden noch nicht unterstützt. Wandle das Foto zuerst in JPEG um.',
+  // #539 — siehe en.ts.
+  'images.err.pdf':
+    'Hier wird ein einzelnes Bild gelesen, kein PDF. Für ein gescanntes PDF nutze „Durchsuchbar machen (OCR)“ im Bereich „Dokumente“.',
+  'images.err.pdfAction': 'Zu den Dokumenten',
   'images.err.decodeFailed':
     'Dieses Bild konnte nicht geöffnet werden. Es ist vielleicht beschädigt oder hat ein nicht unterstütztes Format.',
   'images.err.multiDrop': 'Leg immer nur ein Bild ab.',

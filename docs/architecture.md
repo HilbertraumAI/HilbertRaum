@@ -1779,6 +1779,28 @@ explicitly out of scope.
     English text is unchanged); the spawn passes `windowsHide`; a signal death keeps its stderr
     tail.
   - **Record:** "Engine load failures — design record".
+- **#539 amendment — the `models:voice` landing becomes the rule for every missing optional
+  model.** Three more buttons had the defect #527 fixed: Images' "Go to AI Model" (all three
+  unavailable reasons), Translate's "Go to AI Model", and the Documents row item "Get the
+  translation model…". Each landed on "On this drive" whenever any model was installed. They now
+  open `models:images` / `models:translation`.
+  - **One table.** `ModelsScreen`'s `FOCUS` maps each focus to its task (`voice` → transcriber,
+    `images` → vision, `translation` → translation) and to the engine families whose missing-engine
+    banner keeps the screen at the top instead of scrolling the library into view (`voice`:
+    `llama_cpp` + `whisper_cpp`, unchanged; `images` / `translation`: `llama_cpp`, the runtime of
+    both manifests). `NavResolution.modelsFocus` is the `ModelsFocus` union; the focus is
+    session-only App state, read once at mount.
+  - **One target for Images.** `no-runtime` (the engine binary is missing) puts the engine banner
+    on top of that view; `incompatible` shows on the vision row as "Unsupported". An engine that
+    is present but cannot run (#530) leaves vision available, so the Images card never sends the
+    user there.
+  - **Unchanged on purpose.** Every chat-model and engine button (Home, the chat's no-model state,
+    the #530 App notice, Performance, the first-run gate) keeps plain `models`; the default view
+    shows what they are about. `resolveNavTarget('models')` stays exactly `{ screen: 'models' }`.
+  - **Not in the skip predicate.** The #530 engine-problem banner, and the AI Model banners #516
+    and #532 propose, do not suppress the scroll. They should join the predicate when they land.
+  - **The rule** is recorded once in design-guidelines §7 ("a button about a missing optional
+    model lands on that model").
 - **Permissions:** the Phase-31 deny-by-default `setPermissionRequestHandler` gained its
   single exception — `media` requests that are **audio-only and from the app's own
   WebContents** (`services/permissions.ts`; scope matrix unit-tested). See
@@ -10810,7 +10832,12 @@ phase). Deltas against §1–§10 above:
   downscales as before (main's 50 MP cap stays authoritative). WEBP is accepted at intake and
   **normalized in the renderer** (re-encode ships PNG) so the main-side accept set and SEC-3/D4
   parsers stay PNG/JPEG-only; the original-bytes fallback is disabled for WEBP. HEIC detected by
-  extension with specific "convert to JPEG" copy.
+  extension with specific "convert to JPEG" copy. **#539:** a PDF (by `.pdf` or `application/pdf`,
+  `isPdfName`), dropped or picked through the picker's "All files", gets its own banner pointing a
+  scanned PDF to Make searchable (OCR) under Documents, with a **Go to Documents** button. The PDF
+  is never imported from here: an image-picker token cannot be redeemed by `importDocuments`, and
+  nothing routes to OCR unless the user goes there. The OCR pointer line now also shows under the
+  drop zone while the vision model is available, not only on the unavailable card.
 - **IPC hardening (#119, #120.2):** `imageChooseImage` is `requireUnlocked()`-gated like its
   file-handler siblings; the history persistence fields are clamped at the IPC boundary (title
   ≤ 255, dims finite-positive-or-null, unknown `sessionId` ⇒ fresh session).

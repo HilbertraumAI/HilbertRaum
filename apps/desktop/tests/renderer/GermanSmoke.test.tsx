@@ -8,6 +8,7 @@ import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { DocumentsScreen } from '../../src/renderer/screens/DocumentsScreen'
 import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { ModelsScreen } from '../../src/renderer/screens/ModelsScreen'
+import { ImagesScreen } from '../../src/renderer/screens/ImagesScreen'
 import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { ReviewScreen } from '../../src/renderer/screens/ReviewScreen'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
@@ -334,6 +335,56 @@ describe('German render smokes (Phase 40)', () => {
       await screen.findByRole('heading', { name: t('de', 'models.title') })
     ).toBeInTheDocument()
     expect(await screen.findByText(t('de', 'models.empty.title'))).toBeInTheDocument()
+  })
+
+  it('ModelsScreen renders the German vision card: where it is used + its button (#539)', async () => {
+    stubApi({
+      listModels: vi.fn(async (): Promise<ModelInfo[]> => [
+        {
+          id: 'qwen2.5-vl-3b-instruct-q4',
+          displayName: 'Qwen2.5-VL 3B Instruct Q4',
+          family: 'qwen2.5-vl',
+          role: 'vision',
+          format: 'gguf',
+          runtime: 'llama_cpp',
+          license: 'apache-2.0',
+          sizeOnDiskGb: 3.27,
+          recommendedMinRamGb: 8,
+          recommendedRamGb: 16,
+          recommendedContextTokens: 4096,
+          localPath: 'models/vision/qwen2.5-vl.gguf',
+          state: 'installed',
+          recommended: false
+        }
+      ]),
+      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+      getPolicy: vi.fn(async () => {
+        throw new Error('no policy')
+      }),
+      getAppStatus: vi.fn(async () => appStatus())
+    })
+    const onNavigate = vi.fn()
+    render(german(<ModelsScreen onNavigate={onNavigate} />))
+
+    expect(await screen.findByText(t('de', 'models.vision.installed'))).toBeVisible()
+    await userEvent.setup().click(screen.getByRole('button', { name: t('de', 'models.vision.goToImages') }))
+    expect(onNavigate).toHaveBeenCalledWith('images')
+  })
+
+  it('ImagesScreen renders the German PDF pointer and the OCR line (#539)', async () => {
+    stubApi({
+      imageGetStatus: vi.fn(async () => ({ available: true, modelId: 'v', modelDisplayName: 'V' })),
+      imageChooseImage: vi.fn(async () => ({ token: 'tok', name: 'Scan.pdf', sizeBytes: 4 }))
+    })
+    const onNavigate = vi.fn()
+    const user = userEvent.setup()
+    render(german(<ImagesScreen onNavigate={onNavigate} />))
+
+    expect(await screen.findByText(t('de', 'images.avail.ocrPointer'))).toBeVisible()
+    await user.click(screen.getByRole('button', { name: t('de', 'images.drop.choose') }))
+    expect(await screen.findByText(t('de', 'images.err.pdf'))).toBeInTheDocument()
+    await user.click(screen.getByRole('button', { name: t('de', 'images.err.pdfAction') }))
+    expect(onNavigate).toHaveBeenCalledWith('documents')
   })
 
   it('PrivacyTab renders German', async () => {
