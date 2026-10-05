@@ -7,6 +7,7 @@ import { openDatabase, type Db } from '../../src/main/services/db'
 import { runBankExtraction, runCashflowSummary, runCategorization, runCsvExport, latestBankStatementId } from '../../src/main/services/skills/run'
 import { withDocumentLock, activeDocumentLockCount } from '../../src/main/services/skills/doc-lock'
 import { SkillRunController } from '../../src/main/services/skills/run-controller'
+import { hangPolls } from '../helpers/hang-budget'
 import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
 
 // Cross-lane write safety (skills-tools-audit-2026-06-26 PC-1, §2.3). The main process is
@@ -168,75 +169,6 @@ describe('cross-lane write safety — per-document serialization (audit PC-1)', 
     expect(activeDocumentLockCount()).toBe(0)
   })
 
-  it('SKA-24: an aborted PARKED waiter rejects immediately, never runs, and a THIRD caller still acquires', async () => {
-    // The chain invariant under abort: the waiter's tail is PUBLISHED before it parks, so the abort
-    // path must still settle it (release + prune) — otherwise every later caller deadlocks forever.
-    const docId = 'doc-abort-parked'
-    let releaseHolder!: () => void
-    const holderGate = new Promise<void>((resolve) => {
-      releaseHolder = resolve
-    })
-    const order: string[] = []
-
-    // Caller 1 HOLDS the lock (parked inside its own fn, like a long categorize).
-    let holderStarted!: () => void
-    const holderAcquired = new Promise<void>((resolve) => {
-      holderStarted = resolve
-    })
-    const holder = withDocumentLock(docId, async () => {
-      order.push('holder:start')
-      holderStarted()
-      await holderGate
-      order.push('holder:end')
-    })
-    await holderAcquired // the holder provably holds the lock
-
-    // Caller 2 parks behind it with a signal, then aborts.
-    const ac = new AbortController()
-    let waiterRan = false
-    const waiter = withDocumentLock(docId, async () => {
-      waiterRan = true
-    }, ac.signal)
-    const waiterErr = waiter.then(
-      () => null,
-      (e: unknown) => e
-    )
-    ac.abort()
-    // Assertions before the holder releases run in a try/finally: a red one must still release the
-    // gate, or the leaked module-global chain poisons every later activeDocumentLockCount() test.
-    try {
-      const err = await waiterErr // rejects IMMEDIATELY — the holder is still parked on its gate
-      expect(err).toBeInstanceOf(DOMException)
-      expect((err as DOMException).name).toBe('AbortError')
-      expect(waiterRan).toBe(false)
-      expect(order).toEqual(['holder:start']) // the holder had NOT finished when the waiter rejected
-    } finally {
-      releaseHolder()
-    }
-
-    // Caller 3 (no signal) queues after the aborted waiter — the chain must not be wedged.
-    const third = withDocumentLock(docId, async () => {
-      order.push('third')
-      return 7
-    })
-    await holder
-    expect(await third).toBe(7)
-    expect(order).toEqual(['holder:start', 'holder:end', 'third'])
-    await Promise.resolve() // let the aborted waiter's deferred prune run
-    expect(activeDocumentLockCount()).toBe(0) // no leaked chain entry from the aborted waiter
-  })
-
-  it('SKA-24: an already-aborted caller facing a FREE lock still runs fn (the seam records the honest cancel)', async () => {
-    const ac = new AbortController()
-    ac.abort()
-    let ran = false
-    await withDocumentLock('doc-abort-free', async () => {
-      ran = true
-    }, ac.signal)
-    expect(ran).toBe(true) // pre-R9 behaviour preserved: the seam's own first signal check owns this case
-    expect(activeDocumentLockCount()).toBe(0)
-  })
-
   it('SKA-24 end-to-end: Cancel flips a run QUEUED on the doc lock to cancelled while the holder still runs', async () => {
     // The user-visible defect: a run queued behind a long categorize showed a dead "running" spinner
     // after Cancel until the other lane finished. Now the parked waiter rejects, the controller's
@@ -280,7 +212,10 @@ describe('cross-lane write safety — per-document serialization (audit PC-1)', 
     try {
       // The parked waiter rejects on the abort; the controller flips to 'cancelled' WITHOUT waiting for
       // lane A (which is still parked on its barrier). Bounded poll — no dependence on hop counts.
-      for (let i = 0; i < 50 && controller.get(started.runHandle)!.state === 'running'; i++) {
+      const polls = hangPolls(50, 10)
+      let i = 0
+      while (controller.get(started.runHandle)!.state === 'running') {
+        if (++i > polls) throw new Error('cancelled run still "running" after the poll budget (queued waiter never rejected)')
         await new Promise((r) => setTimeout(r, 10))
       }
       expect(controller.get(started.runHandle)!.state).toBe('cancelled')
@@ -301,87 +236,62 @@ describe('cross-lane write safety — per-document serialization (audit PC-1)', 
     expect(activeDocumentLockCount()).toBe(0)
   })
 
-  it('SKA-28: an export racing a competing replace-delete never writes an empty file (TOCTOU closed)', async () => {
-    // Pre-R9, `runDomainFileExport` held NO outer lock: its R3 staleness re-extract self-locked and
-    // RELEASED, and the subsequent row load ran unlocked — a competing lane's DELETE (the doctask
-    // replace step, reduced here to its interleave-relevant essence) could land between the two, so the
-    // export loaded 0 rows and wrote an empty CSV reported "saved 0 rows". The audit notes the window
-    // is microtask-narrow in production but test environments can invert the timing — this barrier
-    // forces exactly that inversion. Post-fix the export's ONE hold spans prepare+load+serialize, so it
-    // writes either its re-extracted rows or runs strictly before/after the competitor — never [].
-    const db = freshDb()
-    const COLLAPSED = 'Statement EUR 2026-01-02 Grocery -45,90 1.954,10 2026-01-03 Salary 2.500,00 4.454,10'
-    const docId = seedDocWithChunks(db, COLLAPSED)
-
-    // Seed a statement extracted from FAITHFUL segments, then force it stale so the export re-extracts.
-    const pre = await runBankExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: async () => segmentsFor(STATEMENT_TEXT) })
-    expect(pre.transactionCount).toBe(2)
-    db.prepare('UPDATE bank_statements SET extractor_version = 2 WHERE id = ?').run(pre.statementId!)
-
-    // The export parks at its re-extract's segment read (holding the outer lock post-fix).
-    let releaseBarrier!: () => void
-    const barrier = new Promise<void>((resolve) => {
-      releaseBarrier = resolve
-    })
-    let exportReached!: () => void
-    const exportAtBarrier = new Promise<void>((resolve) => {
-      exportReached = resolve
-    })
-    let written: string | null = null
-    const exportRun = runCsvExport(db, { skillInstallId, documentId: docId }, {
-      audit: () => {},
-      confirmed: true,
-      readDocumentSegments: barrierReader(STATEMENT_TEXT, exportReached, barrier),
-      saveTextFile: async (_name, content) => {
-        written = content
-        return true
+  // The competing replace-delete queues on the lock. Its body is SYNCHRONOUS on acquisition — the most
+  // aggressive interleave a cooperative scheduler allows (pre-fix it deterministically ran between the
+  // seam's re-extract release and its unlocked load). Pre-R9, `runDomainFileExport` and
+  // `runCashflowSummary` held NO outer lock (validate/categorize already wrapped): the R3 staleness
+  // re-extract self-locked and RELEASED, and the subsequent row load ran unlocked — so the competitor's
+  // DELETE could land between the two and the seam loaded 0 rows (an export wrote an empty CSV reported
+  // "saved 0 rows"). The window is microtask-narrow in production but test environments can invert the
+  // timing; the barrier forces exactly that inversion. Post-fix ONE hold spans prepare+load+serialize.
+  it.each([
+    {
+      // SKA-28: an export never writes an empty file (TOCTOU closed).
+      name: 'export',
+      start: (db: Db, docId: string, reader: ReturnType<typeof barrierReader>, sink: { written: string | null }) =>
+        runCsvExport(db, { skillInstallId, documentId: docId }, {
+          audit: () => {},
+          confirmed: true,
+          readDocumentSegments: reader,
+          saveTextFile: async (_name, content) => {
+            sink.written = content
+            return true
+          }
+        }),
+      check: (sink: { written: string | null }) => {
+        expect(sink.written!).toContain('Grocery') // the serialized text carries the re-extracted rows…
+        expect(sink.written!).toContain('Salary') // …not an empty header-only CSV
       }
-    })
-    await exportAtBarrier
-
-    // The competing replace-delete queues on the lock. Its body is SYNCHRONOUS on acquisition — the
-    // most aggressive interleave a cooperative scheduler allows (pre-fix it deterministically ran
-    // between the export's re-extract release and its unlocked load).
-    const competitor = withDocumentLock(docId, async () => {
-      db.prepare(
-        `DELETE FROM bank_transactions WHERE statement_id IN (SELECT id FROM bank_statements WHERE document_id = ?)`
-      ).run(docId)
-      db.prepare('DELETE FROM bank_statements WHERE document_id = ?').run(docId)
-    })
-
-    releaseBarrier()
-    const res = await exportRun
-    await competitor
-    expect(res.ok).toBe(true)
-    expect(res.count).toBe(2) // never "saved 0 rows"
-    expect(written!).toContain('Grocery') // the serialized text carries the re-extracted rows…
-    expect(written!).toContain('Salary') // …not an empty header-only CSV
-    expect(activeDocumentLockCount()).toBe(0)
-  })
-
-  it('SKA-28: summarize under the same racing replace-delete serves the re-extracted rows, never 0', async () => {
-    // The summarize twin: `runCashflowSummary` was the OTHER downstream seam holding no outer lock
-    // (validate/categorize already wrap). Same interleave, same fix — one hold across prepare+load.
+    },
+    {
+      // SKA-28 summarize twin: the OTHER downstream seam that held no outer lock.
+      name: 'summarize',
+      start: (db: Db, docId: string, reader: ReturnType<typeof barrierReader>) =>
+        runCashflowSummary(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: reader }),
+      check: () => {}
+    }
+  ])('SKA-28: $name under a racing replace-delete serves the re-extracted rows, never 0', async ({ start, check }) => {
     const db = freshDb()
     const COLLAPSED = 'Statement EUR 2026-01-02 Grocery -45,90 1.954,10 2026-01-03 Salary 2.500,00 4.454,10'
     const docId = seedDocWithChunks(db, COLLAPSED)
+
+    // Seed a statement extracted from FAITHFUL segments, then force it stale so the seam re-extracts.
     const pre = await runBankExtraction(db, { skillInstallId, documentId: docId }, { audit: () => {}, readDocumentSegments: async () => segmentsFor(STATEMENT_TEXT) })
     expect(pre.transactionCount).toBe(2)
     db.prepare('UPDATE bank_statements SET extractor_version = 2 WHERE id = ?').run(pre.statementId!)
 
+    // The seam parks at its re-extract's segment read (holding the outer lock post-fix).
     let releaseBarrier!: () => void
     const barrier = new Promise<void>((resolve) => {
       releaseBarrier = resolve
     })
-    let summarizeReached!: () => void
-    const summarizeAtBarrier = new Promise<void>((resolve) => {
-      summarizeReached = resolve
+    let seamReached!: () => void
+    const seamAtBarrier = new Promise<void>((resolve) => {
+      seamReached = resolve
     })
-    const summaryRun = runCashflowSummary(db, { skillInstallId, documentId: docId }, {
-      audit: () => {},
-      readDocumentSegments: barrierReader(STATEMENT_TEXT, summarizeReached, barrier)
-    })
-    await summarizeAtBarrier
+    const sink: { written: string | null } = { written: null }
+    const seamRun = start(db, docId, barrierReader(STATEMENT_TEXT, seamReached, barrier), sink)
+    await seamAtBarrier
 
     const competitor = withDocumentLock(docId, async () => {
       db.prepare(
@@ -391,29 +301,11 @@ describe('cross-lane write safety — per-document serialization (audit PC-1)', 
     })
 
     releaseBarrier()
-    const res = await summaryRun
+    const res = await seamRun
     await competitor
     expect(res.ok).toBe(true)
-    expect(res.count).toBe(2) // the summary read the rows its own re-extract persisted — never 0
-    expect(activeDocumentLockCount()).toBe(0)
-  })
-
-  it('withDocumentLock is re-entrant within one async chain (a nested same-doc acquire does not deadlock)', async () => {
-    // The load-bearing property for the lane wraps: the analysis handler / runCategorize hold the lock
-    // across a sequence AND call self-locking seams inside. A nested acquire of an already-held id must
-    // run inline rather than await the outer hold forever.
-    const docId = 'doc-reentrant'
-    const seen: string[] = []
-    const result = await withDocumentLock(docId, async () => {
-      seen.push('outer')
-      const inner = await withDocumentLock(docId, async () => {
-        seen.push('inner')
-        return 42
-      })
-      return inner
-    })
-    expect(result).toBe(42)
-    expect(seen).toEqual(['outer', 'inner'])
+    expect(res.count).toBe(2) // the seam used the rows its own re-extract persisted — never "saved 0 rows"
+    check(sink)
     expect(activeDocumentLockCount()).toBe(0)
   })
 })

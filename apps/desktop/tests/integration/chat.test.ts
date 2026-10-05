@@ -252,6 +252,22 @@ describe('getLatestMessage — LIMIT-1 twin of listMessages (CB-6)', () => {
     const conv = createConversation(db, {})
     expect(getLatestMessage(db, conv.id)).toBeNull()
   })
+
+  it('matches on a skill-stamped assistant tail (the skills JOIN column is populated)', () => {
+    const db = freshDb()
+    // A bare skills row is enough for the title JOIN; no skill machinery is involved.
+    db.prepare(
+      `INSERT INTO skills (install_id, id, title, version, kind, source, path, enabled, warning_ack, trusted_level, manifest_json, installed_at, updated_at)
+       VALUES ('user:bank', 'bank', 'Skill bank', '1.0.0', 'instruction', 'user', 'bank', 1, 1, 'user', '{}', 'now', 'now')`
+    ).run()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Summarize.' })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'Done.', skillId: 'user:bank' })
+    const twin = getLatestMessage(db, conv.id)
+    expect(twin).toEqual(listMessages(db, conv.id).at(-1))
+    expect(twin?.skillId).toBe('user:bank')
+    expect(twin?.skillTitle).toBe('Skill bank')
+  })
 })
 
 // CB-6 — buildChatMessages takes the §5.4 compaction toggle as a threaded param (default = a fresh

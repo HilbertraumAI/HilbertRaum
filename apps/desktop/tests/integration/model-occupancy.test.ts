@@ -18,7 +18,7 @@ import {
   processDocument
 } from '../../src/main/services/ingestion'
 import { runBenchmark, measureTokensPerSecond } from '../../src/main/services/benchmark'
-import { SKILL_TOOL_DESCRIPTORS, getToolDescriptor } from '../../src/shared/skill-tools'
+import { SKILL_TOOL_DESCRIPTORS } from '../../src/shared/skill-tools'
 import { t } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import type { OccupancyLane } from '../../src/main/services/runtime/occupancy'
@@ -133,12 +133,12 @@ describe('ModelOccupancy (the span registry)', () => {
 // ---- The external lane ----------------------------------------------------------
 
 describe('RuntimeManager.isExternallyBusy folds the spans in (#185/#186)', () => {
-  it('is busy while a background span is held, even with no generation in flight', async () => {
+  it.each(['doc-task', 'skill-run', 'benchmark'] as const)('is busy while a %s span is held, even with no generation in flight', async (lane) => {
     const mgr = await startedManager()
     expect(mgr.isGenerating()).toBe(false)
     expect(mgr.isExternallyBusy()).toBe(false)
 
-    const release = mgr.occupancy.begin('doc-task')
+    const release = mgr.occupancy.begin(lane)
     // The gate still reads idle — this is exactly the gap a multi-step job leaves between two
     // of its model calls, and the gap an external request used to be admitted into.
     expect(mgr.isGenerating()).toBe(false)
@@ -146,16 +146,6 @@ describe('RuntimeManager.isExternallyBusy folds the spans in (#185/#186)', () =>
 
     release()
     expect(mgr.isExternallyBusy()).toBe(false)
-  })
-
-  it('a skill-run and a benchmark span each close external admission', async () => {
-    const mgr = await startedManager()
-    for (const lane of ['skill-run', 'benchmark'] as const) {
-      const release = mgr.occupancy.begin(lane)
-      expect(mgr.isExternallyBusy()).toBe(true)
-      release()
-      expect(mgr.isExternallyBusy()).toBe(false)
-    }
   })
 })
 
@@ -448,30 +438,11 @@ describe('the benchmark refuses to measure a contended model (#185)', () => {
 // ---- The descriptor-derived skill lane (#186) -----------------------------------
 
 describe('skill tool model lanes are declared, not hand-listed (#186)', () => {
-  it('declares exactly the two tools whose run streams on the chat runtime', () => {
-    const direct = SKILL_TOOL_DESCRIPTORS.filter((d) => d.modelLane === 'direct').map((d) => d.name)
-    expect(direct.sort()).toEqual(['apply_document_edits', 'redact_document'])
-  })
-
-  it('routes the categorizer through the doctask lane, so it takes no span of its own', () => {
-    // D26: its model call happens inside a doc task it enqueues. A `skill-run` span here would
-    // make `startDocTask` refuse the very task the run is waiting on.
-    expect(getToolDescriptor('categorize_transactions')?.modelLane).toBe('doctask')
-  })
-
-  it('leaves every deterministic tool with no lane at all', () => {
-    for (const d of SKILL_TOOL_DESCRIPTORS) {
-      if (d.name === 'redact_document' || d.name === 'apply_document_edits') continue
-      if (d.name === 'categorize_transactions') continue
-      expect(d.modelLane, d.name).toBeUndefined()
-    }
-  })
-
   // The drift guard: `buildToolRunner` is a switch, so the ONE mechanical fact linking a tool to
   // the model is whether its case forwards `deps.runtime`. Pin that to the declaration — a tenth
   // tool that starts generating without declaring `modelLane: 'direct'` would otherwise silently
   // reopen #186 (it would take no span, and refuse nothing).
-  it('pins the declaration to the dispatch: `deps.runtime` is forwarded only by `direct` tools', () => {
+  it('pins the declaration to the dispatch: `deps.runtime` is forwarded only by the two `direct` tools, and no other tool declares a lane', () => {
     const source = readFileSync(
       join(process.cwd(), 'src/main/services/skills/tool-runs.ts'),
       'utf8'
@@ -486,5 +457,12 @@ describe('skill tool model lanes are declared, not hand-listed (#186)', () => {
     expect(forwarding.size).toBeGreaterThan(0) // the scan actually found the dispatch
     const declared = SKILL_TOOL_DESCRIPTORS.filter((d) => d.modelLane === 'direct').map((d) => d.name)
     expect([...forwarding].sort()).toEqual(declared.sort())
+    expect(declared.sort()).toEqual(['apply_document_edits', 'redact_document'])
+    // Every deterministic tool declares no lane at all; the categorizer's `doctask` lane (it takes no
+    // span of its own) is pinned in model-occupancy-ipc.test.ts.
+    const otherLanes = SKILL_TOOL_DESCRIPTORS.filter(
+      (d) => d.modelLane !== undefined && d.modelLane !== 'direct' && d.name !== 'categorize_transactions'
+    ).map((d) => d.name)
+    expect(otherLanes).toEqual([])
   })
 })

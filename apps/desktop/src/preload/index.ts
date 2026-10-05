@@ -815,7 +815,7 @@ const api = {
   /** All runs main currently holds (running + terminal-but-unacknowledged), ids/counts only — the
    *  renderer re-adopts them on a fresh mount after a reload (SKA-17). */
   listSkillRuns: (): Promise<SkillRunState[]> => ipcRenderer.invoke(IPC.listSkillRuns),
-  /** Cancel a run; with no handle, the active run. */
+  /** Cancel a run by its handle; main ignores a missing or empty handle (SKA-25). */
   cancelSkillRun: (runHandle?: string): Promise<void> =>
     ipcRenderer.invoke(IPC.cancelSkillRun, runHandle),
   /** Drop a terminal run main-side once its outcome has been shown (the acknowledge handshake). */

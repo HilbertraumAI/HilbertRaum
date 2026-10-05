@@ -546,8 +546,8 @@ export function registerSkillsIpc(ctx: AppContext): void {
   })
 
   // Cancel a run by handle. SKA-25: a NON-EMPTY handle is REQUIRED at the IPC boundary — the no-arg
-  // cancel-all (a pre-A2 relic that aborted every in-flight run across all documents/windows) is now
-  // internal/test-only. An empty/absent handle is refused (no-op) rather than blasting every run.
+  // cancel-all (a pre-A2 relic that aborted every in-flight run across all documents/windows) is gone
+  // from the controller. An empty/absent handle is refused (no-op) rather than blasting every run.
   ipcHandle(IPC.cancelSkillRun, (_e, runHandle?: string | null): void => {
     requireUnlocked()
     if (typeof runHandle !== 'string' || runHandle.length === 0) return
@@ -556,7 +556,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
 
   // Drop a terminal run once the renderer has shown its outcome (the acknowledge handshake — the
   // controller keeps a terminal run readable until this clears it). No-op on a still-running handle.
-  // SKA-25: a non-empty handle is required here too (the no-arg clear-all stays internal/test-only).
+  // SKA-25: a non-empty handle is required here too (the controller has no clear-all).
   ipcHandle(IPC.clearSkillRun, (_e, runHandle?: string | null): void => {
     requireUnlocked()
     if (typeof runHandle !== 'string' || runHandle.length === 0) return
