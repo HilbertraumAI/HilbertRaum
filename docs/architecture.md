@@ -1952,8 +1952,13 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   right turn on every clean and moderately degraded page in 0.15–0.7 s and declined ("too few
   characters") on a 110-DPI ruin and a near-blank page. Its own confidence is unreliable (0.8–15
   when right).
-- pdf.js `getOperatorList` tells a scanned page from a blank one: 0.3 ms for a blank page,
-  ~0.1 s for an A4 JPEG page (it decodes the image), whatever the intent.
+- pdf.js `getOperatorList` tells a scanned page from a blank one, but building it DECODES every
+  image the page paints, in the calling process and with no size limit (~0.1 s for an A4 JPEG
+  page; unbounded for a crafted one) — not acceptable in the main process at import (PR review
+  M1). pdf.js checks an image's DECLARED size (`maxImageSize`) before touching its data, and with
+  `stopAtErrors` a too-large image ends the page's operator list; without it the image is dropped
+  and the rest kept. Comparing the two lists finds image pages with no decode: 1–2 ms per page,
+  the same verdicts on every test PDF.
 
 **Design as built:**
 - **Orientation marker** (`services/ocr/orientation.ts`): every turn is a big-endian EXIF
@@ -1986,16 +1991,20 @@ deu+eng `best_int`, tesseract.js 7.0.0, DesktopDiT i7-8700):
   page carries a confidence). The open-time backfill re-derives every sidecar that lacks
   `textPageCount` (filtered in JS: a corrupt sidecar must never fail the open).
 - **Photos (#574):** the image parser returns its reading's counts as `ParsedDocument.ocrMeta`;
-  `prepareDocument` writes it as the photo's `ocr_meta_json` on each import/re-index and clears it
-  when reading fails. No `ocr_json` — a photo's text still lives only in its chunks.
+  `prepareDocument` writes it as the photo's `ocr_meta_json` on each import/re-index, and it is
+  cleared whenever the photo ends failed (reading it, or embedding it — `finalizeDocument`). No `ocr_json` — a photo's text still lives only in its chunks.
 - **Scanned pages in a text PDF (#575):** with `ParseContext.detectScannedPages` (import and
-  re-index only), the PDF parser checks the pages under `PDF_TEXT_PAGE_MIN_CHARS` of a PDF that
-  has real text pages for an image-painting operator, bounded by `SCANNED_PAGE_CHECK_BUDGET_MS`
-  (20 s; unchecked pages count as scanned). Stored as `documents.scanned_pages_json`
-  (`{ pages, pageCount }`); `DocumentInfo.scannedPages` carries the counts. The OCR task admits
-  such a PDF, rasterizes only those pages (`RasterizePdfOptions.pages` → `pagesToWalk`), and
-  persists the reading even when it found no text (the pages were read; a whole scan with no text
-  still fails `ocrNoText`). The parser merges per page: a short page with stored recognition
+  re-index only), the PDF parser checks which pages under `PDF_TEXT_PAGE_MIN_CHARS` of a PDF that
+  has real text pages paint an image — `findScannedPages`: after the text document is released,
+  two documents of its own with `maxImageSize: 1` (lenient, then `stopAtErrors`), one at a time; a
+  page whose strict operator list is shorter than its lenient one paints an image. No image is
+  ever decoded. Bounded by `SCANNED_PAGE_CHECK_BUDGET_MS` (20 s; unchecked pages count as
+  scanned). Stored as `documents.scanned_pages_json` (`{ pages, pageCount }`);
+  `DocumentInfo.scannedPages` carries the counts. The OCR task admits such a PDF and rasterizes
+  only those pages (`RasterizePdfOptions.pages` → `pagesToWalk`). It persists a reading that found
+  no text only on the FIRST read of those pages (the offer then goes); a re-run never replaces an
+  earlier reading with nothing, a run that read no page persists nothing, and a whole scan with no
+  text still fails `ocrNoText`. The parser merges per page: a short page with stored recognition
   contributes the recognition (its rendered layer is part of the reading), every other page keeps
   its text layer; a whole scan keeps its old path.
 - **UI** (design-guidelines §11.19): the preview counts recognized pages ("on 2 of 3 pages",

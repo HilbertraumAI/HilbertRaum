@@ -187,7 +187,10 @@ export const DocRow = memo(function DocRow({
   // (OCR)") is in the "⋯" menu and, with the causes, in the preview.
   // #574: a photo is read by OCR too; reading it again is a re-index (every re-index reads it).
   const photo = isPhotoDocument(d.mimeType)
-  const ocrUnsure = d.status === 'indexed' && d.ocr ? ocrUnsureLine(d.ocr, t, photo) : null
+  const ocrUnsure =
+    d.status === 'indexed' && d.ocr
+      ? ocrUnsureLine(d.ocr, t, { photo, documentPages: d.scannedPages?.pageCount })
+      : null
   // #575: a text PDF with scanned pages that OCR has not read yet — a quiet caption, and "Make
   // searchable (OCR)" in the ⋯ menu reads just those pages (once read, both go: `ocr` is set).
   const unreadScans = d.status === 'indexed' && d.scannedPages && d.ocr == null ? d.scannedPages : null
@@ -270,7 +273,7 @@ export const DocRow = memo(function DocRow({
         {unreadScans && (
           <p className="hint doc-row-cap">
             {t('docs.ocr.scannedPages', { count: unreadScans.count, total: unreadScans.pageCount })}
-            {!ocrAvailable && <> {t('docs.ocr.scannedPagesNeedsOcr')}</>}
+            {ocrFilesMissing && <> {t('docs.ocr.scannedPagesNeedsOcr')}</>}
           </p>
         )}
         {d.status === 'failed' && d.errorMessage && (

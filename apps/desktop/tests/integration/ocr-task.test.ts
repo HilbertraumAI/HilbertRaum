@@ -494,6 +494,17 @@ describe('a text PDF with scanned pages (#575)', () => {
     expect(getDocument(db, docId)?.scannedPages).toEqual({ count: 2, pageCount: 3 })
   })
 
+  it('a re-run that finds no text never replaces an earlier reading of the scanned pages', async () => {
+    const docId = await importLetter()
+    const first = makeManager({ engine: fakeEngine((n) => `Seite ${n} gelesen.`), rasterize: fakeRasterizer(3) })
+    expect((await waitTerminal(first, first.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)).state).toBe('done')
+    const rerun = makeManager({ engine: fakeEngine(() => ''), rasterize: fakeRasterizer(3) })
+    const status = await waitTerminal(rerun, rerun.startDocTask({ kind: 'ocr', documentIds: [docId] }).jobId)
+    expect(status.state).toBe('failed')
+    expect(status.error).toBe(TASK_OCR_NO_TEXT_MESSAGE)
+    expect(getDocumentOcrPages(db, docId)?.map((p) => p.text)).toEqual(['Seite 2 gelesen.', 'Seite 3 gelesen.'])
+  })
+
   it('a reading that finds no text on the scanned pages is kept — the pages were read, the offer goes', async () => {
     const docId = await importLetter()
     const manager = makeManager({ engine: fakeEngine(() => ''), rasterize: fakeRasterizer(3) })
@@ -554,6 +565,16 @@ describe('photo import through the real pipeline', () => {
     const reread = await reindexDocument(db, storeDir, queued.id, { embedder: createMockEmbedder() })
     expect(reread.status).toBe('failed')
     expect(getDocument(db, queued.id)?.ocr ?? null).toBeNull()
+
+    // Read fine, but its embedding failed: the row ends failed and claims no recognized text either.
+    const failingEmbedder = { ...createMockEmbedder(), embed: async () => Promise.reject(new Error('embed down')) }
+    const second = createQueuedDocument(db, p)
+    const embedFailed = await processDocument(db, storeDir, second.id, {
+      embedder: failingEmbedder,
+      ocrEngine: fakeEngine(() => 'Quittung über 42 Euro.')
+    })
+    expect(embedFailed.status).toBe('failed')
+    expect(getDocument(db, second.id)?.ocr ?? null).toBeNull()
   })
 
   // #232 / #219: the OCR files are on the drive but the

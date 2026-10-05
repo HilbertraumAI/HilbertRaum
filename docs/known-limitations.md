@@ -2328,8 +2328,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   clean page about 92–94. The note says where to look; it cannot say which words are wrong.
 - **A PDF with some scanned pages shows them after a Re-index if it was added before #575.**
   Scanned pages inside a text PDF (under 25 characters of text and painting an image) are found at
-  import. A PDF imported earlier carries no such record until it is parsed again. The check costs
-  about 0.1 s per scanned page at import (pdf.js decodes the image to see it), bounded at 20 s per
+  import. A PDF imported earlier carries no such record until it is parsed again. The check reads
+  only each image's declared size, never its data (1–2 ms per short page), bounded at 20 s per
   document — pages it leaves unchecked count as scanned. A page whose text layer has fewer than 25
   characters AND an image (a logo-only cover, a full-page figure) counts as scanned too; OCR then
   reads what text the image holds.

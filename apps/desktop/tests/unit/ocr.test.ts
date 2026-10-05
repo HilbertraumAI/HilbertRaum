@@ -634,7 +634,9 @@ describe('TesseractOcrEngine (offline wiring — R-O2)', () => {
       }
     }
     const engine = new TesseractOcrEngine({ langDir, languages: ['eng'], loadTesseract: async () => mod })
-    expect(await engine.detectOrientation(TINY_PNG)).toBeNull()
+    // Two detections in flight at once (a photo import during an OCR task): the one queued behind
+    // the failed start does not start the worker again.
+    expect(await Promise.all([engine.detectOrientation(TINY_PNG), engine.detectOrientation(TINY_PNG)])).toEqual([null, null])
     expect(await engine.detectOrientation(TINY_PNG)).toBeNull()
     expect(osdStarts).toBe(1) // not retried for every page
     expect(engine.availability()).toBe('available')

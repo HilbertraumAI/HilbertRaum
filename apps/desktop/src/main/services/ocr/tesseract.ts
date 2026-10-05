@@ -468,6 +468,8 @@ export class TesseractOcrEngine implements OcrEngine {
 
   private ensureOsdWorker(): Promise<TesseractWorker> {
     if (this.stopped) return Promise.reject(new Error('OCR engine is stopped'))
+    // A detection queued before a failed start or a death must not start (or reach) a worker again.
+    if (this.osdBroken) return Promise.reject(new Error('OCR orientation detection is off'))
     if (this.osdWorker) return Promise.resolve(this.osdWorker)
     if (!this.osdStarting) {
       this.osdStarting = this.startOsdWorker()
@@ -510,6 +512,7 @@ export class TesseractOcrEngine implements OcrEngine {
     this.osdBroken = true
     const dead = this.osdWorker
     this.osdWorker = null
+    this.osdStarting = null
     if (dead) void dead.terminate().catch(() => undefined)
     for (const reject of this.osdInflight) reject(err)
     this.osdInflight.clear()

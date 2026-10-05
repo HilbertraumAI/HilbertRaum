@@ -759,6 +759,7 @@ export const de: Record<keyof typeof en, string> = {
     'Die Texterkennung (OCR) hat auf diesem Laufwerk {count} gescannte Seiten gelesen und darauf ' +
     'keinen Text gefunden.',
   'docs.ocr.unsure.page': 'Die Texterkennung war bei dieser Seite unsicher.',
+  'docs.ocr.unsure.onlyRecognized': 'Die Texterkennung war bei der einzigen erkannten Seite unsicher.',
   'docs.ocr.unsure.photo': 'Die Texterkennung war bei diesem Foto unsicher.',
   'docs.ocr.unsure.some': 'Die Texterkennung war auf {count} der {total} erkannten Seiten unsicher.',
   'docs.ocr.unsure.all': 'Die Texterkennung war auf allen {count} erkannten Seiten unsicher.',

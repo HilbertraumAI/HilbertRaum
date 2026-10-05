@@ -39,14 +39,23 @@ export function ocrInfoLine(
 /**
  * "Text recognition was unsure …" (#538) when at least one text page was read with low
  * confidence, else null. Nouns agree without plural forms: `some` always has ≥ 2 pages in total,
- * `all` ≥ 2 pages, and a single page has its own sentence.
+ * `all` ≥ 2 pages; one recognized page is "this page" only in a one-page document (else "the one
+ * page it recognized" — a 12-page document must not read "this page"). `documentPages` is the
+ * whole document's page count when only its scanned pages were read (#575).
  */
-export function ocrUnsureLine(ocr: DocumentOcrInfo, t: I18n['t'], photo = false): string | null {
+export function ocrUnsureLine(
+  ocr: DocumentOcrInfo,
+  t: I18n['t'],
+  opts: { photo?: boolean; documentPages?: number } = {}
+): string | null {
   const unsure = ocr.lowConfidencePageCount ?? 0
   if (unsure <= 0) return null
-  if (photo) return t('docs.ocr.unsure.photo')
+  if (opts.photo) return t('docs.ocr.unsure.photo')
   const textPages = ocrTextPages(ocr)
-  if (textPages <= 1) return t('docs.ocr.unsure.page')
+  if (textPages <= 1) {
+    const onePageDocument = Math.max(ocr.pageCount, opts.documentPages ?? 0) <= 1
+    return t(onePageDocument ? 'docs.ocr.unsure.page' : 'docs.ocr.unsure.onlyRecognized')
+  }
   if (unsure >= textPages) return t('docs.ocr.unsure.all', { count: textPages })
   return t('docs.ocr.unsure.some', { count: unsure, total: textPages })
 }

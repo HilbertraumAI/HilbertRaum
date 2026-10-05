@@ -74,7 +74,7 @@ export function PreviewModal({
   const { t, tCount, lang } = useT()
   const showToast = useToast()
   const photo = isPhotoDocument(preview.mimeType)
-  const ocrUnsure = ocr ? ocrUnsureLine(ocr, t, photo) : null
+  const ocrUnsure = ocr ? ocrUnsureLine(ocr, t, { photo, documentPages }) : null
   // FE-6: guards the "Show more" button while a page is in flight.
   const [loadingMore, setLoadingMore] = useState(false)
   // full-audit 2026-07-11 CODE-35: a failed "Show more" page fetch used to land on the SCREEN

@@ -1095,6 +1095,9 @@ export async function finalizeDocument(
     perfMark('ingest_indexed', { docId: documentId })
     return infoOrDeleted(db, documentId)
   } catch (err) {
+    // #574: a photo that ends failed (here: its embedding) carries no claim that its text was read.
+    const row = getRow(db, documentId)
+    if (row && isImagePath(row.title)) setPhotoOcrMeta(db, documentId, null)
     // #530: an engine the OS refused to start persists canonical text, never the loader's raw
     // line (it carries the absolute drive path); any other failure keeps its own message.
     setStatus(db, documentId, 'failed', failureRowMessage(err))

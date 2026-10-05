@@ -749,6 +749,7 @@ export const en = {
   // #538: pages the recognizer was unsure of (low mean confidence). The lead is shared by the row
   // caption and the preview; the preview adds the causes and a "Read again (OCR)" action.
   'docs.ocr.unsure.page': 'Text recognition was unsure of this page.',
+  'docs.ocr.unsure.onlyRecognized': 'Text recognition was unsure of the one page it recognized.',
   'docs.ocr.unsure.photo': 'Text recognition was unsure of this photo.',
   'docs.ocr.unsure.some': 'Text recognition was unsure on {count} of the {total} recognized pages.',
   'docs.ocr.unsure.all': 'Text recognition was unsure on all {count} recognized pages.',

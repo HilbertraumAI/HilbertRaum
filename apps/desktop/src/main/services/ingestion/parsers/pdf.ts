@@ -44,10 +44,9 @@ export const PDF_SCAN_DETECTED_MESSAGE = t('en', 'main.ingest.pdfScanDetected')
 export const PDF_TEXT_PAGE_MIN_CHARS = 25
 
 /**
- * Wall-clock bound on the scanned-page check (#575). Telling a scanned page from a blank or short
- * title page means building its operator list, which decodes its image (~0.1 s for an A4 JPEG
- * page, measured). Pages the bound leaves unchecked count as scanned: the PDF has shown plenty of
- * image pages by then, and OCR on a page that turns out blank costs one page.
+ * Wall-clock bound on the scanned-page check (#575; `findScannedPages`, ~1–2 ms per short page,
+ * no image decoded). Pages the bound leaves unchecked count as scanned: a PDF that slow to check
+ * has a great many short pages, and OCR on a page that turns out blank costs one page.
  */
 export const SCANNED_PAGE_CHECK_BUDGET_MS = 20_000
 
@@ -181,9 +180,6 @@ export const PdfParser: DocumentParser = {
 
         if (rawTrimmed.length > 0) segments.push({ text: rawTrimmed, pageNumber })
       }
-      if (ctx?.detectScannedPages && rawTextPageCount > 0 && shortPages.length > 0) {
-        scannedPages = await findScannedPages(doc, shortPages, pdfjs.OPS)
-      }
     } finally {
       // Release pdfjs transport/worker resources promptly.
       await loadingTask.destroy()
@@ -208,6 +204,12 @@ export const PdfParser: DocumentParser = {
       throw new Error(PDF_SCAN_DETECTED_MESSAGE)
     }
 
+    // #575: a text PDF's short pages that paint an image are its scanned pages. Checked after the
+    // text document is released, on two documents of their own (see findScannedPages).
+    if (ctx?.detectScannedPages && shortPages.length > 0) {
+      scannedPages = await findScannedPages(filePath, shortPages, pdfjs)
+    }
+
     // `pageCount` is the DECLARED total (issue #58): a page whose text-layer trimmed empty
     // pushed no segment above, and pages past the M-2 cap were never walked — both are real
     // content gaps the translation completeness accounting must be able to see.
@@ -220,58 +222,71 @@ export const PdfParser: DocumentParser = {
   }
 }
 
-/** The pdf.js operators that paint an image — a scanned page paints at least one. */
-function imagePaintOps(ops: Record<string, number>): Set<number> {
-  return new Set(
-    [
-      ops.paintImageXObject,
-      ops.paintInlineImageXObject,
-      ops.paintInlineImageXObjectGroup,
-      ops.paintImageXObjectRepeat,
-      ops.paintImageMaskXObject,
-      ops.paintImageMaskXObjectGroup,
-      ops.paintImageMaskXObjectRepeat,
-      ops.paintSolidColorImageMask
-    ].filter((op): op is number => typeof op === 'number')
-  )
-}
-
-interface OperatorListDoc {
-  getPage(n: number): Promise<{
-    getOperatorList(): Promise<{ fnArray: number[] }>
-    cleanup(): unknown
-  }>
-}
-
 /**
- * #575: which of a text PDF's short pages paint an image — the scanned ones. A blank page or a
- * short title page paints none and is not offered OCR. Bounded by SCANNED_PAGE_CHECK_BUDGET_MS
- * (pages it leaves unchecked count as scanned); a page whose operator list fails is not counted.
+ * #575: which of a text PDF's short pages paint an image — the scanned ones; a blank page or a
+ * short title page paints none and is not offered OCR.
+ *
+ * NO IMAGE IS DECODED here: building an operator list normally decodes every image it paints, in
+ * this (main) process, with no size limit — a crafted page could freeze or exhaust it. Both
+ * documents below declare every image too large (`maxImageSize: 1`), and pdf.js compares an
+ * image's DECLARED size before touching its data. A lenient document then drops the image and
+ * keeps the page's other operators; a strict one (`stopAtErrors`) ends the page's list at the
+ * first image. So a page whose strict list is SHORTER than its lenient one paints an image (or
+ * hits another error before its end — a short page with an unreadable font, which OCR suits too).
+ * Measured: ~1–2 ms per page, the same verdicts as a decoding check on the test scans.
+ *
+ * Bounded by SCANNED_PAGE_CHECK_BUDGET_MS (pages left unchecked count as scanned); a document that
+ * cannot be opened this way yields no pages. One document is open at a time.
  */
 async function findScannedPages(
-  doc: OperatorListDoc,
+  filePath: string,
   shortPages: readonly number[],
-  ops: Record<string, number>
+  pdfjs: Awaited<typeof import('pdfjs-dist/legacy/build/pdf.mjs')>
 ): Promise<number[]> {
-  const paintsImage = imagePaintOps(ops)
   const deadline = performance.now() + SCANNED_PAGE_CHECK_BUDGET_MS
+  const operatorCounts = async (stopAtErrors: boolean): Promise<Map<number, number> | null> => {
+    const counts = new Map<number, number>()
+    const task = pdfjs.getDocument({
+      data: new Uint8Array(await readFile(filePath)),
+      verbosity: 0,
+      maxImageSize: 1,
+      stopAtErrors
+    })
+    try {
+      const doc = await task.promise
+      for (const pageNumber of shortPages) {
+        if (performance.now() > deadline) break
+        try {
+          const page = await doc.getPage(pageNumber)
+          try {
+            counts.set(pageNumber, (await page.getOperatorList()).fnArray.length)
+          } finally {
+            page.cleanup()
+          }
+        } catch {
+          // An unreadable page is not offered OCR on this evidence.
+        }
+      }
+      return counts
+    } catch {
+      return null
+    } finally {
+      await task.destroy()
+    }
+  }
+  const lenient = await operatorCounts(false)
+  const strict = lenient ? await operatorCounts(true) : null
+  if (!lenient || !strict) return []
   const scanned: number[] = []
   for (const pageNumber of shortPages) {
-    if (performance.now() > deadline) {
-      scanned.push(pageNumber)
+    const all = lenient.get(pageNumber)
+    const upToFirstImage = strict.get(pageNumber)
+    if (all === undefined || upToFirstImage === undefined) {
+      // Not reached before the deadline: count it (a PDF this slow to check is full of pages).
+      if (performance.now() > deadline) scanned.push(pageNumber)
       continue
     }
-    try {
-      const page = await doc.getPage(pageNumber)
-      try {
-        const list = await page.getOperatorList()
-        if (list.fnArray.some((op) => paintsImage.has(op))) scanned.push(pageNumber)
-      } finally {
-        page.cleanup()
-      }
-    } catch {
-      // An unreadable page is not offered OCR on this evidence.
-    }
+    if (upToFirstImage < all) scanned.push(pageNumber)
   }
   return scanned
 }

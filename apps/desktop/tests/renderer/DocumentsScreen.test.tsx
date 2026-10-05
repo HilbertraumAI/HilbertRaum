@@ -1931,6 +1931,25 @@ describe('DocumentsScreen — OCR initiation + progress (OCR-R P1)', () => {
     )
   })
 
+  // #575 review L5: only missing files earn "needs the OCR files" — files that are present but whose
+  // recognizer cannot run (or is still being proven) are not "missing".
+  it.each([
+    ['missing', true],
+    ['unavailable', false],
+    ['probing', false]
+  ] as const)('#575: with OCR %s, the scanned-pages caption names the OCR files: %s', async (ocrState, named) => {
+    stubApi({
+      listDocuments: vi.fn(async () => [doc({ title: 'letter.pdf', scannedPages: { count: 2, pageCount: 3 } })]),
+      getAppStatus: vi.fn(async () => appStatus({ ocrAvailable: false, ocrState }))
+    })
+    render(<DocumentsScreen />)
+    const caption = translate('en', 'docs.ocr.scannedPages', { count: 2, total: 3 })
+    const row = (await screen.findByText(new RegExp(caption.replace(/[.]/g, '\\.')))).closest('p') as HTMLElement
+    await waitFor(() =>
+      expect(row.textContent?.includes(en['docs.ocr.scannedPagesNeedsOcr'])).toBe(named)
+    )
+  })
+
   it('FE-4: the OCR busy label switches to "Finishing…" on the final re-ingest step; Cancel stays enabled', async () => {
     vi.useFakeTimers()
     try {

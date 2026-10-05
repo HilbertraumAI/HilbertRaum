@@ -99,7 +99,11 @@ export async function runOcr(task: InternalTask, ctx: DocTaskCtx): Promise<strin
   // actually cancels (nothing persisted). There is no await between here and `setDocumentOcr`,
   // so past this line the task is committed to completing (see the header's cancel contract).
   if (signal.aborted) throw new DOMException('Document task cancelled', 'AbortError')
-  if (!scannedPages && !pages.some((p) => p.text.length > 0)) {
+  // A reading with no text is kept only for a text PDF's scanned pages read for the FIRST time (so
+  // the offer goes away); a re-run never replaces an earlier reading with nothing, and a run that
+  // read no page at all (every scanned page past the page cap) persists nothing (#575).
+  const foundText = pages.some((p) => p.text.length > 0)
+  if (!foundText && (!scannedPages || doc.ocr != null || pages.length === 0)) {
     throw new Error(tMain('main.task.ocrNoText'))
   }
 
