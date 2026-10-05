@@ -332,6 +332,24 @@ export class VisionService {
     return { ...existing }
   }
 
+  /** #516: is an image analysis running? An engine update waits rather than cutting it off. */
+  hasActiveJob(): boolean {
+    return this.activeJobId !== null
+  }
+
+  /**
+   * #516: let the idle sidecar go so an engine update can replace the folder it runs from —
+   * unlike `stop()`, nothing is aborted and finished answers stay pollable (no lock-time purge).
+   * A no-op while an analysis runs (the update refuses then); the next analyze rebuilds the
+   * runtime, as after `stop()`.
+   */
+  async releaseRuntime(): Promise<void> {
+    if (this.activeJobId !== null) return
+    const runtime = this.runtime
+    this.runtime = null
+    await runtime?.stop?.()
+  }
+
   /**
    * Tear down the lazily-built runtime — wired to workspace LOCK (registerWorkspaceIpc) and
    * QUIT (will-quit), and a safe no-op when nothing was ever built. Any in-flight job is

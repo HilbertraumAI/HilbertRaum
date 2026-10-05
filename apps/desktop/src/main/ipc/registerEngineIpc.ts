@@ -19,6 +19,8 @@ import { OcrInstallManager, assertNoOcrInstallPayload } from '../services/ocr-in
 import { registeredSidecarPids } from '../services/runtime/sidecar'
 import { engineInstalled, engineProblemFor } from '../services/runtime/engine-load'
 import { rearmLlamaConsumers, recheckEngines, restartChatOnRealEngine } from './engine-recheck'
+import { modelBusyLane } from './model-busy'
+import { startModelRuntime } from './registerModelIpc'
 import { refreshOcrSlot, refreshTranscriberSlot } from '../services/compose-services'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { getSettings } from '../services/settings'
@@ -51,6 +53,60 @@ export function chatEngineInUse(runtime: Pick<RuntimeManager, 'activeModelId' | 
   const status = runtime.status()
   if (status.startingModelId != null) return true
   return runtime.activeModelId() !== null && status.backend !== 'mock'
+}
+
+/**
+ * #516: is work running that an engine update's pause would cut off? On the chat engine: any
+ * generation in either lane (an in-app answer, a local-API completion), a document task, a skill
+ * run or the benchmark (`modelBusyLane`), a model that is still starting, a document translation,
+ * or an image analysis. On either engine: an import, a re-index or a knowledge-pack article save
+ * (the embedder; for audio, the voice engine). On the voice engine: a transcription or dictation.
+ * Exported for the engine IPC suite.
+ */
+export function engineUpdateBusy(
+  ctx: Pick<AppContext, 'runtime' | 'docTasks' | 'translateJobs' | 'ingestionActive' | 'vision'>,
+  families: readonly string[]
+): boolean {
+  if (families.includes('llama_cpp')) {
+    if (modelBusyLane(ctx) !== null) return true
+    if (ctx.runtime.isGenerating?.() === true) return true
+    if (ctx.runtime.status().startingModelId != null) return true
+    if (ctx.translateJobs?.getActiveJob()) return true
+    if (ctx.vision?.hasActiveJob?.() === true) return true
+  }
+  if (ctx.ingestionActive?.() === true) return true
+  return families.includes('whisper_cpp') && whisperSidecarInUse()
+}
+
+/**
+ * #516: stop everything that runs from the engine folders an update is about to replace. The
+ * helpers come back by themselves on their next use (the lock teardown's `suspend()`s, never the
+ * latching `stop()`; vision lets its idle sidecar go without the lock's purge of finished answers);
+ * the chat model is brought back by the update's resume. Until the swap is over, any of them that
+ * restarts waits at the spawn gate (`runtime/spawn-gate.ts`).
+ */
+async function pauseEngineUsers(ctx: AppContext, families: readonly string[]): Promise<void> {
+  const stops: Array<Promise<unknown>> = []
+  if (families.includes('llama_cpp')) {
+    stops.push(
+      ctx.runtime.stop(),
+      ctx.embedder.suspend?.() ?? Promise.resolve(),
+      ctx.reranker?.suspend?.() ?? Promise.resolve(),
+      ctx.vision?.releaseRuntime?.() ?? Promise.resolve(),
+      ctx.translator?.suspend?.() ?? Promise.resolve()
+    )
+  }
+  if (families.includes('whisper_cpp')) stops.push(ctx.transcriber?.suspend?.() ?? Promise.resolve())
+  await Promise.allSettled(stops)
+}
+
+/** #516: start `modelId` again after an update, unless the session moved on (locked, or another start). */
+async function resumeChatModel(ctx: AppContext, modelId: string | null): Promise<void> {
+  if (!modelId || !workspaceAdmitsWork(ctx.workspace)) return
+  const status = ctx.runtime.status()
+  if (status.running || status.startingModelId) return
+  log.info('Engine update finished — starting the model again', { modelId })
+  await startModelRuntime(ctx, modelId)
 }
 
 /**
@@ -108,6 +164,11 @@ export function registerEngineIpc(
   // next unlock, the next check or "Try GPU again". Installing the chat engine is the moment
   // that answer can change, so it re-runs the once-per-session probe refresh — the benchmark
   // itself is not re-run, and a probe that already lists a device is left alone.
+  // #516: the update in flight (the manager runs one job at a time), and what its pause stopped.
+  // `resumed`: the install hook brought the model back, so the settle listener leaves it alone.
+  let pendingUpdate: { jobId: string; modelId: string | null; paused: boolean; resumed: boolean } | null =
+    null
+
   engine.onInstalled((families, binaryPaths) => {
     if (families.includes('llama_cpp')) {
       // #372: a new runtime binary may load what the old one could not (a pin that adds an
@@ -120,8 +181,11 @@ export function registerEngineIpc(
       rearmLlamaConsumers(ctx)
       // #532: a model the demo runtime stands in for comes back on the real engine, as after a
       // healed "Check again" — after the probe refresh, so the ladder reads this computer's answer.
+      // #516: after an update, the model its pause stopped comes back the same way.
+      const update = pendingUpdate?.paused ? pendingUpdate : null
+      if (update) update.resumed = true
       void refreshGpuProbeAfterRuntimeInstall(ctx)
-        .then(() => restartChatOnRealEngine(ctx))
+        .then(() => (update ? resumeChatModel(ctx, update.modelId) : restartChatOnRealEngine(ctx)))
         .catch((err: unknown) => {
           log.warn('Restarting the model after the engine install failed', { error: String(err) })
         })
@@ -147,10 +211,61 @@ export function registerEngineIpc(
     }
   })
 
+  // #516: a failed or cancelled update (or one the install hook did not resume) brings back the
+  // model its pause stopped. The helpers need nothing: they restart on their next use.
+  engine.onSettled((job) => {
+    const update = pendingUpdate
+    if (!update || update.jobId !== job.jobId) return
+    pendingUpdate = null
+    if (!update.paused || update.resumed) return
+    void resumeChatModel(ctx, update.modelId).catch((err: unknown) => {
+      log.warn('Restarting the model after the engine update failed', { error: String(err) })
+    })
+  })
+
   const gates = (): DownloadGates => {
     const { policy } = loadPolicy(ctx.paths.configPath, (m) => log.warn(m), { isDev: ctx.isDev })
     const settingAllows = ctx.workspace.isUnlocked() && getSettings(ctx.db).allowNetwork
     return { policyAllows: policy.network.allowModelDownloads, settingAllows }
+  }
+
+  /**
+   * #516 "Update the AI engine": download and verify the pinned build(s) while everything keeps
+   * running, then — in the manager's `beforeReplace`, after the last archive verified — refuse if
+   * work started meanwhile, pause what runs from the folders being replaced, check that nothing
+   * still does, and let the swap happen. Whatever happens next, the model comes back (the install
+   * hook on success, the settle listener otherwise).
+   */
+  const startEngineUpdate = async (families: EngineFamily[]): Promise<EngineDownloadJob> => {
+    if (engineUpdateBusy(ctx, families)) throw new Error(tMain('main.engine.updateBusy'))
+    const update = { jobId: '', modelId: null as string | null, paused: false, resumed: false }
+    const job = await engine.start({
+      rootPath: ctx.paths.rootPath,
+      manifestsDir: ctx.manifestsDir ?? null,
+      gates: gates(),
+      families,
+      update: true,
+      beforeReplace: async () => {
+        // What this job replaces (an update skips families that are already current).
+        const replacing = (update.jobId && engine.get(update.jobId).families) || families
+        if (!workspaceAdmitsWork(ctx.workspace)) throw new Error(tMain('main.settings.locked'))
+        if (engineUpdateBusy(ctx, replacing)) throw new Error(tMain('main.engine.updateBusy'))
+        if (replacing.includes('llama_cpp')) {
+          // A start in flight was refused just above; `startingModelId` is the belt to that brace.
+          const status = ctx.runtime.status()
+          update.modelId = status.running ? status.modelId : (status.startingModelId ?? null)
+        }
+        update.paused = true
+        await pauseEngineUsers(ctx, replacing)
+        const stillInUse =
+          (replacing.includes('llama_cpp') && (chatEngineInUse(ctx.runtime) || llamaSidecarInUse())) ||
+          (replacing.includes('whisper_cpp') && whisperSidecarInUse())
+        if (stillInUse) throw new Error(tMain('main.engine.updateBusy'))
+      }
+    })
+    update.jobId = job.jobId
+    pendingUpdate = update
+    return job
   }
 
   // #530 "Check again": no payload; drive-local spawns only. Admission-gated like every
@@ -176,6 +291,8 @@ export function registerEngineIpc(
     if (request.reinstall && !(request.families ?? []).every(repairable)) {
       throw new Error(tMain('main.engine.nothingToRepair'))
     }
+    // #516: an update downloads first and pauses the engine's users only for the swap.
+    if (request.update) return startEngineUpdate(request.families ?? [])
     return engine.start({
       rootPath: ctx.paths.rootPath,
       manifestsDir: ctx.manifestsDir ?? null,

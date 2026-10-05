@@ -166,6 +166,9 @@ export function registerDocsIpc(ctx: AppContext): void {
   // ingestions themselves run OUTSIDE this set (DB-3), so the guard can never refuse a start
   // because of another task (the manager's own one-at-a-time lane covers that).
   ctx.docIngestionActive = (documentId) => processing.has(documentId) || ctx.articleSaveActive?.(documentId) === true
+  // #516: the same set, for "is any import running" — an engine update waits for it. A
+  // knowledge-pack article save embeds through the same path (registerZimIpc), so it counts too.
+  ctx.ingestionActive = () => processing.size > 0 || ctx.articleSavesActive?.() === true
 
   // DB-backed handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.

@@ -1302,6 +1302,15 @@ export const de: Record<keyof typeof en, string> = {
   'models.engineProblem.voiceReinstall': 'Sprach-Engine neu installieren',
   'models.engineProblem.reinstalled': 'Die KI-Engine wurde neu installiert.',
   'models.engineProblem.voiceReinstalled': 'Die Sprach-Engine wurde neu installiert.',
+  // #516: ein ruhiger Hinweis für eine Engine auf dem Laufwerk, die älter ist als die Version dieser App.
+  'models.engineUpdate.title': 'Für die KI-Engine ist ein Update verfügbar',
+  'models.engineUpdate.voiceTitle': 'Für die Sprach-Engine ist ein Update verfügbar',
+  'models.engineUpdate.bothTitle': 'Für die KI-Engine und die Sprach-Engine sind Updates verfügbar',
+  'models.engineUpdate.explain': 'Auf diesem Laufwerk liegt eine ältere Version, als diese App erwartet. Das Update lädt zuerst die neue Version herunter; dann pausieren die Modelle für einige Sekunden, während die Dateien ersetzt werden, und das ausgewählte Modell startet wieder.',
+  'models.engineUpdate.update': 'Aktualisieren',
+  'models.engineUpdate.done': 'Die KI-Engine wurde aktualisiert.',
+  'models.engineUpdate.voiceDone': 'Die Sprach-Engine wurde aktualisiert.',
+  'models.engineUpdate.bothDone': 'Die KI-Engine und die Sprach-Engine wurden aktualisiert.',
   'models.engineProblem.blocked': 'Die Windows-Sicherheit hat sie blockiert (intelligente App-Steuerung oder dein Virenschutz). In der Anleitung zur Fehlerbehebung steht, was du tun kannst.',
   'models.engineProblem.demoNote': 'Bis dahin antworten Modelle im Demo-Modus — die Antworten sind simuliert.',
   'models.engineProblem.check': 'Erneut prüfen',
@@ -1995,6 +2004,12 @@ export const de: Record<keyof typeof en, string> = {
   'diag.app.acceleration': 'Beschleunigung',
   'diag.app.runtimeBuild': 'Laufzeit-Build',
   'diag.app.noInstallMarker': 'kein Installations-Marker (manuell bestücktes Laufwerk)',
+  // #516: Engines auf dem Laufwerk, die nicht der Version dieser App entsprechen. Die Namen bleiben technisch.
+  'diag.app.engineVersions': 'Engine-Versionen',
+  'diag.engineVersion.older': '{engine} {installed}, diese App erwartet {pinned}',
+  'diag.engineVersion.newer': '{engine} {installed}, neuer als von dieser App erwartet ({pinned})',
+  'diag.engineVersion.unknown': '{engine}: keine Version vermerkt, diese App erwartet {pinned}',
+  'diag.engineVersion.cpuNet': '{engine} CPU-Ausweichversion',
   'diag.gpu.compat':
     'Kompatibilitätsmodus aktiv: Antworten nutzen die CPU — das funktioniert auf jedem ' +
     'Gerät.',
@@ -2725,6 +2740,12 @@ export const de: Record<keyof typeof en, string> = {
   // #532: „… neu installieren“ gibt es nur für eine Engine, deren eigene Dateien das System in dieser Sitzung als beschädigt erkannt hat.
   'main.engine.nothingToRepair':
     'Es gibt nichts zu reparieren: Die Engine auf diesem Laufwerk wurde nicht als beschädigt erkannt.',
+  // #516: ein Update ersetzt nur eine Engine, die älter ist als die Version dieser App, nie eine neuere.
+  'main.engine.nothingToUpdate':
+    'Es gibt nichts zu aktualisieren: Die Engines auf diesem Laufwerk haben bereits die Version dieser App oder sind neuer.',
+  // #516: das Update hält die Engine für den Dateitausch an, das würde laufende Arbeit abbrechen.
+  'main.engine.updateBusy':
+    'Die KI-Engine wird gerade verwendet (eine Antwort, ein Import, eine Übersetzung oder eine Dokumentaufgabe läuft). Versuche das Update erneut, wenn sie fertig ist.',
   // #410: der In-App-Installer für die OCR-Sprachdateien (services/ocr-install.ts).
   'main.ocr.badRequest':
     'Die Anfrage zum Herunterladen der OCR-Dateien wurde nicht verstanden. Bitte versuche es ' +

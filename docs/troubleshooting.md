@@ -166,6 +166,27 @@ the AI Model screen:
 
 ---
 
+## "An update for the AI engine is available"
+
+The drive carries an older version of the AI engine (or the voice engine) than this app was built
+and tested with. It still works; the update brings it to the version the app expects.
+**Settings → Diagnostics** shows both versions under *Engine versions*.
+
+- **To update:** choose **Update** in the notice on the **AI Model** screen. The new version
+  downloads and is checked against its pinned checksum first, while your model keeps answering.
+  Then the models pause for a few seconds while the files are replaced, and the selected model
+  starts again. If the download fails or you cancel it, the engine on the drive stays as it was.
+- **"The AI engine is in use right now":** an answer, an import, a translation or a document task is
+  running. Wait until it has finished, then choose Update again.
+- **The button is greyed out:** like every download, the update needs **Allow internet access…** in
+  Settings and a drive that permits downloads. On a drive whose policy forbids downloads (an
+  offline Kit), whoever prepared the drive updates it with the scripts: `prepare-drive` on the
+  drive, then `fetch-runtime` (`packaging.md`).
+- **A drive used with a newer app** may carry a newer engine than this app expects. The app never
+  replaces it with an older one; Diagnostics says "newer than this app expects".
+
+---
+
 ## I downloaded the app from GitHub — where are the models?
 
 A release download is **the app only**. It starts in **demo mode** (simulated placeholder answers)

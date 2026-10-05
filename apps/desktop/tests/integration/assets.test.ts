@@ -19,6 +19,8 @@ import {
   readRuntimeMarker,
   writeRuntimeMarker,
   runtimeInstallCurrent,
+  runtimeInstallRelation,
+  compareRuntimeVersions,
   runtimeMarkerPath,
   isPrivateOrLoopbackHost,
   effectiveDownloadCap,
@@ -563,6 +565,41 @@ describe('runtime install marker (.hilbertraum-runtime.json, Phase 14)', () => {
     writeFileSync(plan.binaryPath, 'binary')
     writeRuntimeMarker(plan.extractTo, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
     expect(runtimeInstallCurrent(plan)).toBe(true)
+  })
+
+  // #516: an update replaces an install only when it is OLDER than the pin. Build tags order by
+  // number — as strings 'b9849' sorts after 'b11146', which would read the drive as NEWER.
+  it.each<[string, string, -1 | 0 | 1 | null]>([
+    ['b9849', 'b11146', -1],
+    ['b11146', 'b11146', 0],
+    ['b11200', 'b11146', 1],
+    ['v1.8.6', 'v1.8.10', -1],
+    ['1.8.6', 'v1.8.6', 0],
+    ['3.8', '3.8.1', -1],
+    ['b9849', 'v1.8.6', null], // a build counter cannot be ordered against a release
+    ['nightly', 'b11146', null]
+  ])('compareRuntimeVersions(%s, %s) = %s (#516)', (installed, pinned, order) => {
+    expect(compareRuntimeVersions(installed, pinned)).toBe(order)
+  })
+
+  it('runtimeInstallRelation: older, current, newer, the pin in another backend, no record (#516)', () => {
+    const root = tempDir('hilbertraum-marker-')
+    const plan = planFor(root) // pins b9585, vulkan
+    mkdirSync(plan.extractTo, { recursive: true })
+    writeFileSync(plan.binaryPath, 'binary')
+    const relationWith = (version: string, backend = 'vulkan'): string => {
+      writeRuntimeMarker(plan.extractTo, { version, backend, os: 'win', arch: 'x64' })
+      return runtimeInstallRelation(plan)
+    }
+    expect(relationWith('b9000')).toBe('older')
+    expect(relationWith('b9585')).toBe('current')
+    expect(relationWith('b9600')).toBe('newer')
+    // The pinned version in another backend is the drive owner's choice (`fetch-runtime -Backend`):
+    // current, so no "update" ever swaps the backend.
+    expect(relationWith('b9585', 'cpu')).toBe('current')
+    expect(relationWith('nightly')).toBe('unknown')
+    writeFileSync(runtimeMarkerPath(plan.extractTo), 'not-json')
+    expect(runtimeInstallRelation(plan)).toBe('unknown')
   })
 
   // Phase 36: the whisper family rides the exact same marker logic — its plan just

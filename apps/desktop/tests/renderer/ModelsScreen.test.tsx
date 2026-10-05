@@ -15,6 +15,7 @@ import {
   type EngineOptionalFamily,
   type EngineProblem,
   type EngineStatus,
+  type EngineVersionInfo,
   type ModelInfo,
   type ModelVerifyProgress,
   type OcrInstallStatus,
@@ -902,6 +903,23 @@ describe.each([
       stub({ models: library(), engine: engine([]), appStatus: { engineProblems: [DAMAGED_ENGINE] } })
       render(<ModelsScreen focus={focus} />)
       expect(await screen.findByText(t('en', 'models.engineProblem.title'))).toBeInTheDocument()
+      expect(screen.getByText(name)).toBeInTheDocument()
+      expect(scrolled).toHaveLength(0)
+    })
+
+    it('an AI engine update is available (#516): stays at the top, where its notice is', async () => {
+      const older: EngineVersionInfo = {
+        family: 'llama_cpp',
+        optional: false,
+        installed: 'b9849',
+        installedBackend: 'vulkan',
+        pinned: 'b11146',
+        pinnedBackend: 'vulkan',
+        relation: 'older'
+      }
+      stub({ models: library(), engine: { ...engine([]), engineVersions: [older] } })
+      render(<ModelsScreen focus={focus} />)
+      expect(await screen.findByText(t('en', 'models.engineUpdate.title'))).toBeInTheDocument()
       expect(screen.getByText(name)).toBeInTheDocument()
       expect(scrolled).toHaveLength(0)
     })

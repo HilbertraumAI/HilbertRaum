@@ -775,6 +775,33 @@ export interface EngineDownloadJob {
   families?: string[]
   /** True for a reinstall of an engine already on the drive (#532: `reinstall: true`). */
   reinstall?: boolean
+  /** True for an update of an engine older than this app's pin (#516: `update: true`). */
+  update?: boolean
+}
+
+/** How an engine on the drive relates to the version this app pins (#516). */
+export type EngineVersionRelation = 'current' | 'older' | 'newer' | 'unknown'
+
+/**
+ * One engine family that is ON the drive, against this app's pin (#516). `older` = an update is
+ * available (an older version, or the pinned version in another backend); `newer` = the drive's
+ * engine is newer than this app (never replaced, so an older app cannot downgrade it); `unknown` =
+ * no readable install record or an unorderable version (reported, never replaced).
+ */
+export interface EngineVersionInfo {
+  /** The family key (`llama_cpp`, `whisper_cpp`, `kiwix_tools`). */
+  family: string
+  /** From the code-side family spec: an optional family is reported, never updated in-app. */
+  optional: boolean
+  /** The version the drive's install record states, or null when it has none. */
+  installed: string | null
+  installedBackend: string | null
+  /** This app's pinned version and default backend for this computer. */
+  pinned: string
+  pinnedBackend: string
+  relation: EngineVersionRelation
+  /** The pure-CPU safety net beside the main build (`<os>/cpu/`), when the drive carries one. */
+  cpuNet?: { installed: string | null; pinned: string; relation: EngineVersionRelation }
 }
 
 /** Whether the engine binaries are installed and (if not) whether they can be fetched. */
@@ -795,6 +822,11 @@ export interface EngineStatus {
    * so an older main simply offers no repair.
    */
   reinstallableFamilies?: string[]
+  /**
+   * #516: every family on the drive that has a build for this computer, against this app's pin —
+   * what the update notice and Diagnostics read. Optional so an older main offers no update.
+   */
+  engineVersions?: EngineVersionInfo[]
   /**
    * OPTIONAL families (never a readiness prerequisite) with a host build but no binary yet —
    * today `kiwix_tools` (#339 P8-1). Never counted in `installed`, never listed in
@@ -843,6 +875,13 @@ export interface EngineDownloadRequest {
    * `'files-damaged'` verdict this session; main refuses anything else.
    */
   reinstall?: boolean
+  /**
+   * #516: update the named REQUIRED families to this app's pin. Only a family whose install is
+   * `older` is touched (never a downgrade), plus its `cpu/` safety net when that is older too. The
+   * engine's users are paused only for the file swap, after every archive downloaded and verified,
+   * and the selected model starts again afterwards. Not combinable with `reinstall`.
+   */
+  update?: boolean
 }
 
 // ---- In-app OCR language-file install (#410) ----

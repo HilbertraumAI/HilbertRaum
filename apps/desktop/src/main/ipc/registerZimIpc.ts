@@ -234,6 +234,8 @@ export function registerZimIpc(ctx: AppContext, opts: { platform?: NodeJS.Platfo
   // them busy (the `skillRunActive` pattern; the precedent pushes its id on the task status).
   const savingDocs = new Set<string>()
   ctx.articleSaveActive = (documentId) => savingDocs.has(documentId)
+  // #516: any save in flight — an engine update's pause would cut off its embedding.
+  ctx.articleSavesActive = () => inFlight.size > 0 || savingDocs.size > 0
   ipcHandle(
     IPC.savePackArticle,
     async (_e, packId: string, articlePath: string): Promise<PackArticleSaveResult> => {

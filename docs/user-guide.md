@@ -267,6 +267,11 @@ words per second" and "faster than you can read". There is nothing to install or
   needs **Allow internet access…** in Settings and a drive that permits downloads. Home, the chat
   and Diagnostics point to the same banner. Step by step:
   [`troubleshooting.md`](troubleshooting.md), "The AI engine can't run on this computer".
+- When the drive carries an older AI engine (or voice engine) than this app was built for, the
+  **AI Model** screen shows a quiet notice, "An update for the AI engine is available". **Update**
+  downloads and checks the new version while your model keeps answering, then pauses the models for
+  a few seconds to replace the files and starts your model again. Settings → Diagnostics lists the
+  versions under *Engine versions*.
 - You can turn acceleration off under **Settings → Use GPU acceleration** if you prefer.
 - Small built-in graphics chips (e.g. Intel Iris Xe) give only a modest boost — that's normal;
   big speedups come from dedicated graphics cards.

@@ -580,14 +580,21 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
   }
 
   /** Register the engine IPC over the fixture, start the install through the handler, wait for it to settle. */
-  async function installRuntime(f: Fixture, manifests: string, extract: ExtractFn = dropBinary): Promise<EngineDownloadJob> {
+  async function installRuntime(
+    f: Fixture,
+    manifests: string,
+    extract: ExtractFn = dropBinary,
+    request?: { families: string[] }
+  ): Promise<EngineDownloadJob> {
     const ctx = f.ctx as unknown as { manifestsDir: string; runtime: { status: () => RuntimeStatus } }
     ctx.manifestsDir = manifests
     ctx.runtime.status = () => STOPPED
     ipcState.handlers.clear()
     const manager = new EngineDownloadManager({ fetchImpl: okFetch, extractImpl: extract })
     registerEngineIpc(f.ctx, manager)
-    const { result } = await invoke(handlers, IPC.downloadEngine)
+    const { result } = request
+      ? await invoke(handlers, IPC.downloadEngine, request)
+      : await invoke(handlers, IPC.downloadEngine)
     const started = result as EngineDownloadJob
     await vi.waitFor(() => expect(['done', 'failed', 'cancelled']).toContain(manager.get(started.jobId).status), { timeout: 5000 })
     return manager.get(started.jobId)
@@ -640,8 +647,9 @@ describe('picker seams: the runtime installed after a benchmark refreshes the GP
     const before = getSettings(f.ctx.db).gpuProbe
     const pushes = vi.fn()
     setPerformanceChangedSink(pushes)
-    // The fixture's marker-less binary makes the install proceed (not "already current").
-    const job = await installRuntime(f, engineManifests())
+    // The fixture's marker-less binary makes an explicit chat-engine install proceed (not "already
+    // current"). Explicit since #516: the argument-less install fetches MISSING engines only.
+    const job = await installRuntime(f, engineManifests(), dropBinary, { families: ['llama_cpp'] })
     expect(job.status).toBe('done')
     await new Promise((r) => setTimeout(r, 50))
     expect(f.probe).not.toHaveBeenCalled()

@@ -134,6 +134,15 @@ export interface AppContext {
    */
   docIngestionActive?: (documentId: string) => boolean
   /**
+   * #516: true while the docs IPC import loop or a re-index is driving ANY document (the same
+   * module-local `processing` set, assigned at registration). An engine update's pause would cut
+   * off its embedding (or, for audio, its transcription), so the update waits for it. Optional so
+   * partial test contexts stay valid.
+   */
+  ingestionActive?: () => boolean
+  /** #516: true while any knowledge-pack article save is in flight (registerZimIpc assigns it). */
+  articleSavesActive?: () => boolean
+  /**
    * In-flight knowledge-pack article save (#340 Tier-2): true while `packs:saveArticle` is
    * driving this document's row through the import path (registerZimIpc assigns it). The docs
    * IPC guards treat it exactly like their own `processing` set — a delete or re-index under

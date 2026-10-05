@@ -18,9 +18,11 @@ import {
   downloadToFile,
   markerBinaryKey,
   planRuntimeDownload,
+  readRuntimeMarker,
   requiredInstallFiles,
   runtimeBinaryPresent,
   runtimeInstallCurrent,
+  runtimeInstallRelation,
   selectRuntimeBuild,
   verifyDownloadedFile,
   writeRuntimeMarker,
@@ -32,6 +34,7 @@ import {
 import { sha256File } from './models'
 import { invalidateBinaryVerification } from './binary-verifier'
 import { assertDownloadAllowed, type DownloadGates } from './downloads'
+import { holdEngineSpawns } from './runtime/spawn-gate'
 
 // In-app engine (prebuilt sidecar binary) downloader. The model downloader fetches model
 // WEIGHTS; the ENGINE binaries (the llama.cpp chat server, the whisper.cpp transcriber)
@@ -123,6 +126,12 @@ interface EnginePlan {
   optional: boolean
   /** The code-side licence string an optional family's consent dialog shows (#339 P8-2). */
   license: string | null
+  /**
+   * #516: the family's pure-CPU safety net for this host — the yaml's `cpu` build when the default
+   * build is another backend and lands in its own folder (`<os>/cpu/`, win + linux). Only an update
+   * installs it, and only when the drive carries it and it is older; nothing else here does.
+   */
+  cpuNet?: RuntimeDownloadPlan
 }
 
 /**
@@ -144,17 +153,24 @@ function availableEngines(
     if (!sources) continue
     const build = selectHostBuild(sources, platform, arch)
     if (!build) continue
-    const plan = planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase, {
-      alsoRequired: spec.alsoRequired,
-      declaredExecutables: sources.executables
-    })
+    const files = { alsoRequired: spec.alsoRequired, declaredExecutables: sources.executables }
+    const plan = planRuntimeDownload(rootPath, build, sources.version, spec.binaryBase, files)
+    const cpuBuild =
+      build.backend === 'cpu'
+        ? null
+        : selectRuntimeBuild(sources, { os: hostRuntimeOs(platform), arch: hostRuntimeArch(arch), backend: 'cpu' })
+    const cpuNet =
+      cpuBuild && cpuBuild.extractTo !== build.extractTo
+        ? planRuntimeDownload(rootPath, cpuBuild, sources.version, spec.binaryBase, files)
+        : undefined
     out.push({
       family: spec.family,
       version: sources.version,
       build,
       plan,
       optional: spec.optional === true,
-      license: spec.license ?? null
+      license: spec.license ?? null,
+      ...(cpuNet ? { cpuNet } : {})
     })
   }
   return out
@@ -179,21 +195,30 @@ export function engineFamilyHasHostBuild(
 
 /**
  * Validate the renderer's `downloadEngine` payload (#339 P8-2). Renderer input is untrusted:
- * anything but "absent" or `{ families: [<known family>, …], reinstall?: boolean }` is rejected
- * with friendly copy, and the parsed list is rebuilt from the code's own family names (never the
- * caller's strings echoed back). Absent / `{}` = the default install (`families` undefined).
- * `reinstall: true` (#532) needs an explicit list of REQUIRED families: the repair is never the
- * default selection and never reaches a separately consented optional family. Whether each named
- * family really holds a "files damaged" verdict is the IPC layer's check (`registerEngineIpc.ts`).
+ * anything but "absent" or `{ families: [<known family>, …], reinstall?: boolean, update?: boolean }`
+ * is rejected with friendly copy, and the parsed list is rebuilt from the code's own family names
+ * (never the caller's strings echoed back). Absent / `{}` = the default install (`families`
+ * undefined). `reinstall: true` (#532) and `update: true` (#516) each need an explicit list of
+ * REQUIRED families and exclude each other: neither is ever the default selection or reaches a
+ * separately consented optional family. Whether each named family really holds a "files damaged"
+ * verdict is the IPC layer's check (`registerEngineIpc.ts`); which families are older, the manager's.
  */
-export function parseEngineDownloadRequest(raw: unknown): { families?: EngineFamily[]; reinstall?: true } {
+export function parseEngineDownloadRequest(raw: unknown): {
+  families?: EngineFamily[]
+  reinstall?: true
+  update?: true
+} {
   if (raw === undefined || raw === null) return {}
   if (typeof raw !== 'object' || Array.isArray(raw)) throw new Error(tMain('main.engine.badRequest'))
   const reinstall = (raw as { reinstall?: unknown }).reinstall
   if (reinstall !== undefined && typeof reinstall !== 'boolean') throw new Error(tMain('main.engine.badRequest'))
+  // #516: `update` follows the same rules as `reinstall`, and never rides with it.
+  const update = (raw as { update?: unknown }).update
+  if (update !== undefined && typeof update !== 'boolean') throw new Error(tMain('main.engine.badRequest'))
+  if (reinstall === true && update === true) throw new Error(tMain('main.engine.badRequest'))
   const families = (raw as { families?: unknown }).families
   if (families === undefined) {
-    if (reinstall === true) throw new Error(tMain('main.engine.badRequest'))
+    if (reinstall === true || update === true) throw new Error(tMain('main.engine.badRequest'))
     return {}
   }
   if (!Array.isArray(families) || families.length === 0) {
@@ -212,9 +237,9 @@ export function parseEngineDownloadRequest(raw: unknown): { families?: EngineFam
   // carried the acknowledgement, so it is refused outright.
   const optional = out.filter((f) => SIDECAR_FAMILY_SPECS.find((s) => s.family === f)?.optional === true)
   if (optional.length > 0 && optional.length !== out.length) throw new Error(tMain('main.engine.badRequest'))
-  if (reinstall === true) {
+  if (reinstall === true || update === true) {
     if (optional.length > 0) throw new Error(tMain('main.engine.badRequest'))
-    return { families: out, reinstall: true }
+    return reinstall === true ? { families: out, reinstall: true } : { families: out, update: true }
   }
   return { families: out }
 }
@@ -246,6 +271,26 @@ export function engineStatus(
     missingFamilies: missingRequired.map((e) => e.family),
     // #532: what an "Install … again" action could fetch — on the drive, and with a build here.
     reinstallableFamilies: required.filter((e) => existsSync(e.plan.binaryPath)).map((e) => e.family),
+    // #516: every family on the drive against this app's pin (the update notice + Diagnostics).
+    engineVersions: engines
+      .filter((e) => existsSync(e.plan.binaryPath))
+      .map((e) => {
+        const marker = readRuntimeMarker(e.plan.extractTo)
+        const net = e.cpuNet && existsSync(e.cpuNet.binaryPath) ? e.cpuNet : null
+        const netMarker = net ? readRuntimeMarker(net.extractTo) : null
+        return {
+          family: e.family,
+          optional: e.optional,
+          installed: marker?.version ?? null,
+          installedBackend: marker?.backend ?? null,
+          pinned: e.version,
+          pinnedBackend: e.build.backend,
+          relation: runtimeInstallRelation(e.plan, marker),
+          ...(net
+            ? { cpuNet: { installed: netMarker?.version ?? null, pinned: e.version, relation: runtimeInstallRelation(net, netMarker) } }
+            : {})
+        }
+      }),
     missingOptionalFamilies: missingOptional.map((e) => e.family),
     // #339 P8-2: what the consent dialog states, from the pin + the code-side spec — never copy.
     optionalFamilies: engines
@@ -423,6 +468,21 @@ export interface StartEngineDownloadOptions {
    */
   reinstall?: boolean
   /**
+   * #516: update `families` to this app's pin. Only an install whose relation is `older` is
+   * replaced (never a newer or unrecorded one), plus the family's `cpu/` safety net when the drive
+   * carries it and it is older too. Requires `families`; no family qualifying is
+   * `main.engine.nothingToUpdate`.
+   */
+  update?: boolean
+  /**
+   * #516: awaited once, after EVERY archive of the job downloaded and verified and before the first
+   * installed file is touched — the IPC layer pauses the engine's users here, so a model keeps
+   * answering through the download and stops only for the file swap. A throw fails the job with
+   * its message (the archives are discarded, nothing was replaced). With it, the in-use flags below
+   * are not checked at start: the hook owns that check, after the pause.
+   */
+  beforeReplace?: () => Promise<void>
+  /**
    * True when a chat model runtime is currently RUNNING off the llama_cpp install dir
    * (full-audit 2026-07-11 CODE-13). An engine (re-)install pre-cleans that dir
    * (`install()` removes everything but the archive + `cpu/`), which on Windows fails
@@ -467,6 +527,14 @@ export type InstalledListener = (
   binaryPaths: Partial<Record<EngineFamily, string>>
 ) => void
 
+/** One archive a job installs: a family's main build, or (#516, updates only) its `cpu/` net. */
+interface InstallStep {
+  family: EngineFamily
+  plan: RuntimeDownloadPlan
+  /** The family's main build — the program every spawn site resolves; false for the `cpu/` net. */
+  main: boolean
+}
+
 /**
  * Owns the in-app engine-download job. One at a time; a single job installs every missing
  * engine family in sequence. The job lives in memory for the session (the durable truth is
@@ -486,8 +554,23 @@ export class EngineDownloadManager {
   private runSettled = true
   /** Issue #323: told the families a finished job installed, AFTER `job.status = 'done'`. */
   private readonly installedListeners = new Set<InstalledListener>()
+  /** #516: told every job's final snapshot once its run has settled — done, failed or cancelled. */
+  private readonly settledListeners = new Set<(job: EngineDownloadJob) => void>()
 
   constructor(private readonly deps: EngineDownloadDeps = {}) {}
+
+  /**
+   * Subscribe to settled jobs (#516): `cb` receives the job's final snapshot once its run has
+   * finished, whatever the outcome — after any `onInstalled` call of a `'done'` job, and after the
+   * manager is free for the next job. A listener fault is logged, never thrown. Returns the
+   * unsubscribe.
+   */
+  onSettled(cb: (job: EngineDownloadJob) => void): () => void {
+    this.settledListeners.add(cb)
+    return () => {
+      this.settledListeners.delete(cb)
+    }
+  }
 
   /**
    * Subscribe to completed installs (issue #323): `cb` receives the families a job installed,
@@ -526,42 +609,69 @@ export class EngineDownloadManager {
     if (engines.length === 0) {
       throw new Error(tMain('main.engine.noHostBuild'))
     }
-    // Install the requested families, minus any already current per marker. The DEFAULT
-    // selection is every missing REQUIRED family — an OPTIONAL family (kiwix_tools, #339 P8-1)
-    // is never in it: `downloadEngine` takes no arguments, so "install everything missing"
-    // must not be able to reach a copyleft, separately-consented family. Only an explicit
-    // `families: ['kiwix_tools']` installs it (the consent step is P8-2), and `e.optional`
-    // comes from the CODE spec, never from the drive's user-writable yaml.
+    // The DEFAULT selection is every MISSING required family — an OPTIONAL family (kiwix_tools,
+    // #339 P8-1) is never in it: `downloadEngine` takes no arguments, so "install everything
+    // missing" must not be able to reach a copyleft, separately-consented family. Only an
+    // explicit `families: ['kiwix_tools']` installs it (the consent step is P8-2), and
+    // `e.optional` comes from the CODE spec, never from the drive's user-writable yaml.
+    // #516: "missing" means missing. It used to mean "not current by its marker", so on a drive
+    // set up before a pin bump the "Install voice engine" button also re-installed the chat
+    // engine — refused outright while a model ran, and a silent DOWNGRADE of a newer engine. An
+    // engine that is on the drive changes only through an explicit update or reinstall.
+    // An explicit `families` list (the consent step) installs the named families not yet current.
     // #532: a reinstall keeps the requested families even when current — and only those, so it
     // needs the explicit list; a family it names that has no build here cannot be repaired here.
     const wanted = opts.families
     const reinstall = opts.reinstall === true
-    if (reinstall && (!wanted || wanted.length === 0)) throw new Error(tMain('main.engine.badRequest'))
-    const installs = engines.filter(
-      (e) =>
-        (wanted ? wanted.includes(e.family) : !e.optional) && (reinstall || !runtimeInstallCurrent(e.plan))
-    )
-    if (reinstall && installs.length < (wanted?.length ?? 0)) {
-      throw new Error(tMain('main.engine.noHostBuild'))
+    const update = opts.update === true
+    if ((reinstall || update) && (!wanted || wanted.length === 0)) {
+      throw new Error(tMain('main.engine.badRequest'))
     }
-    if (installs.length === 0) {
-      throw new Error(tMain('main.engine.alreadyInstalled'))
+    let steps: InstallStep[]
+    if (update) {
+      steps = []
+      for (const e of engines) {
+        if (e.optional || !wanted?.includes(e.family)) continue
+        // The same presence test `engineStatus().engineVersions` uses, so a notice can never
+        // offer an update this refuses (a fresh copy also restores a missing secondary file).
+        if (existsSync(e.plan.binaryPath) && runtimeInstallRelation(e.plan) === 'older') {
+          steps.push({ family: e.family, plan: e.plan, main: true })
+        }
+        if (e.cpuNet && existsSync(e.cpuNet.binaryPath) && runtimeInstallRelation(e.cpuNet) === 'older') {
+          steps.push({ family: e.family, plan: e.cpuNet, main: false })
+        }
+      }
+      if (steps.length === 0) throw new Error(tMain('main.engine.nothingToUpdate'))
+    } else {
+      const selected = engines.filter((e) =>
+        wanted
+          ? wanted.includes(e.family) && (reinstall || !runtimeInstallCurrent(e.plan))
+          : !e.optional && !runtimeBinaryPresent(e.plan)
+      )
+      if (reinstall && selected.length < (wanted?.length ?? 0)) {
+        throw new Error(tMain('main.engine.noHostBuild'))
+      }
+      if (selected.length === 0) {
+        throw new Error(tMain('main.engine.alreadyInstalled'))
+      }
+      steps = selected.map((e) => ({ family: e.family, plan: e.plan, main: true }))
     }
+    const families = [...new Set(steps.map((s) => s.family))]
     // CODE-13 + F-32: refuse an install that would pre-clean a dir a LIVE child executes from.
     // A llama_cpp install is refused while the chat runtime OR any other llama-server-backed
     // sidecar (embedder/reranker/vision/translation) is up; a whisper_cpp install while a
     // transcription/dictation runs. Installs touching only the OTHER family stay allowed.
-    if (
-      installs.some((e) => e.family === 'llama_cpp') &&
-      (opts.chatRuntimeActive || opts.llamaSidecarActive)
-    ) {
-      throw new Error(tMain('main.engine.runtimeRunning'))
-    }
-    if (installs.some((e) => e.family === 'whisper_cpp') && opts.whisperActive) {
-      throw new Error(tMain('main.engine.transcriptionRunning'))
-    }
-    if (installs.some((e) => e.family === 'kiwix_tools') && opts.kiwixToolsActive) {
-      throw new Error(tMain('main.engine.knowledgePackToolsRunning'))
+    // #516: an update that brings its own `beforeReplace` makes that check there, after its pause.
+    if (!opts.beforeReplace) {
+      if (families.includes('llama_cpp') && (opts.chatRuntimeActive || opts.llamaSidecarActive)) {
+        throw new Error(tMain('main.engine.runtimeRunning'))
+      }
+      if (families.includes('whisper_cpp') && opts.whisperActive) {
+        throw new Error(tMain('main.engine.transcriptionRunning'))
+      }
+      if (families.includes('kiwix_tools') && opts.kiwixToolsActive) {
+        throw new Error(tMain('main.engine.knowledgePackToolsRunning'))
+      }
     }
 
     const job: EngineDownloadJob = {
@@ -572,8 +682,9 @@ export class EngineDownloadManager {
       unverified: false,
       binaryPath: null,
       error: null,
-      families: installs.map((e) => e.family),
-      reinstall
+      families,
+      reinstall,
+      update
     }
     this.jobs.set(job.jobId, job)
     const controller = new AbortController()
@@ -581,12 +692,22 @@ export class EngineDownloadManager {
     this.runSettled = false // F-33: busy until run() actually settles (not just until cancelled)
     this.deps.log?.('Engine download started', {
       jobId: job.jobId,
-      families: installs.map((e) => `${e.family}:${e.build.os}/${e.build.arch}/${e.build.backend}`),
-      ...(reinstall ? { reinstall } : {})
+      families: steps.map((s) => `${s.family}:${s.plan.os}/${s.plan.arch}/${s.plan.backend}`),
+      ...(reinstall ? { reinstall } : {}),
+      ...(update ? { update } : {})
     })
-    void this.run(job, installs, controller).finally(() => {
+    void this.run(job, steps, controller, opts.beforeReplace).finally(() => {
       this.runSettled = true
       if (this.active?.jobId === job.jobId) this.active = null
+      // #516: every outcome — the IPC layer resumes what an update paused, done or not.
+      const settled = this.get(job.jobId)
+      for (const listener of this.settledListeners) {
+        try {
+          listener(settled)
+        } catch (err) {
+          this.deps.log?.('Engine job settle listener failed', String(err))
+        }
+      }
     })
     return { ...job }
   }
@@ -610,8 +731,8 @@ export class EngineDownloadManager {
    * too (full-audit 2026-07-11 CODE-13 — the downloads.ts BE-4 precedent): the SHA-256
    * hash and the extraction of a tens-of-MB archive take real time on a USB drive, and a
    * cancel landing there used to be silently dropped (the job kept installing).
-   * `installOne` re-checks the abort signal after the verify and after the extraction
-   * (before the marker write), and `run` re-checks between families.
+   * `fetchArchive` re-checks the abort signal after the verify, `replaceInstall` after the
+   * extraction (before the marker write), and `run` between archives and between its phases.
    */
   cancel(jobId: string): EngineDownloadJob {
     const job = this.jobs.get(jobId)
@@ -653,36 +774,96 @@ export class EngineDownloadManager {
     }
   }
 
-  /** Install every requested family in sequence; the first failure fails the whole job. */
+  /**
+   * Install every step; the first failure fails the whole job. Two phases (#516): every archive
+   * is downloaded and verified first, while the installed engine stays untouched and usable; only
+   * then (after `beforeReplace`, the update's pause) is each install replaced, which takes seconds.
+   * A failure or cancel in the first phase replaces nothing. Archives not yet extracted when the
+   * job stops are deleted.
+   */
   private async run(
     job: EngineDownloadJob,
-    installs: EnginePlan[],
-    controller: AbortController
+    steps: InstallStep[],
+    controller: AbortController,
+    beforeReplace?: () => Promise<void>
   ): Promise<void> {
-    let firstBinary: string | null = null
-    for (const engine of installs) {
-      // Each family is a fresh download — reset the per-file progress counters.
+    const fetched: RuntimeDownloadPlan[] = []
+    const discard = async (plans: readonly RuntimeDownloadPlan[]): Promise<void> => {
+      for (const p of plans) await rm(p.zipDest, { force: true }).catch(() => undefined)
+    }
+    for (const step of steps) {
+      // Each archive is a fresh download — reset the per-file progress counters.
       job.receivedBytes = 0
       job.totalBytes = null
-      const outcome = await this.installOne(job, engine.plan, controller)
-      if (outcome === 'aborted') return // a cancel; the partial archive was cleaned
-      if (outcome === 'failed') return // job.status/error already set
-      // CODE-13 (the BE-4 shape): a cancel that landed in the window after this family's
-      // abort checks must stop the run here — the next installOne would otherwise
-      // overwrite the `cancelled` status and start downloading the next family.
-      if (controller.signal.aborted) {
-        job.status = 'cancelled'
+      const outcome = await this.fetchArchive(job, step.plan, controller)
+      if (outcome !== 'ok') {
+        await discard(fetched) // its own archive is already gone; job.status/error already set
         return
       }
-      if (!firstBinary) firstBinary = engine.plan.binaryPath
+      fetched.push(step.plan)
+      // CODE-13 (the BE-4 shape): a cancel that landed in the window after this archive's
+      // abort checks must stop the run here — the next fetch would otherwise overwrite the
+      // `cancelled` status and start downloading the next archive.
+      if (controller.signal.aborted) {
+        job.status = 'cancelled'
+        await discard(fetched)
+        return
+      }
     }
-    job.binaryPath = firstBinary
+    job.status = 'extracting'
+    // #516: from the pause to the last marker, no program of these families may start — a
+    // helper restarting by itself, or a model start that was still hashing its weights, waits
+    // for the swap (`spawn-gate.ts`) instead of running a half-extracted binary.
+    const releases = [...new Set(steps.map((s) => s.family))].map((f) => holdEngineSpawns(f))
+    const replaced: InstallStep[] = []
+    let complete = false
+    try {
+      if (beforeReplace) {
+        try {
+          await beforeReplace()
+        } catch (err) {
+          job.status = 'failed'
+          job.error = err instanceof Error ? err.message : String(err)
+          await discard(fetched)
+          return
+        }
+        if (controller.signal.aborted) {
+          job.status = 'cancelled'
+          await discard(fetched)
+          return
+        }
+      }
+      for (const [i, step] of steps.entries()) {
+        const outcome = await this.replaceInstall(job, step.plan, controller)
+        if (outcome === 'done') replaced.push(step)
+        // A cancel stops what has not started; a swap it arrived too late to stop stays recorded.
+        const last = i === steps.length - 1
+        if (outcome !== 'done' || (controller.signal.aborted && !last)) {
+          if (outcome === 'done') job.status = 'cancelled'
+          await discard(fetched.slice(i + 1))
+          return
+        }
+      }
+      complete = true
+    } finally {
+      for (const release of releases) release()
+      // #516: a job that stopped part-way still replaced what it replaced — the consumers of a new
+      // main build need the same re-arm and probe refresh as after a complete install.
+      if (!complete && replaced.some((s) => s.main)) this.notifyInstalled(replaced)
+    }
+    job.binaryPath = steps.find((s) => s.main)?.plan.binaryPath ?? steps[0]?.plan.binaryPath ?? null
     job.status = 'done'
-    // Issue #323: the install is complete and recorded — tell the subscribers which families
-    // landed. Each listener is isolated: a fault there must never fail the finished job.
-    const families = installs.map((e) => e.family)
+    this.notifyInstalled(steps)
+  }
+
+  /**
+   * Issue #323: tell the subscribers which families landed — every binary of `steps` is on the
+   * drive with its marker. Each listener is isolated: a fault there must never fail the job.
+   */
+  private notifyInstalled(steps: readonly InstallStep[]): void {
+    const families = [...new Set(steps.map((s) => s.family))]
     const binaryPaths: Partial<Record<EngineFamily, string>> = {}
-    for (const e of installs) binaryPaths[e.family] = e.plan.binaryPath
+    for (const s of steps) if (s.main) binaryPaths[s.family] = s.plan.binaryPath
     for (const listener of this.installedListeners) {
       try {
         listener(families, binaryPaths)
@@ -693,16 +874,17 @@ export class EngineDownloadManager {
   }
 
   /**
-   * Download → verify → clean → extract → flatten → marker for ONE family. Returns the
-   * outcome; on 'failed' it sets `job.status`/`job.error`. `job.unverified` stays false for
-   * engines: RT-02 made a placeholder hash a hard FAILURE (the verify branch below), so there
-   * is no "installed but unverified" engine state — unlike model weights.
+   * Phase 1 for ONE archive: download → verify. Returns 'ok' with the verified archive at
+   * `plan.zipDest`; on 'failed' it sets `job.status`/`job.error`, and on anything but 'ok' the
+   * archive is gone. The installed engine is not touched. `job.unverified` stays false for
+   * engines: RT-02 made a placeholder hash a hard FAILURE (the verify branch below), so there is
+   * no "installed but unverified" engine state — unlike model weights.
    */
-  private async installOne(
+  private async fetchArchive(
     job: EngineDownloadJob,
     plan: RuntimeDownloadPlan,
     controller: AbortController
-  ): Promise<'done' | 'failed' | 'aborted'> {
+  ): Promise<'ok' | 'failed' | 'aborted'> {
     try {
       await mkdir(plan.extractTo, { recursive: true })
       // Fetch the release archive. No Range resume (an engine archive is far smaller than a
@@ -777,21 +959,47 @@ export class EngineDownloadManager {
         })
         return 'failed'
       }
+      return 'ok'
+    } catch (err) {
+      if (job.status === 'cancelled') {
+        await rm(plan.zipDest, { force: true })
+        return 'aborted'
+      }
+      job.status = 'failed'
+      job.error = friendlyEngineError(err)
+      this.deps.log?.('Engine download failed', { error: String(err) })
+      await rm(plan.zipDest, { force: true }).catch(() => undefined)
+      return 'failed'
+    }
+  }
 
+  /**
+   * Phase 2 for ONE verified archive: clean → extract → flatten → completeness check → marker.
+   * Returns the outcome; on 'failed' it sets `job.status`/`job.error`. The archive is deleted
+   * whatever happens.
+   */
+  private async replaceInstall(
+    job: EngineDownloadJob,
+    plan: RuntimeDownloadPlan,
+    controller: AbortController
+  ): Promise<'done' | 'failed' | 'aborted'> {
+    try {
       job.status = 'extracting'
       // F-33: thread the job's abort signal into the extractor so a cancel actually kills the
       // tar child (and a deadline bounds a wedged one), instead of the status flipping while tar
       // keeps writing into `extractTo`.
       await this.install(plan, controller.signal)
-      // CODE-13: honour a cancel that landed DURING the extraction, BEFORE the marker
-      // write. The extracted files may exist, but without a marker the install is not
-      // "current" (`runtimeInstallCurrent`), so the next job re-installs cleanly — and the
-      // pre-spawn verifier treats a marker-less binary as legacy rather than trusting a
-      // half-cancelled install.
+      // CODE-13 / F-33: a cancel DURING the extraction kills tar, so `install()` rejects and the
+      // catch below reports the job cancelled (the half-extracted folder has no marker, and the
+      // missing files surface as #530 "files damaged", whose #532 reinstall repairs them).
+      // #516: a cancel that lands after `install()` finished arrives too late to stop anything —
+      // the old copy is gone and the new one is complete — so the install is finished and
+      // recorded. Skipping the marker used to leave a working engine without a version record,
+      // which no update offers to replace.
       if (controller.signal.aborted) {
-        job.status = 'cancelled'
-        await rm(plan.zipDest, { force: true })
-        return 'aborted'
+        this.deps.log?.('Cancel arrived after the files were in place — finishing the install', {
+          extractTo: plan.extractTo
+        })
       }
       await rm(plan.zipDest, { force: true })
 
