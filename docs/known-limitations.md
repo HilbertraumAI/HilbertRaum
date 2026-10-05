@@ -269,7 +269,14 @@ password recovery — are documented in
   neither `routeMatch` nor the informational PII scan for them ("Was regelt die DSGVO?" is about the LAW,
   not the document), so redaction no longer offers **or** auto-fires on them; the PII-content topics
   (`sensitive data`/`sensible daten`) stay, since the informational dry-run reports per-category counts
-  for those.
+  for those (they still offer and auto-fire on legal questions too: #604). The bare German
+  `personenbezogene daten` stopped offering in #608 (GDPR, privacy-notice and contract questions got
+  Redaction); it still routes once Redaction or Share-Safe is active, like English `personal data`.
+  German removal requests therefore get the Redaction offer only in a few word orders ("…
+  personenbezogenen Daten entfernen", "Lösche die personenbezogenen Daten …"): one that names only the
+  data ("eine Version ohne personenbezogene Daten"), uses another verb, or another form of these verbs
+  ("Entfernen Sie …", "Bitte personenbezogene Daten löschen.") gets none, so pick the skill yourself
+  (#602).
 - **A skill picked in the composer applies PER-TURN, is visible, and is reversible (Skills U3, audit
   §4.3 / ux-6).** Before U3 every picker pick — including accepting a one-off suggestion — was silently
   written to the conversation's persisted default (`active_skill_id`), so a pick made many turns ago

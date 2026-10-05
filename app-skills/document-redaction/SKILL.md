@@ -32,12 +32,18 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
   # PII-content topics (sensitive data / sensible daten) are `suggest`-only but the informational dry-run
   # DOES act on them (per-category counts). U4/§4.4: the pure legal words datenschutz/dsgvo/gdpr were
   # DROPPED — the handler acts on none of them, so keeping them let redaction auto-fire a wrong-flavoured
-  # fence on "Was regelt die DSGVO?". Edit the vocabulary, not this list.
+  # fence on "Was regelt die DSGVO?". #608: the bare `personenbezogene daten` is route-only for the same
+  # reason (GDPR, privacy-notice and contract questions); the German removal phrases are listed per form,
+  # but not the infinitive "… daten löschen", which deletion-duty questions use. Edit the vocabulary, not
+  # this list.
   keywords: [redact, redaction, anonymize, anonymise, anonymized, anonymised,
              remove personal data, remove all personal data, mask personal data,
              anonymisieren, anonymisierung, anonymisiere, pseudonymisieren,
              schwärzen, schwärzung, schwärze, geschwärzt,
-             personenbezogene daten, personenbezogene daten entfernen,
+             personenbezogene daten entfernen, personenbezogenen daten entfernen,
+             entferne alle personenbezogenen daten, entferne die personenbezogenen daten,
+             entferne personenbezogene daten, lösche alle personenbezogenen daten,
+             lösche die personenbezogenen daten, lösche personenbezogene daten,
              sensitive data, sensible daten]
   mimeTypes: [application/pdf, text/plain, text/markdown]
   filenamePatterns: []         # redaction is intent-driven, not filename-driven — leave empty
