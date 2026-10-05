@@ -144,7 +144,8 @@ describe('skill-run store — poll resilience (SKA-39/40)', () => {
       startSkillRun: async () => ({ started: true, run: running }),
       getSkillRun: async () => {
         throw new Error('transient IPC error')
-      }
+      },
+      clearSkillRun: async () => {}
     })
     await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'extract_transactions', conversationId: 'conv-1', documentId: 'doc-1' })
     // immediate poll (#1) + two interval ticks (#2, #3) = MAX_POLL_FAILURES → give up, keep the row.
@@ -165,7 +166,8 @@ describe('skill-run store — poll resilience (SKA-39/40)', () => {
     const cur = { run: initial as SkillRunState | null }
     setApi({
       startSkillRun: async () => ({ started: true, run: initial }),
-      getSkillRun: async () => cur.run
+      getSkillRun: async () => cur.run,
+      clearSkillRun: async () => {}
     })
     await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'extract_transactions', conversationId: 'conv-1', documentId: 'doc-1' })
     // Main loses the run (a swept slot / main restart): getSkillRun returns null for the LIVE handle.

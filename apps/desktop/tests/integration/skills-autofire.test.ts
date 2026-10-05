@@ -1,6 +1,4 @@
 import { describe, it, expect } from 'vitest'
-import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { randomUUID } from 'node:crypto'
 import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
@@ -15,8 +13,8 @@ import {
 } from '../../src/main/services/chat'
 import { addToCollection, getBuiltinCollection, linkConversationDocument } from '../../src/main/services/collections'
 import { updateSettings } from '../../src/main/services/settings'
-import { openFreshDb, tempRoot } from '../helpers/db-fixtures'
-import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { makeSkillDirs, realAppSkillsDeps, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Skills S13b — AUTO-FIRE mechanics (skills-s13-plan.md §2.1/§4). Proves the ratified contract:
 //   D4  off by default (the safe-merge property — inert in production) AND app-skills only.
@@ -29,9 +27,10 @@ import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/ski
 //   §6.5 an enabled-but-incompatible app skill never auto-fires.
 // All deterministic + DB-only (no model, no Electron).
 
-const tempDir = (): string => tempRoot('autofire')
 const freshDb = (): Db => openFreshDb('autofire')
 const makeDirs = (): SkillDirs => makeSkillDirs('autofire')
+// The real committed app-skills/ tree (the redaction and complaint describes).
+const realDirs = (): SkillDirs => realAppSkillsDeps('autofire')
 
 /** Write a SKILL.md (frontmatter triggers + optional autoFire + optional minAppVersion) into `dir`. */
 function writeSkill(
@@ -63,9 +62,9 @@ function seedIndexedDoc(db: Db, title: string, mime: string): string {
  * signal, plus a `documents` conversation whose scope holds a matching PDF (so keyword + mime ⇒
  * score 3). Returns the db, dirs, and the conversation id.
  */
-function envWithAutoFireSkill(extra?: (dirs: { appSkillsDir: string; userSkillsDir: string }) => void): {
+function envWithAutoFireSkill(extra?: (dirs: SkillDirs) => void): {
   db: Db
-  dirs: { appSkillsDir: string; userSkillsDir: string }
+  dirs: SkillDirs
   convId: string
 } {
   const db = freshDb()
@@ -313,10 +312,6 @@ describe('S13c — auto-fire provenance + the undo (skills-s13-plan.md §5/D3)',
 // not declare gives no doc signal, so the keyword alone never fires. (The positive case is a row of the
 // complaint-skills table below.)
 describe('document-redaction auto-fires against the real selector (S13b D6 opt-in)', () => {
-  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-  function realDirs(): { appSkillsDir: string; userSkillsDir: string } {
-    return { appSkillsDir: join(REPO_ROOT, 'app-skills'), userSkillsDir: join(tempDir(), 'user-skills') }
-  }
   const Q_ANON = 'I want to anonymize my attached document' // keyword "anonymize" (2)
 
   it('a selected NON-redactable MIME (no mime hit) does NOT fire on the keyword alone', () => {
@@ -338,7 +333,7 @@ describe('document-redaction auto-fires against the real selector (S13b D6 opt-i
 describe('resolveAutoFireSkill — narrowed doc signals (U4, audit §4.4)', () => {
   /** autobank (autoFire + `bank statement` keyword + pdf mime) with a matching PDF seeded INTO the Library
    *  collection — present in the corpus, NOT explicitly selected. */
-  function envWithLibraryDoc(): { db: Db; dirs: { appSkillsDir: string; userSkillsDir: string }; libDocId: string } {
+  function envWithLibraryDoc(): { db: Db; dirs: SkillDirs; libDocId: string } {
     const db = freshDb()
     const dirs = makeDirs()
     writeSkill(dirs.appSkillsDir, 'autobank', {
@@ -390,10 +385,6 @@ describe('resolveAutoFireSkill — narrowed doc signals (U4, audit §4.4)', () =
 // triggers.autoFire in their COMMITTED SKILL.md, so they auto-fire end-to-end against the real manifests
 // with an explicitly-scoped matching document. Regression for the §2.4 "can never auto-fire" gap.
 describe('the complaint skills auto-fire against the real committed manifests (U4 D6 opt-in)', () => {
-  const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-  function realDirs(): { appSkillsDir: string; userSkillsDir: string } {
-    return { appSkillsDir: join(REPO_ROOT, 'app-skills'), userSkillsDir: join(tempDir(), 'user-skills') }
-  }
   const cases = [
     { skill: 'app:bank-statement', q: 'Reconcile the transactions on my bank statement.', title: 'march-statement.pdf', mime: 'application/pdf' },
     { skill: 'app:invoice', q: 'List the line items and the invoice number.', title: 'invoice-2026.pdf', mime: 'application/pdf' },

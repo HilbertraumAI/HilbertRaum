@@ -1,7 +1,6 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
 import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, getSkill, listSkills, skillInstallId } from '../../src/main/services/skills/registry'
@@ -16,7 +15,7 @@ import { openFreshDb } from '../helpers/db-fixtures'
 import { capturingAudit } from '../helpers/audit-capture'
 import { scriptedRuntime } from '../helpers/scripted-runtime'
 import { seedDocWithChunks as seedChunks } from '../helpers/doc-fixtures'
-import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
+import { REPO_APP_SKILLS_DIR, realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Phase 8 (beta-feedback-2026-07 §11, #23, D76; architecture.md "Skills — design record" §22) — the
 // SECOND read-transform-export skill: document-edit. Like redaction, the deliverable is a FILE (no
@@ -26,9 +25,7 @@ import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 // reporting only the applied/dropped counts + an 'edited'/'editedPartial'/'none' discriminator. Unlike
 // redaction there is NO deterministic floor: a missing model / instruction refuses cleanly.
 
-const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-const APP_SKILLS_DIR = join(REPO_ROOT, 'app-skills')
-const EDIT_SKILL_MD = readFileSync(join(APP_SKILLS_DIR, 'document-edit', 'SKILL.md'), 'utf8')
+const EDIT_SKILL_MD = readFileSync(join(REPO_APP_SKILLS_DIR, 'document-edit', 'SKILL.md'), 'utf8')
 
 const freshDb = (): Db => openFreshDb('edit')
 

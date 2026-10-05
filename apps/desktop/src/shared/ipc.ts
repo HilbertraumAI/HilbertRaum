@@ -383,7 +383,7 @@ export const IPC = {
    * precedent, for skill runs. Content-free: each entry is a `SkillRunState` (state/progress/counts +
    * the content-free conversation/document ids), never the extracted rows. */
   listSkillRuns: 'skills:listToolRuns',
-  /** Cancel a run (aborts its `AbortSignal`); with no handle, the active run. */
+  /** Cancel a run by handle (aborts its `AbortSignal`); an empty handle is a no-op (SKA-25). */
   cancelSkillRun: 'skills:cancelToolRun',
   /** Drop a terminal run main-side once the renderer has shown its outcome (the acknowledge handshake). */
   clearSkillRun: 'skills:clearToolRun',

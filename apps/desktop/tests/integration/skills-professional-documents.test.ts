@@ -1,12 +1,11 @@
 import { describe, it, expect } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { fileURLToPath } from 'node:url'
 import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
 import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, getSkill, skillInstallId } from '../../src/main/services/skills/registry'
 import { openFreshDb } from '../helpers/db-fixtures'
-import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
+import { REPO_APP_SKILLS_DIR, realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // The "Professional Documents" wave — the upgraded Meeting Minutes skill plus four NEW Tier-1
 // instruction skills (contract-brief, deadline-obligation-finder, what-changed, share-safe-review).
@@ -15,14 +14,12 @@ import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 // conversations still resolve it). The English + German trigger rows live in the production-path eval
 // (`tests/eval/skill-triggers.test.ts` + its corpus), not here.
 
-const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..', '..', '..')
-const APP_SKILLS_DIR = join(REPO_ROOT, 'app-skills')
 
 const NEW_SKILL_IDS = ['contract-brief', 'deadline-obligation-finder', 'what-changed', 'share-safe-review'] as const
 const ALL_PRO_SKILL_IDS = ['meeting-protocol', ...NEW_SKILL_IDS] as const
 
 function readSkillMd(id: string): string {
-  return readFileSync(join(APP_SKILLS_DIR, id, 'SKILL.md'), 'utf8')
+  return readFileSync(join(REPO_APP_SKILLS_DIR, id, 'SKILL.md'), 'utf8')
 }
 
 const freshDb = (): Db => openFreshDb('prodocs')

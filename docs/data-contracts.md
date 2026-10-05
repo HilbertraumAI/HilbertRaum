@@ -1899,8 +1899,9 @@ whole renderer-visible surface.
   Tier-2 runs `listRunnableTools(skillInstallId, conversationId): Promise<RunnableToolSet>`
   (tools + in-scope `documentIds` — resolved at FETCH time, so the renderer re-fetches after a
   scope write or attach settle, #140), `startSkillRun(req): Promise<StartSkillRunResult>`,
-  `getSkillRun`/`listSkillRuns`/`cancelSkillRun`/`clearSkillRun` (ids/counts-only
-  `SkillRunState`). Record: `architecture.md` Skills records (§42/§44).
+  `getSkillRun`/`listSkillRuns`/`cancelSkillRun(runHandle)`/`clearSkillRun(runHandle)`
+  (ids/counts-only `SkillRunState`; cancel and clear require the run handle — there is no
+  cancel-all). Record: `architecture.md` Skills records (§42/§44).
 - **Collections CRUD** — `listCollections(): Promise<Collection[]>`, `createCollection(name)`,
   `renameCollection`, `archiveCollection`, `deleteCollection`, membership
   `addToCollection`/`removeFromCollection`, lifecycle `setDocumentLifecycle`. Types:

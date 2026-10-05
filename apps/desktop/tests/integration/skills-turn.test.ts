@@ -1,6 +1,4 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdirSync, writeFileSync } from 'node:fs'
-import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 import type { Db } from '../../src/main/services/db'
 import { MockEmbedder } from '../../src/main/services/embeddings'
@@ -46,7 +44,7 @@ function writeSkill(dir: string, id: string, body: string, version = '1.0.0'): v
 }
 
 /** A db with one ENABLED user skill `bank` (body "Quote totals.") + its install_id. */
-function envWithSkill(): { db: Db; dirs: { appSkillsDir: string; userSkillsDir: string }; installId: string } {
+function envWithSkill(): { db: Db; dirs: SkillDirs; installId: string } {
   const db = freshDb()
   const dirs = makeDirs()
   writeSkill(dirs.userSkillsDir, 'bank', 'Quote the printed totals.\n\nFlag anything you cannot verify.')
@@ -96,23 +94,13 @@ describe('resolveTurnSkill (skills plan §10.1/§10.3)', () => {
     // `enabled` flag is stale (reconcile preserves it); the use-site gate must still exclude it.
     const db = freshDb()
     const dirs = makeDirs()
-    const d = join(dirs.userSkillsDir, 'futureskill')
-    mkdirSync(d, { recursive: true })
-    writeFileSync(
-      join(d, 'SKILL.md'),
-      [
-        '---',
-        'id: futureskill',
-        'title: Future Skill',
-        'description: Needs a newer app',
-        'version: 1.0.0',
-        'compatibility:',
-        '  minAppVersion: 99.0.0',
-        '---',
-        'Body that should never reach a turn while the app is too old.'
-      ].join('\n'),
-      'utf8'
-    )
+    writeSkillPackage(dirs.userSkillsDir, {
+      id: 'futureskill',
+      title: 'Future Skill',
+      description: 'Needs a newer app',
+      minAppVersion: '99.0.0',
+      body: 'Body that should never reach a turn while the app is too old.'
+    })
     reconcileSkills(db, dirs)
     setSkillEnabled(db, 'user:futureskill', true) // force-enable (simulate stale enabled flag)
     const conv = createConversation(db, {})
