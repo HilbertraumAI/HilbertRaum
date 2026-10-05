@@ -48,11 +48,6 @@ interface ParseCacheEntry {
 }
 const parseCache = new Map<string, ParseCacheEntry>()
 
-/** Test/maintenance seam: drop all cached parses (e.g. between isolated unit tests). */
-export function clearSkillParseCache(): void {
-  parseCache.clear()
-}
-
 /**
  * Load a discovered skill from disk: read + validate its SKILL.md and return the manifest plus
  * the trimmed Markdown body (the instructions a later phase injects). The same one path serves

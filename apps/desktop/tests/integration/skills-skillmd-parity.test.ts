@@ -59,22 +59,16 @@ describe('SKILL.md triggers.keywords ⇔ vocabulary parity (W5)', () => {
 // P2 = bullets) still decapitated the rules at a tight budget — the minimum shipped a bare heading, or
 // (as this test previously pinned at paras[1]) an intro PROMISING rules with none delivered. SKA-15
 // merges heading + intro + bullets into ONE paragraph, so the guaranteed-kept minimum IS the rules
-// block. Pinned for all 9 shipped app skills, both statically (paragraph shape) and end-to-end
+// block. Pinned for every shipped app skill, both statically (paragraph shape) and end-to-end
 // (trimming the REAL body through `buildSkillFence` at a rules-only budget keeps the bullets).
-const ALL_APP_SKILL_IDS = [
-  'bank-statement',
-  'invoice',
-  'document-redaction',
-  'document-edit',
-  'contract-brief',
-  'deadline-obligation-finder',
-  'meeting-protocol',
-  'share-safe-review',
-  'what-changed'
-] as const
+// Enumerated from DISK, so an added or removed skill is covered without a hand-kept list.
+const shippedIds = readdirSync(join(REPO_ROOT, 'app-skills'), { withFileTypes: true })
+  .filter((e) => e.isDirectory())
+  .map((e) => e.name)
+  .sort()
 
 describe('SKILL.md honesty/safety rules survive the fence-trim minimum (U1 + SKA-15)', () => {
-  for (const id of ALL_APP_SKILL_IDS) {
+  for (const id of shippedIds) {
     it(`${id}: heading + rules are ONE paragraph — the buildSkillFence guaranteed minimum`, () => {
       const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))
       expect(res.ok, `parse ${id}: ${res.errors.join('; ')}`).toBe(true)
@@ -117,15 +111,6 @@ describe('SKILL.md honesty/safety rules survive the fence-trim minimum (U1 + SKA
 // must not list a skill id that no longer ships (a removed skill fails until its row is dropped).
 describe('SKILL.md ⇔ docs/skills-overview.md parity (skills overview keep-in-sync rule)', () => {
   const OVERVIEW = readFileSync(join(REPO_ROOT, 'docs', 'skills-overview.md'), 'utf8')
-  const shippedIds = readdirSync(join(REPO_ROOT, 'app-skills'), { withFileTypes: true })
-    .filter((e) => e.isDirectory())
-    .map((e) => e.name)
-    .sort()
-
-  it('sanity: the disk enumeration sees the bundled skill set', () => {
-    expect(shippedIds).toEqual([...ALL_APP_SKILL_IDS].sort())
-  })
-
   for (const id of shippedIds) {
     it(`${id}: the overview lists the skill with its current id and version`, () => {
       const res = parseSkillManifestFromDir(join(REPO_ROOT, 'app-skills', id))

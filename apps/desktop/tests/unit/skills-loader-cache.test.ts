@@ -1,11 +1,8 @@
-import { describe, it, expect, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, statSync } from 'node:fs'
+import { describe, it, expect } from 'vitest'
+import { mkdtempSync, mkdirSync, writeFileSync, utimesSync, statSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import {
-  loadSkillPackage,
-  clearSkillParseCache
-} from '../../src/main/services/skills/loader'
+import { loadSkillPackage } from '../../src/main/services/skills/loader'
 import type { SkillRecord } from '../../src/main/services/skills/registry'
 
 // Per-turn parse cache (perf): resolveTurnSkill loads the skill on every turn, so loadSkillPackage
@@ -40,8 +37,6 @@ function makeEnv(id: string, body: string): {
 }
 
 describe('loadSkillPackage parse cache', () => {
-  beforeEach(() => clearSkillParseCache())
-
   it('returns the SAME parsed result object on an unchanged skill (cache hit, no re-parse)', () => {
     const { record, opts } = makeEnv('bank', 'Quote the printed totals.')
     const first = loadSkillPackage(record, opts)
@@ -71,13 +66,12 @@ describe('loadSkillPackage parse cache', () => {
     expect(second.ok && second.body).toContain('BBBB')
   })
 
-  it('a missing SKILL.md is not cached (defers to the friendly parser error)', () => {
-    const { record, opts } = makeEnv('bank', 'Body.')
-    const ok = loadSkillPackage(record, opts)
-    expect(ok.ok).toBe(true)
-    // Point the record at a sibling folder with no SKILL.md.
-    const missing = { source: 'user', path: 'does-not-exist' } as SkillRecord
-    const res = loadSkillPackage(missing, opts)
-    expect(res.ok).toBe(false)
+  it('a vanished SKILL.md is not served from the cache, and a re-created one loads again', () => {
+    const { record, opts, mdPath } = makeEnv('bank', 'Body.')
+    expect(loadSkillPackage(record, opts).ok).toBe(true) // primes the cache for this dir
+    rmSync(mdPath)
+    expect(loadSkillPackage(record, opts).ok).toBe(false) // stat fails: friendly error, not the stale parse
+    writeFileSync(mdPath, skillMd('bank', 'Body.'), 'utf8')
+    expect(loadSkillPackage(record, opts).ok).toBe(true)
   })
 })

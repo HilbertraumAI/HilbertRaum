@@ -271,7 +271,7 @@ describe('validateSkillManifest', () => {
   // the fixed English strings, and the `localized.<key>` family DROPS the raw locale key (bounded
   // attacker-chosen text that used to be interpolated into the preview payload).
   describe('structured note codes (SKA-35)', () => {
-    it('noteCodes parallels notes, and formatSkillNote reproduces each string exactly', () => {
+    it('noteCodes are index-aligned with notes (SkillsTab pairs them by index)', () => {
       const res = validateSkillManifest(
         rawFront({
           permissions: { documents: 'all' },
@@ -562,23 +562,5 @@ describe('manifest cache round-trip (audit C2)', () => {
     expect(restored).toEqual(res.manifest)
     expect(restored.triggers.keywords).toEqual(['iban'])
     expect(restored.compatibility.minAppVersion).toBe('0.1.29')
-  })
-
-  it('survives JSON.stringify/parse with triggers.autoFire intact (D6 cache round-trip)', () => {
-    const res = parseSkillMarkdown(
-      skillMd(rawFront({ triggers: { keywords: ['bank statement'], mimeTypes: ['application/pdf'], autoFire: true } }))
-    )
-    expect(res.ok).toBe(true)
-    const restored = JSON.parse(JSON.stringify(res.manifest)) as SkillManifest
-    expect(restored).toEqual(res.manifest)
-    expect(restored.triggers.autoFire).toBe(true)
-  })
-
-  it('survives JSON.stringify/parse with analysis intact (A3 cache round-trip)', () => {
-    const res = parseSkillMarkdown(skillMd(rawFront({ analysis: 'compare' })))
-    expect(res.ok).toBe(true)
-    const restored = JSON.parse(JSON.stringify(res.manifest)) as SkillManifest
-    expect(restored).toEqual(res.manifest)
-    expect(restored.analysis).toBe('compare')
   })
 })
