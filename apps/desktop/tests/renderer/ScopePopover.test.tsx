@@ -250,3 +250,85 @@ describe('ScopePopover — "Answering from:" scope chip (#26, D71)', () => {
     )
   })
 })
+
+// #571: an attachment that failed (a scan, a damaged file) still scopes its chat — main counts the
+// unfiled file — so the chip must name it as NOT READABLE YET, never bare (as if it were in use)
+// and never "your whole library" (what the chat used to fall back to).
+describe('ScopePopover — a failed attachment (#571)', () => {
+  const failed = indexedDoc({ id: 'scan', title: 'scan.pdf', status: 'failed', chunkCount: 0 })
+
+  it('the chip names the file as not readable yet — not bare, not the whole library', () => {
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[indexedDoc({ id: 'a' }), indexedDoc({ id: 'b' })]}
+          collections={[]}
+          scope={{ collectionIds: [], documentIds: [] }}
+          onChangeScope={() => {}}
+          attachments={[failed]}
+        />
+      </I18nProvider>
+    )
+    const source = t('en', 'chat.scope.attachmentNotReadable', { name: 'scan.pdf' })
+    const trigger = screen.getByRole('button')
+    expect(trigger.textContent).toContain(t('en', 'chat.scope.answeringFrom', { source }))
+    expect(trigger.textContent).not.toContain(t('en', 'chat.scope.wholeLibrary.other', { count: 2 }))
+  })
+
+  it('"Files in this chat" marks it and says it adds nothing yet; a readable file stays bare', async () => {
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[]}
+          collections={[]}
+          scope={{ collectionIds: [], documentIds: [] }}
+          onChangeScope={() => {}}
+          attachments={[failed, indexedDoc({ id: 'ok', title: 'invoice.pdf' })]}
+        />
+      </I18nProvider>
+    )
+    await userEvent.click(screen.getByRole('button'))
+    const chip = (await screen.findAllByText(t('en', 'chat.scope.attachmentNotReadable', { name: 'scan.pdf' }))).find(
+      (el) => el.classList.contains('scope-attachment')
+    )
+    expect(chip).toHaveClass('failed')
+    expect(screen.getByText('invoice.pdf')).not.toHaveClass('failed')
+    expect(screen.getByText(t('en', 'chat.scope.attachmentFailedHint'))).toBeInTheDocument()
+  })
+
+  it('renders the marker and the hint from the German catalog', async () => {
+    window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, 'de')
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[]}
+          collections={[]}
+          scope={{ collectionIds: [], documentIds: [] }}
+          onChangeScope={() => {}}
+          attachments={[failed]}
+        />
+      </I18nProvider>
+    )
+    const source = t('de', 'chat.scope.attachmentNotReadable', { name: 'scan.pdf' })
+    expect(screen.getByRole('button').textContent).toContain(t('de', 'chat.scope.answeringFrom', { source }))
+    await userEvent.click(screen.getByRole('button'))
+    expect(await screen.findByText(t('de', 'chat.scope.attachmentFailedHint'))).toBeInTheDocument()
+  })
+
+  it('no hint while every attachment is readable', async () => {
+    render(
+      <I18nProvider>
+        <ScopePopover
+          docs={[]}
+          collections={[]}
+          scope={{ collectionIds: [], documentIds: [] }}
+          onChangeScope={() => {}}
+          attachments={[indexedDoc({ id: 'ok', title: 'invoice.pdf' })]}
+        />
+      </I18nProvider>
+    )
+    await userEvent.click(screen.getByRole('button'))
+    await screen.findByText(t('en', 'chat.scope.filesInChatLine'))
+    expect(screen.queryByText(t('en', 'chat.scope.attachmentFailedHint'))).not.toBeInTheDocument()
+  })
+})

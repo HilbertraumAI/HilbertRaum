@@ -1431,6 +1431,74 @@ with the absolute drive path. Each of those sends the user to the wrong fix.
   App notice target, the Diagnostics line and report, the Performance tile, the Translate/Images
   codes), `live-region-nesting.test.ts`, `display-map.test.ts`.
 
+### 11.18 A file attached in a chat that can't be read yet — design record (IMPLEMENTED 2026-10-05, #570–#573)
+
+_What the chat says when an attached file fails because it needs OCR, where it sends the user,
+and how they get back. Engineering record: `architecture.md` doc-org §4 "#571 amendment" and
+rag-design §13.2. Code cites this section as **§11.18**._
+
+**The problem.** A scanned PDF attached in a chat failed with only *"This PDF looks like a scan —
+it has no readable text yet."* and disappeared from the chat. The next question was answered from
+the whole corpus (#571). Documents offered **Try again** next to the real fix (#572), and coming
+back to Chat opened a new chat instead of the one the file was attached in (#573).
+
+**Decisions.**
+1. **Documents is the one OCR surface; everything else points there.** OCR does not run inside
+   the chat: a run blocks chat in every conversation and would need the doc-task store, cancel,
+   the #410 install flow and remount handling there. The chat, Translate (#570 parity) and Images
+   (#539) each name the case and offer **Go to Documents** / „Zu den Dokumenten“.
+2. **The button navigates, so it is not named like the row action.** The Documents row carries
+   **Make searchable (OCR)**; a chat button with the same label that only navigates would mislead.
+3. **The copy names the file, the one next step, and what happens after** — *"{name} looks like a
+   scan, so it can't be read yet. In Documents, use Make searchable (OCR) on it. It then joins this
+   chat by itself — no need to attach it again."* The promise is pinned by an integration test (OCR
+   re-indexes the same row, which files it into the chat). It never promises "come back here". A
+   photo of a page without the OCR files gets its own sentence (Download OCR files, then Try
+   again). German quotes the exact labels („Durchsuchbar machen (OCR)“, „OCR-Dateien
+   herunterladen“, „Erneut versuchen“).
+4. **Read the flag, never the text.** The case comes from `ocrRemedyKind` (`scanDetected`, or the
+   canonical photo message through the display map). The chat stores localized banner text, and
+   `main.ingest.pdfScanDetected` is persist-canonical.
+5. **The banner belongs to its chat.** A failure that lands while the user is in another chat is
+   held in memory and shown when they return; it is never shown over another chat. When several
+   files failed, the scan leads, then the photo. The message and its remedy are ONE state, so the
+   button can never ride along on a later, unrelated error.
+6. **An unreadable file still scopes its chat, and says so.** The chip reads *"Answering from:
+   scan.pdf (not readable yet)"*, never bare and never *"your whole library"*. **Files in this
+   chat** marks the chip (dashed, muted) and adds one line: *"A file that can't be read yet adds
+   nothing to the answers. Documents shows why, and what to do."*
+7. **A dead-end button is removed, not explained.** A detected scan's row has no **Try again**
+   (it fails the same way until OCR runs); **Retry all** skips every row a retry cannot fix.
+8. **One way back, for that trip only.** After the chat's **Go to Documents**, Documents shows a
+   ghost **‹ Back to chat** (the Images/Review back-link shape) that reopens that conversation.
+   App holds the id in a one-shot slot that every other navigation clears. The rail's **Chat**
+   keeps its plain chat-home landing; remembering the last chat for every return was rejected as a
+   change to general navigation.
+
+**As built.**
+- **Renderer:**
+  - `lib/ocrRemedy.ts` (moved from `screens/documents/format.tsx`);
+  - `screens/ChatScreen.tsx` (`errorState`, `ATTACH_REMEDY_KEY`, the held-failure ref, the CR-6
+    effect, `onOpenDocumentsFrom`);
+  - `chat/ScopePopover.tsx` (`attachmentName`, the hint);
+  - `screens/DocumentsScreen.tsx` (`onBackToConversation`, Retry all);
+  - `screens/documents/format.tsx` (`isRetryableFailure`);
+  - `App.tsx` (`documentsReturn`, `openDocumentsFromChat`);
+  - `screens/TranslateScreen.tsx`;
+  - `.scope-attachment.failed` and `.docs-back` in `styles.css`.
+- **Copy:** `chat.attach.{scanned,photoNeedsOcr,goToDocuments}`,
+  `chat.scope.{attachmentNotReadable,attachmentFailedHint}`, `docs.backToChat`,
+  `translate.file.err.scannedAction` (en + de).
+- **Tests:**
+  - `ChatAttach.test.tsx` (scan, photo, other failure, scan-first, dismiss, held across a
+    conversation switch, the return hand-over);
+  - `ScopePopover.test.tsx` (EN + DE);
+  - `ChatBackToConversation.test.tsx` (App-level Back to chat + the rail);
+  - `DocumentsScreen.test.tsx` / `OcrInstall.test.tsx` (no Try again on scan rows, Retry all);
+  - `TranslateScreen.test.tsx`;
+  - main side: `collections.test.ts`, `chat-ipc.test.ts`, `rag-collections.test.ts`,
+    `docs-ipc.test.ts` (the OCR rejoin).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

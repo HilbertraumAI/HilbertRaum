@@ -559,6 +559,8 @@ export function TranslateScreen({
   // one path is non-idle at a time, so these never collide in practice; the priority is a tie-break.
   let bannerText: string | null = null
   let dismissBanner: () => void = () => {}
+  // #570 parity: a scanned PDF is fixed in Documents (Make searchable), so its banner links there.
+  let bannerToDocuments = false
   if (screenError) {
     bannerText = t(ERR_KEY[screenError] ?? 'translate.err.runtimeFailed')
     dismissBanner = () => setScreenError(null)
@@ -576,6 +578,7 @@ export function TranslateScreen({
         ? localizeServerCopy(t, fileTx.errorMessage)
         : t(fileTx.error ? FILE_ERR_KEY[fileTx.error] : 'translate.file.err.runtimeFailed')
     dismissBanner = () => resetFileTranslation()
+    bannerToDocuments = fileTx.error === 'scanned'
   }
 
   return (
@@ -586,7 +589,15 @@ export function TranslateScreen({
           conditionally-inserted role="alert" that already contains text is missed by many
           screen readers, so ALL translate errors (runtimeFailed/startFailed/doc-task failures)
           now announce reliably; the visible Banner mounts inside the stable region. */}
-      <ErrorBanner message={bannerText} onDismiss={bannerText ? dismissBanner : undefined} t={t} />
+      <ErrorBanner message={bannerText} onDismiss={bannerText ? dismissBanner : undefined} t={t}>
+        {bannerToDocuments && (
+          <div className="actions">
+            <Button size="sm" onClick={() => onNavigate('documents')}>
+              {t('translate.file.err.scannedAction')}
+            </Button>
+          </div>
+        )}
+      </ErrorBanner>
       {/* #161 (FE-5): the document path has no StreamAnnouncer (nothing streams), so after
           minutes of silence the finished Markdown appeared unannounced. A polite region
           announces the terminal swap; failures already announce via the ErrorBanner above. */}

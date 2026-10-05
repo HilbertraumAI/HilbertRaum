@@ -18,6 +18,7 @@ import {
   addToCollection,
   createCollection,
   getBuiltinCollection,
+  resolveScope,
   setCollectionArchived
 } from '../../src/main/services/collections'
 import { appendMessage, createConversation } from '../../src/main/services/chat'
@@ -180,6 +181,32 @@ describe('scope-aware corpusNeedsReindex (M2)', () => {
     const chatSpy = vi.spyOn(runtime, 'chatStream')
     const msg = await generateGroundedAnswer(db, runtime, embedder, conv.id, 'anything at all', SETTINGS, {
       scope: { collectionIds: [emptyProject.id] }
+    })
+    expect(msg.content).toBe(NO_DOCUMENT_CONTEXT_ANSWER)
+    expect(chatSpy).not.toHaveBeenCalled()
+  })
+
+  // #571: an attach-born chat whose only file failed to import (a scan) used to answer from the
+  // whole corpus — here, from a private Library document the user never asked about.
+  it('an attach-born chat whose only file failed answers from no documents, never the whole corpus', async () => {
+    const db = freshDb()
+    const embedder = new MockEmbedder()
+    const lib = getBuiltinCollection(db, 'library')!
+    const privateDoc = await seedDocument(db, embedder, 'salaries.pdf', ['the salary of the director'])
+    addToCollection(db, [privateDoc], lib.id)
+
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [] } })
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO documents (id, title, status, pending_destination_json, created_at, updated_at)
+       VALUES ('scan', 'scan.pdf', 'failed', ?, ?, ?)`
+    ).run(JSON.stringify({ kind: 'conversation', conversationId: conv.id }), now, now)
+
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'the salary of the director' })
+    const runtime = createMockRuntime({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 1024 })
+    const chatSpy = vi.spyOn(runtime, 'chatStream')
+    const msg = await generateGroundedAnswer(db, runtime, embedder, conv.id, 'the salary of the director', SETTINGS, {
+      scope: resolveScope(db, conv.id)
     })
     expect(msg.content).toBe(NO_DOCUMENT_CONTEXT_ANSWER)
     expect(chatSpy).not.toHaveBeenCalled()

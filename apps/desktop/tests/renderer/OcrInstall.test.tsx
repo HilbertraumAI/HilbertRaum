@@ -154,6 +154,8 @@ describe('OcrInstall — Documents rows (#410)', () => {
     expect(await screen.findByText(byText(en['docs.scan.ocrMissing']))).toBeInTheDocument()
     const btn = await screen.findByRole('button', { name: en['ocr.install.action'] })
     expect(btn).toBeEnabled()
+    // #572: a scan row never offers Try again (the photo row in test 2 still does).
+    expect(screen.queryByRole('button', { name: en['docs.failed.retry'] })).not.toBeInTheDocument()
     await user.click(btn)
 
     const dialog = await screen.findByRole('dialog')

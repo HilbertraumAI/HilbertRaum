@@ -442,6 +442,35 @@ export function conversationAttachmentIds(db: Db, conversationId: string): strin
 }
 
 /**
+ * The documents attached to this conversation that were never filed (#571): still importing, or
+ * failed — a scan, a damaged file, an import cut short by a lock or a crash. Their
+ * `pending_destination_json` names the conversation until a success files and links them
+ * (`fileFromPendingDestination` clears it), so they are this chat's attachments too: without
+ * them an attach-born chat (D71's empty scope) whose only file failed resolves to the whole
+ * corpus (RD-2). No link is written for them (N4 holds). Parsed with the tolerant
+ * `parsePendingDestination`, never SQL `json_extract`, which throws on a malformed row; the
+ * partial index `idx_documents_pending_dest` keeps the read to the unfiled rows.
+ */
+export function unfiledConversationDocuments(
+  db: Db,
+  conversationId: string
+): Array<{ id: string; status: string }> {
+  const rows = prepareCached(
+    db,
+    `SELECT id, status, pending_destination_json FROM documents
+     WHERE pending_destination_json IS NOT NULL AND origin_json IS NULL AND status != 'deleted'`
+  ).all() as unknown as Array<{ id: string; status: string; pending_destination_json: string }>
+  const out: Array<{ id: string; status: string }> = []
+  for (const r of rows) {
+    const destination = parsePendingDestination(r.pending_destination_json)
+    if (destination?.kind === 'conversation' && destination.conversationId === conversationId) {
+      out.push({ id: r.id, status: r.status })
+    }
+  }
+  return out
+}
+
+/**
  * The collection ids a document currently belongs to (the reverse of
  * `documentIdsInCollection`). Used to snapshot a generated output's source
  * memberships into its provenance at creation time (plan §15.1/§15.2).
@@ -526,7 +555,9 @@ interface ScopeRow {
  *  1. `scope_v2_json` present ⇒ authoritative composite scope (collections + docs).
  *  2. else legacy fallback: non-empty `scope_json` ⇒ explicit specific-doc scope; else
  *     `collection_id` ⇒ that project; else the Library default (documents-mode default).
- *  3. chat attachments (`conversation_documents`) are ALWAYS merged into `documentIds`.
+ *  3. chat attachments (`conversation_documents`) are ALWAYS merged into `documentIds`, and so
+ *     are the conversation's unfiled attachments (#571 — importing or failed; they add no chunks,
+ *     but an attach-born chat whose only file failed must not widen to the whole corpus).
  *
  * `hasExplicitDocSelection` is set from the user's HAND-PICKED docs BEFORE attachments are
  * merged (N2), so filename auto-scope (plan §10.1 rule 5) can tell a deliberate pick from an
@@ -585,6 +616,9 @@ export function resolveScope(db: Db, conversationId: string): RetrievalScope {
   ).all(conversationId) as unknown as Array<{ document_id: string }>
   for (const a of attachments) {
     if (!documentIds.includes(a.document_id)) documentIds.push(a.document_id)
+  }
+  for (const u of unfiledConversationDocuments(db, conversationId)) {
+    if (!documentIds.includes(u.id)) documentIds.push(u.id)
   }
 
   return {

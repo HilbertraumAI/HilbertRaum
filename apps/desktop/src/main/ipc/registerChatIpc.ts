@@ -32,7 +32,7 @@ import {
   updateConversationScope
 } from '../services/chat'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
-import { conversationAttachmentIds } from '../services/collections'
+import { conversationAttachmentIds, unfiledConversationDocuments } from '../services/collections'
 import { listDocumentsByIds } from '../services/ingestion'
 import type { DocumentInfo } from '../../shared/types'
 import { tMain } from '../services/i18n'
@@ -182,13 +182,17 @@ export function registerChatIpc(ctx: AppContext): void {
   // A conversation's temporary chat attachments (plan C3/§16 — `conversation_documents`):
   // the docs dropped/attached into THIS chat, for the composer's read-only "Files in this
   // chat" affordance. The link — not Temporary membership — is authoritative, so a doc the
-  // user later Keeps in Library still shows here. Only indexed+linked docs appear; a
+  // user later Keeps in Library still shows here. Linked docs appear, plus (#571) a FAILED
+  // attachment that was never filed, so the chat can say it is not readable yet; a
   // still-processing attachment is surfaced by the renderer's pending chip (import polling).
   // CODE-21 (full audit 2026-07-11): id-targeted — this used to materialize the whole library
   // (the PF-5 load-all) per conversation switch to return a handful of linked docs.
   ipcHandle(IPC.listAttachments, (_e, conversationId: string): DocumentInfo[] => {
     requireUnlocked()
     const ids = conversationAttachmentIds(ctx.db, conversationId)
+    for (const u of unfiledConversationDocuments(ctx.db, conversationId)) {
+      if (u.status === 'failed' && !ids.includes(u.id)) ids.push(u.id)
+    }
     if (ids.length === 0) return []
     return listDocumentsByIds(ctx.db, ctx.embedder.id, ids)
   })

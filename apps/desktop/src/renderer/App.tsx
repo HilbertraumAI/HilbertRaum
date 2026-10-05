@@ -154,6 +154,10 @@ function AppShell(): JSX.Element {
   // review screen's "Back to chat" so it returns to the ORIGINATING conversation. One-shot
   // by construction: every normal chat navigation (navigate below) clears it.
   const [chatConversation, setChatConversation] = useState<string | null>(null)
+  // #573: the conversation a chat's "Go to Documents" came from (a failed attachment to make
+  // searchable there). One-shot like `chatConversation`: set only by `openDocumentsFromChat`,
+  // cleared by every other navigation, so Documents offers "Back to chat" for that trip alone.
+  const [documentsReturn, setDocumentsReturn] = useState<string | null>(null)
   // Evidence-review handoff (EP-1 plan §7.1 — the chatScope idiom): which review (or
   // message, for a first review) the review screen opens. The screen is meaningless
   // without it, which is why plain navigate('review') resolves to home (navigation.ts).
@@ -284,6 +288,7 @@ function AppShell(): JSX.Element {
   // resolveNavTarget — see navigation.ts for the table.
   function navigate(target: string): void {
     const next = resolveNavTarget(target)
+    setDocumentsReturn(null)
     if (next.chatMode) {
       setChatMode(next.chatMode)
       setChatScope(null)
@@ -303,6 +308,7 @@ function AppShell(): JSX.Element {
   // mount re-attach an OLD conversation and stomp the just-set documents mode (pinned by
   // an App-level test). The only setScreen('chat') paths are navigate() and this one.
   function askSelectedDocuments(documentIds: string[]): void {
+    setDocumentsReturn(null)
     setChatMode('documents')
     setChatScope(documentIds.length > 0 ? documentIds : null)
     setChatPackScope(null)
@@ -314,6 +320,7 @@ function AppShell(): JSX.Element {
   // that pack as the next conversation's ONLY source. Same discipline as askSelectedDocuments —
   // it bypasses navigate(), so it clears the review back-handoff and the document scope itself.
   function askPack(packId: string): void {
+    setDocumentsReturn(null)
     setChatMode('documents')
     setChatScope(null)
     setChatPackScope([packId])
@@ -337,6 +344,13 @@ function AppShell(): JSX.Element {
     setChatConversation(conversationId)
   }
 
+  // Chat → Documents from a failed attachment's pointer (#573): navigate() runs FIRST (it clears
+  // the slot), then the slot is set — one React batch, so Documents mounts with it in place.
+  function openDocumentsFromChat(conversationId: string): void {
+    navigate('documents')
+    setDocumentsReturn(conversationId)
+  }
+
   async function lockNow(): Promise<void> {
     setLockError(null)
     // EP-1 plan §7.5: flush pending review auto-save edits BEFORE the vault re-encrypts —
@@ -351,6 +365,7 @@ function AppShell(): JSX.Element {
     purgeSessionStores()
     setWorkspace(next)
     setScreen('home')
+    setDocumentsReturn(null)
     // The locked gate cannot read settings — back to following the OS theme.
     // (The LANGUAGE deliberately stays: the gate follows the localStorage mirror.)
     setThemeSetting('system')
@@ -534,6 +549,7 @@ function AppShell(): JSX.Element {
                 initialScopePackIds={chatPackScope}
                 initialConversationId={chatConversation}
                 onOpenReview={openReview}
+                onOpenDocumentsFrom={openDocumentsFromChat}
               />
             )}
             {/* Review renders ONLY with a handoff target (guaranteed by openReview being
@@ -551,6 +567,9 @@ function AppShell(): JSX.Element {
                 onAskPack={askPack}
                 onNavigate={navigate}
                 initialMode={documentsMode}
+                onBackToConversation={
+                  documentsReturn ? () => backToConversation(documentsReturn) : undefined
+                }
               />
             )}
             {screen === 'translate' && <TranslateScreen onNavigate={navigate} />}

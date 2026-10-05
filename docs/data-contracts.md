@@ -147,12 +147,19 @@ composite `scope_v2_json` union — see rag-design §13; #301 P4 finding M10 add
 `documentsOff?: true` flag — "Knowledge packs" below), with the companions
 `setConversationScope(conversationId, scope | null)`, `setConversationCollection(conversationId,
 collectionId | null)`, and `listAttachments(conversationId): Promise<DocumentInfo[]>` (the
-chat's temporary attachments)._
+chat's temporary attachments). **#571:** `listAttachments` also returns the chat's FAILED attachments
+that were never filed (`pending_destination_json` still names the conversation; `status: 'failed'`,
+no link — N4 holds), so the renderer can mark them *"(not readable yet)"*; and `resolveScope` unions
+every unfiled one (failed or importing) into `RetrievalScope.documentIds`. No shape change: the same
+`DocumentInfo`, the same `RetrievalScope`._
 
 ### DB schema
 ✅ Implemented in `src/main/services/db.ts` — all spec §8 tables created idempotently (WAL mode,
 foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `createRequire`
-(see Decision log). Helpers: `openDatabase(path)`, `listTables(db)`.
+(see Decision log). Helpers: `openDatabase(path)`, `listTables(db)`. **#571** added one additive
+partial index, `idx_documents_pending_dest ON documents(id) WHERE pending_destination_json IS NOT
+NULL` (created after `ensureColumn`, like the other migrated-column indexes) — no column, no
+migration.
 
 ### Settings storage
 ✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;

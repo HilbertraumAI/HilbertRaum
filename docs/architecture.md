@@ -139,7 +139,9 @@ batching — no behavior change.
   served with no SCAN/temp-B-tree because SQLite auto-appends the rowid; **not** `(…, kind, rowid)` —
   naming rowid in an index is rejected, "no such column: rowid"); `idx_summary_cache_created` on
   `summary_cache(created_at)` (PERF-4 — turns the age-ordered eviction delete into an ordered index
-  scan, replacing a full-table temp-B-tree sort). `idx_messages_conversation` (conversation_id alone) is
+  scan, replacing a full-table temp-B-tree sort); `idx_documents_pending_dest` on `documents(id) WHERE
+  pending_destination_json IS NOT NULL` (#571 — the per-ask read of a chat's unfiled attachments; partial,
+  so it stays proportional to those rows). `idx_messages_conversation` (conversation_id alone) is
   **retained** — it still serves `listConversationTurns` / the summary-marker lookup, whose `rowid>?`
   range + `ORDER BY rowid` the composite can't satisfy (the non-equality `kind!='compaction'` blocks the
   trailing rowid seek). **`run_id` indexes deliberately
@@ -4419,6 +4421,20 @@ conversation_documents(conversation_id, document_id, added_at)    -- C3 temp-att
   `finally` in `fileFromPendingDestination` as belt-and-suspenders (the generated-doc `origin_json`
   early-return still fires first and never clears — those rows carry no destination). `resolveScope`
   is documented in rag-design §13.
+- **#571 amendment — an unfiled conversation intent is one of the chat's attachments.** A failed
+  conversation-destined import writes no link (N4) but keeps `pending_destination_json`; M1 meant it
+  only as a filing intent. `unfiledConversationDocuments(db, conversationId)` now reads it as an
+  attachment too: `resolveScope` unions those ids (an attach-born chat whose only file failed used to
+  resolve to the whole corpus — rag-design §13.2), and `listAttachments` adds the FAILED ones (an
+  importing one stays the renderer's pending chip). Parsed with `parsePendingDestination`, never SQL
+  `json_extract` (it throws on a malformed row); the partial index `idx_documents_pending_dest`
+  (post-migration block, the column is migrated in late) keeps the per-ask read to the unfiled rows —
+  checked with `EXPLAIN QUERY PLAN` in `collections.test.ts`. No new column, no migration: every
+  existing failed attachment is covered as it stands. **The rejoin after OCR is pinned:** "Make
+  searchable (OCR)" re-indexes the same row, `reindexDocument` files it by the intent into Temporary +
+  the chat's link and clears it (`docs-ipc.test.ts`, #570 — the chat pointer's copy rests on it).
+  Residual, pre-existing: deleting a chat's only attachment from Documents still widens it (the link
+  cascades); a flag on attach-born chats would close that.
 - **`listDocuments` stuck-row reconcile — task gate (DB-3, Chat & Documents audit 2026-07-07).** The
   `registerDocsIpc` list poll reconciles rows left non-terminal by a killed/lock-interrupted run to
   `failed` (so the UI offers Re-index instead of a perpetual "in progress"). It fires only when nothing

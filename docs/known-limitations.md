@@ -2105,7 +2105,17 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   to make it searchable first under **Documents** with **Make searchable (OCR)**, then
   translate the result; any other import failure (a corrupt/encrypted PDF) shows its own
   localized reason rather than the old, misleading "unsupported file type" note. A genuinely
-  unsupported extension still shows the unsupported note.
+  unsupported extension still shows the unsupported note. Since #570 the scan banner also has a
+  **Go to Documents** button.
+- **A scanned PDF attached in a chat is not read there — the chat points you to OCR (#570).**
+  The import fails as a scan and the chat says what to do: **Make searchable (OCR)** in Documents,
+  with a **Go to Documents** button (a photo of a page without the OCR files gets the same kind
+  of note). OCR does not run inside the chat. After OCR the document joins that chat by itself.
+  Until then the chat answers from no documents rather than the whole library, and lists the
+  file as *not readable yet* (#571). The note shows in the chat that received the file, also
+  when the import finished while you were in another chat; it is held in memory only, so after
+  leaving the Chat screen the Documents row is where the failure is recorded. One residual stays:
+  deleting a chat's ONLY attachment from Documents widens that chat back to its default sources.
 - **The Translate view shows only the START of a long translated document.** To bound
   renderer memory the output panel loads the materialized doc's bounded first page; a long
   translation shows a "showing the start" hint. Use **Export…** or **Show in Documents**

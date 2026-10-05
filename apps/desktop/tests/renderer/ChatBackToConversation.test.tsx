@@ -4,7 +4,7 @@ import { render, screen, cleanup, fireEvent, waitFor, within } from '@testing-li
 import { App } from '../../src/renderer/App'
 import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { resetReviewSessionForTests } from '../../src/renderer/lib/reviewSession'
-import { t } from '../../src/shared/i18n'
+import { en, t } from '../../src/shared/i18n'
 import {
   DEFAULT_SETTINGS,
   type AppSettings,
@@ -282,5 +282,125 @@ describe('App — the back-handoff slot is one-shot across EVERY chat mount path
     )
     expect(c1Row).not.toHaveAttribute('aria-current')
     expect(listMessages).not.toHaveBeenCalledWith('c1')
+  })
+})
+
+// #573: a chat's "Go to Documents" (a failed attachment to make searchable there) arms a one-shot
+// return slot: Documents offers "‹ Back to chat", which reopens THAT conversation. Reaching
+// Documents any other way offers nothing, and the rail's Chat keeps its plain chat-home landing.
+describe('App — "Back to chat" after a failed attachment sent the user to Documents (#573)', () => {
+  const droppedPaths = new WeakMap<object, string>()
+  function dropOnChat(name: string, path: string): void {
+    const target = document.querySelector('.chat-main')
+    if (!target) throw new Error('no .chat-main drop target')
+    const file = { name }
+    droppedPaths.set(file, path)
+    fireEvent.drop(target, { dataTransfer: { files: [file], types: ['Files'] } })
+  }
+
+  function stubApp(): void {
+    const scanChat = conv('c1', {
+      title: 'Scan chat',
+      mode: 'documents',
+      scope: { collectionIds: [], documentIds: [] }
+    })
+    const scan = {
+      id: 'd1',
+      title: 'scan.pdf',
+      originalPath: null,
+      mimeType: 'application/pdf',
+      sizeBytes: 2048,
+      status: 'failed',
+      errorMessage: en['main.ingest.pdfScanDetected'],
+      scanDetected: true,
+      chunkCount: 0
+    } as DocumentInfo
+    stubApi({
+      getWorkspaceState: vi.fn(async () => unlockedWorkspace),
+      getPolicy: vi.fn(async () => offlinePolicy),
+      getSettings: vi.fn(async () => DEFAULT_SETTINGS),
+      onRuntimeNotice: vi.fn(() => () => {}),
+      getAppStatus: vi.fn(
+        async () =>
+          ({
+            appName: 'x',
+            appVersion: '0',
+            offlineMode: true,
+            networkAllowed: false,
+            activeModelId: 'm1',
+            hardwareProfile: 'UNKNOWN',
+            workspaceMode: 'plaintext_dev',
+            workspaceReady: true,
+            machineRamGb: 16,
+            dictationAvailable: false,
+            ocrAvailable: true
+          }) as AppStatus
+      ),
+      runPreflight: vi.fn(
+        async () =>
+          ({
+            ok: true,
+            rootPath: '/drive',
+            writable: true,
+            freeBytes: 1024 * 1024 * 1024,
+            slowDriveWarning: null,
+            problems: []
+          }) as unknown as PreflightResult
+      ),
+      listConversations: vi.fn(async () => [scanChat]),
+      listMessages: vi.fn(async () => []),
+      listDocuments: vi.fn(async () => [scan]),
+      listCollections: vi.fn(async () => []),
+      listAttachments: vi.fn(async () => [scan]),
+      getRuntimeStatus: vi.fn(async () => idleStatus),
+      getDroppedFilePath: vi.fn((file: File) => droppedPaths.get(file) ?? ''),
+      importDocuments: vi.fn(async () => ({ jobId: 'j1', documentIds: ['d1'] })),
+      getImportJob: vi.fn(async () => ({ jobId: 'j1', total: 1, completed: 0, failed: 1, done: true }))
+    })
+  }
+  const backLabel = `‹ ${t('en', 'docs.backToChat')}`
+  const currentRow = (): HTMLElement | undefined =>
+    Array.from(document.querySelectorAll<HTMLElement>('.chat-conv')).find(
+      (el) => el.getAttribute('aria-current') === 'true'
+    )
+
+  async function pointerToDocuments(nav: HTMLElement): Promise<void> {
+    fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.chat') }))
+    fireEvent.click(await screen.findByRole('button', { name: /^Scan chat/ }))
+    await waitFor(() => expect(currentRow()?.textContent ?? '').toContain('Scan chat'))
+    dropOnChat('scan.pdf', '/tmp/scan.pdf')
+    fireEvent.click(await screen.findByRole('button', { name: t('en', 'chat.attach.goToDocuments') }))
+    await screen.findByRole('heading', { name: t('en', 'docs.title') })
+  }
+
+  it('the pointer → Documents → Back to chat reopens the conversation the file was attached in', async () => {
+    stubApp()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+    await pointerToDocuments(nav)
+
+    fireEvent.click(await screen.findByRole('button', { name: backLabel }))
+    await waitFor(() => expect(currentRow()?.textContent ?? '').toContain('Scan chat'))
+  })
+
+  it('Documents reached from the rail offers no way back, and the rail clears an armed one', async () => {
+    stubApp()
+    render(<App />)
+    const nav = await screen.findByRole('navigation')
+
+    fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.documents') }))
+    await screen.findByRole('heading', { name: t('en', 'docs.title') })
+    expect(screen.queryByRole('button', { name: backLabel })).not.toBeInTheDocument()
+
+    // Armed by the pointer, then the rail's Chat: the plain chat-home landing, unchanged…
+    await pointerToDocuments(nav)
+    expect(screen.getByRole('button', { name: backLabel })).toBeInTheDocument()
+    fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.chat') }))
+    await screen.findByRole('button', { name: /^Scan chat/ })
+    expect(currentRow()).toBeUndefined()
+    // …and the slot is spent: Documents again shows no Back.
+    fireEvent.click(within(nav).getByRole('button', { name: t('en', 'nav.documents') }))
+    await screen.findByRole('heading', { name: t('en', 'docs.title') })
+    expect(screen.queryByRole('button', { name: backLabel })).not.toBeInTheDocument()
   })
 })
