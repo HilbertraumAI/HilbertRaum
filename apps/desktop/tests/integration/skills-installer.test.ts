@@ -1,6 +1,5 @@
 import { describe, it, expect, vi } from 'vitest'
 import {
-  mkdtempSync,
   mkdirSync,
   writeFileSync,
   readFileSync,
@@ -8,11 +7,12 @@ import {
   existsSync,
   symlinkSync
 } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomBytes } from 'node:crypto'
 import JSZip from 'jszip'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
+import { tempRoot, openFreshDb } from '../helpers/db-fixtures'
+import { skillMdText } from '../helpers/skill-fixtures'
 import {
   previewSkillPackage,
   importSkill,
@@ -42,13 +42,9 @@ vi.mock('node:zlib', async (importOriginal) => {
 // into a real on-disk folder, so the extractor matrix (traversal / symlink / zip-bomb-on-inflated /
 // nested-archive-magic / extension-allowlist / §6.4 caps) is first-class HERE, not deferred to S12.
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-skill-s4-'))
-}
+const tempDir = (): string => tempRoot('skill-s4')
 
-function freshDb(): Db {
-  return openDatabase(join(tempDir(), 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('skill-s4')
 
 function makeDeps(over: Partial<SkillInstallerDeps> = {}): SkillInstallerDeps {
   const root = tempDir()
@@ -62,15 +58,13 @@ function makeDeps(over: Partial<SkillInstallerDeps> = {}): SkillInstallerDeps {
 
 function skillMd(fields: { id?: string; title?: string; version?: string; body?: string } = {}): string {
   const id = fields.id ?? 'my-skill'
-  return [
-    '---',
-    `id: ${id}`,
-    `title: ${fields.title ?? 'My Skill'}`,
-    `description: A test skill named ${id}.`,
-    `version: ${fields.version ?? '1.0.0'}`,
-    '---',
-    fields.body ?? `Instructions for ${id}.`
-  ].join('\n')
+  return skillMdText({
+    id,
+    title: fields.title ?? 'My Skill',
+    description: `A test skill named ${id}.`,
+    version: fields.version,
+    body: fields.body
+  })
 }
 
 interface ZipMember {

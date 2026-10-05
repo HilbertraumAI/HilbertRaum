@@ -16,6 +16,7 @@ import type {
 } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { makeSkillInfo, makeConversation } from '../helpers/chat-fixtures'
 
 // CH-1 + CH-2 (frontend audit 2026-08-09, issues #139/#140).
 //
@@ -30,18 +31,7 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 // an attach-job settle (the #44 "invisible run button" class). The fix re-fires it on both.
 
 function conv(over: Partial<Conversation> = {}): Conversation {
-  return {
-    id: 'c1',
-    title: 'Doc Q&A',
-    createdAt: '2026-01-01T00:00:00Z',
-    updatedAt: '2026-01-01T00:00:00Z',
-    modelId: null,
-    mode: 'documents',
-    scopeDocumentIds: null,
-    collectionId: null,
-    scope: { collectionIds: [], documentIds: [] },
-    ...over
-  }
+  return makeConversation({ title: 'Doc Q&A', mode: 'documents', scope: { collectionIds: [], documentIds: [] }, ...over })
 }
 
 const runningStatus: RuntimeStatus = {
@@ -83,26 +73,10 @@ function collection(over: Partial<Collection>): Collection {
 }
 
 function skill(): SkillInfo {
-  return {
-    installId: 'app:bank-statement',
-    id: 'bank-statement',
-    title: 'Bank statement helper',
+  return makeSkillInfo({
     description: 'Explains a bank statement in plain language.',
-    version: '1.0.0',
-    kind: 'instruction',
-    author: 'You',
-    language: 'en',
-    source: 'app',
-    trustedLevel: 'app',
-    enabled: true,
-    warningAck: true,
-    unavailable: false,
-    permissions: { documents: 'selected_only', network: 'denied', filesystem: 'skill_resources_only' },
-    permissionSummary: 'can read the documents you pick for a turn.',
-    duplicateId: false,
-    installedAt: '2026-01-01T00:00:00.000Z',
-    updatedAt: '2026-01-01T00:00:00.000Z'
-  } as SkillInfo
+    permissionSummary: 'can read the documents you pick for a turn.'
+  })
 }
 
 const unsub = (): (() => void) => () => {}

@@ -1,7 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
 // Full-doc-skills Phase 3 (§3.2) — the CHAT wiring: `askDocuments` routes a `kind:tool` skill's
@@ -23,21 +20,18 @@ vi.mock('electron', () => ({
 
 import { IPC, STREAM } from '../../src/shared/ipc'
 import type { Message } from '../../src/shared/types'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
-import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
-import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
-import { createSkillRegistry, getSkill } from '../../src/main/services/skills/registry'
+import type { Db } from '../../src/main/services/db'
+import { getSkill } from '../../src/main/services/skills/registry'
 import { createConversation, listMessages } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { SCAN_MARKER_TYPE } from '../../src/main/services/analysis/extract'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import type { AppContext } from '../../src/main/services/context'
-import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
-import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import { t } from '../../src/shared/i18n'
-import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { writeSkillPackage } from '../helpers/skill-fixtures'
+import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
+import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const BANK_INSTALL_ID = 'app:bank-statement'
@@ -49,31 +43,32 @@ const CLEAN =
   'Statement EUR\nOpening balance 2.000,00\n2026-01-02 Grocery -45,90 1.954,10\n' +
   '2026-01-03 Salary 2.500,00 4.454,10\nClosing balance 4.454,10'
 
+const BANK_ALLOWED_TOOLS = [
+  'extract_transactions',
+  'validate_statement_balances',
+  'categorize_transactions',
+  'summarize_cashflow',
+  'export_transactions_csv'
+]
+
 function writeBankSkill(appSkillsDir: string, opts: { triggers?: boolean } = {}): void {
-  const d = join(appSkillsDir, 'bank-statement')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: bank-statement',
-    'title: Bank statement',
-    'description: Reads statements.',
-    'version: 1.0.0',
-    'kind: tool',
-    'allowedTools: [extract_transactions, validate_statement_balances, categorize_transactions, summarize_cashflow, export_transactions_csv]',
+  writeSkillPackage(appSkillsDir, {
+    id: 'bank-statement',
+    title: 'Bank statement',
+    description: 'Reads statements.',
+    kind: 'tool',
+    allowedTools: BANK_ALLOWED_TOOLS,
     // A4 (SKA-7): the single-doc inversion consults the skill's manifest doc signals. With triggers the
     // `*statement*` filename pattern marks a `statement.txt` in scope as "plausibly a statement".
-    ...(opts.triggers
-      ? [
-          'triggers:',
-          '  keywords: [bank statement, kontoauszug, transaction, balance]',
-          '  mimeTypes: [application/pdf, text/csv]',
-          '  filenamePatterns: ["*statement*", "*kontoauszug*"]'
-        ]
-      : []),
-    '---',
-    'Quote the printed figures.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+    triggers: opts.triggers
+      ? {
+          keywords: ['bank statement', 'kontoauszug', 'transaction', 'balance'],
+          mimeTypes: ['application/pdf', 'text/csv'],
+          filenamePatterns: ['*statement*', '*kontoauszug*']
+        }
+      : undefined,
+    body: 'Quote the printed figures.'
+  })
 }
 
 // SEC-1 end-to-end (T2): a USER-imported `kind:'tool'` skill that DECLARES `analysis: whole-doc` plus the
@@ -82,50 +77,39 @@ function writeBankSkill(appSkillsDir: string, opts: { triggers?: boolean } = {})
 // only, and the app registry holds no handler under a `user:` install id — so askDocuments must take the
 // plain relevance path (no analysis engine, no tool run) even with the skill force-enabled.
 function writeUserToolSkill(userSkillsDir: string): void {
-  const d = join(userSkillsDir, 'imported-bank')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: imported-bank',
-    'title: Imported bank tool',
-    'description: A user-imported tool skill.',
-    'version: 1.0.0',
-    'kind: tool',
-    'analysis: whole-doc',
-    'allowedTools: [extract_transactions, validate_statement_balances, summarize_cashflow]',
-    'triggers:',
-    '  keywords: [bank statement, kontoauszug, transaction, balance]',
-    '  filenamePatterns: ["*statement*"]',
-    '---',
-    'Quote the printed figures.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(userSkillsDir, {
+    id: 'imported-bank',
+    title: 'Imported bank tool',
+    description: 'A user-imported tool skill.',
+    kind: 'tool',
+    analysis: 'whole-doc',
+    allowedTools: ['extract_transactions', 'validate_statement_balances', 'summarize_cashflow'],
+    triggers: {
+      keywords: ['bank statement', 'kontoauszug', 'transaction', 'balance'],
+      filenamePatterns: ['*statement*']
+    },
+    body: 'Quote the printed figures.'
+  })
 }
 
 // A minimal app-owned ACTION skill whose analysis handler is `mode:'routing'` (document-redaction /
 // document-edit): it reads no content, so the chat path must skip the fully-chunked refusal for it.
 function writeRoutingSkill(appSkillsDir: string, id: string, tool: string): void {
-  const d = join(appSkillsDir, id)
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    `id: ${id}`,
-    `title: ${id}`,
-    'description: A routing action skill.',
-    'version: 1.0.0',
-    'kind: tool',
-    `allowedTools: [${tool}]`,
-    '---',
-    'Point the user at the run button.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(appSkillsDir, {
+    id,
+    title: id,
+    description: 'A routing action skill.',
+    kind: 'tool',
+    allowedTools: [tool],
+    body: 'Point the user at the run button.'
+  })
 }
 
 interface Harness {
   db: Db
   conversationId: string
   docId: string
-  runtime: ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
+  runtime: RecordingRuntime
   audit: { type: string; meta?: Record<string, unknown> }[]
 }
 
@@ -142,79 +126,42 @@ async function makeHarness(
     routingSkill?: { id: string; tool: string }
   } = {}
 ): Promise<Harness> {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ragskill-'))
-  const workspacePath = join(root, 'workspace')
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  if (opts.userToolSkill) writeUserToolSkill(userSkillsDir)
-  else if (opts.routingSkill) writeRoutingSkill(appSkillsDir, opts.routingSkill.id, opts.routingSkill.tool)
-  else writeBankSkill(appSkillsDir, { triggers: opts.triggers })
-
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir, appVersion: '0.0.0-test' })
-  skills.reconcile() // installs app:bank-statement ENABLED
+  const w = makeSkillsWorld('ragskill', {
+    seedApp: (d) => {
+      if (opts.userToolSkill) return
+      if (opts.routingSkill) writeRoutingSkill(d, opts.routingSkill.id, opts.routingSkill.tool)
+      else writeBankSkill(d, { triggers: opts.triggers })
+    },
+    seedUser: (d) => {
+      if (opts.userToolSkill) writeUserToolSkill(d)
+    },
+    appVersion: '0.0.0-test',
+    reconcile: true // installs app:bank-statement ENABLED
+  })
+  const { db } = w
   // A drop-in user skill installs DISABLED (DS19); force-enable to model the SEC-1 worst case.
   if (opts.userToolSkill) db.prepare('UPDATE skills SET enabled = 1 WHERE install_id = ?').run('user:imported-bank')
 
   // A REAL ingested statement: stored copy + chunks + embeddings + fully_chunked (the production path).
   // The filename drives the A4 signal match (`*statement*`) — a test can override it to a non-matching name.
-  const storeDir = documentsDir(workspacePath)
-  const docPath = join(root, opts.docFile ?? 'statement.txt')
-  writeFileSync(docPath, opts.text ?? CLEAN, 'utf8')
-  const doc = createQueuedDocument(db, docPath)
-  await processDocument(db, storeDir, doc.id, { embedder: createMockEmbedder() })
-  if (opts.fullyChunked === false) {
-    db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(doc.id)
-  }
+  const docId = await ingestTextFile(w, opts.docFile ?? 'statement.txt', opts.text ?? CLEAN, {
+    fullyChunked: opts.fullyChunked
+  })
 
   // A runtime that records whether it was ever asked to generate (the Phase-3 template/refuse outcomes must
   // make ZERO model calls) AND captures the messages it was handed, so a W4 grounded-data turn can assert
   // the model saw the JSON data block + the verbatim rules.
-  const runtime = {
-    modelId: 'mock',
-    calls: 0,
-    lastMessages: [] as ChatMessage[],
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[]) {
-      runtime.calls++
-      runtime.lastMessages = messages
-      yield 'Model answer.'
-    }
-  } as unknown as ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
+  const runtime = recordingRuntime('Model answer.')
 
-  const audit: { type: string; meta?: Record<string, unknown> }[] = []
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    paths: { rootPath: root, workspacePath },
-    get db() {
-      return db
-    },
-    workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
-    embedder: createMockEmbedder(),
-    reranker: null,
-    ocrEngine: undefined,
-    manifestsDir: null,
-    isDev: true,
-    audit: (type: string, _message: string, meta?: Record<string, unknown>) => audit.push({ type, meta }),
-    skills,
-    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
-    // unconditionally now (no more `??` fallback).
-    pendingModelSwitches: createPendingModelSwitchCounter()
-  } as unknown as AppContext
+  const { ctx, audit } = makeRagAskContext(w, runtime)
 
   registerBuiltinSkillAnalysisHandlers()
   registerRagIpc(ctx)
   const conv = createConversation(db, {
     mode: 'documents',
-    scope: { collectionIds: [], documentIds: [doc.id] }
+    scope: { collectionIds: [], documentIds: [docId] }
   })
-  return { db, conversationId: conv.id, docId: doc.id, runtime, audit }
+  return { db, conversationId: conv.id, docId, runtime, audit }
 }
 
 beforeEach(() => {
@@ -548,74 +495,59 @@ describe('askDocuments — A4 tool-skill inversion (SKA-7 structural)', () => {
 
 /** A bank skill WITH real manifest doc signals (the narrowing/gate consult filenamePatterns/mimeTypes). */
 function writeBankSkillWithTriggers(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'bank-statement')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: bank-statement',
-    'title: Bank statement',
-    'description: Reads statements.',
-    'version: 1.0.0',
-    'kind: tool',
-    'allowedTools: [extract_transactions, validate_statement_balances, categorize_transactions, summarize_cashflow, export_transactions_csv]',
-    'triggers:',
-    '  keywords: [bank statement, kontoauszug, transaction, balance]',
-    '  mimeTypes: [application/pdf, text/csv]',
-    '  filenamePatterns: ["*statement*", "*kontoauszug*"]',
-    '---',
-    'Quote the printed figures.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(appSkillsDir, {
+    id: 'bank-statement',
+    title: 'Bank statement',
+    description: 'Reads statements.',
+    kind: 'tool',
+    allowedTools: BANK_ALLOWED_TOOLS,
+    triggers: {
+      keywords: ['bank statement', 'kontoauszug', 'transaction', 'balance'],
+      mimeTypes: ['application/pdf', 'text/csv'],
+      filenamePatterns: ['*statement*', '*kontoauszug*']
+    },
+    body: 'Quote the printed figures.'
+  })
 }
 
 /** A what-changed compare skill (kind:instruction) — its handler needs EXACTLY two in-scope docs. */
 function writeWhatChangedSkill(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'what-changed')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: what-changed',
-    'title: What Changed',
-    'description: Compares two document versions.',
-    'version: 1.0.0',
-    'kind: instruction',
-    'triggers:',
-    '  keywords: [what changed, compare versions]',
-    '  mimeTypes: [application/pdf, text/plain]',
-    '  filenamePatterns: ["*draft*"]',
-    '---',
-    'Compare document A and document B.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(appSkillsDir, {
+    id: 'what-changed',
+    title: 'What Changed',
+    description: 'Compares two document versions.',
+    kind: 'instruction',
+    triggers: {
+      keywords: ['what changed', 'compare versions'],
+      mimeTypes: ['application/pdf', 'text/plain'],
+      filenamePatterns: ['*draft*']
+    },
+    body: 'Compare document A and document B.'
+  })
 }
 
 /** A contract-brief skill (kind:instruction, grounded-whole-doc) — narrows to the one matched contract
  *  and streams a MODEL answer over it (exercising the W2 `answerPrefix` scope-notice path). */
 function writeContractBriefSkill(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'contract-brief')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: contract-brief',
-    'title: Contract Brief',
-    'description: Briefs a contract.',
-    'version: 1.0.0',
-    'kind: instruction',
-    'triggers:',
-    '  keywords: [contract, agreement, summarize contract]',
-    '  mimeTypes: [application/pdf, text/plain, text/markdown]',
-    '  filenamePatterns: ["*contract*", "*agreement*", "*lease*"]',
-    '---',
-    'Produce a plain-language brief of the whole contract.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(appSkillsDir, {
+    id: 'contract-brief',
+    title: 'Contract Brief',
+    description: 'Briefs a contract.',
+    kind: 'instruction',
+    triggers: {
+      keywords: ['contract', 'agreement', 'summarize contract'],
+      mimeTypes: ['application/pdf', 'text/plain', 'text/markdown'],
+      filenamePatterns: ['*contract*', '*agreement*', '*lease*']
+    },
+    body: 'Produce a plain-language brief of the whole contract.'
+  })
 }
 
 interface MultiHarness {
   db: Db
   conversationId: string
   docIds: string[]
-  runtime: ModelRuntime & { calls: number }
+  runtime: RecordingRuntime
 }
 
 /** Ingest N real documents (each named `file`, so its title drives the filename-pattern match) into ONE
@@ -628,68 +560,30 @@ async function makeMultiHarness(opts: {
    *  "an empty model turn on a narrowed whole-doc persists nothing" regression. */
   emptyModel?: boolean
 }): Promise<MultiHarness> {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-ragskill-w2-'))
-  const workspacePath = join(root, 'workspace')
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeBankSkillWithTriggers(appSkillsDir)
-  if (opts.installWhatChanged) writeWhatChangedSkill(appSkillsDir)
-  if (opts.installContractBrief) writeContractBriefSkill(appSkillsDir)
+  const w = makeSkillsWorld('ragskill-w2', {
+    seedApp: (d) => {
+      writeBankSkillWithTriggers(d)
+      if (opts.installWhatChanged) writeWhatChangedSkill(d)
+      if (opts.installContractBrief) writeContractBriefSkill(d)
+    },
+    appVersion: '0.0.0-test',
+    reconcile: true
+  })
+  const { db } = w
 
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir, appVersion: '0.0.0-test' })
-  skills.reconcile()
-
-  const storeDir = documentsDir(workspacePath)
-  const embedder = createMockEmbedder()
   const docIds: string[] = []
   for (const { file, text, mime } of opts.docs) {
-    const p = join(root, file)
-    writeFileSync(p, text, 'utf8')
-    const doc = createQueuedDocument(db, p)
-    await processDocument(db, storeDir, doc.id, { embedder })
+    const docId = await ingestTextFile(w, file, text)
     // Override the ingestion-guessed MIME when a test needs a specific doc-signal shape (the narrowing +
     // plausibility gate consult mime_type). Post-ingestion: content is already parsed as text.
-    if (mime) db.prepare('UPDATE documents SET mime_type = ? WHERE id = ?').run(mime, doc.id)
-    docIds.push(doc.id)
+    if (mime) db.prepare('UPDATE documents SET mime_type = ? WHERE id = ?').run(mime, docId)
+    docIds.push(docId)
   }
 
-  const runtime = {
-    modelId: 'mock',
-    calls: 0,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(_messages: ChatMessage[]) {
-      runtime.calls++
-      if (opts.emptyModel) return // an empty model turn — yields no tokens
-      yield 'Model answer.'
-    }
-  } as unknown as ModelRuntime & { calls: number }
+  // An empty model turn (opts.emptyModel) yields no tokens.
+  const runtime = recordingRuntime('Model answer.', { emitNothing: opts.emptyModel })
 
-  const audit: { type: string; meta?: Record<string, unknown> }[] = []
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    paths: { rootPath: root, workspacePath },
-    get db() {
-      return db
-    },
-    workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
-    embedder: createMockEmbedder(),
-    reranker: null,
-    ocrEngine: undefined,
-    manifestsDir: null,
-    isDev: true,
-    audit: (type: string, _message: string, meta?: Record<string, unknown>) => audit.push({ type, meta }),
-    skills,
-    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
-    // unconditionally now (no more `??` fallback).
-    pendingModelSwitches: createPendingModelSwitchCounter()
-  } as unknown as AppContext
+  const { ctx } = makeRagAskContext(w, runtime)
 
   registerBuiltinSkillAnalysisHandlers()
   registerRagIpc(ctx)

@@ -1,7 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 // Skill-whole-doc engine, Follow-up B — the CHAT wiring for a 2-document compare: `askDocuments`
 // routes a compare-shaped question for the `grounded-whole-doc-compare` skill (what-changed) to a
@@ -22,20 +19,16 @@ vi.mock('electron', () => ({
 
 import { IPC } from '../../src/shared/ipc'
 import type { Message } from '../../src/shared/types'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
-import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
-import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
-import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import type { AppContext } from '../../src/main/services/context'
-import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
-import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
+import type { Db } from '../../src/main/services/db'
 import { t } from '../../src/shared/i18n'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { writeSkillPackage } from '../helpers/skill-fixtures'
+import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
+import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const WHAT_CHANGED_INSTALL_ID = 'app:what-changed'
@@ -48,19 +41,13 @@ const REWRITE_A = 'alpha bravo charlie delta echo foxtrot golf hotel india julie
 const REWRITE_B = 'one two three four five six seven eight nine ten eleven twelve thirteen'
 
 function writeWhatChangedSkill(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'what-changed')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: what-changed',
-    'title: What Changed?',
-    'description: Compare two versions.',
-    'version: 1.0.0',
-    'kind: instruction',
-    '---',
-    'Compare the two versions and report the material changes that matter, in business language.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(appSkillsDir, {
+    id: 'what-changed',
+    title: 'What Changed?',
+    description: 'Compare two versions.',
+    kind: 'instruction',
+    body: 'Compare the two versions and report the material changes that matter, in business language.'
+  })
 }
 
 interface Harness {
@@ -69,70 +56,27 @@ interface Harness {
   docA: string
   docB: string
   mk: (name: string, text: string) => Promise<string>
-  runtime: ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
+  runtime: RecordingRuntime
 }
 
 async function makeHarness(opts: { bothFullyChunked?: boolean } = {}): Promise<Harness> {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-wholedoccompare-'))
-  const workspacePath = join(root, 'workspace')
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeWhatChangedSkill(appSkillsDir)
+  const w = makeSkillsWorld('wholedoccompare', {
+    seedApp: writeWhatChangedSkill,
+    appVersion: '0.0.0-test',
+    reconcile: true
+  })
+  const { db } = w
 
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir, appVersion: '0.0.0-test' })
-  skills.reconcile()
-
-  const storeDir = documentsDir(workspacePath)
-  const mk = async (name: string, text: string): Promise<string> => {
-    const p = join(root, name)
-    writeFileSync(p, text, 'utf8')
-    const doc = createQueuedDocument(db, p)
-    await processDocument(db, storeDir, doc.id, { embedder: createMockEmbedder() })
-    return doc.id
-  }
+  const mk = (name: string, text: string): Promise<string> => ingestTextFile(w, name, text)
   const docA = await mk('v1.txt', VERSION_A)
   const docB = await mk('v2.txt', VERSION_B)
   if (opts.bothFullyChunked === false) {
     db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(docB)
   }
 
-  const runtime = {
-    modelId: 'mock',
-    calls: 0,
-    lastMessages: [] as ChatMessage[],
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[]) {
-      runtime.calls++
-      runtime.lastMessages = messages
-      yield 'Material changes: fee 100→120, term 12→24, notice 30→60.'
-    }
-  } as unknown as ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
+  const runtime = recordingRuntime('Material changes: fee 100→120, term 12→24, notice 30→60.')
 
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    paths: { rootPath: root, workspacePath },
-    get db() {
-      return db
-    },
-    workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
-    embedder: createMockEmbedder(),
-    reranker: null,
-    ocrEngine: undefined,
-    manifestsDir: null,
-    isDev: true,
-    audit: () => {},
-    skills,
-    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
-    // unconditionally now (no more `??` fallback).
-    pendingModelSwitches: createPendingModelSwitchCounter()
-  } as unknown as AppContext
+  const { ctx } = makeRagAskContext(w, runtime)
 
   registerBuiltinSkillAnalysisHandlers()
   registerRagIpc(ctx)

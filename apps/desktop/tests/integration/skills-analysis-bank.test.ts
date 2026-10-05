@@ -1,17 +1,17 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   BANK_STATEMENT_INSTALL_ID,
   bankStatementAnalysisHandler
 } from '../../src/main/services/skills/analysis/bank-statement'
-import type { SkillAnalysisContext } from '../../src/main/services/skills/analysis/types'
 import { t, type MessageKey, type MessageParams } from '../../src/shared/i18n'
-import type { AuditEventType, RetrievalScope } from '../../src/shared/types'
+import type { RetrievalScope } from '../../src/shared/types'
 import { BANK_FIXTURES } from '../fixtures/real-layouts/corpus'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedLineChunkDoc } from '../helpers/doc-fixtures'
+import { makeAnalysisCtx } from '../helpers/skill-contexts'
+import { countPrepares } from '../helpers/db-spy'
 
 // full-doc-skills plan §3.1, Phase 2 — the analysis-handler seam + bank handler, driven DIRECTLY (no
 // IPC, no chat wiring). Seeds the `chunks` table (the legacy reader path — no segment reader injected),
@@ -22,74 +22,14 @@ import { BANK_FIXTURES } from '../fixtures/real-layouts/corpus'
 
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 
-function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-analysis-'))
-  return openDatabase(join(dir, 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('analysis')
 
-function seedDoc(
-  db: Db,
-  text: string,
-  opts: { fullyChunked?: boolean; title?: string } = {}
-): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  const title = opts.title ?? 'Statement'
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
-     VALUES (?, ?, 'indexed', 'application/pdf', ?, ?, ?)`
-  ).run(docId, title, opts.fullyChunked ? now : null, now, now)
-  // One chunk per line so citations resolve against real source rows (page-addressable).
-  text.split('\n').forEach((line, i) => {
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-       VALUES (?, ?, ?, ?, ?, 1, ?)`
-    ).run(randomUUID(), docId, i, line, title, now)
-  })
-  return docId
-}
+// One chunk per line so citations resolve against real source rows (page-addressable).
+const seedDoc = (db: Db, text: string, o: { fullyChunked?: boolean; title?: string } = {}): string =>
+  seedLineChunkDoc(db, text.split('\n'), o)
 
-function capturingAudit(): {
-  audit: (t: AuditEventType, m?: Record<string, unknown>) => void
-  events: Array<{ type: string; meta?: Record<string, unknown> }>
-} {
-  const events: Array<{ type: string; meta?: Record<string, unknown> }> = []
-  return { audit: (type, meta) => events.push({ type, meta }), events }
-}
-
-function ctxFor(db: Db, scope: RetrievalScope, question: string): SkillAnalysisContext & {
-  events: Array<{ type: string; meta?: Record<string, unknown> }>
-} {
-  const { audit, events } = capturingAudit()
-  return {
-    db,
-    scope,
-    question,
-    skillInstallId: BANK_STATEMENT_INSTALL_ID,
-    conversationId: null,
-    audit,
-    tr,
-    events
-  }
-}
-
-/** Count the `db.prepare` calls whose SQL matches `pattern` while `fn` runs (audit P-1 query-count).
- *  Matching `FROM bank_transactions` counts only row LOADS, never the reconciled/category UPDATEs. */
-async function countPrepares(db: Db, pattern: RegExp, fn: () => Promise<void>): Promise<number> {
-  const real = db.prepare.bind(db)
-  let count = 0
-  const target = db as unknown as { prepare: Db['prepare'] }
-  target.prepare = ((sql: string) => {
-    if (pattern.test(sql)) count++
-    return real(sql)
-  }) as Db['prepare']
-  try {
-    await fn()
-  } finally {
-    target.prepare = real
-  }
-  return count
-}
+const ctxFor = (db: Db, scope: RetrievalScope, question: string) =>
+  makeAnalysisCtx(db, scope, question, { skillInstallId: BANK_STATEMENT_INSTALL_ID })
 
 // A clean 2-row statement: Grocery -45.90 (out), Salary +2500.00 (in); the running balances reconcile.
 // NOTE: it prints NO opening/closing balance, so under the D56 completeness gate it cannot PROVE it

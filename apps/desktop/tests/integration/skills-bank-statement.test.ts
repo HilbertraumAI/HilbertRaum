@@ -1,9 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   reconcileSkills,
   getSkill,
@@ -17,6 +16,8 @@ import {
   composeSystemPromptWithSkill,
   SKILL_GUARD_LINE
 } from '../../src/main/services/skills/prompt'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Skills plan Phase S9 — the built-in bank-statement instruction stub. This is the FIRST real
 // app skill, so it exercises the whole S2→S7 path end-to-end against the COMMITTED package:
@@ -28,16 +29,9 @@ const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..',
 const APP_SKILLS_DIR = join(REPO_ROOT, 'app-skills')
 const BANK_SKILL_MD = readFileSync(join(APP_SKILLS_DIR, 'bank-statement', 'SKILL.md'), 'utf8')
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-s9-')), 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('s9')
 
-function deps(): { appSkillsDir: string; userSkillsDir: string } {
-  return {
-    appSkillsDir: APP_SKILLS_DIR,
-    userSkillsDir: join(mkdtempSync(join(tmpdir(), 'hilbertraum-s9-user-')), 'user-skills')
-  }
-}
+const deps = (): SkillDirs => realAppSkillsDeps('s9-user')
 
 describe('S9 — bundled bank-statement skill: discovery + reconcile', () => {
   it('discovers and reconciles the committed app skill as enabled', () => {

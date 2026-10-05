@@ -1,8 +1,9 @@
 import { describe, it, expect } from 'vitest'
-import { existsSync, mkdtempSync, mkdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { existsSync, mkdirSync, utimesSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
-import { openDatabase, listTables, type Db } from '../../src/main/services/db'
+import { listTables, type Db } from '../../src/main/services/db'
+import { tempRoot, openFreshDb } from '../helpers/db-fixtures'
+import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 import {
   createSkillRegistry,
   discoverSkillsInDir,
@@ -23,13 +24,9 @@ import { DEFAULT_SKILL_LIMITS, type SkillLimits } from '../../src/main/services/
 // the additive `skills` table + the uniform disk reconcile of app-skills/ + user-skills/, with
 // drop-in-disabled (DS19), DB-rebuild re-derivation (no orphan), and mark-unavailable.
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-skills-'))
-}
+const tempDir = (): string => tempRoot('skills')
 
-function freshDb(): Db {
-  return openDatabase(join(tempDir(), 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('skills')
 
 interface SkillFields {
   id?: string
@@ -43,33 +40,25 @@ interface SkillFields {
 
 /** Write a `<dir>/<folderName>/SKILL.md` package. Defaults make a minimal valid instruction skill. */
 function writeSkill(parentDir: string, folderName: string, fields: SkillFields = {}): string {
-  const dir = join(parentDir, folderName)
-  mkdirSync(dir, { recursive: true })
   const id = fields.id ?? folderName
-  const lines = [
-    '---',
-    `id: ${id}`,
-    `title: ${fields.title ?? 'Skill ' + id}`,
-    `description: A test skill named ${id}`,
-    `version: ${fields.version ?? '1.0.0'}`
-  ]
-  if (fields.kind) lines.push(`kind: ${fields.kind}`)
-  if (fields.keywords) {
-    lines.push('triggers:')
-    lines.push(`  keywords: [${fields.keywords.join(', ')}]`)
-  }
-  if (fields.extraFrontmatter) lines.push(fields.extraFrontmatter)
-  lines.push('---')
-  lines.push(fields.body ?? `Instructions for ${id}.`)
-  writeFileSync(join(dir, 'SKILL.md'), lines.join('\n'), 'utf8')
-  return dir
+  return writeSkillPackage(
+    parentDir,
+    {
+      id,
+      title: fields.title ?? 'Skill ' + id,
+      description: `A test skill named ${id}`,
+      version: fields.version,
+      kind: fields.kind,
+      triggers: fields.keywords ? { keywords: fields.keywords } : undefined,
+      extraFrontmatter: fields.extraFrontmatter,
+      body: fields.body
+    },
+    folderName
+  )
 }
 
 /** A reconcile-options pair over two fresh temp source dirs. */
-function makeDirs(): { appSkillsDir: string; userSkillsDir: string } {
-  const root = tempDir()
-  return { appSkillsDir: join(root, 'app-skills'), userSkillsDir: join(root, 'user-skills') }
-}
+const makeDirs = (): SkillDirs => makeSkillDirs('skills')
 
 function opts(dirs: { appSkillsDir: string; userSkillsDir: string }): ReconcileOptions {
   return { ...dirs }

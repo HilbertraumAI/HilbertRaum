@@ -1,7 +1,4 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 
 // Full-doc-skills Phase 4 (§3.2, D49) — the CHAT wiring for the SECOND adopter: `askDocuments` routes
 // an `app:invoice` analysis-shaped question to the invoice whole-document handler (deterministic
@@ -21,20 +18,16 @@ vi.mock('electron', () => ({
 
 import { IPC } from '../../src/shared/ipc'
 import type { Message } from '../../src/shared/types'
-import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
-import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
-import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
-import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import { registerRagIpc } from '../../src/main/ipc/registerRagIpc'
 import { registerBuiltinSkillAnalysisHandlers } from '../../src/main/services/skills/analysis'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import type { AppContext } from '../../src/main/services/context'
-import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
-import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
+import type { Db } from '../../src/main/services/db'
 import { t } from '../../src/shared/i18n'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { writeSkillPackage } from '../helpers/skill-fixtures'
+import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
+import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const INVOICE_INSTALL_ID = 'app:invoice'
@@ -52,32 +45,27 @@ const CLEAN = [
 ].join('\n')
 
 function writeInvoiceSkill(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'invoice')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: invoice',
-    'title: Invoice Analysis',
-    'description: Reads invoices.',
-    'version: 1.0.0',
-    'kind: tool',
-    'allowedTools: [extract_invoice, validate_invoice_totals, export_invoice_csv]',
+  writeSkillPackage(appSkillsDir, {
+    id: 'invoice',
+    title: 'Invoice Analysis',
+    description: 'Reads invoices.',
+    kind: 'tool',
+    allowedTools: ['extract_invoice', 'validate_invoice_totals', 'export_invoice_csv'],
     // Real manifest doc signals so the W2 plausibility gate can tell an invoice from a contract.
-    'triggers:',
-    '  keywords: [invoice, rechnung, total, vendor]',
-    '  mimeTypes: [application/pdf, text/csv]',
-    '  filenamePatterns: ["*invoice*", "*rechnung*", "*faktura*", "*bill*"]',
-    '---',
-    'Quote the printed figures.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+    triggers: {
+      keywords: ['invoice', 'rechnung', 'total', 'vendor'],
+      mimeTypes: ['application/pdf', 'text/csv'],
+      filenamePatterns: ['*invoice*', '*rechnung*', '*faktura*', '*bill*']
+    },
+    body: 'Quote the printed figures.'
+  })
 }
 
 interface Harness {
   db: Db
   conversationId: string
   docId: string
-  runtime: ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
+  runtime: RecordingRuntime
   audit: { type: string; meta?: Record<string, unknown> }[]
 }
 
@@ -87,84 +75,38 @@ interface Harness {
 async function makeHarness(
   opts: { fullyChunked?: boolean; text?: string; file?: string; extraDoc?: { file: string; text: string } } = {}
 ): Promise<Harness> {
-  const root = mkdtempSync(join(tmpdir(), 'hilbertraum-raginvoice-'))
-  const workspacePath = join(root, 'workspace')
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeInvoiceSkill(appSkillsDir)
+  const w = makeSkillsWorld('raginvoice', {
+    seedApp: writeInvoiceSkill,
+    appVersion: '0.0.0-test',
+    reconcile: true // installs app:invoice ENABLED
+  })
+  const { db } = w
 
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir, appVersion: '0.0.0-test' })
-  skills.reconcile() // installs app:invoice ENABLED
-
-  const storeDir = documentsDir(workspacePath)
-  const docPath = join(root, opts.file ?? 'invoice.txt')
-  writeFileSync(docPath, opts.text ?? CLEAN, 'utf8')
-  const doc = createQueuedDocument(db, docPath)
-  await processDocument(db, storeDir, doc.id, { embedder: createMockEmbedder() })
-  if (opts.fullyChunked === false) {
-    db.prepare('UPDATE documents SET fully_chunked = NULL WHERE id = ?').run(doc.id)
-  }
+  const docId = await ingestTextFile(w, opts.file ?? 'invoice.txt', opts.text ?? CLEAN, {
+    fullyChunked: opts.fullyChunked
+  })
 
   // Optional second in-scope document (for the W2 auto-narrow path): its filename deliberately does NOT
   // match the invoice manifest signals, so exactly ONE candidate (the invoice) narrows the multi-doc scope.
   let extraDocId: string | null = null
   if (opts.extraDoc) {
-    const extraPath = join(root, opts.extraDoc.file)
-    writeFileSync(extraPath, opts.extraDoc.text, 'utf8')
-    const extra = createQueuedDocument(db, extraPath)
-    await processDocument(db, storeDir, extra.id, { embedder: createMockEmbedder() })
-    extraDocId = extra.id
+    extraDocId = await ingestTextFile(w, opts.extraDoc.file, opts.extraDoc.text)
   }
 
   // A runtime that records whether it was ever asked to generate (the exhaustive/template path must make
   // ZERO model calls) AND captures the messages it was handed, so a grounded-data turn can assert the
   // model saw the JSON data block + the verbatim rules.
-  const runtime = {
-    modelId: 'mock',
-    calls: 0,
-    lastMessages: [] as ChatMessage[],
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[]) {
-      runtime.calls++
-      runtime.lastMessages = messages
-      yield 'Model answer.'
-    }
-  } as unknown as ModelRuntime & { calls: number; lastMessages: ChatMessage[] }
+  const runtime = recordingRuntime('Model answer.')
 
-  const audit: { type: string; meta?: Record<string, unknown> }[] = []
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    paths: { rootPath: root, workspacePath },
-    get db() {
-      return db
-    },
-    workspace: { isUnlocked: () => true, documentCipher: () => null, beginDocumentWork: () => () => {} },
-    runtime: { active: () => runtime, activeModelId: () => runtime.modelId },
-    embedder: createMockEmbedder(),
-    reranker: null,
-    ocrEngine: undefined,
-    manifestsDir: null,
-    isDev: true,
-    audit: (type: string, _message: string, meta?: Record<string, unknown>) => audit.push({ type, meta }),
-    skills,
-    // #477: pendingModelSwitches is required — the ask path's occupancy snapshot reads it
-    // unconditionally now (no more `??` fallback).
-    pendingModelSwitches: createPendingModelSwitchCounter()
-  } as unknown as AppContext
+  const { ctx, audit } = makeRagAskContext(w, runtime)
 
   registerBuiltinSkillAnalysisHandlers()
   registerRagIpc(ctx)
   const conv = createConversation(db, {
     mode: 'documents',
-    scope: { collectionIds: [], documentIds: extraDocId ? [doc.id, extraDocId] : [doc.id] }
+    scope: { collectionIds: [], documentIds: extraDocId ? [docId, extraDocId] : [docId] }
   })
-  return { db, conversationId: conv.id, docId: doc.id, runtime, audit }
+  return { db, conversationId: conv.id, docId, runtime, audit }
 }
 
 beforeEach(() => {

@@ -14,8 +14,8 @@ import {
   type RedactDocumentOutput
 } from '../../src/main/services/skills/tools/redaction'
 import { runSkillTool, validateToolOutput } from '../../src/main/services/skills/tool-registry'
-import type { AuditEventType, DocumentChunkRead, SkillToolContext } from '../../src/shared/types'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { makeToolCtx as makeCtx, chunk } from '../helpers/skill-contexts'
 
 // architecture.md "Skills — design record" §8 — the document-redaction Tier-2 tool, the
 // read-transform-export shape, proven in isolation: each deterministic detector masks a clearly-shaped
@@ -23,30 +23,6 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 // no-PII document is unchanged; redaction is idempotent; and the tool honours cancellation. No DB, no
 // Electron. The honesty posture (best-effort, conservative — prefer a miss over corrupting text) is
 // pinned by the near-miss cases below.
-
-interface CapturedEvent {
-  type: AuditEventType
-  meta?: Record<string, unknown>
-}
-
-function makeCtx(
-  chunks: DocumentChunkRead[],
-  over: Partial<SkillToolContext> = {}
-): { ctx: SkillToolContext; events: CapturedEvent[] } {
-  const events: CapturedEvent[] = []
-  const ctx: SkillToolContext = {
-    documentIds: ['d1'],
-    readDocumentChunks: (id) => (id === 'd1' ? chunks : []),
-    signal: new AbortController().signal,
-    audit: (type, meta) => events.push({ type, meta }),
-    ...over
-  }
-  return { ctx, events }
-}
-
-function chunk(text: string, page: number | null = 1, index = 0): DocumentChunkRead {
-  return { text, page, index }
-}
 
 describe('redaction detectors (each in isolation)', () => {
   it('maskEmails masks an address and leaves a non-address @ alone', () => {

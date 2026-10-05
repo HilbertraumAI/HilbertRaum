@@ -1,19 +1,22 @@
 import { describe, it, expect } from 'vitest'
-import { readFileSync, mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomUUID } from 'node:crypto'
 import { parseSkillMarkdown } from '../../src/shared/skill-manifest'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, getSkill, listSkills, skillInstallId } from '../../src/main/services/skills/registry'
 import { recordToInfo } from '../../src/main/services/skills/installer'
 import { runDocumentEdit, type OriginalDocumentBytes } from '../../src/main/services/skills/run'
 import { runnableToolsForSkill, buildToolRunner } from '../../src/main/services/skills/tool-runs'
 import { readDocxTextLayer } from '../../src/main/services/export/docx-rewrite'
 import { makeDocx, otherDocxParts } from '../helpers/docx'
-import type { AuditEventType, RunnableTool } from '../../src/shared/types'
+import type { RunnableTool } from '../../src/shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { capturingAudit } from '../helpers/audit-capture'
+import { scriptedRuntime } from '../helpers/scripted-runtime'
+import { seedDocWithChunks as seedChunks } from '../helpers/doc-fixtures'
+import { realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Phase 8 (beta-feedback-2026-07 §11, #23, D76; architecture.md "Skills — design record" §22) — the
 // SECOND read-transform-export skill: document-edit. Like redaction, the deliverable is a FILE (no
@@ -27,56 +30,12 @@ const REPO_ROOT = join(fileURLToPath(new URL('.', import.meta.url)), '..', '..',
 const APP_SKILLS_DIR = join(REPO_ROOT, 'app-skills')
 const EDIT_SKILL_MD = readFileSync(join(APP_SKILLS_DIR, 'document-edit', 'SKILL.md'), 'utf8')
 
-/** A scripted runtime whose `chatStream` replies with `reply(call)` token-by-token — the locate pass sees
- *  fixture edits (the MockRuntime ignores `responseSchema`, so this mirrors it for the seam). */
-function scriptedRuntime(
-  reply: (call: { messages: ChatMessage[]; options?: RuntimeChatOptions }) => string,
-  calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
-): ModelRuntime {
-  return {
-    modelId: 'mock',
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
-      calls.push({ messages, options })
-      for (const tok of reply({ messages, options }).match(/\S+\s*/g) ?? []) {
-        if (options?.signal?.aborted) return
-        yield tok
-      }
-    }
-  }
-}
+const freshDb = (): Db => openFreshDb('edit')
 
-function freshDb(): Db {
-  return openDatabase(join(mkdtempSync(join(tmpdir(), 'hilbertraum-edit-')), 'test.sqlite'))
-}
+const deps = (): SkillDirs => realAppSkillsDeps('edit-user')
 
-function deps(): { appSkillsDir: string; userSkillsDir: string } {
-  return {
-    appSkillsDir: APP_SKILLS_DIR,
-    userSkillsDir: join(mkdtempSync(join(tmpdir(), 'hilbertraum-edit-user-')), 'user-skills')
-  }
-}
-
-function seedDocWithChunks(db: Db, text: string): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
-     VALUES (?, 'Vollmacht', 'indexed', 'text/plain', ?, ?)`
-  ).run(docId, now, now)
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-     VALUES (?, ?, 0, ?, 'p', 1, ?)`
-  ).run(randomUUID(), docId, text, now)
-  return docId
-}
-
-function capturingAudit(): { audit: (t: AuditEventType, m?: Record<string, unknown>) => void; events: unknown[] } {
-  const events: unknown[] = []
-  return { audit: (type, meta) => events.push({ type, meta }), events }
-}
+const seedDocWithChunks = (db: Db, text: string): string =>
+  seedChunks(db, text, { title: 'Vollmacht', mimeType: 'text/plain' })
 
 const skillInstall = 'app:document-edit'
 

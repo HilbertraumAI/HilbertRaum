@@ -1,45 +1,30 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { reconcileSkills, setSkillEnabled } from '../../src/main/services/skills/registry'
 import { suggestSkillsForTurn } from '../../src/main/services/skills/suggest'
 import { __suggestSignalMaterializations } from '../../src/main/services/skills/scope-signals'
 import { createConversation, getConversationDefaultSkill } from '../../src/main/services/chat'
 import { addToCollection, getBuiltinCollection } from '../../src/main/services/collections'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Skills plan §10.2/§16 (S8) — suggestSkills orchestration. Proves: scope is resolved MAIN-side from
 // the conversationId (a doc in scope drives the offer, §22-C4); only ENABLED skills are candidates;
 // at most one offer; and it is INERT — suggesting never writes the conversation's active_skill_id
 // (never auto-applies — auto-fire is the deferred S13 wave).
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-suggest-'))
-}
-function freshDb(): Db {
-  return openDatabase(join(tempDir(), 'test.sqlite'))
-}
-function dirs(): { appSkillsDir: string; userSkillsDir: string } {
-  const root = tempDir()
-  return { appSkillsDir: join(root, 'app-skills'), userSkillsDir: join(root, 'user-skills') }
-}
+const freshDb = (): Db => openFreshDb('suggest')
+const dirs = (): SkillDirs => makeSkillDirs('suggest')
 
 function writeSkill(
   dir: string,
   id: string,
   triggers: { keywords?: string[]; mimeTypes?: string[]; filenamePatterns?: string[] }
 ): void {
-  const d = join(dir, id)
-  mkdirSync(d, { recursive: true })
-  const lines = ['---', `id: ${id}`, `title: Skill ${id}`, `description: ${id} skill`, 'version: 1.0.0', 'triggers:']
-  if (triggers.keywords) lines.push(`  keywords: [${triggers.keywords.join(', ')}]`)
-  if (triggers.mimeTypes) lines.push(`  mimeTypes: [${triggers.mimeTypes.join(', ')}]`)
-  if (triggers.filenamePatterns)
-    lines.push(`  filenamePatterns: [${triggers.filenamePatterns.map((p) => `"${p}"`).join(', ')}]`)
-  lines.push('---', `Instructions for ${id}.`)
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+  writeSkillPackage(dir, { id, triggers })
 }
 
 function seedIndexedDoc(db: Db, title: string, mime: string): string {

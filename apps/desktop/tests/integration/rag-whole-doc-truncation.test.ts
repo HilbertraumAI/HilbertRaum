@@ -31,7 +31,7 @@ import {
 } from '../../src/main/services/rag'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { DEFAULT_SETTINGS, type Message } from '../../src/shared/types'
-import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
+import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 
 /** Insert a chunk row directly, for precise control over segment labels (page/section) the ingestion
  *  path would coalesce away — used to exercise the cross-segment de-overlap gate. */
@@ -102,20 +102,8 @@ async function makeHarness(): Promise<Harness> {
 }
 
 /** A runtime that reports a 4096 window (§L0) and captures the assembled grounded turn. */
-function capturingRuntime(): ModelRuntime & { lastMessages: ChatMessage[] } {
-  const rt = {
-    modelId: 'mock',
-    lastMessages: [] as ChatMessage[],
-    contextWindow: () => CTX,
-    start: async () => {},
-    stop: async () => {},
-    health: async () => ({ healthy: true, message: 'ok', port: null }),
-    async *chatStream(messages: ChatMessage[]) {
-      rt.lastMessages = messages
-      yield 'Zusammenfassung des Anfangs.'
-    }
-  } as unknown as ModelRuntime & { lastMessages: ChatMessage[] }
-  return rt
+function capturingRuntime(): RecordingRuntime {
+  return recordingRuntime('Zusammenfassung des Anfangs.', { contextWindow: CTX })
 }
 
 /** All `M####` markers across a chunk set, in order. Duplicates ⇒ an un-stripped overlap boundary. */

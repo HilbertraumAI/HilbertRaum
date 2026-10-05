@@ -1,9 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { mkdirSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { MockEmbedder } from '../../src/main/services/embeddings'
 import { createMockRuntime } from '../../src/main/services/runtime/mock'
 import type { ChatMessage } from '../../src/main/services/runtime'
@@ -32,35 +31,18 @@ import {
 } from '../../src/main/services/rag'
 import { SKILL_GUARD_LINE } from '../../src/main/services/skills/prompt'
 import { DEFAULT_SETTINGS } from '../../src/shared/types'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { makeSkillDirs, writeSkillPackage, type SkillDirs } from '../helpers/skill-fixtures'
 
 // Skills plan S6+S7 — manual activation + prompt integration. Proves: resolveTurnSkill (sticky /
 // override / disabled / deleted → none), the fence placement (plain-chat system vs RAG user turn —
 // §22-H2), assistant-row stamping ONLY when the fence was placed (§22-A5), the no-context RAG turn
 // stamps NULL, and the carry-forward invariant — a DELETED skill resolves messages.skill_id → NULL.
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-skillturn-'))
-}
-function freshDb(): Db {
-  return openDatabase(join(tempDir(), 'test.sqlite'))
-}
-function makeDirs(): { appSkillsDir: string; userSkillsDir: string } {
-  const root = tempDir()
-  return { appSkillsDir: join(root, 'app-skills'), userSkillsDir: join(root, 'user-skills') }
-}
+const freshDb = (): Db => openFreshDb('skillturn')
+const makeDirs = (): SkillDirs => makeSkillDirs('skillturn')
 function writeSkill(dir: string, id: string, body: string, version = '1.0.0'): void {
-  const d = join(dir, id)
-  mkdirSync(d, { recursive: true })
-  const md = [
-    '---',
-    `id: ${id}`,
-    `title: Skill ${id}`,
-    `description: Test skill ${id}`,
-    `version: ${version}`,
-    '---',
-    body
-  ].join('\n')
-  writeFileSync(join(d, 'SKILL.md'), md, 'utf8')
+  writeSkillPackage(dir, { id, description: `Test skill ${id}`, version, body })
 }
 
 /** A db with one ENABLED user skill `bank` (body "Quote totals.") + its install_id. */

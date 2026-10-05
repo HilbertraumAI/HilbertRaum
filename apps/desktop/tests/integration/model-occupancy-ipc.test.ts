@@ -1,8 +1,5 @@
 import { describe, it, expect, vi, beforeEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { randomUUID } from 'node:crypto'
 
 // Issues #185/#186 at the IPC entry points — the two handlers the issues actually name:
 // `runBenchmark` (which had no re-entrancy or busy guard at all) and `startSkillRun` (which
@@ -39,21 +36,21 @@ import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings, getSettings } from '../../src/main/services/settings'
-import { createAuditRecorder } from '../../src/main/services/audit'
-import { createSkillRegistry } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
 import { IPC } from '../../src/shared/ipc'
 import { t } from '../../src/shared/i18n'
 import { getToolDescriptor } from '../../src/shared/skill-tools'
 import type { AppContext } from '../../src/main/services/context'
 import type { SkillRunState, StartSkillRunResult } from '../../src/shared/types'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
+import { tempRoot } from '../helpers/db-fixtures'
+import { seedStoredTextDoc } from '../helpers/doc-fixtures'
+import { writeSkillPackage } from '../helpers/skill-fixtures'
+import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-occ-ipc-'))
-}
+const tempDir = (): string => tempRoot('occ-ipc')
 
 function fakeRuntime(): ModelRuntime {
   return {
@@ -76,40 +73,17 @@ async function startedManager(): Promise<RuntimeManager> {
 }
 
 function writeSkill(appSkillsDir: string, id: string, tools: string[]): void {
-  const d = join(appSkillsDir, id)
-  mkdirSync(d, { recursive: true })
-  writeFileSync(
-    join(d, 'SKILL.md'),
-    [
-      '---',
-      `id: ${id}`,
-      `title: ${id}`,
-      'description: A test skill.',
-      'version: 1.0.0',
-      'kind: tool',
-      `allowedTools: [${tools.join(', ')}]`,
-      '---',
-      'Body.'
-    ].join('\n'),
-    'utf8'
-  )
+  writeSkillPackage(appSkillsDir, {
+    id,
+    title: id,
+    description: 'A test skill.',
+    kind: 'tool',
+    allowedTools: tools,
+    body: 'Body.'
+  })
 }
 
-function seedDoc(db: Db, text: string): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  const storedPath = join(tempDir(), 'document.txt')
-  writeFileSync(storedPath, text, 'utf8')
-  db.prepare(
-    `INSERT INTO documents (id, title, stored_path, status, mime_type, created_at, updated_at)
-     VALUES (?, ?, ?, 'indexed', 'text/plain', ?, ?)`
-  ).run(docId, 'document.txt', storedPath, now, now)
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-     VALUES (?, ?, 0, ?, 'p', 1, ?)`
-  ).run(randomUUID(), docId, text, now)
-  return docId
-}
+const seedDoc = (db: Db, text: string): string => seedStoredTextDoc(db, text, { label: 'occ-ipc' })
 
 interface Harness {
   db: Db
@@ -126,28 +100,17 @@ async function makeHarness(
   docText: string,
   opts: { docTasksActive?: boolean } = {}
 ): Promise<Harness> {
-  const root = tempDir()
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeSkill(appSkillsDir, skillId, tools)
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
+  const w = makeSkillsWorld('occ-ipc', { seedApp: (d) => writeSkill(d, skillId, tools) })
+  const db = w.db
   const runtime = await startedManager()
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root, rootPath: root },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    isDev: false,
-    runtime,
-    docTasks: opts.docTasksActive ? { hasActiveTask: () => true } : undefined,
-    manifestsDir: null,
-    audit: createAuditRecorder(() => db),
-    skills: createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir }),
-    ocrEngine: undefined
-  } as unknown as AppContext
+  const ctx = makeSkillsIpcContext(w, {
+    extra: {
+      paths: { workspacePath: w.root, rootPath: w.root },
+      runtime,
+      docTasks: opts.docTasksActive ? { hasActiveTask: () => true } : undefined,
+      manifestsDir: null
+    }
+  })
   registerSkillsIpc(ctx)
   const docId = seedDoc(db, docText)
   const conv = createConversation(db, {

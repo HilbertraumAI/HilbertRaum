@@ -1,6 +1,5 @@
 import { describe, it, expect, vi, beforeEach, beforeAll, afterAll } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, existsSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync, existsSync } from 'node:fs'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
 
@@ -56,72 +55,60 @@ import { SKILL_TOOL_DESCRIPTORS, WIRED_TOOL_NAMES } from '../../src/shared/skill
 import { IPC } from '../../src/shared/ipc'
 import { t, type MessageKey } from '../../src/shared/i18n'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import { seedSettings } from '../../src/main/services/settings'
-import { createAuditRecorder, listAuditEvents } from '../../src/main/services/audit'
-import { createSkillRegistry, getSkill } from '../../src/main/services/skills/registry'
+import { listAuditEvents } from '../../src/main/services/audit'
+import { getSkill } from '../../src/main/services/skills/registry'
 import { createConversation } from '../../src/main/services/chat'
-import type { AppContext } from '../../src/main/services/context'
 import type { RunnableTool, RunnableToolSet, SkillRunState, StartSkillRunResult } from '../../src/shared/types'
-import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { hangPolls } from '../helpers/hang-budget'
+import { tempRoot } from '../helpers/db-fixtures'
+import { seedStoredTextDoc } from '../helpers/doc-fixtures'
+import { writeSkillPackage, type SkillSpec } from '../helpers/skill-fixtures'
+import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const SENTINEL = 'XTOOLRUN_SENTINEL_secret_payee_77777'
 
-function tempDir(): string {
-  return mkdtempSync(join(tmpdir(), 'hilbertraum-toolrun-'))
+const tempDir = (): string => tempRoot('toolrun')
+
+// S11c: kind:'tool' so the declared allowedTools become effective (the SL-1 parser path).
+const BANK_SKILL: SkillSpec = {
+  id: 'bank-statement',
+  title: 'Bank statement',
+  description: 'Reads statements.',
+  kind: 'tool',
+  allowedTools: [
+    'extract_transactions',
+    'validate_statement_balances',
+    'categorize_transactions',
+    'summarize_cashflow',
+    'export_transactions_csv'
+  ],
+  body: 'Quote the printed figures.'
 }
 
-function writeBankSkill(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'bank-statement')
-  mkdirSync(d, { recursive: true })
-  // S11c: kind:'tool' so the declared allowedTools become effective (the SL-1 parser path).
-  const lines = [
-    '---',
-    'id: bank-statement',
-    'title: Bank statement',
-    'description: Reads statements.',
-    'version: 1.0.0',
-    'kind: tool',
-    'allowedTools: [extract_transactions, validate_statement_balances, categorize_transactions, summarize_cashflow, export_transactions_csv]',
-    '---',
-    'Quote the printed figures.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+const REDACTION_SKILL: SkillSpec = {
+  id: 'document-redaction',
+  title: 'Document redaction',
+  description: 'Redacts personal data.',
+  kind: 'tool',
+  allowedTools: ['redact_document'],
+  body: 'Best-effort redaction; review the copy.'
 }
 
-function writeRedactionSkill(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'document-redaction')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: document-redaction',
-    'title: Document redaction',
-    'description: Redacts personal data.',
-    'version: 1.0.0',
-    'kind: tool',
-    'allowedTools: [redact_document]',
-    '---',
-    'Best-effort redaction; review the copy.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
-}
-
-function writeInvoiceSkill(appSkillsDir: string): void {
-  const d = join(appSkillsDir, 'invoice')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: invoice',
-    'title: Invoice',
-    'description: Reads invoices.',
-    'version: 1.0.0',
-    'kind: tool',
-    'allowedTools: [extract_invoice, validate_invoice_totals, export_invoice_csv, export_invoice_json, export_invoice_xml]',
-    '---',
-    'Quote the printed figures.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+const INVOICE_SKILL: SkillSpec = {
+  id: 'invoice',
+  title: 'Invoice',
+  description: 'Reads invoices.',
+  kind: 'tool',
+  allowedTools: [
+    'extract_invoice',
+    'validate_invoice_totals',
+    'export_invoice_csv',
+    'export_invoice_json',
+    'export_invoice_xml'
+  ],
+  body: 'Quote the printed figures.'
 }
 
 const INVOICE_TEXT = [
@@ -141,69 +128,30 @@ const INVOICE_TEXT = [
 // tools an app skill would. Its TITLE carries a sentinel so the SEC-1 refusal can be asserted
 // content-free. The SEC-1 gate means it must run NONE of these even when enabled.
 const USER_SKILL_TITLE_SENTINEL = 'XUSERSKILL_SENTINEL_imported_title_99999'
-function writeUserToolSkill(userSkillsDir: string): void {
-  const d = join(userSkillsDir, 'imported-bank')
-  mkdirSync(d, { recursive: true })
-  const lines = [
-    '---',
-    'id: imported-bank',
-    `title: ${USER_SKILL_TITLE_SENTINEL}`,
-    'description: A user-imported tool skill.',
-    'version: 1.0.0',
-    'kind: tool',
-    'allowedTools: [extract_transactions, export_transactions_csv]',
-    '---',
-    'Quote the printed figures.'
-  ]
-  writeFileSync(join(d, 'SKILL.md'), lines.join('\n'), 'utf8')
+const USER_TOOL_SKILL: SkillSpec = {
+  id: 'imported-bank',
+  title: USER_SKILL_TITLE_SENTINEL,
+  description: 'A user-imported tool skill.',
+  kind: 'tool',
+  allowedTools: ['extract_transactions', 'export_transactions_csv'],
+  body: 'Quote the printed figures.'
 }
 
-function seedDocWithChunks(db: Db, text: string, opts: { title?: string; createdAt?: string } = {}): string {
-  const now = opts.createdAt ?? new Date().toISOString()
-  const docId = randomUUID()
-  // A REAL stored .txt copy: the run seam re-extracts VERBATIM segments from the stored file via
-  // extractDocumentPreview (the faithful content reach the IPC injects) — NOT the newline-collapsed,
-  // overlapping `chunks`. TxtParser returns the file as one newline-preserving segment, so the
-  // line-oriented extractor sees the rows exactly as written. (The chunk row is still seeded so the
-  // doc is "indexed"; it is no longer the content source.)
-  const storedPath = join(mkdtempSync(join(tmpdir(), 'hilbertraum-toolrun-doc-')), 'document.txt')
-  writeFileSync(storedPath, text, 'utf8')
-  db.prepare(
-    `INSERT INTO documents (id, title, stored_path, status, mime_type, created_at, updated_at)
-     VALUES (?, ?, ?, 'indexed', 'text/plain', ?, ?)`
-  ).run(docId, opts.title ?? 'document.txt', storedPath, now, now)
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-     VALUES (?, ?, 0, ?, 'p', 1, ?)`
-  ).run(randomUUID(), docId, text, now)
-  return docId
-}
+// A REAL stored .txt copy: the run seam re-extracts VERBATIM segments from the stored file via
+// extractDocumentPreview (the faithful content reach the IPC injects) — NOT the newline-collapsed,
+// overlapping `chunks`. TxtParser returns the file as one newline-preserving segment, so the
+// line-oriented extractor sees the rows exactly as written. (The chunk row is still seeded so the
+// doc is "indexed"; it is no longer the content source.)
+const seedDocWithChunks = (db: Db, text: string, o: { title?: string; createdAt?: string } = {}): string =>
+  seedStoredTextDoc(db, text, { ...o, label: 'toolrun-doc' })
 
 // A bank-skill harness scoped to SEVERAL indexed documents (U-1 multi-doc targeting). Distinct,
 // ascending `created_at` makes `resolveInScopeDocumentIds` order deterministic = the seed order, so
 // `docIds[0]` is the first seeded document (the default target). Returns the ids in that order.
 function makeMultiDocHarness(texts: string[]): Harness & { docIds: string[] } {
-  const root = tempDir()
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeBankSkill(appSkillsDir)
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const audit = createAuditRecorder(() => db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    isDev: false,
-    audit,
-    skills,
-    ocrEngine: undefined
-  } as unknown as AppContext
-  registerSkillsIpc(ctx)
+  const w = makeSkillsWorld('toolrun', { seedApp: (d) => writeSkillPackage(d, BANK_SKILL) })
+  const db = w.db
+  registerSkillsIpc(makeSkillsIpcContext(w))
   const docIds = texts.map((text, i) =>
     seedDocWithChunks(db, text, { createdAt: `2026-01-0${i + 1}T00:00:00.000Z` })
   )
@@ -218,81 +166,27 @@ interface Harness {
 }
 
 function makeHarness(statementText: string, opts: { title?: string } = {}): Harness {
-  const root = tempDir()
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeBankSkill(appSkillsDir)
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const audit = createAuditRecorder(() => db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    isDev: false,
-    audit,
-    skills,
-    ocrEngine: undefined
-  } as unknown as AppContext
-  registerSkillsIpc(ctx)
+  const w = makeSkillsWorld('toolrun', { seedApp: (d) => writeSkillPackage(d, BANK_SKILL) })
+  const db = w.db
+  registerSkillsIpc(makeSkillsIpcContext(w))
   const docId = seedDocWithChunks(db, statementText, { title: opts.title })
   const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
   return { db, conversationId: conv.id, skillInstallId: 'app:bank-statement' }
 }
 
 function makeRedactionHarness(docText: string): Harness {
-  const root = tempDir()
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeRedactionSkill(appSkillsDir)
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const audit = createAuditRecorder(() => db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    isDev: false,
-    audit,
-    skills,
-    ocrEngine: undefined
-  } as unknown as AppContext
-  registerSkillsIpc(ctx)
+  const w = makeSkillsWorld('toolrun', { seedApp: (d) => writeSkillPackage(d, REDACTION_SKILL) })
+  const db = w.db
+  registerSkillsIpc(makeSkillsIpcContext(w))
   const docId = seedDocWithChunks(db, docText)
   const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
   return { db, conversationId: conv.id, skillInstallId: 'app:document-redaction' }
 }
 
 function makeInvoiceHarness(invoiceText: string): Harness {
-  const root = tempDir()
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeInvoiceSkill(appSkillsDir)
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const audit = createAuditRecorder(() => db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    isDev: false,
-    audit,
-    skills,
-    ocrEngine: undefined
-  } as unknown as AppContext
-  registerSkillsIpc(ctx)
+  const w = makeSkillsWorld('toolrun', { seedApp: (d) => writeSkillPackage(d, INVOICE_SKILL) })
+  const db = w.db
+  registerSkillsIpc(makeSkillsIpcContext(w))
   const docId = seedDocWithChunks(db, invoiceText)
   const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
   return { db, conversationId: conv.id, skillInstallId: 'app:invoice' }
@@ -302,27 +196,9 @@ function makeInvoiceHarness(invoiceText: string): Harness {
 // worst case (a drop-in installs DISABLED per DS19; a zip import installs enabled-with-warning per
 // DS7 — either way an ENABLED user tool skill). The SEC-1 gate must still refuse it every Tier-2 tool.
 function makeUserSkillHarness(statementText: string): Harness {
-  const root = tempDir()
-  const appSkillsDir = join(root, 'app-skills')
-  const userSkillsDir = join(root, 'user-skills')
-  mkdirSync(appSkillsDir, { recursive: true })
-  mkdirSync(userSkillsDir, { recursive: true })
-  writeUserToolSkill(userSkillsDir)
-  const db = openDatabase(join(root, 'test.sqlite'))
-  seedSettings(db)
-  const audit = createAuditRecorder(() => db)
-  const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
-  const ctx = {
-    trustedSenders: ANY_SENDER,
-    db,
-    paths: { workspacePath: root },
-    workspace: { isUnlocked: () => true, documentCipher: () => null },
-    isDev: false,
-    audit,
-    skills,
-    ocrEngine: undefined
-  } as unknown as AppContext
-  registerSkillsIpc(ctx)
+  const w = makeSkillsWorld('toolrun', { seedUser: (d) => writeSkillPackage(d, USER_TOOL_SKILL) })
+  const { db, skills } = w
+  registerSkillsIpc(makeSkillsIpcContext(w))
   const docId = seedDocWithChunks(db, statementText)
   const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
   skills.list() // reconcile disk→DB (the user skill installs DISABLED)
@@ -406,45 +282,12 @@ describe('skills tool-run IPC (S11b)', () => {
     // Reconcile installs it disabled; we then force-enable it to simulate a SKILL.md edited on disk
     // upward AFTER it was enabled (reconcile preserves the enabled flag). The use-site gate must
     // still exclude it — both from the runnable list and from being startable.
-    const root = tempDir()
-    const appSkillsDir = join(root, 'app-skills')
-    const userSkillsDir = join(root, 'user-skills')
-    mkdirSync(appSkillsDir, { recursive: true })
-    mkdirSync(userSkillsDir, { recursive: true })
-    const skillDir = join(appSkillsDir, 'bank-statement')
-    mkdirSync(skillDir, { recursive: true })
-    writeFileSync(
-      join(skillDir, 'SKILL.md'),
-      [
-        '---',
-        'id: bank-statement',
-        'title: Bank statement',
-        'description: Reads statements.',
-        'version: 1.0.0',
-        'kind: tool',
-        'allowedTools: [extract_transactions]',
-        'compatibility:',
-        '  minAppVersion: 99.0.0',
-        '---',
-        'Quote the printed figures.'
-      ].join('\n'),
-      'utf8'
-    )
-    const db = openDatabase(join(root, 'test.sqlite'))
-    seedSettings(db)
-    const audit = createAuditRecorder(() => db)
-    const skills = createSkillRegistry({ getDb: () => db, appSkillsDir, userSkillsDir })
-    const ctx = {
-      trustedSenders: ANY_SENDER,
-      db,
-      paths: { workspacePath: root },
-      workspace: { isUnlocked: () => true, documentCipher: () => null },
-      isDev: false,
-      audit,
-      skills,
-      ocrEngine: undefined
-    } as unknown as AppContext
-    registerSkillsIpc(ctx)
+    const w = makeSkillsWorld('toolrun', {
+      seedApp: (d) =>
+        writeSkillPackage(d, { ...BANK_SKILL, allowedTools: ['extract_transactions'], minAppVersion: '99.0.0' })
+    })
+    const { db, skills } = w
+    registerSkillsIpc(makeSkillsIpcContext(w))
     const docId = seedDocWithChunks(db, 'EUR\n2026-01-02 Grocery -45,90')
     const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
 

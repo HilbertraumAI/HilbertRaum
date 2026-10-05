@@ -1,9 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import { createConversation, exportTranscript, appendMessage, listMessages } from '../../src/main/services/chat'
 import {
   resolveDocumentReader,
@@ -25,28 +22,11 @@ import {
   summarizeCashflow,
   type TransactionInput
 } from '../../src/main/services/skills/tools/bank-statement'
-import type { AuditEventType, DocumentChunkRead } from '../../src/shared/types'
-
-/**
- * Count the `db.prepare` calls whose SQL matches `pattern` while `fn` runs (audit P-1 query-count
- * assertions). `UPDATE … bank_transactions` is excluded by matching `FROM bank_transactions` — only
- * the row LOADS are counted, never the reconciled/category persists.
- */
-async function countPrepares(db: Db, pattern: RegExp, fn: () => Promise<void>): Promise<number> {
-  const real = db.prepare.bind(db)
-  let count = 0
-  const target = db as unknown as { prepare: Db['prepare'] }
-  target.prepare = ((sql: string) => {
-    if (pattern.test(sql)) count++
-    return real(sql)
-  }) as Db['prepare']
-  try {
-    await fn()
-  } finally {
-    target.prepare = real
-  }
-  return count
-}
+import type { DocumentChunkRead } from '../../src/shared/types'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedDocWithChunks } from '../helpers/doc-fixtures'
+import { capturingAudit } from '../helpers/audit-capture'
+import { countPrepares } from '../helpers/db-spy'
 
 /** Load a statement's rows in the `LoadedTransaction` shape the analysis handler hands to the seams as
  *  `preloaded` (id + tool fields, null columns omitted, row order). */
@@ -91,31 +71,7 @@ function loadLoadedRows(db: Db, statementId: string): LoadedTransaction[] {
 
 const SENTINEL = 'XRUN_SENTINEL_secret_payee_42424242'
 
-function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-run-'))
-  return openDatabase(join(dir, 'test.sqlite'))
-}
-
-function seedDocWithChunks(db: Db, chunks: Array<{ text: string; page: number | null }>): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at)
-     VALUES (?, 'Statement', 'indexed', 'application/pdf', ?, ?)`
-  ).run(docId, now, now)
-  chunks.forEach((c, i) => {
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-       VALUES (?, ?, ?, ?, 'p', ?, ?)`
-    ).run(randomUUID(), docId, i, c.text, c.page, now)
-  })
-  return docId
-}
-
-function capturingAudit(): { audit: (t: AuditEventType, m?: Record<string, unknown>) => void; events: unknown[] } {
-  const events: unknown[] = []
-  return { audit: (type, meta) => events.push({ type, meta }), events }
-}
+const freshDb = (): Db => openFreshDb('run')
 
 describe('resolveDocumentReader — layout flag is threaded only when requested (D58)', () => {
   it('requests layout reconstruction ONLY when deps.layout is set (bank-statement), else text mode', async () => {

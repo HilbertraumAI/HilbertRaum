@@ -1,10 +1,8 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync, readFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { randomUUID } from 'node:crypto'
-import { openDatabase, type Db } from '../../src/main/services/db'
+import type { Db } from '../../src/main/services/db'
 import {
   contractBriefAnalysisHandler,
   deadlineObligationAnalysisHandler,
@@ -19,6 +17,8 @@ import {
   retrieveCompareWholeDocuments,
   splitCompareBudget
 } from '../../src/main/services/rag'
+import { openFreshDb } from '../helpers/db-fixtures'
+import { seedLineChunkDoc } from '../helpers/doc-fixtures'
 
 // Skill-aware WHOLE-DOCUMENT handlers (skill-whole-doc engine, Wave 2 + A3 gate inversion, §6.3/§8.2 +
 // A4/SKA-8 §3.2). Two contracts pinned here:
@@ -31,27 +31,11 @@ import {
 // A3 also honors the engine for a USER-imported instruction skill via `manifestAnalysisHandler` — pinned
 // below alongside the SKILL.md-declaration ⇔ registered-handler consistency.
 
-function freshDb(): Db {
-  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-wholedoc-'))
-  return openDatabase(join(dir, 'test.sqlite'))
-}
+const freshDb = (): Db => openFreshDb('wholedoc')
 
 /** Seed an indexed document with one chunk per line (chunk_index ordered; token_count left NULL). */
-function seedDoc(db: Db, lines: string[]): string {
-  const now = new Date().toISOString()
-  const docId = randomUUID()
-  db.prepare(
-    `INSERT INTO documents (id, title, status, mime_type, fully_chunked, created_at, updated_at)
-     VALUES (?, 'Doc', 'indexed', 'text/plain', ?, ?, ?)`
-  ).run(docId, now, now, now)
-  lines.forEach((line, i) => {
-    db.prepare(
-      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, created_at)
-       VALUES (?, ?, ?, ?, 'Doc', NULL, ?)`
-    ).run(randomUUID(), docId, i, line, now)
-  })
-  return docId
-}
+const seedDoc = (db: Db, lines: string[]): string =>
+  seedLineChunkDoc(db, lines, { title: 'Doc', mimeType: 'text/plain', page: null, fullyChunked: true })
 
 const HANDLERS = [
   { name: 'meeting-protocol', h: meetingProtocolAnalysisHandler, shaped: 'write the meeting minutes', deShaped: 'erstelle das Besprechungsprotokoll' },
