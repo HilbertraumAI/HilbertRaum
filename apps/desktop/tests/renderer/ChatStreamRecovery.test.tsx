@@ -219,7 +219,7 @@ describe('ChatScreen — stream recovery (T-1)', () => {
 
       // CR-5 teeth: the send branches on the CONVERSATION's own (documents) mode, not the screen mode.
       // Revert `stream` to the `mode`-state branch → sendChatMessage fires here instead.
-      expect(askDocuments).toHaveBeenCalledWith('c1', 'the question', undefined, false, undefined)
+      expect(askDocuments).toHaveBeenCalledWith('c1', 'the question', undefined, false, undefined, undefined)
       expect(sendChatMessage).not.toHaveBeenCalled()
     } finally {
       vi.useRealTimers()
@@ -268,6 +268,41 @@ describe('ChatScreen — stream recovery (T-1)', () => {
       // ever polls c2. Remove the guard and the re-select stamps activeId back to c1 (→ getActiveStream('c1')).
       expect(getActiveStream).toHaveBeenCalledWith('c2')
       expect(getActiveStream).not.toHaveBeenCalledWith('c1')
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// #613: a fresh mount mid-reply lists the question main is still answering a moment before the
+// in-flight check (getActiveStream) flips `recovering`. "Send again" must wait for that check: a click
+// in the gap collides with the live turn ("already being generated") over a reply that is working fine.
+describe('ChatScreen — "Send again" waits for the in-flight check (#613)', () => {
+  it('shows nothing under the question until the check says no reply is being written', async () => {
+    vi.useFakeTimers()
+    try {
+      let answerCheck!: (snap: ActiveStreamSnapshot | null) => void
+      const getActiveStream = vi.fn(() => new Promise<ActiveStreamSnapshot | null>((r) => (answerCheck = r)))
+      stubApi({
+        listConversations: vi.fn(async () => [chatConv('c1', 'Chat 1')]),
+        getRuntimeStatus: vi.fn(async () => runningStatus),
+        listMessages: vi.fn(async () => [userMsg('u1', 'c1', 'the question')]),
+        listDocuments: vi.fn(async () => []),
+        listCollections: vi.fn(async () => []),
+        listAttachments: vi.fn(async () => []),
+        listActiveStreamConversations: vi.fn(async () => ['c1']),
+        getActiveStream
+      })
+      const sendAgain = (): HTMLElement | null => screen.queryByRole('button', { name: /Send again/ })
+
+      renderChat()
+      await flush()
+      expect(screen.getByText('the question')).toBeInTheDocument()
+      expect(sendAgain()).toBeNull() // the check is still out: main may be writing this answer
+
+      await act(async () => answerCheck(null))
+      await flush()
+      expect(sendAgain()).toBeInTheDocument() // nothing in flight: the question really has no answer
     } finally {
       vi.useRealTimers()
     }

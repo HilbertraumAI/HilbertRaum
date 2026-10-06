@@ -844,6 +844,9 @@ code, pre, kbd { font-family: var(--font-mono); }
 .msg-actions { display: flex; gap: 2px; align-items: center; opacity: 0; transition: opacity var(--dur-fast) var(--ease); }
 .msg-block:hover .msg-actions,
 .msg-actions:focus-within { opacity: 1; }
+/* #613: "Send again" under a question with no answer stays visible — it exists only in that state, and
+   it is the way on (design-guidelines §11.21 "#613 amendment"). */
+.msg-actions.msg-actions-resend { opacity: 1; }
 .msg-action {
   background: transparent;
   border: 1px solid transparent;

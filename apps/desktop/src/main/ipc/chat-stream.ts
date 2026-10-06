@@ -10,11 +10,13 @@ import {
   type Message
 } from '../../shared/types'
 import {
+  clearUnansweredMark,
   deleteLastAssistantMessage,
   emptyAssistantMessage,
   getConversation,
   getLatestMessage,
   getRegenerableAssistantMessageId,
+  getUnansweredQuestion,
   isEmptyCompletionError,
   markUnansweredQuestion,
   restoreMessage
@@ -88,6 +90,26 @@ export async function assertChatStreamReady(
     throw new Error(tMain('main.chat.streamInFlight'))
   }
   return { conv, runtime }
+}
+
+/**
+ * #613 "Send again" — the one owner of the resend precondition for both channels (`chat:send`'s
+ * `resendMessageId`, `rag:ask`'s 6th argument). Returns null when the call is not a resend (no id, or
+ * `regenerate` set: regenerate wins), else the stored question it answers. That question must still be
+ * the conversation's last visible message and carry the clicked id: an answer that landed since, or a
+ * stale screen, refuses with `main.chat.nothingToResend` before any stream or write, rather than answer
+ * some other turn (the SKA-37 rule). The caller appends nothing — the question is already history.
+ */
+export function resendableQuestion(
+  db: Db,
+  conversationId: string,
+  regenerate: boolean,
+  resendMessageId: unknown
+): Message | null {
+  if (regenerate || typeof resendMessageId !== 'string' || resendMessageId.length === 0) return null
+  const question = getUnansweredQuestion(db, conversationId)
+  if (!question || question.id !== resendMessageId) throw new Error(tMain('main.chat.nothingToResend'))
+  return question
 }
 
 /** A guarded token sender: a no-op once the renderer is gone (window closed mid-stream). */
@@ -168,7 +190,12 @@ export type ChatStreamRunFn = (
  *  - a turn that ended early with no answer at all marks its question "Not answered", with its cause
  *    (`markUnansweredQuestion`, which touches the last row only when it IS the question).
  *    A Stop during the pre-generation slot handoff (REL-3) ends before this wrapper runs and is not
- *    marked.
+ *    marked;
+ *  - #613: the "Not answered" cause always describes the LATEST attempt on the question. Every attempt
+ *    clears the tail question's mark once it starts (slot held) and sets it again if it too ends early,
+ *    so an error leaves it unmarked like any failed turn. Today only a resend ("Send again") starts on a
+ *    marked tail — a plain send's fresh question carries no mark and a regenerate's tail is an answer —
+ *    but any future path that re-answers a trailing question is a new attempt and gets the same rule.
  */
 export function withRegenerateGuard(
   db: Db,
@@ -199,6 +226,14 @@ function markUnansweredOnEarlyEnd(db: Db, conversationId: string, runFn: ChatStr
     }
   }
   return async (signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings) => {
+    // #613: the mark describes the latest attempt (see the guard above). The slot is held, so this
+    // attempt has really started; a refusal before this point (no model, busy, a Stop during the slot
+    // handoff) keeps the old cause. `mark` below sets it again if this attempt ends early too.
+    try {
+      clearUnansweredMark(db, conversationId)
+    } catch {
+      /* a marker is a courtesy; it must never fail the turn */
+    }
     try {
       const result = await runFn(signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings)
       if (result.content === '') mark(signal)

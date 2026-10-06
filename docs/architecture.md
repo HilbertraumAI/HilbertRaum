@@ -1602,7 +1602,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - Skill runs are left to #606. *Closed by the #606 amendment below.*
       - Answers ended by the Stop button, lock or quit keep no marker (#612). *Closed by the #612
         amendment below.*
-      - There is still no resend for an unanswered question (#613).
+      - There is still no resend for an unanswered question (#613). *Closed by the #613 amendment
+        below.*
 
       **Tests.**
       - `model-stop-mid-answer.test.ts`: the real manager, hook body, chat stream and
@@ -1672,7 +1673,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
       **Not covered.**
       - A Stop or lock during the pre-generation slot handoff (REL-3) still ends before the guard runs,
-        so its question is not marked.
+        so its question is not marked. *Since #613 it still offers "Send again" (amendment below).*
       - The OS session-end lock (`emergencyLock`, #248) closes the database without aborting, so a
         partial it cuts is not saved at all, as before.
       - The Markdown transcript export carries neither "Reply cut off" (#498) nor "Reply stopped".
@@ -1894,6 +1895,100 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         the card shows "Reagiert nicht" + "Neu starten" (German UI). Restart takes 5.2 s, the frozen
         process is gone, and the next chat answers.
       - **A chat during a model start**: `startRequested: true` and `main.modelStarting`.
+    - **#613 amendment (2026-10-06) — "Send again" for a question that got no answer.** The facts:
+      - **A dead end.** An error, a crash or a stop before the first word leaves the conversation ending
+        in the question. "Try again" renders only on the last assistant turn, in chat mode only (SKA-37).
+        The error banner offered no retry, although `main.chat.connectionLost` and the CPU-crash notice
+        say "send your message again". The user retyped the question, and the next send dropped the
+        orphan from the prompt (`collapseToAlternating`), so it was never answered.
+      - **Only early ends are marked.** #600 and #612 mark the question for a Stop, a lock or a model
+        stop. An error (a crash, a server error, an empty completion, an overflow) leaves it unmarked,
+        and its banner is gone after a reload or a conversation switch. The anchor is therefore the
+        transcript's tail, not the mark.
+      - **Main could already re-answer from history** (`deleteLastAssistantMessage` deletes nothing
+        when the tail is a question), but F2's pre-stream `hasRegenerableAssistantReply` refuses a user
+        tail. Relaxing it would bring SKA-37 back: a stale "Answer without it" or offer click would
+        re-answer a later question. The resend is therefore its own intent on the wire.
+
+      **Decisions** (the issue's candidate fix; the design calls taken as recommended defaults).
+      - One **"Send again"** under the last question while no answer follows it, in chat and documents
+        mode. It is always shown, never hover-revealed: it exists only in that state, and it is the way
+        on. The banner gets no button of its own.
+      - It answers the stored question in place: nothing is appended and nothing is deleted.
+      - Depth and skill are the composer's, the arguments a send from it would carry. An untouched
+        composer lets main resolve the saved default and score the stored question for auto-fire, as the
+        first send did. A routed run's question keeps the run's own skill and document instead.
+      - The "Not answered" note names the latest attempt's cause.
+
+      **As built.**
+      - **The wire.** `ChatOptions.resendMessageId` on `chat:send`; a 6th `askDocuments` argument,
+        `resendMessageId`, on `rag:ask`. `regenerate` wins when both are set; `content` is unused.
+      - **Main.** Both handlers call one precondition, `resendableQuestion` (`chat-stream.ts`). It reads
+        `getUnansweredQuestion` (the last visible message when it is a user turn; compaction rows
+        skipped). A different id, or none, refuses with `main.chat.nothingToResend` before any stream
+        or write. The chat branch hands the stored question to `resolveTurnSkillFromRegistry`. The
+        documents branch makes it `text`, so retrieval, the filename auto-scope and the skill engines
+        all see it. The guard runs with `regenerate: false`.
+      - **The mark.** `markUnansweredOnEarlyEnd` calls `clearUnansweredMark` before `runFn`, so only
+        once the slot is held. A refusal before that (no model, busy, a stale skill id, a Stop during
+        the slot handoff) keeps the old cause; an attempt that ends early marks the question again. For
+        a plain send or a regenerate the tail carries no mark, so the call changes nothing there.
+      - **The renderer.** `Transcript` derives `resendableId`: the last message when it is a user turn,
+        but not while this conversation streams. `MessageBlock` renders a `.msg-actions-resend` row
+        with one `.msg-action`, "↺ Send again". The trailing question's old note is hidden during that
+        stream too. `ChatScreen.onSendAgain` calls `stream(…, resendMessageId)` with `turnSkillArgFor` and
+        `depthFor`, guarded by `sendInFlightRef` (the CH-14 rule); there is no optimistic bubble. The
+        stale `Transcript.tsx` SKA-37 comment ("covered by the error banner") now points here. Design
+        record: design-guidelines §11.21 "#613 amendment".
+      - **When ChatScreen offers it** (`canSendAgain`), found by the review of the change:
+        - only once the recovery effect's tick has found nothing in flight for this conversation
+          (`idleCheckedId`). A fresh remount mid-reply lists the question main is still answering a
+          moment before that tick flips `recovering`, and a click there met `streamInFlight` and broke
+          into a working reply;
+        - never under an optimistic bubble (`isOptimistic`): a failed send whose refresh also failed
+          keeps one, and main has no question with its id;
+        - a routed question (the Summarize / Categorize relay, documents mode) keeps its run's skill and
+          document pin (`routedTurnRef`), which the composer never showed. Without them the re-ask
+          skipped the run's 0-model-call handler (C2) and spread over the whole scope (ux-6).
+
+      **Not covered.**
+      - Only the last question can be sent again. An older unanswered question keeps its note, and the
+        next send still drops it from the prompt.
+      - A routed question keeps its run's skill and pin for one visit of the Chat screen. After a
+        remount or a reload it is resent under the composer's skill and the ordinary scope.
+      - A send refused before its question was saved (no model, busy) leaves nothing to resend; the
+        draft goes back into the composer (CR-1), as before.
+
+      **Tests.** Each fails on the pre-fix code. Ten rules were mutation-checked: the auto-fire text,
+      the shared id check, the clear, both streaming gates, the in-flight-check gate, the optimistic
+      guard, the routed skill and pin.
+      - `chat-ipc.test.ts` "(#613)": answered in place, the model gets the question once; the two
+        refusals; auto-fire on the stored question.
+      - `rag-regenerate-ipc.test.ts` "Send again": the documents twin and its refusal.
+      - `chat-stream-regenerate.test.ts` "(#613)": a resend that fails with an error drops the old cause.
+      - `TruncatedNotice.test.tsx` "(#613)": placement, the label in EN and DE, the streaming gate.
+      - `ChatSendFailure.test.tsx` "(#613)": a crash, one click, the question once and the banner gone;
+        no button under an unsaved bubble; the documents channel.
+      - `ChatStreamRecovery.test.tsx` "(#613)": nothing under the question until the in-flight check
+        comes back empty.
+      - `SkillRunLifecycle.test.tsx` "(#613)": a routed question is resent with the run's skill and pin.
+
+      **Real app** (2026-10-06, DesktopDiT, dev build over CDP, the 4B in CPU mode on b11146, a
+      plaintext-dev root with E:'s e5). Every button was clicked in the DOM; German and English UI.
+      - A Stop before the first word (a 4,917-character question): the note and "↺ Noch einmal senden"
+        sit under the question. During the answer the question shows once, with no note and no button;
+        afterwards there is one question and one answer, and its `ended_early` is cleared. After a
+        reload the transcript is the same.
+      - A crash mid-prefill, through the UI (Send, then the chat sidecar killed). The first crash of the
+        session showed #599's "Das KI-Modell startet" screen for ~4 s, then the question with its button;
+        one click answered it. A second crash left the model stopped (#599). The transcript then showed
+        the question, "↺ Send again" and the `connectionLost` banner together; after "Use this model",
+        one click answered it.
+      - A document chat whose model was stopped mid-prefill: "Nicht beantwortet – das KI-Modell wurde
+        beendet." After the restart, one click gave a grounded answer citing the document.
+      - With the model stopped, a remounted Chat shows its no-model state, not the transcript. Its
+        question kept its `'user'` cause through the stop, the start and the remount, and was answered
+        with one click once the model was back.
   - **Friendly-error chain** in `withChatStream` (rethrow-friendly, mapped copy on BOTH the `chat:error`
     event and the invoke rejection): `RuntimeUnresponsiveError` → `main.chat.runtimeUnresponsive`,
     `RuntimeConnectionLostError` → `main.chat.connectionLost` (#600), `EmptyCompletionError` →

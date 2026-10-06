@@ -1128,6 +1128,30 @@ export function markUnansweredQuestion(db: Db, conversationId: string, cause: En
 }
 
 /**
+ * #613 — the question "Send again" answers: the conversation's last VISIBLE message when it is a user
+ * turn (an error, a crash or an early end left it without an answer), else null. Unlike the "Not
+ * answered" note it does not need an `endedEarly` mark: an error leaves none, and its banner is gone
+ * after a reload. Read-only; the same tail the regenerate and mark helpers above read.
+ */
+export function getUnansweredQuestion(db: Db, conversationId: string): Message | null {
+  const last = getLatestMessage(db, conversationId)
+  return last?.role === 'user' ? last : null
+}
+
+/**
+ * #613 — drop the "Not answered" mark from the question an attempt is about to answer, so the mark always
+ * describes the LATEST attempt: that attempt marks it again if it too ends early, and an error leaves the
+ * question unmarked like any other failed turn. Only the last visible row, only a user turn (the tail
+ * `getUnansweredQuestion` reads). Runs at the start of every turn; a plain send's fresh question carries
+ * no mark and a regenerate's tail is an answer, so today it only ever clears a resent question.
+ */
+export function clearUnansweredMark(db: Db, conversationId: string): void {
+  const question = getUnansweredQuestion(db, conversationId)
+  if (question?.endedEarly == null) return
+  db.prepare('UPDATE messages SET ended_early = NULL WHERE id = ?').run(question.id)
+}
+
+/**
  * Read-only precondition for "regenerate": is the conversation's last message an assistant turn
  * (so there is a prior reply to drop and re-stream)? Mirrors `deleteLastAssistantMessage`'s
  * last-message-must-be-assistant rule so the pre-stream "nothing to regenerate" bail and the

@@ -282,6 +282,14 @@ export function ChatScreen({
   // CH-7 (#148): ref mirror of `recovering` so the poll's completion side effects run at
   // tick level (pure setState) instead of inside the updater. Written wherever recovering is.
   const recoveringRef = useRef(false)
+  // #613: the conversation whose in-flight check (the recovery effect's tick) found no reply being
+  // written. "Send again" waits for it: on a fresh remount mid-reply the transcript lists the question
+  // a moment before that check flips `recovering`, and a click there would collide with the live turn.
+  const [idleCheckedId, setIdleCheckedId] = useState<string | null>(null)
+  // #613: a ROUTED question's skill and document pin (the run relay below), per conversation, for this
+  // visit of the screen. Neither is in the composer, so "Send again" on that question reuses them
+  // instead of the composer's pick (C2 / ux-6); an ordinary send in the conversation drops the record.
+  const routedTurnRef = useRef(new Map<string, { skill: string; pinnedDocumentId?: string }>())
   const [runtimeRunning, setRuntimeRunning] = useState<boolean | null>(null)
   // The full runtime status behind `runtimeRunning` — feeds the muted header hint (#36:
   // which model is answering, GPU or CPU) without changing the boolean-driven gates below.
@@ -824,7 +832,10 @@ export function ChatScreen({
   // the token events fired while the screen was gone are not replayed.
   useEffect(() => {
     if (!activeId || streaming) return
-    if (!window.api.getActiveStream) return // older preload / test stub
+    if (!window.api.getActiveStream) {
+      setIdleCheckedId(activeId) // older preload / test stub: nothing to recover, nothing to wait for
+      return
+    }
     let cancelled = false
     let timer: ReturnType<typeof setInterval> | null = null
     // CH-4 (#148): a getActiveStream REJECTION is not "stream finished" — mapping it to null
@@ -864,6 +875,7 @@ export function ChatScreen({
         const was = recoveringRef.current
         recoveringRef.current = false
         setRecovering(false)
+        setIdleCheckedId(activeId) // #613: nothing in flight here — "Send again" may show
         if (was) {
           // Completed: pull the persisted final reply and clear the live bubble.
           void window.api
@@ -1194,6 +1206,7 @@ export function ChatScreen({
     []
   )
   const handleTryAgain = useEventCallback(onTryAgain)
+  const handleSendAgain = useEventCallback(onSendAgain)
   const handleAnswerWithoutSkill = useEventCallback(onAnswerWithoutSkill)
   const handleRunWithSkill = useEventCallback(onRunWithSkill)
   const handleSelectConversation = useEventCallback(onSelectConversation)
@@ -1597,6 +1610,7 @@ export function ChatScreen({
     handledRoutedRunRef.current = run.runHandle
     acknowledgeSkillRun(run.runHandle) // drop the content-free run row; the routed answer replaces it
     const question = t(questionKey)
+    routedTurnRef.current.set(targetConv, { skill: run.skillInstallId, pinnedDocumentId: pinnedDocId })
     setMessages((prev) => [...prev, optimisticUser(targetConv, question)])
     // Route under the skill the RUN used (C2) — never `currentSkillId`, which is whatever the picker
     // shows now; a null/non-bank pick would bypass the 0-model-call bank analysis handler.
@@ -1615,7 +1629,10 @@ export function ChatScreen({
     skillInstallId: string | null | undefined,
     // U3 (audit ux-6): pin the document answer to ONE document (the routed-run relay passes the run's
     // target). Documents mode only; main re-validates it against scope. Absent ⇒ ordinary scope.
-    pinnedDocumentId?: string
+    pinnedDocumentId?: string,
+    // #613 "Send again": answer this unanswered last question (its id) — `content` is then unused and
+    // `regenerate` false. Main re-checks the id is still the conversation's last message.
+    resendMessageId?: string
   ): Promise<boolean> {
     setError(null)
     setStreaming(true)
@@ -1625,9 +1642,9 @@ export function ChatScreen({
     setThinkingOpen(false)
     setProgressNotice(null)
     // Seed the live meter with the user turn about to be sent; the streaming answer estimate is
-    // added on top in `liveUsage`. A regenerate re-streams an EXISTING user turn (already counted in
-    // the resting usage), so it seeds 0 to avoid double-counting the question.
-    setLiveUserTokens(regenerate ? 0 : estimateLiveTokens(content))
+    // added on top in `liveUsage`. A regenerate or a resend re-streams an EXISTING user turn (already
+    // counted in the resting usage), so it seeds 0 to avoid double-counting the question.
+    setLiveUserTokens(regenerate || resendMessageId != null ? 0 : estimateLiveTokens(content))
     // A stale prior turn's real-usage report must not leak into this turn's meter.
     setStreamUsage(null)
     answerStarted.current = false
@@ -1754,12 +1771,13 @@ export function ChatScreen({
       // (created in the current screen mode). The reattach-site `setMode` stays as cosmetic footer sync.
       const convMode = conversations.find((c) => c.id === convId)?.mode ?? mode
       if (convMode === 'documents') {
-        await window.api.askDocuments(convId, content, turnSkillArg, regenerate, pinnedDocumentId)
+        await window.api.askDocuments(convId, content, turnSkillArg, regenerate, pinnedDocumentId, resendMessageId)
       } else {
         await window.api.sendChatMessage(convId, content, {
           mode: depth,
           ...(turnSkillArg !== undefined ? { skillInstallId: turnSkillArg } : {}),
-          ...(regenerate ? { regenerate: true } : {})
+          ...(regenerate ? { regenerate: true } : {}),
+          ...(resendMessageId != null ? { resendMessageId } : {})
         })
       }
       sendSucceeded = true // CODE-40 follow-up: the turn is persisted; the catch must not re-judge it
@@ -1847,6 +1865,7 @@ export function ChatScreen({
       const turnSkill = turnSkillArgFor(depthKey)
       const convId = await ensureConversation()
       setDepths((prev) => ({ ...prev, [convId]: depth }))
+      routedTurnRef.current.delete(convId) // #613: the last question is now this one, not a routed one
       setMessages((prev) => [...prev, optimisticUser(convId, text)])
       // CR-1: `setInput('')` above keeps the composer responsive (the optimistic bubble shows the
       // text), but a pre-persist failure removes that bubble via the failure refresh and leaves the
@@ -1874,6 +1893,25 @@ export function ChatScreen({
       return last && last.role === 'assistant' ? prev.slice(0, -1) : prev
     })
     await stream(activeId, '', true, depthFor(activeId), skillFor(activeId, activeConversation))
+  }
+
+  // #613 "Send again": ask the unanswered last question again, in either mode. The question stays
+  // where it is (main appends nothing), so the view needs no optimistic change: the live bubble
+  // streams under it. Depth and skill are what the composer shows — the arguments a send from it would
+  // carry (`turnSkillArgFor`: an untouched composer lets main re-resolve the saved default and score
+  // the question for auto-fire, as its first send did). A routed question keeps its run's skill and
+  // document pin instead (`routedTurnRef`), which the composer never showed. The ref refuses a
+  // same-tick double click before `busyStreaming` re-renders (the CH-14 rule onSend follows).
+  async function onSendAgain(messageId: string): Promise<void> {
+    if (!activeId || busyStreaming || sendInFlightRef.current) return
+    sendInFlightRef.current = true
+    try {
+      const routed = routedTurnRef.current.get(activeId)
+      const skill = routed ? routed.skill : turnSkillArgFor(activeId)
+      await stream(activeId, '', false, depthFor(activeId), skill, routed?.pinnedDocumentId, messageId)
+    } finally {
+      sendInFlightRef.current = false
+    }
   }
 
   // S13c (D3): the per-turn "answer without it" undo on an AUTO-FIRED turn. Re-runs the SAME user
@@ -2030,6 +2068,11 @@ export function ChatScreen({
   }
 
   const canTryAgain = !busyStreaming && mode === 'chat' && messages.some((m) => m.role === 'assistant')
+  // #613: "Send again" (placement lives in Transcript) needs this conversation's in-flight check to
+  // have come back empty, and never sits under an optimistic bubble main has not stored (a failed send
+  // whose refresh failed too — main would refuse its id as "no longer the last message").
+  const canSendAgain =
+    !busyStreaming && activeId != null && idleCheckedId === activeId && !isOptimistic(messages[messages.length - 1])
 
   const activeConv = activeId ? conversations.find((c) => c.id === activeId) : undefined
 
@@ -2490,6 +2533,8 @@ export function ChatScreen({
           answerSpeeds={answerSpeeds}
           emptyState={emptyState}
           onTryAgain={canTryAgain ? handleTryAgain : undefined}
+          // #613: "Send again" under an unanswered last question, both modes (`canSendAgain` above).
+          onSendAgain={canSendAgain ? handleSendAgain : undefined}
           // The undo's own placement gate (last skill-stamped turn — auto-fired OR picked, U3 §4.3)
           // lives in Transcript; here we only withhold it while a reply is streaming (it would re-run
           // mid-answer).
@@ -2813,4 +2858,9 @@ function optimisticUser(conversationId: string, content: string): Message {
     content,
     createdAt: new Date().toISOString()
   }
+}
+
+/** A bubble `optimisticUser` made that no persisted list has replaced yet (main never saw its id). */
+function isOptimistic(m: Message | undefined): boolean {
+  return m?.id.startsWith('optimistic-') === true
 }

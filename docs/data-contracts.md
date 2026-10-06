@@ -492,6 +492,12 @@ on `chat:error:<id>` as the friendly localized `main.chat.streamError` copy (sti
 string). The structural server reason goes to the local log only — never to the renderer.
 **Regenerate:** `sendChatMessage` with `options.regenerate = true` deletes the last assistant
 message and re-streams from existing history (no new user turn).
+**Send again (#613, additive):** `sendChatMessage(conversationId, '', { resendMessageId })` and
+`askDocuments(conversationId, '', skillInstallId, false, pinnedDocumentId, resendMessageId)` answer the
+conversation's unanswered last question: the user turn with that id, which must still be the last visible
+message (else `main.chat.nothingToResend`, nothing streamed or written). No user turn is appended and
+nothing is deleted; `regenerate` wins when both are set. The attempt clears that question's
+`ended_early` when it starts (slot held) and sets it again if it too ends early.
 **Decision (documented):** `sendChatMessage` does **not** auto-start a runtime — a chat needs a
 model explicitly started on the Models screen. No active runtime → handler throws; Chat screen
 shows a "start a model" empty state linking to Models. (Heavy llama.cpp start in Phase 10 stays an

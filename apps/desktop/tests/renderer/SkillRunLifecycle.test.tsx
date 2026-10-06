@@ -165,7 +165,33 @@ describe('ChatScreen — routed-run relay invariants (C1/C2/ux-6)', () => {
     //  C2 — under the RUN's skill (app:bank-statement), NOT the composer's current pick (none here),
     //  ux-6 — pinned to docA (the run's document, resolved from the store entry before acknowledge).
     await waitFor(() =>
-      expect(askDocuments).toHaveBeenCalledWith('convA', 'Summarize my income and expenses.', 'app:bank-statement', false, 'docA')
+      expect(askDocuments).toHaveBeenCalledWith('convA', 'Summarize my income and expenses.', 'app:bank-statement', false, 'docA', undefined)
+    )
+  })
+
+  // #613: the relay's skill and pin are not in the composer, so "Send again" on a routed question that
+  // got no answer (here the model crashed) must carry them itself, or the re-ask silently skips the
+  // run's 0-model-call handler (C2) and spreads over the whole scope (ux-6).
+  it('"Send again" on a routed question that got no answer keeps the RUN’s skill and document pin (#613)', async () => {
+    const runs = {
+      docA: runState({ runHandle: 'hA', skillInstallId: 'app:bank-statement', toolName: 'summarize_cashflow', conversationId: 'convA', documentId: 'docA', state: 'done', transactionCount: 4 })
+    }
+    let history: Message[] = []
+    const { askDocuments } = baseApi(runs, { listMessages: vi.fn(async () => history) })
+    askDocuments.mockImplementationOnce(async () => {
+      history = [{ id: 'q1', conversationId: 'convA', role: 'user', content: 'Summarize my income and expenses.', createdAt: '2026-01-01T00:01:00Z' }]
+      throw new Error('The AI model stopped before the answer was finished.')
+    })
+    const user = userEvent.setup()
+    render(<ChatScreen onNavigate={() => {}} />)
+    await selectConversation(user, 'Chat A') // no skill picked in the composer
+    await act(async () => {
+      await startSkillRun({ skillInstallId: 'app:bank-statement', toolName: 'summarize_cashflow', conversationId: 'convA', documentId: 'docA' })
+    })
+
+    await user.click(await screen.findByRole('button', { name: /Send again/ }))
+    await waitFor(() =>
+      expect(askDocuments).toHaveBeenLastCalledWith('convA', '', 'app:bank-statement', false, 'docA', 'q1')
     )
   })
 

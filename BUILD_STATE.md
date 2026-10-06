@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-06 — **#613 — "Send again" under a question that got no answer (`feat/613-resend-unanswered`).** After an error, a crash or a stop before the first word
+the question was a dead end ("Try again" is answer-only, the banner had no retry, the next send dropped it from the prompt). The last unanswered question now shows "↺ Send
+again" in both modes: `ChatOptions.resendMessageId` / `askDocuments`' 6th argument; main answers the stored question in place (id re-checked, else `nothingToResend`; auto-fire
+scores it) and a started attempt drops the old "Not answered" cause. Record: CB-5 "#613 amendment", design-guidelines §11.21. Open: only the last question._
 _2026-10-06 — **#622 — the redaction / edit locate windows and replies fit the model's context (`fix/622-locate-window-budget`).** A fixed 768-token reply cap
 cut dense windows (measured 744–1,293), so they parsed to nothing: master's register copy kept 8/10 names while the run said done; 40 long paragraphs overflowed
 4,096. Now one walk (`locate-walk.ts`): a digit-aware estimate, a third of the context per window, the rest for the reply, cut/overflow → halve and re-ask, an
@@ -43,7 +47,7 @@ reads "Stopped. Nothing was saved." Owner calls from the issue. Record: CB-5 "#6
 _2026-10-06 — **#612 — the Stop button, lock and quit leave the same lasting "Reply stopped" marker (`fix/612-stopped-answer-marker`).** Each abort names its cause
 (`chat/ended-early.ts`: `'user'` Stop, `'lock'` lock + quit, `'model'` #600); `persistAssistantMessage` stamps any of them, an unanswered question is marked for all
 three, a re-ask cut by lock/quit restores its predecessor; the evidence snapshot's `answerEndedEarly` (replaced the unreleased `answerStopped`) names the cause in the
-pack. Owner calls as recommended (the totals echo stays under a cut narration). Real app verified on an encrypted vault. Record: CB-5 "#612 amendment", design-guidelines §11.21. Open: #613._
+pack. Owner calls as recommended (the totals echo stays under a cut narration). Real app verified on an encrypted vault. Record: CB-5 "#612 amendment", design-guidelines §11.21. Open: none (#613: above)._
 _2026-10-06 — **#599 — a frozen or crashed chat model no longer reads "running, healthy" (`feat/599-runtime-liveness`, stacked on #600).** Status reads re-probe
 `/health` (cached 10 s); an answer the CB-5 watchdog ended marks the model unresponsive until it answers again. The AI Model card says "Not responding" + Restart (offered,
 never automatic). A CPU-mode crash restarts the model once per model per session, then leaves it stopped, each with a notice. "Is starting" counts from the start request
@@ -51,7 +55,7 @@ never automatic). A CPU-mode crash restarts the model once per model per session
 _2026-10-06 — **#600 — a model stop or switch ends the answer cleanly; a crash speaks in words (`fix/600-model-stop-mid-answer`).** `RuntimeManager`'s model-stop hook
 (after `current` is cleared, before the kill, no wait; never on the crash restart) ends the local API request (`model_not_loaded`/`model_starting`), a deep-index build and
 the answers: partial kept + "Reply stopped" (new `messages.ended_early`, not `truncated`), a re-ask keeps its predecessor, an unanswered question is marked, an AI Model card note.
-A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: #613 (#606, #612: above)._
+A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: none (#606, #612, #613: above)._
 _2026-10-06 — **#598 — a prefill wedged behind pings ends; the header wait is 180 s (`fix/598-prefill-liveness`).** Both pins ping every ~30 s (b9849 too — #594's
 record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `return_progress` on every chat request and two prefill clocks: any byte (120 s) and a
 `prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
@@ -66,9 +70,6 @@ pause is cut off. Found, pre-existing, now fixed: a chat sidecar hung before its
 _2026-10-05 — **#580 — redaction masks the union of overlapping proposals (`fix/580-redaction-overlap`).** "Jane" before "Jane Doe" left the surname visible (.txt + DOCX),
 and a partial overlap ("Anna Berg" + "Berg GmbH") left " GmbH" in either order: `applySpans` keeps the first of two overlapping spans. `verifyAndSweepEntities` now merges
 occurrences into disjoint regions; counts are regions; the edit tool's comment corrected. Record: Skills record §21 "#580 amendment". Open: none._
-_2026-10-05 — **#585 — mammoth 1.12.3 → 1.13.0, replacement PR (`chore/mammoth-1.13`).** Notices regenerated (226 → 224: `bluebird` out, `path-is-absolute` dev-only;
-packed `app.asar` agrees). 1.12.3 dropped `w:customXml`/`w:moveTo`/`w:moveFrom` with their text; 1.13 reads custom XML + moved text once (pinned in `ingestion.test.ts`;
-old docs need Re-index). Packaged DOCX import verified. Record: `architecture.md` DEP-6 §12. Open: none._
 _2026-10-05 — **#532 — "Install the AI engine again" for an engine whose own files are damaged (`fix/532-engine-reinstall`).** `downloadEngine({ families,
 reinstall: true })`, admitted only for a `files-damaged` verdict; the demo runtime no longer counts as "engine in use" (CODE-13 polish, also first installs); the
 model restarts on the engine after any chat-engine install; a fresh copy refused again carries `afterInstall` (no loop; Windows → VC++ hint). Owner: offline Kits
@@ -191,7 +192,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

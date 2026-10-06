@@ -464,3 +464,118 @@ describe('ChatScreen — a "model is starting" refusal clears once the model is 
     }
   })
 })
+
+// #613: a question an error, a crash or an early stop left without an answer used to be a dead end —
+// "Try again" exists only on answers, the banner offers no retry, and the user had to retype it. "Send
+// again" under the question asks it again with one click; main answers the stored question, so the
+// screen must not add a second copy of it (no optimistic bubble), in either mode.
+describe('ChatScreen — "Send again" on a question that got no answer (#613)', () => {
+  const sendAgain = (): HTMLElement | null => screen.queryByRole('button', { name: /Send again/ })
+
+  it('after a crash, one click asks the same question again — shown once, the crash banner gone', async () => {
+    vi.useFakeTimers()
+    try {
+      let history: Message[] = []
+      let finishResend!: () => void
+      const sendChatMessage = vi
+        .fn()
+        // The first send persists the question, then the model crashes under it.
+        .mockImplementationOnce(async () => {
+          history = [userMsg('u1', 'c1', 'the question')]
+          throw new Error(t('en', 'main.chat.connectionLost'))
+        })
+        // The resend parks mid-answer, so the screen can be read while it streams.
+        .mockImplementationOnce(
+          () =>
+            new Promise<Message>((resolve) => {
+              finishResend = () => {
+                history = [...history, assistantMsg('a1', 'c1', 'the answer')]
+                resolve(history[1])
+              }
+            })
+        )
+      baseStub({ listMessages: vi.fn(async () => history), sendChatMessage })
+
+      renderChat()
+      await flush()
+      fireEvent.click(screen.getByText('Chat 1'))
+      await flush()
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'the question' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await flush()
+      expect(screen.getByRole('alert').textContent).toContain(t('en', 'main.chat.connectionLost'))
+
+      fireEvent.click(sendAgain()!)
+      await flush()
+      expect(sendChatMessage).toHaveBeenLastCalledWith('c1', '', { mode: 'balanced', resendMessageId: 'u1' })
+      // Mid-answer: the question is on screen once, its button gone, the crash banner cleared.
+      expect(screen.getAllByText('the question')).toHaveLength(1)
+      expect(sendAgain()).toBeNull()
+      expect(screen.getByRole('alert').textContent).not.toContain(t('en', 'main.chat.connectionLost'))
+
+      finishResend()
+      await flush()
+      expect(screen.getAllByText('the question')).toHaveLength(1)
+      expect(sendAgain()).toBeNull() // an answer follows the question now
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('offers nothing under a bubble main never stored (the send failed and so did the refresh)', async () => {
+    vi.useFakeTimers()
+    try {
+      let refreshFails = false
+      const sendChatMessage = vi.fn(async () => {
+        refreshFails = true // the failure refresh below rejects too, so the optimistic bubble stays
+        throw new Error(DOC_TASK_BUSY_MESSAGE)
+      })
+      const listMessages = vi.fn(async () => {
+        if (refreshFails) throw new Error('Workspace is locked. Unlock it to chat.')
+        return []
+      })
+      baseStub({ listMessages, sendChatMessage })
+
+      renderChat()
+      await flush()
+      fireEvent.click(screen.getByText('Chat 1'))
+      await flush()
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'never stored' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await flush()
+
+      expect(screen.getByText('never stored')).toBeInTheDocument() // the optimistic bubble stays
+      expect(sendAgain()).toBeNull() // main would refuse its id: it has no such question
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('in a documents chat it asks through the documents channel, by the question id', async () => {
+    vi.useFakeTimers()
+    try {
+      // E.g. reopened after a reload: the question is there, its error banner long gone.
+      const askDocuments = vi.fn(() => new Promise<Message>(() => {}))
+      const sendChatMessage = vi.fn()
+      baseStub({
+        listConversations: vi.fn(async () => [{ ...chatConv('c1', 'Doc chat 1'), mode: 'documents' as const }]),
+        listMessages: vi.fn(async () => [userMsg('u1', 'c1', 'what are the payment terms')]),
+        askDocuments,
+        sendChatMessage
+      })
+
+      renderChat()
+      await flush()
+      fireEvent.click(screen.getByText('Doc chat 1'))
+      await flush()
+      fireEvent.click(sendAgain()!)
+      await flush()
+
+      expect(askDocuments).toHaveBeenCalledWith('c1', '', undefined, false, undefined, 'u1')
+      expect(sendChatMessage).not.toHaveBeenCalled()
+      expect(screen.getAllByText('what are the payment terms')).toHaveLength(1)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})

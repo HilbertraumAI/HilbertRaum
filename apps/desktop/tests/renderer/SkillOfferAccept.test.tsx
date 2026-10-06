@@ -103,10 +103,10 @@ describe('ChatScreen — the #80 offer accept flow (#135)', () => {
     const run = screen.getByRole('button', { name: RUN_LABEL })
     expect(run).toBeEnabled()
     await user.click(run)
-    // The wire tuple: (conversationId, content='', skillInstallId, regenerate=true, pinnedDocumentId).
-    // stream()'s OWN parameter order swaps regenerate/skill — this pins the translation.
+    // The wire tuple: (conversationId, content='', skillInstallId, regenerate=true, pinnedDocumentId,
+    // resendMessageId — #613). stream()'s OWN parameter order swaps regenerate/skill — this pins the translation.
     await waitFor(() =>
-      expect(askDocuments).toHaveBeenCalledExactlyOnceWith('c1', '', 'app:bank-statement', true, undefined)
+      expect(askDocuments).toHaveBeenCalledExactlyOnceWith('c1', '', 'app:bank-statement', true, undefined, undefined)
     )
     // The answered turn was optimistically dropped before the re-run (the regenerate contract).
     expect(screen.queryByText('Found 2 amounts across 1 section scanned.')).not.toBeInTheDocument()

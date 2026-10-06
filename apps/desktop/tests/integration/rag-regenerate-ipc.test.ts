@@ -32,6 +32,9 @@ import type { AppContext } from '../../src/main/services/context'
 import { createPendingModelSwitchCounter } from '../../src/main/services/rag/device-posture'
 import type { ChatMessage, ModelRuntime } from '../../src/main/services/runtime'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { t } from '../../src/shared/i18n'
+import type { Message } from '../../src/shared/types'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -168,5 +171,51 @@ describe('askDocuments regenerate — F2 data-loss guard', () => {
       title: 'Bank Statement Analysis',
       source: 'deterministic'
     })
+  })
+})
+
+// #613 "Send again" — the documents channel's twin of chat's resend (its own branch in the handler):
+// the stored question is the question, so retrieval and the model get it, and nothing is appended.
+describe('askDocuments "Send again" (#613)', () => {
+  async function unansweredDocumentQuestion(): Promise<{ db: Db; workspacePath: string; convId: string; questionId: string }> {
+    const { db, workspacePath } = freshDb()
+    const question = 'what are the payment terms'
+    const docId = await seedDocument(db, new MockEmbedder(), 'contract.pdf', question)
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: [docId] } })
+    const q = appendMessage(db, { conversationId: conv.id, role: 'user', content: question })
+    return { db, workspacePath, convId: conv.id, questionId: q.id }
+  }
+
+  it('answers the unanswered last question from the documents — no second copy', async () => {
+    const { db, workspacePath, convId, questionId } = await unansweredDocumentQuestion()
+    const calls: ScriptedCall[] = []
+    registerRagIpc(makeCtx(db, workspacePath, scriptedRuntime('Net 30 days.', calls)))
+
+    const { result } = await invoke(handlers, IPC.askDocuments, convId, '', null, false, undefined, questionId)
+
+    // Retrieval ran on the stored question (the answer cites the document), and the model got it.
+    expect((result as Message).citations?.map((c) => c.sourceTitle)).toEqual(['contract.pdf'])
+    expect(calls).toHaveLength(1)
+    expect(String(calls[0].messages.at(-1)?.content)).toContain('what are the payment terms')
+    const history = listMessages(db, convId)
+    expect(history.map((m) => [m.role, m.id === questionId])).toEqual([
+      ['user', true],
+      ['assistant', false]
+    ])
+  })
+
+  it('refuses a question that is no longer the last message — nothing streams, nothing is written', async () => {
+    const { db, workspacePath, convId, questionId } = await unansweredDocumentQuestion()
+    appendMessage(db, { conversationId: convId, role: 'assistant', content: 'answered meanwhile' })
+    const calls: ScriptedCall[] = []
+    registerRagIpc(makeCtx(db, workspacePath, scriptedRuntime('never', calls)))
+    const before = listMessages(db, convId)
+
+    await expect(
+      invoke(handlers, IPC.askDocuments, convId, '', null, false, undefined, questionId)
+    ).rejects.toThrow(t('en', 'main.chat.nothingToResend'))
+
+    expect(calls).toHaveLength(0)
+    expect(listMessages(db, convId)).toEqual(before)
   })
 })

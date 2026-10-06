@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect, vi, beforeAll, afterEach, beforeEach } from 'vitest'
-import { render, cleanup, screen } from '@testing-library/react'
+import type { ComponentProps } from 'react'
+import { render, cleanup, screen, fireEvent } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t, type UiLanguage } from '../../src/shared/i18n'
@@ -30,7 +31,11 @@ function assistantMsg(id: string, truncated?: boolean, truncatedCause?: Truncati
 const noop = (): void => {}
 const onCopy = (_c: string): void => {}
 
-function renderTranscript(lang: UiLanguage, messages: Message[]) {
+function renderTranscript(
+  lang: UiLanguage,
+  messages: Message[],
+  extra: Partial<Pick<ComponentProps<typeof Transcript>, 'onSendAgain' | 'streamingHere'>> = {}
+) {
   window.localStorage.setItem(UI_LANGUAGE_STORAGE_KEY, lang)
   return render(
     <I18nProvider>
@@ -45,6 +50,7 @@ function renderTranscript(lang: UiLanguage, messages: Message[]) {
         onCopy={onCopy}
         onSave={noop}
         actionsDisabled={false}
+        {...extra}
       />
     </I18nProvider>
   )
@@ -123,16 +129,17 @@ describe('Transcript truncation notice (#498)', () => {
 // pressed Stop, or locked the workspace / quit — gets its OWN label ("Reply stopped"), never the cut-off
 // badge, whose meaning is "the model ran out of room"; the tooltip names the cause. A question such a
 // turn left with no answer gets a "Not answered" note naming the cause, which goes once an answer follows.
+const user = (id: string, endedEarly?: EndedEarly): Message => ({
+  id,
+  conversationId: 'c1',
+  role: 'user',
+  content: 'Tell me about lighthouses.',
+  createdAt: '2026-01-01T00:00:00Z',
+  endedEarly
+})
+
 describe('the "Reply stopped" and "Not answered" notes (#600, #612)', () => {
   const causes: EndedEarly[] = ['model', 'user', 'lock']
-  const user = (id: string, endedEarly?: EndedEarly): Message => ({
-    id,
-    conversationId: 'c1',
-    role: 'user',
-    content: 'Tell me about lighthouses.',
-    createdAt: '2026-01-01T00:00:00Z',
-    endedEarly
-  })
 
   it.each((['en', 'de'] as const).flatMap((lang) => causes.map((cause) => [lang, cause] as const)))(
     '%s: a reply that ended early (%s) shows "Reply stopped" with the hint for its cause',
@@ -152,5 +159,41 @@ describe('the "Reply stopped" and "Not answered" notes (#600, #612)', () => {
   it('once an answer follows the question, the "Not answered" note goes', () => {
     renderTranscript('en', [user('u1', 'user'), assistantMsg('a1')])
     expect(screen.queryByText(t('en', 'chat.unanswered.user'))).toBeNull()
+  })
+})
+
+// #613: "Send again" is the way on for a question that got no answer — after an error or a crash
+// (which leave no "Not answered" mark) as much as after a stop before the first word. Only the LAST
+// question can be sent again (main answers the conversation's last turn), and never while it is
+// being answered: the live bubble under it is that answer.
+describe('"Send again" under an unanswered last question (#613)', () => {
+  const sendAgain = (): HTMLElement | null => screen.queryByRole('button', { name: /Send again|Noch einmal senden/ })
+
+  it.each([
+    ['en', 'after an error, which leaves no mark', undefined, '↺ Send again'],
+    ['de', 'after a stop before the first word', 'user', '↺ Noch einmal senden']
+  ] as const)('%s: %s, the last question offers it and sends its id', (lang, _l, mark, label) => {
+    const onSendAgain = vi.fn()
+    renderTranscript(lang, [user('u1'), assistantMsg('a1'), user('u2', mark)], { onSendAgain })
+    expect(sendAgain()).toHaveTextContent(label)
+    fireEvent.click(sendAgain()!)
+    expect(onSendAgain).toHaveBeenCalledWith('u2')
+  })
+
+  it('is offered under the last question only — not under an answered one, nor an older unanswered one', () => {
+    const onSendAgain = vi.fn()
+    renderTranscript('en', [user('u1', 'model'), user('u2')], { onSendAgain })
+    expect(screen.getAllByRole('button', { name: /Send again/ })).toHaveLength(1)
+    fireEvent.click(sendAgain()!)
+    expect(onSendAgain).toHaveBeenCalledWith('u2')
+    cleanup()
+    renderTranscript('en', [user('u1', 'model'), assistantMsg('a1')], { onSendAgain })
+    expect(sendAgain()).toBeNull()
+  })
+
+  it('while the question is being answered again, neither "Send again" nor its old note shows', () => {
+    renderTranscript('en', [user('u1', 'model')], { onSendAgain: vi.fn(), streamingHere: true })
+    expect(sendAgain()).toBeNull()
+    expect(screen.queryByText(t('en', 'chat.unanswered.model'))).toBeNull()
   })
 })

@@ -64,7 +64,7 @@ import { detectSystem } from '../services/benchmark'
 import { defaultThreadCount } from '../services/runtime/sidecar'
 import type { AppSettings } from '../../shared/types'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
-import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
+import { assertChatStreamReady, resendableQuestion, withChatStream, withRegenerateGuard } from './chat-stream'
 import type { Db } from '../services/db'
 
 /**
@@ -219,7 +219,8 @@ export function registerRagIpc(ctx: AppContext): void {
       question: string,
       skillInstallId?: string | null,
       regenerate?: boolean,
-      pinnedDocumentId?: string | null
+      pinnedDocumentId?: string | null,
+      resendMessageId?: string | null
     ): Promise<Message> => {
       // F16 (audit-postmerge-2026-06-29): rag:ask is the document-grounded sibling of
       // sendChatMessage and touches ctx.db throughout; gate it FIRST with the same localized chat
@@ -238,6 +239,9 @@ export function registerRagIpc(ctx: AppContext): void {
       // question — never append a duplicate user row. The renderer passes `skillInstallId: null` to
       // re-run skill-free; with no prior assistant reply there is nothing to regenerate.
       const isRegenerate = regenerate === true
+      // #613 "Send again" (chat's `resendMessageId` twin): the unanswered last question this turn
+      // answers again, or null (refuses a stale id before anything is written; regenerate wins).
+      const resend = resendableQuestion(ctx.db, conversationId, isRegenerate, resendMessageId)
       let text: string
       if (isRegenerate) {
         // Only CHECK (read-only) that a prior assistant reply exists, then recover the last USER
@@ -251,6 +255,9 @@ export function registerRagIpc(ctx: AppContext): void {
         const history = listMessages(ctx.db, conversationId)
         text = ([...history].reverse().find((m) => m.role === 'user')?.content ?? '').trim()
         if (!text) throw new Error(tMain('main.chat.emptyQuestion'))
+      } else if (resend != null) {
+        // The stored question IS the question: nothing appended (no duplicate), nothing deleted.
+        text = resend.content.trim()
       } else {
         text = question.trim()
         if (!text) throw new Error(tMain('main.chat.emptyQuestion'))

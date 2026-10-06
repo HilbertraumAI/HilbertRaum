@@ -58,6 +58,11 @@ from its first public `1.0.0` release onward.
 
 ### Added
 
+- **A question that got no answer can be sent again with one click.** When an answer fails because
+  the AI model crashed, ran into an error, or was stopped before it wrote a word, the question now
+  shows **Send again** underneath. It asks the same question again, in chats and in document chats,
+  without adding it to the conversation a second time. Before, you had to type or paste the question
+  again (#613).
 - **Scanned pages inside an ordinary PDF can now be made searchable.** A typed letter with a
   scanned signature page, or a report with a scanned attachment, used to index its typed pages and
   leave the scanned ones silently out of search. The document's row now says how many pages are
