@@ -27,6 +27,22 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-07 — the closed 2026-10-02 DEP-6 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #473 Phase 0 entry). Its record is
+unchanged: `architecture.md` "Dependabot triage — design record (wave DEP-6)" §7, and its §3 holds the residuals. Citations
+of the form "BUILD_STATE 2026-10-02 DEP-6 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (PRs #535, #536, #537 merged).**
+PR A, lockfile-only through the pinned npm 11.6.2 with no collateral (undici 6.29.0 / 7.30.0, brace-expansion ×7, fast-uri 3.1.8, dompurify
+3.4.16), cleared alerts 96, 97 and 102–123: all dev toolchain or not shipped, and the app's own `fetch` is Electron's undici 7.29.1. PR B
+moves vitest 3.2.6 → 4.1.11 (alerts 91/92/94; `npm audit` 0). Two 4.x changes the migration guide omits would have weakened the suite: the
+full-suite guard's `onFinished` hook is gone (now `onTestRunEnd`) and `vi.spyOn` returns a live spy with its history. Also `maxWorkers`, a
+30-minute CI job cap, coverage `include`, and a `tinyexec` asar leak closed. PR C adds `.github/dependabot.yml` (§5 18(a)). After #536 no
+alert is open (91–123 `fixed`) and `npm audit` is 0. Dependabot's first production group (#545: pdf.js 6.3 + six) lands via a replacement PR:
+pdf.js's never-loaded Liberation fonts (GPL v2, not OFL) leave the Kit (owner ruling), argon2id gets an explicit `maxmem`. Record: `architecture.md`
+"Dependabot triage — design record (wave DEP-6)" §7; its §3 holds the residuals._
+
 ## 2026-10-06 — the closed 2026-10-02 #554 / #555 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #581 entry). It was
