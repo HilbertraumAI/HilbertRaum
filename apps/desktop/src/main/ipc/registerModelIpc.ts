@@ -55,6 +55,7 @@ import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { perfMark, perfMs } from '../services/perf'
+import { inFlightStreams } from './inflight'
 
 // IPC for model discovery/selection + runtime start/stop (spec §9.1).
 // The hardware profile comes from the persisted benchmark (`lastBenchmark`),
@@ -752,6 +753,9 @@ export function registerModelIpc(ctx: AppContext): void {
         /* settings unreadable (e.g. just locked) — the plain status still serves */
       }
     }
+    // #600: an answer is being written on the running model — the AI Model card says that stopping
+    // or switching the model now ends it (keeping its text so far), instead of a confirmation dialog.
+    if (status.running && inFlightStreams.size > 0) status.answering = true
     // #107: enrich the "Starting…" window with an expected load duration from the
     // honest effective-read sample (#108). `bytesTotal` already rides the status (the
     // manager resolves it once per window); the sample is memoized per window too, so a

@@ -477,6 +477,35 @@ describe('message truncation cause persistence (#498)', () => {
   })
 })
 
+// ---- "Ended early" persistence (#600) ------------------------------------------------
+// A reply cut by the user stopping or switching the model is marked in its OWN nullable column
+// (`messages.ended_early`), never as a truncation: an older app reads an unknown `truncated_cause` as
+// "raise the context size", while it ignores this column. A workspace moves between laptops with
+// different app versions (success criterion #10), so the read is tolerant and the marker survives
+// the regenerate snapshot like every other column.
+describe('message "ended early" persistence (#600)', () => {
+  it('delete → restore carries the marker, and it is not a truncation', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'half an answ', endedEarly: 'model' })
+
+    const snapshot = deleteLastAssistantMessage(db, conv.id)
+    restoreMessage(db, snapshot!)
+    const read = listMessages(db, conv.id).at(-1)
+    expect(read?.endedEarly).toBe('model')
+    expect(read?.truncated).toBeUndefined()
+  })
+
+  it('an unknown stored value (a newer app wrote it) reads as no marker', () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    const msg = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a' })
+    db.prepare('UPDATE messages SET ended_early = ? WHERE id = ?').run('some-future-cause', msg.id)
+    expect(listMessages(db, conv.id).at(-1)?.endedEarly).toBeUndefined()
+  })
+})
+
 describe('system prompt + message assembly', () => {
   it('the plain-chat base prompt answers from the model’s own knowledge and carries no grounding rules', () => {
     const p = buildSystemPrompt()

@@ -215,6 +215,7 @@ export function parseGenerationSnapshot(json: string | null): EvidenceGeneration
       skillDisplayName: str(g.skillDisplayName),
       appVersion: str(g.appVersion),
       answerTruncated: typeof g.answerTruncated === 'boolean' ? g.answerTruncated : null,
+      answerStopped: typeof g.answerStopped === 'boolean' ? g.answerStopped : null,
       answerMode:
         typeof g.answerMode === 'string' && modes.has(g.answerMode)
           ? (g.answerMode as EvidenceGenerationSnapshot['answerMode'])

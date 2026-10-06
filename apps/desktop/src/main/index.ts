@@ -30,6 +30,7 @@ import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
+import { endWorkOnModelStop } from './ipc/model-stop'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerCollectionsIpc } from './ipc/registerCollectionsIpc'
 import { registerZimIpc } from './ipc/registerZimIpc'
@@ -705,6 +706,12 @@ function initBackend(): void {
   // registrar — so the lock/quit teardowns reach it via `ctx.localApi`. It binds nothing
   // until a post-unlock seam runs `maybeStartLocalApi` AND policy ∧ setting permit (D3/D7).
   ctx.localApi = createLocalApiServer(ctx as AppContext, app.getVersion())
+  // #600: a deliberate stop or switch of the chat model ends the work running on it first — the
+  // local API's request, a deep-index build, the chat and document answers — so each ends as a
+  // clean stop instead of failing on the killed sidecar (`ipc/model-stop.ts`).
+  runtime.setModelStopHook((kind) => {
+    if (ctx) endWorkOnModelStop(ctx, kind)
+  })
   // Issue #40: a completed in-app model download re-runs the translation selector, so the
   // Translate screen stops claiming the model is missing the moment the GGUF lands — no restart.
   // Only a NULL slot or a `startFailed`-latched instance is ever re-composed (BE-7, full-audit

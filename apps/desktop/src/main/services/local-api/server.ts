@@ -39,6 +39,21 @@ export class PortInUseError extends Error {
   }
 }
 
+/** #600: the abort reason `endForModelChange` tags a request with — `<prefix><code>`. */
+const MODEL_CHANGE_REASON = 'model-change:'
+type ModelChangeCode = 'model_not_loaded' | 'model_starting'
+type ModelUnavailable = { status: number; body: ApiErrorBody; headers?: Record<string, string> }
+
+/** #600: the code a request was aborted with by a model stop/switch, or null for any other abort. */
+function modelChangeCode(signal: AbortSignal): ModelChangeCode | null {
+  if (!signal.aborted) return null
+  const reason: unknown = signal.reason
+  const text = reason instanceof Error ? reason.message : typeof reason === 'string' ? reason : ''
+  if (text === MODEL_CHANGE_REASON + 'model_starting') return 'model_starting'
+  if (text === MODEL_CHANGE_REASON + 'model_not_loaded') return 'model_not_loaded'
+  return null
+}
+
 export interface LocalApiServerDeps {
   /** Live settings read (port + token-required may change while running). */
   getSettings(): { localApiPort: number; localApiTokenRequired: boolean }
@@ -301,6 +316,19 @@ export class LocalApiServer {
     this.admission.abortAll(reason)
   }
 
+  /**
+   * #600: the user stopped or switched the chat model (the runtime's model-stop hook, before the
+   * kill). The active request ends with the code that tells its client what happened — the same
+   * two the model gate answers new requests with: `model_starting` (a switch; retry after the
+   * `Retry-After`) or `model_not_loaded` (a stop; a human must start a model). Before #600 the
+   * kill surfaced as 502 `runtime_unresponsive`, which reads like a crash. A queued waiter is
+   * refused with the same code (it used to be promoted into the model gate's re-check, which
+   * answered the same way).
+   */
+  endForModelChange(code: ModelChangeCode): void {
+    this.admission.abortAll(MODEL_CHANGE_REASON + code)
+  }
+
   // ---- Request handling -------------------------------------------------------------------
 
   private reject(res: http.ServerResponse, status: number, body: ApiErrorBody, headers?: Record<string, string>): void {
@@ -373,23 +401,24 @@ export class LocalApiServer {
   /** Model presence as three DISTINCT client outcomes (perf M6): running (200), starting
    *  (503 + Retry-After — pace, don't tell a human to act), absent (503 — a human must
    *  open HilbertRaum and start a model). Never consumes an admission slot. */
-  private modelGate(): { status: RuntimeStatus } | { error: { status: number; body: ApiErrorBody; headers?: Record<string, string> } } {
+  private modelGate(): { status: RuntimeStatus } | { error: ModelUnavailable } {
     const status = this.deps.runtime.status()
     if (status.running && this.deps.runtime.active() != null) return { status }
-    if (status.startingModelId != null) {
+    return { error: this.modelUnavailable(status.startingModelId != null ? 'model_starting' : 'model_not_loaded') }
+  }
+
+  /** The two "no model to answer with" outcomes — shared by the gate and by #600's model change. */
+  private modelUnavailable(code: ModelChangeCode): ModelUnavailable {
+    if (code === 'model_starting') {
       return {
-        error: {
-          status: 503,
-          body: errorBody('The model is still loading', 'unavailable_error', 'model_starting'),
-          headers: { 'retry-after': String(this.deps.estimateBusySeconds()) }
-        }
+        status: 503,
+        body: errorBody('The model is still loading', 'unavailable_error', 'model_starting'),
+        headers: { 'retry-after': String(this.deps.estimateBusySeconds()) }
       }
     }
     return {
-      error: {
-        status: 503,
-        body: errorBody('No model is running — open HilbertRaum and start a model', 'unavailable_error', 'model_not_loaded')
-      }
+      status: 503,
+      body: errorBody('No model is running — open HilbertRaum and start a model', 'unavailable_error', 'model_not_loaded')
     }
   }
 
@@ -466,7 +495,16 @@ export class LocalApiServer {
     const admission: Admission = outcome
     try {
       const held = await admission.ready
-      if (!held) return this.rejectBusy(res)
+      if (!held) {
+        // #600: a waiter refused because the model was stopped or switched learns that, exactly as
+        // the model gate would tell it now — "busy" would send it into a retry loop against no model.
+        const change = modelChangeCode(admission.signal)
+        if (change) {
+          const e = this.modelUnavailable(change)
+          return this.reject(res, e.status, e.body, e.headers)
+        }
+        return this.rejectBusy(res)
+      }
       // Re-resolve runtime + status now that the slot is held: a queued waiter promoted
       // after a model switch must never generate against the stopped old runtime (or
       // label the stream with the old model id) — review 2026-08-18.
@@ -541,7 +579,7 @@ export class LocalApiServer {
       if (admission.signal.aborted) {
         // Aborted mid-buffer: nothing useful to return. Distinguish teardown/pre-emption
         // for the client; a vanished client just gets the socket closed.
-        return this.abortedBeforeStream(res)
+        return this.abortedBeforeStream(res, admission.signal)
       }
       const payload = completionEnvelope(id, created, model, content, finishReason)
       this.requestsServed++
@@ -605,7 +643,7 @@ export class LocalApiServer {
         ? errorBody(
             'The answer was interrupted',
             'server_error',
-            this.stopping ? 'server_stopped' : 'preempted_by_user'
+            modelChangeCode(admission.signal) ?? (this.stopping ? 'server_stopped' : 'preempted_by_user')
           )
         : errorBody('The generation failed', 'server_error', 'runtime_error')
       await write(JSON.stringify(frame))
@@ -619,8 +657,8 @@ export class LocalApiServer {
       return
     }
     if (admission.signal.aborted) {
-      if (!started) return this.abortedBeforeStream(res)
-      const code = this.stopping ? 'server_stopped' : 'preempted_by_user'
+      if (!started) return this.abortedBeforeStream(res, admission.signal)
+      const code = modelChangeCode(admission.signal) ?? (this.stopping ? 'server_stopped' : 'preempted_by_user')
       await write(JSON.stringify(errorBody('The answer was interrupted', 'server_error', code)))
       res.end() // NO [DONE] — the stream is truncated, not successful (client-dev 7)
       return
@@ -633,7 +671,14 @@ export class LocalApiServer {
   }
 
   /** Abort before any SSE bytes: a plain status answer is still possible. */
-  private abortedBeforeStream(res: http.ServerResponse): void {
+  private abortedBeforeStream(res: http.ServerResponse, signal: AbortSignal): void {
+    // #600: a model stop/switch answers as the model gate would now. The abort's first reason wins,
+    // so a lock — which stops this server first — still reads `server_stopped`.
+    const change = modelChangeCode(signal)
+    if (change) {
+      const e = this.modelUnavailable(change)
+      return this.reject(res, e.status, e.body, e.headers)
+    }
     if (this.stopping) {
       return this.reject(res, 503, errorBody('HilbertRaum is shutting down', 'unavailable_error', 'server_stopped'))
     }
@@ -658,7 +703,7 @@ export class LocalApiServer {
     }
     // The shared abort classifier: the real runtime rejects with a PLAIN Error named
     // 'AbortError' (not a DOMException) — `isAbortError` also covers the signal fallback.
-    if (isAbortError(err, signal)) return this.abortedBeforeStream(res)
+    if (isAbortError(err, signal)) return this.abortedBeforeStream(res, signal)
     // Runtime unresponsive / anything else: 502 with a content-free reason.
     this.reject(res, 502, errorBody('The model runtime did not answer', 'server_error', 'runtime_unresponsive'))
   }

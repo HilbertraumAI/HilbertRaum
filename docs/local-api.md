@@ -371,8 +371,8 @@ All errors are OpenAI-shaped: `{"error": {"message": …, "type": …, "code": �
 | 429 | `preempted_by_user` | The user's own chat interrupted this request before any bytes were sent | Retry after `Retry-After` |
 | 500 | `internal_error` | An unexpected failure inside the endpoint (for example the workspace locking mid-request) | Retry; if it persists, check Diagnostics |
 | 502 | `runtime_unresponsive` | The model runtime did not answer | Check the app — the model may have crashed |
-| 503 | `model_not_loaded` | No model is running | A human must start one |
-| 503 | `model_starting` | A model is loading | Retry after `Retry-After` |
+| 503 / in-band | `model_not_loaded` | No model is running — also a request in flight when the user **stops** the model (#600) | A human must start one |
+| 503 / in-band | `model_starting` | A model is loading — also a request in flight when the user **switches** models (#600) | Retry after `Retry-After` |
 | 503 | `workspace_locked` | The workspace is locked | Retry once it is unlocked |
 | 503 / in-band | `server_stopped` | The endpoint is shutting down (lock or quit) | Reconnect later |
 
@@ -381,7 +381,8 @@ All errors are OpenAI-shaped: `{"error": {"message": …, "type": …, "code": �
 it is clamped to 5–180 s.
 
 **Mid-stream failures** arrive as an in-band frame with the same body shape (`preempted_by_user`,
-`server_stopped`, or `runtime_error`), and the stream then closes **without** `[DONE]`.
+`server_stopped`, `model_not_loaded`, `model_starting`, or `runtime_error`), and the stream then closes
+**without** `[DONE]`.
 
 ### 6.7 Limits and timeouts
 
@@ -417,6 +418,12 @@ There is one model and one machine, so the rules are explicit rather than emerge
   between two steps of a background job.
 - **Lock and quit stop the endpoint first**, before the model sidecars come down. A stream running
   at that moment ends with `server_stopped`.
+- **Stopping or switching the model** in HilbertRaum ends a request that is running on it **before** the
+  model goes away, with the code that says what happened: `model_not_loaded` after a stop, `model_starting`
+  (with `Retry-After`) after a switch or an engine update (the model comes back by itself) — as a 503
+  before any bytes, as an in-band frame after (#600). It used to surface as 502 `runtime_unresponsive`,
+  which reads like a crash. A request still **waiting** for its turn at that moment gets the same 503. A
+  real crash of the model still answers 502.
 - **Switching models** while a caller waits is safe: a promoted waiter re-checks which model is
   running and never generates against a stopped one.
 

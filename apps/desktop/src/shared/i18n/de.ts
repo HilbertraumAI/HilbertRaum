@@ -460,6 +460,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.speed.hint':
     'Wie schnell diese Antwort entstanden ist: Decodier-Geschwindigkeit der KI-Engine, Wartezeit bis zum ersten Wort und Anzahl der erzeugten Token. Nur für Antworten aus dieser Sitzung.',
   'chat.truncated.label': 'Antwort abgeschnitten',
+  'chat.endedEarly.label': 'Antwort gestoppt',
+  'chat.endedEarly.hint.model': 'Das KI-Modell wurde beendet oder gewechselt, bevor diese Antwort fertig war.',
+  'chat.unanswered.model': 'Nicht beantwortet – das KI-Modell wurde beendet.',
   'chat.truncated.hint.context':
     'Dem Modell ging der Platz aus, um diese Antwort zu beenden. Bitte es fortzufahren, beginne einen neuen Chat oder erhöhe die Kontextgröße im Bereich „KI-Modell“.',
   'chat.truncated.hint.cap':
@@ -1400,6 +1403,8 @@ export const de: Record<keyof typeof en, string> = {
   'models.use': 'Dieses Modell verwenden',
   'models.useTitle': 'Als dein Modell festlegen und starten, damit du chatten kannst',
   'models.stopRuntime': 'Modell stoppen',
+  'models.answeringNote':
+    'Gerade wird eine Antwort geschrieben. Wenn du das Modell beendest oder wechselst, endet sie – der bisherige Text bleibt erhalten.',
   'models.startMock': 'Im Demo-Modus testen',
   'models.starting': 'Wird gestartet…',
   'models.startingTitle': 'Dieses Modell wird geladen — bei großen Modellen kann das etwas dauern',
@@ -2592,6 +2597,8 @@ export const de: Record<keyof typeof en, string> = {
     'Das KI-Modell antwortet nicht mehr. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
   // F-02 (Audit 2026-07-16): Der Sidecar hat mitten in der Generierung einen Fehler im offenen
   // Stream gemeldet (ChatStreamError). Inhaltsfrei — der strukturelle Grund geht nur ins lokale Log.
+  'main.chat.connectionLost':
+    'Das KI-Modell wurde beendet, bevor die Antwort fertig war. Schick deine Nachricht noch einmal — wenn das öfter passiert, starte das Modell im KI-Modell-Bereich neu.',
   'main.chat.streamError':
     'Beim KI-Modell ist ein Fehler aufgetreten, bevor die Antwort fertig war. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
@@ -3589,6 +3596,8 @@ export const de: Record<keyof typeof en, string> = {
     '{count} Quelldokumente sind nicht mehr im Arbeitsbereich vorhanden',
   'review.summary.truncated':
     'Die erzeugte Antwort ist möglicherweise unvollständig — sie wurde am Ausgabelimit des Modells abgeschnitten.',
+  'review.summary.stopped':
+    'Die erzeugte Antwort ist unvollständig — das KI-Modell wurde beendet oder gewechselt, bevor sie fertig war.',
   'review.summary.generation': 'Erstellungsdetails',
   'review.summary.model': 'Modell',
   'review.summary.generatedAt': 'Erstellt',

@@ -9,6 +9,7 @@ import {
   FAST_MAX_TOKENS,
   FAST_TEMPERATURE,
   isExceedContextError,
+  isRuntimeConnectionLostError,
   isRuntimeUnresponsiveError,
   LlamaRuntime,
   readChatSSE,
@@ -515,6 +516,114 @@ describe('LlamaRuntime — the wait for the response headers (#594)', () => {
     expect(out).toEqual(['Answer'])
     vi.useRealTimers()
     await runtime.stop()
+  })
+})
+
+// ---- #600: a sidecar that dies under a request --------------------------------------------------------------------------
+//
+// A crash or an OS kill of llama-server mid-request used to reach the chat as undici's bare TypeError — "fetch failed" before
+// the headers, "terminated" once the body streamed — shown to the user as that raw text. Measured in Electron 43.7.7 by
+// killing a b11146 server at each phase (all within 3 ms of the kill). The runtime now throws `RuntimeConnectionLostError`,
+// which the chat maps to `main.chat.connectionLost`. Real loopback socket, real fetch: the shapes come from undici itself.
+
+/** A loopback llama-server that answers /health and then loses the chat request's socket in the given phase. */
+async function dyingSidecar(phase: 'before-headers' | 'mid-stream'): Promise<{
+  port: number
+  close: () => Promise<void>
+}> {
+  const server = createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json', connection: 'close' })
+      res.end('{"status":"ok"}')
+      return
+    }
+    req.resume()
+    req.on('end', () => {
+      if (phase === 'mid-stream') {
+        res.writeHead(200, { 'content-type': 'text/event-stream' })
+        res.write(chatChunk('Lighthouses'))
+        // Let the first chunk reach the reader, then the process "dies".
+        setImmediate(() => res.socket?.destroy())
+      } else {
+        req.socket.destroy()
+      }
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  return {
+    port: (server.address() as AddressInfo).port,
+    close: () => {
+      server.closeAllConnections()
+      return new Promise<void>((r) => server.close(() => r()))
+    }
+  }
+}
+
+describe('LlamaRuntime — a sidecar that dies under the request (#600)', () => {
+  const startOpts: RuntimeStartOptions = { modelId: 'qwen3-4b-instruct-q4', modelPath: '/models/x.gguf', contextTokens: 4096 }
+  const ask = [{ role: 'user' as const, content: 'hi' }]
+
+  async function runAgainst(port: number, signal?: AbortSignal): Promise<{ out: string[]; err: unknown }> {
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn: fakeSpawn().spawn,
+      findPort: async () => port,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    const out: string[] = []
+    let err: unknown = null
+    try {
+      for await (const t of runtime.chatStream(ask, { signal })) out.push(t)
+    } catch (e) {
+      err = e
+    }
+    await runtime.stop()
+    return { out, err }
+  }
+
+  it.each([['before-headers' as const], ['mid-stream' as const]])(
+    'the socket closes %s ⇒ RuntimeConnectionLostError, never the raw undici TypeError',
+    async (phase) => {
+      const sidecar = await dyingSidecar(phase)
+      const { out, err } = await runAgainst(sidecar.port)
+      expect(isRuntimeConnectionLostError(err)).toBe(true)
+      // The log line keeps undici's reason and socket code — the only trace of why the sidecar went.
+      expect((err as Error).message).toMatch(/\((terminated|fetch failed): [A-Z_]+\)\.$/)
+      expect(out).toEqual(phase === 'mid-stream' ? ['Lighthouses'] : [])
+      await sidecar.close()
+    }
+  )
+
+  it('a request to a sidecar that is already gone (connection refused) ⇒ RuntimeConnectionLostError', async () => {
+    const sidecar = await dyingSidecar('before-headers')
+    const runtime = new LlamaRuntime(startOpts, {
+      binPath: '/bin/llama-server',
+      spawn: fakeSpawn().spawn,
+      findPort: async () => sidecar.port,
+      healthIntervalMs: 1
+    })
+    await runtime.start()
+    await sidecar.close() // the process died after its health check — nothing listens on the port now
+    let err: unknown = null
+    try {
+      for await (const _t of runtime.chatStream(ask)) void _t
+    } catch (e) {
+      err = e
+    }
+    expect(isRuntimeConnectionLostError(err)).toBe(true)
+    expect((err as Error).message).toContain('(fetch failed: ECONNREFUSED)')
+    await runtime.stop()
+  })
+
+  it('a Stop that landed first stays a Stop, not a lost connection', async () => {
+    const sidecar = await dyingSidecar('before-headers')
+    const stop = new AbortController()
+    stop.abort()
+    const { err } = await runAgainst(sidecar.port, stop.signal)
+    expect((err as Error).name).toBe('AbortError')
+    expect(isRuntimeConnectionLostError(err)).toBe(false)
+    await sidecar.close()
   })
 })
 

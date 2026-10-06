@@ -13,7 +13,7 @@ import type {
   RuntimeStartOptions
 } from './index'
 import { createMockRuntime } from './mock'
-import { createLlamaRuntime } from './llama'
+import { createLlamaRuntime, RuntimeConnectionLostError } from './llama'
 import { createPlacementParser, recordModelPlacement } from './placement'
 import { probeGpuDevices } from './gpu'
 import { displayDevice } from '../../../shared/gpu-rules'
@@ -869,7 +869,10 @@ class LadderRuntime implements ModelRuntime {
     messages: ChatMessage[],
     options?: RuntimeChatOptions
   ): AsyncGenerator<string, void, unknown> {
-    if (!this.inner) throw new Error('Runtime is not started')
+    // #600: only a runtime captured before it was stopped gets here. After a deliberate stop the
+    // caller's turn is already aborted (the model-stop hook), so it counts as a Stop; after a crash
+    // restart the model really is gone — the typed error gives the user words, not this text.
+    if (!this.inner) throw new RuntimeConnectionLostError()
     // #39: the first streamed chunk — an answer token, or in Deep mode a reasoning delta
     // that arrives before any answer token — proves the one-time prefill is done, so the
     // Chat warm-up hint must stop claiming the model is still warming up. Mark on either.

@@ -89,7 +89,7 @@ async function pauseEngineUsers(ctx: AppContext, families: readonly string[]): P
   const stops: Array<Promise<unknown>> = []
   if (families.includes('llama_cpp')) {
     stops.push(
-      ctx.runtime.stop(),
+      ctx.runtime.stop({ startFollows: true }), // the update's resume starts it again (#600)
       ctx.embedder.suspend?.() ?? Promise.resolve(),
       ctx.reranker?.suspend?.() ?? Promise.resolve(),
       ctx.vision?.releaseRuntime?.() ?? Promise.resolve(),

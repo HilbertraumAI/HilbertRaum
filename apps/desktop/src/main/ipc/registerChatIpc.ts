@@ -302,7 +302,8 @@ export function registerChatIpc(ctx: AppContext): void {
         conversationId,
         'Chat generation failed',
         // F2: on regenerate the destructive delete runs INSIDE this runFn (slot held) and is
-        // restored on a non-abort failure, so a failed regenerate never leaves the turn answer-less.
+        // restored when it fails with nothing in its place, so a failed regenerate never leaves the
+        // turn answer-less (any thrown reason, and a model stop, since #600).
         withRegenerateGuard(ctx.db, conversationId, regenerate, (signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings) =>
           generateAssistantMessage(ctx.db, runtime, conversationId, {
             signal,

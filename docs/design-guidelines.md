@@ -1592,6 +1592,46 @@ Engineering record: `architecture.md` "In-app engine updates". Code cites this s
 `main.engine.{nothingToUpdate, updateBusy}` (en + de). **Tests:** `EngineUpdate.test.tsx`,
 `ModelsScreen.test.tsx` (the deep-link row).
 
+### 11.21 An answer the AI model's stop, switch or crash interrupted — design record (IMPLEMENTED 2026-10-06, #600)
+
+_What the chat says when the AI model is stopped, switched or crashes while an answer is being
+written. Engineering record: `architecture.md` CB-5 "#600 amendment". Code cites this section as
+**§11.21**._
+
+**Decisions** (owner, 2026-10-06).
+1. **A stop the user caused ends cleanly, and the answer says so.**
+   - Stopping or switching the model on the AI Model screen ends the answer like the chat's own
+     Stop: no error, and the text so far is kept.
+   - Unlike a Stop, the user usually did this from another screen, so the answer carries a lasting
+     label: **"Reply stopped"** (DE „Antwort gestoppt“). Its tooltip reads "The AI model was stopped or
+     switched before this reply was finished."
+   - It is deliberately not "Reply cut off". That label means the model ran out of room, and its
+     context-window advice would be wrong here. Older app versions show it on any unknown cause, so
+     the marker lives in its own field, which they ignore.
+2. **A question with no answer says why.** If the model had not written a word yet (common on CPU:
+   reading a long question takes minutes), the question gets the same quiet note: "Not answered —
+   the AI model was stopped." (DE „Nicht beantwortet – das KI-Modell wurde beendet.“). It shows only
+   while no answer follows the question.
+3. **"Try again" never costs the previous answer.** A re-ask that the stop cut keeps the previous
+   complete answer and drops the half-written one. The user acted on the model, not on the answer.
+4. **No confirmation dialog; a note where the decision is made.** While an answer is being written,
+   the running model's card on the AI Model screen says: "An answer is being written. Stopping or
+   switching the model ends it — the text so far is kept." Stop stays one click (§1: calm over
+   clever).
+5. **A crash is an error, in words.** When the model's program dies (a crash, Task Manager, an
+   antivirus tool), the chat shows "The AI model stopped before the answer was finished. Send your
+   message again — if this keeps happening, restart the model on the AI Model screen." It is never
+   the raw "terminated" / "fetch failed". The unfinished text is not kept (the F-02 rule), and the
+   German screen name follows §7: „im KI-Modell-Bereich“.
+
+**Look.** Both notes reuse the "Reply cut off" marker's markup (`.msg-truncated`, ⚠ glyph,
+`role="note"`, cause in the tooltip): a quiet labelled line, never colour-only (§9). The card note is a
+`.hint` with `role="status"`.
+
+**Copy:** `chat.endedEarly.{label, hint.model}`, `chat.unanswered.model`, `models.answeringNote`,
+`main.chat.connectionLost`, `review.summary.stopped` (en + de). **Tests:** `TruncatedNotice.test.tsx`
+(#600 block), `ModelsScreen.test.tsx` (the answering note), `model-stop-mid-answer.test.ts`.
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

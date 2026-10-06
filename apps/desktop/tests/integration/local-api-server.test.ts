@@ -24,6 +24,8 @@ interface Harness {
   /** Rotate the access key the server validates against (the P4 regenerate flow). */
   setToken: (t: string) => void
   setAdmitsWork: (v: boolean) => void
+  /** How many admission checks ran — each request's `tryAdmit` asks once, synchronously before it parks. */
+  admitChecks: () => number
   stopAll: () => Promise<void>
 }
 
@@ -70,6 +72,7 @@ async function makeHarness(opts?: {
   }
   let docTask = false
   let admits = true
+  let admitChecks = 0
   const token = 'hr-' + 'a'.repeat(43)
   let liveToken = token
   const server = new LocalApiServer({
@@ -82,7 +85,10 @@ async function makeHarness(opts?: {
       setExternalPreemption: (hook) => mgr.setExternalPreemption(hook)
     },
     hasActiveDocTask: () => docTask,
-    admitsWork: () => admits,
+    admitsWork: () => {
+      admitChecks++
+      return admits
+    },
     estimateBusySeconds: () => 42,
     appVersion: '0.0.0-test',
     queueWaitMs: opts?.queueWaitMs,
@@ -101,6 +107,7 @@ async function makeHarness(opts?: {
     setDocTask: (b) => (docTask = b),
     setToken: (t) => (liveToken = t),
     setAdmitsWork: (v) => (admits = v),
+    admitChecks: () => admitChecks,
     stopAll: async () => {
       await server.stop()
       await mgr.stop()
@@ -575,6 +582,40 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     h.sources[1]?.push('a')
     await inAppPull
     await inApp.return()
+  })
+
+  // #600: the user stopped or switched the chat model while a request ran (the runtime's model-stop hook
+  // calls endForModelChange BEFORE the kill). The client gets the model gate's own code — `model_starting`
+  // (a switch, with Retry-After) or `model_not_loaded` (a stop) — not the 502 runtime_unresponsive a
+  // killed sidecar used to produce (measured on master 2026-10-06: 502 / in-band runtime_error).
+  it.each([
+    ['model_not_loaded' as const, false],
+    ['model_starting' as const, true]
+  ])('a model change before any bytes → 503 %s for the running request and the one queued behind it (Retry-After: %s)', async (code, retryAfter) => {
+    const h = await makeHarness({ echo: false })
+    const running = post(h, { messages: [{ role: 'user', content: 'x' }] })
+    await waitFor(() => h.sources.length === 1) // generating, nothing sent yet
+    const queued = post(h, { messages: [{ role: 'user', content: 'y' }] })
+    await waitFor(() => h.admitChecks() === 2) // parked in the one-deep queue
+    h.server.endForModelChange(code)
+    for (const res of [await running, await queued]) {
+      expect(res.status).toBe(503)
+      expect(((await res.json()) as { error: { code: string } }).error.code).toBe(code)
+      expect(res.headers.has('retry-after')).toBe(retryAfter)
+    }
+  })
+
+  it('a model change mid-stream → in-band model_starting frame, closed WITHOUT [DONE] (#600)', async () => {
+    const h = await makeHarness({ echo: false })
+    const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream: true })
+    await waitFor(() => h.sources.length === 1)
+    h.sources[0].push('partial ')
+    const res = await resPromise // the headers ride the first delta
+    h.server.endForModelChange('model_starting')
+    const payloads = ssePayloads(await res.text())
+    expect(payloads).not.toContain('[DONE]')
+    const last = JSON.parse(payloads[payloads.length - 1]) as { error?: { code: string } }
+    expect(last.error?.code).toBe('model_starting')
   })
 
   it('server stop mid-stream (the lock teardown): error frame, no [DONE], listener gone', async () => {

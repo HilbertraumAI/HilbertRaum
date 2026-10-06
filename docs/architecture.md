@@ -1430,7 +1430,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       **Left open:**
       - **#598:** a hung prefill on b11146 stays unbounded, and b9849 cuts a long one at 120 s.
       - **#599:** a running server's liveness is never re-checked.
-      - **#600:** a model stop mid-answer shows "fetch failed".
+      - **#600:** a model stop mid-answer shows "fetch failed". *Closed by the #600 amendment below.*
 
       **Real app** (2026-10-05, DesktopDiT, dev build, b11146 Vulkan, the 4B on the GTX 1070 Ti). The
       sidecar was frozen with `NtSuspendProcess` just before a chat.
@@ -1443,9 +1443,116 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       socket and real `fetch`), `read-chat-sse.test.ts` "SSE comment pings in the stream phase
       (#594)", `combine-signals.test.ts` `disarmTimeout()`, and `local-api-server.test.ts` "502
       runtime_unresponsive, slot freed".
+    - **#600 amendment (2026-10-06) — the model stopped, switched or crashed mid-answer.** The facts:
+      - **What users saw** (real app on master, DesktopDiT, b11146):
+        - A stop or a switch mid-answer showed "terminated" and lost the partial answer. Only an abort
+          keeps a partial; this was a killed socket.
+        - A request still waiting for its headers showed "fetch failed".
+        - A re-ask followed by a stop restored the old answer, but with the raw error.
+        - A CPU-mode crash then showed "fetch failed" on every later turn, because the status still
+          says running (#599).
+        - The local API answered 502 `runtime_unresponsive` or an in-band `runtime_error`.
+      - **undici's shapes** (Electron 43.7.7, a b11146 server killed at each phase, all within 3 ms):
+        a queued request → `TypeError: fetch failed` (cause `ECONNRESET`); prefill or mid-stream →
+        `TypeError: terminated` (`ECONNRESET`); a new request to the dead port → "fetch failed"
+        (`ECONNREFUSED`).
+      - **On POSIX** a stop is a SIGTERM. llama-server then holds an open stream silently for 30–57 s,
+        with no clean end (curl exit 18), and the app SIGKILLs it after its 2 s grace. With the
+        client gone first it exits in 0.8 s (WSL, the b11146 Linux build).
+      - **A switch first hashes the new model's weights** (17 s for a cold 9B; minutes from a slow
+        drive). The old model keeps answering meanwhile.
+
+      **Owner decisions (2026-10-06).**
+      - End in-flight work at the kill point, not at the click, and only for a deliberate stop or
+        switch. There is no wait before the kill, and the crash restart is excluded.
+      - Keep the partial with its own "Reply stopped" marker, never the "Reply cut off" flag.
+      - A re-ask cut by a model stop keeps its previous complete answer.
+      - The scope is chat, document answers and the local API. Document tasks keep their honest
+        failure: a cancelled task is silent on the Documents screen. Skill runs move to #606.
+      - A crash shows `main.chat.connectionLost` and drops the partial (the F-02 rule).
+      - A question that got no answer is marked; a calm note on the AI Model card replaces any dialog.
+
+      **As built.**
+      - **The hook.** `RuntimeManager.setModelStopHook` is called from `doStop(kind)` after
+        `current` is cleared and before `stopping.stop()`, synchronously, for `stop` and `switch`;
+        `forceRestart` passes `restart` and skips it. A wait there would let a GPU crash queue a
+        `forceRestart` of the model just stopped. Lock and quit abort first anyway, and the first
+        abort reason wins.
+      - **`endWorkOnModelStop`** (`ipc/model-stop.ts`, wired in `main/index.ts`) ends, in order:
+        - the local API's request (`endForModelChange`). It goes first because a turn ended inside
+          its compaction pre-pass re-enters the gate;
+        - a deep-index build;
+        - every `inFlightStreams` controller, with `modelStopAbortReason()`: an AbortError-named
+          DOMException tagged in a WeakSet (`runtime/model-stop.ts`).
+      - **The gate** returns at once for an in-app call whose turn is already aborted, so such a call
+        no longer pre-empts the external lane or stamps `lastPreemptedAt`.
+      - **`persistAssistantMessage`** stamps `endedEarly: 'model'` from that reason. It is a new
+        nullable column, `messages.ended_early`, because an older app reads an unknown
+        `truncated_cause` as "raise the context size", while it ignores a new column. The column is
+        carried through `DeletedMessage`, read tolerantly, and its values `user`/`lock` are
+        reserved for #612.
+      - **`withRegenerateGuard`** now holds the model-stop rules for every turn:
+        - a re-ask the stop cut deletes its saved partial and restores the predecessor, in one
+          transaction (a failed restore keeps the partial). It keys on the saved answer's
+          `endedEarly`, not the signal, so a stop landing after a complete answer was saved keeps it;
+        - a re-ask that threw with nothing saved restores its predecessor for any reason. Before,
+          aborts were skipped, so a Stop during document search lost the answer — reachable through
+          "Answer without it" / "Run with <skill>";
+        - a turn left with no answer marks its question (`markUnansweredQuestion`, last visible row
+          only).
+      - **A crash** surfaces as `RuntimeConnectionLostError`, raised by `LlamaRuntime.chatStream` on
+        a socket-loss `TypeError` (fetch and body read) when the caller's signal is clear, and by the
+        ladder's "not started" guard. It maps to `main.chat.connectionLost`, which names the
+        "KI-Modell-Bereich" in German per the design guide. A Stop always wins a tie.
+      - **The local API** reads the code back from the abort reason: `model_not_loaded` /
+        `model_starting` as a 503, or the same codes in-band. A queued request gets the same 503, not 429 `busy`.
+        A stop the app follows with a start itself (an engine update, the demo → real engine restart)
+        passes `stop({ startFollows: true })` and reads as a switch.
+      - **The UI.**
+        - "Reply stopped" and its hint on the answer; "Not answered — the AI model was stopped." on
+          the question.
+        - `RuntimeStatus.answering` (in-flight streams) drives the AI Model card's note, which polls
+          until it clears.
+        - The evidence snapshot's `answerStopped` makes the pack say the answer was stopped.
+        - Design record: design-guidelines §11.21.
+
+      **Not covered.**
+      - A Stop during the pre-generation slot handoff (REL-3) ends before the guard runs; its question
+        is not marked.
+      - Document tasks fail with `main.task.genericFailure` on a stop (by decision).
+      - The stop ends every in-flight chat turn, a deterministic extraction that might not have needed
+        the model included; it ends as a Stop would, and `answering` counts it the same way.
+      - A stopped bank-statement narration still gets its totals block (#612).
+      - Skill runs are left to #606.
+      - Answers ended by the Stop button, lock or quit keep no marker (#612).
+      - There is still no resend for an unanswered question (#613).
+
+      **Tests.**
+      - `model-stop-mid-answer.test.ts`: the real manager, hook body, chat stream and
+        `generateAssistantMessage` against a runtime that dies like the sidecar; plus the hook
+        order.
+      - `runtime-manager.test.ts` "the model-stop hook (#600)".
+      - `chat-stream-regenerate.test.ts` "#600".
+      - `llama-runtime.test.ts` "a sidecar that dies under the request (#600)": a real loopback
+        socket and real fetch.
+      - `chat-stream.test.ts`, `local-api-server.test.ts`, `chat.test.ts` "ended early",
+        `evidence-snapshot.test.ts`, `evidence-pack-html.test.ts`, `TruncatedNotice.test.tsx` and
+        `ModelsScreen.test.tsx`.
+      - All 16 rules were mutation-checked; the end-to-end test fails with "terminated" on the pre-fix
+        code.
+
+      **Real app** (2026-10-06, DesktopDiT, dev build over CDP; the same script as the master run).
+      - A stop or a switch mid-answer resolves with the partial marked.
+      - A re-ask followed by a stop keeps its 976-character predecessor.
+      - A GPU crash and a CPU crash show the connectionLost copy, and so does the next turn on the
+        dead CPU sidecar.
+      - A stop before the first word marks the question.
+      - Local API: a stop → in-band `model_not_loaded` / 503 `model_not_loaded`; a switch →
+        `model_starting`.
   - **Friendly-error chain** in `withChatStream` (rethrow-friendly, mapped copy on BOTH the `chat:error`
     event and the invoke rejection): `RuntimeUnresponsiveError` → `main.chat.runtimeUnresponsive`,
-    `EmptyCompletionError` → `main.chat.emptyCompletion`, overflow → `main.model.contextExceeded`, else
+    `RuntimeConnectionLostError` → `main.chat.connectionLost` (#600), `EmptyCompletionError` →
+    `main.chat.emptyCompletion`, `ChatStreamError` → `main.chat.streamError`, overflow → `main.model.contextExceeded`, else
     raw. Composition: CB-2+CB-4 (a regenerate that produces nothing never loses the prior answer, whether
     it stops or completes empty); CB-3+CB-6 (the fence reorder supplies the compaction pre-pass's
     `reservedTokens`).
@@ -3495,6 +3602,14 @@ queueing a second one. The crash wiring in `main/index.ts` calls `runtimeRef.for
 enqueue separately so a concurrent user start could interleave between them; (c) have the manager
 subscribe to the runtime's unexpected-exit and clear `current`/`last` itself — more plumbing for no
 extra guarantee. `forceRestart` is atomic within the queue and easiest to test.)
+
+**#600 amendment (2026-10-06).**
+- The answer the crash interrupted now ends with `main.chat.connectionLost` ("The AI model stopped
+  before the answer was finished…"), not undici's raw "terminated". The runtime raises
+  `RuntimeConnectionLostError`; see the CB-5 "#600 amendment".
+- `forceRestart` passes `restart` to `doStop`, so the model-stop hook (which ends in-flight answers as
+  clean stops on a *deliberate* stop or switch) does not run. Those answers have already failed on
+  the dead socket.
 
 **Retry bound (no restart loop).** `gpuAutoDisabled` is persisted **before** the restart, so the
 ladder rebuilt inside `doStart` skips rung 1 and lands on CPU (`--device none`). A later crash is

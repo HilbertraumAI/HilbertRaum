@@ -1187,3 +1187,67 @@ describe('RuntimeManager generation gate (local-api P1)', () => {
     expect(mgr.isGenerating()).toBe(false)
   })
 })
+
+// #600 — a deliberate stop or switch of the chat model ends the work running on it FIRST (the model-stop
+// hook, wired in main/index.ts to `endWorkOnModelStop`), so each answer ends as a clean stop instead of
+// failing on the killed sidecar. The hook must run after the manager marks the model stopped (nothing new
+// may start on it meanwhile) and before the kill, with no wait in between; never for the crash restart.
+describe('the model-stop hook — a deliberate stop or switch ends in-flight work first (#600)', () => {
+  async function hookHarness(hook?: (kind: 'stop' | 'switch') => void) {
+    const order: string[] = []
+    const mgr = new RuntimeManager((opts) => ({
+      modelId: opts.modelId,
+      start: async () => {},
+      stop: async () => {
+        order.push(`kill ${opts.modelId}`)
+      },
+      health: async () => ({ healthy: true, message: '', port: null }),
+      // eslint-disable-next-line require-yield
+      chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+    }))
+    mgr.setModelStopHook(hook ?? ((kind) => order.push(`hook ${kind}, active: ${mgr.active()?.modelId ?? 'none'}`)))
+    await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+    return { mgr, order }
+  }
+
+  it.each([
+    ['Stop runtime', (mgr: RuntimeManager) => mgr.stop(), 'stop'],
+    // An engine update / the demo → real engine restart: the app starts the model again itself.
+    ['a stop the app follows with a start', (mgr: RuntimeManager) => mgr.stop({ startFollows: true }), 'switch'],
+    ['a switch to another model',(mgr: RuntimeManager) => mgr.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 }), 'switch']
+  ])('%s: the hook runs once the model is marked stopped, then the kill', async (_label, act, kind) => {
+    const { mgr, order } = await hookHarness()
+    await act(mgr)
+    expect(order).toEqual([`hook ${kind}, active: none`, 'kill a'])
+  })
+
+  it('the crash auto-restart (forceRestart) does not run it — that sidecar is dead and its answers already failed', async () => {
+    const { mgr, order } = await hookHarness()
+    await mgr.forceRestart({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+    expect(order).toEqual(['kill a'])
+  })
+
+  it('a hook that throws never blocks the stop', async () => {
+    const { mgr, order } = await hookHarness(() => {
+      throw new Error('boom')
+    })
+    await mgr.stop()
+    expect(order).toEqual(['kill a'])
+    expect(mgr.active()).toBeNull()
+  })
+
+  it('an in-app call whose turn is already aborted pre-empts nothing (the local API keeps its own stop code)', async () => {
+    // A turn the hook ended inside its compaction pre-pass still calls the runtime (compaction swallows
+    // the abort); that call must not label the external request `preempted_by_user`.
+    const { mgr, runtime } = await gatedHarness()
+    const preempt = vi.fn()
+    mgr.setExternalPreemption(preempt)
+    const stopped = new AbortController()
+    stopped.abort()
+    const gen = runtime.chatStream([{ role: 'user', content: 'q' }], { signal: stopped.signal })
+    expect((await gen.next()).done).toBe(true)
+    expect(preempt).not.toHaveBeenCalled()
+    expect(mgr.isGenerating()).toBe(false)
+    mgr.setExternalPreemption(null)
+  })
+})

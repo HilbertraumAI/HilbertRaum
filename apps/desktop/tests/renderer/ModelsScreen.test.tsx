@@ -617,6 +617,16 @@ describe('ModelsScreen — one "Use this model" action (beta #27, D70 collapse)'
     expect(screen.queryByRole('button', { name: t('en', 'models.use') })).not.toBeInTheDocument()
   })
 
+  it('says that stopping ends the answer being written — a calm note, no dialog (#600)', async () => {
+    stub({ models: [model({ state: 'running' })], activeModelId: 'qwen3-4b-instruct-q4' })
+    ;(window.api as unknown as { getRuntimeStatus: () => Promise<RuntimeStatus> }).getRuntimeStatus =
+      vi.fn(async () => ({ running: true, modelId: 'qwen3-4b-instruct-q4', port: 1, healthy: true, message: '', answering: true }))
+    render(<ModelsScreen />)
+    expect(await screen.findByText(t('en', 'models.answeringNote'))).toBeInTheDocument()
+    // The Stop action itself is unchanged: enabled, one click.
+    expect(screen.getByRole('button', { name: t('en', 'models.stopRuntime') })).toBeEnabled()
+  })
+
   it('still offers the demo-mode button on the zero-weights developer card (no Use action)', async () => {
     stub({ models: [model({ state: 'missing', startableAsMock: true })] })
     render(<ModelsScreen />)

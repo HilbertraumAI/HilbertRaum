@@ -525,6 +525,22 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     return () => clearInterval(timer)
   }, [runtime?.startingModelId])
 
+  // #600: while an answer is being written, poll the same small status so the card's "an answer is
+  // being written" note disappears once the answer finishes (the screen is usually opened mid-answer
+  // from the chat). Stops on its own when `answering` clears; while a model starts (a switch: the old one
+  // still answers meanwhile) the poll above already refreshes the same status.
+  useEffect(() => {
+    if (!runtime?.answering || runtime.startingModelId) return
+    const timer = setInterval(() => {
+      void Promise.resolve(window.api.getRuntimeStatus?.())
+        .then((rt) => {
+          if (mountedRef.current && rt) setRuntime(rt)
+        })
+        .catch(() => undefined)
+    }, RUNTIME_POLL_MS)
+    return () => clearInterval(timer)
+  }, [runtime?.answering, runtime?.startingModelId])
+
   // F2/B1: remember the downloading model's NAME while the catalog still lists it, so a terminal
   // result stays named after a refresh that drops the entry or flips it to `installed`.
   useEffect(() => {
@@ -1074,6 +1090,14 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             reinstall={engineReinstall(voiceEngineProblem)}
             t={t}
           />
+        )}
+
+        {/* #600: a calm note, not a confirmation dialog (owner decision): an answer is being written
+            on this model, and stopping or switching ends it — its text so far is kept. */}
+        {m.state === 'running' && runtime?.answering && (
+          <p className="hint" role="status">
+            {t('models.answeringNote')}
+          </p>
         )}
 
         <div className="model-row-actions">

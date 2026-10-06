@@ -438,6 +438,12 @@ export const en = {
   // `Message.truncatedCause`, so "raise the context size" is offered only when the window really
   // was the reason. A legacy row without a cause reads as '.context' (the pre-#498 advice).
   'chat.truncated.label': 'Reply cut off',
+  // #600: a reply the user's model stop or switch ended before it was finished — its own label, not
+  // "Reply cut off" (that one means the model ran out of room). The hint names the cause.
+  'chat.endedEarly.label': 'Reply stopped',
+  'chat.endedEarly.hint.model': 'The AI model was stopped or switched before this reply was finished.',
+  // #600: under a question the model stop left with no answer at all.
+  'chat.unanswered.model': 'Not answered — the AI model was stopped.',
   'chat.truncated.hint.context':
     'The model ran out of room to finish this answer. Ask it to continue, start a new chat, or raise the context size on the AI Model screen.',
   'chat.truncated.hint.cap':
@@ -1385,6 +1391,9 @@ export const en = {
   'models.use': 'Use this model',
   'models.useTitle': 'Make this your model and start it so you can chat',
   'models.stopRuntime': 'Stop runtime',
+  // #600: a calm note on the running model's card while an answer is being written — no dialog.
+  'models.answeringNote':
+    'An answer is being written. Stopping or switching the model ends it — the text so far is kept.',
   'models.startMock': 'Try in demo mode',
   'models.starting': 'Starting…',
   'models.startingTitle': 'This model is loading — it can take a little while for large models',
@@ -2627,6 +2636,9 @@ export const en = {
     'The AI model stopped responding. Try again — if it keeps happening, restart the model on the AI Model screen.',
   // F-02 (audit 2026-07-16): the sidecar reported a mid-generation failure in-band on the open
   // stream (ChatStreamError). Content-free — the structural reason goes to the local log only.
+  // #600: the model's sidecar died while the answer was being written (a crash, an OS kill).
+  'main.chat.connectionLost':
+    'The AI model stopped before the answer was finished. Send your message again — if this keeps happening, restart the model on the AI Model screen.',
   'main.chat.streamError':
     'The AI model ran into an error before finishing the answer. Try again — if it keeps happening, restart the model on the AI Model screen.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
@@ -3655,6 +3667,9 @@ export const en = {
     '{count} source documents are no longer present in the workspace',
   'review.summary.truncated':
     'The generated answer may be incomplete — it was cut off at the model’s output limit.',
+  // #600: the answer under review was ended early by a model stop or switch.
+  'review.summary.stopped':
+    'The generated answer is incomplete — the AI model was stopped or switched before it was finished.',
   'review.summary.generation': 'Generation details',
   'review.summary.model': 'Model',
   'review.summary.generatedAt': 'Generated',

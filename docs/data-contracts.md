@@ -368,7 +368,12 @@ both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invali
 502 `runtime_unresponsive` · 503 `model_starting`/`model_not_loaded`/`workspace_locked`/
 `server_stopped`. **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
 `{"error":{type:'server_error', code:'preempted_by_user'}}` frame, stream closes **without**
-`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. Baseline
+`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. **A deliberate model
+stop or switch (#600)** ends the active request first with the model gate's own code — `model_not_loaded`
+after a stop, `model_starting` (+ Retry-After) after a switch or a stop the app follows with a start
+(`stop({ startFollows })`: an engine update, the demo → real engine restart); 503 before any bytes, the
+same in-band frame after, and the same 503 for a request queued behind it (`LocalApiServer.endForModelChange`,
+called from the runtime's model-stop hook). Baseline
 limits: headersTimeout 10 s, requestTimeout DISABLED (CPU generations exceed 300 s; watchdogs +
 a 15 s SSE drain-timeout reclaim wedged slots), body-idle 30 s (body phase only),
 maxConnections 16. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
@@ -442,6 +447,13 @@ below for the shape and the whitelist that parses it.
 only alongside `truncated: true`. NULL on every complete reply and every pre-#498 row — a
 truncated legacy row reads back as `'context'`, the flag's historical meaning — and it is
 carried verbatim through the regenerate delete/restore snapshot (`DeletedMessage`).
+`messages.ended_early` (#600) is additive and nullable: `'model' | 'user' | 'lock'` (`EndedEarly`),
+surfaced as `Message.endedEarly`; only `'model'` is written (the user stopped or switched the chat model
+mid-turn; `'user'` / `'lock'` are reserved for #612). On an assistant row the partial was cut ("Reply
+stopped"; stamped by `persistAssistantMessage` from the turn's abort reason, `isModelStopAbort`); on a
+user row the question got no answer (`markUnansweredQuestion`, last visible row only). Its OWN column,
+never a `truncated_cause` value — an older app reads an unknown cause as "raise the context size" and
+ignores this column. Unknown values read back as undefined; carried verbatim through `DeletedMessage`.
 ✅ **Title:** new conversations are `"New chat"`; first user message sets the title (≤60 chars),
 later messages don't overwrite it. Conversations list newest-updated first.
 (Phase 42: the default is persist-canonical English — `t('en', 'main.chat.defaultTitle')`,
@@ -460,6 +472,14 @@ never replayed (D6) — see "Answer-depth modes" below.
 **Cancellation:** `ipc/registerChatIpc.ts` keeps a per-conversation `AbortController` map;
 `stopGeneration(conversationId)` aborts it → `chatStream` stops on `options.signal`, the partial
 reply is persisted, a normal `done` fires.
+**Model stop or switch mid-turn (#600, additive — channel shape unchanged):** the runtime's
+model-stop hook aborts every in-flight turn with `modelStopAbortReason()` BEFORE the sidecar is killed,
+so the turn ends exactly like a Stop (`done`, partial persisted) — the partial carries
+`endedEarly: 'model'`, a re-ask whose saved answer carries that marker restores its predecessor
+instead (one transaction; a complete answer saved before the stop landed stays), and a turn with no
+answer marks its question. A sidecar that DIES under a turn instead (crash, OS kill) rejects with
+`RuntimeConnectionLostError` → `chat:error:<id>` with the friendly `main.chat.connectionLost` copy; its
+partial is not persisted (the F-02 rule).
 **Mid-stream runtime failure (audit 2026-07-16 F-02, additive — channel shape unchanged):** an
 in-band SSE error frame from the runtime rejects the stream (`ChatStreamError`) instead of
 ending it cleanly, so a partial can never persist as a complete answer; it reaches the renderer
@@ -904,6 +924,10 @@ head's own weights + KV.
   speed (`effectiveRead` or "not measured yet") / drive write / tokens-sec / profile /
   recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects
   the persisted value via `getAppStatus`.
+- **`RuntimeStatus.answering?`** (issue #600) — `true` while a chat or document answer streams on
+  the running model (`inFlightStreams` non-empty), added by the `getRuntimeStatus` handler; absent
+  otherwise. The AI Model card shows a note then (stopping or switching ends that answer, keeping its
+  text) and polls the status until it clears.
 - **`RuntimeStatus.starting?`** (issue #107) — `{ elapsedMs, bytesTotal?, expectedMs? }`:
   present while `startingModelId` is (incl. the GPU-crash `forceRestart` window). The manager
   resolves `elapsedMs` (stamped with `startingModelId`, RE-stamped at queue-drain in `doStart`
@@ -1302,7 +1326,9 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   resolver branch runs, and `packId`/`articlePath` are the source's stable locator
   carried through every export),
   `EvidenceGenerationSnapshot` (spec §18.3 but **every field optional** per plan §1.3 — absent
-  renders "Unavailable", never invented), `EvidenceLink`, `EvidenceReviewItem`,
+  renders "Unavailable", never invented; #600 added `answerStopped`, `true` when a model stop or switch
+  ended the answer early, so the pack says so instead of "No output truncation was recorded"),
+  `EvidenceLink`, `EvidenceReviewItem`,
   `EvidenceReadyGate`, `EvidenceReview`, `EvidenceReviewSummary`, `EvidenceReviewDetail`,
   `EvidenceExportFormat` ('html'|'pdf' — the write-side type; `EvidenceExportRecord.format`
   reads as the RAW stored string, see the service bullet), `EvidenceExportRecord`;

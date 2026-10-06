@@ -412,6 +412,9 @@ export function renderEvidencePackHtml(model: EvidencePackModel): string {
   if (model.honesty.answerTruncated === true) {
     // Reused review copy — the identical §15.2 statement the summary view shows.
     warning(s('review.summary.truncated'))
+  } else if (model.honesty.answerStopped === true) {
+    // #600: ended early by a model stop or switch — not a truncation, and never "no truncation".
+    warning(s('review.summary.stopped'))
   } else {
     push(`<p class="hint">${s('packExport.coverage.noTruncationRecord')}</p>`)
   }

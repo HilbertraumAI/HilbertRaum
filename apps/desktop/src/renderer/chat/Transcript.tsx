@@ -198,6 +198,16 @@ export const Transcript = memo(function Transcript({
     return last && last.role === 'assistant' ? last.id : undefined
   }, [messages])
 
+  // #600: questions a model stop left with no answer — marked in the database, and still not
+  // followed by an answer (a later re-ask from that question would answer it).
+  const unansweredIds = useMemo(() => {
+    const ids = new Set<string>()
+    messages.forEach((m, i) => {
+      if (m.role === 'user' && m.endedEarly === 'model' && messages[i + 1]?.role !== 'assistant') ids.add(m.id)
+    })
+    return ids
+  }, [messages])
+
   // localizeServerCopy is an O(n) Map-lookup + two regex .exec over the WHOLE growing buffer; it
   // was run TWICE per ~40 ms flush (visible bubble + StreamAnnouncer). Compute it once and feed
   // both — behavior identical, half the work on the CPU-bound streaming path (perf audit F2).
@@ -231,6 +241,7 @@ export const Transcript = memo(function Transcript({
               m={m}
               t={t}
               isLast={m.id === lastAssistantId}
+              unanswered={unansweredIds.has(m.id)}
               onTryAgain={onTryAgain}
               onAnswerWithoutSkill={onAnswerWithoutSkill}
               onRunWithSkill={onRunWithSkill}
@@ -344,6 +355,7 @@ const MessageBlock = memo(function MessageBlock({
   m,
   t,
   isLast,
+  unanswered,
   onTryAgain,
   onAnswerWithoutSkill,
   onRunWithSkill,
@@ -369,6 +381,8 @@ const MessageBlock = memo(function MessageBlock({
   lang: UiLanguage
   /** True on the last assistant turn — gates the regenerate + "answer without it" affordances. */
   isLast: boolean
+  /** #600: a question a model stop left with no answer — shows the "Not answered" note. */
+  unanswered: boolean
   onTryAgain?: () => void
   onAnswerWithoutSkill?: () => void
   onRunWithSkill?: (installId: string) => void
@@ -585,6 +599,26 @@ const MessageBlock = memo(function MessageBlock({
               ⚠
             </span>
             <span>{t('chat.truncated.label')}</span>
+          </div>
+        )}
+        {/* #600: the user stopped or switched the model while this reply was being written. Its own
+            label, not "Reply cut off" (that one means the model ran out of room); the same quiet
+            labelled note, the cause in the tooltip. */}
+        {m.role === 'assistant' && m.endedEarly === 'model' && (
+          <div className="msg-truncated" role="note" title={t('chat.endedEarly.hint.model')}>
+            <span className="msg-truncated-glyph" aria-hidden="true">
+              ⚠
+            </span>
+            <span>{t('chat.endedEarly.label')}</span>
+          </div>
+        )}
+        {/* #600: …or before it wrote anything — the question stays, and says why it has no answer. */}
+        {m.role === 'user' && unanswered && (
+          <div className="msg-truncated" role="note">
+            <span className="msg-truncated-glyph" aria-hidden="true">
+              ⚠
+            </span>
+            <span>{t('chat.unanswered.model')}</span>
           </div>
         )}
         {/* #290: the per-answer speed line — decode tokens/sec, time to first token, token count —

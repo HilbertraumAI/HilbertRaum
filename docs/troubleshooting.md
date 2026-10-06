@@ -448,6 +448,38 @@ Everything keeps working; responses may just be a bit slower.
 
 ---
 
+## An answer says "Reply stopped", or a question says "Not answered"
+
+You stopped or switched the AI model while that answer was being written. The app ends the answer
+cleanly before it shuts the model down:
+
+- **"Reply stopped"** under an answer: the text so far is kept, and the label says it is not the
+  whole answer. Ask again if you need the rest.
+- **"Not answered — the AI model was stopped."** under a question: the model had not written a
+  word yet (on a computer without a graphics card, reading a long question can take minutes).
+  Start a model and send the question again.
+- If you pressed **Try again** and then stopped or switched the model, the previous complete
+  answer stays — the half-written new one is dropped.
+
+While an answer is being written, the AI Model screen says so on the running model's card before
+you stop or switch it.
+
+---
+
+## "The AI model stopped before the answer was finished"
+
+The AI model's program closed while it was answering — it crashed, or something on the computer
+ended it (Task Manager, an antivirus tool, too little free memory). The unfinished answer is not
+kept.
+
+- Send your message again. If the model was running on the graphics card, the app restarts it in
+  compatibility mode by itself (see above).
+- If it keeps happening, open the **AI Model** screen, choose **Stop runtime**, then **Use this
+  model** to start it fresh. A smaller model is the next step if it still happens — see
+  [The app feels slow](#the-app-feels-slow) for what fits your computer.
+
+---
+
 ## Importing a PDF didn't extract any text
 
 Some PDFs are scanned images with no embedded text. The app detects this and marks the file
@@ -769,8 +801,8 @@ A connected app usually surfaces an HTTP status. Translated:
 | **413** | The request was too large. | Send less text at once. |
 | **415** | The app did not send JSON. | Almost always a misconfigured client — check that you selected an OpenAI-compatible mode. |
 | **429** | HilbertRaum was busy with another answer, or your own chat interrupted this one. | Wait a moment and try again; the response says how long. |
-| **503 "model_not_loaded"** | No model is running. | Open HilbertRaum and start a model on the **AI Model** screen. |
-| **503 "model_starting"** | A model is loading right now. | Wait and retry; the response says roughly how long. |
+| **503 "model_not_loaded"** | No model is running — also the answer when you stop the model in HilbertRaum while the app is waiting. | Open HilbertRaum and start a model on the **AI Model** screen. |
+| **503 "model_starting"** | A model is loading right now — also the answer when you switch models in HilbertRaum while the app is waiting. | Wait and retry; the response says roughly how long. |
 | **502** | The model did not answer. | Check the app — the model may have crashed; the Diagnostics tab has details. |
 
 ### An app's request stopped halfway
@@ -778,6 +810,10 @@ A connected app usually surfaces an HTTP status. Translated:
 If you used HilbertRaum yourself while an outside app was generating, that is expected: your own
 turn always wins, and the app's request is cut short with a "retry" answer. The card tells you it
 just happened. The app can simply ask again.
+
+The same happens when you stop or switch the AI model in HilbertRaum while an outside app is
+generating: its answer ends with "model_not_loaded" (stopped) or "model_starting" (a new model is
+loading — retry shortly).
 
 ---
 

@@ -66,6 +66,7 @@ interface SnapshotMessageRow {
   citations_json: string | null
   coverage_json: string | null
   truncated: number | null
+  ended_early: string | null
   skill_id: string | null
   skill_title: string | null
 }
@@ -229,7 +230,7 @@ export function createEvidenceReviewFromMessage(
   const msg = prepareCached(
     db,
     `SELECT m.rowid AS rid, m.id, m.conversation_id, m.role, m.content, m.created_at,
-            m.citations_json, m.coverage_json, m.truncated, m.skill_id, s.title AS skill_title
+            m.citations_json, m.coverage_json, m.truncated, m.ended_early, m.skill_id, s.title AS skill_title
        FROM messages m LEFT JOIN skills s ON s.install_id = m.skill_id
       WHERE m.id = ?`
   ).get(messageId) as SnapshotMessageRow | undefined
@@ -268,6 +269,8 @@ export function createEvidenceReviewFromMessage(
     // Positive flag only: 1 = honestly recorded as cut off; NULL/0 = no truncation recorded
     // (null, not false — a pre-migration row never gains a "complete" claim).
     answerTruncated: msg.truncated === 1 ? true : null,
+    // #600: a model stop or switch ended this answer early — the pack must not call it complete.
+    answerStopped: msg.ended_early === 'model' ? true : null,
     answerMode: coverage?.mode ?? 'unknown'
   }
 

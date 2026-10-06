@@ -321,6 +321,20 @@ export class RuntimeManager {
    * fails a start or a stop.
    */
   private readonly changeListeners = new Set<() => void>()
+  /**
+   * #600: ends the work in flight on the model about to be killed — the composition seam registers
+   * one (`endWorkOnModelStop`: the local API's request, a deep-index build, the chat and document
+   * answers). Called from `doStop` for every stop and switch EXCEPT the crash restart
+   * (`forceRestart`: that sidecar is already dead and its answers have already failed):
+   *   - AFTER `current` is cleared, so nothing new can start on the dying model meanwhile;
+   *   - synchronously and BEFORE the kill, with no wait in between. Aborting is instant and an
+   *     answer's partial persists with no help from the sidecar, while a wait would open a window
+   *     in which a GPU crash queues a `forceRestart` of the model the user just stopped.
+   * Lock and quit abort their work first anyway; the second abort is a no-op (first reason wins).
+   * `kind` says whether a start follows ('switch') or not ('stop'). A throwing hook never blocks
+   * the stop.
+   */
+  private modelStopHook: ((kind: 'stop' | 'switch') => void) | null = null
 
   constructor(
     private readonly factory: RuntimeFactory,
@@ -353,6 +367,11 @@ export class RuntimeManager {
   /** Register/clear the external pre-emption hook (one consumer: local-API admission). */
   setExternalPreemption(hook: ((reason: string) => void) | null): void {
     this.externalPreemptionHook = hook
+  }
+
+  /** #600: register/clear the hook that ends in-flight work when the model is stopped (see field). */
+  setModelStopHook(hook: ((kind: 'stop' | 'switch') => void) | null): void {
+    this.modelStopHook = hook
   }
 
   /**
@@ -463,6 +482,12 @@ export class RuntimeManager {
         if (this.laneCounts['in-app'] > 0 || this.laneCounts.external > 1) {
           throw new ExternalGenerationBusyError()
         }
+      } else if (options?.signal?.aborted) {
+        // #600: an in-app call whose turn is already aborted generates nothing, so it pre-empts
+        // nothing either. A turn the model-stop hook ended inside its compaction pre-pass still
+        // reaches here (compaction swallows the abort); without this it would have labelled the
+        // local API's request `preempted_by_user` and stamped `lastPreemptedAt`.
+        return
       } else {
         try {
           this.externalPreemptionHook?.('in-app generation entered')
@@ -543,7 +568,12 @@ export class RuntimeManager {
     }
   }
 
-  async stop(): Promise<void> {
+  /**
+   * `startFollows`: the app stops the model only to start it again itself (an engine update, the
+   * demo → real engine restart). In-flight work then hears "switch", so a local-API client is told
+   * to retry (`model_starting`) rather than that a person must start a model (#600).
+   */
+  async stop(opts?: { startFollows?: boolean }): Promise<void> {
     // CODE-2 (full-audit 2026-07-11): cancel an in-flight start so it settles PROMPTLY
     // instead of holding the queue for the remaining health timeouts. The queue semantics
     // stay untouched (the doStop below still runs only after the start settles and acts on
@@ -558,7 +588,7 @@ export class RuntimeManager {
         .then(() => starting.stop())
         .catch(() => undefined)
     }
-    return this.enqueue(() => this.doStop())
+    return this.enqueue(() => this.doStop(opts?.startFollows === true ? 'switch' : 'stop'))
   }
 
   /**
@@ -594,7 +624,8 @@ export class RuntimeManager {
     this.startingSince = Date.now()
     this.emitChange()
     try {
-      return await this.enqueue(() => this.doStart(opts))
+      // #600: the crashed runtime's answers already failed — no model-stop hook on this stop.
+      return await this.enqueue(() => this.doStart(opts, 'restart'))
     } finally {
       // Clear ALL THREE (paired with startingModelId, here and in start()) — a stale
       // startingSince would attribute an old window's elapsed to the next start.
@@ -607,13 +638,13 @@ export class RuntimeManager {
     }
   }
 
-  private async doStart(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
+  private async doStart(opts: RuntimeStartOptions, stopKind: 'switch' | 'restart' = 'switch'): Promise<RuntimeStatus> {
     // CODE-3: a start that was already IN the queue when shutdown() armed the latch
     // (e.g. enqueued behind an in-flight start/stop) must not spawn either — re-check
     // before touching anything, so the factory is never invoked past the latch.
     if (this.stopped) throw shutdownError()
     // Restart cleanly on a model switch (spec §7.5).
-    if (this.current) await this.doStop()
+    if (this.current) await this.doStop(stopKind)
     // Fresh gate epoch for the new runtime: zeroes any count a misbehaving external
     // consumer leaked in the previous session (see gateEpoch).
     this.resetGenerationGate()
@@ -665,12 +696,20 @@ export class RuntimeManager {
     return this.status()
   }
 
-  private async doStop(): Promise<void> {
+  private async doStop(kind: 'stop' | 'switch' | 'restart'): Promise<void> {
     if (!this.current) return
     const stopping = this.current
     this.current = null
     this.last = null
     this.emitChange()
+    // #600: end the in-flight work first — after `current` is cleared, before the kill, no wait.
+    if (kind !== 'restart') {
+      try {
+        this.modelStopHook?.(kind)
+      } catch {
+        /* ending the answers is a courtesy to them; it must never block the stop itself */
+      }
+    }
     await stopping.stop()
 
     // The runtime is gone — no stream of its epoch can legitimately still count.

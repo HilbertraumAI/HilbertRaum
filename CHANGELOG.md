@@ -116,6 +116,22 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **Stopping or switching the AI model while it is answering now keeps the answer so far.** Before,
+  the chat showed "terminated" and everything written so far was lost. Now the answer ends cleanly,
+  keeps its text, and is labelled **Reply stopped**. A question the model had not started answering
+  says "Not answered — the AI model was stopped." If you pressed **Try again** and then stopped the
+  model, the previous complete answer stays. While an answer is being written, the AI Model screen
+  says that stopping or switching the model ends it (#600).
+- **When the AI model crashes in the middle of an answer, the chat says so in words.** It used to
+  show "terminated" or "fetch failed". Now it says "The AI model stopped before the answer was
+  finished" and what to do next (#600).
+- **Asking a document question again could delete the previous answer.** Choosing "Answer without
+  it" or "Run with" a skill, then pressing **Stop** while the documents were still being searched,
+  removed the previous answer and left nothing in its place. The previous answer now comes back
+  (#600).
+- **Apps connected through the local API learn when you stop or switch the model.** A request that
+  was running at that moment ends with "model_not_loaded" (stopped) or "model_starting" (another model
+  is loading — retry shortly), no longer with the crash error 502 (#600).
 - **A chat whose AI model stops responding before it begins its answer now ends after two minutes
   with a clear message.** When the model's engine accepted a question and then went silent, the
   chat waited for five minutes and then showed only "fetch failed". Meanwhile the app counted the

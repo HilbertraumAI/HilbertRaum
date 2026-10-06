@@ -1192,6 +1192,16 @@ export interface Citation {
  */
 export type TruncationCause = 'context' | 'cap'
 
+/**
+ * #600 — what ended a turn before it was finished. Not a truncation (`truncated` means the model
+ * ran out of room, and an older app reads any unknown cause as "raise the context size"), so it
+ * lives in its own column (`messages.ended_early`) that older app versions simply ignore.
+ *  - `'model'` — the user stopped or switched the chat model while the answer was being written
+ *    (#600; the only value written today);
+ *  - `'user'` / `'lock'` — reserved for the Stop button and for lock/quit (#612).
+ */
+export type EndedEarly = 'model' | 'user' | 'lock'
+
 export interface Message {
   id: string
   conversationId: string
@@ -1260,6 +1270,12 @@ export interface Message {
    * historical meaning.
    */
   truncatedCause?: TruncationCause
+  /**
+   * #600 — why this turn ended early (see `EndedEarly`). On an ASSISTANT row: the partial answer was
+   * cut ("Reply stopped"). On a USER row: the question got no answer at all ("Not answered"). Persisted
+   * as `messages.ended_early` (TEXT/NULL); undefined on every complete turn and every older row.
+   */
+  endedEarly?: EndedEarly
   /**
    * True when a generic RESULT TABLE is attached to this assistant answer (result-tables plan §4,
    * Phase 2) — the structured rows behind e.g. a bank "as CSV" answer, persisted in `result_tables`
@@ -3525,6 +3541,13 @@ export interface RuntimeStatus {
    */
   warmedUp?: boolean
   /**
+   * #600: true while a chat or document answer is being written on the running model (an in-flight
+   * chat stream). Enriched by the `getRuntimeStatus` IPC handler; the AI Model card shows a calm note
+   * then — stopping or switching the model ends that answer, keeping its text so far. Absent when
+   * nothing is being written or no model runs.
+   */
+  answering?: boolean
+  /**
    * #107: honest load progress for the in-flight "Starting…" window. `elapsedMs` comes
    * from the runtime manager (present whenever `startingModelId` is); the
    * `getRuntimeStatus` IPC handler enriches `bytesTotal` (the starting model's on-disk
@@ -3671,6 +3694,9 @@ export interface EvidenceGenerationSnapshot {
   appVersion?: string | null
   /** The message's honest output-truncation flag (`messages.truncated`). */
   answerTruncated?: boolean | null
+  /** #600 — true when a model stop or switch ended the answer early (`messages.ended_early` =
+   *  'model'); null otherwise, and on every snapshot taken before #600. */
+  answerStopped?: boolean | null
   /** The answer's `coverage.mode` at snapshot time; 'unknown' when none was recorded. */
   answerMode?: 'relevance' | 'tree' | 'capped' | 'extract' | 'unknown' | null
 }

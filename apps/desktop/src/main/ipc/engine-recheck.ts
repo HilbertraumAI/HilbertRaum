@@ -54,7 +54,7 @@ export async function restartChatOnRealEngine(ctx: AppContext): Promise<void> {
   if (!workspaceAdmitsWork(ctx.workspace)) return
   log.info('The real AI engine is on the drive — restarting the selected model on it', { modelId })
   ctx.docTasks?.abortActiveBuild()
-  await ctx.runtime.stop()
+  await ctx.runtime.stop({ startFollows: true })
   await startModelRuntime(ctx, modelId)
 }
 
