@@ -1019,6 +1019,65 @@ function seedCollections(db: Db): void {
   ).run(libraryId, now)
 }
 
+// #581 — the documents-corpus GENERATION: a counter that moves on every write that can change which documents
+// a scope resolves to (`documentsInScope`: `status`, `lifecycle`, collection membership) or the title/MIME they
+// carry. It replaced a `(COUNT, MAX(rowid))` signature that could not see the commonest such write: `documents`
+// and `document_collections` are rowid tables, so deleting the newest row and importing another hands the new
+// row the freed rowid and both figures repeat. A trigger catches every write path (the import pipeline, a
+// delete and its FK cascade, filing, archive, a collection delete) without each caller having to remember.
+// TEMP, so nothing is added to the workspace file: an older build opening the drive sees no new table or
+// trigger, and the counter lives in memory (`temp_store = MEMORY`), off the slow drive. The cost is that only
+// this connection's writes count — sound because the app holds one connection per session and every writer
+// goes through it (a reopen is a new `Db`, so a cache keyed on it starts empty). Installed after
+// `temp_store` (changing that PRAGMA drops every temp object) and after the `lifecycle` column exists.
+//
+// The `documents` triggers count only what can change the answer, so the suggestion memo survives work that
+// cannot: a row that is not `indexed` before or after the write is in no scope (an import's queued →
+// extracting → embedding steps and its MIME write), and the update trigger lists only the columns the scope
+// query reads (a deep-index build re-stamps `updated_at` / `tree_status` all the time). That list must name
+// every `documents` column `documentsInScope` or `buildScopeFilter` reads; `skills-suggest.test.ts` writes
+// every column in turn and fails when a write that changes the answer leaves the counter where it was.
+const CORPUS_GENERATION = `
+CREATE TEMP TABLE IF NOT EXISTS corpus_generation (
+  id INTEGER PRIMARY KEY CHECK (id = 1),
+  n INTEGER NOT NULL
+);
+INSERT OR IGNORE INTO temp.corpus_generation (id, n) VALUES (1, 0);
+-- A trigger body may not schema-qualify the table it writes; a TEMP trigger resolves the bare name temp-first.
+CREATE TEMP TRIGGER IF NOT EXISTS corpus_generation_doc_insert AFTER INSERT ON main.documents
+WHEN new.status = 'indexed' BEGIN
+  UPDATE corpus_generation SET n = n + 1;
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS corpus_generation_doc_delete AFTER DELETE ON main.documents
+WHEN old.status = 'indexed' BEGIN
+  UPDATE corpus_generation SET n = n + 1;
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS corpus_generation_doc_update
+AFTER UPDATE OF status, title, mime_type, lifecycle ON main.documents
+WHEN (old.status = 'indexed' OR new.status = 'indexed')
+  AND (old.status IS NOT new.status OR old.title IS NOT new.title
+    OR old.mime_type IS NOT new.mime_type OR old.lifecycle IS NOT new.lifecycle)
+BEGIN
+  UPDATE corpus_generation SET n = n + 1;
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS corpus_generation_member_insert AFTER INSERT ON main.document_collections BEGIN
+  UPDATE corpus_generation SET n = n + 1;
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS corpus_generation_member_delete AFTER DELETE ON main.document_collections BEGIN
+  UPDATE corpus_generation SET n = n + 1;
+END;
+CREATE TEMP TRIGGER IF NOT EXISTS corpus_generation_member_update
+AFTER UPDATE OF document_id, collection_id ON main.document_collections BEGIN
+  UPDATE corpus_generation SET n = n + 1;
+END;
+`
+
+/** The connection's corpus generation (#581, see `CORPUS_GENERATION`): two equal readings mean nothing written
+ *  in between could have changed any scope's document set or the titles/MIME types it carries. */
+export function corpusGeneration(db: Db): number {
+  return (prepareCached(db, 'SELECT n FROM temp.corpus_generation').get() as { n: number }).n
+}
+
 /**
  * The schema version this build writes and understands (#247, owner decision #225). Stored in
  * the database header as `PRAGMA user_version`; read FIRST on every open, before any PRAGMA
@@ -1366,6 +1425,7 @@ function applyPragmasAndMigrations(db: Db): void {
   ensureMessagesFtsUpdateKindFilter(db)
   ensureFtsRowidSync(db)
   seedCollections(db)
+  db.exec(CORPUS_GENERATION)
   // #247: stamp AFTER the migrations, and only when moving up — a same-version open writes
   // nothing here, so a second open is a no-op.
   if (found < SCHEMA_VERSION) db.exec(`PRAGMA user_version = ${SCHEMA_VERSION};`)

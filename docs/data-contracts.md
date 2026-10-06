@@ -179,7 +179,13 @@ foreign keys on). `Db` type = `InstanceType<typeof DatabaseSync>`. Loaded via `c
 (see Decision log). Helpers: `openDatabase(path)`, `listTables(db)`. **#571** added one additive
 partial index, `idx_documents_pending_dest ON documents(id) WHERE pending_destination_json IS NOT
 NULL` (created after `ensureColumn`, like the other migrated-column indexes) — no column, no
-migration.
+migration. **#581** added connection-local TEMP objects, created on every open after the
+migrations: the one-row `temp.corpus_generation` counter and six `corpus_generation_*` TEMP
+triggers that bump it on a `documents` insert, delete or change of `status`, `title`,
+`mime_type` or `lifecycle` on a row that is `indexed` before or after, and on any
+`document_collections` insert, delete or re-key.
+`corpusGeneration(db)` reads it (the skill-suggestion memo's key, `skills/scope-signals.ts`).
+Nothing reaches the workspace file, so an older build sees no change and `SCHEMA_VERSION` stays.
 
 ### Settings storage
 ✅ `src/main/services/settings.ts` — key/value rows; `getSettings` merges over `DEFAULT_SETTINGS`;

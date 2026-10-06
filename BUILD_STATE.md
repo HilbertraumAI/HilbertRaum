@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-06 — **#581 — the skill suggestion follows every change to the documents in scope (`fix/581-scope-signal-cache`).** The F-29 memo's `(COUNT, MAX(rowid))` key
+repeated after a delete of the newest document + an import (both tables reuse the freed rowid) and never moved on an archive or a status swap below the highest
+row, so a Library or project chat kept a deleted title. Key now: scope fingerprint + `corpusGeneration(db)`, bumped by connection-local TEMP triggers on `documents` /
+`document_collections` (nothing in the workspace file). Auto-fire always read live. Record: `architecture.md` F-29 row "#581", data-contracts "DB schema". Open: none._
 _2026-10-06 — **#613 — "Send again" under a question that got no answer (`feat/613-resend-unanswered`).** After an error, a crash or a stop before the first word
 the question was a dead end ("Try again" is answer-only, the banner had no retry, the next send dropped it from the prompt). The last unanswered question now shows "↺ Send
 again" in both modes: `ChatOptions.resendMessageId` / `askDocuments`' 6th argument; main answers the stored question in place (id re-checked, else `nothingToResend`; auto-fire
@@ -111,9 +115,6 @@ _2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pd
 `file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
 has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
 pages + prod header. Measured packaged: 18/18 smoke, 0 worker targets, 0 loopback. Record: `architecture.md` DEP-6 §11. Suite 7,920→7,923._
-_2026-10-02 — **#554 / #555 — two missed aborts across an await (`fix/554-555-missed-abort`, PR #556).** `KiwixServer.ensureStarted` re-checks the signal
-after superseding `stop()`; `acquireForChat` re-checks it after the handoff and releases the slot itself. Each test lands the abort in the gap by microtask
-ordering, failed on the old code and passes now. No user-visible change, so no CHANGELOG. Record: `architecture.md` DEP-6 §8 (#549 bullet)._
 _2026-10-02 — **#550 follow-up — streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on the #548–#551 PR).** The mermaid chain (110 lockfile entries)
 leaves the tree, and with it DEP-3's ~40 `files:` negations; a guard keeps mermaid out of the production graph. 2.6's new 400/300 px caps on code blocks and
 tables need Tailwind (not loaded): a tall table drew 1,128 px over what followed, so both are off. Also fixed: since 2026-06-30 every multi-line code block
@@ -192,7 +193,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---
