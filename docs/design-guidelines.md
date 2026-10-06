@@ -1664,6 +1664,29 @@ was cut. Engineering record: `architecture.md` CB-5 "#612 amendment".
 `review.summary.stopped.{model, user, lock}` (the #600 `review.summary.stopped` became `.model`), en +
 de. **Tests:** `TruncatedNotice.test.tsx` (#600, #612 block), `evidence-pack-html.test.ts`.
 
+**#613 amendment (2026-10-06): "Send again" for a question that got no answer.** Before, such a
+question was a dead end: "Try again" sits only under an answer, the error banner had no retry (although
+the crash message says "Send your message again"), and the user retyped the question. Engineering
+record: `architecture.md` CB-5 "#613 amendment".
+1. **One click, under the question.** When the conversation ends in a question with no answer (after an
+   error, a crash, or a stop before the first word) the question shows **"↺ Send again"** („↺ Noch
+   einmal senden“) below it, in chats and document chats alike. It asks the same question again, with
+   the depth and skill the composer shows (a question a Summarize or Categorize run asked keeps that
+   run's skill and document), and does not add the question a second time.
+2. **Always visible, not on hover.** It is the answer row's button ("↺ Try again", `.msg-action`) in its
+   own row, but it does not wait for hover or focus: it exists only while the question has no answer, and
+   it is the way on. The error banner gets no retry button of its own; one affordance, in the place
+   that lasts after a reload.
+3. **The note follows the latest attempt.** While the question is being answered again, neither its
+   "Not answered" note nor the button shows. If the new attempt also ends early, the note names the new
+   cause; if it fails with an error, the note goes and the banner explains.
+4. **Only the last question.** An older question with no answer keeps its note but has no button; the
+   app answers the conversation's last turn.
+
+**Copy (#613):** `chat.actions.sendAgain`; `main.chat.nothingToResend` if the question stopped being the
+last message meanwhile (en + de). **Tests:** `TruncatedNotice.test.tsx` and `ChatSendFailure.test.tsx`
+(#613 blocks).
+
 ### 11.22 An AI model that stopped responding, crashed, or is still starting — design record (IMPLEMENTED 2026-10-06, #599)
 
 _What the app says when the running model is frozen, crashes in CPU mode, or is still starting.

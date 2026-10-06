@@ -49,6 +49,14 @@ interface TranscriptProps {
   /** Provided only for the message that can regenerate (last assistant turn, chat mode). */
   onTryAgain?: () => void
   /**
+   * #613 "Send again": ask the conversation's last question again when no answer follows it (an
+   * error, a crash, a stop before the first word). Rendered only under that question, in either mode,
+   * and never while it is being answered. Gets the question's id, which main re-checks. Absent ⇒ the
+   * affordance never renders: the parent withholds it while a reply streams and until its check that
+   * none is in flight for this conversation has come back (so it is never shown disabled).
+   */
+  onSendAgain?: (messageId: string) => void
+  /**
    * Re-run the turn skill-free (S13c "answer without it" undo). Surfaced on the last assistant turn
    * that ANY skill shaped — auto-fired OR explicitly picked (U3, audit §4.3: a per-turn pick must be
    * as reversible as an auto-fire). Absent ⇒ the affordance never renders.
@@ -148,6 +156,7 @@ export const Transcript = memo(function Transcript({
   warmupHint,
   emptyState,
   onTryAgain,
+  onSendAgain,
   onAnswerWithoutSkill,
   onRunWithSkill,
   isSkillOfferAvailable,
@@ -192,22 +201,32 @@ export const Transcript = memo(function Transcript({
   // turn. A trailing UNANSWERED user turn (e.g. a send that failed to produce an answer) otherwise let
   // "Answer without this skill" on A1 actually re-answer the later Q2 skill-free. So the id is the last
   // message's id only when it is an assistant turn — a trailing user turn suppresses both affordances
-  // (the failed-generation retry is covered by the error banner instead). Memoized (perf audit FE-1).
+  // (that question gets "Send again" instead — `resendableId` below, #613). Memoized (perf audit FE-1).
   const lastAssistantId = useMemo(() => {
     const last = messages[messages.length - 1]
     return last && last.role === 'assistant' ? last.id : undefined
   }, [messages])
 
+  // #613: the question "Send again" sits under — the last message, when it is a user turn, i.e. no
+  // answer follows it. Not while it is being answered: the live bubble below IS its answer.
+  const resendableId = useMemo(() => {
+    const last = messages[messages.length - 1]
+    return last && last.role === 'user' && !streamingHere ? last.id : undefined
+  }, [messages, streamingHere])
+
   // #600/#612: questions a turn that ended early left with no answer (a model stop, the Stop button,
   // lock or quit) — marked in the database, and still not followed by an answer (a later re-ask from
-  // that question would answer it).
+  // that question would answer it). #613: a resent question is being answered while this conversation
+  // streams, so its old note waits — the persisted list after the turn says whether it still applies.
   const unansweredIds = useMemo(() => {
     const ids = new Set<string>()
     messages.forEach((m, i) => {
-      if (m.role === 'user' && m.endedEarly != null && messages[i + 1]?.role !== 'assistant') ids.add(m.id)
+      if (m.role !== 'user' || m.endedEarly == null || messages[i + 1]?.role === 'assistant') return
+      if (streamingHere && i === messages.length - 1) return
+      ids.add(m.id)
     })
     return ids
-  }, [messages])
+  }, [messages, streamingHere])
 
   // localizeServerCopy is an O(n) Map-lookup + two regex .exec over the WHOLE growing buffer; it
   // was run TWICE per ~40 ms flush (visible bubble + StreamAnnouncer). Compute it once and feed
@@ -244,6 +263,8 @@ export const Transcript = memo(function Transcript({
               isLast={m.id === lastAssistantId}
               unanswered={unansweredIds.has(m.id)}
               onTryAgain={onTryAgain}
+              // Only the resendable question gets the handler, so the other blocks' memo holds (FE-3).
+              onSendAgain={m.id === resendableId ? onSendAgain : undefined}
               onAnswerWithoutSkill={onAnswerWithoutSkill}
               onRunWithSkill={onRunWithSkill}
               isSkillOfferAvailable={isSkillOfferAvailable}
@@ -358,6 +379,7 @@ const MessageBlock = memo(function MessageBlock({
   isLast,
   unanswered,
   onTryAgain,
+  onSendAgain,
   onAnswerWithoutSkill,
   onRunWithSkill,
   isSkillOfferAvailable,
@@ -386,6 +408,8 @@ const MessageBlock = memo(function MessageBlock({
    *  note for its `endedEarly` cause. */
   unanswered: boolean
   onTryAgain?: () => void
+  /** #613: set only on the last question when no answer follows it — renders "Send again". */
+  onSendAgain?: (messageId: string) => void
   onAnswerWithoutSkill?: () => void
   onRunWithSkill?: (installId: string) => void
   isSkillOfferAvailable?: (installId: string) => boolean
@@ -647,6 +671,16 @@ const MessageBlock = memo(function MessageBlock({
           reviewOutdated={reviewSummary?.outdated === true}
           disabled={actionsDisabled}
         />
+      )}
+      {/* #613: the question's counterpart of "Try again" — the same row and button style, but always
+          shown, not on hover: it only exists while the question has no answer, and it is the way on
+          (the crash copy says "Send your message again"). Main re-checks the id. */}
+      {m.role === 'user' && onSendAgain && (
+        <div className="msg-actions msg-actions-resend">
+          <button type="button" className="msg-action" onClick={() => onSendAgain(m.id)}>
+            ↺ {t('chat.actions.sendAgain')}
+          </button>
+        </div>
       )}
     </div>
   )

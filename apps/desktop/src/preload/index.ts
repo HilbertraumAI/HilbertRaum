@@ -477,9 +477,20 @@ const api = {
     /** U3 (audit ux-6): pin retrieval to ONE document (the routed-run relay passes the run's target),
      *  narrowing within the resolved scope. UNTRUSTED — main re-validates it against the in-scope set
      *  and ignores an out-of-scope id. Absent ⇒ the ordinary conversation scope applies. */
-    pinnedDocumentId?: string | null
+    pinnedDocumentId?: string | null,
+    /** #613 "Send again": answer the unanswered last question with this id again (`question` is
+     *  ignored; main re-checks it is still the last message). `ChatOptions.resendMessageId`'s twin. */
+    resendMessageId?: string | null
   ): Promise<Message> =>
-    ipcRenderer.invoke(IPC.askDocuments, conversationId, question, skillInstallId, regenerate, pinnedDocumentId),
+    ipcRenderer.invoke(
+      IPC.askDocuments,
+      conversationId,
+      question,
+      skillInstallId,
+      regenerate,
+      pinnedDocumentId,
+      resendMessageId
+    ),
 
   // ---- Documents ----
   /** Open the OS picker for files (default) or a folder; returns the selected paths (display)

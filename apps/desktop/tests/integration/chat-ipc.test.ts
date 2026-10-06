@@ -48,6 +48,10 @@ import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { scriptedRuntime, type ScriptedCall } from '../helpers/scripted-runtime'
+import { makeSkillDirs, writeSkillPackage } from '../helpers/skill-fixtures'
+import { reconcileSkills } from '../../src/main/services/skills/registry'
+import { updateSettings } from '../../src/main/services/settings'
 import { t } from '../../src/shared/i18n'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -452,6 +456,94 @@ describe('registerChatIpc', () => {
     expect(history.at(-1)?.content).toBe('first second') // the freshly generated reply
     expect(history.at(-1)?.id).toBe(msg.id)
     expect(history.at(-1)?.id).not.toBe(prior.id) // the old reply is gone
+  })
+
+  // #613 "Send again": a question an error, a crash or an early stop left without an answer is asked
+  // again from the history — the renderer sends only its id, main appends nothing, so the model gets
+  // that question as the turn to answer and the transcript keeps exactly one copy of it.
+  it('Send again answers the unanswered last question in place — no second copy (#613)', async () => {
+    const db = freshDb()
+    const calls: ScriptedCall[] = []
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'first question' })
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'first answer' })
+    const question = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'user',
+      content: 'the question that got no answer',
+      endedEarly: 'model'
+    })
+    registerChatIpc(makeCtx(db, scriptedRuntime('the answer', calls)))
+
+    await invoke(handlers, IPC.sendChatMessage, conv.id, '', { resendMessageId: question.id })
+
+    expect(calls).toHaveLength(1)
+    expect(calls[0].messages.at(-1)).toMatchObject({ role: 'user', content: 'the question that got no answer' })
+    const history = listMessages(db, conv.id)
+    expect(history.map((m) => m.content)).toEqual([
+      'first question',
+      'first answer',
+      'the question that got no answer',
+      'the answer'
+    ])
+    expect(history[2].id).toBe(question.id)
+  })
+
+  it.each([
+    ['an answer arrived since', true],
+    ['the id is not the last question', false]
+  ] as const)('Send again refuses when %s — nothing streams, nothing is written (#613)', async (_l, answered) => {
+    const db = freshDb()
+    const calls: ScriptedCall[] = []
+    const conv = createConversation(db, {})
+    const question = appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
+    if (answered) appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'a' })
+    registerChatIpc(makeCtx(db, scriptedRuntime('never', calls)))
+    const before = listMessages(db, conv.id)
+
+    await expect(
+      invoke(handlers, IPC.sendChatMessage, conv.id, '', {
+        resendMessageId: answered ? question.id : 'not-the-last-question'
+      })
+    ).rejects.toThrow(t('en', 'main.chat.nothingToResend'))
+
+    expect(calls).toHaveLength(0)
+    expect(listMessages(db, conv.id)).toEqual(before)
+  })
+
+  // The renderer re-sends the composer's skill argument; with none picked, main resolves the saved
+  // default and may auto-fire. Auto-fire scores the QUESTION — a resend's `content` is empty, so main
+  // scores the stored question instead, and the resent turn gets the skill its first send would have.
+  it('Send again scores the stored question for auto-fire, as its first send did (#613)', async () => {
+    const db = freshDb()
+    updateSettings(db, { skillsAutoFireEnabled: true })
+    const dirs = makeSkillDirs('chatipc-resend')
+    writeSkillPackage(dirs.appSkillsDir, {
+      id: 'autobank',
+      triggers: { keywords: ['bank statement'], mimeTypes: ['application/pdf'], autoFire: true }
+    })
+    reconcileSkills(db, dirs)
+    const now = new Date().toISOString()
+    db.prepare(
+      `INSERT INTO documents (id, title, status, mime_type, created_at, updated_at) VALUES ('d1', 'march.pdf', 'indexed', 'application/pdf', ?, ?)`
+    ).run(now, now)
+    const conv = createConversation(db, { mode: 'documents', scope: { collectionIds: [], documentIds: ['d1'] } })
+    const question = appendMessage(db, {
+      conversationId: conv.id,
+      role: 'user',
+      content: 'please reconcile my bank statement'
+    })
+    const ctx = makeCtx(db, scriptedRuntime('reconciled'))
+    Object.assign(ctx, { skills: dirs })
+    registerChatIpc(ctx)
+
+    await invoke(handlers, IPC.sendChatMessage, conv.id, '', { resendMessageId: question.id })
+
+    expect(listMessages(db, conv.id).at(-1)).toMatchObject({
+      role: 'assistant',
+      skillId: 'app:autobank',
+      autoFired: true
+    })
   })
 
   it('deletes a conversation and its messages (chat and documents mode alike)', async () => {

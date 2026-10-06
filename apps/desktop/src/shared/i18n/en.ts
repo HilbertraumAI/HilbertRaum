@@ -410,6 +410,9 @@ export const en = {
   'chat.role.assistant': 'HilbertRaum',
   'chat.thinking': 'Thinking…',
   'chat.actions.tryAgain': 'Try again',
+  // #613: under the last question when it has no answer (an error, a crash, a stop before the first
+  // word) — asks the same question again, without adding it to the conversation a second time.
+  'chat.actions.sendAgain': 'Send again',
   'chat.actions.copy': 'Copy',
   'chat.actions.save': 'Save',
   'chat.actions.saveTitle': 'Save this conversation as a file (stays local)',
@@ -2667,6 +2670,10 @@ export const en = {
   'main.chat.streamError':
     'The AI model ran into an error before finishing the answer. Try again — if it keeps happening, restart the model on the AI Model screen.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
+  // #613: "Send again" on a question that is no longer the conversation's last message (an answer
+  // arrived meanwhile, or the screen was out of date).
+  'main.chat.nothingToResend':
+    "This question is no longer the last message in this conversation, so it can't be sent again.",
   // #132: an EXPLICIT per-turn skill id (an offer click / composer pick) that no longer resolves
   // refuses instead of silently re-answering without the skill (the graceful-null is for sticky
   // defaults only, §10.3).

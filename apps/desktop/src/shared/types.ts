@@ -1308,6 +1308,12 @@ export interface ChatOptions {
   /** Re-answer the last user turn: drop the previous assistant reply, then stream a fresh one. */
   regenerate?: boolean
   /**
+   * #613 "Send again": answer the conversation's unanswered last question — the id of that user
+   * turn. Main re-checks that it IS still the last visible message (else `main.chat.nothingToResend`);
+   * nothing is appended or deleted, and `content` is ignored. `regenerate` wins when both are set.
+   */
+  resendMessageId?: string
+  /**
    * The skill for THIS turn (skills plan §10.1): `undefined` ⇒ use the conversation's sticky
    * default (`active_skill_id`); `null`/`''` ⇒ no skill this turn; a string ⇒ that skill. A
    * disabled/missing skill resolves to none (graceful — §10.3). Carried on BOTH chat channels.

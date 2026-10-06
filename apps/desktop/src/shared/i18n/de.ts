@@ -436,6 +436,9 @@ export const de: Record<keyof typeof en, string> = {
   'chat.role.assistant': 'HilbertRaum',
   'chat.thinking': 'Denkt nach…',
   'chat.actions.tryAgain': 'Noch einmal',
+  // #613: unter der letzten Frage, wenn sie keine Antwort bekam (Fehler, Absturz, Stopp vor dem ersten
+  // Wort) — stellt dieselbe Frage erneut, ohne sie ein zweites Mal in die Unterhaltung zu schreiben.
+  'chat.actions.sendAgain': 'Noch einmal senden',
   'chat.actions.copy': 'Kopieren',
   'chat.actions.save': 'Speichern',
   'chat.actions.saveTitle': 'Diese Unterhaltung als Datei speichern (bleibt lokal)',
@@ -2625,6 +2628,9 @@ export const de: Record<keyof typeof en, string> = {
   'main.chat.streamError':
     'Beim KI-Modell ist ein Fehler aufgetreten, bevor die Antwort fertig war. Versuche es erneut — wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
   'main.chat.nothingToRegenerate': 'Es gibt noch keine Antwort, die neu erstellt werden könnte.',
+  // #613: „Noch einmal senden“ auf einer Frage, die nicht mehr die letzte Nachricht ist.
+  'main.chat.nothingToResend':
+    'Diese Frage ist nicht mehr die letzte Nachricht dieser Unterhaltung und kann daher nicht noch einmal gesendet werden.',
   // #132: eine EXPLIZITE Skill-Wahl (Angebots-Klick / Auswahl), die sich nicht mehr auflösen lässt,
   // lehnt ab, statt stillschweigend ohne den Skill neu zu antworten.
   'main.chat.skillUnavailable':

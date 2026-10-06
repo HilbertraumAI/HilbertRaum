@@ -40,7 +40,7 @@ import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { inFlightStreams, streamBuffers } from './inflight'
-import { assertChatStreamReady, withChatStream, withRegenerateGuard } from './chat-stream'
+import { assertChatStreamReady, resendableQuestion, withChatStream, withRegenerateGuard } from './chat-stream'
 import { saveBinaryExport, saveTextExport } from './save-export'
 import { codeBlockDefaultFileName, codeBlockExtension } from '../../shared/code-block-export'
 import { tableToCsv } from '../services/tables'
@@ -251,6 +251,9 @@ export function registerChatIpc(ctx: AppContext): void {
       const { runtime } = await assertChatStreamReady(ctx, conversationId)
 
       const regenerate = options?.regenerate === true
+      // #613 "Send again": the unanswered last question this turn answers again, or null (refuses a
+      // stale id before anything is written; `regenerate` wins when both are set).
+      const resend = resendableQuestion(ctx.db, conversationId, regenerate, options?.resendMessageId)
       if (regenerate) {
         // Re-answer the last user turn: the previous assistant reply is dropped, history kept.
         // Only CHECK here (read-only) that a prior reply exists — with none there is nothing to
@@ -261,7 +264,8 @@ export function registerChatIpc(ctx: AppContext): void {
         if (!hasRegenerableAssistantReply(ctx.db, conversationId)) {
           throw new Error(tMain('main.chat.nothingToRegenerate'))
         }
-      } else {
+      } else if (resend == null) {
+        // A resend appends nothing: its question is already the history's last turn (no duplicate).
         const text = content.trim()
         if (!text) throw new Error(tMain('main.chat.emptyMessage'))
         appendMessage(ctx.db, { conversationId, role: 'user', content: text })
@@ -279,13 +283,15 @@ export function registerChatIpc(ctx: AppContext): void {
       // default. A disabled/missing skill resolves to none (graceful). Shared with the RAG channel
       // via resolveTurnSkill so both carry the skill (audit A1). The message text is passed so the
       // resolver can S13b AUTO-FIRE when the turn has no skill set (it is content — scored, not
-      // logged; off by default). On regenerate `content` is empty ⇒ no auto-fire (conservative).
+      // logged; off by default). On regenerate `content` is empty ⇒ no auto-fire (conservative). A
+      // resend (#613) scores the stored question (its `content` is empty too): given the same skill
+      // argument, it resolves the same default and auto-fire as the question's first send.
       const skill = resolveTurnSkillFromRegistry(
         ctx.db,
         ctx.skills,
         conversationId,
         options?.skillInstallId,
-        content
+        resend?.content ?? content
       )
       // #132: an EXPLICIT per-turn skill id that no longer resolves refuses instead of silently
       // answering skill-free (mirror of the rag channel — the resolver's graceful-null is the

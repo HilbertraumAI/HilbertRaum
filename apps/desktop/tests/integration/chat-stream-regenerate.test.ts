@@ -225,4 +225,20 @@ describe('withRegenerateGuard — an answer that ended early, and an abort throw
     // A bare abort names no cause, so nothing is claimed about why the question has no answer.
     expect((await run(undefined)).endedEarly).toBeUndefined()
   })
+
+  // #613: "Send again" answers a question that already says "Not answered — the AI model was stopped."
+  // If that attempt fails with an error (a crash, a server error) the old cause must not stay behind
+  // as the reason: the note names the latest attempt, and an error leaves a question unmarked.
+  it('a question answered again drops its old "Not answered" cause when the attempt fails (#613)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q', endedEarly: 'model' })
+
+    const wrapped = withRegenerateGuard(db, conv.id, false, async () => {
+      throw new Error('terminated')
+    })
+    await expect(wrapped(new AbortController().signal, noop, noop, noop, noop)).rejects.toThrow('terminated')
+
+    expect(listMessages(db, conv.id)[0].endedEarly).toBeUndefined()
+  })
 })

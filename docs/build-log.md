@@ -27,6 +27,16 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-06 — the closed 2026-10-05 #585 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #613 entry). It was
+closed with nothing open; its record is unchanged: `architecture.md` DEP-6 §12. Citations of the form
+"BUILD_STATE 2026-10-05 #585 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#585 — mammoth 1.12.3 → 1.13.0, replacement PR (`chore/mammoth-1.13`).** Notices regenerated (226 → 224: `bluebird` out, `path-is-absolute` dev-only;
+packed `app.asar` agrees). 1.12.3 dropped `w:customXml`/`w:moveTo`/`w:moveFrom` with their text; 1.13 reads custom XML + moved text once (pinned in `ingestion.test.ts`;
+old docs need Re-index). Packaged DOCX import verified. Record: `architecture.md` DEP-6 §12. Open: none._
+
 ## 2026-10-06 — the closed 2026-09-27 #512 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #622 entry). Its records are unchanged:
