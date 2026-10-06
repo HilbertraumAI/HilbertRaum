@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-07 — **#582 — What-changed routes English and German compare requests alike (`fix/582-what-changed-en-de-parity`).** At a count ≠ 2 German
+"Fasse die Unterschiede zusammen" got "select exactly two"; "summarize the differences" fell to top-k under the compare fence (0.1.59 + 4B: an invented
+"Document B"). Owner: route both; `differences` offers + routes; route-only compare/change words in both languages (German word by word). 23 EN/DE pairs
+pinned, corpus 161 rows; real app before/after on E: data. Record: `architecture.md` §18 "#582". Open: "amendments" routes in neither language._
 _2026-10-06 — **#581 — the skill suggestion follows every change to the documents in scope (`fix/581-scope-signal-cache`).** The F-29 memo's `(COUNT, MAX(rowid))` key
 repeated after a delete of the newest document + an import (both tables reuse the freed rowid) and never moved on an archive or a status swap below the highest
 row, so a Library or project chat kept a deleted title. Key now: scope fingerprint + `corpusGeneration(db)`, bumped by connection-local TEMP triggers on `documents` /
@@ -123,15 +127,6 @@ _2026-10-02 — **#548–#551 — the DEP-6 residuals (`fix/dep6-residuals-548-5
 packs each package (its own hoister replayed on the lockfile; it names a real `app.asar`'s 226 package directories exactly), and the notices must name exactly that set.
 #549: both load races fixed by where the clock starts and which timer trips, not by a bigger budget. #550: `lib` ES2024 in both programs; taking streamdown 2.6 stays its own change.
 #551: the Documents list on react-virtual 3.14.13 measures identical to 3.14.4 (CDP A/B). The packaged exe: the #551 entry above. Record: `architecture.md` DEP-6 §8._
-_2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (PRs #535, #536, #537 merged).**
-PR A, lockfile-only through the pinned npm 11.6.2 with no collateral (undici 6.29.0 / 7.30.0, brace-expansion ×7, fast-uri 3.1.8, dompurify
-3.4.16), cleared alerts 96, 97 and 102–123: all dev toolchain or not shipped, and the app's own `fetch` is Electron's undici 7.29.1. PR B
-moves vitest 3.2.6 → 4.1.11 (alerts 91/92/94; `npm audit` 0). Two 4.x changes the migration guide omits would have weakened the suite: the
-full-suite guard's `onFinished` hook is gone (now `onTestRunEnd`) and `vi.spyOn` returns a live spy with its history. Also `maxWorkers`, a
-30-minute CI job cap, coverage `include`, and a `tinyexec` asar leak closed. PR C adds `.github/dependabot.yml` (§5 18(a)). After #536 no
-alert is open (91–123 `fixed`) and `npm audit` is 0. Dependabot's first production group (#545: pdf.js 6.3 + six) lands via a replacement PR:
-pdf.js's never-loaded Liberation fonts (GPL v2, not OFL) leave the Kit (owner ruling), argon2id gets an explicit `maxmem`. Record: `architecture.md`
-"Dependabot triage — design record (wave DEP-6)" §7; its §3 holds the residuals._
 _2026-10-01 — **#530 — an engine the OS refuses to start is named as such, never as a GPU, model or memory fault (`fix/530-engine-load-failure`).**
 One classifier (`runtime/engine-load.ts`: Linux ld.so text, Windows NTSTATUS + a System32 VC++ check, macOS dyld) at every spawn site, a
 session verdict (never persisted) fed by the startup probe and every refusal, `AppStatus.engineProblems`, `engine:recheck` ("Check again")
@@ -193,7 +188,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

@@ -1455,7 +1455,15 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   what the model can actually see (A/B labels or an exact-changes block ⇒ compare; ordinary passages with
   no diff ⇒ just answer), so a fence riding a non-compare turn no longer tells the model to invent a
   comparison. Revisit only if the gold set later shows comparison-framed answers on non-compare
-  fall-through turns.
+  fall-through turns. What counts as a compare question is the skill's routing vocabulary. Until #582 a
+  compare request in one language could miss it while its translation matched: "summarize the
+  differences" fell through while "Fasse die Unterschiede zusammen" got "select exactly two". The
+  vocabulary now covers the compare and change words in both languages ([`architecture.md`](architecture.md)
+  §18 "#582"). A question with any of them gets "select exactly two" at any count other than two,
+  including a Library chat with What-changed still selected. Seen in the #582 real-app run (a 4B model,
+  2026-10-07, not addressed there): on a fall-through turn, "Wer ist der Mieter?" over three lease drafts
+  got a comparison-framed "Executive summary", both on 0.1.59 and with #582. That is the revisit condition
+  above.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
   INFO, recorded so the next audit doesn't re-litigate; full ledger in architecture.md "Skills — design
   record" §44).** None is a defect; each is a place where a SKILL.md sentence is broader or narrower than

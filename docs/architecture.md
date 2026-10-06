@@ -6665,7 +6665,7 @@ deleted at S13 close — text in git history) holds the baseline tables; this is
 **The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
 deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
 the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
-no-user-data corpus of 160 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+no-user-data corpus of 161 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
 through the **production** `suggestSkillsForTurn` / `resolveAutoFireSkill` on a real temporary
 database with the committed app skills reconciled (`tests/eval/skill-triggers.ts` + `.test.ts`),
 reporting precision/recall + a confusion matrix. Still no model and no network. The
@@ -6697,7 +6697,7 @@ below); and `tp-redaction-en-sensitive-blackout-01` and `tp-sharesafe-de-sensibl
 and a check before sharing that only the bare "sensitive data" / "sensible Daten" offered Redaction on,
 which the labellers accepted, until #604: the accepted cost of that decision, see below). The GDPR row
 `tp-redaction-en-02` left the list in #583, when "remove all personal data" joined the vocabulary.
-Measured on the 160 rows: suggestion precision 99.1%, recall 96.4% (107 correct, 1 wrong, 4
+Measured on the 161 rows: suggestion precision 99.1%, recall 96.4% (108 correct, 1 wrong, 4
 missed), confusion set 0 wrong / 0 missed. The
 printout (`formatReport`, at the start of the S13b gate) shows the two production paths: `suggestion`
 (all rows) and `auto-fire`, the latter twice, once over the gate set and once with the accepted
@@ -6712,7 +6712,7 @@ never auto-fire (the U4 narrowing and the #130 doc-signal gate). From 2026-10-05
 such rows: German share-safe questions with "sensible Daten" (`tp-sharesafe-de-01`, `-02`) fired
 document-redaction's read-only scan, because the keyword belonged to both skills and only redaction
 auto-fires. #604 ended them (below): the map is empty and the cap is 0. Measured auto-fire precision is
-100% (34 correct, 0 wrong, 77 missed, recall 30.6%) over all rows. Auto-fire recall is low by design:
+100% (34 correct, 0 wrong, 78 missed, recall 30.4%) over all rows. Auto-fire recall is low by design:
 rows labelled with the five skills that never auto-fire count as misses.
 
 **#604: "sensible Daten" / "sensitive data" stop offering (owner decision 2026-10-06).** The #608
@@ -6796,6 +6796,38 @@ matches. A co-occurrence rule (a sending word plus a permission word, measured r
 right answer net and made 7 wrong suggestions: three legal questions, two sending tasks, a question
 about what a contract allows, and a sharing question with no document selected. Nothing changed; the
 route to better recall is the same §6 path.
+
+**#582: English and German compare requests route alike (owner decision 2026-10-07).** With What-changed
+active at any document count other than two (one document, three, a whole Library), `applies()` is false,
+so `intends()` (the skill's routing vocabulary) decides between the "select exactly two documents" answer
+and the ordinary engines (SKA-8, §39). German "Fasse die Unterschiede zusammen" matched `unterschiede` and
+got that answer. English "summarize the differences" matched nothing. The task router already reads both as
+a compare (`COMPARE_RE`), so the English turn became a top-k answer under the compare fence. The shipped
+0.1.59 build with a 4B model showed the cost: over one draft it invented a "Document B", and over three
+drafts it compared passages mixed across all of them. The owner chose to route both languages:
+- `differences` is now an offer and route term like `unterschiede`.
+- Route-only, English: `compare`, `comparison`, `changes`, `changed`, `old version`, `new version`, and the
+  noun `the change` / `a change`. A bare `change` is mostly the verb ("How do I change my password?"), which
+  German `ändere`/`ändern` does not route either.
+- Route-only, German: `geändert`, `geänderte(n)`, `verändert`, `veränderte(n)` and `veränderung(en)`.
+  German puts the participle last, so `was hat sich geändert` missed "Was hat sich am Vertrag geändert?".
+- Route-only, both languages: the rest of what `COMPARE_RE` reads as a compare: `difference`, `versus`, `vs`,
+  `diff`, `unterschied`, and `vergleich` with `vergleiche` / `vergleichen`.
+
+The German forms are listed word by word, because a stem would also catch "unverändert" (unchanged),
+"unterschiedlich" (various) and "Vergleichs…" compounds (a legal settlement), none of which English routes.
+`compare`, `difference` and `unterschied` replaced the phrases they cover (`compare these`, `compare the
+two`, `difference between`, `unterschied zwischen`), and the offer phrase `differences between` went with
+`differences`. The cost: while What-changed is active at the wrong count, more questions with a
+compare or change word get "select two", in a Library chat too. German `änderung` already reached that far.
+Accepting the `differences` offer, or a classifier offer (#133 counts the routing answer as engaging), over
+one document also leads to "select two". The offer changes only for `differences`. What-changed never
+auto-fires, and its install id loses every equal-score tie, so it cannot take another skill's offer.
+`skills-analysis-whole-doc.test.ts` pins 23 request pairs side by side, and each English request must get
+the same answer as its German counterpart. `rag-skill-analysis.test.ts` runs "summarize the differences"
+through the real W2 pre-pass. Corpus row `tp-whatchanged-en-03` is the English twin of
+`tp-whatchanged-de-02`. Left open: "amendments" / "modifications" route in neither language (a recall gap,
+not a language gap).
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
@@ -8651,7 +8683,8 @@ phase-id (`R2`/`W4`/`U1`/`A3`/`T1`) citation through the **§-anchor legend** be
    extract, not top-k) — a separate chat-path composition, distinct from `intends()`; (SKA-8) `intends()` —
    the W2 count-mismatch routing predicate — was decoupled from `applies()` and made VOCABULARY-shaped for
    the whole-doc/compare handlers too, so a general/off-topic question at multi-doc scope falls through to
-   the ordinary engines instead of a "pick one document" dead-end; (SKA-12) the needle downgrade **dropped
+   the ordinary engines instead of a "pick one document" dead-end (#582 later made what-changed's compare
+   vocabulary route English and German alike: §18 "#582"); (SKA-12) the needle downgrade **dropped
    the "AND no tree exists" conjunct** — a needle prefers top-k whenever the whole read would truncate, tree
    or no tree (the tree rescues DELIVERABLES only); (SKA-23) the needle downgrade is evaluated **before** the
    D45 fully-chunked refusal for grounded-whole-doc handlers (a downgraded needle makes no whole-document
