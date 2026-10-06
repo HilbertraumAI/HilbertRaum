@@ -2986,9 +2986,10 @@ are decided scope, not oversights; the record's §7 carries the reasoning.
   as a SEPARATE file for smaller quants, so "same family, same flag" would silently ship a broken
   start (issue #196 §9.5 gate). A closed enum, not an argument list: manifests are user-editable and
   `LlamaServer.buildArgs` appends extras LAST, so a hand-edited `--host 0.0.0.0` would win.
-- **Skipped silently when it will not fit, and invisible in the UI by design.** One device must
-  report the weight's bytes plus 3.5 GiB free; free VRAM is never summed across cards (a multi-device
-  split with a draft head is unmeasured). A refusal costs nothing and falls through to exactly the
+- **Skipped silently when it will not fit, and invisible in the UI by design.** The budget device
+  (the largest usable discrete card, never an integrated GPU) must report the weight's bytes plus
+  3.5 GiB free; free VRAM is never summed across cards (a multi-device split with a draft head is
+  unmeasured). A refusal costs nothing and falls through to exactly the
   previous behaviour — but there is no user-facing signal, because there is no decision a user could
   act on. The answer to "is it actually on?" is the log and `perfMark('runtime_speculative')`.
 - **RAM/VRAM lines in the manifests are pre-MTP figures** and stay that way until re-measured with

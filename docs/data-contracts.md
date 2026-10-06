@@ -543,8 +543,8 @@ document answers always run balanced (deep-grounded = wave 2).
 ladder's **rung 1a**, which spawns with `CHAT_SERVER_ARGS` + `MTP_SERVER_ARGS` = `--spec-type
 draft-mtp --spec-draft-n-max 2`. The manifest names a scheme and NEVER supplies arguments (the
 flag list is code-owned; extras are appended last in `buildArgs`, so a free-form field could
-override `--host`). The ladder gates the rung on a probed GPU with the weight's bytes +
-`MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
+override `--host`). The ladder gates the rung on the budget device (`primaryUsefulDevice`) having
+the weight's bytes + `MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
 `architecture.md` "MTP speculative decoding".
 ✅ **Prompt cache (#512; replaces the #399 D5 family gate):** manifest `disable_prompt_cache`
 (optional boolean, default false = cache on; chat role only; a non-boolean or another role is a
