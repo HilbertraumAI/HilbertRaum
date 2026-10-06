@@ -328,18 +328,18 @@ const SHARE_SAFE_REVIEW: VocabEntry[] = [
   both('metadata', 'en'),
   both('sicher teilen', 'de'),
   both('vor dem teilen prüfen', 'de'),
-  both('sensible daten', 'de'),
   both('vertrauliche informationen', 'de'),
   both('datenschutz prüfen', 'de'),
   both('metadaten', 'de'),
   // route-only — broader share phrasings, fired once the review skill is active. The bare topic phrases
-  // `personal data` / `personenbezogene daten` (#608) appear in GDPR, privacy-notice and contract questions
-  // too often to offer on.
+  // `personal data` / `personenbezogene daten` (#608) / `sensible daten` (#604) appear in GDPR,
+  // privacy-notice and contract questions too often to offer on.
   route('before sharing', 'en'),
   route('remove private information', 'en'),
   route('metadata warning', 'en'),
   route('personal data', 'en'),
   route('personenbezogene daten', 'de'),
+  route('sensible daten', 'de'),
   route('private informationen', 'de'),
   route('weitergeben', 'de'),
   route('veröffentlichen', 'de')
@@ -448,19 +448,22 @@ const DOCUMENT_REDACTION: VocabEntry[] = [
   both('lösche alle personenbezogenen daten', 'de'),
   both('lösche die personenbezogenen daten', 'de'),
   both('lösche personenbezogene daten', 'de'),
-  // #608 — the bare topic phrase only ROUTES now: with Redaction active the handler still takes a question
-  // that names it. As an offer keyword it suggested Redaction, and over a PDF auto-fired it, on GDPR,
-  // privacy-notice and contract questions (English `personal data` was never one).
+  // #604 — removal requests that name sensitive data, the way #595/#608 list them for personal data.
+  both('remove sensitive data', 'en'),
+  both('remove the sensitive data', 'en'),
+  both('remove all sensitive data', 'en'),
+  both('mask sensitive data', 'en'),
+  both('sensible daten entfernen', 'de'),
+  both('sensiblen daten entfernen', 'de'),
+  // #608/#604 — the bare PII-content topics only ROUTE: with Redaction active the handler still takes a
+  // question that names them, and its informational scan (`PII_TOPIC_RE`) still answers "what sensitive data
+  // is in here?" with per-category counts. As offer keywords they suggested Redaction, and over a PDF
+  // auto-fired it, on GDPR, privacy-notice and contract questions (#604 measured 18 harmful auto-fires in 90
+  // blind messages); English `personal data` was never one. U4/§4.4 had already dropped the pure legal words
+  // `datenschutz`/`dsgvo`/`gdpr`: the handler acts on neither `routeMatch` nor `PII_TOPIC_RE` for them.
   route('personenbezogene daten', 'de'),
-  // suggest-only PII-CONTENT topics — the informational dry-run (`isInformationalPiiQuestion`, `PII_TOPIC_RE`)
-  // recognises these ("what sensitive data is in here?" reports per-category counts), so they align with the
-  // handler and stay auto-fire-eligible. Word-matched, so a compound never trips the bare term.
-  // U4/§4.4: the pure LEGAL/topic words `datenschutz`/`dsgvo`/`gdpr` were DROPPED here — the handler acts on
-  // NEITHER `routeMatch` NOR `PII_TOPIC_RE` for them ("Was regelt die DSGVO?" is a question about the LAW,
-  // not the document), so keeping them as manifest keywords let redaction auto-fire a wrong-flavoured fence.
-  // Aligning the manifest to the handler = removing them (the audit's "take the drop").
-  suggest('sensitive data', 'en'),
-  suggest('sensible daten', 'de')
+  route('sensitive data', 'en'),
+  route('sensible daten', 'de')
 ]
 
 const DOCUMENT_EDIT: VocabEntry[] = [

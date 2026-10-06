@@ -56,15 +56,16 @@ const ROUTING_CASES: RoutingCase[] = [
     handler: documentRedactionAnalysisHandler,
     installId: DOCUMENT_REDACTION_INSTALL_ID,
     // EN + DE action verbs apply; a German informational PII ask the route vocab misses
-    // ("personenbezogenen", U2 dry-run) applies too; the bare "personenbezogene Daten" still routes a request
-    // that carries no listed phrase (#608 kept it as a route term); an off-topic question keeps the relevance
-    // path, and so does a question about what the document says on "Löschung" (#608: not a scan, not a
-    // removal request).
+    // ("personenbezogenen", U2 dry-run) applies too; the bare "personenbezogene Daten" and "sensitive data"
+    // still route a request that carries no listed phrase (#608/#604 kept them as route terms); an off-topic
+    // question keeps the relevance path, and so does a question about what the document says on "Löschung"
+    // (#608: not a scan, not a removal request).
     applies: [
       ['Can you anonymize this doc?', true],
       ['Bitte die personenbezogenen Daten schwärzen', true],
       ['Welche personenbezogenen Daten enthält das Dokument?', true],
       ['Bitte personenbezogene Daten löschen.', true],
+      ['Mask the sensitive data, please.', true],
       ['what is this letter about?', false],
       ['Was sagt das Dokument zur Löschung personenbezogener Daten?', false]
     ],

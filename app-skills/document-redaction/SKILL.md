@@ -24,18 +24,16 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
                                #   (auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory
                                #   keyword hit) — a
                                #   keyword corroborated by ≥1 EXPLICITLY-scoped doc signal, U4/§4.4). The
-                               #   eval corpus holds the auto-fire gate at 0-wrong except two accepted German
-                               #   share-safe rows that fire this skill's read-only scan (architecture.md §18).
+                               #   eval corpus holds the auto-fire gate at 0-wrong (architecture.md §18).
                                #   (Comment refreshed from the stale S13a-era wording — SKA-45, U7.)
-  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` + `suggest`-only terms)
-  # and pinned by a parity test. The action verbs (redact/anonymize/schwärzen…) both OFFER and ROUTE; the
-  # PII-content topics (sensitive data / sensible daten) are `suggest`-only but the informational dry-run
-  # DOES act on them (per-category counts). U4/§4.4: the pure legal words datenschutz/dsgvo/gdpr were
-  # DROPPED — the handler acts on none of them, so keeping them let redaction auto-fire a wrong-flavoured
-  # fence on "Was regelt die DSGVO?". #608: the bare `personenbezogene daten` is route-only for the same
-  # reason (GDPR, privacy-notice and contract questions); the German removal phrases are listed per form,
-  # but not the infinitive "… daten löschen", which deletion-duty questions use. Edit the vocabulary, not
-  # this list.
+  # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
+  # parity test. The action verbs (redact/anonymize/schwärzen…) both OFFER and ROUTE. The bare PII-content
+  # topics (personenbezogene daten #608, sensitive data / sensible daten #604) are route-only: the
+  # informational dry-run still answers them once the skill is active, but as offer keywords they
+  # suggested and auto-fired this skill on GDPR, privacy-notice and contract questions. U4/§4.4 dropped
+  # the pure legal words datenschutz/dsgvo/gdpr for the same reason. The removal phrases are listed per
+  # form, but not the infinitive "… daten löschen", which deletion-duty questions use. Edit the
+  # vocabulary, not this list.
   keywords: [redact, redaction, anonymize, anonymise, anonymized, anonymised,
              remove personal data, remove all personal data, mask personal data,
              anonymisieren, anonymisierung, anonymisiere, pseudonymisieren,
@@ -44,7 +42,8 @@ triggers:                      # OPTIONAL — drives the deterministic suggestio
              entferne alle personenbezogenen daten, entferne die personenbezogenen daten,
              entferne personenbezogene daten, lösche alle personenbezogenen daten,
              lösche die personenbezogenen daten, lösche personenbezogene daten,
-             sensitive data, sensible daten]
+             remove sensitive data, remove the sensitive data, remove all sensitive data,
+             mask sensitive data, sensible daten entfernen, sensiblen daten entfernen]
   mimeTypes: [application/pdf, text/plain, text/markdown]
   filenamePatterns: []         # redaction is intent-driven, not filename-driven — leave empty
 ---

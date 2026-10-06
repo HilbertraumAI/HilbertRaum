@@ -6095,7 +6095,7 @@ deleted at S13 close — text in git history) holds the baseline tables; this is
 **The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
 deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
 the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
-no-user-data corpus of 152 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+no-user-data corpus of 160 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
 through the **production** `suggestSkillsForTurn` / `resolveAutoFireSkill` on a real temporary
 database with the committed app skills reconciled (`tests/eval/skill-triggers.ts` + `.test.ts`),
 reporting precision/recall + a confusion matrix. Still no model and no network. The
@@ -6119,31 +6119,50 @@ ratified the suggestion bar (2026-10-05), and it is a hard CI gate: **precision 
 **zero wrong and zero missed on the confusion rows** (the cross-skill pairs); and every row gives its
 expected offer except the rows listed in `KNOWN_SUGGESTION_DEVIATIONS` in
 `tests/eval/skill-triggers.test.ts`, whose entry must be removed when the row is fixed (a stale entry
-fails). Three rows are listed today: `adv-meeting-schedule-01` (a scheduling question that merely names
-a meeting still offers meeting-protocol, the precision ceiling of a one-keyword offer), and
+fails). Five rows are listed today: `adv-meeting-schedule-01` (a scheduling question that merely names
+a meeting still offers meeting-protocol, the precision ceiling of a one-keyword offer);
 `tp-redaction-de-pd-version-01` and `tp-redaction-de-pd-loeschen-01` (German removal requests that only
 the bare "personenbezogene Daten" offered on until #608; #602 found no safe keyword for them, see
-below). The GDPR row
+below); and `tp-redaction-en-sensitive-blackout-01` and `tp-sharesafe-de-sensible-01` (a removal request
+and a check before publishing that only the bare "sensitive data" / "sensible Daten" offered on until
+#604, the accepted cost of that decision, see below). The GDPR row
 `tp-redaction-en-02` left the list in #583, when "remove all personal data" joined the vocabulary.
-Measured on the 152 rows: suggestion precision 99.1%, recall 98.1% (105 correct, 1 wrong, 2
+Measured on the 160 rows: suggestion precision 99.1%, recall 96.4% (107 correct, 1 wrong, 4
 missed), confusion set 0 wrong / 0 missed. The
 printout (`formatReport`, at the start of the S13b gate) shows the two production paths: `suggestion`
 (all rows) and `auto-fire`, the latter twice, once over the gate set and once with the accepted
-deviations counted as wrong. Question text is scored but never logged. The numbers the deleted
+deviations counted as wrong (identical while none is accepted). Question text is scored but never logged. The numbers the deleted
 `skills-s13-plan.md §3.3` used to hold now live here — **this record is their durable home**.
 
-**Accepted auto-fire deviation (owner decision 2026-10-05).** With auto-fire on, a German share-safe
-question containing "sensible Daten" auto-fires document-redaction's read-only scan: the keyword
-belongs to both share-safe-review and document-redaction, and only redaction is auto-fire-eligible.
-The scan answer is honest (it says names and addresses are not detected). The D1 gate therefore
-counts the rows in `KNOWN_AUTOFIRE_DEVIATIONS` (`tp-sharesafe-de-01`, `tp-sharesafe-de-02`)
-separately: they must fire exactly `document-redaction`, and over the other rows `fired-wrong == 0`
-and `precision ≥ 0.95`; a row whose document is only in the Library (not explicitly selected) must
-never auto-fire (the U4 narrowing and the #130 doc-signal gate). Measured auto-fire precision is 100%
-(32 correct, 0 wrong, 73 missed, recall 30.5%) over the gate set, and 94.1% (32 correct, 2 wrong,
-73 missed) with the two deviations counted as wrong fires. Auto-fire recall is low by design: rows
-labelled with the five skills that never auto-fire count as misses. The same mechanism for
-"sensible Daten" / "sensitive data" on legal, privacy-policy and contract questions is #604.
+**Auto-fire deviations: none since #604 (owner decisions 2026-10-05 and 2026-10-06).** The D1 gate
+counts the rows in `KNOWN_AUTOFIRE_DEVIATIONS` separately: they must fire exactly the listed skill, over
+the other rows `fired-wrong == 0` and `precision ≥ 0.95`, and `ACCEPTED_AUTOFIRE_WRONG_FIRES` caps the
+wrong fires over all rows; a row whose document is only in the Library (not explicitly selected) must
+never auto-fire (the U4 narrowing and the #130 doc-signal gate). From 2026-10-05 the owner accepted two
+such rows: German share-safe questions with "sensible Daten" (`tp-sharesafe-de-01`, `-02`) fired
+document-redaction's read-only scan, because the keyword belonged to both skills and only redaction
+auto-fires. #604 ended them (below): the map is empty and the cap is 0. Measured auto-fire precision is
+100% (34 correct, 0 wrong, 77 missed, recall 30.6%) over all rows. Auto-fire recall is low by design:
+rows labelled with the five skills that never auto-fire count as misses.
+
+**#604: "sensible Daten" / "sensitive data" stop offering (owner decision 2026-10-06).** The #608
+mechanism, for the other topic phrases: `sensitive data` and `sensible daten` were offer keywords of
+Redaction (for its "is there sensitive data in it?" scan) and `sensible daten` also of Share-Safe, so one
+hit plus any PDF auto-fired Redaction on legal, privacy-policy and contract questions. A pre-registered
+blind evaluation measured it: 90 messages (46 German, 44 English), each naming sensitive data, labelled
+independently by two models (agreement 100% / 90%). Today 46 of the 90 got Redaction applied, and both
+labellers called 18 of those harmful, every one a legal question or a question about what a notice,
+contract or policy says. The phrases are now route-only in both skills, and Redaction offers six removal
+phrases instead (`remove sensitive data`, `remove the sensitive data`, `remove all sensitive data`,
+`mask sensitive data`, `sensible daten entfernen`, `sensiblen daten entfernen`): right suggestions 36 →
+60 of 90, harmful auto-fires 18 → 0. On "is there sensitive data in it?" the labellers wanted Share-Safe
+or no suggestion, not Redaction (an automatic scan there was acceptable, not harmful), so the scan stays
+one pick away. The cost: removal requests phrased only with the topic ("Please black out all sensitive
+data") lose the offer (13 → 5 of 15), and so do checks before sharing (8 → 0 of 15). Keeping Share-Safe's
+`sensible daten` (scored 58, and ahead on a strict reading, 48 to 43) was the alternative; the owner chose
+the pre-registered pick. With Redaction active, "Mask the sensitive data" now gets the run button, and so
+does a retention question naming "Löschfristen … für sensible Daten" (the #608 `lösch` rule plus the new
+route term). Eight corpus rows pin it, two of them the accepted cost in `KNOWN_SUGGESTION_DEVIATIONS`.
 
 **#608: the bare "personenbezogene Daten" (owner decision 2026-10-06).** The article-less German
 phrase was an offer keyword of both skills, so it suggested Redaction (the tie-break) and, over a PDF,
@@ -6226,8 +6245,8 @@ capability; no auto-fire path adds an audit event or logs the question.
 bundled skill to do so; U4 later opted in bank-statement, invoice and meeting-protocol). Once a user
 enables auto-fire, an "anonymize/redact"-style turn over a selected pdf/plain/markdown document
 auto-applies it: keyword (2) + the in-scope-doc MIME signal (1) = 3, clearing
-`AUTOFIRE_SCORE_THRESHOLD`. On the corpus it fires on no row it should not, except the two accepted
-German share-safe rows ("Accepted auto-fire deviation" above). A "selected" document is one in the
+`AUTOFIRE_SCORE_THRESHOLD`. On the corpus it fires on no row it should not (the two accepted German
+share-safe rows ended with #604, "Auto-fire deviations" above). A "selected" document is one in the
 conversation's persisted scope, so `inScopeDocSignals` surfaces its MIME main-side (§22-C4) — the same
 phrase with no document in scope scores 2 and does **not** fire (regression-tested in
 `skills-autofire.test.ts`).
