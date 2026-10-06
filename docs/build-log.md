@@ -27,6 +27,21 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-06 — the closed 2026-09-22 #410 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #606 entry). Its record is unchanged:
+`architecture.md` "In-app OCR install — design record"; its open residuals stay tracked in `BUILD_STATE.md` §5 items 15(a)
+and 18(c). Citations of the form "BUILD_STATE 2026-09-22 #410 entry" now resolve here. Text below is byte-identical to what
+was removed.
+
+_2026-09-22 — **#410 — the OCR language files install in-app (`feat/410-in-app-ocr-install`): a failed scan or
+photo row in Documents and a quiet AI Model row offer "Download OCR files", and OCR activates without a restart.**
+Record: `architecture.md` "In-app OCR install — design record" (owner decisions D1–D7, the facts, the design as
+built); contracts in `data-contracts.md` (four `ocr:*` channels, `OcrRefreshOutcome`); `security-model.md` (#410
+note). Its own narrow installer, not an engine family; sha256 + exact size pinned in code (`OCR_PINS`,
+drift-tested), only the URL from the yaml; the doc-task deps now read `ctx.ocrEngine` live. Open: the owner's
+packaged-build checks (PR body); hand-copied files or a grown language set still need a restart (§5 item 15(a))._
+
 ## 2026-10-06 — the closed 2026-09-27 #515 and #512 decision 3 entries retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #612 entry). Both entries closed with "Open: none";

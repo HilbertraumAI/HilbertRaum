@@ -5,13 +5,17 @@ import { join } from 'node:path'
 // `runBenchmark` (which had no re-entrancy or busy guard at all) and `startSkillRun` (which
 // consulted neither `inFlightStreams` nor the doc-task registry). The registry itself, the
 // composed predicate, and the chat/doc-task seams are pinned in `model-occupancy.test.ts`.
+// #606: the same two lanes when the model is taken away under them — a stop or switch of the chat
+// model cancels the skill runs streaming on it, and a lock or quit cancels the benchmark's speed leg.
 
 const ipcState = vi.hoisted(() => ({ handlers: new Map<string, unknown>() }))
 // A gate a test can set to HOLD the save dialog — and with it a confirmed skill run — open, so
 // the occupancy span can be observed while the run is genuinely in flight.
 const dialogState = vi.hoisted(() => ({
   saveResult: { canceled: true } as { canceled: boolean; filePath?: string },
-  gate: undefined as Promise<void> | undefined
+  gate: undefined as Promise<void> | undefined,
+  /** How many save dialogs opened (#606: a cancelled run must never reach one). */
+  calls: 0
 }))
 vi.mock('electron', () => ({
   ipcMain: {
@@ -22,6 +26,7 @@ vi.mock('electron', () => ({
   dialog: {
     showOpenDialog: async () => ({ canceled: true, filePaths: [] }),
     showSaveDialog: async () => {
+      dialogState.calls++
       if (dialogState.gate) await dialogState.gate
       return dialogState.saveResult
     }
@@ -29,14 +34,16 @@ vi.mock('electron', () => ({
   app: { getVersion: () => '0.0.0-test' }
 }))
 
+import { existsSync } from 'node:fs'
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
-import { runAndPersistBenchmark } from '../../src/main/ipc/registerBenchmarkIpc'
+import { cancelRunningBenchmark, runAndPersistBenchmark } from '../../src/main/ipc/registerBenchmarkIpc'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import { RuntimeManager } from '../../src/main/services/runtime'
+import { endWorkOnModelStop } from '../../src/main/ipc/model-stop'
+import { RuntimeManager, type RuntimeFactory } from '../../src/main/services/runtime'
 import type { ModelRuntime } from '../../src/main/services/runtime'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { seedSettings, getSettings } from '../../src/main/services/settings'
-import { createConversation } from '../../src/main/services/chat'
+import { appendMessage, createConversation } from '../../src/main/services/chat'
 import { IPC } from '../../src/shared/ipc'
 import { t } from '../../src/shared/i18n'
 import { getToolDescriptor } from '../../src/shared/skill-tools'
@@ -46,6 +53,7 @@ import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { tempRoot } from '../helpers/db-fixtures'
 import { seedStoredTextDoc } from '../helpers/doc-fixtures'
 import { writeSkillPackage } from '../helpers/skill-fixtures'
+import { killableRuntime } from '../helpers/killable-runtime'
 import { makeSkillsWorld, makeSkillsIpcContext } from '../helpers/skills-world'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
@@ -66,8 +74,8 @@ function fakeRuntime(): ModelRuntime {
   }
 }
 
-async function startedManager(): Promise<RuntimeManager> {
-  const mgr = new RuntimeManager(() => fakeRuntime())
+async function startedManager(factory: RuntimeFactory = () => fakeRuntime()): Promise<RuntimeManager> {
+  const mgr = new RuntimeManager(factory)
   await mgr.start({ modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 })
   return mgr
 }
@@ -98,11 +106,11 @@ async function makeHarness(
   skillId: string,
   tools: string[],
   docText: string,
-  opts: { docTasksActive?: boolean } = {}
+  opts: { docTasksActive?: boolean; runtimeFactory?: RuntimeFactory } = {}
 ): Promise<Harness> {
   const w = makeSkillsWorld('occ-ipc', { seedApp: (d) => writeSkill(d, skillId, tools) })
   const db = w.db
-  const runtime = await startedManager()
+  const runtime = await startedManager(opts.runtimeFactory)
   const ctx = makeSkillsIpcContext(w, {
     extra: {
       paths: { workspacePath: w.root, rootPath: w.root },
@@ -162,6 +170,7 @@ beforeEach(() => {
   ipcState.handlers.clear()
   dialogState.saveResult = { canceled: true }
   dialogState.gate = undefined
+  dialogState.calls = 0
   inFlightStreams.clear()
 })
 
@@ -262,11 +271,11 @@ describe('startSkillRun — the model-lane guard (#186)', () => {
 // ---- #185: the benchmark's re-entrancy and busy guard ---------------------------
 
 describe('runAndPersistBenchmark — the re-entrancy and busy guard (#185)', () => {
-  async function benchCtx(): Promise<{ ctx: AppContext; runtime: RuntimeManager; db: Db }> {
+  async function benchCtx(factory?: RuntimeFactory): Promise<{ ctx: AppContext; runtime: RuntimeManager; db: Db }> {
     const root = tempDir()
     const db = openDatabase(join(root, 'test.sqlite'))
     seedSettings(db)
-    const runtime = await startedManager()
+    const runtime = await startedManager(factory)
     const ctx = {
       db,
       paths: { workspacePath: root, rootPath: root },
@@ -324,5 +333,66 @@ describe('runAndPersistBenchmark — the re-entrancy and busy guard (#185)', () 
     const result = await runAndPersistBenchmark(ctx)
     expect(getSettings(db).lastBenchmark?.ranAt).toBe(result.ranAt)
     expect(runtime.occupancy.isBusy()).toBe(false)
+  })
+
+  // #606: lock and quit stopped the model under the speed leg, which then died on the killed socket.
+  // They now cancel the run first (`ctx.cancelBenchmark` → `cancelRunningBenchmark`). Here the
+  // workspace still admits work, so only the cancel itself can keep the result from persisting.
+  it('a lock or quit cancels the speed leg: its request is aborted and nothing is persisted (#606)', async () => {
+    let markParked!: () => void
+    const parked = new Promise<void>((r) => (markParked = r))
+    const signals: AbortSignal[] = []
+    const { ctx, runtime, db } = await benchCtx((opts) =>
+      killableRuntime({ modelId: opts.modelId, onParked: markParked, signals })
+    )
+    const run = runAndPersistBenchmark(ctx)
+    run.catch(() => undefined)
+    await parked // the speed leg's request is in flight
+
+    cancelRunningBenchmark(ctx)
+    await expect(run).rejects.toThrow(t('en', 'main.benchmark.lockedDuringRun'))
+    expect(signals).toHaveLength(1)
+    expect(signals[0].aborted).toBe(true) // ended as a cancel, before any sidecar stop
+    expect(getSettings(db).lastBenchmark).toBeNull()
+    expect(runtime.occupancy.isBusy()).toBe(false)
+  })
+})
+
+// ---- #606: a stop or switch of the model cancels the skill runs streaming on it ----------------
+
+describe('a stop or switch of the chat model mid-run (#606)', () => {
+  const DOC = 'Anna Berger lives at Lindenweg 4 in Freiburg.'
+
+  // Before #606 the run's own signal was untouched, so the killed request took the failure path: the
+  // redaction fell back to the rule-based floor, dropped what the model had found and opened the save
+  // dialog (it then saved — 'done', 'cleanFloor'); the edit ended 'failed', 'editFailed'. Seen in the
+  // real app for the redaction (2026-10-06). Driven through `startSkillRun`, the real manager and the
+  // production hook body, so the run's model flag comes from the handler, not from this test.
+  it.each([
+    ['redaction', 'stop', 'redact_document'],
+    ['redaction', 'switch', 'redact_document'],
+    ['document-edit', 'stop', 'apply_document_edits']
+  ] as const)('%s: a model %s during the locate pass ends the run cancelled, with no save dialog', async (skillId, how, tool) => {
+    let markParked!: () => void
+    const parked = new Promise<void>((r) => (markParked = r))
+    const h = await makeHarness(skillId, [tool], DOC, {
+      runtimeFactory: (opts) => killableRuntime({ modelId: opts.modelId, onParked: markParked })
+    })
+    h.runtime.setModelStopHook((kind) => endWorkOnModelStop(h.ctx, kind)) // the `main/index.ts` wiring
+    if (tool === 'apply_document_edits') {
+      appendMessage(h.db, { conversationId: h.conversationId, role: 'user', content: 'Change Anna to Bea.' })
+    }
+    const out = join(tempDir(), 'copy.txt')
+    dialogState.saveResult = { canceled: false, filePath: out }
+
+    const handle = startedHandle(await startRun(h, tool, true))
+    await parked // the locate pass's model request is in flight
+    if (how === 'stop') await h.runtime.stop()
+    else await h.runtime.start({ modelId: 'm2', modelPath: '/m2.gguf', contextTokens: 2048 })
+
+    const final = await pollUntilTerminal(handle)
+    expect(final.state).toBe('cancelled') // "Stopped. Nothing was saved."
+    expect(dialogState.calls).toBe(0)
+    expect(existsSync(out)).toBe(false)
   })
 })

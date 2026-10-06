@@ -30,10 +30,11 @@ export interface ShutdownDeps {
 /**
  * Overall bound on the AWAITED MIDDLE of `performShutdown` (#238, #230;
  * owner decision 13 unanswered → this default, #230): the local-API stop, the sidecar stops, the
- * stream settle, the doc-task settle and the plaintext-operation settle (#237) are raced as ONE
+ * stream settle, the doc-task + skill-run settle and the plaintext-operation settle (#237) are raced as ONE
  * section against this deadline. The per-step bounds sum to 25.5 s (local API ≤ 0.5 s; sidecars
- * ≤ 10 s — the transcriber's suspend timeout; streams 5 s; doc tasks 5 s; plaintext operations
- * 5 s), so 30 s only ever fires on a step that is not honouring its own bound. When it fires,
+ * ≤ 10 s — the transcriber's suspend timeout; streams 5 s; doc tasks and skill runs 5 s, settled
+ * side by side (#606); plaintext operations 5 s), so 30 s only ever fires on a step that is not
+ * honouring its own bound. When it fires,
  * the teardown logs, ABANDONS the parked promises and
  * goes straight on to the log flush + the vault lock — the lock is never inside the race (a
  * deadline that abandoned the lock would reproduce the hard-kill outcome it exists to prevent).
@@ -72,7 +73,7 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   // AUD-02 — arm the WORKSPACE lock latch FIRST, and in its OWN best-effort try (two latches
   // sharing one `catch` would make whichever runs second silently optional). The teardown below
   // spends up to ~25.5 s in awaited windows (the local-API stop ≤ 0.5 s, the sidecar stops ≤ 10 s,
-  // the stream settle ≤ 5 s, the doc-task settle ≤ 5 s, the plaintext-operation settle ≤ 5 s — bounded as a whole by
+  // the stream settle ≤ 5 s, the doc-task + skill-run settle ≤ 5 s, the plaintext-operation settle ≤ 5 s — bounded as a whole by
   // `SHUTDOWN_OVERALL_DEADLINE_MS`) during which the DB is still OPEN, so `isUnlocked()` is still true and every
   // content-surface guard still admits. Most sidecars are safe here because QUIT uses the
   // permanently-latching `stop()` where lock uses the non-latching `suspend()` — a translate or
@@ -119,6 +120,21 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     // Abort an in-flight Translate-view job (TG-4) too, before the sidecar stop below — its next
     // window would otherwise call translate() and race a lazy respawn of the server being killed.
     void ctx?.translateJobs?.stop()
+  } catch {
+    /* best-effort */
+  }
+  // #606: every skill run too, before the sidecars stop — the lock path's rule. Left running, a
+  // redaction whose model request died with the sidecar fell back to the rule-based floor and opened
+  // its save dialog during the teardown. Its settle is awaited beside the doc task's, below. Its OWN
+  // try, like each registry here.
+  try {
+    ctx?.skillRuns?.cancelAll()
+  } catch {
+    /* best-effort */
+  }
+  // #606: and the benchmark's speed leg, which streams on the same model (nothing is persisted).
+  try {
+    ctx?.cancelBenchmark?.()
   } catch {
     /* best-effort */
   }
@@ -197,7 +213,9 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
     // translation handler persists/shreds its `.parse` transient synchronously during the unwind
     // while ctx.db is open; awaiting the settle here makes cleanup-before-close the ORDERING, not a
     // race. Bounded (~5 s) so a wedged handler can never hang quit. Mirrors the stream-settle above.
-    await awaitActiveDocTaskSettled(ctx, log)
+    // #606: the cancelled skill runs settle in the same window and bound, so each records its
+    // cancel while ctx.db is open (a categorize run ends when its doc task does).
+    await Promise.all([awaitActiveDocTaskSettled(ctx, log), awaitSkillRunsSettled(ctx, log)])
     // #237: then the plaintext operations aborted above — same bound. A parser that cannot cancel
     // (pdfjs, mammoth) outlives it; the sweep below (outside this section, so a deadline that
     // abandons this settle still reaches it) shreds its transient before the lock.
@@ -483,6 +501,22 @@ async function awaitActiveDocTaskSettled(
     await Promise.race([settle.catch(() => undefined), timeout])
   } finally {
     if (timer) clearTimeout(timer)
+  }
+}
+
+/**
+ * Await the cancelled skill runs within `SHUTDOWN_TASK_SETTLE_TIMEOUT_MS` (#606). A run parked in
+ * a save dialog that was already open does not settle; quit proceeds at the bound. Never throws.
+ */
+async function awaitSkillRunsSettled(
+  ctx: AppContext | null,
+  log: Pick<typeof realLog, 'error' | 'info'>
+): Promise<void> {
+  try {
+    const settled = await (ctx?.skillRuns?.awaitSettled(SHUTDOWN_TASK_SETTLE_TIMEOUT_MS) ?? true)
+    if (!settled) log.info('quit: a skill run was still running at the settle bound')
+  } catch (err) {
+    log.error('Error settling skill runs on quit', String(err))
   }
 }
 

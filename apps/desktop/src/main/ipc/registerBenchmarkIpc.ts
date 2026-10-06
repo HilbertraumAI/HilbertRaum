@@ -233,13 +233,31 @@ export async function runAndPersistBenchmark(
   const busy = modelBusyLane(ctx)
   if (busy) throw new BenchmarkBusyError(busy)
   const releaseOccupancy = ctx.runtime.occupancy.begin('benchmark')
+  const abort = new AbortController()
+  runningBenchmarks.set(ctx, abort)
   notifyPerformanceChanged()
   try {
-    return await runBenchmarkAndPersist(ctx, onProgress)
+    return await runBenchmarkAndPersist(ctx, abort.signal, onProgress)
   } finally {
+    if (runningBenchmarks.get(ctx) === abort) runningBenchmarks.delete(ctx)
     releaseOccupancy()
     notifyPerformanceChanged()
   }
+}
+
+/**
+ * #606: the running benchmark's abort, one per context (the #185 guard above admits one run at a
+ * time on a runtime). Lock and quit used to stop the chat model under the speed leg, which then died
+ * on the killed socket (undici's `TypeError: terminated`) and ended as a silent null or a
+ * `speedSkipped`. They now abort it first (`ctx.cancelBenchmark`), and the run persists nothing. A
+ * model stop or switch does NOT cancel it: the run keeps its other legs and says the speed leg was
+ * skipped (#393).
+ */
+const runningBenchmarks = new WeakMap<AppContext, AbortController>()
+
+/** #606: abort the benchmark running on `ctx` — the lock and quit teardowns, via `ctx.cancelBenchmark`. */
+export function cancelRunningBenchmark(ctx: AppContext): void {
+  runningBenchmarks.get(ctx)?.abort()
 }
 
 /**
@@ -257,6 +275,7 @@ export class BenchmarkBusyError extends Error {
 /** The benchmark body, run under the `benchmark` occupancy span held by the caller above. */
 async function runBenchmarkAndPersist(
   ctx: AppContext,
+  signal: AbortSignal,
   onProgress?: (step: BenchmarkProgressStep) => void
 ): Promise<BenchmarkResult> {
   // AUD-03 for the benchmark (PR #303 audit P7): WHICH unlocked session this run belongs to,
@@ -312,8 +331,16 @@ async function runBenchmarkAndPersist(
       modelBusyLane(ctx, { ignore: ['benchmark'] }) != null ||
       modelStartInFlight(ctx) ||
       ctx.runtime.active() !== runtime,
+    signal,
     onProgress
   })
+
+  // #606: a lock or quit cancelled the run (`cancelRunningBenchmark`). Both close the workspace, so it
+  // is refused like the late write below — without relying on the lock latch still being armed.
+  if (signal.aborted) {
+    log.info('Benchmark cancelled by a lock or quit; result not persisted')
+    throw new Error(tMain('main.benchmark.lockedDuringRun'))
+  }
 
   // The late-write guard (P7): the legs are done, nothing is written yet. A completed lock reads
   // as not admitted; a lock still tearing down reads the same way (`isLocking`, AUD-02); a lock
@@ -1260,6 +1287,8 @@ export function observeAnswerSpeed(ctx: AppContext, speed: AnswerSpeed): void {
 
 export function registerBenchmarkIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
+  // #606: lock and quit cancel the running benchmark before they stop the chat model.
+  ctx.cancelBenchmark = () => cancelRunningBenchmark(ctx)
   // Persist every observed placement under its model id (benchmark.md "Your model"), so the
   // row survives a restart. Skipped while locked; a failure is logged, never thrown into a start.
   // The session latch already moved before this observer ran, and the snapshot reads the

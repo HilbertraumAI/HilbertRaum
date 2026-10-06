@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-06 — **#606 — lock, quit and a model stop or switch end the skill runs and the benchmark's speed leg on the model first (`fix/606-teardown-skill-bench`).** A run's
+own signal was never aborted, so a redaction whose model request died fell back to the rule-based floor and opened its save dialog (over the lock screen after "Lock now", real
+app); an edit ended `editFailed`. `SkillRunController` `cancelAll` / `cancelModelRuns` / `awaitSettled` (`ctx.skillRuns`), the #600 hook's 4th step, `ctx.cancelBenchmark`; the run
+reads "Stopped. Nothing was saved." Owner calls from the issue. Record: CB-5 "#606 amendment", `benchmark.md` "Lock and quit cancel the speed leg". Open: a crash still degrades._
 _2026-10-06 — **#612 — the Stop button, lock and quit leave the same lasting "Reply stopped" marker (`fix/612-stopped-answer-marker`).** Each abort names its cause
 (`chat/ended-early.ts`: `'user'` Stop, `'lock'` lock + quit, `'model'` #600); `persistAssistantMessage` stamps any of them, an unanswered question is marked for all
 three, a re-ask cut by lock/quit restores its predecessor; the evidence snapshot's `answerEndedEarly` (replaced the unreleased `answerStopped`) names the cause in the
@@ -39,7 +43,7 @@ never automatic). A CPU-mode crash restarts the model once per model per session
 _2026-10-06 — **#600 — a model stop or switch ends the answer cleanly; a crash speaks in words (`fix/600-model-stop-mid-answer`).** `RuntimeManager`'s model-stop hook
 (after `current` is cleared, before the kill, no wait; never on the crash restart) ends the local API request (`model_not_loaded`/`model_starting`), a deep-index build and
 the answers: partial kept + "Reply stopped" (new `messages.ended_early`, not `truncated`), a re-ask keeps its predecessor, an unanswered question is marked, an AI Model card note.
-A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: #606, #613 (#612: above)._
+A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: #613 (#606, #612: above)._
 _2026-10-06 — **#598 — a prefill wedged behind pings ends; the header wait is 180 s (`fix/598-prefill-liveness`).** Both pins ping every ~30 s (b9849 too — #594's
 record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `return_progress` on every chat request and two prefill clocks: any byte (120 s) and a
 `prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
@@ -135,13 +139,6 @@ min(8192, RAM MiB / 8)` on every chat start; manual `prompt-cache-smoke`; LLVM `
 Records: model-policy (licence, "To bump": stable-release pins only), model-benchmarks §6.6 "#512 amendment" (smoke, cache session, the
 grounded-QA gate: PASSED), GPU record §3. **Rig legs PASSED 2026-09-27** (PR #524, not merged: qwen3.6/3.8 restore, 27B MTP 66/66, Linux
 asset run; close-out `fix/512-close-out`, smoke B now shares A's system message). Open: macOS asset never run; b9849 drives (#516)._
-_2026-09-22 — **#410 — the OCR language files install in-app (`feat/410-in-app-ocr-install`): a failed scan or
-photo row in Documents and a quiet AI Model row offer "Download OCR files", and OCR activates without a restart.**
-Record: `architecture.md` "In-app OCR install — design record" (owner decisions D1–D7, the facts, the design as
-built); contracts in `data-contracts.md` (four `ocr:*` channels, `OcrRefreshOutcome`); `security-model.md` (#410
-note). Its own narrow installer, not an engine family; sha256 + exact size pinned in code (`OCR_PINS`,
-drift-tested), only the URL from the yaml; the doc-task deps now read `ctx.ocrEngine` live. Open: the owner's
-packaged-build checks (PR body); hand-copied files or a grown language set still need a restart (§5 item 15(a))._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -192,7 +189,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

@@ -496,6 +496,35 @@ describe('measureTokensPerSecond', () => {
     expect(onBusySkip).not.toHaveBeenCalled()
   })
 
+  // #606 — a CANCELLED probe: lock and quit abort the leg before they stop the model. The aborted
+  // stream ends cleanly with the chunks it had (the SSE reader returns on an abort), rejects (the kill
+  // landing too), or still hands over a chunk it had buffered. None is a reading, and a cancel is no
+  // busy skip — although the busy predicate reads true by then (the teardown has taken the model away).
+  it.each(['ends cleanly', 'rejects', 'still delivers a chunk'] as const)(
+    'a cancelled probe whose stream %s after the abort is no reading and no busy skip (#606)',
+    async (shape) => {
+      const cancel = new AbortController()
+      const onBusySkip = vi.fn()
+      const rt: ModelRuntime = {
+        ...timedRuntime([], undefined),
+        async *chatStream() {
+          yield 'a'
+          yield 'b'
+          cancel.abort() // the teardown's cancel lands mid-stream
+          if (shape === 'rejects') throw new TypeError('terminated')
+          if (shape === 'still delivers a chunk') yield 'c'
+        }
+      }
+      const reading = await measureTokensPerSecond(rt, {
+        signal: cancel.signal,
+        modelBusy: () => cancel.signal.aborted,
+        onBusySkip
+      })
+      expect(reading).toBeNull()
+      expect(onBusySkip).not.toHaveBeenCalled()
+    }
+  )
+
   it('never throws when the busy predicate itself throws in the catch (#393)', async () => {
     // The catch runs at the moment the runtime is dying, so the predicate it consults can blow
     // up (a manager tearing down under it). The function is documented "never throws".

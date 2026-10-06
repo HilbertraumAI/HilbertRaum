@@ -12,6 +12,7 @@ import type { AuditRecorder } from './audit'
 import type { DocTaskManager } from './doctasks'
 import type { ZimService } from './zim'
 import type { SkillRegistry } from './skills/registry'
+import type { SkillRunController } from './skills/run-controller'
 import type { VisionService } from './vision'
 import type { TrustedSenders } from '../ipc/guarded-handle'
 import type { TranslateJobService } from './translation/jobs'
@@ -124,6 +125,20 @@ export interface AppContext {
    * Optional so partial test contexts stay valid.
    */
   skillRunActive?: (documentId: string) => boolean
+  /**
+   * #606: the skill-run lane's teardown handle, assigned by registerSkillsIpc like
+   * `skillRunActive`. Lock and quit cancel every run before they stop the sidecars and await the
+   * runs' settle before the vault re-encrypts; a stop or switch of the chat model cancels the runs
+   * streaming on it (`endWorkOnModelStop`). Optional so partial test contexts stay valid.
+   */
+  skillRuns?: Pick<SkillRunController, 'cancelAll' | 'cancelModelRuns' | 'awaitSettled'>
+  /**
+   * #606: abort the running benchmark's speed leg, assigned by registerBenchmarkIpc. Lock and quit
+   * call it before they stop the chat model, so the leg ends as a cancel rather than on the killed
+   * socket; nothing is persisted. A model stop or switch does not: the run keeps its system, drive
+   * and graphics legs and says the speed leg was skipped (#393). Optional (partial test contexts).
+   */
+  cancelBenchmark?: () => void
   /**
    * In-flight ingestion probe (BE-1, ocr-audit 2026-07-18): true while the docs IPC import
    * loop or a re-index — the module-local `processing` set in registerDocsIpc, which assigns

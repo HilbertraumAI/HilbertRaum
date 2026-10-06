@@ -604,6 +604,25 @@ the resolved value is documented as "the reconciled object that was written" (M6
 refusal is the typed `BenchmarkBusyError` (the friendly localized lane copy as its message, the
 lane as a field), so the scheduler can tell it from a failure.
 
+**Lock and quit cancel the speed leg (#606, 2026-10-06).** Lock and quit end every lane on the
+chat model before they stop it, and the benchmark had no way to be ended: `runBenchmark` passed
+no signal to `measureTokensPerSecond`, so the leg died on the killed socket (undici's
+`TypeError: terminated`, within 3 ms) and ended as a silent `null` or as `warnSpeedSkipped`. Each
+run now owns an `AbortController`, held per context (the #185 guard admits one run at a time on a
+runtime); `cancelRunningBenchmark(ctx)` aborts it, and both teardowns call it through
+`ctx.cancelBenchmark` before `runtime.stop()`. A cancelled leg yields no reading and no busy skip,
+whether its stream ends cleanly after the abort (the SSE reader does), rejects, or still delivers a
+buffered chunk (the abort is checked before the busy predicate, which reads true by then), and
+`runAndPersistBenchmark` then persists nothing and rejects with the late-write guard's copy
+(`main.benchmark.lockedDuringRun`) without depending on the lock latch. A **model stop or switch
+does not cancel it**: the run keeps its system, drive and graphics legs and says the speed leg was
+skipped (#393 above). Cancelling there would throw those legs away. Not cancellable: the GPU and
+drive probes before the leg (each bounded, neither touches the model or user data). A lock that
+then fails (CODE-1a, e.g. ENOSPC) has still cancelled the run, which reports the lock copy on a
+workspace that stayed open; run it again. Tests:
+`model-occupancy-ipc.test.ts` "(#606)", `benchmark.test.ts` "a cancelled probe … (#606)", and the
+teardown ordering in `workspace-ipc.test.ts` / `shutdown.test.ts`.
+
 **Upgrade backfill (PR #303 audit, M4).** A workspace from before the history existed holds the
 previous computer's result only in `lastBenchmark`, so whatever replaces that headline first
 files the **outgoing** result into the history (`backfillOutgoing`): the same-machine startup

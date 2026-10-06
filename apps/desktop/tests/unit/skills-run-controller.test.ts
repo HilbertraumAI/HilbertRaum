@@ -1,5 +1,6 @@
 import { describe, it, expect, vi } from 'vitest'
 import { SkillRunController, type ToolRunner } from '../../src/main/services/skills/run-controller'
+import { hangBudgetMs } from '../helpers/hang-budget'
 
 // architecture.md "Skills — design record" §9 (S11b) — the GENERIC tool-run lifecycle controller: running →
 // terminal, progress merge, Cancel via the AbortSignal, and (A2, audit
@@ -198,5 +199,39 @@ describe('SkillRunController — re-attach surface (U6)', () => {
     } finally {
       now.mockRestore()
     }
+  })
+})
+
+// #606 — the teardown owners' handle. Lock and quit cancel every running run; a stop or switch of the
+// chat model cancels only the runs streaming on it, so an extraction (no model) survives it. The
+// teardowns then wait, bounded, for the cancelled runs to record their outcome before the DB closes.
+describe('SkillRunController — the teardown handle (#606)', () => {
+  const parked: ToolRunner = ({ signal }) =>
+    new Promise((resolve) => signal.addEventListener('abort', () => resolve({ ok: false }), { once: true }))
+
+  it('a model stop cancels only the runs streaming on the model; lock and quit cancel every run', async () => {
+    const c = new SkillRunController()
+    const redact = c.start({ skillInstallId: 's', toolName: 'redact_document', documentId: 'doc-a', documentCount: 1, usesModel: true, runner: parked })
+    const extract = c.start({ skillInstallId: 's', toolName: 'extract_transactions', documentId: 'doc-b', documentCount: 1, runner: parked })
+
+    c.cancelModelRuns()
+    expect(await waitForTerminal(c, redact.runHandle)).toBe('cancelled')
+    expect(c.get(extract.runHandle)!.state).toBe('running')
+
+    c.cancelAll()
+    expect(await waitForTerminal(c, extract.runHandle)).toBe('cancelled')
+  })
+
+  it('awaitSettled resolves once the running runs settle, and gives up at its bound', async () => {
+    const c = new SkillRunController()
+    let finish!: () => void
+    const slow: ToolRunner = () => new Promise((resolve) => (finish = () => resolve({ ok: false, cancelled: true })))
+    const { runHandle } = c.start({ skillInstallId: 's', toolName: 'redact_document', documentId: 'doc-a', documentCount: 1, runner: slow })
+
+    expect(await c.awaitSettled(10)).toBe(false) // a run that never settles cannot hold a lock or a quit
+    const settled = c.awaitSettled(hangBudgetMs(5_000))
+    finish()
+    expect(await settled).toBe(true)
+    expect(c.get(runHandle)!.state).toBe('cancelled') // finish() ran before the wait resolved
   })
 })

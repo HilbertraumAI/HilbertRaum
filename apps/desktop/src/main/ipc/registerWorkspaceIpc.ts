@@ -92,6 +92,21 @@ async function awaitActiveDocTaskSettled(ctx: AppContext): Promise<void> {
 }
 
 /**
+ * #606: await the skill runs cancelled at the start of the teardown within the same bound, so each
+ * records its cancel in `skill_runs` while `ctx.db` is open — after the lock the write failed and a
+ * cancelled run read "This could not be saved". A run parked in a save dialog that was already open
+ * does not settle (an abort cannot close the dialog); the lock proceeds at the bound. Best-effort.
+ */
+async function awaitSkillRunsSettled(ctx: AppContext): Promise<void> {
+  try {
+    const settled = await (ctx.skillRuns?.awaitSettled(LOCK_TASK_SETTLE_TIMEOUT_MS) ?? true)
+    if (!settled) log.warn('Lock: a skill run was still running at the settle bound')
+  } catch (err) {
+    log.error('Error settling skill runs on lock', String(err))
+  }
+}
+
+/**
  * Await the aborted plaintext operations (preview / re-index / import prepare / dictation /
  * export) within the same bound as the doc-task settle, then shred whatever transient is still
  * registered — a parser that cannot cancel (pdfjs, mammoth) is bounded by this sweep, not by
@@ -494,6 +509,24 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   // that outlives the lock. `cancelAllDocTasks()` closes that window; no permanent latch (the
   // manager is usable again after unlock).
   ctx.docTasks?.cancelAllDocTasks()
+  // #606: and every skill run, before the sidecars stop below. A redaction or document-edit run whose
+  // model request died with the sidecar took its FAILURE path, because its own signal was untouched:
+  // redaction fell back to the rule-based floor and opened its save dialog over the lock screen (seen
+  // in the real app), and an edit ended "could not be completed". Cancelled first, the killed request
+  // reads as the cancel it is and nothing is written. Every run, whatever its tool — an extraction
+  // decrypts document text too. Its settle is awaited below, beside the doc task's.
+  try {
+    ctx.skillRuns?.cancelAll()
+  } catch {
+    /* best-effort */
+  }
+  // #606: and the benchmark's speed leg, which streams on the same model. Cancelled, it ends as an
+  // abort instead of on the killed socket; nothing is persisted (`runBenchmarkAndPersist`).
+  try {
+    ctx.cancelBenchmark?.()
+  } catch {
+    /* best-effort */
+  }
   // And the active TRANSLATE-VIEW job (TG-4): abort it BEFORE the translator suspend below —
   // left running, its next window would call translate() and lazily RESPAWN the just-suspended
   // ~10 GB sidecar with the source text while the vault re-encrypts. stop() also purges the job
@@ -579,8 +612,9 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   await awaitInFlightStreamsSettled()
   // TA-1 H2: also await the cancelled doc-task's abort-unwind (its materialize/shred runs
   // synchronously while ctx.db is open) before purge/lock close the DB — bounded so a wedged
-  // handler can't hang the lock. Mirrors the in-flight-stream settle await above.
-  await awaitActiveDocTaskSettled(ctx)
+  // handler can't hang the lock. Mirrors the in-flight-stream settle await above. #606: the
+  // cancelled skill runs settle in the same window (a categorize run ends when its doc task does).
+  await Promise.all([awaitActiveDocTaskSettled(ctx), awaitSkillRunsSettled(ctx)])
   // #237: then the plaintext operations aborted above — settle within the same bound, and shred
   // whatever `.parse*` transient a parser that cannot cancel still holds. Only registered paths
   // are touched, never a stored copy.
