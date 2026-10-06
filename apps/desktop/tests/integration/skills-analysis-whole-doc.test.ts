@@ -94,22 +94,44 @@ describe('whole-doc analysis handlers — intends() (A4/SKA-8 vocabulary-shaped 
     })
   }
 
-  it('what-changed: intends() is TRUE only for a compare-VOCABULARY question at ≠2 docs (SKA-8)', () => {
+  // #582: at any document count other than two what-changed's applies() is false (pinned below), so
+  // intends() alone decides between "select exactly two" and the ordinary engines. It reads only the
+  // question. Each row is ONE request in both languages, and both must get the same answer: German
+  // "Unterschiede" used to route while English "differences" fell through to a top-k answer under the
+  // compare fence. A term added for one language only turns its row red.
+  const WHAT_CHANGED_PAIRS = [
+    { en: 'what changed?', de: 'Was hat sich geändert?', intends: true },
+    { en: 'summarize the differences', de: 'Fasse die Unterschiede zusammen', intends: true },
+    { en: 'what is the difference?', de: 'Was ist der Unterschied?', intends: true },
+    { en: 'summarize the changes', de: 'Fasse die Änderungen zusammen', intends: true },
+    { en: 'list the changes', de: 'Liste die Veränderungen auf', intends: true },
+    { en: 'what is the change in clause 5?', de: 'Was ist die Änderung in Klausel 5?', intends: true },
+    { en: 'What changed in the contract?', de: 'Was hat sich am Vertrag geändert?', intends: true },
+    { en: 'Which clauses were changed?', de: 'Welche Klauseln wurden geändert?', intends: true },
+    { en: 'List the changed clauses', de: 'Liste die geänderten Klauseln auf', intends: true },
+    { en: 'How has the contract changed?', de: 'Wie hat sich der Vertrag verändert?', intends: true },
+    { en: 'compare them', de: 'Vergleiche sie', intends: true },
+    { en: 'Please compare the two contracts', de: 'Bitte die beiden Verträge vergleichen', intends: true },
+    { en: 'give me a comparison', de: 'Mach einen Vergleich', intends: true },
+    { en: 'contract A vs contract B', de: 'Vertrag A vs. Vertrag B', intends: true },
+    { en: 'What does the old version say?', de: 'Was sagt die alte Version?', intends: true },
+    { en: 'How does the new version differ?', de: 'Wie unterscheidet sich die neue Version?', intends: true },
+    // SKA-8: off the compare vocabulary in both languages, so no "select two" dead-end. The verb "change"
+    // is an edit request, and unchanged / various / a settlement are not compares; small talk never routes.
+    { en: 'How do I change my password?', de: 'Wie ändere ich mein Passwort?', intends: false },
+    { en: 'Does the rent stay unchanged?', de: 'Bleibt die Miete unverändert?', intends: false },
+    { en: 'Which different payment methods are named?', de: 'Welche unterschiedlichen Zahlungsarten werden genannt?', intends: false },
+    { en: 'What does the settlement agreement say?', de: 'Was regelt die Vergleichsvereinbarung?', intends: false },
+    { en: 'who is Angela Merkel?', de: 'Wer ist Angela Merkel?', intends: false },
+    { en: 'what does this say?', de: 'Was steht hier?', intends: false },
+    { en: 'thanks!', de: 'danke!', intends: false }
+  ] as const
+
+  it.each(WHAT_CHANGED_PAIRS)('what-changed: "$en" and "$de" both intend compare = $intends (#582)', ({ en, de, intends }) => {
     const db = freshDb()
-    const a = seedDoc(db, ['a'])
-    const b = seedDoc(db, ['b'])
-    const c = seedDoc(db, ['c'])
-    const h = whatChangedAnalysisHandler
-    for (const ids of [[a], [a, b, c]]) {
-      expect(h.applies!({ db, scope: { documentIds: ids }, question: 'what changed?' })).toBe(false)
-      // A compare-vocabulary question at the wrong count still routes ("select exactly two").
-      expect(h.intends!({ db, scope: { documentIds: ids }, question: 'what changed?' })).toBe(true)
-      // SKA-8: a general/off-vocabulary question does NOT intend compare — it fails the count AND misses the
-      // vocabulary, so it falls through to the ordinary engines instead of the "select two" dead-end.
-      expect(h.intends!({ db, scope: { documentIds: ids }, question: 'summarize the differences' })).toBe(false)
-    }
-    // Clear small talk stays false at any count.
-    expect(h.intends!({ db, scope: { documentIds: [a] }, question: 'thanks!' })).toBe(false)
+    const ask = (question: string): boolean =>
+      whatChangedAnalysisHandler.intends!({ db, scope: { documentIds: [] }, question })
+    expect({ en: ask(en), de: ask(de) }).toEqual({ en: intends, de: intends })
   })
 })
 

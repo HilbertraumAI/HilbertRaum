@@ -238,6 +238,14 @@ from its first public `1.0.0` release onward.
   sensitive data, such as "Please black out all sensitive data" or "bitte auf sensible Daten
   checken", no longer get a suggestion: pick Document Redaction or Share-Safe Review yourself there
   (#604).
+- **What Changed? treats English and German compare requests the same way.** With the What Changed?
+  skill selected and one document in scope (or three or more), "Fasse die Unterschiede zusammen" asked
+  you to pick exactly two documents. "Summarize the differences" got an answer built from a few passages
+  of the documents instead, which could describe a second version that was not there. Now both languages
+  ask for exactly two documents. That covers requests with words such as "differences", "difference",
+  "changes", "compare", "comparison", "vs" or "old/new version", and German ones such as "Was hat sich
+  am Vertrag geändert?", "Was ist der Unterschied?" or "die beiden Verträge vergleichen". "Differences"
+  also suggests the skill now, as "Unterschiede" already did (#582).
 - **Word documents no longer leave some of their text out of search.** Text inside custom XML
   (used by some forms and templates) and text moved with Track Changes was skipped when a `.docx`
   was added, so questions about it found nothing. The updated Word reader (mammoth 1.13.0) reads

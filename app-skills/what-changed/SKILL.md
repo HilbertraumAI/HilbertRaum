@@ -23,11 +23,12 @@ permissions:
   filesystem: skill_resources_only
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
-  # parity test. Bilingual compare phrases; the bare imperatives (`compare these`, `vergleiche`) are
-  # route-only. `änderung`/`änderungen` are word-matched (each form in its own right, not a substring).
+  # parity test. Bilingual compare phrases; the bare compare and change words (`compare`, `vergleiche`,
+  # `changes`, `geändert`) are route-only. `differences` mirrors `unterschiede` (#582). `änderung`/
+  # `änderungen` are word-matched (each form in its own right, not a substring).
   # Edit the vocabulary, not this list.
   keywords: [what changed, what has changed, compare versions, compare documents, version difference,
-             differences between, changed between, redline, revision, updated terms, compare contract,
+             differences, changed between, redline, revision, updated terms, compare contract,
              was hat sich geändert, änderung, änderungen, unterschiede, versionen vergleichen,
              dokumente vergleichen, alte version, neue version, gegenüberstellung,
              vertragsänderung, aktualisierte bedingungen]

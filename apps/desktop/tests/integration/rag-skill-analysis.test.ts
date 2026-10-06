@@ -762,12 +762,14 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
     expect(assistantRows).toHaveLength(0)
   })
 
+  // #582: the English request that used to fall through to a top-k answer under the compare fence.
   it('what-changed at ≠ 2 docs answers "select exactly two" deterministically (1 doc and 3 docs)', async () => {
+    const ask = 'summarize the differences'
     const one = await makeMultiHarness({
       docs: [{ file: 'draft-v1.txt', text: 'first version text' }],
       installWhatChanged: true
     })
-    const r1 = (await invoke(handlers, IPC.askDocuments, one.conversationId, 'what changed?', 'app:what-changed'))
+    const r1 = (await invoke(handlers, IPC.askDocuments, one.conversationId, ask, 'app:what-changed'))
       .result as Message
     expect(r1.content).toBe(t('en', 'skills.analysis.selectTwo', { count: 1 }))
     expect(one.runtime.calls).toBe(0)
@@ -780,7 +782,7 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
       ],
       installWhatChanged: true
     })
-    const r3 = (await invoke(handlers, IPC.askDocuments, three.conversationId, 'what changed?', 'app:what-changed'))
+    const r3 = (await invoke(handlers, IPC.askDocuments, three.conversationId, ask, 'app:what-changed'))
       .result as Message
     expect(r3.content).toBe(t('en', 'skills.analysis.selectTwo', { count: 3 }))
     expect(three.runtime.calls).toBe(0)
