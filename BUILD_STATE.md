@@ -31,7 +31,7 @@
 _2026-10-06 — **#606 — lock, quit and a model stop or switch end the skill runs and the benchmark's speed leg on the model first (`fix/606-teardown-skill-bench`).** A run's
 own signal was never aborted, so a redaction whose model request died fell back to the rule-based floor and opened its save dialog (over the lock screen after "Lock now", real
 app); an edit ended `editFailed`. `SkillRunController` `cancelAll` / `cancelModelRuns` / `awaitSettled` (`ctx.skillRuns`), the #600 hook's 4th step, `ctx.cancelBenchmark`; the run
-reads "Stopped. Nothing was saved." Owner calls from the issue. Record: CB-5 "#606 amendment", `benchmark.md` "Lock and quit cancel the speed leg". Open: a crash still degrades._
+reads "Stopped. Nothing was saved." Owner calls from the issue. Record: CB-5 "#606 amendment", `benchmark.md` "Lock and quit cancel the speed leg". Open: #620 (a crash still degrades)._
 _2026-10-06 — **#612 — the Stop button, lock and quit leave the same lasting "Reply stopped" marker (`fix/612-stopped-answer-marker`).** Each abort names its cause
 (`chat/ended-early.ts`: `'user'` Stop, `'lock'` lock + quit, `'model'` #600); `persistAssistantMessage` stamps any of them, an unanswered question is marked for all
 three, a re-ask cut by lock/quit restores its predecessor; the evidence snapshot's `answerEndedEarly` (replaced the unreleased `answerStopped`) names the cause in the

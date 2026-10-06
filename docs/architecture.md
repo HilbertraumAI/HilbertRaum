@@ -1749,7 +1749,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
       **Not covered.**
       - A **crash** mid-redaction (`forceRestart`, no hook) still falls back to the floor and opens the
-        save dialog; the "rule-based detection only" note appears only after it (D78's design).
+        save dialog; the "rule-based detection only" note appears only after it (D78's design; #620,
+        an owner decision).
       - The OS session-end lock (`emergencyLock`) aborts nothing (#612 note above).
       - A run parked in an already-open save dialog does not settle; lock and quit go on at the bound.
       - `usesModel` is fixed when the run starts. A stop in the short tail after the locate pass (the
@@ -10514,7 +10515,7 @@ model pass. Builds directly on the §20 span-transform engine.
   and never claims "fully anonymized" (SKILL.md honesty block rewritten to "AI-assisted best-effort with a
   deterministic floor"). **#606:** a model stop or switch, a lock and a quit are cancels, not model
   failures. They abort the run's signal before the model dies, so the run ends "Stopped. Nothing was
-  saved." and never degrades (CB-5 "#606 amendment"). A crash still degrades.
+  saved." and never degrades (CB-5 "#606 amendment"). A crash still degrades (#620).
 - **Flow & gates unchanged.** Still user-initiated + confirm-gated (`export-file`); `skill_runs` stays
   content-free (entity VALUES never logged/audited — a privacy-guard test drives a secret name through the
   locate pass and asserts it reaches no sink). The `saveTextFile` boundary's trust model is untouched.
