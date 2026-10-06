@@ -150,6 +150,15 @@ from its first public `1.0.0` release onward.
   skill selected, "lösche" now points to the **Redact personal data** button like "entferne" does.
   Other phrasings get no suggestion, including two that used to get one: "Bitte personenbezogene
   Daten löschen." and "eine Version ohne personenbezogene Daten". Pick the skill yourself there (#608).
+- **Questions that mention sensitive data are no longer handed to Document Redaction.** A question
+  that mentioned "sensitive data" or "sensible Daten", about the GDPR, a privacy policy or a contract,
+  was offered Document Redaction. With automatic skills switched on and a PDF selected, it got a count
+  of the e-mail addresses and phone numbers in the document instead of an answer. Such questions are
+  now answered normally when no skill is selected, in English and German. "Remove the sensitive
+  data" and "sensible Daten entfernen" still offer the skill. Other requests that name only
+  sensitive data, such as "Please black out all sensitive data" or "bitte auf sensible Daten
+  checken", no longer get a suggestion: pick Document Redaction or Share-Safe Review yourself there
+  (#604).
 - **Word documents no longer leave some of their text out of search.** Text inside custom XML
   (used by some forms and templates) and text moved with Track Changes was skipped when a `.docx`
   was added, so questions about it found nothing. The updated Word reader (mammoth 1.13.0) reads

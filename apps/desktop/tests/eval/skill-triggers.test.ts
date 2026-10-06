@@ -29,26 +29,28 @@ const LABEL_SPACE = new Set<string>([...APP_VOCAB_SKILL_IDS, 'none'])
  *    the bare "personenbezogene Daten" offered on. It stopped offering in #608, and the infinitive
  *    "… daten löschen" stays out (owner ruling). They stay deviations: #602 found no German removal
  *    keyword that catches more requests without also firing on legal questions (architecture.md §18).
+ *  - tp-redaction-en-sensitive-blackout-01, tp-sharesafe-de-sensible-01: a removal request and a check
+ *    before sharing that only the bare "sensitive data" / "sensible Daten" offered Redaction on (an offer
+ *    the labellers accepted). Those stopped offering in #604: on legal, privacy-policy and contract
+ *    questions they auto-fired Redaction (owner decision, the accepted cost).
  */
 const KNOWN_SUGGESTION_DEVIATIONS: Record<string, string> = {
   'adv-meeting-schedule-01': 'meeting-protocol',
   'tp-redaction-de-pd-version-01': 'none',
-  'tp-redaction-de-pd-loeschen-01': 'none'
+  'tp-redaction-de-pd-loeschen-01': 'none',
+  'tp-redaction-en-sensitive-blackout-01': 'none',
+  'tp-sharesafe-de-sensible-01': 'none'
 }
 
 /**
  * Rows whose production AUTO-FIRE applies a different skill than the label (id → the skill it fires).
- * `sensible daten` is a keyword of BOTH share-safe-review and document-redaction, and only redaction is
- * auto-fire-eligible, so these two share-safe rows fire redaction's read-only scan. Accepted by the owner;
- * a fixed row must be REMOVED from this map.
+ * None today: the two German share-safe rows that fired Redaction's read-only scan through `sensible
+ * daten` stopped in #604. A new entry is a new owner decision (architecture.md §18).
  */
-const KNOWN_AUTOFIRE_DEVIATIONS: Record<string, string> = {
-  'tp-sharesafe-de-01': 'document-redaction',
-  'tp-sharesafe-de-02': 'document-redaction'
-}
+const KNOWN_AUTOFIRE_DEVIATIONS: Record<string, string> = {}
 
-/** The owner accepted exactly this many wrong auto-fires (the two rows above, §18); more is a new decision. */
-const ACCEPTED_AUTOFIRE_WRONG_FIRES = 2
+/** The owner accepts exactly this many wrong auto-fires (the rows above, §18; none since #604); more is a new decision. */
+const ACCEPTED_AUTOFIRE_WRONG_FIRES = 0
 
 const deviation = (map: Record<string, string>, id: string): string | undefined =>
   Object.hasOwn(map, id) ? map[id] : undefined
@@ -127,8 +129,8 @@ describe('suggestion — every corpus row gives its expected offer (production s
 
 // S13b — the HARD GATE (owner-set form, architecture.md §18 ratified contract): the production auto-fire
 // decision must clear D1 on the corpus. A MISS is fine (the inert offer is the fallback); firing a
-// DIFFERENT skill than the label — or firing at all where the label is 'none' — is a wrong fire. The two
-// accepted deviations must fire exactly the listed skill; any other row's outcome is its label or nothing.
+// DIFFERENT skill than the label — or firing at all where the label is 'none' — is a wrong fire. Accepted
+// deviations (none since #604) must fire exactly the listed skill; any other row's outcome is its label or nothing.
 // It first prints the two production paths' aggregates (recorded in architecture.md §18) — metrics and
 // confusion only, NO question text — so the numbers surface even when a bar below regresses.
 describe('S13b gate — production auto-fire clears the ratified D1 precision bar', () => {

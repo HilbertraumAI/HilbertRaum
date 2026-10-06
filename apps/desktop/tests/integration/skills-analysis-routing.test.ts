@@ -56,15 +56,16 @@ const ROUTING_CASES: RoutingCase[] = [
     handler: documentRedactionAnalysisHandler,
     installId: DOCUMENT_REDACTION_INSTALL_ID,
     // EN + DE action verbs apply; a German informational PII ask the route vocab misses
-    // ("personenbezogenen", U2 dry-run) applies too; the bare "personenbezogene Daten" still routes a request
-    // that carries no listed phrase (#608 kept it as a route term); an off-topic question keeps the relevance
-    // path, and so does a question about what the document says on "Löschung" (#608: not a scan, not a
-    // removal request).
+    // ("personenbezogenen", U2 dry-run) applies too; a request that carries no listed phrase still routes on
+    // the bare "personenbezogene Daten" (#608 kept it as a route term) or, since #604, "sensitive data" (an
+    // offer-only keyword until then); an off-topic question keeps the relevance path, and so does a question
+    // about what the document says on "Löschung" (#608: not a scan, not a removal request).
     applies: [
       ['Can you anonymize this doc?', true],
       ['Bitte die personenbezogenen Daten schwärzen', true],
       ['Welche personenbezogenen Daten enthält das Dokument?', true],
       ['Bitte personenbezogene Daten löschen.', true],
+      ['Mask the sensitive data, please.', true],
       ['what is this letter about?', false],
       ['Was sagt das Dokument zur Löschung personenbezogener Daten?', false]
     ],
@@ -191,6 +192,15 @@ describe('redaction routing handler — informational dry-run (U2)', () => {
       locale: 'de' as const,
       text: undefined,
       question: 'Welche personenbezogenen Daten sind enthalten?',
+      counts: { email: 0, phone: 1, iban: 0, card: 0, date: 0, url: 0 },
+      leaks: ['+49 170 1234567']
+    },
+    {
+      // #604: "sensitive data" no longer offers the skill, but once it is picked the scan still answers.
+      title: 'EN, asks which sensitive data',
+      locale: 'en' as const,
+      text: undefined,
+      question: 'What sensitive data is in this document?',
       counts: { email: 0, phone: 1, iban: 0, card: 0, date: 0, url: 0 },
       leaks: ['+49 170 1234567']
     },
