@@ -420,14 +420,25 @@ describe('document-redaction — Phase 7 LLM locate pass (D73/D75/D78)', () => {
     ...scriptedRuntime(''),
     // eslint-disable-next-line require-yield
     async *chatStream() {
-      // The b11146 reply to a 4,660-token window on a 4,096 context, measured 2026-10-06.
+      // The b11146 reply to a 4,660-token window on a 4,096 context, measured 2026-10-06. Since #622 the walk
+      // splits a window over the context; one still over it as a single short line fails the run.
       throw new ChatRequestError(400, 'request (4660 tokens) exceeds the available context size (4096 tokens), try increasing it', 'exceed_context_size_error')
+    }
+  })
+
+  // #622: a reply still cut short at a one-line window is the model repeating itself, not a long document.
+  const keepsGettingCut = (): ModelRuntime => ({
+    ...scriptedRuntime(''),
+    async *chatStream(_messages, options) {
+      yield '{"entities": [{"text": "Ja'
+      options?.onFinish?.('length')
     }
   })
 
   it.each([
     ['the model dies under window 2 of 2', 'redactionModelStopped', crashesInWindow2],
-    ['a window exceeds the context', 'redactionTooLong', overflows]
+    ['a window is still over the context at its smallest', 'redactionTooLong', overflows],
+    ['a reply is still cut short at its smallest window', 'redactionModelStopped', keepsGettingCut]
   ] as const)('a model failure mid-locate fails the run, saves nothing (#620): %s → %s', async (_how, code, runtime) => {
     const db = freshDb()
     const docId = seedDocWithChunks(db, TWO_WINDOW_DOC)

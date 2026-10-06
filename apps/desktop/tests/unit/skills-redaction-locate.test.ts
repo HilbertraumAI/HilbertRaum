@@ -1,5 +1,6 @@
 import { describe, it, expect } from 'vitest'
-import type { ChatMessage, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { ChatRequestError } from '../../src/main/services/runtime/llama'
 import {
   entityLocateSchema,
   locateEntities,
@@ -147,6 +148,76 @@ describe('redaction-locate — locateEntities over the runtime', () => {
     await expect(locateEntities('a\nb', 'names', { runtime, signal: controller.signal })).rejects.toMatchObject({
       name: 'AbortError'
     })
+  })
+})
+
+// #622: the windows and their replies fit the model's context. Measured 2026-10-06 (Qwen3 4B, b11146):
+// dense windows need 744–1,293 reply tokens. At the old fixed 768 the reply was cut (`finish_reason:
+// length`), did not parse, and the window added nothing — on master 8 of a register's 10 client names
+// stayed visible while the run said "142 items hidden". 40 long paragraphs overflowed a 4,096 context.
+describe('redaction-locate — the windows and replies fit the context (#622)', () => {
+  type Answer = { reply: string; finish: 'stop' | 'length' } | Error
+  /** A runtime launched with a 4,096-token context that answers each window by its numbered lines. */
+  const contextRuntime = (answer: (lines: string[]) => Answer, calls: RuntimeChatOptions[] = []): ModelRuntime => ({
+    ...scriptedRuntime(''),
+    contextWindow: () => 4096,
+    async *chatStream(messages: ChatMessage[], options?: RuntimeChatOptions) {
+      if (options) calls.push(options)
+      const a = answer(messages[1].content.split('\n'))
+      if (a instanceof Error) throw a
+      yield a.reply
+      options?.onFinish?.(a.finish)
+    }
+  })
+  /** The reply a grammar-constrained model gives: every line's name, as `Name12` on line 12. */
+  const namesOf = (lines: string[]): string =>
+    JSON.stringify({ entities: lines.map((l) => ({ text: l.split('\t')[1], category: 'name', line: Number(l.split('\t')[0]) })) })
+  const TWELVE = Array.from({ length: 12 }, (_, i) => `Name${i + 1}`)
+
+  it('a reply cut short asks the window again in halves — no name is lost', async () => {
+    const runtime = contextRuntime((lines) => {
+      const reply = namesOf(lines)
+      // More than four lines: cut mid-list at the token limit, as llama-server cuts a reply.
+      return lines.length > 4 ? { reply: reply.slice(0, reply.length / 2), finish: 'length' } : { reply, finish: 'stop' }
+    })
+    const { entities } = await locateEntities(TWELVE.join('\n'), '', { runtime, signal: new AbortController().signal })
+    expect(entities.map((e) => e.text).sort()).toEqual([...TWELVE].sort())
+  })
+
+  it('a prompt over the context asks the window again in halves (HTTP 400 exceed_context_size_error)', async () => {
+    const overflow = new ChatRequestError(400, 'request (4660 tokens) exceeds the available context size (4096 tokens), try increasing it', 'exceed_context_size_error')
+    const runtime = contextRuntime((lines) => (lines.length > 4 ? overflow : { reply: namesOf(lines), finish: 'stop' }))
+    const { entities } = await locateEntities(TWELVE.join('\n'), '', { runtime, signal: new AbortController().signal })
+    expect(entities.map((e) => e.text).sort()).toEqual([...TWELVE].sort())
+  })
+
+  it('gives each reply the room its window leaves in the context, not a fixed 768 tokens', async () => {
+    const calls: RuntimeChatOptions[] = []
+    const prompts: string[] = []
+    const runtime = contextRuntime((lines) => {
+      prompts.push(lines.join('\n'))
+      return { reply: '{"entities": []}', finish: 'stop' }
+    }, calls)
+    // 44 paragraphs of ~545 characters: one 40-line window was 4,660 real tokens on a 4,096 context.
+    const paragraph = (i: number): string =>
+      `Paragraph ${i}. In the matter concerning our client Name${i}, residing at Gartenstrasse ${i}, the firm confirms that the power of attorney remains in force and that all correspondence with the opposing counsel shall continue to be routed through this office. The client has asked that the supporting records held at the archive be reviewed once more before the hearing, and that any remaining questions about the settlement terms be answered in writing within the agreed period.`
+    await locateEntities(Array.from({ length: 44 }, (_, i) => paragraph(i + 1)).join('\n'), '', {
+      runtime,
+      signal: new AbortController().signal
+    })
+    // Measured replies of dense windows ran to 1,293 tokens (the bound against the context itself is in
+    // skills-locate-windows.test.ts, beside the estimate it rests on).
+    for (const options of calls) expect(options.maxTokens).toBeGreaterThan(768)
+    expect(new Set(prompts.flatMap((p) => p.split('\n').map((l) => l.split('\t')[0])))).toHaveProperty('size', 44)
+  })
+
+  // A one-line window needs a few hundred reply tokens at most: still cut there, the model is repeating
+  // itself — the seam reports it as the model failing, not as a document too long for it.
+  it('a window still cut short at its smallest fails the pass — never a silent skip', async () => {
+    const runtime = contextRuntime(() => ({ reply: '{"entities": [{"text": "Na', finish: 'length' }))
+    await expect(
+      locateEntities(TWELVE.join('\n'), '', { runtime, signal: new AbortController().signal })
+    ).rejects.toMatchObject({ name: 'LocateReplyCutError' })
   })
 })
 

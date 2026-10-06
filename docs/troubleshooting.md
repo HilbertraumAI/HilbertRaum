@@ -699,9 +699,12 @@ the saved copy before you share it. If something you expected wasn't handled:
   crashed, stopped responding, or ran into an error), the run says "The AI model stopped before the
   redaction was finished. Nothing was saved." Run it again; if the model is still restarting, the app
   says "The AI model is starting" until it is back. If it keeps happening, restart the model on **AI
-  Model**. "Parts of this document are too long for the current model's context window" means some
-  paragraphs are too long for the model's working memory: choose a larger **context size** on **AI
-  Model**, restart the model, and run the redaction again.
+  Model**. "Parts of this document are too long for the current model's context window" is rare: the app
+  already reads long paragraphs in smaller pieces, and this means even a piece did not fit. Choose a
+  larger **context size** on **AI Model**, restart the model, and run the redaction again.
+- **A redaction or an edit of a long document takes a while.** The model reads the document in windows
+  sized to its context and answers each one in full; on a computer without a graphics card, a long
+  document of dense paragraphs can take several minutes. The run bar counts the windows as it goes.
 - **"Keep the city" (or similar) wasn't respected.** Say the scope in your own words when you ask
   ("remove names and street addresses, keep the city"). The app never guesses intent — it only hides what
   the model proposes within that scope, then hides each confirmed value **everywhere** it appears.

@@ -10468,7 +10468,69 @@ model pass. Builds directly on the §20 span-transform engine.
   malformed reply is skipped (that window contributes nothing; the floor still covers it — never a hard
   fail); an abort throws `AbortError` (the seam maps it to a calm cancel). This is LOCATE-ONLY — the
   returned strings are UNVERIFIED proposals.
-- **Verify + sweep** (`redaction.ts` `verifyAndSweepEntities`, runtime-free so it unit-tests without a
+  - **#622 amendment (2026-10-06): the windows and their replies fit the model's context.** The facts
+    (Qwen3 4B, b11146, the app's exact request):
+    - **The reply cap lost windows silently, on every model.** Each reply was capped at 768 tokens.
+      Dense windows need 744–1,293 (the #606 client register: 1,284 tokens for 44 entities), so the reply
+      ended `finish_reason: length`, did not parse, and the window added nothing. Real app on master: the
+      register's saved copy kept **8 of 10 client names and 48 of 50 addresses** while the run said
+      "142 items hidden" — only its last, short window came back whole.
+    - **40 long paragraphs overflowed** a 4,096-token context on every run (4,660 tokens; since #620 the
+      run failed `redactionTooLong`). b11146 does not refuse a request whose prompt plus `max_tokens`
+      exceeds the context: it cuts the reply at the context's end.
+    - **The word estimate under-counts digits.** Qwen3 and Qwen3.5 tokenize numbers digit by digit;
+      `approxTokenCount` × 2.2 gave a bank-statement line half its real cost (53 vs 106).
+
+    **Owner decisions** (on the issue, 2026-10-06): fix the reply cap with the window budget; a reply
+    cut short or a prompt over the context splits the window and asks again — nothing is skipped
+    silently; a line too long for any window is split into pieces, for redaction and for edits.
+
+    **As built** (`tools/locate-walk.ts`, the walk §21 and §22 now share; `tools/locate-windows.ts`):
+    - `estimateLocateTokens`: every digit one token, the other words `approxTokenCount` × 2.2. Against
+      `/tokenize` (Qwen3 4B and Qwen3.5 9B; register, English and German paragraphs, bank-statement
+      lines) it never under-counted a line (worst real/estimate 0.95); it over-counts English ~1.8×.
+    - The budget comes from `contextWindow()` (4,096 when a runtime reports none): a window may cost a
+      third of the context left after the system prompt and a 64-token template allowance; the reply
+      gets the rest, at most 4,096 tokens. Replies measured up to 1.5× their window's tokens. A window
+      still stops at 40 lines; its overlap shrinks with it (a fifth of its lines, at most 8), so a
+      short-line document gets exactly the old windows. An overlap that cannot reach past the previous
+      window (short lines before a piece that fills the budget) is dropped, so no call repeats a window.
+    - A line over the budget becomes verbatim pieces overlapping by 240 characters — longer than any
+      span either pass may propose (160 / 200) — that keep the line's number; two pieces of one line
+      never share a window. Every piece starts at a word start (`wordStart`, also when a cut reply
+      halves a piece): a piece starting at "…Bil|der Text" would show the model "der Text", and its edit
+      "der → die" would verify inside "Bilder". Only a whitespace-free run longer than the budget is cut
+      by characters. An edit proposed on a piece counts its occurrence from the piece's start, so
+      the edit pass adds the line's occurrences before the piece (`lineOccurrence`: the verify step's
+      non-overlapping scan, run from the line's start to the piece only).
+    - A reply that ends `length` or passes the runaway char cap, or a request refused with
+      `exceed_context_size_error` (matched by shape: the tools import no concrete runtime), halves the
+      window — two halves sharing a segment, or two overlapping pieces of a single line — and asks again
+      ahead of the waiting windows. A window that cannot get smaller throws: `LocateTooLongError` when its
+      prompt is still over the context (redaction → `redactionTooLong`), `LocateReplyCutError` when its
+      reply is still cut — a one-line piece needs a few hundred reply tokens, so that is a model repeating
+      itself, not a long document (redaction → `redactionModelStopped`). The edit seam reports both as
+      `editFailed`. A reply that finished normally but does not parse (the dev mock) is still skipped.
+    - Progress counts finished windows; the total grows when a window splits.
+
+    **Tests**, red on the pre-fix code: `skills-redaction-locate.test.ts` "(#622)" — a cut reply and an
+    overflow both re-asked in halves with every name found, the reply given more than 768 tokens, a
+    window still cut at its smallest failing the pass; `skills-redaction.test.ts` "(#620)" gains the row
+    mapping that failure to `redactionModelStopped`. Pinned at the new code (fourteen mutations caught):
+    `skills-locate-windows.test.ts` "(#622)" — the estimate against the captured token counts, the
+    budget and the line coverage, the pieces' span coverage and word boundaries, the halving of a
+    one-piece window, no window that only repeats the previous one, a short-line document unchanged, and
+    every request plus its reply room inside a 4,096 and an 8,192 context; `skills-document-edit-locate.test.ts`
+    "#622" — an edit on a piece of a 12,000-character second line lands on the right occurrence of that line.
+
+    **Real app** (DesktopDiT, the 4B on the GTX 1070 Ti at 4,096 tokens, each copy saved through the
+    native dialog and compared with its source; master → this change):
+    - client register (50 records): "done", 8/10 names + 48/50 addresses visible → 0/10 + 0/50 (147 s,
+      was 99 s with the windows lost);
+    - 44 English / 44 German paragraphs: `redactionTooLong` → done, 0/12 names + 0/44 addresses visible
+      (101 s / 133 s);
+    - 44 bank-statement lines: `redactionTooLong` → done, 0/12 names visible (40 s);
+    - an edit replacing the company in the English paragraphs: `editFailed` → 44 of 44 applied (57 s).
   model): each proposed string is confirmed only when it is present **verbatim** in the source
   (`locateOccurrences`, no fuzzy match); an unconfirmed / too-short (`< MIN_ENTITY_CHARS`) / letter-less
   proposal is **dropped and counted** (D78 honesty). A confirmed string is masked at **every** occurrence
@@ -10531,7 +10593,8 @@ model pass. Builds directly on the §20 span-transform engine.
       opened the save dialog within 3.6 s on the GPU (before the app's own crash notice) and 2.1 s on
       the CPU. A 44-paragraph document opened it in 1.6 s with the model running: its first window is
       4,660 tokens against `n_ctx` 4,096 (`exceed_context_size_error`). A DOCX paragraph is one locate
-      line, so dense documents overflow a 4,096-token model every time; the window budget is #622.
+      line, so dense documents overflow a 4,096-token model every time; the window budget is #622
+      (fixed: the "#622 amendment" above).
 
     **Owner decisions** (on the issue, 2026-10-06).
     - Every model failure during the pass fails the run: no tool pass, no dialog, nothing saved. The
@@ -10603,7 +10666,9 @@ change — the `applySpans` guarantee). Output is `.txt` this phase; same-format
   ignores the schema, so `parseEditReply` re-validates in code (empty `find` dropped, and so is a
   `find`/`replace` over the tool schema's maxLength of 200 UTF-16 units, #583; missing line/occurrence
   default to 1; empty `replace` = a deletion). A window's malformed reply is skipped; an abort throws
-  `AbortError` (calm cancel).
+  `AbortError` (calm cancel). **#622:** the windows and replies are sized to the model's context by
+  the walk §21 shares, a cut reply re-asks the window in halves, and an edit on a piece of an over-long
+  line has its occurrence counted from the line's start (§21 "#622 amendment").
 - **Verify + splice** (`document-edit.ts` `verifyAndSpliceEdits`, runtime-free so it unit-tests without a
   model): each proposed `find` is confirmed only when present **verbatim at its `{line, occurrence}`
   anchor** (`locateOccurrences(text, find, {line, nth: occurrence})`, no fuzzy match); a miss / wrong-line /

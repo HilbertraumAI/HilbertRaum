@@ -149,6 +149,16 @@ from its first public `1.0.0` release onward.
   **Lock now** the save dialog even opened over the lock screen. A document edit ended with "The
   edits could not be completed". Now both say **Stopped. Nothing was saved.** A save dialog that was
   already open stays open, and saving there still saves (#606).
+- **Redaction now hides the names, addresses and organisations the AI model finds in the whole
+  document, not only in its last part.** On documents with many people in them, the model's answer for
+  each part of the document was cut off before it was complete, and the app then ignored that part
+  entirely. The copy kept most names and addresses visible, while the run still reported the redaction
+  as done: in a test with a 50-entry client register, 8 of 10 names stayed in the saved copy. Documents
+  with long paragraphs did not get that far: on smaller AI models the redaction or edit failed every
+  time with "too long". The app now gives each part of the document the room the model actually has,
+  reads long paragraphs in smaller pieces, and asks again about any part whose answer was cut short.
+  The same applies to document edits. On a computer without a graphics card, a long document can take
+  several minutes (#622).
 - **When the AI model crashes, freezes or fails during a redaction, nothing is saved, and the run says
   so.** Before, the redaction fell back to the simple rule-based detection and asked where to save
   that copy, a few seconds after the crash. The names and addresses the model had already found were
