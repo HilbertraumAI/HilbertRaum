@@ -6124,8 +6124,8 @@ a meeting still offers meeting-protocol, the precision ceiling of a one-keyword 
 `tp-redaction-de-pd-version-01` and `tp-redaction-de-pd-loeschen-01` (German removal requests that only
 the bare "personenbezogene Daten" offered on until #608; #602 found no safe keyword for them, see
 below); and `tp-redaction-en-sensitive-blackout-01` and `tp-sharesafe-de-sensible-01` (a removal request
-and a check before publishing that only the bare "sensitive data" / "sensible Daten" offered on until
-#604, the accepted cost of that decision, see below). The GDPR row
+and a check before sharing that only the bare "sensitive data" / "sensible Daten" offered Redaction on,
+which the labellers accepted, until #604: the accepted cost of that decision, see below). The GDPR row
 `tp-redaction-en-02` left the list in #583, when "remove all personal data" joined the vocabulary.
 Measured on the 160 rows: suggestion precision 99.1%, recall 96.4% (107 correct, 1 wrong, 4
 missed), confusion set 0 wrong / 0 missed. The
@@ -6156,13 +6156,18 @@ contract or policy says. The phrases are now route-only in both skills, and Reda
 phrases instead (`remove sensitive data`, `remove the sensitive data`, `remove all sensitive data`,
 `mask sensitive data`, `sensible daten entfernen`, `sensiblen daten entfernen`): right suggestions 36 →
 60 of 90, harmful auto-fires 18 → 0. On "is there sensitive data in it?" the labellers wanted Share-Safe
-or no suggestion, not Redaction (an automatic scan there was acceptable, not harmful), so the scan stays
-one pick away. The cost: removal requests phrased only with the topic ("Please black out all sensitive
-data") lose the offer (13 → 5 of 15), and so do checks before sharing (8 → 0 of 15). Keeping Share-Safe's
-`sensible daten` (scored 58, and ahead on a strict reading, 48 to 43) was the alternative; the owner chose
-the pre-registered pick. With Redaction active, "Mask the sensitive data" now gets the run button, and so
-does a retention question naming "Löschfristen … für sensible Daten" (the #608 `lösch` rule plus the new
-route term). Eight corpus rows pin it, two of them the accepted cost in `KNOWN_SUGGESTION_DEVIATIONS`.
+or no suggestion, not Redaction, and split on an automatic scan there (harmful to one on 7 of 17, to the
+other on 2, never to both), so the scan stays one pick away. The cost: removal requests phrased only with
+the topic ("Please black out all sensitive data") lose the offer (13 → 5 of 15), and so do checks before
+sharing, where Redaction was an accepted offer (8 → 0 of 15). Keeping Share-Safe's `sensible daten`
+(scored 58, and ahead on a strict reading, 48 to 43) was the alternative; the owner chose the
+pre-registered pick. With Redaction active, "Mask the sensitive data" now gets the run button (the bare
+phrases were offer-only in Redaction, so routing on them is new), and so does a retention question naming
+"Löschfristen … für sensible Daten" (the #608 `lösch` rule plus the new route term). The removal phrases
+are bare verb-plus-topic substrings like #608's "… entfernen" ones: a duty question in that word order
+("Muss ich laut Vertrag sensible Daten entfernen, …?") would still suggest and, over a PDF, auto-fire
+Redaction; none of the 90 messages used one. Eight corpus rows pin it, two of them the accepted cost in
+`KNOWN_SUGGESTION_DEVIATIONS`.
 
 **#608: the bare "personenbezogene Daten" (owner decision 2026-10-06).** The article-less German
 phrase was an offer keyword of both skills, so it suggested Redaction (the tie-break) and, over a PDF,

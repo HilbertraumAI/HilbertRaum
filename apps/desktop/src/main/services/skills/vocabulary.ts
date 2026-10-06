@@ -76,22 +76,17 @@ export function deriveMatch(term: string): 'word' | 'phrase' {
   return /\s/.test(term) ? 'phrase' : 'word'
 }
 
-// Compact constructors. All three default the ROUTE match to the term's shape (`deriveMatch`); a
+// Compact constructors. Both default the ROUTE match to the term's shape (`deriveMatch`); a
 // single-token German compound ROOT passes an explicit `stem` so the routing gate substring-matches its
 // compounds (`rechnung` → "Rechnungsposten") — safe because routing runs only under an already-active
 // skill (§8.2). The `match` never changes the OFFER: the suggestion scorer word/phrase-infers from the
-// manifest string itself, so a `both`-`stem` German noun still OFFERS word-anchored (precision).
+// manifest string itself, so a `both`-`stem` German noun still OFFERS word-anchored (precision). No entry
+// is offer-only (`use: 'suggest'`) since #604 made the last two, the bare PII topics, route-only.
 const both = (term: string, lang: VocabLang, match?: VocabMatch): VocabEntry => ({
   term,
   lang,
   match: match ?? deriveMatch(term),
   use: 'both'
-})
-const suggest = (term: string, lang: VocabLang, match?: VocabMatch): VocabEntry => ({
-  term,
-  lang,
-  match: match ?? deriveMatch(term),
-  use: 'suggest'
 })
 const route = (term: string, lang: VocabLang, match?: VocabMatch): VocabEntry => ({
   term,
@@ -101,7 +96,7 @@ const route = (term: string, lang: VocabLang, match?: VocabMatch): VocabEntry =>
 })
 
 // ─────────────────────────────────────────────────────────────────────────────────────────────────────
-// The canonical per-skill vocabularies. `both`/`suggest` terms (the discriminating, unambiguous nouns and
+// The canonical per-skill vocabularies. `both` terms (the discriminating, unambiguous nouns and
 // domain phrases) drive the OFFER and are mirrored into SKILL.md; `route` terms add the ambiguous-but-safe
 // tokens (`total`, `sum`, `net`, `bill`, `statement`, `minutes`…) + German stems that are only ever matched
 // once the skill is already active (audit §8.2), so they never over-suggest.

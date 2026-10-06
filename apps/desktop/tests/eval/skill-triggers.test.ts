@@ -30,9 +30,9 @@ const LABEL_SPACE = new Set<string>([...APP_VOCAB_SKILL_IDS, 'none'])
  *    "… daten löschen" stays out (owner ruling). They stay deviations: #602 found no German removal
  *    keyword that catches more requests without also firing on legal questions (architecture.md §18).
  *  - tp-redaction-en-sensitive-blackout-01, tp-sharesafe-de-sensible-01: a removal request and a check
- *    before publishing that only the bare "sensitive data" / "sensible Daten" offered on. Those stopped
- *    offering in #604: on legal, privacy-policy and contract questions they auto-fired Redaction (owner
- *    decision, the accepted cost).
+ *    before sharing that only the bare "sensitive data" / "sensible Daten" offered Redaction on (an offer
+ *    the labellers accepted). Those stopped offering in #604: on legal, privacy-policy and contract
+ *    questions they auto-fired Redaction (owner decision, the accepted cost).
  */
 const KNOWN_SUGGESTION_DEVIATIONS: Record<string, string> = {
   'adv-meeting-schedule-01': 'meeting-protocol',
