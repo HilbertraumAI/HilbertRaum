@@ -29,6 +29,7 @@ import { log } from '../services/logging'
 import { tMain } from '../services/i18n'
 import type { RuntimeManager } from '../services/runtime'
 import type { DownloadGates } from '../services/downloads'
+import { isModelStarting } from '../../shared/runtime-status'
 
 // IPC for the in-app engine (llama.cpp sidecar) downloader. Without the engine binary a
 // started model falls back to the built-in demo runtime — this lets the user install the
@@ -70,7 +71,9 @@ export function engineUpdateBusy(
   if (families.includes('llama_cpp')) {
     if (modelBusyLane(ctx) !== null) return true
     if (ctx.runtime.isGenerating?.() === true) return true
-    if (ctx.runtime.status().startingModelId != null) return true
+    // #599: a start still checking its weights counts too — an update then would resume the
+    // previous model behind the user's back (`resumeChatModel`) and could undo their switch.
+    if (isModelStarting(ctx.runtime.status())) return true
     if (ctx.translateJobs?.getActiveJob()) return true
     if (ctx.vision?.hasActiveJob?.() === true) return true
   }
@@ -104,7 +107,7 @@ async function pauseEngineUsers(ctx: AppContext, families: readonly string[]): P
 async function resumeChatModel(ctx: AppContext, modelId: string | null): Promise<void> {
   if (!modelId || !workspaceAdmitsWork(ctx.workspace)) return
   const status = ctx.runtime.status()
-  if (status.running || status.startingModelId) return
+  if (status.running || isModelStarting(status)) return
   log.info('Engine update finished — starting the model again', { modelId })
   await startModelRuntime(ctx, modelId)
 }

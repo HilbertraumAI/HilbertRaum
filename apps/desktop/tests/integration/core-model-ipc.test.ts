@@ -57,7 +57,8 @@ import { checksumCacheStats, clearChecksumCache, primeChecksum } from '../../src
 import { clearModelLoadLatches, latchModelLoad, modelLoadLatchReason } from '../../src/main/services/runtime/factory'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
-import type { AppSettings, AppStatus, GpuDevice, ModelInfo, WorkspaceStateInfo } from '../../src/shared/types'
+import type { AppSettings, AppStatus, GpuDevice, ModelInfo, RuntimeStatus, WorkspaceStateInfo } from '../../src/shared/types'
+import { RuntimeManager } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { t } from '../../src/shared/i18n'
 import { reportEngineProblem, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
@@ -1491,6 +1492,84 @@ describe('registerModelIpc', () => {
       expect(devicePosture.mock.results[1]!.value).toBe('gpu') // T2: 4B committed, remainder >= floor
       expect(calls[1]!.args).not.toContain('--device') // the NEW start actually used the NEW posture
       await reranker.stop()
+    })
+  })
+
+  // #599: the running model's liveness at the IPC boundary — the status read re-probes /health, a
+  // start counts as "starting" from the request (its weight check included), and the AI Model card's
+  // Restart starts the same model again. A real RuntimeManager over a stub runtime.
+  describe('liveness of the running model (#599)', () => {
+    const MODEL = 'qwen3-4b-instruct-q4'
+    function liveCtx(): { ctx: AppContext; mgr: RuntimeManager; health: { healthy: boolean }; started: string[]; audits: string[] } {
+      const health = { healthy: true }
+      const started: string[] = []
+      const audits: string[] = []
+      const mgr = new RuntimeManager(
+        (o) => {
+          started.push(o.modelId)
+          return {
+            modelId: o.modelId,
+            start: async () => {},
+            stop: async () => {},
+            health: async () => ({ healthy: health.healthy, message: '', port: 1 }),
+            // eslint-disable-next-line require-yield
+            chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+          }
+        },
+        { healthProbeTtlMs: 0 }
+      )
+      const db = seededDb()
+      updateSettings(db, { developerMode: true })
+      const ctx = {
+        db,
+        manifestsDir: REPO_MANIFESTS,
+        // The missing-weights developer start (mock fallback) — no multi-GB hash in a test.
+        paths: { rootPath: join(tmpdir(), 'hilbertraum-no-weights'), configPath: devPolicyConfigDir() },
+        isDev: false,
+        runtime: mgr,
+        audit: (_kind: string, message: string) => audits.push(message)
+      } as unknown as AppContext
+      reg(ctx)
+      return { ctx, mgr, health, started, audits }
+    }
+
+    it('the status read re-checks a running model: a frozen process reads "not responding"', async () => {
+      const { mgr, health } = liveCtx()
+      await invoke(handlers, IPC.startRuntime, MODEL)
+      health.healthy = false // the process stopped answering /health (frozen, suspended)
+      const status = (await invoke(handlers, IPC.getRuntimeStatus)).result as RuntimeStatus
+      expect(status).toMatchObject({ running: true, healthy: false, unresponsive: true })
+      await mgr.stop()
+    })
+
+    it('a start counts as starting from the request — while it still checks the weights', async () => {
+      const { mgr } = liveCtx()
+      let release!: () => void
+      hashGate.hold = new Promise<void>((r) => (release = r))
+      try {
+        const start = invoke(handlers, IPC.startRuntime, MODEL)
+        const during = (await invoke(handlers, IPC.getRuntimeStatus)).result as RuntimeStatus
+        expect(during).toMatchObject({ running: false, startRequested: true })
+        expect(during.startingModelId ?? null).toBeNull() // the load itself has not begun
+        release()
+        await start
+      } finally {
+        hashGate.hold = null
+      }
+      const after = (await invoke(handlers, IPC.getRuntimeStatus)).result as RuntimeStatus
+      expect(after).toMatchObject({ running: true })
+      expect(after.startRequested).toBeUndefined()
+      await mgr.stop()
+    })
+
+    it('Restart starts the running model again and records it', async () => {
+      const { mgr, started, audits } = liveCtx()
+      await invoke(handlers, IPC.startRuntime, MODEL)
+      const status = (await invoke(handlers, IPC.restartRuntime)).result as RuntimeStatus
+      expect(status).toMatchObject({ running: true, modelId: MODEL })
+      expect(started).toEqual([MODEL, MODEL])
+      expect(audits).toContain(`Model runtime restarted: ${MODEL}`)
+      await mgr.stop()
     })
   })
 })

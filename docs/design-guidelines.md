@@ -1632,6 +1632,45 @@ written. Engineering record: `architecture.md` CB-5 "#600 amendment". Code cites
 `main.chat.connectionLost`, `review.summary.stopped` (en + de). **Tests:** `TruncatedNotice.test.tsx`
 (#600 block), `ModelsScreen.test.tsx` (the answering note), `model-stop-mid-answer.test.ts`.
 
+### 11.22 An AI model that stopped responding, crashed, or is still starting — design record (IMPLEMENTED 2026-10-06, #599)
+
+_What the app says when the running model is frozen, crashes in CPU mode, or is still starting.
+Engineering record: `architecture.md` CB-5 "#599 amendment" and GPU §5.3. Code cites this section
+as **§11.22**._
+
+**Decisions** (owner, 2026-10-06).
+1. **"Not responding", and the user decides.** When the running model fails its health re-check or an
+   answer on it timed out, its card on the AI Model screen keeps "Running" and adds a warning badge,
+   **"Not responding"** (DE „Reagiert nicht"), a hint ("The AI model has stopped answering.
+   Restarting it usually fixes this.") and a one-click **Restart** (DE „Neu starten") beside Stop.
+   - The app offers the restart and never performs it: from outside, a slow CPU prefill and a stuck
+     model look the same, and an automatic restart would cut the slow one off.
+   - Diagnostics keeps its healthy/unhealthy wording; it now reads "unhealthy" here.
+2. **A crash in CPU mode recovers once, then stops honestly.** The first crash of a model in a session
+   restarts it, with a notice: "The AI model stopped unexpectedly and is starting again. Send your
+   message again in a moment." A second crash leaves it stopped: "The AI model stopped unexpectedly
+   again, so it was not restarted. You can start it again on the AI Model screen." (DE „im
+   KI-Modell-Bereich", §7). The notices use the existing runtime-notice channel, like the
+   compatibility-mode notice.
+3. **"Starting" means starting.** From the moment a start is requested, the weight check included, a
+   question or a document task says "The AI model is starting. Try again in a moment." (DE „Das
+   KI-Modell startet gerade. Versuch es gleich noch einmal."), never "start one first". Chat's
+   waiting screen says "The AI model is starting" (DE „Das KI-Modell startet") instead of "No model
+   is running", and drops the "choose Use this model" line meanwhile.
+4. **A stale "no model" banner goes when the model is back.** A "No AI model is running" or "is
+   starting" banner clears when Chat sees the model running again. Any other error stays until it
+   is dismissed — a crash's own message included, because it explains why the question has no
+   answer.
+
+**Look.** The badge is the existing warning `Badge` (⚠ glyph and text, never colour-only, §9); the
+hint is a `.hint` with `role="status"`; Restart is the card's primary action while it shows.
+
+**Copy:** `models.badge.notResponding`, `models.notRespondingHint`, `models.restart`,
+`main.runtime.{crashRestarting, crashStopped}`, `main.modelStarting`, `chat.noModel.startingTitle`
+(en + de). **Tests:** `ModelsScreen.test.tsx` (#599), `ChatSendFailure.test.tsx` (#599),
+`runtime-ladder-exit-wiring.test.ts` (the notices), `chat-ipc.test.ts` / `doctasks.test.ts` (the
+starting copy).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

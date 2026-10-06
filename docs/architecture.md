@@ -1429,7 +1429,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
       **Left open:**
       - **#598:** a hung prefill on b11146 stays unbounded, and b9849 cuts a long one at 120 s.
-      - **#599:** a running server's liveness is never re-checked.
+      - **#599:** a running server's liveness is never re-checked. *Closed by the #599 amendment below.*
       - **#600:** a model stop mid-answer shows "fetch failed". *Closed by the #600 amendment below.*
 
       **Real app** (2026-10-05, DesktopDiT, dev build, b11146 Vulkan, the 4B on the GTX 1070 Ti). The
@@ -1549,6 +1549,123 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - A stop before the first word marks the question.
       - Local API: a stop → in-band `model_not_loaded` / 503 `model_not_loaded`; a switch →
         `model_starting`.
+    - **#599 amendment (2026-10-06) — the running model's liveness.** The facts:
+      - **What users saw.** `status().healthy` was the start's health check, never re-read
+        (`RuntimeManager.last`). During the #594 hang (b9849 Vulkan, GTX 1070 Ti) the sidecar answered
+        neither chat nor `/health` at 0 % CPU, and for 4½ minutes the AI Model screen and Diagnostics
+        said "running, healthy". A CPU-mode crash was worse: the ladder dropped its exit
+        (`onUnexpectedExit` returned for `backend !== 'gpu'`), so every surface kept saying "running"
+        and each later turn failed on the dead port until the user pressed Stop runtime, then Use this
+        model (a restart of the same model was a no-op).
+      - **What a probe can see** (b11146 source, `server-context.cpp`): `/health` is answered by the
+        HTTP thread, so it catches a frozen or suspended process but not a wedged compute loop.
+        `/slots` and `/metrics` go through the task queue and block during a legitimate long batch,
+        so they cannot tell slow from wedged either. Only the CB-5 watchdog sees a wedged loop.
+      - **The "starting" gap.** `startingModelId` is set only when the load begins, after
+        `startModelRuntime`'s weight check — minutes on a freshly copied drive. A document summary
+        asked in that window failed with "No AI model is running… start one first".
+
+      **Owner decisions (2026-10-06).**
+      - Probe `/health` on status reads, cached about 10 s; no background timer.
+      - A `RuntimeUnresponsiveError` marks the model unresponsive until the next completed answer or a
+        restart; a passing `/health` cannot clear it.
+      - The AI Model card shows "Not responding" with a one-click Restart. The app offers the restart
+        and never performs it: from outside, a long CPU prefill and a wedge look alike. Diagnostics
+        keeps its healthy/unhealthy wording.
+      - An unresponsive GPU is not a GPU fault: nothing persists `gpuAutoDisabled` for it.
+      - A CPU-mode crash restarts the model once per model per session, with a notice; a second crash
+        of that model leaves it stopped, with a notice.
+      - "Is starting" counts from the start request: "The AI model is starting. Try again in a moment."
+        Chat's waiting screen gets a matching title; a stale "no model" banner clears when the model
+        is back.
+
+      **As built.**
+      - **`RuntimeManager`** (`runtime/index.ts`):
+        - `refreshHealth()` re-probes the running runtime's `/health` at most once per
+          `HEALTH_PROBE_TTL_MS` (10 s). Concurrent reads share one probe, a probe that outlives a stop
+          or switch is discarded, and each probe is bounded by the sidecar's own 3 s timeout. The
+          `getRuntimeStatus` handler awaits it, so Diagnostics, the AI Model card, Chat and the Copy
+          report all read a fresh verdict.
+        - The generation gate sets `wedged` when a stream ends with `RuntimeUnresponsiveError` and
+          clears it when one completes unaborted; a new runtime starts clear.
+        - `status()`: `healthy` is false and `unresponsive: true` while wedged or after a failed
+          probe. `startRequested` comes from `beginStartRequest()`, which `startModelRuntime` opens at
+          its top and releases in a `finally`; `isStarting()` folds it with `startingModelId`.
+        - `restartCurrent()` = `forceRestart(currentOpts, 'switch')`: the same model with the options
+          it was started with, its in-flight answers ended as a switch ends them (#600). A start
+          already in flight (a crash restart, a switch) replaces the runtime anyway, so a Restart
+          then joins it. `stopCrashed(modelId)` drops a crashed runtime without the model-stop hook,
+          and only when it fails its health check: a late or duplicate report must not take down
+          the runtime that replaced it.
+        - The "starting" window has an owner (`startingClaim`): only the last `start()` /
+          `forceRestart()` that claimed it clears it. Comparing model ids let a start whose warm-up
+          crashed clear the window of the crash restart queued behind it.
+        - The watchdog verdict is matched by name (an Error named `RuntimeUnresponsiveError`), so the
+          manager imports no concrete runtime (spec §9.2). The probe cache runs on
+          `performance.now()`: a wall clock stepping back would stop the probes.
+      - **The CPU crash** (`factory.ts`): the ladder routes a non-GPU unexpected exit to
+        `onCpuCrash` once its backend label has settled (before that, 'cpu' is only the default: a
+        rung-1 server dying before its GPU probe resolves keeps its pre-#599 path).
+        `createCpuCrashAutoRestart` restarts once per model id (`main.runtime.crashRestarting`),
+        then calls `stopCrashed` (`main.runtime.crashStopped`). Overlapping reports while a restart
+        or stop is in flight count once (a sidecar can report one exit as 'error', then 'exit'), and
+        a crash during a lock does nothing — the restart is neither spent nor announced. It is wired
+        in `main/index.ts` through the AUD-02 `guardedCrashRestart` the GPU and speculative
+        handlers now share, and audits `runtime_crashed`.
+      - **The restart IPC**: `runtime:restart` (`restartRuntime`), gated on the unlocked workspace
+        like `startRuntime`; it aborts a deep-index build first and audits `runtime_started`
+        ("restarted").
+      - **"Is starting"**: `assertChatStreamReady` (chat and document answers) and both doc-task guards
+        throw `main.modelStarting` while `isStarting()`; the friendly task-error filter keeps it.
+        `shared/runtime-status.ts` `isModelStarting(status)` is the one reader-side definition: the
+        local API's model gate (`model_starting`), Chat's waiting screen, the engine update's busy
+        check (an update during a weight check would resume the previous model behind the user's
+        back), its post-update resume, the demo → real engine restart and the benchmark's
+        start-in-flight check.
+      - **The UI**: the running card's "Not responding" badge, hint and Restart button
+        (design-guidelines §11.22) — a Restart re-reads the status at once, so the card shows the
+        reload instead of "Not responding"; Chat's waiting screen title `chat.noModel.startingTitle`
+        and the clearing of a stale `main.noModelRunning` / `main.modelStarting` banner on any status
+        read that finds the model running (a quick restart is often over by the re-read after the
+        refusal). A crash's own message stays: it explains why the question has no answer.
+
+      **Not covered.**
+      - A wedged compute loop with a live HTTP thread reads healthy until an answer runs into the
+        watchdog (up to 10 min per batch, #598); `/slots` cannot tell slow from wedged.
+      - The Performance screen's "loaded now" reads `healthy`, so it says "not loaded" while the
+        model is unresponsive — honest, but not a separate state.
+      - The restart budget is per app session: a lock and unlock does not reset it.
+      - **Accepted:** on a frozen process a status read takes up to 3 s (the probe's bound), once per
+        10 s. Answering from the cache and probing in the background would leave a screen that does
+        not poll (the AI Model screen while a model runs) showing "Running" until it is reopened.
+      - **Accepted:** one failed probe marks the model "Not responding" — a machine too overloaded to
+        answer `/health` within 3 s can show it while an answer still progresses. A later passing
+        probe clears it, and the restart stays the user's click (the owner's "never automatic").
+
+      **Tests.**
+      - `runtime-manager.test.ts` "liveness of the running model (#599)": the watchdog mark and what
+        clears it, the probe and its cache, Restart, `stopCrashed`, the start request.
+      - `runtime-ladder-exit-wiring.test.ts` "a CPU-mode crash restarts the model once per session":
+        the real sidecar exit wiring through the ladder and the restart policy.
+      - `core-model-ipc.test.ts` "liveness of the running model (#599)": the status read probes, a start
+        counts from the request (held inside the weight check), Restart.
+      - `chat-ipc.test.ts`, `doctasks.test.ts` (the "is starting" refusals, the friendly filter),
+        `local-api-server.test.ts` (the gate), `ModelsScreen.test.tsx`, `ChatSendFailure.test.tsx`.
+      - `engine-consent-ipc.test.ts` (an update during a start's weight check is refused).
+      - All 45 rules were mutation-checked.
+
+      **Real app** (2026-10-06, DesktopDiT, dev build over CDP, b11146, the 4B in CPU mode).
+      - **A CPU crash mid-answer** (`taskkill /F`): the turn ends with `main.chat.connectionLost`; the
+        restart notice shows; the model is back on a new process 7.0 s later and the next chat answers.
+        A chat sent within ~0.6 s of the kill still meets the dead process (Windows reports the exit
+        after the socket reset) and gets the same crash copy.
+      - **A second crash of the same model** (idle): it stays stopped, with the second notice; a chat
+        then gets `main.noModelRunning`.
+      - **A frozen process** (`NtSuspendProcess`): a read inside the 10 s cache still says healthy;
+        the next read takes 3.0 s (the probe's bound) and returns `healthy: false, unresponsive: true`;
+        the card shows "Reagiert nicht" + "Neu starten" (German UI). Restart takes 5.2 s, the frozen
+        process is gone, and the next chat answers.
+      - **A chat during a model start**: `startRequested: true` and `main.modelStarting`.
   - **Friendly-error chain** in `withChatStream` (rethrow-friendly, mapped copy on BOTH the `chat:error`
     event and the invoke rejection): `RuntimeUnresponsiveError` → `main.chat.runtimeUnresponsive`,
     `RuntimeConnectionLostError` → `main.chat.connectionLost` (#600), `EmptyCompletionError` →
@@ -3575,7 +3692,7 @@ the suspect, not the device.)
 A GPU-backed `llama-server` can die *after* it became healthy — a driver crash, VRAM stolen by
 another process. `LlamaServer`'s `onUnexpectedExit` hook fires (only for a healthy server dying
 outside `stop()`); `LadderRuntime` forwards it to `onGpuCrash` **only when the backend it landed on
-was `gpu`** (factory.ts:137-139). `createGpuCrashAutoFallback` then, in order: persists
+was `gpu`** (its `onUnexpectedExit`; a non-GPU exit goes to `onCpuCrash` since #599). `createGpuCrashAutoFallback` then, in order: persists
 `gpuAutoDisabled` + `gpuLastError`, surfaces the friendly compatibility-mode notice, and restarts
 the model once at CPU — so the user's *next* message just works.
 
@@ -3611,10 +3728,23 @@ extra guarantee. `forceRestart` is atomic within the queue and easiest to test.)
   clean stops on a *deliberate* stop or switch) does not run. Those answers have already failed on
   the dead socket.
 
+**#599 amendment (2026-10-06) — the CPU-mode crash.**
+- The ladder used to drop a non-GPU unexpected exit, so after a CPU crash every surface said
+  "running" and each turn failed on the dead port. It now goes to `onCpuCrash`:
+  `createCpuCrashAutoRestart` restarts the model once per model per session
+  (`main.runtime.crashRestarting`), and a second crash of that model stops it
+  (`RuntimeManager.stopCrashed`, `main.runtime.crashStopped`). No GPU flag is touched.
+- The budget is separate from the GPU fallback: a GPU crash restarts on CPU (this section), and that
+  CPU runtime still gets its one restart. At most two automatic restarts per model per session.
+- A user Restart (the AI Model card, for a model that stopped responding) also uses `forceRestart`,
+  passing `switch`: the user acted on the model, so its answers end cleanly first (#600). An
+  unresponsive GPU is not a GPU fault. See the CB-5 "#599 amendment".
+
 **Retry bound (no restart loop).** `gpuAutoDisabled` is persisted **before** the restart, so the
 ladder rebuilt inside `doStart` skips rung 1 and lands on CPU (`--device none`). A later crash is
 then a *CPU* crash, which `LadderRuntime` does **not** route to `onGpuCrash` (`backend !== 'gpu'`) —
-so a GPU session auto-falls-back **at most once**, never in a loop. Re-entrant crash reports while a
+so a GPU session auto-falls-back **at most once**, never in a loop. (Since #599 that CPU crash gets
+its own single restart, then the model stays stopped.) Re-entrant crash reports while a
 restart is in flight are also dropped by `createGpuCrashAutoFallback`'s `restarting` latch.
 
 (`LlamaServer.start()` additionally carries its own single-flight latch (REL-2): two overlapping

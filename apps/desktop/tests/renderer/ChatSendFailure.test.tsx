@@ -5,6 +5,8 @@ import { ChatScreen } from '../../src/renderer/screens/ChatScreen'
 import { ToastProvider } from '../../src/renderer/components'
 import { DOC_TASK_BUSY_MESSAGE, type Conversation, type Message, type RuntimeStatus } from '../../src/shared/types'
 import { stubApi } from '../helpers/renderer'
+import { t } from '../../src/shared/i18n'
+import { RUNTIME_POLL_MS } from '../../src/renderer/lib/polling'
 
 // CR-1 (audit chat-docs-2026-07-07): a send that fails BEFORE the user turn persists (document-task
 // busy, no model, a slot held by another window) used to lose both the composer text and the
@@ -404,6 +406,59 @@ describe('ChatScreen — transcript scroll resets on conversation switch (CR-2)'
       await flush()
       expect(screen.getByText('B only')).toBeInTheDocument()
       expect(scrollTo.mock.calls.length).toBeGreaterThan(afterScrollUp)
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+})
+
+// #599: a refusal about the model's state ("…is starting", "No AI model is running…") used to sit over
+// the composer after the model came back. It now goes when the model returns; any other error stays —
+// the crash's own message explains why the question has no answer. The waiting screen in between says
+// the model is starting (its title used to read "No model is running" above "Your model is starting").
+describe('ChatScreen — a "model is starting" refusal clears once the model is back (#599)', () => {
+  // `startingReads`: how many status reads after the refusal still find the model starting — one (the
+  // waiting screen, then back on the next poll) or none (a quick restart is over by the re-read).
+  it.each([
+    ['the starting refusal clears once the model is back', t('en', 'main.modelStarting'), 1, false],
+    ['the starting refusal clears when the model is already back', t('en', 'main.modelStarting'), 0, false],
+    ['a crash message stays', t('en', 'main.chat.connectionLost'), 1, true]
+  ])('%s', async (_label, refusal, startingReads, stays) => {
+    vi.useFakeTimers()
+    try {
+      let starting = 0
+      const getRuntimeStatus = vi.fn(async (): Promise<RuntimeStatus> => {
+        if (starting === 0) return { ...runningStatus } // IPC hands back a fresh copy per read
+        starting-- // the following read finds the model back
+        return { running: false, modelId: null, port: null, healthy: false, message: 'Stopped', startRequested: true }
+      })
+      const sendChatMessage = vi.fn(async () => {
+        starting = startingReads // a CPU crash restart is under way
+        throw new Error(refusal)
+      })
+      baseStub({ listMessages: vi.fn(async () => []), sendChatMessage, getRuntimeStatus })
+
+      renderChat()
+      await flush()
+      fireEvent.click(screen.getByText('Chat 1'))
+      await flush()
+      fireEvent.change(screen.getByPlaceholderText('Message…'), { target: { value: 'hello' } })
+      fireEvent.click(screen.getByRole('button', { name: 'Send' }))
+      await flush()
+
+      if (startingReads > 0) {
+        // The post-failure re-read finds the model starting: the waiting screen says so.
+        expect(screen.getByText(t('en', 'chat.noModel.startingTitle'))).toBeInTheDocument()
+        expect(screen.queryByText(t('en', 'chat.noModel.title'))).not.toBeInTheDocument()
+        await act(async () => {
+          await vi.advanceTimersByTimeAsync(RUNTIME_POLL_MS)
+        })
+        await flush()
+      }
+      expect(screen.getByPlaceholderText('Message…')).toBeInTheDocument() // the model is back
+      const alerts = screen.queryAllByRole('alert').map((el) => el.textContent ?? '').join(' ')
+      if (stays) expect(alerts).toContain(refusal)
+      else expect(alerts).not.toContain(refusal)
     } finally {
       vi.useRealTimers()
     }

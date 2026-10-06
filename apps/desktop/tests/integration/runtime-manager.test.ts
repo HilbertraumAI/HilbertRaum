@@ -14,7 +14,7 @@ import {
   COMPATIBILITY_MODE_NOTICE,
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
-import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
+import { createLlamaRuntime, RuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { performShutdown } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
 import type { GpuDevice } from '../../src/shared/types'
@@ -1249,5 +1249,176 @@ describe('the model-stop hook — a deliberate stop or switch ends in-flight wor
     expect(preempt).not.toHaveBeenCalled()
     expect(mgr.isGenerating()).toBe(false)
     mgr.setExternalPreemption(null)
+  })
+})
+
+// #599 — the running model's liveness. `last` used to be the start's health check, never re-read: the
+// #594 hang (b9849, a frozen process answering neither chat nor /health) stayed "running, healthy" on
+// every surface for 4½ minutes. Two signals now feed `status().unresponsive`: a /health re-probe on
+// status reads (cached), and an answer the CB-5 watchdog ended (a wedged compute loop, which /health —
+// served by the HTTP thread — cannot see).
+describe('liveness of the running model (#599)', () => {
+  async function livenessHarness(opts?: { healthProbeTtlMs?: number }) {
+    const sources: ManualSource[] = []
+    const health = { healthy: true }
+    const probes = { count: 0 }
+    const started: RuntimeStartOptions[] = []
+    const order: string[] = []
+    const mgr = new RuntimeManager((startOpts) => {
+      started.push(startOpts)
+      return {
+        modelId: startOpts.modelId,
+        start: async () => {},
+        stop: async () => {
+          order.push(`kill ${startOpts.modelId}`)
+        },
+        health: async () => {
+          probes.count++
+          return { healthy: health.healthy, message: health.healthy ? 'ok' : 'Health check failed', port: 1 }
+        },
+        chatStream(_messages, options?: RuntimeChatOptions) {
+          const src = manualSource()
+          sources.push(src)
+          return src.stream(options?.signal)
+        }
+      }
+    }, opts)
+    mgr.setModelStopHook((kind) => order.push(`hook ${kind}`))
+    const startOpts = { modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 }
+    await mgr.start(startOpts)
+    probes.count = 0 // the start's own health check
+    return { mgr, sources, health, probes, started, order, startOpts }
+  }
+
+  async function answer(mgr: RuntimeManager, src: () => ManualSource, end: (s: ManualSource) => void): Promise<unknown> {
+    const gen = mgr.active()!.chatStream([{ role: 'user', content: 'q' }])
+    const pulled = gen.next()
+    await Promise.resolve()
+    end(src())
+    try {
+      await pulled
+      for (;;) if ((await gen.next()).done) return null
+    } catch (err) {
+      return err
+    }
+  }
+
+  it('an answer the watchdog ended marks the model unresponsive; a passing /health does not clear it, the next completed answer does', async () => {
+    const { mgr, sources } = await livenessHarness({ healthProbeTtlMs: 0 })
+    const err = await answer(mgr, () => sources[0], (s) => s.fail(new RuntimeUnresponsiveError(600_000)))
+    expect(err).toBeInstanceOf(RuntimeUnresponsiveError)
+    expect(mgr.status()).toMatchObject({ running: true, healthy: false, unresponsive: true })
+
+    await mgr.refreshHealth() // /health passes — the HTTP thread answers while the compute loop is wedged
+    expect(mgr.status().unresponsive).toBe(true)
+
+    await answer(mgr, () => sources[1], (s) => {
+      s.push('fine')
+      s.end()
+    })
+    expect(mgr.status()).toMatchObject({ healthy: true })
+    expect(mgr.status().unresponsive).toBeUndefined()
+  })
+
+  it('a failed /health re-probe marks it unresponsive until a probe passes; one probe per TTL', async () => {
+    const cached = await livenessHarness({ healthProbeTtlMs: 60_000 })
+    await cached.mgr.refreshHealth() // inside the TTL of the start's own check: nothing probed
+    expect(cached.probes.count).toBe(0)
+
+    const { mgr, health, probes } = await livenessHarness({ healthProbeTtlMs: 0 })
+    health.healthy = false // frozen: the probe times out
+    await Promise.all([mgr.refreshHealth(), mgr.refreshHealth()])
+    expect(probes.count).toBe(1) // concurrent reads share one probe
+    expect(mgr.status()).toMatchObject({ healthy: false, unresponsive: true })
+    health.healthy = true // resumed
+    await mgr.refreshHealth()
+    expect(mgr.status().unresponsive).toBeUndefined()
+  })
+
+  it('Restart starts the same model again with its own options and ends its answers as a switch (#600)', async () => {
+    const { mgr, started, order, startOpts } = await livenessHarness()
+    expect(await mgr.restartCurrent()).toMatchObject({ running: true, modelId: 'm' })
+    expect(started).toEqual([startOpts, startOpts])
+    expect(order).toEqual(['hook switch', 'kill m'])
+  })
+
+  it('Restart with no model running does nothing', async () => {
+    const { mgr, started } = await livenessHarness()
+    await mgr.stop()
+    expect(await mgr.restartCurrent()).toBeNull()
+    expect(started).toHaveLength(1)
+  })
+
+  it('a crashed model the app will not restart is stopped without the model-stop hook; a live runtime is left alone', async () => {
+    const { mgr, order, health } = await livenessHarness()
+    await mgr.stopCrashed('m') // a late or duplicate report: the runtime of m now answers — keep it
+    expect(mgr.status().running).toBe(true)
+    health.healthy = false // the process is gone
+    await mgr.stopCrashed('another')
+    expect(mgr.status().running).toBe(true)
+    await mgr.stopCrashed('m')
+    expect(mgr.status().running).toBe(false)
+    expect(order).toEqual(['kill m'])
+  })
+
+  it('Restart while a start is in flight joins it instead of loading the model again', async () => {
+    let release!: () => void
+    const parked = new Promise<void>((r) => (release = r))
+    const slow = new RuntimeManager((o) => ({
+      modelId: o.modelId,
+      start: () => (o.modelId === 'b' ? parked : Promise.resolve()),
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: '', port: 1 }),
+      // eslint-disable-next-line require-yield
+      chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+    }))
+    await slow.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+    const switching = slow.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 })
+    const restart = slow.restartCurrent() // the user's Restart on a's card, mid-switch
+    release()
+    await switching
+    expect(await restart).toMatchObject({ running: true, modelId: 'b' }) // the switch stands
+  })
+
+  it('a crash restart queued behind a start of the same model keeps its "starting" window', async () => {
+    let release!: () => void
+    const parked = new Promise<void>((r) => (release = r))
+    let calls = 0
+    const mgr = new RuntimeManager((o) => {
+      calls++
+      const first = calls === 1
+      return {
+        modelId: o.modelId,
+        start: () => (first ? Promise.resolve() : parked),
+        stop: async () => {},
+        health: async () => ({ healthy: true, message: '', port: 1 }),
+        // eslint-disable-next-line require-yield
+        chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+      }
+    })
+    const opts = { modelId: 'm', modelPath: '/m.gguf', contextTokens: 2048 }
+    const starting = mgr.start(opts)
+    const restart = mgr.forceRestart(opts) // the crash during the start's warm-up
+    await starting
+    expect(mgr.status().startingModelId).toBe('m') // the restart is still loading
+    release()
+    await restart
+    expect(mgr.status().startingModelId ?? null).toBeNull()
+  })
+
+  it('a start request counts as starting before the load begins, until it is released', async () => {
+    const { mgr } = await livenessHarness()
+    await mgr.stop()
+    expect(mgr.isStarting()).toBe(false)
+    const release = mgr.beginStartRequest()
+    expect(mgr.isStarting()).toBe(true)
+    expect(mgr.status()).toMatchObject({ running: false, startRequested: true })
+    release()
+    release() // idempotent: the next request still counts
+    expect(mgr.isStarting()).toBe(false)
+    expect(mgr.status().startRequested).toBeUndefined()
+    const next = mgr.beginStartRequest()
+    expect(mgr.isStarting()).toBe(true)
+    next()
   })
 })

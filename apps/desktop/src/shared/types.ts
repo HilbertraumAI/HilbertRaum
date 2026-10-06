@@ -3548,6 +3548,22 @@ export interface RuntimeStatus {
    */
   answering?: boolean
   /**
+   * #599: true when the running model stopped responding — a `/health` re-probe failed (a frozen or
+   * suspended process; re-checked on status reads, at most every ~10 s), or an answer ended on the
+   * CB-5 watchdog (`RuntimeUnresponsiveError`). A passing probe cannot clear the second: `/health` is
+   * served by the HTTP thread while the compute loop can be wedged; the next completed answer or a
+   * restart does. `healthy` reads false meanwhile. The AI Model card shows "Not responding" and offers
+   * a Restart (`restartRuntime`). Absent otherwise.
+   */
+  unresponsive?: boolean
+  /**
+   * #599: true from the moment a model start is requested (`startModelRuntime`, before its weight
+   * check — minutes on a freshly copied drive) until it settles; `startingModelId` is set only once
+   * the load itself begins. The "is starting" copy (Chat's waiting screen, the `main.modelStarting`
+   * refusal, the local API's `model_starting`) keys on either. Absent otherwise.
+   */
+  startRequested?: boolean
+  /**
    * #107: honest load progress for the in-flight "Starting…" window. `elapsedMs` comes
    * from the runtime manager (present whenever `startingModelId` is); the
    * `getRuntimeStatus` IPC handler enriches `bytesTotal` (the starting model's on-disk

@@ -472,11 +472,43 @@ The AI model's program closed while it was answering — it crashed, or somethin
 ended it (Task Manager, an antivirus tool, too little free memory). The unfinished answer is not
 kept.
 
-- Send your message again. If the model was running on the graphics card, the app restarts it in
-  compatibility mode by itself (see above).
-- If it keeps happening, open the **AI Model** screen, choose **Stop runtime**, then **Use this
-  model** to start it fresh. A smaller model is the next step if it still happens — see
+- Send your message again. The app restarts the model by itself: on the graphics card in
+  compatibility mode (see above), on the processor once per session (see the next section).
+- If it keeps happening, a smaller model is the next step — see
   [The app feels slow](#the-app-feels-slow) for what fits your computer.
+
+---
+
+## "The AI model stopped unexpectedly and is starting again"
+
+The model's program crashed while it ran on the processor, or something on the computer ended it.
+The app starts it again by itself, once per model each time you open the app. Wait until the AI
+Model screen says **Running**, then send your message again.
+
+If the same model stops a second time, the app leaves it stopped and says **"The AI model stopped
+unexpectedly again, so it was not restarted."** Starting it over and over would not help. Open the
+**AI Model** screen and choose **Use this model** when you are ready. If it keeps crashing, close
+other programs to free memory, or pick a smaller model.
+
+---
+
+## The AI Model screen says "Not responding"
+
+The model is running but has stopped answering: it failed a quick check, or an answer on it waited
+too long for the model. Choose **Restart** on its card. An answer being written at that moment ends,
+and its text so far is kept.
+
+The app never restarts it on its own, because a model that is just slow — a long document on a
+computer without a graphics card — can look the same from outside. If **Not responding** comes back
+often, close other programs, or pick a smaller model.
+
+---
+
+## "The AI model is starting. Try again in a moment."
+
+A model start is under way. Before loading, the app checks the model's files — on a drive just
+copied to another computer that can take a few minutes. Questions and document tasks wait for it:
+send again once Chat shows the message box. Nothing needs to be started by hand.
 
 ---
 
@@ -802,7 +834,7 @@ A connected app usually surfaces an HTTP status. Translated:
 | **415** | The app did not send JSON. | Almost always a misconfigured client — check that you selected an OpenAI-compatible mode. |
 | **429** | HilbertRaum was busy with another answer, or your own chat interrupted this one. | Wait a moment and try again; the response says how long. |
 | **503 "model_not_loaded"** | No model is running — also the answer when you stop the model in HilbertRaum while the app is waiting. | Open HilbertRaum and start a model on the **AI Model** screen. |
-| **503 "model_starting"** | A model is loading right now — also the answer when you switch models in HilbertRaum while the app is waiting. | Wait and retry; the response says roughly how long. |
+| **503 "model_starting"** | A model is loading right now, or HilbertRaum is still checking its files before loading — also the answer when you switch models in HilbertRaum while the app is waiting. | Wait and retry; the response says roughly how long. |
 | **502** | The model did not answer. | Check the app — the model may have crashed; the Diagnostics tab has details. |
 
 ### An app's request stopped halfway

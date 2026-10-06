@@ -224,6 +224,13 @@ export interface GpuLadderDeps {
    * session, so the caller's restart comes back on the plain GPU rung.
    */
   onSpeculativeCrash?: (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void
+  /**
+   * #599: fired when a runtime that is NOT on the GPU dies mid-session (a CPU-mode crash, an OS
+   * kill). Nothing changes device here, so the caller restarts the model once per session
+   * (`createCpuCrashAutoRestart`) and stops it after a second crash. Before #599 this exit was
+   * dropped: every surface kept saying "running" and each later turn failed on the dead port.
+   */
+  onCpuCrash?: (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void
 }
 
 /** Extra knobs `makeLlama` receives per rung. */
@@ -360,6 +367,12 @@ function largestPlacementRow(
 class LadderRuntime implements ModelRuntime {
   readonly modelId: string
   backend: RuntimeBackend = 'cpu'
+  /**
+   * #599: the backend label above is final. Until then 'cpu' is only the default, so a rung-1
+   * server that dies before its GPU probe resolves must not count as a CPU-mode crash (it would
+   * restart on the same GPU rung and spend the model's one CPU restart).
+   */
+  private labelled = false
   gpuName: string | null = null
   private inner: ModelRuntime | null = null
   /** #39: flips on the first streamed chunk of the first real generation since start(). */
@@ -476,9 +489,13 @@ class LadderRuntime implements ModelRuntime {
         extraArgs: rung.extraArgs,
         onStderrData: placement.onStderrData,
         // Only a crash of a runtime that actually landed on the GPU triggers the
-        // auto-fallback; CPU-mode crashes keep today's behavior (error + manual restart).
+        // auto-fallback; a CPU-mode crash gets its own bounded restart (#599).
         onUnexpectedExit: (info) => {
-          if (this.backend !== 'gpu') return
+          if (this.backend !== 'gpu') {
+            // An exit before the label settled keeps its pre-#599 path (the start's own handling).
+            if (this.labelled) this.deps.gpu.onCpuCrash?.(this.opts, info)
+            return
+          }
           // #182: on the speculative rung the extra flags are the prime suspect, not the
           // device — latch MTP off for the session and route to the speculative handler,
           // which restarts on the plain GPU rung instead of exiling the machine to CPU.
@@ -658,6 +675,7 @@ class LadderRuntime implements ModelRuntime {
         this.backend = 'cpu'
         this.gpuName = null
       }
+      this.labelled = true
       this.deps.onSelect?.('llama', this.opts, `started via ${rung.label} (backend: ${this.backend})`)
       // benchmark.md "Your model": what this start's log said about where the model landed.
       // Recorded after the backend label so the observation carries the same verdict the UI
@@ -1088,4 +1106,49 @@ export function createSpeculativeCrashAutoFallback(deps: {
     deps.onCrash?.(describeExit(info))
     deps.notify?.(tMain('main.runtime.speedUpDisabled'))
   }, deps.restart)
+}
+
+/**
+ * #599: the handler for a CPU-mode crash (`onCpuCrash`). Owner decision 2026-10-06: restart the same
+ * model once per model per session, with a notice; a second crash of that model stops it, with a
+ * notice, so a model that keeps crashing is never respawned in a loop. No GPU flag is touched — the
+ * device did not change. The budget is separate from the GPU fallback: a GPU crash restarts on CPU
+ * (§5.3), and that CPU runtime still gets its one restart.
+ */
+export function createCpuCrashAutoRestart(deps: {
+  restart: (opts: RuntimeStartOptions) => Promise<unknown>
+  /** Drop the dead runtime so every surface says stopped (`RuntimeManager.stopCrashed`). */
+  stop: (opts: RuntimeStartOptions) => Promise<unknown>
+  /**
+   * The workspace admits work (AUD-02). A crash during a lock does nothing here — the lock's
+   * teardown stops the model anyway — so it neither spends the restart nor announces one.
+   */
+  admitsWork?: () => boolean
+  /** Observability only (the audit event). */
+  onCrash?: (reason: string) => void
+  notify?: (message: string) => void
+}): (opts: RuntimeStartOptions, info: UnexpectedExitInfo) => void {
+  const restarted = new Set<string>()
+  // Overlapping reports while a restart or stop is in flight are the same crash (a sidecar can
+  // report one exit twice: 'error', then 'exit').
+  let busy = false
+  return (opts, info) => {
+    if (busy) return
+    if (deps.admitsWork && !deps.admitsWork()) return
+    const first = !restarted.has(opts.modelId)
+    restarted.add(opts.modelId)
+    deps.onCrash?.(describeExit(info))
+    deps.notify?.(tMain(first ? 'main.runtime.crashRestarting' : 'main.runtime.crashStopped'))
+    busy = true
+    // restart()/stop() may throw synchronously — never leave the latch stuck (M-C3).
+    try {
+      void (first ? deps.restart(opts) : deps.stop(opts))
+        .catch(() => undefined) // a failed restart surfaces on the user's next start
+        .finally(() => {
+          busy = false
+        })
+    } catch {
+      busy = false
+    }
+  }
 }

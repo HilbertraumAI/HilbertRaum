@@ -127,6 +127,8 @@ export const en = {
   // ---- Chat (ChatScreen.tsx) ----
   'chat.title': 'Chat',
   'chat.noModel.title': 'No model is running',
+  // #599: the same screen while a start is requested or loading.
+  'chat.noModel.startingTitle': 'The AI model is starting',
   // Split around the inline <b>Use this model</b>.
   'chat.noModel.hintBefore':
     'Chat and document Q&A need a model loaded. Open the AI Model screen, pick a downloaded ' +
@@ -1220,6 +1222,10 @@ export const en = {
   'models.state.notRecommended': 'Not recommended',
   'models.state.ready': 'Ready',
   'models.state.running': 'Running',
+  // #599: the running model failed a health re-check, or an answer on it timed out.
+  'models.badge.notResponding': 'Not responding',
+  'models.notRespondingHint': 'The AI model has stopped answering. Restarting it usually fixes this.',
+  'models.restart': 'Restart',
   'models.hint.embeddings': 'Prepares your documents so you can ask about them.',
   'models.hint.reranker': 'Improves which document passages are used for answers.',
   'models.hint.transcriber':
@@ -2594,6 +2600,12 @@ export const en = {
   // borrow the compatibility-mode copy above, which promises slower answers.
   'main.runtime.speedUpDisabled':
     'Turned off an optional speed-up for stability. The model is restarting — send your message again.',
+  // #599: a CPU-mode crash (or an OS kill). The first one this session restarts the model; a second
+  // one of the same model leaves it stopped, so a model that keeps crashing is never respawned.
+  'main.runtime.crashRestarting':
+    'The AI model stopped unexpectedly and is starting again. Send your message again in a moment.',
+  'main.runtime.crashStopped':
+    'The AI model stopped unexpectedly again, so it was not restarted. You can start it again on the AI Model screen.',
   // Issue #312: no rung could load THIS model, and the graphics card is not the suspect (nothing
   // was disabled). Name the model and the next step — never "your GPU failed".
   'main.runtime.modelCannotLoad':
@@ -2603,6 +2615,8 @@ export const en = {
   'main.runtime.engineCannotRun': "The AI engine can't run on this computer, so replies are simulated. The AI Model screen says what is missing.",
   'main.engine.cannotRun': "The AI engine can't run on this computer. The AI Model screen says what is missing.",
   'main.noModelRunning': 'No AI model is running. Open the AI Model screen and start one first.',
+  // #599: the same refusal while a start is requested or loading — "start one first" would be wrong.
+  'main.modelStarting': 'The AI model is starting. Try again in a moment.',
   'main.translation.noModel':
     'Translating needs the translation model, which is not installed on this drive. ' +
     'You can download it on the AI Model screen.',

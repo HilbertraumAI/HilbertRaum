@@ -116,6 +116,19 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A frozen AI model no longer shows as "Running" and healthy.** The app now re-checks the model when
+  a screen asks for its state, and when an answer on it times out. The AI Model screen then says
+  **Not responding** and offers a one-click **Restart**; Diagnostics says it is unhealthy. The app never
+  restarts it on its own — a slow model looks the same from outside (#599).
+- **When the AI model crashes on the processor, it comes back by itself.** Before, every screen kept
+  saying it was running and each question failed until you stopped and started it by hand. Now the
+  app restarts it once and says so; if the same model crashes again, it stays stopped and the app says
+  that too (#599).
+- **"The AI model is starting" instead of "No AI model is running".** A question or a document task
+  asked while a model starts — including the file check before loading, which takes minutes on a
+  freshly copied drive — now says the model is starting and to try again in a moment. Chat's waiting
+  screen says the same, and its "No AI model is running" message disappears once the model is back
+  (#599).
 - **Stopping or switching the AI model while it is answering now keeps the answer so far.** Before,
   the chat showed "terminated" and everything written so far was lost. Now the answer ends cleanly,
   keeps its text, and is labelled **Reply stopped**. A question the model had not started answering

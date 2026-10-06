@@ -289,8 +289,9 @@ the model.
 ```
 
 `context_window` is a non-standard extra so a client can size its prompts. Three distinct
-outcomes: **200** (running) · **503 `model_starting`** + `Retry-After` (loading — pace yourself) ·
-**503 `model_not_loaded`** (a human must start a model).
+outcomes: **200** (running) · **503 `model_starting`** + `Retry-After` (loading, or still checking the
+model's files before loading — pace yourself; #599) · **503 `model_not_loaded`** (a human must start a
+model).
 
 ### 6.3 `POST /v1/chat/completions`
 
@@ -372,7 +373,7 @@ All errors are OpenAI-shaped: `{"error": {"message": …, "type": …, "code": �
 | 500 | `internal_error` | An unexpected failure inside the endpoint (for example the workspace locking mid-request) | Retry; if it persists, check Diagnostics |
 | 502 | `runtime_unresponsive` | The model runtime did not answer | Check the app — the model may have crashed |
 | 503 / in-band | `model_not_loaded` | No model is running — also a request in flight when the user **stops** the model (#600) | A human must start one |
-| 503 / in-band | `model_starting` | A model is loading — also a request in flight when the user **switches** models (#600) | Retry after `Retry-After` |
+| 503 / in-band | `model_starting` | A model is loading or its files are being checked first (#599) — also a request in flight when the user **switches** models (#600) | Retry after `Retry-After` |
 | 503 | `workspace_locked` | The workspace is locked | Retry once it is unlocked |
 | 503 / in-band | `server_stopped` | The endpoint is shutting down (lock or quit) | Reconnect later |
 
