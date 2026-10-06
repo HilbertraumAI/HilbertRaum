@@ -178,6 +178,13 @@ interface ChatCompletionChunk {
    * chunk, including one with no `choices`, so a future server that moves it keeps working.
    */
   timings?: RuntimeTimings
+  /**
+   * #598: a prompt-progress event, sent because the request asks for `return_progress` — one when
+   * the slot starts (0 %) and one after every prompt batch. Its delta is `{role, content: null}`,
+   * so it carries no text; the reader takes it as proof that prefill is advancing. Shape pinned by
+   * `tests/fixtures/chat-sse-progress-b11146.txt`.
+   */
+  prompt_progress?: { total?: number; cache?: number; processed?: number; time_ms?: number }
 }
 
 /**
@@ -202,6 +209,8 @@ function parseSseLine(line: string): {
   streamError?: ChatStreamError
   /** A top-level `timings` object on this chunk (#290/#291) — read off ANY data chunk. */
   timings?: RuntimeTimings
+  /** #598: a `prompt_progress` event — prefill advanced by a batch (or the slot just started). */
+  progress?: boolean
 } {
   const t = line.trim()
   // F-02: the bare `error: {…}` SSE field-line carrier (mirrors completion.ts's M3 handling).
@@ -243,11 +252,13 @@ function parseSseLine(line: string): {
       reasoning?: string
       finishReason?: string
       timings?: RuntimeTimings
+      progress?: boolean
     } = {}
     // #290/#291: the server's timing block. Read from whichever chunk carries it — with or
     // without `choices` — and let the reader keep the LAST one seen (llama-server's are cumulative
     // for the request, so the last is the complete one).
     if (json.timings != null && typeof json.timings === 'object') out.timings = json.timings
+    if (json.prompt_progress != null && typeof json.prompt_progress === 'object') out.progress = true
     if (typeof d?.content === 'string' && d.content.length > 0) out.delta = d.content
     if (typeof d?.reasoning_content === 'string' && d.reasoning_content.length > 0) {
       out.reasoning = d.reasoning_content
@@ -263,7 +274,7 @@ function parseSseLine(line: string): {
   return {}
 }
 
-/** #594: does this SSE text hold anything but blank lines and comments (`:`, b11146's keep-alive ping)? */
+/** #594: does this SSE text hold anything but blank lines and comments (`:`, the keep-alive ping)? */
 function isModelOutput(text: string): boolean {
   return text.split('\n').some((line) => {
     const t = line.trim()
@@ -280,8 +291,9 @@ function isModelOutput(text: string): boolean {
  * prior reply is restored (it is NOT a user Stop) rather than lost.
  */
 export class RuntimeUnresponsiveError extends Error {
-  constructor(idleMs: number) {
-    super(`The model stopped responding (no output for ${idleMs}ms).`)
+  /** `what` names the signal that stopped (#598): model output, prompt progress, any byte, the headers. */
+  constructor(idleMs: number, what = 'output') {
+    super(`The model stopped responding (no ${what} for ${idleMs}ms).`)
     this.name = 'RuntimeUnresponsiveError'
   }
 }
@@ -367,26 +379,51 @@ export function isChatStreamError(err: unknown): boolean {
 }
 
 /**
- * Two-phase idle budget for the completion watchdog (CB-5). The PREFILL budget covers the wait for
- * the FIRST chunk — legitimately slow on a near-window regenerate (the sidecar re-reads a long prompt
- * before emitting a token) — after which inter-chunk gaps are milliseconds, so a much tighter STREAM
- * budget means "wedged". Reasoning deltas count as chunks, so a long "thinking" phase is safe.
+ * The completion watchdog's budgets (CB-5). Before the FIRST chunk (token or reasoning delta) the
+ * server is prefilling — legitimately slow on a long prompt — after which inter-chunk gaps are
+ * milliseconds, so a much tighter STREAM budget means "wedged". Reasoning deltas count as chunks,
+ * so a long "thinking" phase is safe.
  *
- * #594: the PREFILL budget also bounds the wait for the response HEADERS (`LlamaRuntime.chatStream`).
- * Both pinned builds (b9849, b11146) send the headers when the slot STARTS, before any prompt batch is
- * decoded (`is_begin`, upstream `server-context.cpp`); measured on b11146: headers 14 ms after the
- * request, first token 320.9 s later (9B on CPU, 6,394 tokens). So the header wait is tokenisation
- * plus the wait for the one slot, and only exceeds seconds behind a cancelled request's batch.
+ * #598: prefill has TWO clocks, because both pinned builds (b9849 and b11146 alike) write an SSE
+ * comment ping after every ~30 s of silence from their HTTP thread, which keeps pinging while the
+ * compute loop is wedged (measured on b11146: one compute thread suspended for 151.7 s, a ping every
+ * 30 s, `/health` 200 in 62 ms). So a ping proves the PROCESS is alive and nothing more:
+ *   - `prefillMs`, the process clock — any byte, pings included, re-arms it. A frozen process
+ *     sends nothing and ends here, as it did before #598.
+ *   - `progressMs`, the compute clock — only a `prompt_progress` event (the request asks for
+ *     `return_progress`: one at slot start, then one per prompt batch) or model output re-arms it.
+ *     It runs only once the server has sent a progress event, so a server that sends none keeps
+ *     the pre-#598 behaviour. Calibrated per batch of up to `CHAT_MAX_PHYSICAL_BATCH` (2048) tokens —
+ *     re-calibrate if that cap changes, since one event comes per batch: one 2,015-token batch took
+ *     up to 414 s for the 9B on the i7-8550U laptop in power-saver mode (`eval/results/hardware/
+ *     i7-8550u-uhd-620-shared-8gb-laptop-16gb/leg0-*`), ~100 s on an i7-8700; later batches of a
+ *     long prompt run slower than the first. The owner set 10 min (first 7, raised once those two
+ *     facts were weighed: 7 min sat at the slowest batch measured, ≈421 s for a full one).
  */
 export interface IdleWatchdog {
-  /** Max wait for the response headers, then (again) for the first chunk (token or reasoning delta). */
+  /** Max silence before the first chunk: no bytes at all, pings included (the process clock, #598). */
   prefillMs: number
+  /** Max time between prompt-progress events before the first chunk (the compute clock, #598). */
+  progressMs: number
   /** Max wait between chunks once streaming has started. SSE comment pings do not count (#594). */
   streamMs: number
 }
 const PREFILL_IDLE_MS = 120_000
+const PROGRESS_IDLE_MS = 600_000
 const STREAM_IDLE_MS = 30_000
-const DEFAULT_IDLE: IdleWatchdog = { prefillMs: PREFILL_IDLE_MS, streamMs: STREAM_IDLE_MS }
+const DEFAULT_IDLE: IdleWatchdog = {
+  prefillMs: PREFILL_IDLE_MS,
+  progressMs: PROGRESS_IDLE_MS,
+  streamMs: STREAM_IDLE_MS
+}
+/**
+ * #594/#598: the wait for the response HEADERS (`LlamaRuntime.chatStream`), 180 s (owner). Both
+ * pinned builds send the headers when the slot STARTS, before any prompt batch is decoded (upstream
+ * `server-context.cpp`; measured: 14–26 ms on b11146, 18 ms on b9849), so this wait is tokenisation
+ * plus queueing for the one slot (`-np 1`). It is long only behind a cancelled request, whose
+ * current batch must finish first — up to one batch, which can exceed this on a slow CPU (accepted).
+ */
+const HEADER_WAIT_MS = 180_000
 
 /** An `AbortError`-named error so `isAbortError` treats a signal-driven read cancel as a clean stop. */
 function abortReadError(): Error {
@@ -400,13 +437,13 @@ function abortReadError(): Error {
  * `RuntimeUnresponsiveError` if `waitMs` elapses first (cancelling the reader), or rejects with the
  * read's own error. A user Stop wins first: an aborted `signal` rejects with an `AbortError` so the
  * partial persists exactly as today — a hang is NEVER converted to an abort or vice-versa. A `settled`
- * guard makes the first outcome authoritative (no double-settle). `idleMs` is the budget the error
- * names: in the stream phase `waitMs` is only what is LEFT of it after pings (#594).
+ * guard makes the first outcome authoritative (no double-settle). `budget` is the clock the error
+ * names: `waitMs` is only what is LEFT of it after pings (#594, #598).
  */
 function readWithIdleTimeout<T>(
   reader: ReadableStreamDefaultReader<T>,
   waitMs: number,
-  idleMs: number,
+  budget: { ms: number; what: string },
   signal?: AbortSignal
 ): ReturnType<ReadableStreamDefaultReader<T>['read']> {
   return new Promise((resolve, reject) => {
@@ -417,7 +454,7 @@ function readWithIdleTimeout<T>(
       cleanup()
       // A wedged sidecar: cancel the reader so undici releases the socket, then surface the timeout.
       void reader.cancel().catch(() => {})
-      reject(new RuntimeUnresponsiveError(idleMs))
+      reject(new RuntimeUnresponsiveError(budget.ms, budget.what))
     }, Math.max(0, waitMs))
     const onAbort = (): void => {
       if (settled) return
@@ -471,13 +508,16 @@ function readWithIdleTimeout<T>(
  * production default keeps behaviour byte-identical on any live stream) so a HUNG sidecar rejects with
  * `RuntimeUnresponsiveError` instead of wedging the conversation forever. A user Stop still wins first.
  *
- * #594: b11146 sends an SSE comment ping (`:`) after every ~30 s of silence (`--sse-ping-interval`,
- * default 30; b9849 has none). A ping is the server's HTTP thread, not the model, so once the first
- * chunk has landed it no longer resets the stream budget: the budget counts the time spent WAITING
- * since the last model output — any bytes but blank lines and comments, a split line's start
- * included — on the monotonic clock (time the consumer spends between pulls never counts).
- * Before the first chunk a ping still re-arms the prefill budget, deliberately: a real CPU prefill
- * runs for minutes (320.9 s measured, above) and on b11146 the pings are the only sign of it.
+ * #594: both pinned builds send an SSE comment ping (`:`) after every ~30 s of silence
+ * (`--sse-ping-interval`, default 30 — b9849 too, which the #594 record had wrong). A ping is the
+ * server's HTTP thread, not the model, so once the first chunk has landed it no longer resets the
+ * stream budget: the budget counts the time spent WAITING since the last model output — any bytes
+ * but blank lines and comments, a split line's start included — on the monotonic clock (time the
+ * consumer spends between pulls never counts).
+ *
+ * #598: before the first chunk a ping re-arms only the process clock (`prefillMs`); the compute
+ * clock (`progressMs`) counts waiting time since the last `prompt_progress` event or model output,
+ * the same way, and runs once the server has sent a progress event (see `IdleWatchdog`).
  *
  * #290/#291: the server's top-level `timings` block is remembered from whichever chunk carries it
  * (the `finish_reason` chunk at the pinned b9849 — captured in `tests/fixtures/chat-sse-timings-b9849.txt`,
@@ -503,6 +543,10 @@ export async function* readChatSSE(
   let sawChunk = false
   // #594: stream phase only — time spent waiting since the model's last output (pings don't count).
   let quietMs = 0
+  // #598: prefill only — time spent waiting since the last progress event or model output, and
+  // whether the server sends progress events at all (the compute clock runs only once it has).
+  let stalledMs = 0
+  let sawProgress = false
   // The finish reason + the last timings block seen, handed up together at the sentinel/close.
   let finishReason: string | undefined
   let timings: RuntimeTimings | undefined
@@ -512,16 +556,26 @@ export async function* readChatSSE(
   try {
     for (;;) {
       if (signal?.aborted) return
-      const streaming = sawChunk
+      // Which clock ends this read: the stream budget once a chunk landed; before that the process
+      // clock (re-armed by every read, so always whole) or the compute clock, whichever runs out first.
+      let waitMs: number
+      let budget: { ms: number; what: string }
+      if (sawChunk) {
+        waitMs = idle.streamMs - quietMs
+        budget = { ms: idle.streamMs, what: 'output' }
+      } else if (sawProgress && idle.progressMs - stalledMs < idle.prefillMs) {
+        waitMs = idle.progressMs - stalledMs
+        budget = { ms: idle.progressMs, what: 'prompt progress' }
+      } else {
+        waitMs = idle.prefillMs
+        budget = { ms: idle.prefillMs, what: 'data at all (pings included)' }
+      }
       const waitStart = performance.now() // monotonic: a wall-clock step must not eat the budget
-      const { done, value } = await readWithIdleTimeout(
-        reader,
-        streaming ? idle.streamMs - quietMs : idle.prefillMs,
-        streaming ? idle.streamMs : idle.prefillMs,
-        signal
-      )
+      const { done, value } = await readWithIdleTimeout(reader, waitMs, budget, signal)
       if (done) break
-      quietMs += performance.now() - waitStart
+      const waited = performance.now() - waitStart
+      quietMs += waited
+      stalledMs += waited
       buffer += decoder.decode(value, { stream: true })
       // Anything but a blank line or an SSE comment is the model's output (#594) — the start of
       // one split across reads included.
@@ -541,6 +595,10 @@ export async function* readChatSSE(
         // never dropped and a timings block on a later chunk is never missed.
         if (r.finishReason) finishReason = r.finishReason
         if (r.timings) timings = r.timings
+        if (r.progress) sawProgress = true
+        // #598: only a parsed progress event or real model output proves the compute loop moved —
+        // never a role-only or timings-only frame, which a wedged server could still send.
+        if (r.progress || r.delta || r.reasoning) stalledMs = 0
         if (r.done) {
           finish()
           return
@@ -661,6 +719,10 @@ export class LlamaRuntime implements ModelRuntime {
       // the injected fence is prefilled once and then cached, so toggling a skill on costs one
       // prefill, not one per turn. Loopback-only, no telemetry — purely a local compute hint.
       cache_prompt: true,
+      // #598: a `prompt_progress` event at slot start and after every prompt batch (both pins) —
+      // the only sign that prefill is advancing, which `readChatSSE`'s compute clock watches. The
+      // events carry no text; the local API re-serialises tokens, so its clients never see them.
+      return_progress: true,
       ...(maxTokens != null ? { max_tokens: maxTokens } : {}),
       ...(temperature != null ? { temperature } : {}),
       // Grammar-constrained decoding (D55): constrain the output to a JSON Schema. llama-server's
@@ -684,9 +746,9 @@ export class LlamaRuntime implements ModelRuntime {
     // #594: CB-5's watchdog starts at `res.body`, so a sidecar that took the request and never sent
     // its headers left the turn — and every busy signal it holds — waiting until undici's own
     // headers timeout ended it after 300 s (304.8 s measured in Electron 43.7.7) as a raw "fetch
-    // failed". The headers now get the prefill budget (see `IdleWatchdog`); the request keeps
-    // following the caller after they arrive, so a user Stop tears the stream down as before.
-    const request = combineSignals(options?.signal, DEFAULT_IDLE.prefillMs)
+    // failed". The headers get their own budget (`HEADER_WAIT_MS`); the request keeps following the
+    // caller after they arrive, so a user Stop tears the stream down as before.
+    const request = combineSignals(options?.signal, HEADER_WAIT_MS)
     try {
       let res: Response
       try {
@@ -699,7 +761,7 @@ export class LlamaRuntime implements ModelRuntime {
       } catch (err) {
         // Only the deadline aborts the request while the caller's signal is clear; a Stop wins a tie.
         if (request.signal.aborted && !options?.signal?.aborted) {
-          throw new RuntimeUnresponsiveError(DEFAULT_IDLE.prefillMs)
+          throw new RuntimeUnresponsiveError(HEADER_WAIT_MS, 'response headers')
         }
         // #600: the sidecar died under the request (or is gone) — a typed error, never raw text.
         if (!options?.signal?.aborted && isConnectionLoss(err)) throw new RuntimeConnectionLostError(err)

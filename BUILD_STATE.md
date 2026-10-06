@@ -36,6 +36,10 @@ _2026-10-06 — **#600 — a model stop or switch ends the answer cleanly; a cra
 (after `current` is cleared, before the kill, no wait; never on the crash restart) ends the local API request (`model_not_loaded`/`model_starting`), a deep-index build and
 the answers: partial kept + "Reply stopped" (new `messages.ended_early`, not `truncated`), a re-ask keeps its predecessor, an unanswered question is marked, an AI Model card note.
 A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: #606, #612, #613._
+_2026-10-06 — **#598 — a prefill wedged behind pings ends; the header wait is 180 s (`fix/598-prefill-liveness`).** Both pins ping every ~30 s (b9849 too — #594's
+record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `return_progress` on every chat request and two prefill clocks: any byte (120 s) and a
+`prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
+CB-5 "#598 amendment". Open: a 27B/31B on CPU can exceed 10 min per batch; translation has no watchdog (#605)._
 _2026-10-05 — **#516 — the app reports engines older than its pin and updates them (`feat/516-engine-update`).** `EngineStatus.engineVersions` (numeric tag order;
 `older`/`current`/`newer`/`unknown`, `cpu/` net included); `update: true` replaces only `older` installs + an older `cpu/` net; every engine job now downloads + verifies all
 archives first, then (updates) pauses the model + llama helpers for the swap and restarts the model; a spawn gate holds the family's starts through every swap (closes the

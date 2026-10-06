@@ -267,12 +267,16 @@ password recovery — are documented in
   auto-applied from a suggestion alone. The redaction manifest↔handler pair is now **aligned** (Skills U4, audit §4.4): the pure
   legal words (`datenschutz`/`dsgvo`/`gdpr`) were **dropped** from the vocabulary — the handler acts on
   neither `routeMatch` nor the informational PII scan for them ("Was regelt die DSGVO?" is about the LAW,
-  not the document), so redaction no longer offers **or** auto-fires on them; the PII-content topics
-  (`sensitive data`/`sensible daten`) stay, since the informational dry-run reports per-category counts
-  for those (they still offer and auto-fire on legal questions too: #604). The bare German
-  `personenbezogene daten` stopped offering in #608 (GDPR, privacy-notice and contract questions got
-  Redaction); it still routes once Redaction or Share-Safe is active, like English `personal data`.
-  German removal requests therefore get the Redaction offer only in a few word orders ("…
+  not the document), so redaction no longer offers **or** auto-fires on them. The bare PII-content
+  topics went the same way: `personenbezogene daten` in #608 and `sensitive data`/`sensible daten` in #604
+  (GDPR, privacy-notice and contract questions got Redaction, and with auto-fire on and a PDF selected a
+  count scan instead of an answer). They still route once a skill is picked (the German phrases under
+  Redaction and Share-Safe, `sensitive data` under Redaction), so with Redaction picked "what sensitive
+  data is in here?" still gets the per-category counts, and a question that also carries a removal word
+  ("Löschfristen … für sensible Daten") gets the Redact button. A removal request or a check before
+  sharing that names only the topic ("Please black out all sensitive data", "bitte auf sensible Daten
+  checken") gets no suggestion: pick the skill.
+  German removal requests get the Redaction offer only in a few word orders ("…
   personenbezogenen Daten entfernen", "Lösche die personenbezogenen Daten …"): one that names only the
   data ("eine Version ohne personenbezogene Daten"), uses another verb, or another form of these verbs
   ("Entfernen Sie …", "Bitte personenbezogene Daten löschen.") gets none, so pick the skill yourself.

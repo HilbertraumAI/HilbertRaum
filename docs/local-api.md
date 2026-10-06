@@ -393,7 +393,7 @@ it is clamped to 5–180 s.
 | Header phase | 10 s | Slow-loris |
 | Body idle | 30 s of **inactivity** (body phase only; reset by every byte) | A stalled upload should not hold a socket |
 | Body total | **120 s** from the end of the header phase (#255) | A slow but steady trickle resets the idle timer forever; sixteen of them would exhaust the listener. The 1 MB body cap ends a fast body long before |
-| Generation | **no timeout** | A legitimate CPU generation can run for minutes; Node's 300 s default would kill it. Wedge detection is done app-side instead: a model server that has not taken up the request after **120 s**, or stops producing text for **30 s** in mid-answer, ends it with 502 `runtime_unresponsive` (a stream that already sent text gets a `runtime_error` frame instead) (#594) |
+| Generation | **no timeout** | A legitimate CPU generation can run for minutes; Node's 300 s default would kill it. Wedge detection is done app-side instead, and ends the request with 502 `runtime_unresponsive` (a stream that already sent text gets a `runtime_error` frame instead) when the model server: has not taken up the request after **180 s**; sends nothing at all for **120 s**, or shows no progress through the prompt for **10 minutes**, before its first token; or stops producing text for **30 s** in mid-answer (#594, #598) |
 | SSE reader stall | 15 s of unrelieved backpressure → the request is aborted and the slot reclaimed | One stalled reader must not wedge the model |
 | Concurrent connections | 16 | Cheap flood ceiling |
 | Outside requests generating at once | **1** (plus one waiting up to ~30 s) | [§7](#7-sharing-one-model-with-yourself) |

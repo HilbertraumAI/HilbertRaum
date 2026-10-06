@@ -350,14 +350,14 @@
       "question": "Bitte vor dem Teilen prüfen, ob sensible Daten enthalten sind.",
       "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
       "expected": "share-safe-review",
-      "note": "True positive (de) — 'vor dem teilen prüfen' + 'sensible daten'."
+      "note": "True positive (de) — 'vor dem teilen prüfen' ('sensible daten' is route-only since #604; it auto-fired Redaction here until then)."
     },
     {
       "id": "tp-sharesafe-de-02",
       "question": "Sind sensible Daten oder Metadaten enthalten, bevor ich es weitergebe?",
       "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
       "expected": "share-safe-review",
-      "note": "True positive (de) — 'sensible daten' + 'Metadaten' ('weitergebe' is route-only)."
+      "note": "True positive (de) — 'Metadaten' ('sensible daten' is route-only since #604 and auto-fired Redaction here until then; 'weitergebe' is route-only)."
     },
     {
       "id": "tp-sharesafe-kwonly-01",
@@ -936,7 +936,7 @@
       "question": "Remove the sensitive data from this file.",
       "inScopeDocs": [],
       "expected": "document-redaction",
-      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - the PII-topic keyword \"sensitive data\""
+      "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - originally the PII-topic keyword \"sensitive data\"; since #604 (route-only topic) the removal phrase \"remove the sensitive data\""
     },
     {
       "id": "adv-datenschutz-topic-01",
@@ -1133,6 +1133,62 @@
       "inScopeDocs": [{ "title": "studie_pflegeheime_auswertung.pdf", "mimeType": "application/pdf" }],
       "expected": "none",
       "note": "#602 — fresh blind set (both labellers: none, auto-fire harmful). A question about what a selected study says: the participle forms (pseudonymisiert, anonymisiert) would offer Redaction and auto-fire its count scan here, so they were rejected."
+    },
+    {
+      "id": "adv-sensible-legal-de-01",
+      "question": "Wir sind ein kleiner Sportverein. Brauchen wir für sensible Daten wie Allergien oder Medikamente der Kinder eine eigene Einwilligung der Eltern?",
+      "inScopeDocs": [{ "title": "anmeldeformular_sommercamp.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#604 — from the fresh blind evaluation (both labellers: none, automatic Redaction harmful). A German legal question about sensitive data over a PDF: 'sensible daten' offered and auto-fired Redaction until #604."
+    },
+    {
+      "id": "adv-sensible-notice-de-01",
+      "question": "Hab hier die Datenschutzinfo vom Labor. Steht da drin, ob die sensible Daten an die Krankenkasse weitergeben?",
+      "inScopeDocs": [{ "title": "datenschutzinfo_labor.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#604 — fresh blind set (both labellers: none, automatic Redaction harmful). What a privacy notice says about sensitive data: 'sensible daten' offered Share-Safe and auto-fired Redaction until #604 (both skills' offer dropped)."
+    },
+    {
+      "id": "adv-sensitive-legal-en-01",
+      "question": "General question, not about this file: can an employer keep sensitive data like sick notes in the normal personnel file?",
+      "inScopeDocs": [{ "title": "quarterly_report_q2.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#604 — fresh blind set (both labellers: none, automatic Redaction harmful). An English legal question with a document selected: 'sensitive data' offered and auto-fired Redaction until #604."
+    },
+    {
+      "id": "adv-sensitive-policy-en-01",
+      "question": "What does this privacy policy say about sensitive data?",
+      "inScopeDocs": [{ "title": "privacy-policy.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#604 — fresh blind set (both labellers: none, automatic Redaction harmful). What a privacy policy says about sensitive data: 'sensitive data' offered and auto-fired Redaction until #604."
+    },
+    {
+      "id": "tp-redaction-en-sensitive-remove-01",
+      "question": "Hello, could you help me remove the sensitive data from this so I can keep a copy for our statistics? We only need the age group and the outcome.",
+      "inScopeDocs": [{ "title": "patient_survey_results.md", "mimeType": "text/markdown" }],
+      "expected": "document-redaction",
+      "note": "#604 — fresh blind set (both labellers: document-redaction). The 'remove the sensitive data' phrase keeps this removal request's offer after the bare topic phrase stopped offering."
+    },
+    {
+      "id": "tp-redaction-en-sensitive-blackout-01",
+      "question": "Please black out all sensitive data in this document.",
+      "inScopeDocs": [{ "title": "witness_statement.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "#604 — fresh blind set (both labellers: document-redaction). Only the bare 'sensitive data' offered on this request, so it is a KNOWN_SUGGESTION_DEVIATIONS row: the accepted cost of #604."
+    },
+    {
+      "id": "tp-sharesafe-de-sensible-01",
+      "question": "Ich will das gleich an die Versicherung schicken. Sind da noch sensible Daten drin, die die nicht sehen sollten?",
+      "inScopeDocs": [{ "title": "gutachten_unfall_2025.pdf", "mimeType": "application/pdf" }],
+      "expected": "share-safe-review",
+      "note": "#604 — fresh blind set (both labellers: best share-safe-review, Redaction acceptable). Only the bare 'sensible daten' offered on this check before sharing (Redaction, until #604), so it is a KNOWN_SUGGESTION_DEVIATIONS row: the accepted cost of #604."
+    },
+    {
+      "id": "tp-redaction-de-sensible-remove-01",
+      "question": "Bitte die sensiblen Daten entfernen.",
+      "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "#604 — pins the German removal phrase 'sensiblen daten entfernen'. Hand-written."
     }
   ]
 }

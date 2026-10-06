@@ -363,7 +363,8 @@ describe('LlamaRuntime', () => {
 // CB-5's watchdog lived in `readChatSSE`, i.e. it started once `res.body` existed. A sidecar that took the request and
 // never answered it (seen 2026-10-05: b9849 Vulkan on a GTX 1070 Ti, 0 % CPU, /health silent too) left the turn waiting
 // until undici's own 300 s headers timeout ended it as a raw "fetch failed". Both pinned builds send the headers when the
-// slot starts, BEFORE prefill (measured on b11146: 14 ms), so the owner's budget is CB-5's 120 s first-output budget.
+// slot starts, BEFORE prefill (measured on b11146: 14 ms), so the wait is queueing for the one slot; #598 gave it the
+// owner's 180 s (it was CB-5's 120 s first-output budget, which a re-ask behind a cancelled request's batch outlasted).
 
 const realSetTimeout = globalThis.setTimeout
 const realClearTimeout = globalThis.clearTimeout
@@ -426,7 +427,7 @@ describe('LlamaRuntime — the wait for the response headers (#594)', () => {
     vi.useRealTimers()
   })
 
-  it('no headers ⇒ RuntimeUnresponsiveError at exactly the 120 s budget, and the connection is closed', async () => {
+  it('no headers ⇒ RuntimeUnresponsiveError at exactly the 180 s budget (#598), and the connection is closed', async () => {
     const sidecar = await silentSidecar()
     const runtime = new LlamaRuntime(startOpts, {
       binPath: '/bin/llama-server',
@@ -445,11 +446,12 @@ describe('LlamaRuntime — the wait for the response headers (#594)', () => {
         (e: unknown) => (outcome = e)
       )
     await within(sidecar.chatReached, 'the chat request reaching the sidecar')
-    await vi.advanceTimersByTimeAsync(119_999)
+    await vi.advanceTimersByTimeAsync(179_999)
     expect(outcome).toBe('pending')
     await vi.advanceTimersByTimeAsync(1)
     await within(first, 'the header deadline firing')
     expect(isRuntimeUnresponsiveError(outcome)).toBe(true) // CB-5's error ⇒ main.chat.runtimeUnresponsive / 502
+    expect((outcome as Error).message).toContain('no response headers for 180000ms')
     await within(sidecar.chatClosed, 'the request connection closing')
     vi.useRealTimers()
     await runtime.stop()
@@ -479,8 +481,8 @@ describe('LlamaRuntime — the wait for the response headers (#594)', () => {
 
   it('the deadline ends when the headers arrive: a b11146 CPU prefill (a ping every 30 s, first token at 320.9 s) answers', async () => {
     // Replays the 2026-10-05 capture's timing. The body errors when the request is aborted, as a fetch body does — so a
-    // header deadline still armed at 120 s would cut this stream; and before the first token a ping still re-arms the
-    // prefill budget (the owner kept that: on b11146 the pings are the only sign of a minutes-long CPU prefill).
+    // header deadline still armed at 180 s would cut this stream. That capture predates `return_progress`, so it has no
+    // progress events and the pings alone carry it (readChatSSE's no-progress rule, #598).
     let sse!: ReadableStreamDefaultController<Uint8Array>
     const enc = new TextEncoder()
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
@@ -704,6 +706,12 @@ describe('answer-depth mode → request mapping (D4)', () => {
   it('sends cache_prompt:true so the slot KV prefix is reused across turns (skill-fence prefill is one-time)', async () => {
     const { body } = await captureBody()
     expect(body.cache_prompt).toBe(true)
+  })
+
+  it('asks for prompt-progress events (return_progress), the only sign that a prefill advances (#598)', async () => {
+    // Without them readChatSSE's compute clock never runs, and a wedged prefill is pinged alive forever.
+    const { body } = await captureBody()
+    expect(body.return_progress).toBe(true)
   })
 
   it('fast → thinking off + temperature 0.7 + modest max_tokens', async () => {

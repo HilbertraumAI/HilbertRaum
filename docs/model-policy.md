@@ -715,6 +715,10 @@ The win-cpu / ubuntu-cpu / macos-arm64 assets keep their hashes from the origina
 >   (`architecture.md` GPU record "llama.cpp facts"), write the licence record above, and
 >   regenerate `DRIVE-NOTICES.md` — as a deliberate, reviewed change. A real-hash mismatch makes
 >   `fetch-runtime` delete the archive and fail.
+>   **Re-capture the SSE fixtures** (`apps/desktop/tests/fixtures/chat-sse-*-<pin>.txt`,
+>   `vision/vision-sse-<pin>.txt`; TS-3(a)), and with them confirm that the new build still answers
+>   `return_progress` with a `prompt_progress` event per batch and still pings every ~30 s: the chat
+>   watchdog's prefill clocks rest on both (`architecture.md` CB-5 "#598 amendment").
 >   **Re-read the host requirements too (#530):** `objdump -T` / `readelf -d` the new Linux
 >   binaries for their GLIBC / GLIBCXX / OpenSSL / libgomp needs, and the Windows DLL imports.
 >   If the floor moves, update the record above, `known-limitations.md` and the user-facing

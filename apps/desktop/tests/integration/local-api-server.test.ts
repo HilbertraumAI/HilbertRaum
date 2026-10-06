@@ -554,8 +554,9 @@ describe('LocalApiServer — completions contract (client-dev 1/2/5/7)', () => {
     expect(((await res.json()) as { error: { code: string } }).error.code).toBe('workspace_locked')
   })
 
-  // #594: a sidecar that never answers now ends in CB-5's error within 120 s (it used to hold the one external slot until
-  // undici gave up at 300 s). Before the first token both modes owe the documented 502, and the slot must free.
+  // #594/#598: a sidecar that never answers now ends in CB-5's error (headers 180 s, then 120 s of silence or 7 min without
+  // prompt progress — it used to hold the one external slot until undici gave up at 300 s, or forever behind pings). Before
+  // the first token both modes owe the documented 502, and the slot must free.
   it.each([false, true])('the runtime stops responding before its first token → 502 runtime_unresponsive, slot freed (stream: %s)', async (stream) => {
     const h = await makeHarness({ echo: false })
     const resPromise = post(h, { messages: [{ role: 'user', content: 'x' }], stream })
