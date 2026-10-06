@@ -164,6 +164,46 @@ describe('document-edit-locate — locateDocumentEdits over the runtime', () => 
       locateDocumentEdits('a\nb', 'change a to b', { runtime, signal: controller.signal })
     ).rejects.toMatchObject({ name: 'AbortError' })
   })
+
+  // #622: a line too long for any window (a .txt without line breaks) is asked about in overlapping
+  // pieces. The model counts `occurrence` within the piece it sees; the splice counts from the line's
+  // start, so the pass adds the line's occurrences before the piece — or the edit lands on the wrong one.
+  it('#622: an edit proposed on a piece of an over-long line is anchored to the right occurrence of the line', async () => {
+    const filler = 'Die Parteien vereinbaren Stillschweigen über den Inhalt dieser Vereinbarung. '.repeat(80)
+    // Line 1 is short; line 2 is the over-long one (its occurrences count from ITS start, not line 1's).
+    const text =
+      'Der Vollmachtgeber ist bekannt.\n' +
+      'Der Vollmachtgeber unterschreibt. ' + filler + 'Der Vollmachtgeber prüft. ' + filler.slice(0, 300) +
+      'Der Vollmachtgeber (Mandant) zahlt. ' + filler
+    const calls: Array<{ messages: ChatMessage[]; options?: RuntimeChatOptions }> = []
+    const runtime = {
+      ...scriptedRuntime(({ messages }) => {
+        // The model sees its piece and counts within it, as a real model would.
+        for (const numbered of messages[1].content.split('\n')) {
+          const tab = numbered.indexOf('\t')
+          const piece = numbered.slice(tab + 1)
+          const at = piece.indexOf('Vollmachtgeber (Mandant)')
+          if (at === -1) continue
+          const occurrence = piece.slice(0, at).split('Vollmachtgeber').length
+          const line = Number(numbered.slice(0, tab))
+          return JSON.stringify({ edits: [{ line, find: 'Vollmachtgeber', occurrence, replace: 'Vollmachtgeberin' }] })
+        }
+        return JSON.stringify({ edits: [] })
+      }, calls),
+      contextWindow: () => 4096
+    }
+    const { edits } = await locateDocumentEdits(text, 'Vollmachtgeber → Vollmachtgeberin for the Mandant', {
+      runtime,
+      signal: new AbortController().signal
+    })
+    expect(calls.length).toBeGreaterThan(1) // the line really was asked about in pieces
+    const { text: out, applied } = verifyAndSpliceEdits(text, edits)
+    expect(applied).toBe(1)
+    expect(out).toContain('Der Vollmachtgeberin (Mandant) zahlt.')
+    expect(out).toContain('Der Vollmachtgeber unterschreibt.')
+    expect(out).toContain('Der Vollmachtgeber prüft.')
+    expect(out).toContain('Der Vollmachtgeber ist bekannt.')
+  })
 })
 
 describe('document-edit verify + splice (D75/D76)', () => {

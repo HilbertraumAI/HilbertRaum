@@ -1,7 +1,6 @@
 import type { JsonSchema } from '../../../../shared/types'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../runtime'
 import { stripThinkBlocks } from '../../chat'
-import { buildLocateWindows } from './locate-windows'
+import { walkLocateWindows, type LocateWalkDeps } from './locate-walk'
 
 // LLM locate pass for document redaction v2 (beta-feedback-2026-07 Phase 7, decisions D73/D75/D78;
 // architecture.md "Skills — design record" §21, beside the §20 span-transform engine). The local model
@@ -15,8 +14,9 @@ import { buildLocateWindows } from './locate-windows'
 //   - misses shrink: the model contributes JUDGEMENT (names/addresses the deterministic regex floor
 //     cannot detect), and the sweep turns one confirmation into every-occurrence coverage (D75).
 //
-// This module holds the runtime-touching half (the model call + reply parse; the windows come from
-// locate-windows.ts, shared with the document-edit pass). It is pure main-side TS otherwise — no
+// This module holds the runtime-touching half (the prompt, the schema, the reply parse; the windows and
+// the model calls are the walk in locate-walk.ts, shared with the document-edit pass — #622 sizes both to
+// the model's context). It is pure main-side TS otherwise — no
 // fs/net/native (CLAUDE.md §0). The deterministic verify+sweep lives in redaction.ts so it stays
 // runtime-free and unit-testable without a model.
 //
@@ -52,12 +52,6 @@ export const MAX_LOCATED_ENTITIES = 4096
 /** The entity `text` maxLength (UTF-16 units) of the locate grammar and the `redact_document` schema, which
  *  cites it. `parseLocateReply` re-checks it (#583): the grammar may bound code points instead. */
 export const MAX_LOCATED_ENTITY_CHARS = 160
-
-/** Per-window generation ceiling (tokens) — enough for a JSON list of the entities a 40-line window
- *  can plausibly hold. The char cap (below) is the runaway backstop the categorizer/enricher use. */
-const LOCATE_MAX_TOKENS = 768
-/** Char cap multiplier — the same runaway-runtime bound the enricher uses (audit L-2). */
-const OUTPUT_CHAR_CAP_PER_TOKEN = 8
 
 /**
  * The grammar contract (D55) for one window's locate reply: a list of entities, each a short verbatim
@@ -106,30 +100,6 @@ function buildLocateSystemPrompt(directive: string): string {
   ].join('\n')
 }
 
-/** Stream a grammar-constrained JSON reply (temp 0), or null on a runaway reply. Aborts propagate as an
- *  AbortError so the seam maps them to a calm cancel (mirrors the enricher/categorizer surfaces). */
-async function streamLocateJson(
-  messages: ChatMessage[],
-  deps: { runtime: ModelRuntime; signal: AbortSignal }
-): Promise<string | null> {
-  let text = ''
-  const charCap = LOCATE_MAX_TOKENS * OUTPUT_CHAR_CAP_PER_TOKEN
-  const options: RuntimeChatOptions = {
-    signal: deps.signal,
-    maxTokens: LOCATE_MAX_TOKENS,
-    temperature: 0,
-    responseSchema: entityLocateSchema(),
-    responseSchemaName: 'redaction_entities'
-  }
-  for await (const token of deps.runtime.chatStream(messages, options)) {
-    if (deps.signal.aborted) throw new DOMException('Redaction locate cancelled', 'AbortError')
-    text += token
-    if (text.length > charCap) return null
-  }
-  if (deps.signal.aborted) throw new DOMException('Redaction locate cancelled', 'AbortError')
-  return text
-}
-
 /** Parse + in-code re-validate one window's reply into entities (the mock runtime ignores the schema).
  *  A malformed reply ⇒ [] (that window contributes nothing; the floor still runs — never a hard fail).
  *  An over-long text is dropped, never clipped: one would make the gate refuse the whole list (#583). */
@@ -176,28 +146,31 @@ export interface LocateEntitiesResult {
  * walk early — further model calls could only produce droppable proposals — and reports `truncated`.
  *
  * A single window's malformed reply is skipped (that window contributes no entity, the floor still
- * covers it); an ABORT throws (the seam maps it to a calm cancel). `onProgress` ticks per window.
+ * covers it). #622: the windows fit the model's context and a reply cut short splits its window
+ * (`locate-walk.ts`); a window that cannot fit throws `LocateTooLongError`. An ABORT throws (the seam
+ * maps it to a calm cancel). `onProgress` ticks per window.
  */
 export async function locateEntities(
   text: string,
   instruction: string,
-  deps: { runtime: ModelRuntime; signal: AbortSignal; onProgress?: (done: number, total: number) => void }
+  deps: LocateWalkDeps
 ): Promise<LocateEntitiesResult> {
   const directive = instruction.trim().length > 0 ? instruction.trim() : DEFAULT_LOCATE_DIRECTIVE
-  const system = buildLocateSystemPrompt(directive)
-  const windows = buildLocateWindows(text)
   const found: LocatedEntity[] = []
   const seen = new Set<string>()
   let truncated = false
-  for (let i = 0; i < windows.length; i++) {
-    if (deps.signal.aborted) throw new DOMException('Redaction locate cancelled', 'AbortError')
-    const messages: ChatMessage[] = [
-      { role: 'system', content: system },
-      { role: 'user', content: windows[i].numbered }
-    ]
-    const reply = await streamLocateJson(messages, deps)
-    if (reply !== null) {
-      for (const e of parseLocateReply(reply)) {
+  const walk = await walkLocateWindows(
+    text,
+    {
+      system: buildLocateSystemPrompt(directive),
+      schema: entityLocateSchema(),
+      schemaName: 'redaction_entities',
+      parse: parseLocateReply,
+      cancelledMessage: 'Redaction locate cancelled'
+    },
+    deps,
+    (entities) => {
+      for (const e of entities) {
         if (seen.has(e.text)) continue // already collected — the sweep masks every occurrence anyway
         if (found.length >= MAX_LOCATED_ENTITIES) {
           truncated = true
@@ -206,14 +179,9 @@ export async function locateEntities(
         seen.add(e.text)
         found.push(e)
       }
+      // A full cap stops paying for locate calls whose proposals could only be dropped.
+      return found.length < MAX_LOCATED_ENTITIES
     }
-    deps.onProgress?.(i + 1, windows.length)
-    if (found.length >= MAX_LOCATED_ENTITIES && i + 1 < windows.length) {
-      // The cap is full and windows remain: stop paying for locate calls whose proposals could only be
-      // dropped, and report the walk as truncated.
-      truncated = true
-      break
-    }
-  }
-  return { entities: found, truncated }
+  )
+  return { entities: found, truncated: truncated || walk.stoppedEarly }
 }

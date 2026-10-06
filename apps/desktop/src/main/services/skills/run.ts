@@ -16,6 +16,7 @@ import { CATEGORIZER_CATEGORIES } from './categorizer'
 import { withDocumentLock } from './doc-lock'
 import { redactWithEntities, type RedactDocumentOutput } from './tools/redaction'
 import { locateEntities, type LocatedEntity } from './tools/redaction-locate'
+import { LocateTooLongError } from './tools/locate-walk'
 import { verifyAndSpliceEdits, type ApplyDocumentEditsOutput } from './tools/document-edit'
 import { locateDocumentEdits, type LocatedEdit } from './tools/document-edit-locate'
 import {
@@ -1379,9 +1380,11 @@ export interface RedactionResult {
 
 /**
  * #620: why a locate pass the model did not finish failed the run — the content-free reason code the run
- * bar maps to copy. `redactionTooLong`: a window exceeded the model's context window (llama-server
- * `exceed_context_size_error`; the window sizing is #622). `redactionModelStopped`: everything else — a
- * crash or kill (`RuntimeConnectionLostError`), a frozen model the CB-5 watchdog ended, a server error.
+ * bar maps to copy. `redactionTooLong`: part of the document did not fit the model's context even split
+ * into the smallest pieces (`LocateTooLongError`; since #622 the windows fit the context and a window over
+ * it — llama-server `exceed_context_size_error` — is split, so this is rare). `redactionModelStopped`:
+ * everything else — a crash or kill (`RuntimeConnectionLostError`), a frozen model the CB-5 watchdog ended,
+ * a server error.
  */
 type RedactionLocateFailure = 'redactionModelStopped' | 'redactionTooLong'
 
@@ -1423,7 +1426,8 @@ async function runRedactionLocate(
     // runs for a crash, so the signal is live), froze, errored, or a window overflowed its context. The
     // floor would offer the user a copy the model never finished, saying "no model running" after the
     // save. Content-free log: the error's class name only (§22-M1).
-    const failure: RedactionLocateFailure = isExceedContextError(e) ? 'redactionTooLong' : 'redactionModelStopped'
+    const failure: RedactionLocateFailure =
+      e instanceof LocateTooLongError || isExceedContextError(e) ? 'redactionTooLong' : 'redactionModelStopped'
     const kind = e instanceof Error ? e.name : typeof e
     console.error(`[skills] redaction locate pass failed (${kind}) — the run fails, nothing is saved`)
     return { failed: failure }

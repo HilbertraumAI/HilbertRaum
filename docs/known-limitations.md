@@ -541,9 +541,10 @@ password recovery — are documented in
   corrupting text). **If no model is running, only the rule-based floor applies** and the run says so
   honestly (`redactedFloor`/`cleanFloor` → "offline rule-based detection only, no model running"). **If
   the model fails during the run** (a crash, a freeze, an error), the run saves nothing and says so
-  (#620). On a model with a **4,096-token context**, a document whose paragraphs are long (a DOCX
-  paragraph is one line of the model's 40-line windows) is too long for it every time — the run says so
-  and points to a larger context size; giving the windows a token budget is #622. The
+  (#620). The model reads the document in windows sized to its **context**, and a paragraph too long for
+  any window is read in overlapping pieces (#622), so long paragraphs are slower to check on a
+  small-context model but no longer fail; if a piece is still too long, the run says so and points to a
+  larger context size. The
   redacted copy is a **starting point that still needs a human review** before sharing; the SKILL.md body
   and the run's "done" copy both say so, and the app never describes the output as "fully anonymized" or
   as meeting any legal/GDPR-DSGVO standard. Privacy posture is otherwise the strongest of the Tier-2

@@ -1,7 +1,7 @@
 import type { JsonSchema } from '../../../../shared/types'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../runtime'
 import { stripThinkBlocks } from '../../chat'
-import { buildLocateWindows } from './locate-windows'
+import type { LocateWindow } from './locate-windows'
+import { walkLocateWindows, type LocateWalkDeps } from './locate-walk'
 
 // LLM locate pass for format-preserving TARGETED EDITS (beta-feedback-2026-07 Phase 8, decision D76;
 // architecture.md "Skills — design record" §22, beside the §20 span engine + §21 redaction locate). The
@@ -16,8 +16,9 @@ import { buildLocateWindows } from './locate-windows'
 //   - agreement edits are expressible: because an edit is anchored to ONE occurrence (D76 precision, unlike
 //     redaction's every-occurrence sweep), "der → die only where it refers to X" is one edit per occurrence.
 //
-// This module holds the runtime-touching half (the model call + reply parse; the windows come from
-// locate-windows.ts, shared with the redaction pass). It is pure main-side TS otherwise — no
+// This module holds the runtime-touching half (the prompt, the schema, the reply parse; the windows and
+// the model calls are the walk in locate-walk.ts, shared with the redaction pass — #622 sizes both to
+// the model's context). It is pure main-side TS otherwise — no
 // fs/net/native (CLAUDE.md §0). The deterministic verify+splice lives in document-edit.ts so it stays
 // runtime-free and unit-testable without a model.
 //
@@ -43,12 +44,6 @@ export const MAX_LOCATED_EDITS = 4096
 /** The `find` / `replace` maxLength (UTF-16 units) of the locate grammar and the `apply_document_edits`
  *  schema, which cites it. `parseEditReply` re-checks it (#583): the grammar may bound code points instead. */
 export const MAX_LOCATED_EDIT_CHARS = 200
-
-/** Per-window generation ceiling (tokens) — enough for a JSON list of the edits a 40-line window can
- *  plausibly hold. The char cap (below) is the runaway backstop. */
-const EDIT_MAX_TOKENS = 768
-/** Char cap multiplier — the same runaway-runtime bound the redaction locate + the enricher use (audit L-2). */
-const OUTPUT_CHAR_CAP_PER_TOKEN = 8
 
 /**
  * The grammar contract (D55) for one window's locate reply: a list of edits, each a verbatim `find`
@@ -101,30 +96,6 @@ function buildEditSystemPrompt(instruction: string): string {
   ].join('\n')
 }
 
-/** Stream a grammar-constrained JSON reply (temp 0), or null on a runaway reply. Aborts propagate as an
- *  AbortError so the seam maps them to a calm cancel (mirrors the redaction locate surface). */
-async function streamEditJson(
-  messages: ChatMessage[],
-  deps: { runtime: ModelRuntime; signal: AbortSignal }
-): Promise<string | null> {
-  let text = ''
-  const charCap = EDIT_MAX_TOKENS * OUTPUT_CHAR_CAP_PER_TOKEN
-  const options: RuntimeChatOptions = {
-    signal: deps.signal,
-    maxTokens: EDIT_MAX_TOKENS,
-    temperature: 0,
-    responseSchema: editLocateSchema(),
-    responseSchemaName: 'document_edits'
-  }
-  for await (const token of deps.runtime.chatStream(messages, options)) {
-    if (deps.signal.aborted) throw new DOMException('Document edit locate cancelled', 'AbortError')
-    text += token
-    if (text.length > charCap) return null
-  }
-  if (deps.signal.aborted) throw new DOMException('Document edit locate cancelled', 'AbortError')
-  return text
-}
-
 /** Parse + in-code re-validate one window's reply into edits (the mock runtime ignores the schema). A
  *  malformed reply ⇒ [] (that window contributes nothing — never a hard fail). A missing/invalid line or
  *  occurrence defaults to 1; an empty `find` is dropped (there is nothing to anchor). An over-long `find` or
@@ -174,28 +145,34 @@ export interface LocateEditsResult {
  * list is capped at MAX_LOCATED_EDITS (== the tool schema's `edits` maxItems, so the gate can never
  * refuse the seam's input). A full cap stops the window walk early and reports `truncated`.
  *
- * A single window's malformed reply is skipped (that window contributes no edit); an ABORT throws (the
- * seam maps it to a calm cancel). `onProgress` ticks per window.
+ * A single window's malformed reply is skipped (that window contributes no edit). #622: the windows fit
+ * the model's context, a reply cut short splits its window (`locate-walk.ts`), and an edit proposed on a
+ * piece of an over-long line gets its occurrence counted from the line's start (`lineOccurrence`); a
+ * window that cannot fit throws `LocateTooLongError`. An ABORT throws (the seam maps it to a calm
+ * cancel). `onProgress` ticks per window.
  */
 export async function locateDocumentEdits(
   text: string,
   instruction: string,
-  deps: { runtime: ModelRuntime; signal: AbortSignal; onProgress?: (done: number, total: number) => void }
+  deps: LocateWalkDeps
 ): Promise<LocateEditsResult> {
-  const system = buildEditSystemPrompt(instruction.trim())
-  const windows = buildLocateWindows(text)
   const found: LocatedEdit[] = []
   const seen = new Set<string>()
   let truncated = false
-  for (let i = 0; i < windows.length; i++) {
-    if (deps.signal.aborted) throw new DOMException('Document edit locate cancelled', 'AbortError')
-    const messages: ChatMessage[] = [
-      { role: 'system', content: system },
-      { role: 'user', content: windows[i].numbered }
-    ]
-    const reply = await streamEditJson(messages, deps)
-    if (reply !== null) {
-      for (const e of parseEditReply(reply)) {
+  const lineStarts = lineStartOffsets(text)
+  const walk = await walkLocateWindows(
+    text,
+    {
+      system: buildEditSystemPrompt(instruction.trim()),
+      schema: editLocateSchema(),
+      schemaName: 'document_edits',
+      parse: parseEditReply,
+      cancelledMessage: 'Document edit locate cancelled'
+    },
+    deps,
+    (edits, window) => {
+      for (const proposed of edits) {
+        const e = lineOccurrence(text, lineStarts, proposed, window)
         const key = `${e.line}\u0000${e.find}\u0000${e.occurrence}`
         if (seen.has(key)) continue // the same anchor again — the splice would drop it as an overlap
         if (found.length >= MAX_LOCATED_EDITS) {
@@ -205,14 +182,35 @@ export async function locateDocumentEdits(
         seen.add(key)
         found.push(e)
       }
+      // A full cap stops paying for locate calls whose proposals could only be dropped.
+      return found.length < MAX_LOCATED_EDITS
     }
-    deps.onProgress?.(i + 1, windows.length)
-    if (found.length >= MAX_LOCATED_EDITS && i + 1 < windows.length) {
-      // The cap is full and windows remain: stop paying for locate calls whose proposals could only be
-      // dropped, and report the walk as truncated.
-      truncated = true
-      break
-    }
+  )
+  return { edits: found, truncated: truncated || walk.stoppedEarly }
+}
+
+/** The character offset where each 1-based line starts (index 0 = line 1). */
+function lineStartOffsets(text: string): number[] {
+  const starts = [0]
+  for (let i = 0; i < text.length; i++) if (text.charCodeAt(i) === 10 /* \n */) starts.push(i + 1)
+  return starts
+}
+
+/**
+ * #622: an edit the model proposed on a PIECE of a line counts its occurrence from the piece's start; the
+ * verify step counts from the line's start (`locateOccurrences`' non-overlapping scan). Add the line's
+ * occurrences that start before the piece — the same scan, run only from the line's start to the piece,
+ * not over the whole document per edit. A whole line (offset 0) is returned as is. Only a `find` that
+ * overlaps itself ("aa" in "aaa") and straddles the piece's start can be counted one off.
+ */
+function lineOccurrence(text: string, lineStarts: number[], e: LocatedEdit, window: LocateWindow): LocatedEdit {
+  const piece = window.segments.find((s) => s.line === e.line)
+  const lineStart = lineStarts[e.line - 1]
+  if (piece === undefined || piece.offset === 0 || lineStart === undefined || e.find.length === 0) return e
+  const pieceStart = lineStart + piece.offset
+  let before = 0
+  for (let at = text.indexOf(e.find, lineStart); at !== -1 && at < pieceStart; at = text.indexOf(e.find, at + e.find.length)) {
+    before++
   }
-  return { edits: found, truncated }
+  return { ...e, occurrence: e.occurrence + before }
 }

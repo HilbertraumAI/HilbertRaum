@@ -2589,6 +2589,12 @@ until one is added, run it by hand through the APP per the checklist below.
 - [ ] **steerability holds** — with "…, keep city names" the city (`Wien` / `Linz`) is NOT proposed;
       widening/narrowing the instruction changes what is proposed, never what the app interprets.
 - [ ] **sweep coverage** — a name reported once is masked at EVERY occurrence in the saved file (D75).
+- [ ] **a dense, multi-window document is covered** (#622) — the gold documents above fit one short
+      window, so they never exercised the reply room. Redact a document of many records (e.g. 50
+      register entries, each with a name, an address and a company) on the smallest supported context
+      (4,096) and count the names still visible in the saved copy: none. Before #622 a 768-token reply
+      cap left 8 of 10 such names visible while the run reported success (`architecture.md` Skills
+      record §21 "#622 amendment").
 - [ ] **no hallucination reaches the output** — anything the model proposes that is not present
       verbatim is dropped and counted; the saved bytes outside a mask are byte-identical to the source.
 - [ ] **the regex floor still runs** — IBAN/email/phone/date are masked whether or not the model ran;

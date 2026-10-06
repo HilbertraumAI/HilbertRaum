@@ -27,6 +27,21 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-06 — the closed 2026-09-27 #512 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #622 entry). Its records are unchanged:
+model-policy (the licence, "To bump"), model-benchmarks §6.6 "#512 amendment", the GPU record §3; its rig legs passed
+2026-09-27, the b9849 drives it names were handled by #516, and its one residual (the macOS asset is hash-checked, never
+run) stays recorded in model-policy and the GPU record. Citations of the form "BUILD_STATE 2026-09-27 #512 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-09-27 — **#512 — llama.cpp pin b9849 → b11146 (= upstream v0.5.0), prompt cache on for every chat model (`feat/512-llama-cpp-b11146`).**
+The #399 family list is gone: manifest `disable_prompt_cache` (default false; true → `--cache-ram 0`; none set) + `--cache-ram
+min(8192, RAM MiB / 8)` on every chat start; manual `prompt-cache-smoke`; LLVM `libomp.dll` licence pinned (`licenses/`, DRIVE-NOTICES).
+Records: model-policy (licence, "To bump": stable-release pins only), model-benchmarks §6.6 "#512 amendment" (smoke, cache session, the
+grounded-QA gate: PASSED), GPU record §3. **Rig legs PASSED 2026-09-27** (PR #524, not merged: qwen3.6/3.8 restore, 27B MTP 66/66, Linux
+asset run; close-out `fix/512-close-out`, smoke B now shares A's system message). Open: macOS asset never run; b9849 drives (#516)._
+
 ## 2026-10-06 — the closed 2026-09-22 #410 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #606 entry). Its record is unchanged:

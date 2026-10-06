@@ -28,10 +28,14 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-06 — **#622 — the redaction / edit locate windows and replies fit the model's context (`fix/622-locate-window-budget`).** A fixed 768-token reply cap
+cut dense windows (measured 744–1,293), so they parsed to nothing: master's register copy kept 8/10 names while the run said done; 40 long paragraphs overflowed
+4,096. Now one walk (`locate-walk.ts`): a digit-aware estimate, a third of the context per window, the rest for the reply, cut/overflow → halve and re-ask, an
+over-long line → 240-char-overlap pieces (edit occurrences remapped). Real app: every name masked, the edit applied 44/44. Record: Skills §21 "#622 amendment"._
 _2026-10-06 — **#620 — a model that fails during a redaction's locate pass fails the run, nothing saved (`fix/620-redaction-crash-mid-locate`).** A crash restart runs no
 #600 hook, so after #606 a crash, a freeze, a server error and a context overflow still took the floor and opened the save dialog (real app: 2–4 s after a kill; 1.6 s
 for a 4,660-token window on the 4B's 4,096). Now `failed` + `redactionModelStopped` / `redactionTooLong`; the floor is only for "no model at the start" (D78 amended,
-owner option 1). A `direct` skill run asked for during a model start is refused "is starting". Record: Skills §21 "#620 amendment". Open: #622 (window token budget)._
+owner option 1). A `direct` skill run asked for during a model start is refused "is starting". Record: Skills §21 "#620 amendment". Open: none (#622: above)._
 _2026-10-06 — **#606 — lock, quit and a model stop or switch end the skill runs and the benchmark's speed leg on the model first (`fix/606-teardown-skill-bench`).** A run's
 own signal was never aborted, so a redaction whose model request died fell back to the rule-based floor and opened its save dialog (over the lock screen after "Lock now", real
 app); an edit ended `editFailed`. `SkillRunController` `cancelAll` / `cancelModelRuns` / `awaitSettled` (`ctx.skillRuns`), the #600 hook's 4th step, `ctx.cancelBenchmark`; the run
@@ -137,12 +141,6 @@ _2026-10-01 — **#527 — the greyed-out mic names the missing piece and its bu
 build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
 screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
 `data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
-_2026-09-27 — **#512 — llama.cpp pin b9849 → b11146 (= upstream v0.5.0), prompt cache on for every chat model (`feat/512-llama-cpp-b11146`).**
-The #399 family list is gone: manifest `disable_prompt_cache` (default false; true → `--cache-ram 0`; none set) + `--cache-ram
-min(8192, RAM MiB / 8)` on every chat start; manual `prompt-cache-smoke`; LLVM `libomp.dll` licence pinned (`licenses/`, DRIVE-NOTICES).
-Records: model-policy (licence, "To bump": stable-release pins only), model-benchmarks §6.6 "#512 amendment" (smoke, cache session, the
-grounded-QA gate: PASSED), GPU record §3. **Rig legs PASSED 2026-09-27** (PR #524, not merged: qwen3.6/3.8 restore, 27B MTP 66/66, Linux
-asset run; close-out `fix/512-close-out`, smoke B now shares A's system message). Open: macOS asset never run; b9849 drives (#516)._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -193,7 +191,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---
