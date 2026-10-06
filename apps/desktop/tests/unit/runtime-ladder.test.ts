@@ -1133,6 +1133,26 @@ describe('MTP speculative decoding (#182)', () => {
     expect(h.speculative[0].event).toBe('skipped')
   })
 
+  it('judges the discrete card, never an integrated GPU that reports more free memory (#473)', async () => {
+    // The b11146 capture of the hybrid desktop (list-devices-b11146-vulkan-rtx3080ti.txt): the
+    // UHD 770 reports shared system RAM as free. 9 GiB of weights need 12,800 MiB, which the
+    // RTX's 11,316 cannot hold — the iGPU's 48,060 must not wave the draft head onto the card.
+    const UHD: GpuDevice = { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
+    const RTX_HYBRID: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12084, freeMb: 11316 }
+    const nineGiB = { ...mtpOpts, weightBytes: 9 * 1024 * 1024 * 1024 }
+    for (const [probe, detail] of [
+      [[RTX_HYBRID, UHD], '11316 MiB free on NVIDIA GeForce RTX 3080 Ti'],
+      [[UHD], 'no usable graphics card']
+    ] as const) {
+      clearSpeculativeSuppression()
+      const h = ladderHarness({ probe: [...probe] })
+      await h.factory(nineGiB).start()
+      expect(h.calls[0].extraArgs).toEqual([])
+      expect(h.speculative[0].event).toBe('skipped')
+      expect(h.speculative[0].detail).toContain(detail)
+    }
+  })
+
   it('skips the rung when the weight size is unknown (the VRAM check cannot be made)', async () => {
     const h = ladderHarness({ probe: [BIG] })
     await h.factory({ ...mtpOpts, weightBytes: null }).start()

@@ -743,12 +743,15 @@ function initBackend(): void {
   // refreshes its slot (`refreshOcrSlot`, wired in registerEngineIpc — #410).
   ctx.refreshTranslatorSlot = () => {
     if (!ctx || !shouldReplaceTranslator(ctx.translator)) return
-    ctx.translator = composeTranslator({
-      rootPath: paths.rootPath,
-      manifestsDir,
-      isDev,
-      gpu: gpuSignals
-    })
+    ctx.translator = composeTranslator(
+      {
+        rootPath: paths.rootPath,
+        manifestsDir,
+        isDev,
+        gpu: gpuSignals
+      },
+      ctx.reranker
+    )
     // The replacement is a fresh instance: re-attach the Performance push to it.
     ctx.translator?.onResidencyChange?.(notifyPerformanceChanged)
   }

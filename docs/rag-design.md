@@ -4417,6 +4417,10 @@ accessor covering all four stages a GPU-posture ('auto') sidecar can occupy the 
 (before `deviceStatus().live` can see it), resident, hard teardown, and idle teardown (a soft
 timeout kill) — a forced-CPU sidecar never occupies it. The posture closure reads `ctx.translator`
 live through a getter (never captured), because `onModelInstalled` re-composes it mid-session.
+**#473 amendment (2026-10-07): the yield now runs both ways.** A chat model switch suspended the
+reranker; a translation cold start did not, so a reranker resident on the card left it only at its
+next ask. A GPU-posture translation start now awaits `translationGpuYield` (`compose-services.ts`)
+before it spawns, which suspends a reranker resident ON THE CARD and nothing else.
 
 **Lifecycle hardening (`reranker/llama.ts` only), the translation runtime's own M5/M1 patterns
 ported.** Single-flight teardown: every overlapping `suspend()`/`stop()`/Q-restart shares ONE

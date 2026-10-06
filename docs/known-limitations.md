@@ -1011,7 +1011,13 @@ password recovery — are documented in
     latency, never a cold-start duration) and this step runs no inference, so it is stated as
     unmeasured rather than invented; a behaviour-neutral memo of the manifest read itself was
     measured at 15.5 ms warm p50 on the drive layout (`K:`), well under the 50 ms threshold that
-    would have required one, so none was added.
+    would have required one, so none was added. **Since #473 (2026-10-07)** the first of the two
+    moves EARLIER: a GPU-posture translation cold start suspends a reranker resident on the card
+    before it spawns (the chat model switch already did this), so translation's `--fit` no longer
+    sizes itself against memory the reranker holds. The count is unchanged — the reranker's next
+    ask cold-starts on the processor, and it returns to the card after translation idles out. A
+    reranker on the processor, or not resident, is left alone. A reranker still mid-way through a
+    GPU cold start when translation starts is not stopped; its first ask moves it as before.
 
   No 5–8 GiB card was available in this session either (Wave 8 ruling (i)'s hardware leg is
   optional and not blocking): the small-card branch and the fail-vs-spill question above remain
@@ -2003,7 +2009,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   speed" / for a fully-starved 0-layer fit "runs on the processor — the graphics memory was fully
   taken, usually by the chat model, so no layers fit on the graphics card" (full-audit 2026-07-11
   CODE-23) / plain "runs on the graphics card (GPU)" when the GPU posture started but no offload
-  line could be parsed from the server log (`translate.device.gpuUnknown` — no split is invented) /
+  line could be parsed from the server log (`translate.device.gpuUnknown` — no split is invented;
+  until #629 EVERY GPU start landed here, because the sidecar ran below the log level that prints
+  the line) /
   CPU. Since #161 (FE-4) the remedy for the two starved forms is VISIBLE text under the device
   line, no longer tooltip-only. **The two starved forms name the CAUSE since the owner decision of
   2026-09-08 on this issue (#42)** — they used to state the symptom ("about processor speed") alone, leaving a user who
@@ -2746,11 +2754,12 @@ All of these are decided scope, not oversights; the design record's §7 carries 
   answers "unknown" and is neither cached nor persisted, so the stored probe stands until the
   next start or check, and "Try GPU again" re-probes; and a start whose probe is unknown takes
   its backend label from the load log's offload line instead of defaulting to `cpu`, naming the
-  device the start's own compute buffers landed on. Only the already-benchmarked path is
-  sequenced: a workspace with no stored result at all fires no probe there and still lets the
-  ladder's own probe run beside the upload — which needs no sequencing, because a timeout on that
-  path now answers "unknown" (labelled from the load log, nothing cached, nothing persisted) and
-  the measurement scheduled behind the start re-probes on an idle driver. Residuals: a genuinely
+  device the start's own compute buffers landed on. A workspace with no stored result is
+  sequenced the same way since #473 (2026-10-07). It used to fire no probe and let the ladder's
+  own probe run beside the upload, on the reasoning that a timeout there answers "unknown" and
+  the measurement behind the start re-probes on an idle driver — true only for a TIMEOUT: a probe
+  that answered mid-upload was cached and persisted as the session's baseline with the chat model
+  already on the card, where the reranker gate then subtracted chat a second time. Residuals: a genuinely
   wedged driver still waits, once per session before the auto-start, the probe's 10 s bound plus
   the one-time sidecar-binary verification, which the start itself would wait on anyway; and
   "Try GPU again" against a still-wedged driver shows no change once the bound elapses — the
@@ -2986,9 +2995,10 @@ are decided scope, not oversights; the record's §7 carries the reasoning.
   as a SEPARATE file for smaller quants, so "same family, same flag" would silently ship a broken
   start (issue #196 §9.5 gate). A closed enum, not an argument list: manifests are user-editable and
   `LlamaServer.buildArgs` appends extras LAST, so a hand-edited `--host 0.0.0.0` would win.
-- **Skipped silently when it will not fit, and invisible in the UI by design.** One device must
-  report the weight's bytes plus 3.5 GiB free; free VRAM is never summed across cards (a multi-device
-  split with a draft head is unmeasured). A refusal costs nothing and falls through to exactly the
+- **Skipped silently when it will not fit, and invisible in the UI by design.** The budget device
+  (the largest usable discrete card, never an integrated GPU) must report the weight's bytes plus
+  3.5 GiB free; free VRAM is never summed across cards (a multi-device split with a draft head is
+  unmeasured). A refusal costs nothing and falls through to exactly the
   previous behaviour — but there is no user-facing signal, because there is no decision a user could
   act on. The answer to "is it actually on?" is the log and `perfMark('runtime_speculative')`.
 - **RAM/VRAM lines in the manifests are pre-MTP figures** and stay that way until re-measured with

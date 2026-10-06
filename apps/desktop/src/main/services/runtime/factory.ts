@@ -16,7 +16,7 @@ import { createMockRuntime } from './mock'
 import { createLlamaRuntime, RuntimeConnectionLostError } from './llama'
 import { createPlacementParser, recordModelPlacement } from './placement'
 import { probeGpuDevices } from './gpu'
-import { displayDevice } from '../../../shared/gpu-rules'
+import { displayDevice, primaryUsefulDevice } from '../../../shared/gpu-rules'
 import { startModelPrefetch, type ModelPrefetch } from './prefetch'
 import { isEngineCannotRunError, type EngineCannotRunError } from './engine-load'
 import { isNextModelLoadSuppressed, recordModelLoadRead } from '../read-speed'
@@ -804,8 +804,14 @@ class LadderRuntime implements ModelRuntime {
     }
     const neededMb = Math.ceil(bytes / (1024 * 1024)) + MTP_VRAM_HEADROOM_MB
     // ONE device must hold all of it: a multi-device split with a draft head is unmeasured,
-    // so free VRAM is never summed across cards.
-    const best = devices.reduce((a, d) => (d.freeMb > a.freeMb ? d : a))
+    // so free VRAM is never summed across cards. That device is the budget device every other
+    // VRAM rule uses (#473): taking whichever device reports the most free memory let a hybrid
+    // box's integrated GPU — a UHD 770 reports 48,060 MiB free of shared RAM beside an
+    // RTX 3080 Ti's 11,316 — pass the check for the discrete card.
+    const best = primaryUsefulDevice(devices)
+    if (best === null) {
+      return { ok: false, reason: 'no usable graphics card (only integrated or small devices)' }
+    }
     if (best.freeMb < neededMb) {
       return {
         ok: false,

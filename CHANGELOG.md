@@ -325,6 +325,14 @@ from its first public `1.0.0` release onward.
   next time you unlock. The voice-dictation messages are now shown in German too (#530).
 - **Home no longer calls the demo mode "running".** When a model answers with simulated demo
   replies, Home says so (#530).
+- **The Translate screen now says how much of translation really runs on the graphics card.** It
+  said "runs on the graphics card" after every graphics-card start, even when the chat model had
+  left no room and translation actually ran at processor speed. The Performance screen now also
+  counts translation as being on the card when it is (#629).
+- **Translation gets the graphics card's memory when it starts.** A reranker sitting on the graphics
+  card now moves to the processor first, and returns to the card once translation is done. On a
+  computer with both a built-in and a separate graphics card, the faster draft mode of the largest
+  models is now judged by the separate card's free memory instead of the built-in one's (#473).
 
 ### Security
 

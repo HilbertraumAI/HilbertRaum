@@ -58,8 +58,8 @@ IPC: `runBenchmark()` (`benchmark:run`) in
    a re-unlock, never writes. With no binary / no devices / a failed probe, `gpu` stays `null`
    and nothing blocks. The persisted probe is additionally refreshed **once per session** in the
    background (even when a benchmark already exists — `prepareFirstBenchmark`, the cheap half of
-   the first-run benchmark, fires it, and the auto-start waits for it (#380, 2026-09-08), PR #303
-   P7), so a drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
+   the first-run benchmark, fires it, and the auto-start waits for it (#380, 2026-09-08; a first
+   run included since #473, 2026-10-07), PR #303 P7), so a drive moved to another machine re-labels itself; Diagnostics' "Try GPU again"
    (`gpu:try-again` IPC) invalidates the session cache and re-probes immediately.
 3. **Drive speed** (`measureDriveSpeed`): writes a small temp file
    (`DRIVE_PROBE_BYTES = 8 MB` of random bytes) **inside the workspace**, times a sequential
@@ -529,7 +529,10 @@ first-run benchmark is therefore **two halves**, run in this order at every seam
    pushes — a known computer's profile and ★ pick come back promptly, before anything heavy
    starts. It returns a **decision**: `run: 'first-run' | 'new-machine' | null`, plus the epoch,
    this machine's key, and `probed` — the promise of the probe refresh it just fired (#380;
-   already resolved when none was fired, and it never rejects).
+   already resolved when none was fired, and it never rejects). Since #473 (2026-10-07) a first
+   run fires it too; before that a workspace whose first run never stored a result auto-started
+   its model beside the ladder's own probe, and a reading taken mid-upload was persisted as the
+   session's baseline.
 2. **The probe settles** (#380, 2026-09-08). The seams gate the auto-start on `decision.probed`:
    about 1 s on an idle driver, nothing at all on a machine with no `llama-server` (the probe is
    never called then), and on a wedged driver the probe's 10 s bound plus the one-time

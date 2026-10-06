@@ -4427,9 +4427,13 @@ record is why.
   translation a FULL offload at ~75 tok/s, against ~3–4 tok/s forced to the CPU. A rule that trades
   75 for 3.5 to avoid a case that only bites when the card is nearly full is a net loss.
 
-The condition is also already OBSERVABLE — the Translate screen's device line has covered all five
-forms since #164 (D-7b), and the "Models on this computer" card carries the start-order warning when
-both are resident on the card.
+The condition is also OBSERVABLE — the Translate screen's device line has covered all five forms
+since #164 (D-7b), and the "Models on this computer" card carries the start-order warning when both
+are resident on the card. **Correction (#629, 2026-10-07):** that held only from #629 on. Until then
+the sidecar ran at llama-server's default log level, below the verbosity 4 at which the pinned build
+prints its offload line, so every GPU start fell to the plain "runs on the graphics card" form and
+the card could never count translation as resident. The refusal above rests on the measurement, not
+on this sentence, and stands.
 
 **What was actually wrong was the COPY.** The two starved fact lines stated the symptom and nothing
 else — "about processor speed" — so a user who read no further had a fact and no action. Both now
@@ -15303,7 +15307,11 @@ Three refusals, all of which **skip** the rung (no spawn, no failure, no GPU bla
    full-offload llama-server peaks ~1.3–1.4 GiB above the GGUF's size (KV + compute buffers) and
    the draft head plus its KV costs ~2 GiB more. It reproduces the §9.4 verdicts exactly — Q4
    (15.9 GiB) and Q5 (18.5 GiB) clear a 24 GB card, Q6_K (21.3 GiB) does not. Free VRAM is never
-   summed across cards: a multi-device split with a draft head is unmeasured.
+   summed across cards: a multi-device split with a draft head is unmeasured. The one device is
+   the budget device (`primaryUsefulDevice`, the same pick as every other VRAM rule), not the
+   device reporting the most free memory: on a hybrid box the integrated GPU reports shared RAM
+   as free (a UHD 770 shows 48,060 MiB beside an RTX 3080 Ti's 11,316) and used to pass the check
+   for the discrete card (#473). A machine with no usable card skips the rung.
 3. **Weight size unknown** — a failed file stat means the VRAM check cannot be made. Refuse
    rather than guess.
 
