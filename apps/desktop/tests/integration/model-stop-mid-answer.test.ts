@@ -11,7 +11,7 @@ import {
   listMessages
 } from '../../src/main/services/chat'
 import { RuntimeManager } from '../../src/main/services/runtime'
-import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { killableRuntime } from '../helpers/killable-runtime'
 import { withChatStream, withRegenerateGuard } from '../../src/main/ipc/chat-stream'
 import { endWorkOnModelStop } from '../../src/main/ipc/model-stop'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
@@ -38,42 +38,15 @@ function freshDb(): Db {
   return db
 }
 
-/**
- * A runtime that behaves like the llama-server sidecar under a kill: it streams `tokens`, then parks
- * on the next read (`parked` resolves). `stop()` kills it — the pending read rejects with undici's
- * `TypeError: terminated` (the measured shape), unless the caller's signal was aborted first, in which
- * case the read ends like `readChatSSE` does on an abort: a clean return.
- */
-function killableRuntime(modelId: string, tokens: string[], onParked: () => void): ModelRuntime {
-  let kill: (() => void) | null = null
-  return {
-    modelId,
-    async start() {},
-    async stop() {
-      kill?.()
-    },
-    contextWindow: () => 4096,
-    async health() {
-      return { healthy: true, port: null, message: 'ok' }
-    },
-    async *chatStream(_messages: ChatMessage[], options?: RuntimeChatOptions) {
-      for (const t of tokens) yield t
-      await new Promise<void>((resolve, reject) => {
-        kill = () => reject(new TypeError('terminated'))
-        options?.signal?.addEventListener('abort', () => resolve(), { once: true })
-        onParked()
-      })
-    }
-  }
-}
-
 async function harness(tokens: string[]) {
   const db = freshDb()
   const conv = createConversation(db, {})
   appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Tell me about lighthouses.' })
   let markParked!: () => void
   const parked = new Promise<void>((r) => (markParked = r))
-  const mgr = new RuntimeManager((opts) => killableRuntime(opts.modelId, tokens, markParked))
+  // Like the llama-server sidecar under a kill: `tokens`, then a parked read that a stop rejects with
+  // undici's "terminated" and an abort ends cleanly (`tests/helpers/killable-runtime.ts`).
+  const mgr = new RuntimeManager((opts) => killableRuntime({ modelId: opts.modelId, tokens, onParked: markParked }))
   // The production wiring (`main/index.ts`); this harness has no local API and no doc tasks.
   mgr.setModelStopHook((kind) => endWorkOnModelStop({}, kind))
   await mgr.start({ modelId: 'model-a', modelPath: '/a.gguf', contextTokens: 4096 })
@@ -112,13 +85,15 @@ describe('a model stop or switch mid-answer ends the answer cleanly (#600)', () 
   it.each([
     ['stop' as const, 'model_not_loaded'],
     ['switch' as const, 'model_starting']
-  ])('on a %s the hook ends the local API request first (%s), then the deep-index build, then the answers', (kind, code) => {
+  ])('on a %s the hook ends the local API request first (%s), then the deep-index build, the answers and the skill runs on the model', (kind, code) => {
     // The order is load-bearing: a turn ended inside its compaction pre-pass re-enters the runtime gate,
     // and by then the external request must already carry its model-change code.
     const calls: string[] = []
     const ctx = {
       localApi: { endForModelChange: (c: string) => calls.push(`api ${c}`) },
-      docTasks: { abortActiveBuild: () => calls.push('build') }
+      docTasks: { abortActiveBuild: () => calls.push('build') },
+      // #606: only the runs streaming on the model — an extraction never touched it.
+      skillRuns: { cancelModelRuns: () => calls.push('model runs'), cancelAll: () => calls.push('ALL runs') }
     } as unknown as Parameters<typeof endWorkOnModelStop>[0]
     const answer = new AbortController()
     answer.signal.addEventListener('abort', () => calls.push('answer'))
@@ -128,7 +103,7 @@ describe('a model stop or switch mid-answer ends the answer cleanly (#600)', () 
     } finally {
       inFlightStreams.delete('conv-hook-order')
     }
-    expect(calls).toEqual([`api ${code}`, 'build', 'answer'])
+    expect(calls).toEqual([`api ${code}`, 'build', 'answer', 'model runs'])
     expect(endedEarlyCause(answer.signal)).toBe('model') // the reason the persist + restore rules key on
   })
 

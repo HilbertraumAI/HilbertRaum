@@ -259,6 +259,10 @@ export async function measureTokensPerSecond(
   opts?: { signal?: AbortSignal; modelBusy?: () => boolean; onBusySkip?: () => void }
 ): Promise<SpeedReading | null> {
   if (!runtime) return null
+  // #606: a cancelled run (lock or quit, `signal`) measures nothing — up front, after the stream and
+  // in the catch below. An aborted stream can end CLEANLY with the chunks it had (the SSE reader
+  // returns on an abort), which is not a reading; nor is a cancel a busy skip (no warning).
+  if (opts?.signal?.aborted) return null
   // #185: refuse to measure a CONTENDED model. The benchmark's own admission guard already
   // refused to start beside a chat answer or a document task, but the admission is followed by
   // a GPU probe and an 8 MB drive probe — seconds in which the user can send a message. A
@@ -289,6 +293,9 @@ export async function measureTokensPerSecond(
       }
     )) {
       count++
+      // #606: a chunk the reader still delivers after a cancel is no reading either — and checked
+      // FIRST, because the busy predicate reads true once the teardown takes the model away.
+      if (opts?.signal?.aborted) return null
       // …and DISCARD a reading that became contended mid-probe (a message sent while the 64
       // tokens stream). Returning runs the generator's `return()`, so the runtime manager's
       // generation gate decrements normally — an abandoned count is exactly what its epoch
@@ -298,6 +305,7 @@ export async function measureTokensPerSecond(
         return null
       }
     }
+    if (opts?.signal?.aborted) return null
     const seconds = (performance.now() - t0) / 1000
     const tps = timings?.predicted_per_second
     if (typeof tps === 'number' && Number.isFinite(tps) && tps > 0) {
@@ -311,6 +319,7 @@ export async function measureTokensPerSecond(
     if (count === 0 || seconds <= 0) return null
     return { tokensPerSecond: Math.round((count / seconds) * 10) / 10, basis: 'chunks', tokens: count }
   } catch {
+    if (opts?.signal?.aborted) return null
     // #393: a start that stopped the model MID-STREAM makes the iterator REJECT rather than
     // deliver another chunk, so the per-chunk check above never fires and the reading would be
     // lost silently (`speedSkipped` stays false ⇒ no warning at all). Ask once more here: a
@@ -535,6 +544,12 @@ export interface RunBenchmarkDeps {
    * behavior for every non-IPC caller, including the preflight harnesses).
    */
   modelBusy?: () => boolean
+  /**
+   * #606: aborts the tokens/sec leg's request — lock and quit, before they stop the model, so the
+   * leg ends as a cancel instead of on the killed socket. An aborted leg yields no reading and no
+   * busy warning; the caller then persists nothing (`runBenchmarkAndPersist`). Absent ⇒ unabortable.
+   */
+  signal?: AbortSignal
   /** Injectable clock for deterministic `ranAt` in tests. */
   now?: () => Date
   /**
@@ -579,6 +594,7 @@ export async function runBenchmark(deps: RunBenchmarkDeps): Promise<BenchmarkRes
   // long-standing behavior) from "a runtime WAS up but something else was using it" (warned).
   let speedSkipped = false
   const reading = await measureTokensPerSecond(deps.runtime ?? null, {
+    signal: deps.signal,
     modelBusy: deps.modelBusy,
     onBusySkip: () => {
       speedSkipped = true

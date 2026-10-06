@@ -52,6 +52,10 @@ import {
 import type { KdfParams } from '../../src/main/services/security/crypto'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { buildToolRunner } from '../../src/main/services/skills/tool-runs'
+import { SkillRunController } from '../../src/main/services/skills/run-controller'
+import { seedStoredTextDoc } from '../helpers/doc-fixtures'
+import { killableRuntime } from '../helpers/killable-runtime'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const FAST_KDF: KdfParams = { algo: 'scrypt', N: 1024, r: 8, p: 1, keyLen: 32 }
@@ -305,7 +309,25 @@ describe('registerWorkspaceIpc', () => {
   // TA-1 H2: the lock handler awaits the flushed running task's abort-unwind SETTLE (its
   // materialize/shred runs synchronously while ctx.db is open) BEFORE the vault re-encrypts —
   // mirroring the in-flight-stream settle. A deferred settle must block lock() until it resolves.
-  it('lockWorkspace awaits the cancelled doc-task settle before re-encrypting (TA-1 H2)', async () => {
+  // #606: the cancelled skill runs too — each records its cancel in `skill_runs` while the DB is open.
+  it.each([
+    [
+      'doc-task (TA-1 H2)',
+      (base: Record<string, unknown>, settle: () => Promise<void>) => {
+        const cancel = vi.fn()
+        base.docTasks = { cancelAllDocTasks: cancel, awaitActiveTaskSettled: settle, abortActiveBuild: vi.fn() }
+        return cancel
+      }
+    ],
+    [
+      'skill-run (#606)',
+      (base: Record<string, unknown>, settle: () => Promise<void>) => {
+        const cancel = vi.fn()
+        base.skillRuns = { cancelAll: cancel, cancelModelRuns: vi.fn(), awaitSettled: () => settle().then(() => true) }
+        return cancel
+      }
+    ]
+  ])('lockWorkspace awaits the cancelled %s settle before re-encrypting', async (_lane, install) => {
     const vp = freshVault()
     createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
     const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
@@ -315,8 +337,9 @@ describe('registerWorkspaceIpc', () => {
 
     let unwind!: () => void
     const settled = { done: false }
-    const cancelAllDocTasks = vi.fn()
-    const awaitActiveTaskSettled = vi.fn(
+    const base = ctxWith(ctrl) as unknown as Record<string, unknown>
+    const cancel = install(
+      base,
       () =>
         new Promise<void>((r) => {
           unwind = () => {
@@ -325,8 +348,6 @@ describe('registerWorkspaceIpc', () => {
           }
         })
     )
-    const base = ctxWith(ctrl) as unknown as Record<string, unknown>
-    base.docTasks = { cancelAllDocTasks, awaitActiveTaskSettled, abortActiveBuild: vi.fn() }
     registerWorkspaceIpc(base as unknown as AppContext)
 
     const lockP = invoke(handlers, IPC.lockWorkspace)
@@ -334,12 +355,12 @@ describe('registerWorkspaceIpc', () => {
     await tick()
     await tick()
     await tick()
-    // The task was flushed, but the DB is STILL OPEN — lock is blocked on the pending settle.
-    expect(cancelAllDocTasks).toHaveBeenCalledTimes(1)
+    // The work was cancelled, but the DB is STILL OPEN — lock is blocked on the pending settle.
+    expect(cancel).toHaveBeenCalledTimes(1)
     expect(settled.done).toBe(false)
     expect(ctrl.isUnlocked()).toBe(true) // reds if the settle-await is removed (DB already closed)
 
-    unwind() // the aborted task finished materializing/shredding → settle resolves
+    unwind() // the aborted task / run finished unwinding (its DB writes) → settle resolves
     const { result } = await lockP
     expect(result).toMatchObject({ state: 'locked' })
     expect(ctrl.isUnlocked()).toBe(false) // re-encrypted only AFTER the settle
@@ -510,6 +531,67 @@ describe('registerWorkspaceIpc', () => {
         ['user', 'Tell me about lighthouses.', undefined],
         ['assistant', 'Lighthouses guide ships', 'lock']
       ])
+    } finally {
+      ctrl.lock()
+    }
+  })
+
+  // #606: "Lock now" stopped the chat model under a running skill run and under the benchmark's speed
+  // leg, whose own signals were untouched. A redaction whose locate request died with the sidecar fell
+  // back to the rule-based floor and opened its save dialog over the lock screen (real app, 2026-10-06).
+  // Driven with the real redaction seam and run controller on the unlocked vault's database.
+  it('lockWorkspace cancels a skill run and the benchmark before it stops the model; nothing is saved (#606)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    const db = ctrl.requireDb()
+    const documentId = seedStoredTextDoc(db, 'Anna Berger lives at Lindenweg 4 in Freiburg.', { label: 'wsipc' })
+
+    let markParked!: () => void
+    const parked = new Promise<void>((r) => (markParked = r))
+    const model = killableRuntime({ onParked: markParked })
+    const saveTextFile = vi.fn(async () => true)
+    const runner = buildToolRunner(
+      db,
+      'redact_document',
+      { skillInstallId: 'app:document-redaction', conversationId: '', documentId, confirmed: true },
+      () => {},
+      { saveTextFile, runtime: model }
+    )!
+    const runs = new SkillRunController()
+    const { runHandle } = runs.start({
+      skillInstallId: 'app:document-redaction',
+      toolName: 'redact_document',
+      documentId,
+      documentCount: 1,
+      usesModel: true,
+      runner
+    })
+    await parked // the locate pass's model request is in flight
+
+    const order: string[] = []
+    const stopRuntime = async (): Promise<void> => {
+      order.push('runtime.stop')
+      await model.stop()
+    }
+    registerWorkspaceIpc({
+      ...ctxWith(ctrl, { stopRuntime }),
+      db,
+      skillRuns: runs,
+      cancelBenchmark: () => order.push('benchmark.cancel')
+    } as unknown as AppContext)
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+
+    expect(runs.get(runHandle)?.state).toBe('cancelled')
+    expect(saveTextFile).not.toHaveBeenCalled() // before #606: the rule-based copy's save dialog
+    expect(order).toEqual(['benchmark.cancel', 'runtime.stop'])
+    ctrl.unlock('right-password')
+    try {
+      // Recorded before the vault re-encrypted (before #606 a late write failed: "could not be saved").
+      expect(ctrl.requireDb().prepare('SELECT status FROM skill_runs').all()).toEqual([{ status: 'cancelled' }])
     } finally {
       ctrl.lock()
     }

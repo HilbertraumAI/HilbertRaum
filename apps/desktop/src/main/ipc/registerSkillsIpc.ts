@@ -76,8 +76,11 @@ export function registerSkillsIpc(ctx: AppContext): void {
   const runAudit = toSkillToolAudit(ctx.audit)
   // GAP-5 (full-audit 2026-07-11): expose the per-document "run in flight?" probe on the context so
   // the docs IPC delete/re-index guards can refuse under a live skill run (the requireNoActiveTask
-  // mirror) — the controller itself stays module-local (no lifecycle leaks; a bool is all they need).
+  // mirror) — a bool is all they need.
   ctx.skillRunActive = (documentId) => runController.isRunning(documentId)
+  // #606: and the teardown handle, typed down to its three methods: lock, quit and a model stop or
+  // switch end the running runs before the model dies (`AppContext.skillRuns`).
+  ctx.skillRuns = runController
 
   // The MAIN-side CSV write for `export_transactions_csv` (skills plan §9.5, S11c — the first
   // FS-write from a skill tool). The tool only PRODUCES the CSV; this saves it to a user-chosen path
@@ -449,6 +452,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
     // MAIN-side (content — used, never logged; the §6/scope posture). Only the edit tool reads it.
     const instruction =
       toolName === 'apply_document_edits' ? getLatestUserMessage(ctx.db, conversationId) ?? undefined : undefined
+    const activeRuntime = ctx.runtime?.active() ?? null
     const runner = buildToolRunner(
       ctx.db,
       toolName,
@@ -464,7 +468,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
         readOriginalDocument,
         readDocumentSegments,
         docTasks: ctx.docTasks,
-        runtime: ctx.runtime?.active() ?? null
+        runtime: activeRuntime
       }
     )
     if (!runner) return { started: false, error: tMain('main.skills.run.unavailable') }
@@ -485,7 +489,11 @@ export function registerSkillsIpc(ctx: AppContext): void {
     // guard and no span, exactly like `ctx.docTasks?` in the sibling checks.
     const occupancy = ctx.runtime?.occupancy ?? null
     const modelLane = getToolDescriptor(toolName)?.modelLane
-    const occupies = modelLane === 'direct' && occupancy != null && ctx.runtime?.active() != null
+    // #606: the same two facts say the run streams on the chat model itself, so a stop or switch of
+    // the model cancels it (`cancelModelRuns`). Categorize ('doctask') is not such a run: its model
+    // call is a document task, which a model stop leaves to fail (#600).
+    const usesModel = modelLane === 'direct' && activeRuntime != null
+    const occupies = usesModel && occupancy != null
     if (occupies) {
       const busy = modelBusyLane(ctx)
       if (busy) return { started: false, error: tMain(modelBusyMessageKey(busy)) }
@@ -518,6 +526,7 @@ export function registerSkillsIpc(ctx: AppContext): void {
         documentId: targetId,
         documentCount: 1,
         conversationId,
+        usesModel,
         runner: gatedRunner
       })
       return { started: true, run }

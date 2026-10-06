@@ -15,10 +15,10 @@ import { inFlightStreams } from './inflight'
  * Document tasks are NOT ended here (owner decision, #600): a running summary or comparison then
  * fails with "The task could not be finished. Make sure the model is still running" — true and
  * visible — where a cancel would vanish without a word (the Documents screen shows nothing for a
- * cancelled task). Skill runs get their cancel in #606.
+ * cancelled task). The same holds for a categorize skill run, whose model call is a document task.
  */
 export function endWorkOnModelStop(
-  ctx: Pick<AppContext, 'localApi' | 'docTasks'>,
+  ctx: Pick<AppContext, 'localApi' | 'docTasks' | 'skillRuns'>,
   kind: 'stop' | 'switch'
 ): void {
   // 1. The local API's request — FIRST: a chat turn aborted inside its compaction pre-pass re-enters
@@ -42,5 +42,14 @@ export function endWorkOnModelStop(
   const reason = endedEarlyAbortReason('model')
   for (const controller of inFlightStreams.values()) {
     if (!controller.signal.aborted) controller.abort(reason)
+  }
+  // 4. #606: the redaction and document-edit runs streaming on the model. Left running, a redaction
+  //    fell back to the rule-based floor, dropped what the model had found and opened the save
+  //    dialog; an edit ended "could not be completed". Cancelled, each reads "Stopped. Nothing was
+  //    saved." A save dialog already open stays open; saving there still writes (owner, #606).
+  try {
+    ctx.skillRuns?.cancelModelRuns()
+  } catch {
+    /* best-effort */
   }
 }

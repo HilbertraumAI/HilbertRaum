@@ -1599,7 +1599,7 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         the model included; it ends as a Stop would, and `answering` counts it the same way.
       - A stopped bank-statement narration still gets its totals block (#612). *Kept on purpose:
         see the #612 amendment below.*
-      - Skill runs are left to #606.
+      - Skill runs are left to #606. *Closed by the #606 amendment below.*
       - Answers ended by the Stop button, lock or quit keep no marker (#612). *Closed by the #612
         amendment below.*
       - There is still no resend for an unanswered question (#613).
@@ -1702,6 +1702,78 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - Quit mid-answer → only `hilbertraum.sqlite.enc` at rest; after relaunch and unlock the 206-character
         partial reads `'lock'`.
       - Every label and tooltip was read off the DOM in English and German; screenshots are in the PR.
+    - **#606 amendment (2026-10-06) — skill runs and the benchmark when the model is taken away.**
+      The facts:
+      - **Two lanes were missing from the teardown lists.** Lock (`runLockTeardown`), quit
+        (`performShutdown`) and #600's model-stop hook end every lane on the chat model before it
+        dies. The skill-run controller was reachable only from `registerSkillsIpc`, and the
+        benchmark's speed leg had no signal at all.
+      - **What a killed request did to a skill run.** The run's own signal was untouched, so undici's
+        `TypeError: terminated` (not an abort) took each seam's failure path. A redaction fell back to
+        the rule-based floor (D73), dropped what the model had already found, and opened its save
+        dialog. A document edit ended `failed` / `editFailed`. A categorize run's model call is a
+        document task (D26), which lock and quit already cancelled.
+      - **Seen in the real app** (master, DesktopDiT, encrypted vault, the 4B on the GTX 1070 Ti,
+        b11146, a 200-line register at window 1 of 7). Stop runtime → "rule-based floor" in the log
+        and the "Save redacted copy" dialog. "Lock now" → the same dialog **over the lock screen**.
+        After a cancel and an unlock the run read `failed`, "This could not be saved": its write hit
+        the closed database, and the next unlock reconciled a `skill_runs` row left at `started`.
+
+      **Owner decisions** (on the issue, 2026-10-06).
+      - A stop or switch of the model is a third trigger: "Stop runtime", "Use this model" and the
+        Performance screen's "Start … and measure" cancel the runs streaming on the model. The honest
+        outcome for a privacy tool is a cancel ("Stopped. Nothing was saved."), never a floor copy.
+      - An abort cannot close a save dialog that is already open. Saving there writes, and the run
+        reads `done`.
+      - A categorize run follows #600's rule for document tasks: a model stop leaves it to fail.
+
+      **As built.**
+      - **`SkillRunController`** gains a per-run `usesModel` flag and three main-side methods:
+        `cancelAll()` (lock, quit), `cancelModelRuns()` (the hook) and `awaitSettled(ms)`. They are not
+        on the IPC surface; SKA-25's handle-only rule for the renderer stands.
+      - **`startSkillRun`** sets `usesModel` from the same two facts the #186 span reads: a `direct`
+        tool and a running model. A floor-only redaction started with no model is never cancelled by
+        a later stop, and neither is categorize (`doctask`) or an extraction.
+      - **`ctx.skillRuns`** is assigned by `registerSkillsIpc`, beside `skillRunActive`, narrowed to the
+        three methods.
+      - **Lock and quit** call `cancelAll()` next to `cancelAllDocTasks()`, before the sidecars stop.
+        They await `awaitSettled` (5 s) beside the doc-task settle, so the cancel is recorded while the
+        database is open. Quit's 30 s overall budget sum is unchanged.
+      - **`endWorkOnModelStop`** gains a fourth step, `cancelModelRuns()`, after the answers.
+      - **The seams are untouched.** With the signal aborted first, `isAbortError(e, signal)` already
+        maps the killed request to the calm cancel, and the pre-dialog `signal.aborted` check stops
+        the save. The run bar's existing copy reads "Stopped. Nothing was saved."
+      - **The benchmark** is in `benchmark.md` "Lock and quit cancel the speed leg (#606)": an abort
+        slot, `ctx.cancelBenchmark` in both teardowns, nothing persisted. A model stop keeps #393's
+        `warnSpeedSkipped`.
+
+      **Not covered.**
+      - A **crash** mid-redaction (`forceRestart`, no hook) still falls back to the floor and opens the
+        save dialog; the "rule-based detection only" note appears only after it (D78's design; #620,
+        an owner decision).
+      - The OS session-end lock (`emergencyLock`) aborts nothing (#612 note above).
+      - A run parked in an already-open save dialog does not settle; lock and quit go on at the bound.
+      - `usesModel` is fixed when the run starts. A stop in the short tail after the locate pass (the
+        tool's in-memory pass, a DOCX rezip) cancels a run that would not have needed the model
+        again; it reads "Stopped" and can be run again. Accepted as simpler than tracking the pass.
+      - A lock that then fails (CODE-1a, e.g. ENOSPC) has already cancelled the runs, as it has the
+        answers and the document tasks.
+
+      **Tests.** Each fails on the pre-fix code; all twelve rules were mutation-checked.
+      - `model-occupancy-ipc.test.ts` "(#606)": `startSkillRun` → the real manager + hook → a stop or
+        switch mid-locate ends redaction and edit `cancelled`, no dialog, no file. Before: `done` (the
+        floor copy saved) and `failed`.
+      - `workspace-ipc.test.ts` "(#606)": the real redaction seam on a real encrypted vault, "Lock now"
+        → `cancelled`, no save, the benchmark cancelled before the runtime stop, and the row read back
+        `cancelled` after unlock. Plus the settle row beside TA-1 H2's.
+      - `shutdown.test.ts`: the REL-4 ordering and the settle row beside H1's.
+      - `model-stop-mid-answer.test.ts`: the hook order (`cancelModelRuns`, never `cancelAll`).
+      - `skills-run-controller.test.ts` "(#606)", plus the benchmark tests listed in `benchmark.md`.
+      - The runtime that dies like the sidecar is one helper now, `tests/helpers/killable-runtime.ts`.
+
+      **Real app** (the same root and script as the master run, fixed build): Stop runtime at window
+      1 of 7 → `cancelled` within ~2 s, no dialog. "Lock now" → no dialog while locked; after unlock
+      the run reads `cancelled`. No floor line in the log.
     - **#599 amendment (2026-10-06) — the running model's liveness.** The facts:
       - **What users saw.** `status().healthy` was the start's health check, never re-read
         (`RuntimeManager.last`). During the #594 hang (b9849 Vulkan, GTX 1070 Ti) the sidecar answered
@@ -5766,7 +5838,8 @@ nothing about banks; the bank seam is handed in as an opaque runner by the dispa
 ActiveRun>` so unrelated documents/conversations run in parallel; only a second run on the **same**
 document is refused. (The old single app-wide slot fired "a skill is already working" across unrelated
 chats. The **doc-lock** below — §9-PC-1 — is the real serializer of true same-document write conflicts,
-so per-document concurrency here is safe.)
+so per-document concurrency here is safe.) Since #606 lock and quit cancel every running run, and a stop
+or switch of the chat model cancels the runs streaming on it (CB-5 "#606 amendment").
 Four generic `skills:*` IPC channels (`listRunnableTools` / `startSkillRun` / `getSkillRun` /
 `cancelSkillRun`) wrap it: all `requireUnlocked`, the document scope resolved **main-side** (§22-C4),
 the run returning **ids/counts only** (`SkillRunState` = state/progress/counts, never the rows). The
@@ -10440,7 +10513,9 @@ model pass. Builds directly on the §20 span-transform engine.
   `cleanFloor` (rule-based only); the run-bar copy says "offline rule-based detection only, no model
   running." The completion line keeps the "best-effort, not a guarantee — review before sharing" reminder
   and never claims "fully anonymized" (SKILL.md honesty block rewritten to "AI-assisted best-effort with a
-  deterministic floor").
+  deterministic floor"). **#606:** a model stop or switch, a lock and a quit are cancels, not model
+  failures. They abort the run's signal before the model dies, so the run ends "Stopped. Nothing was
+  saved." and never degrades (CB-5 "#606 amendment"). A crash still degrades (#620).
 - **Flow & gates unchanged.** Still user-initiated + confirm-gated (`export-file`); `skill_runs` stays
   content-free (entity VALUES never logged/audited — a privacy-guard test drives a secret name through the
   locate pass and asserts it reaches no sink). The `saveTextFile` boundary's trust model is untouched.

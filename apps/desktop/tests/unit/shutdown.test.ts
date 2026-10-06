@@ -49,6 +49,17 @@ function fakeCtx(order: string[]): AppContext {
     // TG-4: the Translate-view job service is aborted on quit too (before the sidecar stop below),
     // so its next window can't respawn the server being killed.
     translateJobs: { stop: stop('translateJobs.stop') },
+    // #606: every skill run and the benchmark's speed leg are cancelled before the model stops, and
+    // the runs' settle is awaited before lock().
+    skillRuns: {
+      cancelAll: () => order.push('skill-runs.cancel'),
+      cancelModelRuns: () => order.push('skill-runs.cancel-model'),
+      awaitSettled: async () => {
+        order.push('skill-runs.settle')
+        return true
+      }
+    },
+    cancelBenchmark: () => order.push('benchmark.cancel'),
     // CODE-3 (full-audit 2026-07-11): the manager's permanent shutdown latch is armed FIRST,
     // before anything else runtime-related, so a background auto-start whose weight hash
     // completes during this teardown can never enqueue a fresh start after the stop.
@@ -126,6 +137,17 @@ describe('performShutdown ordering (REL-4)', () => {
     // …and its abort-unwind SETTLE is awaited after the sidecar stop, before the vault re-encrypts.
     expect(i('task-settle')).toBeGreaterThan(i('runtime.stop'))
     expect(i('task-settle')).toBeLessThan(i('lock'))
+    // #606: every skill run (whatever its tool — never only the model's) and the benchmark's speed
+    // leg end as cancels BEFORE the model stops: left running, a redaction whose request died with the
+    // sidecar fell back to the rule-based floor and opened its save dialog. The runs' settle follows
+    // the sidecar stop, before the vault re-encrypts.
+    expect(i('skill-runs.cancel')).toBeGreaterThanOrEqual(0)
+    expect(i('skill-runs.cancel')).toBeLessThan(i('runtime.stop'))
+    expect(order).not.toContain('skill-runs.cancel-model')
+    expect(i('benchmark.cancel')).toBeGreaterThanOrEqual(0)
+    expect(i('benchmark.cancel')).toBeLessThan(i('runtime.stop'))
+    expect(i('skill-runs.settle')).toBeGreaterThan(i('runtime.stop'))
+    expect(i('skill-runs.settle')).toBeLessThan(i('lock'))
     // Sidecars stopped before the log detaches and the vault re-encrypts; lock() is last of all.
     expect(i('runtime.stop')).toBeLessThan(i('detach'))
     expect(i('detach')).toBeLessThan(i('lock'))
@@ -223,20 +245,27 @@ describe('performShutdown ordering (REL-4)', () => {
   // H1 (TA-1): the flushed doc-task's abort-unwind (which materializes/shreds its transient
   // synchronously while the DB is open) must SETTLE before lock() closes the DB. The quit path
   // awaits `ctx.docTasks.awaitActiveTaskSettled()` (bounded) after the sidecar stop, before lock.
-  it('AWAITS the cancelled doc-task settle before locking (H1)', async () => {
+  // #606: the same for the cancelled skill runs, which record their cancel in `skill_runs`.
+  type SettleCtx = {
+    docTasks: { awaitActiveTaskSettled: () => Promise<void> }
+    skillRuns: { awaitSettled: () => Promise<boolean> }
+  }
+  it.each([
+    ['doc-task (H1)', (ctx: SettleCtx, settle: () => Promise<void>) => (ctx.docTasks.awaitActiveTaskSettled = settle)],
+    ['skill-run (#606)', (ctx: SettleCtx, settle: () => Promise<void>) => (ctx.skillRuns.awaitSettled = () => settle().then(() => true))]
+  ])('AWAITS the cancelled %s settle before locking', async (_lane, install) => {
     const order: string[] = []
     let unwind!: () => void
-    const ctx = fakeCtx(order) as unknown as {
-      docTasks: { awaitActiveTaskSettled: () => Promise<void> }
-    }
+    const ctx = fakeCtx(order) as unknown as SettleCtx
     // Override the resolved-immediately settle with one the test controls.
-    ctx.docTasks.awaitActiveTaskSettled = () =>
+    install(ctx, () =>
       new Promise<void>((r) => {
         unwind = () => {
           order.push('unwound')
           r()
         }
       })
+    )
 
     const p = performShutdown(ctx as unknown as AppContext, {
       inFlightStreams: new Map(),
@@ -248,12 +277,12 @@ describe('performShutdown ordering (REL-4)', () => {
     while (!order.includes('runtime.stop')) await tick()
     await tick()
     await tick()
-    // The sidecars stopped, but lock() has NOT run — the teardown is blocked on the doc-task settle.
+    // The sidecars stopped, but lock() has NOT run — the teardown is blocked on the settle.
     expect(order).toContain('runtime.stop')
     expect(order).not.toContain('unwound')
     expect(order).not.toContain('lock')
 
-    unwind() // the aborted task finished materializing/shredding → settle resolves
+    unwind() // the aborted task / run finished unwinding (its DB writes) → settle resolves
     await p
 
     // The abort-unwind finished BEFORE the vault re-encrypted; lock() is last of all.

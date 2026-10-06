@@ -143,6 +143,12 @@ from its first public `1.0.0` release onward.
   the reason. An evidence pack and its review state that the answer is incomplete and why. If you
   pressed **Try again** and then locked the workspace or closed the app, the previous complete answer
   stays (#612).
+- **Locking, closing the app, or stopping or switching the AI model during a redaction or a document
+  edit now stops it, and nothing is saved.** Before, a redaction fell back to the simple rule-based
+  detection, dropped the names the model had already found, and asked where to save that copy. After
+  **Lock now** the save dialog even opened over the lock screen. A document edit ended with "The
+  edits could not be completed". Now both say **Stopped. Nothing was saved.** A save dialog that was
+  already open stays open, and saving there still saves (#606).
 - **When the AI model crashes in the middle of an answer, the chat says so in words.** It used to
   show "terminated" or "fetch failed". Now it says "The AI model stopped before the answer was
   finished" and what to do next (#600).

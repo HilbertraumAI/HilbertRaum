@@ -1430,6 +1430,14 @@ re-encrypts (the bullet below).
   **settle** (bounded ~5 s) before `lock()` re-encrypts, so its materialize/shred of any `.parse`
   transient completes while the DB is still open — mirroring the in-flight-stream settle await.
   `cancelAllDocTasks()` holds no permanent latch: the manager is fully usable again after unlock.
+- **Skill runs and the benchmark's speed leg are cancelled on lock/quit (#606).** Both teardowns
+  call `ctx.skillRuns.cancelAll()` and `ctx.cancelBenchmark()` beside `cancelAllDocTasks()`, before
+  the sidecars stop. Before #606 a redaction whose model request died with the sidecar fell back to
+  the rule-based floor and opened its "Save redacted copy" dialog **over the lock screen** (seen in
+  the real app); saving there would have written a rule-based-only copy after the vault re-encrypted.
+  A cancelled run writes nothing, and its settle is awaited (bounded ~5 s, beside the doc task's)
+  so the cancel is recorded while the DB is still open. An abort cannot close a save dialog that was
+  already open; the modal dialog also blocks "Lock now" in that window.
 - **Plaintext operations are aborted, settled and swept on lock/quit (#237, PR #273).** A preview
   or re-index of an encrypted stored copy, an import's prepare phase, a dictation and the two
   export readers each decrypt to a `.parse*` transient under `workspace/documents/` and shred it

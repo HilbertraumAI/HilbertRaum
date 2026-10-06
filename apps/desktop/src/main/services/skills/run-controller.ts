@@ -69,6 +69,13 @@ export interface StartRunArgs {
    * re-adopt the right conversation after a reload. Optional (tests omit it); the real IPC passes it.
    */
   conversationId?: string
+  /**
+   * #606: true when the run streams on the CHAT MODEL itself — a `modelLane: 'direct'` tool started
+   * with a model running (the redaction / document-edit locate passes). A stop or switch of the model
+   * cancels exactly these runs (`cancelModelRuns`). Unset for a run that never touches the model,
+   * and for categorize, whose model call happens inside a document task (#600 leaves those to fail).
+   */
+  usesModel?: boolean
   runner: ToolRunner
 }
 
@@ -77,6 +84,10 @@ interface ActiveRun {
   controller: AbortController
   /** The document this run is keyed by (its concurrency slot in `runs`). */
   documentId: string
+  /** #606: see `StartRunArgs.usesModel`. */
+  usesModel: boolean
+  /** #606: resolves once the runner has settled and `finish` has run (never rejects). */
+  settled: Promise<void>
   /** Epoch ms when the run went terminal — drives the TTL sweep (SKA-17). Unset while running. */
   finishedAt?: number
 }
@@ -127,10 +138,17 @@ export class SkillRunController {
       documentId: args.documentId
     }
     // Replace this document's slot (a lingering terminal run, if any — the next run supersedes it).
-    this.runs.set(args.documentId, { state, controller, documentId: args.documentId })
+    const entry: ActiveRun = {
+      state,
+      controller,
+      documentId: args.documentId,
+      usesModel: args.usesModel === true,
+      settled: Promise.resolve()
+    }
+    this.runs.set(args.documentId, entry)
     const handle = state.runHandle
 
-    void args
+    entry.settled = args
       .runner({
         signal: controller.signal,
         onProgress: (p) => {
@@ -224,6 +242,51 @@ export class SkillRunController {
   cancel(runHandle: string): void {
     const r = this.findByHandle(runHandle)
     if (r && !TERMINAL.has(r.state.state)) r.controller.abort()
+  }
+
+  // ---- #606: the teardown owners' handle ------------------------------------------------------
+  //
+  // Lock, quit and a model stop or switch kill the chat model under whatever runs on it. A redaction
+  // or document-edit run whose OWN signal was still live then took its failure path: redaction fell
+  // back to the rule-based floor and opened the save dialog (over the lock screen, after a lock), and
+  // an edit ended `editFailed`. Aborting the run's signal first turns the killed request into a cancel
+  // the seams already handle (`isAbortError(e, signal)`): nothing is written, the run reads
+  // "Stopped. Nothing was saved." An abort cannot close a save dialog that is already open; a user
+  // who saves anyway gets `done` (owner decision, #606).
+  //
+  // Main-side only. SKA-25 removed the renderer's no-arg cancel-all — one window must never stop
+  // every run — and the IPC still requires a handle; these are reachable only from the teardowns.
+
+  /** Lock and quit: cancel every running run, whatever its tool. */
+  cancelAll(): void {
+    for (const r of this.runs.values()) if (!TERMINAL.has(r.state.state)) r.controller.abort()
+  }
+
+  /** A stop or switch of the chat model: cancel the runs streaming on it (`StartRunArgs.usesModel`). */
+  cancelModelRuns(): void {
+    for (const r of this.runs.values()) {
+      if (r.usesModel && !TERMINAL.has(r.state.state)) r.controller.abort()
+    }
+  }
+
+  /**
+   * Wait until every run that is still running has settled — its seam recorded the outcome in
+   * `skill_runs` — or `timeoutMs` passed. The lock and quit teardowns await it after cancelling, so
+   * the cancel is recorded while the database is still open. True when everything settled.
+   */
+  async awaitSettled(timeoutMs: number): Promise<boolean> {
+    const pending = [...this.runs.values()].filter((r) => !TERMINAL.has(r.state.state)).map((r) => r.settled)
+    if (pending.length === 0) return true
+    let timer: ReturnType<typeof setTimeout> | undefined
+    const timeout = new Promise<false>((resolve) => {
+      timer = setTimeout(() => resolve(false), timeoutMs)
+      timer.unref?.()
+    })
+    try {
+      return await Promise.race([Promise.allSettled(pending).then(() => true), timeout])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   /** Drop a terminal run once the renderer has shown its outcome (the acknowledge precedent). A still-running handle is a no-op. */
