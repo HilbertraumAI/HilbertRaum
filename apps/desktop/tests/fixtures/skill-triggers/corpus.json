@@ -1083,7 +1083,7 @@
       "question": "Ich brauche eine Version ohne personenbezogene Daten für die Fallbesprechung.",
       "inScopeDocs": [{ "title": "befundbericht_mrt_knie.pdf", "mimeType": "application/pdf" }],
       "expected": "document-redaction",
-      "note": "#608 — blind set (both labellers: document-redaction). Names only the data, with no removal verb: only the bare phrase found it, so it is a KNOWN_SUGGESTION_DEVIATIONS row until #602 (German removal verbs)."
+      "note": "#608 — blind set (both labellers: document-redaction). Names only the data, with no removal verb: only the bare phrase found it, so it is a KNOWN_SUGGESTION_DEVIATIONS row: #602 found no safe German removal keyword for it."
     },
     {
       "id": "tp-redaction-de-pd-entfernen-01",
@@ -1111,7 +1111,21 @@
       "question": "Bitte personenbezogene Daten löschen.",
       "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
       "expected": "document-redaction",
-      "note": "#608 (owner ruling 2026-10-06) — the cost of leaving out the infinitive '… daten löschen': this request only matched the bare phrase, so it is a KNOWN_SUGGESTION_DEVIATIONS row until #602 (German removal verbs). Hand-written."
+      "note": "#608 (owner ruling 2026-10-06) — the cost of leaving out the infinitive '… daten löschen': this request only matched the bare phrase, so it is a KNOWN_SUGGESTION_DEVIATIONS row: #602 found no safe German removal keyword for it. Hand-written."
+    },
+    {
+      "id": "adv-unkenntlich-legal-01",
+      "question": "Nach welchen Regeln werden Gerichtsentscheidungen vor der Veröffentlichung unkenntlich gemacht? Fallen da auch die Namen der Richter und Anwälte drunter?",
+      "inScopeDocs": [{ "title": "urteil_ag_mietsache.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#602 — from the fresh blind evaluation (both labellers: none, auto-fire harmful). A legal question with 'unkenntlich gemacht' over a PDF: 'unkenntlich' was measured as a Redaction keyword and rejected, because it suggested and auto-fired Redaction here."
+    },
+    {
+      "id": "adv-pseudonymisiert-legal-01",
+      "question": "Sind pseudonymisierte Daten rechtlich gesehen noch personenbezogen?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "#602 — fresh blind set (both labellers: none). A legal question with an adjective form: the participle/adjective forms (pseudonymisierte, anonymisierte, …) were measured and rejected, because they offer Redaction on legal questions."
     }
   ]
 }
