@@ -109,8 +109,9 @@ export type ComposeServicesArgs = ComposeServicesDeps &
  * both call sites stay byte-identical in their deps. Cheap + synchronous by design (the sidecar is
  * lazy; construction spawns nothing).
  */
-export function composeTranslator(deps: ComposeServicesDeps): Translator | null {
+export function composeTranslator(deps: ComposeServicesDeps, reranker?: Reranker | null): Translator | null {
   return createSelectedTranslator({
+    beforeGpuStart: translationGpuYield(reranker),
     rootPath: deps.rootPath,
     isDev: deps.isDev ?? false,
     model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation', {
@@ -130,6 +131,27 @@ export function composeTranslator(deps: ComposeServicesDeps): Translator | null 
       }),
     onSelect: (kind, reason) => log.info('Translation backend selected', { kind, reason })
   })
+}
+
+/**
+ * #473: the translator's `beforeGpuStart` hook. A translation cold start that will try the
+ * graphics card first takes a reranker RESIDENT ON THE CARD off it, the way a chat model switch
+ * already does (`registerModelIpc`), so `--fit` sizes translation against memory the reranker no
+ * longer holds. A reranker on the processor, or not resident, is left alone: suspending it would
+ * cost its next ask a cold start and free no graphics memory. The reranker's next ask restarts it
+ * on the processor while translation occupies the card (its posture reads `gpuOccupied()`), and
+ * on the card again once translation idles out.
+ */
+export function translationGpuYield(reranker: Reranker | null | undefined): (() => Promise<void>) | undefined {
+  if (!reranker?.suspend) return undefined
+  return async () => {
+    if (reranker.isLoaded?.() !== true || reranker.devicePosture?.() !== 'gpu') return
+    await reranker.suspend?.().catch((err: unknown) => {
+      log.warn('Reranker sidecar suspend before a translation GPU start failed', {
+        error: err instanceof Error ? err.message : String(err)
+      })
+    })
+  }
 }
 
 /**
@@ -437,7 +459,7 @@ export function composeServices({
   // install path at TG-3). Its own lazy `LlamaServer`, --ctx-size from the manifest, no --jinja.
   // Shares `composeTranslator` with the issue-#40 post-download re-selection so the two call
   // sites can never drift.
-  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered })
+  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered }, reranker)
 
   return { embedder, reranker, transcriber, transcriberMissing, ocrEngine, translator }
 }

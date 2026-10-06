@@ -1011,7 +1011,13 @@ password recovery — are documented in
     latency, never a cold-start duration) and this step runs no inference, so it is stated as
     unmeasured rather than invented; a behaviour-neutral memo of the manifest read itself was
     measured at 15.5 ms warm p50 on the drive layout (`K:`), well under the 50 ms threshold that
-    would have required one, so none was added.
+    would have required one, so none was added. **Since #473 (2026-10-07)** the first of the two
+    moves EARLIER: a GPU-posture translation cold start suspends a reranker resident on the card
+    before it spawns (the chat model switch already did this), so translation's `--fit` no longer
+    sizes itself against memory the reranker holds. The count is unchanged — the reranker's next
+    ask cold-starts on the processor, and it returns to the card after translation idles out. A
+    reranker on the processor, or not resident, is left alone. A reranker still mid-way through a
+    GPU cold start when translation starts is not stopped; its first ask moves it as before.
 
   No 5–8 GiB card was available in this session either (Wave 8 ruling (i)'s hardware leg is
   optional and not blocking): the small-card branch and the fail-vs-spill question above remain

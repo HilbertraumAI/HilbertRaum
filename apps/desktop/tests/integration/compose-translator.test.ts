@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { composeTranslator, shouldReplaceTranslator } from '../../src/main/services/compose-services'
+import { composeTranslator, shouldReplaceTranslator, translationGpuYield } from '../../src/main/services/compose-services'
+import type { Reranker } from '../../src/main/services/reranker'
 import type { Translator } from '../../src/main/services/translation'
 import { llamaOsDir, llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
 
@@ -123,5 +124,39 @@ describe('shouldReplaceTranslator (BE-7 — latched instances repairable without
     expect(fresh).not.toBeNull()
     expect(fresh?.modelId).toBe('translategemma-test')
     expect(fresh?.isStartFailed?.()).toBe(false) // the fresh instance starts un-latched
+  })
+})
+
+// #473: the translator's beforeGpuStart hook. Only a reranker resident ON THE CARD yields it —
+// suspending one on the processor (or not resident) frees no graphics memory and costs its next
+// ask a cold start.
+describe('translationGpuYield (#473)', () => {
+  it('suspends a reranker only when it is resident on the graphics card', async () => {
+    for (const [loaded, posture, expected] of [
+      [true, 'gpu', 1],
+      [true, 'cpu', 0],
+      [false, 'gpu', 0]
+    ] as const) {
+      let suspends = 0
+      const reranker = {
+        isLoaded: () => loaded,
+        devicePosture: () => posture,
+        suspend: async () => void (suspends += 1)
+      } as unknown as Reranker
+      await translationGpuYield(reranker)?.()
+      expect(suspends).toBe(expected)
+    }
+    expect(translationGpuYield(null)).toBeUndefined() // no reranker on this drive: no hook
+  })
+
+  it('a suspend that fails never fails the translation start', async () => {
+    const reranker = {
+      isLoaded: () => true,
+      devicePosture: () => 'gpu',
+      suspend: async () => {
+        throw new Error('teardown failed')
+      }
+    } as unknown as Reranker
+    await expect(translationGpuYield(reranker)?.()).resolves.toBeUndefined()
   })
 })

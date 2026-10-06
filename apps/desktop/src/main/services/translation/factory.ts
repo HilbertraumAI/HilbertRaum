@@ -45,6 +45,8 @@ export interface TranslatorSelectionDeps {
    * symmetrically with the chat ladder's start line. Must never throw.
    */
   onStarted?: (info: TranslationStartInfo) => void
+  /** Awaited before a GPU-posture cold start (#473) — see `TranslationRuntimeOptions`. */
+  beforeGpuStart?: () => Promise<void>
 }
 
 /**
@@ -62,7 +64,8 @@ export function createSelectedTranslator(deps: TranslatorSelectionDeps): Transla
         contextTokens: model.contextTokens,
         gpu: deps.gpu,
         onDeviceFallback: deps.onDeviceFallback,
-        onStarted: deps.onStarted
+        onStarted: deps.onStarted,
+        beforeGpuStart: deps.beforeGpuStart
       }))
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — unavailable means null (plan O2).

@@ -232,6 +232,14 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
    * never throw.
    */
   onStarted?: (info: TranslationStartInfo) => void
+  /**
+   * Awaited before a cold start that will try the graphics card ('auto'), never before a forced-CPU
+   * one (#473). The composition passes a hook that takes a GPU-resident reranker off the card, so
+   * `--fit` sizes translation against memory the reranker no longer holds — the chat model switch
+   * already does the same. A teardown that begins meanwhile aborts the start as usual. Must never
+   * throw.
+   */
+  beforeGpuStart?: () => Promise<void>
 }
 
 export interface TranslateOptions {
@@ -599,6 +607,9 @@ export class TranslationRuntime {
     const abort = new AbortController()
     this.startAbort = abort
     try {
+      // #473: let the reranker leave the card first. Inside the try so a lock that begins while
+      // this waits has aborted `abort` by the time `startAttempt` runs, which then never spawns.
+      if (device === 'auto') await this.opts.beforeGpuStart?.().catch(() => undefined)
       await this.startAttempt(device, abort.signal)
       return
     } catch (err) {

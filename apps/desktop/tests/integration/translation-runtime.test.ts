@@ -9,7 +9,7 @@ import {
 import { createSelectedTranslator } from '../../src/main/services/translation/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import { EngineCannotRunError, engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
-import { testBudgetMs } from '../helpers/hang-budget'
+import { hangPolls, testBudgetMs } from '../helpers/hang-budget'
 
 // TG-2 fake-server tests for the real TranslationRuntime (plan §4 TG-2): launch args (NO --jinja,
 // --ctx-size 4096, --parallel 1), the raw /completion streaming + stop/temperature, abort
@@ -1265,6 +1265,69 @@ describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
 
 // #530: a program the OS loader refuses is not a device fault — no CPU retry, no fallback note, a
 // latched TranslationStartError flagged `engineCannotRun` that the consumers map to the engine copy.
+// #473: a GPU-posture cold start lets a GPU-resident reranker leave the card BEFORE it spawns, so
+// `--fit` sizes translation against memory the reranker no longer holds. The hook's policy (which
+// reranker yields) is composeTranslator's; these pin the runtime's half: when it is awaited.
+describe('#473 — beforeGpuStart runs before a GPU-posture spawn', () => {
+  it('a GPU-posture start waits for the hook before spawning; a forced-CPU start never calls it', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const hook: { calls: number; release: (() => void) | null } = { calls: 0, release: null }
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      beforeGpuStart: () => {
+        hook.calls += 1
+        return new Promise<void>((r) => (hook.release = r))
+      }
+    })
+    const done = rt.translate(translateOpts)
+    for (let i = 0; i < hangPolls(200, 5) && !hook.release; i++) await sleep(5)
+    expect(hook.release, 'the GPU-posture start never awaited beforeGpuStart').not.toBeNull()
+    expect(calls).toHaveLength(0) // nothing on the card yet while the reranker leaves it
+    expect(rt.gpuOccupied()).toBe(true) // so a rerank meanwhile already resolves 'cpu'
+    hook.release?.()
+    await expect(done).resolves.toBe(COMPLETION_TEXT)
+    expect(calls).toHaveLength(1)
+    expect(hook.calls).toBe(1)
+    await rt.stop()
+
+    const cpu = fakeSpawn()
+    let cpuHookCalls = 0
+    const off = new TranslationRuntime({
+      ...base,
+      spawn: cpu.spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      gpu: { getGpuMode: () => 'off' },
+      beforeGpuStart: async () => void (cpuHookCalls += 1)
+    })
+    await off.translate(translateOpts)
+    expect(cpu.calls).toHaveLength(1)
+    expect(cpuHookCalls).toBe(0) // a processor start frees nothing on the card
+    await off.stop()
+  })
+
+  it('a lock that begins while the hook waits ends the start without spawning or latching', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const hook: { release: (() => void) | null } = { release: null }
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      beforeGpuStart: () => new Promise<void>((r) => (hook.release = r))
+    })
+    const done = rt.translate(translateOpts).catch((e: unknown) => e)
+    for (let i = 0; i < hangPolls(200, 5) && !hook.release; i++) await sleep(5)
+    expect(hook.release, 'the GPU-posture start never awaited beforeGpuStart').not.toBeNull()
+    const suspended = rt.suspend()
+    hook.release?.()
+    await suspended
+    expect(await done).toBeInstanceOf(Error)
+    expect(calls).toHaveLength(0)
+    expect(rt.isStartFailed()).toBe(false) // an aborted start is not a load fault
+  })
+})
+
 describe('TranslationRuntime — OS loader refusal (#530)', () => {
   afterEach(() => resetEngineProblemsForTest())
 
