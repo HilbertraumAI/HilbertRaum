@@ -4829,6 +4829,13 @@ floors PASS — allPacked 102, anyCandidate 143, anyArticle 143 (identical to th
 arm-excl-planner+rerank p90 1,137 ms, rerank p90 3,231 ms, planner p90 922 ms; the same 14 ids
 without a generated answer as in the #500 read. Artifacts stay local (`tmp/`, git-ignored), as
 for #479/#500.
+**Figure captions joined the convention on 2026-10-07.** The `<figcaption>` capture (#500) appends
+to its own buffer, never through `emit`, so a caption still fused (`H2O`, `m2`) and kept the
+`mw-ref` brackets (`[2]`) that prose drops. It now arms, resolves and disarms its own marker
+against the caption's last character and skips citation brackets with the same nested-`<sup>`
+counting. Measured old against new converter: 0 of the 949 + 1,024 cached Wikipedia articles
+change (none carries a `<figure>`), and 1 caption in the 488 articles from seven other archives
+changes: a `[2]` bracket is dropped.
 
 ### Shipping rule for knowledge-pack changes
 
