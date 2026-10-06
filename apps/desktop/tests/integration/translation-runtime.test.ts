@@ -114,6 +114,7 @@ describe('TranslationRuntime — launch + translate', () => {
     expect(args).not.toContain('--device')
     expect(args).not.toContain('-ngl') // NEVER pass -ngl (the GPU record's hard rule)
     expect(args).toContain('--chat-template gemma') // avoids the #20305 STARTUP crash (TG-2 smoke finding)
+    expect(args).toContain('-lv 4') // the offload line the device hint parses prints only at verbosity 4 (#629)
     expect(args).toContain('--host 127.0.0.1') // loopback only
     expect(rt.isStartFailed()).toBe(false) // a healthy instance never reads as latched (BE-7)
     await rt.stop()

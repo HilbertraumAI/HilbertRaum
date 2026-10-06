@@ -2532,6 +2532,14 @@ prints, not about the sidecar's redaction. The sidecar's own guarantee is exactl
 the in-memory 4,000-character tail cap plus `redactExactKey` at the drain and
 `redactSidecarSecrets` at read time, with nothing written to disk.
 
+**The translation sidecar runs at verbosity 4 too (#629, 2026-10-07)**, so that its offload line
+reaches the Translate screen's device hint. The same check was repeated on the current pin (b11146)
+for its request path and, for the record, the reranker's: one real `/completion` request
+(TranslateGemma) and one real `/v1/rerank` request, each carrying unique marker words. The full
+logs (235 and 221 lines) contained none of the markers and no 7+-letter word of either response
+(16 and 7 probes), and no request line or `"content"`/`"prompt"`/`"documents"` body. The reranker
+still runs at the default level; this records only that verbosity 4 would not change its content.
+
 **Sidecar `serverMessage` is structural-only — accepted Info residual (SEC-N3).** `ChatRequestError`
 (runtime/`llama.ts`) keeps up to 500 chars of a non-JSON error body as `serverMessage`, surfaced via
 `chat-stream.ts` and `doctasks/manager.ts`. The sidecar is **our own loopback llama.cpp server** and its

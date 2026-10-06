@@ -114,6 +114,19 @@ export interface TranslationGpuDeps {
 export const TRANSLATION_TEMPLATE_ARGS = ['--chat-template', 'gemma'] as const
 
 /**
+ * Log verbosity 4, the chat server's setting (`CHAT_SERVER_ARGS`), for the same reason: the pinned
+ * build prints its `offloaded X/Y layers to GPU` load line only from verbosity 4 up. Without it the
+ * offload parse below never matched, so the Translate screen fell back to "runs on the graphics
+ * card" even when `--fit` gave translation no layers, and the Performance card could never count
+ * it on the card (#629). Measured on b11146, 2026-10-07: the default start printed 9 log lines and
+ * no offload line; `-lv 4` printed `offloaded 49/49 layers to GPU`. Verbosity 4 also adds
+ * per-request DIAGNOSTIC lines (slot, token counts, timings); a real `/completion` request carrying
+ * marker words left none of them, and none of the translated text, in the log — the same result
+ * `security-model.md` records for chat (DR3).
+ */
+export const TRANSLATION_LOG_ARGS = ['-lv', '4'] as const
+
+/**
  * The full extra-arg set the translation sidecar launches with for one device posture (composed
  * from the named constants above so the runtime AND the manual smoke stay byte-identical — no
  * drift). NO `--jinja`, NOT the chat `CHAT_SERVER_ARGS`. 'auto' composes NO device args — the
@@ -123,7 +136,8 @@ export function translationServerArgs(device: TranslationDevice): string[] {
   return [
     ...TRANSLATION_SLOT_ARGS,
     ...(device === 'cpu' ? TRANSLATION_CPU_DEVICE_ARGS : []),
-    ...TRANSLATION_TEMPLATE_ARGS
+    ...TRANSLATION_TEMPLATE_ARGS,
+    ...TRANSLATION_LOG_ARGS
   ]
 }
 

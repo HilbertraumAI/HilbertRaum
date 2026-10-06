@@ -4427,9 +4427,13 @@ record is why.
   translation a FULL offload at ~75 tok/s, against ~3–4 tok/s forced to the CPU. A rule that trades
   75 for 3.5 to avoid a case that only bites when the card is nearly full is a net loss.
 
-The condition is also already OBSERVABLE — the Translate screen's device line has covered all five
-forms since #164 (D-7b), and the "Models on this computer" card carries the start-order warning when
-both are resident on the card.
+The condition is also OBSERVABLE — the Translate screen's device line has covered all five forms
+since #164 (D-7b), and the "Models on this computer" card carries the start-order warning when both
+are resident on the card. **Correction (#629, 2026-10-07):** that held only from #629 on. Until then
+the sidecar ran at llama-server's default log level, below the verbosity 4 at which the pinned build
+prints its offload line, so every GPU start fell to the plain "runs on the graphics card" form and
+the card could never count translation as resident. The refusal above rests on the measurement, not
+on this sentence, and stands.
 
 **What was actually wrong was the COPY.** The two starved fact lines stated the symptom and nothing
 else — "about processor speed" — so a user who read no further had a fact and no action. Both now

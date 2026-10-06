@@ -2003,7 +2003,9 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   speed" / for a fully-starved 0-layer fit "runs on the processor — the graphics memory was fully
   taken, usually by the chat model, so no layers fit on the graphics card" (full-audit 2026-07-11
   CODE-23) / plain "runs on the graphics card (GPU)" when the GPU posture started but no offload
-  line could be parsed from the server log (`translate.device.gpuUnknown` — no split is invented) /
+  line could be parsed from the server log (`translate.device.gpuUnknown` — no split is invented;
+  until #629 EVERY GPU start landed here, because the sidecar ran below the log level that prints
+  the line) /
   CPU. Since #161 (FE-4) the remedy for the two starved forms is VISIBLE text under the device
   line, no longer tooltip-only. **The two starved forms name the CAUSE since the owner decision of
   2026-09-08 on this issue (#42)** — they used to state the symptom ("about processor speed") alone, leaving a user who
