@@ -32,7 +32,7 @@ import {
 } from './skills/prompt'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from './runtime'
 import { requestParamsForMode } from './runtime/llama'
-import { isModelStopAbort } from './runtime/model-stop'
+import { endedEarlyCause, parseEndedEarly } from './chat/ended-early'
 import { ensureCompacted } from './chat/compaction'
 import { log } from './logging'
 
@@ -459,11 +459,6 @@ function parseTruncationCause(raw: string | null | undefined): TruncationCause {
   return raw === 'cap' ? 'cap' : 'context'
 }
 
-/** Read `messages.ended_early` (#600). Only a known value surfaces; NULL or anything else ⇒ undefined. */
-function parseEndedEarly(raw: string | null | undefined): EndedEarly | undefined {
-  return raw === 'model' || raw === 'user' || raw === 'lock' ? raw : undefined
-}
-
 function rowToMessage(r: MessageRow): Message {
   const citations = parseCitations(r.citations_json)
   const coverage = parseCoverage(r.coverage_json)
@@ -865,8 +860,9 @@ export interface AppendMessageInput {
   truncatedCause?: TruncationCause
   /**
    * #600 — this turn ended early: on an assistant row the partial was cut, on a user row the question
-   * got no answer. Omitted ⇒ NULL. `persistAssistantMessage` stamps `'model'` itself when the turn's
-   * signal says the user stopped or switched the model, so the answer paths need not pass it.
+   * got no answer. Omitted ⇒ NULL. `persistAssistantMessage` stamps the cause itself from the turn's
+   * abort reason (a model stop, the Stop button, lock or quit — `chat/ended-early.ts`, #612), so the
+   * answer paths need not pass it.
    */
   endedEarly?: EndedEarly
   /**
@@ -1115,9 +1111,9 @@ export function getRegenerableAssistantMessageId(db: Db, conversationId: string)
 /**
  * #600 — mark the question that a turn left unanswered: the conversation's last VISIBLE message,
  * when — and only when — it is a user turn (an answer that persisted, or a restored one, makes the
- * tail an assistant row and nothing is marked). The transcript then shows "Not answered — the AI
- * model was stopped." under it instead of a silently unanswered question. Returns whether a row was
- * marked.
+ * tail an assistant row and nothing is marked). The transcript then shows "Not answered — …" under
+ * it, naming the cause (a model stop; since #612 also the Stop button, lock or quit), instead of a
+ * silently unanswered question. Returns whether a row was marked.
  */
 export function markUnansweredQuestion(db: Db, conversationId: string, cause: EndedEarly): boolean {
   const row = db
@@ -1921,10 +1917,11 @@ export function emptyAssistantMessage(conversationId: string): Message {
  * Stop+lock race behaves identically on every answer path.
  */
 export function persistAssistantMessage(db: Db, input: AppendMessageInput, signal?: AbortSignal): Message {
-  // #600: a partial cut by the user stopping or switching the model is marked "Reply stopped" — here,
-  // once, for every answer path that persists through this helper (plain chat and the three grounded
-  // sites), keyed on the turn's own abort reason. A Stop-button partial keeps no marker (#612).
-  if (input.endedEarly == null && isModelStopAbort(signal)) input = { ...input, endedEarly: 'model' }
+  // #600/#612: a partial cut by a model stop, the Stop button, lock or quit is marked "Reply stopped" —
+  // here, once, for every answer path that persists through this helper (plain chat and the three
+  // grounded sites), keyed on the turn's own abort reason. A bare abort carries no cause and no marker.
+  const cause = input.endedEarly == null ? endedEarlyCause(signal) : undefined
+  if (cause) input = { ...input, endedEarly: cause }
   try {
     return appendMessage(db, input)
   } catch (err) {

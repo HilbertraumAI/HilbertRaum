@@ -27,6 +27,21 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-06 — the closed 2026-09-27 #515 and #512 decision 3 entries retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #612 entry). Both entries closed with "Open: none";
+their records are unchanged: `architecture.md` GPU record "#515 amendment", and the translation record "#512" bullet +
+`model-benchmarks.md` §11.2. Citations of the form "BUILD_STATE 2026-09-27 #515 entry" now resolve here. Text below is
+byte-identical to what was removed.
+
+_2026-09-27 — **#515 — the #312 model-vs-device check compares the first error line; the sidecars log uncoloured (`fix/515-failure-signature`).**
+`failureSignature` read the last tail line — a per-process timestamp, or on Windows a bare colour reset (stdout is NUL, which
+`--log-colors auto` takes for a terminal) — so rungs never matched, or always did. Now the first `E` line, prefix stripped; `--log-colors
+off` on every `LlamaServer` spawn; the tail ANSI-free. Record: `architecture.md` GPU record "#515 amendment". Open: none._
+_2026-09-27 — **#512 decision 3 — translation planner constants 2.8 in / 3.1 out (`feat/512-translation-constants`).**
+Curated-10 basis (owner ruling); at ctx 4096 the D4 clamp now binds: 642-word windows, `windowMaxTokens` 1,998, a token-dense
+window under the trained 2K. Record: `architecture.md` translation record "#512" bullet, `model-benchmarks.md` §11.2. Open: none._
+
 ## 2026-10-06 — the closed 2026-10-05 #594 entry retired verbatim (its follow-ups #598–#600 are done)
 
 Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #599 entry). #594 merged as PR #601; the three

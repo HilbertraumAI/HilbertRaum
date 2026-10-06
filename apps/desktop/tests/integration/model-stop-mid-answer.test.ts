@@ -15,7 +15,7 @@ import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/ma
 import { withChatStream, withRegenerateGuard } from '../../src/main/ipc/chat-stream'
 import { endWorkOnModelStop } from '../../src/main/ipc/model-stop'
 import { inFlightStreams } from '../../src/main/ipc/inflight'
-import { isModelStopAbort } from '../../src/main/services/runtime/model-stop'
+import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
 import type { Message } from '../../src/shared/types'
 
 // #600 — the user stops or switches the chat model while an answer is being written. Before #600 the
@@ -129,7 +129,7 @@ describe('a model stop or switch mid-answer ends the answer cleanly (#600)', () 
       inFlightStreams.delete('conv-hook-order')
     }
     expect(calls).toEqual([`api ${code}`, 'build', 'answer'])
-    expect(isModelStopAbort(answer.signal)).toBe(true) // the reason the persist + restore rules key on
+    expect(endedEarlyCause(answer.signal)).toBe('model') // the reason the persist + restore rules key on
   })
 
   it('a switch to another model before the first word: no answer, and the question is marked "Not answered"', async () => {

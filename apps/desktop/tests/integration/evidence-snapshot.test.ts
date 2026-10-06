@@ -11,7 +11,7 @@ import {
   sourceKindForMode
 } from '../../src/main/services/evidence-pack/snapshot'
 import { deleteEvidenceReview } from '../../src/main/services/evidence-reviews'
-import type { Citation, CoverageInfo } from '../../src/shared/types'
+import type { Citation, CoverageInfo, EndedEarly } from '../../src/shared/types'
 
 // EP-1 Phase 1 (plan §6.3) — the snapshot builder: a complete, honest, deterministic draft
 // review per answer class, from PERSISTED data only. Classes: relevance (auto-links land),
@@ -51,7 +51,7 @@ function seedAnswer(
     title?: string
     modelId?: string | null
     truncated?: boolean
-    endedEarly?: 'model'
+    endedEarly?: EndedEarly
   }
 ): SeededAnswer {
   const conv = createConversation(db, {
@@ -349,14 +349,17 @@ describe('display-parity auto-links across block boundaries (Phase-1 review FIX-
 })
 
 describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
-  it('an answer a model stop ended early is recorded as stopped — never as complete (#600)', () => {
-    // The user stopped or switched the model mid-answer; the partial was kept and marked. Its review
-    // must say so: the pack would otherwise state "No output truncation was recorded".
-    const db = freshDb()
-    const { messageId } = seedAnswer(db, { content: 'The contract ends wh', endedEarly: 'model' })
-    const detail = createEvidenceReviewFromMessage(db, messageId)
-    expect(detail.generationSnapshot).toMatchObject({ answerTruncated: null, answerStopped: true })
-  })
+  it.each<EndedEarly>(['model', 'user', 'lock'])(
+    'an answer that ended early (%s) is recorded with its cause — never as complete (#600, #612)',
+    (cause) => {
+      // A model stop, the Stop button, or a lock / quit cut the answer; the partial was kept and marked.
+      // Its review must say so: the pack would otherwise state "No output truncation was recorded".
+      const db = freshDb()
+      const { messageId } = seedAnswer(db, { content: 'The contract ends wh', endedEarly: cause })
+      const detail = createEvidenceReviewFromMessage(db, messageId)
+      expect(detail.generationSnapshot).toMatchObject({ answerTruncated: null, answerEndedEarly: cause })
+    }
+  )
 
   it('a no-citation legacy answer reviews with zero sources, zero links, honest generation gaps', () => {
     const db = freshDb()
@@ -375,6 +378,7 @@ describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
       modelDisplayName: null,
       appVersion: null,
       answerTruncated: null,
+      answerEndedEarly: null, // #612: a complete answer records no early end
       answerMode: 'unknown'
     })
     expect(detail.coverageSnapshot).toBeNull()

@@ -4,7 +4,7 @@ import { render, cleanup, screen } from '@testing-library/react'
 import { Transcript } from '../../src/renderer/chat/Transcript'
 import { I18nProvider, UI_LANGUAGE_STORAGE_KEY } from '../../src/renderer/i18n'
 import { t, type UiLanguage } from '../../src/shared/i18n'
-import type { Message, TruncationCause } from '../../src/shared/types'
+import type { EndedEarly, Message, TruncationCause } from '../../src/shared/types'
 
 // #498: the cut-off badge used to read "Reply cut off — reached the model's context limit" and its
 // tooltip always advised raising the context size — wrong for a grounded reply the app's OWN fixed
@@ -119,11 +119,13 @@ describe('Transcript truncation notice (#498)', () => {
   })
 })
 
-// #600: a reply the user's model stop or switch ended gets its OWN label ("Reply stopped") — never the
-// cut-off badge, whose meaning is "the model ran out of room". A question the stop left with no answer
-// gets a "Not answered" note, which goes once a later answer follows it.
-describe('the "Reply stopped" and "Not answered" notes (#600)', () => {
-  const user = (id: string, endedEarly?: 'model'): Message => ({
+// #600 / #612: a reply that ended before it was finished — the user stopped or switched the model,
+// pressed Stop, or locked the workspace / quit — gets its OWN label ("Reply stopped"), never the cut-off
+// badge, whose meaning is "the model ran out of room"; the tooltip names the cause. A question such a
+// turn left with no answer gets a "Not answered" note naming the cause, which goes once an answer follows.
+describe('the "Reply stopped" and "Not answered" notes (#600, #612)', () => {
+  const causes: EndedEarly[] = ['model', 'user', 'lock']
+  const user = (id: string, endedEarly?: EndedEarly): Message => ({
     id,
     conversationId: 'c1',
     role: 'user',
@@ -132,18 +134,23 @@ describe('the "Reply stopped" and "Not answered" notes (#600)', () => {
     endedEarly
   })
 
-  it.each([['en' as const], ['de' as const]])('%s: a reply a model stop ended shows "Reply stopped" with its own hint', (lang) => {
-    renderTranscript(lang, [user('u1'), { ...assistantMsg('a1'), endedEarly: 'model' }])
-    expect(notice()).toHaveTextContent(t(lang, 'chat.endedEarly.label'))
-    expect(notice()).toHaveAttribute('title', t(lang, 'chat.endedEarly.hint.model'))
-    expect(screen.queryByText(t(lang, 'chat.truncated.label'))).toBeNull()
+  it.each((['en', 'de'] as const).flatMap((lang) => causes.map((cause) => [lang, cause] as const)))(
+    '%s: a reply that ended early (%s) shows "Reply stopped" with the hint for its cause',
+    (lang, cause) => {
+      renderTranscript(lang, [user('u1'), { ...assistantMsg('a1'), endedEarly: cause }])
+      expect(notice()).toHaveTextContent(t(lang, 'chat.endedEarly.label'))
+      expect(notice()).toHaveAttribute('title', t(lang, `chat.endedEarly.hint.${cause}`))
+      expect(screen.queryByText(t(lang, 'chat.truncated.label'))).toBeNull()
+    }
+  )
+
+  it.each(causes)('a question a turn that ended early (%s) left unanswered says why', (cause) => {
+    renderTranscript('en', [user('u1', cause)])
+    expect(notice()).toHaveTextContent(t('en', `chat.unanswered.${cause}`))
   })
 
-  it('a question a model stop left unanswered says so; once an answer follows it, the note goes', () => {
-    renderTranscript('en', [user('u1', 'model')])
-    expect(notice()).toHaveTextContent(t('en', 'chat.unanswered.model'))
-    cleanup()
-    renderTranscript('en', [user('u1', 'model'), assistantMsg('a1')])
-    expect(screen.queryByText(t('en', 'chat.unanswered.model'))).toBeNull()
+  it('once an answer follows the question, the "Not answered" note goes', () => {
+    renderTranscript('en', [user('u1', 'user'), assistantMsg('a1')])
+    expect(screen.queryByText(t('en', 'chat.unanswered.user'))).toBeNull()
   })
 })

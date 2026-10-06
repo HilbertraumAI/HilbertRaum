@@ -1180,11 +1180,11 @@ function applyPragmasAndMigrations(db: Db): void {
   // the flag's historical meaning, so the badge's advice is unchanged for old history. CODE-only
   // (a two-value enum), never content.
   ensureColumn(db, 'messages', 'truncated_cause', 'truncated_cause TEXT')
-  // #600 — what ended a turn early: 'model' (the user stopped or switched the chat model mid-answer;
-  // 'user' / 'lock' reserved for #612), NULL on every complete turn and every pre-#600 row. On an
-  // assistant row the partial was cut; on a user row the question got no answer. Its OWN column, not
-  // a `truncated_cause` value: an older app reads an unknown cause as "raise the context size",
-  // while it ignores this column and shows the text as it shows a Stop-button partial today.
+  // #600 — what ended a turn early: 'model' (the user stopped or switched the chat model mid-answer),
+  // 'user' (the Stop button) or 'lock' (lock / quit) — both written since #612 — NULL on every complete
+  // turn and every pre-#600 row. On an assistant row the partial was cut; on a user row the question
+  // got no answer. Its OWN column, not a `truncated_cause` value: an older app reads an unknown cause
+  // as "raise the context size", while it ignores this column and shows the text as complete.
   // Additive + nullable, no `SCHEMA_VERSION` bump. CODE-only (a three-value enum), never content.
   ensureColumn(db, 'messages', 'ended_early', 'ended_early TEXT')
   // Issue #80 (wave R80) — the per-answer actionable skill OFFER: JSON-serialized `SkillOffer`

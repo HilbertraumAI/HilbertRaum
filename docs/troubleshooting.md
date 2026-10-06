@@ -450,16 +450,20 @@ Everything keeps working; responses may just be a bit slower.
 
 ## An answer says "Reply stopped", or a question says "Not answered"
 
-You stopped or switched the AI model while that answer was being written. The app ends the answer
-cleanly before it shuts the model down:
+That answer ended before it was finished: you pressed **Stop**, stopped or switched the AI model,
+locked the workspace, or closed the app while it was being written. Point at the label to see which.
+The app ends the answer cleanly, so nothing is wrong with the model:
 
 - **"Reply stopped"** under an answer: the text so far is kept, and the label says it is not the
-  whole answer. Ask again if you need the rest.
-- **"Not answered — the AI model was stopped."** under a question: the model had not written a
-  word yet (on a computer without a graphics card, reading a long question can take minutes).
-  Start a model and send the question again.
-- If you pressed **Try again** and then stopped or switched the model, the previous complete
-  answer stays — the half-written new one is dropped.
+  whole answer. Ask again if you need the rest. For a bank statement or an invoice, the figures the
+  app read from the document still follow the stopped text; they are complete and checked.
+- **"Not answered — …"** under a question: no word of the answer had been written yet (on a computer
+  without a graphics card, reading a long question can take minutes). The note says why: you stopped
+  it, the AI model was stopped, or the workspace was locked or the app closed. Send the question again
+  (start a model first if none is running).
+- If you pressed **Try again** and then stopped or switched the model, locked the workspace or closed
+  the app, the previous complete answer stays — the half-written new one is dropped. If you pressed
+  **Stop** on the new answer yourself, the half-written one stays instead.
 
 While an answer is being written, the AI Model screen says so on the running model's card before
 you stop or switch it.

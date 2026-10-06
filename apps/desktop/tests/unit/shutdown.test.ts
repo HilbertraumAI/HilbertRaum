@@ -8,6 +8,7 @@ import {
   SHUTDOWN_OVERALL_DEADLINE_MS
 } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
+import { endedEarlyCause } from '../../src/main/services/chat/ended-early'
 
 // REL-4 (full-audit-2026-06-29 follow-up): the QUIT teardown must abort in-flight chat/RAG streams
 // BEFORE runtime.stop() — like the workspace-LOCK path — so a partial reply unwinds as an ABORT and
@@ -145,6 +146,21 @@ describe('performShutdown ordering (REL-4)', () => {
     expect(order).not.toContain('should-not-fire') // not re-aborted
     expect(order).toContain('runtime.stop')
     expect(order[order.length - 1]).toBe('lock') // teardown still ran to completion
+  })
+
+  // #612: quit locks the workspace too, so it ends an answer with the lock's cause — the partial is
+  // then saved marked and reads "Reply stopped" after the next unlock. The persist side, end to end:
+  // the lock-handler test in workspace-ipc.test.ts. A real controller, for the reason it carries.
+  it('aborts in-flight streams with the lock cause, so a cut answer is saved marked (#612)', async () => {
+    const running = new AbortController()
+
+    await performShutdown(fakeCtx([]), {
+      inFlightStreams: new Map([['c1', running]]),
+      detachVaultKey: () => undefined,
+      log: quietLog
+    })
+
+    expect(endedEarlyCause(running.signal)).toBe('lock')
   })
 
   it('is a safe no-op-ish call with a null ctx (crash/early-quit path)', async () => {

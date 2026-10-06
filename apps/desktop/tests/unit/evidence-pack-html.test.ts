@@ -10,7 +10,7 @@ import {
 } from '../../src/main/services/evidence-pack/render-html'
 import { EVIDENCE_PACK_OPTION_DEFAULTS } from '../../src/shared/evidence-review'
 import { t } from '../../src/shared/i18n'
-import type { EvidencePackOptions, EvidenceReviewDetail } from '../../src/shared/types'
+import type { EndedEarly, EvidencePackOptions, EvidenceReviewDetail } from '../../src/shared/types'
 import { makeDetail, makeItem } from '../helpers/evidenceReview'
 
 // EP-1 plan §8.2 — the pure HTML renderer: the new `escapeHtml` primitive, the spec §29.4
@@ -448,13 +448,16 @@ describe('honesty rendering', () => {
     expect(html).not.toContain(t('en', 'review.summary.truncated'))
   })
 
-  it('an answer ended early by a model stop says so instead of "no truncation recorded" (#600)', () => {
-    const detail = makeDetail()
-    detail.generationSnapshot!.answerStopped = true
-    const html = render(detail)
-    expect(html).toContain(t('en', 'review.summary.stopped'))
-    expect(html).not.toContain(t('en', 'packExport.coverage.noTruncationRecord'))
-  })
+  it.each<EndedEarly>(['model', 'user', 'lock'])(
+    'an answer that ended early (%s) says so, naming the cause, instead of "no truncation recorded" (#600, #612)',
+    (cause) => {
+      const detail = makeDetail()
+      detail.generationSnapshot!.answerEndedEarly = cause
+      const html = render(detail)
+      expect(html).toContain(t('en', `review.summary.stopped.${cause}`))
+      expect(html).not.toContain(t('en', 'packExport.coverage.noTruncationRecord'))
+    }
+  )
 
   it('the truncation warning renders when honestly recorded', () => {
     const detail = makeDetail()

@@ -1,5 +1,6 @@
 import type {
   CoverageInfo,
+  EndedEarly,
   EvidenceExportFormat,
   EvidenceGenerationSnapshot,
   EvidencePackLanguage,
@@ -154,8 +155,9 @@ export interface EvidencePackHonesty {
   chunksTotal: number | null
   /** True only when truncation was honestly RECORDED; null = no record (never "false"). */
   answerTruncated: boolean | null
-  /** #600 — true only when the answer was recorded as ended early by a model stop; null otherwise. */
-  answerStopped: boolean | null
+  /** #600/#612 — why the answer was recorded as ended early (a model stop, the Stop button, lock or
+   *  quit); null when no such record exists. */
+  answerEndedEarly: EndedEarly | null
   /** Excludes archive sources (M11): an archive is unresolved BY CONSTRUCTION and gets its
    *  own `archiveSources` line below — the two warnings must never both fire for one source. */
   unresolvedSources: number
@@ -352,7 +354,7 @@ export function buildEvidencePackModel(
     // Positive record only (the P1 generation-snapshot rule): true when honestly recorded
     // as cut off, null otherwise — absence of a record is never rendered as "complete".
     answerTruncated: gen?.answerTruncated === true ? true : null,
-    answerStopped: gen?.answerStopped === true ? true : null,
+    answerEndedEarly: gen?.answerEndedEarly ?? null,
     // M11: an archive source is unresolved by construction (H2) and carries its own
     // archiveSources line — never double-count it as an unresolved DOCUMENT identity.
     unresolvedSources: detail.sources.filter(

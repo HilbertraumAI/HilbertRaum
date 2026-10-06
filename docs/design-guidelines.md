@@ -1632,6 +1632,38 @@ written. Engineering record: `architecture.md` CB-5 "#600 amendment". Code cites
 `main.chat.connectionLost`, `review.summary.stopped` (en + de). **Tests:** `TruncatedNotice.test.tsx`
 (#600 block), `ModelsScreen.test.tsx` (the answering note), `model-stop-mid-answer.test.ts`.
 
+**#612 amendment (owner, 2026-10-06): the Stop button, lock and quit say so too.** Before this, an
+answer the user stopped, or one cut by "Lock now" or by closing the app, kept no lasting sign. After
+a reload, an unlock or a relaunch it looked finished, and an evidence pack built on it said nothing
+was cut. Engineering record: `architecture.md` CB-5 "#612 amendment".
+1. **One label, the cause in the tooltip.** Every early end shows the same "Reply stopped" („Antwort
+   gestoppt“). The hint says why:
+   - the model: as above;
+   - the Stop button: "You stopped this reply before it was finished." („Du hast diese Antwort
+     gestoppt, bevor sie fertig war.“);
+   - lock or quit: "The workspace was locked or the app was closed before this reply was finished."
+     („Der Arbeitsbereich wurde gesperrt oder die App geschlossen, bevor diese Antwort fertig war.“)
+
+   The Stop toast stays as the moment's confirmation; the label is what lasts, in every window.
+2. **"Not answered" for every cause.** A Stop before the first word: "Not answered — you stopped
+   it." („Nicht beantwortet – du hast die Antwort gestoppt.“). Lock or quit: "Not answered — the
+   workspace was locked or the app was closed." („Nicht beantwortet – der Arbeitsbereich wurde
+   gesperrt oder die App geschlossen.“).
+3. **"Try again" keeps the previous answer unless the user stopped the new one.** A lock or quit
+   that cuts a re-ask brings the previous complete answer back, as a model stop does. Only the Stop
+   button keeps the half-written one: there the user made the choice about the answer.
+4. **The totals stay under a cut bank-statement or invoice answer.** The figures the app checked
+   (and their date / text-quality notes) still follow the stopped narration, as they follow a "Reply
+   cut off" one: they are verified, and they contradict a figure the partial got wrong. The label is
+   what says the answer is unfinished.
+5. **The evidence pack names the cause** in the same sentence the review summary shows, worded for
+   a reader who was not there: "The generated answer is incomplete — it was stopped before it was
+   finished." / "… the workspace was locked or the app was closed before it was finished."
+
+**Copy (#612):** `chat.endedEarly.hint.{user, lock}`, `chat.unanswered.{user, lock}`,
+`review.summary.stopped.{model, user, lock}` (the #600 `review.summary.stopped` became `.model`), en +
+de. **Tests:** `TruncatedNotice.test.tsx` (#600, #612 block), `evidence-pack-html.test.ts`.
+
 ### 11.22 An AI model that stopped responding, crashed, or is still starting — design record (IMPLEMENTED 2026-10-06, #599)
 
 _What the app says when the running model is frozen, crashes in CPU mode, or is still starting.

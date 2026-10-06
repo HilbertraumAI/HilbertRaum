@@ -31,6 +31,7 @@ import {
   setScope,
   updateConversationScope
 } from '../services/chat'
+import { endedEarlyAbortReason } from '../services/chat/ended-early'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import { conversationAttachmentIds, unfiledConversationDocuments } from '../services/collections'
 import { listDocumentsByIds } from '../services/ingestion'
@@ -52,9 +53,9 @@ import { loadResultTable } from '../services/tables/store'
 // chat:token:<id> / chat:done:<id> / chat:error:<id>. The `sendChatMessage` invoke
 // also resolves with the final assistant Message so a caller can simply await it.
 // Cancellation: stopGeneration(id) aborts the in-flight AbortController; the partial
-// reply is persisted and a normal `done` is emitted. Deep-mode reasoning deltas go
-// out on chat:reasoning:<id> — a separate (additive) channel, so token events still
-// carry only answer text.
+// reply is persisted (marked `endedEarly: 'user'`, #612) and a normal `done` is emitted.
+// Deep-mode reasoning deltas go out on chat:reasoning:<id> — a separate (additive)
+// channel, so token events still carry only answer text.
 //
 // sendChatMessage does NOT auto-start a runtime. A chat needs an explicitly-started
 // model (AI Model screen → "Start runtime"); with no active runtime it throws so the
@@ -343,7 +344,9 @@ export function registerChatIpc(ctx: AppContext): void {
     const controller = inFlight.get(conversationId)
     if (controller) {
       log.info('Generation stop requested', { conversationId })
-      controller.abort()
+      // #612: the reason records the cause, so the partial is saved marked "Reply stopped" (and a
+      // question with no answer yet "Not answered"); before, the toast in this window was the only sign.
+      controller.abort(endedEarlyAbortReason('user'))
     }
   })
 

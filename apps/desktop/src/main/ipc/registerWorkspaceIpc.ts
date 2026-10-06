@@ -14,6 +14,7 @@ import { healEngineLoadState } from '../services/engine-health'
 import { maybeStartLocalApi } from '../services/local-api/lifecycle'
 import { startKnowledgePackSession } from '../services/zim/session'
 import { inFlightStreams, awaitInFlightStreamsSettled } from './inflight'
+import { endedEarlyAbortReason } from '../services/chat/ended-early'
 import { applyUiLanguageSetting, tMain } from '../services/i18n'
 import { isWorkspaceNewerError } from '../services/db'
 import { getSettings } from '../services/settings'
@@ -470,8 +471,11 @@ async function runLockTeardown(ctx: AppContext): Promise<WorkspaceStateInfo> {
   // questions + chunk text), so ALL sidecars are stopped BEFORE the vault re-encrypts.
   // In-flight generations are aborted first (their partial replies persist while the
   // DB is still open); the E5 embedder + reranker restart lazily on next use, and the
-  // chat runtime comes back via the unlock auto-start.
-  for (const controller of inFlightStreams.values()) controller.abort()
+  // chat runtime comes back via the unlock auto-start. #612: the reason records the cause, so a
+  // partial is saved marked "Reply stopped", a question with no answer yet "Not answered", and a
+  // re-ask keeps its previous complete answer — a lock is not a verdict on the answer.
+  const lockReason = endedEarlyAbortReason('lock')
+  for (const controller of inFlightStreams.values()) controller.abort(lockReason)
   // A multi-minute deep-index (tree) build is NOT in inFlightStreams (doc tasks never
   // are), so it must be aborted explicitly or it would keep calling chatStream/getDb()
   // while the vault re-encrypts (plan §4.1 M9). Aborts the build's controller AND rejects

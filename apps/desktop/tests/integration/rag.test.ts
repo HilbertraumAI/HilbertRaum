@@ -38,6 +38,7 @@ import {
 } from '../../src/main/services/chat'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from '../../src/main/services/runtime'
 import { ChatStreamError, isChatStreamError } from '../../src/main/services/runtime/llama'
+import { endedEarlyAbortReason } from '../../src/main/services/chat/ended-early'
 import { MAX_REDUCE_CONTINUATIONS, streamWholeDocMapReduce } from '../../src/main/services/rag/whole-doc-tree'
 import { SKILL_GUARD_LINE, stripSkillFenceEcho } from '../../src/main/services/skills/prompt'
 import { DATA_END, GROUNDED_DATA_GUARD_LINE } from '../../src/main/services/rag/grounded-data'
@@ -1014,6 +1015,34 @@ describe('generateGroundedAnswer', () => {
     )
     expect(isChatStreamError(err)).toBe(true)
     expect(listMessages(db, conv.id).filter((m) => m.role === 'assistant')).toHaveLength(0)
+  })
+
+  // #612 (owner decision 2026-10-06): a narration that ended early — the Stop button here; a model
+  // stop or a lock persists through the same helper — KEEPS the deterministic totals echo under it and
+  // is marked "Reply stopped", as a "Reply cut off" narration keeps it. The echo is verified data that
+  // contradicts a figure the partial misquoted; the marker is what says the answer is unfinished.
+  it('a stopped grounded-DATA narration keeps its totals echo and is marked "Reply stopped" (#612)', async () => {
+    const db = freshDb()
+    const conv = createConversation(db, { mode: 'documents' })
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'what is the total?' })
+
+    const turn = new AbortController()
+    const rt = runtime()
+    vi.spyOn(rt, 'chatStream').mockImplementation(async function* () {
+      yield 'The invoice total is'
+      turn.abort(endedEarlyAbortReason('user')) // Stop lands mid-narration; the reader then ends cleanly
+    })
+    const msg = await generateGroundedDataAnswer(
+      db,
+      rt,
+      conv.id,
+      'what is the total?',
+      { dataBlock: '{"gross":"119.00 EUR"}', postscript: 'Gross: 119.00 EUR', citations: [] },
+      { signal: turn.signal }
+    )
+
+    expect(msg.content).toBe('The invoice total is\n\nGross: 119.00 EUR')
+    expect(listMessages(db, conv.id).at(-1)).toMatchObject({ content: msg.content, endedEarly: 'user' })
   })
 
   // Mirrors generateGroundedAnswer's own pinned decoding setting (above): the grounded-DATA

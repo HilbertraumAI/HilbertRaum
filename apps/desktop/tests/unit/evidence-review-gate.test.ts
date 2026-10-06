@@ -174,7 +174,7 @@ describe('parseGenerationSnapshot (tolerant — absent = "Unavailable", never in
       skillDisplayName: null,
       appVersion: '0.1.52',
       answerTruncated: null,
-      answerStopped: null,
+      answerEndedEarly: null,
       answerMode: 'relevance'
     })
   })

@@ -169,9 +169,10 @@ export function ReviewSummaryView({
             <span aria-hidden="true">⚠</span> {t('review.summary.truncated')}
           </p>
         )}
-        {gen?.answerStopped === true && (
+        {/* #600/#612: ended early — the sentence names the cause (model stop, Stop button, lock/quit). */}
+        {gen?.answerEndedEarly != null && (
           <p className="hint review-truncated">
-            <span aria-hidden="true">⚠</span> {t('review.summary.stopped')}
+            <span aria-hidden="true">⚠</span> {t(`review.summary.stopped.${gen.answerEndedEarly}`)}
           </p>
         )}
       </section>

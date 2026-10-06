@@ -3,6 +3,7 @@ import {
   streamSettled as realStreamSettled,
   awaitInFlightStreamsSettled
 } from './ipc/inflight'
+import { endedEarlyAbortReason } from './services/chat/ended-early'
 import { detachVaultKey as realDetachVaultKey, log as realLog } from './services/logging'
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import type { AppContext } from './services/context'
@@ -142,9 +143,12 @@ export async function performShutdown(ctx: AppContext | null, deps: ShutdownDeps
   }
   // REL-4: abort in-flight chat/RAG streams so each partial reply persists (see the ordering note
   // above). Best-effort per controller — a misbehaving canceller must not block the rest of teardown.
+  // #612: with the lock's own reason — quit locks the workspace too — so the partial is saved marked
+  // "Reply stopped" and reads that way after the next unlock (the lock path's rules, same cause).
   try {
+    const quitReason = endedEarlyAbortReason('lock')
     for (const controller of inFlightStreams.values()) {
-      if (!controller.signal.aborted) controller.abort()
+      if (!controller.signal.aborted) controller.abort(quitReason)
     }
   } catch (err) {
     log.error('Error aborting in-flight streams on quit', String(err))

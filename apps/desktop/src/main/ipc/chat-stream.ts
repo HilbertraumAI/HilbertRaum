@@ -6,6 +6,7 @@ import {
   DOC_TASK_BUSY_MESSAGE,
   type ContextUsage,
   type Conversation,
+  type EndedEarly,
   type Message
 } from '../../shared/types'
 import {
@@ -27,7 +28,7 @@ import {
   isRuntimeConnectionLostError,
   isRuntimeUnresponsiveError
 } from '../services/runtime/llama'
-import { isModelStopAbort } from '../services/runtime/model-stop'
+import { endedEarlyCause } from '../services/chat/ended-early'
 import { noModelMessageKey } from '../../shared/runtime-status'
 import { modelBusyMessageKey } from '../services/runtime/occupancy'
 import { tMain } from '../services/i18n'
@@ -154,16 +155,17 @@ export type ChatStreamRunFn = (
  * chat and the document channel alike — and `regenerate` is caller-supplied over IPC, so the
  * refusal belongs here rather than in either handler.
  *
- * #600 — the same choke point carries the model-stop rules (the user stopped or switched the chat
- * model mid-turn: `isModelStopAbort`), for EVERY turn, re-ask or not:
- *  - a re-ask that a model stop cut keeps the previous COMPLETE answer: the partial is removed and
- *    the snapshot restored. A model stop ended the stream, not the wish for an answer; the Stop
- *    button keeps its partial, as before, because that was the user's own choice;
+ * #600 / #612 — the same choke point carries the ended-early rules, for EVERY turn, re-ask or not.
+ * The cause is the turn's abort reason (`endedEarlyCause`): 'model' (the user stopped or switched the
+ * chat model), 'user' (the Stop button) or 'lock' (lock or quit):
+ *  - a re-ask that a model stop, lock or quit cut keeps the previous COMPLETE answer: the partial is
+ *    removed and the snapshot restored. Those ended the stream, not the wish for an answer; the Stop
+ *    button keeps its partial, as before, because that was the user's own choice about the answer;
  *  - a re-ask that THROWS restores its snapshot whenever nothing was saved in its place, abort or
  *    not. An abort thrown before anything streamed (document search, the reranker, a knowledge-pack
  *    arm, the categorizer) used to skip the restore and lose the previous answer, the Stop button
  *    included (reachable through "Answer without it" / "Run with <skill>" in a document chat);
- *  - a turn a model stop left with no answer at all marks its question "Not answered"
+ *  - a turn that ended early with no answer at all marks its question "Not answered", with its cause
  *    (`markUnansweredQuestion`, which touches the last row only when it IS the question).
  *    A Stop during the pre-generation slot handoff (REL-3) ends before this wrapper runs and is not
  *    marked.
@@ -175,15 +177,23 @@ export function withRegenerateGuard(
   runFn: ChatStreamRunFn
 ): ChatStreamRunFn {
   const guarded = regenerate ? regenerateGuarded(db, conversationId, runFn) : runFn
-  return markUnansweredOnModelStop(db, conversationId, guarded)
+  return markUnansweredOnEarlyEnd(db, conversationId, guarded)
 }
 
-/** #600 — mark the question when a model stop left the turn with no answer (see the guard above). */
-function markUnansweredOnModelStop(db: Db, conversationId: string, runFn: ChatStreamRunFn): ChatStreamRunFn {
+/**
+ * #612 — a re-ask cut by one of these causes restores the previous complete answer (see the guard
+ * above): the user acted on the model or the workspace, not on the answer. The Stop button ('user')
+ * is absent on purpose: there the half-written answer is the one the user chose to keep.
+ */
+const RESTORES_PREVIOUS_ANSWER: ReadonlySet<EndedEarly> = new Set<EndedEarly>(['model', 'lock'])
+
+/** #600/#612 — mark the question when the turn ended early with no answer (see the guard above). */
+function markUnansweredOnEarlyEnd(db: Db, conversationId: string, runFn: ChatStreamRunFn): ChatStreamRunFn {
   const mark = (signal: AbortSignal): void => {
-    if (!isModelStopAbort(signal)) return
+    const cause = endedEarlyCause(signal)
+    if (!cause) return
     try {
-      markUnansweredQuestion(db, conversationId, 'model')
+      markUnansweredQuestion(db, conversationId, cause)
     } catch {
       /* a marker is a courtesy; it must never fail the turn */
     }
@@ -233,12 +243,13 @@ function regenerateGuarded(db: Db, conversationId: string, runFn: ChatStreamRunF
         restoreMessage(db, deleted)
         return getLatestMessage(db, conversationId) ?? result
       }
-      // #600: a model stop cut the re-ask — the previous complete answer comes back, the partial
-      // goes. Keyed on the saved answer's own "Reply stopped" marker, not the signal: a stop that
-      // lands after a COMPLETE answer was saved (a post-answer step still awaiting) must not throw
-      // that answer away. The partial is already saved, so it is removed first, or two would remain —
-      // in one transaction, so a failed restore rolls back to the saved partial, never to neither.
-      if (deleted && result.endedEarly === 'model') {
+      // #600/#612: a model stop, lock or quit cut the re-ask — the previous complete answer comes
+      // back, the partial goes. Keyed on the saved answer's own "Reply stopped" marker, not the signal:
+      // a stop that lands after a COMPLETE answer was saved (a post-answer step still awaiting) must
+      // not throw that answer away. The partial is already saved, so it is removed first, or two would
+      // remain — in one transaction, so a failed restore rolls back to the saved partial, never to
+      // neither. A lock runs this while the teardown awaits the turn's settle, so the DB is still open.
+      if (deleted && result.endedEarly != null && RESTORES_PREVIOUS_ANSWER.has(result.endedEarly)) {
         db.exec('BEGIN')
         try {
           if (getRegenerableAssistantMessageId(db, conversationId) === result.id) {

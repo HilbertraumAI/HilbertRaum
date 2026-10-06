@@ -135,6 +135,14 @@ from its first public `1.0.0` release onward.
   says "Not answered — the AI model was stopped." If you pressed **Try again** and then stopped the
   model, the previous complete answer stays. While an answer is being written, the AI Model screen
   says that stopping or switching the model ends it (#600).
+- **An answer you stopped, or one cut short by locking the workspace or closing the app, no longer
+  looks finished afterwards.** Before, only the short "Stopped" note in that window said anything;
+  after a reload, an unlock or a restart the half-written text read like a complete answer, and an
+  evidence pack built on it said nothing had been cut. Now such an answer keeps the **Reply stopped**
+  label, and pointing at it says why. A question that got no answer at all says "Not answered" with
+  the reason. An evidence pack and its review state that the answer is incomplete and why. If you
+  pressed **Try again** and then locked the workspace or closed the app, the previous complete answer
+  stays (#612).
 - **When the AI model crashes in the middle of an answer, the chat says so in words.** It used to
   show "terminated" or "fetch failed". Now it says "The AI model stopped before the answer was
   finished" and what to do next (#600).

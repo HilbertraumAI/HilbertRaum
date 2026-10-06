@@ -1556,14 +1556,15 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
           its compaction pre-pass re-enters the gate;
         - a deep-index build;
         - every `inFlightStreams` controller, with `modelStopAbortReason()`: an AbortError-named
-          DOMException tagged in a WeakSet (`runtime/model-stop.ts`).
+          DOMException tagged in a WeakSet (`runtime/model-stop.ts`; since #612 one WeakMap for all
+          three causes, `chat/ended-early.ts`).
       - **The gate** returns at once for an in-app call whose turn is already aborted, so such a call
         no longer pre-empts the external lane or stamps `lastPreemptedAt`.
       - **`persistAssistantMessage`** stamps `endedEarly: 'model'` from that reason. It is a new
         nullable column, `messages.ended_early`, because an older app reads an unknown
         `truncated_cause` as "raise the context size", while it ignores a new column. The column is
         carried through `DeletedMessage`, read tolerantly, and its values `user`/`lock` are
-        reserved for #612.
+        reserved for #612 (written since the #612 amendment below).
       - **`withRegenerateGuard`** now holds the model-stop rules for every turn:
         - a re-ask the stop cut deletes its saved partial and restores the predecessor, in one
           transaction (a failed restore keeps the partial). It keys on the saved answer's
@@ -1586,7 +1587,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
           the question.
         - `RuntimeStatus.answering` (in-flight streams) drives the AI Model card's note, which polls
           until it clears.
-        - The evidence snapshot's `answerStopped` makes the pack say the answer was stopped.
+        - The evidence snapshot's `answerStopped` makes the pack say the answer was stopped (since
+          #612 `answerEndedEarly`, which names the cause).
         - Design record: design-guidelines §11.21.
 
       **Not covered.**
@@ -1595,9 +1597,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - Document tasks fail with `main.task.genericFailure` on a stop (by decision).
       - The stop ends every in-flight chat turn, a deterministic extraction that might not have needed
         the model included; it ends as a Stop would, and `answering` counts it the same way.
-      - A stopped bank-statement narration still gets its totals block (#612).
+      - A stopped bank-statement narration still gets its totals block (#612). *Kept on purpose:
+        see the #612 amendment below.*
       - Skill runs are left to #606.
-      - Answers ended by the Stop button, lock or quit keep no marker (#612).
+      - Answers ended by the Stop button, lock or quit keep no marker (#612). *Closed by the #612
+        amendment below.*
       - There is still no resend for an unanswered question (#613).
 
       **Tests.**
@@ -1622,6 +1626,82 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - A stop before the first word marks the question.
       - Local API: a stop → in-band `model_not_loaded` / 503 `model_not_loaded`; a switch →
         `model_starting`.
+    - **#612 amendment (2026-10-06) — the Stop button, lock and quit leave the same lasting marker.**
+      The facts:
+      - **What users saw.** Four things abort an in-flight answer (`inFlightStreams`): the Stop button
+        (`chat:stop`), "Lock now" (`runLockTeardown`), quit (`performShutdown`) and the #600 model
+        stop. Only the model stop passed a reason. The other three called a bare `controller.abort()`,
+        so their partials were saved like complete answers. After a reload, an unlock or a relaunch
+        nothing said they were cut. The Stop toast showed only in the window that pressed Stop.
+      - **The first abort wins.** Lock's own `runtime.stop()` fires the model-stop hook, but every turn
+        is already aborted by then. That is why a lock-cut partial never got #600's `'model'` either.
+      - **The evidence snapshot copied `'model'` only**, so a pack built on a Stop or lock partial said
+        "No output truncation was recorded for this answer."
+      - **Not released yet.** #600 is not in v0.1.62, so `answerStopped` (below) never shipped, and the
+        column already reserved `'user'` and `'lock'`. No migration was needed.
+
+      **Owner decisions (2026-10-06).**
+      - The cut bank-statement or invoice narration **keeps** its deterministic totals echo (and the
+        date / text-quality caveats); the "Reply stopped" marker labels it. A "Reply cut off" narration
+        keeps them the same way, and the echo contradicts a figure the partial misquoted. Dropping it
+        would have removed that guard exactly where the answer is incomplete.
+      - A re-ask cut by a lock or quit restores the previous complete answer, as a model stop does: the
+        user acted on the workspace, not on the answer. The Stop button keeps its partial.
+      - A Stop before the first word marks the question too ("Not answered — you stopped it."), so all
+        three causes follow #600's rule that a question with no answer says why.
+
+      **As built.**
+      - **One tag module**, `chat/ended-early.ts`: `endedEarlyAbortReason(cause)` mints an
+        AbortError-named DOMException registered in a WeakMap, `endedEarlyCause(signal)` reads it back,
+        and `parseEndedEarly` is the one tolerant reader of a stored value. It replaces #600's
+        `runtime/model-stop.ts`.
+      - **The sites.** `chat:stop` aborts with `'user'`. `runLockTeardown` and `performShutdown`
+        abort with `'lock'`; quit locks the workspace too, so it shares the cause. The model-stop hook
+        keeps `'model'`.
+      - **`persistAssistantMessage`** stamps whatever cause the turn's signal carries, so all four
+        streamed answer paths are covered. A bare abort carries none.
+      - **`withRegenerateGuard`.** It marks an unanswered question with any cause, and restores the
+        predecessor for `'model'` and `'lock'` (`RESTORES_PREVIOUS_ANSWER`). A lock runs that while
+        its teardown awaits the turn's settle (R1), so the database is still open.
+      - **The evidence snapshot** records the cause as `answerEndedEarly`, replacing #600's
+        `answerStopped` boolean. The pack, the review footer and the review summary say
+        `review.summary.stopped.<cause>`.
+      - **The UI.** The transcript shows one "Reply stopped" label with a hint per cause
+        (`chat.endedEarly.hint.*`) and the "Not answered" note per cause (`chat.unanswered.*`).
+        Design record: design-guidelines §11.21 "#612 amendment".
+
+      **Not covered.**
+      - A Stop or lock during the pre-generation slot handoff (REL-3) still ends before the guard runs,
+        so its question is not marked.
+      - The OS session-end lock (`emergencyLock`, #248) closes the database without aborting, so a
+        partial it cuts is not saved at all, as before.
+      - The Markdown transcript export carries neither "Reply cut off" (#498) nor "Reply stopped".
+      - A partial still replays into later prompts as if complete (the Stop button's long-standing
+        behaviour).
+
+      **Tests.** Each fails on the pre-fix behaviour; all ten rules were mutation-checked.
+      - `chat-ipc.test.ts` C1: the Stop handler → the saved partial reads `'user'`.
+      - `workspace-ipc.test.ts` "(#612)": a real turn on a real encrypted vault, "Lock now", then a fresh
+        unlock that reads `'lock'` back.
+      - `shutdown.test.ts` "(#612)": quit aborts with `'lock'`.
+      - `chat-stream-regenerate.test.ts`: the restore rule per cause, the "Not answered" mark per cause
+        (and none for a bare abort).
+      - `rag.test.ts`: a stopped grounded-data narration keeps its echo and is marked.
+      - `evidence-snapshot.test.ts`, `evidence-pack-html.test.ts` and `TruncatedNotice.test.tsx`:
+        per cause.
+
+      **Real app** (2026-10-06, DesktopDiT, dev build over CDP, the 4B on the GTX 1070 Ti, b11146). The
+      run was made on a plaintext-dev root, then again on an encrypted one (E:'s `policy.json`):
+      - Stop mid-answer → the partial reads "Reply stopped" (`'user'`), and its evidence review says
+        `answerEndedEarly: 'user'`, before and after a relaunch.
+      - Stop before the first word (a 6,162-character question) → the question reads "Not answered — you
+        stopped it."
+      - "Lock now" mid-answer → `locked`; after unlock the partial reads `'lock'`.
+      - A complete 906-character answer, Try again, then "Lock now" mid re-ask → after unlock the same
+        answer (same id, no marker) is the one left.
+      - Quit mid-answer → only `hilbertraum.sqlite.enc` at rest; after relaunch and unlock the 206-character
+        partial reads `'lock'`.
+      - Every label and tooltip was read off the DOM in English and German; screenshots are in the PR.
     - **#599 amendment (2026-10-06) — the running model's liveness.** The facts:
       - **What users saw.** `status().healthy` was the start's health check, never re-read
         (`RuntimeManager.last`). During the #594 hang (b9849 Vulkan, GTX 1070 Ti) the sidecar answered
