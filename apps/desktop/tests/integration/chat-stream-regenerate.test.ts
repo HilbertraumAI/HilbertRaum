@@ -11,7 +11,7 @@ import {
   listMessages,
   persistAssistantMessage
 } from '../../src/main/services/chat'
-import { modelStopAbortReason } from '../../src/main/services/runtime/model-stop'
+import { endedEarlyAbortReason } from '../../src/main/services/chat/ended-early'
 import { withRegenerateGuard } from '../../src/main/ipc/chat-stream'
 import type { ChatStreamRunFn } from '../../src/main/ipc/chat-stream'
 import type { CoverageInfo, Message } from '../../src/shared/types'
@@ -108,9 +108,10 @@ describe('withRegenerateGuard — CB-2 (a produced-nothing regenerate never lose
   })
 })
 
-// #600 — the same guard carries the model-stop rules. A model stop ends the turn through its abort
-// signal (`modelStopAbortReason`, the runtime's model-stop hook) before the sidecar is killed.
-describe('withRegenerateGuard — a model stop, and an abort thrown before anything streamed (#600)', () => {
+// #600 / #612 — the same guard carries the ended-early rules. A model stop (the runtime's model-stop
+// hook), the Stop button and a lock / quit end the turn through its abort signal, each with a reason
+// that names the cause (`endedEarlyAbortReason`), before anything is killed or locked.
+describe('withRegenerateGuard — an answer that ended early, and an abort thrown before anything streamed (#600, #612)', () => {
   function abortedWith(reason?: unknown): AbortSignal {
     const c = new AbortController()
     c.abort(reason)
@@ -118,22 +119,29 @@ describe('withRegenerateGuard — a model stop, and an abort thrown before anyth
   }
   const noop = (): void => {}
 
-  it('a model stop that cut a re-ask brings the previous complete answer back; the partial goes', async () => {
+  it.each([
+    // The user acted on the model or the workspace, not on the answer: the previous answer comes back.
+    ['a model stop', 'model', ['q', 'the full answer']],
+    ['a lock or quit', 'lock', ['q', 'the full answer']],
+    // The Stop button was the user's own choice about this answer: its partial stays, marked.
+    ['the Stop button', 'user', ['q', 'the fu']]
+  ] as const)('%s that cut a re-ask keeps the right answer (cause %s)', async (_l, cause, expected) => {
     const db = freshDb()
     const conv = createConversation(db, {})
     appendMessage(db, { conversationId: conv.id, role: 'user', content: 'q' })
-    const original = appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the full answer' })
-    const signal = abortedWith(modelStopAbortReason())
+    appendMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the full answer' })
 
-    // The re-ask streamed a few words, then the model stop ended it: its partial is persisted
+    // The re-ask streamed a few words, then the turn was ended: its partial is persisted
     // (persistAssistantMessage, as every answer path does) and the run resolves with it.
     const wrapped = withRegenerateGuard(db, conv.id, true, async (sig) =>
       persistAssistantMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the fu' }, sig)
     )
-    const result = await wrapped(signal, noop, noop, noop, noop)
+    await wrapped(abortedWith(endedEarlyAbortReason(cause)), noop, noop, noop, noop)
 
-    expect(result.id).toBe(original.id)
-    expect(listMessages(db, conv.id).map((m) => m.content)).toEqual(['q', 'the full answer'])
+    const history = listMessages(db, conv.id)
+    expect(history.map((m) => m.content)).toEqual(expected)
+    // The answer that remains reads as complete when it was restored, and "Reply stopped" when not.
+    expect(history[1].endedEarly).toBe(cause === 'user' ? 'user' : undefined)
   })
 
   it('a model-stopped re-ask whose restore fails keeps its partial — never neither answer', async () => {
@@ -148,7 +156,7 @@ describe('withRegenerateGuard — a model stop, and an abort thrown before anyth
     const wrapped = withRegenerateGuard(db, conv.id, true, async (sig) =>
       persistAssistantMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the fu' }, sig)
     )
-    const result = await wrapped(abortedWith(modelStopAbortReason()), noop, noop, noop, noop)
+    const result = await wrapped(abortedWith(endedEarlyAbortReason('model')), noop, noop, noop, noop)
 
     expect(result.content).toBe('the fu')
     expect(listMessages(db, conv.id).map((m) => m.content)).toEqual(['q', 'the fu'])
@@ -164,7 +172,7 @@ describe('withRegenerateGuard — a model stop, and an abort thrown before anyth
 
     const wrapped = withRegenerateGuard(db, conv.id, true, async (sig) => {
       const saved = persistAssistantMessage(db, { conversationId: conv.id, role: 'assistant', content: 'the new answer' }, sig)
-      turn.abort(modelStopAbortReason())
+      turn.abort(endedEarlyAbortReason('model'))
       await Promise.resolve()
       return saved
     })
@@ -175,8 +183,8 @@ describe('withRegenerateGuard — a model stop, and an abort thrown before anyth
   })
 
   it.each([
-    ['the Stop button', undefined],
-    ['a model stop', modelStopAbortReason()]
+    ['the Stop button', endedEarlyAbortReason('user')],
+    ['a model stop', endedEarlyAbortReason('model')]
   ])('%s while documents are still being searched for a re-ask: the previous answer comes back', async (_l, reason) => {
     // Retrieval, the reranker and a knowledge-pack arm rethrow an abort (rag/index.ts) — nothing was
     // streamed or saved. The guard used to skip every abort here, so the previous answer was lost.
@@ -197,7 +205,7 @@ describe('withRegenerateGuard — a model stop, and an abort thrown before anyth
     expect(history.map((m) => m.id)).toEqual([history[0].id, original.id])
   })
 
-  it('a model stop before the first word marks the question "Not answered"; the Stop button marks nothing', async () => {
+  it('a turn that ended before the first word marks the question "Not answered" with its cause (#612)', async () => {
     const db = freshDb()
     const run = async (reason: unknown): Promise<Message> => {
       const conv = createConversation(db, {})
@@ -211,7 +219,10 @@ describe('withRegenerateGuard — a model stop, and an abort thrown before anyth
       )
       return listMessages(db, conv.id)[0]
     }
-    expect((await run(modelStopAbortReason())).endedEarly).toBe('model')
-    expect((await run(undefined)).endedEarly).toBeUndefined() // the user's own Stop: #612
+    expect((await run(endedEarlyAbortReason('model'))).endedEarly).toBe('model')
+    expect((await run(endedEarlyAbortReason('user'))).endedEarly).toBe('user')
+    expect((await run(endedEarlyAbortReason('lock'))).endedEarly).toBe('lock')
+    // A bare abort names no cause, so nothing is claimed about why the question has no answer.
+    expect((await run(undefined)).endedEarly).toBeUndefined()
   })
 })

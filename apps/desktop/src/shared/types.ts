@@ -1196,9 +1196,9 @@ export type TruncationCause = 'context' | 'cap'
  * #600 — what ended a turn before it was finished. Not a truncation (`truncated` means the model
  * ran out of room, and an older app reads any unknown cause as "raise the context size"), so it
  * lives in its own column (`messages.ended_early`) that older app versions simply ignore.
- *  - `'model'` — the user stopped or switched the chat model while the answer was being written
- *    (#600; the only value written today);
- *  - `'user'` / `'lock'` — reserved for the Stop button and for lock/quit (#612).
+ *  - `'model'` — the user stopped or switched the chat model while the answer was being written (#600);
+ *  - `'user'` — the chat's own Stop button (#612);
+ *  - `'lock'` — "Lock now", or quitting the app, which locks the workspace too (#612).
  */
 export type EndedEarly = 'model' | 'user' | 'lock'
 
@@ -3710,9 +3710,10 @@ export interface EvidenceGenerationSnapshot {
   appVersion?: string | null
   /** The message's honest output-truncation flag (`messages.truncated`). */
   answerTruncated?: boolean | null
-  /** #600 — true when a model stop or switch ended the answer early (`messages.ended_early` =
-   *  'model'); null otherwise, and on every snapshot taken before #600. */
-  answerStopped?: boolean | null
+  /** #600/#612 — why the answer ended before it was finished (`messages.ended_early`): a model stop,
+   *  the Stop button, or lock/quit. Null on a complete answer and on every snapshot taken before #612
+   *  (#600's unreleased `answerStopped` boolean, which this replaced, never shipped). */
+  answerEndedEarly?: EndedEarly | null
   /** The answer's `coverage.mode` at snapshot time; 'unknown' when none was recorded. */
   answerMode?: 'relevance' | 'tree' | 'capped' | 'extract' | 'unknown' | null
 }

@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-06 — **#612 — the Stop button, lock and quit leave the same lasting "Reply stopped" marker (`fix/612-stopped-answer-marker`).** Each abort names its cause
+(`chat/ended-early.ts`: `'user'` Stop, `'lock'` lock + quit, `'model'` #600); `persistAssistantMessage` stamps any of them, an unanswered question is marked for all
+three, a re-ask cut by lock/quit restores its predecessor; the evidence snapshot's `answerEndedEarly` (replaced the unreleased `answerStopped`) names the cause in the
+pack. Owner calls as recommended (the totals echo stays under a cut narration). Real app verified on an encrypted vault. Record: CB-5 "#612 amendment", design-guidelines §11.21. Open: #613._
 _2026-10-06 — **#599 — a frozen or crashed chat model no longer reads "running, healthy" (`feat/599-runtime-liveness`, stacked on #600).** Status reads re-probe
 `/health` (cached 10 s); an answer the CB-5 watchdog ended marks the model unresponsive until it answers again. The AI Model card says "Not responding" + Restart (offered,
 never automatic). A CPU-mode crash restarts the model once per model per session, then leaves it stopped, each with a notice. "Is starting" counts from the start request
@@ -35,7 +39,7 @@ never automatic). A CPU-mode crash restarts the model once per model per session
 _2026-10-06 — **#600 — a model stop or switch ends the answer cleanly; a crash speaks in words (`fix/600-model-stop-mid-answer`).** `RuntimeManager`'s model-stop hook
 (after `current` is cleared, before the kill, no wait; never on the crash restart) ends the local API request (`model_not_loaded`/`model_starting`), a deep-index build and
 the answers: partial kept + "Reply stopped" (new `messages.ended_early`, not `truncated`), a re-ask keeps its predecessor, an unanswered question is marked, an AI Model card note.
-A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: #606, #612, #613._
+A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: #606, #613 (#612: above)._
 _2026-10-06 — **#598 — a prefill wedged behind pings ends; the header wait is 180 s (`fix/598-prefill-liveness`).** Both pins ping every ~30 s (b9849 too — #594's
 record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `return_progress` on every chat request and two prefill clocks: any byte (120 s) and a
 `prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
@@ -125,19 +129,12 @@ _2026-10-01 — **#527 — the greyed-out mic names the missing piece and its bu
 build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
 screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
 `data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
-_2026-09-27 — **#515 — the #312 model-vs-device check compares the first error line; the sidecars log uncoloured (`fix/515-failure-signature`).**
-`failureSignature` read the last tail line — a per-process timestamp, or on Windows a bare colour reset (stdout is NUL, which
-`--log-colors auto` takes for a terminal) — so rungs never matched, or always did. Now the first `E` line, prefix stripped; `--log-colors
-off` on every `LlamaServer` spawn; the tail ANSI-free. Record: `architecture.md` GPU record "#515 amendment". Open: none._
 _2026-09-27 — **#512 — llama.cpp pin b9849 → b11146 (= upstream v0.5.0), prompt cache on for every chat model (`feat/512-llama-cpp-b11146`).**
 The #399 family list is gone: manifest `disable_prompt_cache` (default false; true → `--cache-ram 0`; none set) + `--cache-ram
 min(8192, RAM MiB / 8)` on every chat start; manual `prompt-cache-smoke`; LLVM `libomp.dll` licence pinned (`licenses/`, DRIVE-NOTICES).
 Records: model-policy (licence, "To bump": stable-release pins only), model-benchmarks §6.6 "#512 amendment" (smoke, cache session, the
 grounded-QA gate: PASSED), GPU record §3. **Rig legs PASSED 2026-09-27** (PR #524, not merged: qwen3.6/3.8 restore, 27B MTP 66/66, Linux
 asset run; close-out `fix/512-close-out`, smoke B now shares A's system message). Open: macOS asset never run; b9849 drives (#516)._
-_2026-09-27 — **#512 decision 3 — translation planner constants 2.8 in / 3.1 out (`feat/512-translation-constants`).**
-Curated-10 basis (owner ruling); at ctx 4096 the D4 clamp now binds: 642-word windows, `windowMaxTokens` 1,998, a token-dense
-window under the trained 2K. Record: `architecture.md` translation record "#512" bullet, `model-benchmarks.md` §11.2. Open: none._
 _2026-09-22 — **#410 — the OCR language files install in-app (`feat/410-in-app-ocr-install`): a failed scan or
 photo row in Documents and a quiet AI Model row offer "Download OCR files", and OCR activates without a restart.**
 Record: `architecture.md` "In-app OCR install — design record" (owner decisions D1–D7, the facts, the design as
@@ -194,7 +191,8 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 2026-10-04 (preamble budget, making room for the #567 entry), and the closed 2026-09-20 wave-13 entry on 2026-10-05 (preamble budget, making
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
-for the #516 entry) — citations of the form "BUILD_STATE <date> entry" /
+for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
+the #612 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

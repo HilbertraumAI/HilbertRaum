@@ -450,9 +450,10 @@ only alongside `truncated: true`. NULL on every complete reply and every pre-#49
 truncated legacy row reads back as `'context'`, the flag's historical meaning — and it is
 carried verbatim through the regenerate delete/restore snapshot (`DeletedMessage`).
 `messages.ended_early` (#600) is additive and nullable: `'model' | 'user' | 'lock'` (`EndedEarly`),
-surfaced as `Message.endedEarly`; only `'model'` is written (the user stopped or switched the chat model
-mid-turn; `'user'` / `'lock'` are reserved for #612). On an assistant row the partial was cut ("Reply
-stopped"; stamped by `persistAssistantMessage` from the turn's abort reason, `isModelStopAbort`); on a
+surfaced as `Message.endedEarly`: `'model'` = the user stopped or switched the chat model mid-turn
+(#600), `'user'` = the chat's Stop button, `'lock'` = "Lock now" or quit (both #612). On an assistant
+row the partial was cut ("Reply stopped"; stamped by `persistAssistantMessage` from the turn's abort
+reason, `endedEarlyCause` in `chat/ended-early.ts` — a bare abort carries no cause); on a
 user row the question got no answer (`markUnansweredQuestion`, last visible row only). Its OWN column,
 never a `truncated_cause` value — an older app reads an unknown cause as "raise the context size" and
 ignores this column. Unknown values read back as undefined; carried verbatim through `DeletedMessage`.
@@ -473,9 +474,11 @@ thinking deltas; token events still carry ONLY answer text. Reasoning is never p
 never replayed (D6) — see "Answer-depth modes" below.
 **Cancellation:** `ipc/registerChatIpc.ts` keeps a per-conversation `AbortController` map;
 `stopGeneration(conversationId)` aborts it → `chatStream` stops on `options.signal`, the partial
-reply is persisted, a normal `done` fires.
+reply is persisted (marked `endedEarly: 'user'`, #612; a turn with no answer yet marks its question
+`'user'`), a normal `done` fires. "Lock now" and quit abort the same way with `'lock'`; a re-ask they
+cut restores its predecessor, as a model stop does below (#612).
 **Model stop or switch mid-turn (#600, additive — channel shape unchanged):** the runtime's
-model-stop hook aborts every in-flight turn with `modelStopAbortReason()` BEFORE the sidecar is killed,
+model-stop hook aborts every in-flight turn with `endedEarlyAbortReason('model')` BEFORE the sidecar is killed,
 so the turn ends exactly like a Stop (`done`, partial persisted) — the partial carries
 `endedEarly: 'model'`, a re-ask whose saved answer carries that marker restores its predecessor
 instead (one transaction; a complete answer saved before the stop landed stays), and a turn with no
@@ -1340,8 +1343,10 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   resolver branch runs, and `packId`/`articlePath` are the source's stable locator
   carried through every export),
   `EvidenceGenerationSnapshot` (spec §18.3 but **every field optional** per plan §1.3 — absent
-  renders "Unavailable", never invented; #600 added `answerStopped`, `true` when a model stop or switch
-  ended the answer early, so the pack says so instead of "No output truncation was recorded"),
+  renders "Unavailable", never invented; `answerEndedEarly` (#612; it replaced #600's never-released
+  `answerStopped` boolean) records why the answer ended early — `EndedEarly`, a model stop, the Stop
+  button or lock/quit, `null` on a complete answer — so the pack names the cause instead of "No output
+  truncation was recorded"),
   `EvidenceLink`, `EvidenceReviewItem`,
   `EvidenceReadyGate`, `EvidenceReview`, `EvidenceReviewSummary`, `EvidenceReviewDetail`,
   `EvidenceExportFormat` ('html'|'pdf' — the write-side type; `EvidenceExportRecord.format`

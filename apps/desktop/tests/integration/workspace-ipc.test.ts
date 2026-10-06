@@ -31,8 +31,12 @@ vi.mock('../../src/main/services/embeddings', async (importOriginal) => {
 
 import { randomBytes, randomUUID } from 'node:crypto'
 import { encodeVector, getResidentVectors } from '../../src/main/services/embeddings'
+import type { IpcMainInvokeEvent } from 'electron'
 import { inFlightStreams, streamSettled } from '../../src/main/ipc/inflight'
+import { withChatStream, withRegenerateGuard } from '../../src/main/ipc/chat-stream'
 import { registerWorkspaceIpc } from '../../src/main/ipc/registerWorkspaceIpc'
+import { appendMessage, createConversation, generateAssistantMessage, listMessages } from '../../src/main/services/chat'
+import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
 import { IPC } from '../../src/shared/ipc'
 import { DEFAULT_POLICY } from '../../src/main/services/policy'
 import type { PrivacyPolicy, WorkspaceActionResult } from '../../src/shared/types'
@@ -448,6 +452,66 @@ describe('registerWorkspaceIpc', () => {
     } finally {
       inFlightStreams.delete('c1')
       streamSettled.delete('c1')
+    }
+  })
+
+  // #612: "Lock now" mid-answer saved the partial with nothing to say it was cut, so after the next
+  // unlock it read as a finished answer. Driven end to end: a real chat turn through the stream
+  // lifecycle on the unlocked vault's database, the lock handler, then a fresh unlock that reads it back.
+  it('lockWorkspace ends an in-flight answer so it still reads "Reply stopped" after the next unlock (#612)', async () => {
+    const vp = freshVault()
+    createEncryptedVaultOnDisk(vp, 'right-password', FAST_KDF)
+    const ctrl = new WorkspaceController(vp, ENCRYPTION_REQUIRED, false)
+    ctrl.init()
+    ctrl.unlock('right-password')
+    const db = ctrl.requireDb()
+    const conv = createConversation(db, {})
+    appendMessage(db, { conversationId: conv.id, role: 'user', content: 'Tell me about lighthouses.' })
+
+    // Streams two tokens, then waits on the next read until its signal aborts (a clean return, as the
+    // real reader ends on an abort).
+    let markParked!: () => void
+    const parked = new Promise<void>((r) => (markParked = r))
+    const runtime: ModelRuntime = {
+      modelId: 'mock',
+      start: async () => {},
+      stop: async () => {},
+      health: async () => ({ healthy: true, message: 'ok', port: null }),
+      contextWindow: () => 4096,
+      async *chatStream(_m: ChatMessage[], opts?: RuntimeChatOptions) {
+        yield 'Lighthouses '
+        yield 'guide ships'
+        await new Promise<void>((resolve) => {
+          opts?.signal?.addEventListener('abort', () => resolve(), { once: true })
+          markParked()
+        })
+      }
+    }
+    const event = { sender: { isDestroyed: () => false, send: () => {} } } as unknown as IpcMainInvokeEvent
+    const turn = withChatStream(
+      event,
+      conv.id,
+      'Chat generation failed',
+      withRegenerateGuard(db, conv.id, false, (signal, sendToken) =>
+        generateAssistantMessage(db, runtime, conv.id, { signal, onToken: sendToken })
+      )
+    )
+    await parked
+
+    registerWorkspaceIpc({ ...ctxWith(ctrl), db } as unknown as AppContext)
+    const { result } = await invoke(handlers, IPC.lockWorkspace)
+    expect(result).toMatchObject({ state: 'locked' })
+    await expect(turn).resolves.toMatchObject({ content: 'Lighthouses guide ships', endedEarly: 'lock' })
+
+    ctrl.unlock('right-password')
+    try {
+      const saved = listMessages(ctrl.requireDb(), conv.id)
+      expect(saved.map((m) => [m.role, m.content, m.endedEarly])).toEqual([
+        ['user', 'Tell me about lighthouses.', undefined],
+        ['assistant', 'Lighthouses guide ships', 'lock']
+      ])
+    } finally {
+      ctrl.lock()
     }
   })
 })

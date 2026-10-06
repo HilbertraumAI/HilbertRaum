@@ -426,9 +426,10 @@ export function ReviewScreen({
             <span aria-hidden="true">⚠</span> {t('review.summary.truncated')}
           </span>
         )}
-        {detail.generationSnapshot?.answerStopped === true && (
+        {detail.generationSnapshot?.answerEndedEarly != null && (
           <span className="hint review-truncated">
-            <span aria-hidden="true">⚠</span> {t('review.summary.stopped')}
+            <span aria-hidden="true">⚠</span>{' '}
+            {t(`review.summary.stopped.${detail.generationSnapshot.answerEndedEarly}`)}
           </span>
         )}
         <span className="review-foot-spacer" />

@@ -388,7 +388,8 @@ with sources (see §7).
    line). The box grows as you type. The answer streams in word by word, with formatting
    (bold, lists, tables, code blocks) rendered as the model writes it.
 2. While an answer is streaming, the send button becomes **Stop** — click it (or tab to it)
-   to cancel.
+   to cancel. The text so far is kept and marked **Reply stopped**, so it never passes for a finished
+   answer later; locking the workspace or closing the app mid-answer marks it the same way.
 3. Hover over (or tab to) any answer for its actions: **Try again** regenerates the latest
    answer (plain Chat only — not in *Ask my documents*), **Copy** copies it, and **Save** saves the
    conversation to a file of your choice. A small *"Copied"* / *"Saved to …"* note confirms each one.

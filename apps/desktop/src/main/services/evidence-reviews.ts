@@ -22,6 +22,7 @@ import type {
 } from '../../shared/types'
 import { prepareCached, type Db } from './db'
 import { parseCoverage } from './chat'
+import { parseEndedEarly } from './chat/ended-early'
 
 // Evidence Pack / Review Mode — storage CRUD + tolerant row→DTO parsing (EP-1 plan §5,
 // Phase 0). NO IPC, NO UI, NO export pipeline, NO snapshot builder here — those are later
@@ -215,7 +216,7 @@ export function parseGenerationSnapshot(json: string | null): EvidenceGeneration
       skillDisplayName: str(g.skillDisplayName),
       appVersion: str(g.appVersion),
       answerTruncated: typeof g.answerTruncated === 'boolean' ? g.answerTruncated : null,
-      answerStopped: typeof g.answerStopped === 'boolean' ? g.answerStopped : null,
+      answerEndedEarly: parseEndedEarly(g.answerEndedEarly) ?? null,
       answerMode:
         typeof g.answerMode === 'string' && modes.has(g.answerMode)
           ? (g.answerMode as EvidenceGenerationSnapshot['answerMode'])

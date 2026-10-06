@@ -374,7 +374,7 @@ describe('registerChatIpc', () => {
     expect(inFlightStreams.has(conv.id)).toBe(false)
   })
 
-  it('stopGeneration aborts the stream and the invoke resolves via done, not error (C1)', async () => {
+  it('stopGeneration aborts the stream and the invoke resolves via done, not error (C1); the partial is saved marked (#612)', async () => {
     const db = freshDb()
     const { runtime, release, started } = gatedRuntime()
     const conv = createConversation(db, {})
@@ -392,6 +392,9 @@ describe('registerChatIpc', () => {
     const channels = event.sender.send.mock.calls.map((c) => String(c[0]))
     expect(channels).toContain(STREAM.done(conv.id))
     expect(channels).not.toContain(STREAM.error(conv.id))
+    // #612: and it reads as stopped from the database, so after a reload (or in another window) it
+    // still says "Reply stopped". Before, the toast in the window that pressed Stop was the only sign.
+    expect(listMessages(db, conv.id).at(-1)).toMatchObject({ role: 'assistant', content: 'first ', endedEarly: 'user' })
   })
 
   it('refuses to regenerate when there is no prior assistant message', async () => {

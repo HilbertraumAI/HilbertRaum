@@ -8,6 +8,7 @@ import type {
 import { t } from '../../../shared/i18n'
 import { prepareCached, type Db } from '../db'
 import { parseCitations, parseCoverage } from '../chat'
+import { parseEndedEarly } from '../chat/ended-early'
 import {
   createEvidenceReview,
   getEvidenceReview,
@@ -269,8 +270,9 @@ export function createEvidenceReviewFromMessage(
     // Positive flag only: 1 = honestly recorded as cut off; NULL/0 = no truncation recorded
     // (null, not false — a pre-migration row never gains a "complete" claim).
     answerTruncated: msg.truncated === 1 ? true : null,
-    // #600: a model stop or switch ended this answer early — the pack must not call it complete.
-    answerStopped: msg.ended_early === 'model' ? true : null,
+    // #600/#612: a model stop, the Stop button, lock or quit ended this answer early — the pack
+    // must not call it complete, and says which. Null on a complete answer and any unknown value.
+    answerEndedEarly: parseEndedEarly(msg.ended_early) ?? null,
     answerMode: coverage?.mode ?? 'unknown'
   }
 

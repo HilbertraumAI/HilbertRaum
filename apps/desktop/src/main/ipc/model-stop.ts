@@ -1,5 +1,5 @@
 import type { AppContext } from '../services/context'
-import { modelStopAbortReason } from '../services/runtime/model-stop'
+import { endedEarlyAbortReason } from '../services/chat/ended-early'
 import { inFlightStreams } from './inflight'
 
 /**
@@ -39,7 +39,7 @@ export function endWorkOnModelStop(
   // 3. Chat and document answers: each ends as a clean stop, its partial kept and marked
   //    "Reply stopped" (`persistAssistantMessage`); a re-asked answer's predecessor restored and a
   //    question with no answer at all marked (`withRegenerateGuard`).
-  const reason = modelStopAbortReason()
+  const reason = endedEarlyAbortReason('model')
   for (const controller of inFlightStreams.values()) {
     if (!controller.signal.aborted) controller.abort(reason)
   }

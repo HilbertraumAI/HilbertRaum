@@ -440,12 +440,17 @@ export const en = {
   // `Message.truncatedCause`, so "raise the context size" is offered only when the window really
   // was the reason. A legacy row without a cause reads as '.context' (the pre-#498 advice).
   'chat.truncated.label': 'Reply cut off',
-  // #600: a reply the user's model stop or switch ended before it was finished — its own label, not
-  // "Reply cut off" (that one means the model ran out of room). The hint names the cause.
+  // #600/#612: a reply that ended before it was finished — its own label, not "Reply cut off" (that
+  // one means the model ran out of room). The hint names the cause, keyed by `Message.endedEarly`:
+  // a model stop or switch, the chat's Stop button, or a lock / quit.
   'chat.endedEarly.label': 'Reply stopped',
   'chat.endedEarly.hint.model': 'The AI model was stopped or switched before this reply was finished.',
-  // #600: under a question the model stop left with no answer at all.
+  'chat.endedEarly.hint.user': 'You stopped this reply before it was finished.',
+  'chat.endedEarly.hint.lock': 'The workspace was locked or the app was closed before this reply was finished.',
+  // #600/#612: under a question whose turn ended before the model wrote a word — same three causes.
   'chat.unanswered.model': 'Not answered — the AI model was stopped.',
+  'chat.unanswered.user': 'Not answered — you stopped it.',
+  'chat.unanswered.lock': 'Not answered — the workspace was locked or the app was closed.',
   'chat.truncated.hint.context':
     'The model ran out of room to finish this answer. Ask it to continue, start a new chat, or raise the context size on the AI Model screen.',
   'chat.truncated.hint.cap':
@@ -3681,9 +3686,13 @@ export const en = {
     '{count} source documents are no longer present in the workspace',
   'review.summary.truncated':
     'The generated answer may be incomplete — it was cut off at the model’s output limit.',
-  // #600: the answer under review was ended early by a model stop or switch.
-  'review.summary.stopped':
+  // #600/#612: the answer under review ended early — keyed by the snapshot's `answerEndedEarly`.
+  // Also the evidence pack's line, so it is worded for a reader other than the person who stopped it.
+  'review.summary.stopped.model':
     'The generated answer is incomplete — the AI model was stopped or switched before it was finished.',
+  'review.summary.stopped.user': 'The generated answer is incomplete — it was stopped before it was finished.',
+  'review.summary.stopped.lock':
+    'The generated answer is incomplete — the workspace was locked or the app was closed before it was finished.',
   'review.summary.generation': 'Generation details',
   'review.summary.model': 'Model',
   'review.summary.generatedAt': 'Generated',

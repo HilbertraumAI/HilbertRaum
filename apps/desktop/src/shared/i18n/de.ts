@@ -463,7 +463,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.truncated.label': 'Antwort abgeschnitten',
   'chat.endedEarly.label': 'Antwort gestoppt',
   'chat.endedEarly.hint.model': 'Das KI-Modell wurde beendet oder gewechselt, bevor diese Antwort fertig war.',
+  'chat.endedEarly.hint.user': 'Du hast diese Antwort gestoppt, bevor sie fertig war.',
+  'chat.endedEarly.hint.lock':
+    'Der Arbeitsbereich wurde gesperrt oder die App geschlossen, bevor diese Antwort fertig war.',
   'chat.unanswered.model': 'Nicht beantwortet – das KI-Modell wurde beendet.',
+  'chat.unanswered.user': 'Nicht beantwortet – du hast die Antwort gestoppt.',
+  'chat.unanswered.lock': 'Nicht beantwortet – der Arbeitsbereich wurde gesperrt oder die App geschlossen.',
   'chat.truncated.hint.context':
     'Dem Modell ging der Platz aus, um diese Antwort zu beenden. Bitte es fortzufahren, beginne einen neuen Chat oder erhöhe die Kontextgröße im Bereich „KI-Modell“.',
   'chat.truncated.hint.cap':
@@ -3608,8 +3613,11 @@ export const de: Record<keyof typeof en, string> = {
     '{count} Quelldokumente sind nicht mehr im Arbeitsbereich vorhanden',
   'review.summary.truncated':
     'Die erzeugte Antwort ist möglicherweise unvollständig — sie wurde am Ausgabelimit des Modells abgeschnitten.',
-  'review.summary.stopped':
+  'review.summary.stopped.model':
     'Die erzeugte Antwort ist unvollständig — das KI-Modell wurde beendet oder gewechselt, bevor sie fertig war.',
+  'review.summary.stopped.user': 'Die erzeugte Antwort ist unvollständig — sie wurde gestoppt, bevor sie fertig war.',
+  'review.summary.stopped.lock':
+    'Die erzeugte Antwort ist unvollständig — der Arbeitsbereich wurde gesperrt oder die App geschlossen, bevor sie fertig war.',
   'review.summary.generation': 'Erstellungsdetails',
   'review.summary.model': 'Modell',
   'review.summary.generatedAt': 'Erstellt',
