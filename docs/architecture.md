@@ -6095,7 +6095,7 @@ deleted at S13 close — text in git history) holds the baseline tables; this is
 **The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
 deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
 the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
-no-user-data corpus of 149 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+no-user-data corpus of 152 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
 through the **production** `suggestSkillsForTurn` / `resolveAutoFireSkill` on a real temporary
 database with the committed app skills reconciled (`tests/eval/skill-triggers.ts` + `.test.ts`),
 reporting precision/recall + a confusion matrix. Still no model and no network. The
@@ -6122,9 +6122,10 @@ expected offer except the rows listed in `KNOWN_SUGGESTION_DEVIATIONS` in
 fails). Three rows are listed today: `adv-meeting-schedule-01` (a scheduling question that merely names
 a meeting still offers meeting-protocol, the precision ceiling of a one-keyword offer), and
 `tp-redaction-de-pd-version-01` and `tp-redaction-de-pd-loeschen-01` (German removal requests that only
-the bare "personenbezogene Daten" offered on until #608; German removal verbs are #602). The GDPR row
+the bare "personenbezogene Daten" offered on until #608; #602 found no safe keyword for them, see
+below). The GDPR row
 `tp-redaction-en-02` left the list in #583, when "remove all personal data" joined the vocabulary.
-Measured on the 149 rows: suggestion precision 99.1%, recall 98.1% (105 correct, 1 wrong, 2
+Measured on the 152 rows: suggestion precision 99.1%, recall 98.1% (105 correct, 1 wrong, 2
 missed), confusion set 0 wrong / 0 missed. The
 printout (`formatReport`, at the start of the S13b gate) shows the two production paths: `suggestion`
 (all rows) and `auto-fire`, the latter twice, once over the gate set and once with the accepted
@@ -6155,13 +6156,34 @@ lose the offer (3 of 20). Redaction offers seven German removal phrases instead:
 Daten entfernen", and "entferne …" or "lösche …" before the data, with "alle", "die" or no article
 (`vocabulary.ts`). The infinitive "… Daten löschen" is left out on purpose: "löschen" is also the
 GDPR erasure term, and deletion-duty questions ("Wann muss ich personenbezogene Daten löschen?")
-would fire Redaction (owner ruling, the same day; the corpus pins both forms). With Redaction active, a word-initial "lösch…" now counts as a removal request in the
-handler (`REDACT_ACTION_RE`, beside "entfern…"), so "Lösche die … Daten" gets the run button, and a
+would fire Redaction (owner ruling, the same day; the corpus pins both forms). With Redaction active,
+a word-initial "lösch…" now counts as a removal request in the handler (`REDACT_ACTION_RE`, beside
+"entfern…"), so "Lösche die … Daten" gets the run button, and a
 question about a document's "Löschung …" is no longer answered with a count scan: it gets the normal
 answer, or the button when a route term (such as the bare phrase) also matches. Asking whether the data
 is "gelöscht" stays a count scan. The phrase list does not cover every request:
 "Bitte personenbezogene Daten löschen." and "Entfernen Sie …" get no offer (#602), and first-person
 statements ("Ich lösche die personenbezogenen Daten nach sechs Monaten – …") still match "lösche die …".
+
+**#602: German removal requests stay a limit of keyword suggestion (owner decision 2026-10-06).** A
+second blind evaluation, pre-registered the same way, tested three word lists for Redaction: request
+forms of the removal verbs (`anonymisier`, `pseudonymisier(e)`, `schwärz`, `unkenntlich`,
+`maskiere(n)`), plus Sie-imperative phrases ("Entfernen Sie … personenbezogene Daten"), plus
+participles and adjectives (`anonymisierte`, `pseudonymisiert`, …). The set held 90 fresh German
+messages: 30 removal requests, 20 requests to remove something that is not personal data, 20 legal
+questions and 20 questions about a selected document; labeller agreement 94% / 92%. Today Redaction is
+offered on 6 of the 30 requests. No list passed the gates (no new wrong suggestion, no new harmful
+auto-fire, at least 3 more requests). The first two lists gained 3 requests, all through `unkenntlich`,
+which also suggested and auto-fired Redaction on a legal question about anonymising court decisions;
+the Sie-phrases caught none. The third gained one more request (through `pseudonymisiert`) and three
+new wrong suggestions: a legal question and two questions about a selected document ("Wurden die Daten
+in der Studie pseudonymisiert oder anonymisiert?"), one of which it auto-fired. Real requests rarely
+name "personenbezogene Daten" at all ("Namen, Personalnummern und Gehälter müssen raus", "Beteiligte
+neutralisieren"), so a co-occurrence rule (the data plus any removal word, measured report-only) reached
+only 12 of 30, with 3 new wrong suggestions and 2 harmful auto-fires. Nothing changed in the vocabulary;
+three corpus rows pin the rejected words (`adv-unkenntlich-legal-01`, `adv-pseudonymisiert-legal-01`,
+`adv-pseudonymisiert-doc-01`).
+Better recall for such requests is the §6 scale-up path (embedding-based suggestion), not more keywords.
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`
