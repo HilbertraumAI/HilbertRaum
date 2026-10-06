@@ -276,7 +276,7 @@ password recovery — are documented in
   ("Löschfristen … für sensible Daten") gets the Redact button. A removal request or a check before
   sharing that names only the topic ("Please black out all sensitive data", "bitte auf sensible Daten
   checken") gets no suggestion: pick the skill.
-  German removal requests therefore get the Redaction offer only in a few word orders ("…
+  German removal requests get the Redaction offer only in a few word orders ("…
   personenbezogenen Daten entfernen", "Lösche die personenbezogenen Daten …"): one that names only the
   data ("eine Version ohne personenbezogene Daten"), uses another verb, or another form of these verbs
   ("Entfernen Sie …", "Bitte personenbezogene Daten löschen.") gets none, so pick the skill yourself.
