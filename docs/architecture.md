@@ -6182,8 +6182,24 @@ name "personenbezogene Daten" at all ("Namen, Personalnummern und Gehälter müs
 neutralisieren"), so a co-occurrence rule (the data plus any removal word, measured report-only) reached
 only 12 of 30, with 3 new wrong suggestions and 2 harmful auto-fires. Nothing changed in the vocabulary;
 three corpus rows pin the rejected words (`adv-unkenntlich-legal-01`, `adv-pseudonymisiert-legal-01`,
-`adv-pseudonymisiert-doc-01`).
-Better recall for such requests is the §6 scale-up path (embedding-based suggestion), not more keywords.
+`adv-pseudonymisiert-doc-01`). Better recall for such requests is the §6 scale-up path
+(embedding-based suggestion), not more keywords.
+
+**#603: German "can I send this?" questions stay a limit of keyword suggestion too (owner decision
+2026-10-06).** The same protocol tested three word lists for Share-Safe Review: seven nominalised
+infinitives ("zum Teilen", "zum Weiterleiten", "zum Versenden", …, the only phrases that caught anything
+on the #608 set), plus 30 permission phrases ("darf ich das …", "kann ich das …", "das so …" with ten
+sending verbs), plus five safety words (`bedenkenlos`, `unbedenklich`, `verschickbar`, `versendbar`,
+`weiterleitbar`). The set held 90 fresh German messages: 30 questions whether a selected document can
+be passed on as it is, 20 sending tasks already decided, 20 legal questions about passing on
+information and 20 questions about a document where sending is the topic; labeller agreement 94%. Both
+labellers want Share-Safe on 21 of the 30 sharing questions; today it is offered on 1 (through
+"Metadaten"). No list reached the gate of 3 more right answers: the first two added none, the safety
+words 2 (with no wrong suggestion). People ask "Geht das so raus?", "Ist der Entwurf reif für die
+Gegenanwältin?", "Spricht was dagegen?", and when a sending verb appears, the recipient sits inside it
+("Kann ich das so an den Mandanten schicken?"), so no contiguous phrase matches. A co-occurrence rule (a
+sending word plus a permission word, measured report-only) added 1 and made 7 wrong suggestions, on
+legal questions and sending tasks. Nothing changed; the route to better recall is the same §6 path.
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in
 `shared/skill-manifest.ts` (only boolean `true` opts in; absent/false leaves `manifest_json`

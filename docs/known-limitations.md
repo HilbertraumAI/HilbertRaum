@@ -277,7 +277,10 @@ password recovery — are documented in
   data ("eine Version ohne personenbezogene Daten"), uses another verb, or another form of these verbs
   ("Entfernen Sie …", "Bitte personenbezogene Daten löschen.") gets none, so pick the skill yourself.
   This is a lasting limit of keyword suggestion, not a gap in a list: a blind evaluation (#602) found
-  no German removal words that catch more requests without also firing on legal questions.
+  no German removal words that catch more requests without also firing on legal questions. Share-Safe
+  Review is likewise rarely suggested for German "can I send this?" questions ("Geht das so raus?",
+  "Kann ich das so an den Mandanten schicken?"); a second blind evaluation (#603) found no phrase list
+  that catches them, so pick the skill yourself there too.
 - **A skill picked in the composer applies PER-TURN, is visible, and is reversible (Skills U3, audit
   §4.3 / ux-6).** Before U3 every picker pick — including accepting a one-off suggestion — was silently
   written to the conversation's persisted default (`active_skill_id`), so a pick made many turns ago
