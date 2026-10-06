@@ -351,7 +351,8 @@ export function isChatStreamError(err: unknown): boolean {
  *     re-calibrate if that cap changes, since one event comes per batch: one 2,015-token batch took
  *     up to 414 s for the 9B on the i7-8550U laptop in power-saver mode (`eval/results/hardware/
  *     i7-8550u-uhd-620-shared-8gb-laptop-16gb/leg0-*`), ~100 s on an i7-8700; later batches of a
- *     long prompt run slower than the first. The owner set 7 min.
+ *     long prompt run slower than the first. The owner set 10 min (first 7, raised once those two
+ *     facts were weighed: 7 min sat at the slowest batch measured, ≈421 s for a full one).
  */
 export interface IdleWatchdog {
   /** Max silence before the first chunk: no bytes at all, pings included (the process clock, #598). */
@@ -362,7 +363,7 @@ export interface IdleWatchdog {
   streamMs: number
 }
 const PREFILL_IDLE_MS = 120_000
-const PROGRESS_IDLE_MS = 420_000
+const PROGRESS_IDLE_MS = 600_000
 const STREAM_IDLE_MS = 30_000
 const DEFAULT_IDLE: IdleWatchdog = {
   prefillMs: PREFILL_IDLE_MS,

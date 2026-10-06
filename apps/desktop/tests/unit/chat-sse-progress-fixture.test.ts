@@ -96,14 +96,14 @@ describe('readChatSSE on the captured b11146 prompt-progress transcripts (#598)'
     expect(r.out.join('')).toBe('There are 100 distinct words in the given list.')
   })
 
-  it('the captured wedge ends 7 min after its last progress event although the pings keep coming', async () => {
+  it('the captured wedge ends 10 min after its last progress event although the pings keep coming', async () => {
     const lastProgress = Math.max(...reads(WEDGE).filter((r) => r.bytes.includes('"prompt_progress"')).map((r) => r.at))
     expect(lastProgress).toBeLessThan(60_000) // the first batch's event; the thread was suspended right after it
-    const r = await replay(WEDGE, lastProgress + 419_999)
+    const r = await replay(WEDGE, lastProgress + 599_999)
     expect(r.outcome()).toBe('pending')
     await r.advance(1)
     expect(isRuntimeUnresponsiveError(r.outcome())).toBe(true) // ⇒ main.chat.runtimeUnresponsive / local API 502
-    expect((r.outcome() as Error).message).toContain('no prompt progress for 420000ms')
+    expect((r.outcome() as Error).message).toContain('no prompt progress for 600000ms')
     expect(r.out).toEqual([])
   })
 })

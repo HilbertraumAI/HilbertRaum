@@ -30,8 +30,8 @@
 > named in §5's branch analysis still carry unmerged work.
 _2026-10-06 — **#598 — a prefill wedged behind pings ends; the header wait is 180 s (`fix/598-prefill-liveness`).** Both pins ping every ~30 s (b9849 too — #594's
 record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `return_progress` on every chat request and two prefill clocks: any byte (120 s) and a
-`prompt_progress` event (7 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
-CB-5 "#598 amendment". Open: 7 min ≈ the slowest batch measured (414 s, i7-8550U); translation has no watchdog (#605); #599, #600._
+`prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
+CB-5 "#598 amendment". Open: a 27B/31B on CPU can exceed 10 min per batch; translation has no watchdog (#605); #599, #600._
 _2026-10-05 — **#594 — a chat request whose sidecar never sends its response headers ends after 120 s (`fix/594-chat-header-timeout`).** Both pins send the headers
 when the slot starts, before prefill (upstream `is_begin`; b11146 measured: 14 ms, first token 320.9 s for a CPU 9B); the wait used to end only at undici's 300 s
 (304.8 s in Electron 43.7.7, a raw "fetch failed"), holding every busy signal. `LlamaRuntime.chatStream` gives it CB-5's 120 s (owner); b11146's 30 s SSE pings

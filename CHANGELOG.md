@@ -127,7 +127,7 @@ from its first public `1.0.0` release onward.
 - **A chat whose AI model gets stuck while it reads a long question now ends with a clear message.**
   The AI engine keeps signalling that it is alive while it works through a question, even when the
   model itself has stopped, so such a chat could wait forever. The app now watches the model's own
-  progress through the question: when there is none for seven minutes, the chat ends with "The AI
+  progress through the question: when there is none for ten minutes, the chat ends with "The AI
   model stopped responding". If the engine goes completely silent instead, the chat ends after two
   minutes. A long question on a slow computer still gets the time it needs as long as the model keeps
   working through it (#598).

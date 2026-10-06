@@ -4,61 +4,82 @@
 : instruct-q4, a 6,381-token prompt, i7-8700 (DesktopDiT), 2026-10-06. Right after the first batch's progress event the
 : busiest llama-server thread was suspended (SuspendThread on one compute thread, never the process): the compute loop
 : stopped while the HTTP thread kept writing a `:` ping every ~30 s (an earlier run of this repro: /health 200 in 62 ms
-: during the wedge). The capture ends at +520 s with the server still wedged; it was then resumed and killed.
+: during the wedge). The capture ends at +730 s with the server still wedged; it was then resumed and killed.
 : Each `: +<ms> ms` line is the arrival time of the socket read below it (ms after the request was sent; de-chunked,
 : otherwise verbatim). The model path was scrubbed to <drive>/…; nothing else was edited. These colon lines are SSE
 : comments (the reader ignores them), like the server's own `:` pings.
-: +18 ms
-data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791239832,"id":"chatcmpl-YVWAnMXXVDZCi0N6jvzOueSyz775UGFv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b11146-7fe450e19","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":0,"time_ms":0}}
+: +23 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791245525,"id":"chatcmpl-nDsUGKXkpugMoNhcukmJnma28qtbuCWq","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b11146-7fe450e19","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":0,"time_ms":0}}
 
-: +30269 ms
+: +30276 ms
 :
 
-: +41833 ms
-data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791239874,"id":"chatcmpl-YVWAnMXXVDZCi0N6jvzOueSyz775UGFv","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b11146-7fe450e19","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":2048,"time_ms":41815}}
+: +44427 ms
+data: {"choices":[{"finish_reason":null,"index":0,"delta":{"role":"assistant","content":null}}],"created":1791245570,"id":"chatcmpl-nDsUGKXkpugMoNhcukmJnma28qtbuCWq","model":"<drive>/models/chat/qwen3-4b-instruct-q4.gguf","system_fingerprint":"b11146-7fe450e19","object":"chat.completion.chunk","prompt_progress":{"total":6381,"cache":0,"processed":2048,"time_ms":44405}}
 
-: +72099 ms
+: +74647 ms
 :
 
-: +102311 ms
+: +104885 ms
 :
 
-: +132534 ms
+: +135088 ms
 :
 
-: +162747 ms
+: +165332 ms
 :
 
-: +192994 ms
+: +195585 ms
 :
 
-: +223206 ms
+: +225843 ms
 :
 
-: +253447 ms
+: +256084 ms
 :
 
-: +283705 ms
+: +286341 ms
 :
 
-: +313946 ms
+: +316565 ms
 :
 
-: +344152 ms
+: +346799 ms
 :
 
-: +374400 ms
+: +377083 ms
 :
 
-: +404602 ms
+: +407315 ms
 :
 
-: +434809 ms
+: +437536 ms
 :
 
-: +464994 ms
+: +467727 ms
 :
 
-: +495269 ms
+: +497947 ms
+:
+
+: +528143 ms
+:
+
+: +558320 ms
+:
+
+: +588593 ms
+:
+
+: +618780 ms
+:
+
+: +649035 ms
+:
+
+: +679257 ms
+:
+
+: +709519 ms
 :
 

@@ -1470,11 +1470,11 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       clocks on the monotonic waiting time (the #594 accounting):
       - the **process clock** (`prefillMs`, 120 s): any byte re-arms it, pings included. A frozen
         process still ends here, as before;
-      - the **compute clock** (`progressMs`, **7 min**, owner call): only a progress event or model
+      - the **compute clock** (`progressMs`, **10 min**, owner call; first 7, raised once the calibration below was weighed): only a progress event or model
         output re-arms it. It runs once the server has sent a progress event, so a server that sends
         none keeps the pre-#598 rule.
       - The read waits for whichever runs out first, and the error names the clock
-        (`no prompt progress for 420000ms`). After the first chunk nothing changed.
+        (`no prompt progress for 600000ms`). After the first chunk nothing changed.
       - `LlamaRuntime.chatStream` sends `return_progress: true` on every chat request. The headers
         get their own `HEADER_WAIT_MS`, **180 s** (owner call), no longer CB-5's 120 s.
       - Vision shares the reader but does **not** ask for progress events. With none arriving it keeps
@@ -1484,9 +1484,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - The local API re-serialises tokens, so its clients never see the progress events.
 
       **Accepted (owner):**
-      - 7 min leaves almost no room over the slowest batch measured: 414 s for 2,015 tokens is about
-        421 s for a full 2048-token batch, and later batches are slower. So a long prompt on that
-        laptop in power-saver mode can be cut. It is a one-line constant (`PROGRESS_IDLE_MS`).
+      - 10 min sits about 40 % above the slowest batch measured (414 s for 2,015 tokens, about 421 s for
+        a full 2048-token batch, later batches slower). A bigger model on CPU (the 27B/31B class) can
+        still exceed it per batch. It is a one-line constant (`PROGRESS_IDLE_MS`).
       - A re-ask right after a Stop still waits for the cancelled request's batch, now for up to
         180 s.
 
@@ -1497,16 +1497,17 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - A 3.4K-token question answered after 214.7 s, past the old 120 s.
       - Next, the busiest llama-server thread was suspended 6 s into the same kind of prefill. During
         the stall `/health` answered 200 in 7 ms.
-      - The chat ended 420.2 s after it was sent with `main.chat.runtimeUnresponsive`. Its last
-        progress event was the 0 % one at slot start.
-      - After the thread was resumed, the next chat answered in 32.6 s. It first waited for the
+      - The chat ended with `main.chat.runtimeUnresponsive` exactly one compute budget after its
+        last progress event (the 0 % one at slot start): 420.2 s with the first 7-minute value, and
+        600.0 s with the final 10-minute one.
+      - After the thread was resumed, the next chat answered in 32.2–32.6 s. It first waited for the
         stalled batch to finish, inside the 180 s header budget.
 
       **Tests.**
       - `chat-sse-progress-fixture.test.ts` replays two real b11146 captures on their recorded
         timelines (`chat-sse-progress-b11146.txt`, `chat-sse-progress-stall-b11146.txt`).
         - A legitimate 187 s, four-batch CPU prefill answers.
-        - The captured wedge ends exactly 7 min after its last progress event, with the pings still
+        - The captured wedge ends exactly 10 min after its last progress event, with the pings still
           coming. This one fails on the pre-#598 code.
         - A b9849 capture of the same request (`chat-sse-progress-b9849.txt`, truncated after the
           first token) pins that the older pin sends the same per-batch events, so the compute clock
@@ -8535,7 +8536,7 @@ Per-finding disposition (fixed → session@commit / deferred·declined·accepted
 | **CB-2** | LOW | S5 `b38f819` | **fixed** — `withRegenerateGuard` restores the prior reply on an unpersisted-empty resolve (`content === ''`, the Stop-before-first-token path), re-inserting the original id/timestamp and returning it via `getLatestMessage` so `chat:done` re-shows the answer. Composes with CB-4. |
 | **CB-3** | LOW | S5 `b38f819` | **fixed** — compaction trigger capped at `min(COMPACT_THRESHOLD·window, window − reserve)` so small (2048/4096) windows compact before L1 drops history (≥6827 keeps `0.85·window` byte-identical); pre-pass estimate folds in the real summary-pair + system-prompt + a caller-supplied `reservedTokens` (fence built before compaction). |
 | **CB-4** | LOW | S5 `b38f819` | **fixed** — completed, non-aborted, **zero-token** stream throws `EmptyCompletionError` (friendly-mapped) instead of a silent blank; abort-before-first-token and all-`<think>`/fence-echo empties stay the benign silent-empty (`receivedAnyToken`/`caughtAbort` narrowing). |
-| **CB-5** | LOW | S5 `b38f819` | **fixed** — `readChatSSE` races each read against a two-phase idle watchdog (`PREFILL_IDLE_MS` 120 s → `STREAM_IDLE_MS` 30 s; reasoning deltas reset it) → `RuntimeUnresponsiveError` on a hung sidecar; a user Stop still wins first. Post-response streaming only — until #594 (2026-10-05) gave the response headers the same 120 s and stopped b11146's SSE pings from re-arming the stream budget (the CB-5 bullet's #594 amendment); #598 (2026-10-06) then gave the headers 180 s and the prefill a progress-based compute clock (7 min per batch) beside the 120 s any-byte clock, because both pins ping while the compute loop is wedged (the #598 amendment). |
+| **CB-5** | LOW | S5 `b38f819` | **fixed** — `readChatSSE` races each read against a two-phase idle watchdog (`PREFILL_IDLE_MS` 120 s → `STREAM_IDLE_MS` 30 s; reasoning deltas reset it) → `RuntimeUnresponsiveError` on a hung sidecar; a user Stop still wins first. Post-response streaming only — until #594 (2026-10-05) gave the response headers the same 120 s and stopped b11146's SSE pings from re-arming the stream budget (the CB-5 bullet's #594 amendment); #598 (2026-10-06) then gave the headers 180 s and the prefill a progress-based compute clock (10 min per batch) beside the 120 s any-byte clock, because both pins ping while the compute loop is wedged (the #598 amendment). |
 | **CB-6** | LOW | S4 `b5c46cb` | **fixed** — `buildTurnFence` sizes the fence via a new `LIMIT 1` `getLatestMessage` twin instead of paging the whole history; `generateAssistantMessage` reads `getSettings` once (threaded `compactionOn` default param). |
 | **CB-7** | LOW | S5 (deferred) | **DEFERRED — decision #1.** Per-token IPC batching NOT implemented: the renderer already coalesces re-renders (the flush timer), the residual is a structured-clone of a short string, and batching would add a lifecycle seam to the safety-sensitive stream teardown for an unmeasured gain. Revisit only if profiling shows contextBridge volume is a real bottleneck. Docs note in the streaming record. |
 | **CR-1** | MED | S2 `6e89879` | **fixed** — draft restored on a pre-persist send failure (`stream` returns whether the user turn persisted; `restoreDraft` = `setInput((cur) => cur === '' ? text : cur)`, newer in-flight typing wins), never on a stopped-but-persisted turn. |

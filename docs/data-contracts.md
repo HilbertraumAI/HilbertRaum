@@ -372,7 +372,7 @@ both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invali
 limits: headersTimeout 10 s, requestTimeout DISABLED (CPU generations exceed 300 s; watchdogs +
 a 15 s SSE drain-timeout reclaim wedged slots — the runtime's CB-5 watchdogs end a wedged
 sidecar with 502 `runtime_unresponsive`: no headers in 180 s, then before the first token 120 s
-of silence or 7 min without prompt progress, then 30 s without text; `local-api.md` §6.7, #598), body-idle 30 s (body phase only),
+of silence or 10 min without prompt progress, then 30 s without text; `local-api.md` §6.7, #598), body-idle 30 s (body phase only),
 maxConnections 16. Lifecycle: `ctx.localApi` built in initBackend; started ONLY from the three
 post-unlock seams via `maybeStartLocalApi` when policy ∧ setting permit (D3/D7) — both seams
 delegate to `applyLocalApiSettings` (one gate); stopped first in `runLockTeardown` (best-effort,
