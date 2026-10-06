@@ -27,6 +27,16 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-06 — the closed 2026-10-02 #554 / #555 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #581 entry). It was
+closed with nothing open; its record is unchanged: `architecture.md` DEP-6 §8 (#549 bullet). Citations of the form
+"BUILD_STATE 2026-10-02 #554 / #555 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-02 — **#554 / #555 — two missed aborts across an await (`fix/554-555-missed-abort`, PR #556).** `KiwixServer.ensureStarted` re-checks the signal
+after superseding `stop()`; `acquireForChat` re-checks it after the handoff and releases the slot itself. Each test lands the abort in the gap by microtask
+ordering, failed on the old code and passes now. No user-visible change, so no CHANGELOG. Record: `architecture.md` DEP-6 §8 (#549 bullet)._
+
 ## 2026-10-06 — the closed 2026-10-05 #585 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #613 entry). It was

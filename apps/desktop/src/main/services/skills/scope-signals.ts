@@ -1,5 +1,5 @@
 import type { Db } from '../db'
-import { prepareCached } from '../db'
+import { corpusGeneration } from '../db'
 import type { RetrievalScope } from '../../../shared/types'
 import { resolveScope } from '../collections'
 import { documentsInScope } from './scope-documents'
@@ -31,17 +31,18 @@ export interface DocSignalOptions {
 // scope a scan of every indexed row + an unindexed `created_at` sort + a JS marshal of every row — on
 // each keystroke pause even though the corpus is unchanged between imports. A tiny resident cache
 // (single entry per Db — the resident-cache idiom, WeakMap-scoped so it GCs with the connection and
-// never crosses workspaces or leaks between tests) keyed by the resolved SCOPE plus a cheap corpus
-// SIGNATURE returns the identical projected signals on a hit. The signature is re-checked each call and
-// changes on the events that change the set: `(COUNT, MAX(rowid))` over the `indexed` documents catches
-// import / delete / index-status transitions, and `(COUNT, MAX(rowid))` over `document_collections`
-// catches membership add/remove (so a project- or Library-scoped conversation invalidates when a doc is
-// moved in/out). What it does NOT catch — a title rename or archive toggle of an EXISTING in-set doc —
-// serves a brief stale title in an inert, user-chosen offer until the next real change, which is
-// harmless. The AUTO-FIRE path (`explicitDocumentsOnly`) is NEVER cached — it is narrowed to explicit
-// ids (already cheap) and must read live. The cache sits STRICTLY ABOVE `documentsInScope`; that shared
-// helper's semantics are untouched (audit caution: never memoize inside it — ~13 call sites across
-// three layers depend on its live, deterministic result).
+// never crosses workspaces or leaks between tests) keyed by the resolved SCOPE plus the connection's
+// corpus GENERATION (`corpusGeneration` in db.ts) returns the identical projected signals on a hit. The
+// generation is read each call and moves on every write that can change the set or its signals — an
+// import, a delete, an index-status change, an archive toggle, a membership add/remove — because TEMP
+// triggers on `documents` and `document_collections` count them, whichever code path wrote. #581: the key
+// was a `(COUNT, MAX(rowid))` signature over the `indexed` documents and over `document_collections`. Both
+// are rowid tables, so deleting the newest row and adding another reused the freed rowid and the signature
+// repeated (a Library chat kept the deleted document's title and missed the new one); an archive toggle or
+// a status swap below the highest row never moved it at all. The AUTO-FIRE path (`explicitDocumentsOnly`)
+// is NEVER cached — it is narrowed to explicit ids (already cheap) and must read live. The cache sits
+// STRICTLY ABOVE `documentsInScope`; that shared helper's semantics are untouched (audit caution: never
+// memoize inside it — ~13 call sites across three layers depend on its live, deterministic result).
 interface ResidentSignals {
   key: string
   titles: string[]
@@ -56,28 +57,14 @@ export function __suggestSignalMaterializations(db: Db): number {
   return materializationsByDb.get(db) ?? 0
 }
 
-/** Cheap corpus signature (F-29): `indexed`-documents `(COUNT, MAX(rowid))` ∥ `document_collections`
- *  `(COUNT, MAX(rowid))` ∥ `includeArchived` — changes on every import/delete/index/membership move. */
-function corpusSignature(db: Db, includeArchived: boolean): string {
-  const docs = prepareCached(
-    db,
-    `SELECT COUNT(*) AS n, MAX(rowid) AS m FROM documents WHERE status = 'indexed'`
-  ).get() as { n: number; m: number | null }
-  const mem = prepareCached(
-    db,
-    `SELECT COUNT(*) AS n, MAX(rowid) AS m FROM document_collections`
-  ).get() as { n: number; m: number | null }
-  return `${includeArchived ? 1 : 0}|${docs.n}|${docs.m ?? 0}|${mem.n}|${mem.m ?? 0}`
-}
-
-/** Deterministic fingerprint of a resolved scope's id-union (order-independent). Carries the
- *  #301 P4 deny-all bit too: a documents-off scope resolves to the same null ids as the explicit
- *  whole-corpus scope, and without the bit the per-Db memo would hand a documents-off chat the
+/** Deterministic fingerprint of a resolved scope's id-union (order-independent) and its archive bit.
+ *  Carries the #301 P4 deny-all bit too: a documents-off scope resolves to the same null ids as the
+ *  explicit whole-corpus scope, and without the bit the per-Db memo would hand a documents-off chat the
  *  whole-corpus title/MIME signals (retrieval itself is fail-closed through `buildScopeFilter`). */
 function scopeFingerprint(scope: RetrievalScope): string {
   const c = [...(scope.collectionIds ?? [])].sort().join(',')
   const d = [...(scope.documentIds ?? [])].sort().join(',')
-  return `c:${c}|d:${d}|n:${scope.noDocuments ? 1 : 0}`
+  return `c:${c}|d:${d}|a:${scope.includeArchived ? 1 : 0}|n:${scope.noDocuments ? 1 : 0}`
 }
 
 /** Project the in-scope indexed documents to their filename + MIME signals (empty-tolerant). */
@@ -116,9 +103,13 @@ export function inScopeDocSignals(
     scope = { ...scope, collectionIds: null }
     return projectSignals(db, scope)
   }
+  // A rollback rewinds the generation with the data, so a later write could land on the same number with
+  // different content: a read inside an open transaction is answered live and never memoized. (No
+  // transaction spans an await today, so no IPC read can land inside one; this keeps it true by construction.)
+  if (db.isTransaction) return projectSignals(db, scope)
   // F-29: the SUGGESTION path re-runs per keystroke pause over an unchanged corpus — memoize it keyed by
-  // the resolved scope + a cheap corpus signature (the resident-cache idiom). See the header note.
-  const key = `${scopeFingerprint(scope)}|${corpusSignature(db, scope.includeArchived ?? false)}`
+  // the resolved scope + the corpus generation (the resident-cache idiom). See the header note.
+  const key = `${scopeFingerprint(scope)}|g:${corpusGeneration(db)}`
   const hit = residentByDb.get(db)
   if (hit && hit.key === key) return { titles: hit.titles, mimeTypes: hit.mimeTypes }
   const signals = projectSignals(db, scope)

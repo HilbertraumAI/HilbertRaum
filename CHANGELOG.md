@@ -212,6 +212,11 @@ from its first public `1.0.0` release onward.
   a word ("Anna Berg" and "Berg GmbH"). Now every part of the text that any confirmed suggestion
   covers is hidden, in the `.txt` and the Word copy alike, whatever order the suggestions came in.
   Redaction stays AI-assisted best-effort: review the copy before sharing it (#580).
+- **The skill the chat suggests now keeps up with your documents.** After you deleted your newest
+  document and added another, the suggestion could still go by the deleted document and miss the new
+  one, until some later change to your documents. Archiving a document, or taking one out of a
+  project and adding another, could leave it out of date the same way. It now follows every change.
+  A suggestion is only ever an offer: nothing is applied until you pick it (#581).
 - **Asking to "remove all personal data" now suggests Document Redaction.** The chat offered the
   skill for "remove personal data" but not for the same request with "all" in it, so a question
   like "Remove all personal data for GDPR compliance." got no suggestion (#583).

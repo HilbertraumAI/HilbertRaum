@@ -16,6 +16,9 @@ import { buildScopeFilter } from '../retrieval-scope'
 // deterministic `ORDER BY created_at, id` is LOAD-BEARING for the run path
 // (`resolveInScopeDocumentIds[0]` is the default single-document run target, U-1/U-2) and harmlessly
 // stable for everyone else.
+//
+// #581: a `documents` column newly read here or in `buildScopeFilter` also joins the corpus-generation
+// trigger list in db.ts (`CORPUS_GENERATION`), or the suggestion memo above this query goes stale.
 
 /** One in-scope document. `title`/`mimeType` are content-adjacent — callers project only what they use. */
 export interface ScopeDocument {
