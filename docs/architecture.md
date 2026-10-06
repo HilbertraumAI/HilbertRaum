@@ -6095,7 +6095,7 @@ deleted at S13 close — text in git history) holds the baseline tables; this is
 **The gate (S13a — harness + corpus + baseline).** Auto-fire ships only after an **offline,
 deterministic** harness proves a precision bar on a labelled corpus — a false fire (shaping an answer
 the user didn't ask for) is the costly event; a miss just falls back to the tap-offer. A synthetic,
-no-user-data corpus of 151 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
+no-user-data corpus of 152 labelled turns (`tests/fixtures/skill-triggers/corpus.json`) is scored
 through the **production** `suggestSkillsForTurn` / `resolveAutoFireSkill` on a real temporary
 database with the committed app skills reconciled (`tests/eval/skill-triggers.ts` + `.test.ts`),
 reporting precision/recall + a confusion matrix. Still no model and no network. The
@@ -6125,7 +6125,7 @@ a meeting still offers meeting-protocol, the precision ceiling of a one-keyword 
 the bare "personenbezogene Daten" offered on until #608; #602 found no safe keyword for them, see
 below). The GDPR row
 `tp-redaction-en-02` left the list in #583, when "remove all personal data" joined the vocabulary.
-Measured on the 151 rows: suggestion precision 99.1%, recall 98.1% (105 correct, 1 wrong, 2
+Measured on the 152 rows: suggestion precision 99.1%, recall 98.1% (105 correct, 1 wrong, 2
 missed), confusion set 0 wrong / 0 missed. The
 printout (`formatReport`, at the start of the S13b gate) shows the two production paths: `suggestion`
 (all rows) and `auto-fire`, the latter twice, once over the gate set and once with the accepted
@@ -6173,13 +6173,16 @@ participles and adjectives (`anonymisierte`, `pseudonymisiert`, …). The set he
 messages: 30 removal requests, 20 requests to remove something that is not personal data, 20 legal
 questions and 20 questions about a selected document; labeller agreement 94% / 92%. Today Redaction is
 offered on 6 of the 30 requests. No list passed the gates (no new wrong suggestion, no new harmful
-auto-fire, at least 3 more requests). The best gained 3, all through `unkenntlich`, which also
-suggested and auto-fired Redaction on a legal question about anonymising court decisions; the
-Sie-phrases caught none; the adjective forms landed on legal questions. Real requests rarely name
-"personenbezogene Daten" at all ("Namen, Personalnummern und Gehälter müssen raus", "Beteiligte
+auto-fire, at least 3 more requests). The first two lists gained 3 requests, all through `unkenntlich`,
+which also suggested and auto-fired Redaction on a legal question about anonymising court decisions;
+the Sie-phrases caught none. The third gained one more request (through `pseudonymisiert`) and three
+new wrong suggestions: a legal question and two questions about a selected document ("Wurden die Daten
+in der Studie pseudonymisiert oder anonymisiert?"), one of which it auto-fired. Real requests rarely
+name "personenbezogene Daten" at all ("Namen, Personalnummern und Gehälter müssen raus", "Beteiligte
 neutralisieren"), so a co-occurrence rule (the data plus any removal word, measured report-only) reached
 only 12 of 30, with 3 new wrong suggestions and 2 harmful auto-fires. Nothing changed in the vocabulary;
-two corpus rows pin the rejected words (`adv-unkenntlich-legal-01`, `adv-pseudonymisiert-legal-01`).
+three corpus rows pin the rejected words (`adv-unkenntlich-legal-01`, `adv-pseudonymisiert-legal-01`,
+`adv-pseudonymisiert-doc-01`).
 Better recall for such requests is the §6 scale-up path (embedding-based suggestion), not more keywords.
 
 **The mechanics (S13b).** `triggers.autoFire?: boolean` is additive + lenient in

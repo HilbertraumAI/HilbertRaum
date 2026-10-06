@@ -1125,7 +1125,14 @@
       "question": "Sind pseudonymisierte Daten rechtlich gesehen noch personenbezogen?",
       "inScopeDocs": [],
       "expected": "none",
-      "note": "#602 — fresh blind set (both labellers: none). A legal question with an adjective form: the participle/adjective forms (pseudonymisierte, anonymisierte, …) were measured and rejected, because they offer Redaction on legal questions."
+      "note": "#602 — fresh blind set (both labellers: none). A legal question with an adjective form: the participle/adjective forms (pseudonymisierte, anonymisierte, …) were measured and rejected, because they offer Redaction on legal questions and on questions about a document."
+    },
+    {
+      "id": "adv-pseudonymisiert-doc-01",
+      "question": "Wurden die Daten in der Studie pseudonymisiert oder anonymisiert? Was steht da im Methodenteil?",
+      "inScopeDocs": [{ "title": "studie_pflegeheime_auswertung.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#602 — fresh blind set (both labellers: none, auto-fire harmful). A question about what a selected study says: the participle forms (pseudonymisiert, anonymisiert) would offer Redaction and auto-fire its count scan here, so they were rejected."
     }
   ]
 }
