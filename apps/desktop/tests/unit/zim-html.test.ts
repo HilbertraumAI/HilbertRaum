@@ -286,6 +286,15 @@ describe('zimArticleToSegments — figure captions', () => {
     expect(textOf(html)).toContain('Caption: A caption with bold text & more')
   })
 
+  it('a figcaption marks sup/sub and drops citation brackets like prose does ' +
+    '(issue #488: a caption still read H2O and m2)', () => {
+    const html =
+      '<figure><img src="x.jpg"><figcaption>H<sub>2</sub>O auf 25 m<sup>2</sup>' +
+      '<sup class="mw-ref reference"><a href="#n1"><sup>n</sup>[1]</a></sup>, Fußnote <sup>a</sup>' +
+      '</figcaption></figure>'
+    expect(textOf(html)).toBe('Caption: H_2O auf 25 m^2, Fußnote a')
+  })
+
   it('a dropped subtree (svg) nested inside an open figcaption does not leak its text into the caption', () => {
     const html =
       '<figure><figcaption>before <svg><text>svg-leak-must-not-appear</text></svg> after</figcaption></figure>'

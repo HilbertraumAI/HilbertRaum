@@ -3452,3 +3452,6 @@ reports and phase plans were working papers; their full text lives in git histor
   delivered segment, up from 0 before the fix; the remaining 7 sit inside a
   Wikivoyage image-gallery grid built as a `<table>` of `<figure>` cells —
   the KEPT-TABLE subtree-skip path documented above, unchanged by design.
+  Since 2026-10-07 a caption's superscripts, subscripts and citation
+  brackets follow the prose convention (#488) too: before, a caption read
+  `H2O` and `m2` and kept `[2]`, where the text around it read `H_2O`.

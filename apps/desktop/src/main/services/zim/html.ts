@@ -700,6 +700,18 @@ export function* zimArticleSlices(
   let figureCaptionDepth = 0
   let figureInnerSkipDepth = 0
   let captionBuf = ''
+  // The caption's own copy of the sup/sub state (#488's convention, the one `emit` and
+  // `tables.ts` apply). The capture appends to `captionBuf` directly, never through `emit`, so it
+  // arms, resolves and disarms its own marker against the caption's last character, and skips
+  // its own `mw-ref` citation brackets. Without it a caption read `H2O` where the prose beside
+  // it reads `H_2O`.
+  let captionPendingMark: string | null = null
+  let captionRefSkipDepth = 0
+  const resetCaption = (): void => {
+    captionBuf = ''
+    captionPendingMark = null
+    captionRefSkipDepth = 0
+  }
   // Mirrors tables.ts's TABLE_SEGMENT_MAX_CHARS (1500) by value, not by import — html.ts does
   // not depend on tables.ts (the dependency runs the other way).
   const FIGURE_CAPTION_MAX_CHARS = 1500
@@ -797,7 +809,15 @@ export function* zimArticleSlices(
       // figure subtree stays dropped. Not piece-wise like the ordinary path above — a caption
       // is short by construction (capped at flush, below) — so one decode call is enough,
       // exactly like `headingBuf`'s own whole-string accumulation via `emit`.
-      captionBuf += decodeEntities(input.slice(textStart, upto))
+      if (captionRefSkipDepth === 0) {
+        let text = decodeEntities(input.slice(textStart, upto))
+        if (text.length > 0 && captionPendingMark !== null) {
+          // Resolved by the first text after the open tag and consumed either way, as in `emit`.
+          if (shouldMark(lastCharOf(captionBuf), text)) text = captionPendingMark + text
+          captionPendingMark = null
+        }
+        captionBuf += text
+      }
     }
     textStart = upto
   }
@@ -1030,7 +1050,7 @@ export function* zimArticleSlices(
             // (the same whole-string helper ordinary text uses) and cap — mirrors the
             // kept-table path's own `Caption: ` line and its TABLE_SEGMENT_MAX_CHARS cap.
             const tidied = tidyWhole(captionBuf)
-            captionBuf = ''
+            resetCaption()
             const capped =
               tidied.length <= FIGURE_CAPTION_MAX_CHARS ? tidied : capCaptionChars(tidied, FIGURE_CAPTION_MAX_CHARS)
             if (capped.length > 0) {
@@ -1044,13 +1064,33 @@ export function* zimArticleSlices(
         }
         continue
       }
+      if ((name === 'sup' || name === 'sub') && skipIsFigure && figureCaptionDepth > 0 && figureInnerSkipDepth === 0) {
+        // Inside an open caption: the prose branch's sup/sub handling below, on the caption's
+        // own state. While a citation bracket is skipped, every nested `<sup>` is counted on
+        // open and close, so a plain one inside it cannot end the skip early.
+        if (captionRefSkipDepth > 0) {
+          if (name === 'sup' && !selfClosing) captionRefSkipDepth += isClose ? -1 : 1
+          continue
+        }
+        if (isClose) {
+          captionPendingMark = null
+        } else if (!selfClosing) {
+          if (name === 'sup' && REF_SUP_CLASS_RE.test(attrValue(attrs, 'class') ?? '')) {
+            captionPendingMark = null
+            captionRefSkipDepth = 1
+          } else {
+            captionPendingMark = name === 'sup' ? SUP_MARK : SUB_MARK
+          }
+        }
+        continue
+      }
       if (SKIP_SUBTREE.has(name) && !selfClosing) {
         skipDepth += isClose ? -1 : 1
         if (skipDepth === 0) {
           skipIsFigure = false
           figureCaptionDepth = 0
           figureInnerSkipDepth = 0
-          captionBuf = ''
+          resetCaption()
         } else if (skipIsFigure && name !== 'figure') {
           // Counts only the non-`figure` skipped subtrees (svg/template/nav/noscript/head) open
           // INSIDE the figure, incremented/decremented on their own opens/closes and never
