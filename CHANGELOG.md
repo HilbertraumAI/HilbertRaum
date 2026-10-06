@@ -149,6 +149,15 @@ from its first public `1.0.0` release onward.
   **Lock now** the save dialog even opened over the lock screen. A document edit ended with "The
   edits could not be completed". Now both say **Stopped. Nothing was saved.** A save dialog that was
   already open stays open, and saving there still saves (#606).
+- **When the AI model crashes, freezes or fails during a redaction, nothing is saved, and the run says
+  so.** Before, the redaction fell back to the simple rule-based detection and asked where to save
+  that copy, a few seconds after the crash. The names and addresses the model had already found were
+  dropped, and only after saving did the run say "no model running", while a model was running. The
+  same happened every time when parts of a document were too long for a small model's context window.
+  Now the run ends with "The AI model stopped before the redaction was finished. Nothing was saved."
+  or says the document is too long for the current model's context window and what to change. Running
+  a redaction or a document edit while a model is starting, for example right after a crash, now says
+  the model is starting and to try again in a moment (#620).
 - **When the AI model crashes in the middle of an answer, the chat says so in words.** It used to
   show "terminated" or "fetch failed". Now it says "The AI model stopped before the answer was
   finished" and what to do next (#600).

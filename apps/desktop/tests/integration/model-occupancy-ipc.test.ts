@@ -396,3 +396,31 @@ describe('a stop or switch of the chat model mid-run (#606)', () => {
     expect(existsSync(out)).toBe(false)
   })
 })
+
+// ---- #620: a model-backed run asked for while a model is starting ------------------------------
+
+describe('startSkillRun while a model is starting (#620)', () => {
+  // Before #620 the run started with no runtime: the redaction ran rule-based only and said "no model
+  // running" (its save dialog opened), the edit failed "Start a model first". Chat and document tasks
+  // already said "is starting" (#599), and #620's failure copy sends the user to run the redaction again
+  // while the crash restart is loading the model.
+  it.each([
+    ['redaction', 'redact_document'],
+    ['document-edit', 'apply_document_edits']
+  ] as const)('%s: %s is refused with the "is starting" copy, and runs once the model is up', async (skillId, tool) => {
+    let loaded!: () => void
+    const loading = new Promise<void>((r) => (loaded = r))
+    const h = await makeHarness(skillId, [tool], 'Anna Berger lives at Lindenweg 4 in Freiburg.', {
+      runtimeFactory: (opts) => ({ ...fakeRuntime(), start: () => (opts.modelId === 'm2' ? loading : Promise.resolve()) })
+    })
+    await h.runtime.stop()
+    const starting = h.runtime.start({ modelId: 'm2', modelPath: '/m2.gguf', contextTokens: 2048 })
+
+    expect(refusal(await startRun(h, tool, true))).toBe(t('en', 'main.modelStarting'))
+    expect(dialogState.calls).toBe(0)
+
+    loaded()
+    await starting
+    await pollUntilTerminal(startedHandle(await startRun(h, tool, true)))
+  })
+})

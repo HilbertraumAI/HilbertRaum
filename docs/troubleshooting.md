@@ -695,6 +695,13 @@ the saved copy before you share it. If something you expected wasn't handled:
   ("offline rule-based detection only") and those are left in — start a model on **AI Model** and run it
   again. Even with a model it can miss an unusual spelling; check the copy and, if needed, use **Document
   edit** to remove what's left.
+- **The redaction stopped and saved nothing.** If the AI model stops while it checks the document (it
+  crashed, stopped responding, or ran into an error), the run says "The AI model stopped before the
+  redaction was finished. Nothing was saved." Run it again; if the model is still restarting, the app
+  says "The AI model is starting" until it is back. If it keeps happening, restart the model on **AI
+  Model**. "Parts of this document are too long for the current model's context window" means some
+  paragraphs are too long for the model's working memory: choose a larger **context size** on **AI
+  Model**, restart the model, and run the redaction again.
 - **"Keep the city" (or similar) wasn't respected.** Say the scope in your own words when you ask
   ("remove names and street addresses, keep the city"). The app never guesses intent — it only hides what
   the model proposes within that scope, then hides each confirmed value **everywhere** it appears.

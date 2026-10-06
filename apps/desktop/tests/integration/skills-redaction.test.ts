@@ -16,9 +16,11 @@ import { readDocxTextLayer } from '../../src/main/services/export/docx-rewrite'
 import { makeDocx, otherDocxParts, docxPartText } from '../helpers/docx'
 import type { RunnableTool } from '../../src/shared/types'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../../src/main/services/runtime'
+import { ChatRequestError } from '../../src/main/services/runtime/llama'
 import { openFreshDb } from '../helpers/db-fixtures'
 import { capturingAudit } from '../helpers/audit-capture'
 import { scriptedRuntime } from '../helpers/scripted-runtime'
+import { killableRuntime } from '../helpers/killable-runtime'
 import { seedDocWithChunks as seedChunks } from '../helpers/doc-fixtures'
 import { REPO_APP_SKILLS_DIR, realAppSkillsDeps, type SkillDirs } from '../helpers/skill-fixtures'
 
@@ -402,35 +404,49 @@ describe('document-redaction — Phase 7 LLM locate pass (D73/D75/D78)', () => {
     expect(written).toContain('Jane Doe') // the name survives — the floor cannot detect it, honestly
   })
 
-  it('a model failure mid-locate degrades to the floor (still saves), never fails the whole run', async () => {
-    const db = freshDb()
-    const docId = seedDocWithChunks(db, NAME_DOC)
-    const { audit } = capturingAudit()
-    // A runtime whose stream THROWS (not an abort) — the seam degrades, it does not fail the redaction.
-    const runtime: ModelRuntime = {
-      modelId: 'mock',
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: null }),
-      // eslint-disable-next-line require-yield
-      async *chatStream() {
-        throw new Error('model crashed')
-      }
+  // #620: a model that fails DURING the locate pass is not D78's "no model" floor. Before #620 the seam fell
+  // back to the floor, dropped what the model had found and saved the copy, and the run bar then said "no
+  // model running". Real app (2026-10-06): a killed sidecar opened the save dialog within 2–4 s, a window
+  // too long for the 4B's 4,096-token context within 1.6 s.
+  const TWO_WINDOW_DOC = ['Dear Jane Doe, your appointment is confirmed.', ...Array(44).fill('No names here.'), 'Reply to Jane Doe at jane.doe@example.com.'].join('\n')
+  const crashesInWindow2 = (): ModelRuntime => {
+    const finds = scriptedRuntime(JSON.stringify({ entities: [{ text: 'Jane Doe', category: 'name', line: 1 }] }))
+    // A crash: the request rejects like undici's killed fetch while the run's own signal stays live.
+    const dies: ModelRuntime = killableRuntime({ onParked: () => void dies.stop() })
+    let calls = 0
+    return { ...dies, chatStream: (messages, options) => (++calls === 1 ? finds : dies).chatStream(messages, options) }
+  }
+  const overflows = (): ModelRuntime => ({
+    ...scriptedRuntime(''),
+    // eslint-disable-next-line require-yield
+    async *chatStream() {
+      // The b11146 reply to a 4,660-token window on a 4,096 context, measured 2026-10-06.
+      throw new ChatRequestError(400, 'request (4660 tokens) exceeds the available context size (4096 tokens), try increasing it', 'exceed_context_size_error')
     }
-    let written = ''
+  })
+
+  it.each([
+    ['the model dies under window 2 of 2', 'redactionModelStopped', crashesInWindow2],
+    ['a window exceeds the context', 'redactionTooLong', overflows]
+  ] as const)('a model failure mid-locate fails the run, saves nothing (#620): %s → %s', async (_how, code, runtime) => {
+    const db = freshDb()
+    const docId = seedDocWithChunks(db, TWO_WINDOW_DOC)
+    const { audit } = capturingAudit()
+    let saved = false
     const res = await runDocumentRedaction(db, { skillInstallId, documentId: docId }, {
       audit,
       confirmed: true,
-      runtime,
-      saveTextFile: async (_name, content) => {
-        written = content
+      runtime: runtime(),
+      saveTextFile: async () => {
+        saved = true
         return true
       }
     })
-    expect(res.ok).toBe(true)
-    expect(res.resultKind).toBe('redactedFloor') // degraded, but the copy WAS saved
-    expect(written).toContain('Jane Doe') // the failed locate contributed nothing; the floor still ran
-    expect(written).not.toContain('jane.doe@example.com')
+    expect(res).toMatchObject({ ok: false, errorCode: code })
+    expect(res.cancelled).not.toBe(true) // a failure, not "Stopped"
+    expect(saved).toBe(false) // no dialog: neither the floor copy nor what window 1 found
+    const run = db.prepare('SELECT status FROM skill_runs WHERE id = ?').get(res.runId) as { status: string }
+    expect(run.status).toBe('failed')
   })
 })
 

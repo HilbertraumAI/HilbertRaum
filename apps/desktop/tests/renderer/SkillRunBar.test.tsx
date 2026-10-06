@@ -128,6 +128,26 @@ describe('SkillRunBar (S11b)', () => {
     expect(screen.getByText('Stopped. Nothing was saved.')).toBeInTheDocument()
   })
 
+  // #620: a redaction the model did not finish names why and that nothing was saved — never the generic
+  // "Nothing was changed." line, and never the floor's "no model running" copy (the model was running).
+  it.each([
+    ['redactionModelStopped', 'The AI model stopped before the redaction was finished. Nothing was saved.'],
+    ['redactionTooLong', 'Parts of this document are too long for the current model’s context window. Nothing was saved.']
+  ])('RESULT (#620): a failed redaction with %s says why it saved nothing', (errorCode, opening) => {
+    render(
+      withI18n(
+        <SkillRunBar
+          run={run({ toolName: 'redact_document', state: 'failed', errorCode })}
+          runnableTools={[]}
+          onRun={vi.fn()}
+          onCancel={vi.fn()}
+          onDismiss={vi.fn()}
+        />
+      )
+    )
+    expect(screen.getByRole('status')).toHaveTextContent(opening)
+  })
+
   // U5 (audit ux-15): the needsExtraction failure names the ACTUAL extract button to click first —
   // interpolated per the FAILING tool's domain (bank downstream tool → "Extract transactions";
   // invoice downstream tool → "Extract invoice"), never the old generic "run this tool".

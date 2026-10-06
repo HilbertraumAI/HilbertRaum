@@ -397,6 +397,12 @@ export const de: Record<keyof typeof en, string> = {
   'chat.skill.run.error.needsModel': 'Starte zuerst ein Modell – gezielte Änderungen brauchen ein laufendes Modell, um den zu ändernden Text zu finden.',
   'chat.skill.run.error.needsInstruction': 'Sag zuerst, was geändert werden soll (zum Beispiel „ersetze X durch Y“), dann führe dies erneut aus.',
   'chat.skill.run.error.editFailed': 'Die Änderungen konnten nicht abgeschlossen werden. Es wurde nichts geändert.',
+  // #620: das Modell ist während einer Schwärzung ausgefallen (Absturz, hängt, Fehler), oder ein Teil des
+  // Dokuments ist zu lang für sein Kontextfenster. Es wird nichts gespeichert.
+  'chat.skill.run.error.redactionModelStopped':
+    'Das KI-Modell hat aufgehört, bevor die Schwärzung fertig war. Es wurde nichts gespeichert. Starte sie noch einmal – wenn das öfter passiert, starte das Modell im Bildschirm „KI-Modell“ neu.',
+  'chat.skill.run.error.redactionTooLong':
+    'Teile dieses Dokuments sind zu lang für das Kontextfenster des aktuellen Modells. Es wurde nichts gespeichert. Wähle im Bildschirm „KI-Modell“ eine größere Kontextgröße und starte das Modell neu, dann starte die Schwärzung noch einmal.',
   'chat.skill.run.cancelled': 'Gestoppt. Es wurde nichts gespeichert.',
   // SKA-40 (Skills-Audit 2026-07-03, U6): der Status ließ sich nach mehreren Fehlern nicht mehr prüfen –
   // eine beschriftete, schließbare Zeile statt einer still verschwundenen Ausführung.

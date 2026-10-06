@@ -539,7 +539,11 @@ password recovery — are documented in
   It **still misses** things (unusual formats, text inside images/scans — it sees only the extracted text,
   and anything the model doesn't spot); the regex floor stays conservative (a **false negative** over
   corrupting text). **If no model is running, only the rule-based floor applies** and the run says so
-  honestly (`redactedFloor`/`cleanFloor` → "offline rule-based detection only, no model running"). The
+  honestly (`redactedFloor`/`cleanFloor` → "offline rule-based detection only, no model running"). **If
+  the model fails during the run** (a crash, a freeze, an error), the run saves nothing and says so
+  (#620). On a model with a **4,096-token context**, a document whose paragraphs are long (a DOCX
+  paragraph is one line of the model's 40-line windows) is too long for it every time — the run says so
+  and points to a larger context size; giving the windows a token budget is #622. The
   redacted copy is a **starting point that still needs a human review** before sharing; the SKILL.md body
   and the run's "done" copy both say so, and the app never describes the output as "fully anonymized" or
   as meeting any legal/GDPR-DSGVO standard. Privacy posture is otherwise the strongest of the Tier-2
