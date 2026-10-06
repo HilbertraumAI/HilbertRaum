@@ -55,6 +55,7 @@ import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { perfMark, perfMs } from '../services/perf'
+import { inFlightStreams } from './inflight'
 
 // IPC for model discovery/selection + runtime start/stop (spec §9.1).
 // The hardware profile comes from the persisted benchmark (`lastBenchmark`),
@@ -165,6 +166,18 @@ function developerLeniency(ctx: AppContext, s: AppSettings): boolean {
  * the `startRuntime` IPC handler and the startup auto-start). Throws on any refusal.
  */
 export async function startModelRuntime(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
+  // #599: "starting" counts from the request — the weight check below takes minutes on a freshly
+  // copied drive, and a refusal in that window must say "is starting", not "start one first".
+  // Optional call: bare boundary-fake runtimes in tests omit it.
+  const release = ctx.runtime.beginStartRequest?.()
+  try {
+    return await startModelRuntimeNow(ctx, modelId)
+  } finally {
+    release?.()
+  }
+}
+
+async function startModelRuntimeNow(ctx: AppContext, modelId: string): Promise<RuntimeStatus> {
   // AUD-03 — snapshot WHICH unlocked session this start belongs to, before the long pre-start
   // window below. `computeInstallState` hashes a multi-GB GGUF, which takes minutes on a cold
   // checksum cache (the first unlock of a prepared or freshly-copied drive — a copy changes mtime
@@ -717,6 +730,25 @@ export function registerModelIpc(ctx: AppContext): void {
     return startModelRuntime(ctx, modelId)
   })
 
+  // #599: the AI Model card's "Restart" for a model that stopped responding. The app offers it and
+  // never performs it on its own: from outside, a long CPU prefill and a wedged compute loop look
+  // alike. Same model, its own start options, past start()'s same-model guard; the in-flight answers
+  // end as a switch ends them (#600).
+  ipcHandle(IPC.restartRuntime, async (): Promise<RuntimeStatus | null> => {
+    requireUnlocked()
+    const modelId = ctx.runtime.activeModelId()
+    log.info('Restart runtime', { modelId })
+    ctx.docTasks?.abortActiveBuild()
+    const status = await ctx.runtime.restartCurrent()
+    if (modelId && status) {
+      ctx.audit?.('runtime_started', `Model runtime restarted: ${modelId}`, {
+        modelId,
+        backend: status.backend ?? null
+      })
+    }
+    return status
+  })
+
   ipcHandle(IPC.stopRuntime, async (): Promise<void> => {
     log.info('Stop runtime')
     const modelId = ctx.runtime.activeModelId()
@@ -732,7 +764,10 @@ export function registerModelIpc(ctx: AppContext): void {
   // so the Chat composer knows whether to offer the Deep answer mode. Manifest reads
   // happen only while a runtime is actually running (the ChatScreen's not-running
   // poll stays I/O-free), and a read failure just leaves the flag absent.
-  ipcHandle(IPC.getRuntimeStatus, (): RuntimeStatus => {
+  ipcHandle(IPC.getRuntimeStatus, async (): Promise<RuntimeStatus> => {
+    // #599: re-check a running model's /health first (cached ~10 s, bounded at 3 s per probe), so a
+    // frozen process stops reading "running, healthy" here, in Diagnostics and on the AI Model card.
+    await ctx.runtime.refreshHealth?.()
     const status = ctx.runtime.status()
     if (status.running && status.modelId && ctx.manifestsDir) {
       try {
@@ -752,6 +787,9 @@ export function registerModelIpc(ctx: AppContext): void {
         /* settings unreadable (e.g. just locked) — the plain status still serves */
       }
     }
+    // #600: an answer is being written on the running model — the AI Model card says that stopping
+    // or switching the model now ends it (keeping its text so far), instead of a confirmation dialog.
+    if (status.running && inFlightStreams.size > 0) status.answering = true
     // #107: enrich the "Starting…" window with an expected load duration from the
     // honest effective-read sample (#108). `bytesTotal` already rides the status (the
     // manager resolves it once per window); the sample is memoized per window too, so a

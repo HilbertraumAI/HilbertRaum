@@ -116,6 +116,35 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A frozen AI model no longer shows as "Running" and healthy.** The app now re-checks the model when
+  a screen asks for its state, and when an answer on it times out. The AI Model screen then says
+  **Not responding** and offers a one-click **Restart**; Diagnostics says it is unhealthy. The app never
+  restarts it on its own — a slow model looks the same from outside (#599).
+- **When the AI model crashes on the processor, it comes back by itself.** Before, every screen kept
+  saying it was running and each question failed until you stopped and started it by hand. Now the
+  app restarts it once and says so; if the same model crashes again, it stays stopped and the app says
+  that too (#599).
+- **"The AI model is starting" instead of "No AI model is running".** A question or a document task
+  asked while a model starts — including the file check before loading, which takes minutes on a
+  freshly copied drive — now says the model is starting and to try again in a moment. Chat's waiting
+  screen says the same, and its "No AI model is running" message disappears once the model is back
+  (#599).
+- **Stopping or switching the AI model while it is answering now keeps the answer so far.** Before,
+  the chat showed "terminated" and everything written so far was lost. Now the answer ends cleanly,
+  keeps its text, and is labelled **Reply stopped**. A question the model had not started answering
+  says "Not answered — the AI model was stopped." If you pressed **Try again** and then stopped the
+  model, the previous complete answer stays. While an answer is being written, the AI Model screen
+  says that stopping or switching the model ends it (#600).
+- **When the AI model crashes in the middle of an answer, the chat says so in words.** It used to
+  show "terminated" or "fetch failed". Now it says "The AI model stopped before the answer was
+  finished" and what to do next (#600).
+- **Asking a document question again could delete the previous answer.** Choosing "Answer without
+  it" or "Run with" a skill, then pressing **Stop** while the documents were still being searched,
+  removed the previous answer and left nothing in its place. The previous answer now comes back
+  (#600).
+- **Apps connected through the local API learn when you stop or switch the model.** A request that
+  was running at that moment ends with "model_not_loaded" (stopped) or "model_starting" (another model
+  is loading — retry shortly), no longer with the crash error 502 (#600).
 - **A chat whose AI model never starts on the question now ends after three minutes with a clear
   message.** When the model's engine accepted a question and then went silent, the chat waited for
   five minutes and then showed only "fetch failed". Meanwhile the app counted the model as busy, so

@@ -4,6 +4,7 @@ import { answerSpeedFrom, setAnswerSpeedObserver, withChatStream } from '../../s
 import {
   ChatRequestError,
   ChatStreamError,
+  RuntimeConnectionLostError,
   RuntimeUnresponsiveError
 } from '../../src/main/services/runtime/llama'
 import { EmptyCompletionError } from '../../src/main/services/chat'
@@ -225,6 +226,19 @@ describe('withChatStream (M-A2)', () => {
     }).catch((e: Error) => e.message)
     expect(rejection).toBe(friendly)
     expect(rejection).not.toMatch(/30000|responding \(/) // the raw diagnostic never reaches the user
+    expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
+    expect(inFlightStreams.has('c1')).toBe(false)
+  })
+
+  // #600: the sidecar died under the turn (a crash, an OS kill). The runtime's typed error maps to the
+  // friendly connectionLost copy on both channels — before #600 the user saw undici's raw "terminated".
+  it('maps RuntimeConnectionLostError to the friendly connectionLost copy on the error event AND the rejection (#600)', async () => {
+    const { event, sent } = fakeEvent()
+    const friendly = t('en', 'main.chat.connectionLost')
+    const rejection = await withChatStream(event, 'c1', 'label', async () => {
+      throw new RuntimeConnectionLostError()
+    }).catch((e: Error) => e.message)
+    expect(rejection).toBe(friendly)
     expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
     expect(inFlightStreams.has('c1')).toBe(false)
   })

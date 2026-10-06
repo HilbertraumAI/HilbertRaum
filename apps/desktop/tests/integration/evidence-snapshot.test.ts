@@ -51,6 +51,7 @@ function seedAnswer(
     title?: string
     modelId?: string | null
     truncated?: boolean
+    endedEarly?: 'model'
   }
 ): SeededAnswer {
   const conv = createConversation(db, {
@@ -71,7 +72,8 @@ function seedAnswer(
     content: opts.content,
     citations: opts.citations ?? null,
     coverage: opts.coverage ?? null,
-    truncated: opts.truncated
+    truncated: opts.truncated,
+    endedEarly: opts.endedEarly
   })
   return { conversationId: conv.id, messageId: msg.id }
 }
@@ -347,6 +349,15 @@ describe('display-parity auto-links across block boundaries (Phase-1 review FIX-
 })
 
 describe('legacy and degraded answers (spec §25.5 — never invent)', () => {
+  it('an answer a model stop ended early is recorded as stopped — never as complete (#600)', () => {
+    // The user stopped or switched the model mid-answer; the partial was kept and marked. Its review
+    // must say so: the pack would otherwise state "No output truncation was recorded".
+    const db = freshDb()
+    const { messageId } = seedAnswer(db, { content: 'The contract ends wh', endedEarly: 'model' })
+    const detail = createEvidenceReviewFromMessage(db, messageId)
+    expect(detail.generationSnapshot).toMatchObject({ answerTruncated: null, answerStopped: true })
+  })
+
   it('a no-citation legacy answer reviews with zero sources, zero links, honest generation gaps', () => {
     const db = freshDb()
     const { messageId } = seedAnswer(db, {

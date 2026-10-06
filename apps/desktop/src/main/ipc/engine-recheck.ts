@@ -14,6 +14,7 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 import { log } from '../services/logging'
 import { probeAndPersistGpu } from './registerBenchmarkIpc'
 import { startModelRuntime } from './registerModelIpc'
+import { isModelStarting } from '../../shared/runtime-status'
 
 // "Check again" (#530, `engine:recheck`; architecture.md "Engine load failures"): the user
 // installed the missing library (or the Visual C++ runtime) and wants the engine back without a
@@ -50,11 +51,11 @@ export function rearmLlamaConsumers(ctx: AppContext): void {
 export async function restartChatOnRealEngine(ctx: AppContext): Promise<void> {
   const status = ctx.runtime.status()
   const modelId = status.modelId
-  if (status.backend !== 'mock' || !modelId || status.startingModelId) return
+  if (status.backend !== 'mock' || !modelId || isModelStarting(status)) return
   if (!workspaceAdmitsWork(ctx.workspace)) return
   log.info('The real AI engine is on the drive — restarting the selected model on it', { modelId })
   ctx.docTasks?.abortActiveBuild()
-  await ctx.runtime.stop()
+  await ctx.runtime.stop({ startFollows: true })
   await startModelRuntime(ctx, modelId)
 }
 

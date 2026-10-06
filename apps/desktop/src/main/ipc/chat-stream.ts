@@ -14,8 +14,8 @@ import {
   getConversation,
   getLatestMessage,
   getRegenerableAssistantMessageId,
-  isAbortError,
   isEmptyCompletionError,
+  markUnansweredQuestion,
   restoreMessage
 } from '../services/chat'
 import { hasReviewForMessage } from '../services/evidence-reviews'
@@ -24,8 +24,11 @@ import type { ModelRuntime } from '../services/runtime'
 import {
   isChatStreamError,
   isExceedContextError,
+  isRuntimeConnectionLostError,
   isRuntimeUnresponsiveError
 } from '../services/runtime/llama'
+import { isModelStopAbort } from '../services/runtime/model-stop'
+import { noModelMessageKey } from '../../shared/runtime-status'
 import { modelBusyMessageKey } from '../services/runtime/occupancy'
 import { tMain } from '../services/i18n'
 import { isEngineCannotRunError } from '../services/runtime/engine-load'
@@ -55,8 +58,9 @@ export async function assertChatStreamReady(
   const runtime = ctx.runtime.active()
   if (!runtime) {
     // Ephemeral IPC guard → tMain (i18n record §3.3); DOC_TASK_BUSY_MESSAGE stays
-    // canonical English on the wire (renderer exact-match + display map).
-    throw new Error(tMain('main.noModelRunning'))
+    // canonical English on the wire (renderer exact-match + display map). #599: while a start is
+    // requested or loading, say so — "start one first" would send the user to start it twice.
+    throw new Error(tMain(noModelMessageKey(ctx.runtime.isStarting?.() === true)))
   }
   // Strict one-at-a-time vs document tasks: the one local model serves either a chat
   // answer or a task, never both. A YIELDING deep-index build is the exception — it cedes
@@ -137,9 +141,10 @@ export type ChatStreamRunFn = (
  * nothing in its place.
  *
  * This wraps a `runFn` so the delete runs INSIDE the stream (slot held, controller registered)
- * and the snapshot is RESTORED if generation fails for a NON-abort reason. A user Stop (abort)
- * keeps the delete: the new partial/empty reply stands, exactly as before. A no-op passthrough
- * when `regenerate` is false — the only change is WHEN the regenerate delete runs. The caller is
+ * and the snapshot is RESTORED when generation throws with nothing saved in its place (before
+ * #600: a non-abort throw only). A user Stop that resolves keeps the delete: the new partial/empty
+ * reply stands, exactly as before. When `regenerate` is false only the #600 "Not answered" rule
+ * below applies. The caller is
  * expected to have already bailed (read-only `hasRegenerableAssistantReply`) when there is no
  * prior reply; the snapshot being null here is a benign race (nothing deleted, nothing to
  * restore).
@@ -148,6 +153,20 @@ export type ChatStreamRunFn = (
  * review (see the guard body). This is the choke point every regenerate passes through — plain
  * chat and the document channel alike — and `regenerate` is caller-supplied over IPC, so the
  * refusal belongs here rather than in either handler.
+ *
+ * #600 — the same choke point carries the model-stop rules (the user stopped or switched the chat
+ * model mid-turn: `isModelStopAbort`), for EVERY turn, re-ask or not:
+ *  - a re-ask that a model stop cut keeps the previous COMPLETE answer: the partial is removed and
+ *    the snapshot restored. A model stop ended the stream, not the wish for an answer; the Stop
+ *    button keeps its partial, as before, because that was the user's own choice;
+ *  - a re-ask that THROWS restores its snapshot whenever nothing was saved in its place, abort or
+ *    not. An abort thrown before anything streamed (document search, the reranker, a knowledge-pack
+ *    arm, the categorizer) used to skip the restore and lose the previous answer, the Stop button
+ *    included (reachable through "Answer without it" / "Run with <skill>" in a document chat);
+ *  - a turn a model stop left with no answer at all marks its question "Not answered"
+ *    (`markUnansweredQuestion`, which touches the last row only when it IS the question).
+ *    A Stop during the pre-generation slot handoff (REL-3) ends before this wrapper runs and is not
+ *    marked.
  */
 export function withRegenerateGuard(
   db: Db,
@@ -155,7 +174,34 @@ export function withRegenerateGuard(
   regenerate: boolean,
   runFn: ChatStreamRunFn
 ): ChatStreamRunFn {
-  if (!regenerate) return runFn
+  const guarded = regenerate ? regenerateGuarded(db, conversationId, runFn) : runFn
+  return markUnansweredOnModelStop(db, conversationId, guarded)
+}
+
+/** #600 — mark the question when a model stop left the turn with no answer (see the guard above). */
+function markUnansweredOnModelStop(db: Db, conversationId: string, runFn: ChatStreamRunFn): ChatStreamRunFn {
+  const mark = (signal: AbortSignal): void => {
+    if (!isModelStopAbort(signal)) return
+    try {
+      markUnansweredQuestion(db, conversationId, 'model')
+    } catch {
+      /* a marker is a courtesy; it must never fail the turn */
+    }
+  }
+  return async (signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings) => {
+    try {
+      const result = await runFn(signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings)
+      if (result.content === '') mark(signal)
+      return result
+    } catch (err) {
+      mark(signal)
+      throw err
+    }
+  }
+}
+
+/** The regenerate leg of `withRegenerateGuard`: AUD-01 refusal, in-stream delete, restore rules. */
+function regenerateGuarded(db: Db, conversationId: string, runFn: ChatStreamRunFn): ChatStreamRunFn {
   return async (signal, sendToken, sendReasoning, sendCompaction, sendUsage, sendTimings) => {
     // AUD-01 (data loss): `evidence_reviews.message_id` is a foreign key with ON DELETE CASCADE
     // and the workspace runs with `PRAGMA foreign_keys = ON`, so the `DELETE FROM messages` below
@@ -187,10 +233,39 @@ export function withRegenerateGuard(
         restoreMessage(db, deleted)
         return getLatestMessage(db, conversationId) ?? result
       }
+      // #600: a model stop cut the re-ask — the previous complete answer comes back, the partial
+      // goes. Keyed on the saved answer's own "Reply stopped" marker, not the signal: a stop that
+      // lands after a COMPLETE answer was saved (a post-answer step still awaiting) must not throw
+      // that answer away. The partial is already saved, so it is removed first, or two would remain —
+      // in one transaction, so a failed restore rolls back to the saved partial, never to neither.
+      if (deleted && result.endedEarly === 'model') {
+        db.exec('BEGIN')
+        try {
+          if (getRegenerableAssistantMessageId(db, conversationId) === result.id) {
+            deleteLastAssistantMessage(db, conversationId)
+          }
+          restoreMessage(db, deleted)
+          db.exec('COMMIT')
+        } catch (err) {
+          try {
+            db.exec('ROLLBACK')
+          } catch {
+            /* keep the partial either way */
+          }
+          log.warn('chat: kept the stopped re-ask — restoring the previous answer failed', {
+            conversationId,
+            error: String(err)
+          })
+          return result
+        }
+        return getLatestMessage(db, conversationId) ?? result
+      }
       return result
     } catch (err) {
-      // Restore the prior reply only on a real failure; a user Stop (abort) keeps the delete.
-      if (deleted && !isAbortError(err, signal)) restoreMessage(db, deleted)
+      // Restore whenever the re-ask threw with nothing saved in its place (#600: aborts included).
+      // Every path that saves a partial resolves instead of throwing; the tail check keeps a saved
+      // answer from ever sitting next to a restored one should that change.
+      if (deleted && getRegenerableAssistantMessageId(db, conversationId) == null) restoreMessage(db, deleted)
       throw err
     }
   }
@@ -364,11 +439,14 @@ export async function withChatStream(
     }
     const raw = err instanceof Error ? err.message : String(err)
     // Friendly-mapping chain (CB-4/CB-5/F-02), most-specific first: a HUNG sidecar
-    // (runtimeUnresponsive) → a genuine EMPTY completion (emptyCompletion) → a mid-stream
+    // (runtimeUnresponsive) → a sidecar that DIED under the turn (connectionLost, #600) → a genuine
+    // EMPTY completion (emptyCompletion) → a mid-stream
     // IN-BAND error frame (streamError, audit 2026-07-16 F-02) → a prompt-OVERFLOW HTTP 400
     // (contextExceeded) → else the raw reason. Each mapped case shows actionable, CONTENT-FREE
     // copy to the user (the raw structural reason still goes to the local log only).
     const unresponsive = isRuntimeUnresponsiveError(err)
+    // #600: the sidecar died under the turn (a crash, an OS kill) — never the raw "terminated".
+    const connectionLost = isRuntimeConnectionLostError(err)
     const emptyCompletion = isEmptyCompletionError(err)
     const streamError = isChatStreamError(err)
     const overflow = isExceedContextError(err)
@@ -376,7 +454,9 @@ export async function withChatStream(
     const engine = isEngineCannotRunError(err)
     const message = unresponsive
       ? tMain('main.chat.runtimeUnresponsive')
-      : emptyCompletion
+      : connectionLost
+        ? tMain('main.chat.connectionLost')
+        : emptyCompletion
         ? tMain('main.chat.emptyCompletion')
         : streamError
           ? tMain('main.chat.streamError')
@@ -394,7 +474,9 @@ export async function withChatStream(
     // here is what leaked the unmapped "ChatRequestError: HTTP 400 …" string to users. For
     // any other failure (incl. aborts) rethrow the original error untouched so its type and
     // message are preserved upstream.
-    throw unresponsive || emptyCompletion || streamError || overflow || engine ? new Error(message) : err
+    throw unresponsive || connectionLost || emptyCompletion || streamError || overflow || engine
+      ? new Error(message)
+      : err
   } finally {
     // Resume any paused deep-index build first (idempotent; no-op when none was paused).
     releaseSlot()

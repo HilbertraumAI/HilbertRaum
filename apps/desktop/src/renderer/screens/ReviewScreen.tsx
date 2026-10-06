@@ -426,6 +426,11 @@ export function ReviewScreen({
             <span aria-hidden="true">⚠</span> {t('review.summary.truncated')}
           </span>
         )}
+        {detail.generationSnapshot?.answerStopped === true && (
+          <span className="hint review-truncated">
+            <span aria-hidden="true">⚠</span> {t('review.summary.stopped')}
+          </span>
+        )}
         <span className="review-foot-spacer" />
         <Button variant="primary" onClick={() => setSummaryOpen(true)}>
           {t('review.footer.summary')}

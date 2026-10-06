@@ -26,6 +26,7 @@ import {
 import { recordEvent, listAuditEvents } from '../../src/main/services/audit'
 import type { AuditEventType } from '../../src/shared/types'
 import { hangBudgetMs } from '../helpers/hang-budget'
+import { t } from '../../src/shared/i18n'
 import type {
   ChatMessage,
   ModelRuntime,
@@ -123,6 +124,8 @@ interface ManagerOptions {
   audit?: boolean
   /** Override the Phase-32 lease seam (default: a counting no-op lease). */
   beginDocumentWork?: () => () => void
+  /** #599: a model start is requested or loading. */
+  modelStarting?: boolean
 }
 
 function makeManager(opts: ManagerOptions = {}): DocTaskManager {
@@ -135,6 +138,7 @@ function makeManager(opts: ManagerOptions = {}): DocTaskManager {
     getStoreDir: () => storeDir,
     getIngestionDeps: () => ({}),
     beginDocumentWork: opts.beginDocumentWork ?? (() => () => {}),
+    isModelStarting: () => opts.modelStarting === true,
     audit: opts.audit
       ? (type, message, metadata) => recordEvent(db, type as AuditEventType, message, metadata)
       : undefined
@@ -251,15 +255,20 @@ describe('state machine guards (D26)', () => {
     )
   })
 
-  it('refuses to start with no runtime (never auto-starts one)', async () => {
+  it.each([
+    ['no model is running', false, TASK_NEEDS_RUNTIME_MESSAGE],
+    ['a model is starting — says so (#599)', true, t('en', 'main.modelStarting')]
+  ])('refuses to start with no runtime (never auto-starts one): %s', async (_label, modelStarting, message) => {
     const docId = await importDoc(50)
-    const manager = makeManager({ runtime: null })
-    expect(() => manager.startDocTask({ kind: 'summary', documentIds: [docId] })).toThrow(
-      TASK_NEEDS_RUNTIME_MESSAGE
-    )
+    const manager = makeManager({ runtime: null, modelStarting })
+    expect(() => manager.startDocTask({ kind: 'summary', documentIds: [docId] })).toThrow(message)
   })
 
-  it('fails friendly when the runtime is stopped while the task is queued', async () => {
+  it.each([
+    ['stopped', false, TASK_NEEDS_RUNTIME_MESSAGE],
+    // #599: a crash restart (or a switch) is under way — the friendly filter keeps this copy too.
+    ['restarting', true, t('en', 'main.modelStarting')]
+  ])('fails friendly when the runtime is %s while the task is queued', async (_label, modelStarting, message) => {
     const doc1 = await importDoc(50, 'a.txt')
     const doc2 = await importDoc(50, 'b.txt')
     let release!: () => void
@@ -273,7 +282,8 @@ describe('state machine guards (D26)', () => {
       getContextTokens: () => 4096,
       getStoreDir: () => storeDir,
       getIngestionDeps: () => ({}),
-      beginDocumentWork: () => () => {}
+      beginDocumentWork: () => () => {},
+      isModelStarting: () => runtime == null && modelStarting
     })
 
     const first = manager.startDocTask({ kind: 'summary', documentIds: [doc1] })
@@ -286,7 +296,7 @@ describe('state machine guards (D26)', () => {
     await waitTerminal(manager, first.jobId)
     const failed = await waitTerminal(manager, second.jobId)
     expect(failed.state).toBe('failed')
-    expect(failed.error).toBe(TASK_NEEDS_RUNTIME_MESSAGE)
+    expect(failed.error).toBe(message)
   })
 
   it('serializes tasks: one queue, never two model calls in flight', async () => {

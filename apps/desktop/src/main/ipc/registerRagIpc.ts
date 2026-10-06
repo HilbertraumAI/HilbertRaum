@@ -453,8 +453,8 @@ export function registerRagIpc(ctx: AppContext): void {
         // no partial answer), skill-stamped so the user sees which skill declined. Closured so BOTH the
         // grounded-whole-doc branch (which enforces it only for a non-downgraded whole read — SKA-23) and
         // the exhaustive/compare branch reuse one body. A `routing` handler is EXEMPT: it reads no content.
-        // F2: on regenerate the destructive delete runs inside the runFn (slot held), restored on a
-        // non-abort failure — symmetric with the chat channel.
+        // F2: on regenerate the destructive delete runs inside the runFn (slot held), restored when it
+        // fails with nothing in its place (#600: any thrown reason) — symmetric with the chat channel.
         const refusePartial = (): Promise<Message> =>
           withChatStream(
             event,
@@ -846,7 +846,7 @@ export function registerRagIpc(ctx: AppContext): void {
         event,
         conversationId,
         'Document answer failed',
-        // F2: defer the regenerate delete into the runFn (slot held) + restore on a non-abort failure.
+        // F2: defer the regenerate delete into the runFn (slot held) + restore when it fails (#600: any reason).
         withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction, sendUsage) => {
           // #80 P3 trigger (b): a LOW-CONFIDENCE fallback (the router detected an intent it
           // provably cannot serve — a coverage ask with no extract data, a compare without two

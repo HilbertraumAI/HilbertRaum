@@ -118,3 +118,32 @@ describe('Transcript truncation notice (#498)', () => {
     expect(notice()).toBeNull()
   })
 })
+
+// #600: a reply the user's model stop or switch ended gets its OWN label ("Reply stopped") — never the
+// cut-off badge, whose meaning is "the model ran out of room". A question the stop left with no answer
+// gets a "Not answered" note, which goes once a later answer follows it.
+describe('the "Reply stopped" and "Not answered" notes (#600)', () => {
+  const user = (id: string, endedEarly?: 'model'): Message => ({
+    id,
+    conversationId: 'c1',
+    role: 'user',
+    content: 'Tell me about lighthouses.',
+    createdAt: '2026-01-01T00:00:00Z',
+    endedEarly
+  })
+
+  it.each([['en' as const], ['de' as const]])('%s: a reply a model stop ended shows "Reply stopped" with its own hint', (lang) => {
+    renderTranscript(lang, [user('u1'), { ...assistantMsg('a1'), endedEarly: 'model' }])
+    expect(notice()).toHaveTextContent(t(lang, 'chat.endedEarly.label'))
+    expect(notice()).toHaveAttribute('title', t(lang, 'chat.endedEarly.hint.model'))
+    expect(screen.queryByText(t(lang, 'chat.truncated.label'))).toBeNull()
+  })
+
+  it('a question a model stop left unanswered says so; once an answer follows it, the note goes', () => {
+    renderTranscript('en', [user('u1', 'model')])
+    expect(notice()).toHaveTextContent(t('en', 'chat.unanswered.model'))
+    cleanup()
+    renderTranscript('en', [user('u1', 'model'), assistantMsg('a1')])
+    expect(screen.queryByText(t('en', 'chat.unanswered.model'))).toBeNull()
+  })
+})

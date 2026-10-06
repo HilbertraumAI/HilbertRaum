@@ -448,6 +448,14 @@ describe('honesty rendering', () => {
     expect(html).not.toContain(t('en', 'review.summary.truncated'))
   })
 
+  it('an answer ended early by a model stop says so instead of "no truncation recorded" (#600)', () => {
+    const detail = makeDetail()
+    detail.generationSnapshot!.answerStopped = true
+    const html = render(detail)
+    expect(html).toContain(t('en', 'review.summary.stopped'))
+    expect(html).not.toContain(t('en', 'packExport.coverage.noTruncationRecord'))
+  })
+
   it('the truncation warning renders when honestly recorded', () => {
     const detail = makeDetail()
     detail.generationSnapshot!.answerTruncated = true

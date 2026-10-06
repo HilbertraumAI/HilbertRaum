@@ -169,6 +169,11 @@ export function ReviewSummaryView({
             <span aria-hidden="true">⚠</span> {t('review.summary.truncated')}
           </p>
         )}
+        {gen?.answerStopped === true && (
+          <p className="hint review-truncated">
+            <span aria-hidden="true">⚠</span> {t('review.summary.stopped')}
+          </p>
+        )}
       </section>
 
       <section>

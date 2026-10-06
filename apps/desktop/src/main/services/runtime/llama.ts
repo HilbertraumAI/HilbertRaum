@@ -304,6 +304,52 @@ export function isRuntimeUnresponsiveError(err: unknown): boolean {
 }
 
 /**
+ * #600 — the connection to the chat sidecar broke while a request was in flight: the process died
+ * (a crash, an OS or Task Manager kill) or the request reached a sidecar that is gone. undici
+ * reports it as a bare `TypeError` ("fetch failed" before the headers, "terminated" once the body
+ * streams), which used to reach the user as raw text. Measured in Electron 43.7.7 (undici 7.29.1)
+ * by killing a b11146 server at each phase: a queued request → "fetch failed" (cause
+ * `ECONNRESET`); a request in prefill or mid-stream → "terminated" (cause `ECONNRESET`); a new
+ * request to the dead port → "fetch failed" (cause `ECONNREFUSED`); all within 3 ms of the kill.
+ * A deliberate model stop or switch never reaches here — it ends the answer first (the model-stop
+ * hook), so its signal is already aborted. The chat IPC maps this to `main.chat.connectionLost`.
+ */
+export class RuntimeConnectionLostError extends Error {
+  /** `cause` is undici's socket error; its message and code ride the log line (structural, content-free). */
+  constructor(cause?: unknown) {
+    super(`The connection to the AI model was lost${describeSocketLoss(cause)}.`, cause === undefined ? undefined : { cause })
+    this.name = 'RuntimeConnectionLostError'
+  }
+}
+
+/** ` (terminated: ECONNRESET)` for undici's socket error; empty when there is none. */
+function describeSocketLoss(cause: unknown): string {
+  if (!(cause instanceof Error)) return ''
+  const code = (cause.cause as { code?: unknown } | undefined)?.code
+  return ` (${cause.message}${typeof code === 'string' ? ': ' + code : ''})`
+}
+
+/** True when `err` is a {@link RuntimeConnectionLostError} (#600). */
+export function isRuntimeConnectionLostError(err: unknown): boolean {
+  return err instanceof RuntimeConnectionLostError
+}
+
+/** undici's cause codes for a socket that closed or refused under a request (#600). */
+const CONNECTION_LOSS_CODES = new Set(['ECONNRESET', 'ECONNREFUSED', 'ECONNABORTED', 'EPIPE', 'UND_ERR_SOCKET'])
+
+/**
+ * #600: does `err` mean the sidecar's socket went away? "terminated" is undici's error for a body
+ * whose connection closed; "fetch failed" counts only with a socket-loss cause, so undici's own
+ * timeouts (`UND_ERR_HEADERS_TIMEOUT`) and anything else keep their old path.
+ */
+function isConnectionLoss(err: unknown): boolean {
+  if (!(err instanceof TypeError)) return false
+  if (err.message === 'terminated') return true
+  const code = (err.cause as { code?: unknown } | undefined)?.code
+  return err.message === 'fetch failed' && typeof code === 'string' && CONNECTION_LOSS_CODES.has(code)
+}
+
+/**
  * F-02 (audit 2026-07-16) — a MID-STREAM in-band error frame on the open completion stream.
  * llama-server reports a mid-generation failure (slot error, context-shift refusal, grammar
  * failure, server-side-handled OOM) in-band and then closes the stream WITHOUT `[DONE]`;
@@ -717,6 +763,8 @@ export class LlamaRuntime implements ModelRuntime {
         if (request.signal.aborted && !options?.signal?.aborted) {
           throw new RuntimeUnresponsiveError(HEADER_WAIT_MS, 'response headers')
         }
+        // #600: the sidecar died under the request (or is gone) — a typed error, never raw text.
+        if (!options?.signal?.aborted && isConnectionLoss(err)) throw new RuntimeConnectionLostError(err)
         throw err
       }
       if (!res.ok) {
@@ -732,7 +780,13 @@ export class LlamaRuntime implements ModelRuntime {
         throw new ChatRequestError(res.status, 'empty response body', '')
       }
       request.disarmTimeout() // the SSE body has CB-5's own watchdog
-      yield* readChatSSE(res.body, options?.signal, options?.onReasoning, options?.onFinish)
+      try {
+        yield* readChatSSE(res.body, options?.signal, options?.onReasoning, options?.onFinish)
+      } catch (err) {
+        // #600: the body's socket closed under the stream ("terminated"); a Stop wins a tie.
+        if (!options?.signal?.aborted && isConnectionLoss(err)) throw new RuntimeConnectionLostError(err)
+        throw err
+      }
     } finally {
       request.clear()
     }

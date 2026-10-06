@@ -566,6 +566,15 @@ describe('downloadEngine({ families, update }) — pause, update, resume (#516)'
         const status = ctx.runtime.status.bind(ctx.runtime)
         Object.assign(ctx.runtime, { status: () => ({ ...status(), startingModelId: 'chat-test' }) })
       }
+    ],
+    [
+      // #599: before the load, the start checks the weights (minutes on a freshly copied drive); an
+      // update then would resume the previous model behind the user's back and could undo a switch.
+      'a model start is still checking its files',
+      (ctx) => {
+        const status = ctx.runtime.status.bind(ctx.runtime)
+        Object.assign(ctx.runtime, { status: () => ({ ...status(), startRequested: true }) })
+      }
     ]
   ])('is refused while %s — nothing is fetched, nothing is paused', async (_label, busy) => {
     const runtime = liveRuntime()

@@ -30,6 +30,7 @@ import { registerCoreIpc } from './ipc/registerCoreIpc'
 import { registerWorkspaceIpc } from './ipc/registerWorkspaceIpc'
 import { maybeAutoStartActiveModel, registerModelIpc } from './ipc/registerModelIpc'
 import { registerChatIpc } from './ipc/registerChatIpc'
+import { endWorkOnModelStop } from './ipc/model-stop'
 import { registerDocsIpc } from './ipc/registerDocsIpc'
 import { registerCollectionsIpc } from './ipc/registerCollectionsIpc'
 import { registerZimIpc } from './ipc/registerZimIpc'
@@ -71,13 +72,14 @@ import { createRerankerCallbacks, createPendingModelSwitchCounter } from './serv
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
-import { RuntimeManager } from './services/runtime'
+import { RuntimeManager, type RuntimeStartOptions } from './services/runtime'
 import { occupiedLaneForDocTask } from './services/runtime/occupancy'
 import {
   clearModelLoadLatch,
   createGpuCrashAutoFallback,
   createSelectingRuntimeFactory,
-  createSpeculativeCrashAutoFallback
+  createSpeculativeCrashAutoFallback,
+  createCpuCrashAutoRestart
 } from './services/runtime/factory'
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
@@ -344,32 +346,36 @@ function initBackend(): void {
   // The crash handler needs the manager and the manager's factory needs the handler —
   // late-bind through a ref.
   let runtimeRef: RuntimeManager | null = null
-  const gpuCrashFallback = createGpuCrashAutoFallback({
-    // REL-1: a mid-session GPU crash must FORCE a real stop-then-start. `start()` would hit
-    // the same-model idempotency guard (the crashed runtime is still `current`) and no-op, so
-    // the restart is silently swallowed and `status()` keeps reporting the dead server healthy.
-    // `forceRestart` bypasses that guard atomically; `persistGpuFailure` (below) runs first, so
-    // the rebuilt ladder lands on CPU and the fallback can fire at most once (no restart loop).
-    restart: (opts) => {
-      // AUD-02: `forceRestart` re-checks only the QUIT latch, so a GPU crash landing during or
-      // after a workspace lock would respawn a CPU llama-server past the lock — an unwanted
-      // multi-GB child while the app sits at the unlock gate (resource/orphan, not a content
-      // leak: the crashed child's KV cache died with it, and the CPU replacement starts empty).
-      // The manager holds no workspace reference, so the admission check goes here, at the
-      // composition seam that does. Nothing is lost: the unlock auto-start brings the model
-      // back up, and `persistGpuFailure` above already recorded the fallback intent.
+  // The three crash handlers (GPU, speculative, CPU) share the restart and the audit event.
+  // REL-1: a mid-session crash must FORCE a real stop-then-start. `start()` would hit the
+  // same-model idempotency guard (the crashed runtime is still `current`) and no-op, so the
+  // restart is silently swallowed and `status()` keeps reporting the dead server healthy.
+  // `forceRestart` bypasses that guard atomically.
+  // AUD-02: `forceRestart` re-checks only the QUIT latch, so a crash landing during or after a
+  // workspace lock would respawn a llama-server past the lock — an unwanted multi-GB child while
+  // the app sits at the unlock gate (resource/orphan, not a content leak: the crashed child's KV
+  // cache died with it, and the replacement starts empty). The manager holds no workspace
+  // reference, so the admission check goes here, at the composition seam that does. Nothing is
+  // lost: the unlock auto-start brings the model back up.
+  const guardedCrashRestart =
+    (label: string) =>
+    (opts: RuntimeStartOptions): Promise<unknown> => {
       if (!workspaceAdmitsWork(workspace)) {
-        log.info('GPU crash restart skipped — the workspace is locked or locking')
+        log.info(`${label} crash restart skipped — the workspace is locked or locking`)
         return Promise.resolve()
       }
       return runtimeRef?.forceRestart(opts) ?? Promise.resolve()
-    },
+    }
+  const auditCrash = (reason: string): void =>
+    audit('runtime_crashed', 'Model runtime stopped unexpectedly', { reason: reason.slice(0, 500) })
+  const gpuCrashFallback = createGpuCrashAutoFallback({
+    // `persistGpuFailure` (below) runs first, so the rebuilt ladder lands on CPU and the fallback
+    // can fire at most once (no restart loop); a lock skipping the restart loses nothing.
+    restart: guardedCrashRestart('GPU'),
     persistFailure: (reason) => {
       // A mid-session crash is its own audit event; persistGpuFailure then records the
       // compatibility-mode fallback it triggers.
-      audit('runtime_crashed', 'Model runtime stopped unexpectedly', {
-        reason: reason.slice(0, 500)
-      })
+      auditCrash(reason)
       persistGpuFailure(reason)
     },
     notify: notifyRenderer
@@ -378,19 +384,24 @@ function initBackend(): void {
   // GPU flags stay untouched, so the model comes back ON the GPU with MTP latched off for
   // the session (the ladder set that latch before calling this).
   const speculativeCrashFallback = createSpeculativeCrashAutoFallback({
-    restart: (opts) => {
-      // Same AUD-02 admission check as the GPU sibling above: never respawn past a lock.
-      if (!workspaceAdmitsWork(workspace)) {
-        log.info('Speculative crash restart skipped — the workspace is locked or locking')
-        return Promise.resolve()
-      }
-      return runtimeRef?.forceRestart(opts) ?? Promise.resolve()
-    },
+    restart: guardedCrashRestart('Speculative'),
     onCrash: (reason) => {
-      audit('runtime_crashed', 'Model runtime stopped unexpectedly', {
-        reason: reason.slice(0, 500)
-      })
+      auditCrash(reason)
       log.warn('Speculative decoding crashed mid-session — restarting without it', { reason })
+    },
+    notify: notifyRenderer
+  })
+  // #599: a CPU-mode crash (or an OS kill) used to leave every surface saying "running" while each
+  // turn failed on the dead port. Restart the model once per session, then leave it stopped. During
+  // a lock it does nothing at all (`admitsWork`): the lock's teardown stops the model anyway, and
+  // the restart is neither spent nor announced.
+  const cpuCrashRestart = createCpuCrashAutoRestart({
+    restart: guardedCrashRestart('CPU'),
+    stop: (opts) => runtimeRef?.stopCrashed(opts.modelId) ?? Promise.resolve(),
+    admitsWork: () => workspaceAdmitsWork(workspace),
+    onCrash: (reason) => {
+      auditCrash(reason)
+      log.warn('The model crashed mid-session in CPU mode', { reason })
     },
     notify: notifyRenderer
   })
@@ -492,7 +503,8 @@ function initBackend(): void {
         onGpuFailure: persistGpuFailure,
         probeDevices: gpuProbe,
         onGpuCrash: (opts, info) => gpuCrashFallback(opts, info),
-        onSpeculativeCrash: (opts, info) => speculativeCrashFallback(opts, info)
+        onSpeculativeCrash: (opts, info) => speculativeCrashFallback(opts, info),
+        onCpuCrash: (opts, info) => cpuCrashRestart(opts, info)
       }
     })
   )
@@ -558,6 +570,7 @@ function initBackend(): void {
   const docTasks = new DocTaskManager({
     getDb: () => workspace.requireDb(),
     getRuntime: () => runtime.active(),
+    isModelStarting: () => runtime.isStarting(),
     // TG-3: the translation kind runs on the TranslateGemma sidecar — availability-driven;
     // null → the friendly install path, never the chat runtime. Read LIVE off ctx (issue #40):
     // a mid-session model download re-assigns `ctx.translator`, and capturing the startup const
@@ -705,6 +718,12 @@ function initBackend(): void {
   // registrar — so the lock/quit teardowns reach it via `ctx.localApi`. It binds nothing
   // until a post-unlock seam runs `maybeStartLocalApi` AND policy ∧ setting permit (D3/D7).
   ctx.localApi = createLocalApiServer(ctx as AppContext, app.getVersion())
+  // #600: a deliberate stop or switch of the chat model ends the work running on it first — the
+  // local API's request, a deep-index build, the chat and document answers — so each ends as a
+  // clean stop instead of failing on the killed sidecar (`ipc/model-stop.ts`).
+  runtime.setModelStopHook((kind) => {
+    if (ctx) endWorkOnModelStop(ctx, kind)
+  })
   // Issue #40: a completed in-app model download re-runs the translation selector, so the
   // Translate screen stops claiming the model is missing the moment the GGUF lands — no restart.
   // Only a NULL slot or a `startFailed`-latched instance is ever re-composed (BE-7, full-audit

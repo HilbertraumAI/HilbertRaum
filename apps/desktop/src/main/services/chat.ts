@@ -12,6 +12,7 @@ import {
   type ConversationSearchResult,
   type CoverageInfo,
   type DocumentScope,
+  type EndedEarly,
   type KnowledgePackOutcome,
   type Message,
   type SkillOffer,
@@ -31,6 +32,7 @@ import {
 } from './skills/prompt'
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions, RuntimeTimings } from './runtime'
 import { requestParamsForMode } from './runtime/llama'
+import { isModelStopAbort } from './runtime/model-stop'
 import { ensureCompacted } from './chat/compaction'
 import { log } from './logging'
 
@@ -237,6 +239,8 @@ interface MessageRow {
   /** #498 — which ceiling cut it: 'context' | 'cap'. NULL on a complete reply and on a pre-#498
    *  truncated row (read back as 'context', the flag's historical meaning). */
   truncated_cause?: string | null
+  /** #600 — what ended this turn early ('model' | 'user' | 'lock'), or NULL (complete / pre-#600). */
+  ended_early?: string | null
   /** Derived by listMessages (EXISTS over `result_tables`): 1 when a result table is attached
    *  (result-tables plan §4, Phase 2). Absent on other query paths — coalesced to undefined. */
   has_result_table?: number | null
@@ -455,6 +459,11 @@ function parseTruncationCause(raw: string | null | undefined): TruncationCause {
   return raw === 'cap' ? 'cap' : 'context'
 }
 
+/** Read `messages.ended_early` (#600). Only a known value surfaces; NULL or anything else ⇒ undefined. */
+function parseEndedEarly(raw: string | null | undefined): EndedEarly | undefined {
+  return raw === 'model' || raw === 'user' || raw === 'lock' ? raw : undefined
+}
+
 function rowToMessage(r: MessageRow): Message {
   const citations = parseCitations(r.citations_json)
   const coverage = parseCoverage(r.coverage_json)
@@ -485,6 +494,8 @@ function rowToMessage(r: MessageRow): Message {
     // it reads as 'context', which is exactly what the pre-#498 badge claimed, so old history keeps
     // its old advice. Anything unrecognized degrades the same way (tolerant read, like coverage).
     truncatedCause: r.truncated === 1 ? parseTruncationCause(r.truncated_cause) : undefined,
+    // #600: undefined on every complete turn and every older row (tolerant read).
+    endedEarly: parseEndedEarly(r.ended_early),
     // Positive-flag convention (Phase 2 result tables): 1 → true, anything else (incl. query paths
     // that don't compute the EXISTS) → undefined, so older rows and other readers are byte-identical.
     hasResultTable: r.has_result_table === 1 ? true : undefined,
@@ -853,6 +864,12 @@ export interface AppendMessageInput {
    */
   truncatedCause?: TruncationCause
   /**
+   * #600 — this turn ended early: on an assistant row the partial was cut, on a user row the question
+   * got no answer. Omitted ⇒ NULL. `persistAssistantMessage` stamps `'model'` itself when the turn's
+   * signal says the user stopped or switched the model, so the answer paths need not pass it.
+   */
+  endedEarly?: EndedEarly
+  /**
    * The actionable per-answer skill OFFER (issue #80, wave R80) — persisted to
    * `messages.skill_offer_json`. Assistant rows only; omitted/null ⇒ NULL (no offer — every
    * ordinary answer stays byte-identical). Structural only (id + title + provenance), never content.
@@ -881,6 +898,7 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   const truncated = input.truncated === true
   // #498: the cause is meaningful only on a truncated row — a complete reply always stores NULL.
   const truncatedCause = truncated ? (input.truncatedCause ?? null) : null
+  const endedEarly = input.endedEarly ?? null
   // #80: best-effort like coverage — a serialization fault degrades to NULL, never blocks the answer.
   const skillOfferJson = serializeSkillOffer(input.skillOffer)
   // #301 P4: same best-effort posture — the ANSWER must persist even if the metadata cannot.
@@ -899,6 +917,7 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     truncated: truncated ? true : undefined,
     // Mirror the read side exactly: a truncated row with no stored cause reads back as 'context'.
     truncatedCause: truncated ? (truncatedCause ?? 'context') : undefined,
+    endedEarly: endedEarly ?? undefined,
     skillOffer: skillOfferJson != null ? (input.skillOffer ?? undefined) : undefined,
     // Mirrors the row: undefined when nothing was written (no pack in scope, or a serialization
     // fault), so the returned Message and a later `listMessages` read agree.
@@ -906,8 +925,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
   }
   prepareCached(
     db,
-    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated, truncated_cause, skill_offer_json, pack_outcomes_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+    `INSERT INTO messages (id, conversation_id, role, content, created_at, token_count, citations_json, skill_id, auto_fired, coverage_json, truncated, truncated_cause, skill_offer_json, pack_outcomes_json, ended_early)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     msg.id,
     msg.conversationId,
@@ -922,7 +941,8 @@ export function appendMessage(db: Db, input: AppendMessageInput): Message {
     truncated ? 1 : null,
     truncatedCause,
     skillOfferJson,
-    packOutcomesJson
+    packOutcomesJson,
+    endedEarly
   )
   prepareCached(db, 'UPDATE conversations SET updated_at = ? WHERE id = ?').run(
     now,
@@ -993,16 +1013,16 @@ export interface DeletedResultTable {
  * A snapshot of a deleted message, sufficient to re-insert it byte-faithfully via
  * `restoreMessage`. Powers the regenerate data-loss guard (F2, post-merge audit): the
  * destructive regenerate delete runs only after the stream slot is held, and the prior reply
- * is restored from this snapshot if generation then fails for a non-abort reason — so a failed
- * regenerate never leaves the turn answer-less.
+ * is restored from this snapshot if generation then fails with nothing saved in its place — so a
+ * failed regenerate never leaves the turn answer-less.
  *
  * It also carries the message's `result_tables` rows. `result_tables.message_id` is a foreign key
  * with ON DELETE CASCADE and the workspace runs with `PRAGMA foreign_keys = ON`, so the
  * regenerate `DELETE FROM messages` takes the answer's structured table (the artifact behind the
  * message-level "Export CSV" action) with it. Dropping it is CORRECT when a regenerate succeeds —
- * the answer is genuinely replaced and the new one brings its own table — but on the two legs
- * that put the OLD answer back (a non-abort generation failure, and a Stop before the first
- * token) the reply used to return with its table permanently gone: the derived `hasResultTable`
+ * the answer is genuinely replaced and the new one brings its own table — but on the legs that
+ * put the OLD answer back (a failed generation, a Stop before the first token, and since #600 a
+ * model stop that cut the re-ask) the reply used to return with its table permanently gone: the derived `hasResultTable`
  * EXISTS join then read false and the Export affordance silently vanished from a turn the app had
  * just reported as fully restored, with no way to reproduce it short of re-running the model.
  * Capturing the rows here keeps those legs' "nothing is lost" contract honest.
@@ -1032,6 +1052,9 @@ export interface DeletedMessage {
    *  `skillOfferJson`: omit it and a regenerate that later restores the prior reply would silently
    *  strip the answer's pack record). Replayed byte-identically by `restoreMessage`. */
   readonly packOutcomesJson: string | null
+  /** #600 — `ended_early`, captured verbatim like the cause above: a regenerate that restores a
+   *  stopped reply must keep its "Reply stopped" marker. */
+  readonly endedEarly: string | null
   /** The message's result tables, oldest-first. Empty for the common table-less answer. */
   readonly resultTables: readonly DeletedResultTable[]
 }
@@ -1053,6 +1076,7 @@ interface DeletedMessageRow {
   truncated_cause: string | null
   skill_offer_json: string | null
   pack_outcomes_json: string | null
+  ended_early: string | null
 }
 
 interface ResultTableRow {
@@ -1086,6 +1110,25 @@ export function getRegenerableAssistantMessageId(db: Db, conversationId: string)
     )
     .get(conversationId) as unknown as { id: string; role: string } | undefined
   return row?.role === 'assistant' ? row.id : null
+}
+
+/**
+ * #600 — mark the question that a turn left unanswered: the conversation's last VISIBLE message,
+ * when — and only when — it is a user turn (an answer that persisted, or a restored one, makes the
+ * tail an assistant row and nothing is marked). The transcript then shows "Not answered — the AI
+ * model was stopped." under it instead of a silently unanswered question. Returns whether a row was
+ * marked.
+ */
+export function markUnansweredQuestion(db: Db, conversationId: string, cause: EndedEarly): boolean {
+  const row = db
+    .prepare(
+      `SELECT id, role FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
+       ORDER BY created_at DESC, rowid DESC LIMIT 1`
+    )
+    .get(conversationId) as unknown as { id: string; role: string } | undefined
+  if (row?.role !== 'user') return false
+  db.prepare('UPDATE messages SET ended_early = ? WHERE id = ?').run(cause, row.id)
+  return true
 }
 
 /**
@@ -1126,7 +1169,7 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     .prepare(
       `SELECT id, conversation_id, role, content, created_at, token_count, citations_json,
               skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated,
-              truncated_cause, skill_offer_json, pack_outcomes_json
+              truncated_cause, skill_offer_json, pack_outcomes_json, ended_early
        FROM messages WHERE conversation_id = ? AND kind IS NOT 'compaction'
        ORDER BY created_at DESC, rowid DESC LIMIT 1`
     )
@@ -1157,6 +1200,7 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
     truncatedCause: row.truncated_cause,
     skillOfferJson: row.skill_offer_json,
     packOutcomesJson: row.pack_outcomes_json,
+    endedEarly: row.ended_early,
     resultTables: tableRows.map((t) => ({
       id: t.id,
       messageId: t.message_id,
@@ -1173,7 +1217,8 @@ export function deleteLastAssistantMessage(db: Db, conversationId: string): Dele
 /**
  * Re-insert a previously-deleted message exactly (same id, timestamp, citations, coverage, skill
  * stamp) together with any result tables that hung off it. Restores a regenerate's prior reply
- * after a non-abort generation failure (F2) or a Stop before the first token (CB-2). The row keeps
+ * after a failed generation (F2), a Stop before the first token (CB-2), or a model stop that cut
+ * the re-ask (#600). The row keeps
  * its original `created_at`, so it sorts back to the tail of the transcript; the FTS triggers
  * re-index it on insert. A fresh rowid is assigned (rowid is identity-free here — no checkpoint
  * coverage points at a tail assistant reply).
@@ -1191,8 +1236,8 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     `INSERT INTO messages
        (id, conversation_id, role, content, created_at, token_count, citations_json,
         skill_id, auto_fired, coverage_json, kind, covers_through_rowid, truncated,
-        truncated_cause, skill_offer_json, pack_outcomes_json)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        truncated_cause, skill_offer_json, pack_outcomes_json, ended_early)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
   ).run(
     m.id,
     m.conversationId,
@@ -1209,7 +1254,8 @@ export function restoreMessage(db: Db, m: DeletedMessage): void {
     m.truncated,
     m.truncatedCause,
     m.skillOfferJson,
-    m.packOutcomesJson
+    m.packOutcomesJson,
+    m.endedEarly
   )
   if (m.resultTables.length === 0) return
   try {
@@ -1875,6 +1921,10 @@ export function emptyAssistantMessage(conversationId: string): Message {
  * Stop+lock race behaves identically on every answer path.
  */
 export function persistAssistantMessage(db: Db, input: AppendMessageInput, signal?: AbortSignal): Message {
+  // #600: a partial cut by the user stopping or switching the model is marked "Reply stopped" — here,
+  // once, for every answer path that persists through this helper (plain chat and the three grounded
+  // sites), keyed on the turn's own abort reason. A Stop-button partial keeps no marker (#612).
+  if (input.endedEarly == null && isModelStopAbort(signal)) input = { ...input, endedEarly: 'model' }
   try {
     return appendMessage(db, input)
   } catch (err) {

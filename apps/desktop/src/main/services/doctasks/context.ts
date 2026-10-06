@@ -28,6 +28,8 @@ export interface DocTaskDeps {
   getDb: () => Db
   /** The active chat runtime, or null when none is running. */
   getRuntime: () => ModelRuntime | null
+  /** #599: a model start is requested or loading — a refusal then says "is starting", not "start one". */
+  isModelStarting?: () => boolean
   /**
    * The TranslateGemma translation sidecar, or null when its binary/weights are absent
    * (TG-3, plan D3/O2). `kind:'translation'` requires THIS — never the chat runtime —

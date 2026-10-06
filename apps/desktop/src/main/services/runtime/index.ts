@@ -218,6 +218,22 @@ function shutdownError(): Error {
 const EXTERNAL_TEARDOWN_TIMEOUT_MS = 5_000
 
 /**
+ * #599: how long a `/health` re-probe result stands (`refreshHealth`). The status read that asks
+ * runs every 2.5 s while a screen polls; one probe per 10 s keeps a frozen process visible within
+ * seconds without a probe per poll (each costs one loopback request, ~60 ms on b11146).
+ */
+const HEALTH_PROBE_TTL_MS = 10_000
+
+/**
+ * #599: a runtime's watchdog verdict — "the model stopped responding" — is an Error named
+ * `RuntimeUnresponsiveError` (llama.ts's CB-5 class). Matched by name so the manager stays free of
+ * any concrete runtime (spec §9.2): another backend signals the same verdict the same way.
+ */
+function isUnresponsiveVerdict(err: unknown): boolean {
+  return err instanceof Error && err.name === 'RuntimeUnresponsiveError'
+}
+
+/**
  * Holds the single active runtime. The factory lets us swap mock → llama.cpp
  * without touching callers (the IPC layer just sees start/stop/status).
  */
@@ -240,6 +256,12 @@ export class RuntimeManager {
    * while the first is still loading) must not stop-and-restart the runtime.
    */
   private startingModelId: string | null = null
+  /**
+   * #599: who owns the "starting" window — the last `start()` / `forceRestart()` that claimed it.
+   * Only the owner clears it. Comparing model ids let a start whose warm-up crashed clear the flag
+   * of the crash restart queued behind it (same model), so the restart read "Stopped" throughout.
+   */
+  private startingClaim: object | null = null
   /** #107: Date.now() when the in-flight start began; null outside a start window.
    *  Stamped synchronously with `startingModelId` and RE-stamped at queue-drain inside
    *  `doStart` so a switch's elapsed measures THIS load, not the old model's stop. */
@@ -321,12 +343,46 @@ export class RuntimeManager {
    * fails a start or a stop.
    */
   private readonly changeListeners = new Set<() => void>()
+  /**
+   * #600: ends the work in flight on the model about to be killed — the composition seam registers
+   * one (`endWorkOnModelStop`: the local API's request, a deep-index build, the chat and document
+   * answers). Called from `doStop` for every stop and switch EXCEPT the crash restart
+   * (`forceRestart`: that sidecar is already dead and its answers have already failed):
+   *   - AFTER `current` is cleared, so nothing new can start on the dying model meanwhile;
+   *   - synchronously and BEFORE the kill, with no wait in between. Aborting is instant and an
+   *     answer's partial persists with no help from the sidecar, while a wait would open a window
+   *     in which a GPU crash queues a `forceRestart` of the model the user just stopped.
+   * Lock and quit abort their work first anyway; the second abort is a no-op (first reason wins).
+   * `kind` says whether a start follows ('switch') or not ('stop'). A throwing hook never blocks
+   * the stop.
+   */
+  private modelStopHook: ((kind: 'stop' | 'switch') => void) | null = null
+
+  // ---- Liveness of the running model (#599) ---------------------------------------------
+  //
+  // `last` used to be the start's health check, never re-read: a frozen sidecar (the #594 hang
+  // answered neither chat nor `/health`) stayed "running, healthy" on every surface. Two signals now
+  // feed `status().unresponsive`: a `/health` re-probe on status reads (a frozen or suspended
+  // process), and an answer the CB-5 watchdog ended (a wedged compute loop, which `/health` — served
+  // by the HTTP thread — cannot see).
+  /** #599: the options the running model was started with — what a user Restart starts again. */
+  private currentOpts: RuntimeStartOptions | null = null
+  /** #599: an answer ended on the CB-5 watchdog. Sticky: a passing `/health` cannot clear it — only
+   *  the next completed answer or a new runtime does. */
+  private wedged = false
+  /** #599: when the last `/health` re-probe settled (`performance.now()`), and the one in flight. */
+  private probedAt = 0
+  private probeInFlight: Promise<void> | null = null
+  private readonly healthProbeTtlMs: number
+  /** #599: starts requested and not yet settled (`beginStartRequest`), the weight check included. */
+  private startRequests = 0
 
   constructor(
     private readonly factory: RuntimeFactory,
-    opts?: { externalTeardownTimeoutMs?: number }
+    opts?: { externalTeardownTimeoutMs?: number; healthProbeTtlMs?: number }
   ) {
     this.externalTeardownTimeoutMs = opts?.externalTeardownTimeoutMs ?? EXTERNAL_TEARDOWN_TIMEOUT_MS
+    this.healthProbeTtlMs = opts?.healthProbeTtlMs ?? HEALTH_PROBE_TTL_MS
   }
 
   /** True while ANY lane has an in-flight generation. For external admission use
@@ -355,6 +411,11 @@ export class RuntimeManager {
     this.externalPreemptionHook = hook
   }
 
+  /** #600: register/clear the hook that ends in-flight work when the model is stopped (see field). */
+  setModelStopHook(hook: ((kind: 'stop' | 'switch') => void) | null): void {
+    this.modelStopHook = hook
+  }
+
   /**
    * Subscribe to runtime transitions (starting, ready, stopped — see `changeListeners`);
    * returns the unsubscribe. Fired after the state is committed, so `status()` read inside
@@ -375,6 +436,97 @@ export class RuntimeManager {
         /* a listener is an observer of the runtime, never a participant in its lifecycle */
       }
     }
+  }
+
+  /**
+   * #599: re-check the running model's `/health`, at most once per `healthProbeTtlMs`. Called by the
+   * status read (`getRuntimeStatus`), never by a timer, so an idle app probes nothing. A failed
+   * probe marks the model unresponsive until a later probe passes; concurrent reads share one
+   * probe, and a probe that outlives a stop or switch is discarded.
+   */
+  refreshHealth(): Promise<void> {
+    const runtime = this.current
+    if (!runtime) return Promise.resolve()
+    if (this.probeInFlight) return this.probeInFlight
+    if (performance.now() - this.probedAt < this.healthProbeTtlMs) return Promise.resolve()
+    const probe = (async () => {
+      let health: HealthStatus
+      try {
+        health = await runtime.health()
+      } catch (err) {
+        health = { healthy: false, port: this.last?.port ?? null, message: `Health check failed: ${String(err)}` }
+      }
+      if (this.current !== runtime) return
+      const changed = (this.last?.healthy ?? false) !== health.healthy
+      this.last = health
+      if (changed) this.emitChange()
+    })().finally(() => {
+      this.probedAt = performance.now()
+      this.probeInFlight = null
+    })
+    this.probeInFlight = probe
+    return probe
+  }
+
+  /** #599: set the watchdog mark; a change is a status transition. */
+  private setWedged(wedged: boolean): void {
+    if (this.wedged === wedged) return
+    this.wedged = wedged
+    this.emitChange()
+  }
+
+  /**
+   * #599: a model start was requested — from the top of `startModelRuntime`, before its weight check
+   * (minutes on a freshly copied drive) and before `start()` sets `startingModelId`. Returns the
+   * release (idempotent). While any is open, `status().startRequested` is true and the "no model is
+   * running" refusals say "is starting" instead.
+   */
+  beginStartRequest(): () => void {
+    this.startRequests++
+    if (this.startRequests === 1) this.emitChange()
+    let released = false
+    return () => {
+      if (released) return
+      released = true
+      this.startRequests--
+      if (this.startRequests === 0) this.emitChange()
+    }
+  }
+
+  /** #599: a start is requested or loading — the "is starting" predicate of the no-model refusals. */
+  isStarting(): boolean {
+    return this.startRequests > 0 || this.startingModelId != null
+  }
+
+  /**
+   * #599: the AI Model card's "Restart" — start the running model again with the options it was
+   * started with, past `start()`'s same-model guard (`forceRestart`). The user acted on the model, so
+   * its in-flight answers end as a switch ends them (#600). Null when nothing runs. A start already
+   * in flight (a crash restart, a switch) replaces the runtime anyway: the Restart joins it instead
+   * of loading the model twice — or undoing the switch.
+   */
+  async restartCurrent(): Promise<RuntimeStatus | null> {
+    const opts = this.currentOpts
+    if (!opts) return null
+    if (this.startingModelId != null) return this.enqueue(() => Promise.resolve(this.status()))
+    return this.forceRestart(opts, 'switch')
+  }
+
+  /**
+   * #599: a CPU-mode crash the app does not restart (its one restart this session is spent): drop
+   * the dead runtime so every surface says stopped. No model-stop hook — its answers already failed
+   * on the dead socket. A no-op when another model runs by now, or when the runtime answers its
+   * health check — a late or duplicate crash report must not take down the healthy runtime that
+   * replaced the crashed one.
+   */
+  stopCrashed(modelId: string): Promise<void> {
+    return this.enqueue(async () => {
+      const runtime = this.current
+      if (runtime?.modelId !== modelId) return
+      const health = await runtime.health().catch(() => ({ healthy: false }))
+      if (health.healthy || this.current !== runtime) return
+      await this.doStop('restart')
+    })
   }
 
   /** Zero the gate for a new runtime epoch (see {@link gateEpoch}). */
@@ -463,6 +615,12 @@ export class RuntimeManager {
         if (this.laneCounts['in-app'] > 0 || this.laneCounts.external > 1) {
           throw new ExternalGenerationBusyError()
         }
+      } else if (options?.signal?.aborted) {
+        // #600: an in-app call whose turn is already aborted generates nothing, so it pre-empts
+        // nothing either. A turn the model-stop hook ended inside its compaction pre-pass still
+        // reaches here (compaction swallows the abort); without this it would have labelled the
+        // local API's request `preempted_by_user` and stamped `lastPreemptedAt`.
+        return
       } else {
         try {
           this.externalPreemptionHook?.('in-app generation entered')
@@ -476,7 +634,15 @@ export class RuntimeManager {
           if (options?.signal?.aborted) return
         }
       }
-      yield* inner.chatStream(messages, options)
+      try {
+        yield* inner.chatStream(messages, options)
+      } catch (err) {
+        // #599: the CB-5 watchdog gave up on the model — the status says so until it answers again.
+        if (isUnresponsiveVerdict(err) && epoch === this.gateEpoch) this.setWedged(true)
+        throw err
+      }
+      // #599: a completed answer proves the compute loop works again.
+      if (!options?.signal?.aborted && epoch === this.gateEpoch) this.setWedged(false)
     } finally {
       if (epoch === this.gateEpoch) {
         this.laneCounts[lane]--
@@ -525,6 +691,8 @@ export class RuntimeManager {
     }
     // Set synchronously so a concurrent caller sees the in-flight model immediately.
     this.startingModelId = opts.modelId
+    const claim = {}
+    this.startingClaim = claim
     // #107: when the start actually began — status() derives the elapsed time of the
     // "Starting…" window from it, so the renderer can show honest load progress.
     this.startingSince = Date.now()
@@ -532,8 +700,10 @@ export class RuntimeManager {
     try {
       return await this.enqueue(() => this.doStart(opts))
     } finally {
-      // Only clear if no newer start (a switch) has since claimed the slot.
-      if (this.startingModelId === opts.modelId) {
+      // Only clear if no newer start (a switch, or a crash restart of this model) has since
+      // claimed the slot.
+      if (this.startingClaim === claim) {
+        this.startingClaim = null
         this.startingModelId = null
         this.startingSince = null
         this.startingBytesTotal = null
@@ -543,7 +713,12 @@ export class RuntimeManager {
     }
   }
 
-  async stop(): Promise<void> {
+  /**
+   * `startFollows`: the app stops the model only to start it again itself (an engine update, the
+   * demo → real engine restart). In-flight work then hears "switch", so a local-API client is told
+   * to retry (`model_starting`) rather than that a person must start a model (#600).
+   */
+  async stop(opts?: { startFollows?: boolean }): Promise<void> {
     // CODE-2 (full-audit 2026-07-11): cancel an in-flight start so it settles PROMPTLY
     // instead of holding the queue for the remaining health timeouts. The queue semantics
     // stay untouched (the doStop below still runs only after the start settles and acts on
@@ -558,7 +733,7 @@ export class RuntimeManager {
         .then(() => starting.stop())
         .catch(() => undefined)
     }
-    return this.enqueue(() => this.doStop())
+    return this.enqueue(() => this.doStop(opts?.startFollows === true ? 'switch' : 'stop'))
   }
 
   /**
@@ -567,7 +742,8 @@ export class RuntimeManager {
    * already `this.current` — correct for a double-click or an AI-Model-screen revisit, but
    * fatal for the GPU mid-session crash auto-fallback (architecture.md GPU record §5.3): the
    * crashed `LadderRuntime` is still `this.current` (the manager never observes the child's
-   * exit — it caches `this.last` at start and never re-polls), so wiring the crash restart to
+   * exit — `this.last` is the start's health check, re-probed only on status reads since #599),
+   * so wiring the crash restart to
    * `start(sameModel)` early-returns a stale status read, never stops-and-restarts, and leaves
    * `status()` reporting the DEAD server as running/healthy while the next chat/RAG turn routes
    * to it and fails.
@@ -582,23 +758,30 @@ export class RuntimeManager {
    *
    * Retry bound (no restart loop): the caller (`createGpuCrashAutoFallback`) persists
    * `gpuAutoDisabled` BEFORE invoking this, so the ladder rebuilt inside `doStart` skips rung 1
-   * and lands on CPU; a later CPU crash does NOT route through `onGpuCrash` (LadderRuntime gates
-   * it on `backend === 'gpu'`, factory.ts:137-139), so a GPU session auto-falls-back at most once.
+   * and lands on CPU; a later CPU crash does NOT route through `onGpuCrash` (the ladder's
+   * `onUnexpectedExit` gates it on `backend === 'gpu'`), so a GPU session auto-falls-back at most
+   * once. A CPU-mode crash goes to `onCpuCrash` instead (#599): one restart per model per session,
+   * then `stopCrashed`.
    */
-  async forceRestart(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
+  async forceRestart(opts: RuntimeStartOptions, stopKind: 'restart' | 'switch' = 'restart'): Promise<RuntimeStatus> {
     // CODE-3: a crash restart racing the quit teardown must not respawn either.
     if (this.stopped) throw shutdownError()
     this.startingModelId = opts.modelId
+    const claim = {}
+    this.startingClaim = claim
     // #107: the crash-restart window carries load progress too (it is the slowest start
     // the app performs — a full cold ladder re-walk); doStart re-stamps at queue-drain.
     this.startingSince = Date.now()
     this.emitChange()
     try {
-      return await this.enqueue(() => this.doStart(opts))
+      // #600: the crashed runtime's answers already failed — no model-stop hook on this stop. A user
+      // Restart (#599, `restartCurrent`) passes 'switch': its answers end cleanly first.
+      return await this.enqueue(() => this.doStart(opts, stopKind))
     } finally {
       // Clear ALL THREE (paired with startingModelId, here and in start()) — a stale
       // startingSince would attribute an old window's elapsed to the next start.
-      if (this.startingModelId === opts.modelId) {
+      if (this.startingClaim === claim) {
+        this.startingClaim = null
         this.startingModelId = null
         this.startingSince = null
         this.startingBytesTotal = null
@@ -607,13 +790,13 @@ export class RuntimeManager {
     }
   }
 
-  private async doStart(opts: RuntimeStartOptions): Promise<RuntimeStatus> {
+  private async doStart(opts: RuntimeStartOptions, stopKind: 'switch' | 'restart' = 'switch'): Promise<RuntimeStatus> {
     // CODE-3: a start that was already IN the queue when shutdown() armed the latch
     // (e.g. enqueued behind an in-flight start/stop) must not spawn either — re-check
     // before touching anything, so the factory is never invoked past the latch.
     if (this.stopped) throw shutdownError()
     // Restart cleanly on a model switch (spec §7.5).
-    if (this.current) await this.doStop()
+    if (this.current) await this.doStop(stopKind)
     // Fresh gate epoch for the new runtime: zeroes any count a misbehaving external
     // consumer leaked in the previous session (see gateEpoch).
     this.resetGenerationGate()
@@ -649,6 +832,10 @@ export class RuntimeManager {
       // chatStream passes the generation gate with zero call-site changes.
       this.current = this.decorateWithGenerationGate(next)
       this.last = health
+      // #599: a fresh runtime — its start just proved `/health`, and no answer has failed on it.
+      this.currentOpts = opts
+      this.wedged = false
+      this.probedAt = performance.now()
       this.emitChange()
     } catch (err) {
       try {
@@ -665,12 +852,22 @@ export class RuntimeManager {
     return this.status()
   }
 
-  private async doStop(): Promise<void> {
+  private async doStop(kind: 'stop' | 'switch' | 'restart'): Promise<void> {
     if (!this.current) return
     const stopping = this.current
     this.current = null
     this.last = null
+    this.currentOpts = null
+    this.wedged = false
     this.emitChange()
+    // #600: end the in-flight work first — after `current` is cleared, before the kill, no wait.
+    if (kind !== 'restart') {
+      try {
+        this.modelStopHook?.(kind)
+      } catch {
+        /* ending the answers is a courtesy to them; it must never block the stop itself */
+      }
+    }
     await stopping.stop()
 
     // The runtime is gone — no stream of its epoch can legitimately still count.
@@ -699,6 +896,8 @@ export class RuntimeManager {
             bytesTotal: this.startingBytesTotal
           }
         : undefined
+    // #599: a start requested but still checking the weights (`startingModelId` not set yet).
+    const startRequested = this.startRequests > 0 ? { startRequested: true } : {}
     if (!this.current) {
       return {
         running: false,
@@ -707,17 +906,22 @@ export class RuntimeManager {
         healthy: false,
         message: startingModelId ? 'Starting' : 'Stopped',
         startingModelId,
-        starting
+        starting,
+        ...startRequested
       }
     }
+    // #599: a failed `/health` re-probe, or an answer the CB-5 watchdog ended.
+    const unresponsive = this.wedged || this.last?.healthy === false
     // A start in flight for a DIFFERENT model than the running one = a switch underway.
     const switchingId = startingModelId !== this.current.modelId ? startingModelId : null
     return {
       running: true,
       modelId: this.current.modelId,
       port: this.last?.port ?? null,
-      healthy: this.last?.healthy ?? false,
-      message: this.last?.message ?? 'Running',
+      healthy: (this.last?.healthy ?? false) && !this.wedged,
+      message: this.wedged ? 'Not responding: an answer timed out' : (this.last?.message ?? 'Running'),
+      ...(unresponsive ? { unresponsive: true } : {}),
+      ...startRequested,
       backend: this.current.backend ?? UNLABELLED_BACKEND,
       gpuName: this.current.gpuName ?? null,
       // The real launched context window (§L0) — the budget chat/RAG assembly trims

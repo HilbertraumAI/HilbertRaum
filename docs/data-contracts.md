@@ -366,9 +366,14 @@ both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invali
 404 `unknown_route` · 413 `body_too_large` (counted bytes, 1 MB; Content-Length never trusted) ·
 415 · 429 `busy` + Retry-After (derived from measured tok/s; ~5–180 s, default 30) ·
 502 `runtime_unresponsive` · 503 `model_starting`/`model_not_loaded`/`workspace_locked`/
-`server_stopped`. **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
+`server_stopped` (`model_starting` from the start REQUEST on, its weight check included — #599). **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
 `{"error":{type:'server_error', code:'preempted_by_user'}}` frame, stream closes **without**
-`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. Baseline
+`[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. **A deliberate model
+stop or switch (#600)** ends the active request first with the model gate's own code — `model_not_loaded`
+after a stop, `model_starting` (+ Retry-After) after a switch or a stop the app follows with a start
+(`stop({ startFollows })`: an engine update, the demo → real engine restart); 503 before any bytes, the
+same in-band frame after, and the same 503 for a request queued behind it (`LocalApiServer.endForModelChange`,
+called from the runtime's model-stop hook). Baseline
 limits: headersTimeout 10 s, requestTimeout DISABLED (CPU generations exceed 300 s; watchdogs +
 a 15 s SSE drain-timeout reclaim wedged slots — the runtime's CB-5 watchdogs end a wedged
 sidecar with 502 `runtime_unresponsive`: no headers in 180 s, then before the first token 120 s
@@ -444,6 +449,13 @@ below for the shape and the whitelist that parses it.
 only alongside `truncated: true`. NULL on every complete reply and every pre-#498 row — a
 truncated legacy row reads back as `'context'`, the flag's historical meaning — and it is
 carried verbatim through the regenerate delete/restore snapshot (`DeletedMessage`).
+`messages.ended_early` (#600) is additive and nullable: `'model' | 'user' | 'lock'` (`EndedEarly`),
+surfaced as `Message.endedEarly`; only `'model'` is written (the user stopped or switched the chat model
+mid-turn; `'user'` / `'lock'` are reserved for #612). On an assistant row the partial was cut ("Reply
+stopped"; stamped by `persistAssistantMessage` from the turn's abort reason, `isModelStopAbort`); on a
+user row the question got no answer (`markUnansweredQuestion`, last visible row only). Its OWN column,
+never a `truncated_cause` value — an older app reads an unknown cause as "raise the context size" and
+ignores this column. Unknown values read back as undefined; carried verbatim through `DeletedMessage`.
 ✅ **Title:** new conversations are `"New chat"`; first user message sets the title (≤60 chars),
 later messages don't overwrite it. Conversations list newest-updated first.
 (Phase 42: the default is persist-canonical English — `t('en', 'main.chat.defaultTitle')`,
@@ -462,6 +474,14 @@ never replayed (D6) — see "Answer-depth modes" below.
 **Cancellation:** `ipc/registerChatIpc.ts` keeps a per-conversation `AbortController` map;
 `stopGeneration(conversationId)` aborts it → `chatStream` stops on `options.signal`, the partial
 reply is persisted, a normal `done` fires.
+**Model stop or switch mid-turn (#600, additive — channel shape unchanged):** the runtime's
+model-stop hook aborts every in-flight turn with `modelStopAbortReason()` BEFORE the sidecar is killed,
+so the turn ends exactly like a Stop (`done`, partial persisted) — the partial carries
+`endedEarly: 'model'`, a re-ask whose saved answer carries that marker restores its predecessor
+instead (one transaction; a complete answer saved before the stop landed stays), and a turn with no
+answer marks its question. A sidecar that DIES under a turn instead (crash, OS kill) rejects with
+`RuntimeConnectionLostError` → `chat:error:<id>` with the friendly `main.chat.connectionLost` copy; its
+partial is not persisted (the F-02 rule).
 **Mid-stream runtime failure (audit 2026-07-16 F-02, additive — channel shape unchanged):** an
 in-band SSE error frame from the runtime rejects the stream (`ChatStreamError`) instead of
 ending it cleanly, so a partial can never persist as a complete answer; it reaches the renderer
@@ -906,6 +926,22 @@ head's own weights + KV.
   speed (`effectiveRead` or "not measured yet") / drive write / tokens-sec / profile /
   recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects
   the persisted value via `getAppStatus`.
+- **`RuntimeStatus.unresponsive?`** (issue #599) — `true` while the RUNNING model stopped
+  responding: a `/health` re-probe failed (a frozen or suspended process; the `getRuntimeStatus`
+  handler re-probes at most every ~10 s, each probe bounded at 3 s), or an answer ended on the CB-5
+  watchdog (`RuntimeUnresponsiveError` — sticky: a passing probe cannot clear it, only the next
+  completed answer or a restart). `healthy` reads `false` meanwhile. Absent otherwise. The AI Model
+  card shows "Not responding" + Restart (`restartRuntime`).
+- **`RuntimeStatus.startRequested?`** (issue #599) — `true` from the moment a model start is
+  requested (`startModelRuntime`, before its weight check) until it settles; `startingModelId` is set
+  only once the load begins. Absent otherwise. "Is starting" keys on either
+  (`shared/runtime-status.ts` `isModelStarting`): Chat's waiting screen, the `main.modelStarting`
+  refusal (chat, document answers, doc tasks), the local API's `model_starting`, and the engine
+  update's busy refusal.
+- **`RuntimeStatus.answering?`** (issue #600) — `true` while a chat or document answer streams on
+  the running model (`inFlightStreams` non-empty), added by the `getRuntimeStatus` handler; absent
+  otherwise. The AI Model card shows a note then (stopping or switching ends that answer, keeping its
+  text) and polls the status until it clears.
 - **`RuntimeStatus.starting?`** (issue #107) — `{ elapsedMs, bytesTotal?, expectedMs? }`:
   present while `startingModelId` is (incl. the GPU-crash `forceRestart` window). The manager
   resolves `elapsedMs` (stamped with `startingModelId`, RE-stamped at queue-drain in `doStart`
@@ -1304,7 +1340,9 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   resolver branch runs, and `packId`/`articlePath` are the source's stable locator
   carried through every export),
   `EvidenceGenerationSnapshot` (spec §18.3 but **every field optional** per plan §1.3 — absent
-  renders "Unavailable", never invented), `EvidenceLink`, `EvidenceReviewItem`,
+  renders "Unavailable", never invented; #600 added `answerStopped`, `true` when a model stop or switch
+  ended the answer early, so the pack says so instead of "No output truncation was recorded"),
+  `EvidenceLink`, `EvidenceReviewItem`,
   `EvidenceReadyGate`, `EvidenceReview`, `EvidenceReviewSummary`, `EvidenceReviewDetail`,
   `EvidenceExportFormat` ('html'|'pdf' — the write-side type; `EvidenceExportRecord.format`
   reads as the RAW stored string, see the service bullet), `EvidenceExportRecord`;
@@ -1958,6 +1996,13 @@ appeared under neither their method name nor their channel string — mostly sib
 calls that arrived one at a time. Listed here so the declared source of truth is complete; each
 one's behaviour stays owned by the design record named beside it.
 
+- **`restartRuntime(): Promise<RuntimeStatus | null>`** (`runtime:restart`, #599) — start the RUNNING
+  model again with the options it was started with, past `startRuntime`'s same-model no-op
+  (`RuntimeManager.restartCurrent` → `forceRestart(opts, 'switch')`): its in-flight answers end as a
+  switch ends them (#600). Gated on the unlocked workspace like `startRuntime`; aborts a deep-index
+  build first; audits `runtime_started` ("restarted"). Null when no model runs. The AI Model card
+  offers it for a model that stopped responding (design-guidelines §11.22); the app never calls it
+  on its own.
 - **`useModel(modelId): Promise<RuntimeStatus>`** (`runtime:use`) — the MERGED select-and-start
   action, and the one a UI caller should reach for. It persists the active chat slot, emits
   `model_selected`, and starts the runtime in one handler so the spec-§7.4 install gate and the RAM

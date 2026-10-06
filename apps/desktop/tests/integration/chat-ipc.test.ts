@@ -48,6 +48,7 @@ import { createMockEmbedder } from '../../src/main/services/embeddings/mock'
 import type { ModelRuntime, RuntimeChatOptions, ChatMessage } from '../../src/main/services/runtime'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
+import { t } from '../../src/shared/i18n'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -111,11 +112,17 @@ beforeEach(() => {
 })
 
 describe('registerChatIpc', () => {
-  it('throws a clear error when no model runtime is active', async () => {
+  // #599: while a start is requested or loading, "start one first" would send the user to start it twice.
+  it.each([
+    ['no model is running', false, 'main.noModelRunning'],
+    ['a model is starting (#599)', true, 'main.modelStarting']
+  ] as const)('throws a clear error when %s', async (_label, starting, key) => {
     const db = freshDb()
     const conv = createConversation(db, {})
-    registerChatIpc(makeCtx(db, null))
-    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(/No AI model is running/)
+    const ctx = makeCtx(db, null)
+    Object.assign(ctx.runtime, { isStarting: () => starting })
+    registerChatIpc(ctx)
+    await expect(invoke(handlers, IPC.sendChatMessage, conv.id, 'hi')).rejects.toThrow(t('en', key))
   })
 
   it('surfaces the friendly localized lock message on a locked-vault chat call, not the raw engine string (API-1)', async () => {
