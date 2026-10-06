@@ -75,13 +75,20 @@ dependencies, with the pinned npm version (`packageManager` in `package.json`, `
 version the committed lockfile is canonical under; with corepack enabled it is picked up
 automatically).
 
-**Faster test iteration** (run from the app workspace — the whole suite is large):
+**Faster test iteration** (the whole suite is large). From the repo root:
 ```bash
-cd apps/desktop
-npx vitest run tests/unit/some-file.test.ts   # one file
-npx vitest -t "a test-name substring"          # one test (by name filter)
-npm run test:watch                              # watch mode (re-runs affected tests on save)
+npm test -- tests/unit/some-file.test.ts                  # one file
+npm test -- tests/unit/some-file.test.ts -t "a name"      # tests in that file whose name contains "a name"
+npm test -- -t "a test-name substring"                    # by name across the suite (still loads every file)
+npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # watch mode
 ```
+- **The test path is relative to `apps/desktop`**, where the test script runs. A path that starts with
+  `apps/desktop/` matches nothing: vitest prints "No test files found" and exits with code 1.
+- **Windows PowerShell with a `Restricted` or `AllSigned` execution policy** refuses both `npm` and
+  `npx`, because their `.ps1` launchers are unsigned. Type `npm.cmd` / `npx.cmd` instead, for example
+  `npm.cmd test -- tests/unit/some-file.test.ts`.
+- **From `apps/desktop`** the direct forms work too: `npx vitest run tests/unit/some-file.test.ts`,
+  `npx vitest run -t "a test-name substring"` and `npm run test:watch`.
 - **Window security wiring is pin-tested.** The `webPreferences` hardening flags, the CSP
   strings, and the window-open policy live in `apps/desktop/src/main/window-security.ts`,
   pinned literal-by-literal by `tests/unit/window-security.test.ts` — do **not** edit CSP or

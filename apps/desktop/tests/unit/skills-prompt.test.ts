@@ -8,7 +8,14 @@ import {
   stripSkillFenceEcho,
   SKILL_GUARD_LINE
 } from '../../src/main/services/skills/prompt'
-import { EXCERPT_BEGIN, EXCERPT_END, EXCERPT_GUARD_LINE } from '../../src/main/services/rag/grounded-data'
+import {
+  DATA_BEGIN,
+  DATA_END,
+  EXCERPT_BEGIN,
+  EXCERPT_END,
+  EXCERPT_GUARD_LINE,
+  GROUNDED_DATA_GUARD_LINE
+} from '../../src/main/services/rag/grounded-data'
 import { readLogTail } from '../../src/main/services/logging'
 
 // Skills plan §11 (S7) — the skill fence builder + budget. Pure, no DB, no Electron. Covers the
@@ -155,6 +162,13 @@ describe('stripSkillFenceEcho — drop fence framing the model echoed back', () 
     const answer = ['The cap is one million [S1].', EXCERPT_END, EXCERPT_GUARD_LINE].join('\n')
     expect(stripSkillFenceEcho(answer)).toBe('The cap is one million [S1].')
     const begin = [EXCERPT_BEGIN, 'Body that survives.'].join('\n')
+    expect(stripSkillFenceEcho(begin)).toBe('Body that survives.')
+  })
+
+  it('also drops the echoed data-block framing of the invoice/bank grounded-data answer (#583)', () => {
+    const answer = ['The vendor is Acme GmbH.', '', DATA_END, GROUNDED_DATA_GUARD_LINE].join('\n')
+    expect(stripSkillFenceEcho(answer)).toBe('The vendor is Acme GmbH.')
+    const begin = [DATA_BEGIN, 'Body that survives.'].join('\n')
     expect(stripSkillFenceEcho(begin)).toBe('Body that survives.')
   })
 })

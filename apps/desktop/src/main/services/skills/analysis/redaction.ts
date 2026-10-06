@@ -55,9 +55,12 @@ const PII_TOPIC_RE =
 
 // An explicit ACTION request ("do the masking") — the WRITE-tool verbs. When present the handler keeps the
 // button deflection (the confirm-gated write stays user-initiated); when ABSENT and the question is a PII
-// topic, it is informational ⇒ the read-only dry-run.
+// topic, it is informational ⇒ the read-only dry-run. `lösch` (#608) counts like `entfern`: "Lösche die
+// personenbezogenen Daten" gets the button, and a question about a document's "Löschung …" is no longer a
+// count scan (the normal answer, unless a route term takes it). Word-initial, so "Sind sie schon gelöscht?"
+// stays informational; a lookbehind, because `\b` without the u flag treats ä/ö/ü/ß as a boundary.
 const REDACT_ACTION_RE =
-  /\b(redact|redaction|anonymi[sz]\w*|pseudonymi[sz]\w*|mask)\b|schwärz\w*|geschwärzt|\bentfern\w*|\bremove\b/i
+  /\b(redact|redaction|anonymi[sz]\w*|pseudonymi[sz]\w*|mask)\b|schwärz\w*|geschwärzt|\bentfern\w*|(?<![\wäöüß])lösch\w*|\bremove\b/i
 
 /** An informational PII ask ("welche personenbezogenen Daten…", "what personal data…") — a PII topic with
  *  NO redaction action verb. This is the dry-run trigger; a request carrying an action verb is NOT. */

@@ -524,9 +524,11 @@ export function createSkillRegistry(deps: SkillRegistryDeps): SkillRegistry {
 
   // Post-unlock lazy reconcile (the RATIFIED S3 guidance, implemented in S4). The startup
   // reconcile in main/index.ts no-ops while an encrypted DB is locked; rather than hook the
-  // unlock critical path, the FIRST registry read after unlock reconciles disk→DB exactly once
-  // per session. The flag is set only on a SUCCESSFUL reconcile, so a read attempted while still
-  // locked (reconcile throws) simply retries on the next read. The S4 import/delete IPC handlers
+  // unlock critical path, the FIRST registry read after the first unlock reconciles disk→DB. The
+  // flag is never reset, so that is once per app PROCESS, not per unlock: a skill folder copied onto
+  // the drive later appears after a restart (or an import/delete, below). The flag is set only on a
+  // SUCCESSFUL reconcile, so a read attempted while still locked (reconcile throws) simply retries
+  // on the next read. The S4 import/delete IPC handlers
   // mutate disk and then call THIS handle's `reconcile()`, which also arms the flag and refreshes
   // the SKA-32 status summary (the installer's own internal reconcile bypasses this closure).
   let reconciledThisSession = false

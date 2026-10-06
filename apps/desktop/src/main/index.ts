@@ -621,7 +621,7 @@ function initBackend(): void {
   // user-skills/ folders (outside the encrypted workspace). app-skills/ falls back to the repo
   // source dir in a dev build (resolveAppSkillsDir, the manifests precedent). Reconcile needs an
   // unlocked DB, so it is best-effort here (works in plaintext_dev; a locked encrypted DB defers
-  // to a later phase that re-runs it post-unlock — S3 has no skill-reading surface yet).
+  // it to the registry's first read after unlock, once per process — see createSkillRegistry).
   const skills = createSkillRegistry({
     getDb: () => workspace.requireDb(),
     appSkillsDir: resolveAppSkillsDir(paths.rootPath, app.getAppPath()),
@@ -753,8 +753,8 @@ function initBackend(): void {
   translator?.onResidencyChange?.(notifyPerformanceChanged)
   ctx.vision.onResidencyChange(notifyPerformanceChanged)
   // Best-effort first reconcile (skills plan §8). In plaintext_dev the DB is already open; in
-  // encrypted mode `requireDb()` throws while locked, so swallow it — a later phase reconciles on
-  // unlock, and S3 ships no surface that reads skills yet.
+  // encrypted mode `requireDb()` throws while locked, so swallow it — the registry's first read
+  // after unlock reconciles instead.
   try {
     const result = skills.reconcile()
     log.info('Skill registry reconciled', {

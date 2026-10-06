@@ -160,8 +160,9 @@ export function registerSkillsIpc(ctx: AppContext): void {
 
   ipcHandle(IPC.listSkills, (): SkillInfo[] => {
     requireUnlocked()
-    // ctx.skills.list() reconciles disk→DB once per session on first read (the ratified
-    // post-unlock lazy reconcile); project each row to SkillInfo with its duplicate-id flag.
+    // ctx.skills.list() reconciles disk→DB once per app process, on the first read after the first
+    // unlock (the ratified post-unlock lazy reconcile); project each row to SkillInfo with its
+    // duplicate-id flag.
     const records = ctx.skills!.list()
     // Count declared ids in one pass so duplicateId is O(n), not O(n²).
     const idCounts = new Map<string, number>()

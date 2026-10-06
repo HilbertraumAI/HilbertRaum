@@ -1035,6 +1035,83 @@
       "inScopeDocs": [],
       "expected": "document-redaction",
       "note": "pins a keyword listed by tests/integration/skills-redaction.test.ts 'covers English + German triggers, singular and plural' - pins the single keyword \"schwärzung\" (the only keyword this question hits)"
+    },
+    {
+      "id": "adv-pd-dsgvo-01",
+      "question": "Was zählt eigentlich alles als personenbezogene Daten laut DSGVO?",
+      "inScopeDocs": [],
+      "expected": "none",
+      "note": "#608 — from the blind German evaluation (both labellers: none). A GDPR question naming 'personenbezogene Daten' without an article: the bare phrase is route-only now, so nothing is offered (Redaction was)."
+    },
+    {
+      "id": "adv-pd-einwilligung-01",
+      "question": "Brauche ich eine Einwilligung, um personenbezogene Daten meiner Patienten an ein Labor zu übermitteln?",
+      "inScopeDocs": [{ "title": "laborauftrag_vorlage.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#608 — blind set (both labellers: none). A consent question over a PDF: the bare phrase offered Redaction and auto-fired its count scan."
+    },
+    {
+      "id": "adv-pd-datenschutzerklaerung-01",
+      "question": "Was steht in der Datenschutzerklärung darüber, wie lange personenbezogene Daten gespeichert werden?",
+      "inScopeDocs": [{ "title": "datenschutzerklaerung_website.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#608 — blind set (both labellers: none). A privacy-notice question: the bare phrase offered Share-Safe (with the '*datenschutz*' filename) and auto-fired Redaction."
+    },
+    {
+      "id": "adv-pd-avv-01",
+      "question": "Laut AVV – an welche Subunternehmer dürfen personenbezogene Daten weitergegeben werden?",
+      "inScopeDocs": [{ "title": "auftragsverarbeitungsvertrag_lohnverrechnung.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#608 — blind set (both labellers: none). A question about a data processing agreement: the bare phrase offered and auto-fired Redaction."
+    },
+    {
+      "id": "adv-pd-vertrag-01",
+      "question": "In welchem Paragraphen geht's um personenbezogene Daten?",
+      "inScopeDocs": [{ "title": "kooperationsvertrag_praxisgemeinschaft.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#608 — blind set (both labellers: none). A contract question: the bare phrase offered and auto-fired Redaction."
+    },
+    {
+      "id": "tp-redaction-de-pd-schwaerzen-01",
+      "question": "Bitte alle personenbezogenen Daten in diesem Dokument schwärzen.",
+      "inScopeDocs": [{ "title": "arztbrief_2024-03-12.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "#608 — blind set (both labellers: document-redaction). 'schwärzen' carries the offer; the article form never matched the bare phrase."
+    },
+    {
+      "id": "tp-redaction-de-pd-version-01",
+      "question": "Ich brauche eine Version ohne personenbezogene Daten für die Fallbesprechung.",
+      "inScopeDocs": [{ "title": "befundbericht_mrt_knie.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "#608 — blind set (both labellers: document-redaction). Names only the data, with no removal verb: only the bare phrase found it, so it is a KNOWN_SUGGESTION_DEVIATIONS row until #602 (German removal verbs)."
+    },
+    {
+      "id": "tp-redaction-de-pd-entfernen-01",
+      "question": "Bitte alle personenbezogenen Daten entfernen.",
+      "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "#608 — the contiguous article form ('personenbezogenen daten entfernen'), which got no offer before #608."
+    },
+    {
+      "id": "adv-pd-loeschpflicht-01",
+      "question": "Was steht im AVV dazu, wann der Auftragnehmer die personenbezogenen Daten löschen muss?",
+      "inScopeDocs": [{ "title": "avv_lohnverrechnung.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#608 (owner ruling 2026-10-06) — 'personenbezogenen daten löschen' is not a keyword: 'löschen' is also the GDPR erasure term, and this deletion-duty question would be offered Redaction and auto-fire it. Hand-written."
+    },
+    {
+      "id": "adv-pd-loeschpflicht-02",
+      "question": "Wann muss ich personenbezogene Daten löschen?",
+      "inScopeDocs": [{ "title": "datenschutzhinweise.pdf", "mimeType": "application/pdf" }],
+      "expected": "none",
+      "note": "#608 (owner ruling 2026-10-06) — nor is the article-less 'personenbezogene daten löschen'; before #608 the bare phrase auto-fired Redaction on this deletion-duty question. Hand-written."
+    },
+    {
+      "id": "tp-redaction-de-pd-loeschen-01",
+      "question": "Bitte personenbezogene Daten löschen.",
+      "inScopeDocs": [{ "title": "bericht.pdf", "mimeType": "application/pdf" }],
+      "expected": "document-redaction",
+      "note": "#608 (owner ruling 2026-10-06) — the cost of leaving out the infinitive '… daten löschen': this request only matched the bare phrase, so it is a KNOWN_SUGGESTION_DEVIATIONS row until #602 (German removal verbs). Hand-written."
     }
   ]
 }

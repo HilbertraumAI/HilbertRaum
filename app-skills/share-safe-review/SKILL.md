@@ -25,10 +25,11 @@ permissions:
 triggers:                      # OPTIONAL — drives the deterministic suggestion heuristic (§10).
   # W5: GENERATED from services/skills/vocabulary.ts (the skill's `suggest|both` terms) and pinned by a
   # parity test. The pure redaction VERBS (anonymize/schwärzen/redact) stay with the document-redaction
-  # tool skill; the bare `personal data`/`weitergeben` phrasings are route-only. Edit the vocabulary.
+  # tool skill; the bare `personal data`/`personenbezogene daten` (#608)/`weitergeben` phrasings are
+  # route-only. Edit the vocabulary.
   keywords: [safe to share, share-safe, review before sharing, privacy review, disclosure review,
              sensitive information, confidential information, metadata,
-             sicher teilen, vor dem teilen prüfen, sensible daten, personenbezogene daten,
+             sicher teilen, vor dem teilen prüfen, sensible daten,
              vertrauliche informationen, datenschutz prüfen, metadaten]
   mimeTypes: [application/pdf, text/plain, text/markdown]
   filenamePatterns: ["*share*", "*confidential*", "*personal*", "*sensitive*", "*teilen*", "*vertraulich*", "*datenschutz*"]

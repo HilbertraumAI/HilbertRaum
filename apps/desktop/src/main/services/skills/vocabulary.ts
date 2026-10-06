@@ -329,15 +329,17 @@ const SHARE_SAFE_REVIEW: VocabEntry[] = [
   both('sicher teilen', 'de'),
   both('vor dem teilen prüfen', 'de'),
   both('sensible daten', 'de'),
-  both('personenbezogene daten', 'de'),
   both('vertrauliche informationen', 'de'),
   both('datenschutz prüfen', 'de'),
   both('metadaten', 'de'),
-  // route-only — broader share phrasings, fired once the review skill is active.
+  // route-only — broader share phrasings, fired once the review skill is active. The bare topic phrases
+  // `personal data` / `personenbezogene daten` (#608) appear in GDPR, privacy-notice and contract questions
+  // too often to offer on.
   route('before sharing', 'en'),
   route('remove private information', 'en'),
   route('metadata warning', 'en'),
   route('personal data', 'en'),
+  route('personenbezogene daten', 'de'),
   route('private informationen', 'de'),
   route('weitergeben', 'de'),
   route('veröffentlichen', 'de')
@@ -434,8 +436,22 @@ const DOCUMENT_REDACTION: VocabEntry[] = [
   both('schwärzung', 'de'),
   both('schwärze', 'de'),
   both('geschwärzt', 'de'),
-  both('personenbezogene daten', 'de'),
   both('personenbezogene daten entfernen', 'de'),
+  // #608 — German removal requests in the word order people type them ("Bitte alle personenbezogenen Daten
+  // entfernen."). A multi-word keyword matches only as an exact substring, so each form is listed. The
+  // infinitive "… daten löschen" is NOT: "löschen" is also the GDPR erasure term, so it would match
+  // deletion-duty questions ("Wann muss ich personenbezogene Daten löschen?") and auto-fire over a PDF.
+  both('personenbezogenen daten entfernen', 'de'),
+  both('entferne alle personenbezogenen daten', 'de'),
+  both('entferne die personenbezogenen daten', 'de'),
+  both('entferne personenbezogene daten', 'de'),
+  both('lösche alle personenbezogenen daten', 'de'),
+  both('lösche die personenbezogenen daten', 'de'),
+  both('lösche personenbezogene daten', 'de'),
+  // #608 — the bare topic phrase only ROUTES now: with Redaction active the handler still takes a question
+  // that names it. As an offer keyword it suggested Redaction, and over a PDF auto-fired it, on GDPR,
+  // privacy-notice and contract questions (English `personal data` was never one).
+  route('personenbezogene daten', 'de'),
   // suggest-only PII-CONTENT topics — the informational dry-run (`isInformationalPiiQuestion`, `PII_TOPIC_RE`)
   // recognises these ("what sensitive data is in here?" reports per-category counts), so they align with the
   // handler and stay auto-fire-eligible. Word-matched, so a compound never trips the bare term.
