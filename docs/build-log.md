@@ -27,6 +27,18 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-06 — the closed 2026-10-05 #594 entry retired verbatim (its follow-ups #598–#600 are done)
+
+Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #599 entry). #594 merged as PR #601; the three
+follow-ups it names are fixed: #598 (PR #611), #600 (PR #617) and #599 (the PR that retires this entry). The record is unchanged:
+`architecture.md` CB-5 "#594 amendment", now followed by the #598, #600 and #599 amendments. Citations of the form
+"BUILD_STATE 2026-10-05 #594 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#594 — a chat request whose sidecar never sends its response headers ends after 120 s (`fix/594-chat-header-timeout`).** Both pins send the headers
+when the slot starts, before prefill (upstream `is_begin`; b11146 measured: 14 ms, first token 320.9 s for a CPU 9B); the wait used to end only at undici's 300 s
+(304.8 s in Electron 43.7.7, a raw "fetch failed"), holding every busy signal. `LlamaRuntime.chatStream` gives it CB-5's 120 s (owner); b11146's 30 s SSE pings
+no longer re-arm the stream budget once tokens flow. Record: `architecture.md` CB-5 "#594 amendment". Open: #598 (prefill liveness), #599, #600._
+
 ## 2026-10-05 — the closed 2026-09-21 #488/#498/#501 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-05 (preamble budget, making room for the #516 entry). #488, #498 and #501 are closed

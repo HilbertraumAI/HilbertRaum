@@ -47,6 +47,7 @@ import { Button, Chip, EmptyState, ErrorBanner, Progress, SegmentedControl, Spin
 import { ArticleModal, Composer, ContextMeter, ConversationList, DepthMenu, ScopeNarrowDialog, ScopePopover, SkillInfoCard, SkillPicker, SkillRunBar, Transcript, type ArticleTarget, type SkillRunTarget } from '../chat'
 import { requestSkillDetail } from '../lib/skillDetailRequest'
 import type { MessageKey } from '@shared/i18n'
+import { isModelStarting } from '@shared/runtime-status'
 
 // Chat screen (spec §7.6 / §7.8; layout per design-guidelines §3). The
 // conversation is the canvas: a collapsible conversation list, a centered transcript,
@@ -546,7 +547,8 @@ export function ChatScreen({
     const status = await window.api.getRuntimeStatus()
     setRuntimeRunning(status.running)
     setRuntimeInfo(status)
-    setModelStarting(status.startingModelId != null)
+    // #599: "starting" counts from the request — the weight check before the load included.
+    setModelStarting(isModelStarting(status))
     setSupportsThinking(status.supportsThinkingMode === true)
   }, [])
 
@@ -599,6 +601,17 @@ export function ChatScreen({
     }, RUNTIME_POLL_MS)
     return () => clearInterval(timer)
   }, [runtimeRunning, checkRuntime])
+
+  // #599: a refusal about the model's state ("No AI model is running…", "…is starting") goes when the
+  // model is back — it used to sit over the restored composer. Every other error stays until it is
+  // dismissed, a crash's own message included: that one explains why the question has no answer.
+  // Keyed on every status read, not on a down-to-up flip: a quick restart is often over by the
+  // re-read that follows the refusal, so the screen never saw the model down.
+  useEffect(() => {
+    if (runtimeInfo?.running !== true) return
+    const stale = new Set([t('main.noModelRunning'), t('main.modelStarting')])
+    setErrorState((current) => (current != null && stale.has(current.message) ? null : current))
+  }, [runtimeInfo, t])
 
   // #36: keep the header hint honest across the mid-generation GPU crash fallback — the
   // same `runtime:notice` broadcast that shows the ephemeral compatibility-mode banner
@@ -2321,13 +2334,17 @@ export function ChatScreen({
       <div className="screen">
         <h1>{t('chat.title')}</h1>
         <EmptyState
-          title={t('chat.noModel.title')}
+          // #599: while the model starts, the title says so — it used to read "No model is running"
+          // right above "Your model is starting", and the "choose Use this model" line is moot then.
+          title={modelStarting ? t('chat.noModel.startingTitle') : t('chat.noModel.title')}
           line={
-            <>
-              {t('chat.noModel.hintBefore')}
-              <b>{t('chat.noModel.hintAction')}</b>
-              {t('chat.noModel.hintAfter')}
-            </>
+            modelStarting ? undefined : (
+              <>
+                {t('chat.noModel.hintBefore')}
+                <b>{t('chat.noModel.hintAction')}</b>
+                {t('chat.noModel.hintAfter')}
+              </>
+            )
           }
           action={
             <>

@@ -627,6 +627,48 @@ describe('ModelsScreen — one "Use this model" action (beta #27, D70 collapse)'
     expect(screen.getByRole('button', { name: t('en', 'models.stopRuntime') })).toBeEnabled()
   })
 
+  it.each([
+    ['a model that stopped answering: "Not responding" and a one-click Restart', true],
+    ['a responding model: no badge and no Restart', false]
+  ])('%s (#599)', async (_label, unresponsive) => {
+    stub({ models: [model({ state: 'running' })], activeModelId: 'qwen3-4b-instruct-q4' })
+    let restarting = false
+    // The restart takes a while (a model load); the card must not keep saying "Not responding".
+    const restartRuntime = vi.fn(() => {
+      restarting = true
+      return new Promise<null>(() => {})
+    })
+    Object.assign(window.api, {
+      getRuntimeStatus: vi.fn(async () =>
+        restarting
+          ? { running: false, modelId: null, port: null, healthy: false, message: 'Starting', startingModelId: 'qwen3-4b-instruct-q4' }
+          : {
+              running: true,
+              modelId: 'qwen3-4b-instruct-q4',
+              port: 1,
+              healthy: !unresponsive,
+              message: '',
+              ...(unresponsive ? { unresponsive: true } : {})
+            }
+      ),
+      restartRuntime
+    })
+    render(<ModelsScreen />)
+    await screen.findByRole('button', { name: t('en', 'models.stopRuntime') })
+    const restart = screen.queryByRole('button', { name: t('en', 'models.restart') })
+    if (!unresponsive) {
+      expect(restart).not.toBeInTheDocument()
+      expect(screen.queryByText(t('en', 'models.badge.notResponding'))).not.toBeInTheDocument()
+      return
+    }
+    expect(screen.getByText(t('en', 'models.badge.notResponding'))).toBeInTheDocument()
+    expect(screen.getByText(t('en', 'models.notRespondingHint'))).toBeInTheDocument()
+    await userEvent.click(restart!)
+    expect(restartRuntime).toHaveBeenCalledTimes(1)
+    // The status read right after the request shows the restart under way.
+    await waitFor(() => expect(screen.queryByText(t('en', 'models.badge.notResponding'))).not.toBeInTheDocument())
+  })
+
   it('still offers the demo-mode button on the zero-weights developer card (no Use action)', async () => {
     stub({ models: [model({ state: 'missing', startableAsMock: true })] })
     render(<ModelsScreen />)

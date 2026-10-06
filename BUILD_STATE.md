@@ -28,14 +28,14 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-06 — **#599 — a frozen or crashed chat model no longer reads "running, healthy" (`feat/599-runtime-liveness`, stacked on #600).** Status reads re-probe
+`/health` (cached 10 s); an answer the CB-5 watchdog ended marks the model unresponsive until it answers again. The AI Model card says "Not responding" + Restart (offered,
+never automatic). A CPU-mode crash restarts the model once per model per session, then leaves it stopped, each with a notice. "Is starting" counts from the start request
+(chat, documents, doc tasks, the local API). Owner calls as recommended. Record: CB-5 "#599 amendment", GPU §5.3, design-guidelines §11.22. Retired the #594 entry._
 _2026-10-06 — **#600 — a model stop or switch ends the answer cleanly; a crash speaks in words (`fix/600-model-stop-mid-answer`).** `RuntimeManager`'s model-stop hook
 (after `current` is cleared, before the kill, no wait; never on the crash restart) ends the local API request (`model_not_loaded`/`model_starting`), a deep-index build and
 the answers: partial kept + "Reply stopped" (new `messages.ended_early`, not `truncated`), a re-ask keeps its predecessor, an unanswered question is marked, an AI Model card note.
 A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner calls taken as recommended. Record: CB-5 "#600 amendment", design-guidelines §11.21. Open: #606, #612, #613._
-_2026-10-05 — **#594 — a chat request whose sidecar never sends its response headers ends after 120 s (`fix/594-chat-header-timeout`).** Both pins send the headers
-when the slot starts, before prefill (upstream `is_begin`; b11146 measured: 14 ms, first token 320.9 s for a CPU 9B); the wait used to end only at undici's 300 s
-(304.8 s in Electron 43.7.7, a raw "fetch failed"), holding every busy signal. `LlamaRuntime.chatStream` gives it CB-5's 120 s (owner); b11146's 30 s SSE pings
-no longer re-arm the stream budget once tokens flow. Record: `architecture.md` CB-5 "#594 amendment". Open: #598 (prefill liveness), #599, #600._
 _2026-10-05 — **#516 — the app reports engines older than its pin and updates them (`feat/516-engine-update`).** `EngineStatus.engineVersions` (numeric tag order;
 `older`/`current`/`newer`/`unknown`, `cpu/` net included); `update: true` replaces only `older` installs + an older `cpu/` net; every engine job now downloads + verifies all
 archives first, then (updates) pauses the model + llama helpers for the swap and restarts the model; a spawn gate holds the family's starts through every swap (closes the

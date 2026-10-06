@@ -28,6 +28,7 @@ import {
   isRuntimeUnresponsiveError
 } from '../services/runtime/llama'
 import { isModelStopAbort } from '../services/runtime/model-stop'
+import { noModelMessageKey } from '../../shared/runtime-status'
 import { modelBusyMessageKey } from '../services/runtime/occupancy'
 import { tMain } from '../services/i18n'
 import { isEngineCannotRunError } from '../services/runtime/engine-load'
@@ -57,8 +58,9 @@ export async function assertChatStreamReady(
   const runtime = ctx.runtime.active()
   if (!runtime) {
     // Ephemeral IPC guard → tMain (i18n record §3.3); DOC_TASK_BUSY_MESSAGE stays
-    // canonical English on the wire (renderer exact-match + display map).
-    throw new Error(tMain('main.noModelRunning'))
+    // canonical English on the wire (renderer exact-match + display map). #599: while a start is
+    // requested or loading, say so — "start one first" would send the user to start it twice.
+    throw new Error(tMain(noModelMessageKey(ctx.runtime.isStarting?.() === true)))
   }
   // Strict one-at-a-time vs document tasks: the one local model serves either a chat
   // answer or a task, never both. A YIELDING deep-index build is the exception — it cedes

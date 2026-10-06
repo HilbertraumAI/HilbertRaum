@@ -366,7 +366,7 @@ both modes. Errors are OpenAI-shaped `{"error":{message,type,code}}`: 400 invali
 404 `unknown_route` · 413 `body_too_large` (counted bytes, 1 MB; Content-Length never trusted) ·
 415 · 429 `busy` + Retry-After (derived from measured tok/s; ~5–180 s, default 30) ·
 502 `runtime_unresponsive` · 503 `model_starting`/`model_not_loaded`/`workspace_locked`/
-`server_stopped`. **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
+`server_stopped` (`model_starting` from the start REQUEST on, its weight check included — #599). **Pre-emption (D8)**: an in-app turn aborts the external stream → in-band
 `{"error":{type:'server_error', code:'preempted_by_user'}}` frame, stream closes **without**
 `[DONE]` (retry-with-backoff); teardown uses code `server_stopped` the same way. **A deliberate model
 stop or switch (#600)** ends the active request first with the model gate's own code — `model_not_loaded`
@@ -924,6 +924,18 @@ head's own weights + KV.
   speed (`effectiveRead` or "not measured yet") / drive write / tokens-sec / profile /
   recommended model + warnings; re-loads `lastBenchmark` on mount. `HomeScreen` profile reflects
   the persisted value via `getAppStatus`.
+- **`RuntimeStatus.unresponsive?`** (issue #599) — `true` while the RUNNING model stopped
+  responding: a `/health` re-probe failed (a frozen or suspended process; the `getRuntimeStatus`
+  handler re-probes at most every ~10 s, each probe bounded at 3 s), or an answer ended on the CB-5
+  watchdog (`RuntimeUnresponsiveError` — sticky: a passing probe cannot clear it, only the next
+  completed answer or a restart). `healthy` reads `false` meanwhile. Absent otherwise. The AI Model
+  card shows "Not responding" + Restart (`restartRuntime`).
+- **`RuntimeStatus.startRequested?`** (issue #599) — `true` from the moment a model start is
+  requested (`startModelRuntime`, before its weight check) until it settles; `startingModelId` is set
+  only once the load begins. Absent otherwise. "Is starting" keys on either
+  (`shared/runtime-status.ts` `isModelStarting`): Chat's waiting screen, the `main.modelStarting`
+  refusal (chat, document answers, doc tasks), the local API's `model_starting`, and the engine
+  update's busy refusal.
 - **`RuntimeStatus.answering?`** (issue #600) — `true` while a chat or document answer streams on
   the running model (`inFlightStreams` non-empty), added by the `getRuntimeStatus` handler; absent
   otherwise. The AI Model card shows a note then (stopping or switching ends that answer, keeping its
@@ -1982,6 +1994,13 @@ appeared under neither their method name nor their channel string — mostly sib
 calls that arrived one at a time. Listed here so the declared source of truth is complete; each
 one's behaviour stays owned by the design record named beside it.
 
+- **`restartRuntime(): Promise<RuntimeStatus | null>`** (`runtime:restart`, #599) — start the RUNNING
+  model again with the options it was started with, past `startRuntime`'s same-model no-op
+  (`RuntimeManager.restartCurrent` → `forceRestart(opts, 'switch')`): its in-flight answers end as a
+  switch ends them (#600). Gated on the unlocked workspace like `startRuntime`; aborts a deep-index
+  build first; audits `runtime_started` ("restarted"). Null when no model runs. The AI Model card
+  offers it for a model that stopped responding (design-guidelines §11.22); the app never calls it
+  on its own.
 - **`useModel(modelId): Promise<RuntimeStatus>`** (`runtime:use`) — the MERGED select-and-start
   action, and the one a UI caller should reach for. It persists the active chat slot, emits
   `model_selected`, and starts the runtime in one handler so the spec-§7.4 install gate and the RAM

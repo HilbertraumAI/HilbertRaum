@@ -21,6 +21,7 @@ import {
   type ApiErrorBody,
   type ParsedChatRequest
 } from './handlers'
+import { isModelStarting } from '../../../shared/runtime-status'
 
 // LocalApiServer (local-api wave P3): the opt-in OpenAI-compatible loopback endpoint.
 // `node:http` only — no framework dependency. Exists only while the workspace is
@@ -404,7 +405,8 @@ export class LocalApiServer {
   private modelGate(): { status: RuntimeStatus } | { error: ModelUnavailable } {
     const status = this.deps.runtime.status()
     if (status.running && this.deps.runtime.active() != null) return { status }
-    return { error: this.modelUnavailable(status.startingModelId != null ? 'model_starting' : 'model_not_loaded') }
+    // #599: "starting" counts from the start request, the weight check before the load included.
+    return { error: this.modelUnavailable(isModelStarting(status) ? 'model_starting' : 'model_not_loaded') }
   }
 
   /** The two "no model to answer with" outcomes — shared by the gate and by #600's model change. */

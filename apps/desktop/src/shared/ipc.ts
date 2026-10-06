@@ -55,6 +55,12 @@ export const IPC = {
    */
   useModel: 'runtime:use',
   stopRuntime: 'runtime:stop',
+  /**
+   * #599: start the running model again with its own start options — the AI Model card's "Restart"
+   * for a model that stopped responding. Gated on the unlocked workspace like `startRuntime`.
+   * Resolves the new status, or null when no model runs.
+   */
+  restartRuntime: 'runtime:restart',
   /** Read-only runtime health/state for Diagnostics (spec §7.11). */
   getRuntimeStatus: 'runtime:status',
   /** The drive's installed sidecar build (the .hilbertraum-runtime.json marker). */

@@ -13,6 +13,7 @@ import {
 import type { ChatMessage, ModelRuntime, RuntimeChatOptions } from '../runtime'
 import { isExceedContextError } from '../runtime/llama'
 import { modelBusyMessageKey } from '../runtime/occupancy'
+import { noModelMessageKey } from '../../../shared/runtime-status'
 import { ContextOverflowError } from './errors'
 import { getDocument } from '../ingestion'
 import { isPdfPath } from '../ingestion/parsers'
@@ -317,7 +318,7 @@ export class DocTaskManager {
         throw new Error(tMain('main.translation.noModel'))
       }
     } else if (kind !== 'categorize' && !this.deps.getRuntime()) {
-      throw new Error(tMain('main.noModelRunning'))
+      throw new Error(tMain(this.noModelKey()))
     }
     // Compare runs over exactly TWO (distinct) documents; summary/translation/ocr over one.
     const documentIds = (req.documentIds ?? []).filter((x) => typeof x === 'string' && x.length > 0)
@@ -551,6 +552,11 @@ export class DocTaskManager {
     })
   }
 
+  /** #599: the no-model refusal — "is starting" while a start is requested or loading. */
+  private noModelKey(): MessageKey {
+    return noModelMessageKey(this.deps.isModelStarting?.() === true)
+  }
+
   /** Run the next queued task; tasks serialize among themselves. */
   private pump(): void {
     if (this.runningId) return
@@ -641,7 +647,7 @@ export class DocTaskManager {
       } else {
         // Re-check at dequeue time: the runtime may have been stopped while queued.
         const runtime = this.deps.getRuntime()
-        if (!runtime) throw new Error(tMain('main.noModelRunning'))
+        if (!runtime) throw new Error(tMain(this.noModelKey()))
         // Registry dispatch (DX-1): every runtime-requiring kind is a one-line entry in
         // `MODEL_TASK_HANDLERS`, not another `else if` branch here.
         resultId = await MODEL_TASK_HANDLERS[kind](task, runtime, this.ctx)
@@ -746,6 +752,7 @@ function isYieldingKind(kind: DocTaskKind): boolean {
 /** Keys of the guard/validation copy that may pass through to the renderer on failure. */
 const FRIENDLY_TASK_ERROR_KEYS: readonly MessageKey[] = [
   'main.noModelRunning',
+  'main.modelStarting',
   'main.translation.noModel',
   'main.translation.startFailed',
   // #530: the translation handler's copy when the OS refused to start the engine program.

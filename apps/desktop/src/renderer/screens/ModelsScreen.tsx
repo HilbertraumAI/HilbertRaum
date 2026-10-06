@@ -649,6 +649,21 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
     }
   }
 
+  /**
+   * #599: Restart on a model that stopped responding. The main side claims the "starting" window
+   * synchronously, so one status read right after the request shows it — and arms the starting poll
+   * above — instead of leaving "Not responding" up for the whole reload.
+   */
+  async function restartModel(): Promise<void> {
+    const done = window.api.restartRuntime()
+    void Promise.resolve(window.api.getRuntimeStatus?.())
+      .then((rt) => {
+        if (mountedRef.current && rt) setRuntime(rt)
+      })
+      .catch(() => undefined)
+    await done
+  }
+
   async function run(key: string, fn: () => Promise<unknown>): Promise<void> {
     setBusy(key)
     setError(null)
@@ -1074,6 +1089,11 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             <Badge tone={STATE_BADGE[m.state].tone} icon={STATE_BADGE[m.state].icon}>
               {t(STATE_BADGE[m.state].labelKey)}
             </Badge>
+            {m.state === 'running' && runtime?.unresponsive && (
+              <Badge tone="warning" icon="⚠">
+                {t('models.badge.notResponding')}
+              </Badge>
+            )}
           </div>
         </div>
 
@@ -1099,6 +1119,13 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
             {t('models.answeringNote')}
           </p>
         )}
+        {/* #599: the running model stopped answering (a failed health re-check, or an answer that
+            timed out). The app offers the restart and never performs it on its own. */}
+        {m.state === 'running' && runtime?.unresponsive && (
+          <p className="hint" role="status">
+            {t('models.notRespondingHint')}
+          </p>
+        )}
 
         <div className="model-row-actions">
         {!automatic && (
@@ -1112,9 +1139,21 @@ export function ModelsScreen({ focus = null, onNavigate }: ModelsScreenProps = {
           (installed || canMockStart || thisStarting || m.state === 'running') && (
             <div className="model-actions">
               {m.state === 'running' ? (
-                <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
-                  {t('models.stopRuntime')}
-                </Button>
+                <>
+                  {runtime?.unresponsive && (
+                    <Button
+                      size="sm"
+                      variant="primary"
+                      disabled={busy !== null}
+                      onClick={() => run('restart', restartModel)}
+                    >
+                      {t('models.restart')}
+                    </Button>
+                  )}
+                  <Button size="sm" disabled={busy !== null} onClick={() => run('stop', () => window.api.stopRuntime())}>
+                    {t('models.stopRuntime')}
+                  </Button>
+                </>
               ) : thisStarting ? (
                 // Server-truth "Starting…": disabled, and it survives leaving + revisiting
                 // the screen (the cause of the accidental restart).

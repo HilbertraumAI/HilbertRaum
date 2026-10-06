@@ -45,6 +45,7 @@ import type { Db } from '../services/db'
 import { modelBusyLane, modelBusyMessageKey, type ModelBusyLane } from './model-busy'
 import { log } from '../services/logging'
 import { perfEnabled, perfMark, perfMs } from '../services/perf'
+import { isModelStarting } from '../../shared/runtime-status'
 
 // IPC for the hardware benchmark + model recommendation (spec §9.1, §11).
 //
@@ -930,7 +931,8 @@ function chatModelResident(ctx: AppContext, activeId: string | null): boolean {
  * unwired probe means "no start in flight".
  */
 function modelStartInFlight(ctx: AppContext): boolean {
-  return ctx.runtime?.status?.().startingModelId != null
+  const status = ctx.runtime?.status?.()
+  return status != null && isModelStarting(status) // #599: the weight check counts too
 }
 
 /**

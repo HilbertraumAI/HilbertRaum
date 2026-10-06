@@ -170,6 +170,8 @@ const api = {
   useModel: (modelId: string): Promise<RuntimeStatus> =>
     ipcRenderer.invoke(IPC.useModel, modelId),
   stopRuntime: (): Promise<void> => ipcRenderer.invoke(IPC.stopRuntime),
+  /** #599: restart the running model (the AI Model card's "Restart" when it stopped responding). */
+  restartRuntime: (): Promise<RuntimeStatus | null> => ipcRenderer.invoke(IPC.restartRuntime),
   /** Read-only runtime health/state (Diagnostics, spec §7.11). */
   getRuntimeStatus: (): Promise<RuntimeStatus> => ipcRenderer.invoke(IPC.getRuntimeStatus),
   /** The drive's installed sidecar build (.hilbertraum-runtime.json), or null. */

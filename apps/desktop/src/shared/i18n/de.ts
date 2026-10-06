@@ -151,6 +151,7 @@ export const de: Record<keyof typeof en, string> = {
 
   // ---- Chat ----
   'chat.title': 'Chat',
+  'chat.noModel.startingTitle': 'Das KI-Modell startet',
   'chat.noModel.title': 'Es läuft gerade kein Modell',
   'chat.noModel.hintBefore':
     'Chat und Dokument-Fragen brauchen ein geladenes Modell. Öffne den KI-Modell-Bereich, ' +
@@ -1232,6 +1233,9 @@ export const de: Record<keyof typeof en, string> = {
   'models.state.notRecommended': 'Nicht empfohlen',
   'models.state.ready': 'Bereit',
   'models.state.running': 'Läuft',
+  'models.badge.notResponding': 'Reagiert nicht',
+  'models.notRespondingHint': 'Das KI-Modell antwortet nicht mehr. Ein Neustart behebt das meistens.',
+  'models.restart': 'Neu starten',
   'models.hint.embeddings': 'Bereitet deine Dokumente vor, damit du Fragen dazu stellen kannst.',
   'models.hint.reranker': 'Verbessert, welche Dokumentpassagen für Antworten verwendet werden.',
   'models.hint.transcriber':
@@ -2553,6 +2557,13 @@ export const de: Record<keyof typeof en, string> = {
   'main.runtime.speedUpDisabled':
     'Eine optionale Beschleunigung wurde aus Stabilitätsgründen abgeschaltet. Das Modell ' +
     'startet neu — schick deine Nachricht bitte noch einmal.',
+  // #599: ein Absturz im CPU-Modus. Der erste in dieser Sitzung startet das Modell neu, ein zweiter
+  // desselben Modells lässt es beendet.
+  'main.runtime.crashRestarting':
+    'Das KI-Modell wurde unerwartet beendet und startet neu. Schick deine Nachricht gleich noch einmal.',
+  'main.runtime.crashStopped':
+    'Das KI-Modell wurde erneut unerwartet beendet und deshalb nicht neu gestartet. ' +
+    'Du kannst es im KI-Modell-Bereich wieder starten.',
   // Issue #312: Keine Stufe konnte DIESES Modell laden — die Grafikkarte ist nicht die Ursache
   // und bleibt unangetastet. Das Modell benennen, nie die Hardware beschuldigen.
   'main.runtime.modelCannotLoad':
@@ -2563,6 +2574,7 @@ export const de: Record<keyof typeof en, string> = {
   'main.engine.cannotRun': 'Die KI-Engine kann auf diesem Computer nicht laufen. Im Bereich „KI-Modell“ steht, was fehlt.',
   'main.noModelRunning':
     'Es läuft kein KI-Modell. Öffne den KI-Modell-Bereich und starte zuerst eines.',
+  'main.modelStarting': 'Das KI-Modell startet gerade. Versuch es gleich noch einmal.',
   'main.translation.noModel':
     'Zum Übersetzen wird das Übersetzungsmodell benötigt, das auf diesem Laufwerk nicht ' +
     'installiert ist. Du kannst es im KI-Modell-Bereich herunterladen.',

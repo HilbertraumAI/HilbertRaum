@@ -387,6 +387,14 @@ describe('LocalApiServer — model states (perf M6)', () => {
     expect(absent.status).toBe(503)
     expect(((await absent.json()) as { error: { code: string } }).error.code).toBe('model_not_loaded')
 
+    // #599: a start requested and still checking the weights (minutes on a freshly copied drive) —
+    // `startingModelId` is not set yet, but a client must still hear "retry", not "start one".
+    const releaseRequest = h.mgr.beginStartRequest()
+    const checking = await fetch(`${h.base}/v1/models`, { headers: authed(h.token) })
+    releaseRequest()
+    expect(checking.status).toBe(503)
+    expect(((await checking.json()) as { error: { code: string } }).error.code).toBe('model_starting')
+
     // A start in flight: startingModelId set, active() still null.
     let release!: () => void
     const gate = new Promise<void>((r) => (release = r))
