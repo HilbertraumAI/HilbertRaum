@@ -27,7 +27,8 @@ const LABEL_SPACE = new Set<string>([...APP_VOCAB_SKILL_IDS, 'none'])
  *    meeting-protocol — the documented precision ceiling of a one-keyword offer.
  *  - tp-redaction-de-pd-version-01, tp-redaction-de-pd-loeschen-01: German removal requests that only
  *    the bare "personenbezogene Daten" offered on. It stopped offering in #608, and the infinitive
- *    "… daten löschen" stays out (owner ruling); German removal verbs are #602.
+ *    "… daten löschen" stays out (owner ruling). They stay deviations: #602 found no German removal
+ *    keyword that catches more requests without also firing on legal questions (architecture.md §18).
  */
 const KNOWN_SUGGESTION_DEVIATIONS: Record<string, string> = {
   'adv-meeting-schedule-01': 'meeting-protocol',
