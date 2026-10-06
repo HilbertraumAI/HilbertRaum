@@ -116,14 +116,21 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
-- **A chat whose AI model stops responding before it begins its answer now ends after two minutes
-  with a clear message.** When the model's engine accepted a question and then went silent, the
-  chat waited for five minutes and then showed only "fetch failed". Meanwhile the app counted the
-  model as busy, so actions such as the engine update were refused. The chat now ends after two
-  minutes with "The AI model stopped responding", and the model is free again. Apps connected through
-  the local API get their documented `runtime_unresponsive` error within the same two minutes. An
-  answer that stops partway through ends after 30 seconds without new text. With the current AI
-  engine, its keep-alive messages could postpone that (#594).
+- **A chat whose AI model never starts on the question now ends after three minutes with a clear
+  message.** When the model's engine accepted a question and then went silent, the chat waited for
+  five minutes and then showed only "fetch failed". Meanwhile the app counted the model as busy, so
+  actions such as the engine update were refused. The chat now ends after three minutes with "The
+  AI model stopped responding", and the model is free again. Apps connected through the local API
+  get their documented `runtime_unresponsive` error at the same point. An answer that stops partway
+  through ends after 30 seconds without new text. With the current AI engine, its keep-alive
+  messages could postpone that (#594, #598).
+- **A chat whose AI model gets stuck while it reads a long question now ends with a clear message.**
+  The AI engine keeps signalling that it is alive while it works through a question, even when the
+  model itself has stopped, so such a chat could wait forever. The app now watches the model's own
+  progress through the question: when there is none for ten minutes, the chat ends with "The AI
+  model stopped responding". If the engine goes completely silent instead, the chat ends after two
+  minutes. A long question on a slow computer still gets the time it needs as long as the model keeps
+  working through it (#598).
 - **"Install voice engine" installs only the voice engine.** On a drive with an older AI engine, the
   button also tried to download the AI engine again, and while a model was running it then refused
   with "The AI engine can't be replaced while a model is running". It now installs only what is
