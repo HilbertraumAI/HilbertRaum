@@ -1748,9 +1748,10 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         `warnSpeedSkipped`.
 
       **Not covered.**
-      - A **crash** mid-redaction (`forceRestart`, no hook) still falls back to the floor and opens the
-        save dialog; the "rule-based detection only" note appears only after it (D78's design; #620,
-        an owner decision).
+      - A **crash** mid-redaction (`forceRestart`, no hook) still fell back to the floor and opened the
+        save dialog; the "rule-based detection only" note appeared only after it. **Fixed by #620:**
+        any model failure during the locate pass now fails the run with nothing saved (Skills record
+        §21 "#620 amendment").
       - The OS session-end lock (`emergencyLock`) aborts nothing (#612 note above).
       - A run parked in an already-open save dialog does not settle; lock and quit go on at the bound.
       - `usesModel` is fixed when the run starts. A stop in the short tail after the locate pass (the
@@ -1841,7 +1842,9 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
         like `startRuntime`; it aborts a deep-index build first and audits `runtime_started`
         ("restarted").
       - **"Is starting"**: `assertChatStreamReady` (chat and document answers) and both doc-task guards
-        throw `main.modelStarting` while `isStarting()`; the friendly task-error filter keeps it.
+        throw `main.modelStarting` while `isStarting()`; the friendly task-error filter keeps it. Since
+        #620, `startSkillRun` refuses a `direct` tool (redaction, edit) the same way while no runtime is
+        active (Skills record §21 "#620 amendment").
         `shared/runtime-status.ts` `isModelStarting(status)` is the one reader-side definition: the
         local API's model gate (`model_starting`), Chat's waiting screen, the engine update's busy
         check (an update during a weight check would resume the previous model behind the user's
@@ -10515,7 +10518,50 @@ model pass. Builds directly on the §20 span-transform engine.
   and never claims "fully anonymized" (SKILL.md honesty block rewritten to "AI-assisted best-effort with a
   deterministic floor"). **#606:** a model stop or switch, a lock and a quit are cancels, not model
   failures. They abort the run's signal before the model dies, so the run ends "Stopped. Nothing was
-  saved." and never degrades (CB-5 "#606 amendment"). A crash still degrades (#620).
+  saved." and never degrades (CB-5 "#606 amendment"). **Since #620 the floor is only for "no model at
+  the start"**: a model that fails during the pass fails the run (below).
+  - **#620 amendment (2026-10-06): a model that fails during the locate pass fails the run, with
+    nothing saved.** The facts:
+    - A crash restart stops with the kind `'restart'`, which runs no model-stop hook, so the run's signal
+      stayed live after #606. Every non-abort failure took the floor branch: a crash or an OS kill
+      (`RuntimeConnectionLostError` on both crash paths), a frozen model the CB-5 watchdog ended, a
+      server error, and a context overflow. The branch dropped what the model had found, opened the
+      save dialog, and the run bar then said "no model running".
+    - Real app (master `9666eda0`, DesktopDiT, b11146, the 4B, an encrypted vault): a killed sidecar
+      opened the save dialog within 3.6 s on the GPU (before the app's own crash notice) and 2.1 s on
+      the CPU. A 44-paragraph document opened it in 1.6 s with the model running: its first window is
+      4,660 tokens against `n_ctx` 4,096 (`exceed_context_size_error`). A DOCX paragraph is one locate
+      line, so dense documents overflow a 4,096-token model every time; the window budget is #622.
+
+    **Owner decisions** (on the issue, 2026-10-06).
+    - Every model failure during the pass fails the run: no tool pass, no dialog, nothing saved. The
+      floor stays for the case D78 was written for, no model when the run starts, where its "no model
+      running" copy is true. What the model found in the finished windows is dropped with the rest.
+    - The run bar names the cause: `redactionModelStopped` ("The AI model stopped before the redaction
+      was finished. Nothing was saved. Run it again…") and `redactionTooLong` (the document is too long
+      for the model's context window; choose a larger context size and restart the model).
+    - A `direct` skill run asked for while a model is starting is refused with #599's
+      `main.modelStarting`, for redaction and edit alike: the crash restart is exactly when the user
+      runs it again.
+
+    **As built.** `runRedactionLocate` returns `{ failed }` instead of the floor (`isExceedContextError`
+    picks `redactionTooLong`; the log line names the error's class only). `runDocumentRedaction` records
+    `failed` before the tool pass. `startSkillRun` refuses a `modelLane: 'direct'` tool while no runtime
+    is active and `isStarting()`. `SkillRunBar` maps both codes (EN/DE).
+
+    **Tests**, each red on the pre-fix code; six mutations caught. `skills-redaction.test.ts` "(#620)": a
+    runtime that dies under window 2 of 2 (`killableRuntime`) and the measured overflow reply.
+    `model-occupancy-ipc.test.ts` "(#620)": the starting refusal for both tools through the real
+    manager. `SkillRunBar.test.tsx` "(#620)": both codes' copy.
+
+    **Real app** (the same legs, fixed build): GPU crash → `failed` / `redactionModelStopped` within
+    1.7 s, no dialog; "run it again" during the restart → refused "is starting" at 4.1 s, then started
+    on the restarted model at 7.1 s; overflow → `failed` / `redactionTooLong`, no dialog; CPU crash →
+    `failed` within 1.7 s, no dialog.
+
+    **Not covered.** A run started again in the moment between the socket loss and the manager seeing
+    the process exit still holds the dead runtime; its first request fails the same way, with the same
+    copy (verified in code, not observed — the 4.1 s attempt above was already refused).
 - **Flow & gates unchanged.** Still user-initiated + confirm-gated (`export-file`); `skill_runs` stays
   content-free (entity VALUES never logged/audited — a privacy-guard test drives a secret name through the
   locate pass and asserts it reaches no sink). The `saveTextFile` boundary's trust model is untouched.

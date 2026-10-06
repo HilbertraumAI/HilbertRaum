@@ -27,6 +27,7 @@ import {
 } from '../export/docx-rewrite'
 import { isAbortError } from '../chat'
 import type { ModelRuntime } from '../runtime'
+import { isExceedContextError } from '../runtime/llama'
 
 // The app-orchestrated run seam (architecture.md "Skills — design record" §8, Phase S11a). This is the exact
 // function S11b's IPC/UI will call: it is invoked by the APP from a user action (DS4), never by the
@@ -1358,32 +1359,50 @@ export interface RedactionResult {
    * A content-free outcome discriminator the renderer maps to copy:
    *   'redacted'       — the LLM locate pass ran, items were masked;
    *   'clean'          — the LLM locate pass ran, nothing was masked;
-   *   'redactedFloor'  — DEGRADED (no runtime / locate failed): only the regex floor ran, items masked;
+   *   'redactedFloor'  — DEGRADED (no runtime at the start, D78): only the regex floor ran, items masked;
    *   'cleanFloor'     — DEGRADED: only the regex floor ran, nothing masked;
    *   'redactedCapped' — #134: the locate pass hit its proposal cap (a very large document) — items
    *                      were masked, but automatic detection stopped at the limit; review carefully.
+   * A model that fails DURING the locate pass is no floor: the run fails and `errorCode` says why (#620).
    */
   resultKind?: string
   /** True when the run ended because it was CANCELLED (vs a genuine failure) — the seam is authority (B2). */
   cancelled?: boolean
-  /** A content-free failure reason CODE the renderer localizes (I1). */
+  /**
+   * A content-free failure reason CODE the renderer localizes (I1): `unavailable`, `persistFailed`,
+   * `exportWriteFailed`, and #620's `redactionModelStopped` / `redactionTooLong` (the model failed mid-locate).
+   */
   errorCode?: string
   /** A friendly, content-free reason on failure. */
   error?: string
 }
 
 /**
+ * #620: why a locate pass the model did not finish failed the run — the content-free reason code the run
+ * bar maps to copy. `redactionTooLong`: a window exceeded the model's context window (llama-server
+ * `exceed_context_size_error`; the window sizing is #622). `redactionModelStopped`: everything else — a
+ * crash or kill (`RuntimeConnectionLostError`), a frozen model the CB-5 watchdog ended, a server error.
+ */
+type RedactionLocateFailure = 'redactionModelStopped' | 'redactionTooLong'
+
+/** #620: the English `skill_runs.error` / log line per failure; the renderer shows the localized code. */
+const REDACTION_LOCATE_FAILED_MESSAGE: Record<RedactionLocateFailure, string> = {
+  redactionModelStopped: 'The AI model stopped before the redaction was finished. Nothing was saved.',
+  redactionTooLong: "Parts of this document are too long for the current model's context window. Nothing was saved."
+}
+
+/**
  * The shared Phase-7/9 redaction LOCATE step: run the model over `text` (the extracted `.txt` join OR the
  * DOCX text layer) and report the proposed entities + whether the run DEGRADED to the deterministic floor.
- * No runtime ⇒ degrade (entities empty). A non-abort model failure ⇒ degrade with a content-free log (the
- * entity strings never reach it, §22-M1). Empty text ⇒ no locate, not degraded (the tool's own read
+ * No runtime ⇒ degrade (entities empty) — D78's floor. A non-abort model failure ⇒ `failed` (#620): the
+ * caller fails the run with nothing saved. Empty text ⇒ no locate, not degraded (the tool's own read
  * surfaces an unreadable document). A USER CANCEL throws `AbortError` — the caller maps it to a calm cancel.
  */
 async function runRedactionLocate(
   text: string,
   deps: RedactionDeps,
   signal: AbortSignal
-): Promise<{ entities: LocatedEntity[]; degraded: boolean; truncated: boolean }> {
+): Promise<{ entities: LocatedEntity[]; degraded: boolean; truncated: boolean } | { failed: RedactionLocateFailure }> {
   if (deps.runtime == null) return { entities: [], degraded: true, truncated: false }
   if (text.length === 0) return { entities: [], degraded: false, truncated: false }
   try {
@@ -1398,10 +1417,16 @@ async function runRedactionLocate(
   } catch (e) {
     // GAP-4 (full-audit 2026-07-11): the app-wide `isAbortError(e, signal)` instead of the narrow
     // DOMException name-check — a user cancel surfacing as a wrapped runtime error (e.g.
-    // 'terminated' from a killed fetch) must rethrow as a cancel, never degrade to the floor.
+    // 'terminated' from a killed fetch) must rethrow as a cancel, never fail the run.
     if (isAbortError(e, signal)) throw e
-    console.error('[skills] redaction locate pass failed — degrading to the rule-based floor')
-    return { entities: [], degraded: true, truncated: false }
+    // #620: the model failed under the pass while it was running — it crashed or was killed (no #600 hook
+    // runs for a crash, so the signal is live), froze, errored, or a window overflowed its context. The
+    // floor would offer the user a copy the model never finished, saying "no model running" after the
+    // save. Content-free log: the error's class name only (§22-M1).
+    const failure: RedactionLocateFailure = isExceedContextError(e) ? 'redactionTooLong' : 'redactionModelStopped'
+    const kind = e instanceof Error ? e.name : typeof e
+    console.error(`[skills] redaction locate pass failed (${kind}) — the run fails, nothing is saved`)
+    return { failed: failure }
   }
 }
 
@@ -1494,23 +1519,19 @@ export async function runDocumentRedaction(
 
     // Phase 7 LOCATE pass (D73/D75): the model proposes name/address/org spans over the SAME text the tool
     // verifies against (the DOCX layer or the extracted text); the tool then confirms each verbatim and
-    // sweeps all occurrences. The model NEVER generates the output text. With no runtime — or a locate
-    // failure that is NOT a user cancel — the run DEGRADES to the deterministic floor with an honest note
-    // (`degraded`), never a silent partial. A user cancel throws AbortError → the calm cancel below.
+    // sweeps all occurrences. The model NEVER generates the output text. With no runtime at the start the
+    // run DEGRADES to the deterministic floor with an honest note (`degraded`, D78). A model that fails
+    // during the pass FAILS the run with nothing saved (#620). A user cancel throws AbortError → the calm
+    // cancel below.
     let joined = ''
     try {
       joined = reader(args.documentId).map((c) => c.text).join('\n')
     } catch {
       joined = '' // an unreadable document surfaces through the tool's own read below; skip locate
     }
-    let entities: LocatedEntity[] = []
-    let degraded: boolean
-    let locateTruncated = false
+    let located: Awaited<ReturnType<typeof runRedactionLocate>>
     try {
-      const located = await runRedactionLocate(joined, deps, signal)
-      entities = located.entities
-      degraded = located.degraded
-      locateTruncated = located.truncated
+      located = await runRedactionLocate(joined, deps, signal)
     } catch (e) {
       // GAP-4: the app-wide abort classifier — a cancel surfacing as a wrapped runtime error is
       // still a calm cancel, never a 'failed' run.
@@ -1521,6 +1542,15 @@ export async function runDocumentRedaction(
       }
       throw e
     }
+    if ('failed' in located) {
+      // #620: no tool pass, no save dialog — what the model found in the windows that finished is dropped
+      // with the rest, because a partial model pass offered as a redaction is the under-masked copy D78 forbids.
+      const msg = REDACTION_LOCATE_FAILED_MESSAGE[located.failed]
+      finishRun(db, runId, 'failed', now(), null, msg)
+      return { ok: false, runId, errorCode: located.failed, error: msg }
+    }
+    const { entities, degraded } = located
+    const locateTruncated = located.truncated
 
     const result = await runSkillTool(tool, {
       skillId: args.skillInstallId,

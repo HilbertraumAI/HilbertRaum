@@ -1113,8 +1113,9 @@ without dismissing anything first.
 > footnotes, comments, and tracked-changes deleted text — and also clears the **author metadata** and
 > **link targets** a file quietly carries. What it can't check: **pictures, scanned pages, and embedded
 > objects** (the confirmation dialog says so before the run). It can still miss things, and if no model
-> is running only the rule-based part applies (the run tells you so). Always review the redacted copy
-> before you share it.
+> is running only the rule-based part applies (the run tells you so). If the model stops while it is
+> checking the document, nothing is saved and the run says so — run it again. Always review the
+> redacted copy before you share it.
 
 > **Document edit** makes **targeted find-and-replace changes** — for example "replace *Vollmachtgeber*
 > with *Vollmachtgeberin* everywhere it refers to the principal". Ask for the change in the chat, then

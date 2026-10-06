@@ -453,6 +453,14 @@ export function registerSkillsIpc(ctx: AppContext): void {
     const instruction =
       toolName === 'apply_document_edits' ? getLatestUserMessage(ctx.db, conversationId) ?? undefined : undefined
     const activeRuntime = ctx.runtime?.active() ?? null
+    const modelLane = getToolDescriptor(toolName)?.modelLane
+    // #620: a `direct` tool asked for while a model is STARTING (the unlock auto-start, a switch, the
+    // crash restart #620's "run it again" sends the user into) is refused with the #599 "is starting"
+    // copy that chat and document tasks already give. Without a runtime the redaction would run
+    // rule-based only and say "no model running"; the edit would say "Start a model first".
+    if (modelLane === 'direct' && activeRuntime == null && ctx.runtime?.isStarting?.() === true) {
+      return { started: false, error: tMain('main.modelStarting') }
+    }
     const runner = buildToolRunner(
       ctx.db,
       toolName,
@@ -460,7 +468,8 @@ export function registerSkillsIpc(ctx: AppContext): void {
       runAudit,
       // `docTasks` routes `categorize_transactions` into the doctask lane (D26 exclusion, Phase 33).
       // `runtime` (Phase 7/8, D73/D76) is the active chat model for the redaction / document-edit LLM
-      // locate pass — null when none runs (redaction degrades to its floor; the edit tool refuses cleanly).
+      // locate pass — null when none runs (redaction degrades to its floor; the edit tool refuses cleanly;
+      // while one is starting, the check above refused).
       // `saveBinaryFile` + `readOriginalDocument` (Phase 9, D77) drive the same-format DOCX export.
       {
         saveTextFile,
@@ -488,7 +497,6 @@ export function registerSkillsIpc(ctx: AppContext): void {
     // `ctx.runtime` is optional in the partial contexts the skills tests build; unwired ⇒ no
     // guard and no span, exactly like `ctx.docTasks?` in the sibling checks.
     const occupancy = ctx.runtime?.occupancy ?? null
-    const modelLane = getToolDescriptor(toolName)?.modelLane
     // #606: the same two facts say the run streams on the chat model itself, so a stop or switch of
     // the model cancels it (`cancelModelRuns`). Categorize ('doctask') is not such a run: its model
     // call is a document task, which a model stop leaves to fail (#600).

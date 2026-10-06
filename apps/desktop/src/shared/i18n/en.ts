@@ -369,6 +369,12 @@ export const en = {
   'chat.skill.run.error.needsModel': 'Start a model first — targeted edits need a running model to find the text to change.',
   'chat.skill.run.error.needsInstruction': 'Say what to change first (for example, “replace X with Y”), then run this again.',
   'chat.skill.run.error.editFailed': 'The edits couldn’t be completed. Nothing was changed.',
+  // #620: the model failed during a redaction (a crash, a freeze, an error), or part of the document is
+  // too long for its context window. Nothing is saved — a copy the model never finished is no redaction.
+  'chat.skill.run.error.redactionModelStopped':
+    'The AI model stopped before the redaction was finished. Nothing was saved. Run it again — if this keeps happening, restart the model on the AI Model screen.',
+  'chat.skill.run.error.redactionTooLong':
+    'Parts of this document are too long for the current model’s context window. Nothing was saved. Choose a larger context size on the AI Model screen and restart the model, then run it again.',
   'chat.skill.run.cancelled': 'Stopped. Nothing was saved.',
   // SKA-40 (skills audit 2026-07-03, U6): the store gave up polling a run after repeated errors — a
   // labelled, dismissable row rather than a silently vanished run.

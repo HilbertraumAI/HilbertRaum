@@ -28,10 +28,14 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-06 — **#620 — a model that fails during a redaction's locate pass fails the run, nothing saved (`fix/620-redaction-crash-mid-locate`).** A crash restart runs no
+#600 hook, so after #606 a crash, a freeze, a server error and a context overflow still took the floor and opened the save dialog (real app: 2–4 s after a kill; 1.6 s
+for a 4,660-token window on the 4B's 4,096). Now `failed` + `redactionModelStopped` / `redactionTooLong`; the floor is only for "no model at the start" (D78 amended,
+owner option 1). A `direct` skill run asked for during a model start is refused "is starting". Record: Skills §21 "#620 amendment". Open: #622 (window token budget)._
 _2026-10-06 — **#606 — lock, quit and a model stop or switch end the skill runs and the benchmark's speed leg on the model first (`fix/606-teardown-skill-bench`).** A run's
 own signal was never aborted, so a redaction whose model request died fell back to the rule-based floor and opened its save dialog (over the lock screen after "Lock now", real
 app); an edit ended `editFailed`. `SkillRunController` `cancelAll` / `cancelModelRuns` / `awaitSettled` (`ctx.skillRuns`), the #600 hook's 4th step, `ctx.cancelBenchmark`; the run
-reads "Stopped. Nothing was saved." Owner calls from the issue. Record: CB-5 "#606 amendment", `benchmark.md` "Lock and quit cancel the speed leg". Open: #620 (a crash still degrades)._
+reads "Stopped. Nothing was saved." Owner calls from the issue. Record: CB-5 "#606 amendment", `benchmark.md` "Lock and quit cancel the speed leg". Open: none (#620: above)._
 _2026-10-06 — **#612 — the Stop button, lock and quit leave the same lasting "Reply stopped" marker (`fix/612-stopped-answer-marker`).** Each abort names its cause
 (`chat/ended-early.ts`: `'user'` Stop, `'lock'` lock + quit, `'model'` #600); `persistAssistantMessage` stamps any of them, an unanswered question is marked for all
 three, a re-ask cut by lock/quit restores its predecessor; the evidence snapshot's `answerEndedEarly` (replaced the unreleased `answerStopped`) names the cause in the

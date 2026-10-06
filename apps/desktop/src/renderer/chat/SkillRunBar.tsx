@@ -60,7 +60,11 @@ const RUN_ERROR_KEY: Record<string, MessageKey> = {
   // model failure mid-locate. Each maps to a friendly, actionable line.
   needsModel: 'chat.skill.run.error.needsModel',
   needsInstruction: 'chat.skill.run.error.needsInstruction',
-  editFailed: 'chat.skill.run.error.editFailed'
+  editFailed: 'chat.skill.run.error.editFailed',
+  // #620 — the model failed during a redaction's locate pass (crash, kill, freeze, error / a window too
+  // long for its context): the run saved nothing. The rule-based floor is only for "no model at the start".
+  redactionModelStopped: 'chat.skill.run.error.redactionModelStopped',
+  redactionTooLong: 'chat.skill.run.error.redactionTooLong'
 }
 
 export interface SkillRunBarProps {
@@ -232,9 +236,10 @@ export function SkillRunBar({
     }
     if (d?.resultShape === 'redaction' && d.redactionKeys) {
       // 'clean' = nothing detected (a copy was still saved); 'redacted' = N items hidden. The *Floor
-      // variants (Phase 7, D78) are the DEGRADED run — the model was unavailable, so only rule-based
-      // detection ran; the copy says so honestly. 'redactedCapped' (#134) = the locate pass hit its
-      // proposal cap on a very large document — detection stopped at the limit; review carefully.
+      // variants (Phase 7, D78) are the DEGRADED run — no model ran when it started, so only rule-based
+      // detection ran; the copy says so honestly (a model that fails mid-run fails the run, #620).
+      // 'redactedCapped' (#134) = the locate pass hit its proposal cap on a very large document —
+      // detection stopped at the limit; review carefully.
       if (state.resultKind === 'clean') return t(d.redactionKeys.clean)
       if (state.resultKind === 'cleanFloor') return t(d.redactionKeys.cleanFloor)
       if (state.resultKind === 'redactedFloor') return tCount(d.redactionKeys.redactedFloor, count)
