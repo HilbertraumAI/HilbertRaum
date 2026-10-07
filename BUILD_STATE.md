@@ -28,6 +28,10 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-07 — **#607 — the embed request's 120 s deadline and the caller's Stop cover the response body (`fix/607-e5-body-timeout`).** Since the 2026-06-30
+overflow retry (`dbfee90f`) both were dropped at the headers: a stalled body ran to undici's own 305 s (`terminated`) while an import held its queue, the doc-work lease and the
+engine-update busy gate, and Stop could not end a document question. The `try/finally` now spans `res.json()` / `res.text()`. Real b9849 e5 behind a stalling proxy:
+120.0 s `TimeoutError`, Stop at once. Record: `rag-design.md` §12.4 "#607 amendment". Open: none._
 _2026-10-07 — **#582 — What-changed routes English and German compare requests alike (`fix/582-what-changed-en-de-parity`).** At a count ≠ 2 German
 "Fasse die Unterschiede zusammen" got "select exactly two"; "summarize the differences" fell to top-k under the compare fence (0.1.59 + 4B: an invented
 "Document B"). Owner: route both; `differences` offers + routes; route-only compare/change words in both languages (German word by word). 23 EN/DE pairs

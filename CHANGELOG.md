@@ -198,6 +198,12 @@ from its first public `1.0.0` release onward.
   model stopped responding". If the engine goes completely silent instead, the chat ends after two
   minutes. A long question on a slow computer still gets the time it needs as long as the model keeps
   working through it (#598).
+- **A search model that stops partway through its reply no longer holds things up for five minutes.**
+  When the search model that prepares documents for questions started a reply and then went silent,
+  the app waited about five minutes before giving up with "terminated". Until then the rest of an
+  import waited behind it, a password change or an engine update was refused as busy, and Stop did
+  not end a document question that was waiting for it. The app now gives up after two minutes, as it
+  already did when the search model did not reply at all, and Stop ends the question at once (#607).
 - **"Install voice engine" installs only the voice engine.** On a drive with an older AI engine, the
   button also tried to download the AI engine again, and while a model was running it then refused
   with "The AI engine can't be replaced while a model is running". It now installs only what is

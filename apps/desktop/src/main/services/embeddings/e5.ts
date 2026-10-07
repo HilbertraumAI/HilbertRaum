@@ -377,7 +377,8 @@ export class E5Embedder implements Embedder {
    * truncated to the sidecar context (see `truncateForContext` / `runtime/context-budget.ts`),
    * sent in bounded batches, and each request carries a timeout so a wedged sidecar cannot park a
    * document in `embedding` forever. `opts.signal` (a user "Stop") is combined with
-   * the timeout so query embedding cancels promptly (M-C5).
+   * the timeout so query embedding cancels promptly (M-C5). Both cover the whole request, the
+   * body read included (#607).
    */
   async embed(texts: string[], opts?: EmbedOptions): Promise<Float32Array[]> {
     if (texts.length === 0) return []
@@ -428,9 +429,13 @@ export class E5Embedder implements Embedder {
       let json!: EmbeddingResponse
       for (let attempt = 0; ; attempt++) {
         // REL-4: own the per-attempt timeout so it is cleared the instant the request settles —
-        // hundreds of batches in a large ingestion otherwise leave hundreds of live timers.
+        // hundreds of batches in a large ingestion otherwise leave hundreds of live timers. #607: the
+        // request settles once its BODY is read, not when `fetch` resolves at the headers. Clearing
+        // there left the body read with no deadline of ours (only undici's 300 s idle limit) and
+        // detached the caller's signal, so a Stop could not reach a stalled body either.
         const combined = combineSignals(opts?.signal, timeoutMs)
         let res: Response
+        let errorBody: string
         try {
           res = await server.fetch('/v1/embeddings', {
             method: 'POST',
@@ -438,16 +443,19 @@ export class E5Embedder implements Embedder {
             body: JSON.stringify({ model: this.id, input: batch }),
             signal: combined.signal
           })
+          if (res.ok) {
+            json = (await res.json()) as EmbeddingResponse
+            break
+          }
+          // llama.cpp wraps the reason in `{ error: { message, type } }`. Read it (also drains the
+          // body, releasing the connection). Still under the deadline: a stalled error body leaves
+          // only the status (#594's rule for the chat error body).
+          errorBody = (await res.text().catch(() => '')).trim()
         } finally {
           combined.clear()
         }
-        if (res.ok) {
-          json = (await res.json()) as EmbeddingResponse
-          break
-        }
-        // llama.cpp wraps the reason in `{ error: { message, type } }`. Read it (also drains the
-        // body, releasing the connection) and surface just the message — never the JSON envelope.
-        const err = parseLlamaError((await res.text().catch(() => '')).trim())
+        // Surface just the message — never the JSON envelope.
+        const err = parseLlamaError(errorBody)
         // Context overflow despite truncation (the heuristic factor can't guarantee fit for an
         // arbitrary-density chunk against E5's hard 512): halve this batch's budget and retry so the
         // chunk's head still embeds instead of failing the document. Only this batch is re-truncated.
