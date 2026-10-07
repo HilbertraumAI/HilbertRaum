@@ -8,6 +8,7 @@ import {
   RuntimeUnresponsiveError
 } from '../../src/main/services/runtime/llama'
 import { EmptyCompletionError } from '../../src/main/services/chat'
+import { EmbedderError } from '../../src/main/services/embeddings/errors'
 import { inFlightStreams, streamBuffers, streamSettled } from '../../src/main/ipc/inflight'
 import { t } from '../../src/shared/i18n'
 import { type Message } from '../../src/shared/types'
@@ -256,6 +257,25 @@ describe('withChatStream (M-A2)', () => {
     }).catch((e: Error) => e.message)
     expect(rejection).toBe(friendly)
     expect(rejection).not.toMatch(/kv cache|server_error|Chat stream failed/) // structural reason stays local
+    expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
+    expect(inFlightStreams.has('c1')).toBe(false)
+  })
+
+  // #634: a document question's search step failed. Before #634 the banner showed the raw reason —
+  // "The operation timed out." in any UI language, or llama-server's stderr tail with the weight
+  // file's absolute path. Each kind maps to copy that names the search model, on both channels.
+  it.each([
+    { kind: 'timeout', key: 'main.chat.searchModelTimeout' },
+    { kind: 'start', key: 'main.chat.searchModelCannotStart' },
+    { kind: 'failed', key: 'main.chat.searchModelFailed' },
+    { kind: 'interrupted', key: 'main.chat.searchModelFailed' }
+  ] as const)('maps a $kind search-model failure to $key on the error event AND the rejection (#634)', async ({ kind, key }) => {
+    const { event, sent } = fakeEvent()
+    const friendly = t('en', key)
+    const rejection = await withChatStream(event, 'c1', 'label', async () => {
+      throw new EmbedderError(kind, 'The search model could not start (exit:code 1)')
+    }).catch((e: Error) => e.message)
+    expect(rejection).toBe(friendly)
     expect(sent).toEqual([{ channel: 'chat:error:c1', args: [friendly] }])
     expect(inFlightStreams.has('c1')).toBe(false)
   })

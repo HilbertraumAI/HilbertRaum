@@ -2475,6 +2475,16 @@ export const en = {
   'main.ingest.engineCannotRun': "The AI engine can't run on this computer, so this document could not be indexed. The AI Model screen says what to do — then try again.",
   'main.ingest.engineLibraryMissing': "The AI engine can't run on this computer because the system library {library} is missing. The AI Model screen says how to fix it — then try again.",
   'main.ingest.voiceEngineCannotRun': "The voice engine can't run on this computer, so this recording could not be transcribed. The AI Model screen says what to do — then re-index this document.",
+  // #634 (design-guidelines §11.23): the search model (the E5 embedder) failed. Chosen by the error's
+  // kind, never its text: a start failure's text names the weight file by absolute path. A lock or
+  // quit that cut the embed off stores `main.ingest.interrupted` instead.
+  'main.ingest.searchModelTimeout':
+    'The search model did not respond in time, so this document could not be indexed. Try again.',
+  'main.ingest.searchModelCannotStart':
+    'The search model could not start, so this document could not be indexed. On the AI Model ' +
+    'screen, choose Check all model files — then try again.',
+  'main.ingest.searchModelFailed':
+    'The search model ran into a problem, so this document could not be indexed. Try again.',
   'main.ingest.imageNeedsOcr':
     'Photo import needs the text-recognition (OCR) files, which are not on this drive.',
   'main.ingest.imageNoText':
@@ -2669,6 +2679,16 @@ export const en = {
     'The AI model stopped before the answer was finished. Send your message again — if this keeps happening, restart the model on the AI Model screen.',
   'main.chat.streamError':
     'The AI model ran into an error before finishing the answer. Try again — if it keeps happening, restart the model on the AI Model screen.',
+  // #634 (design-guidelines §11.23): a document question's search step failed — the search model
+  // (the E5 embedder), not the AI model. Content-free and path-free; the raw reason goes to the
+  // local log only.
+  'main.chat.searchModelTimeout':
+    'The search model did not respond in time, so your documents could not be searched. Try again.',
+  'main.chat.searchModelCannotStart':
+    'The search model could not start, so your documents could not be searched. On the AI Model ' +
+    'screen, choose Check all model files — then try again.',
+  'main.chat.searchModelFailed':
+    'The search model ran into a problem, so your documents could not be searched. Try again.',
   'main.chat.nothingToRegenerate': 'Nothing to regenerate yet.',
   // #613: "Send again" on a question that is no longer the conversation's last message (an answer
   // arrived meanwhile, or the screen was out of date).

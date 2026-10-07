@@ -28,6 +28,11 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-07 — **#634 — a search-model failure reaches the user as words, chosen by kind (`fix/634-embedder-error-copy`).** A timeout read "The
+operation timed out." in any language, and a damaged e5 file stored llama-server's stderr (the weight file's absolute path) on every row of the
+session and in the question banner. Now `EmbedderError` (`timeout`/`start`/`failed`/`interrupted`) → canonical row copy + chat copy naming the
+search model; old rows rewritten at unlock; lock mid-import → "interrupted"; a crashed sidecar restarts; a re-download or clean model check re-arms. Owner calls as
+recommended. Real app (German, encrypted vault) before/after. Record: `rag-design.md` §12.4 "#634 amendment", design-guidelines §11.23. Open: #635._
 _2026-10-07 — **#607 — the embed request's 120 s deadline and the caller's Stop cover the response body (`fix/607-e5-body-timeout`).** Since the 2026-06-30
 overflow retry (`dbfee90f`) both were dropped at the headers: a stalled body ran to undici's own 305 s (`terminated`) while an import held its queue, the doc-work lease and the
 engine-update busy gate, and Stop could not end a document question. The `try/finally` now spans `res.json()` / `res.text()`. Real b9849 e5 behind a stalling proxy:
@@ -137,11 +142,6 @@ session verdict (never persisted) fed by the startup probe and every refusal, `A
 with a full latch re-arm, and a heal at unlock (loader-caused `gpuAutoDisabled`, raw-path document rows). Owner rulings: no libgomp/VC++
 bundling, option C, kiwix out of scope. Records: `architecture.md` "Engine load failures", design-guidelines §11.17, data-contracts.
 Real-app verified (Linux container w/o libgomp1 + heal by apt; Windows en/de). Open: a stock desktop run; macOS unmeasured (reinstall button: done, #532)._
-_2026-10-01 — **#527 — the greyed-out mic names the missing piece and its button opens the AI Model screen on the speech model
-(`fix/527-dictation-hint-cause`).** Cause per drive state (`TranscriberMissing`: model / engine / both / `engine-unsupported` = no engine
-build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
-screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
-`data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -192,7 +192,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry), and the closed 2026-10-01 #527 entry on 2026-10-07 (preamble budget, making room for the #634 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

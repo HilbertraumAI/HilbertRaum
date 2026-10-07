@@ -4589,7 +4589,8 @@ graphics card".
 - **Embedder.** Still latches, so a refused engine is not respawned on every import. Ingestion
   stores the canonical, display-mapped text: `main.ingest.engineLibraryMissing` (interpolated
   `{library}`) or `main.ingest.engineCannotRun`. A document question maps the error to
-  `main.engine.cannotRun`.
+  `main.engine.cannotRun`. #634 gives the search model's other failures (a timeout, a damaged
+  weight file, a crash) the same treatment by kind: `rag-design.md` §12.4 "#634 amendment".
 - **Reranker and translation.** No GPU-fallback latch, no CPU retry; they latch. Translation
   reports `engineCannotRun` instead of the "free memory" copy.
 - **Vision.** Reports `engineCannotRun` (it used to say "pick another model") and repeats it
@@ -4635,7 +4636,9 @@ until a lock/unlock.
 create), before the auto-start reads the GPU flags. It clears a loader-caused `gpuAutoDisabled`
 together with its `gpuLastError`. That flag has no machine stamp, so it would otherwise have followed
 the drive to every computer. It also rewrites failed rows still holding the raw line
-(`rewriteEngineFailureRows`). Both steps are idempotent and admission-gated.
+(`rewriteEngineFailureRows`). Both steps are idempotent and admission-gated. #634 adds a third
+after them, for rows holding the search model's raw failure (`rewriteSearchModelFailureRows`,
+`rag-design.md` §12.4 "#634 amendment"); a row this classifier claims keeps #530's text.
 
 ### §6 Surfaces
 
@@ -5184,7 +5187,9 @@ a download that verified while locked still reports `done` and fires `onModelIns
 `DownloadManagerDeps.audit` hook; a placeholder-hash completion records NO "verified".
 A job reaching `done` additionally fires `DownloadManagerDeps.onModelInstalled` → wired to
 `AppContext.onModelInstalled`, which re-runs the startup-frozen availability selectors — the
-translation sidecar today (issue #40; the "Translation sidecar" record has the details).
+translation sidecar today (issue #40; the "Translation sidecar" record has the details). Since #634
+it also re-arms the embedder's failed-start latch when the installed model is the embedder's own,
+so a re-downloaded damaged e5 file works without a lock/unlock (`rag-design.md` §12.4).
 No update checks, no catalog (only manifests already on the drive), no background anything;
 a sanctioned download session is by definition not `offlineMode`. Gate semantics +
 licensing: `model-policy.md` §"The in-app downloader"; user-facing posture: `PRIVACY.md`.

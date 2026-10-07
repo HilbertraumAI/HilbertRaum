@@ -102,6 +102,10 @@ describe('localizeServerCopy (D-L4)', () => {
       // #530: the OS refused to start the AI engine / the voice engine — canonical, path-free.
       'main.ingest.engineCannotRun',
       'main.ingest.voiceEngineCannotRun',
+      // #634: the search model timed out, could not start, or failed — canonical, path-free.
+      'main.ingest.searchModelTimeout',
+      'main.ingest.searchModelCannotStart',
+      'main.ingest.searchModelFailed',
       'main.ingest.imageNeedsOcr',
       'main.ingest.imageNoText',
       'main.ingest.imageOcrFailed',

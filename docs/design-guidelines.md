@@ -1726,6 +1726,36 @@ hint is a `.hint` with `role="status"`; Restart is the card's primary action whi
 `runtime-ladder-exit-wiring.test.ts` (the notices), `chat-ipc.test.ts` / `doctasks.test.ts` (the
 starting copy).
 
+### 11.23 A search model that failed — design record (IMPLEMENTED 2026-10-07, #634)
+
+_What a document row and a document question say when the search model (the E5 embedder) fails.
+Engineering record: `rag-design.md` §12.4 "#634 amendment". Code cites this section as **§11.23**._
+
+**The problem.** The row and the banner showed the raw reason. A timeout read "The operation timed
+out." in a German UI too. A damaged weight file put llama-server's stderr on the row, a wall of log
+lines with the file's absolute path, on every document of the session.
+
+**Decisions** (owner, 2026-10-07).
+1. **Name the search model, not the AI model.** Users know the chat model as "the AI model"; this
+   is the other one, "the search model" (DE „das Suchmodell", the term the re-index copy already
+   uses). Each line says what failed, what it cost ("this document could not be indexed" / "your
+   documents could not be searched") and the next step.
+2. **A start failure points at the fix:** "On the AI Model screen, choose Check all model files —
+   then try again." (DE „Wähle im Bereich „KI-Modell“ „Alle Modelldateien prüfen“ — versuch es danach
+   erneut."; English names the button without quotes, German quotes its exact label, §11.17). The
+   check flags a damaged file and offers the download; after it, Try again works at once. A check
+   that finds the file intact re-arms the start too, so Try again is always a real attempt.
+3. **Timeout gets its own line; everything else shares one.** "did not respond in time" vs "ran
+   into a problem". An HTTP error, a malformed response and a crash have the same next step, so
+   they share the line; the detail goes to the local log.
+4. **A lock is not a failure.** A lock or quit that cut an import off shows the existing
+   "Ingestion was interrupted before it finished. Re-index to try again."
+5. **Try again stays offered** on every one of these rows (`isRetryableFailure`).
+
+**Copy:** `main.ingest.searchModel{Timeout,CannotStart,Failed}` (persist-canonical, display-mapped),
+`main.chat.searchModel{Timeout,CannotStart,Failed}` (en + de). **Tests:** `display-map.test.ts`
+(German round-trip), `chat-stream.test.ts`, `engine-health.test.ts` (#634).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

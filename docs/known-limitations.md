@@ -1054,8 +1054,15 @@ password recovery — are documented in
   even survived `suspend()`) for the session until lock/unlock. A bind-class start error is now
   excluded from the latch (`isBindRaceError`), so the next `embed()`/`rerank()` re-attempts on a
   fresh port. Residual: a GENUINE load fault still latches — for the embedder it clears on a
-  workspace lock/unlock (replace the weight file and retry); for the reranker it persists for the
+  workspace lock/unlock (replace the weight file and retry) and, since #634, when the search model
+  is downloaded again in the app (the repair "Check all model files" offers) or a completed "Check
+  all model files" finds its file intact (a file copied back outside the app, a transient cause);
+  for the reranker it persists for the
   session (reranking stays off, retrieval keeps the fused order) by design.
+- **A Stop during the search model's cold start waits for the start (#635).** A document
+  question that finds the E5 sidecar stopped (its first use in a session, or after a lock) starts it
+  — 1.2 s measured on DesktopDiT — and the question's Stop is not wired into that start, only into
+  its requests. A start that hangs keeps the turn in flight up to the 180 s health budget.
 - **The FTS5 index duplicates chunk text inside the workspace DB** (a self-contained table was
   chosen over external-content on `chunks`' implicit rowid, which VACUUM may renumber). Bounded by
   the 1 000-chunk/file cap; encrypted at rest with the same DB file.

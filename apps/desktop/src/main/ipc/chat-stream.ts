@@ -35,6 +35,8 @@ import { noModelMessageKey } from '../../shared/runtime-status'
 import { modelBusyMessageKey } from '../services/runtime/occupancy'
 import { tMain } from '../services/i18n'
 import { isEngineCannotRunError } from '../services/runtime/engine-load'
+import { isEmbedderError, type EmbedderFailureKind } from '../services/embeddings/errors'
+import type { MessageKey } from '../../shared/i18n'
 import { log } from '../services/logging'
 import { perfMark, perfMs } from '../services/perf'
 import { inFlightStreams, streamBuffers, streamSettled } from './inflight'
@@ -110,6 +112,18 @@ export function resendableQuestion(
   const question = getUnansweredQuestion(db, conversationId)
   if (!question || question.id !== resendMessageId) throw new Error(tMain('main.chat.nothingToResend'))
   return question
+}
+
+/**
+ * #634: the chat copy for a search-model failure, by kind. An interruption is a lock or quit, whose
+ * own abort normally ends the turn first (no error at all); if one still lands here, the generic
+ * line is the honest one.
+ */
+const SEARCH_MODEL_CHAT_KEY: Record<EmbedderFailureKind, MessageKey> = {
+  timeout: 'main.chat.searchModelTimeout',
+  start: 'main.chat.searchModelCannotStart',
+  failed: 'main.chat.searchModelFailed',
+  interrupted: 'main.chat.searchModelFailed'
 }
 
 /** A guarded token sender: a no-op once the renderer is gone (window closed mid-stream). */
@@ -488,7 +502,8 @@ export async function withChatStream(
     // (runtimeUnresponsive) → a sidecar that DIED under the turn (connectionLost, #600) → a genuine
     // EMPTY completion (emptyCompletion) → a mid-stream
     // IN-BAND error frame (streamError, audit 2026-07-16 F-02) → a prompt-OVERFLOW HTTP 400
-    // (contextExceeded) → else the raw reason. Each mapped case shows actionable, CONTENT-FREE
+    // (contextExceeded) → an engine the OS refuses (#530) → a search-model failure by kind (#634)
+    // → else the raw reason. Each mapped case shows actionable, CONTENT-FREE
     // copy to the user (the raw structural reason still goes to the local log only).
     const unresponsive = isRuntimeUnresponsiveError(err)
     // #600: the sidecar died under the turn (a crash, an OS kill) — never the raw "terminated".
@@ -498,6 +513,8 @@ export async function withChatStream(
     const overflow = isExceedContextError(err)
     // #530: a document question needs the embedder, and the OS refused to start the engine.
     const engine = isEngineCannotRunError(err)
+    // #634: a document question's search step failed — the search model, not the AI model.
+    const searchModel = isEmbedderError(err) ? SEARCH_MODEL_CHAT_KEY[err.kind] : null
     const message = unresponsive
       ? tMain('main.chat.runtimeUnresponsive')
       : connectionLost
@@ -510,7 +527,9 @@ export async function withChatStream(
             ? tMain('main.model.contextExceeded')
             : engine
               ? tMain('main.engine.cannotRun')
-              : raw
+              : searchModel
+                ? tMain(searchModel)
+                : raw
     log.error(logLabel, { conversationId, message: raw })
     if (!event.sender.isDestroyed()) {
       event.sender.send(STREAM.error(conversationId), message)
@@ -520,7 +539,7 @@ export async function withChatStream(
     // here is what leaked the unmapped "ChatRequestError: HTTP 400 …" string to users. For
     // any other failure (incl. aborts) rethrow the original error untouched so its type and
     // message are preserved upstream.
-    throw unresponsive || connectionLost || emptyCompletion || streamError || overflow || engine
+    throw unresponsive || connectionLost || emptyCompletion || streamError || overflow || engine || searchModel
       ? new Error(message)
       : err
   } finally {

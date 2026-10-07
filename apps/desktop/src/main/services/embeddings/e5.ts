@@ -1,11 +1,15 @@
 import type { Embedder, EmbedOptions } from './index'
+import { EmbedderError, isEmbedderError } from './errors'
 import {
   LlamaServer,
   combineSignals,
+  failureSignature,
   isBindRaceError,
   isStartAbortError,
-  type LlamaServerOptions
+  type LlamaServerOptions,
+  type UnexpectedExitInfo
 } from '../runtime/sidecar'
+import { isEngineCannotRunError } from '../runtime/engine-load'
 import { truncateToContext } from '../runtime/context-budget'
 import { log } from '../logging'
 
@@ -174,6 +178,35 @@ function round2(n: number): number {
   return Math.round(n * 100) / 100
 }
 
+// ---- #634: typed failures ------------------------------------------------------------------------
+// Every failure leaves `embed()` as an `EmbedderError` (or the caller's own AbortError, or #530's
+// `EngineCannotRunError`), so callers choose copy by kind. The messages below are the local log's.
+
+const STOPPED_MESSAGE = 'Embedder is stopped (app is shutting down)'
+const SUSPENDING_MESSAGE = 'Embedder is suspending (workspace is locking)'
+
+function interrupted(message: string): EmbedderError {
+  return new EmbedderError('interrupted', message)
+}
+
+/**
+ * The path-free form of a start failure. The raw message ends in llama-server's stderr tail, which
+ * names the weight file by absolute path (`failed to load model 'D:\…\models\embeddings\….gguf'`),
+ * so only the CLASS of `failureSignature` is kept — `exit:code 1`, `timeout`, `launch`, `integrity`
+ * — never the tail line it appends (that line can be the path-bearing one).
+ */
+function startFailure(raw: Error): EmbedderError {
+  const kind = failureSignature(raw.message)?.split(' | ')[0]
+  return new EmbedderError('start', `The search model could not start${kind ? ` (${kind})` : ''}`)
+}
+
+/** undici's socket error with its cause code — `terminated (UND_ERR_SOCKET)` — for the log line. */
+function describeRequestError(err: unknown): string {
+  if (!(err instanceof Error)) return String(err)
+  const code = (err.cause as { code?: unknown } | undefined)?.code
+  return `${err.name === 'Error' ? '' : `${err.name}: `}${err.message}${typeof code === 'string' ? ` (${code})` : ''}`
+}
+
 /** L2-normalize a vector in place so cosine similarity == dot product (interface contract). */
 function l2normalize(vec: Float32Array): Float32Array {
   let norm = 0
@@ -241,6 +274,12 @@ export class E5Embedder implements Embedder {
    */
   private startFailed: Error | null = null
   /**
+   * #634: every sidecar a teardown (lock/quit) took down. A request that dies with one of these was
+   * interrupted; one that dies with a sidecar that crashed on its own failed. `this.server` alone
+   * cannot tell them apart, since both null it. Weak, so a retired server is not kept alive.
+   */
+  private readonly retired = new WeakSet<LlamaServer>()
+  /**
    * Aborts the IN-FLIGHT lazy start on lock/quit (#244 — the translation
    * runtime's #159 / BE-1 pattern, ported): the child is killed inside the health wait and the
    * start rejects with an AbortError, instead of the teardown awaiting the full health window
@@ -278,12 +317,28 @@ export class E5Embedder implements Embedder {
     }
   }
 
+  /**
+   * #634: a sidecar that dies on its own after it was healthy (a crash, an OS kill) is dropped, so
+   * the next `embed()` starts a fresh one. Before, the dead server stayed `this.server` and every
+   * later request failed "fetch failed" until a lock/unlock — the row's Try again could not work.
+   * No crash latch: the embedder has no degraded mode, and a restart of the small E5 model is cheap.
+   */
+  private handleUnexpectedExit(server: LlamaServer, info: UnexpectedExitInfo): void {
+    if (this.server !== server) return
+    this.server = null
+    this.emitResidencyChange()
+    log.warn('The search model (embeddings sidecar) exited unexpectedly; the next request starts it again', {
+      exitCode: info.exitCode,
+      exitSignal: info.exitSignal
+    })
+  }
+
   /** Lazily spawn the embeddings sidecar (once). Concurrent callers share one start. */
   private async ensureStarted(): Promise<LlamaServer> {
-    if (this.stopped) throw new Error('Embedder is stopped (app is shutting down)')
+    if (this.stopped) throw interrupted(STOPPED_MESSAGE)
     // F19: refuse to spawn while a teardown (lock/quit) is in progress — a sidecar started here
     // would survive the lock. The `suspend()` analogue of the `stopped` guard for `stop()`.
-    if (this.tearingDown) throw new Error('Embedder is suspending (workspace is locking)')
+    if (this.tearingDown) throw interrupted(SUSPENDING_MESSAGE)
     if (this.startFailed) throw this.startFailed
     if (this.server) return this.server
     if (!this.starting) {
@@ -324,7 +379,9 @@ export class E5Embedder implements Embedder {
         host: this.opts.host,
         // #244: let a lock/quit teardown abort this start mid-health-wait (the child is killed
         // via the normal stop path; start() rejects AbortError — never latched below).
-        startAbortSignal: abort.signal
+        startAbortSignal: abort.signal,
+        // #634: a crash after the start drops the server, so the next embed() starts a fresh one.
+        onUnexpectedExit: (info) => this.handleUnexpectedExit(server, info)
       })
       this.starting = server
         .start()
@@ -336,7 +393,21 @@ export class E5Embedder implements Embedder {
           const error = err instanceof Error ? err : new Error(String(err))
           // #244: a teardown-ABORTED start is not a load fault — never latch
           // `startFailed`; the next embed() after unlock must attempt a fresh start.
-          if (isStartAbortError(err) || abort.signal.aborted) throw error
+          if (isStartAbortError(err) || abort.signal.aborted) {
+            throw interrupted(this.stopped ? STOPPED_MESSAGE : SUSPENDING_MESSAGE)
+          }
+          // #530: the OS refused the program — its own typed, path-free error and copy.
+          // #634: anything else becomes the path-free `start` failure — except a bind race, which
+          // is transient and never latched (F4 below): a retry fixes it, so it reads `failed`, not
+          // "check the model files". The raw message, whose stderr tail names the weight file by
+          // absolute path, goes to the local log only, once.
+          const bindRace = isBindRaceError(error.message)
+          const typed = isEngineCannotRunError(error)
+            ? error
+            : bindRace
+              ? new EmbedderError('failed', 'The search model lost its port while starting (address already in use)')
+              : startFailure(error)
+          if (typed !== error) log.warn('The search model could not start', { error: error.message })
           // F4 (post-merge audit): a TRANSIENT port-bind race must NOT arm the failed-start latch.
           // LlamaServer.start retries a bind race only ONCE (REL-1); losing the port twice during
           // the near-simultaneous chat+embedder+reranker+vision startup throws a bind-class error.
@@ -344,8 +415,8 @@ export class E5Embedder implements Embedder {
           // silently disabled ALL imports for the session (the embedder has no graceful
           // degradation) until lock/unlock. Leave it null so the next embed() re-attempts a fresh
           // start on a new port — mirroring the GPU ladder's transient treatment of the same class.
-          if (!isBindRaceError(error.message)) this.startFailed = error
-          throw error
+          if (!bindRace) this.startFailed = typed
+          throw typed
         })
         .finally(() => {
           this.starting = null
@@ -356,9 +427,9 @@ export class E5Embedder implements Embedder {
     // F19: a teardown (lock/quit) may have begun during the await above and already nulled the
     // server we'd return — re-check rather than hand back a sidecar that's being / about to be
     // stopped (mirrors the top-of-function guards).
-    if (this.stopped) throw new Error('Embedder is stopped (app is shutting down)')
-    if (this.tearingDown) throw new Error('Embedder is suspending (workspace is locking)')
-    if (!this.server) throw new Error('Embeddings server failed to start')
+    if (this.stopped) throw interrupted(STOPPED_MESSAGE)
+    if (this.tearingDown) throw interrupted(SUSPENDING_MESSAGE)
+    if (!this.server) throw this.failed('Embeddings server failed to start')
     return this.server
   }
 
@@ -372,13 +443,44 @@ export class E5Embedder implements Embedder {
     return truncateToContext(text, this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS)
   }
 
+  /** #634: a request that went wrong once the sidecar was up; the detail goes to the local log. */
+  private failed(message: string): EmbedderError {
+    log.warn('A search-model request failed', { error: message })
+    return new EmbedderError('failed', message)
+  }
+
+  /**
+   * #634: what a request that threw means. The caller's own Stop passes through untouched — a
+   * clean cancellation, never a failure. A request whose sidecar a lock or quit took down was
+   * interrupted (the teardown kills the child under it, so undici reports "terminated" or "fetch
+   * failed"); our own deadline is a timeout; anything else failed — undici's socket errors after a
+   * crash included.
+   */
+  private requestFailure(
+    err: unknown,
+    server: LlamaServer,
+    request: AbortSignal,
+    caller: AbortSignal | undefined,
+    timeoutMs: number
+  ): unknown {
+    if (caller?.aborted || isEmbedderError(err)) return err
+    if (this.stopped) return interrupted(STOPPED_MESSAGE)
+    if (this.tearingDown || this.retired.has(server)) return interrupted(SUSPENDING_MESSAGE)
+    if (request.aborted && (request.reason as { name?: unknown } | undefined)?.name === 'TimeoutError') {
+      log.warn('A search-model request timed out', { timeoutMs })
+      return new EmbedderError('timeout', `The search model did not answer within ${timeoutMs} ms`)
+    }
+    return this.failed(`Embedding request failed: ${describeRequestError(err)}`)
+  }
+
   /**
    * Embed texts → L2-normalized `Float32Array`s, one per input, in order. Inputs are
    * truncated to the sidecar context (see `truncateForContext` / `runtime/context-budget.ts`),
    * sent in bounded batches, and each request carries a timeout so a wedged sidecar cannot park a
    * document in `embedding` forever. `opts.signal` (a user "Stop") is combined with
    * the timeout so query embedding cancels promptly (M-C5). Both cover the whole request, the
-   * body read included (#607).
+   * body read included (#607). A failure rejects with an `EmbedderError` whose `kind` says what went
+   * wrong (#634), with #530's `EngineCannotRunError`, or — for a Stop — with the caller's own abort.
    */
   async embed(texts: string[], opts?: EmbedOptions): Promise<Float32Array[]> {
     if (texts.length === 0) return []
@@ -417,10 +519,11 @@ export class E5Embedder implements Embedder {
       // signal: teardown nulls (or replaces) `this.server` and that staleness persists even after
       // `tearingDown` clears in teardown's `finally` (so a suspend that COMPLETED between batches is
       // caught too, not only one still in progress). `stopped` is checked first for the quit path.
-      if (this.stopped) throw new Error('Embedder is stopped (app is shutting down)')
-      if (this.tearingDown || this.server !== server) {
-        throw new Error('Embedder is suspending (workspace is locking)')
-      }
+      // #634: the durable signal is now `retired`, since a crash nulls `this.server` too (and that
+      // batch failed: it would go to a dead sidecar, so it ends here as `failed`).
+      if (this.stopped) throw interrupted(STOPPED_MESSAGE)
+      if (this.tearingDown || this.retired.has(server)) throw interrupted(SUSPENDING_MESSAGE)
+      if (this.server !== server) throw this.failed('The search model stopped during the request')
       const batchIdx = pending.slice(start, start + batchSize)
       // First attempt uses the already-prepared (default-budget) truncation; a context overflow
       // re-truncates THIS batch from the originals at a smaller budget and retries (see below).
@@ -451,6 +554,8 @@ export class E5Embedder implements Embedder {
           // body, releasing the connection). Still under the deadline: a stalled error body leaves
           // only the status (#594's rule for the chat error body).
           errorBody = (await res.text().catch(() => '')).trim()
+        } catch (err) {
+          throw this.requestFailure(err, server, combined.signal, opts?.signal, timeoutMs)
         } finally {
           combined.clear()
         }
@@ -464,13 +569,13 @@ export class E5Embedder implements Embedder {
           batch = batchIdx.map((i) => truncateToContext(texts[i], truncCtx))
           continue
         }
-        throw new Error(
+        throw this.failed(
           `Embedding request failed: HTTP ${res.status}${err.message ? ` — ${err.message.slice(0, 500)}` : ''}`
         )
       }
       const data = json.data ?? []
       if (data.length !== batch.length) {
-        throw new Error(`Embedding count mismatch: expected ${batch.length}, got ${data.length}`)
+        throw this.failed(`Embedding count mismatch: expected ${batch.length}, got ${data.length}`)
       }
       // Order by `index` so the result lines up with the input batch. The OpenAI
       // embeddings schema makes `index` optional, so handle the two clean cases and
@@ -480,7 +585,7 @@ export class E5Embedder implements Embedder {
       // above still passes), so fail loudly instead.
       const withIndex = data.filter((d) => typeof d.index === 'number').length
       if (withIndex !== 0 && withIndex !== data.length) {
-        throw new Error(
+        throw this.failed(
           `Embedding response mixes indexed and unindexed entries (${withIndex}/${data.length}); cannot order safely`
         )
       }
@@ -494,9 +599,7 @@ export class E5Embedder implements Embedder {
         // document would still report `indexed`. Failing here surfaces it as a doc error.
         const raw = ordered[k].embedding ?? []
         if (raw.length !== this.dimensions) {
-          throw new Error(
-            `Embedding dimension mismatch: expected ${this.dimensions}, got ${raw.length}`
-          )
+          throw this.failed(`Embedding dimension mismatch: expected ${this.dimensions}, got ${raw.length}`)
         }
         // ordered[k] lines up with batch position k (sorted by `index` when present, else array
         // order) → place it at the original input index this batch entry came from.
@@ -588,6 +691,8 @@ export class E5Embedder implements Embedder {
     const server = this.server
     this.server = null
     if (server) {
+      // #634: before the kill, so a request the kill ends reads as interrupted, not failed.
+      this.retired.add(server)
       this.emitResidencyChange()
       await server.stop()
     }
