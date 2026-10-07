@@ -23,7 +23,9 @@ export interface RerankedHit {
 export interface RerankOptions {
   /**
    * Caller abort signal. Combined with the per-request timeout so a user "Stop" during
-   * the (CPU-slow) rerank cancels promptly (M-C5), not only after it completes.
+   * the (CPU-slow) rerank cancels promptly (M-C5), not only after it completes. It also ends
+   * this caller's wait for the sidecar's cold start (or a posture restart), without cancelling a
+   * start that other asks may share (#635).
    */
   signal?: AbortSignal
 }

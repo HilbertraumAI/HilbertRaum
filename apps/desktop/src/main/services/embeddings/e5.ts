@@ -6,6 +6,7 @@ import {
   failureSignature,
   isBindRaceError,
   isStartAbortError,
+  waitUnlessAborted,
   type LlamaServerOptions,
   type UnexpectedExitInfo
 } from '../runtime/sidecar'
@@ -333,8 +334,10 @@ export class E5Embedder implements Embedder {
     })
   }
 
-  /** Lazily spawn the embeddings sidecar (once). Concurrent callers share one start. */
-  private async ensureStarted(): Promise<LlamaServer> {
+  /** Lazily spawn the embeddings sidecar (once). Concurrent callers share one start. `callerSignal`
+   *  ends only this caller's wait for it (#635: before, a Stop during a start that hung waited out
+   *  the 180 s health budget), never the start: an import embedding with no signal may share it. */
+  private async ensureStarted(callerSignal?: AbortSignal): Promise<LlamaServer> {
     if (this.stopped) throw interrupted(STOPPED_MESSAGE)
     // F19: refuse to spawn while a teardown (lock/quit) is in progress — a sidecar started here
     // would survive the lock. The `suspend()` analogue of the `stopped` guard for `stop()`.
@@ -423,7 +426,7 @@ export class E5Embedder implements Embedder {
           if (this.startAbort === abort) this.startAbort = null
         })
     }
-    await this.starting
+    await waitUnlessAborted(this.starting, callerSignal)
     // F19: a teardown (lock/quit) may have begun during the await above and already nulled the
     // server we'd return — re-check rather than hand back a sidecar that's being / about to be
     // stopped (mirrors the top-of-function guards).
@@ -479,12 +482,16 @@ export class E5Embedder implements Embedder {
    * sent in bounded batches, and each request carries a timeout so a wedged sidecar cannot park a
    * document in `embedding` forever. `opts.signal` (a user "Stop") is combined with
    * the timeout so query embedding cancels promptly (M-C5). Both cover the whole request, the
-   * body read included (#607). A failure rejects with an `EmbedderError` whose `kind` says what went
-   * wrong (#634), with #530's `EngineCannotRunError`, or — for a Stop — with the caller's own abort.
+   * body read included (#607). The signal also ends this caller's wait for a cold start, which
+   * keeps running for anyone else sharing it (#635). A failure rejects with an `EmbedderError` whose
+   * `kind` says what went wrong (#634), with #530's `EngineCannotRunError`, or — for a Stop — with
+   * the caller's own abort.
    */
   async embed(texts: string[], opts?: EmbedOptions): Promise<Float32Array[]> {
     if (texts.length === 0) return []
-    const server = await this.ensureStarted()
+    // #635: a caller already stopped starts nothing; one stopped during the start stops waiting.
+    opts?.signal?.throwIfAborted()
+    const server = await this.ensureStarted(opts?.signal)
     const prepared = texts.map((t) => this.truncateForContext(t))
     const batchSize = Math.max(1, this.opts.batchSize ?? DEFAULT_EMBED_BATCH_SIZE)
     const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS

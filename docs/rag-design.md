@@ -1191,7 +1191,76 @@ E:'s b9849 runtime, the 4B and `multilingual-e5-small-q8`):
     still failed at once (the latch); after "Check all model files" (e5 `installed`) the retry
     indexed in 1.6 s.
 
-**Not changed.** A Stop during the search model's cold start still waits for the start (#635).
+**Not changed by #634.** A Stop during the search model's cold start still waited for the start
+(#635, next amendment).
+
+**#635 amendment (2026-10-07) — a Stop ends the wait for a cold start, not the start.** The facts:
+- **What was wrong.** `embed()` awaited the shared lazy start before it read the caller's signal,
+  so a document question's Stop reached only the request after the start.
+  - The Stop already ended the turn cleanly: `withChatStream` checks `signal.aborted` before it maps
+    any error, and the question reads "Not answered — you stopped it". It ended late.
+  - Until the start settled, the turn stayed in `inFlightStreams`, and a new message in that
+    conversation was refused ("A response is already being generated").
+  - A normal e5 start takes 1.2 s; one that hangs runs to the 180 s health budget.
+- **The reranker, the next sidecar of the same question, had the same gap.** Its `callerSignal`
+  only classified a start abort (Wave 8 rule (iv)), and its GPU→CPU ladder can spend two health
+  windows. Vision and translation have the gap too (#637).
+- **A question and an import can share one start.** Nothing serialises `rag:ask` against
+  ingestion, and ingestion embeds with no signal. So the start must outlive a stopped question.
+
+**Decision (owner, 2026-10-07).** The embedder and the reranker now: one Stop button, one question.
+Vision and translation go to #637, because an abandoned start there also needs the idle timer
+armed when it lands (otherwise a ~10 GB translation model stays resident for nobody).
+
+**As built.**
+- **`waitUnlessAborted(start, signal)`** (`runtime/sidecar.ts`): the caller's wait ends at its
+  signal and rejects with `signal.reason`. That is the value the request's `fetch` rejects with via
+  `combineSignals`, so the chat sees the same Stop as before. The start is never cancelled, and a
+  start that fails after every waiter left stays a handled rejection. Only lock and quit cancel a
+  start (`startAbort`, #244). The precedent is kiwix-serve's `raceSignal` (`zim/index.ts`).
+- **Both `ensureStarted`s** (`E5Embedder`, `LlamaReranker`) race `this.starting` against the
+  caller's signal. A resident sidecar returns before any of this, so a warm request pays nothing.
+  `embed()` and `rerank()` check `signal.aborted` first, so a caller already stopped starts nothing
+  (the reranker also restarts nothing on a posture flip).
+- **The reranker's posture-mismatch restart** races its own teardown pass the same way (code
+  review). That wait was bounded (the aborted start settles within one health poll, then the 2 s
+  kill grace), but it was the same Stop.
+- A start that lands serves the next request. One that fails is latched as before (#634's `start`).
+- **The contract** is in `EmbedOptions.signal` / `RerankOptions.signal`, so a future backend
+  keeps it.
+
+**Tests.**
+- `e5-embedder.test.ts`:
+  - a Stop during a start that never gets healthy (`/health` 503) ends the question at once with
+    its own reason, and an import embed that shares the start embeds on it (one spawn);
+  - a caller stopped before the embed starts no sidecar.
+- `reranker.test.ts`: the same Stop for a rerank, and another ask sharing the start is scored.
+- `reranker-wave8.test.ts` rule (ii): a Stop during the posture restart's teardown ends the ask
+  with its own reason before the teardown escalates to SIGKILL (the end of its 2 s grace).
+- All four fail on master's `e5.ts` / `llama.ts`: the two cold-start rows by their hang detectors,
+  the stopped caller by its spawn, rule (ii) by the escalation that came first. A mutation that
+  cancels the start on Stop turns the two shared-start rows red: the import ends "interrupted", and
+  the other rerank "aborted by another operation".
+
+**Real app** (2026-10-07, DesktopDiT, dev build, German UI, a fresh encrypted vault; a scratch root
+with the b9849 runtime, the 4B, `multilingual-e5-small-q8` and `bge-reranker-v2-m3-f16` (GPU
+posture)). A watcher suspended the sidecar the moment it spawned (`NtSuspendProcess`): a cold
+start that never gets healthy. Stop was pressed 3–4 s into the question, and the sidecar was thawed
+20.9 s after the Stop.
+
+| Frozen start | Master: question settled after the Stop | Fix: question settled after the Stop |
+|---|---|---|
+| search model (e5) | 22,012 ms (after the thaw) | 1 ms |
+| reranker | 24,049 ms (after the thaw) | 1 ms |
+
+- **Both builds ended the question as a Stop:** an empty `chat:done`, no `chat:error`, and the
+  question marked `endedEarly: 'user'`.
+- **Master refused a second message during the wait:** „Für diese Unterhaltung wird bereits eine
+  Antwort erstellt.“
+- **On the fix, the shared start was unaffected.** An import started with the e5 question waited on
+  the same frozen start and indexed after the thaw. The abandoned reranker start landed 3 s after
+  its thaw, and the next question was answered correctly on it, with no second start.
+- **Re-run on the final code** (after the code-review changes above): the same, 1 ms for both.
 
 ## 13. Collection-scoped retrieval & composite scope — design record (document organization, Phases A–F)
 

@@ -3382,6 +3382,10 @@ Per-finding disposition (F-1…F-8):
   lock/quit; `tests/integration/sidecar-teardown-abort.test.ts` bounds all four at < 5 s under
   production defaults — typically one health-poll, ≈ 5 s worst case with the 3 s probe timeout
   and the 2 s SIGTERM grace — where the three used to take the full 180 s and then latch.)*
+  *(#635: a caller's own Stop is the other half. It ends only that caller's wait for the start
+  (`waitUnlessAborted`), never the start, which other callers may share — the embedder and the
+  reranker since 2026-10-07 (`rag-design.md` §12.4 "#635 amendment"); vision and translation:
+  #637.)*
   **(#160)** the F-2
   retry classification splits the per-request timeout by tokens-flowed (live-decode timeout =
   deterministic, no retry; wedged = one retry) in BOTH consumers; the view paste is bounded by
