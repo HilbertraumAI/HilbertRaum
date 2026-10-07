@@ -4,6 +4,7 @@ import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
 import { hangBudgetMs } from '../helpers/hang-budget'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
+import { isEmbedderError } from '../../src/main/services/embeddings/errors'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { createSelectedEmbedder } from '../../src/main/services/embeddings/factory'
 import {
@@ -300,7 +301,9 @@ describe('E5Embedder', () => {
     // State-poll on the captured signal (the file's own idiom).
     while (!seenSignal) await new Promise((r) => setTimeout(r, 1))
     controller.abort()
-    await expect(embedPromise).rejects.toThrow(/abort/i)
+    // The caller's own AbortError, untouched — a Stop is a clean cancellation, never a search-model
+    // failure (#634 types every other failure; this one must stay what the chat treats as a Stop).
+    await expect(embedPromise).rejects.toMatchObject({ name: 'AbortError' })
     // The signal handed to fetch fires when the caller aborts (combined with the timeout).
     expect(seenSignal?.aborted).toBe(true)
     await embedder.stop()
@@ -518,13 +521,31 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
-  it('latches a failed start (fail fast, one spawn) and clears the latch on suspend()', async () => {
+  // #634: the start failure is also what every document row of the session stores (latched), and
+  // llama-server's stderr names the weight file by absolute path. These lines are the real b9849
+  // `llama-server` given a truncated copy of the e5 GGUF (DesktopDiT, 2026-10-07), path shortened.
+  it('latches a failed start (fail fast, one spawn) as a path-free start failure, and clears the latch on suspend()', async () => {
+    const weightPath = 'D:\\HilbertRaum\\models\\embeddings\\multilingual-e5-small-q8.gguf'
     const calls: Array<{ args: string[] }> = []
     const spawn = (_c: string, args: string[]): ChildProcessLike => {
       calls.push({ args })
-      const child = new FakeChild()
-      // The server dies immediately (e.g. a corrupt/incompatible GGUF).
-      queueMicrotask(() => child.emit('exit', 1, null))
+      const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
+      child.stderr = new EventEmitter()
+      // The server dies immediately: a corrupt/incomplete GGUF.
+      queueMicrotask(() => {
+        child.stderr.emit(
+          'data',
+          [
+            `0.00.214.130 I srv    load_model: loading model '${weightPath}'`,
+            "0.00.273.164 E llama_model_load: error loading model: tensor 'token_embd.weight' data is not within the file bounds, model is corrupted or incomplete",
+            `0.00.333.627 E cmn  common_init_: failed to load model '${weightPath}'`,
+            '0.00.334.509 E srv  llama_server: exiting due to model loading error',
+            ''
+          ].join('\n')
+        )
+        child.emit('exit', 1, null)
+        child.emit('close', 1, null)
+      })
       return child
     }
     const embedder = new E5Embedder({
@@ -534,8 +555,10 @@ describe('E5Embedder', () => {
         throw new Error('connection refused')
       }) as unknown as typeof fetch
     })
-    await expect(embedder.embed(['a'])).rejects.toThrow()
-    await expect(embedder.embed(['a'])).rejects.toThrow()
+    const first = await embedder.embed(['a']).catch((e: unknown) => e)
+    expect(isEmbedderError(first) && first.kind).toBe('start')
+    expect((first as Error).message).not.toContain('HilbertRaum') // no part of the path
+    expect(await embedder.embed(['a']).catch((e: unknown) => e)).toBe(first) // the latched error
     // One spawn total: the failed-start latch prevents a health-timeout stall per embed.
     expect(calls.length).toBe(1)
     // Unlike the reranker, suspend() (workspace lock) clears the latch so the user can
@@ -581,7 +604,8 @@ describe('E5Embedder', () => {
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
 
     // The doubly-unlucky startup: BOTH the initial start and its single bind-retry lose the port.
-    await expect(embedder.embed(['a'])).rejects.toThrow(/address already in use/)
+    // #634: transient, so it reads `failed` (try again), never "could not start, check the files".
+    await expect(embedder.embed(['a'])).rejects.toMatchObject({ name: 'EmbedderError', kind: 'failed' })
     expect(calls.length).toBe(2) // one start + one bind-retry, both raced — NOT a permanent fault
 
     // The latch must NOT be armed for a transient race: the next embed re-attempts a fresh start
@@ -772,7 +796,7 @@ describe('E5Embedder', () => {
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl, batchSize: 1 })
     const embedP = embedder.embed(['a', 'b']).then(
       () => 'resolved',
-      (e: Error) => e.message
+      (e: unknown) => e
     )
     while (!gate.release) await new Promise((r) => setTimeout(r, 1)) // batch 1 in flight (parked)
 
@@ -783,9 +807,74 @@ describe('E5Embedder', () => {
     const result = await embedP
 
     // Clean, recognizable cancellation — NOT "llama-server is not started" / a count mismatch.
-    expect(result).toMatch(/suspending|locking/)
-    expect(result).not.toMatch(/not started/)
+    // #634: typed as an interruption, so the document row reads "interrupted", not a failure.
+    expect(result).toMatchObject({ name: 'EmbedderError', kind: 'interrupted' })
+    expect((result as Error).message).toMatch(/suspending|locking/)
     expect(embedCalls).toBe(1) // the second batch never issued a request to the dead sidecar
+    await embedder.stop()
+  })
+
+  // #634: the usual lock mid-import — one batch, in flight when the teardown kills the sidecar, so
+  // undici ends the request ("terminated"). It used to reach the document row as that raw word.
+  it('a lock that kills the sidecar under an in-flight request ends the embed as interrupted (#634)', async () => {
+    const { spawn, child } = fakeSpawn()
+    let endRequest: ((err: Error) => void) | null = null
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      return await new Promise<Response>((_resolve, reject) => (endRequest = reject))
+    }) as typeof fetch
+    // The kill closes the request's socket — what a real sidecar's death does to undici.
+    const kill = child.kill.bind(child)
+    child.kill = () => {
+      endRequest?.(new TypeError('terminated'))
+      return kill()
+    }
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const embedP = embedder.embed(['a']).catch((e: unknown) => e)
+    while (!endRequest) await new Promise((r) => setTimeout(r, 1)) // the request is in flight
+    await embedder.suspend()
+    expect(await embedP).toMatchObject({ name: 'EmbedderError', kind: 'interrupted' })
+    await embedder.stop()
+  })
+
+  // #634: a sidecar that died on its own after it was healthy stayed `this.server`, so every later
+  // embed went to the dead port ("fetch failed") until a lock/unlock — the row's Try again failed.
+  it('a sidecar that crashes is started again on the next embed; the request it cut off failed (#634)', async () => {
+    const children: FakeChild[] = []
+    let alive = false
+    const spawn = (): ChildProcessLike => {
+      alive = true
+      const c = new FakeChild()
+      children.push(c)
+      return c
+    }
+    const parked = { reject: null as null | ((err: Error) => void) }
+    let park = false
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (!alive) throw new TypeError('fetch failed', { cause: { code: 'ECONNREFUSED' } })
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (park) return await new Promise<Response>((_resolve, reject) => (parked.reject = reject))
+      return { ok: true, status: 200, json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] }) } as Response
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    await embedder.embed(['warm-up'])
+
+    park = true
+    const cutOff = embedder.embed(['a']).catch((e: unknown) => e)
+    while (!parked.reject) await new Promise((r) => setTimeout(r, 1))
+    // The crash: the process exits on its own, and its socket closes under the request.
+    alive = false
+    children[0]!.emit('exit', 3221225477, null)
+    parked.reject!(new TypeError('terminated'))
+    // A crash is not a lock: the request failed, it was not interrupted.
+    expect(await cutOff).toMatchObject({ name: 'EmbedderError', kind: 'failed' })
+
+    park = false
+    const [v] = await embedder.embed(['b'])
+    expect(Array.from(v)).toEqual([1, 0])
+    expect(children.length).toBe(2) // a fresh sidecar, not the dead one
     await embedder.stop()
   })
 
@@ -934,10 +1023,15 @@ describe('E5Embedder — a response body that stalls after the headers (#607)', 
   }
 
   it.each([
-    // The timeout's own TimeoutError — what a stall before the headers has always ended with.
-    { status: 200, check: (e: Error) => expect(e.name).toBe('TimeoutError') },
+    // The deadline — what a stall before the headers has always ended with. #634: typed, so the row
+    // and the chat name the search model instead of showing "The operation timed out.".
+    { status: 200, check: (e: Error) => expect(e).toMatchObject({ name: 'EmbedderError', kind: 'timeout' }) },
     // A stalled error body leaves the status alone (#594's rule for the chat error body).
-    { status: 500, check: (e: Error) => expect(e.message).toBe('Embedding request failed: HTTP 500') }
+    {
+      status: 500,
+      check: (e: Error) =>
+        expect(e).toMatchObject({ name: 'EmbedderError', kind: 'failed', message: 'Embedding request failed: HTTP 500' })
+    }
   ])('an HTTP $status response whose body stalls ends at exactly the 120 s request timeout and closes the connection', async ({ status, check }) => {
     const sidecar = await stallingSidecar()
     const { embedder, headersArrived } = await startedEmbedder(sidecar.port)

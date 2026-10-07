@@ -1079,7 +1079,119 @@ pre-fix code; a mutation that re-breaks only the error branch reddens only the H
 
 **Not changed.** The dev-only `HR_EMBED_COVERAGE=1` measurement's `/tokenize` reads carry no
 deadline and no signal (developer tooling, never on in a user's app). The document row's
-"The operation timed out." is the raw text of the timeout, unchanged by #607 and not localised.
+"The operation timed out." is the raw text of the timeout, unchanged by #607 and not localised
+(#634 since: see the next amendment).
+
+**#634 amendment (2026-10-07) — a search-model failure reaches the user as words, chosen by
+kind.** The facts:
+- **What the user saw.** `E5Embedder` threw untyped errors. A document row stored `err.message`
+  (`failureRowMessage` mapped only #530's `EngineCannotRunError`), and a document question's banner
+  showed it raw (`withChatStream` mapped only the chat runtime's errors). So a timeout read "The
+  operation timed out." in any UI language. A start failure stored llama-server's stderr tail,
+  which names the weight file by absolute path, three times over: the real b9849 given a truncated
+  e5 GGUF prints `failed to load model '<root>\models\embeddings\multilingual-e5-small-q8.gguf'`.
+  The start failure is latched, so every document imported in that session stored it.
+- **Where it surfaced.** Three `embed()` call sites (the question embed, `embedChunks`,
+  `ensureNodeEmbeddings`) serve seven user paths. Only `rag:ask` and the ingestion paths that write
+  the row (import, re-index and Retry all, the OCR re-ingest) showed the raw text. The chat-attachment
+  banner and the Translate screen's file import show that row through `localizeServerCopy`.
+  Compare, generated outputs and the article save already used generic copy.
+- **Three neighbours found in the analysis.**
+  - A lock mid-import ended the in-flight embed with the killed socket's "terminated", or with
+    "Embedder is suspending (workspace is locking)", stored on the row: `embedChunks` passes no
+    signal, so only the sidecar kill ends the request.
+  - A sidecar that crashed after its start stayed `this.server` (no `onUnexpectedExit`), so every
+    later embed failed "fetch failed" until a lock/unlock.
+  - A re-download of a damaged e5 file did not re-arm the failed-start latch.
+
+**Decisions (owner, 2026-10-07, each as recommended).**
+1. **The start failure points at the fix:** the AI Model screen's "Check all model files", which
+   flags a damaged e5 file and offers to download it again.
+2. **Old rows are rewritten once per session start,** like #530's, but only rows whose text only
+   the embedder can have written. The stored paths leave the database.
+3. **One generic line** covers an HTTP error, a malformed response and a crash. None of them has
+   a different next step.
+4. **In scope too:** a lock mid-import reads "interrupted"; a crashed sidecar is started again;
+   a re-download re-arms the latch.
+
+**As built.**
+- **`embeddings/errors.ts`:** `EmbedderError` with `kind` `timeout | start | failed | interrupted`.
+  Its message is a path-free English diagnostic; the raw detail (the stderr tail, undici's
+  socket error) is logged once where it happens. A caller's Stop passes through as its own
+  AbortError (a clean cancellation, never a failure), and #530's `EngineCannotRunError` keeps its
+  own copy.
+- **`E5Embedder`:**
+  - A start failure becomes `start`, its message keeping only the `failureSignature` class
+    (`exit:code 1`, `timeout`, `launch`, `integrity`), never the tail line. That is what the latch
+    holds and rethrows. A bind race is transient and never latched (F4), so it is typed `failed`:
+    a retry fixes it, and "check the model files" would send the user to the wrong place.
+  - A request ends `timeout` on our deadline and `failed` on anything else, the HTTP and
+    malformed-response guards included.
+  - A request ends `interrupted` when a lock or quit took its sidecar down. `retired`, a
+    `WeakSet` of the servers a teardown took down, tells that apart from a crash, since both null
+    `this.server`.
+  - `onUnexpectedExit` drops a sidecar that died on its own, so the next `embed()` starts a fresh
+    one. There is no crash latch: the embedder has no degraded mode, and a restart is cheap.
+- **Rows:** `failureRowMessage` stores `main.ingest.searchModelTimeout`, `searchModelCannotStart`,
+  `searchModelFailed`, or the existing `main.ingest.interrupted`. All are persist-canonical and in
+  `DISPLAY_MAP_KEYS`, and all stay retryable.
+- **Chat:** `withChatStream` maps the kinds to `main.chat.searchModel*`. An `interrupted` takes
+  the generic line; a lock's own abort normally ends the turn before any error.
+- **Heal:** `rewriteSearchModelFailureRows` runs in `healEngineLoadState` after
+  `rewriteEngineFailureRows`, and skips any row the #530 classifier claims. It reads every failed
+  row and rewrites, in one transaction, the exact "The operation timed out.", "terminated" and
+  "fetch failed", the embedder's own texts, and the llama-server start failures (by
+  `failureSignature`, the one definition of their shapes; a bind race maps to `failed`). These are attributable because ingestion's only network
+  request and only `llama-server` are the embedder's: OCR runs in-process and transcription is a
+  CLI.
+- **Re-arm**, so the copy's "then try again" is a real attempt:
+  - `onModelInstalled` calls `resetStartFailure()` when the installed model is the embedder's own
+    (the same manifest id; a mock embedder never matches): the repair for a damaged file.
+  - A completed full "Check all model files" (`listModels` without `lazyVerify`, not cancelled)
+    that does not find the embedder's file damaged calls it too. The start failure may have had
+    another cause (the health budget on a slow drive, a memory shortage, a file put back outside
+    the app), and the latch would otherwise hold until a lock/unlock (code review).
+- **One approximation:** a program that fails its pre-spawn integrity check also counts as
+  `start`, whose copy points at the model files. It is rare (a tampered engine), and the chat model
+  fails visibly on the same binary.
+
+**Tests.** Run against master's `e5.ts`, `engine-failure.ts`, `engine-health.ts` and
+`chat-stream.ts`, all 19 new or changed embedder, row and chat cases below fail; with the fix they
+pass.
+- `e5-embedder.test.ts`:
+  - the latched start failure is `start` and path-free (real b9849 stderr lines);
+  - the #607 stall rows are `timeout` / `failed`;
+  - a lock under an in-flight request and the REL-3 between-batches lock are `interrupted`;
+  - a crash fails the request it cut off, and the next embed starts a fresh sidecar (mutations:
+    dropping `onUnexpectedExit`, or classifying by `this.server !== server`, each turn it red);
+  - a Stop stays an AbortError.
+- `engine-health.test.ts`: the real `E5Embedder` behind `processDocument` stores the canonical start
+  text on every row, never the weight path; the kind-to-row table; the heal (attributable rows
+  rewritten, a #530 loader row and unrelated rows untouched, idempotent).
+- `chat-stream.test.ts`: the kind-to-copy table on both channels.
+- `core-model-ipc.test.ts`: a full check re-arms when the file is intact, not when it is damaged,
+  and an ordinary visit's lazy check never does (a mutation for each condition turns its row red).
+- `display-map.test.ts`: the persist-canonical set, which round-trips to German.
+
+**Real app** (2026-10-07, DesktopDiT, dev build, German UI, encrypted vault; a scratch root with
+E:'s b9849 runtime, the 4B and `multilingual-e5-small-q8`):
+- **Before** (master's code, a truncated e5 file): the row held the whole stderr tail with the
+  absolute weight path, and a document question rejected with the same text.
+- **After, on the same vault:**
+  - Unlock rewrote that row (`rewritten: 1`).
+  - A new import and a question both read „Das Suchmodell konnte nicht starten … Wähle im Bereich
+    „KI-Modell“ „Alle Modelldateien prüfen“ …“.
+  - The check flagged e5 `checksum_failed`. The in-app re-download verified, and "Erneut versuchen"
+    indexed at once, with no lock/unlock.
+  - With the sidecar frozen (`NtSuspendProcess`), an import and a question each ended after 120.1 s
+    with the German timeout copy, and the row kept „Erneut versuchen“; thawed, the retry indexed.
+  - A killed sidecar was replaced by a fresh one on the next import, which indexed.
+  - A lock during a held embed left „Die Indexierung wurde unterbrochen …“, and the retry indexed.
+  - A start failure latched on a damaged file; the intact file copied back outside the app; a retry
+    still failed at once (the latch); after "Check all model files" (e5 `installed`) the retry
+    indexed in 1.6 s.
+
+**Not changed.** A Stop during the search model's cold start still waits for the start (#635).
 
 ## 13. Collection-scoped retrieval & composite scope — design record (document organization, Phases A–F)
 

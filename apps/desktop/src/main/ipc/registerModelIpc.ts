@@ -613,6 +613,14 @@ export function registerModelIpc(ctx: AppContext): void {
         // #108: a cold-cache visit just hashed real multi-GB files — persist any fresh sample.
         // A CANCELLED pass reaches here too: whatever finished hashing is a genuine sample.
         persistEffectiveRead(ctx)
+        // #634: the search model's start-failure copy says "choose Check all model files — then try
+        // again". A completed full check that did not find its file damaged re-arms its failed-start
+        // latch, so "then try again" is a real attempt (a health timeout on a slow drive, or a memory
+        // shortage, may pass now). A damaged file is re-armed by its re-download (`onModelInstalled`).
+        if (!lazyVerify && !controller?.signal.aborted) {
+          const searchModel = models.find((m) => m.id === ctx.embedder?.id)
+          if (searchModel && searchModel.state !== 'checksum_failed') ctx.embedder.resetStartFailure?.()
+        }
         return models
       } finally {
         // Only ever retire our own registration.

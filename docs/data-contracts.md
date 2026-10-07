@@ -125,6 +125,14 @@ classifies as a load refusal is cleared (both fields) at every session start. No
 engine install put on the drive (session-only, like the verdict; the UI then offers no second
 reinstall). The engine-downloader additions are listed under the downloader below. No new
 channel, no schema change.
+#634 (`rag-design.md` §12.4 "#634 amendment"): `documents.error_message` gained three
+persist-canonical English values for a search-model failure — `main.ingest.searchModelTimeout`,
+`…searchModelCannotStart`, `…searchModelFailed` (exact match, display-map translated) — and a lock
+or quit that cut an embed off stores the existing `main.ingest.interrupted`. Rows that stored the
+embedder's raw failure before #634 ("The operation timed out.", "terminated", a start failure's
+stderr tail with the weight file's absolute path) are rewritten to them at every session start. A
+document question's `rag:ask` rejection carries the matching `main.chat.searchModel*` copy. No new
+channel, no schema change.
 Phase 38: `kind: 'ocr'` on the same doc-task channels (one PDF; the target must be
 scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
 `DocumentInfo` gained the DERIVED `scanDetected` flag + optional `ocr: DocumentOcrInfo`

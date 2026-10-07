@@ -27,6 +27,19 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-07 — the closed 2026-10-01 #527 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #634 entry). Its record is unchanged:
+`architecture.md` "Voice dictation" #527 amendment; its one residual (no prebuilt Linux voice engine is pinned yet) stays in
+`known-limitations.md` ("mac/linux drives need a source-built whisper-cli"). Citations of the form "BUILD_STATE 2026-10-01 #527 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-01 — **#527 — the greyed-out mic names the missing piece and its button opens the AI Model screen on the speech model
+(`fix/527-dictation-hint-cause`).** Cause per drive state (`TranscriberMissing`: model / engine / both / `engine-unsupported` = no engine
+build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
+screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
+`data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
+
 ## 2026-10-07 — the closed 2026-10-02 DEP-6 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #582 entry). It was
