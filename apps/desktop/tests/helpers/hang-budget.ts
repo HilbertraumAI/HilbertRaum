@@ -80,3 +80,43 @@ export function testBudgetMs(localMs: number): number {
   if (!process.env.CI) return localMs
   return Math.max(localMs * CI_FACTOR, CI_TEST_TIMEOUT_MS)
 }
+
+// Captured at import, before any test installs fake timers, so the detector below keeps real time
+// under `vi.useFakeTimers()`.
+const realSetTimeout = globalThis.setTimeout
+const realClearTimeout = globalThis.clearTimeout
+
+/**
+ * Await `p`, or fail by name once `hangBudgetMs(localMs)` of REAL time has passed — the
+ * promise-shaped hang detector. It works under fake timers too. `what` names the event awaited:
+ * the failure reads "`what` never happened".
+ */
+export function within<T>(p: Promise<T>, what: string, localMs = 5_000): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = realSetTimeout(() => reject(new Error(`${what} never happened`)), hangBudgetMs(localMs))
+    p.then(
+      (v) => {
+        realClearTimeout(t)
+        resolve(v)
+      },
+      (e: unknown) => {
+        realClearTimeout(t)
+        reject(e)
+      }
+    )
+  })
+}
+
+const realNow = Date.now.bind(Date)
+
+/**
+ * Poll `cond` until it holds, or fail by name once `hangBudgetMs(localMs)` of REAL time has
+ * passed — the poll-shaped twin of `within`, for state that has no promise to await.
+ */
+export async function until(cond: () => boolean, what: string, localMs = 5_000): Promise<void> {
+  const deadline = realNow() + hangBudgetMs(localMs)
+  while (!cond()) {
+    if (realNow() > deadline) throw new Error(`${what} never happened`)
+    await new Promise<void>((r) => realSetTimeout(r, 1))
+  }
+}

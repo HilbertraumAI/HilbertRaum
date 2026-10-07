@@ -9,7 +9,9 @@ import {
 import { createSelectedTranslator } from '../../src/main/services/translation/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import { EngineCannotRunError, engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
-import { testBudgetMs } from '../helpers/hang-budget'
+import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
+import { testBudgetMs, until, within } from '../helpers/hang-budget'
+import { loadingSidecar } from '../helpers/loading-sidecar'
 
 // TG-2 fake-server tests for the real TranslationRuntime (plan §4 TG-2): launch args (NO --jinja,
 // --ctx-size 4096, --parallel 1), the raw /completion streaming + stop/temperature, abort
@@ -400,6 +402,52 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
     const out = await p
     expect(out).toBe(COMPLETION_TEXT)
     expect(calls.length).toBe(2) // exactly one fresh child, spawned only AFTER the old one died
+    await rt.stop()
+  })
+
+  // #637: the M5 wait above is up to the 2 s kill grace; a cancelled window stops waiting at once and
+  // starts nothing.
+  it('a cancel ends a translate\'s wait for a soft idle teardown at once, and starts no child (#637)', async () => {
+    const { spawn, calls, children } = gatedSpawn()
+    const { fetchImpl } = translationFetch()
+    const { clock, state } = fakeClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    await rt.translate(translateOpts)
+    children[0].hold = true // hold child0's exit so the soft teardown stays IN FLIGHT
+    state.fire!()
+    const cancel = new AbortController()
+    const waiting = rt.translate({ ...translateOpts, signal: cancel.signal }).catch((e: unknown) => e)
+    const reason = new DOMException('Cancelled by the user', 'AbortError')
+    cancel.abort(reason)
+    expect(await within(waiting, 'the cancel ending the wait for the idle teardown')).toBe(reason)
+    expect(calls.length).toBe(1) // no fresh ~10 GB child for a window nobody waits for
+    children[0].release()
+    await rt.stop()
+  })
+
+  // #637: a cancelled translate no longer waits for its cold start, so its `finally` runs while the
+  // start is still in flight — and armIdleTimer returns early on `starting`. The start's own settle
+  // must arm the clock, or ~10 GB that lands with nobody waiting stays resident until lock or quit.
+  it('a start that lands after every translate was cancelled arms the idle clock, and its fire tears it down (#637)', async () => {
+    const { spawn, children } = gatedSpawn()
+    const { fetchImpl, state: start } = loadingSidecar(translationFetch().fetchImpl)
+    const { clock, state } = fakeClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+
+    const cancel = new AbortController()
+    const cancelled = rt.translate({ ...translateOpts, signal: cancel.signal }).catch(() => undefined)
+    await until(() => start.probes > 0, 'the cold start polling /health')
+    cancel.abort()
+    await within(cancelled, 'the cancel ending the wait for the start')
+    expect(state.fire).toBeNull() // the translate settled while the start was still loading
+
+    start.loaded = true
+    await until(() => rt.deviceStatus()?.live === true, 'the abandoned start landing')
+    expect(state.fire).not.toBeNull() // armed by the start's settle, with no translate in flight
+    expect(state.unrefCount).toBe(state.setCount)
+    state.fire!()
+    expect(children[0].killed).toBe(true)
+    expect(rt.deviceStatus()?.live).toBe(false)
     await rt.stop()
   })
 
@@ -1042,6 +1090,85 @@ describe('#159 (BE-1) — teardown aborts an in-flight cold start', () => {
     expect(calls[0].args.join(' ')).not.toContain('--device')
     await rt.stop()
   }, testBudgetMs(15_000))
+})
+
+// #637: the other half of #159. A lock or quit cancels the start; the job's own cancel used to reach
+// only the request after it, so a cancel during a start that hung held the window — and, for a
+// document translation, the doc-task lane and with it chat — up to the 180 s health budget (two of
+// them on the GPU→CPU ladder). The cancel now ends only that window's wait; the start goes on.
+describe('#637 — a cancel during the translation cold start', () => {
+  it('ends that translate at once with its own reason; a translate sharing the start gets its text', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const { fetchImpl, state } = loadingSidecar(translationFetch().fetchImpl)
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+
+    const cancel = new AbortController()
+    const cancelled = rt.translate({ ...translateOpts, signal: cancel.signal }).catch((e: unknown) => e)
+    await until(() => state.probes > 0, 'the cold start polling /health')
+    const other = rt.translate(translateOpts) // the next window joins the same start
+    const reason = new DOMException('Cancelled by the user', 'AbortError')
+    cancel.abort(reason)
+    // The window's own reason: both consumers read a cancel from their aborted signal.
+    expect(await within(cancelled, 'the cancel ending the wait for the start')).toBe(reason)
+
+    state.loaded = true
+    expect(await within(other, 'the shared start serving the other translate')).toBe(COMPLETION_TEXT)
+    expect(children[0].killed).toBe(false) // the cancel never cancelled the start
+    expect(calls.length).toBe(1)
+    await rt.stop()
+  })
+
+  it('a translate cancelled before it begins starts no sidecar', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const reason = new DOMException('Cancelled by the user', 'AbortError')
+    await expect(rt.translate({ ...translateOpts, signal: AbortSignal.abort(reason) })).rejects.toBe(reason)
+    expect(calls.length).toBe(0)
+    await rt.stop()
+  })
+
+  // The ladder's CPU rung is a second ~10 GB cold load. When the GPU attempt fails after every
+  // translate waiting for it was cancelled, nobody would use that load; the next translate starts
+  // on the CPU directly instead (the session latch the failure arms).
+  it('a GPU attempt that fails after every translate left loads no CPU rung for nobody; the next translate starts on the CPU', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const { fetchImpl, state } = loadingSidecar(translationFetch().fetchImpl)
+    let fellBack = false
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl,
+      idleTimeoutMs: 100_000,
+      onDeviceFallback: () => {
+        fellBack = true
+      }
+    })
+    const cancel = new AbortController()
+    const cancelled = rt.translate({ ...translateOpts, signal: cancel.signal }).catch(() => undefined)
+    await until(() => state.probes > 0, 'the GPU attempt polling /health')
+    cancel.abort()
+    await within(cancelled, 'the cancel ending the wait for the start')
+
+    // Hold every engine spawn (the engine update's gate), so a CPU rung walked for nobody would stay
+    // in flight at the gate, and the suspend below — a lock — would have to wait for it.
+    const release = holdEngineSpawns('llama_cpp')
+    try {
+      children[0].emit('exit', 1, null) // the GPU attempt dies while loading
+      await until(() => fellBack, 'the GPU attempt failing')
+      await within(rt.suspend(), 'a lock finding no start in flight')
+    } finally {
+      release()
+    }
+    expect(calls.length).toBe(1)
+    expect(rt.isStartFailed()).toBe(false) // nothing latched against the next translate
+
+    state.loaded = true
+    expect(await within(rt.translate(translateOpts), 'the next translate')).toBe(COMPLETION_TEXT)
+    expect(calls.length).toBe(2)
+    expect(calls[1].args.join(' ')).toContain('--device none')
+    await rt.stop()
+  })
 })
 
 // ---- #163 (T-3): the per-request timeout WIRING — generation, not just classification ----

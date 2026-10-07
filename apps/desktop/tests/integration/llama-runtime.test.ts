@@ -15,7 +15,7 @@ import {
   readChatSSE,
   requestParamsForMode
 } from '../../src/main/services/runtime/llama'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { within } from '../helpers/hang-budget'
 import { createSelectingRuntimeFactory } from '../../src/main/services/runtime/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
@@ -365,26 +365,6 @@ describe('LlamaRuntime', () => {
 // until undici's own 300 s headers timeout ended it as a raw "fetch failed". Both pinned builds send the headers when the
 // slot starts, BEFORE prefill (measured on b11146: 14 ms), so the wait is queueing for the one slot; #598 gave it the
 // owner's 180 s (it was CB-5's 120 s first-output budget, which a re-ask behind a cancelled request's batch outlasted).
-
-const realSetTimeout = globalThis.setTimeout
-const realClearTimeout = globalThis.clearTimeout
-
-/** Await `p` under fake timers with a REAL-time hang detector, so a hang fails by name. */
-function within<T>(p: Promise<T>, what: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const t = realSetTimeout(() => reject(new Error(`${what} never happened`)), hangBudgetMs(5_000))
-    p.then(
-      (v) => {
-        realClearTimeout(t)
-        resolve(v)
-      },
-      (e: unknown) => {
-        realClearTimeout(t)
-        reject(e)
-      }
-    )
-  })
-}
 
 /** A loopback llama-server that answers /health and takes the chat request without ever writing its headers. */
 async function silentSidecar(): Promise<{

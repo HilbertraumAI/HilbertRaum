@@ -1204,7 +1204,8 @@ E:'s b9849 runtime, the 4B and `multilingual-e5-small-q8`):
   - A normal e5 start takes 1.2 s; one that hangs runs to the 180 s health budget.
 - **The reranker, the next sidecar of the same question, had the same gap.** Its `callerSignal`
   only classified a start abort (Wave 8 rule (iv)), and its GPU→CPU ladder can spend two health
-  windows. Vision and translation have the gap too (#637).
+  windows. Vision and translation have the gap too (#637, since fixed: `architecture.md`
+  image-understanding record §6 "#637 amendment").
 - **A question and an import can share one start.** Nothing serialises `rag:ask` against
   ingestion, and ingestion embeds with no signal. So the start must outlive a stopped question.
 
