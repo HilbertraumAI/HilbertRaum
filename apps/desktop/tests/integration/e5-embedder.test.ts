@@ -2,7 +2,8 @@ import { describe, it, expect, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { until, within } from '../helpers/hang-budget'
+import { loadingSidecar } from '../helpers/loading-sidecar'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { isEmbedderError } from '../../src/main/services/embeddings/errors'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
@@ -505,27 +506,13 @@ describe('E5Embedder', () => {
   // embedding (with no signal, as ingestion does) that shares it.
   it('a Stop during a hung cold start ends the question at once; an import sharing the start still embeds (#635)', async () => {
     const { spawn, calls, child } = fakeSpawn()
-    // A loading llama-server answers /health 503 until the model is in; this one stays loading.
-    let loaded = false
-    let healthProbes = 0
-    const fetchImpl = (async (url: string | URL) => {
-      const u = String(url)
-      if (u.endsWith('/health')) {
-        healthProbes++
-        return { ok: loaded, status: loaded ? 200 : 503 } as Response
-      }
-      return { ok: true, status: 200, json: async () => ({ data: [{ embedding: [3, 4], index: 0 }] }) } as Response
-    }) as typeof fetch
+    // This llama-server stays loading (/health 503) until `state.loaded`.
+    const { fetchImpl, state } = loadingSidecar(embedFetch([[3, 4]]))
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
 
     const stop = new AbortController()
     const question = embedder.embed(['question'], { signal: stop.signal })
-    const polling = Date.now() + hangBudgetMs(5_000)
-    while (healthProbes === 0) {
-      // the start is in flight once it polls /health
-      if (Date.now() > polling) throw new Error('the cold start never polled /health')
-      await new Promise((r) => setTimeout(r, 1))
-    }
+    await until(() => state.probes > 0, 'the cold start polling /health')
     const importing = embedder.embed(['chunk']) // joins the same start
     // The chat's own reason (`endedEarlyAbortReason('user')`) is what a real Stop carries.
     const reason = new DOMException('Stopped by the user', 'AbortError')
@@ -533,7 +520,7 @@ describe('E5Embedder', () => {
     // The question's own reason, untouched — the chat's Stop path, never a search-model failure.
     expect(await within(question.catch((e: unknown) => e), 'the Stop ending the wait for the start')).toBe(reason)
 
-    loaded = true
+    state.loaded = true
     // The start was not cancelled: the import's embed lands on it.
     const [v] = await importing
     expect(child.killed).toBe(false)
@@ -983,26 +970,6 @@ describe('E5Embedder', () => {
 // the clear also detached the caller's signal, so a Stop never reached that read either. Real
 // loopback socket, real fetch: whether an abort after the headers ends `res.json()` is undici's
 // behaviour, not a fake's.
-
-const realSetTimeout = globalThis.setTimeout
-const realClearTimeout = globalThis.clearTimeout
-
-/** Await `p` under fake timers with a REAL-time hang detector, so a hang fails by name. */
-function within<T>(p: Promise<T>, what: string): Promise<T> {
-  return new Promise((resolve, reject) => {
-    const t = realSetTimeout(() => reject(new Error(`${what} never happened`)), hangBudgetMs(5_000))
-    p.then(
-      (v) => {
-        realClearTimeout(t)
-        resolve(v)
-      },
-      (e: unknown) => {
-        realClearTimeout(t)
-        reject(e)
-      }
-    )
-  })
-}
 
 /**
  * A loopback `llama-server --embedding`: /health answers, and /v1/embeddings answers normally until

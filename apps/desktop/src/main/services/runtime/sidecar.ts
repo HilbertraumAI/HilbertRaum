@@ -271,6 +271,10 @@ export function combineSignals(caller: AbortSignal | undefined, timeoutMs: numbe
  * once `combineSignals` hands it the caller's signal, so a Stop reads the same before and after the
  * start. A start that fails after every waiter left stays a handled rejection.
  *
+ * A start that lands after every waiter left serves nobody yet. An owner with an idle timer must
+ * arm it when the start settles, because the waiters' own settle-time arming ran while the start
+ * was still in flight (vision and translation, #637).
+ *
  * Only a lock or quit cancels the start itself (the sidecars' `startAbort`, #244).
  */
 export function waitUnlessAborted<T>(start: Promise<T>, signal: AbortSignal | undefined): Promise<T> {

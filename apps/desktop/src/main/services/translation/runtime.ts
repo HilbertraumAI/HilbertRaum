@@ -3,6 +3,7 @@ import {
   combineSignals,
   isBindRaceError,
   isStartAbortError,
+  waitUnlessAborted,
   type LlamaServerOptions
 } from '../runtime/sidecar'
 import { isEngineCannotRunError } from '../runtime/engine-load'
@@ -21,7 +22,8 @@ import type { TranslationDeviceStatus } from '../../../shared/types'
 // The lifecycle is a HYBRID of two established precedents:
 //   • vision/runtime.ts — the SOFT idle-teardown interlock (a 12B model must not sit ~10 GB
 //     co-resident with a resident chat model + embedder forever; plan §2 D9). Every use cancels
-//     the idle timer; it re-arms only when the LAST in-flight translate settles.
+//     the idle timer; it re-arms only when the LAST in-flight translate settles, or when a start
+//     lands after every translate waiting for it was cancelled (#637).
 //   • reranker/llama.ts — `stop()` (permanent, quit) vs `suspend()` (soft, workspace lock →
 //     lazy restart on next translate), the `tearingDown` latch that bars a racing start from
 //     orphaning a child across a lock, and the bind-race-forgiving `startFailed` latch.
@@ -225,7 +227,8 @@ export interface TranslateOptions {
   targetLang: TranslationLangCode
   /** The source text for ONE window. Translated as data, never obeyed (plan §2 D2). */
   text: string
-  /** A user "Stop" — combined with the per-request timeout (M-C5 pattern). */
+  /** A user "Stop" — combined with the per-request timeout (M-C5 pattern); it also ends the wait
+   *  for a cold start, without cancelling the start (#637). */
   signal?: AbortSignal
   /** Streamed translation-token sink. */
   onToken?: (delta: string) => void
@@ -388,8 +391,11 @@ export class TranslationRuntime {
     return this.startFailed !== null
   }
 
-  /** Lazily spawn the translation sidecar (once). Concurrent callers share one start (single-flight). */
-  private async ensureStarted(): Promise<LlamaServer> {
+  /** Lazily spawn the translation sidecar (once). Concurrent callers share one start (single-flight).
+   *  `callerSignal` ends only this caller's waits — for a soft idle teardown and for the start
+   *  (#637: before, a cancel during a start that hung waited out the 180 s health budget, two of
+   *  them on the GPU→CPU ladder) — never the start: the next window or job may share it. */
+  private async ensureStarted(callerSignal?: AbortSignal): Promise<LlamaServer> {
     // Any use of the sidecar resets the idle clock: a teardown must never fire out from under an
     // imminent request.
     this.cancelIdleTimer()
@@ -403,7 +409,10 @@ export class TranslationRuntime {
     // Re-check the latches after the await: a lock/quit may have begun, or another caller may have
     // already restarted the sidecar, while we waited.
     if (this.idleTeardownPromise) {
-      await this.idleTeardownPromise.catch(() => undefined)
+      await waitUnlessAborted(
+        this.idleTeardownPromise.catch(() => undefined),
+        callerSignal
+      )
       if (this.stopped) throw new Error('Translation runtime is stopped (app is shutting down)')
       if (this.tearingDown) throw new Error('Translation runtime is suspending (workspace is locking)')
       if (this.server) return this.server
@@ -411,9 +420,13 @@ export class TranslationRuntime {
     if (!this.starting) {
       this.starting = this.startLadder().finally(() => {
         this.starting = null
+        // #637: when every translate that waited for this start was cancelled, each one's
+        // `finally` found `starting` set and armed nothing. Arm the idle clock here, or a start
+        // that lands keeps ~10 GB resident until lock or quit. A no-op while a translate waits.
+        this.armIdleTimer()
       })
     }
-    await this.starting
+    await waitUnlessAborted(this.starting, callerSignal)
     // A teardown (lock/quit) may have begun during the await above and nulled the server we'd
     // return — re-check rather than hand back a sidecar that's being / about to be stopped.
     if (this.stopped) throw new Error('Translation runtime is stopped (app is shutting down)')
@@ -577,7 +590,8 @@ export class TranslationRuntime {
    * The translation start LADDER (issue #42 — the chat rung-1/rung-2 pair, sized for a lazy
    * sidecar): try the resolved device posture; when a GPU attempt fails for a non-transient
    * reason, fall back to forced CPU ONCE within the same start, then latch the session to CPU.
-   * Only a failure of the FINAL (CPU) attempt arms the permanent `startFailed` latch.
+   * The CPU rung runs only while a translate still waits for the start (#637). Only a failure of
+   * the FINAL (CPU) attempt arms the permanent `startFailed` latch.
    */
   private async startLadder(): Promise<void> {
     const device = this.resolveDevice()
@@ -610,8 +624,10 @@ export class TranslationRuntime {
       if (device === 'auto') {
         this.noteDeviceFallback(`translation sidecar GPU-attempt start failed: ${error.message}`)
         // A lock/quit that began while the GPU attempt was failing must not cold-load ~10 GB on
-        // the CPU rung just to tear it straight down.
-        if (!this.stopped && !this.tearingDown) {
+        // the CPU rung just to tear it straight down. Nor for nobody (#637): when every translate
+        // waiting for this start was cancelled, the next one starts on the CPU directly (the latch
+        // just armed), and the GPU failure stays unlatched.
+        if (!this.stopped && !this.tearingDown && this.inFlight > 0) {
           try {
             await this.startAttempt('cpu', abort.signal)
             return
@@ -644,9 +660,13 @@ export class TranslationRuntime {
    * Translate ONE window: format the trained prompt (`buildTranslationPrompt`), POST it to the raw
    * `/completion` endpoint with `temperature 0` (greedy — deterministic MT) + `stop:
    * ["<end_of_turn>"]`, stream the translation through `onToken`, and return the full text. Honours
-   * `signal` (a user "Stop") combined with the per-request timeout.
+   * `signal` (a user "Stop") combined with the per-request timeout. The signal also ends this
+   * window's wait for a cold start, which keeps running for the next window or job (#637); a
+   * translate already stopped starts nothing and rejects with the signal's reason.
    */
   async translate(opts: TranslateOptions): Promise<string> {
+    // #637: a caller already stopped starts nothing and leaves the idle clock alone.
+    opts.signal?.throwIfAborted()
     // Cancel the idle timer and mark a job in flight BEFORE the (possibly slow, cold-start)
     // ensureStarted await, so a teardown can't fire during the start either.
     this.cancelIdleTimer()
@@ -661,7 +681,7 @@ export class TranslationRuntime {
   }
 
   private async runTranslate(opts: TranslateOptions): Promise<string> {
-    const server = await this.ensureStarted()
+    const server = await this.ensureStarted(opts.signal)
     const prompt = buildTranslationPrompt({
       sourceLang: opts.sourceLang,
       targetLang: opts.targetLang,

@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-07 — the closed 2026-10-02 #548–#551 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #637 entry). Its record is unchanged:
+`architecture.md` DEP-6 §8; the streamdown 2.6 change it deferred landed as its own entry (DEP-6 §9). Citations of the form
+"BUILD_STATE 2026-10-02 #548–#551 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-02 — **#548–#551 — the DEP-6 residuals (`fix/dep6-residuals-548-551`).** #548: the packaging gates check the negations where electron-builder
+packs each package (its own hoister replayed on the lockfile; it names a real `app.asar`'s 226 package directories exactly), and the notices must name exactly that set.
+#549: both load races fixed by where the clock starts and which timer trips, not by a bigger budget. #550: `lib` ES2024 in both programs; taking streamdown 2.6 stays its own change.
+#551: the Documents list on react-virtual 3.14.13 measures identical to 3.14.4 (CDP A/B). The packaged exe: the #551 entry above. Record: `architecture.md` DEP-6 §8._
+
 ## 2026-10-07 — the closed 2026-10-01 #530 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #635 entry). Its record is unchanged:

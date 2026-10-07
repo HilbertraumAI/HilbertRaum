@@ -28,10 +28,16 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-07 — **#637 — a cancel ends a vision or translation job's wait for a cold start, not the start (`fix/637-vision-translation-start-stop`).** A
+cancel during a hung start waited up to the 180 s health budget: a new image analysis read "busy", a cancelled document translation kept chat refused.
+Both `ensureStarted`s now race the shared start (#635's `waitUnlessAborted`; translation's idle-teardown wait too); the start's own settle arms the idle clock, so
+a start every job left is unloaded one idle window after it lands; `VisionService` drops a runtime whose start failed after its job left; translation walks no CPU rung
+for nobody. Real app, frozen start:
+a new analysis 28.8 s → 30 ms after the cancel, a cancelled translation 23.9 s → 5 ms. Record: `architecture.md` image-understanding §6 "#637 amendment". Open: none._
 _2026-10-07 — **#635 — a Stop ends a document question's wait for a cold start, not the start (`fix/635-e5-start-stop`).** The question awaited the
 search model's (then the reranker's) shared lazy start before it read its signal, so a Stop during a hung start held the turn up to the 180 s health budget (a new
 message refused). `waitUnlessAborted` (`runtime/sidecar.ts`) ends the caller's wait with its own reason; the start runs on for an import sharing it; a caller already
-stopped starts nothing. Owner: embedder + reranker now. Real app, frozen start: master 22.0 / 24.0 s, fix 1 ms. Record: `rag-design.md` §12.4 "#635 amendment". Open: #637._
+stopped starts nothing. Owner: embedder + reranker now. Real app, frozen start: master 22.0 / 24.0 s, fix 1 ms. Record: `rag-design.md` §12.4 "#635 amendment". Open: none (#637: above)._
 _2026-10-07 — **#634 — a search-model failure reaches the user as words, chosen by kind (`fix/634-embedder-error-copy`).** A timeout read "The
 operation timed out." in any language, and a damaged e5 file stored llama-server's stderr (the weight file's absolute path) on every row of the
 session and in the question banner. Now `EmbedderError` (`timeout`/`start`/`failed`/`interrupted`) → canonical row copy + chat copy naming the
@@ -136,10 +142,6 @@ _2026-10-02 — **#550 follow-up — streamdown 2.5.0 → 2.6.0 (`chore/streamdo
 leaves the tree, and with it DEP-3's ~40 `files:` negations; a guard keeps mermaid out of the production graph. 2.6's new 400/300 px caps on code blocks and
 tables need Tailwind (not loaded): a tall table drew 1,128 px over what followed, so both are off. Also fixed: since 2026-06-30 every multi-line code block
 ran its lines together (Tailwind `block` again); a `styles.css` rule restores them. Real-app measured. Record: `architecture.md` DEP-6 §9._
-_2026-10-02 — **#548–#551 — the DEP-6 residuals (`fix/dep6-residuals-548-551`).** #548: the packaging gates check the negations where electron-builder
-packs each package (its own hoister replayed on the lockfile; it names a real `app.asar`'s 226 package directories exactly), and the notices must name exactly that set.
-#549: both load races fixed by where the clock starts and which timer trips, not by a bigger budget. #550: `lib` ES2024 in both programs; taking streamdown 2.6 stays its own change.
-#551: the Documents list on react-virtual 3.14.13 measures identical to 3.14.4 (CDP A/B). The packaged exe: the #551 entry above. Record: `architecture.md` DEP-6 §8._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -190,7 +192,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry), and the closed 2026-10-01 #527 entry on 2026-10-07 (preamble budget, making room for the #634 entry), and the closed 2026-10-01 #530 entry on 2026-10-07 (preamble budget, making room for the #635 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry), and the closed 2026-10-01 #527 entry on 2026-10-07 (preamble budget, making room for the #634 entry), and the closed 2026-10-01 #530 entry on 2026-10-07 (preamble budget, making room for the #635 entry), and the closed 2026-10-02 #548–#551 entry on 2026-10-07 (preamble budget, making room for the #637 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

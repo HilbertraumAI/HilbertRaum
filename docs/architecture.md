@@ -3223,7 +3223,9 @@ Per-finding disposition (F-1…F-8):
   `HILBERTRAUM_TRANSLATION_IDLE_MS`; re-armed only when the last in-flight window settles) bounds
   the ~10 GB co-residency window (plan §2 D9); the reranker `stop()` (permanent, quit) vs
   `suspend()` (soft, workspace lock → lazy restart) split + `tearingDown`/bind-race-forgiving
-  `startFailed` latches keep the session-held instance safe across lock/unlock. Availability-driven:
+  `startFailed` latches keep the session-held instance safe across lock/unlock. A cancel ends a
+  window's wait for a cold start without cancelling the start, and the start arms the idle clock
+  itself when it lands (#637, image-understanding record §6 "#637 amendment"). Availability-driven:
   `resolveModelByRole('translation')` → `resolveSidecarSelection` → `createSelectedTranslator`
   (null when binary/weights absent; no mock — plan O2). Composed in `compose-services.ts`, carried
   on `AppContext.translator`, stopped on quit (`shutdown.ts`) + suspended on lock
@@ -3384,8 +3386,8 @@ Per-finding disposition (F-1…F-8):
   and the 2 s SIGTERM grace — where the three used to take the full 180 s and then latch.)*
   *(#635: a caller's own Stop is the other half. It ends only that caller's wait for the start
   (`waitUnlessAborted`), never the start, which other callers may share — the embedder and the
-  reranker since 2026-10-07 (`rag-design.md` §12.4 "#635 amendment"); vision and translation:
-  #637.)*
+  reranker since 2026-10-07 (`rag-design.md` §12.4 "#635 amendment"), vision and translation too
+  (#637, image-understanding record §6 "#637 amendment").)*
   **(#160)** the F-2
   retry classification splits the per-request timeout by tokens-flowed (live-decode timeout =
   deterministic, no retry; wedged = one retry) in BOTH consumers; the view paste is bounded by
@@ -11979,6 +11981,86 @@ As built in `runtime.ts`:
 - `stop()` (permanent — lock/quit/cancel) cancels the timer + **awaits an in-flight soft teardown** so
   no child orphans on quit; the timer is `unref()`-ed so it never blocks a clean exit.
 - Default **120 000 ms** (tuned V5 — model-benchmarks §8.3), env `HILBERTRAUM_VISION_IDLE_MS`.
+
+**#637 amendment (2026-10-07) — a cancel ends the wait for a cold start, not the start; the start
+arms the idle clock.** It covers vision and translation, which share this interlock (translation
+record "Lifecycle — a hybrid").
+- **What was wrong.** `analyze()` and `translate()` awaited the shared lazy start before the job's
+  signal reached anything: the signal first met `combineSignals` at the request. A cancel during a
+  start that hung waited up to the 180 s health budget (translation's GPU→CPU ladder: two of them).
+  - Vision: `VisionService` frees its busy slot only when `run()` unwinds (#120 item 3), so a new
+    analysis was refused "busy" until the start landed.
+  - Translation: the Translate view frees its slot at cancel, but a cancelled document translation
+    stayed `running` until its window unwound. That kept `hasActiveTask()` true, so chat was refused
+    (`DOC_TASK_BUSY_MESSAGE`) and the view answered `docTaskBusy`.
+  - A soft idle teardown that a translate waits out first (M5) is bounded by the 2 s kill grace.
+- **The trap the fix had to close.** A job's `finally` arms the idle clock when `inFlight` reaches 0,
+  and `armIdleTimer` returns early while `starting` is set. A job that stops waiting therefore arms
+  nothing, and a start that lands after every job left would stay resident until lock or quit: the
+  vision model, or ~10 GB of translation model.
+- **As built.**
+  - Both `ensureStarted`s race the shared start with the caller's signal (`waitUnlessAborted`, #635),
+    and translation races its wait for a soft idle teardown the same way. The job rejects with
+    `signal.reason`, so both consumers read a cancel from their aborted signal, as before.
+  - The start is never cancelled: the next job joins it. Only lock and quit cancel a start
+    (`startAbort`, #244), and the engine update's pause does the same (`suspend()` /
+    `releaseRuntime()`).
+  - **The start's own settle calls `armIdleTimer()`**, after `starting` is cleared. While a job still
+    waits, `inFlight > 0` makes it a no-op; when every job left, it arms the clock, so an abandoned
+    start that lands is torn down after the idle window, as after a finished job.
+  - `analyze()` / `translate()` refuse a signal that is already aborted before they touch anything, so
+    a stopped caller starts nothing and does not reset the idle clock.
+  - **`VisionService`** discards a runtime whose start failed after its cancelled job left, before it
+    reuses the instance, and logs that it did. `run()`'s catch, which discards a start-failed runtime
+    (#117), never sees that failure. Without the discard, the next job failed on a failure nobody
+    waited for. The cooldown (5 s) is not armed for it, so the next job gets one fresh start; if the
+    fault is permanent, that job's own failure arms it.
+  - **Translation's CPU rung runs only while a translate waits** (`inFlight > 0`). A GPU attempt that
+    fails after every translate left still arms the session CPU latch, but loads no ~10 GB CPU rung
+    for nobody, and its failure is not latched: the next translate starts on the CPU directly.
+  - A translation start that fails on its last rung after its job left still arms the session-long
+    `startFailed` latch (F-7), so the next translation fails fast with the "restart / free memory"
+    copy. That is unchanged: before #637 the cancelled job ended `cancelled` too, and the next job hit
+    the same latch. Vision differs because its service rebuilds a failed runtime (#117).
+  - The #120 single-slot rule holds: a job cancelled during the start has sent no request, so the
+    next job is still the only request on the `--parallel 1` sidecar.
+- **Considered, not built: cancelling the start when its last waiter leaves.** Every vision and
+  translation caller carries a signal, so this was possible. It was rejected because a cancel is
+  often followed by a new job (another question, another language), which then joins the start
+  instead of paying for a second cold load. The cost of an abandoned start is bounded: it loads, then
+  sits for one idle window (2 min), recorded in `known-limitations.md`.
+- **Tests.** The cold-start fake is shared: `tests/helpers/loading-sidecar.ts` (`/health` 503 until
+  loaded; the #635 embedder and reranker rows use it too), with the `until` / `within` hang detectors
+  in `tests/helpers/hang-budget.ts`.
+  - `vision-runtime.test.ts`: a cancel during a start that never gets healthy ends that analyze with
+    its own reason while an analyze sharing the start is answered (one spawn, the child alive); idle
+    row (h): the abandoned start arms the clock when it lands and its fire tears it down; a stopped
+    analyze spawns nothing; `VisionService` frees the slot at once and the next job joins the start;
+    a start that fails after its job left does not fail the next job.
+  - `translation-runtime.test.ts`: the same start, idle and stopped-caller rows; a cancel during the
+    M5 idle-teardown wait starts no second child; a GPU attempt that fails after every translate left
+    walks no CPU rung (the engine spawn gate holds a rung that would start, so a `suspend()` would
+    wait for it) and the next translate starts on the CPU.
+  - All 10 fail on master: the start waits by their hang detectors, the stopped callers by a spawn,
+    the idle-teardown wait by a second child. One mutation per piece (the settle's arm, the discard,
+    the CPU-rung condition, each `throwIfAborted`, the idle-teardown race, and "cancel the start on a
+    cancel") reddens exactly its own rows.
+- **Real app** (2026-10-07, DesktopDiT, dev build, an encrypted vault; E:'s b9849 runtime, Qwen2.5-VL
+  3B, and the 4B standing in for TranslateGemma under its file name). A watcher suspended the sidecar
+  the moment it spawned (`NtSuspendProcess`), the job was cancelled 4 s in, and the sidecar was
+  thawed 20.8 s after the cancel. Idle windows set to 15 s.
+
+  | Frozen start | Master | Fix |
+  |---|---|---|
+  | Vision: a new analysis admitted after the cancel | 28,818 ms (453 "busy" refusals, admitted only after the thaw) | 30 ms, and it joined the frozen start |
+  | Document translation: the task `cancelled` after the cancel | 23,869 ms (after the thaw) | 5 ms |
+
+  On the fix, the next analysis answered "STOP 637" from the image once the start was thawed, with
+  one vision sidecar. An abandoned start with nobody waiting landed and exited one idle window later
+  (translation 15.6 s, vision 15.9 s after `sidecar_healthy`).
+  - **Re-run on the final code** (after the code-review changes above): 32 ms and 6 ms. A frozen GPU
+    attempt killed after its task was cancelled logged the CPU fallback, and no translation sidecar
+    started in the 15 s after. The next translation's sidecar started with `--device none`.
 
 ### §7 Security & privacy posture (additive within the boundaries)
 

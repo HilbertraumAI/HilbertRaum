@@ -1059,13 +1059,14 @@ password recovery — are documented in
   all model files" finds its file intact (a file copied back outside the app, a transient cause);
   for the reranker it persists for the
   session (reranking stays off, retrieval keeps the fused order) by design.
-- **A cancel during the vision or translation sidecar's cold start waits for the start (#637).**
-  The job's signal reaches only the request after the start. A start that hangs holds the job up to
-  the 180 s health budget (translation's GPU→CPU ladder: two of them). Meanwhile a new image
-  analysis is refused as busy, and a cancelled document translation keeps chat refused. A document
-  question no longer waits: since #635 its Stop ends the wait for the search model's and the
-  reranker's start at once, and the start keeps running for an import that shares it
-  (`rag-design.md` §12.4 "#635 amendment").
+- **A cancelled job's sidecar start keeps loading (#635, #637).** A Stop or cancel during a
+  sidecar's cold start ends the job at once, but not the start: the search model, the reranker, the
+  vision model or the translation model goes on loading for the next job, which joins it. A start
+  that lands with no job waiting is torn down by the idle timer like any idle sidecar: vision and
+  translation after their 2-minute window (the embedder and the reranker have no idle timer and
+  stay loaded, as after any question). Until then it holds its memory: up to ~10 GB for the
+  translation model. A lock or quit cancels the start at once (`rag-design.md` §12.4 "#635
+  amendment", `architecture.md` image-understanding record §6 "#637 amendment").
 - **The FTS5 index duplicates chunk text inside the workspace DB** (a self-contained table was
   chosen over external-content on `chunks`' implicit rowid, which VACUUM may renumber). Bounded by
   the 1 000-chunk/file cap; encrypted at rest with the same DB file.

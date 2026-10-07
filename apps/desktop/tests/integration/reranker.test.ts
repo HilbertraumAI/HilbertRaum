@@ -9,7 +9,8 @@ import { rerankerDeviceFor } from '../../src/main/services/rag/rerank-profile'
 import { discoverManifests, estimateGraphicsNeedMib, graphicsBudgetMib } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
 import type { GpuDevice } from '../../src/shared/types'
-import { hangBudgetMs } from '../helpers/hang-budget'
+import { until, within } from '../helpers/hang-budget'
+import { loadingSidecar } from '../helpers/loading-sidecar'
 
 // Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
 // fake-spawn + mocked-loopback-fetch harness (the E5 embedder test pattern). CI never
@@ -491,40 +492,20 @@ describe('LlamaReranker', () => {
   // and serves the next ask that shares it.
   it('a Stop during a hung cold start ends that ask at once; another ask sharing the start is scored (#635)', async () => {
     const { spawn, calls, child } = fakeSpawn()
-    // A loading llama-server answers /health 503 until the model is in; this one stays loading.
-    let loaded = false
-    let healthProbes = 0
-    const fetchImpl = (async (url: string | URL) => {
-      const u = String(url)
-      if (u.endsWith('/health')) {
-        healthProbes++
-        return { ok: loaded, status: loaded ? 200 : 503 } as Response
-      }
-      return { ok: true, status: 200, json: async () => ({ results: [{ index: 0, relevance_score: 2 }] }) } as Response
-    }) as typeof fetch
+    // This llama-server stays loading (/health 503) until `state.loaded`.
+    const { fetchImpl, state } = loadingSidecar(rerankFetch([2]))
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl })
 
     const stop = new AbortController()
     const stopped = reranker.rerank('q', ['a'], { signal: stop.signal }).catch((e: unknown) => e)
-    const polling = Date.now() + hangBudgetMs(5_000)
-    while (healthProbes === 0) {
-      // the start is in flight once it polls /health
-      if (Date.now() > polling) throw new Error('the cold start never polled /health')
-      await new Promise((r) => setTimeout(r, 1))
-    }
+    await until(() => state.probes > 0, 'the cold start polling /health')
     const other = reranker.rerank('q2', ['b']) // shares the start
     const reason = new DOMException('Stopped by the user', 'AbortError')
     stop.abort(reason)
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const outcome = await Promise.race([
-      stopped,
-      new Promise((r) => (timer = setTimeout(() => r('still waiting for the start'), hangBudgetMs(5_000))))
-    ])
-    clearTimeout(timer)
     // The ask's own reason: `rag/index.ts` rethrows it as the Stop, never "reranker unavailable".
-    expect(outcome).toBe(reason)
+    expect(await within(stopped, 'the Stop ending the wait for the start')).toBe(reason)
 
-    loaded = true
+    state.loaded = true
     // The start was not cancelled: the other ask is scored on it.
     expect(await other).toEqual([{ index: 0, score: 2 }])
     expect(child.killed).toBe(false)

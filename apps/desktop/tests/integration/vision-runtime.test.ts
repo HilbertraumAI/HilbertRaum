@@ -11,6 +11,8 @@ import { VisionService, type VisionStreamEmitter } from '../../src/main/services
 import { EngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
+import { until, within } from '../helpers/hang-budget'
+import { loadingSidecar } from '../helpers/loading-sidecar'
 
 // V4 hardening tests for the real VisionRuntime (image-understanding plan §16 V4 / §17): lazy
 // single-flight start, the failed-start latch, cancellation, NO orphan on a racing stop, and —
@@ -572,6 +574,33 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     expect(state.fire).toBeNull() // no idle timer armed/left live after the racing stop()
   })
 
+  // #637: a cancelled analyze no longer waits for its cold start, so its `finally` runs while the
+  // start is still in flight — and armIdleTimer returns early on `starting`. The start's own
+  // settle must arm the clock, or a start that lands with nobody waiting stays resident until
+  // lock or quit.
+  it('(h) a start that lands after every analyze was cancelled arms the idle clock, and its fire tears it down (#637)', async () => {
+    const { spawn, children } = gatedSpawn()
+    const { fetchImpl, state: start } = loadingSidecar(visionFetch().fetchImpl)
+    const { clock, state } = fakeClock()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+
+    const cancel = new AbortController()
+    const cancelled = rt.analyze({ ...analyzeOpts, signal: cancel.signal }).catch(() => undefined)
+    await until(() => start.probes > 0, 'the cold start polling /health')
+    cancel.abort()
+    await within(cancelled, 'the cancel ending the wait for the start')
+    expect(state.fire).toBeNull() // the analyze settled while the start was still loading
+
+    start.loaded = true
+    await until(() => rt.isLoaded(), 'the abandoned start landing')
+    expect(state.fire).not.toBeNull() // armed by the start's settle, with no analyze in flight
+    expect(state.unrefCount).toBe(state.setCount)
+    state.fire!()
+    expect(children[0].killed).toBe(true)
+    expect(rt.isLoaded()).toBe(false)
+    await rt.stop()
+  })
+
   // M1 (F-14): the TA-6 crash-recovery fix ported verbatim from translation/runtime.ts. A healthy
   // vision child that dies on its OWN (OOM — the three-process RAM peak makes 12 GB machines
   // likely-OOM) must not leave `this.server` pointing at a dead handle where every later analyze
@@ -808,6 +837,115 @@ describe('VisionService — OS loader refusal (#530)', () => {
     expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
     expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
     expect(spawnCount).toBe(1)
+    await service.stop()
+  })
+})
+
+// #637: an analyze awaited the vision sidecar's lazy start before its signal reached anything, so a
+// cancel during a start that hung held the job — and VisionService's busy slot — up to the 180 s
+// health budget. The cancel now ends only that analyze's wait; the start goes on for the next one.
+describe('#637 — a cancel during the vision cold start', () => {
+  it('ends that analyze at once with its own reason; an analyze sharing the start gets its answer', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const { fetchImpl, state } = loadingSidecar(visionFetch().fetchImpl)
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+
+    const cancel = new AbortController()
+    const cancelled = rt.analyze({ ...analyzeOpts, signal: cancel.signal }).catch((e: unknown) => e)
+    await until(() => state.probes > 0, 'the cold start polling /health')
+    const other = rt.analyze(analyzeOpts) // the next analyze joins the same start
+    const reason = new DOMException('Cancelled by the user', 'AbortError')
+    cancel.abort(reason)
+    // The analyze's own reason, which the service reads as `cancelled` (its signal is aborted).
+    expect(await within(cancelled, 'the cancel ending the wait for the start')).toBe(reason)
+
+    state.loaded = true
+    expect(await within(other, 'the shared start serving the other analyze')).toBe(FIXTURE_ANSWER)
+    expect(children[0].killed).toBe(false) // the cancel never cancelled the start
+    expect(calls.length).toBe(1)
+    await rt.stop()
+  })
+
+  it('an analyze cancelled before it begins starts no sidecar', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = visionFetch()
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const reason = new DOMException('Cancelled by the user', 'AbortError')
+    await expect(rt.analyze({ ...analyzeOpts, signal: AbortSignal.abort(reason) })).rejects.toBe(reason)
+    expect(calls.length).toBe(0)
+    await rt.stop()
+  })
+
+  it('VisionService: the cancelled job frees the busy slot at once, and the next job joins its start', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl, state } = loadingSidecar(visionFetch().fetchImpl)
+    const service = new VisionService({
+      getStatus: async () => VLM_AVAILABLE,
+      createRuntime: () => new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    })
+    const emit: VisionStreamEmitter = { token: () => {}, done: () => {}, error: () => {} }
+
+    const first = service.analyze(serviceReq(), emit)
+    await until(() => state.probes > 0, 'the cold start polling /health')
+    expect(service.cancel(first.jobId).state).toBe('cancelled')
+    // Before #637 the slot stayed taken until the start landed: a new analysis read "busy".
+    await until(() => !service.hasActiveJob(), 'the cancelled job freeing the busy slot')
+
+    const next = service.analyze(serviceReq(), emit)
+    expect(next.state).toBe('queued')
+    await until(() => service.getJob(next.jobId).state === 'analyzing', 'the next job reaching the runtime')
+    expect(calls.length).toBe(1) // waiting on the same start: the abandoned job sent no request
+    state.loaded = true
+    await until(() => service.getJob(next.jobId).state === 'done', 'the next job finishing')
+    expect(service.getJob(next.jobId).answer).toBe(FIXTURE_ANSWER)
+    expect(calls.length).toBe(1)
+    await service.stop()
+  })
+
+  // The cancelled job is gone by the time its start fails, so run()'s catch — which discards a
+  // start-failed runtime (#117) — never sees the failure. The next job must not inherit it.
+  it('VisionService: a start that fails after its cancelled job left does not fail the next job', async () => {
+    const children: FakeChild[] = []
+    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
+      const child = new FakeChild()
+      children.push(child)
+      return child
+    }
+    let probes = 0
+    // The first child never gets healthy; any later one answers at once.
+    const fetchImpl = (async (url: string | URL) => {
+      if (String(url).endsWith('/health')) {
+        probes++
+        const healthy = children.length > 1
+        return { ok: healthy, status: healthy ? 200 : 503 } as Response
+      }
+      return { ok: true, status: 200, body: sseBody(FIXTURE_SSE) } as unknown as Response
+    }) as typeof fetch
+    const runtimes: VisionRuntime[] = []
+    const service = new VisionService({
+      getStatus: async () => VLM_AVAILABLE,
+      createRuntime: () => {
+        const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+        runtimes.push(rt)
+        return rt
+      },
+      // A failure the service saw itself would make the next job fail fast for a minute.
+      startFailureCooldownMs: 60_000
+    })
+    const emit: VisionStreamEmitter = { token: () => {}, done: () => {}, error: () => {} }
+
+    const first = service.analyze(serviceReq(), emit)
+    await until(() => probes > 0, 'the cold start polling /health')
+    service.cancel(first.jobId)
+    await until(() => !service.hasActiveJob(), 'the cancelled job freeing the busy slot')
+    children[0].emit('exit', 1, null) // the abandoned start dies while loading
+    await until(() => runtimes[0].isStartFailed(), 'the abandoned start failing')
+
+    const next = await runToTerminal(service, serviceReq())
+    expect(next.state).toBe('done')
+    expect(next.answer).toBe(FIXTURE_ANSWER)
+    expect(runtimes.length).toBe(2) // a fresh runtime, not the latched one
+    expect(children.length).toBe(2)
     await service.stop()
   })
 })

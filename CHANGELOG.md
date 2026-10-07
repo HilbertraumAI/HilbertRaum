@@ -204,6 +204,13 @@ from its first public `1.0.0` release onward.
   import waited behind it, a password change or an engine update was refused as busy, and Stop did
   not end a document question that was waiting for it. The app now gives up after two minutes, as it
   already did when the search model did not reply at all, and Stop ends the question at once (#607).
+- **Stop and Cancel no longer wait for a model that is still loading.** When you stopped a document
+  question, or cancelled an image analysis or a document translation, while the model it needed was
+  still starting, the app waited until that model had loaded: up to three minutes if loading got
+  stuck. Until then a new image analysis was refused as busy, and after a cancelled document
+  translation the chat stayed blocked. Stop and Cancel now take effect at once. The model goes on
+  loading so that your next question or job can use it; the image and translation models are
+  unloaded again after two minutes if nothing uses them (#635, #637).
 - **"Install voice engine" installs only the voice engine.** On a drive with an older AI engine, the
   button also tried to download the AI engine again, and while a model was running it then refused
   with "The AI engine can't be replaced while a model is running". It now installs only what is
