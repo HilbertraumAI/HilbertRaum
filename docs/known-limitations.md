@@ -1059,10 +1059,13 @@ password recovery — are documented in
   all model files" finds its file intact (a file copied back outside the app, a transient cause);
   for the reranker it persists for the
   session (reranking stays off, retrieval keeps the fused order) by design.
-- **A Stop during the search model's cold start waits for the start (#635).** A document
-  question that finds the E5 sidecar stopped (its first use in a session, or after a lock) starts it
-  — 1.2 s measured on DesktopDiT — and the question's Stop is not wired into that start, only into
-  its requests. A start that hangs keeps the turn in flight up to the 180 s health budget.
+- **A cancel during the vision or translation sidecar's cold start waits for the start (#637).**
+  The job's signal reaches only the request after the start. A start that hangs holds the job up to
+  the 180 s health budget (translation's GPU→CPU ladder: two of them). Meanwhile a new image
+  analysis is refused as busy, and a cancelled document translation keeps chat refused. A document
+  question no longer waits: since #635 its Stop ends the wait for the search model's and the
+  reranker's start at once, and the start keeps running for an import that shares it
+  (`rag-design.md` §12.4 "#635 amendment").
 - **The FTS5 index duplicates chunk text inside the workspace DB** (a self-contained table was
   chosen over external-content on `chunks`' implicit rowid, which VACUUM may renumber). Bounded by
   the 1 000-chunk/file cap; encrypted at rest with the same DB file.

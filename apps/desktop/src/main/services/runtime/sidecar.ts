@@ -263,6 +263,29 @@ export function combineSignals(caller: AbortSignal | undefined, timeoutMs: numbe
   }
 }
 
+/**
+ * #635: wait for a SHARED lazy start — or stop waiting the moment this caller's own signal aborts.
+ * The start is never cancelled: other callers may share it (an import embeds with no signal while
+ * a question waits on the same start), and a start that lands simply serves the next request. The
+ * abandoned waiter rejects with `signal.reason`, the same value the request's `fetch` rejects with
+ * once `combineSignals` hands it the caller's signal, so a Stop reads the same before and after the
+ * start. A start that fails after every waiter left stays a handled rejection.
+ *
+ * Only a lock or quit cancels the start itself (the sidecars' `startAbort`, #244).
+ */
+export function waitUnlessAborted<T>(start: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return start
+  if (signal.aborted) {
+    start.catch(() => undefined)
+    return Promise.reject(signal.reason)
+  }
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = (): void => reject(signal.reason)
+    signal.addEventListener('abort', onAbort, { once: true })
+    start.then(resolve, reject).finally(() => signal.removeEventListener('abort', onAbort))
+  })
+}
+
 // ---- Injectable seams (so the server can be unit-tested with no real binary) -----
 
 /** A readable stream surface — just enough to drain + capture the child's stderr. */

@@ -18,7 +18,9 @@ import { getResidentVectors, getResidentVectorIndex } from './resident-cache'
 export interface EmbedOptions {
   /**
    * Caller abort signal. Combined with the per-request timeout so a user "Stop" during
-   * query embedding cancels the loopback request promptly (M-C5), not only on timeout.
+   * query embedding cancels the loopback request promptly (M-C5), not only on timeout. It also
+   * ends this caller's wait for a lazily started backend, without cancelling a start that other
+   * callers may share (#635); an embed that is already stopped starts nothing.
    */
   signal?: AbortSignal
 }

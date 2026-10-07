@@ -294,9 +294,21 @@ describe('Wave 8 ruling (b)(Q): the four race rules', () => {
     const controller = new AbortController()
     const askP = reranker.rerank('q2', docs(1), { signal: controller.signal })
     while (!children[0]!.killed) await new Promise((r) => setTimeout(r, 1))
-    controller.abort() // the CALLER's own signal — a lock would do this to the ask FIRST
+    // The teardown's `server.stop()` escalates to SIGKILL at the end of its 2 s grace (the exit is
+    // gated) and settles right after it, so an ask that waited for the teardown settles after it.
+    let escalated = false
+    const kill = children[0]!.kill.bind(children[0]!)
+    children[0]!.kill = () => {
+      escalated = true
+      return kill()
+    }
+    const reason = new DOMException('Stopped by the user', 'AbortError')
+    controller.abort(reason) // the CALLER's own signal — a lock would do this to the ask FIRST
+    const outcome = await askP.catch((e: unknown) => ({ error: e, escalatedBefore: escalated }))
+    // #635: the ask ended at once, with its own reason, while the teardown it began ran on.
+    expect(outcome).toMatchObject({ escalatedBefore: false })
+    expect((outcome as { error: unknown }).error).toBe(reason)
     children[0]!.releaseExit()
-    await expect(askP).rejects.toThrow(/abort/i)
     await reranker.stop()
   })
 

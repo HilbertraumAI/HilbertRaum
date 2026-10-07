@@ -27,6 +27,20 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-07 — the closed 2026-10-01 #530 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #635 entry). Its record is unchanged:
+`architecture.md` "Engine load failures — design record"; its residuals (a stock Windows desktop run, macOS unmeasured) stay in
+`known-limitations.md` ("What the AI engine needs from the system"). Citations of the form "BUILD_STATE 2026-10-01 #530 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-01 — **#530 — an engine the OS refuses to start is named as such, never as a GPU, model or memory fault (`fix/530-engine-load-failure`).**
+One classifier (`runtime/engine-load.ts`: Linux ld.so text, Windows NTSTATUS + a System32 VC++ check, macOS dyld) at every spawn site, a
+session verdict (never persisted) fed by the startup probe and every refusal, `AppStatus.engineProblems`, `engine:recheck` ("Check again")
+with a full latch re-arm, and a heal at unlock (loader-caused `gpuAutoDisabled`, raw-path document rows). Owner rulings: no libgomp/VC++
+bundling, option C, kiwix out of scope. Records: `architecture.md` "Engine load failures", design-guidelines §11.17, data-contracts.
+Real-app verified (Linux container w/o libgomp1 + heal by apt; Windows en/de). Open: a stock desktop run; macOS unmeasured (reinstall button: done, #532)._
+
 ## 2026-10-07 — the closed 2026-10-01 #527 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #634 entry). Its record is unchanged:

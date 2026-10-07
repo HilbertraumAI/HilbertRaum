@@ -499,6 +499,66 @@ describe('E5Embedder', () => {
     await expect(embedder.embed(['b'])).rejects.toThrow(/stopped/)
   })
 
+  // #635: a document question that finds the sidecar stopped starts it, and its Stop used to reach
+  // only the request after the start — so a Stop during a start that hung waited out the 180 s
+  // health budget. The question now stops waiting at once; the start goes on for the import
+  // embedding (with no signal, as ingestion does) that shares it.
+  it('a Stop during a hung cold start ends the question at once; an import sharing the start still embeds (#635)', async () => {
+    const { spawn, calls, child } = fakeSpawn()
+    // A loading llama-server answers /health 503 until the model is in; this one stays loading.
+    let loaded = false
+    let healthProbes = 0
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        healthProbes++
+        return { ok: loaded, status: loaded ? 200 : 503 } as Response
+      }
+      return { ok: true, status: 200, json: async () => ({ data: [{ embedding: [3, 4], index: 0 }] }) } as Response
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+
+    const stop = new AbortController()
+    const question = embedder.embed(['question'], { signal: stop.signal })
+    const polling = Date.now() + hangBudgetMs(5_000)
+    while (healthProbes === 0) {
+      // the start is in flight once it polls /health
+      if (Date.now() > polling) throw new Error('the cold start never polled /health')
+      await new Promise((r) => setTimeout(r, 1))
+    }
+    const importing = embedder.embed(['chunk']) // joins the same start
+    // The chat's own reason (`endedEarlyAbortReason('user')`) is what a real Stop carries.
+    const reason = new DOMException('Stopped by the user', 'AbortError')
+    stop.abort(reason)
+    // The question's own reason, untouched — the chat's Stop path, never a search-model failure.
+    expect(await within(question.catch((e: unknown) => e), 'the Stop ending the wait for the start')).toBe(reason)
+
+    loaded = true
+    // The start was not cancelled: the import's embed lands on it.
+    const [v] = await importing
+    expect(child.killed).toBe(false)
+    expect(v[0]).toBeCloseTo(0.6, 6)
+    expect(calls.length).toBe(1) // one start, shared
+    expect(embedder.isLoaded()).toBe(true)
+    await embedder.stop()
+  })
+
+  it('a caller stopped before the embed starts no sidecar (#635)', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const served = embedFetch([[1, 0]])
+    // Honours the request signal as real fetch does, so the request itself could never serve a
+    // stopped caller: what is under test is only whether a sidecar gets started for it.
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      init?.signal?.throwIfAborted()
+      return served(url, init)
+    }) as typeof fetch
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const reason = new DOMException('Stopped by the user', 'AbortError')
+    await expect(embedder.embed(['question'], { signal: AbortSignal.abort(reason) })).rejects.toBe(reason)
+    expect(calls.length).toBe(0)
+    await embedder.stop()
+  })
+
   // Phase 21 fix: lockWorkspace used to call stop(), whose latch is permanent — every
   // post-lock/unlock embed then failed with "Embedder is stopped". The lock path now
   // suspends instead: the sidecar dies (its memory held chunk text) but restarts lazily.
