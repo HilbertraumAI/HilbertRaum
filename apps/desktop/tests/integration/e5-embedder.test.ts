@@ -1,5 +1,8 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
+import { createServer } from 'node:http'
+import type { AddressInfo } from 'node:net'
+import { hangBudgetMs } from '../helpers/hang-budget'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { createSelectedEmbedder } from '../../src/main/services/embeddings/factory'
@@ -820,6 +823,161 @@ describe('E5Embedder', () => {
     await Promise.all([suspendP, stopP])
     expect(stopSettled).toBe(true)
     expect(children[0]!.killed).toBe(true)
+  })
+})
+
+// ---- #607: a response body that stalls after the headers --------------------------------------
+//
+// Each /v1/embeddings attempt runs under combineSignals(caller, 120 s). From the 2026-06-30
+// context-overflow retry until #607 the embedder cleared it as soon as fetch() resolved — at the
+// HEADERS — so the body read after it had no deadline of ours (only undici's 300 s idle limit), and
+// the clear also detached the caller's signal, so a Stop never reached that read either. Real
+// loopback socket, real fetch: whether an abort after the headers ends `res.json()` is undici's
+// behaviour, not a fake's.
+
+const realSetTimeout = globalThis.setTimeout
+const realClearTimeout = globalThis.clearTimeout
+
+/** Await `p` under fake timers with a REAL-time hang detector, so a hang fails by name. */
+function within<T>(p: Promise<T>, what: string): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const t = realSetTimeout(() => reject(new Error(`${what} never happened`)), hangBudgetMs(5_000))
+    p.then(
+      (v) => {
+        realClearTimeout(t)
+        resolve(v)
+      },
+      (e: unknown) => {
+        realClearTimeout(t)
+        reject(e)
+      }
+    )
+  })
+}
+
+/**
+ * A loopback `llama-server --embedding`: /health answers, and /v1/embeddings answers normally until
+ * `stall(status)`. From then on it writes the status line, the headers and the first bytes of the
+ * body, and nothing more — a sidecar that froze mid-response.
+ */
+async function stallingSidecar(): Promise<{
+  port: number
+  stall: (status: number) => void
+  /** The client tore the stalled request's connection down. */
+  closed: Promise<void>
+  close: () => Promise<void>
+}> {
+  let stallStatus: number | null = null
+  let markClosed!: () => void
+  const closed = new Promise<void>((r) => (markClosed = r))
+  const server = createServer((req, res) => {
+    if (req.url === '/health') {
+      res.writeHead(200, { 'content-type': 'application/json', connection: 'close' })
+      res.end('{"status":"ok"}')
+      return
+    }
+    let body = ''
+    req.on('data', (c: Buffer) => (body += c.toString('utf8')))
+    req.on('end', () => {
+      if (stallStatus === null) {
+        const input = (JSON.parse(body) as { input: string[] }).input
+        res.writeHead(200, { 'content-type': 'application/json' })
+        res.end(JSON.stringify({ data: input.map((_t, index) => ({ embedding: [3, 4], index })) }))
+        return
+      }
+      res.on('close', markClosed)
+      res.writeHead(stallStatus, { 'content-type': 'application/json', 'content-length': '4096' })
+      res.write('{"')
+    })
+  })
+  await new Promise<void>((r) => server.listen(0, '127.0.0.1', r))
+  return {
+    port: (server.address() as AddressInfo).port,
+    stall: (status) => {
+      stallStatus = status
+    },
+    closed,
+    close: () => {
+      server.closeAllConnections()
+      return new Promise<void>((r) => server.close(() => r()))
+    }
+  }
+}
+
+describe('E5Embedder — a response body that stalls after the headers (#607)', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** An embedder on the loopback sidecar, already started (one normal embed), plus a promise per
+   *  request that resolves when real `fetch` hands its response — the headers — to the embedder. */
+  async function startedEmbedder(port: number) {
+    const headers: Array<() => void> = []
+    const headersArrived = (): Promise<void> => new Promise<void>((r) => headers.push(r))
+    const embedder = new E5Embedder({
+      id: 'multilingual-e5-small-q8',
+      binPath: '/bin/llama-server',
+      modelPath: '/models/e5.gguf',
+      dimensions: 2,
+      spawn: fakeSpawn().spawn,
+      findPort: async () => port,
+      healthIntervalMs: 1,
+      fetchImpl: (async (url: string | URL, init?: RequestInit) => {
+        const res = await fetch(url, init)
+        if (String(url).endsWith('/v1/embeddings')) headers.shift()?.()
+        return res
+      }) as typeof fetch
+    })
+    const [v] = await embedder.embed(['warm-up'])
+    expect(v[0]).toBeCloseTo(0.6, 6) // the sidecar answers normally before the stall
+    return { embedder, headersArrived }
+  }
+
+  it.each([
+    // The timeout's own TimeoutError — what a stall before the headers has always ended with.
+    { status: 200, check: (e: Error) => expect(e.name).toBe('TimeoutError') },
+    // A stalled error body leaves the status alone (#594's rule for the chat error body).
+    { status: 500, check: (e: Error) => expect(e.message).toBe('Embedding request failed: HTTP 500') }
+  ])('an HTTP $status response whose body stalls ends at exactly the 120 s request timeout and closes the connection', async ({ status, check }) => {
+    const sidecar = await stallingSidecar()
+    const { embedder, headersArrived } = await startedEmbedder(sidecar.port)
+    sidecar.stall(status)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    const arrived = headersArrived()
+    let outcome: unknown = 'pending'
+    const run = embedder.embed(['hello']).then(
+      () => (outcome = 'embedded'),
+      (e: unknown) => (outcome = e)
+    )
+    await within(arrived, 'the response headers arriving')
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(outcome).toBe('pending')
+    await vi.advanceTimersByTimeAsync(1)
+    await within(run, 'the request deadline firing during the body read')
+    check(outcome as Error)
+    await within(sidecar.closed, 'the request connection closing')
+    vi.useRealTimers()
+    await embedder.stop()
+    await sidecar.close()
+  })
+
+  it('a user Stop during a stalled body ends the embed at once, and the connection closes', async () => {
+    const sidecar = await stallingSidecar()
+    const { embedder, headersArrived } = await startedEmbedder(sidecar.port)
+    sidecar.stall(200)
+    const arrived = headersArrived()
+    const stop = new AbortController()
+    const run = embedder.embed(['hello'], { signal: stop.signal }).then(
+      () => null,
+      (e: unknown) => e
+    )
+    await within(arrived, 'the response headers arriving')
+    stop.abort()
+    const err = await within(run, 'the Stop ending the body read')
+    expect((err as Error).name).toBe('AbortError') // the caller's own reason, not the timeout
+    await within(sidecar.closed, 'the request connection closing')
+    await embedder.stop()
+    await sidecar.close()
   })
 })
 

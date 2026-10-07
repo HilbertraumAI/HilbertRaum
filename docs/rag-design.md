@@ -1033,6 +1033,54 @@ reranks, no 500 fall-through), `embeddings.test.ts` (`decodeVector` truncated �
 scan skips the bad row), `doctasks-compare.test.ts` (a truncated stored vector → the compare
 completes, not a thrown task) — all teeth-verified.
 
+**#607 amendment (2026-10-07) — the embed request's deadline covers its body.** Each
+`/v1/embeddings` attempt runs under `combineSignals(caller, 120 s)` (`DEFAULT_REQUEST_TIMEOUT_MS`;
+REL-4 owns the timer so it is cleared once the request settles). The facts:
+- **A regression, not a design gap.** REL-4 (2026-06-29) cleared the timer after `res.json()`. The
+  context-overflow retry of 2026-06-30 (`dbfee90f`) rebuilt the loop per attempt and wrapped only
+  the `fetch` in the `try/finally`, so from then on the timer was cleared when the **headers**
+  arrived. The reranker, vision and translation kept their deadline over the whole request.
+- **What a stalled body did.** `clear()` also detaches the caller's signal, so neither the timeout
+  nor a user Stop reached `res.json()` / `res.text()` (measured: the read was still pending 10 s
+  after the Stop). Only undici's own idle limit ended it: 305.0 s in Electron 43.7.7 (undici
+  7.29.1), as `TypeError: terminated` (cause `UND_ERR_BODY_TIMEOUT`); a sidecar that trickles bytes
+  re-arms that limit. Meanwhile an import, a re-index or an article save held the import queue,
+  the document-work lease (a password change was refused) and `ingestionActive` (the #516 engine
+  update was refused), and a document question ignored Stop. Lock and quit kill the sidecar first,
+  so they always ended it.
+- **Abort after the headers works.** An abort of the request signal once the headers are in
+  rejects the body read with the signal's reason, in Electron's Node and in the test runner's Node
+  alike, and undici closes the connection.
+
+**As built.** The `try/finally` covers the `fetch` and the body read on both branches:
+`res.json()`, and on an error status `res.text()`. A stalled error body leaves only the status
+("Embedding request failed: HTTP 500"), the rule #594 set for the chat error body. A stall now
+ends like a stall before the headers always did, with the timeout's `TimeoutError` ("The
+operation timed out." on the document row, which offers Try again), and Stop ends a document
+question's query embedding at once.
+
+**Real sidecar** (2026-10-07, DesktopDiT, Electron 43.7.7's Node; the actual `E5Embedder` code,
+bundled from master and from the fix; E:'s b9849 `llama-server` with `multilingual-e5-small-q8`;
+a TCP proxy forwarded each stalled response's headers and first 2 body bytes and held the rest):
+- Both builds embedded 40 real texts in two batches (384 dims, norm 1.0000).
+- Master: the unattended embed and the one stopped 2.0 s in both ended only at undici's limit,
+  after 308.4 s, with `TypeError: terminated` (`UND_ERR_BODY_TIMEOUT`).
+- The fix: the unattended embed ended after 120.0 s with `TimeoutError`; the stopped one at the
+  Stop itself (issued 2.0 s in) with `AbortError`. Each closed its connection, and the next embed
+  answered.
+- The app on the fix (dev build over CDP, a scratch root with the same files and the 4B): a 59-chunk
+  import (two requests) indexed in 4.6 s, a document question's query embed found the passage it
+  asked about, a Stop 1.5 s into another question settled at once, and quit left no sidecar.
+
+**Tests.** `e5-embedder.test.ts` "a response body that stalls after the headers (#607)", on a real
+loopback socket with real `fetch`: an HTTP 200 and an HTTP 500 body that stall end at exactly
+120 s and close the connection, and a Stop ends a stalled body read at once. All three fail on the
+pre-fix code; a mutation that re-breaks only the error branch reddens only the HTTP 500 row.
+
+**Not changed.** The dev-only `HR_EMBED_COVERAGE=1` measurement's `/tokenize` reads carry no
+deadline and no signal (developer tooling, never on in a user's app). The document row's
+"The operation timed out." is the raw text of the timeout, unchanged by #607 and not localised.
+
 ## 13. Collection-scoped retrieval & composite scope — design record (document organization, Phases A–F)
 
 _The retrieval/scope half of the document-organization layer. The **data model, IPC, and audit**
