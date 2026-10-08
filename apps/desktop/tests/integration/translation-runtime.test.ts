@@ -1,13 +1,15 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import {
   TranslationRuntime,
+  isRequestTimeoutError,
   isTranslationStartError,
   TRANSLATION_START_FAILED_CODE,
   type TranslateOptions
 } from '../../src/main/services/translation/runtime'
 import { createSelectedTranslator } from '../../src/main/services/translation/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import { isRuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { EngineCannotRunError, engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { testBudgetMs, until, within } from '../helpers/hang-budget'
@@ -44,6 +46,32 @@ function fakeSpawn() {
   const spawn = (_c: string, args: string[]): ChildProcessLike => {
     calls.push({ args })
     const child = new FakeChild()
+    children.push(child)
+    return child
+  }
+  return { spawn, calls, children }
+}
+
+/** A child whose exit the test can hold after a kill (`hold`, then `release()`). */
+class GatedChild extends EventEmitter implements ChildProcessLike {
+  pid = 9
+  killed = false
+  hold = false
+  kill(): boolean {
+    this.killed = true
+    if (!this.hold) queueMicrotask(() => this.emit('exit', 0, null))
+    return true
+  }
+  release(): void {
+    queueMicrotask(() => this.emit('exit', 0, null))
+  }
+}
+function gatedSpawn() {
+  const calls: Array<{ args: string[] }> = []
+  const children: GatedChild[] = []
+  const spawn = (_c: string, args: string[]): ChildProcessLike => {
+    calls.push({ args })
+    const child = new GatedChild()
     children.push(child)
     return child
   }
@@ -116,6 +144,8 @@ describe('TranslationRuntime — launch + translate', () => {
     expect(args).not.toContain('--device')
     expect(args).not.toContain('-ngl') // NEVER pass -ngl (the GPU record's hard rule)
     expect(args).toContain('--chat-template gemma') // avoids the #20305 STARTUP crash (TG-2 smoke finding)
+    // #605: a progress frame per 512 prompt tokens — at the default 2048 a window is one batch, silent until 100 %.
+    expect(args).toContain('--batch-size 512 --ubatch-size 512')
     expect(args).toContain('--host 127.0.0.1') // loopback only
     expect(rt.isStartFailed()).toBe(false) // a healthy instance never reads as latched (BE-7)
     await rt.stop()
@@ -155,6 +185,7 @@ describe('TranslationRuntime — launch + translate', () => {
     expect(String(body.prompt)).toContain('You are a professional German (de) to English (en) translator.')
     expect(String(body.prompt).endsWith('Guten Tag.<end_of_turn>\n<start_of_turn>model\n')).toBe(true)
     expect(body.n_predict).toBeUndefined() // unset unless maxTokens is passed
+    expect(body.return_progress).toBe(true) // #605: the prompt-progress frames the compute clock watches
     expect(timings).toEqual({ predicted_per_second: 9.5, predicted_n: 3 }) // the smoke's tok/s artifact
     await rt.stop()
   })
@@ -303,30 +334,6 @@ describe('TranslationRuntime — launch + translate', () => {
 // The idle-teardown interlock (vision RUNTIME-4 pattern) + the reranker stop()/suspend() split.
 // Injected clock → deterministic (fire teardown on demand), no wall-clock idle sleeps.
 describe('TranslationRuntime — idle teardown + stop/suspend', () => {
-  class GatedChild extends EventEmitter implements ChildProcessLike {
-    pid = 9
-    killed = false
-    hold = false
-    kill(): boolean {
-      this.killed = true
-      if (!this.hold) queueMicrotask(() => this.emit('exit', 0, null))
-      return true
-    }
-    release(): void {
-      queueMicrotask(() => this.emit('exit', 0, null))
-    }
-  }
-  function gatedSpawn() {
-    const calls: Array<{ args: string[] }> = []
-    const children: GatedChild[] = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new GatedChild()
-      children.push(child)
-      return child
-    }
-    return { spawn, calls, children }
-  }
   function fakeClock() {
     const state = { fire: null as (() => void) | null, setCount: 0, clearCount: 0, unrefCount: 0 }
     const clock = {
@@ -1262,6 +1269,165 @@ describe('#163 (T-3) — per-request timeout wiring', () => {
     await expect(rt.translate({ ...translateOpts, signal: caller.signal })).resolves.toBe(
       COMPLETION_TEXT
     )
+    await rt.stop()
+  })
+})
+
+// #605: a hung sidecar used to hold its window until the 45-min request cap (or Electron's own 300 s fetch limit), and
+// the retry then queued behind the stuck slot, as every later window of a document did. Now the reader's clocks or the
+// header wait end it, and the runtime stops the hung child so the retry starts a fresh one. Production budgets under
+// fake timers, as the chat header-wait suite does; the sidecar starts on real timers first.
+describe('#605 — a hung translation sidecar', () => {
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  /** /health ok; the `hangAt`-th /completion hangs — before its headers, or after two tokens — and ends only when the
+   *  request is aborted, as a real fetch does. Every other request answers. */
+  function hangingFetch(hangAt: number, shape: 'headers' | 'mid-stream') {
+    let completions = 0
+    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
+      const u = String(url)
+      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
+      if (!u.endsWith('/completion')) throw new Error(`unexpected url ${u}`)
+      completions += 1
+      if (completions !== hangAt) return { ok: true, status: 200, body: sseBody(COMPLETION_SSE) } as unknown as Response
+      const signal = init!.signal!
+      if (shape === 'headers') {
+        return await new Promise<Response>((_res, rej) =>
+          signal.addEventListener('abort', () => rej(signal.reason), { once: true })
+        )
+      }
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          c.enqueue(new TextEncoder().encode('data: {"content":"Good ","stop":false}\n\ndata: {"content":"da","stop":false}\n\n'))
+          signal.addEventListener('abort', () => c.error(signal.reason), { once: true })
+        }
+      })
+      return { ok: true, status: 200, body } as unknown as Response
+    }) as typeof fetch
+    return { fetchImpl, completions: () => completions }
+  }
+
+  it('a decode that stops is ended at 120 s and its sidecar stopped; the retry waits for the exit, then starts a fresh one in the same posture', async () => {
+    const { spawn, calls, children } = gatedSpawn()
+    const { fetchImpl } = hangingFetch(2, 'mid-stream')
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    await rt.translate(translateOpts)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const tokens: string[] = []
+    let outcome: unknown = 'pending'
+    const hung = rt.translate({ ...translateOpts, onToken: (d) => tokens.push(d) }).then(
+      (v) => (outcome = v),
+      (e: unknown) => (outcome = e)
+    )
+    await until(() => tokens.length === 2, 'the two tokens before the hang')
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(outcome).toBe('pending')
+    children[0].hold = true // the hung child outlives its kill for a while
+    await vi.advanceTimersByTimeAsync(1)
+    await within(hung, 'the decode clock ending the window')
+    expect(isRuntimeUnresponsiveError(outcome)).toBe(true)
+    expect((outcome as Error).message).toContain('no output for 120000ms')
+    expect(isRequestTimeoutError(outcome)).toBe(false) // so both consumers retry it, tokens or not
+    expect(children[0].killed).toBe(true)
+    vi.useRealTimers()
+
+    let retried = false
+    const retry = rt.translate(translateOpts).then((out) => {
+      retried = true
+      return out
+    })
+    await tick()
+    await tick()
+    expect(retried).toBe(false) // never two ~10 GB children at once
+    expect(calls.length).toBe(1)
+    children[0].release()
+    expect(await retry).toBe(COMPLETION_TEXT)
+    expect(calls.length).toBe(2)
+    expect(calls[1].args).toEqual(calls[0].args) // a hang keeps the posture: no switch to the CPU (owner call)
+    await rt.stop()
+  })
+
+  /** /completion answers the canned stream; the first request's body is held until `releaseFirst()`. Counts requests and
+   *  how many are open at the server at once. */
+  function slotFetch() {
+    const state = { completions: 0, open: 0, maxOpen: 0, releaseFirst: () => {} }
+    const fetchImpl = (async (url: string | URL) => {
+      if (String(url).endsWith('/health')) return { ok: true, status: 200 } as Response
+      state.completions += 1
+      state.open += 1
+      state.maxOpen = Math.max(state.maxOpen, state.open)
+      const held = state.completions === 1
+      const body = new ReadableStream<Uint8Array>({
+        async start(c) {
+          if (held) await new Promise<void>((r) => (state.releaseFirst = r))
+          c.enqueue(new TextEncoder().encode(COMPLETION_SSE))
+          state.open -= 1
+          c.close()
+        }
+      })
+      return { ok: true, status: 200, body } as unknown as Response
+    }) as typeof fetch
+    return { fetchImpl, state }
+  }
+
+  // jobs.ts D9: a document translation can start while a Translate job runs. At the one-slot server the second request
+  // waited for its headers behind the first window's whole decode — minutes on a CPU, which the 180 s header wait cannot
+  // tell from a hang: it would stop a healthy sidecar under both.
+  it('overlapping translates queue in the app, never at the one-slot server', async () => {
+    const { spawn, calls } = gatedSpawn()
+    const { fetchImpl, state } = slotFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const first = rt.translate(translateOpts)
+    await until(() => state.completions === 1, 'the first request reaching the sidecar')
+    const second = rt.translate(translateOpts)
+    await tick()
+    await tick()
+    expect(state.completions).toBe(1) // the second waits for the slot
+    state.releaseFirst()
+    expect(await first).toBe(COMPLETION_TEXT)
+    expect(await second).toBe(COMPLETION_TEXT)
+    expect(state.completions).toBe(2)
+    expect(state.maxOpen).toBe(1)
+    expect(calls.length).toBe(1) // one sidecar served both
+    await rt.stop()
+  })
+
+  it('a cancel ends a translate\'s wait for the slot at once, and sends nothing', async () => {
+    const { spawn } = gatedSpawn()
+    const { fetchImpl, state } = slotFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const first = rt.translate(translateOpts)
+    await until(() => state.completions === 1, 'the first request reaching the sidecar')
+    const cancel = new AbortController()
+    const queued = rt.translate({ ...translateOpts, signal: cancel.signal }).catch((e: unknown) => e)
+    const reason = new DOMException('Cancelled by the user', 'AbortError')
+    cancel.abort(reason)
+    expect(await within(queued, 'the cancel ending the wait for the slot')).toBe(reason)
+    state.releaseFirst()
+    expect(await first).toBe(COMPLETION_TEXT)
+    expect(state.completions).toBe(1) // the cancelled window never reached the sidecar
+    await rt.stop()
+  })
+
+  it('no response headers within 180 s ends the window as hung and stops the sidecar', async () => {
+    const { spawn, children } = gatedSpawn()
+    const { fetchImpl, completions } = hangingFetch(2, 'headers')
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    await rt.translate(translateOpts)
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    let outcome: unknown = 'pending'
+    const hung = rt.translate(translateOpts).catch((e: unknown) => (outcome = e))
+    await until(() => completions() === 2, 'the request reaching the sidecar')
+    await vi.advanceTimersByTimeAsync(179_999)
+    expect(outcome).toBe('pending')
+    await vi.advanceTimersByTimeAsync(1)
+    await within(hung, 'the header deadline ending the window')
+    expect(isRuntimeUnresponsiveError(outcome)).toBe(true)
+    expect((outcome as Error).message).toContain('no response headers for 180000ms')
+    expect(children[0].killed).toBe(true)
+    vi.useRealTimers()
     await rt.stop()
   })
 })

@@ -28,6 +28,11 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-08 — **#605 — a hung translation sidecar ends within minutes and is restarted (`fix/605-translation-liveness`).** The `/completion` reader had no
+watchdog: a hang held its window to the 45-min cap (≈ 50 / 45 / 10 min per window with Electron's own 300 s limit, not the issue's 90), and every later window of a document
+hit the same stuck process. Now `return_progress` + 512-token prefill batches give `readCompletionSSE` the chat reader's clocks (120 s silence, 10 min per batch, 120 s between
+tokens; headers 180 s), a hang stops the child so the one retry runs fresh in the same posture (owner calls), and overlapping requests queue in the app. Real app (9B stand-in):
+master failed a frozen job after 609 s; the fix restarted at 120 s and finished. Record: `architecture.md` translation record "#605 amendment". Open: no TranslateGemma prefill measured on the slowest laptop._
 _2026-10-07 — **#637 — a cancel ends a vision or translation job's wait for a cold start, not the start (`fix/637-vision-translation-start-stop`).** A
 cancel during a hung start waited up to the 180 s health budget: a new image analysis read "busy", a cancelled document translation kept chat refused.
 Both `ensureStarted`s now race the shared start (#635's `waitUnlessAborted`; translation's idle-teardown wait too); the start's own settle arms the idle clock, so
@@ -86,7 +91,7 @@ A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner c
 _2026-10-06 — **#598 — a prefill wedged behind pings ends; the header wait is 180 s (`fix/598-prefill-liveness`).** Both pins ping every ~30 s (b9849 too — #594's
 record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `return_progress` on every chat request and two prefill clocks: any byte (120 s) and a
 `prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
-CB-5 "#598 amendment". Open: a 27B/31B on CPU can exceed 10 min per batch; translation has no watchdog (#605)._
+CB-5 "#598 amendment". Open: a 27B/31B on CPU can exceed 10 min per batch; translation has no watchdog (#605: fixed, above)._
 _2026-10-05 — **#516 — the app reports engines older than its pin and updates them (`feat/516-engine-update`).** `EngineStatus.engineVersions` (numeric tag order;
 `older`/`current`/`newer`/`unknown`, `cpu/` net included); `update: true` replaces only `older` installs + an older `cpu/` net; every engine job now downloads + verifies all
 archives first, then (updates) pauses the model + llama helpers for the swap and restarts the model; a spawn gate holds the family's starts through every swap (closes the
@@ -138,10 +143,6 @@ _2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pd
 `file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
 has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
 pages + prod header. Measured packaged: 18/18 smoke, 0 worker targets, 0 loopback. Record: `architecture.md` DEP-6 §11. Suite 7,920→7,923._
-_2026-10-02 — **#550 follow-up — streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on the #548–#551 PR).** The mermaid chain (110 lockfile entries)
-leaves the tree, and with it DEP-3's ~40 `files:` negations; a guard keeps mermaid out of the production graph. 2.6's new 400/300 px caps on code blocks and
-tables need Tailwind (not loaded): a tall table drew 1,128 px over what followed, so both are off. Also fixed: since 2026-06-30 every multi-line code block
-ran its lines together (Tailwind `block` again); a `styles.css` rule restores them. Real-app measured. Record: `architecture.md` DEP-6 §9._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -192,7 +193,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry), and the closed 2026-10-01 #527 entry on 2026-10-07 (preamble budget, making room for the #634 entry), and the closed 2026-10-01 #530 entry on 2026-10-07 (preamble budget, making room for the #635 entry), and the closed 2026-10-02 #548–#551 entry on 2026-10-07 (preamble budget, making room for the #637 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry), and the closed 2026-10-01 #527 entry on 2026-10-07 (preamble budget, making room for the #634 entry), and the closed 2026-10-01 #530 entry on 2026-10-07 (preamble budget, making room for the #635 entry), and the closed 2026-10-02 #548–#551 entry on 2026-10-07 (preamble budget, making room for the #637 entry), and the closed 2026-10-02 streamdown 2.6 entry on 2026-10-08 (preamble budget, making room for the #605 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

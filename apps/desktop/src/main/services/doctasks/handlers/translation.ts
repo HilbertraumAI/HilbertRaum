@@ -117,6 +117,8 @@ async function translateWithRetry(
         log.warn('Translation window timed out mid-decode — not retried', { attempt })
         return null
       }
+      // #605: a hung sidecar (`RuntimeUnresponsiveError`) is retried, tokens or not: the runtime
+      // stopped it, so the retry runs on a fresh one.
       log.warn('Translation window failed', {
         attempt,
         error: err instanceof Error ? err.message : String(err)

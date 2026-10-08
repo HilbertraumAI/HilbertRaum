@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-08 — the closed 2026-10-02 streamdown 2.6 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-08 (preamble budget, making room for the #605 entry). Its record is unchanged:
+`architecture.md` DEP-6 §9; the #548–#551 entry it was stacked on was retired on 2026-10-07 (below). Citations of the form
+"BUILD_STATE 2026-10-02 streamdown 2.6 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-02 — **#550 follow-up — streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on the #548–#551 PR).** The mermaid chain (110 lockfile entries)
+leaves the tree, and with it DEP-3's ~40 `files:` negations; a guard keeps mermaid out of the production graph. 2.6's new 400/300 px caps on code blocks and
+tables need Tailwind (not loaded): a tall table drew 1,128 px over what followed, so both are off. Also fixed: since 2026-06-30 every multi-line code block
+ran its lines together (Tailwind `block` again); a `styles.css` rule restores them. Real-app measured. Record: `architecture.md` DEP-6 §9._
+
 ## 2026-10-07 — the closed 2026-10-02 #548–#551 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #637 entry). Its record is unchanged:

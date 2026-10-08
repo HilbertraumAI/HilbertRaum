@@ -1,0 +1,76 @@
+: Captured llama-server SSE body — a WEDGED decode on the pinned b11146 (the official Windows Vulkan release, forced to CPU
+: with --device none), the same request body and argv as translation-sse-progress-b11146.txt except --threads 6 and a
+: 120-word German window (274 prompt tokens). Model: the same STAND-IN (qwen3.5-9b-ud-q4kxl in the translation slot).
+: i7-8700 (DesktopDiT), 2026-10-08. After the 8th token's frame (+16.2 s) the busiest llama-server thread was suspended
+: (SuspendThread on one compute thread, never the process); the frames already under way still arrived at +18.5 s, then
+: the compute loop stopped while the HTTP thread kept writing a `:` ping every ~30 s. The capture ends at +240 s with the
+: server still wedged; it was then resumed and killed. Each `: +<ms> ms` line is the arrival time of the socket read
+: below it (ms after the request was sent; de-chunked, otherwise verbatim). These colon lines are SSE comments (the
+: reader ignores them), like the server's own `:` pings.
+: +7 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":274,"prompt_progress":{"total":274,"cache":0,"processed":0,"time_ms":0}}
+
+: +13621 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":274,"prompt_progress":{"total":274,"cache":0,"processed":270,"time_ms":13615}}
+
+: +13984 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":274,"prompt_progress":{"total":274,"cache":0,"processed":274,"time_ms":13977}}
+
+: +13984 ms
+data: {"index":0,"content":"The","tokens":[760],"stop":false,"id_slot":-1,"tokens_predicted":1,"tokens_evaluated":274}
+
+: +14271 ms
+data: {"index":0,"content":" invoice","tokens":[23839],"stop":false,"id_slot":-1,"tokens_predicted":2,"tokens_evaluated":274}
+
+: +14572 ms
+data: {"index":0,"content":" numbered","tokens":[47193],"stop":false,"id_slot":-1,"tokens_predicted":3,"tokens_evaluated":274}
+
+: +14887 ms
+data: {"index":0,"content":" ","tokens":[220],"stop":false,"id_slot":-1,"tokens_predicted":4,"tokens_evaluated":274}
+
+: +15185 ms
+data: {"index":0,"content":"1","tokens":[16],"stop":false,"id_slot":-1,"tokens_predicted":5,"tokens_evaluated":274}
+
+: +15553 ms
+data: {"index":0,"content":"0","tokens":[15],"stop":false,"id_slot":-1,"tokens_predicted":6,"tokens_evaluated":274}
+
+: +15917 ms
+data: {"index":0,"content":"0","tokens":[15],"stop":false,"id_slot":-1,"tokens_predicted":7,"tokens_evaluated":274}
+
+: +16244 ms
+data: {"index":0,"content":"0","tokens":[15],"stop":false,"id_slot":-1,"tokens_predicted":8,"tokens_evaluated":274}
+
+: +18452 ms
+data: {"index":0,"content":" was","tokens":[557],"stop":false,"id_slot":-1,"tokens_predicted":9,"tokens_evaluated":274}
+
+data: {"index":0,"content":" forwarded","tokens":[50492],"stop":false,"id_slot":-1,"tokens_predicted":10,"tokens_evaluated":274}
+
+data: {"index":0,"content":" to","tokens":[310],"stop":false,"id_slot":-1,"tokens_predicted":11,"tokens_evaluated":274}
+
+data: {"index":0,"content":" the","tokens":[279],"stop":false,"id_slot":-1,"tokens_predicted":12,"tokens_evaluated":274}
+
+data: {"index":0,"content":" accounting","tokens":[22445],"stop":false,"id_slot":-1,"tokens_predicted":13,"tokens_evaluated":274}
+
+data: {"index":0,"content":" department","tokens":[9016],"stop":false,"id_slot":-1,"tokens_predicted":14,"tokens_evaluated":274}
+
+: +48470 ms
+:
+
+: +78721 ms
+:
+
+: +109111 ms
+:
+
+: +139526 ms
+:
+
+: +169846 ms
+:
+
+: +200143 ms
+:
+
+: +230425 ms
+:
+
