@@ -211,6 +211,14 @@ from its first public `1.0.0` release onward.
   translation the chat stayed blocked. Stop and Cancel now take effect at once. The model goes on
   loading so that your next question or job can use it; the image and translation models are
   unloaded again after two minutes if nothing uses them (#635, #637).
+- **A translation whose model gets stuck now ends within minutes, and the next try starts on a fresh
+  model.** When the translation model stopped working partway through a text, the app waited 45
+  minutes or longer before giving up on that part. In a document translation every later part then
+  waited the same way, so the job could hold up chat and other document tasks for hours. The app now
+  watches the model's progress. It gives up on a part after two minutes without a new word, after
+  ten minutes without progress while the model reads the part, or after two to three minutes of
+  complete silence. It then restarts the translation model and tries that part once more. A slow
+  computer still gets the time it needs as long as the model keeps working (#605).
 - **"Install voice engine" installs only the voice engine.** On a drive with an older AI engine, the
   button also tried to download the AI engine again, and while a model was running it then refused
   with "The AI engine can't be replaced while a model is running". It now installs only what is

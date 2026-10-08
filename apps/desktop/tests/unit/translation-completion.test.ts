@@ -7,6 +7,8 @@ import {
   type CompletionFinal
 } from '../../src/main/services/translation/completion'
 import { log } from '../../src/main/services/logging'
+import { isRuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
+import { until, within } from '../helpers/hang-budget'
 
 // TA-4: unit tests for the raw `/completion` SSE reader, driven DIRECTLY with scripted
 // `ReadableStream`s (no fake server) so the frame-boundary + terminal-frame + abort discipline is
@@ -253,5 +255,79 @@ describe('readCompletionSSE — L4 garbled-frame counting', () => {
     await collect(readCompletionSSE(stream))
     expect(warn).toHaveBeenCalledTimes(1)
     expect(warn).toHaveBeenCalledWith('translation SSE: dropped unparseable frame', { count: 2 })
+  })
+})
+
+// #605 — the reader's liveness clocks, on a hand-fed stream under fake timers at the production budgets. The captured
+// transcripts (`translation-sse-progress-fixture.test.ts`) own the prefill and decode wedges with pings; these cover what
+// no capture shows: a process that sends nothing at all, a token whose text the server holds back, and a Stop mid-read.
+describe('readCompletionSSE — liveness clocks (#605)', () => {
+  const enc = new TextEncoder()
+  /** A stream the test writes to, and the reader's outcome. */
+  function feed(signal?: AbortSignal) {
+    let controller!: ReadableStreamDefaultController<Uint8Array>
+    const body = new ReadableStream<Uint8Array>({
+      start(c) {
+        controller = c
+      }
+    })
+    const out: string[] = []
+    let outcome: unknown = 'pending'
+    const done = (async () => {
+      for await (const d of readCompletionSSE(body, signal)) out.push(d)
+    })().then(
+      () => (outcome = 'ended'),
+      (e: unknown) => (outcome = e)
+    )
+    return { send: (s: string) => controller.enqueue(enc.encode(s)), out, outcome: () => outcome, done }
+  }
+  const progress = (processed: number) =>
+    `data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1263,"prompt_progress":{"total":1263,"cache":0,"processed":${processed},"time_ms":0}}\n\n`
+
+  afterEach(() => {
+    vi.useRealTimers()
+  })
+
+  it('a process that sends nothing after the headers ends after 120 s — the process clock', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const r = feed()
+    r.send(progress(0)) // the 0 % frame rides with the headers
+    await vi.advanceTimersByTimeAsync(119_999)
+    expect(r.outcome()).toBe('pending')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(isRuntimeUnresponsiveError(r.outcome())).toBe(true)
+    expect((r.outcome() as Error).message).toContain('no data at all (pings included) for 120000ms')
+  })
+
+  it('a token whose text the server holds back starts the decode clock: pings after it end at 120 s, not at 10 min', async () => {
+    // The frames b11146 sent while `<end_of_turn>` could still be a stop string (captured 2026-10-08, the 4B): one per
+    // token, no text. Counted by their text, the reader would still be in prefill, where pings re-arm the process clock
+    // and only the compute clock (10 min after the 100 % frame) could end it.
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const r = feed()
+    r.send(progress(0))
+    r.send(progress(1263))
+    r.send('data: {"index":0,"content":"","tokens":[27],"stop":false,"id_slot":-1,"tokens_predicted":1,"tokens_evaluated":1263}\n\n')
+    r.send('data: {"index":0,"content":"","tokens":[408],"stop":false,"id_slot":-1,"tokens_predicted":2,"tokens_evaluated":1263}\n\n')
+    for (let t = 0; t < 3; t++) {
+      await vi.advanceTimersByTimeAsync(30_000)
+      r.send(':\n\n')
+    }
+    await vi.advanceTimersByTimeAsync(29_999)
+    expect(r.outcome()).toBe('pending')
+    await vi.advanceTimersByTimeAsync(1)
+    expect(isRuntimeUnresponsiveError(r.outcome())).toBe(true)
+    expect((r.outcome() as Error).message).toContain('no output for 120000ms')
+    expect(r.out).toEqual([])
+  })
+
+  it("L1: a Stop while a read waits throws the caller's own reason", async () => {
+    const stop = new AbortController()
+    const r = feed(stop.signal)
+    r.send('data: {"index":0,"content":"Good","tokens":[9],"stop":false}\n\n')
+    await until(() => r.out.length === 1, 'the token being read') // the reader now waits on the next read
+    stop.abort(new DOMException('user stop', 'AbortError'))
+    await within(r.done, 'the Stop ending the read')
+    expect(r.outcome()).toBe(stop.signal.reason)
   })
 })

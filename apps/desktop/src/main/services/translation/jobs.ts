@@ -32,7 +32,8 @@ import type { Translator } from './index'
 // a translation (same sidecar) or a summary/compare (chat model). A second view translate while
 // one runs is `busy`. The doc-task manager is left unchanged (plan D9 "all other kinds
 // unchanged"); the shared sidecar is `--parallel 1`, so the rare reverse race (a doc task started
-// while a view translate runs) serializes safely at the server rather than crashing.
+// while a view translate runs) serializes safely rather than crashing — since #605 in the runtime's
+// one-slot queue (`TranslationRuntime.takeSlot`), no longer at the server.
 
 /** A per-job streaming sink, keyed by jobId (the IPC layer binds it to one renderer's sender). */
 export interface TranslateStreamEmitter {
@@ -282,7 +283,8 @@ export class TranslateJobService {
             }
             // A runtime error / no-tokens timeout — never a user cancel (that aborts `signal`).
             // A throw is TRANSIENT (F-2): log content-free and let the retry run; a second failure
-            // fails the job below.
+            // fails the job below. #605: a hung sidecar (`RuntimeUnresponsiveError`) lands here
+            // too, tokens or not: the runtime stopped it, so the retry runs on a fresh one.
             log.warn('Translate view window failed', { jobId, window: i + 1, attempt, error: String(err) })
           }
         }

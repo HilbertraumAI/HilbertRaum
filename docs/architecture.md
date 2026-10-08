@@ -1490,8 +1490,10 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
       - A re-ask right after a Stop still waits for the cancelled request's batch, now for up to
         180 s.
 
-      **Out of scope.** The translation sidecar's reader has no watchdog at all; its 45-minute request
-      cap and one retry bound it at about 90 min. That is #605.
+      **Out of scope.** The translation sidecar's reader had no watchdog at all. #605 gave it these
+      clocks with its own budgets and restarts a hung sidecar: see the translation sidecar record's
+      "#605 amendment". The "about 90 min" first written here was wrong, because Electron's fetch ends
+      300 s of silence by itself; it was ≈ 50 / 45 / 10 min per window.
 
       **Real app** (2026-10-06, DesktopDiT, dev build over CDP, b11146 CPU rung, the 4B at ctx 4096).
       - A 3.4K-token question answered after 214.7 s, past the old 120 s.
@@ -3211,12 +3213,15 @@ Per-finding disposition (F-1…F-8):
   `--chat-template gemma` (`TRANSLATION_TEMPLATE_ARGS` — **REQUIRED**, TG-2 smoke finding: b9849
   crashes at STARTUP validating TranslateGemma's embedded template — the #20305 minja crash at init,
   even without `--jinja` — so we override it with the built-in legacy gemma template; safe because
-  `/completion` never applies the chat template). NO `--jinja`, NOT `CHAT_SERVER_ARGS`.
+  `/completion` never applies the chat template). NO `--jinja`, NOT `CHAT_SERVER_ARGS`. Since #605
+  also `--batch-size 512 --ubatch-size 512` (`TRANSLATION_BATCH_ARGS`: a progress frame per batch;
+  see the "#605 amendment" at the end of this record).
 - **Prompt in app code (`prompt.ts`), raw `/completion` (`completion.ts`).** The trained
   single-user-turn prompt is formatted in `buildTranslationPrompt` (our own `code → English name`
   map — the template's dictionary is unusable without jinja) and POSTed to the native `/completion`
   endpoint with `temperature 0` (greedy MT) + `stop: ["<end_of_turn>"]`; `readCompletionSSE` parses
-  the bare-object stream (NOT `readChatSSE`'s `choices[].delta` shape). Source text inside `{TEXT}`
+  the bare-object stream (NOT `readChatSSE`'s `choices[].delta` shape; since #605 with that reader's
+  liveness clocks and `return_progress`). Source text inside `{TEXT}`
   is translated, never obeyed (no "part n of m" scaffolding, D2). VERBATIM template reconciliation
   (plan §7 V1) is done by the `translategemma-smoke` harness against the server's `/props`.
 - **Lifecycle — a hybrid.** The vision RUNTIME-4 SOFT idle-teardown interlock (120 s default,
@@ -3253,7 +3258,8 @@ Per-finding disposition (F-1…F-8):
   (~3–4 tok/s tolerable for a background doc-task; GPU deferred, not rejected) — **superseded by
   issue #42 (2026-07-09)**, which pulled GPU forward: see the issue-#40/#42 bullet below. The
   per-window timeout was recalibrated to 45 min (a ~2,070-token full window at the observed-worst
-  ~1.1 tok/s is ~30 min; it stays — an upper bound is harmless on a fast GPU decode). **D9 (chat-during-translation relaxation):** KEEP serialization —
+  ~1.1 tok/s is ~30 min; it stays — an upper bound is harmless on a fast GPU decode; since #605 a
+  hung sidecar ends much sooner, see the "#605 amendment"). **D9 (chat-during-translation relaxation):** KEEP serialization —
   co-residency measured ≈13.2 GiB (translation ≈9.2 + a 4B chat + embedder); a 12B chat pushes the
   pair past a 16 GB machine, so two large models decoding at once is infeasible. **min-RAM (D10):**
   `recommended_min_ram_gb` reset to 17 (the §4 peak+3-headroom rule applied to the measured 13.24 GiB
@@ -3410,6 +3416,105 @@ Per-finding disposition (F-1…F-8):
   text is ≈ 1,798 input tokens plus the scaffold, **under** TranslateGemma's trained 2K input;
   at 690 words it was ≈ 2,080, just over. The cost is about 7 % more windows per document. The
   45-min per-window timeout is unchanged (a ~2,000-token window at ~1.1 tok/s is still ~30 min).
+- **#605 amendment (2026-10-08) — liveness clocks for the translation stream; a hung sidecar is
+  restarted.** Before, `readCompletionSSE` had no idle watchdog: only the 45-min request cap and
+  one retry bounded a window. The issue's "about 90 min" was wrong, because Electron's fetch
+  (undici 7.29.1) ends 300 s of byte silence or header wait by itself (measured under #594 and
+  #607). The real cost per window:
+  - a prefill wedge with pings ≈ 50 min: the cap, then the retry queued behind the stuck slot until
+    undici's header limit;
+  - a decode wedge 45 min: timed out mid-decode, so not retried (#160);
+  - a frozen process ≈ 10 min.
+
+  Nothing restarted the sidecar, so every later window of a document waited ≈ 10 min more. All that
+  time the doc-task lane refused chat, other document tasks, the local API, benchmark and skill runs
+  and the engine update. The 12B also stayed resident, since the idle teardown cannot fire mid-job,
+  and a GPU-posture sidecar kept the card from the reranker (`gpuOccupied`).
+
+  **Facts**, verified at both pins (upstream source at `7fe450e1` / `799fcc04`, and captures on
+  DesktopDiT):
+  - The native `/completion` stream carries `prompt_progress` when the request sets `return_progress`
+    (`server_task_result_cmpl_partial::to_json_non_oaicompat`). The frame carries no text (`content ""`,
+    `tokens [0]`). One comes with the headers, then one after every `n_batch` decode (`post_decode`).
+  - The default `n_batch` is **2048** (`common.h`; the physical `n_ubatch` is 512). So a window of up
+    to ~1,950 prompt tokens prefilled as ONE batch, with nothing between 0 % and 100 % (captured:
+    1,263 tokens, the 100 % frame at 29.9 s).
+  - `--batch-size 512` keeps the compute, because the physical batch is 512 either way. Prefill:
+    29.9 / 28.6 s at the default, 30.8 / 26.3 s at 512 (the 4B, 1,263 tokens, the CPU posture). A 14B
+    took 33.6 / 36.1 s per 512-token batch on the i7-8700's CPU.
+  - Every decoded token sends a frame, but its `content` can be **empty**: the server holds text back
+    while it may be the start of the stop string (captured: `<end_of_turn>` as five text-less frames).
+    Hybrid / SWA models take the last few prompt tokens apart for a context checkpoint (1018 → 1022).
+  - Pings start only after the headers (`set_next`). Before them, the handler waits for the first
+    result.
+
+  **As built** (owner calls 2026-10-08; the first wording of the budget questions was unclear to the
+  owner and was re-asked in plain words):
+  - `TRANSLATION_BATCH_ARGS` (`--batch-size 512 --ubatch-size 512`) goes into `translationServerArgs`,
+    so the manual smoke follows. Every window sends `return_progress: true`.
+  - `readCompletionSSE` races each read with the chat reader's `readWithIdleTimeout`, on its own
+    budgets (`TRANSLATION_IDLE`):
+    - the **process clock**, 120 s: any byte re-arms it, pings included;
+    - the **compute clock**, **10 min** per progress frame (owner). The slowest per-batch estimate is
+      ~2.4 min on the slowest laptop measured, ~8 min under memory pressure;
+    - the **decode clock**, **120 s** (owner): it starts at the first token FRAME (text or not), and
+      only model output re-arms it — any data, the #594 rule — never pings.
+  - The `/completion` headers wait `HEADER_WAIT_MS`, 180 s (chat's value). The 45-min cap stays as
+    the outer bound for a decode that is alive but too slow (#160, not retried).
+  - Either error is chat's `RuntimeUnresponsiveError`. `TranslationRuntime.restartHung` then stops
+    the hung child as a soft teardown (`idleTeardownPromise`): a racing translate waits for the kill,
+    and a lock or quit awaits it. The posture is kept (owner): a hang does not latch the session to
+    the CPU, unlike a GPU-posture crash.
+  - Both consumers retry the window once, tokens or not. The error is not a `TimeoutError`, so the
+    #160 rule does not apply. The existing `runtimeFailed` copy and the failed-window notice fit
+    unchanged.
+  - **Requests take the one slot in turn** (`takeSlot`, from the code review). A document
+    translation can start while a Translate job runs (`jobs.ts` D9), and the two used to queue at
+    the `--parallel 1` server. There the second request's wait for its headers covered the first
+    one's whole window, which the header wait would read as a hang and so stop a healthy sidecar
+    under both. Now they queue in the app, and a cancel ends a queued window's wait at once.
+
+  **Tests:**
+  - `translation-sse-progress-fixture.test.ts` replays four real captures (b11146 legitimate
+    prefill, prefill wedge, decode wedge; b9849 legitimate) at the production budgets.
+  - `translation-completion.test.ts` "liveness clocks" covers a silent process, held-back tokens and a
+    Stop mid-read.
+  - `translation-runtime.test.ts` "#605" covers the restart, the header wait, the one-slot queue,
+    and the argv and body.
+  - The #160 neighbours in `translate-ipc` and `doctasks-translation` pin the retry.
+
+  **Real app** (2026-10-08, DesktopDiT): the dev build over CDP, b11146 in the CPU posture, and the
+  qwen3.5-9b as a stand-in in the translation slot (there are no TranslateGemma weights on that
+  machine). "Before" is master's reader and runtime swapped in.
+  - **Whole process frozen** 3 s into a 400-word Translate job.
+    - Master failed the job 609 s after the freeze: `terminated` at 301 s, then the retry's `fetch
+      failed` at +306 s. The frozen process stayed the sidecar.
+    - The fix ended the attempt 120.0 s after the last byte and had a fresh sidecar up 6.3 s later.
+      The retry finished the translation.
+  - **One compute thread suspended mid-decode**, pings still flowing.
+    - Master was still waiting 321 s later.
+    - The fix ended the attempt 120.0 s after the last token, and the retry finished.
+  - **One compute thread suspended mid-prefill**: the fix ended the attempt 600.0 s after the 0 %
+    frame, although the pings kept coming. The retry finished.
+  - **A three-window document translation**, the sidecar frozen 8 s in: window 1 ended at 120 s.
+    Its retry and windows 2–3 ran on the fresh sidecar, and the task finished with no failed
+    window.
+  - **A Translate job and a document translation started together** (after the code review): the
+    document's first window waited in the app for 919 s behind a 640-word Translate window, slowed
+    by a test run beside it. No hang was declared and no sidecar restarted; both finished on one
+    sidecar, the document with no failed window. Without the queue it would have been declared
+    hung at 180 s.
+
+  **Accepted:**
+  - A hang that recurs on a fresh sidecar for the same window fails that window twice, at
+    ≈ budget + cold start each. A document marks it and moves on.
+  - A window sent right after a cancel waits for the cancelled request's current 512-token batch.
+    When that batch takes longer than 180 s (a slow laptop under memory pressure), a healthy
+    sidecar is restarted: one cold load, then the retry. The header wait must stay under
+    Electron's own 300 s limit, or a pre-header hang would end as a plain "fetch failed" and
+    restart nothing.
+  - The compute budget rests on a 14B proxy and scaling: no TranslateGemma prefill has been measured
+    on the slowest laptop.
 
 ### §-anchor legend (historical plan citations)
 

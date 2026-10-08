@@ -2094,7 +2094,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   so it is marked/failed on the FIRST attempt rather than burning a second full decode (up to ~30 min
   per window) for the same outcome — and since #160 a per-request TIMEOUT during a LIVE decode
   (tokens flowed until the bound) is classified the same deterministic way: marked immediately,
-  never retried into a second ~45-min timeout on the one-at-a-time lane. In the **document task**, a failed window's output carries a
+  never retried into a second ~45-min timeout on the one-at-a-time lane. **Since #605 a HUNG
+  sidecar is caught within minutes:** 2 min without a token, 10 min without progress while reading
+  a window, 2 min of total silence, or 3 min without response headers. The runtime then restarts
+  the sidecar, and the window's one retry runs on the fresh one, tokens or not. A hang that recurs
+  on the fresh sidecar fails that window. A window sent right after a cancel waits for the
+  cancelled request's current 512-token batch. If that batch takes longer than 3 min (a slow
+  laptop under memory pressure), a healthy sidecar is restarted: one extra cold load. In the
+  **document task**, a failed window's output carries a
   visible "could not be translated" notice with the ORIGINAL text kept below it; only an all-windows
   failure fails the whole task. In the **Translate view** (interactive), a failed window fails the
   whole job VISIBLY rather than completing with a mid-sentence-truncated or missing paragraph — a

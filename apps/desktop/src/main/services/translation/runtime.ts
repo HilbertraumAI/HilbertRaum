@@ -7,6 +7,8 @@ import {
   type LlamaServerOptions
 } from '../runtime/sidecar'
 import { isEngineCannotRunError } from '../runtime/engine-load'
+import { RuntimeUnresponsiveError, isRuntimeUnresponsiveError } from '../runtime/llama'
+import { log } from '../logging'
 import { readCompletionSSE, type CompletionFinal } from './completion'
 import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCode } from './prompt'
 import type { TranslationDeviceStatus } from '../../../shared/types'
@@ -39,6 +41,17 @@ import type { TranslationDeviceStatus } from '../../../shared/types'
  * context split that starved the vision sidecar (RUNTIME-5).
  */
 export const TRANSLATION_SLOT_ARGS = ['--parallel', '1'] as const
+
+/**
+ * Prefill in 512-token batches (#605, owner call). The server sends a prompt-progress frame after
+ * each batch, and those frames are the only sign that a prefill is moving (`readCompletionSSE`'s
+ * compute clock). At the server's default 2048-token batch a whole window (≤ ~1,950 prompt tokens)
+ * is one batch, so nothing arrives between 0 % and 100 %. The physical batch is the server's
+ * default 512 either way, so the compute is the same — measured on b11146 (the 4B, 1,263 tokens,
+ * the CPU posture): 29.9 / 28.6 s at the default, 30.8 / 26.3 s at 512. It also bounds what a
+ * cancelled request leaves for the next one to wait out: the server stops between batches.
+ */
+export const TRANSLATION_BATCH_ARGS = ['--batch-size', '512', '--ubatch-size', '512'] as const
 
 /**
  * Force-CPU device args — the translation analogue of the chat ladder's rung 2 (`--device none` is
@@ -124,6 +137,7 @@ export const TRANSLATION_TEMPLATE_ARGS = ['--chat-template', 'gemma'] as const
 export function translationServerArgs(device: TranslationDevice): string[] {
   return [
     ...TRANSLATION_SLOT_ARGS,
+    ...TRANSLATION_BATCH_ARGS,
     ...(device === 'cpu' ? TRANSLATION_CPU_DEVICE_ARGS : []),
     ...TRANSLATION_TEMPLATE_ARGS
   ]
@@ -142,8 +156,24 @@ const DEFAULT_TRANSLATION_CONTEXT_TOKENS = 4096
  * 300 s did — every full window timed out twice into a failed-window notice; the interim TG-3
  * 30 min would clip a ~1.1 tok/s full window) while still bounding a true hang; user cancel stays
  * instant via the task's own abort signal.
+ *
+ * #605: a HUNG sidecar now ends much sooner — at the header wait below or at `readCompletionSSE`'s
+ * liveness clocks — so this cap only bounds a decode that is alive but slower than ~0.74 tok/s on
+ * average (the #160 "timed out mid-decode" class, which is not retried).
  */
 const DEFAULT_REQUEST_TIMEOUT_MS = 2_700_000
+
+/**
+ * #605: the wait for the `/completion` response headers, 180 s — the same value as the chat
+ * request's (#594, #598), calibrated for this sidecar. Both pins send the headers when the slot
+ * starts, before prefill. Requests take the one slot in turn (`takeSlot`), so the server's slot is
+ * busy only behind a cancelled request, which it stops after its current 512-token batch
+ * (`TRANSLATION_BATCH_ARGS`), or behind a hung one. A batch slower than this restarts a healthy
+ * sidecar (accepted). It must stay under Electron's own 300 s header limit, which would end the
+ * request as a plain "fetch failed" and restart nothing. Before #605 the headers had only the
+ * 45-min cap.
+ */
+const HEADER_WAIT_MS = 180_000
 
 /**
  * Idle-teardown timeout default (plan §2 D1, the vision §19.13 precedent). The window the 12B
@@ -344,9 +374,20 @@ export class TranslationRuntime {
   private lastStart: TranslationStartInfo | null = null
   /** Number of translate() calls currently using the sidecar. Guards the idle teardown. */
   private inFlight = 0
+  /**
+   * #605: the tail of the one-slot queue. The sidecar serves one request at a time (`--parallel 1`),
+   * and two callers can overlap: a document translation can start while a Translate job runs
+   * (jobs.ts D9). At the server the second request waited for its headers behind the first one's
+   * whole window, which `HEADER_WAIT_MS` cannot tell from a hang. The requests queue here instead
+   * (`takeSlot`), so the header wait and the liveness clocks only ever time the sidecar's own work.
+   */
+  private slotTail: Promise<void> = Promise.resolve()
   /** The pending idle-teardown timer handle (armed only when `inFlight === 0`), or null. */
   private idleHandle: IdleTimerHandle | null = null
-  /** An in-flight SOFT idle teardown, tracked so `stop()` can await it (no orphan on quit). */
+  /**
+   * An in-flight SOFT teardown — the idle timer's, or the stop of a hung sidecar (#605) — tracked so
+   * `stop()` can await it (no orphan on quit) and a cold start waits for it (no double-load).
+   */
   private idleTeardownPromise: Promise<void> | null = null
   /**
    * The in-flight HARD teardown (`suspend()`/`stop()`), held so overlapping calls SHARE one pass
@@ -662,7 +703,8 @@ export class TranslationRuntime {
    * ["<end_of_turn>"]`, stream the translation through `onToken`, and return the full text. Honours
    * `signal` (a user "Stop") combined with the per-request timeout. The signal also ends this
    * window's wait for a cold start, which keeps running for the next window or job (#637); a
-   * translate already stopped starts nothing and rejects with the signal's reason.
+   * translate already stopped starts nothing and rejects with the signal's reason. Windows from
+   * overlapping callers take the one slot in turn (#605, `takeSlot`).
    */
   async translate(opts: TranslateOptions): Promise<string> {
     // #637: a caller already stopped starts nothing and leaves the idle clock alone.
@@ -672,12 +714,33 @@ export class TranslationRuntime {
     this.cancelIdleTimer()
     this.inFlight++
     try {
-      return await this.runTranslate(opts)
+      const release = await this.takeSlot(opts.signal)
+      try {
+        return await this.runTranslate(opts)
+      } finally {
+        release()
+      }
     } finally {
       this.inFlight--
       // The last job to settle re-arms the idle clock; a still-running job leaves it disarmed.
       if (this.inFlight === 0) this.armIdleTimer()
     }
+  }
+
+  /** #605: wait for the one slot, first come first served. A cancel ends only this caller's wait,
+   *  and the slot passes on once the request ahead settles. Resolves with the release. */
+  private async takeSlot(signal?: AbortSignal): Promise<() => void> {
+    const ahead = this.slotTail
+    let release!: () => void
+    const mine = new Promise<void>((resolve) => (release = resolve))
+    this.slotTail = ahead.then(() => mine)
+    try {
+      await waitUnlessAborted(ahead, signal)
+    } catch (err) {
+      release()
+      throw err
+    }
+    return release
   }
 
   private async runTranslate(opts: TranslateOptions): Promise<string> {
@@ -697,18 +760,33 @@ export class TranslationRuntime {
       // Loopback compute hint: reuse the KV prefix across windows that share the instruction
       // prefix. Purely local, no telemetry (the chat-stream precedent).
       cache_prompt: true,
+      // #605: a text-less `prompt_progress` frame at slot start and after every prompt batch (both
+      // pins) — the only sign that prefill is advancing, which `readCompletionSSE`'s compute clock watches.
+      return_progress: true,
       ...(opts.maxTokens != null ? { n_predict: opts.maxTokens } : {})
     })
     const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     // Own the (long) timeout so it is cleared the instant the window finishes (REL-4).
     const combined = combineSignals(opts.signal, timeoutMs)
+    // #605: the headers get their own deadline; after them the request follows the cap and the caller.
+    const headers = combineSignals(combined.signal, HEADER_WAIT_MS)
     try {
-      const res = await server.fetch('/completion', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body,
-        signal: combined.signal
-      })
+      let res: Response
+      try {
+        res = await server.fetch('/completion', {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body,
+          signal: headers.signal
+        })
+      } catch (err) {
+        // Only the header deadline aborts `headers` while `combined` is clear; a Stop or the cap wins a tie.
+        if (headers.signal.aborted && !combined.signal.aborted) {
+          throw new RuntimeUnresponsiveError(HEADER_WAIT_MS, 'response headers')
+        }
+        throw err
+      }
+      headers.disarmTimeout()
       if (!res.ok) {
         void res.body?.cancel().catch(() => undefined)
         throw new Error(`Translation request failed: HTTP ${res.status}`)
@@ -720,9 +798,47 @@ export class TranslationRuntime {
         opts.onToken?.(delta)
       }
       return out
+    } catch (err) {
+      if (isRuntimeUnresponsiveError(err)) this.restartHung(server, err as Error)
+      throw err
     } finally {
+      headers.clear()
       combined.clear()
     }
+  }
+
+  /**
+   * #605: stop a sidecar found hung — no response headers within `HEADER_WAIT_MS`, or a liveness
+   * clock in `readCompletionSSE` ran out — so the window's one retry (both consumers retry this error
+   * once, tokens or not) cold-starts a fresh one. Before, the retry queued behind the stuck slot,
+   * and so did every later window of a document. The kill is a soft teardown
+   * (`idleTeardownPromise`): a translate arriving meanwhile waits for it (never two ~10 GB children),
+   * and a lock or quit awaits it. The device posture is kept (owner call): unlike a GPU-composed
+   * sidecar that crashes, one that hangs does not switch the session to the CPU. Identity-checked,
+   * so a sidecar already replaced or torn down is left alone.
+   */
+  private restartHung(server: LlamaServer, err: Error): void {
+    if (this.server !== server) return
+    log.warn('Translation sidecar stopped responding; stopping it so the next window starts a fresh one', {
+      reason: err.message
+    })
+    void this.softTeardown(server).catch(() => undefined)
+  }
+
+  /**
+   * Stop `server` (the live one) as a SOFT teardown: null the handle synchronously, so a translate
+   * arriving meanwhile cold-starts a fresh, independent child — after waiting for this kill
+   * (`ensureStarted`), never two ~10 GB children at once — and track the kill so a lock or quit
+   * awaits it. Used by the idle teardown and by `restartHung` (#605).
+   */
+  private softTeardown(server: LlamaServer): Promise<void> {
+    this.server = null
+    this.emitResidencyChange()
+    const teardown: Promise<void> = server.stop().finally(() => {
+      if (this.idleTeardownPromise === teardown) this.idleTeardownPromise = null
+    })
+    this.idleTeardownPromise = teardown
+    return teardown
   }
 
   /**
@@ -819,15 +935,6 @@ export class TranslationRuntime {
    */
   private async idleTeardown(): Promise<void> {
     if (this.stopped || this.tearingDown || this.starting || this.inFlight > 0 || !this.server) return
-    const server = this.server
-    // Null the reference SYNCHRONOUSLY before awaiting the kill: a translate() arriving
-    // mid-teardown then sees `server === null` and cold-starts a fresh, independent child.
-    this.server = null
-    this.emitResidencyChange()
-    this.idleTeardownPromise = server.stop().finally(() => {
-
-      this.idleTeardownPromise = null
-    })
-    await this.idleTeardownPromise
+    await this.softTeardown(this.server)
   }
 }
