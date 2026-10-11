@@ -124,6 +124,8 @@ async function makeHarness(
     docFile?: string
     userToolSkill?: boolean
     routingSkill?: { id: string; tool: string }
+    /** More ingested documents in the same chat scope, one text each (#641's multi-document hint case). */
+    extraDocs?: string[]
   } = {}
 ): Promise<Harness> {
   const w = makeSkillsWorld('ragskill', {
@@ -147,6 +149,10 @@ async function makeHarness(
   const docId = await ingestTextFile(w, opts.docFile ?? 'statement.txt', opts.text ?? CLEAN, {
     fullyChunked: opts.fullyChunked
   })
+  const extraIds: string[] = []
+  for (const [i, text] of (opts.extraDocs ?? []).entries()) {
+    extraIds.push(await ingestTextFile(w, `note-${i + 1}.txt`, text, { fullyChunked: opts.fullyChunked }))
+  }
 
   // A runtime that records whether it was ever asked to generate (the Phase-3 template/refuse outcomes must
   // make ZERO model calls) AND captures the messages it was handed, so a W4 grounded-data turn can assert
@@ -159,7 +165,7 @@ async function makeHarness(
   registerRagIpc(ctx)
   const conv = createConversation(db, {
     mode: 'documents',
-    scope: { collectionIds: [], documentIds: [docId] }
+    scope: { collectionIds: [], documentIds: [docId, ...extraIds] }
   })
   return { db, conversationId: conv.id, docId, runtime, audit }
 }
@@ -943,8 +949,19 @@ describe('askDocuments — W6 multi-currency grounded-data (IPC pin, T2)', () =>
 // marked `fallback:'coverage'`, and askDocuments LEADS the answer with the actionable deep-index
 // hint instead of discarding the confidence (the pre-fix behaviour).
 describe('askDocuments — whole-document hint on the low-confidence coverage fallback (#37/#38)', () => {
+  // #641: the hint shows only when the answer read fewer sections than the scope holds, so the hint
+  // cases ask over a statement longer than one answer's retrieval budget (here 2 of its 7 sections).
+  // `lines` statement rows of ~5 tokens each; 110 rows make a two-section statement. Each test
+  // asserts the coverage premise it relies on, so a chunker change fails loudly, never silently.
+  const statement = (lines: number): string =>
+    [
+      'Ausgaben Statement EUR',
+      ...Array.from({ length: lines }, (_, i) => `2026-01-${String((i % 28) + 1).padStart(2, '0')} Ausgaben Miete -800,00 1.200,00`)
+    ].join('\n')
+  const LONG_STATEMENT = statement(600)
+
   it('the #37 aggregation question with NO skill leads with the deep-index hint over the relevance answer', async () => {
-    const h = await makeHarness({ fullyChunked: true })
+    const h = await makeHarness({ fullyChunked: true, text: LONG_STATEMENT })
     const { result } = await invoke(
       handlers,
       IPC.askDocuments,
@@ -954,6 +971,8 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     )
     const msg = result as Message
 
+    // The fixture's premise: the answer read only part of the statement.
+    expect(msg.coverage!.chunksCovered).toBeLessThan(msg.coverage!.chunksTotal)
     // Teeth: discard `decision.confidence` again (the pre-fix behaviour) → no hint → red.
     expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
     // The hint LEADS the ordinary relevance answer — it never replaces it.
@@ -1026,15 +1045,74 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   })
 
   it('the same German count question WITHOUT extract data leads with the deep-index hint (BE-3)', async () => {
-    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
+    const h = await makeHarness({ fullyChunked: true, text: LONG_STATEMENT })
     const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
     const msg = result as Message
+    expect(msg.coverage!.chunksCovered).toBeLessThan(msg.coverage!.chunksTotal)
     expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
     expect(msg.content).toContain('Model answer.')
     // #80: low-confidence fallback ⇒ classification (degrades on the prose reply) + the grounded
     // answer — 2 calls; the answer itself stays byte-unchanged.
     expect(h.runtime.calls).toBe(2)
     expect(msg.skillOffer).toBeUndefined()
+  })
+
+  // Issue #641 (second defect): the hint was decided from the question's wording alone, before
+  // retrieval. On a 2-page letter the answer had read both sections, yet the hint said it rested on
+  // "only the most relevant sections" and sent the user to build a deep index that made it worse.
+  it('#641: the same question over a two-section document whose answer read both sections carries no hint', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: statement(110) })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    // The premise: a multi-section document whose every section reached the prompt.
+    expect(msg.coverage!.chunksTotal).toBeGreaterThan(1)
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    // Teeth: gate the hint on the question alone again (the pre-fix behaviour) → hint → red.
+    expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
+    expect(msg.content.startsWith('Model answer.')).toBe(true)
+    // The #80 classification still runs: its trigger is the routing decision, not the coverage.
+    expect(h.runtime.calls).toBe(2)
+  })
+
+  it('#641: a document in scope that the answer never read still counts — the hint shows', async () => {
+    // The two-section statement + five one-section notes without the query's words: more sections
+    // than `ragTopKFinal` (6), so at least one note is left out entirely.
+    const notes = Array.from({ length: 5 }, (_, i) => `Notiz ${i + 1}: Termin beim Steuerberater am Montag.`)
+    const h = await makeHarness({ fullyChunked: true, text: statement(110), extraDocs: notes })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    // The premise: every document the answer drew on was read whole (covered == their total) …
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    expect(new Set(msg.citations!.map((c) => c.documentId)).size).toBeLessThan(1 + notes.length)
+    // … yet a document in scope was never read. Teeth: compare against the documents drawn on
+    // (`coverage.chunksTotal`) instead of the whole scope → no hint → red.
+    expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
+  })
+
+  it('#641: a legacy, partly chunked document always counts as partly read', async () => {
+    // `fully_chunked` NULL: the stored sections are not the whole text, so reading all of THEM
+    // does not mean the answer read the document.
+    const h = await makeHarness({ fullyChunked: false, text: statement(110) })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
+    const msg = result as Message
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    // Teeth: compare against the stored section count alone → no hint → red.
+    expect(msg.content.startsWith(t('en', 'analysis.wholeDocHint'))).toBe(true)
+  })
+
+  // #641: a list question about something the deep index does not collect ("Buchungen" maps to no
+  // extract type) gets the honest label, but NOT the advice to build a deep index — the deep index
+  // would not list it either (it used to answer with the unrelated generic table).
+  it('#641: an untyped list question over a partly read document gets the label without the deep-index advice', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: LONG_STATEMENT })
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Liste alle Buchungen auf', null)
+    const msg = result as Message
+    expect(msg.coverage!.chunksCovered).toBeLessThan(msg.coverage!.chunksTotal)
+    expect(msg.content.startsWith(t('en', 'analysis.partialAnswerHint'))).toBe(true)
+    expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))
+    expect(msg.content).toContain('Model answer.')
+    // A low-confidence fallback: the #80 classification runs, as it did before #641.
+    expect(h.runtime.calls).toBe(2)
   })
 
   // Issue #54 — the wrong-shape half of the #37 incident: WITH extract data the aggregation

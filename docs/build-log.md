@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-11 — the closed 2026-10-03 OCR-rasterizer-CSP entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-11 (preamble budget, making room for the #641 entry). Its record is unchanged:
+`architecture.md` DEP-6 §11. Citations of the form "BUILD_STATE 2026-10-03 OCR rasterizer entry" now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pdfjs-in-page`).** The hidden OCR window ran pdf.js in a
+`file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
+has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
+pages + prod header. Measured packaged: 18/18 smoke, 0 worker targets, 0 loopback. Record: `architecture.md` DEP-6 §11. Suite 7,920→7,923._
+
 ## 2026-10-08 — the closed 2026-10-02 streamdown 2.6 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-08 (preamble budget, making room for the #605 entry). Its record is unchanged:

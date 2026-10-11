@@ -886,10 +886,18 @@ export const de: Record<keyof typeof en, string> = {
   // Abdeckungsbruch allein („Basiert auf 5 von 25 Abschnitten") geht unter einer plausibel
   // aussehenden Summe zu leicht unter.
   // Anführungszeichen „…“ (CODE-25 — das :657-Präzedenz-Vorkommen, mitkorrigiert).
+  // #641: nur noch, wenn die Antwort wirklich Abschnitte ausgelassen hat, und sie verspricht nur,
+  // was der Tiefenindex einer Chat-Antwort hinzufügt — eine Liste aus allen Abschnitten, keine
+  // „vollständige Antwort“.
   'analysis.wholeDocHint':
-    '**Hinweis:** Das sieht nach einer Frage zum ganzen Dokument aus, aber diese Antwort ' +
-    'basiert nur auf den relevantesten Abschnitten. Für eine vollständige Antwort öffne ' +
-    '„Dokumente“, wähle „Tiefenindex erstellen“ für das Dokument und frage dann erneut.',
+    '**Hinweis:** Diese Antwort basiert nur auf den relevantesten Abschnitten und kann daher ' +
+    'Einträge übersehen. Für eine Liste aus allen Abschnitten öffne „Dokumente“, wähle ' +
+    '„Tiefenindex erstellen“ für das Dokument und frage dann erneut.',
+  // #641: dieselbe Ehrlichkeit für eine Frage nach „allen“ X, die auch der Tiefenindex nicht
+  // beantworten kann (eine Erklär-Bitte oder etwas, das er nicht erfasst) — daher kein Rat dazu.
+  'analysis.partialAnswerHint':
+    '**Hinweis:** Diese Antwort basiert nur auf den relevantesten Abschnitten und kann daher ' +
+    'Einträge übersehen.',
 
   // ---- Kontoauszug-Auswertung (full-doc-skills Plan §3.1, Phase 2) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der

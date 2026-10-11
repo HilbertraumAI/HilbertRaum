@@ -57,3 +57,30 @@ export function documentsInScope(
     )
     .all(...params) as Array<{ id: string; title: string; mimeType: string | null }>
 }
+
+/** The sections of the answerable documents in a scope (#641). */
+export interface ScopeSectionTotals {
+  /** Chunks of the documents `documentsInScope(…, { requireChunks: true })` returns. */
+  sections: number
+  /** A legacy document among them (`fully_chunked` NULL): its sections are not its whole text. */
+  partlyChunked: boolean
+}
+
+/**
+ * #641: what the deep-index hint compares an answer's sections against — the same document set as
+ * `documentsInScope(…, { requireChunks: true })` (joining `chunks` is the EXISTS), counted in ONE query
+ * so a whole-library scope does not cost a count per document. Read live on each low-confidence turn and
+ * never memoized, so `fully_chunked` needs no #581 corpus-generation trigger.
+ */
+export function scopeSectionTotals(db: Db, scope: RetrievalScope): ScopeSectionTotals {
+  const filter = buildScopeFilter(scope, 'd.id')
+  const where = filter ? ` AND ${filter.sql}` : ''
+  const row = db
+    .prepare(
+      `SELECT COUNT(*) AS sections, COUNT(DISTINCT CASE WHEN d.fully_chunked IS NULL THEN d.id END) AS partly
+       FROM chunks c JOIN documents d ON d.id = c.document_id
+       WHERE d.status = 'indexed'${where}`
+    )
+    .get(...(filter ? filter.params : [])) as unknown as { sections: number; partly: number } | undefined
+  return { sections: row?.sections ?? 0, partlyChunked: (row?.partly ?? 0) > 0 }
+}

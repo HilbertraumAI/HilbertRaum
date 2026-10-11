@@ -13,8 +13,15 @@ import type { ExtractRecordType } from '../../../shared/types'
 //     (we must not claim a complete "0 items" list with no precomputed table), marked
 //     `fallback: 'coverage'` so the caller leads with the "build the deep index" hint (#38).
 //   - A coverage trigger maps the user's "{X}" to one of the fixed extract types via a closed
-//     synonym table (defaulting to `generic`) — the 0-query-call guarantee holds only for a
-//     mapped, pre-extracted type.
+//     synonym table — the 0-query-call guarantee holds only for a mapped, pre-extracted type.
+//     Issue #641: a PLAIN list/count trigger whose "{X}" maps to no type ("list all the
+//     abbreviations", "how many pages") never reaches the listing — the `generic` table is "any
+//     other salient item", never a list of X. Only an aggregation ask keeps the `generic`
+//     default (its #54 shape hint says what the list is).
+//   - Issue #641: an EXPLAIN intent (explain / describe / "what does X mean", EN + DE) is never
+//     a list request, even when it carries a quantifier ("Erkläre … inkl. aller Abkürzungen") —
+//     the listing engine cannot explain. Both #641 cases fall back to LABELLED relevance
+//     (`fallback: 'partial'`): the answer may miss items, but a deep index would not help.
 //   - Fixed precedence: explicit button > compare (needs 2 docs) > coverage-extract >
 //     tree-summary > relevance. A compare classified without 2 docs, or any low-confidence
 //     classification, falls back to relevance — never an empty result from a stray trigger word.
@@ -49,11 +56,14 @@ export interface RouteDecision {
   confidence: 'high' | 'low'
   /**
    * WHY a low-confidence decision fell back to relevance (issues #37/#38): `coverage` = a
-   * whole-document trigger (list/count/aggregate) fired but no extract data exists in scope —
-   * the caller leads the answer with the "build the deep index" hint; `compare` = a compare
-   * intent without two documents. Absent on every high-confidence decision.
+   * whole-document trigger (list/count over a typed {X}, or aggregate) fired but no extract
+   * data exists in scope — the caller may lead the answer with the "build the deep index" hint
+   * (#641: only when retrieval actually left sections out); `compare` = a compare intent
+   * without two documents; `partial` (#641) = a list/count trigger the listing cannot serve (an
+   * explain request, or an untyped {X}) — the caller may label a partial answer, but must not
+   * recommend the deep index. Absent on every high-confidence decision.
    */
-  fallback?: 'coverage' | 'compare'
+  fallback?: 'coverage' | 'compare' | 'partial'
 }
 
 // --- Language-aware classification regexes (EN + DE) ---
@@ -87,6 +97,21 @@ const SUMMARY_RE =
   /\b(summar(?:y|ise|ize|ies)|overview|tl;?dr|gist|whole document|entire document)\b|\b(ganzes? dokument)\b|\b(zusammenfass|fass(?:e|t|en)?\b.*?\bzusammen\b)|überblick/i
 const COMPARE_RE =
   /\b(compare|comparison|difference|differences|versus|vs\.?|diff)\b|\b(vergleich|unterschied)/i
+// Issue #641: an explain/describe intent. "Erkläre was in diesem Arztbrief steht inkl. aller
+// Abkürzungen" matched the alle[rsn]? quantifier above and, once a deep index existed, got the
+// listing engine's item dump instead of an explanation. The quantifier here modifies an explain
+// request; the request itself is for prose. German forms are listed word by word (the #582
+// lesson: a bare stem catches unrelated words), and the German alternatives use letter
+// lookarounds instead of \b — JS \b is ASCII-defined, so it never sits next to "ä" ("erklär",
+// "erläuter"). Verbs only: a noun is usually a list column or a document part ("every payment
+// with its description", "die Erklärung des Vermieters" — the landlord's declaration).
+const EXPLAIN_RE =
+  /\b(explain|explains|explaining|describe|describes|describing|clarify|interpret|walk me through)\b|\bwhat (?:do|does|did)\b[^.?!]*\b(?:mean|say)\b|\bwhat(?:['’]s| is) (?:meant|in)\b|\bstands? for\b|(?<![\p{L}\p{N}])(erkläre|erklär|erklären|erklärt|erklärst|erläutere|erläuter|erläutern|erläutert|erläuterst|beschreibe|beschreib|beschreiben|beschreibt|beschreibst|was bedeutet|was bedeuten|was heißt|was heisst|was heißen|was meint|was steht|was stehen|wofür steht|wofür stehen|worum geht|gemeint)(?![\p{L}\p{N}])/iu
+// #641: question words and modal verbs among the type synonyms ("when", "who", "must", "wann",
+// "wer", "muss") pick the TYPE of a list, but they never name a thing to list: "Welche
+// Abkürzungen muss ich kennen? Liste alle auf" is not a request for obligations. The typed-{X}
+// gate ignores them.
+const TYPE_CUE_WORDS_RE = /\b(who|when|must|shall|wer|wann|muss)\b|(?<![\p{L}\p{N}])müssen(?![\p{L}\p{N}])/giu
 
 /** Closed-vocabulary synonym table: a user's "{X}" → an extracted type (plan §4.2 step 4). */
 const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [
@@ -120,12 +145,17 @@ export function isAggregationShaped(question: string): boolean {
   return AGGREGATION_RE.test(question ?? '')
 }
 
-/** Map a free-text "list every {X}" to the closed extract type set (default `generic`). */
-export function mapQuestionToRecordType(question: string): ExtractRecordType {
+/** The extract type a question's "{X}" names, or null when no synonym matches (#641). */
+function matchedRecordType(question: string): ExtractRecordType | null {
   for (const { type, re } of TYPE_SYNONYMS) {
     if (re.test(question)) return type
   }
-  return 'generic'
+  return null
+}
+
+/** Map a free-text "list every {X}" to the closed extract type set (default `generic`). */
+export function mapQuestionToRecordType(question: string): ExtractRecordType {
+  return matchedRecordType(question) ?? 'generic'
 }
 
 /** Classify a question / explicit button into an engine choice (pure; plan §4.4). */
@@ -148,7 +178,14 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   }
 
   const wantsCompare = COMPARE_RE.test(q)
-  const wantsCoverage = COVERAGE_RE.test(q) || AGGREGATION_RE.test(q)
+  // #641: a plain list/count trigger counts only for a list request about a TYPED thing. An
+  // explain request that carries a quantifier, or a "{X}" no extract type covers, never gets
+  // the listing — it could only print the unrelated `generic` table (step 4b labels it instead).
+  // An aggregation ask stays coverage whatever its {X} (#37: never a silent top-k sum).
+  const listTrigger = COVERAGE_RE.test(q)
+  const namesTypedThing = matchedRecordType(q.replace(TYPE_CUE_WORDS_RE, ' ')) !== null
+  const wantsListing = listTrigger && !EXPLAIN_RE.test(q) && namesTypedThing
+  const wantsCoverage = wantsListing || AGGREGATION_RE.test(q)
   const wantsSummary = SUMMARY_RE.test(q)
 
   // 2. Compare (needs two documents). A compare intent without 2 docs is low-confidence and
@@ -159,10 +196,11 @@ export function routeQuestion(input: RouteInput): RouteDecision {
       : { engine: 'relevance', confidence: 'low', fallback: 'compare' }
   }
 
-  // 3. Coverage-extract ("list every / how many" + the #37 aggregation verbs): only when there
-  //    IS precomputed extracted data — otherwise we cannot honestly claim a complete list, so
-  //    fall back to relevance, marked `fallback: 'coverage'` so the caller can lead the answer
-  //    with the actionable "build the deep index" hint (#38) instead of a silent partial sum.
+  // 3. Coverage-extract ("list every / how many" over a typed {X} + the #37 aggregation verbs):
+  //    only when there IS precomputed extracted data — otherwise we cannot honestly claim a
+  //    complete list, so fall back to relevance, marked `fallback: 'coverage'` so the caller can
+  //    lead the answer with the actionable "build the deep index" hint (#38) instead of a silent
+  //    partial sum.
   if (wantsCoverage) {
     if (input.extractAvailable) {
       return {
@@ -177,6 +215,13 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   // 4. Tree-summary ("summarize / overview / whole document") when a deep index is ready.
   if (wantsSummary && input.treeAvailable) {
     return { engine: 'tree-summary', confidence: 'high' }
+  }
+
+  // 4b. #641: a list/count trigger the listing cannot serve (an explain request, an untyped {X})
+  //     — LABELLED relevance: the caller may say the answer can miss items, but never recommends
+  //     the deep index, which would not answer it either.
+  if (listTrigger) {
+    return { engine: 'relevance', confidence: 'low', fallback: 'partial' }
   }
 
   // 5. Everything else → relevance RAG (the existing retrieve path, byte-unchanged).

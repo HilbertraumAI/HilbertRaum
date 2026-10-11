@@ -511,7 +511,9 @@ your files.
    contain the answer, the app says so rather than guessing.
    A short honesty line under the answer says how much it drew on — e.g. *"Based on 3 of
    12 sections"* — so you can tell an answer rested on a few passages, not the whole
-   document. (For full-document coverage, build a deep index — see *Summaries* below.)
+   document. (For questions that list or count dates, amounts, people and organisations, or
+   obligations, a deep index lets the answer cover every section — see *Summaries* below.
+   Other questions are answered from the most relevant passages either way.)
 
 **Ask only chosen documents.** Under the message box, a **📄 Answering from:** chip always shows
 what answers come from — the document's name when one file is in scope, **your whole library — N
@@ -632,7 +634,10 @@ the app reads the whole document once (a one-time, can-be-minutes background pas
 builds a layered summary. Afterwards the Preview shows a **coverage meter** — *"Covers the whole
 document"* vs *"the most relevant passages"* — and a depth selector with three tiers: **Overview**,
 **Section by section**, and **Detailed**. The deep index can pause for a chat and resume on its own,
-so you are never locked out while it runs.
+so you are never locked out while it runs. In *Ask my documents*, the deep index also answers
+questions that list or count dates, amounts, people and organisations, or obligations from every
+section (*"List every deadline"*, *"How many payments are there?"*). Other questions, such as
+*"Explain what this letter says"*, are answered from the most relevant passages with or without it.
 
 A few honest notes:
 

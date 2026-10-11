@@ -1651,7 +1651,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   `buildScopeFilter(scope, 'document_id')` (M3 — membership/id UNION + archived exclusion), **0** model calls;
   returns items+counts+source-chunk provenance + scanned/total/unparsed + `fullyChunked`.
 - **Router** ([`router.ts`](../apps/desktop/src/main/services/analysis/router.ts), pure): EN+DE
-  classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl, **plus the
+  classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl — since #641
+  only over a typed {X} and without an explain intent, see that bullet — **plus the
   #37 aggregation lexicon** `AGGREGATION_RE`: categorize/categorization/group(ed) by/breakdown/sum per/
   total per/per category/itemize/tally + the DE stems kategorisier/gruppier/summier/aufschlüssel/
   aufsummier and the phrases Summe pro/Gesamtsumme/pro Kategorie/nach Kategorie — an aggregation over a
@@ -1663,8 +1664,10 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   `rag:ask` wiring streams the deterministic listing
   ([`listing-answer.ts`](../apps/desktop/src/main/services/analysis/listing-answer.ts))
   for a mapped pre-extracted type; everything else falls through to the existing relevance path
-  **byte-unchanged**. An unmapped/ad-hoc "{X}" falls back to labelled relevance in v1 (no live full-scan —
-  deferred), so the 0-call completeness claim is only ever made for a mapped type. **v1 caveat, still
+  **byte-unchanged**. An unmapped/ad-hoc "{X}" falls back to relevance in v1 (no live full-scan —
+  deferred), so the 0-call completeness claim is only ever made for a mapped type. (That was the design
+  from Phase 3 on, but until #641 the code mapped an unmapped {X} to `generic` and served that table —
+  see the #641 bullet below.) **v1 caveat, still
   open (#37 suggestion 3):** the listing engine groups by `normalized_value` with **counts** — a
   user-defined categorization with per-category numeric **sums** is served exhaustively only by the
   bank-statement skill's category engine; the no-skill coverage-extract answer for such an ask is an
@@ -1687,7 +1690,50 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   doc is in scope. The hint rides the same `answerPrefix` seam as the W2 scope notice (streamed first,
   persisted with the content; both compose when present) and names the fix: build the deep index, ask
   again. The compare fallback keeps its existing selectTwo routing; ordinary high-confidence relevance
-  turns are byte-unchanged.
+  turns are byte-unchanged. **#641 amendment (2026-10-11):** the hint was decided from the question
+  alone, before retrieval, so a 2-section letter whose answer had read both sections was told it rested
+  on "only the most relevant sections". It now rides `GroundedAnswerOptions.partialCoverageNotice`
+  (`{ text, scopeChunkTotal }`): `rag:ask` counts the routable documents' sections in one query
+  (`scopeSectionTotals`, beside `documentsInScope` — the same document set) and `generateGroundedAnswer`
+  leads with the hint only when the distinct
+  document sections that reached the prompt are fewer. The comparison is with the whole scope, not with
+  the documents drawn on, so a document retrieval never reached still counts as missed; a scope with a
+  legacy, partly chunked document (`fully_chunked` NULL) passes `Infinity`, because its stored sections
+  are not its whole text. The wording now promises only what the deep index adds to a chat answer, a
+  list drawn from every section (EN *"…so it may miss items. For a list that covers every section, open
+  Documents…"*), not "a complete answer". The #80 classification keeps its decision-based trigger (it
+  runs before retrieval), so a coverage fallback over a fully read document still pays that one bounded
+  call.
+- **Explain requests and untyped list asks — AS BUILT (#641, 2026-10-11).** With a deep index built,
+  "Erkläre was in diesem Arztbrief steht inkl. aller Abkürzungen" got the listing engine's generic item
+  dump in ~30 ms instead of an explanation. Two causes: `COVERAGE_RE` reads any quantifier
+  (all/every/each/how many, alle/jede/wie viele) as a list request, and an unmapped {X} defaulted to the
+  `generic` table, the extract pass's "any other salient item" grab-bag, which is never a list of X.
+  Probing 21 realistic phrasings against a deep index, 15 landed on it, including needle questions
+  ("Wie viele Seiten hat der Brief?", "Does every employee get a bonus?"). Fix (owner calls, all as
+  recommended): (1) `EXPLAIN_RE` (explain/describe/clarify/interpret/"what does … mean/say"/"stand
+  for", erklären/erläutern/beschreiben/"was bedeutet"/"was steht"/"wofür steht"/"worum geht"/gemeint;
+  German forms word by word with letter lookarounds; verbs only, because a noun is usually a list column
+  or a document part: "every payment with its description", "die Erklärung des Vermieters") suppresses
+  the plain list trigger; (2) a plain list trigger counts only when the {X} maps to a typed extract
+  (date/amount/party/obligation), judged with the question words and modals among the synonyms
+  (who/when/must/shall, wer/wann/muss/müssen) set aside — they pick a list's type but name nothing to
+  list ("Welche Abkürzungen muss ich kennen? Liste alle auf"). Both fall back to LABELLED relevance,
+  the documented design for an unmapped {X}: `{ relevance, low, fallback: 'partial' }` (after the
+  tree-summary step). When retrieval left sections out, the answer leads with
+  `analysis.partialAnswerHint` (EN *"**Heads-up:** this answer is based only on the most relevant
+  sections, so it may miss items."*) — the same gate as the deep-index hint, without its advice, which
+  would not help. A `partial` decision is low confidence, so the #80 classification still runs, as it
+  did for these asks before #641 when no deep index existed. An aggregation ask (`AGGREGATION_RE`) keeps
+  the coverage route whatever its {X} or wording (#37: never a silent top-k sum; its #54 shape hint
+  already says what the list is). Router golden rows in `extract-router.test.ts` (each failed pre-fix).
+  Real app (4B, a fictional 2-page Arztbrief): master answered 5/5 untyped or explain asks with the same
+  16-item generic list after the deep index, and showed the hint at 2 of 2 sections; the fix answers them
+  with the model and shows no hint; over a 12-page report read 6 of 12, a typed list ask gets the
+  deep-index hint and an untyped or explain ask the label. Not done here, filed as follow-ups: a typed {X} in a needle question still lists
+  ("Gilt die Frist für alle Mieter?" lists every date — #644); a small document is still read top-k
+  rather than whole (#643); and the router's `tree-summary` decision has no consumer in `rag:ask` (a
+  summary question with a ready tree is answered by relevance — #642).
 - **Suggestion-only cascade — AS BUILT (issue #80, wave R80; STR-1 §5.2). Truth maintenance on the
   0-model-call claim:** the router itself stays pure and byte-unchanged, and every HAPPY path above
   still answers at 0 query-time model calls — but exactly two decision classes now additionally run

@@ -126,7 +126,8 @@ describe('routeQuestion — inflected German phrasings reach their engines (BE-3
       // coverage: the stems must match their inflections
       ['Zähle die Ausgaben', 'coverage-extract'],
       ['Auflistung der Fristen', 'coverage-extract'],
-      ['Aufzählen bitte', 'coverage-extract'],
+      // #641: a typed {X} — an untyped list ask ("Aufzählen bitte") is no longer a coverage ask.
+      ['Aufzählen der Fristen bitte', 'coverage-extract'],
       // summary: stem, the ü-initial word, and the separable-verb imperative
       ['Fasse das Dokument zusammen', 'tree-summary'],
       ['Zusammenfassung bitte', 'tree-summary'],
@@ -156,6 +157,62 @@ describe('routeQuestion — inflected German phrasings reach their engines (BE-3
     const d = routeQuestion({ ...base, question: 'Erzähle mir etwas über die Verträge' })
     expect(d.engine).toBe('relevance')
     expect(d.confidence).toBe('high')
+  })
+})
+
+// Issue #641: once a deep index existed, "Erkläre was in diesem Arztbrief steht inkl. aller
+// Abkürzungen" was answered by the listing engine's item dump (0 model calls) instead of an
+// explanation — the "aller" quantifier fired the plain list trigger, and the {X} no extract type
+// covers defaulted to the `generic` table ("any other salient item", never a list of X). Every row
+// below routed to coverage-extract pre-fix. Full-decision pins: LABELLED relevance (`partial`) with
+// or without extract data — the answer may miss items, but no "build the deep index" hint promises a
+// listing that could not answer the question; the #80 classification still runs (trigger b).
+describe('routeQuestion — explain requests and untyped list asks never reach the listing (#641)', () => {
+  const base = { documentCount: 1, treeAvailable: false }
+
+  it.each([
+    'Erkläre was in diesem Arztbrief steht inkl. aller Abkürzungen', // the #641 repro, verbatim
+    'Explain what this letter says, including all the abbreviations',
+    'Explain each abbreviation in this letter',
+    'Was bedeuten alle Abkürzungen?',
+    'Wofür stehen alle Abkürzungen?',
+    'What do all the abbreviations stand for?',
+    'Erklär mir jede Zahlung', // the bare imperative ends in "ä": no ASCII \b after it
+    'Erläutere sämtliche Pflichten',
+    'Was ist mit allen Fristen gemeint?',
+    'Describe every payment in the contract',
+    'What’s meant by every obligation?', // a typographic apostrophe (smart quotes)
+    // untyped {X}: a list/count trigger alone is not a coverage ask
+    'Liste alle Abkürzungen auf',
+    'list all the abbreviations',
+    'Wie viele Seiten hat der Brief?',
+    'How many pages does the letter have?',
+    'Does every employee get a bonus?',
+    // a question word or modal verb picks a list's type, but names nothing to list
+    'Welche Abkürzungen muss ich kennen? Liste alle auf',
+    'How many pages does the letter have and when was it written?'
+  ])('%s → labelled relevance, with or without extract data', (question) => {
+    for (const extractAvailable of [true, false]) {
+      const decision = routeQuestion({ ...base, extractAvailable, question })
+      expect(decision).toEqual({ engine: 'relevance', confidence: 'low', fallback: 'partial' })
+      expect(isClassificationTrigger(decision, question)).toBe(true)
+    }
+  })
+
+  // The suppression must stay narrow: these still reach the listing over extract data.
+  it.each([
+    ['Liste alle Erklärungen der Parteien auf', 'party'], // a noun (declarations), not "explain"
+    ['Liste alle Fristen aus der Erklärung des Vermieters auf', 'date'], // the landlord's declaration
+    ['List every payment with its description', 'amount'], // a noun as a list column
+    ['Liste alle Fristen der Datenschutzerklärung auf', 'date'], // compound: no letter boundary
+    ['Erkläre die Ausgaben pro Kategorie', 'amount'], // aggregation outranks explain (#37)
+    ['categorize all the findings', 'generic'] // an aggregation ask keeps the generic default (#54)
+  ] as const)('%s → coverage-extract (%s)', (question, recordType) => {
+    expect(routeQuestion({ ...base, extractAvailable: true, question })).toEqual({
+      engine: 'coverage-extract',
+      recordType,
+      confidence: 'high'
+    })
   })
 })
 

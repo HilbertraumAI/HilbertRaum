@@ -34,7 +34,7 @@ import {
   manifestAnalysisHandler
 } from '../services/skills/analysis'
 import { offerableSkillCandidates } from '../services/skills/suggest'
-import { documentsInScope } from '../services/skills/scope-documents'
+import { documentsInScope, scopeSectionTotals } from '../services/skills/scope-documents'
 import { getSkill } from '../services/skills/registry'
 import { matchesSkillDocSignals } from '../services/skills/selector'
 import { isNeedleShaped, isSmallTalk } from '../services/skills/vocabulary'
@@ -712,10 +712,10 @@ export function registerRagIpc(ctx: AppContext): void {
       // aggregation — exhaustive over indexed sections, with provenance, at ZERO query-time
       // model calls. Anything else (incl. an unmapped/ad-hoc {X} with no precomputed table)
       // falls through to the existing relevance path BYTE-UNCHANGED.
-      const routableDocCount = documentsInScope(ctx.db, scope, { requireChunks: true }).length
+      const routableDocs = documentsInScope(ctx.db, scope, { requireChunks: true })
       const decision = routeQuestion({
         question: text,
-        documentCount: routableDocCount,
+        documentCount: routableDocs.length,
         treeAvailable: readyTreeCountInScope(ctx.db, scope) > 0,
         extractAvailable: extractionsExistInScope(ctx.db, scope)
       })
@@ -839,15 +839,28 @@ export function registerRagIpc(ctx: AppContext): void {
       // relevance. That fallback used to be silent — `decision.confidence` was computed and
       // discarded, so a categorization/sum answer over 5 of 25 sections read like any normal
       // answer. Lead the answer with the actionable hint (build the deep index) instead. It
-      // rides the same `answerPrefix` seam as the W2 scope notice (streamed first, persisted
-      // with the content); gated on ≥1 answerable doc so an empty-scope turn keeps its own
-      // "no documents" honesty path unchanged.
-      const wholeDocHint =
-        decision.confidence === 'low' && decision.fallback === 'coverage' && routableDocCount > 0
-          ? tMain('analysis.wholeDocHint')
+      // streams first and persists with the content, after the W2 scope notice; gated on ≥1
+      // answerable doc so an empty-scope turn keeps its own "no documents" honesty path unchanged.
+      // #641: the hint is decided AFTER retrieval (`partialCoverageNotice`) — it shows only when
+      // the answer read fewer sections than the scope holds. A short document whose sections all
+      // reached the prompt has nothing for the deep index to add. A `partial` fallback (an
+      // explain request or an untyped {X} with a quantifier) gets the same label WITHOUT the
+      // deep-index advice: the deep index would not answer it either. A document in scope that
+      // was never fully chunked (legacy) has text no section holds, so it always counts as
+      // partly read.
+      const scopeSections =
+        decision.confidence === 'low' &&
+        (decision.fallback === 'coverage' || decision.fallback === 'partial') &&
+        routableDocs.length > 0
+          ? scopeSectionTotals(ctx.db, scope)
           : null
-      const relevancePrefixParts = [scopeNotice, wholeDocHint].filter((s): s is string => s != null)
-      const relevancePrefix = relevancePrefixParts.length > 0 ? `${relevancePrefixParts.join('\n\n')}\n\n` : undefined
+      const partialCoverageNotice = scopeSections
+        ? {
+            text: tMain(decision.fallback === 'coverage' ? 'analysis.wholeDocHint' : 'analysis.partialAnswerHint'),
+            scopeChunkTotal: scopeSections.partlyChunked ? Number.POSITIVE_INFINITY : scopeSections.sections
+          }
+        : undefined
+      const relevancePrefix = scopeNotice ? `${scopeNotice}\n\n` : undefined
 
       return withChatStream(
         event,
@@ -896,9 +909,11 @@ export function registerRagIpc(ctx: AppContext): void {
             skill,
             // A3: a needle ask that was auto-narrowed to one doc (W2) and then downgraded off the
             // whole-doc engine reaches HERE — lead the honest scope notice so the narrowing stays
-            // visible. #37/#38: the whole-document-question hint (composed above) rides the same
-            // prefix. Both are null/absent on every ordinary route into this path (byte-unchanged).
+            // visible. #37/#38/#641: the whole-document-question hint or the partial-answer label
+            // (composed above) follows it when retrieval left sections out. Both are absent on
+            // every ordinary route into this path (byte-unchanged).
             answerPrefix: relevancePrefix,
+            partialCoverageNotice,
             onToken: sendToken
           })
           if (offer) {

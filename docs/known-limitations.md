@@ -1148,8 +1148,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the real runtime — the remaining causes are a thinking model burning the token budget on
   reasoning and a reply cut off at the cap, and an explicit "Build deep index" re-run retries them. The "whole document" wording is
   shown only when every in-scope document is fully indexed (`fully_chunked`). An **unmapped/ad-hoc
-  "{X}"** (no precomputed type) is **not** answered as a complete list — it falls back to a labelled
-  relevance answer ("based on the most relevant passages"). v1 has no live full-scan for unmapped
+  "{X}"** (no precomputed type: "list all the abbreviations", "how many pages") is **not** answered
+  as a list — it gets an answer from the most relevant passages, led by a short heads-up ("…so it may
+  miss items") when those passages left part of the documents out (true since #641, 2026-10-11; before
+  that it got the unrelated `generic` table). An explain request is answered the same way even when it
+  names a typed thing ("Erkläre alle Fristen"). Both are recognised by vocabulary (EN + DE word lists
+  in `router.ts`), so an unusual phrasing can still miss. The rule errs towards the written answer: an
+  explain verb anywhere in the question ("List every clause that describes the deposit") and a list
+  typed only by "who" / "when" ("Wann muss ich alles bezahlen?") also get it, not the listing. The reverse also holds: a needle question about a TYPED thing that carries a quantifier
+  ("Gilt die Frist für alle Mieter?") still gets the full list of that type rather than a direct
+  answer (#644). v1 has no live full-scan for unmapped
   types and does not auto-run the extract pass at import (it is started on request) — both are later
   phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
   **The listing cannot categorize or sum — and since issue #54 (2026-07-17) it says so; since #80
