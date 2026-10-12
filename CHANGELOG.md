@@ -45,6 +45,9 @@ from its first public `1.0.0` release onward.
   card now moves to the processor first, and returns to the card once translation is done. On a
   computer with both a built-in and a separate graphics card, the faster draft mode of the largest
   models is now judged by the separate card's free memory instead of the built-in one's (#473).
+- **Figure captions in knowledge packs now read like the text around them.** A caption showed
+  `H2O` and `m2` where the article text shows `H_2O` and `m^2`, and it kept citation numbers such
+  as `[2]` that the rest of the article leaves out (#488).
 
 ## [0.1.63] — 2026-10-12
 
