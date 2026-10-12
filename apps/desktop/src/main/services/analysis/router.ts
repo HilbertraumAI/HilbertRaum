@@ -22,6 +22,12 @@ import type { ExtractRecordType } from '../../../shared/types'
 //     a list request, even when it carries a quantifier ("Erkläre … inkl. aller Abkürzungen") —
 //     the listing engine cannot explain. Both #641 cases fall back to LABELLED relevance
 //     (`fallback: 'partial'`): the answer may miss items, but a deep index would not help.
+//   - Issue #644: a quantifier (all / every / each, alle / jede / sämtliche) is a list request only
+//     at the head of a request ("Alle Fristen?", "Kannst du mir alle Fristen nennen?"); inside a
+//     question it modifies the question ("Welche Frist gilt für alle Mieter?" → labelled relevance).
+//     A yes/no question ("Gilt die Frist für alle Mieter?", "Does the contract list all the
+//     deadlines?") asks for a verdict, not a list: an ordinary answer, unless it is a polite request
+//     ("Can you list …", "Kannst du … auflisten?").
 //   - Fixed precedence: explicit button > compare (needs 2 docs) > coverage-extract >
 //     tree-summary > relevance. A compare classified without 2 docs, or any low-confidence
 //     classification, falls back to relevance — never an empty result from a stray trigger word.
@@ -81,8 +87,12 @@ export interface RouteDecision {
 //     \büberblick can never match "Überblick" (the position before "Ü" is not a JS word
 //     boundary) — überblick therefore carries no boundary at all.
 
-const COVERAGE_RE =
-  /\b(list|enumerate|every|each|all of (the|them)|all the|how many|how much|count)\b|\b(jede[rsn]?|alle[rsn]?|sämtliche[rsn]?|wie ?viele?|liste)\b|\b(auflist|aufzähl|zähl)/i
+// The list/count triggers, in two halves (#644). A list or count VERB asks for a list wherever it
+// stands; a QUANTIFIER does only at the head of a request (`listRequestShape` below).
+const LIST_VERB_RE = /\b(list|enumerate|how many|how much|count)\b|\b(wie ?viele?|liste)\b|\b(auflist|aufzähl|zähl)/i
+const QUANTIFIERS = String.raw`every|each|all of (?:the|them)|all the|jede[rsn]?|alle[rsn]?|sämtliche[rsn]?`
+const QUANTIFIER_RE = new RegExp(String.raw`(?<![\p{L}\p{N}])(?:${QUANTIFIERS})(?![\p{L}\p{N}])`, 'iu')
+const HEAD_QUANTIFIER_RE = new RegExp(String.raw`^(?:${QUANTIFIERS})(?![\p{L}\p{N}])`, 'iu')
 // Aggregation/categorization verbs (issue #37): "categorize the expenses, sum per category" is a
 // whole-document task by nature — no top-k short of "all chunks" yields a correct total. These
 // route to coverage exactly like the list/count triggers above: coverage-extract when extract
@@ -113,11 +123,123 @@ const EXPLAIN_RE =
 // gate ignores them.
 const TYPE_CUE_WORDS_RE = /\b(who|when|must|shall|wer|wann|muss)\b|(?<![\p{L}\p{N}])müssen(?![\p{L}\p{N}])/giu
 
-/** Closed-vocabulary synonym table: a user's "{X}" → an extracted type (plan §4.2 step 4). */
+// #644: the finite verbs a yes/no question opens with. English asks with an auxiliary or modal;
+// German puts any finite verb first, so its list is the common auxiliaries and modals plus the
+// verbs a question about a contract, a letter or a statement tends to open with. A verb missing
+// here costs only the label: the question still never gets the listing (no list verb, no head
+// quantifier), it gets the labelled answer instead of the plain one.
+const YES_NO_VERBS = new Set(
+  (
+    'is are was were am do does did has have had will would shall should can could may might must ' +
+    "isn't aren't wasn't weren't don't doesn't didn't hasn't haven't hadn't won't wouldn't shouldn't can't couldn't mustn't " +
+    'ist sind war waren wäre wären bin bist seid hat haben hatte hatten hätte hätten habe hast habt ' +
+    'wird werden wurde wurden würde würden wirst werde kann kannst können konnte konnten könnte könnten ' +
+    'muss musst müssen musste mussten müsste müssten darf darfst dürfen durfte durften dürfte dürften ' +
+    'soll sollst sollen sollte sollten will willst wollen wollte wollten mag möchte möchten ' +
+    'gilt gelten galt galten gibt gab gäbe steht stehen gehört gehören betrifft betreffen ' +
+    'enthält enthalten bekommt bekommen erhält erhalten zahlt zahlen zahlte zahlten bezahlt endet enden ' +
+    'läuft laufen beginnt beginnen braucht brauchen liegt liegen stimmt stimmen trifft treffen umfasst ' +
+    'umfassen deckt decken haftet haften fällt fallen passt passen reicht reichen regelt verlangt zählt'
+  ).split(' ')
+)
+// "was" and "am" are German too ("Was sind alle Fristen?", "Am Monatsende …"): they open a yes/no
+// question only before an English subject ("Was every payment on time?", "Am I liable for all costs?").
+const ENGLISH_ONLY_BEFORE_SUBJECT = new Set(['was', 'am'])
+const ENGLISH_SUBJECTS = new Set(
+  'the a an this that these those there it i we you he she they my your our their his her its every each all any anything everything'.split(' ')
+)
+// A polite request opens like a yes/no question but asks for the thing ("Can you list every
+// deadline?", "Kannst du mir alle Fristen nennen?"). Matched before the yes/no verbs.
+const POLITE_OPENERS = [
+  'can you', 'could you', 'would you', 'will you', 'can u', 'could u', 'would u',
+  'can i see', 'can i get', 'can i have', 'could i see', 'could i get', 'could i have', 'may i see', 'may i have',
+  'kannst du', 'könntest du', 'können sie', 'könnten sie', 'würdest du', 'würden sie', 'magst du'
+].map((s) => s.split(' '))
+// The words a request may open with before the thing it asks for ("Zeig mir alle Zahlungen", "What
+// are all the deadlines?", "Bitte nenne mir sämtliche Fristen"). Stripped repeatedly from the head of
+// a sentence; what follows is the head the quantifier must stand at. List verbs need no entry: one
+// asks for a list wherever it stands.
+const REQUEST_OPENERS = [
+  'please', 'kindly', 'ok', 'okay', 'so', 'now', 'also', 'and', 'then', 'hey', 'hi', 'hello',
+  'i need', 'we need', 'i want', 'i would like', "i'd like", 'give me', 'give us', 'give', 'show me', 'show us',
+  'show', 'tell me', 'tell us', 'tell', 'get me', 'get', 'name', 'find', 'provide', 'extract', 'pull out',
+  'collect', 'gather', 'identify', 'what are', 'what were', "what're", 'which are', 'which were', 'who are',
+  'who were', 'when are', 'when were', 'where are', 'where were', 'me', 'us',
+  'bitte', 'und', 'dann', 'noch', 'hallo', 'ich brauche', 'wir brauchen', 'ich möchte', 'ich will',
+  'ich hätte gern', 'ich hätte gerne', 'zeig', 'zeige', 'zeigen sie', 'gib', 'geben sie', 'nenn', 'nenne',
+  'nennen sie', 'sag', 'sage', 'sagen', 'sagen sie', 'finde', 'finden sie', 'such', 'suche', 'suchen sie',
+  'sammle', 'mir', 'uns', 'was sind', 'was waren', 'welche sind', 'welche waren', 'wer sind', 'wer waren',
+  'wann sind', 'wo sind', 'wie lauten', 'wie heißen'
+].map((s) => s.split(' '))
+// After a polite opener or a request verb, "whether / if / ob" embeds a yes/no question ("Can you tell
+// me whether all the payments were on time?"). "ob" needs no opener; a bare "if" opens a condition.
+const EMBEDDED_YES_NO = new Set(['whether', 'ob'])
+
+/** The lower-cased words of one sentence (letters and digits; an apostrophe stays inside a word). */
+function sentenceWords(sentence: string): string[] {
+  return sentence.toLowerCase().replace(/’/g, "'").match(/[\p{L}\p{N}]+(?:'\p{L}+)?/gu) ?? []
+}
+
+/** The length of the opener at `words[at]`, or 0. */
+function openerAt(words: readonly string[], at: number, openers: readonly string[][]): number {
+  const hit = openers.find((o) => o.every((w, k) => words[at + k] === w))
+  return hit?.length ?? 0
+}
+
+/** One sentence's shape for #644: is it a yes/no question, and does a quantifier head its request? */
+function sentenceShape(sentence: string): { yesNo: boolean; headQuantifier: boolean } {
+  const words = sentenceWords(sentence)
+  let at = openerAt(words, 0, POLITE_OPENERS)
+  const polite = at > 0
+  const first = words[0] ?? ''
+  if (
+    !polite &&
+    YES_NO_VERBS.has(first) &&
+    (!ENGLISH_ONLY_BEFORE_SUBJECT.has(first) || ENGLISH_SUBJECTS.has(words[1] ?? ''))
+  ) {
+    return { yesNo: true, headQuantifier: false }
+  }
+  let stripped = polite
+  for (let n = openerAt(words, at, REQUEST_OPENERS); n > 0; n = openerAt(words, at, REQUEST_OPENERS)) {
+    at += n
+    stripped = true
+  }
+  const head = words[at] ?? ''
+  if (EMBEDDED_YES_NO.has(head) || (stripped && head === 'if')) return { yesNo: true, headQuantifier: false }
+  return { yesNo: false, headQuantifier: HEAD_QUANTIFIER_RE.test(words.slice(at).join(' ')) }
+}
+
+/**
+ * #644: what a question's list/count triggers ask for. `list` — a list or count verb, or a quantifier
+ * at the head of a request, in a sentence that is not a yes/no question; `lookup` — every trigger sits
+ * in a yes/no question, which asks for a verdict; `modifier` — a quantifier inside some other question
+ * ("When is each payment due?"), which the listing cannot answer; null — no trigger. Judged sentence by
+ * sentence ("Ich habe einen Mietvertrag. Gilt die Frist für alle Mieter?"); a period splits only before
+ * a capital, so "inkl. aller" stays one sentence.
+ */
+function listRequestShape(question: string): { shape: 'list' | 'lookup' | 'modifier' | null; listSentence?: string } {
+  let shape: 'lookup' | 'modifier' | null = null
+  for (const sentence of question.split(/[?!;:\n]|\.\s+(?=\p{Lu})/u)) {
+    const listVerb = LIST_VERB_RE.test(sentence)
+    if (!listVerb && !QUANTIFIER_RE.test(sentence)) continue
+    const { yesNo, headQuantifier } = sentenceShape(sentence)
+    if (yesNo) {
+      shape ??= 'lookup'
+      continue
+    }
+    if (listVerb || headQuantifier) return { shape: 'list', listSentence: sentence }
+    shape = 'modifier'
+  }
+  return { shape }
+}
+
+/** Closed-vocabulary synonym table: a user's "{X}" → an extracted type (plan §4.2 step 4). #644: no
+ *  word with a common second sense — "terms" (medical terms), "names" (names of the medications),
+ *  "Daten" (data) — so such an ask is untyped and gets the labelled answer, not the wrong list. */
 const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [
   {
     type: 'date',
-    re: /\b(deadline|deadlines|due date|due dates|due|date|dates|when)\b|\b(frist|fristen|termin|termine|datum|daten|fälligkeit|wann)\b/i
+    re: /\b(deadline|deadlines|due date|due dates|due|date|dates|when)\b|\b(frist|fristen|termin|termine|datum|fälligkeit|wann)\b/i
   },
   {
     type: 'amount',
@@ -125,11 +247,11 @@ const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [
   },
   {
     type: 'party',
-    re: /\b(who|part(?:y|ies)|signator(?:y|ies)|person|people|persons|name|names|organi[sz]ation|organi[sz]ations|company|companies)\b|\b(wer|partei|parteien|person|personen|name|namen|unternehmen|firma|firmen|organisation|organisationen)\b/i
+    re: /\b(who|part(?:y|ies)|signator(?:y|ies)|person|people|persons|organi[sz]ation|organi[sz]ations|company|companies)\b|\b(wer|partei|parteien|person|personen|unternehmen|firma|firmen|organisation|organisationen)\b/i
   },
   {
     type: 'obligation',
-    re: /\b(obligation|obligations|must|shall|clause|clauses|requirement|requirements|dut(?:y|ies)|term|terms)\b|\b(pflicht|pflichten|klausel|klauseln|muss|müssen|anforderung|anforderungen|verpflichtung|verpflichtungen|bedingung|bedingungen)\b/i
+    re: /\b(obligation|obligations|must|shall|clause|clauses|requirement|requirements|dut(?:y|ies))\b|\b(pflicht|pflichten|klausel|klauseln|muss|müssen|anforderung|anforderungen|verpflichtung|verpflichtungen|bedingung|bedingungen)\b/i
   }
 ]
 
@@ -145,12 +267,21 @@ export function isAggregationShaped(question: string): boolean {
   return AGGREGATION_RE.test(question ?? '')
 }
 
-/** The extract type a question's "{X}" names, or null when no synonym matches (#641). */
+/** The extract type a question's "{X}" names, or null when no synonym matches (#641). #644: the
+ *  synonym that comes FIRST in the question wins, not the first table row — the thing asked for is
+ *  named before what it is asked with ("List all payments and their due dates" lists payments). */
 function matchedRecordType(question: string): ExtractRecordType | null {
+  let first: { type: ExtractRecordType; at: number } | null = null
   for (const { type, re } of TYPE_SYNONYMS) {
-    if (re.test(question)) return type
+    const at = question.search(re)
+    if (at >= 0 && (first === null || at < first.at)) first = { type, at }
   }
-  return null
+  return first?.type ?? null
+}
+
+/** The question without its #641 type cue words (who / when / must …, wer / wann / muss …). */
+function withoutTypeCueWords(question: string): string {
+  return question.replace(TYPE_CUE_WORDS_RE, ' ')
 }
 
 /** Map a free-text "list every {X}" to the closed extract type set (default `generic`). */
@@ -182,8 +313,10 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   // explain request that carries a quantifier, or a "{X}" no extract type covers, never gets
   // the listing — it could only print the unrelated `generic` table (step 4b labels it instead).
   // An aggregation ask stays coverage whatever its {X} (#37: never a silent top-k sum).
-  const listTrigger = COVERAGE_RE.test(q)
-  const namesTypedThing = matchedRecordType(q.replace(TYPE_CUE_WORDS_RE, ' ')) !== null
+  // #644: and only a list REQUEST — a list verb, or a quantifier at the head of the request.
+  const { shape: triggerShape, listSentence } = listRequestShape(q)
+  const listTrigger = triggerShape === 'list'
+  const namesTypedThing = matchedRecordType(withoutTypeCueWords(q)) !== null
   const wantsListing = listTrigger && !EXPLAIN_RE.test(q) && namesTypedThing
   const wantsCoverage = wantsListing || AGGREGATION_RE.test(q)
   const wantsSummary = SUMMARY_RE.test(q)
@@ -205,7 +338,9 @@ export function routeQuestion(input: RouteInput): RouteDecision {
     if (input.extractAvailable) {
       return {
         engine: 'coverage-extract',
-        recordType: mapQuestionToRecordType(q),
+        // #644: the type the list request itself names first ("What must every tenant pay? List all
+        // the fees" lists fees; "List when every payment is due" lists dates), else the question's.
+        recordType: (listSentence !== undefined ? matchedRecordType(listSentence) : null) ?? mapQuestionToRecordType(q),
         confidence: 'high'
       }
     }
@@ -219,11 +354,13 @@ export function routeQuestion(input: RouteInput): RouteDecision {
 
   // 4b. #641: a list/count trigger the listing cannot serve (an explain request, an untyped {X})
   //     — LABELLED relevance: the caller may say the answer can miss items, but never recommends
-  //     the deep index, which would not answer it either.
-  if (listTrigger) {
+  //     the deep index, which would not answer it either. #644: a quantifier inside a question
+  //     ("When is each payment due?") is labelled the same way: the answer covers several items.
+  if (triggerShape === 'list' || triggerShape === 'modifier') {
     return { engine: 'relevance', confidence: 'low', fallback: 'partial' }
   }
 
-  // 5. Everything else → relevance RAG (the existing retrieve path, byte-unchanged).
+  // 5. Everything else → relevance RAG (the existing retrieve path, byte-unchanged). #644: so is a
+  //    yes/no question whatever triggers it carries — it asks for a verdict, not a list.
   return { engine: 'relevance', confidence: 'high' }
 }
