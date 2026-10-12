@@ -27,10 +27,6 @@ export interface EmbedderSelectionDeps {
   model: EmbeddingModelInfo | null
   /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
   isDev?: boolean
-  resolveBin?: (rootPath: string) => string | null
-  modelExists?: (modelPath: string) => boolean
-  makeE5?: (model: EmbeddingModelInfo, binPath: string) => Embedder
-  makeMock?: () => Embedder
   onSelect?: (kind: 'e5' | 'mock', reason: string) => void
 }
 
@@ -40,34 +36,28 @@ export interface EmbedderSelectionDeps {
  * is lazy-started on first `embed()`), so this returns synchronously.
  */
 export function createSelectedEmbedder(deps: EmbedderSelectionDeps): Embedder {
-  const makeMock = deps.makeMock ?? (() => createMockEmbedder())
-  const makeE5 =
-    deps.makeE5 ??
-    ((model: EmbeddingModelInfo, binPath: string) =>
-      createE5Embedder({
-        id: model.id,
-        binPath,
-        modelPath: model.modelPath,
-        dimensions: model.dimensions,
-        contextTokens: model.contextTokens
-      }))
+  const makeE5 = (model: EmbeddingModelInfo, binPath: string): Embedder =>
+    createE5Embedder({
+      id: model.id,
+      binPath,
+      modelPath: model.modelPath,
+      dimensions: model.dimensions,
+      contextTokens: model.contextTokens
+    })
 
   // Shared model→binary→weights ladder (L16). The embedder is the one selector that
   // degrades to a MockEmbedder instead of null, so the app launches with zero model files.
   const sel = resolveSidecarSelection<EmbeddingModelInfo, Embedder>({
     rootPath: deps.rootPath,
     model: deps.model,
-    resolveBin:
-      deps.resolveBin ??
-      ((root) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev })),
-    modelExists: deps.modelExists,
+    resolveBin: (root) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev }),
     makeReal: makeE5,
     binaryName: 'llama-server',
     modelNoun: 'embedding model'
   })
   if (!sel.available) {
     deps.onSelect?.('mock', sel.reason)
-    return makeMock()
+    return createMockEmbedder()
   }
   deps.onSelect?.('e5', sel.reason)
   return makeE5(sel.model, sel.binPath)

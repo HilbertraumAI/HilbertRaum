@@ -67,7 +67,7 @@ const MAX_TRUNCATE_RETRIES = 5
 
 export type E5EmbedderDeps = Pick<
   LlamaServerOptions,
-  'spawn' | 'fetchImpl' | 'findPort' | 'threads' | 'healthTimeoutMs' | 'healthIntervalMs' | 'host'
+  'spawn' | 'fetchImpl' | 'findPort' | 'healthTimeoutMs' | 'healthIntervalMs'
 >
 
 export interface E5EmbedderOptions extends E5EmbedderDeps {
@@ -80,8 +80,6 @@ export interface E5EmbedderOptions extends E5EmbedderDeps {
   dimensions?: number
   /** Texts per `/v1/embeddings` request (default 32). */
   batchSize?: number
-  /** Per-request timeout in ms (default 120 000). */
-  requestTimeoutMs?: number
 }
 
 interface EmbeddingResponse {
@@ -376,10 +374,8 @@ export class E5Embedder implements Embedder {
         spawn: this.opts.spawn,
         fetchImpl: this.opts.fetchImpl,
         findPort: this.opts.findPort,
-        threads: this.opts.threads,
         healthTimeoutMs: this.opts.healthTimeoutMs,
         healthIntervalMs: this.opts.healthIntervalMs,
-        host: this.opts.host,
         // #244: let a lock/quit teardown abort this start mid-health-wait (the child is killed
         // via the normal stop path; start() rejects AbortError — never latched below).
         startAbortSignal: abort.signal,
@@ -494,7 +490,7 @@ export class E5Embedder implements Embedder {
     const server = await this.ensureStarted(opts?.signal)
     const prepared = texts.map((t) => this.truncateForContext(t))
     const batchSize = Math.max(1, this.opts.batchSize ?? DEFAULT_EMBED_BATCH_SIZE)
-    const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    const timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
     const ctxBudget = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
 
     // Empty/whitespace inputs are NEVER sent to the sidecar: llama.cpp's `/v1/embeddings` rejects an
@@ -633,11 +629,9 @@ export class E5Embedder implements Embedder {
    * (see its declaration for why this differs from the reranker).
    */
   async suspend(): Promise<void> {
-    // Clear the failed-start latch AFTER teardown, not before (L4): teardown awaits an
-    // in-flight start, and a start that fails during that await sets `startFailed`. If we
-    // cleared first, that racing failure would re-arm the latch and the next embed() would
-    // throw the stale error — forcing a second lock/unlock. Clearing last guarantees a
-    // post-suspend embed() gets a fresh start attempt.
+    // Cleared after the teardown. The teardown aborts an in-flight start first, so that start's
+    // failure never latches (#244, `ensureStarted`'s `.catch`); clearing last is a second guard for
+    // the same outcome (L4).
     await this.teardown()
     this.startFailed = null
   }
