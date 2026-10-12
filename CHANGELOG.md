@@ -25,7 +25,11 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Fixed
+
+- **Figure captions in knowledge packs now read like the text around them.** A caption showed
+  `H2O` and `m2` where the article text shows `H_2O` and `m^2`, and it kept citation numbers such
+  as `[2]` that the rest of the article leaves out (#488).
 
 ## [0.1.63] — 2026-10-12
 
@@ -371,9 +375,6 @@ Nothing yet — the next release's entries accumulate here.
   next time you unlock. The voice-dictation messages are now shown in German too (#530).
 - **Home no longer calls the demo mode "running".** When a model answers with simulated demo
   replies, Home says so (#530).
-- **Figure captions in knowledge packs now read like the text around them.** A caption showed
-  `H2O` and `m2` where the article text shows `H_2O` and `m^2`, and it kept citation numbers such
-  as `[2]` that the rest of the article leaves out (#488).
 
 ### Security
 
