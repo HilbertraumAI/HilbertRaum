@@ -5083,7 +5083,10 @@ Tests:
 - `assets.test.ts`: the version-order table, the relation (the pin in another backend is current).
 - `spawn-gate.test.ts`: hold, wait, release, bound.
 - `sidecar.test.ts` "waits for an engine install to finish its swap before it spawns (#516 spawn
-  gate)": the LlamaServer spawn site (all five llama sidecars) waits on the gate.
+  gate)": the LlamaServer spawn site (all five llama sidecars) waits on the gate; `gpu.test.ts` (same
+  title) the `--list-devices` probe, and `engine-health.test.ts` "waits for an install of its family to
+  finish the swap before it launches (#516 spawn gate)" the "Check again" launch. The whisper-cli
+  spawn site has no such row yet.
 - `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
   `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
   still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.

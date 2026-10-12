@@ -3,6 +3,7 @@ import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { createCachedGpuProbe, parseListDevices, probeGpuDevices } from '../../src/main/services/runtime/gpu'
+import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { until } from '../helpers/hang-budget'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 
@@ -119,6 +120,26 @@ describe('probeGpuDevices', () => {
     expect(devices).toHaveLength(1)
     expect(devices![0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
     expect(calls[0].args).toEqual(['--list-devices'])
+  })
+
+  // #516 (architecture.md "In-app engine updates" §3): the probe runs the llama-server an engine
+  // install replaces, so it waits for the swap like LlamaServer does (sidecar.test.ts).
+  it('waits for an engine install to finish its swap before it spawns (#516 spawn gate)', async () => {
+    const { spawn, calls } = probeSpawn((child) => {
+      child.stdout.emit('data', RTX_3080TI_OUTPUT)
+      child.emit('close', 0, null)
+    })
+    const release = holdEngineSpawns('llama_cpp')
+    const probing = probeGpuDevices('/bin/llama-server', { spawn })
+    try {
+      // One macrotask: every microtask the probe could chain (verify, spawn) has run.
+      await new Promise((r) => setImmediate(r))
+      expect(calls).toHaveLength(0) // held: nothing spawned mid-swap
+    } finally {
+      release()
+    }
+    expect(await probing).toHaveLength(1)
+    expect(calls).toHaveLength(1)
   })
 
   it('waits for stdout drained after exit ("close"), so late data is not truncated', async () => {

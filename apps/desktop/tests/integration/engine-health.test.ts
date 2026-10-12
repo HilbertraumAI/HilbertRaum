@@ -25,6 +25,7 @@ import type { Embedder } from '../../src/main/services/embeddings'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { EmbedderError } from '../../src/main/services/embeddings/errors'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
+import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 
 const LINUX = { platform: 'linux' as const }
@@ -219,6 +220,24 @@ describe('checkProgramLoads (#530)', () => {
     const out = await checkProgramLoads('llama_cpp', '/x/llama-server', ['--version'], { spawn, verify: verified, ...LINUX })
     expect(out).toBe('loads')
     expect(engineProblems()).toEqual([])
+  })
+
+  // #516 (architecture.md "In-app engine updates" §3): "Check again" never launches a program an
+  // install of ITS family is replacing; LlamaServer (sidecar.test.ts) and the GPU probe (gpu.test.ts)
+  // wait the same way.
+  it('waits for an install of its family to finish the swap before it launches (#516 spawn gate)', async () => {
+    const { spawn, children } = fakeSpawn((c) => c.emit('close', 0, null))
+    const release = holdEngineSpawns('whisper_cpp')
+    const checking = checkProgramLoads('whisper_cpp', '/x/whisper-cli', ['--help'], { spawn, verify: verified, ...LINUX })
+    try {
+      // One macrotask: every microtask the check could chain (verify, spawn) has run.
+      await new Promise((r) => setImmediate(r))
+      expect(children).toHaveLength(0) // held: nothing launched mid-swap
+    } finally {
+      release()
+    }
+    expect(await checking).toBe('loads')
+    expect(children).toHaveLength(1)
   })
 
   it('a spawn that throws is unchecked', async () => {
