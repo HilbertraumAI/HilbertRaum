@@ -29,6 +29,7 @@ import { t } from '../../src/shared/i18n'
 import { invoke, type IpcHandlers } from '../helpers/ipc'
 import { recordingRuntime, type RecordingRuntime } from '../helpers/scripted-runtime'
 import { ingestTextFile, makeRagAskContext, makeSkillsWorld } from '../helpers/skills-world'
+import { documentApproxTokenTotal, wholeDocumentFitBudgetTokens } from '../../src/main/services/rag'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -52,6 +53,8 @@ interface Harness {
 
 async function makeHarness(o: {
   text: string
+  /** Ingested as this file name (default `abrechnung.txt`); a `.md` gives one section per heading. */
+  fileName?: string
   contextWindow: number
   packIds?: string[]
   /** A second scoped document mid re-index: `processing`, its old deep index still `ready` (until the
@@ -59,7 +62,7 @@ async function makeHarness(o: {
   reindexingTreeDoc?: boolean
 }): Promise<Harness> {
   const w = makeSkillsWorld('wholeread')
-  const docId = await ingestTextFile(w, 'abrechnung.txt', o.text)
+  const docId = await ingestTextFile(w, o.fileName ?? 'abrechnung.txt', o.text)
   const documentIds = [docId]
   if (o.reindexingTreeDoc) {
     const other = await ingestTextFile(w, 'notiz.txt', statement(20))
@@ -83,8 +86,9 @@ async function ask(h: Harness, question: string): Promise<Message> {
   return result as Message
 }
 
-/** A ready single-level deep index: one root summary over every section (the tree map-reduce material). */
-function seedReadyTree(h: Harness): void {
+/** A ready single-level deep index: one root summary over every section (the tree map-reduce material).
+ *  `usable: false` leaves the root summary empty: the status says ready, but the tree has nothing to read. */
+function seedReadyTree(h: Harness, usable = true): void {
   const now = new Date().toISOString()
   h.db
     .prepare(
@@ -93,7 +97,7 @@ function seedReadyTree(h: Harness): void {
           embedding_blob, dimensions, embedding_model_id, content_hash, model_id, created_at)
        VALUES (?, ?, NULL, 1, 0, NULL, 1, ?, NULL, NULL, NULL, ?, 'mock', ?)`
     )
-    .run('root-1', h.docId, 'Summary: monthly rent payments of 800 EUR.', 'hash-root-1', now)
+    .run('root-1', h.docId, usable ? 'Summary: monthly rent payments of 800 EUR.' : ' ', 'hash-root-1', now)
   const edge = h.db.prepare('INSERT INTO tree_edges (parent_id, child_id, child_is_chunk, ordinal) VALUES (?, ?, 1, ?)')
   h.chunkIds.forEach((id, i) => edge.run('root-1', id, i))
   h.db.prepare("UPDATE documents SET tree_status = 'ready' WHERE id = ?").run(h.docId)
@@ -142,6 +146,22 @@ describe('askDocuments — one document that fits is read whole (#643)', () => {
     expect(msg.content.startsWith('Model answer.')).toBe(true)
   })
 
+  // Every section also costs its `[Sn] File: …` line in the prompt. Thirty one-line slides: their text
+  // alone (240 units) fits a 2,048 window's 512-unit budget, the text plus 30 × 32 units of framing does not.
+  it.each([
+    { contextWindow: 2048, mode: 'relevance' },
+    { contextWindow: 4096, mode: 'capped' }
+  ])('thirty short sections at a $contextWindow-token window: their framing counts too ($mode)', async ({ contextWindow, mode }) => {
+    const slides = Array.from({ length: 30 }, (_, i) => `# Folie ${i + 1}\n\nMiete Abschnitt ${i + 1}.`).join('\n\n')
+    const h = await makeHarness({ text: slides, fileName: 'folien.md', contextWindow })
+    expect(h.chunkIds.length).toBe(30)
+    const question = 'Wie hoch ist die Miete?'
+    // The premise: the text alone fits even the smaller window's budget.
+    expect(documentApproxTokenTotal(h.db, h.docId)).toBeLessThanOrEqual(wholeDocumentFitBudgetTokens(2048, question, null))
+    const msg = await ask(h, question)
+    expect(msg.coverage?.mode).toBe(mode)
+  })
+
   it.each([
     // The whole read never queries a knowledge pack; a pack chat keeps the retrieval that does.
     { name: 'a chat with knowledge packs', question: 'Wie hoch ist die Miete?', packIds: ['pack-1'], calls: 1, mode: 'relevance' },
@@ -159,13 +179,15 @@ describe('askDocuments — a summary ask with a ready deep index reads the tree 
   it.each([
     { name: 'too large to read whole, ready deep index → the tree', contextWindow: 4096, tree: true, mode: 'tree' },
     { name: 'too large to read whole, no deep index → top-k', contextWindow: 4096, tree: false, mode: 'relevance' },
+    // `answerWholeDocFromTree` would decline it, and the whole path would then map-reduce the chunks.
+    { name: 'too large, a ready deep index without a usable summary → top-k', contextWindow: 4096, tree: 'empty', mode: 'relevance' },
     { name: 'fits, ready deep index → the whole document, not the tree', contextWindow: 16384, tree: true, mode: 'capped' },
     // The ready tree belongs to the other document, which is being re-indexed: this one has none, so
     // the whole-document path would run an unasked-for chunk map-reduce over it.
     { name: "too large, another document's deep index → top-k", contextWindow: 4096, tree: false, mode: 'relevance', reindexingTreeDoc: true }
   ])('$name', async ({ contextWindow, tree, mode, reindexingTreeDoc }) => {
     const h = await makeHarness({ text: EIGHT_SECTIONS, contextWindow, reindexingTreeDoc })
-    if (tree) seedReadyTree(h)
+    if (tree) seedReadyTree(h, tree !== 'empty')
 
     const msg = await ask(h, 'Fasse die Abrechnung zusammen')
     expect(msg.coverage?.mode).toBe(mode)

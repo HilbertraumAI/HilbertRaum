@@ -863,12 +863,14 @@ export function documentApproxTokenTotal(db: Db, documentId: string): number {
  * #643: does the WHOLE document fit `budgetTokens` — the same test `retrieveWholeDocument` applies, so a
  * `true` here means that read comes back untruncated. Stops reading at the first chunk past the budget, so
  * the per-question check on a 1,000-section document reads a budget's worth of rows, not all of them.
+ * `perSectionTokens` charges each section extra (the `[Sn] File: … | Page: …` line, see
+ * `WHOLE_READ_SECTION_FRAMING_TOKENS`); 0 is `retrieveWholeDocument`'s own text-only test.
  */
-export function documentFitsWholeRead(db: Db, documentId: string, budgetTokens: number): boolean {
-  return deOverlappedTokenTotal(db, documentId, budgetTokens) <= budgetTokens
+export function documentFitsWholeRead(db: Db, documentId: string, budgetTokens: number, perSectionTokens = 0): boolean {
+  return deOverlappedTokenTotal(db, documentId, budgetTokens, perSectionTokens) <= budgetTokens
 }
 
-function deOverlappedTokenTotal(db: Db, documentId: string, stopAbove: number): number {
+function deOverlappedTokenTotal(db: Db, documentId: string, stopAbove: number, perSectionTokens = 0): number {
   // ORDER BY chunk_index for read-shape parity with `retrieveWholeDocument`: the whole-document read
   // de-overlaps consecutive same-segment chunks and charges the de-overlapped text against the budget
   // (audit §2.2), so the compare-split sizing must measure the SAME de-overlapped totals — otherwise a
@@ -881,7 +883,7 @@ function deOverlappedTokenTotal(db: Db, documentId: string, stopAbove: number): 
   let prev: { text: string; page_number: number | null; section_label: string | null } | null = null
   for (const r of rows) {
     const text = prev && sameSegment(prev, r) ? deOverlapAgainstPrev(prev.text, r.text) : r.text
-    total += Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
+    total += Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD) + perSectionTokens
     // Leaving the loop early resets the statement (the iterator's return()).
     if (total > stopAbove) break
     prev = r
@@ -1671,6 +1673,18 @@ export function wholeDocumentBudgetTokens(
  */
 const RETRIEVAL_FIT_SAFETY = 1.5
 
+/** Approx tokens of one excerpt's `[Sn] File: <title> | Page: N` line + quotes, per chunk. */
+const EXCERPT_LINE_FRAMING_TOKENS = 48
+
+/**
+ * #643: what one section's `[Sn] File: …` framing costs a whole read, in the budget's units — the
+ * relevance path's per-excerpt allowance taken through the same `RETRIEVAL_FIT_SAFETY` divisor.
+ * `retrieveWholeDocument` charges text only, so a document of many short sections (a slide deck, one
+ * section per page) could pass a text-only fit and still crowd the window; the small-document read
+ * (`registerRagIpc`'s `wholeReadDocumentId`) charges this per section before it chooses a whole read.
+ */
+export const WHOLE_READ_SECTION_FRAMING_TOKENS = Math.ceil(EXCERPT_LINE_FRAMING_TOKENS / RETRIEVAL_FIT_SAFETY)
+
 /**
  * The excerpt-block budget for the RELEVANCE (top-k) path, clamped to the REAL launched context
  * window (§L0) — not just the fixed `ragMaxContextTokens` setting. Mirrors `wholeDocumentBudgetTokens`
@@ -1685,7 +1699,7 @@ function retrievalExcerptBudgetTokens(
   skill: TurnSkill | null | undefined,
   topKFinal: number
 ): number {
-  const perExcerptFraming = 48 * Math.max(1, topKFinal) // "[Sn] File: <title> | Page: N" + quotes, per chunk
+  const perExcerptFraming = EXCERPT_LINE_FRAMING_TOKENS * Math.max(1, topKFinal)
   const usable = wholeDocumentBudgetTokens(contextTokens, question, skill) - perExcerptFraming
   return Math.max(256, Math.floor(usable / RETRIEVAL_FIT_SAFETY))
 }

@@ -25,6 +25,19 @@ export function isReviewEligible(
   return conversation?.mode === 'documents'
 }
 
+/**
+ * #643: did this answer's ONE grounded turn show the model every cited section under its `[Sn]`
+ * label (a whole document read in order, or the compare whole read)? Then its citations are
+ * labelled excerpts, like a relevance answer's, not whole-document provenance. Honoured for
+ * `capped` only — no other mode can mint labels. The one reading of `coverage.labelledExcerpts`
+ * shared by the chat Sources disclosure, the evidence snapshot and the review caption.
+ */
+export function hasLabelledExcerpts(
+  coverage: Pick<CoverageInfo, 'mode' | 'labelledExcerpts'> | null | undefined
+): boolean {
+  return coverage?.mode === 'capped' && coverage.labelledExcerpts === true
+}
+
 /** The three honesty-caption classes an answer's evidence presents as (spec §11.4/§24.3). */
 export type EvidencePaneMode = 'relevance' | 'whole_doc' | 'structured'
 
@@ -44,7 +57,7 @@ export type EvidencePaneMode = 'relevance' | 'whole_doc' | 'structured'
 export function evidencePaneMode(coverage: CoverageInfo | null): EvidencePaneMode {
   const mode = coverage?.mode
   if (mode == null || mode === 'relevance') return 'relevance'
-  if (mode === 'capped' && coverage?.labelledExcerpts === true) return 'relevance'
+  if (hasLabelledExcerpts(coverage)) return 'relevance'
   if (mode === 'extract') return 'structured'
   return 'whole_doc'
 }

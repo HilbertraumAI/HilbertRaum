@@ -1,5 +1,6 @@
 import { useEffect, useId, useRef, useState } from 'react'
 import type { Citation, CoverageMode, PackArticleSaveResult } from '@shared/types'
+import { hasLabelledExcerpts } from '@shared/evidence-review'
 import { Spinner } from '../components'
 import { useT, type I18n } from '../i18n'
 import { friendlyIpcError } from '../lib/errors'
@@ -177,9 +178,9 @@ export function SourcesDisclosure({
   // relevance answer (explicit, or undefined ⇒ pre-migration NULL coverage) keeps the literal
   // "Sources (N)" framing — so this path is byte-identical to before for every relevance turn.
   // #643: so does a labelled whole read, whose cards are capped like provenance (it can be long).
-  const labelledRead = mode === 'capped' && labelled === true
-  const isProvenance = mode != null && mode !== 'relevance' && !labelledRead
-  const overCap = (isProvenance || labelledRead) && !showAll && citations.length > PROVENANCE_CARD_CAP
+  const wholeDocMode = mode != null && mode !== 'relevance'
+  const isProvenance = wholeDocMode && !hasLabelledExcerpts({ mode, labelledExcerpts: labelled })
+  const overCap = wholeDocMode && !showAll && citations.length > PROVENANCE_CARD_CAP
   const shown = overCap ? citations.slice(0, PROVENANCE_CARD_CAP) : citations
   return (
     <div className="sources">

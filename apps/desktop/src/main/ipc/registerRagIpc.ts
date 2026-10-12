@@ -20,14 +20,16 @@ import { resolveScope } from '../services/collections'
 import { buildScopeFilter } from '../services/retrieval-scope'
 import {
   detectFilenameScope,
-  documentApproxTokenTotal,
   documentFitsWholeRead,
   generateGroundedAnswer,
   generateGroundedDataAnswer,
+  type GroundedAnswerOptions,
   modePackOutcomes,
   ragSettingsFrom,
+  WHOLE_READ_SECTION_FRAMING_TOKENS,
   wholeDocumentFitBudgetTokens
 } from '../services/rag'
+import { wholeDocTreeMaterial } from '../services/rag/whole-doc-tree'
 import { resolveTurnSkillFromRegistry } from '../services/skills/turn'
 import {
   BANK_STATEMENT_INSTALL_ID,
@@ -203,13 +205,11 @@ function wholeReadDocumentId(
   if (isSmallTalk(question)) return null
   if (!allInScopeDocsFullyChunked(db, scope)) return null
   const documentId = routableDocs[0]!.id
-  if (documentFitsWholeRead(db, documentId, fitBudgetTokens)) return documentId
-  if (treeSummary) {
-    const row = db.prepare('SELECT tree_status FROM documents WHERE id = ?').get(documentId) as unknown as
-      | { tree_status: string | null }
-      | undefined
-    if (row?.tree_status === 'ready') return documentId
-  }
+  // Each section also carries its `[Sn] File: …` line, which `retrieveWholeDocument` does not charge.
+  if (documentFitsWholeRead(db, documentId, fitBudgetTokens, WHOLE_READ_SECTION_FRAMING_TOKENS)) return documentId
+  // The tree answers only when it is ready AND holds a usable summary (`answerWholeDocFromTree`'s own
+  // gate); otherwise the whole path would fall to the chunk map-reduce.
+  if (treeSummary && wholeDocTreeMaterial(db, documentId) != null) return documentId
   return null
 }
 
@@ -548,8 +548,11 @@ export function registerRagIpc(ctx: AppContext): void {
             //     served by top-k, not refused. A DELIVERABLE keeps the whole read and DOES hit the refusal.
             const needleDowngrade =
               isNeedleShaped(text) &&
-              documentApproxTokenTotal(ctx.db, documentId) >
+              !documentFitsWholeRead(
+                ctx.db,
+                documentId,
                 wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, turnSkill)
+              )
             if (!needleDowngrade) {
               // Only a whole (capped/tree) read makes the whole-document claim → enforce the D45 refusal now.
               if (!allInScopeDocsFullyChunked(ctx.db, scope)) return refusePartial()
@@ -672,7 +675,7 @@ export function registerRagIpc(ctx: AppContext): void {
                     scope,
                     documentsInScope(ctx.db, scope, { requireChunks: true }),
                     text,
-                    wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, rawSettings), text, turnSkill),
+                    wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, turnSkill),
                     false
                   )
                   return generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
@@ -904,27 +907,23 @@ export function registerRagIpc(ctx: AppContext): void {
       // #643 / #642: ONE in-scope document that fits the window is read whole instead (every
       // section in the prompt, so neither notice can be true), and a summary ask over one document
       // too large for that, with a ready deep index, takes the tree. See `wholeReadDocumentId`.
-      const wholeReadId = wholeReadDocumentId(
-        ctx.db,
-        scope,
-        routableDocs,
-        text,
-        wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, rawSettings), text, skill),
-        decision.engine === 'tree-summary'
-      )
-      const scopeSections =
-        wholeReadId == null &&
-        decision.confidence === 'low' &&
-        (decision.fallback === 'coverage' || decision.fallback === 'partial') &&
-        routableDocs.length > 0
-          ? scopeSectionTotals(ctx.db, scope)
-          : null
-      const partialCoverageNotice = scopeSections
-        ? {
-            text: tMain(decision.fallback === 'coverage' ? 'analysis.wholeDocHint' : 'analysis.partialAnswerHint'),
-            scopeChunkTotal: scopeSections.partlyChunked ? Number.POSITIVE_INFINITY : scopeSections.sections
-          }
-        : undefined
+      // Both are decided inside the chat slot (below), against the document as the answer reads
+      // it — not before a wait for a yielding document task.
+      const partialCoverageNoticeFor = (wholeRead: boolean): GroundedAnswerOptions['partialCoverageNotice'] => {
+        const scopeSections =
+          !wholeRead &&
+          decision.confidence === 'low' &&
+          (decision.fallback === 'coverage' || decision.fallback === 'partial') &&
+          routableDocs.length > 0
+            ? scopeSectionTotals(ctx.db, scope)
+            : null
+        return scopeSections
+          ? {
+              text: tMain(decision.fallback === 'coverage' ? 'analysis.wholeDocHint' : 'analysis.partialAnswerHint'),
+              scopeChunkTotal: scopeSections.partlyChunked ? Number.POSITIVE_INFINITY : scopeSections.sections
+            }
+          : undefined
+      }
       const relevancePrefix = scopeNotice ? `${scopeNotice}\n\n` : undefined
 
       return withChatStream(
@@ -941,6 +940,15 @@ export function registerRagIpc(ctx: AppContext): void {
           // afterwards (update-in-place of the offer column only) — it never touches the
           // answer content or the stream.
           const offer = await classifierOffer(signal)
+          const wholeReadId = wholeReadDocumentId(
+            ctx.db,
+            scope,
+            documentsInScope(ctx.db, scope, { requireChunks: true }),
+            text,
+            wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill),
+            decision.engine === 'tree-summary'
+          )
+          const partialCoverageNotice = partialCoverageNoticeFor(wholeReadId != null)
           const msg = await generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
             signal,
             // One-shot ephemeral "summarizing…" notice when the compaction pre-pass starts (§5.2);

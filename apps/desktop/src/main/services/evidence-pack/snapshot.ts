@@ -6,6 +6,7 @@ import type {
   EvidenceSourceSnapshot
 } from '../../../shared/types'
 import { t } from '../../../shared/i18n'
+import { hasLabelledExcerpts } from '../../../shared/evidence-review'
 import { prepareCached, type Db } from '../db'
 import { parseCitations, parseCoverage } from '../chat'
 import { parseEndedEarly } from '../chat/ended-early'
@@ -263,7 +264,7 @@ export function createEvidenceReviewFromMessage(
 
   const citations = parseCitations(msg.citations_json) ?? []
   const coverage = parseCoverage(msg.coverage_json) ?? null
-  const kind = sourceKindForMode(coverage?.mode, coverage?.labelledExcerpts)
+  const kind = sourceKindForMode(coverage?.mode, hasLabelledExcerpts(coverage))
   const sources = buildEvidenceSourceSnapshots(db, citations, kind)
 
   const modelId = conv?.model_id ?? null

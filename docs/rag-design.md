@@ -1759,7 +1759,12 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   skill turns with) to `generateGroundedAnswer({ wholeDocument })`: one grounded turn, every section
   in order under its `[Sn]` label, history replayed, `capped` untruncated coverage ("Covers the whole
   document"). `documentFitsWholeRead` applies `retrieveWholeDocument`'s own fit test and stops reading
-  at the first section past the budget, so the per-question check on a long document stays cheap.
+  at the first section past the budget, so the per-question check on a long document stays cheap (the
+  A3 needle downgrade uses it too). The small-document read also charges every section its `[Sn] File: …`
+  line (`WHOLE_READ_SECTION_FRAMING_TOKENS`, the relevance path's 48 per excerpt through the same 1.5
+  divisor), which `retrieveWholeDocument` does not, so a deck of many short slides cannot pass on its text
+  alone and then crowd the window. The decision is made inside the chat slot, against the document as
+  the answer reads it.
   Measured budgets (a 6-word question, no skill): a 4,096 window (the 4B's default) fits 1,816
   estimated tokens (~3 pages), 8,192 (most catalog models) 4,546 (~7 pages), 16,384 10,008 and 32,768
   20,930; top-k reads 1,624 at 4,096 and 2,500 above. (The issue's "a 10-page letter fits 8k" does
@@ -1767,8 +1772,10 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   takes the same path when its one document is too large to read whole but has a ready deep index —
   `generateGroundedAnswer` reaches `answerWholeDocFromTree` when the read would truncate (`tree`
   coverage, leaf provenance). Without its own ready tree it stays top-k, never an unasked-for chunk
-  map-reduce; the document's own `tree_status` is re-checked because the router counts ready trees
-  over the whole scope, and a document being re-indexed keeps `ready` until its chunk transaction.
+  map-reduce: the document's own tree is re-checked with `answerWholeDocFromTree`'s gate
+  (`wholeDocTreeMaterial` — `ready` AND a usable summary), because the router counts ready trees over
+  the whole scope, a document being re-indexed keeps `ready` until its chunk transaction, and a
+  degenerate ready tree would make the tree decline.
   Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
   read. **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
   knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
