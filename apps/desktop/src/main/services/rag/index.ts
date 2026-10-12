@@ -856,6 +856,19 @@ function sourceMeta(chunk: RetrievedChunk): string {
 /** A document's whole size in the SAME token unit as `retrieveWholeDocument` (persisted token_count
  *  scaled by TOKENS_PER_WORD), so the compare budget can be split by real size. */
 export function documentApproxTokenTotal(db: Db, documentId: string): number {
+  return deOverlappedTokenTotal(db, documentId, Number.POSITIVE_INFINITY)
+}
+
+/**
+ * #643: does the WHOLE document fit `budgetTokens` — the same test `retrieveWholeDocument` applies, so a
+ * `true` here means that read comes back untruncated. Stops reading at the first chunk past the budget, so
+ * the per-question check on a 1,000-section document reads a budget's worth of rows, not all of them.
+ */
+export function documentFitsWholeRead(db: Db, documentId: string, budgetTokens: number): boolean {
+  return deOverlappedTokenTotal(db, documentId, budgetTokens) <= budgetTokens
+}
+
+function deOverlappedTokenTotal(db: Db, documentId: string, stopAbove: number): number {
   // ORDER BY chunk_index for read-shape parity with `retrieveWholeDocument`: the whole-document read
   // de-overlaps consecutive same-segment chunks and charges the de-overlapped text against the budget
   // (audit §2.2), so the compare-split sizing must measure the SAME de-overlapped totals — otherwise a
@@ -863,12 +876,14 @@ export function documentApproxTokenTotal(db: Db, documentId: string): number {
   // actually occupies. The scan is therefore order-dependent (each chunk compared to its predecessor).
   const rows = db
     .prepare('SELECT text, page_number, section_label FROM chunks WHERE document_id = ? ORDER BY chunk_index')
-    .all(documentId) as unknown as Array<{ text: string; page_number: number | null; section_label: string | null }>
+    .iterate(documentId) as unknown as Iterable<{ text: string; page_number: number | null; section_label: string | null }>
   let total = 0
   let prev: { text: string; page_number: number | null; section_label: string | null } | null = null
   for (const r of rows) {
     const text = prev && sameSegment(prev, r) ? deOverlapAgainstPrev(prev.text, r.text) : r.text
     total += Math.ceil(approxTokenCount(text) * TOKENS_PER_WORD)
+    // Leaving the loop early resets the statement (the iterator's return()).
+    if (total > stopAbove) break
     prev = r
   }
   return total
@@ -1561,9 +1576,11 @@ export interface GroundedAnswerOptions {
    * Skill-aware WHOLE-DOCUMENT answer (skill-whole-doc engine, Wave 2). When set, the grounded
    * context is the named document read IN ORDER (not top-k retrieval), capped to the context
    * budget, and the persisted coverage is `capped` ("covers the whole document" / "covers the
-   * beginning" when truncated) instead of `relevance`. Set ONLY by a `grounded-whole-doc` analysis
-   * handler over its single in-scope, fully-chunked document; the caller has already enforced those
-   * preconditions (the D45 fully-chunked refusal still gates this in `registerRagIpc`).
+   * beginning" when truncated) instead of `relevance`. Set by a `grounded-whole-doc` analysis
+   * handler over its single in-scope, fully-chunked document (the D45 fully-chunked refusal still
+   * gates this in `registerRagIpc`), and since #643 / #642 for any top-k-bound turn over ONE fully
+   * chunked document that fits the budget, or a summary ask whose document has a ready deep index
+   * (`registerRagIpc`'s `wholeReadDocumentId`). The caller has enforced those preconditions.
    */
   wholeDocument?: { documentId: string }
   /**
@@ -1842,7 +1859,10 @@ export async function generateGroundedAnswer(
       mode: 'capped',
       chunksCovered: whole.chunksCovered,
       chunksTotal: whole.chunksTotal,
-      truncated: whole.truncated
+      truncated: whole.truncated,
+      // #643: the prompt showed these sections under their [Sn] labels (buildGroundedPrompt), so the
+      // citations are labelled excerpts, not provenance — the map-reduce rescues above never set it.
+      labelledExcerpts: true
     }
     // The last-resort capped FLOOR (both map-reduce rescues declined — zero chunks, or a disabled path): the
     // read is the honest beginning. Tell the model exactly what it cannot see so its answer never claims
@@ -1883,7 +1903,10 @@ export async function generateGroundedAnswer(
         mode: 'capped',
         chunksCovered: comp.chunksCovered,
         chunksTotal: comp.chunksTotal,
-        truncated: comp.truncated
+        truncated: comp.truncated,
+        // #643: both documents' sections were shown under their [Sn] labels (buildCompareWholeDocPrompt).
+        // The diff branch above shows the model change lines, not the sections, so it stays provenance.
+        labelledExcerpts: true
       }
     }
   } else {

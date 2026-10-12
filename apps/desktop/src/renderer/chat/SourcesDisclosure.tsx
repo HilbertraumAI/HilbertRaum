@@ -22,6 +22,10 @@ import { formatCitationLabel } from '../lib/displayMap'
 //     excerpt framing, marks the cards "Sections covered", and caps the render (~24 + an "and N
 //     more sections" reveal). The CoverageMeter beside it owns the breadth claim (whole /
 //     beginning / partial), so this label stays breadth-neutral and never restates it.
+//   - LABELLED WHOLE READ (#643: mode `capped` + `labelled`): the whole document went to the
+//     model in ONE turn, every section under its [Sn] label, so the cards are excerpts the
+//     answer cites inline — relevance framing, [Sn] on every card. The card cap still applies:
+//     a large context window can read a few dozen sections whole.
 
 /** How many provenance cards to render before the "and N more sections" reveal. Exported:
  *  the evidence-review workspace (EP-1 plan §7.3) reuses the same cap for its source cards
@@ -127,6 +131,7 @@ function ArchiveSaveAction({
 export function SourcesDisclosure({
   citations,
   mode,
+  labelled,
   onReview,
   reviewDisabled,
   onOpenArticle,
@@ -135,6 +140,9 @@ export function SourcesDisclosure({
   citations: Citation[]
   /** The answer's coverage mode; any whole-document mode (≠ relevance) renders as provenance. */
   mode?: CoverageMode
+  /** #643: the answer's `coverage.labelledExcerpts` — the model saw these as [Sn] excerpts, so a
+   *  `capped` answer keeps the relevance framing. Ignored for every other mode. */
+  labelled?: boolean
   /** EP-1 plan §7.2 (spec §9.2): the quiet "Review answer and sources" footer action at the
    *  bottom of the expanded region. Absent ⇒ never rendered (optional-callback gating). */
   onReview?: () => void
@@ -168,8 +176,10 @@ export function SourcesDisclosure({
   // A whole-document answer's citations are leaf PROVENANCE, not 1:1 inline citations; only a
   // relevance answer (explicit, or undefined ⇒ pre-migration NULL coverage) keeps the literal
   // "Sources (N)" framing — so this path is byte-identical to before for every relevance turn.
-  const isProvenance = mode != null && mode !== 'relevance'
-  const overCap = isProvenance && !showAll && citations.length > PROVENANCE_CARD_CAP
+  // #643: so does a labelled whole read, whose cards are capped like provenance (it can be long).
+  const labelledRead = mode === 'capped' && labelled === true
+  const isProvenance = mode != null && mode !== 'relevance' && !labelledRead
+  const overCap = (isProvenance || labelledRead) && !showAll && citations.length > PROVENANCE_CARD_CAP
   const shown = overCap ? citations.slice(0, PROVENANCE_CARD_CAP) : citations
   return (
     <div className="sources">

@@ -816,7 +816,9 @@ matches the careful a11y already shipped for `ContextMeter`/`StreamAnnouncer` an
 `tests/renderer/SourcesProvenance.test.tsx` + `TranscriptA11y.test.tsx` (aria-controls resolves to the
 rendered region id when expanded). The **Sources** disclosure was also relabelled in the same pass for
 whole-document answers (provenance, not inline citations) — that honesty record lives in
-[`rag-design.md`](rag-design.md) §14.4 (FE-B / F11).
+[`rag-design.md`](rag-design.md) §14.4 (FE-B / F11). Since #643 a whole document read in one turn
+(`coverage.labelledExcerpts`) keeps the **Sources (N)** label and an `[Sn]` on every card, because its
+answer cites them inline; its card list is still capped at 24 (rag-design §14.4 "#643 amendment").
 
 ### 11.9 Conversation-memory meter — label a gauge, don't leave it a bare % (IMPLEMENTED 2026-07-07, beta-feedback #25 / D69)
 
@@ -933,7 +935,8 @@ idiom). Entry points are quiet and progressive (spec §9): the message action ro
   "No direct source marker" / "Derived through whole-document analysis" notes are asserted
   BY EXACT KEY in tests — whole-document provenance is never worded as citations, and
   provenance cards render no `[Sn]` label (the SourcesDisclosure rule, reused via the
-  exported `PROVENANCE_CARD_CAP` + card markup idiom).
+  exported `PROVENANCE_CARD_CAP` + card markup idiom). A #643 labelled whole read is not
+  provenance: its sources are direct excerpts with their labels and the relevance caption.
 - **Deliberate deviation from spec §11.2:** no per-screen "Local · Offline" header indicator —
   the rail-foot indicator is THE single ambient privacy signal on every screen (§12.1 #2);
   duplicating it per screen is exactly what that record forbids.

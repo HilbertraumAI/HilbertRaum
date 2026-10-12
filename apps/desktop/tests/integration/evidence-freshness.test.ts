@@ -492,7 +492,10 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
       nodeIds: ['n1', 'n2'],
       truncated: true,
       unparsedChunks: 1,
-      fullyChunked: false
+      fullyChunked: false,
+      // #643: unset (false) canonicalizes to nothing, so this pin — taken before the field existed —
+      // still holds, and no acknowledgement stored before #643 lapses.
+      labelledExcerpts: false
     }
     db.prepare('UPDATE messages SET coverage_json = ? WHERE id = ?').run(
       JSON.stringify(drifted),
@@ -516,6 +519,19 @@ describe('acknowledge lifecycle (spec §15.5/§21.3/§28.6)', () => {
       parseFreshnessAck(reviewHeadRow(db, other.reviewId).freshness_ack_json as string | null)!
         .fingerprint
     ).toBe(ack.fingerprint)
+
+    // #643: a SET `labelledExcerpts` is a compared claim (it decides labels + marker links), so
+    // flipping it changes the fingerprint.
+    const labelled = seedReview(db)
+    db.prepare('UPDATE messages SET coverage_json = ? WHERE id = ?').run(
+      JSON.stringify({ ...drifted, labelledExcerpts: true }),
+      labelled.messageId
+    )
+    acknowledgeEvidenceReviewFreshness(db, labelled.reviewId)
+    expect(
+      parseFreshnessAck(reviewHeadRow(db, labelled.reviewId).freshness_ack_json as string | null)!
+        .fingerprint
+    ).not.toBe(ack.fingerprint)
   })
 })
 

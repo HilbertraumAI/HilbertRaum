@@ -396,6 +396,16 @@ describe('evidencePaneMode — weak-degrade mapping (FIX-7c)', () => {
     // WEAKEST claim — whole-document provenance, never citation framing (P1 FIX-1 mirror).
     expect(evidencePaneMode(cov('psychic'))).toBe('whole_doc')
   })
+
+  it('#643: a capped answer stamped labelledExcerpts reads as relevance — no other mode can claim it', () => {
+    const labelled = (mode: string) =>
+      ({ mode, chunksCovered: 3, chunksTotal: 3, labelledExcerpts: true }) as unknown as NonNullable<
+        Parameters<typeof evidencePaneMode>[0]
+      >
+    expect(evidencePaneMode(labelled('capped'))).toBe('relevance')
+    expect(evidencePaneMode(labelled('tree'))).toBe('whole_doc')
+    expect(evidencePaneMode(labelled('psychic'))).toBe('whole_doc')
+  })
 })
 
 describe('ReviewScreen — completion gating (D-7)', () => {

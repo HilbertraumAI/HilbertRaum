@@ -511,9 +511,13 @@ your files.
    contain the answer, the app says so rather than guessing.
    A short honesty line under the answer says how much it drew on — e.g. *"Based on 3 of
    12 sections"* — so you can tell an answer rested on a few passages, not the whole
-   document. (For questions that list or count dates, amounts, people and organisations, or
-   obligations, a deep index lets the answer cover every section — see *Summaries* below.
-   Other questions are answered from the most relevant passages either way.)
+   document. When the chat answers from **one** document that is short enough for the AI model
+   to read at once — about 3 pages with the smallest models, about 7 with most, more if you
+   raise the context size — the app gives the model the whole document instead, and the line
+   says *"Covers the whole document"*. (For longer documents, a deep index lets questions that
+   list or count dates, amounts, people and organisations, or obligations cover every section,
+   and lets *"Summarize this document"* draw on all of it — see *Summaries* below. Other
+   questions about a longer document are answered from the most relevant passages.)
 
 **Ask only chosen documents.** Under the message box, a **📄 Answering from:** chip always shows
 what answers come from — the document's name when one file is in scope, **your whole library — N
@@ -636,8 +640,10 @@ document"* vs *"the most relevant passages"* — and a depth selector with three
 **Section by section**, and **Detailed**. The deep index can pause for a chat and resume on its own,
 so you are never locked out while it runs. In *Ask my documents*, the deep index also answers
 questions that list or count dates, amounts, people and organisations, or obligations from every
-section (*"List every deadline"*, *"How many payments are there?"*). Other questions, such as
-*"Explain what this letter says"*, are answered from the most relevant passages with or without it.
+section (*"List every deadline"*, *"How many payments are there?"*), and, when the chat has just that
+one document, a summary question (*"Summarize this report"*) from its section summaries. Other questions
+about a long document, such as *"Explain what this letter says"*, are answered from the most relevant
+passages with or without it; a document short enough to read at once is read whole either way.
 
 A few honest notes:
 
@@ -831,7 +837,9 @@ AI model anything, and nothing touches the network — it is you, the answer, an
   available; nothing is dropped.
 - Evidence cards show what the model was actually given. The workspace is honest about the
   difference: for a whole-document analysis the cards are **provenance** (sections the answer
-  drew on), *not* sentence-by-sentence citations — and the workspace says so. You can link a
+  drew on), *not* sentence-by-sentence citations — and the workspace says so. (A short document
+  the model read whole in one go is the exception: the model saw each section under its source
+  marker, so those cards keep their markers and the answer's markers link to them.) You can link a
   source to an item yourself; such links are always labeled **Reviewer linked**, never "cited
   by the answer". Remember: *a citation shows where information came from — it does not by
   itself prove the answer is correct.*

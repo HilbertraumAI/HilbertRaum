@@ -1770,6 +1770,14 @@ export interface CoverageInfo {
    * scanned", never "whole document" (mode `extract`; H7/C4).
    */
   fullyChunked?: boolean
+  /**
+   * #643 (mode `capped` only): the model was shown every cited section under its `[Sn]` label — a
+   * single-turn whole-document read or the 2-document compare read — so the citations are labelled
+   * excerpts like a relevance answer's, not whole-document provenance. The chat cards keep their
+   * `[Sn]`, and an evidence review links the answer's markers. Absent on the map-reduce and tree
+   * answers (the model saw summaries or notes, never labels) and on every answer persisted before #643.
+   */
+  labelledExcerpts?: boolean
 }
 
 /**
@@ -3663,7 +3671,7 @@ export interface EvidenceSourceSnapshot {
   /**
    * The honesty class of this source (spec §6.5/§6.6; Phase 1 derives it from
    * `coverage.mode`): 'direct_excerpt' = a labeled excerpt supplied to the model (relevance
-   * path); 'whole_document_provenance' = contributed to a whole-document analysis — NEVER
+   * path, or a #643 whole read stamped `labelledExcerpts`); 'whole_document_provenance' = contributed to a whole-document analysis — NEVER
    * presented as a direct citation; 'structured_record' = deterministic extraction output.
    */
   kind: 'direct_excerpt' | 'whole_document_provenance' | 'structured_record'
@@ -3727,8 +3735,8 @@ export interface EvidenceGenerationSnapshot {
 /**
  * One evidence link on a review item (spec §6.4/§13): item → source snapshot `key`. `origin`
  * is load-bearing honesty: 'answer_marker' = the ANSWER cited this source (an `[Sn]` marker in
- * the item's text — relevance answers only; whole-document answers get ZERO auto-links, spec
- * §13.3); 'reviewer' = a human associated it ("Reviewer linked", never presented as "Cited by
+ * the item's text — relevance answers and #643 labelled whole reads only; other whole-document
+ * answers get ZERO auto-links, spec §13.3); 'reviewer' = a human associated it ("Reviewer linked", never presented as "Cited by
  * the answer"). Tolerant parsing degrades an unknown stored origin to 'reviewer' — the
  * claim-nothing default.
  */

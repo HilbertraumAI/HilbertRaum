@@ -7065,6 +7065,9 @@ tolerantly (a stringify fault degrades to NULL, never blocks the append) and `ro
 falls back to `{ mode:'relevance' }` so every pre-migration message and every non-re-routed turn
 renders byte-identically (R5). The skill-analysis path stamps a real `{ mode:'extract', chunksCovered,
 chunksTotal, fullyChunked }`, where `fullyChunked` gates the "whole document" meter wording.
+(Later additive fields: D72 stamps `relevance` with real counts on the relevance path; #643 adds
+`labelledExcerpts` to a `capped` answer whose prompt showed every section under its `[Sn]` label —
+rag-design §14.4 "#643 amendment". Old rows stay as written.)
 
 **Chat routing + the refuse gate (in `registerRagIpc.askDocuments`).** After the turn skill resolves +
 scope/filename auto-scope, and BEFORE the `routeQuestion`/`generateGroundedAnswer` decision, the turn

@@ -37,10 +37,14 @@ export type EvidencePaneMode = 'relevance' | 'whole_doc' | 'structured'
  * whole-document — always degrading toward the WEAKER claim (an unknown mode must never
  * present provenance as citations). Moved here from renderer/review/EvidencePane.tsx in
  * Phase 3 so main-side pack building reuses it instead of re-deriving the kind map.
+ * #643: a `capped` answer stamped `labelledExcerpts` (one grounded turn over the whole
+ * document, its sections shown as `[Sn]` excerpts) reads as relevance too — its sources ARE
+ * the excerpts supplied to the model, and the snapshot made them direct excerpts.
  */
 export function evidencePaneMode(coverage: CoverageInfo | null): EvidencePaneMode {
   const mode = coverage?.mode
   if (mode == null || mode === 'relevance') return 'relevance'
+  if (mode === 'capped' && coverage?.labelledExcerpts === true) return 'relevance'
   if (mode === 'extract') return 'structured'
   return 'whole_doc'
 }

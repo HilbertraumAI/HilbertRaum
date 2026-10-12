@@ -253,7 +253,7 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     }
   )
 
-  it('relevance path is byte-unchanged for an off-topic question (no handler fire)', async () => {
+  it('an off-topic question takes the ordinary grounded path (no handler fire)', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -264,9 +264,12 @@ describe('askDocuments — tool-skill analysis routing (full-doc-skills Phase 3)
     )
     const msg = result as Message
 
-    // The analysis handler did NOT fire: the relevance path ran (D72 stamps `relevance` coverage —
-    // NOT the extract/whole-document breadth an analysis handler would stamp), and no bank figures.
-    expect(msg.coverage?.mode).toBe('relevance')
+    // The analysis handler did NOT fire: the ordinary grounded path ran — not the extract breadth an
+    // analysis handler would stamp — and no bank figures. #643: that path reads this short statement
+    // whole (one grounded turn, labelled excerpts) instead of top-k.
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.labelledExcerpts).toBe(true)
+    expect(h.runtime.calls).toBe(1)
     expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 2 }))
     // And no whole-document tool was auto-run.
     const runs = h.db.prepare('SELECT COUNT(*) AS n FROM skill_runs').get() as { n: number }
@@ -680,8 +683,10 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
     // …instead the ordinary grounded path answered the actual question (the model WAS consulted).
     expect(msg.content).toContain('Model answer.')
     expect(h.runtime.calls).toBe(1)
-    // Grounded relevance path ⇒ no `extract` breadth claim.
-    expect(msg.coverage?.mode).not.toBe('extract')
+    // The ordinary grounded path ⇒ no `extract` breadth claim. #643: it reads this short agreement
+    // whole, as the ordinary document path does.
+    expect(msg.coverage?.mode).toBe('capped')
+    expect(msg.coverage?.labelledExcerpts).toBe(true)
   })
 
   it('narrows for a grounded-whole-doc skill too: streams the model answer over the one matched contract, notice prepended', async () => {
@@ -874,8 +879,14 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
 describe('askDocuments — SEC-1 end-to-end (user kind:tool skill never reaches an analysis engine, T2)', () => {
   it('user tool skill + analysis: whole-doc + matching doc → the relevance path (no handler, no tool run)', async () => {
     // Teeth: honor `manifestAnalysisHandler` for kind:'tool' (drop its instruction-only guard AND the
-    // parser's analysisIgnoredForTool note) → the whole-doc engine would fire here → red.
-    const h = await makeHarness({ fullyChunked: true, userToolSkill: true })
+    // parser's analysisIgnoredForTool note) → the whole-doc engine would fire here → red. The statement
+    // is too long to read whole (#643): over a short one the ordinary path itself reads the document whole,
+    // which looks exactly like the whole-doc engine, so only an over-budget document tells them apart
+    // (the engine would run its chunk map-reduce — several model calls, `capped` — instead of top-k).
+    const long =
+      'Statement EUR\nOpening balance 2.000,00\n' +
+      Array.from({ length: 600 }, (_, i) => `2026-01-${String((i % 28) + 1).padStart(2, '0')} transaction Grocery -45,90 1.954,10`).join('\n')
+    const h = await makeHarness({ fullyChunked: true, userToolSkill: true, text: long })
     // Sanity: the worst case really is on the board — an ENABLED user TOOL skill that declared tools
     // (the manifest parser already stripped its `analysis: whole-doc`; that strip is one of the gates).
     const record = getSkill(h.db, 'user:imported-bank')!
@@ -986,7 +997,7 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     expect(msg.coverage?.mode).toBe('relevance')
   })
 
-  it('an ordinary question never carries the hint (byte-unchanged relevance)', async () => {
+  it('an ordinary question never carries the hint', async () => {
     const h = await makeHarness({ fullyChunked: true })
     const { result } = await invoke(
       handlers,
@@ -1060,12 +1071,16 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   // Issue #641 (second defect): the hint was decided from the question's wording alone, before
   // retrieval. On a 2-page letter the answer had read both sections, yet the hint said it rested on
   // "only the most relevant sections" and sent the user to build a deep index that made it worse.
-  it('#641: the same question over a two-section document whose answer read both sections carries no hint', async () => {
-    const h = await makeHarness({ fullyChunked: true, text: statement(110) })
+  // #643 now reads such a letter whole, so the case where top-k itself reads every section of the
+  // scope is a multi-document one: a two-section statement and a one-section statement.
+  it('#641: the same question over a scope whose answer read every section carries no hint', async () => {
+    const h = await makeHarness({ fullyChunked: true, text: statement(110), extraDocs: [statement(20)] })
     const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, 'Zähle die Ausgaben', null)
     const msg = result as Message
-    // The premise: a multi-section document whose every section reached the prompt.
-    expect(msg.coverage!.chunksTotal).toBeGreaterThan(1)
+    // The premise: a top-k answer, over a multi-section scope, whose every section reached the prompt.
+    expect(msg.coverage?.mode).toBe('relevance')
+    expect(new Set(msg.citations!.map((c) => c.documentId)).size).toBe(2)
+    expect(msg.coverage!.chunksTotal).toBeGreaterThan(2)
     expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
     // Teeth: gate the hint on the question alone again (the pre-fix behaviour) → hint → red.
     expect(msg.content).not.toContain(t('en', 'analysis.wholeDocHint'))

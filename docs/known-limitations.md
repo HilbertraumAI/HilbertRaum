@@ -1151,7 +1151,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   "{X}"** (no precomputed type: "list all the abbreviations", "how many pages") is **not** answered
   as a list — it gets an answer from the most relevant passages, led by a short heads-up ("…so it may
   miss items") when those passages left part of the documents out (true since #641, 2026-10-11; before
-  that it got the unrelated `generic` table). An explain request is answered the same way even when it
+  that it got the unrelated `generic` table). One document that fits the model's window is read whole
+  instead (#643, next entry), so it gets no heads-up. An explain request is answered the same way even when it
   names a typed thing ("Erkläre alle Fristen"). Both are recognised by vocabulary (EN + DE word lists
   in `router.ts`), so an unusual phrasing can still miss. The rule errs towards the written answer: an
   explain verb anywhere in the question ("List every clause that describes the deposit") and a list
@@ -1174,6 +1175,20 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   never changes the answer text. Plain "list / how many" asks are unchanged (0 extra calls). A
   generic no-skill categorized-sums path (tabular routing over a generic row extractor) remains
   deferred (architecture.md result-tables record §5/§6).
+- **Only a single document is read whole, and only when it fits the model's window (#643 / #642,
+  2026-10-12; rag-design §14.5).** A document question over ONE fully indexed document that fits the
+  launched context window (about 3 pages at the 4B's 4,096 tokens, about 7 at 8,192) hands the model
+  the whole document in order instead of the best-matching passages. Everything else is still answered
+  from the most relevant passages: a chat with several documents (there is no multi-document whole
+  read), a chat with knowledge packs selected (the whole read never searches a pack), small talk, a
+  legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
+  window. A summary question over such a longer document uses its deep index when one is built (#642);
+  without one it is still answered from the most relevant passages, with no hint to build the index,
+  and a summary question over several documents never uses the deep index. Raising the context size
+  raises what counts as "fits": on a CPU a 32k window can mean a ~20,000-token prompt, and minutes of
+  prefill, for every question about a 30-page document. An off-topic question about a document read
+  whole now costs a model call (the model says the document does not cover it) where the passage search
+  could answer "not found" without one. Answers given before #643 keep their old source display.
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
@@ -1467,7 +1482,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   **The what-changed (compare) fence rides SKA-8 fall-through turns by design (skills-audit-2026-07-07
   SK-3b, decision D-P2a — declined runtime change).** When the user has explicitly selected the
   what-changed skill and asks a NON-compare question at a 1- or 3-doc scope, `intends()` is false so the
-  turn falls through to the ordinary top-k relevance path — but the user-chosen skill fence stays
+  turn falls through to the ordinary top-k relevance path (one document that fits is read whole there
+  since #643; the fence rides either way, so #632 is unchanged by it) — but the user-chosen skill fence stays
   attached (the per-message glyph shows the skill as applied). Suppressing the fence on that path was
   **declined**: it would silently drop instructions the user deliberately selected, and the reworded
   honesty rule 1 (`what-changed/SKILL.md` v1.1.0) is coherent on BOTH paths — it now discriminates on

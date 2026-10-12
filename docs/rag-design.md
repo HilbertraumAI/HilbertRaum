@@ -1560,6 +1560,19 @@ keeping the full provenance persisted avoids a persisted-data semantics change (
 to the PreviewModal and future features). FE-D in the same pass wired `aria-controls`/`role="region"` onto
 this disclosure (and the live Thinking + SummaryMarker disclosures); see design-guidelines §11.3.
 
+**#643 amendment — a whole document read in one turn keeps its `[Sn]` (2026-10-12).** The provenance
+framing above assumed every `capped` answer was a map-reduce, whose prompt carries no labels. A
+single-turn whole read is not: `buildGroundedPrompt` shows the model every section under its `[Sn]`
+label (the A3 whole-doc skill read of a fitting document, the §14.5 #643 small-document read, the capped
+floor), and so does `buildCompareWholeDocPrompt`. Their answers cited `[S2]` inline while no card carried
+a marker, and the evidence review called the sources provenance and linked nothing. Those two branches of
+`generateGroundedAnswer` now stamp `CoverageInfo.labelledExcerpts: true`; `SourcesDisclosure` renders such
+an answer with the relevance framing ("Sources (N)", `[Sn]` on every card), still capped at 24 cards
+because a large window can read a few dozen sections; the meter keeps "Covers the whole document"; the
+evidence snapshot makes the sources direct excerpts (§16.1). The flag is honoured for `capped` only. The
+map-reduce rescues, the tree and the diff compare (which shows change lines, not sections) never set it,
+and answers persisted before #643 keep their provenance rendering (no migration).
+
 **Coverage fraction on the relevance path — AS BUILT (beta-feedback-2026-07 Phase 5, #24, D72).** A beta
 user couldn't tell, after an ordinary "ask my documents" answer, how much of the document it drew on — the
 relevance path stamped **no** `CoverageInfo`, so the meter showed only the flat honesty label *"Based on the
@@ -1733,7 +1746,44 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   deep-index hint and an untyped or explain ask the label. Not done here, filed as follow-ups: a typed {X} in a needle question still lists
   ("Gilt die Frist für alle Mieter?" lists every date — #644); a small document is still read top-k
   rather than whole (#643); and the router's `tree-summary` decision has no consumer in `rag:ask` (a
-  summary question with a ready tree is answered by relevance — #642).
+  summary question with a ready tree is answered by relevance — #642). #643 and #642 are fixed: see
+  the next bullet.
+- **One document read whole, and the tree-summary consumer — AS BUILT (#643 / #642, 2026-10-12).**
+  Top-k keeps at most `ragTopKFinal` (6) sections within `ragMaxContextTokens` (2,500) and only the
+  best-ranked section per PDF page (the §8 dedup), so even a short document could reach the prompt
+  incomplete: a 2-page PDF of 3 sections reads at most 2, and the #641 heads-up then truly says items
+  may be missing. `rag:ask`'s `wholeReadDocumentId` now sends a turn bound for top-k — the final
+  relevance call and the exhaustive handlers' fall-through, skill or not — over exactly ONE in-scope,
+  fully chunked document whose de-overlapped text fits `wholeDocumentFitBudgetTokens` (the launched
+  window's whole-document budget for this question and skill, the budget A3 already reads whole-doc
+  skill turns with) to `generateGroundedAnswer({ wholeDocument })`: one grounded turn, every section
+  in order under its `[Sn]` label, history replayed, `capped` untruncated coverage ("Covers the whole
+  document"). `documentFitsWholeRead` applies `retrieveWholeDocument`'s own fit test and stops reading
+  at the first section past the budget, so the per-question check on a long document stays cheap.
+  Measured budgets (a 6-word question, no skill): a 4,096 window (the 4B's default) fits 1,816
+  estimated tokens (~3 pages), 8,192 (most catalog models) 4,546 (~7 pages), 16,384 10,008 and 32,768
+  20,930; top-k reads 1,624 at 4,096 and 2,500 above. (The issue's "a 10-page letter fits 8k" does
+  not hold under the 1.5 subword divisor.) **#642:** a summary ask the router sends to `tree-summary`
+  takes the same path when its one document is too large to read whole but has a ready deep index —
+  `generateGroundedAnswer` reaches `answerWholeDocFromTree` when the read would truncate (`tree`
+  coverage, leaf provenance). Without its own ready tree it stays top-k, never an unasked-for chunk
+  map-reduce; the document's own `tree_status` is re-checked because the router counts ready trees
+  over the whole scope, and a document being re-indexed keeps `ready` until its chunk transaction.
+  Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
+  read. **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
+  knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
+  (top-k answers it at zero model calls when nothing matches); a legacy, partly chunked document (its
+  sections are not its whole text). The #80 classification is unchanged (decided before retrieval); the
+  #641 notices are relevance-only — a whole read has every section in the prompt, so neither can be
+  true. The answer's sources keep their `[Sn]` (§14.4 "#643 amendment"). Owner calls, all as
+  recommended: every top-k turn, skill or not; the window's fit budget with no extra cap; the
+  `labelledExcerpts` flag; #642 wired for one document. **Costs, accepted:** the prompt grows up to
+  ~1.8× at 8k and 4–8× at 16k/32k, which is prefill time on a CPU; follow-up questions keep less
+  history (compaction absorbs it); an off-topic question gets the model's own "the document does not
+  say" under the grounding rules instead of the fixed no-context reply, which needs a model call.
+  The eval (`tests/manual/model-eval.test.ts`, `rag-quality.test.ts`) calls `generateGroundedAnswer`
+  and `retrieve` directly over a 16-document corpus and still measures top-k; no eval compares a whole
+  read with top-k on one document. Tests: `rag-whole-read.test.ts` (each gate mutation-checked).
 - **Suggestion-only cascade — AS BUILT (issue #80, wave R80; STR-1 §5.2). Truth maintenance on the
   0-model-call claim:** the router itself stays pure and byte-unchanged, and every HAPPY path above
   still answers at 0 query-time model calls — but exactly two decision classes now additionally run
@@ -2301,6 +2351,7 @@ so the review can never claim more than the answer did.
 | `coverage.mode` | snapshot `kind` | `machineLabel` | auto-links |
 |---|---|---|---|
 | `relevance` | `direct_excerpt` | the `S{n}` label | YES — marker → citation |
+| `capped` + `labelledExcerpts` (#643) | `direct_excerpt` | the `S{n}` label | YES — marker → citation |
 | `tree` / `capped` | `whole_document_provenance` | **null** | **ZERO** (hard rule) |
 | `extract` | `structured_record` | **null** | ZERO in v1 |
 | *(none stamped)* | `direct_excerpt` | the `S{n}` label | YES |
@@ -2314,6 +2365,11 @@ so the review can never claim more than the answer did.
   never auto-links them — even a literal `[S1]` in a whole-doc answer's text links nothing
   (tested). Reviewer-made links exist but are always `origin: 'reviewer'` ("Reviewer
   linked"), and the IPC layer FORCES that origin regardless of payload.
+- The `capped` + `labelledExcerpts` row (#643, §14.4 "#643 amendment") is a whole document
+  read in ONE grounded turn, every section shown to the model under its `[Sn]` label: the
+  relevance contract, so its markers auto-link. The review caption is the relevance one
+  (`evidencePaneMode` → `relevance`: "the excerpts supplied to the local AI model"); the
+  coverage snapshot still says whole document. Only `capped` honours the flag.
 - The *(none stamped)* row is the pre-D48/D72 legacy population: the relevance path persisted
   NULL coverage before `mode:'relevance'` was stamped (§14.9), and the renderer has always
   read that NULL as the relevance badge (`SourcesDisclosure`'s `isProvenance = mode != null &&
