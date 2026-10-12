@@ -363,13 +363,7 @@ const QUERY_VECTOR_CACHE_MAX = 32
 /** Per-embedder query-vector LRU. WeakMap by embedder instance ⇒ an embedder swap starts fresh. */
 const queryVectorCache = new WeakMap<Embedder, Map<string, Float32Array>>()
 
-export {
-  getResidentVectors,
-  getResidentVectorIndex,
-  invalidateResidentVectors,
-  purgeResidentVectors
-} from './resident-cache'
-export type { EmbeddingDelta, ResidentVectorIndex } from './resident-cache'
+export { getResidentVectors, invalidateResidentVectors, purgeResidentVectors } from './resident-cache'
 export { MockEmbedder, createMockEmbedder, MOCK_EMBEDDING_DIMENSIONS, MOCK_EMBEDDING_MODEL_ID } from './mock'
 export { E5Embedder, createE5Embedder } from './e5'
 export type { E5EmbedderOptions } from './e5'

@@ -7,7 +7,7 @@ import { isEngineCannotRunError } from '../runtime/engine-load'
 import { log } from '../logging'
 import { getVisionStatus } from './status'
 import { VisionRuntime, VisionAnalyzeError } from './runtime'
-import { validateAnalyzeRequest, VISION_MAX_IMAGE_BYTES } from './limits'
+import { validateAnalyzeRequest } from './limits'
 
 // Vision job orchestration (image-understanding plan §9.4 / §10 `index.ts`). Owns the
 // per-process ephemeral job map, vision's OWN one-job-at-a-time serialization (NET-NEW — the
@@ -55,8 +55,6 @@ export interface VisionServiceDeps {
   getStatus: () => Promise<VisionStatus>
   /** Build/return the runtime for an available model. Called lazily, only when available. */
   createRuntime: (status: VisionStatus) => VisionAnalyzer
-  /** Max accepted image bytes (default `VISION_MAX_IMAGE_BYTES`). */
-  maxImageBytes?: number
   /**
    * True while the workspace LOCK teardown is running (AUD-02). Distinct from the `tearingDown`
    * latch below: that one is cleared in `stop()`'s own `finally`, so it covers only the vision
@@ -67,14 +65,6 @@ export interface VisionServiceDeps {
    * deps stay valid).
    */
   isWorkspaceLocking?: () => boolean
-  /**
-   * Fast-fail window after a FAILED runtime start (#117), default
-   * `VISION_START_FAILURE_COOLDOWN_MS`. Within it an analyze fails immediately without
-   * re-spawning (the corrupt-GGUF protection the old sticky latch provided); after it the next
-   * analyze rebuilds a fresh runtime, so a TRANSIENT start failure (OOM under RAM pressure, the
-   * startup port race) recovers on the user's next try instead of bricking the session.
-   */
-  startFailureCooldownMs?: number
 }
 
 export class VisionService {
@@ -151,14 +141,6 @@ export class VisionService {
     return runtime
   }
 
-  private get startFailureCooldownMs(): number {
-    return this.deps.startFailureCooldownMs ?? VISION_START_FAILURE_COOLDOWN_MS
-  }
-
-  private get maxBytes(): number {
-    return this.deps.maxImageBytes ?? VISION_MAX_IMAGE_BYTES
-  }
-
   /**
    * Start an analyze. Validates main-side (extension/MIME, byte cap, question), enforces
    * one-at-a-time (busy-REJECT), and returns the initial job IMMEDIATELY; the sidecar call
@@ -172,7 +154,7 @@ export class VisionService {
     // refuses earlier with the localized locked copy, and this covers non-IPC callers.
     if (this.deps.isWorkspaceLocking?.()) return failedJob('cancelled')
     const bytes = req?.imageBytes
-    const code = validateAnalyzeRequest(bytes, req?.mimeType, req?.question, this.maxBytes)
+    const code = validateAnalyzeRequest(bytes, req?.mimeType, req?.question)
     if (code) return failedJob(code)
     // Busy-REJECT (IPC-3): a second analyze while one runs is rejected, never queued.
     if (this.activeJobId) return failedJob('busy')
@@ -229,7 +211,7 @@ export class VisionService {
       // corrupt-GGUF protection the sticky latch used to provide, now time-bounded. Past the
       // window the failure record clears and the analyze below rebuilds a fresh runtime.
       if (this.startFailedAt !== null) {
-        if (Date.now() - this.startFailedAt < this.startFailureCooldownMs) {
+        if (Date.now() - this.startFailedAt < VISION_START_FAILURE_COOLDOWN_MS) {
           this.fail(jobId, this.startFailedCode, emit)
           return
         }

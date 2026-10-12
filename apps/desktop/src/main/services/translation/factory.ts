@@ -29,9 +29,6 @@ export interface TranslatorSelectionDeps {
   model: TranslationModelInfo | null
   /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
   isDev?: boolean
-  resolveBin?: (rootPath: string) => string | null
-  modelExists?: (modelPath: string) => boolean
-  makeTranslator?: (model: TranslationModelInfo, binPath: string) => Translator
   onSelect?: (kind: 'llama' | 'none', reason: string) => void
   /**
    * GPU signals for the sidecar's device ladder (issue #42) — the SAME Settings read-callbacks the
@@ -52,28 +49,23 @@ export interface TranslatorSelectionDeps {
  * lazy-started on the first `translate()`), so this returns synchronously.
  */
 export function createSelectedTranslator(deps: TranslatorSelectionDeps): Translator | null {
-  const makeTranslator =
-    deps.makeTranslator ??
-    ((model: TranslationModelInfo, binPath: string) =>
-      new TranslationRuntime({
-        modelId: model.id,
-        binPath,
-        modelPath: model.modelPath,
-        contextTokens: model.contextTokens,
-        gpu: deps.gpu,
-        onDeviceFallback: deps.onDeviceFallback,
-        onStarted: deps.onStarted
-      }))
+  const build = (model: TranslationModelInfo, binPath: string): Translator =>
+    new TranslationRuntime({
+      modelId: model.id,
+      binPath,
+      modelPath: model.modelPath,
+      contextTokens: model.contextTokens,
+      gpu: deps.gpu,
+      onDeviceFallback: deps.onDeviceFallback,
+      onStarted: deps.onStarted
+    })
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — unavailable means null (plan O2).
   const sel = resolveSidecarSelection<TranslationModelInfo, Translator>({
     rootPath: deps.rootPath,
     model: deps.model,
-    resolveBin:
-      deps.resolveBin ??
-      ((root) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev })),
-    modelExists: deps.modelExists,
-    makeReal: makeTranslator,
+    resolveBin: (root) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev }),
+    makeReal: build,
     binaryName: 'llama-server',
     modelNoun: 'translation model'
   })
@@ -82,5 +74,5 @@ export function createSelectedTranslator(deps: TranslatorSelectionDeps): Transla
     return null
   }
   deps.onSelect?.('llama', sel.reason)
-  return makeTranslator(sel.model, sel.binPath)
+  return build(sel.model, sel.binPath)
 }

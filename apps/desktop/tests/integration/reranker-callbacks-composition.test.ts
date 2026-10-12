@@ -1,9 +1,10 @@
 import { describe, it, expect } from 'vitest'
-import { mkdtempSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { composeServices } from '../../src/main/services/compose-services'
-import { createSelectedReranker } from '../../src/main/services/reranker/factory'
+import { LlamaReranker } from '../../src/main/services/reranker/llama'
+import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import {
   createRerankerCallbacks,
   createPendingModelSwitchCounter,
@@ -22,12 +23,12 @@ import type { AppContext } from '../../src/main/services/context'
 // alongside a functional check that the wired callbacks actually reach the sidecar.
 
 describe('Wave 8 NF-1: the required-wiring type-level proof', () => {
-  it('composeServices refuses a call that omits either reranker callback (type-level; runtime confirms the shape too)', () => {
+  it('composeServices refuses a call missing ONLY rerankerDevicePosture', () => {
     const rootPath = mktemp()
     // @ts-expect-error — rerankerDevicePosture/rerankerRequestCeiling are REQUIRED on composeServices's
     // own signature (ComposeServicesArgs), even though the shared ComposeServicesDeps base (also used
     // by composeTranslator) keeps them optional. An omission here must be a compile error.
-    composeServices({ rootPath, manifestsDir: null })
+    composeServices({ rootPath, manifestsDir: null, rerankerRequestCeiling: () => 48 })
   })
 
   it('composeServices refuses a call missing ONLY rerankerRequestCeiling', () => {
@@ -94,61 +95,53 @@ function mktemp(): string {
   return mkdtempSync(join(tmpdir(), 'hilbertraum-reranker-callbacks-composition-'))
 }
 
+/** A minimal VALID reranker manifest (compose-services-discovery.test.ts's `roleManifest` shape). */
+const RERANKER_MANIFEST = {
+  id: 'rerank-test',
+  display_name: 'rerank-test (test)',
+  family: 'test-family',
+  role: 'reranker',
+  format: 'gguf',
+  runtime: 'llama_cpp',
+  license: 'apache-2.0',
+  size_on_disk_gb: 0.1,
+  recommended_min_ram_gb: 1,
+  recommended_ram_gb: 2,
+  recommended_context_tokens: 4096,
+  local_path: 'models/reranker/rerank-test.gguf',
+  sha256: 'REPLACE_WITH_REAL_HASH',
+  recommended_profiles: [],
+  license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-07-10', notes: '' }
+}
+
 describe('Wave 8: the wired callbacks actually reach the sidecar (functional, not just type-level)', () => {
-  it('composeServices threads BOTH callbacks all the way to the reranker it selects (when one is provisioned)', () => {
-    const rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-reranker-wiring-'))
+  it('composeServices threads BOTH reranker callbacks into the LlamaReranker it selects from a provisioned drive', async () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-reranker-wiring-'))
+    const manifestsDir = join(root, 'model-manifests')
+    mkdirSync(manifestsDir, { recursive: true })
+    writeFileSync(join(manifestsDir, 'rerank-test.yaml'), JSON.stringify(RERANKER_MANIFEST)) // JSON is YAML
+    mkdirSync(join(root, 'models', 'reranker'), { recursive: true })
+    writeFileSync(join(root, 'models', 'reranker', 'rerank-test.gguf'), '') // existence only
+    mkdirSync(llamaServerDir(root), { recursive: true })
+    writeFileSync(join(llamaServerDir(root), llamaServerBinaryName()), '') // never spawned below
+    let posture: 'gpu' | 'cpu' = 'gpu'
     let postureCalls = 0
-    let ceilingCalls = 0
-    const services = composeServices({
-      rootPath,
-      manifestsDir: null, // no reranker manifest resolvable here -- the wiring itself is what's under test
+    const { reranker } = composeServices({
+      rootPath: root,
+      manifestsDir,
       rerankerDevicePosture: () => {
         postureCalls++
-        return 'cpu'
+        return posture
       },
-      rerankerRequestCeiling: () => {
-        ceilingCalls++
-        return 48
-      }
+      rerankerRequestCeiling: () => 1
     })
-    // No binary/model provisioned in this fixture, so `reranker` is null (graceful-fallback
-    // rule) -- but the CALL to composeServices above already had to accept both callbacks as
-    // required parameters (proven above); a real binary+model pairing (reranker.test.ts's
-    // `createSelectedReranker` tests) proves the factory threads them into `LlamaReranker`
-    // itself via `devicePosture`/`cpuRequestCeiling` — see reranker/factory.ts.
-    expect(services.reranker).toBeNull()
-    expect(postureCalls).toBe(0) // never called before a rerank() -- lazy, as designed
-    expect(ceilingCalls).toBe(0)
-  })
-
-  it('reranker/factory.ts threads BOTH callbacks into the constructed LlamaReranker itself', async () => {
-    const model = { id: 'bge-reranker-v2-m3-f16', modelPath: '/models/reranker.gguf' }
-    const gpuReranker = createSelectedReranker({
-      rootPath: '/r',
-      model,
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => true,
-      devicePosture: () => 'gpu',
-      requestCeiling: () => 1
-    })
-    expect(gpuReranker).not.toBeNull()
-    // devicePosture(): not loaded yet -- reports the injected callback's answer directly, with
-    // no process ever spawned (safe against the real, unmocked spawn/fetch this factory path
-    // uses outside a test harness).
-    expect(gpuReranker?.devicePosture?.()).toBe('gpu')
-
-    // requestCeiling binds only on the 'cpu' posture (ruling (b)(G)); G throws BEFORE any start,
-    // so calling rerank() over the ceiling here is safe too -- no real spawn is ever attempted.
-    const cpuReranker = createSelectedReranker({
-      rootPath: '/r',
-      model,
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => true,
-      devicePosture: () => 'cpu',
-      requestCeiling: () => 1
-    })
-    expect(cpuReranker?.devicePosture?.()).toBe('cpu')
-    await expect(cpuReranker!.rerank('q', ['a', 'b'])).rejects.toThrow(/refused/i) // 2 > the ceiling of 1
+    expect(reranker).toBeInstanceOf(LlamaReranker)
+    expect(reranker?.id).toBe('rerank-test') // the manifest id
+    expect(postureCalls).toBe(0) // composing reads nothing — lazy
+    expect(reranker?.devicePosture?.()).toBe('gpu') // the injected posture, not the absent-callback 'cpu'
+    posture = 'cpu'
+    // G throws before any start, so the placeholder binary is never spawned.
+    await expect(reranker!.rerank('q', ['a', 'b'])).rejects.toThrow(/refused/i) // 2 > the ceiling of 1
   })
 })
 
@@ -167,7 +160,7 @@ describe('Wave 8: the wired callbacks actually reach the sidecar (functional, no
 // passed again once `git checkout -- device-posture.ts` restored the join — confirmed clean via
 // `git diff`/`git status` before moving on.
 
-// The project's own measured GTX 1070 Ti fixture (same as `reranker-wave8.test.ts`'s S1-S9 block):
+// The project's own measured GTX 1070 Ti fixture (same as `reranker-wave8.test.ts`'s S4/S5 scenarios):
 // {totalMb: 8273, freeMb: 7504}. qwen3.5-4b-ud-q4kxl needs ~3837.4 MiB (remainder 3666.6 MiB >=
 // the 2808.2 MiB floor) => posture 'gpu' with NO occupancy — the "otherwise resolves gpu" baseline
 // C4 asks for.

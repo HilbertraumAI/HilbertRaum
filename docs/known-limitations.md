@@ -1544,7 +1544,7 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     of the composed pipeline, not of the single tool.
   - **SK-17 — meeting-protocol runs over imported audio documents, not live dictation.** Its "audio
     transcript" works via the audio-file **import** path (AudioParser → document). **Live dictation**
-    returns composer text and never becomes a document (`registerDictationIpc.ts:76-120`), so the skill
+    returns composer text and never becomes a document (`registerDictationIpc.ts`), so the skill
     can't run "over" a dictation — only over the message it produced. Left as-is (a body clause is the cheap
     fix); **watch beta** — add the clause if users hit it.
   - **SK-18 — invoice/bank `mimeTypes` deliberately omit `text/plain`.** The bodies say "or pasted text",

@@ -761,7 +761,8 @@ behavior-preserving (equivalence-tested, teeth-checked). No schema/IPC/audit-pay
   a cheap `documents`-table probe), else the scoped scan runs byte-unchanged. Result is byte-identical to
   the scoped scan over the same universe (`tests/integration/vector-search-resident-iteration.test.ts`:
   unscoped == all-docs-scoped, hit-for-hit; a `db.prepare` spy confirms the marshal is gone). Measured
-  **~5× / query** at 10k–50k chunks (CI-gated `tests/manual/phaseB-perf-bench.test.ts`).
+  **~5× / query** at 10k–50k chunks (env-gated `tests/manual/phaseB-perf-bench.test.ts`,
+  `RUN_PHASEB_BENCH=1`; never runs in CI).
 - **P1 — `dotProduct` + running top-K in the compare pairing (`doctasks/compare.ts`).** Section-matched
   compare (mode b) scored *every* doc-B vector with `cosineSimilarity` + a full per-A-chunk
   `sort().slice(topK)` — O(N_A·N_B·dim) + N_A sorts, a multi-second main-thread freeze at ~1000 chunks/
@@ -2421,7 +2422,7 @@ explicitly out of scope.
   serialized, so the handler holds a **single-flight guard**: a second `dictation:transcribe`
   while one is in flight is rejected with friendly copy (`DICTATION_BUSY_MESSAGE`) BEFORE it
   writes the temp WAV or spawns — rapid mic presses can't double-spawn. A **wall-clock
-  ceiling** (`maxDurationMs`, default 10 min, `HILBERTRAUM_DICTATION_TIMEOUT_MS`) drives an
+  ceiling** (`DEFAULT_DICTATION_TIMEOUT_MS`, 10 min; override `HILBERTRAUM_DICTATION_TIMEOUT_MS`) drives an
   `AbortController` whose signal is passed to `transcribe` — a wedged child is killed and the
   mic spinner gets the friendly failure instead of hanging forever. The temp WAV is shredded
   in `finally` on every path (success, refusal, timeout).
@@ -3375,7 +3376,8 @@ Per-finding disposition (F-1…F-8):
     numbers + the contention case: `model-benchmarks.md` §11.4; user-facing shape:
     `known-limitations.md` "Document translation". Tests: `translation-runtime.test.ts`
     ("cold-start device observability" — chunk-split parse, once-per-start, honest-null CPU form,
-    fallback lands as 'cpu', throwing hook harmless), `core-model-ipc.test.ts` (status feed),
+    throwing hook harmless; the ladder suite's GPU-fail → CPU row pins that the fallback lands as
+    'cpu'), `core-model-ipc.test.ts` (status feed),
     `TranslateScreen.test.tsx` (hint forms + absent-before-first-start).
 - **Translation-audit wave #156–#165 (2026-08-09) — the read-only pipeline audit's fixes, one
   branch.** Behavioral deltas to this record (details in the issues + the wave PR): **(#156)**
@@ -5087,8 +5089,8 @@ Tests:
 - `sidecar.test.ts` "waits for an engine install to finish its swap before it spawns (#516 spawn
   gate)": the LlamaServer spawn site (all five llama sidecars) waits on the gate; `gpu.test.ts` (same
   title) the `--list-devices` probe, and `engine-health.test.ts` "waits for an install of its family to
-  finish the swap before it launches (#516 spawn gate)" the "Check again" launch. The whisper-cli
-  spawn site has no such row yet (#656).
+  finish the swap before it launches (#516 spawn gate)" the "Check again" launch, and `transcriber.test.ts`
+  "waits for an engine install to finish its swap before it spawns (#516 spawn gate)" the whisper-cli spawn.
 - `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
   `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
   still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.
@@ -9203,7 +9205,7 @@ Per-finding disposition (fixed → phase@commit / declined → rationale / info 
 | **SK-14** | LOW | P1/P3/P4 | **fixed** — the `autoFire` "score ≥ 3 bar" comment reads as the suggestion bar; added "(auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory keyword hit)" to all four tool skills' frontmatter comments (document-redaction P1, invoice + meeting-protocol P3, bank-statement P4). Comment-only. |
 | **SK-15** | LOW | P2 `4f541c1` | **fixed** — what-changed named an "Exact changes" block it never sees; the diff rule now quotes the real runtime label ("Exact word-level changes (redline)", `rag/index.ts:1168`) and defers to the block's own PARTIAL / further-changes markers. |
 | **SK-16** | INFO | — | **note (no change)** — `validate_statement_balances` is a per-row running-balance chain (`tools/bank-statement.ts:815-864`); the opening+Σ=closing tie lives in `assessCompleteness` (:504-531) on the answer layer. The composition satisfies the SKILL.md honesty rule; the tool name just covers less than the sentence implies. Recorded in known-limitations. |
-| **SK-17** | INFO | — | **note (watch beta)** — meeting-protocol's "audio transcript" works via the audio-file **import** path (AudioParser → document); live dictation returns composer text and never becomes a document (`registerDictationIpc.ts:76-120`), so the skill runs over imported audio documents only, not over a dictation. A body clause is the cheap fix if beta users hit it. Recorded in known-limitations. |
+| **SK-17** | INFO | — | **note (watch beta)** — meeting-protocol's "audio transcript" works via the audio-file **import** path (AudioParser → document); live dictation returns composer text and never becomes a document (`registerDictationIpc.ts`), so the skill runs over imported audio documents only, not over a dictation. A body clause is the cheap fix if beta users hit it. Recorded in known-limitations. |
 | **SK-18** | INFO | — | **note (do NOT "fix")** — invoice/bank `mimeTypes` deliberately omit `text/plain` while the bodies say "or pasted text"; pasted text carries no mime signal and a lone keyword (=2) already clears the suggest bar, so the two are consistent — "fixing" it would be a precision regression. Recorded in known-limitations. |
 
 **Version convention (SK-12) — part of the SKILL.md-editing checklist.** For a bundled app skill
@@ -10261,7 +10263,7 @@ phase moved):
 | **REL-8** (C-01 · TQ-2) | MED | 7 | #277 | **fixed** — after a failed lock the fresh working DB is the only copy of the session delta; preservation shredded an old `.recovery`, renamed the fresh file over it, swallowed both errors, and `init()` swept unconditionally — a held `.recovery` (AV/indexer) therefore shredded the only fresh DB (B4 reproduced). `preserveNewerPlaintext` returns `'preserved' | 'not-needed' | 'failed'` (`workspace-vault.ts:685`); on `'failed'` `init()` skips the crash sweep AND the pending-rekey recovery and marks the controller blocked (`isRecoveryBlocked()` `:1548`); `unlock()` re-runs `init()` (the hold may have cleared) and, still blocked, throws `VaultRecoveryBlockedError` (`:161`) → IPC reason `vault_recovery_blocked` (`registerWorkspaceIpc.ts:187`, `shared/types.ts:218`) + EN/DE `main.workspace.recoveryBlocked` (Q24; a one-key change if reworded). The SAME loss existed on the UNLOCK leg (reviewer, fixed in-PR): once `init()` had preserved the fresh copy as `.recovery`, a hold denying the header read at unlock let the older probe-error path proceed into the stale `.enc`, and a later lock made the never-rolled-forward copy shreddable — the probe-error catch now refuses whenever `.recovery` could still be fresh and proceeds only when `.enc` is demonstrably newer. Single `.recovery` name kept (Q20). TQ-2: `vi.spyOn(fs, …)` records nothing for ESM-namespace binders and the shipped guard test's injection was never reached; it now uses the pass-through `vi.mock('node:fs')` wrapper (`rmSync`→EPERM, `writeSync`→ENOSPC) and ASSERTS each injection was hit (`vault-recovery-guards.test.ts:137` `holdRecovery`; "#242" cases `:290,327`); B4 inverted (the fresh DB survives, unlock yields the marker). The incomplete fix REL-8 completes is the **2026-07-12 round's REL-1** (`6a33f25e`, §48). #242 closed. |
 | **REL-9** (C-02 · DOC-15) | MED (confidence medium-low) | 7 (docs) | #277 | **documented on decision 6's default — open.** Every completed file is fsynced before its rename (`workspace-vault.ts` `fsyncSync` at `:255,337,541,739,900`) but no parent-directory flush follows a durability-critical rename; Node exposes no documented Windows directory-flush primitive (the review measured `openSync(dir,'r+')` + `fsyncSync` SUCCEEDING on Win11 — whether it has any namespace effect is HYPOTHESIS; NTFS journaling gives consistency, not durability), so on exFAT/FAT32 a power cut in the metadata window after a rename can roll a committed name back and the old-or-new rekey ordering could be violated. `drive-layout.md` "### Filesystem" (`:277`) recommends exFAT for cross-OS kits and states the caveat (the last successfully locked snapshot always survives); `security-model.md` and `troubleshooting.md` point there (DOC-15: the format was assumed in three docs and chosen nowhere). Not confirmed: no crash-cut tests ran (owner-gated). Ratify (#223) → a Phase F spike: retain the previous generation until the next successful lock, POSIX directory fsync on macOS/Linux, a crash-cut harness on exFAT; `MoveFileEx` write-through needs a native addon. **#243 OPEN.** |
 | **REL-9** — §52 addendum 2026-09-04 | MED (confidence medium-low) | F (PR 2, `docs/pf-decisions-confirmed`) | #284 | **default confirmed as a ruling — document, plus one manual crash-cut on exFAT before the first kit ships** (owner decision #223, `**DECISION:** document; one manual crash-cut on exFAT before the first kit ships`, 2026-09-03). No spike, no directory flush, no write-through. `drive-layout.md` **Filesystem** names the ruling; `packaging.md` "Manual pre-ship checklist" item 9 carries the crash-cut session (a scratch exFAT kit, a hard unplug during a multi-second lock, the wedged instance quit before re-plug; pass = the workspace opens at the last locked snapshot OR with the session rolled forward through `.recovery` — a cut in the encrypt phase is the failed-lock signature; fail = refuses every unlock or opens torn; machine/OS/date/outcome recorded; a per-platform repeat recommended, not ruled); `security-model.md` "Lock failure & durability" points there. Release-acceptance line 7's power-cut half closes by this explicit acceptance. One manual cut samples the lock at an arbitrary point — it is recorded as evidence, not proof, and the finding stays a CANDIDATE. **#243 CLOSED.** |
-| **REL-10** (M-01) | MED | 0 | #267 | **fixed** — E5Embedder, LlamaReranker and VisionRuntime created their `LlamaServer` without a start abort signal and awaited the in-flight cold start on teardown, so "Lock now"/quit waited the full 180 s health window (B8: 180 250 ms ×3 vs Translation's 250 ms). All three now carry the translation runtime's #159 pattern: a per-start `AbortController` passed as `startAbortSignal`, `isStartAbortError` as the FIRST clause of each `startFailed` latch (`e5.ts:287`, `reranker/llama.ts:193`, `vision/runtime.ts:275` — without the bypass a lock during a cold start would latch the wrapper dead until restart), `abort()` first in teardown/stop. B8 ported: `sidecar-teardown-abort.test.ts` (`WrapperCase` table `:79-95`; fake spawn + fake timers, production defaults 180 000 / 250) — 250 ms for all four wrappers, child killed, no stale latch, a fresh child on the next start; real worst case ≈ 5.25 s (one poll + the 3 s probe timeout + the 2 s POSIX SIGTERM grace). Record: the #159 note in this file. #244 closed. |
+| **REL-10** (M-01) | MED | 0 | #267 | **fixed** — E5Embedder, LlamaReranker and VisionRuntime created their `LlamaServer` without a start abort signal and awaited the in-flight cold start on teardown, so "Lock now"/quit waited the full 180 s health window (B8: 180 250 ms ×3 vs Translation's 250 ms). All three now carry the translation runtime's #159 pattern: a per-start `AbortController` passed as `startAbortSignal`, `isStartAbortError` as the FIRST clause of each `startFailed` latch (`e5.ts:287`, `reranker/llama.ts:193`, `vision/runtime.ts:275` — without the bypass a lock during a cold start would latch the wrapper dead until restart), `abort()` first in teardown/stop. B8 ported: `sidecar-teardown-abort.test.ts` (`WrapperCase` table; fake spawn + fake timers, production defaults 180 000 / 250) — 250 ms for all four wrappers, child killed, no stale latch, a fresh child on the next start; real worst case ≈ 5.25 s (one poll + the 3 s probe timeout + the 2 s POSIX SIGTERM grace). Record: the #159 note in this file. #244 closed. |
 | **SEC-2** | MED | 8 | #278 | **fixed** — `zipDest` was `join(extractTo, <last '/'-segment of the url>)`, so a `runtime-sources.yaml` basename containing `..\..\` walked up from the guarded extraction root on Windows (clamped at the volume root) and `download()` wrote there before the attacker-supplied hash was checked. `archiveNameFromUrl(url, fallback)` (`assets.ts:291`) takes `new URL(url).pathname`'s last segment, percent-decoded, requires `ARCHIVE_NAME_RULE = /^[A-Za-z0-9._-]{1,128}$/` (`:281`) and not `.`/`..`, else `<binary>-<version>-<os>-<arch>.zip`; `zipDest = resolveWithinRoot(extractTo, name)` (a hostile `version` in the fallback now throws instead of escaping); every `url` must be https at parse time in all three families (`runtime-sources.ts:134,211`). Two cases, not one: a raw `\` in an https path is a `/` under WHATWG and the `..` resolve INSIDE the root; only the percent-encoded `%5C` form reaches the rule and falls back (`assets.test.ts:1038` "archiveNameFromUrl (#245)"). Record: `security-model.md` manifest-tampering bullet (3). Adjacent, unchanged: BUILD_STATE §8 L-7 (archive MEMBERS; same trigger, different code). #245 closed. |
 | **DOC-6** | MED (reader) | 9 → 9a | #280 | **fixed** — `user-guide.md` §13 "**If the app is not quit cleanly:**" (`:1023`): pulling the drive while the app runs, a power cut or a forced kill, or shutting down / logging off with the app open loses every change since the workspace last locked; the workspace reopens from that point — the product's public statement of REL-11 ("a crash" was dropped after review: an in-process crash runs the synchronous lock). The "(harmless, …)" the evaluation misread modifies the Windows scan prompt. Owner may reword (STATE Q26). #246 closed. |
 | **REL-4** (NEW-5) | MED-LOW | 3 PR 3-b — NOT OPENED | — | **open residual — default stands.** No `PRAGMA user_version` anywhere under `apps/desktop/src` (`db.ts:998` `applyPragmasAndMigrations` runs WAL + additive `CREATE … IF NOT EXISTS`/`ensureColumn` migrations only), so an older build cannot tell it opened a newer workspace and degrades silently — realistic only through REL-7, whose launcher refusal (#272) now closes the trigger. Decision 8 (#225, an on-disk format change) unanswered → not ratified. Ratify → PR 3-b, design on #247: read `user_version` first; `> CURRENT` → `WorkspaceNewerError` → IPC `workspace_newer` + EN/DE copy; `< CURRENT` → migrate then stamp; `0` = every existing DB; `data-contracts.md` migration note; pre-fix builds ignore the stamp, so it protects only future pairs. **#247 OPEN.** |
@@ -11446,6 +11448,8 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   The 2026-10 runtime-ladder test campaign added the fourth seam (the #530 "Check again" engine check,
   `checkProgramLoads`) and the `ok` / `skip-legacy` positive controls, retired the injected-verdict
   `LlamaServer` copies, and removed `LlamaServer`'s `verifyBinary` option: it always calls the real verifier.
+  The sidecar-services test campaign did the same for whisper-cli: it retired the injected-verdict copy in
+  `transcriber.test.ts` and removed `WhisperCliOptions.verifyBinary`.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
@@ -11473,7 +11477,10 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   prompt + image bytes genuinely pass through `runAnalyze` → `server.fetch('/v1/chat/completions', …)` →
   `readChatSSE`, then asserts NO diagnostics-log call (any level) carries the prompt, the answer, or the
   base64 image bytes. Teeth: log `opts.question` or the image data-URL at the runtime layer → the spy
-  captures it and the test reddens.
+  captures it and the test reddens. *(2026-10-12, sidecar-services test campaign: merged into the loopback
+  sentinel "connects only to loopback (127.0.0.1) and logs/audits NO image/prompt/answer content", which
+  already drove the same real-runtime success path with the same recording fetch; its TEETH note moved with
+  it.)*
 - **TEST-6 (INFO) — answer-quality floor in CI is partial, by design.** *(Wording corrected Phase 7 / D1 —
   the original claim that the S13b bar was "owner-gated on D1 / not yet landed" went stale the moment the bar
   shipped.)* The **S13b skill-trigger precision bar IS a live CI gate**: `eval/skill-triggers.test.ts` asserts
@@ -11699,7 +11706,8 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   the cheap ones, recorded the residuals.** Most fixed-duration `setTimeout` are STATE-POLL loop intervals
   (`while (cond) … setTimeout`, e.g. the `waitTerminal`/`waitFor`/`pollUntil` helpers and the `while (!x.release)`
   gates) — deterministic by construction, left as-is. The three genuine correctness-gates converted to state-polls:
-  `reranker.test.ts:125` and `e5-embedder.test.ts:262` (`sleep(1)` "let the request reach fetch" → `while
+  `reranker.test.ts` ("forwards the caller abort signal…") and its E5 twin (since retired: the #607 user-Stop row on
+  a real loopback socket covers it) (`sleep(1)` "let the request reach fetch" → `while
   (!seenSignal) await …` so the abort lands only after the signal was genuinely handed to fetch), and
   `ocr-task.test.ts:210` (`sleep(30)` "let the task start" → a `rasterizeReached` flag in the gate, polled, so the
   cancel lands once the task is genuinely parked rasterizing). **Recorded residuals (NOT converted, with rationale,
@@ -12153,7 +12161,7 @@ record "Lifecycle — a hybrid").
   often followed by a new job (another question, another language), which then joins the start
   instead of paying for a second cold load. The cost of an abandoned start is bounded: it loads, then
   sits for one idle window (2 min), recorded in `known-limitations.md`.
-- **Tests.** The cold-start fake is shared: `tests/helpers/loading-sidecar.ts` (`/health` 503 until
+- **Tests.** The cold-start fake is shared: `loadingSidecar` in `tests/helpers/fake-sidecar.ts` (`/health` 503 until
   loaded; the #635 embedder and reranker rows use it too), with the `until` / `within` hang detectors
   in `tests/helpers/hang-budget.ts`.
   - `vision-runtime.test.ts`: a cancel during a start that never gets healthy ends that analyze with

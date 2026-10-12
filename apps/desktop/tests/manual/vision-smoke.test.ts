@@ -8,13 +8,13 @@ import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
 //
 // CI stays zero-network/zero-model/zero-binary (the green gate: zero vision models ⇒
 // available:false and the suite is green), so this whole file is skipped unless
-// HILBERTRAUM_VISION_SMOKE points at a provisioned drive root carrying the REAL b9585
+// HILBERTRAUM_VISION_SMOKE points at a provisioned drive root carrying the REAL pinned
 // llama-server PLUS the off-repo vision weights under models/vision/ (the GGUF + its mmproj):
 //
 //   HILBERTRAUM_VISION_SMOKE=<root with runtime/llama.cpp/<os>/llama-server + models/vision/*.gguf>
 //   npx vitest run tests/manual/vision-smoke.test.ts
 //
-// Against the REAL pinned b9585 build + the real Qwen2.5-VL-3B-Instruct GGUF + f16 mmproj
+// Against the REAL pinned llama-server build + the real Qwen2.5-VL-3B-Instruct GGUF + f16 mmproj
 // (the V1-chosen production candidate; SHAs/sizes in BUILD_STATE V1) this exercises the
 // VisionRuntime end-to-end — the thing the fake-fetch unit tests cannot:
 //   1. cold start: `--mmproj` loads multimodal on the pin (the V1 gate, re-proven live),
@@ -46,7 +46,7 @@ function findVisionFiles(root: string): { modelPath: string; projectorPath: stri
   return { modelPath: join(dir, model), projectorPath: join(dir, projector) }
 }
 
-describe.skipIf(!enabled)('Vision smoke (manual, real b9585 + real Qwen2.5-VL + mmproj)', () => {
+describe.skipIf(!enabled)('Vision smoke (manual, real pinned llama-server + real Qwen2.5-VL + mmproj)', () => {
   const binPath = enabled ? resolveLlamaServerPath(ROOT, process.platform, process.env) : null
   const files = enabled ? findVisionFiles(ROOT) : null
 

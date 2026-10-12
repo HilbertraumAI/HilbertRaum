@@ -1429,7 +1429,7 @@ describe('registerModelIpc', () => {
     // a fake runtime manager that tracks its own commit, and a REAL LlamaReranker wired to the
     // SAME shared posture helper `main/index.ts`'s own seam uses
     // (`resolveRerankerDevicePosture`/`snapshotRerankerOccupancy`), proving the caller's job that
-    // `reranker.test.ts`'s sidecar-level tests leave out (those drive a hand-held `posture`
+    // the sidecar-level reranker suites leave out (`reranker-wave8.test.ts` drives a hand-held `posture`
     // variable directly; this one drives the REAL headroom gate off a REAL settings write
     // reaching a REAL manifest, through the actual IPC handler). What it proved BEFORE: the next
     // rerank() re-reads the posture after any settings-writing channel, never merely restarting

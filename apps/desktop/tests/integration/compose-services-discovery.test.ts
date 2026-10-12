@@ -7,7 +7,7 @@ import { join } from 'node:path'
 // manifest walk + YAML parse per role resolution — back-to-back, before the window exists. It
 // now discovers ONCE and threads the result into every role resolver. The spy wrapper below
 // keeps the REAL discovery (this test runs over a real temp drive layout) and only counts the
-// walks; the per-action `composeTranslator` call site (issue #40) must keep re-discovering.
+// walks; the per-action call sites — `composeTranslator` (issue #40) and `refreshTranscriberSlot` (issue #497) — must keep re-discovering.
 
 const { discoverCalls } = vi.hoisted(() => ({ discoverCalls: vi.fn() }))
 vi.mock('../../src/main/services/models', async (importOriginal) => {
@@ -21,7 +21,7 @@ vi.mock('../../src/main/services/models', async (importOriginal) => {
   }
 })
 
-import { composeServices, composeTranscriber, composeTranslator } from '../../src/main/services/compose-services'
+import { composeServices, composeTranslator, refreshTranscriberSlot } from '../../src/main/services/compose-services'
 
 /** A minimal VALID manifest per role (JSON is YAML — discoverManifests parses it fine). */
 function roleManifest(id: string, role: string, runtime = 'llama_cpp', format = 'gguf') {
@@ -65,7 +65,8 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
     discoverCalls.mockClear()
     // Wave 8 ruling (b)(G)/NF-1: composeServices's two reranker callbacks are now required —
     // no sidecar binary is provisioned in this fixture, so their values never matter, only that
-    // the wire compiles and is threaded through (proven functionally in reranker.test.ts).
+    // the wire compiles and is threaded through (proven functionally in
+    // reranker-callbacks-composition.test.ts).
     const services = composeServices({
       rootPath: root,
       manifestsDir,
@@ -89,11 +90,12 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
     expect(discoverCalls).toHaveBeenCalledTimes(1)
   })
 
-  it('the per-action composeTranscriber call site (issue #497) re-discovers too', () => {
+  it('the per-action refreshTranscriberSlot call site (issue #497) re-discovers too', () => {
     const { root, manifestsDir } = tempDrive()
     discoverCalls.mockClear()
     // No `discovered` — a speech-model download or a whisper.cpp install just changed the drive.
-    expect(composeTranscriber({ rootPath: root, manifestsDir })).toBeNull() // no binary in the fixture
+    const ctx = { transcriber: null, paths: { rootPath: root }, manifestsDir, isDev: false }
+    expect(refreshTranscriberSlot(ctx)).toBe(false) // no binary in the fixture
     expect(discoverCalls).toHaveBeenCalledTimes(1)
   })
 

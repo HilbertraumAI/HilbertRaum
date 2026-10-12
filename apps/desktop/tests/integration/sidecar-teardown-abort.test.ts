@@ -1,10 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { EventEmitter } from 'node:events'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import { VisionRuntime } from '../../src/main/services/vision/runtime'
-import { TranslationRuntime } from '../../src/main/services/translation/runtime'
-import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import { TranslationRuntime, type TranslateOptions } from '../../src/main/services/translation/runtime'
+import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
+import { within } from '../helpers/hang-budget'
+import { fakeSpawn } from '../helpers/fake-sidecar'
 
 // #244 (port of the review's B8 reproduction): a lock or quit that lands
 // during a NEVER-HEALTHY cold start of a lazily-started llama-server must settle in about one
@@ -20,29 +21,11 @@ import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 // the bound this test measures is the one the product ships. Fake timers make the 180 s
 // reproducible in milliseconds; the settle time is read off the faked clock.
 //
+// The translation rows also carry #159's own checks: the lazy restart after `suspend()` and a
+// permanent `stop()` (moved from translation-runtime.test.ts).
+//
 // Does not prove: the field likelihood of a wedged cold start (a slow USB read of a multi-GB
 // weight is the realistic trigger) — only that, when it happens, teardown is bounded.
-
-class FakeChild extends EventEmitter implements ChildProcessLike {
-  pid = 4242
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-}
-
-/** A spawn() stub that records EVERY spawned child (a restart after an aborted start spawns a second). */
-function fakeSpawn() {
-  const children: FakeChild[] = []
-  const spawn = (): ChildProcessLike => {
-    const child = new FakeChild()
-    children.push(child)
-    return child
-  }
-  return { spawn, children }
-}
 
 /** `/health` never turns ready — a wedged cold start. Every other route is unreachable before health. */
 const neverHealthy = (async () =>
@@ -78,7 +61,7 @@ async function advanceUntil(done: () => boolean, max = 200_000, step = 250): Pro
 
 interface WrapperCase {
   name: string
-  build: (spawn: () => ChildProcessLike) => {
+  build: (spawn: SpawnFn) => {
     /** Trigger the lazy cold start (the first user-facing call). */
     kick: () => Promise<unknown>
     /** The lock/quit teardown under test. */
@@ -87,10 +70,22 @@ interface WrapperCase {
     restart?: () => Promise<unknown>
     /** The wrapper's own latch accessor where one exists. */
     latched?: () => boolean
+    /** A user-facing call after a PERMANENT stop: refused with this message, and no spawn. */
+    afterStop?: { call: () => Promise<unknown>; refusal: RegExp }
     /** Permanent stop at the end so nothing is left parked. */
     finalStop: () => Promise<void>
   }
 }
+
+const TRANSLATE: TranslateOptions = { sourceLang: 'de', targetLang: 'en', text: 'Guten Tag.' }
+const translationRuntime = (spawn: SpawnFn) =>
+  new TranslationRuntime({
+    ...base,
+    modelId: 'tg',
+    spawn,
+    fetchImpl: neverHealthy,
+    gpu: { getGpuMode: () => 'off', getGpuAutoDisabled: () => true }
+  })
 
 const cases: WrapperCase[] = [
   {
@@ -149,20 +144,30 @@ const cases: WrapperCase[] = [
     }
   },
   {
-    // The #159 template — green before this change; kept as the control the three above must match.
-    name: 'TranslationRuntime.suspend() (control, #159)',
+    // The #159 template — green before this change; kept as the control the three above must match. A lock
+    // must leave translation usable after the next unlock: no latch, and the lazy restart spawns a fresh child.
+    name: 'TranslationRuntime.suspend() then a lazy restart (control, #159)',
     build: (spawn) => {
-      const tg = new TranslationRuntime({
-        ...base,
-        modelId: 'tg',
-        spawn,
-        fetchImpl: neverHealthy,
-        gpu: { getGpuMode: () => 'off', getGpuAutoDisabled: () => true }
-      })
+      const tg = translationRuntime(spawn)
       return {
-        kick: () => tg.translate({ sourceLang: 'de', targetLang: 'en', text: 'Guten Tag.' }),
+        kick: () => tg.translate(TRANSLATE),
         teardown: () => tg.suspend(),
+        restart: () => tg.translate(TRANSLATE),
         latched: () => tg.isStartFailed(),
+        finalStop: () => tg.stop()
+      }
+    }
+  },
+  {
+    // A quit during a hung translation cold start (#159): as prompt as the lock, and permanent.
+    name: 'TranslationRuntime.stop()',
+    build: (spawn) => {
+      const tg = translationRuntime(spawn)
+      return {
+        kick: () => tg.translate(TRANSLATE),
+        teardown: () => tg.stop(),
+        latched: () => tg.isStartFailed(),
+        afterStop: { call: () => tg.translate(TRANSLATE), refusal: /stopped/ },
         finalStop: () => tg.stop()
       }
     }
@@ -200,6 +205,11 @@ describe('#244 — lock/quit teardown during a never-healthy cold start (B8)', (
     await expect(inflight).rejects.toThrow() // the in-flight call rejects (aborted start)
 
     if (w.latched) expect(w.latched()).toBe(false) // an aborted start is not a load fault
+    if (w.afterStop) {
+      // `within`: a regression that starts a never-healthy child would otherwise hang under the frozen fake clock.
+      await expect(within(w.afterStop.call(), 'the call after stop() settling')).rejects.toThrow(w.afterStop.refusal)
+      expect(children).toHaveLength(1) // a permanent stop spawns nothing more
+    }
     if (w.restart) {
       const again = w.restart()
       again.catch(() => {})
