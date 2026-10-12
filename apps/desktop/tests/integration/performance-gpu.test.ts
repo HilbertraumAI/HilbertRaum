@@ -5,7 +5,8 @@ import { join } from 'node:path'
 // The graphics figures of the Performance screen come from ONE eligible source (PR #303 audit
 // M8 / N1 / DR1 / DR2 / DR5, owner decisions G3 / G4):
 //  - the persisted probe is STAMPED with the machine it ran on, and a probe stamped with
-//    another machine supplies nothing; an unstamped legacy probe stays eligible (G3);
+//    another machine supplies nothing; an unstamped legacy probe stays eligible (G3; the rule's
+//    own cases live in gpu-rules.test.ts);
 //  - of the eligible probe, ONE device is selected — the BUDGET device for the next start
 //    (`nextStartMemory`: the largest usable card; PR #308 audit decision 9, unified with this
 //    audit's M8.2 at the merge of the two) — and its name and memory travel together into the
