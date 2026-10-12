@@ -1,5 +1,4 @@
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
-import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -11,7 +10,15 @@ import { VisionService, type VisionStreamEmitter } from '../../src/main/services
 import { EngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 import { until, within } from '../helpers/hang-budget'
-import { FakeChild, GatedChild, fakeIdleClock, fakeSpawn, loadingSidecar, sseBody } from '../helpers/fake-sidecar'
+import {
+  FakeChild,
+  GatedChild,
+  exitingChild,
+  fakeIdleClock,
+  fakeSpawn,
+  loadingSidecar,
+  sseBody
+} from '../helpers/fake-sidecar'
 import { pngHeader } from '../helpers/image-fixtures'
 
 // V4 hardening tests for the real VisionRuntime (image-understanding plan §16 V4 / §17): lazy
@@ -57,13 +64,6 @@ const analyzeOpts: VisionAnalyzeOptions = {
   imageBytes: new Uint8Array([1, 2, 3, 4]),
   mimeType: 'image/png',
   question: 'What is in this image?'
-}
-
-/** A child that dies during its start (a corrupt GGUF, an OOM): it exits before /health ever answers. */
-function dyingChild(code: number): FakeChild {
-  const child = new FakeChild()
-  queueMicrotask(() => child.crash(code))
-  return child
 }
 
 /** A sidecar that never answers: every request is refused. */
@@ -506,7 +506,7 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     const t0 = Date.now()
     const { fetchImpl } = visionFetch()
     let spawned = 0
-    const { spawn } = fakeSpawn(() => (++spawned === 1 ? dyingChild(137) : new FakeChild())) // the first start dies (transient OOM)
+    const { spawn } = fakeSpawn(() => (++spawned === 1 ? exitingChild(137) : new FakeChild())) // the first start dies (transient OOM)
     const failingFetch = (async (url: string | URL, init?: RequestInit) => {
       if (spawned === 1) throw new Error('connection refused') // the dead first child never answers /health
       return fetchImpl(url, init)
@@ -537,7 +537,7 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
   it('fails FAST inside the 5 s start-failure cooldown — no re-spawn per retry (corrupt-GGUF case, #117)', async () => {
     vi.useFakeTimers({ toFake: ['Date'] })
     const t0 = Date.now()
-    const { spawn, calls } = fakeSpawn(() => dyingChild(1)) // dies every time (corrupt GGUF)
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // dies every time (corrupt GGUF)
     let built = 0
     const service = new VisionService({
       getStatus: async () => VLM_AVAILABLE,
@@ -565,7 +565,7 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     expect(healthy.isStartFailed()).toBe(false)
     await healthy.stop()
 
-    const dyingSpawn = fakeSpawn(() => dyingChild(1))
+    const dyingSpawn = fakeSpawn(() => exitingChild(1))
     const dying = new VisionRuntime({ ...base, spawn: dyingSpawn.spawn, fetchImpl: refusedFetch })
     await expect(dying.analyze(analyzeOpts)).rejects.toThrow()
     expect(dying.isStartFailed()).toBe(true)
@@ -642,20 +642,12 @@ describe('VisionService — OS loader refusal (#530)', () => {
   })
 
   it('a real VisionRuntime whose sidecar the loader refuses ends engineCannotRun (one spawn)', async () => {
-    const { spawn, calls } = fakeSpawn(() => {
-      const child = new FakeChild()
-      const stderr = new EventEmitter()
-      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
-      queueMicrotask(() => {
-        stderr.emit(
-          'data',
-          '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
-        )
-        child.crash(127)
-        child.emit('close', 127, null)
-      })
-      return child
-    })
+    const { spawn, calls } = fakeSpawn(() =>
+      exitingChild(
+        127,
+        '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
+      )
+    )
     const service = new VisionService({
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => new VisionRuntime({ ...base, spawn, fetchImpl: refusedFetch })
