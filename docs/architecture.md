@@ -5087,8 +5087,8 @@ Tests:
 - `sidecar.test.ts` "waits for an engine install to finish its swap before it spawns (#516 spawn
   gate)": the LlamaServer spawn site (all five llama sidecars) waits on the gate; `gpu.test.ts` (same
   title) the `--list-devices` probe, and `engine-health.test.ts` "waits for an install of its family to
-  finish the swap before it launches (#516 spawn gate)" the "Check again" launch. The whisper-cli
-  spawn site has no such row yet (#656).
+  finish the swap before it launches (#516 spawn gate)" the "Check again" launch, and `transcriber.test.ts`
+  "waits for an engine install to finish its swap before it spawns (#516 spawn gate)" the whisper-cli spawn.
 - `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
   `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
   still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.
@@ -11446,6 +11446,8 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   The 2026-10 runtime-ladder test campaign added the fourth seam (the #530 "Check again" engine check,
   `checkProgramLoads`) and the `ok` / `skip-legacy` positive controls, retired the injected-verdict
   `LlamaServer` copies, and removed `LlamaServer`'s `verifyBinary` option: it always calls the real verifier.
+  The sidecar-services test campaign did the same for whisper-cli: it retired the injected-verdict copy in
+  `transcriber.test.ts` and removed `WhisperCliOptions.verifyBinary`.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
