@@ -302,10 +302,11 @@ describe('registerDictationIpc', () => {
     // flaked under full-suite load). inFlight is set synchronously, so the BUSY refusal below holds regardless.
     await until(() => calls > 0, 'the first dictation reaching transcribe')
     expect(calls).toBe(1)
-    // The second press is refused with friendly copy and never reaches the transcriber.
-    await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([4, 5, 6]))).rejects.toThrow(
-      DICTATION_BUSY_MESSAGE
-    )
+    // The second press is refused with friendly copy and never reaches the transcriber (were it let through, it
+    // would park on the gate: `within` names that instead of a bare test timeout).
+    await expect(
+      within(invoke(handlers, IPC.transcribeDictation, new Uint8Array([4, 5, 6])), 'the second press settling')
+    ).rejects.toThrow(DICTATION_BUSY_MESSAGE)
     expect(calls).toBe(1)
     release()
     const { result } = await first
