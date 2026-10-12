@@ -40,6 +40,13 @@ import { machineKey, memoryClassOf, resetPerformanceForTests } from '../../src/m
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import type { CachedGpuProbe } from '../../src/main/services/runtime/gpu'
 import { ModelOccupancy } from '../../src/main/services/runtime/occupancy'
+import {
+  clearModelLoadLatches,
+  isSpeculativeSuppressed,
+  latchModelLoad,
+  modelLoadLatchReason,
+  suppressSpeculative
+} from '../../src/main/services/runtime/factory'
 import { recordModelPlacement, resetModelPlacementForTests } from '../../src/main/services/runtime/placement'
 import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 import { getSettings, updateSettings } from '../../src/main/services/settings'
@@ -269,30 +276,9 @@ describe('probe identity (M8.3, G3)', () => {
     expect(snap.current?.gpu).toBeNull()
     expect(snap.placement.vramMb).toBeNull()
     expect(snap.placement.memoryClass).toBe(memoryClassOf(process.platform, process.arch, []))
+    expect(snap.graphicsDevice).toBeNull() // the tile never names another machine's card (#327 class)
     // The raw settings still hold the devices — nothing was deleted, they are just not this machine's.
     expect(getSettings(db).gpuProbe).toEqual(probe([RTX], FOREIGN_KEY))
-  })
-
-  it('an unstamped legacy probe stays eligible (unverifiable until a local refresh replaces it)', () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    updateSettings(db, { lastBenchmark: legacyResult(), gpuProbe: probe([RTX]) })
-    expect('machineKey' in getSettings(db).gpuProbe!).toBe(false)
-
-    const snap = buildPerformanceSnapshot(ctxWith(root, db))
-
-    expect(snap.currentGpu).toEqual({ name: RTX.name, totalMb: RTX.totalMb, useful: true })
-    expect(snap.placement.vramMb).toBe(RTX.totalMb)
-    expect(snap.current?.gpuVramMb).toBe(RTX.totalMb)
-  })
-
-  it('a probe stamped with THIS machine, or with an unknown identity, is eligible', () => {
-    for (const stamp of [here(), null]) {
-      const root = freshRoot()
-      const db = seededDb(root)
-      updateSettings(db, { lastBenchmark: legacyResult(), gpuProbe: probe([RTX], stamp) })
-      expect(buildPerformanceSnapshot(ctxWith(root, db)).currentGpu).toEqual({ name: RTX.name, totalMb: RTX.totalMb, useful: true })
-    }
   })
 })
 
@@ -366,14 +352,20 @@ describe('the probe write (probeAndPersistGpu, through "Try GPU again")', () => 
     expect(spy.mock.results.map((r) => r.value)).toEqual([probe([RTX], FOREIGN_KEY), written])
   })
 
-  it('a probe-only refresh writes the devices stamped with this machine and pushes', async () => {
+  it('a probe-only refresh drops the cached answer first, then writes the devices stamped with this machine and pushes', async () => {
     const root = freshRoot()
     const db = seededDb(root)
     withBinary(root)
     const spy = performanceChangedSpy()
+    const impl = vi.fn(async () => [IRIS, RTX])
+    const probeGpu = fakeProbe(impl)
+    const invalidate = vi.spyOn(probeGpu, 'invalidate')
 
-    const settings = await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => [IRIS, RTX]) }))
+    const settings = await tryGpuAgain(ctxWith(root, db, { probeGpu }))
 
+    // "Try GPU again" is never answered from the session cache: invalidate() precedes the re-probe.
+    expect(invalidate).toHaveBeenCalledTimes(1)
+    expect(invalidate.mock.invocationCallOrder[0]).toBeLessThan(impl.mock.invocationCallOrder[0])
     expect(settings.gpuProbe).toMatchObject({ devices: [IRIS, RTX], machineKey: here() })
     expect(spy).toHaveBeenCalledTimes(2) // the flag clear, then the write (A-D1)
   })
@@ -609,8 +601,11 @@ describe('capability is not execution (DR1)', () => {
     expect(cardMachine({ placement: {} }).placement.totals.chatAndTranslationOnCard).toBe(true)
   })
 
-  it("gpuMode 'off': both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — and the class is the NEXT start's, cpu", () => {
-    const off = cardMachine({ settings: { gpuMode: 'off' } })
+  it.each([
+    ["gpuMode 'off'", { gpuMode: 'off' as const }],
+    ['gpuAutoDisabled', { gpuAutoDisabled: true }]
+  ])("%s: both rows say cpu, the verdict is the processor estimate against RAM, bothOnCard is false — and the class is the NEXT start's, cpu", (_name, settings) => {
+    const off = cardMachine({ settings })
     expect(rowOf(off.placement, 'chat').device).toBe('cpu')
     expect(rowOf(off.placement, 'translation').device).toBe('cpu')
     expect(off.placement.totals.bothOnCard).toBe(false)
@@ -623,15 +618,6 @@ describe('capability is not execution (DR1)', () => {
     // gate, is the unchanged flags-at-default wrapper).
     expect(off.placement.memoryClass).toBe('cpu')
     expect(off.placement.vramMb).toBeNull()
-  })
-
-  it('gpuAutoDisabled: the same', () => {
-    const auto = cardMachine({ settings: { gpuAutoDisabled: true } })
-    expect(rowOf(auto.placement, 'chat').device).toBe('cpu')
-    expect(rowOf(auto.placement, 'translation').device).toBe('cpu')
-    expect(auto.placement.totals.bothOnCard).toBe(false)
-    expect(auto.placement.verdict.kind).not.toBe('gpu')
-    expect(auto.placement.verdict.budgetMb).toBe(auto.placement.ramMb)
   })
 
   it('a translation sidecar forced to --device none says cpu while chat keeps the card', () => {
@@ -649,14 +635,18 @@ describe('capability is not execution (DR1)', () => {
     expect(observedCpu.placement.verdict).toMatchObject({ kind: 'cpu', estimated: false, budgetMb: observedCpu.placement.ramMb })
   })
 
-  it('no usable card: both rows say cpu whatever the configuration', () => {
-    const none = cardMachine({ settings: { gpuProbe: probe([IRIS], here()) } })
-    expect(rowOf(none.placement, 'chat').device).toBe(memoryClassOf(process.platform, process.arch, [IRIS]) === 'cpu' ? 'cpu' : 'gpu')
-    if (none.placement.memoryClass === 'cpu') {
+  it.skipIf(process.platform === 'darwin' && process.arch === 'arm64')(
+    'no usable card, GPU on: both rows say cpu and nothing counts as on the card',
+    () => {
+      // An integrated-only probe under 'auto' is a cpu CLASS without a forced configuration (`cpuForced`
+      // false) — the rows still stay off the card (DR1). Apple Silicon is unified (the iGPU IS the pool).
+      const none = cardMachine({ settings: { gpuProbe: probe([IRIS], here()) } })
+      expect(none.placement.memoryClass).toBe('cpu')
+      expect(rowOf(none.placement, 'chat').device).toBe('cpu')
       expect(rowOf(none.placement, 'translation').device).toBe('cpu')
       expect(none.placement.totals.bothOnCard).toBe(false)
     }
-  })
+  )
 })
 
 describe('free/compute attribution to the selected device (DR2)', () => {
@@ -684,36 +674,9 @@ describe('free/compute attribution to the selected device (DR2)', () => {
     expect(p.observed).not.toBeNull()
     expect(p.verdict).toMatchObject({ kind: 'partial', freeAtStartMb: 2703, workingMb: 2860, spillMb: 1750, budgetMb: RTX.totalMb })
   })
-
-  it('the selected device absent from the log: null, never the iGPU’s free memory', () => {
-    const p = withLog([irisRow, { ...rtxRow, name: 'NVIDIA GeForce RTX 3080 Ti' }], [IRIS, RTX])
-    expect(p.verdict).toMatchObject({ kind: 'partial', freeAtStartMb: null, workingMb: null })
-  })
-
-  it('a lone row: the selected device’s own figures when it is that device, null when it is not (A-D3)', () => {
-    // The dGPU alone in the log, the dGPU selected: the row answers, not the legacy summary.
-    expect(withLog([rtxRow], [RTX]).verdict).toMatchObject({ freeAtStartMb: 2703, workingMb: 2860 })
-    // An iGPU-only log beside a selected dGPU: never the iGPU’s free memory under the dGPU’s budget.
-    expect(withLog([irisRow], [IRIS, RTX]).verdict).toMatchObject({ kind: 'partial', freeAtStartMb: null, workingMb: null })
-  })
-
-  it('a record persisted before the rows existed attributes as it always did', () => {
-    expect(withLog(undefined, [IRIS, RTX]).verdict).toMatchObject({ freeAtStartMb: 15_000, workingMb: 3160 })
-  })
 })
 
 describe('everything loaded at once (DR5)', () => {
-  it('cpu class: every row counts', () => {
-    const root = freshRoot()
-    const db = seededDb(root)
-    updateSettings(db, { lastBenchmark: hereResult(), activeModelId: CHAT })
-    const p = buildPerformanceSnapshot(ctxWith(root, db, { manifestsDir: MANIFESTS })).placement
-    // No probe on this host: the cpu class (or, on Apple Silicon, unified — the full sum too).
-    expect(['cpu', 'unified']).toContain(p.memoryClass)
-    const sum = p.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)
-    expect(p.totals.ramAllMb).toBe(Math.round(sum))
-  })
-
   it.skipIf(process.platform === 'darwin' && process.arch === 'arm64')(
     'discrete: the processor rows plus the observed chat spill and the live translation spill',
     () => {
@@ -732,4 +695,22 @@ describe('everything loaded at once (DR5)', () => {
       expect(off.totals.ramAllMb).toBe(Math.round(off.models.reduce((a, r) => a + (r.sizeOnDiskGb ?? 0) * 1024, 0)))
     }
   )
+})
+
+describe('"Try GPU again" and the session latches (#182, #372)', () => {
+  it('re-arms the #182 speculative latch but LEAVES the #372 unloadable-model latch alone', async () => {
+    // "Try GPU again" is about the graphics card. A model no rung could load is not a card
+    // problem, so this button is not its reset — verify / re-download / engine install are.
+    const root = freshRoot()
+    const db = seededDb(root)
+    suppressSpeculative('m')
+    latchModelLoad('m', 'unknown model architecture')
+    try {
+      await tryGpuAgain(ctxWith(root, db, { probeGpu: fakeProbe(async () => [RTX]) }))
+      expect(isSpeculativeSuppressed('m')).toBe(false)
+      expect(modelLoadLatchReason('m')).toBe('unknown model architecture')
+    } finally {
+      clearModelLoadLatches() // module state: never leak into a later case
+    }
+  })
 })

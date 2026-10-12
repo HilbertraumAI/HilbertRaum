@@ -4088,7 +4088,7 @@ persisting nothing; a healthy model starts on rung 1.
 > CODE-2 cancel before the latched start still settles as cancelled, never as the mock.
 >
 > **Clearing rule.** "Try GPU again" is about the graphics card and does **not** touch this latch
-> (pinned in `gpu-ipc.test.ts`). What re-arms a model is evidence that the *file* or the
+> (pinned in `performance-gpu.test.ts`). What re-arms a model is evidence that the *file* or the
 > *runtime* changed: **"Verify checksum"** on that model (`models:verify` → `clearModelLoadLatch`;
 > a re-verified file is a new file — also the way to retry after a transient cause such as RAM
 > pressure), a **completed in-app download** of that model (`ctx.onModelInstalled` → the same,
@@ -4097,7 +4097,7 @@ persisting nothing; a healthy model starts on rung 1.
 > a kiwix-only install clears nothing), and an **app restart** (module state). A device verdict
 > never latches the model, so a persisted `gpuAutoDisabled` still re-walks from rung 2 as before.
 > Tests: `runtime-ladder.test.ts` "#372", `core-model-ipc.test.ts` (verify), `engine-consent-ipc.test.ts`
-> (engine install), the `ctx.onModelInstalled` source-text pin, `gpu-ipc.test.ts` (Try GPU again).
+> (engine install), the `ctx.onModelInstalled` source-text pin, `performance-gpu.test.ts` (Try GPU again).
 
 **#530 amendment — a program the OS loader refused is neither verdict.**
 - **The defect.** A refused `llama-server` (Linux without `libgomp1`, Windows without the Visual
@@ -8284,7 +8284,7 @@ was subsumed by F16 (Phase 4).
 | **T1** (Med) | 5 | **closed** — the LlamaServer **unit** suite couldn't exercise SIGTERM-ignore→SIGKILL escalation (its `FakeChild.kill()` exits on ANY signal, so `stop()` always settled on the "exited" branch). New `sidecar.test.ts` test with a **stubborn child** (records each signal, dies only on SIGKILL) asserts `signals == [undefined,'SIGKILL']`. Teeth: revert the line-576 gate `this.exited` → `child.killed` → SIGKILL dropped → reds | "Test-enforcement seams" (T1) |
 | **T2** (Med) | 5 | **closed** — the resident-cache lock-PURGE (RAG-6 SECURITY requirement) was proven only at the unit tier, never that the lock IPC *calls* it. `workspace-ipc.test.ts` now seeds a real resident map, locks, and asserts `purgeResidentVectors` fired against the LIVE db (spy delegates to the real impl, shared `caches`). Teeth: drop the purge call from the lock handler → spy 0× → reds | "Test-enforcement seams" (T2) |
 | **T6** (Low) | 5 | **closed (de-flake)** — the GPU-probe timeout test awaited a real 20 ms `setTimeout` (a TEST-1-family wall-clock flake). Converted to fake timers (`vi.advanceTimersByTimeAsync`, the combine-signals idiom) with an injected trivial `verify`; the kill-on-timeout assertion is preserved. Teeth: neuter the timeout `child.kill('SIGKILL')` → `child.killed` stays false → reds | "Test-enforcement seams" (T6) |
-| **T7** (Low) | 5 | **closed (de-flake)** — the privacy-guard snapshot poll was an iteration-capped `for(i<50){sleep(5)}` (TEST-1 sibling). Converted to `vi.waitFor` (the gpu-ipc idiom) — re-polls until the run settles, no fixed cap. The no-secret-in-snapshot assertions are preserved. (The optional `vision-runtime.test.ts` real-timer copies were left as-is — converting them needs the fakeClock seam, out of scope for a quick nit) | "Test-enforcement seams" (T7) |
+| **T7** (Low) | 5 | **closed (de-flake)** — the privacy-guard snapshot poll was an iteration-capped `for(i<50){sleep(5)}` (TEST-1 sibling). Converted to `vi.waitFor` (the picker-seams idiom) — re-polls until the run settles, no fixed cap. The no-secret-in-snapshot assertions are preserved. (The optional `vision-runtime.test.ts` real-timer copies were left as-is — converting them needs the fakeClock seam, out of scope for a quick nit) | "Test-enforcement seams" (T7) |
 | **T8** (Low) | 5 | **closed** — the crash-fallback test counted a monkey-patched `stop()` wrapper (`made[0].stops===1`), which still holds if `stop()` stops reaching the child kill (orphan). `runtime-manager.test.ts` now also pins the REAL reap on observable child state: a final `mgr.stop()` + `children[1].child.killed===true` (the LIVE restarted child is genuinely killed). **DIVERGED from the audit's literal "crashed child killed===true"** — the crashed child already `exited`, so `stop()` correctly early-returns before any kill (its `killed` stays false; asserting true would red on correct code). Teeth: early-return `stop()` before the kill → the live child's `killed` stays false → reds | "Test-enforcement seams" (T8) |
 | **T3** (Med) | 4 | **verified subsumed** — `ipc-lock-coverage.test.ts` (F16) drives `registerRagIpc` against a locked ctx with NO exemptions, so `rag:ask` is enumerated and asserted to reject with the localized lock copy. No separate Phase-5 test added | §30 (F16); "Test-enforcement seams" (T3) |
 | **T9** (Low, nit) | 1/5 | **partially closed** — invoice negative line totals / Gutschrift/Rabatt were pinned in Phase 1; the AES-GCM **truncated (length-reduced) ciphertext** case is added at the `crypto.ts` unit tier (`crypto.test.ts`, one assertion — distinct from the existing bit-flip cases). The `BANK_EXTRACTOR_VERSION` tautological-tripwire and the mock-embedder score-band nits are left as accepted | "Test-enforcement seams" (T9); arch §8 (Phase 1 T9) |
@@ -11515,13 +11515,14 @@ carries the one-line disposition for each; the detail and teeth:
   test awaited a real 20 ms `setTimeout` against a never-exiting child — a TEST-1-family wall-clock flake. It
   now drives the probe's own kill-timeout through `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(20)` (the
   `combine-signals.test.ts` idiom), with `verify` injected as a trivial resolver so only the timeout path is
-  under fake-timer control (no real fs/microtask racing the timer; the verify path has its own test). The
+  under fake-timer control (no real fs/microtask racing the timer; the verify path is pinned through the real
+  verifier in `binary-verify-spawn.test.ts`). The
   assertion is preserved (probe resolves `[]` on timeout AND the child is killed). Teeth: neuter the timeout's
   `child.kill('SIGKILL')` → `child.killed` stays false → reds.
 - **T7 — privacy-guard snapshot poll, de-flaked to `vi.waitFor`
   (`tests/integration/skills-privacy-guard.test.ts`, converted in place).** The old `for(i<50 &&
   running){sleep(5)}` was a structural TEST-1 sibling (bounded iterations × a fixed sleep over mutable state).
-  It now re-polls via `vi.waitFor` (the `gpu-ipc.test.ts` idiom) until the run settles, no fixed cap; the
+  It now re-polls via `vi.waitFor` (the `picker-seams.test.ts` idiom) until the run settles, no fixed cap; the
   no-secret-in-snapshot assertions are preserved. (The optional redundant real-timer copies in
   `vision-runtime.test.ts` were left as-is — converting them needs the fakeClock injection seam, beyond a quick
   nit.)

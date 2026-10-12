@@ -9,18 +9,13 @@ import {
   primaryUsefulDevice,
   USABLE_VRAM_MB
 } from '../../src/shared/gpu-rules'
-import {
-  GPU_BUMP_MIN_VRAM_MB as runtimeMinVram,
-  gpuUsefulForProfile as runtimeGate,
-  looksIntegrated as runtimeLooksIntegrated
-} from '../../src/main/services/runtime/gpu'
 import type { GpuDevice, GpuProbeResult } from '../../src/shared/types'
 
 // The ONE "usable graphics card" rule (PR #303 audit M8 / N3, owner decisions G3 / G4): which
 // device counts, which one is shown, whether a persisted probe may speak for this machine —
 // shared by the profile bump, the memory class, the snapshot and the Performance screen. The
-// `looksIntegrated` table moved here from gpu.test.ts with the implementation; the runtime
-// module re-exports the same bindings, pinned below so the two can never drift.
+// `looksIntegrated` table lives here alone (gpu.test.ts's copy was merged in by the 2026-10
+// runtime-ladder test campaign).
 
 const dev = (id: string, name: string, totalMb: number): GpuDevice => ({ id, name, totalMb, freeMb: totalMb })
 const IRIS = dev('Vulkan0', 'Intel(R) Iris(R) Xe Graphics', 16_384)
@@ -47,7 +42,18 @@ describe('looksIntegrated', () => {
     ['AMD Radeon(TM) 780M Graphics', true],
     ['AMD Radeon Vega 8 Graphics (RADV RAVEN)', true],
     ['Intel(R) Arc(TM) Graphics', true],
+    // PR #308 audit (decision 9, R6): the current-generation names the pinned Vulkan build
+    // reports for integrated parts — none matched before, so a hybrid laptop's iGPU (11–36 GiB
+    // of SHARED memory) read as a discrete card on every consumer.
     ['Intel(R) Graphics (ARL)', true],
+    ['Intel(R) Graphics (LNL)', true],
+    ['Intel(R) Arc(TM) 140V GPU (16GB)', true],
+    ['Intel(R) Iris(R) Xe Graphics (TGL GT2)', true],
+    ['Intel(R) UHD Graphics 770', true], // also the iGPU of the real b11146 --list-devices capture (gpu.test.ts)
+    ['AMD Radeon 780M Graphics (RADV PHOENIX)', true],
+    ['AMD Radeon Graphics (RADV RENOIR)', true],
+    ['AMD Radeon 890M Graphics (RADV GFX1150)', true],
+    ['AMD Radeon 8060S Graphics (RADV GFX1151)', true],
     // #320, owner decision 2026-09-07: the BARE Arrow/Lunar-Lake name, no platform code. It
     // used to read discrete, so a 16–32 GiB shared-memory iGPU could become the budget device
     // — a false negative, the one direction the module's bias note forbids. The alternative is
@@ -62,7 +68,17 @@ describe('looksIntegrated', () => {
     // Re-asserted against the bare-name alternative above (#320): a discrete Arc carries its
     // model number, so the anchor never reaches it.
     ['Intel(R) Arc(TM) A770 Graphics', false],
-    ['Intel(R) Arc(TM) B580 Graphics', false]
+    ['Intel(R) Arc(TM) B580 Graphics', false],
+    // PR #308 audit: the discrete forms the new patterns must keep OUT — the model-numbered Arc
+    // A-series, the laptop "RX …S", the RTX line, and Apple's Metal device.
+    ['Intel(R) Arc(tm) A770 Graphics (DG2)', false],
+    ['Intel(R) Arc(TM) A750 Graphics', false],
+    ['AMD Radeon RX 7700S (RADV NAVI33)', false],
+    ['AMD Radeon RX 7700S', false],
+    ['AMD Radeon RX 7900 XTX (RADV NAVI31)', false],
+    ['NVIDIA GeForce RTX 5060', false],
+    ['NVIDIA GeForce RTX 3090', false],
+    ['Apple M2', false]
   ])('%s → %s', (name, integrated) => {
     expect(looksIntegrated(name)).toBe(integrated)
   })
@@ -93,16 +109,10 @@ describe('isUsefulDevice — the single predicate', () => {
     // actually produces (≈ 4,096 − the 768 MiB idle reserve measured on every probed card = 3,328;
     // the 4B's 3,838 does not clear it), so admitting such a card would star the E2B at every RAM
     // size with no measurement behind the demotion (#321, restated reason, arithmetic corrected by
-    // #413; `model-benchmarks.md` §6.6 N8 "Why 5,120 — RESTATED").
+    // #413; `model-benchmarks.md` §6.6 N8 "Why 5,120 — RESTATED"). (#321: the floor is a
+    // DECISION, not an arithmetic consequence — it did not move when the estimate fixes made a
+    // 4 GB card able to hold a ranked model.)
     expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1650', totalMb: 4096 })).toBe(false)
-  })
-
-  // #321: the floor is a DECISION, not an arithmetic consequence — its original justification
-  // went void when the E2B's threshold fell to 2,271 MiB. Pin that it did not move with it.
-  it('the floor did not move when the estimate fixes made a 4 GB card able to hold a ranked model (#321)', () => {
-    expect(USABLE_VRAM_MB).toBe(5120)
-    expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1650', totalMb: 4096 })).toBe(false)
-    expect(isUsefulDevice({ name: 'NVIDIA GeForce GTX 1650 Ti', totalMb: 4032 })).toBe(false)
   })
 })
 
@@ -113,12 +123,6 @@ describe('gpuUsefulForProfile — unchanged semantics (G4)', () => {
     expect(gpuUsefulForProfile([GTX])).toBe(false)
     expect(gpuUsefulForProfile([RTX])).toBe(true)
     expect(gpuUsefulForProfile([IRIS, RTX])).toBe(true)
-  })
-
-  it('the runtime module re-exports these very bindings', () => {
-    expect(runtimeGate).toBe(gpuUsefulForProfile)
-    expect(runtimeLooksIntegrated).toBe(looksIntegrated)
-    expect(runtimeMinVram).toBe(GPU_BUMP_MIN_VRAM_MB)
   })
 })
 

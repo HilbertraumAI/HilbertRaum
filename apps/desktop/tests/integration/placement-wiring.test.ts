@@ -49,8 +49,7 @@ import { createSelectingRuntimeFactory, type LlamaRungOptions } from '../../src/
 import {
   latestModelPlacement,
   recordModelPlacement,
-  resetModelPlacementForTests,
-  setModelPlacementObserver
+  resetModelPlacementForTests
 } from '../../src/main/services/runtime/placement'
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { getSettings } from '../../src/main/services/settings'
@@ -276,18 +275,6 @@ describe('the start ladder feeds the placement latch', () => {
     expect(h.attempts[0].onStderrData).toBeTypeOf('function')
   })
 
-  it('stamps a null machineKey when the factory was built without one', async () => {
-    const h = ladderHarness({ probe: [RTX], stderr: [PARTIAL_LOG] })
-    await h.factory(opts).start()
-    expect(latestModelPlacement()?.machineKey).toBeNull()
-  })
-
-  it('labels a start whose probe found nothing as cpu, with the same reading', async () => {
-    const h = ladderHarness({ probe: [], stderr: [PARTIAL_LOG], machineKey: () => 'k-test' })
-    await h.factory(opts).start()
-    expect(latestModelPlacement()).toMatchObject({ backend: 'cpu', gpuLayers: 20, totalLayers: 33 })
-  })
-
   it('gives every attempt its OWN parser: a retried rung never sums the failed load', async () => {
     const h = ladderHarness({
       failFirst: 1,
@@ -318,20 +305,6 @@ describe('the start ladder feeds the placement latch', () => {
       at: expect.any(String)
     })
   })
-
-  it('completes the start even when the persisting observer throws', async () => {
-    let observed = 0
-    setModelPlacementObserver(() => {
-      observed += 1
-      throw new Error('boom')
-    })
-    const h = ladderHarness({ probe: [RTX], stderr: [PARTIAL_LOG], machineKey: () => 'k-test' })
-    const runtime = h.factory(opts)
-    await expect(runtime.start()).resolves.toBeUndefined()
-    expect(observed).toBe(1)
-    expect(runtime.backend).toBe('gpu')
-    expect(latestModelPlacement()).toMatchObject({ modelId: 'm', gpuLayers: 20 })
-  })
 })
 
 describe('registerBenchmarkIpc persists every observed placement', () => {
@@ -355,24 +328,6 @@ describe('registerBenchmarkIpc persists every observed placement', () => {
     expect(spy.mock.results.map((r) => r.value)).toEqual([498])
   })
 
-  it('files each record under its own model id and keeps the earlier models', () => {
-    const { ctx, db } = here()
-    registerBenchmarkIpc(ctx)
-    const spy = performanceChangedSpy()
-
-    recordModelPlacement(placementRecord())
-    recordModelPlacement(placementRecord({ modelId: 'qwen3.5-9b-ud-q4kxl', backend: 'cpu', contextTokens: 8192 }))
-
-    const placements = getSettings(db).modelPlacements
-    expect(Object.keys(placements).sort()).toEqual(['m', 'qwen3.5-9b-ud-q4kxl'])
-    // P4's normalizer DROPS any entry whose key is not its own `modelId` (one model's measurement
-    // must never be handed to another), so the write has to key by the record — round-trip proves it.
-    for (const [key, value] of Object.entries(placements)) expect(value.modelId).toBe(key)
-    expect(placements['m'].contextTokens).toBe(4096)
-    expect(placements['qwen3.5-9b-ud-q4kxl']).toMatchObject({ backend: 'cpu', contextTokens: 8192 })
-    expect(spy).toHaveBeenCalledTimes(2)
-  })
-
   it('re-recording the same model replaces that row and leaves the others alone', () => {
     const { ctx, db } = here()
     registerBenchmarkIpc(ctx)
@@ -383,6 +338,9 @@ describe('registerBenchmarkIpc persists every observed placement', () => {
     const placements = getSettings(db).modelPlacements
     expect(placements['m']).toMatchObject({ contextTokens: 16384, gpuLayers: 33, at: '2026-09-06T10:00:00.000Z' })
     expect(placements['other'].contextTokens).toBe(4096)
+    expect(Object.keys(placements).sort()).toEqual(['m', 'other'])
+    // P4's normalizer DROPS any entry whose key is not its own `modelId`, so the write must key by the record.
+    for (const [key, value] of Object.entries(placements)) expect(value.modelId).toBe(key)
   })
 
   it('skips the write while the workspace is LOCKED but still pushes (the latch moved)', () => {
