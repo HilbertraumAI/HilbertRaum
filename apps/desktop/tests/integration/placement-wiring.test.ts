@@ -45,7 +45,6 @@ vi.mock('electron', () => ({
 
 import { registerBenchmarkIpc } from '../../src/main/ipc/registerBenchmarkIpc'
 import { setPerformanceChangedSink } from '../../src/main/ipc/performance-notify'
-import { createSelectingRuntimeFactory, type LlamaRungOptions } from '../../src/main/services/runtime/factory'
 import {
   latestModelPlacement,
   recordModelPlacement,
@@ -53,10 +52,9 @@ import {
 } from '../../src/main/services/runtime/placement'
 import { resetEffectiveReadForTests } from '../../src/main/services/read-speed'
 import { getSettings } from '../../src/main/services/settings'
-import type { ModelPrefetch, PrefetchOutcome } from '../../src/main/services/runtime/prefetch'
-import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
+import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { GpuDevice, ModelPlacement } from '../../src/shared/types'
-import { hangPolls } from '../helpers/hang-budget'
+import { ladderHarness, until } from '../helpers/ladder-harness'
 import {
   closePerformanceFixture,
   ctxWith,
@@ -105,97 +103,6 @@ const PARTIAL_READING = {
  * SWA cache pair on an RTX 3080 Ti) — the attempt that then fails to come up.
  */
 const FULL_LOG = fixture('placement-b9849-full-49of49-swa.txt')
-
-interface LadderAttempt {
-  binPath: string
-  extraArgs: string[]
-  /** The parser feed THIS attempt was handed — its identity is the one-parser-per-attempt proof. */
-  onStderrData?: (text: string) => void
-}
-
-/**
- * A dedicated ladder harness (`runtime-ladder.test.ts`'s own is deliberately left untouched):
- * the fake llama emits a per-attempt stderr fixture from INSIDE `start()` — through the very
- * `rung.onStderrData` the ladder handed it — before it resolves or throws, which is the order a
- * real load prints in. `chatGate` holds the #109 warm-up open so the latch can be read mid-start.
- */
-function ladderHarness(config: {
-  /** Attempts 0..failFirst-1 throw AFTER emitting their log (a server that died while loading). */
-  failFirst?: number
-  /** Stderr the Nth attempt emits; a missing entry means that attempt printed nothing. */
-  stderr?: string[]
-  probe?: GpuDevice[]
-  machineKey?: () => string | null
-  /** Fired at the top of the warm-up generation, before `chatGate` is awaited. */
-  onChat?: () => void
-  /** The warm-up generation awaits this before finishing. */
-  chatGate?: Promise<void>
-}) {
-  const attempts: LadderAttempt[] = []
-
-  // #114: the ladder prefetches on the first attempt — injected, so no test reads a real file.
-  const makePrefetch = (_paths: string[]): ModelPrefetch => {
-    let settle!: (outcome: PrefetchOutcome) => void
-    const done = new Promise<PrefetchOutcome>((resolve) => {
-      settle = resolve
-    })
-    return { done, abort: () => settle('aborted') }
-  }
-
-  const makeLlama = (o: RuntimeStartOptions, binPath: string, rung?: LlamaRungOptions): ModelRuntime => {
-    const index = attempts.length
-    attempts.push({ binPath, extraArgs: rung?.extraArgs ?? [], onStderrData: rung?.onStderrData })
-    return {
-      modelId: o.modelId,
-      start: async () => {
-        const log = config.stderr?.[index]
-        if (log != null) rung?.onStderrData?.(log)
-        if (index < (config.failFirst ?? 0)) throw new Error(`rung ${index + 1} failed to start`)
-      },
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'ok', port: 5000 + index }),
-      chatStream: async function* () {
-        config.onChat?.()
-        if (config.chatGate) await config.chatGate
-      }
-    }
-  }
-
-  const factory = createSelectingRuntimeFactory({
-    rootPath: '/root',
-    machineKey: config.machineKey,
-    resolveBin: () => '/bin/llama-server',
-    modelExists: () => true,
-    makeLlama,
-    makeMock: (o) => ({
-      modelId: o.modelId,
-      backend: 'mock',
-      gpuName: null,
-      start: async () => {},
-      stop: async () => {},
-      health: async () => ({ healthy: true, message: 'mock', port: null }),
-      chatStream: async function* () {}
-    }),
-    makePrefetch,
-    gpu: {
-      getGpuMode: () => 'auto',
-      getGpuAutoDisabled: () => false,
-      probeDevices: async () => config.probe ?? [],
-      resolveCpuBin: () => '/bin/cpu/llama-server'
-    }
-  })
-
-  return { factory, attempts }
-}
-
-/** Resolve once `cond` holds — polled on observable state, never a fixed sleep. */
-async function until(cond: () => boolean): Promise<void> {
-  for (let i = 0; i < hangPolls(500, 1); i++) {
-    if (cond()) return
-    await new Promise((r) => setTimeout(r, 1))
-  }
-  throw new Error('condition not reached')
-}
 
 /** A fully-populated record (every optional field set), for the persister half. */
 function placementRecord(over: Partial<ModelPlacement> = {}): ModelPlacement {
@@ -271,8 +178,8 @@ describe('the start ladder feeds the placement latch', () => {
     expect(startResolved).toBe(true)
     // The warm-up neither replaces nor clears the observation it ran behind.
     expect(latestModelPlacement()!.at).toBe(at)
-    expect(h.attempts).toHaveLength(1)
-    expect(h.attempts[0].onStderrData).toBeTypeOf('function')
+    expect(h.calls).toHaveLength(1)
+    expect(h.calls[0].onStderrData).toBeTypeOf('function')
   })
 
   it('gives every attempt its OWN parser: a retried rung never sums the failed load', async () => {
@@ -285,13 +192,13 @@ describe('the start ladder feeds the placement latch', () => {
     await h.factory(opts).start()
 
     // Rung 1 (GPU) printed a 49/49 full offload and then died; rung 2 (--device none) came up.
-    expect(h.attempts).toHaveLength(2)
-    expect(h.attempts[0].extraArgs).toEqual([])
-    expect(h.attempts[1].extraArgs).toEqual(['--device', 'none'])
+    expect(h.calls).toHaveLength(2)
+    expect(h.calls[0].extraArgs).toEqual([])
+    expect(h.calls[1].extraArgs).toEqual(['--device', 'none'])
     // Two feeds, not one shared parser — the identity IS the one-parser-per-attempt rule.
-    expect(h.attempts[0].onStderrData).toBeTypeOf('function')
-    expect(h.attempts[1].onStderrData).toBeTypeOf('function')
-    expect(h.attempts[0].onStderrData).not.toBe(h.attempts[1].onStderrData)
+    expect(h.calls[0].onStderrData).toBeTypeOf('function')
+    expect(h.calls[1].onStderrData).toBeTypeOf('function')
+    expect(h.calls[0].onStderrData).not.toBe(h.calls[1].onStderrData)
 
     // ONLY the second attempt's figures: 20/33 layers (not 49/49), 3393.11 MiB of weights on the
     // card (not 10030.74 = 6637.63 + 3393.11), 160 MiB of KV cache (not 2208), 498 MiB of working
