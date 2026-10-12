@@ -65,9 +65,10 @@ describe.skipIf(!enabled)('Rerank smoke (manual, the pinned llama-server + real 
       // rerank input is query+document in ONE sequence, so we drive the FULL truncation
       // budget — a 160-word query (the reranker's query cap) + 12 docs of
       // `CHUNK_DEFAULTS.chunkSizeTokens` words (the whole-chunk doc cap since RAG-N3) of
-      // realistic words. Realistic lowercase words tokenize ≈ 1 token each, so an input is
-      // ≈ (160 + 500) × 1.4 ≈ 924 real tokens — under the 2048 context/physical batch, over
-      // the 512 batch the server forces in embedding mode (the HTTP 500 this test once hit).
+      // realistic words. These tokenize at ≈ 1–1.4 tokens a word, so an input here is
+      // ≈ (160 + 500) × 1.4 ≈ 924 real tokens (llama.ts budgets the token-dense worst case at
+      // ≈ 1452) — under the 2048 context/physical batch, over the 512 batch the server forces
+      // in embedding mode (the HTTP 500 this test once hit).
       // Token-dense synthetic filler (e.g. "fillerNwordM" ≈ 5 tokens/word) would both
       // over-measure latency and overflow even the resized batch.
       const VOCAB =

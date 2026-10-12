@@ -43,6 +43,7 @@ vi.mock('electron', () => ({
 import { registerImagesIpc } from '../../src/main/ipc/registerImagesIpc'
 import { tMain } from '../../src/main/services/i18n'
 import { VisionService, type VisionAnalyzer } from '../../src/main/services/vision'
+import { VISION_MAX_IMAGE_BYTES } from '../../src/main/services/vision/limits'
 import { IPC, STREAM } from '../../src/shared/ipc'
 import type {
   ImageAnalyzeRequest,
@@ -316,11 +317,11 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
   // PERF-1: the read now runs on a fs/promises FileHandle. The over-cap reject must still close the
   // handle in the `finally` (a leaked-handle unlink does NOT throw on win32 — libuv opens with
   // FILE_SHARE_DELETE — so observe the close directly via the mocked `open`, above).
-  it('refuses an over-cap image (one byte past the 20 MiB default) and still closes the file handle (PERF-1)', async () => {
+  it('refuses an over-cap image (one byte past the byte cap) and still closes the file handle (PERF-1)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'big2.jpg')
-    // Just over the 20 MiB default `VISION_MAX_IMAGE_BYTES`.
-    writeFileSync(file, Buffer.alloc(20 * 1024 * 1024 + 1))
+    // One byte past the cap the handler reads (20 MiB unless HILBERTRAUM_MAX_IMAGE_BYTES overrides it).
+    writeFileSync(file, Buffer.alloc(VISION_MAX_IMAGE_BYTES + 1))
     registerImagesIpc(ctxFor(dir), idleVision())
     const token = await tokenFor(file)
     fhState.closes = 0

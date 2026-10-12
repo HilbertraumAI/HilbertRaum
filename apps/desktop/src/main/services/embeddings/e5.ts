@@ -490,7 +490,6 @@ export class E5Embedder implements Embedder {
     const server = await this.ensureStarted(opts?.signal)
     const prepared = texts.map((t) => this.truncateForContext(t))
     const batchSize = Math.max(1, this.opts.batchSize ?? DEFAULT_EMBED_BATCH_SIZE)
-    const timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
     const ctxBudget = this.opts.contextTokens ?? DEFAULT_CONTEXT_TOKENS
 
     // Empty/whitespace inputs are NEVER sent to the sidecar: llama.cpp's `/v1/embeddings` rejects an
@@ -539,7 +538,7 @@ export class E5Embedder implements Embedder {
         // request settles once its BODY is read, not when `fetch` resolves at the headers. Clearing
         // there left the body read with no deadline of ours (only undici's 300 s idle limit) and
         // detached the caller's signal, so a Stop could not reach a stalled body either.
-        const combined = combineSignals(opts?.signal, timeoutMs)
+        const combined = combineSignals(opts?.signal, DEFAULT_REQUEST_TIMEOUT_MS)
         let res: Response
         let errorBody: string
         try {
@@ -558,7 +557,7 @@ export class E5Embedder implements Embedder {
           // only the status (#594's rule for the chat error body).
           errorBody = (await res.text().catch(() => '')).trim()
         } catch (err) {
-          throw this.requestFailure(err, server, combined.signal, opts?.signal, timeoutMs)
+          throw this.requestFailure(err, server, combined.signal, opts?.signal, DEFAULT_REQUEST_TIMEOUT_MS)
         } finally {
           combined.clear()
         }

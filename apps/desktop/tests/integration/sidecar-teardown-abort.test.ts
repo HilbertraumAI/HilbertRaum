@@ -1,11 +1,11 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { EventEmitter } from 'node:events'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
 import { VisionRuntime } from '../../src/main/services/vision/runtime'
 import { TranslationRuntime, type TranslateOptions } from '../../src/main/services/translation/runtime'
-import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import type { SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { within } from '../helpers/hang-budget'
+import { fakeSpawn } from '../helpers/fake-sidecar'
 
 // #244 (port of the review's B8 reproduction): a lock or quit that lands
 // during a NEVER-HEALTHY cold start of a lazily-started llama-server must settle in about one
@@ -26,27 +26,6 @@ import { within } from '../helpers/hang-budget'
 //
 // Does not prove: the field likelihood of a wedged cold start (a slow USB read of a multi-GB
 // weight is the realistic trigger) — only that, when it happens, teardown is bounded.
-
-class FakeChild extends EventEmitter implements ChildProcessLike {
-  pid = 4242
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-}
-
-/** A spawn() stub that records EVERY spawned child (a restart after an aborted start spawns a second). */
-function fakeSpawn() {
-  const children: FakeChild[] = []
-  const spawn = (): ChildProcessLike => {
-    const child = new FakeChild()
-    children.push(child)
-    return child
-  }
-  return { spawn, children }
-}
 
 /** `/health` never turns ready — a wedged cold start. Every other route is unreachable before health. */
 const neverHealthy = (async () =>
@@ -82,7 +61,7 @@ async function advanceUntil(done: () => boolean, max = 200_000, step = 250): Pro
 
 interface WrapperCase {
   name: string
-  build: (spawn: () => ChildProcessLike) => {
+  build: (spawn: SpawnFn) => {
     /** Trigger the lazy cold start (the first user-facing call). */
     kick: () => Promise<unknown>
     /** The lock/quit teardown under test. */
@@ -99,7 +78,7 @@ interface WrapperCase {
 }
 
 const TRANSLATE: TranslateOptions = { sourceLang: 'de', targetLang: 'en', text: 'Guten Tag.' }
-const translationRuntime = (spawn: () => ChildProcessLike) =>
+const translationRuntime = (spawn: SpawnFn) =>
   new TranslationRuntime({
     ...base,
     modelId: 'tg',

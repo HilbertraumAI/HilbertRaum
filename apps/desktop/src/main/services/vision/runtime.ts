@@ -370,10 +370,9 @@ export class VisionRuntime {
       // thread pays the (slow CPU) image prefill once, not per question. Loopback compute hint.
       cache_prompt: true
     })
-    const timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
     // REL-4: own the (long, 300 s) timeout so it is cleared the instant the stream finishes,
     // rather than living out its full duration after an early-completing analysis.
-    const combined = combineSignals(opts.signal, timeoutMs)
+    const combined = combineSignals(opts.signal, DEFAULT_REQUEST_TIMEOUT_MS)
     try {
       const res = await server.fetch('/v1/chat/completions', {
         method: 'POST',
@@ -415,7 +414,7 @@ export class VisionRuntime {
       // signal un-aborted, so this is the timeout-driven abort — give it its own code.
       if (err instanceof VisionAnalyzeError) throw err
       if (combined.signal.aborted && !opts.signal?.aborted) {
-        throw new VisionAnalyzeError('timedOut', `Vision request timed out after ${timeoutMs} ms`)
+        throw new VisionAnalyzeError('timedOut', `Vision request timed out after ${DEFAULT_REQUEST_TIMEOUT_MS} ms`)
       }
       throw err
     } finally {
