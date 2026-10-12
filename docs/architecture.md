@@ -2421,7 +2421,7 @@ explicitly out of scope.
   serialized, so the handler holds a **single-flight guard**: a second `dictation:transcribe`
   while one is in flight is rejected with friendly copy (`DICTATION_BUSY_MESSAGE`) BEFORE it
   writes the temp WAV or spawns — rapid mic presses can't double-spawn. A **wall-clock
-  ceiling** (`maxDurationMs`, default 10 min, `HILBERTRAUM_DICTATION_TIMEOUT_MS`) drives an
+  ceiling** (`DEFAULT_DICTATION_TIMEOUT_MS`, 10 min; override `HILBERTRAUM_DICTATION_TIMEOUT_MS`) drives an
   `AbortController` whose signal is passed to `transcribe` — a wedged child is killed and the
   mic spinner gets the friendly failure instead of hanging forever. The temp WAV is shredded
   in `finally` on every path (success, refusal, timeout).
@@ -9203,7 +9203,7 @@ Per-finding disposition (fixed → phase@commit / declined → rationale / info 
 | **SK-14** | LOW | P1/P3/P4 | **fixed** — the `autoFire` "score ≥ 3 bar" comment reads as the suggestion bar; added "(auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory keyword hit)" to all four tool skills' frontmatter comments (document-redaction P1, invoice + meeting-protocol P3, bank-statement P4). Comment-only. |
 | **SK-15** | LOW | P2 `4f541c1` | **fixed** — what-changed named an "Exact changes" block it never sees; the diff rule now quotes the real runtime label ("Exact word-level changes (redline)", `rag/index.ts:1168`) and defers to the block's own PARTIAL / further-changes markers. |
 | **SK-16** | INFO | — | **note (no change)** — `validate_statement_balances` is a per-row running-balance chain (`tools/bank-statement.ts:815-864`); the opening+Σ=closing tie lives in `assessCompleteness` (:504-531) on the answer layer. The composition satisfies the SKILL.md honesty rule; the tool name just covers less than the sentence implies. Recorded in known-limitations. |
-| **SK-17** | INFO | — | **note (watch beta)** — meeting-protocol's "audio transcript" works via the audio-file **import** path (AudioParser → document); live dictation returns composer text and never becomes a document (`registerDictationIpc.ts:76-120`), so the skill runs over imported audio documents only, not over a dictation. A body clause is the cheap fix if beta users hit it. Recorded in known-limitations. |
+| **SK-17** | INFO | — | **note (watch beta)** — meeting-protocol's "audio transcript" works via the audio-file **import** path (AudioParser → document); live dictation returns composer text and never becomes a document (`registerDictationIpc.ts`), so the skill runs over imported audio documents only, not over a dictation. A body clause is the cheap fix if beta users hit it. Recorded in known-limitations. |
 | **SK-18** | INFO | — | **note (do NOT "fix")** — invoice/bank `mimeTypes` deliberately omit `text/plain` while the bodies say "or pasted text"; pasted text carries no mime signal and a lone keyword (=2) already clears the suggest bar, so the two are consistent — "fixing" it would be a precision regression. Recorded in known-limitations. |
 
 **Version convention (SK-12) — part of the SKILL.md-editing checklist.** For a bundled app skill
