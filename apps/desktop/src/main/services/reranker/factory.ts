@@ -25,9 +25,6 @@ export interface RerankerSelectionDeps {
   model: RerankerModelInfo | null
   /** Dev build — gates the dev-only `HILBERTRAUM_LLAMA_BIN` override (M-5). Default false. */
   isDev?: boolean
-  resolveBin?: (rootPath: string) => string | null
-  modelExists?: (modelPath: string) => boolean
-  makeReranker?: (model: RerankerModelInfo, binPath: string) => Reranker
   onSelect?: (kind: 'llama' | 'none', reason: string) => void
   /**
    * Step 4-4 (Wave 4 ruling (a)); Wave 8 ruling (b)(Q): which device the sidecar should use,
@@ -54,28 +51,23 @@ export interface RerankerSelectionDeps {
  * sidecar is lazy-started on first `rerank()`), so this returns synchronously.
  */
 export function createSelectedReranker(deps: RerankerSelectionDeps): Reranker | null {
-  const makeReranker =
-    deps.makeReranker ??
-    ((model: RerankerModelInfo, binPath: string) =>
-      createLlamaReranker({
-        id: model.id,
-        binPath,
-        modelPath: model.modelPath,
-        contextTokens: model.contextTokens,
-        devicePosture: deps.devicePosture,
-        cpuRequestCeiling: deps.requestCeiling,
-        onDeviceFallback: deps.onDeviceFallback
-      }))
+  const makeReranker = (model: RerankerModelInfo, binPath: string): Reranker =>
+    createLlamaReranker({
+      id: model.id,
+      binPath,
+      modelPath: model.modelPath,
+      contextTokens: model.contextTokens,
+      devicePosture: deps.devicePosture,
+      cpuRequestCeiling: deps.requestCeiling,
+      onDeviceFallback: deps.onDeviceFallback
+    })
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — a mock reranker would
   // invent an ordering and silently change answers, so unavailable means null.
   const sel = resolveSidecarSelection<RerankerModelInfo, Reranker>({
     rootPath: deps.rootPath,
     model: deps.model,
-    resolveBin:
-      deps.resolveBin ??
-      ((root) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev })),
-    modelExists: deps.modelExists,
+    resolveBin: (root) => resolveLlamaServerPath(root, process.platform, process.env, { isDev: deps.isDev }),
     makeReal: makeReranker,
     binaryName: 'llama-server',
     modelNoun: 'reranker model'
