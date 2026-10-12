@@ -3466,6 +3466,15 @@ export const en = {
     'Translation runs on the processor — the graphics memory was fully taken, usually by the ' +
     'chat model, so no layers fit on the graphics card (0/{total} layers)',
   'translate.device.cpu': 'Translation runs on the processor (CPU)',
+  // #473: a processor start the headroom gate chose names its reason, like the starved forms above.
+  'translate.device.cpuBesideChat':
+    'Translation runs on the processor — the chat model is using the graphics memory, and ' +
+    'translation would not fit beside it',
+  'translate.device.cpuChatStarting':
+    'Translation runs on the processor — a chat model was starting, and the chat model gets the ' +
+    'graphics card first',
+  'translate.device.cpuTooLarge':
+    "Translation runs on the processor — the translation model does not fit in this graphics card's memory",
   'translate.device.title':
     'Where the translation model ran when it last started. It decides again on each start ' +
     '(it unloads about 2 minutes after the last translation).',

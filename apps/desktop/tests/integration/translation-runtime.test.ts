@@ -128,6 +128,7 @@ describe('TranslationRuntime — launch + translate', () => {
     expect(args).toContain('--chat-template gemma') // avoids the #20305 STARTUP crash (TG-2 smoke finding)
     // #605: a progress frame per 512 prompt tokens — at the default 2048 a window is one batch, silent until 100 %.
     expect(args).toContain('--batch-size 512 --ubatch-size 512')
+    expect(args).toContain('-lv 4') // the offload line the device hint parses prints only at verbosity 4 (#629)
     expect(args).toContain('--host 127.0.0.1') // loopback only
     expect(rt.isStartFailed()).toBe(false) // a healthy instance never reads as latched (BE-7)
     await rt.stop()
@@ -1151,6 +1152,195 @@ describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
 
 // #530: a program the OS loader refuses is not a device fault — no CPU retry, no fallback note, a
 // latched TranslationStartError flagged `engineCannotRun` that the consumers map to the engine copy.
+// #473: a GPU-posture cold start lets a GPU-resident reranker leave the card BEFORE it spawns, so
+// `--fit` sizes translation against memory the reranker no longer holds. The hook's policy (which
+// reranker yields) is composeTranslator's; these pin the runtime's half: when it is awaited.
+describe('#473 — beforeGpuStart runs before a GPU-posture spawn', () => {
+  it('a GPU-posture start waits for the hook before spawning; a forced-CPU start never calls it', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const hook: { calls: number; release: (() => void) | null } = { calls: 0, release: null }
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      beforeGpuStart: () => {
+        hook.calls += 1
+        return new Promise<void>((r) => (hook.release = r))
+      }
+    })
+    const done = rt.translate(translateOpts)
+    await until(() => hook.release != null, 'the GPU-posture start never awaited beforeGpuStart')
+    expect(calls).toHaveLength(0) // nothing on the card yet while the reranker leaves it
+    expect(rt.gpuOccupied()).toBe(true) // so a rerank meanwhile already resolves 'cpu'
+    hook.release?.()
+    await expect(done).resolves.toBe(COMPLETION_TEXT)
+    expect(calls).toHaveLength(1)
+    expect(hook.calls).toBe(1)
+    await rt.stop()
+
+    const cpu = fakeSpawn()
+    let cpuHookCalls = 0
+    const off = new TranslationRuntime({
+      ...base,
+      spawn: cpu.spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      gpu: { getGpuMode: () => 'off' },
+      beforeGpuStart: async () => void (cpuHookCalls += 1)
+    })
+    await off.translate(translateOpts)
+    expect(cpu.calls).toHaveLength(1)
+    expect(cpuHookCalls).toBe(0) // a processor start frees nothing on the card
+    await off.stop()
+  })
+
+  it('a lock that begins while the hook waits ends the start without spawning or latching', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const hook: { release: (() => void) | null } = { release: null }
+    const rt = new TranslationRuntime({
+      ...base,
+      spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      beforeGpuStart: () => new Promise<void>((r) => (hook.release = r))
+    })
+    const done = rt.translate(translateOpts).catch((e: unknown) => e)
+    await until(() => hook.release != null, 'the GPU-posture start never awaited beforeGpuStart')
+    const suspended = rt.suspend()
+    hook.release?.()
+    await suspended
+    expect(await done).toBeInstanceOf(Error)
+    expect(calls).toHaveLength(0)
+    expect(rt.isStartFailed()).toBe(false) // an aborted start is not a load fault
+  })
+})
+
+// #473 Phase 1, rulings 1 and 2: the headroom gate picks a cold start's posture, and a chat start
+// takes the card from a sidecar resident on it (`yieldGpu`). The gate's own arithmetic is pinned
+// in gpu-sharing-gates.test.ts; these pin the runtime's half.
+describe('#473 — the headroom gate and yieldGpu', () => {
+  /** /health parks until released, so a cold start can be observed mid-flight. */
+  function parkedHealthFetch() {
+    const health: { release: (() => void) | null } = { release: null }
+    const fetchImpl = (async (url: string | URL) => {
+      const u = String(url)
+      if (u.endsWith('/health')) {
+        if (!health.release) await new Promise<void>((r) => (health.release = r))
+        return { ok: true, status: 200 } as Response
+      }
+      if (u.endsWith('/completion')) return { ok: true, status: 200, body: sseBody(COMPLETION_SSE) } as unknown as Response
+      throw new Error(`unexpected url ${u}`)
+    }) as typeof fetch
+    return { fetchImpl, health }
+  }
+
+  it('the gate decides the cold start\'s posture, and gpuOccupied reports what that start chose', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl, health } = parkedHealthFetch()
+    let gate: 'auto' | 'beside-chat' = 'auto'
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, gpu: { gpuHeadroom: () => gate } })
+    const done = rt.translate(translateOpts)
+    await until(() => health.release != null, 'the cold start never reached its health wait')
+    gate = 'beside-chat' // the gate's answer changed meanwhile; THIS start still loads onto the card
+    expect(rt.gpuOccupied()).toBe(true)
+    health.release?.()
+    await done
+    expect(calls[0].args).not.toContain('none')
+    await rt.stop()
+
+    const cpu = fakeSpawn()
+    const off = new TranslationRuntime({
+      ...base,
+      spawn: cpu.spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      gpu: { gpuHeadroom: () => 'beside-chat' }
+    })
+    await off.translate(translateOpts)
+    expect(cpu.calls[0].args.join(' ')).toContain('--device none')
+    expect(off.gpuOccupied()).toBe(false)
+    expect(off.deviceStatus()?.cpuCause).toBe('beside-chat') // the reason the Translate screen names
+    await off.stop()
+  })
+
+  it('yieldGpu stops a sidecar resident on the card and the next window cold-starts; one on the processor stays', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl })
+    await rt.translate(translateOpts)
+    expect(rt.deviceStatus()?.live).toBe(true)
+    await rt.yieldGpu()
+    expect(children[0].killed).toBe(true)
+    expect(rt.deviceStatus()?.live).toBe(false)
+    await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
+    expect(calls).toHaveLength(2) // a fresh child for the next window
+    await rt.stop()
+
+    const cpu = fakeSpawn()
+    const off = new TranslationRuntime({
+      ...base,
+      spawn: cpu.spawn,
+      fetchImpl: translationFetch().fetchImpl,
+      gpu: { getGpuMode: () => 'off' }
+    })
+    await off.translate(translateOpts)
+    await off.yieldGpu()
+    expect(cpu.children[0].killed).toBe(false) // it holds nothing on the card
+    expect(off.deviceStatus()?.live).toBe(true)
+    await off.stop()
+  })
+
+  it('yieldGpu waits for a soft kill already under way — the card is not free until the child exits', async () => {
+    const { spawn, children } = fakeSpawn(() => new GatedChild())
+    const { clock, state } = fakeIdleClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl, idleClock: clock })
+    await rt.translate(translateOpts)
+    state.fire?.() // the idle teardown: the child is told to exit and holds its exit
+    let yielded = false
+    const done = rt.yieldGpu().then(() => (yielded = true))
+    for (let i = 0; i < 5; i++) await tick()
+    expect(yielded).toBe(false)
+    children[0].releaseExit()
+    await within(done, 'yieldGpu after the soft kill')
+    await rt.stop()
+  })
+
+  it('yieldGpu leaves a GPU-posture sidecar that put nothing on the card (0 layers) alone', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const children: FakeChild[] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      const stderr = new EventEmitter()
+      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
+      queueMicrotask(() => stderr.emit('data', 'load_tensors: offloaded 0/49 layers to GPU\n'))
+      children.push(child)
+      return child
+    }
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl })
+    await rt.translate(translateOpts)
+    expect(rt.deviceStatus()?.gpuLayers).toBe(0)
+    await rt.yieldGpu()
+    expect(children[0].killed).toBe(false)
+    await rt.stop()
+  })
+
+  it('yieldGpu lets a GPU cold start in flight finish, then stops it — never aborts it', async () => {
+    const { spawn, children } = fakeSpawn()
+    const { fetchImpl, health } = parkedHealthFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
+    const done = rt.translate(translateOpts)
+    await until(() => health.release != null, 'the cold start never reached its health wait')
+    const yielded = rt.yieldGpu()
+    await tick()
+    expect(children[0].killed).toBe(false) // still waiting for the start
+    health.release?.()
+    await yielded
+    // Not cancelled: the start was let finish. (This fake's request does not depend on the child,
+    // so it completes; a real one cut mid-answer fails with a stream error the caller retries.)
+    await expect(done).resolves.toBe(COMPLETION_TEXT)
+    expect(children[0].killed).toBe(true)
+    expect(rt.isStartFailed()).toBe(false)
+    await rt.stop()
+  })
+})
+
 describe('TranslationRuntime — OS loader refusal (#530)', () => {
   afterEach(() => resetEngineProblemsForTest())
 

@@ -762,6 +762,12 @@ describe('concurrent weight prefetch (#114)', () => {
 describe('MTP speculative decoding (#182)', () => {
   /** Holds the weight, but not the ~2 GiB draft head on top of it. */
   const TIGHT: GpuDevice = { id: 'Vulkan0', name: 'Small card', totalMb: 8192, freeMb: 4000 }
+  /** #473: the b11146 capture of the hybrid desktop (list-devices-b11146-vulkan-rtx3080ti.txt) —
+   *  the UHD 770 reports shared system RAM as free, far above the discrete card's figure. */
+  const UHD_770: GpuDevice = { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
+  const RTX_HYBRID: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12084, freeMb: 11316 }
+  /** 9 GiB of weights need 12,800 MiB: the RTX's 11,316 cannot hold them, the iGPU's 48,060 "could". */
+  const NINE_GIB = 9 * 1024 * 1024 * 1024
 
   it('starts rung 1a with EXACTLY the code-owned flag pair when the machine can hold it', async () => {
     const h = ladderHarness({ probe: [BIG] })
@@ -811,6 +817,19 @@ describe('MTP speculative decoding (#182)', () => {
       probe: [BIG],
       weightBytes: null,
       reason: 'weight size unknown'
+    },
+    {
+      // #473: the check judges the budget device, never whichever device reports the most free.
+      name: 'only an integrated GPU reports enough free memory (#473: the discrete card is judged)',
+      probe: [RTX_HYBRID, UHD_770],
+      weightBytes: NINE_GIB,
+      reason: '11316 MiB free on NVIDIA GeForce RTX 3080 Ti'
+    },
+    {
+      name: 'the only device is an integrated GPU (#473)',
+      probe: [UHD_770],
+      weightBytes: NINE_GIB,
+      reason: 'no usable graphics card'
     }
   ])('skips rung 1a without spawning it when $name', async ({ probe, weightBytes, reason }) => {
     const h = ladderHarness({ probe })

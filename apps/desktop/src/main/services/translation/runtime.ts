@@ -11,7 +11,7 @@ import { RuntimeUnresponsiveError, isRuntimeUnresponsiveError } from '../runtime
 import { log } from '../logging'
 import { readCompletionSSE, type CompletionFinal } from './completion'
 import { buildTranslationPrompt, TRANSLATION_STOP_TOKEN, type TranslationLangCode } from './prompt'
-import type { TranslationDeviceStatus } from '../../../shared/types'
+import type { TranslationCpuCause, TranslationDeviceStatus } from '../../../shared/types'
 
 // The lazily-started TranslateGemma sidecar (TG wave, plan §2 D1). It composes `LlamaServer`
 // DIRECTLY — like the E5 embedder / reranker / vision, NOT the chat `RuntimeManager` — so it does
@@ -106,7 +106,17 @@ export interface TranslationGpuDeps {
   getGpuMode?: () => 'auto' | 'off'
   /** The persisted auto-disable flag (a previously detected GPU problem — chat owns writing it). */
   getGpuAutoDisabled?: () => boolean
+  /**
+   * #473 ruling 1: the headroom gate, consulted per cold start AFTER the two signals above and the
+   * session fallback latch — 'cpu' when this model would not fully fit on the card beside what the
+   * app already holds there (`rag/device-posture.ts`, `resolveTranslationDevicePosture`). Omitted →
+   * 'auto'. A processor answer carries its reason, recorded with the start for the Translate screen.
+   */
+  gpuHeadroom?: (modelId: string) => TranslationHeadroomVerdict
 }
+
+/** #473: the headroom gate's answer — the card ('auto'), or the processor for the reason named. */
+export type TranslationHeadroomVerdict = 'auto' | TranslationCpuCause
 
 /**
  * Override the model's embedded chat template with the built-in `gemma` one (TG-2 smoke finding,
@@ -129,6 +139,19 @@ export interface TranslationGpuDeps {
 export const TRANSLATION_TEMPLATE_ARGS = ['--chat-template', 'gemma'] as const
 
 /**
+ * Log verbosity 4, the chat server's setting (`CHAT_SERVER_ARGS`), for the same reason: the pinned
+ * build prints its `offloaded X/Y layers to GPU` load line only from verbosity 4 up. Without it the
+ * offload parse below never matched, so the Translate screen fell back to "runs on the graphics
+ * card" even when `--fit` gave translation no layers, and the Performance card could never count
+ * it on the card (#629). Measured on b11146, 2026-10-07: the default start printed 9 log lines and
+ * no offload line; `-lv 4` printed `offloaded 49/49 layers to GPU`. Verbosity 4 also adds
+ * per-request DIAGNOSTIC lines (slot, token counts, timings); a real `/completion` request carrying
+ * marker words left none of them, and none of the translated text, in the log — the same result
+ * `security-model.md` records for chat (DR3).
+ */
+export const TRANSLATION_LOG_ARGS = ['-lv', '4'] as const
+
+/**
  * The full extra-arg set the translation sidecar launches with for one device posture (composed
  * from the named constants above so the runtime AND the manual smoke stay byte-identical — no
  * drift). NO `--jinja`, NOT the chat `CHAT_SERVER_ARGS`. 'auto' composes NO device args — the
@@ -139,7 +162,8 @@ export function translationServerArgs(device: TranslationDevice): string[] {
     ...TRANSLATION_SLOT_ARGS,
     ...TRANSLATION_BATCH_ARGS,
     ...(device === 'cpu' ? TRANSLATION_CPU_DEVICE_ARGS : []),
-    ...TRANSLATION_TEMPLATE_ARGS
+    ...TRANSLATION_TEMPLATE_ARGS,
+    ...TRANSLATION_LOG_ARGS
   ]
 }
 
@@ -174,6 +198,27 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 2_700_000
  * 45-min cap.
  */
 const HEADER_WAIT_MS = 180_000
+
+/**
+ * #473 ruling 2: how long a chat start waits for a GPU-posture translation cold start already in
+ * flight before taking it off the card (`yieldGpu`). A 12B loads in ~5 s from an SSD; a slow
+ * drive can take longer, and past this bound the chat start goes ahead and the translation start
+ * keeps its place until its idle teardown. The race needs both starts within the same seconds.
+ */
+const YIELD_START_WAIT_MS = 30_000
+
+/** Settle when `p` does or after `ms`, whichever comes first; the timer never holds the process. */
+function waitAtMost(p: Promise<unknown>, ms: number): Promise<void> {
+  return new Promise((resolve) => {
+    const timer = setTimeout(resolve, ms)
+    timer.unref?.()
+    const done = (): void => {
+      clearTimeout(timer)
+      resolve()
+    }
+    p.then(done, done)
+  })
+}
 
 /**
  * Idle-teardown timeout default (plan §2 D1, the vision §19.13 precedent). The window the 12B
@@ -243,6 +288,14 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
    * never throw.
    */
   onStarted?: (info: TranslationStartInfo) => void
+  /**
+   * Awaited before a cold start that will try the graphics card ('auto'), never before a forced-CPU
+   * one (#473). The composition passes a hook that takes a GPU-resident reranker off the card, so
+   * `--fit` sizes translation against memory the reranker no longer holds — the chat model switch
+   * already does the same. A teardown that begins meanwhile aborts the start as usual. Must never
+   * throw.
+   */
+  beforeGpuStart?: () => Promise<void>
 }
 
 export interface TranslateOptions {
@@ -398,6 +451,12 @@ export class TranslationRuntime {
    * is killed inside the health wait and the start rejects with an AbortError instead.
    */
   private startAbort: AbortController | null = null
+  /**
+   * The posture of the cold start in flight, null when none is. Recorded once per attempt because
+   * the headroom gate is not stable over a start (a chat start can begin meanwhile), so
+   * `gpuOccupied()` must report what this start chose, not what a fresh resolve would say now.
+   */
+  private startingDevice: TranslationDevice | null = null
   private readonly idleTimeoutMs: number
   private readonly idleClock: IdleClock
   /** Residency listeners (`onResidencyChange`): fired after `deviceStatus().live` flips. */
@@ -476,10 +535,17 @@ export class TranslationRuntime {
    * runtime's own session fallback latch each force CPU (issue #42).
    */
   private resolveDevice(): TranslationDevice {
+    return this.resolvePosture().device
+  }
+
+  /** The posture of a cold start and, when the headroom gate chose the processor, why (#473). */
+  private resolvePosture(): { device: TranslationDevice; cause: TranslationCpuCause | null } {
     const gpuAllowed =
       (this.opts.gpu?.getGpuMode?.() ?? 'auto') === 'auto' &&
       !(this.opts.gpu?.getGpuAutoDisabled?.() ?? false)
-    return gpuAllowed && !this.gpuFellBack ? 'auto' : 'cpu'
+    if (!gpuAllowed || this.gpuFellBack) return { device: 'cpu', cause: null }
+    const verdict = this.opts.gpu?.gpuHeadroom?.(this.modelId) ?? 'auto'
+    return verdict === 'auto' ? { device: 'auto', cause: null } : { device: 'cpu', cause: verdict }
   }
 
   /** Arm the session CPU-fallback latch once and report it (observability hook must never throw). */
@@ -537,14 +603,18 @@ export class TranslationRuntime {
    * card for the remainder of that same load. A forced-CPU sidecar never occupies the card.
    */
   gpuOccupied(): boolean {
-    if (this.starting) return this.resolveDevice() === 'auto'
+    if (this.starting) return (this.startingDevice ?? this.resolveDevice()) === 'auto'
     if (this.server) return this.lastStart?.device === 'auto'
     if (this.teardownPromise || this.idleTeardownPromise) return this.lastStart?.device === 'auto'
     return false
   }
 
   /** One launch attempt at one device posture; installs `this.server` on success. */
-  private async startAttempt(device: TranslationDevice, startSignal?: AbortSignal): Promise<void> {
+  private async startAttempt(
+    device: TranslationDevice,
+    startSignal?: AbortSignal,
+    cpuCause: TranslationCpuCause | null = null
+  ): Promise<void> {
     // Parse the server's own load log for the offload outcome (issue #42 reopen): under the
     // 'auto' posture llama.cpp `--fit` can silently land a PARTIAL offload (a resident chat
     // model took the VRAM) that decodes at ~CPU speed, and the offload line is the only place
@@ -608,10 +678,10 @@ export class TranslationRuntime {
     // Record + report the observed outcome ONCE per successful cold start (issue #42 reopen).
     // A parse miss stays honest as null (e.g. a forced-CPU start on a GPU-less machine prints
     // no offload line); the hook is observability-only and must never break the start path.
-    this.lastStart = { device, gpuLayers, totalLayers }
+    this.lastStart = { device, gpuLayers, totalLayers, ...(device === 'cpu' && cpuCause ? { cpuCause } : {}) }
     this.emitResidencyChange()
     try {
-      this.opts.onStarted?.({ device, gpuLayers, totalLayers })
+      this.opts.onStarted?.(this.lastStart)
     } catch {
       /* observability only */
     }
@@ -625,12 +695,16 @@ export class TranslationRuntime {
    * the FINAL (CPU) attempt arms the permanent `startFailed` latch.
    */
   private async startLadder(): Promise<void> {
-    const device = this.resolveDevice()
+    const { device, cause } = this.resolvePosture()
+    this.startingDevice = device
     // #159 (BE-1): arm the per-ladder abort so `doTeardown()` can cut a cold start short.
     const abort = new AbortController()
     this.startAbort = abort
     try {
-      await this.startAttempt(device, abort.signal)
+      // #473: let the reranker leave the card first. Inside the try so a lock that begins while
+      // this waits has aborted `abort` by the time `startAttempt` runs, which then never spawns.
+      if (device === 'auto') await this.opts.beforeGpuStart?.().catch(() => undefined)
+      await this.startAttempt(device, abort.signal, cause)
       return
     } catch (err) {
       const error = err instanceof Error ? err : new Error(String(err))
@@ -660,6 +734,7 @@ export class TranslationRuntime {
         // just armed), and the GPU failure stays unlatched.
         if (!this.stopped && !this.tearingDown && this.inFlight > 0) {
           try {
+            this.startingDevice = 'cpu'
             await this.startAttempt('cpu', abort.signal)
             return
           } catch (cpuErr) {
@@ -684,6 +759,7 @@ export class TranslationRuntime {
       throw startError
     } finally {
       if (this.startAbort === abort) this.startAbort = null
+      this.startingDevice = null
     }
   }
 
@@ -812,6 +888,35 @@ export class TranslationRuntime {
       reason: err.message
     })
     void this.softTeardown(server).catch(() => undefined)
+  }
+
+  /**
+   * #473 ruling 2 (2026-10-12): a chat model start takes the graphics card first — the chat
+   * runtime's `beforeStart` hook calls this. llama.cpp fixes a process's split at load, so a chat
+   * model starting beside this sidecar would stay squeezed until restarted, while this sidecar
+   * recovers by itself. A sidecar resident ON THE CARD is stopped the way #605 stops a hung one
+   * (`softTeardown`): a window in flight fails with an ordinary stream error, both consumers retry
+   * it once, and the retry cold-starts after this kill — on the processor while the chat start is
+   * still in flight (the headroom gate). A GPU-posture cold start in flight is let finish first, for
+   * at most `YIELD_START_WAIT_MS`: aborting it would reach a document task as a cancel. A sidecar on
+   * the processor, or none, is left alone.
+   */
+  async yieldGpu(): Promise<void> {
+    if (this.stopped || this.tearingDown) return
+    if (this.starting && this.startingDevice === 'auto') {
+      await waitAtMost(this.starting.catch(() => undefined), YIELD_START_WAIT_MS)
+    }
+    // A soft kill already under way (the idle teardown, #605's) still holds the card until the
+    // child exits — the chat start must not size itself while it does.
+    if (this.idleTeardownPromise && this.lastStart?.device === 'auto') {
+      await this.idleTeardownPromise.catch(() => undefined)
+    }
+    const server = this.server
+    if (server == null || this.lastStart?.device !== 'auto' || this.stopped || this.tearingDown) return
+    // A GPU-posture start that put nothing on the card (a machine without one) holds nothing to give.
+    if (this.lastStart.gpuLayers === 0) return
+    log.info('Translation sidecar leaves the graphics card for a chat model start')
+    await this.softTeardown(server).catch(() => undefined)
   }
 
   /**

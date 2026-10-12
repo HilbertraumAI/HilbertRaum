@@ -25,7 +25,26 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-Nothing yet — the next release's entries accumulate here.
+### Changed
+
+- **The chat model gets the graphics card first.** When you start or switch a chat model while
+  translation is on the graphics card, translation moves to the processor first; a document being
+  translated carries on there, redoing the passage that was in progress. Before, the chat model got
+  whatever translation had left and stayed slow until you restarted it (#473).
+- **Translation uses the graphics card only when it fits there completely.** Beside a chat model
+  that leaves too little room, it now runs on the processor, and the Translate screen says why.
+  Before, it squeezed onto the card and ran at about processor speed anyway (#473).
+
+### Fixed
+
+- **The Translate screen now says how much of translation really runs on the graphics card.** It
+  said "runs on the graphics card" after every graphics-card start, even when the chat model had
+  left no room and translation actually ran at processor speed. The Performance screen now also
+  counts translation as being on the card when it is (#629).
+- **Translation gets the graphics card's memory when it starts.** A reranker sitting on the graphics
+  card now moves to the processor first, and returns to the card once translation is done. On a
+  computer with both a built-in and a separate graphics card, the faster draft mode of the largest
+  models is now judged by the separate card's free memory instead of the built-in one's (#473).
 
 ## [0.1.63] — 2026-10-12
 

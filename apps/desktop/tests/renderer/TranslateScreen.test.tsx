@@ -240,6 +240,24 @@ describe('TranslateScreen — device hint (issue #42 reopen)', () => {
     await screen.findByText(t('en', 'translate.action'))
     expect(container.querySelector('.translate-device-hint')).toBeNull()
   })
+
+  // #473: a processor start the headroom gate chose names its reason, like the starved forms; only
+  // "beside the chat model" has something the user can do about it.
+  it.each([
+    ['beside-chat', 'translate.device.cpuBesideChat', true],
+    ['chat-starting', 'translate.device.cpuChatStarting', false],
+    ['too-large', 'translate.device.cpuTooLarge', false]
+  ] as const)('#473: a processor start the gate chose names its reason (%s)', async (cpuCause, key, hasRemedy) => {
+    stubApi({
+      getAppStatus: vi.fn(async () =>
+        appStatus({ translationDevice: { device: 'cpu', gpuLayers: null, totalLayers: null, live: true, cpuCause } })
+      ),
+      getActiveTranslateJob: vi.fn(async () => null)
+    })
+    render(<TranslateScreen onNavigate={vi.fn()} />)
+    expect(await screen.findByText(t('en', key))).toBeInTheDocument()
+    expect(screen.queryByText(t('en', 'translate.device.gpuNoneTitle')) != null).toBe(hasRemedy)
+  })
 })
 
 describe('TranslateScreen — translate → stream → copy', () => {

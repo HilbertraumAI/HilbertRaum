@@ -15,6 +15,7 @@ import type {
   MemoryClass,
   ModelDownloadInfo,
   ModelInfo,
+  ModelPlacement,
   ModelState,
   ModelVerifyProgress
 } from '../../shared/types'
@@ -1223,6 +1224,58 @@ export function estimateGraphicsNeedMib(m: ModelManifest): number {
   const onCard = w - Math.min(m.hostMappedWeightsMib ?? 0, w)
   const cacheGib = m.estimatedContextCacheGib ?? VRAM_DEFAULT_CONTEXT_CACHE_GIB
   return onCard * (1 + VRAM_WORKING_SHARE) + cacheGib * 1024 + VRAM_FIT_MARGIN_MIB
+}
+
+/**
+ * Added to a MEASURED on-card footprint before a sidecar gate subtracts it (#473 ruling 3), MiB.
+ * It covers the gap between the probe's free figure and the fit's own reading, 54–154 MiB on the
+ * three cards measured under `-np 1` (model-benchmarks.md §6.6 finding 1).
+ */
+export const CHAT_MEASURED_MARGIN_MIB = 256
+
+/**
+ * The running chat model's share of the card, MiB, for the two sidecar headroom gates — the
+ * reranker's and translation's (#473 ruling 3, 2026-10-12). Not the picker's figure: that one
+ * judges a model before it starts, this one a model that is running.
+ *
+ * - **Measured** when this session's load log describes the same model at the same context
+ *   window on the card (`latestModelPlacement`): weights + KV + recurrent state + compute buffer
+ *   on the card, plus `CHAT_MEASURED_MARGIN_MIB`. A partial offload counts only what reached the
+ *   card, which is right: the rest is in host memory.
+ * - **Otherwise the estimate**, with its context-cache term scaled UP to the launched window. The
+ *   term is the manifest's figure at its recommended window, so a raised context window used to
+ *   go uncounted. Never scaled down: a sliding-window cache does not shrink with the window.
+ */
+export function chatGraphicsShareMib(
+  m: ModelManifest,
+  launchedContextTokens: number | null,
+  measured: ModelPlacement | null
+): number {
+  if (
+    measured != null &&
+    measured.modelId === m.id &&
+    measured.backend === 'gpu' &&
+    (launchedContextTokens == null || measured.contextTokens === launchedContextTokens) &&
+    measured.gpuModelMb != null &&
+    measured.gpuKvMb != null &&
+    measured.gpuComputeMb != null
+  ) {
+    return (
+      measured.gpuModelMb +
+      measured.gpuKvMb +
+      (measured.gpuRsMb ?? 0) +
+      measured.gpuComputeMb +
+      CHAT_MEASURED_MARGIN_MIB
+    )
+  }
+  const w = weightsMib(m)
+  const onCard = w - Math.min(m.hostMappedWeightsMib ?? 0, w)
+  const cacheGib = m.estimatedContextCacheGib ?? VRAM_DEFAULT_CONTEXT_CACHE_GIB
+  const scale =
+    launchedContextTokens != null && m.recommendedContextTokens > 0
+      ? Math.max(1, launchedContextTokens / m.recommendedContextTokens)
+      : 1
+  return onCard * (1 + VRAM_WORKING_SHARE) + cacheGib * 1024 * scale + VRAM_FIT_MARGIN_MIB
 }
 
 /** Would every layer of this model land on a card offering `budgetMib` (see `graphicsBudgetMib`)? */

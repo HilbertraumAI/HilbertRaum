@@ -203,6 +203,21 @@ export function TranslateScreen({
   const deviceHint = ((): { text: string; title: string; remedy?: string } | null => {
     if (!device) return null
     if (device.device === 'cpu') {
+      // #473: the headroom gate chose the processor — name why, as the starved forms below do.
+      // Only "beside the chat model" has an action; the other two resolve on their own or not at all.
+      if (device.cpuCause === 'beside-chat') {
+        return {
+          text: t('translate.device.cpuBesideChat'),
+          title: t('translate.device.gpuNoneTitle'),
+          remedy: t('translate.device.gpuNoneTitle')
+        }
+      }
+      if (device.cpuCause === 'chat-starting') {
+        return { text: t('translate.device.cpuChatStarting'), title: t('translate.device.title') }
+      }
+      if (device.cpuCause === 'too-large') {
+        return { text: t('translate.device.cpuTooLarge'), title: t('translate.device.title') }
+      }
       return { text: t('translate.device.cpu'), title: t('translate.device.title') }
     }
     if (device.gpuLayers != null && device.totalLayers != null) {

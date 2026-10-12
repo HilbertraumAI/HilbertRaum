@@ -4721,6 +4721,13 @@ this step resolves exactly those three.
   `'cpu'`. `gpuUsefulForProfile` keeps every other job (the profile bump, the Models ★, the
   graphics tile, `memoryClassOf`); only the posture question is re-sourced. See
   `architecture.md` GPU record §7 for the full derivation and the small-card disclosure.
+  **#473 amendment (2026-10-12, ruling 3):** the chat model's side of the subtraction is now
+  `chatGraphicsShareMib` (`models.ts`) — this session's measured footprint of the running model
+  at its launched window plus 256 MiB when there is one, else the estimate with its cache term
+  scaled up to the launched window (a raised context window used to go uncounted), and 0 when
+  the chat model runs on the processor. The translation sidecar's new gate subtracts the same
+  figure (GPU record §9). On Apple Silicon the probe's free figure is Metal's working-set cap, so
+  the gate already computes "cap minus chat" — pinned by `gpu-sharing-gates.test.ts`.
 - **B3 with B7/B20 (ruling (e)) — the wide scope is capped, and its failure mode no longer lands
   below today's baseline.** Two parts. (i) `totalCandidateCapFor('all')` now returns
   `ALL_SCOPE_MAX_DOCS` instead of `Infinity` — the per-article budget stays `Infinity`
@@ -5007,6 +5014,10 @@ accessor covering all four stages a GPU-posture ('auto') sidecar can occupy the 
 (before `deviceStatus().live` can see it), resident, hard teardown, and idle teardown (a soft
 timeout kill) — a forced-CPU sidecar never occupies it. The posture closure reads `ctx.translator`
 live through a getter (never captured), because `onModelInstalled` re-composes it mid-session.
+**#473 amendment (2026-10-07): the yield now runs both ways.** A chat model switch suspended the
+reranker; a translation cold start did not, so a reranker resident on the card left it only at its
+next ask. A GPU-posture translation start now awaits `translationGpuYield` (`compose-services.ts`)
+before it spawns, which suspends a reranker resident ON THE CARD and nothing else.
 
 **Lifecycle hardening (`reranker/llama.ts` only), the translation runtime's own M5/M1 patterns
 ported.** Single-flight teardown: every overlapping `suspend()`/`stop()`/Q-restart shares ONE

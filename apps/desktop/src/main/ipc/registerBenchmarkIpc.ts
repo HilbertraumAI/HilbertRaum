@@ -653,19 +653,24 @@ export function prepareFirstBenchmark(ctx: AppContext): FirstBenchmarkDecision {
       if (run === 'new-machine') setMovedDriveNotice(db, epoch, { kind: 'measuring' })
       return { run, attempted: false, epoch, hereKey: here, probed }
     }
-    if (settings.lastBenchmark === null) return owed('first-run')
-    // Already benchmarked — still refresh the persisted GPU probe for THIS machine/session in
-    // the background: a drive moved between machines would otherwise keep showing the previous
-    // machine's GPU in Diagnostics until a manual re-benchmark (and older workspaces may have no
-    // `gpuProbe` at all). A `--list-devices` subprocess, session-cached — not the measurement.
+    // Refresh the persisted GPU probe for THIS machine/session in the background: a drive moved
+    // between machines would otherwise keep showing the previous machine's GPU in Diagnostics
+    // until a manual re-benchmark (and older workspaces may have no `gpuProbe` at all). A
+    // `--list-devices` subprocess, session-cached — not the measurement.
     // #380: kept off this function's critical path (it stays synchronous), but no longer
     // fire-and-forget — the promise travels on the decision so the seams can start the model
     // AFTER it settles. It never rejects: `probeAndPersistGpu` swallows everything, and the
     // second handler is belt-and-braces so `probed` can never reject into a seam.
+    // #473: a FIRST run is sequenced too. It used to fire nothing here, so a workspace whose
+    // first run never stored a result (failed, cancelled by a lock) auto-started its model beside
+    // the ladder's own probe — and a probe that answered mid-upload was cached and persisted with
+    // the chat model already on the card, a baseline the reranker gate then subtracted chat from
+    // twice. Only a TIMED-OUT probe was ever re-taken on an idle driver.
     probed = probeAndPersistGpu(ctx).then(
       () => undefined,
       () => undefined
     )
+    if (settings.lastBenchmark === null) return owed('first-run')
     // The moved-drive check (benchmark.md "History per machine"): the last result belongs to a
     // DIFFERENT computer than the one we are on. With a stored result for this one, restore it
     // (the recommendation follows the machine, not the drive); without one, this is a first run

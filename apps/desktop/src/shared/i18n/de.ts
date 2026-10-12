@@ -3418,6 +3418,14 @@ export const de: Record<keyof typeof en, string> = {
     'Übersetzung läuft auf dem Prozessor — der Grafikspeicher war vollständig belegt, meist durch ' +
     'das Chat-Modell, sodass keine Schicht auf die Grafikkarte passte (0/{total} Schichten)',
   'translate.device.cpu': 'Übersetzung läuft auf dem Prozessor (CPU)',
+  'translate.device.cpuBesideChat':
+    'Übersetzung läuft auf dem Prozessor — das Chat-Modell belegt den Grafikspeicher, und daneben ' +
+    'hätte die Übersetzung keinen Platz',
+  'translate.device.cpuChatStarting':
+    'Übersetzung läuft auf dem Prozessor — ein Chat-Modell wurde gerade gestartet, und das ' +
+    'Chat-Modell bekommt die Grafikkarte zuerst',
+  'translate.device.cpuTooLarge':
+    'Übersetzung läuft auf dem Prozessor — das Übersetzungsmodell passt nicht in den Speicher dieser Grafikkarte',
   'translate.device.title':
     'Wo das Übersetzungsmodell beim letzten Start gelaufen ist. Es entscheidet bei jedem Start neu ' +
     '(etwa 2 Minuten nach der letzten Übersetzung wird es entladen).',
