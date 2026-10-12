@@ -644,7 +644,12 @@ section (*"List every deadline"*, *"How many payments are there?"*), and, when t
 one document, a summary question (*"Summarize this report"*) from its section summaries. Other questions
 about a long document, such as *"Explain what this letter says"* or a yes/no question like *"Does the
 notice period apply to all tenants?"*, are answered from the most relevant passages with or without
-it; a document short enough to read at once is read whole either way.
+it; a document short enough to read at once is read whole either way. A question about one amount
+(*"How much is the monthly fee?"*) is an ordinary question too. A question that adds amounts up
+(*"How much did I pay in fees?"*) over one document short enough to read at once is read whole, and
+the answer starts with a heads-up: the AI model did the arithmetic itself and can miss or miscount
+items, so check the total against the sources. Over a longer document with a deep index, you get
+every amount instead, with a note that the list cannot add them up.
 
 A few honest notes:
 

@@ -656,7 +656,11 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
     expect(msg.skillId).toBe(BANK_INSTALL_ID)
   })
 
-  it('plausibility gate: a zero-row read on a NON-statement falls through to the grounded path (LLM answers)', async () => {
+  // #649: a total over the fall-through's whole read leads with the arithmetic heads-up, as on the ordinary path.
+  it.each([
+    { question: 'summarize this agreement', headsUp: false },
+    { question: 'How much did I pay in total?', headsUp: true }
+  ])('plausibility gate: a zero-row read on a NON-statement falls through to the grounded path (LLM answers) — $question', async ({ question, headsUp }) => {
     const h = await makeMultiHarness({
       docs: [
         {
@@ -668,20 +672,14 @@ describe('askDocuments — W2 doc-count-fallthrough routing + plausibility gate'
         }
       ]
     })
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId,
-      'summarize this agreement',
-      BANK_INSTALL_ID
-    )
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, BANK_INSTALL_ID)
     const msg = result as Message
 
     // NOT the misleading "I read the whole statement but couldn't find any transactions" template…
     expect(msg.content).not.toBe(t('en', 'skills.bankAnalysis.empty'))
     expect(msg.content).not.toContain(t('en', 'skills.bankAnalysis.count', { count: 0 }))
     // …instead the ordinary grounded path answered the actual question (the model WAS consulted).
-    expect(msg.content).toContain('Model answer.')
+    expect(msg.content).toBe(headsUp ? `${t('en', 'analysis.wholeReadSumHint')}\n\nModel answer.` : 'Model answer.')
     expect(h.runtime.calls).toBe(1)
     // The ordinary grounded path ⇒ no `extract` breadth claim. #643: it reads this short agreement
     // whole, as the ordinary document path does.
@@ -1137,24 +1135,43 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   // Owner decision 2026-07-17: keep the honest listing, but LEAD it with the shape hint + the
   // bank-statement-skill pointer for amounts (option 1 of 3; auto-routing to the skill would
   // reverse the ratified default-off auto-fire posture, a bare redirect would withhold data).
-  it('#54: the aggregation question WITH extract data leads the listing with the shape hint + skill pointer', async () => {
-    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
-    seedAmountExtract(h)
+  // #649 (owner calls): over ONE document that fits the window the same ask is read whole instead — the
+  // model sees every section and can add them up, which the listing cannot. The bank offer rides along, and
+  // the answer leads with the heads-up that the model did the arithmetic (a 4B summed a 1-page statement's
+  // four fees wrong twice), with or without extract data (design-guidelines §11.24). A grouping of anything
+  // but amounts adds nothing up, so it carries no heads-up.
+  const CATEGORIZE = 'kategorisiere alle transaktionen und erstelle eine summe pro kategorie' // the #54 repro
+  it.each([
+    { name: 'a statement too long to read whole keeps the listing, led by the shape hint + skill pointer', question: CATEGORIZE, text: LONG_STATEMENT, extract: true, read: 'listing', headsUp: false, offer: 'deterministic', calls: 0 },
+    { name: 'a statement that fits is read whole, led by the arithmetic heads-up, with the bank offer (#649)', question: CATEGORIZE, text: DE_STATEMENT, extract: true, read: 'whole', headsUp: true, offer: 'deterministic', calls: 1 },
+    { name: 'no extract data: a statement that fits is read whole, led by the arithmetic heads-up (#649)', question: CATEGORIZE, text: DE_STATEMENT, extract: false, read: 'whole', headsUp: true, offer: null, calls: 2 },
+    { name: 'a sum ask over a statement that fits is read whole the same way (#649)', question: 'Wie viel habe ich insgesamt ausgegeben?', text: DE_STATEMENT, extract: true, read: 'whole', headsUp: true, offer: 'deterministic', calls: 1 },
+    { name: 'a grouping of dates over a statement that fits is read whole, with no heads-up (#649)', question: 'Gruppiere die Buchungen nach Datum', text: DE_STATEMENT, extract: true, read: 'whole', headsUp: false, offer: null, calls: 2 }
+  ])('#54: the aggregation question — $name', async ({ question, text, extract, read, headsUp, offer, calls }) => {
+    const h = await makeHarness({ fullyChunked: true, text })
+    if (extract) seedAmountExtract(h)
 
-    const { result } = await invoke(
-      handlers,
-      IPC.askDocuments,
-      h.conversationId,
-      'kategorisiere alle transaktionen und erstelle eine summe pro kategorie',
-      null // the #54 configuration: no skill on the turn
-    )
+    // the #54 configuration: no skill on the turn
+    const { result } = await invoke(handlers, IPC.askDocuments, h.conversationId, question, null)
     const msg = result as Message
 
-    // Still the deterministic listing (0 model calls) — the hint LEADS it, never replaces it.
-    expect(h.runtime.calls).toBe(0)
-    expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
-    expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
-    expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+    // The deterministic #80 offer needs no model call; without it an aggregation ask pays the bounded
+    // classification (it degrades on the prose reply).
+    expect(h.runtime.calls).toBe(calls)
+    expect(listMessages(h.db, h.conversationId).at(-1)?.skillOffer?.source ?? null).toBe(offer)
+    if (read === 'listing') {
+      // Still the deterministic listing (0 model calls) — the hint LEADS it, never replaces it.
+      expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
+      expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
+      expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+      expect(msg.content).not.toContain(t('en', 'analysis.wholeReadSumHint'))
+      return
+    }
+    // One grounded model turn over every section, no listing (pre-fix: the listing with extract data, the
+    // unlabelled whole read without).
+    expect(msg.coverage).toMatchObject({ mode: 'capped', truncated: false })
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    expect(msg.content).toBe(headsUp ? `${t('en', 'analysis.wholeReadSumHint')}\n\nModel answer.` : 'Model answer.')
   })
 
   it('the same #37 question WITH the bank skill takes the whole-document engine — no hint, no top-k', async () => {

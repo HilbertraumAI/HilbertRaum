@@ -127,6 +127,15 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A "how much" question gets an answer, and a sum over a short document gets a total.** Once a
+  document had a deep index, "How much is the monthly fee?" was answered at once with every amount in
+  the document. "How much did I pay in fees?" got the same list, with no total. A question about one
+  amount now gets a written answer. A question that adds amounts up, over one document short enough to
+  read at once, is answered from the whole document with a total. That answer starts with a heads-up:
+  the AI model works out totals itself and can miss or miscount items, so check the total against the
+  sources. Over a longer document it still lists every amount, now with the note that the list cannot
+  add them up. "Welche Fristen stehen auf der Liste?" and "Welche Kosten zählen zu den Nebenkosten?"
+  get an answer instead of a list (#649).
 - **A yes/no question about your documents gets an answer, not a list.** Once a document had a deep
   index, a question such as "Gilt die Frist für alle Mieter?" ("Does the deadline apply to all
   tenants?") was answered at once with every date in the document, because any "all", "every" or
