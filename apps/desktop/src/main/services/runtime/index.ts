@@ -308,7 +308,7 @@ export class RuntimeManager {
   // No per-lane registry sees them all, so the busy signal lives HERE: `doStart` wraps the
   // factory-returned runtime (ladder AND mock — the gate CI exercises is the shipped one)
   // in a decorator whose chatStream counts per-lane in-flight generations. External
-  // admission (the local API) reads `isGenerating()` and FAILS CLOSED: no active runtime
+  // admission (the local API) reads `isExternallyBusy()`, which FAILS CLOSED: no active runtime
   // (which includes the whole start window — the #109 warm-up generation runs against the
   // inner rung runtime while `active()` is still null) means "busy", never "idle".
   /** In-flight generation count per lane; mutated only inside the gate wrapper. */

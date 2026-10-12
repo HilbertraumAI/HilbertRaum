@@ -14546,7 +14546,8 @@ model through **five** lanes: chat/RAG, doc tasks, skill runs, the benchmark, an
   every existing call site passes through it with zero call-site churn.
 - `RuntimeChatOptions.lane` (`'in-app'` default / `'external'`) means an external request never
   pre-empts itself, and in-app entry always wins.
-- `isGenerating()` / `isExternallyBusy()` **fail closed**: no active runtime ⇒ busy. That single
+- `isExternallyBusy()` **fails closed**: no active runtime ⇒ busy (`isGenerating()` is the plain
+  any-lane count; it does not). That single
   rule covers the whole start window including the warm-up generation, which streams against the
   inner rung runtime while `active()` is still null.
 - Counter discipline: increment as the first act of the generator body, decrement in `finally`,
@@ -14675,7 +14676,7 @@ modes; zero CORS headers anywhere; streaming and non-streaming happy paths; the 
 mapping incl. `Retry-After`; pre-emption closing without `[DONE]`; counted-byte body cap over a
 chunked body; the drain-timeout reclaiming a slot; lock and quit killing the listener first;
 rotation aborting in-flight streams; the gate counting all lanes on both the mock and ladder
-paths with `isGenerating()` failing closed; the counter surviving never-iterated and
+paths with `isExternallyBusy()` failing closed; the counter surviving never-iterated and
 throws-before-yield generators; the TOCTOU probe; a **no-content sentinel** driven through the
 success and failure paths and grepped out of every log, console stream, error body, and status
 object; and hostile wire input — a slow-loris header phase cut off **by the server itself**

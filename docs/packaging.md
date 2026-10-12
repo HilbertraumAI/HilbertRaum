@@ -1356,5 +1356,6 @@ slip past the green gate and only surface on real hardware. So **whenever a `HIL
 observes an upstream output format change — or a new format worth pinning — capture the
 verbatim real output into `apps/desktop/tests/fixtures/` and assert a pure parser against
 it in a CI unit test** (the bytes are kept binary via `.gitattributes`). The first such
-fixture is the b9585 `--list-devices` capture parsed by `gpu.test.ts` (audit L19); add SSE
+fixture was the b9585 `--list-devices` capture parsed by `gpu.test.ts` (audit L19; re-taken at b11146,
+#518); add SSE
 and whisper-JSON fixtures the same way as those formats are observed.
