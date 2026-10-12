@@ -45,9 +45,6 @@ export interface TranscriberSelectionDeps {
   model: TranscriberModelInfo | null
   /** Dev build — gates the dev-only `HILBERTRAUM_WHISPER_BIN` override (M-5). Default false. */
   isDev?: boolean
-  resolveBin?: (rootPath: string) => string | null
-  modelExists?: (modelPath: string) => boolean
-  makeTranscriber?: (model: TranscriberModelInfo, binPath: string) => Transcriber
   onSelect?: (kind: 'whisper' | 'none', reason: string) => void
 }
 
@@ -56,25 +53,20 @@ export interface TranscriberSelectionDeps {
  * (the CLI is spawned per `transcribe()` call), so this returns synchronously.
  */
 export function createSelectedTranscriber(deps: TranscriberSelectionDeps): Transcriber | null {
-  const makeTranscriber =
-    deps.makeTranscriber ??
-    ((model: TranscriberModelInfo, binPath: string) =>
-      createWhisperCliTranscriber({
-        id: model.id,
-        binPath,
-        modelPath: model.modelPath,
-        vadModelPath: vadModelPathOf(model)
-      }))
+  const makeTranscriber = (model: TranscriberModelInfo, binPath: string): Transcriber =>
+    createWhisperCliTranscriber({
+      id: model.id,
+      binPath,
+      modelPath: model.modelPath,
+      vadModelPath: vadModelPathOf(model)
+    })
 
   // Shared model→binary→weights ladder (L16). NO mock fallback — a mock transcript would
   // silently corrupt the corpus, so unavailable means null.
   const sel = resolveSidecarSelection<TranscriberModelInfo, Transcriber>({
     rootPath: deps.rootPath,
     model: deps.model,
-    resolveBin:
-      deps.resolveBin ??
-      ((root) => resolveWhisperCliPath(root, process.platform, process.env, { isDev: deps.isDev })),
-    modelExists: deps.modelExists,
+    resolveBin: (root) => resolveWhisperCliPath(root, process.platform, process.env, { isDev: deps.isDev }),
     makeReal: makeTranscriber,
     binaryName: 'whisper-cli',
     modelNoun: 'transcriber model'

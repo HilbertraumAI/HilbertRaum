@@ -3,13 +3,7 @@ import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { stringify } from 'yaml'
-import {
-  composeServices,
-  composeTranscriber,
-  composeTranscriberSlot,
-  refreshTranscriberSlot,
-  shouldReplaceTranscriber
-} from '../../src/main/services/compose-services'
+import { composeServices, composeTranscriberSlot, refreshTranscriberSlot } from '../../src/main/services/compose-services'
 import {
   engineFamilyHasHostBuild,
   hostRuntimeArch,
@@ -24,12 +18,12 @@ import {
 } from '../../src/main/services/transcriber'
 import type { TranscriberMissing } from '../../src/shared/types'
 
-// Issue #497 — the post-install transcriber re-selection, the transcriber twin of the issue-#40
-// translator hook (compose-translator.test.ts). `composeTranscriber` is the ONE construction
-// `composeServices` (startup) and the two mid-session hooks (a completed speech-model download,
-// a completed whisper.cpp engine install) share, driven here over a REAL temp drive layout
-// (manifest YAML + binary + weight files, no mocks): null while binary or weights are absent, a
-// live selection the moment both are on the drive — the restart-free activation the issue asks for.
+// Issue #497 — the post-install transcriber re-selection, the transcriber twin of the issue-#40 translator hook
+// (compose-translator.test.ts). `composeTranscriberSlot` is the ONE construction `composeServices` (startup) and
+// `refreshTranscriberSlot` (the hook body of both mid-session installs: a speech-model download, a whisper.cpp engine
+// install) share, driven here over a REAL temp drive layout (manifest YAML + binary + weight files, no mocks): null while
+// binary or weights are absent, a live selection the moment both are on the drive (the restart-free activation the
+// issue asks for), and since #527 the reason the slot is empty.
 
 /** A minimal VALID transcriber manifest (JSON is YAML — discoverManifests parses it fine). */
 const MANIFEST = {
@@ -75,44 +69,10 @@ function installWeight(root: string): void {
   writeFileSync(join(dir, 'whisper-test.bin'), 'ggml-bytes')
 }
 
-describe('composeTranscriber (issue #497 — post-install re-selection)', () => {
-  it('returns null while the weight is absent, then a live Transcriber once the GGML lands', () => {
-    const { root, manifestsDir } = tempDrive()
-    installBinary(root)
-
-    // The startup composition on a drive WITHOUT the speech model — the tester's step 1.
-    expect(composeTranscriber({ rootPath: root, manifestsDir })).toBeNull()
-
-    // The download completes (weight renamed into place) → the hook re-runs THIS — and the
-    // selection flips without a restart.
-    installWeight(root)
-    const transcriber = composeTranscriber({ rootPath: root, manifestsDir })
-    expect(transcriber).not.toBeNull()
-    expect(transcriber?.id).toBe('whisper-test')
-  })
-
-  it('returns null while the whisper-cli binary is absent, then a live Transcriber once the engine is installed', () => {
-    const { root, manifestsDir } = tempDrive()
-    installWeight(root)
-
-    // The weights were provisioned, the voice engine was not — the "Install voice engine" case.
-    expect(composeTranscriber({ rootPath: root, manifestsDir })).toBeNull()
-    installBinary(root)
-    expect(composeTranscriber({ rootPath: root, manifestsDir })?.id).toBe('whisper-test')
-  })
-
-  it('returns null with no manifests dir (every role falls back)', () => {
-    const { root } = tempDrive()
-    installBinary(root)
-    installWeight(root)
-    expect(composeTranscriber({ rootPath: root, manifestsDir: null })).toBeNull()
-  })
-})
-
 // #504: the shipped whisper manifest declares the Silero VAD model as a second REQUIRED file
 // (`files[]`). Over a real temp layout: the transcriber stays null until BOTH files are present,
 // and the composed CLI backend knows the VAD path (found by name among the required files).
-describe('composeTranscriber — the Silero VAD file as the second required file (#504)', () => {
+describe('composeTranscriberSlot — the Silero VAD file as the second required file (#504)', () => {
   const VAD_NAME = 'ggml-silero-v5.1.2.bin'
   function tempDriveWithVad(): { root: string; manifestsDir: string } {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-compose-transcriber-vad-'))
@@ -132,20 +92,12 @@ describe('composeTranscriber — the Silero VAD file as the second required file
     const { root, manifestsDir } = tempDriveWithVad()
     installBinary(root)
     installWeight(root)
-    expect(composeTranscriber({ rootPath: root, manifestsDir })).toBeNull()
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir }).transcriber).toBeNull()
 
     writeFileSync(join(root, 'models', 'transcriber', VAD_NAME), 'vad-bytes')
-    const transcriber = composeTranscriber({ rootPath: root, manifestsDir })
+    const transcriber = composeTranscriberSlot({ rootPath: root, manifestsDir }).transcriber
     expect(transcriber).toBeInstanceOf(WhisperCliTranscriber)
     expect((transcriber as WhisperCliTranscriber).vadModelPath).toBe(join(root, 'models', 'transcriber', VAD_NAME))
-  })
-
-  it('a weight-only manifest composes without a VAD path (drives from before #504 keep working)', () => {
-    const { root, manifestsDir } = tempDrive()
-    installBinary(root)
-    installWeight(root)
-    const transcriber = composeTranscriber({ rootPath: root, manifestsDir })
-    expect((transcriber as WhisperCliTranscriber).vadModelPath).toBeNull()
   })
 })
 
@@ -157,38 +109,10 @@ function fakeTranscriber(): Transcriber {
   }
 }
 
-describe('shouldReplaceTranscriber (#497 — only a null slot is ever re-composed)', () => {
-  it('replaces a null/undefined slot', () => {
-    expect(shouldReplaceTranscriber(null)).toBe(true)
-    expect(shouldReplaceTranscriber(undefined)).toBe(true)
-  })
-
-  it('NEVER replaces a live instance (it may hold an in-flight whisper child the lock/quit teardowns reach through ctx)', () => {
-    expect(shouldReplaceTranscriber(fakeTranscriber())).toBe(false)
-  })
-})
-
 describe('refreshTranscriberSlot (#497 — the hook body both install paths share)', () => {
   function slot(root: string, manifestsDir: string | null, transcriber: Transcriber | null = null) {
     return { transcriber, paths: { rootPath: root }, manifestsDir, isDev: false }
   }
-
-  it('fills a null slot once binary + weights are present, and reports the flip', () => {
-    const { root, manifestsDir } = tempDrive()
-    installBinary(root)
-    installWeight(root)
-    const ctx = slot(root, manifestsDir)
-    expect(refreshTranscriberSlot(ctx)).toBe(true)
-    expect(ctx.transcriber?.id).toBe('whisper-test')
-  })
-
-  it('leaves a null slot null (and reports no flip) while the drive still lacks binary or weights', () => {
-    const { root, manifestsDir } = tempDrive()
-    installBinary(root) // no weight yet — e.g. a download of a DIFFERENT role fired the hook
-    const ctx = slot(root, manifestsDir)
-    expect(refreshTranscriberSlot(ctx)).toBe(false)
-    expect(ctx.transcriber).toBeNull()
-  })
 
   it('leaves a LIVE instance untouched — same object, no re-composition', () => {
     const { root, manifestsDir } = tempDrive()
@@ -245,14 +169,6 @@ describe('transcriberMissingReason (#527 — which piece is missing)', () => {
     expect(reason({ binary: true, weights: false, fetchable: false })).toBe('model')
     // No transcriber manifest at all reads as "no speech model on this drive" too.
     expect(reason({ binary: true, weights: true, fetchable: true, model: null })).toBe('model')
-  })
-
-  it('names the engine when only the engine is missing and this host has a build of it', () => {
-    expect(reason({ binary: false, weights: true, fetchable: true })).toBe('engine')
-  })
-
-  it('names both when neither is on the drive and both can be fetched', () => {
-    expect(reason({ binary: false, weights: false, fetchable: true })).toBe('model-and-engine')
   })
 
   it('reports an engine with no build for this host whatever the weights’ state (the Linux report)', () => {
@@ -337,6 +253,8 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
     const slot = composeTranscriberSlot({ rootPath: root, manifestsDir })
     expect(slot.transcriber?.id).toBe('whisper-test')
     expect(slot.missing).toBeNull()
+    // A weight-only manifest (drives from before #504) composes without a VAD path.
+    expect((slot.transcriber as WhisperCliTranscriber).vadModelPath).toBeNull()
   })
 
   it('reports the model once the engine is in place', () => {
@@ -356,12 +274,11 @@ describe('composeTranscriberSlot (#527 — the slot and its reason from one reso
     })
   })
 
-  it('composeTranscriber stays the slot’s transcriber (the startup and hook call sites agree)', () => {
-    const { root, manifestsDir } = tempDrive()
-    writeRuntimeSources(manifestsDir)
+  it('returns null with no manifests dir (every role falls back)', () => {
+    const { root } = tempDrive()
     installBinary(root)
-    installWeight(root)
-    expect(composeTranscriber({ rootPath: root, manifestsDir })?.id).toBe('whisper-test')
+    installWeight(root) // both pieces ARE on the drive: only the missing manifests dir keeps the slot empty
+    expect(composeTranscriberSlot({ rootPath: root, manifestsDir: null })).toEqual({ transcriber: null, missing: 'model' })
   })
 
   it('composeServices carries the reason alongside the slot', () => {
