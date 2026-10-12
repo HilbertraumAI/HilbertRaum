@@ -761,7 +761,8 @@ behavior-preserving (equivalence-tested, teeth-checked). No schema/IPC/audit-pay
   a cheap `documents`-table probe), else the scoped scan runs byte-unchanged. Result is byte-identical to
   the scoped scan over the same universe (`tests/integration/vector-search-resident-iteration.test.ts`:
   unscoped == all-docs-scoped, hit-for-hit; a `db.prepare` spy confirms the marshal is gone). Measured
-  **~5× / query** at 10k–50k chunks (CI-gated `tests/manual/phaseB-perf-bench.test.ts`).
+  **~5× / query** at 10k–50k chunks (env-gated `tests/manual/phaseB-perf-bench.test.ts`,
+  `RUN_PHASEB_BENCH=1`; never runs in CI).
 - **P1 — `dotProduct` + running top-K in the compare pairing (`doctasks/compare.ts`).** Section-matched
   compare (mode b) scored *every* doc-B vector with `cosineSimilarity` + a full per-A-chunk
   `sort().slice(topK)` — O(N_A·N_B·dim) + N_A sorts, a multi-second main-thread freeze at ~1000 chunks/
