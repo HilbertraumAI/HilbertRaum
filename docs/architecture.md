@@ -1875,7 +1875,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
       **Tests.**
       - `runtime-manager.test.ts` "liveness of the running model (#599)": the watchdog mark and what
-        clears it, the probe and its 10 s cache, Restart, `stopCrashed`, the start request; and
+        clears it, the probe, its 10 s cache and a probe outliving a switch, Restart, `stopCrashed`,
+        the start request; and
         "GPU mid-session crash auto-fallback through the real manager (REL-1)": the GPU fallback once,
         then the CPU crash budget through the real `forceRestart`/`stopCrashed`.
       - `runtime-ladder-exit-wiring.test.ts` "a CPU-mode crash restarts the model once per session":
@@ -5081,6 +5082,8 @@ voice engine was missing.
 Tests:
 - `assets.test.ts`: the version-order table, the relation (the pin in another backend is current).
 - `spawn-gate.test.ts`: hold, wait, release, bound.
+- `sidecar.test.ts` "waits for an engine install to finish its swap before it spawns (#516 spawn
+  gate)": the LlamaServer spawn site (all five llama sidecars) waits on the gate.
 - `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
   `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
   still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.

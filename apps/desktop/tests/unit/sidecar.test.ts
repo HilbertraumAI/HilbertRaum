@@ -26,6 +26,7 @@ import {
   type ChildProcessLike,
   type UnexpectedExitInfo
 } from '../../src/main/services/runtime/sidecar'
+import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 
 // A switchable core count for the defaultThreadCount rows; everything else in this file reads the
 // real cpus() (the switch is null) — the benchmark.test.ts RAM-pin idiom.
@@ -411,6 +412,35 @@ describe('LlamaServer', () => {
     await Promise.all([server.start(), server.start()])
     expect(calls).toHaveLength(1)
     expect((await server.health()).healthy).toBe(true)
+    await server.stop()
+  })
+
+  // #516 (architecture.md "In-app engine updates" §3): while an install replaces runtime/llama.cpp/<os>/,
+  // every llama-server spawn waits for the swap. spawn-gate.test.ts proves the gate; this proves the one
+  // spawn site all five llama sidecars share actually waits on it.
+  it('waits for an engine install to finish its swap before it spawns (#516 spawn gate)', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = healthFetch(0)
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50015,
+      healthIntervalMs: 1
+    })
+    const release = holdEngineSpawns('llama_cpp')
+    const starting = server.start()
+    try {
+      // One macrotask: every microtask the start could chain (verify, findPort, spawn) has run.
+      await new Promise((r) => setImmediate(r))
+      expect(calls).toHaveLength(0) // held: nothing spawned mid-swap
+    } finally {
+      release()
+    }
+    await starting
+    expect(calls).toHaveLength(1)
     await server.stop()
   })
 

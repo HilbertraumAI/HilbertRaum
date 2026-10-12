@@ -2428,6 +2428,8 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
   it never throws, so a tampered binary is simply never executed for enumeration.
 - **`WhisperCliTranscriber.run()` (`transcriber/cli.ts`)** — refuses before spawn; the audio import fails
   per-file with the generic failure copy (raw reason to the local log only).
+- **`checkProgramLoads()` (`engine-health.ts`)** — the #530 "Check again" launch resolves `unchecked`
+  and never spawns a tampered binary.
 
 **Commercial sell-gate (`commercial-drive.ts`).** `assertCommercialDrive` now **requires** the marker to
 carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that

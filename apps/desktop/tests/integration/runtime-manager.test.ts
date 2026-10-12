@@ -2,7 +2,12 @@ import { describe, it, expect, vi } from 'vitest'
 import { EventEmitter } from 'node:events'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { RuntimeManager, ExternalGenerationBusyError } from '../../src/main/services/runtime'
-import type { ModelRuntime, RuntimeStartOptions, RuntimeChatOptions } from '../../src/main/services/runtime'
+import type {
+  HealthStatus,
+  ModelRuntime,
+  RuntimeStartOptions,
+  RuntimeChatOptions
+} from '../../src/main/services/runtime'
 import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
@@ -1408,5 +1413,35 @@ describe('liveness of the running model (#599)', () => {
     const next = mgr.beginStartRequest()
     expect(mgr.isStarting()).toBe(true)
     next()
+  })
+
+  it('a /health probe that outlives a model switch is discarded — it never marks the new model (#599)', async () => {
+    vi.useFakeTimers({ toFake: ['performance'] })
+    try {
+      let parkA = false
+      let answerA: (healthy: boolean) => void = () => undefined
+      const mgr = new RuntimeManager((o) => ({
+        modelId: o.modelId,
+        start: async () => {},
+        stop: async () => {},
+        health: () =>
+          o.modelId === 'a' && parkA
+            ? new Promise<HealthStatus>((r) => (answerA = (healthy) => r({ healthy, message: '', port: 1 })))
+            : Promise.resolve({ healthy: true, message: '', port: 1 }),
+        // eslint-disable-next-line require-yield
+        chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+      }))
+      await mgr.start({ modelId: 'a', modelPath: '/a.gguf', contextTokens: 2048 })
+      parkA = true // a freezes: its next /health answers only when the test says so
+      vi.advanceTimersByTime(10_000) // past the 10 s probe TTL
+      const probe = mgr.refreshHealth()
+      await mgr.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 }) // the switch lands meanwhile
+      answerA(false) // a's late verdict
+      await probe
+      expect(mgr.status()).toMatchObject({ running: true, modelId: 'b', healthy: true })
+      expect(mgr.status().unresponsive).toBeUndefined()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 })

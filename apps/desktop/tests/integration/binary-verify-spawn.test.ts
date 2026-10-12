@@ -13,6 +13,7 @@ import { sha256File } from '../../src/main/services/models'
 import { LlamaServer, type ChildProcessLike, type SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { probeGpuDevices } from '../../src/main/services/runtime/gpu'
 import { createWhisperCliTranscriber } from '../../src/main/services/transcriber'
+import { checkProgramLoads } from '../../src/main/services/engine-health'
 
 // TEST-2 (full-audit-2026-06-29, Phase 3): the binary-verifier verdict/cache matrix is well unit-
 // tested (binary-verifier.test.ts). A seam test that injects a fake `verifyBinary: () => 'mismatch'`
@@ -22,9 +23,10 @@ import { createWhisperCliTranscriber } from '../../src/main/services/transcriber
 // fully correct and fully unwired.
 //
 // So this file drives the REAL `verifyBinaryBeforeSpawn` end-to-end at the spawn seams:
-// `LlamaServer.start`, the GPU `--list-devices` probe and the `whisper-cli` spawn. PACKAGED
-// enforcement ON (`initBinaryVerification(false)`) + a real on-disk install marker whose recorded
-// hash does NOT match the binary's bytes → each seam must REFUSE to spawn (no child created). They
+// `LlamaServer.start`, the GPU `--list-devices` probe, the `whisper-cli` spawn and the #530
+// "Check again" engine check (`checkProgramLoads`). PACKAGED enforcement ON
+// (`initBinaryVerification(false)`) + a real on-disk install marker whose recorded hash does NOT
+// match the binary's bytes → each seam must REFUSE to spawn (no child created). They
 // deliberately do NOT inject the `verifyBinary`/`verify` seam — the wiring IS the point. The
 // LlamaServer seam's positive controls run through the real verifier too: a matching marker (`ok`)
 // and a legacy, hash-less marker (`skip-legacy`, security-model.md §3's non-breaking rollout). The
@@ -168,6 +170,24 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
     const devices = await probeGpuDevices(bin, { spawn, timeoutMs: 200 })
     expect(devices).toEqual([]) // a tampered binary reads as "no GPU" — the probe never throws
     expect(calls).toHaveLength(0) // …and the real verifier blocked the probe spawn entirely
+  })
+
+  // ---- #530 "Check again" engine check seam (engine-health.ts checkProgramLoads) ------------
+
+  it('the engine check REFUSES to launch a tampered binary (unchecked, no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = tamperedBinary('llama-server.exe')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('close', 0, null)) // if (wrongly) spawned, settle fast
+      return child
+    }
+    // NB: no `verify` → checkProgramLoads falls back to the REAL verifyBinaryBeforeSpawn, as
+    // recheckEngines(ctx) calls it in production.
+    expect(await checkProgramLoads('llama_cpp', bin, ['--version'], { spawn, timeoutMs: 200 })).toBe('unchecked')
+    expect(calls).toHaveLength(0)
   })
 
   // ---- whisper-cli spawn seam -------------------------------------------------------
