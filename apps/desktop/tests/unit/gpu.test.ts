@@ -2,12 +2,9 @@ import { describe, it, expect, vi, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import {
-  createCachedGpuProbe,
-  looksIntegrated,
-  parseListDevices,
-  probeGpuDevices
-} from '../../src/main/services/runtime/gpu'
+import { createCachedGpuProbe, parseListDevices, probeGpuDevices } from '../../src/main/services/runtime/gpu'
+import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
+import { until } from '../helpers/hang-budget'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
 
 // Phase 15 GPU probe (architecture.md GPU record §5.1). Zero GPUs, zero binaries: the
@@ -20,8 +17,9 @@ import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/
 // The b9585 capture it replaces (F-40, audit-2026-07-16) was two pins old and is retired: same
 // machine, same device-line shape, only the free figure differed, and a pin-named fixture that
 // lags the pin is exactly what #518 describes. This one lists TWO devices — the card and the
-// Intel UHD 770 iGPU the b9585 run did not show — so it also pins the hybrid-box shape the
-// `looksIntegrated` rule (#320) sorts. Re-capture on every runtime pin bump (TS-3(a)).
+// Intel UHD 770 iGPU the b9585 run did not show — so it also pins the hybrid-box parse (both
+// names sit in gpu-rules.test.ts's `looksIntegrated` table). Re-capture on every runtime pin
+// bump (TS-3(a)).
 const LIST_DEVICES_B11146 = readFileSync(
   join(__dirname, '..', 'fixtures', 'list-devices-b11146-vulkan-rtx3080ti.txt'),
   'utf8'
@@ -41,15 +39,6 @@ describe('parseListDevices', () => {
       { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12084, freeMb: 11316 },
       // The iGPU reports unified memory: "free" above "total" is what the tool printed.
       { id: 'Vulkan1', name: 'Intel(R) UHD Graphics 770', totalMb: 32606, freeMb: 48060 }
-    ])
-    const [card, igpu] = parseListDevices(LIST_DEVICES_B11146)
-    expect(looksIntegrated(card.name)).toBe(false)
-    expect(looksIntegrated(igpu.name)).toBe(true)
-  })
-
-  it('parses the real single-GPU fixture', () => {
-    expect(parseListDevices(RTX_3080TI_OUTPUT)).toEqual([
-      { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
     ])
   })
 
@@ -93,55 +82,6 @@ describe('parseListDevices', () => {
   })
 })
 
-describe('looksIntegrated', () => {
-  it.each([
-    // Integrated → true (the bump must NOT fire)
-    ['Intel(R) Iris(R) Xe Graphics', true],
-    ['Intel(R) UHD Graphics 630', true],
-    ['Intel(R) HD Graphics 520', true],
-    ['AMD Radeon(TM) Graphics', true],
-    ['AMD Radeon Vega 8', true],
-    // Audit fix: names real Linux/RADV + Meteor-Lake drivers report (these used to
-    // slip through and could bump the profile on shared-memory APUs).
-    ['AMD Radeon Graphics (RADV REMBRANDT)', true],
-    ['AMD Radeon(TM) 780M Graphics', true],
-    ['AMD Radeon Vega 8 Graphics (RADV RAVEN)', true],
-    ['Intel(R) Arc(TM) Graphics', true],
-    // PR #308 audit (decision 9, R6): the current-generation names the pinned b9849 Vulkan
-    // build reports for integrated parts — none matched before, so a hybrid laptop's iGPU
-    // (11–36 GiB of SHARED memory) read as a discrete card on every consumer.
-    ['Intel(R) Graphics (ARL)', true],
-    ['Intel(R) Graphics (LNL)', true],
-    // #320 (owner decision 2026-09-07): the same family reported WITHOUT a platform code.
-    ['Intel(R) Graphics', true],
-    ['Intel(R) Arc(TM) 140V GPU (16GB)', true],
-    ['Intel(R) Iris(R) Xe Graphics (TGL GT2)', true],
-    ['Intel(R) UHD Graphics 770', true],
-    ['AMD Radeon 780M Graphics (RADV PHOENIX)', true],
-    ['AMD Radeon Graphics (RADV RENOIR)', true],
-    ['AMD Radeon 890M Graphics (RADV GFX1150)', true],
-    ['AMD Radeon 8060S Graphics (RADV GFX1151)', true],
-    // Discrete → false (eligible for the bump)
-    ['NVIDIA GeForce RTX 3080 Ti', false],
-    ['AMD Radeon RX 6700 XT', false],
-    ['NVIDIA GeForce GTX 1660', false],
-    ['AMD Radeon RX 7800 XT (RADV NAVI32)', false],
-    ['Intel(R) Arc(TM) A770 Graphics', false],
-    // The discrete forms the new patterns must keep OUT (pinned as negatives): the model-
-    // numbered Arc A-series, the laptop "RX ...S", the RTX line, and Apple's Metal device.
-    ['Intel(R) Arc(tm) A770 Graphics (DG2)', false],
-    ['Intel(R) Arc(TM) A750 Graphics', false],
-    ['AMD Radeon RX 7700S (RADV NAVI33)', false],
-    ['AMD Radeon RX 7700S', false],
-    ['AMD Radeon RX 7900 XTX (RADV NAVI31)', false],
-    ['NVIDIA GeForce RTX 5060', false],
-    ['NVIDIA GeForce RTX 3090', false],
-    ['Apple M2', false]
-  ])('%s → %s', (name, integrated) => {
-    expect(looksIntegrated(name)).toBe(integrated)
-  })
-})
-
 // ---- probeGpuDevices (fake spawn — no real binary, no GPU) -------------------------
 
 class FakeProbeChild extends EventEmitter implements ChildProcessLike {
@@ -182,6 +122,26 @@ describe('probeGpuDevices', () => {
     expect(calls[0].args).toEqual(['--list-devices'])
   })
 
+  // #516 (architecture.md "In-app engine updates" §3): the probe runs the llama-server an engine
+  // install replaces, so it waits for the swap like LlamaServer does (sidecar.test.ts).
+  it('waits for an engine install to finish its swap before it spawns (#516 spawn gate)', async () => {
+    const { spawn, calls } = probeSpawn((child) => {
+      child.stdout.emit('data', RTX_3080TI_OUTPUT)
+      child.emit('close', 0, null)
+    })
+    const release = holdEngineSpawns('llama_cpp')
+    const probing = probeGpuDevices('/bin/llama-server', { spawn })
+    try {
+      // One macrotask: every microtask the probe could chain (verify, spawn) has run.
+      await new Promise((r) => setImmediate(r))
+      expect(calls).toHaveLength(0) // held: nothing spawned mid-swap
+    } finally {
+      release()
+    }
+    expect(await probing).toHaveLength(1)
+    expect(calls).toHaveLength(1)
+  })
+
   it('waits for stdout drained after exit ("close"), so late data is not truncated', async () => {
     // Audit fix regression: Node can fire 'exit' BEFORE pending stdout data is
     // delivered. Resolving there would parse a truncated (often empty) device list.
@@ -195,21 +155,26 @@ describe('probeGpuDevices', () => {
     expect(devices![0].name).toBe('NVIDIA GeForce RTX 3080 Ti')
   })
 
-  it('resolves [] on a non-zero exit', async () => {
-    const { spawn } = probeSpawn((child) => {
-      child.stdout.emit('data', 'some error-ish output')
-      child.emit('close', 1, null)
-    })
-    expect(await probeGpuDevices('/bin/llama-server', { spawn })).toEqual([])
-  })
-
-  // #380: the three "the machine answered, and the answer was nothing" paths keep resolving [].
-  // Only the kill-timeout below is UNKNOWN, so these pins are what keeps the exception narrow.
-  it('resolves [] on a spawn error (missing binary) — never rejects, and never null', async () => {
-    const { spawn } = probeSpawn((child) => {
-      child.emit('error', new Error('ENOENT'))
-    })
-    expect(await probeGpuDevices('/missing/llama-server', { spawn })).toEqual([])
+  // #380 + #530: a spawn failure that is not an OS refusal is still an ANSWER — `[]`, never `null`. Real
+  // non-refusal codes on Windows, where EPERM / EACCES / UNKNOWN ARE refusals (`null` + engine verdict):
+  // these rows keep that refusal set narrow.
+  it.each([
+    {
+      name: "an async 'error' event (ENOENT — the binary is missing)",
+      spawn: probeSpawn((child) =>
+        child.emit('error', Object.assign(new Error('spawn /missing/llama-server ENOENT'), { code: 'ENOENT' }))
+      ).spawn
+    },
+    {
+      name: 'a synchronous spawn throw (EINVAL)',
+      spawn: (() => {
+        throw Object.assign(new Error('spawn EINVAL'), { code: 'EINVAL' })
+      }) as SpawnFn
+    }
+  ])('a non-refusal spawn failure resolves [] — never rejects, never null: $name', async ({ spawn }) => {
+    expect(
+      await probeGpuDevices('/missing/llama-server', { spawn, platform: 'win32', verify: async () => 'skip-dev' })
+    ).toEqual([])
   })
 
   it('kills a hung probe on timeout and resolves NULL — unknown, NOT "no GPU" (#380; T6 — fake timers, no wall-clock flake)', async () => {
@@ -217,7 +182,8 @@ describe('probeGpuDevices', () => {
     // never-exiting child — a TEST-1-family wall-clock flake. Drive the probe's own kill-timeout
     // through fake timers instead (the combine-signals.test.ts idiom) so it fires deterministically.
     // `verify` is injected as a trivial resolver so only the timeout path is under fake-timer
-    // control (no real fs/microtask racing the timer); the verify path has its own test below.
+    // control (no real fs/microtask racing the timer); the verify path is pinned through the REAL
+    // verifier in binary-verify-spawn.test.ts.
     //
     // #380: this used to resolve `[]`, which every consumer read as "this machine has no card".
     // Under the #330 weight upload the driver simply had not answered yet — the child is still
@@ -238,26 +204,6 @@ describe('probeGpuDevices', () => {
     const devices = await probe
     expect(devices).toBeNull()
     expect(child.killed).toBe(true)
-  })
-
-  it('resolves [] when spawn itself throws', async () => {
-    const spawn: SpawnFn = () => {
-      throw new Error('spawn EACCES')
-    }
-    expect(await probeGpuDevices('/bin/llama-server', { spawn })).toEqual([])
-  })
-
-  it('resolves [] WITHOUT spawning when the binary fails pre-spawn verification (vuln-scan B) — never null', async () => {
-    // The probe must NEVER throw — a tampered binary reads as "no GPU", same as a missing one.
-    // #380: still `[]`, not `null` — a binary we refuse to run is an answer, not a wedged driver.
-    let spawned = false
-    const spawn: SpawnFn = () => {
-      spawned = true
-      return new FakeProbeChild()
-    }
-    const devices = await probeGpuDevices('/bin/llama-server', { spawn, verify: async () => 'mismatch' })
-    expect(devices).toEqual([])
-    expect(spawned).toBe(false)
   })
 })
 
@@ -365,7 +311,7 @@ describe('createCachedGpuProbe', () => {
       probe.invalidate()
       void probe('/bin/x')
     }
-    while (spawned === 0) await tick() // let the in-flight probe's verify() resolve + spawn
+    await until(() => spawned > 0, "the in-flight probe's spawn") // its verify() resolves, then it spawns
     // A couple more mashes now that the child is actually alive (still in flight — it never closed).
     for (let i = 0; i < 3; i++) {
       probe.invalidate()
@@ -381,7 +327,7 @@ describe('createCachedGpuProbe', () => {
     await p1
     probe.invalidate()
     const p2 = probe('/bin/x')
-    while (spawned === 1) await tick()
+    await until(() => spawned > 1, 'the re-probe spawning')
     expect(spawned).toBe(2)
     children[1].stdout.emit('data', RTX_3080TI_OUTPUT)
     children[1].emit('close', 0, null)

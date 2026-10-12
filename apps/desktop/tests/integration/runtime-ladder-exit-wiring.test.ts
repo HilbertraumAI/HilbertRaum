@@ -4,12 +4,11 @@ import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
   createCpuCrashAutoRestart,
-  COMPATIBILITY_MODE_NOTICE,
-  type LlamaRungOptions
+  type GpuLadderDeps
 } from '../../src/main/services/runtime/factory'
 import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
-import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
+import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { GpuDevice } from '../../src/shared/types'
 import { t } from '../../src/shared/i18n'
 import { hangBudgetMs } from '../helpers/hang-budget'
@@ -17,12 +16,13 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 // DX-5 (full-audit-2026-06-29 follow-up, Phase 7): pin the SPAWN-'exit' → onUnexpectedExit → GPU
 // crash auto-fallback WIRING end-to-end.
 //
-// runtime-ladder.test.ts (unit) proves the ladder ROUTES a crash to onGpuCrash — but it does so by
-// hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama. That proves the handler
-// logic, NOT that the real sidecar actually wires its child's 'exit' event to that callback. A
-// regression that dropped `child.once('exit', … onUnexpectedExit())` in sidecar.ts (or its
-// `ready && !stopping` gate) would leave the unit test green while a real mid-session GPU crash
-// silently failed to auto-fall back to CPU — the user's next message would just error.
+// This file is the ONLY home of the crash ROUTING: the ladder's per-rung `onUnexpectedExit` is
+// reached through a REAL `LlamaServer` child 'exit' — no stub hand-invokes it (the unit test that
+// did was retired by the 2026-10 runtime-ladder test campaign). The GPU half (`backend === 'gpu'` →
+// §5.3 `onGpuCrash`) is the DX-5 test; the CPU half (a CPU-mode crash never reaches the GPU
+// fallback — its `onGpuCrash` THROWS) is the #599 test. A regression that dropped
+// `child.once('exit', … onUnexpectedExit())` in sidecar.ts (or its `ready && !stopping` gate) reds
+// both.
 //
 // This drives the REAL `createLlamaRuntime` → `LlamaServer` (only the spawn / fetch / port seams
 // injected, the e5/reranker/vision gated-child style), starts it to healthy on a probe that reports
@@ -78,6 +78,27 @@ const healthOkFetch = (async (url: string | URL) => {
   throw new Error(`unexpected url ${String(url)}`)
 }) as typeof fetch
 
+/** The REAL ladder, whose makeLlama builds the REAL LlamaRuntime with only the spawn/fetch/port
+ *  seams injected — so the real `LlamaServer.doStart` 'exit' wiring runs without a binary. */
+function realLadder(spawn: () => ChildProcessLike, fetchImpl: typeof fetch, gpu: GpuLadderDeps) {
+  return createSelectingRuntimeFactory({
+    rootPath: '/root',
+    resolveBin: () => '/bin/llama-server',
+    modelExists: () => true,
+    makeLlama: (o, binPath, rung) =>
+      createLlamaRuntime(o, {
+        binPath,
+        extraArgs: rung?.extraArgs,
+        onUnexpectedExit: rung?.onUnexpectedExit,
+        spawn,
+        fetchImpl,
+        findPort: async () => 50_000,
+        healthIntervalMs: 1
+      }),
+    gpu
+  })
+}
+
 describe('GPU crash auto-fallback is wired to the real sidecar exit event (DX-5)', () => {
   it('a healthy GPU child that emits a real "exit" triggers persist + notify + one CPU restart', async () => {
     const { spawn, children } = fakeSpawn()
@@ -94,27 +115,11 @@ describe('GPU crash auto-fallback is wired to the real sidecar exit event (DX-5)
       notify: (m) => notices.push(m)
     })
 
-    // The REAL ladder, but makeLlama builds the REAL LlamaRuntime with the spawn/fetch/port seams
-    // injected (so the real `LlamaServer.doStart` 'exit' wiring runs without a binary).
-    const factory = createSelectingRuntimeFactory({
-      rootPath: '/root',
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => true,
-      makeLlama: (o: RuntimeStartOptions, binPath: string, rung?: LlamaRungOptions): ModelRuntime =>
-        createLlamaRuntime(o, {
-          binPath,
-          extraArgs: rung?.extraArgs,
-          onUnexpectedExit: rung?.onUnexpectedExit,
-          spawn,
-          fetchImpl: healthOkFetch,
-          findPort: async () => 50_000,
-          healthIntervalMs: 1
-        }),
-      gpu: {
-        getGpuMode: () => 'auto',
-        probeDevices: async () => [RTX], // rung-1 lands on backend 'gpu'
-        onGpuCrash
-      }
+    // The REAL ladder over the REAL LlamaRuntime (realLadder above).
+    const factory = realLadder(spawn, healthOkFetch, {
+      getGpuMode: () => 'auto',
+      probeDevices: async () => [RTX], // rung-1 lands on backend 'gpu'
+      onGpuCrash
     })
 
     const runtime = factory(opts)
@@ -133,7 +138,7 @@ describe('GPU crash auto-fallback is wired to the real sidecar exit event (DX-5)
     expect(persisted).toHaveLength(1)
     expect(persisted[0]).toContain('code 134') // the real exit code flowed through the wiring
     expect(persisted[0]).toContain('vk error: device lost') // …and the captured stderr tail
-    expect(notices).toEqual([COMPATIBILITY_MODE_NOTICE]) // friendly §11.4 copy
+    expect(notices).toEqual([t('en', 'main.runtime.compatibilityMode')]) // friendly §11.4 copy
 
     await runtime.stop()
   })
@@ -160,21 +165,11 @@ describe('a CPU-mode crash restarts the model once per session, then stops it (#
     const onGpuCrash = (): void => {
       throw new Error('a CPU-mode crash must never reach the GPU fallback')
     }
-    const factory = createSelectingRuntimeFactory({
-      rootPath: '/root',
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => true,
-      makeLlama: (o: RuntimeStartOptions, binPath: string, rung?: LlamaRungOptions): ModelRuntime =>
-        createLlamaRuntime(o, {
-          binPath,
-          extraArgs: rung?.extraArgs,
-          onUnexpectedExit: rung?.onUnexpectedExit,
-          spawn,
-          fetchImpl: healthOkFetch,
-          findPort: async () => 50_000,
-          healthIntervalMs: 1
-        }),
-      gpu: { getGpuMode: () => 'auto', probeDevices: async () => [], onGpuCrash, onCpuCrash }
+    const factory = realLadder(spawn, healthOkFetch, {
+      getGpuMode: () => 'auto',
+      probeDevices: async () => [],
+      onGpuCrash,
+      onCpuCrash
     })
     const crash = async (modelId: string): Promise<void> => {
       const runtime = factory({ ...opts, modelId })
@@ -218,21 +213,10 @@ describe('the CPU crash handler counts one crash once, and never during a lock (
       admitsWork: opts2.admits,
       notify: (m) => calls.push(m === t('en', 'main.runtime.crashRestarting') ? 'notice restarting' : 'notice stopped')
     })
-    const factory = createSelectingRuntimeFactory({
-      rootPath: '/root',
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => true,
-      makeLlama: (o: RuntimeStartOptions, binPath: string, rung?: LlamaRungOptions): ModelRuntime =>
-        createLlamaRuntime(o, {
-          binPath,
-          extraArgs: rung?.extraArgs,
-          onUnexpectedExit: rung?.onUnexpectedExit,
-          spawn,
-          fetchImpl,
-          findPort: async () => 50_000,
-          healthIntervalMs: 1
-        }),
-      gpu: { getGpuMode: () => 'auto', probeDevices: opts2.probe ?? (async () => []), onCpuCrash }
+    const factory = realLadder(spawn, fetchImpl, {
+      getGpuMode: () => 'auto',
+      probeDevices: opts2.probe ?? (async () => []),
+      onCpuCrash
     })
     return { factory, children, calls, health }
   }

@@ -16,9 +16,8 @@ import {
   requestParamsForMode
 } from '../../src/main/services/runtime/llama'
 import { within } from '../helpers/hang-budget'
-import { createSelectingRuntimeFactory } from '../../src/main/services/runtime/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
-import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
+import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 
 class FakeChild extends EventEmitter implements ChildProcessLike {
   pid = 7
@@ -867,74 +866,6 @@ describe('answer-depth mode → request mapping (D4)', () => {
     expect(joined).toContain('--cache-ram 0')
     expect(joined).toContain('--device none')
     expect(joined.indexOf('--cache-ram')).toBeLessThan(joined.indexOf('--device none'))
-    await runtime.stop()
-  })
-})
-
-// ---- Factory selector -----------------------------------------------------------
-
-describe('createSelectingRuntimeFactory', () => {
-  const opts: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 2048 }
-
-  function mkMock(): ModelRuntime {
-    return { modelId: 'mock', start: async () => {}, stop: async () => {}, health: async () => ({ healthy: true, message: '', port: null }), chatStream: async function* () {} }
-  }
-  function mkLlama(): ModelRuntime {
-    return { modelId: 'llama', start: async () => {}, stop: async () => {}, health: async () => ({ healthy: true, message: '', port: 1 }), chatStream: async function* () {} }
-  }
-
-  it('falls back to the mock when no binary is on the drive', () => {
-    const selected: string[] = []
-    const factory = createSelectingRuntimeFactory({
-      rootPath: '/root',
-      resolveBin: () => null,
-      modelExists: () => true,
-      makeMock: mkMock,
-      makeLlama: mkLlama,
-      onSelect: (kind) => selected.push(kind)
-    })
-    expect(factory(opts).modelId).toBe('mock')
-    expect(selected).toEqual(['mock'])
-  })
-
-  it('falls back to the mock when the binary exists but weights are absent', () => {
-    const factory = createSelectingRuntimeFactory({
-      rootPath: '/root',
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => false,
-      makeMock: mkMock,
-      makeLlama: mkLlama
-    })
-    expect(factory(opts).modelId).toBe('mock')
-  })
-
-  it('selects the real llama runtime only when binary AND weights are present', async () => {
-    let binSeenPath = ''
-    let llamaMade = false
-    const factory = createSelectingRuntimeFactory({
-      rootPath: '/root',
-      resolveBin: () => '/bin/llama-server',
-      modelExists: (p) => {
-        binSeenPath = p
-        return true
-      },
-      makeMock: mkMock,
-      makeLlama: () => {
-        llamaMade = true
-        return mkLlama()
-      },
-      // Keep this Phase-10 selection test GPU-free (the ladder is covered in
-      // tests/unit/runtime-ladder.test.ts); the probe seam avoids a real spawn.
-      gpu: { probeDevices: async () => [] }
-    })
-    // Since Phase 15 the factory returns the LADDER runtime (the caller's modelId);
-    // the real llama runtime is built lazily inside start().
-    const runtime = factory(opts)
-    expect(runtime.modelId).toBe('m')
-    expect(binSeenPath).toBe('/w.gguf')
-    expect(llamaMade).toBe(false)
-    await runtime.start()
-    expect(llamaMade).toBe(true)
     await runtime.stop()
   })
 })

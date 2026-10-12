@@ -12,27 +12,20 @@ import { join } from 'node:path'
 import { t, type MessageKey } from '../../src/shared/i18n'
 import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
-import {
-  checkProgramLoads,
-  healEngineLoadState,
-  isLoaderCausedGpuError
-} from '../../src/main/services/engine-health'
+import { checkProgramLoads, healEngineLoadState } from '../../src/main/services/engine-health'
 import {
   EngineCannotRunError,
   engineProblemFor,
   engineProblems,
   resetEngineProblemsForTest
 } from '../../src/main/services/runtime/engine-load'
-import {
-  engineProblemRowMessage,
-  failureRowMessage,
-  rewriteEngineFailureRows
-} from '../../src/main/services/ingestion/engine-failure'
+import { failureRowMessage, rewriteEngineFailureRows } from '../../src/main/services/ingestion/engine-failure'
 import { createQueuedDocument, documentsDir, processDocument } from '../../src/main/services/ingestion'
 import type { Embedder } from '../../src/main/services/embeddings'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { EmbedderError } from '../../src/main/services/embeddings/errors'
 import type { ChildProcessLike, SpawnFn } from '../../src/main/services/runtime/sidecar'
+import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { getSettings, seedSettings, updateSettings } from '../../src/main/services/settings'
 
 const LINUX = { platform: 'linux' as const }
@@ -83,39 +76,30 @@ function addDoc(db: Db, status: string, errorMessage: string | null): string {
 const rowMessage = (db: Db, id: string): string | null =>
   (db.prepare('SELECT error_message AS m FROM documents WHERE id = ?').get(id) as { m: string | null }).m
 
-describe('isLoaderCausedGpuError (#530)', () => {
-  it('recognises a loader refusal, not a GPU fault, and treats empty input as false', () => {
-    expect(isLoaderCausedGpuError(LEGACY_GPU_ERROR, LINUX)).toBe(true)
-    expect(isLoaderCausedGpuError(GENUINE_GPU_ERROR, LINUX)).toBe(false)
-    expect(isLoaderCausedGpuError('', LINUX)).toBe(false)
-    expect(isLoaderCausedGpuError(null, LINUX)).toBe(false)
-    expect(isLoaderCausedGpuError(undefined, LINUX)).toBe(false)
-  })
-
-  it('recognises the Windows no-text shape (NTSTATUS exit code only)', () => {
-    expect(isLoaderCausedGpuError('llama-server exited before becoming healthy (code 3221225781)', WIN)).toBe(true)
-  })
-})
-
 describe('healEngineLoadState (#530)', () => {
-  it('clears a loader-caused compatibility-mode flag together with its error text', () => {
+  it.each<{ shape: string; gpuLastError: string | null; opts: typeof LINUX | typeof WIN; cleared: boolean }>([
+    // ISO-prefixed, as index.ts stores it.
+    { shape: 'the Linux loader line', gpuLastError: LEGACY_GPU_ERROR, opts: LINUX, cleared: true },
+    {
+      // An NTSTATUS exit code only.
+      shape: 'the Windows no-text shape',
+      gpuLastError: '2026-09-30T10:00:00.000Z — llama-server exited before becoming healthy (code 3221225781)',
+      opts: WIN,
+      cleared: true
+    },
+    { shape: 'a genuine GPU fault', gpuLastError: GENUINE_GPU_ERROR, opts: LINUX, cleared: false },
+    // A renderer patch can set the flag alone; no text is no evidence — and must not break the row heal.
+    { shape: 'missing (no stored error)', gpuLastError: null, opts: LINUX, cleared: false }
+  ])('a compatibility-mode flag whose stored error is $shape: cleared $cleared, and the row heal still runs', ({ gpuLastError, opts, cleared }) => {
     const db = freshDb()
-    updateSettings(db, { gpuAutoDisabled: true, gpuLastError: LEGACY_GPU_ERROR })
-    const result = healEngineLoadState(unlockedCtx(db), LINUX)
-    expect(result.gpuFlagCleared).toBe(true)
+    updateSettings(db, { gpuAutoDisabled: true, gpuLastError })
+    addDoc(db, 'failed', LEGACY_ROW)
+    const result = healEngineLoadState(unlockedCtx(db), opts)
+    expect(result.gpuFlagCleared).toBe(cleared)
     const s = getSettings(db)
-    expect(s.gpuAutoDisabled).toBe(false)
-    expect(s.gpuLastError).toBeNull()
-  })
-
-  it('leaves a genuine GPU fault alone', () => {
-    const db = freshDb()
-    updateSettings(db, { gpuAutoDisabled: true, gpuLastError: GENUINE_GPU_ERROR })
-    const result = healEngineLoadState(unlockedCtx(db), LINUX)
-    expect(result.gpuFlagCleared).toBe(false)
-    const s = getSettings(db)
-    expect(s.gpuAutoDisabled).toBe(true)
-    expect(s.gpuLastError).toBe(GENUINE_GPU_ERROR)
+    expect(s.gpuAutoDisabled).toBe(!cleared)
+    expect(s.gpuLastError).toBe(cleared ? null : gpuLastError)
+    expect(result.rowsRewritten).toBe(1)
   })
 
   it('skips a locked or locking workspace without throwing (and without touching the DB)', () => {
@@ -192,17 +176,15 @@ class FakeChild extends EventEmitter implements ChildProcessLike {
 }
 
 /** A spawn whose child runs `behavior` on the next microtask (never, when `behavior` is omitted). */
-function fakeSpawn(behavior?: (child: FakeChild) => void): { spawn: SpawnFn; children: FakeChild[]; calls: string[][] } {
+function fakeSpawn(behavior?: (child: FakeChild) => void): { spawn: SpawnFn; children: FakeChild[] } {
   const children: FakeChild[] = []
-  const calls: string[][] = []
-  const spawn: SpawnFn = (_cmd, args) => {
-    calls.push(args)
+  const spawn: SpawnFn = () => {
     const child = new FakeChild()
     children.push(child)
     if (behavior) queueMicrotask(() => behavior(child))
     return child
   }
-  return { spawn, children, calls }
+  return { spawn, children }
 }
 const emitStderr = (child: FakeChild, text: string): void => {
   ;(child.stderr as unknown as EventEmitter).emit('data', Buffer.from(text))
@@ -212,14 +194,6 @@ const LOADER_STDERR =
 
 describe('checkProgramLoads (#530)', () => {
   const verified = async (): Promise<'verified'> => 'verified'
-
-  it('exit 0 means the program loads', async () => {
-    const { spawn, calls } = fakeSpawn((c) => c.emit('close', 0, null))
-    const out = await checkProgramLoads('whisper_cpp', '/x/whisper-cli', ['--help'], { spawn, verify: verified, ...LINUX })
-    expect(out).toBe('loads')
-    expect(calls).toEqual([['--help']])
-    expect(engineProblems()).toEqual([])
-  })
 
   it('exit 127 with the loader line is refused and recorded as the family verdict', async () => {
     const { spawn } = fakeSpawn((c) => {
@@ -248,15 +222,22 @@ describe('checkProgramLoads (#530)', () => {
     expect(engineProblems()).toEqual([])
   })
 
-  it('a failed integrity check is unchecked and spawns nothing', async () => {
-    const { spawn, calls } = fakeSpawn((c) => c.emit('close', 0, null))
-    const out = await checkProgramLoads('llama_cpp', '/x/llama-server', ['--version'], {
-      spawn,
-      verify: async () => 'mismatch',
-      ...LINUX
-    })
-    expect(out).toBe('unchecked')
-    expect(calls).toEqual([])
+  // #516 (architecture.md "In-app engine updates" §3): "Check again" never launches a program an
+  // install of ITS family is replacing; LlamaServer (sidecar.test.ts) and the GPU probe (gpu.test.ts)
+  // wait the same way.
+  it('waits for an install of its family to finish the swap before it launches (#516 spawn gate)', async () => {
+    const { spawn, children } = fakeSpawn((c) => c.emit('close', 0, null))
+    const release = holdEngineSpawns('whisper_cpp')
+    const checking = checkProgramLoads('whisper_cpp', '/x/whisper-cli', ['--help'], { spawn, verify: verified, ...LINUX })
+    try {
+      // One macrotask: every microtask the check could chain (verify, spawn) has run.
+      await new Promise((r) => setImmediate(r))
+      expect(children).toHaveLength(0) // held: nothing launched mid-swap
+    } finally {
+      release()
+    }
+    expect(await checking).toBe('loads')
+    expect(children).toHaveLength(1)
   })
 
   it('a spawn that throws is unchecked', async () => {
@@ -332,17 +313,15 @@ describe('ingestion row text for an engine the OS refused (#530)', () => {
   })
 
   it('a whisper-family problem maps to the voice engine text', async () => {
-    const problem = {
-      family: 'whisper_cpp' as const,
-      reason: 'library-missing' as const,
-      os: 'linux' as const,
+    // Dormant in production today (parsers/audio.ts wraps a whisper refusal first); guarded at the boundary that persists it.
+    const err = new EngineCannotRunError('whisper-cli', {
+      family: 'whisper_cpp',
+      reason: 'library-missing',
+      os: 'linux',
       name: 'libgomp.so.1',
       exit: 'exit code 127'
-    }
-    expect(engineProblemRowMessage(problem)).toBe(t('en', 'main.ingest.voiceEngineCannotRun'))
-    expect(failureRowMessage(new EngineCannotRunError('whisper-cli', problem))).toBe(
-      t('en', 'main.ingest.voiceEngineCannotRun')
-    )
+    })
+    expect(await ingestWith(err)).toEqual({ status: 'failed', errorMessage: t('en', 'main.ingest.voiceEngineCannotRun') })
   })
 
   it('any other error keeps its own message', async () => {

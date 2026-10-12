@@ -61,7 +61,7 @@ const STATUS_CODE_INTEGRITY_BLOCKED = 0xc0e90002
  * (llama.cpp, whisper.cpp and kiwix-tools — measured 2026-10-01) and none of the drive's engine
  * folders carries them; they come with the separately installed Redistributable.
  */
-export const VC_RUNTIME_DLLS = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'] as const
+const VC_RUNTIME_DLLS = ['msvcp140.dll', 'vcruntime140.dll', 'vcruntime140_1.dll'] as const
 
 /** Libraries the ENGINES ship next to their programs — a missing one means damaged engine files. */
 const ENGINE_OWN_LIBRARY = /^(?:lib)?(?:llama|ggml|mtmd|whisper)[\w.+-]*\.(?:so|dylib|dll)\b/i
@@ -99,7 +99,7 @@ function defaultSystemDllExists(dll: string): boolean {
 }
 
 /** How the program ended, for Diagnostics: `exit code 127`, `exit code 0xC0000135`, `signal SIGABRT`. */
-export function describeExit(exitCode: number | null, signal: string | null): string {
+function describeExit(exitCode: number | null, signal: string | null): string {
   if (exitCode != null) {
     const unsigned = exitCode >>> 0
     return unsigned > 0xffff ? `exit code 0x${unsigned.toString(16).toUpperCase()}` : `exit code ${exitCode}`
@@ -264,8 +264,6 @@ export function isEngineCannotRunError(err: unknown): err is EngineCannotRunErro
 
 interface StoredProblem {
   problem: EngineProblem
-  /** Monotonic report sequence — "Check again" asks whether a report landed after it began. */
-  seq: number
   /**
    * The program the OS refused, when the reporter knows it. A healthy start of THAT program clears
    * the verdict (an intermittent block that went away); a different program of the same family
@@ -277,7 +275,6 @@ interface StoredProblem {
 const FAMILY_ORDER: EngineProblemFamily[] = ['llama_cpp', 'whisper_cpp']
 const problems = new Map<EngineProblemFamily, StoredProblem>()
 const listeners = new Set<() => void>()
-let reportSeq = 0
 /**
  * #532: the program each family's engine install put on the drive THIS session — a fresh copy,
  * checked against its pinned SHA-256 before it was unpacked. A "its own files are damaged" verdict
@@ -312,7 +309,7 @@ export function reportEngineProblem(problem: EngineProblem, binPath?: string): v
   const afterInstall =
     problem.reason === 'files-damaged' && binPath != null && freshlyInstalled.get(problem.family) === binPath
   const stored: EngineProblem = afterInstall ? { ...problem, afterInstall: true } : problem
-  problems.set(problem.family, { problem: stored, seq: ++reportSeq, ...(binPath ? { binPath } : {}) })
+  problems.set(problem.family, { problem: stored, ...(binPath ? { binPath } : {}) })
   if (!previous || !sameProblem(previous.problem, stored)) notifyListeners()
 }
 
@@ -355,17 +352,6 @@ export function engineProblemFor(family: EngineProblemFamily): EngineProblem | n
   return problems.get(family)?.problem ?? null
 }
 
-/** The current report sequence — capture it before a re-check, compare with {@link engineProblemReportedSince}. */
-export function engineProblemSeq(): number {
-  return reportSeq
-}
-
-/** Did a report for this family land after `seq` was captured? */
-export function engineProblemReportedSince(family: EngineProblemFamily, seq: number): boolean {
-  const stored = problems.get(family)
-  return stored != null && stored.seq > seq
-}
-
 /** Subscribe to verdict changes (a new or different problem, or a cleared one). Returns the unsubscribe. */
 export function onEngineProblemsChanged(listener: () => void): () => void {
   listeners.add(listener)
@@ -379,5 +365,4 @@ export function resetEngineProblemsForTest(): void {
   problems.clear()
   listeners.clear()
   freshlyInstalled.clear()
-  reportSeq = 0
 }

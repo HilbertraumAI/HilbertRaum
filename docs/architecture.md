@@ -1235,7 +1235,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   routes through the §5.3 `onGpuCrash` auto-fallback (gated on `backend === 'gpu'`);
   (3) the CODE-2 cancel + CODE-3 latch reach the window — `stop()` kills the inner server, the
   warm-up stream errors, and the ladder settles as `cancelledStartError()` (never a rung walk or
-  mock commit); (4) a non-cancel warm-up failure never fails the start (the server IS healthy —
+  mock commit) (the latch itself is manager-level and pinned window-independently in
+  `runtime-manager.test.ts` "quit-path lifecycle"); (4) a non-cancel warm-up failure never fails the start (the server IS healthy —
   warn via `onWarmup`, proceed to ready; a crash still reports via `onUnexpectedExit`); (5) an
   overall `WARMUP_TIMEOUT_MS` (90 s ≈ 3× the worst #109 measurement) aborts a pathological
   warm-up and proceeds — the CB-5 idle watchdog rides along inside it; (6) the request is
@@ -1875,7 +1876,10 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
       **Tests.**
       - `runtime-manager.test.ts` "liveness of the running model (#599)": the watchdog mark and what
-        clears it, the probe and its cache, Restart, `stopCrashed`, the start request.
+        clears it, the probe, its 10 s cache and a probe outliving a switch, Restart, `stopCrashed`,
+        the start request; and
+        "GPU mid-session crash auto-fallback through the real manager (REL-1)": the GPU fallback once,
+        then the CPU crash budget through the real `forceRestart`/`stopCrashed`.
       - `runtime-ladder-exit-wiring.test.ts` "a CPU-mode crash restarts the model once per session":
         the real sidecar exit wiring through the ladder and the restart policy.
       - `core-model-ipc.test.ts` "liveness of the running model (#599)": the status read probes, a start
@@ -3830,8 +3834,7 @@ adds is the safety machinery:
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
   The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful, totalMb, budgetMb, memoryClass }`
   (`gpuUsefulForProfile`: ≥ `USABLE_VRAM_MB` — 5120 MiB since #321 — AND not integrated → the conservative `classifyProfile`
-  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
-  `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name`,
+  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, so the Performance screen rates a device by the same definition — `name`,
   `totalMb` and `budgetMb` are one device's, the BUDGET device `nextStartMemory` selects, PR #308
   audit decision 9); `benchmark.ts` itself keeps **zero
   `child_process`**. `prepareFirstBenchmark` (the cheap half of the first-run benchmark, PR #303
@@ -4084,16 +4087,16 @@ persisting nothing; a healthy model starts on rung 1.
 > CODE-2 cancel before the latched start still settles as cancelled, never as the mock.
 >
 > **Clearing rule.** "Try GPU again" is about the graphics card and does **not** touch this latch
-> (pinned in `gpu-ipc.test.ts`). What re-arms a model is evidence that the *file* or the
+> (pinned in `performance-gpu.test.ts`). What re-arms a model is evidence that the *file* or the
 > *runtime* changed: **"Verify checksum"** on that model (`models:verify` → `clearModelLoadLatch`;
 > a re-verified file is a new file — also the way to retry after a transient cause such as RAM
 > pressure), a **completed in-app download** of that model (`ctx.onModelInstalled` → the same,
-> before the translator rule's early return), a **chat-engine install** (`EngineDownloadManager.onInstalled`
+> as the handler's first statement), a **chat-engine install** (`EngineDownloadManager.onInstalled`
 > for `llama_cpp` → `clearModelLoadLatches`; a new binary may load what the old one could not —
 > a kiwix-only install clears nothing), and an **app restart** (module state). A device verdict
 > never latches the model, so a persisted `gpuAutoDisabled` still re-walks from rung 2 as before.
 > Tests: `runtime-ladder.test.ts` "#372", `core-model-ipc.test.ts` (verify), `engine-consent-ipc.test.ts`
-> (engine install), the `ctx.onModelInstalled` source-text pin, `gpu-ipc.test.ts` (Try GPU again).
+> (engine install), the `ctx.onModelInstalled` source-text pin, `performance-gpu.test.ts` (Try GPU again).
 
 **#530 amendment — a program the OS loader refused is neither verdict.**
 - **The defect.** A refused `llama-server` (Linux without `libgomp1`, Windows without the Visual
@@ -4270,8 +4273,10 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
   `gpuAutoDisabled` for a killed attempt (not a device fault), and (d) refuses the rung-4 mock fallback
   for a cancelled start. Queue semantics are unchanged — the queued stop still runs after the start
   settles; the start just settles *promptly* now. Never a bare timeout race (would orphan the loading
-  child). Pinned in `runtime-manager.test.ts` ("quit-path lifecycle") + `runtime-ladder.test.ts`
-  ("ladder start cancellation").
+  child). Pinned in `runtime-manager.test.ts` ("quit-path lifecycle": "stop() mid-start kills the loading
+  child…" covers (a)–(d) over a real `LlamaServer`) + `runtime-ladder.test.ts` ("ladder start
+  cancellation": a stop before the walk begins; the warm-up window and the #312 / #372 verdict cancels
+  sit in their own blocks).
 - **CODE-11 — crash-exit child reap (rider).** A hard `uncaughtException` skips will-quit's awaited
   sidecar stops entirely, and on Windows the children survive `process.exit(1)`. Every sidecar spawn
   funnels through `LlamaServer` or `WhisperCliTranscriber`; both now register/deregister their live
@@ -4495,7 +4500,7 @@ measured values before release notes claim anything.)
 `gpuUsefulForProfile(devices)`: some device has **≥ `USABLE_VRAM_MB`** AND `!looksIntegrated(name)`.
 Conservative by design — an iGPU reporting 16 GB of *shared* RAM must never bump a laptop's
 profile; a false negative only costs a too-small model recommendation. The regex lives in
-`shared/gpu-rules.ts` (re-exported by `runtime/gpu.ts`; fixture-tested, covers Windows + RADV APU
+`shared/gpu-rules.ts` (fixture-tested, covers Windows + RADV APU
 names, Meteor-Lake Arc and, since #320, the bare `Intel(R) Graphics`). **The floor is 5,120 MiB
 since 2026-09-07** (issue #321, owner decision; 6,144 before): every 6 GB laptop card the project
 has measured reports below 6,144 on Vulkan — GTX 1660 SUPER 5,746, RTX 4050 Laptop 5,921, RTX 3060
@@ -5079,6 +5084,11 @@ voice engine was missing.
 Tests:
 - `assets.test.ts`: the version-order table, the relation (the pin in another backend is current).
 - `spawn-gate.test.ts`: hold, wait, release, bound.
+- `sidecar.test.ts` "waits for an engine install to finish its swap before it spawns (#516 spawn
+  gate)": the LlamaServer spawn site (all five llama sidecars) waits on the gate; `gpu.test.ts` (same
+  title) the `--list-devices` probe, and `engine-health.test.ts` "waits for an install of its family to
+  finish the swap before it launches (#516 spawn gate)" the "Check again" launch. The whisper-cli
+  spawn site has no such row yet (#656).
 - `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
   `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
   still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.
@@ -8278,7 +8288,7 @@ was subsumed by F16 (Phase 4).
 | **T1** (Med) | 5 | **closed** — the LlamaServer **unit** suite couldn't exercise SIGTERM-ignore→SIGKILL escalation (its `FakeChild.kill()` exits on ANY signal, so `stop()` always settled on the "exited" branch). New `sidecar.test.ts` test with a **stubborn child** (records each signal, dies only on SIGKILL) asserts `signals == [undefined,'SIGKILL']`. Teeth: revert the line-576 gate `this.exited` → `child.killed` → SIGKILL dropped → reds | "Test-enforcement seams" (T1) |
 | **T2** (Med) | 5 | **closed** — the resident-cache lock-PURGE (RAG-6 SECURITY requirement) was proven only at the unit tier, never that the lock IPC *calls* it. `workspace-ipc.test.ts` now seeds a real resident map, locks, and asserts `purgeResidentVectors` fired against the LIVE db (spy delegates to the real impl, shared `caches`). Teeth: drop the purge call from the lock handler → spy 0× → reds | "Test-enforcement seams" (T2) |
 | **T6** (Low) | 5 | **closed (de-flake)** — the GPU-probe timeout test awaited a real 20 ms `setTimeout` (a TEST-1-family wall-clock flake). Converted to fake timers (`vi.advanceTimersByTimeAsync`, the combine-signals idiom) with an injected trivial `verify`; the kill-on-timeout assertion is preserved. Teeth: neuter the timeout `child.kill('SIGKILL')` → `child.killed` stays false → reds | "Test-enforcement seams" (T6) |
-| **T7** (Low) | 5 | **closed (de-flake)** — the privacy-guard snapshot poll was an iteration-capped `for(i<50){sleep(5)}` (TEST-1 sibling). Converted to `vi.waitFor` (the gpu-ipc idiom) — re-polls until the run settles, no fixed cap. The no-secret-in-snapshot assertions are preserved. (The optional `vision-runtime.test.ts` real-timer copies were left as-is — converting them needs the fakeClock seam, out of scope for a quick nit) | "Test-enforcement seams" (T7) |
+| **T7** (Low) | 5 | **closed (de-flake)** — the privacy-guard snapshot poll was an iteration-capped `for(i<50){sleep(5)}` (TEST-1 sibling). Converted to `vi.waitFor` (the picker-seams idiom) — re-polls until the run settles, no fixed cap. The no-secret-in-snapshot assertions are preserved. (The optional `vision-runtime.test.ts` real-timer copies were left as-is — converting them needs the fakeClock seam, out of scope for a quick nit) | "Test-enforcement seams" (T7) |
 | **T8** (Low) | 5 | **closed** — the crash-fallback test counted a monkey-patched `stop()` wrapper (`made[0].stops===1`), which still holds if `stop()` stops reaching the child kill (orphan). `runtime-manager.test.ts` now also pins the REAL reap on observable child state: a final `mgr.stop()` + `children[1].child.killed===true` (the LIVE restarted child is genuinely killed). **DIVERGED from the audit's literal "crashed child killed===true"** — the crashed child already `exited`, so `stop()` correctly early-returns before any kill (its `killed` stays false; asserting true would red on correct code). Teeth: early-return `stop()` before the kill → the live child's `killed` stays false → reds | "Test-enforcement seams" (T8) |
 | **T3** (Med) | 4 | **verified subsumed** — `ipc-lock-coverage.test.ts` (F16) drives `registerRagIpc` against a locked ctx with NO exemptions, so `rag:ask` is enumerated and asserted to reject with the localized lock copy. No separate Phase-5 test added | §30 (F16); "Test-enforcement seams" (T3) |
 | **T9** (Low, nit) | 1/5 | **partially closed** — invoice negative line totals / Gutschrift/Rabatt were pinned in Phase 1; the AES-GCM **truncated (length-reduced) ciphertext** case is added at the `crypto.ts` unit tier (`crypto.test.ts`, one assertion — distinct from the existing bit-flip cases). The `BANK_EXTRACTOR_VERSION` tautological-tripwire and the mock-embedder score-band nits are left as accepted | "Test-enforcement seams" (T9); arch §8 (Phase 1 T9) |
@@ -11433,6 +11443,9 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   proves the refusal is genuinely the hash mismatch, not an always-refuse artefact. Teeth: drop the
   `verifyBinary`/`verify` call at a seam → the spawn proceeds and the refusal test reddens
   (verified: LlamaServer resolves instead of rejecting, the probe's spawn count is 1, whisper proceeds).
+  The 2026-10 runtime-ladder test campaign added the fourth seam (the #530 "Check again" engine check,
+  `checkProgramLoads`) and the `ok` / `skip-legacy` positive controls, retired the injected-verdict
+  `LlamaServer` copies, and removed `LlamaServer`'s `verifyBinary` option: it always calls the real verifier.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
@@ -11509,13 +11522,14 @@ carries the one-line disposition for each; the detail and teeth:
   test awaited a real 20 ms `setTimeout` against a never-exiting child — a TEST-1-family wall-clock flake. It
   now drives the probe's own kill-timeout through `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(20)` (the
   `combine-signals.test.ts` idiom), with `verify` injected as a trivial resolver so only the timeout path is
-  under fake-timer control (no real fs/microtask racing the timer; the verify path has its own test). The
+  under fake-timer control (no real fs/microtask racing the timer; the verify path is pinned through the real
+  verifier in `binary-verify-spawn.test.ts`). The
   assertion is preserved (probe resolves `[]` on timeout AND the child is killed). Teeth: neuter the timeout's
   `child.kill('SIGKILL')` → `child.killed` stays false → reds.
 - **T7 — privacy-guard snapshot poll, de-flaked to `vi.waitFor`
   (`tests/integration/skills-privacy-guard.test.ts`, converted in place).** The old `for(i<50 &&
   running){sleep(5)}` was a structural TEST-1 sibling (bounded iterations × a fixed sleep over mutable state).
-  It now re-polls via `vi.waitFor` (the `gpu-ipc.test.ts` idiom) until the run settles, no fixed cap; the
+  It now re-polls via `vi.waitFor` (the `picker-seams.test.ts` idiom) until the run settles, no fixed cap; the
   no-secret-in-snapshot assertions are preserved. (The optional redundant real-timer copies in
   `vision-runtime.test.ts` were left as-is — converting them needs the fakeClock injection seam, beyond a quick
   nit.)
@@ -11593,8 +11607,10 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   vitest runs with DEV true, so the PERF-5 memo test (`DocumentsScreen.test.tsx`, 48 green) still observes
   the bumps. No production behaviour change (the exported Map stays an empty no-op in prod).
 - **DX-5 — the sidecar crash → auto-fallback WIRING is pinned end-to-end
-  (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proves the
-  ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama — never that
+  (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proved the
+  ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama (that unit
+  test was retired by the 2026-10 runtime-ladder test campaign; this file now owns both the GPU and the CPU
+  route) — never that
   the real `LlamaServer` wires its child's `'exit'` event to that callback. The new test drives the REAL
   `createLlamaRuntime`→`LlamaServer` (only spawn/fetch/port injected, the e5/reranker/vision gated-child
   style), starts it to healthy on a GPU-reporting probe (backend `'gpu'`), then emits a REAL `'exit'`
@@ -14535,7 +14551,8 @@ model through **five** lanes: chat/RAG, doc tasks, skill runs, the benchmark, an
   every existing call site passes through it with zero call-site churn.
 - `RuntimeChatOptions.lane` (`'in-app'` default / `'external'`) means an external request never
   pre-empts itself, and in-app entry always wins.
-- `isGenerating()` / `isExternallyBusy()` **fail closed**: no active runtime ⇒ busy. That single
+- `isExternallyBusy()` **fails closed**: no active runtime ⇒ busy (`isGenerating()` is the plain
+  any-lane count; it does not). That single
   rule covers the whole start window including the warm-up generation, which streams against the
   inner rung runtime while `active()` is still null.
 - Counter discipline: increment as the first act of the generator body, decrement in `finally`,
@@ -14664,7 +14681,7 @@ modes; zero CORS headers anywhere; streaming and non-streaming happy paths; the 
 mapping incl. `Retry-After`; pre-emption closing without `[DONE]`; counted-byte body cap over a
 chunked body; the drain-timeout reclaiming a slot; lock and quit killing the listener first;
 rotation aborting in-flight streams; the gate counting all lanes on both the mock and ladder
-paths with `isGenerating()` failing closed; the counter surviving never-iterated and
+paths with `isExternallyBusy()` failing closed; the counter surviving never-iterated and
 throws-before-yield generators; the TOCTOU probe; a **no-content sentinel** driven through the
 success and failure paths and grepped out of every log, console stream, error body, and status
 object; and hostile wire input — a slow-loris header phase cut off **by the server itself**
@@ -15530,7 +15547,7 @@ probe before spawning (sub-second after the first call, hard-capped at 10 s, nev
 the very next rung reuses the same cached answer. Every other model keeps the concurrent
 probe-alongside-load behavior untouched.
 
-Three refusals, all of which **skip** the rung (no spawn, no failure, no GPU blame):
+Four refusals, all of which **skip** the rung (no spawn, no failure, no GPU blame):
 
 1. **No probed device** — the measured gain is a full-offload GPU result.
 2. **Not enough free VRAM** — one device must report the weight's own bytes plus
@@ -15541,6 +15558,9 @@ Three refusals, all of which **skip** the rung (no spawn, no failure, no GPU bla
    summed across cards: a multi-device split with a draft head is unmeasured.
 3. **Weight size unknown** — a failed file stat means the VRAM check cannot be made. Refuse
    rather than guess.
+4. **Device probe gave no answer** — its 10 s bound (#380) or an engine the OS refused (#530): the
+   VRAM headroom cannot be established, so unknown answers no (never the #380 load-log label, which
+   only names a start after the fact).
 
 ### §5 Failure handling: never let a speed-up cost the GPU
 

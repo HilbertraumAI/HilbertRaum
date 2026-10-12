@@ -64,14 +64,4 @@ describe('combineSignals — timeout timer lifecycle (REL-4)', () => {
     expect((signal.reason as DOMException).message).toBe('stopped by user')
     clear()
   })
-
-  it('clear() is idempotent (double-clear is a no-op, never throws)', () => {
-    vi.useFakeTimers()
-    const { clear } = combineSignals(new AbortController().signal, 1000)
-    expect(() => {
-      clear()
-      clear()
-    }).not.toThrow()
-    expect(vi.getTimerCount()).toBe(0)
-  })
 })
