@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-12 — the closed 2026-10-03 #560 app-scheme entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #646 entry). Its record is unchanged:
+`architecture.md` "App scheme" (#560); its residuals (macOS, an AppImage run) are carried by the #560/#562 platform-round entry, still in the preamble. Citations of the form
+"BUILD_STATE 2026-10-03 #560 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-03 — **#560 — the app's pages load from `hilbertraum://app/`, and the packaged exe turns `GrantFileProtocolExtraPrivileges` off (`fix/560-app-protocol`).**
+On `file://`, `'self'` matched every local file: a script could read any file and run a planted one (measured). Allowlist file server
+(`app-protocol.ts`), `standard` + `secure` only, CSP + nosniff on every response, exact-page navigation, local API refuses the app's origin.
+Packaged after-run 22/22, all reads + 20 traversal vectors refused; first paint unchanged. Owner: the 4 UI prefs reset once. Record: `architecture.md` "App scheme" (#560). Open: macOS, an AppImage run._
+
 ## 2026-10-11 — the closed 2026-10-03 OCR-rasterizer-CSP entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-11 (preamble budget, making room for the #641 entry). Its record is unchanged:
