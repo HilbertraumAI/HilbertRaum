@@ -917,8 +917,15 @@ export class TranslationRuntime {
     if (this.starting && this.startingDevice === 'auto') {
       await waitAtMost(this.starting.catch(() => undefined), YIELD_START_WAIT_MS)
     }
+    // A soft kill already under way (the idle teardown, #605's) still holds the card until the
+    // child exits — the chat start must not size itself while it does.
+    if (this.idleTeardownPromise && this.lastStart?.device === 'auto') {
+      await this.idleTeardownPromise.catch(() => undefined)
+    }
     const server = this.server
     if (server == null || this.lastStart?.device !== 'auto' || this.stopped || this.tearingDown) return
+    // A GPU-posture start that put nothing on the card (a machine without one) holds nothing to give.
+    if (this.lastStart.gpuLayers === 0) return
     log.info('Translation sidecar leaves the graphics card for a chat model start')
     await this.softTeardown(server).catch(() => undefined)
   }

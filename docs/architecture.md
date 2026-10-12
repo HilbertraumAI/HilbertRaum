@@ -4589,14 +4589,19 @@ measured one when this session has it. (4) Apple Silicon gets no rule of its own
   the session latch. GPU ('auto') only if the budget device's free figure minus the chat share
   holds `estimateGraphicsNeedMib` of the translation model; otherwise `--device none`. 'auto',
   llama.cpp deciding as before, when there is nothing to judge: no stored probe for this machine,
-  no usable discrete card, a locked workspace. 'cpu' while a chat start is in flight or pending.
+  no usable discrete card, a locked workspace. 'cpu' while a chat start is in flight, pending, or
+  still in its weight check (`startRequested`, #599).
   The translation manifest carries measured `host_mapped_weights_mib` (787.69) and
   `estimated_context_cache_gib` (0.75), so its estimate reads 8,892 MiB against 7,811 measured.
   `gpuOccupied()` reports the posture the start in flight CHOSE, since the gate can change mid-start.
 - **Chat first** — `RuntimeManager`'s `beforeStart` hook, awaited by every start (Start, a switch,
   the auto-start, Restart, the crash restarts) after the old runtime stopped and before the spawn,
-  calls `Translator.yieldGpu()` when the chat start may use the card. That stops a sidecar resident
-  on the card the way #605 stops a hung one (`softTeardown`): the window in flight fails with an
+  calls `Translator.yieldGpu()` on a machine whose card the gates share out (`cardIsShared`: GPU on,
+  a usable discrete device or Apple's Metal pool on record). A Stop or a lock arriving meanwhile
+  cancels the chat start before it spawns (`stopRequests`), never after a whole load; the
+  "Starting…" clock starts after the hook. `yieldGpu` waits for a soft kill already under way,
+  leaves a sidecar that put no layers on the card alone, and stops one resident on the card the
+  way #605 stops a hung one (`softTeardown`): the window in flight fails with an
   ordinary stream error that both consumers retry once, and the retry cold-starts after the kill —
   on the processor, because the gate sees the chat start. A GPU cold start already in flight is let
   finish (at most 30 s, `YIELD_START_WAIT_MS`) and then stopped, never aborted: an abort reaches a

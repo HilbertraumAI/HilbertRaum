@@ -1695,6 +1695,49 @@ describe('#473 — the headroom gate and yieldGpu', () => {
     await off.stop()
   })
 
+  it('yieldGpu waits for a soft kill already under way — the card is not free until the child exits', async () => {
+    const { spawn, children } = gatedSpawn()
+    const timer: { fire: (() => void) | null } = { fire: null }
+    const idleClock = {
+      set(cb: () => void) {
+        timer.fire = cb
+        return { clear: () => undefined, unref: () => undefined }
+      }
+    }
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl, idleClock })
+    await rt.translate(translateOpts)
+    children[0].hold = true
+    timer.fire?.() // the idle teardown: the child is told to exit and has not yet
+    let yielded = false
+    const done = rt.yieldGpu().then(() => (yielded = true))
+    await sleep(20)
+    expect(yielded).toBe(false)
+    children[0].release()
+    await done
+    expect(yielded).toBe(true)
+    await rt.stop()
+  })
+
+  it('yieldGpu leaves a GPU-posture sidecar that put nothing on the card (0 layers) alone', async () => {
+    const calls: Array<{ args: string[] }> = []
+    const children: FakeChild[] = []
+    const spawn = (_c: string, args: string[]): ChildProcessLike => {
+      calls.push({ args })
+      const child = new FakeChild()
+      const stderr = new EventEmitter()
+      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
+      queueMicrotask(() => stderr.emit('data', 'load_tensors: offloaded 0/49 layers to GPU\n'))
+      children.push(child)
+      return child
+    }
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl })
+    await rt.translate(translateOpts)
+    expect(rt.deviceStatus()?.gpuLayers).toBe(0)
+    await rt.yieldGpu()
+    expect(children[0].killed).toBe(false)
+    await rt.stop()
+  })
+
   it('yieldGpu lets a GPU cold start in flight finish, then stops it — never aborts it', async () => {
     const { spawn, children } = fakeSpawn()
     const { fetchImpl, health } = parkedHealthFetch()

@@ -122,18 +122,26 @@ export function resolveTranslationDevicePosture(
   translationModelId: string
 ): TranslationHeadroomVerdict {
   if (settings == null) return 'auto'
-  const probeDevices = eligibleDevicesFor(settings, machineKey(detectSystem()))
-  if (!Array.isArray(probeDevices)) return 'auto'
-  const budgetMib = graphicsBudgetMib(primaryUsefulDevice(probeDevices))
+  const budgetMib = graphicsBudgetMib(primaryUsefulDevice(eligibleDevicesFor(settings, machineKey(detectSystem()))))
   if (budgetMib == null) return 'auto'
   const translation = findManifestById(manifestsDir, translationModelId)
   if (!translation) return 'auto'
-  if (occupancy.chatStartBusy) return 'chat-starting'
+  if (occupancy.chatStartBusy || occupancy.chatStartRequested) return 'chat-starting'
   const needMib = estimateGraphicsNeedMib(translation)
   if (budgetMib < needMib) return 'too-large'
   const chatShareMib = occupancy.committedModelId == null ? 0 : committedChatShareMib(manifestsDir, occupancy)
   if (chatShareMib == null) return 'beside-chat'
   return budgetMib - chatShareMib >= needMib ? 'auto' : 'beside-chat'
+}
+
+/**
+ * #473 ruling 2's scope: does this machine have a card the gates share out — GPU on, and a usable
+ * discrete device (or Apple's Metal pool) on record for it? The chat-first hook yields only then;
+ * a machine without one has nothing on a card to give back (an integrated GPU is out of scope).
+ */
+export function cardIsShared(settings: AppSettings | null): boolean {
+  if (settings == null || settings.gpuMode !== 'auto' || settings.gpuAutoDisabled) return false
+  return primaryUsefulDevice(eligibleDevicesFor(settings, machineKey(detectSystem()))) != null
 }
 
 /** The translation gate as the sidecar's `gpuHeadroom` callback, from the reranker callbacks' own
@@ -193,6 +201,12 @@ export interface RerankerOccupancySnapshot {
    */
   committedContextTokens?: number | null
   committedBackend?: 'gpu' | 'cpu' | null
+  /**
+   * #473: a chat start is requested but not yet in the manager (#599's pre-start window — the
+   * weight check). Read by the TRANSLATION gate only, so a translation cold start does not load
+   * onto the card moments before the chat start takes it back; the reranker's posture is unchanged.
+   */
+  chatStartRequested?: boolean
 }
 
 /**
@@ -322,7 +336,8 @@ export function snapshotRerankerOccupancy(
     chatStartBusy: startingModelId != null || pendingModelSwitches.count > 0,
     translationOccupied: getTranslator()?.gpuOccupied?.() ?? false,
     committedContextTokens: active?.contextWindow?.() ?? null,
-    committedBackend: active?.backend === 'gpu' || active?.backend === 'cpu' ? active.backend : null
+    committedBackend: active?.backend === 'gpu' || active?.backend === 'cpu' ? active.backend : null,
+    chatStartRequested: runtimeManager.status?.().startRequested === true
   }
 }
 

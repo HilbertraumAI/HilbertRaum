@@ -1470,4 +1470,17 @@ describe('the beforeStart hook (#473)', () => {
     await expect(mgr.start(A)).rejects.toThrow()
     expect(order).toEqual([])
   })
+
+  it('a Stop or a lock during the hook cancels the start before it spawns — never a whole load first', async () => {
+    // Until the factory runs, `stop()` has no starting runtime to cancel; without this, a lock that
+    // arrived during the hook (or the old model's stop) waited out a full load of the new model.
+    let stopped: Promise<void> | null = null
+    const { mgr, order } = hookHarness(async (m) => {
+      stopped = m.stop() // queued behind this start, so not awaited here
+    })
+    await expect(mgr.start(A)).rejects.toThrow(/stopped before it began/)
+    await stopped
+    expect(order).toEqual([])
+    expect(mgr.active()).toBeNull()
+  })
 })

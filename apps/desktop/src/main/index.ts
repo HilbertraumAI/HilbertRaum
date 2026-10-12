@@ -69,6 +69,7 @@ import { setAnswerSpeedObserver } from './ipc/chat-stream'
 import { machineKey } from './services/performance'
 import { detectSystem } from './services/benchmark'
 import {
+  cardIsShared,
   createPendingModelSwitchCounter,
   createRerankerCallbacks,
   createTranslationHeadroom
@@ -428,6 +429,14 @@ function initBackend(): void {
   // and the posture-callback factory below (reads only its count). See its own doc comment
   // (`rag/device-posture.ts`) for why it is a counter, never a boolean.
   const pendingModelSwitches = createPendingModelSwitchCounter()
+  // The settings row, or null while locked — the sidecar gates and the chat-first hook below.
+  const readSettingsOrNull = (): AppSettings | null => {
+    try {
+      return getSettings(workspace.requireDb())
+    } catch {
+      return null
+    }
+  }
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
@@ -515,9 +524,9 @@ function initBackend(): void {
       // #473 ruling 2: a chat start takes the graphics card first. Every start (Start, a switch, the
       // auto-start, Restart, the crash restarts) stops a translation sidecar resident on the card
       // before it spawns; the window in flight is retried, on the processor while this start runs.
-      // Skipped when this chat start cannot use the card.
+      // Skipped when this machine has no card the gates share out (`cardIsShared`).
       beforeStart: async () => {
-        if (gpuSignals.getGpuMode() !== 'auto' || gpuSignals.getGpuAutoDisabled()) return
+        if (!cardIsShared(readSettingsOrNull())) return
         await ctx?.translator?.yieldGpu?.()
       }
     }
@@ -532,13 +541,6 @@ function initBackend(): void {
   // permanently-null or stale instance once a mid-session download lands (B4, the Wave 8
   // analysis). `getSettings` keeps the SAME locked-workspace fallback (→ null) the old inline
   // posture closure used.
-  const readSettingsOrNull = (): AppSettings | null => {
-    try {
-      return getSettings(workspace.requireDb())
-    } catch {
-      return null
-    }
-  }
   const { devicePosture: rerankerDevicePosture, requestCeiling: rerankerRequestCeiling } = createRerankerCallbacks({
     runtimeManager: runtime,
     pendingModelSwitches,

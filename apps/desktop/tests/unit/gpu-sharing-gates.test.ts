@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'vitest'
 import { join } from 'node:path'
 import {
+  cardIsShared,
   createPendingModelSwitchCounter,
   createTranslationHeadroom,
   resolveRerankerDevicePosture,
@@ -97,6 +98,7 @@ describe('resolveTranslationDevicePosture — card only if translation fully fit
     ['a 24 GB card beside the 9B chat model', withProbe(RTX_3090), chat(), 'auto'],
     ['a chat start in flight (ruling 2: chat takes the card first)', withProbe(RTX_3090), chat({ chatStartBusy: true }), 'chat-starting'],
     ['an 8 GB card, too small even alone', withProbe(GTX_1070_TI), chat({ committedModelId: null }), 'too-large'],
+    ['a chat start requested, still in its weight check (#599)', withProbe(RTX_3090), chat({ chatStartRequested: true }), 'chat-starting'],
     ['the chat model running on the processor', withProbe(RTX_3080_TI), chat({ committedBackend: 'cpu' }), 'auto'],
     ['the hybrid box: the iGPU\'s 48 GB never counts', withProbe(UHD_770, RTX_3080_TI), chat(), 'beside-chat'],
     ['no stored probe for this machine (nothing to judge)', { ...DEFAULT_SETTINGS }, chat(), 'auto'],
@@ -165,5 +167,18 @@ describe('createTranslationHeadroom — the composed callback', () => {
     expect(gate(TRANSLATION)).toBe('auto') // the 9B moved to the processor
     pending.increment()
     expect(gate(TRANSLATION)).toBe('chat-starting') // a switch is pending
+  })
+})
+
+describe('cardIsShared — where the chat-first hook yields (#473 ruling 2)', () => {
+  it.each([
+    ['a discrete card on record', withProbe(RTX_3080_TI), true],
+    ['Apple\x27s Metal pool', withProbe({ id: 'MTL0', name: 'Apple M2 Pro', totalMb: 21845, freeMb: 21845 }), true],
+    ['an integrated GPU only (nothing on a card to give back)', withProbe(UHD_770), false],
+    ['no stored probe', { ...DEFAULT_SETTINGS, gpuMode: 'auto' as const }, false],
+    ['the GPU switched off', { ...withProbe(RTX_3080_TI), gpuMode: 'off' as const }, false],
+    ['a locked workspace', null, false]
+  ])('%s → %s', (_label, settings, expected) => {
+    expect(cardIsShared(settings)).toBe(expected)
   })
 })
