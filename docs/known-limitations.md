@@ -1163,11 +1163,12 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   ordinary answer with no heads-up. One inside another question ("Welche Frist gilt für alle
   Mieter?") gets the labelled answer. These shapes are also recognised by word lists, so a few still
   miss:
-  - Still listed: "Zählen alle Zahlungen zur Miete?" ("zählen" doubles as the request "Zählen Sie …")
-    and a claim without a verb ("Alle Zahlungen pünktlich eingegangen?").
-  - "Do you have all the deadlines?" gets an ordinary answer rather than the list.
+  - Still listed: "Zählen alle Zahlungen zur Miete?" ("zählen" doubles as the request "Zählen Sie …"),
+    a claim without a verb ("Alle Zahlungen pünktlich eingegangen?"), and "Can we have all the payments
+    refunded?".
   - The written answer instead of the list: a request whose "all" comes after another phrase ("Kannst
-    du mir ab dem 1. Mai alle Zahlungen zeigen?"), and one that opens with a verb the list lacks.
+    du mir ab dem 1. Mai alle Zahlungen zeigen?"), one that opens with a verb the list lacks, and one on
+    a new line after other text.
   - A "how much" question about an amount still gets every amount ("How much is the monthly fee?"). A
     sum over "all" ("Wie hoch ist die Summe aller Zahlungen?") gets the written answer, not the list.
     Both are #649.

@@ -29,8 +29,8 @@
 
 ## 2026-10-12 — the closed 2026-10-03 #563 print-from-memory entry retired verbatim (preamble budget)
 
-Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #644 entry). Its record is unchanged:
-`architecture.md` EP-1 "#563 amendment". Citations of the form "BUILD_STATE 2026-10-03 #563 entry" now resolve here.
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #644 entry). Its open residual (the smoke on the
+stock binary) moved to its record, `architecture.md` EP-1 "#563 amendment" ("Open"). Citations of the form "BUILD_STATE 2026-10-03 #563 entry" now resolve here.
 Text below is byte-identical to what was removed.
 
 _2026-10-03 — **#563 — evidence-pack PDFs print from memory: `hilbertraum://print/<token>`, no `.print.tmp.html` beside the export (`fix/563-print-from-memory`).**
