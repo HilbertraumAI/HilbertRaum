@@ -29,6 +29,10 @@ export const DISPLAY_MAP_KEYS: readonly MessageKey[] = [
   // #530: the OS refused to start the AI engine / the voice engine (no library named).
   'main.ingest.engineCannotRun',
   'main.ingest.voiceEngineCannotRun',
+  // #634: the search model timed out, could not start, or failed (chosen by kind, never its text).
+  'main.ingest.searchModelTimeout',
+  'main.ingest.searchModelCannotStart',
+  'main.ingest.searchModelFailed',
   'main.ingest.imageNeedsOcr',
   'main.ingest.imageNoText',
   'main.ingest.imageOcrFailed',

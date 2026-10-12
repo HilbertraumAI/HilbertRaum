@@ -27,6 +27,127 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-12 — the closed 2026-10-03 #560/#562 platform-round entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #649 entry). Its record is
+`packaging.md` "Platform verification", which now carries its open item (the owner's Mac run of `verify-mac-build.sh`).
+Citations of the form "BUILD_STATE 2026-10-03 #560/#562 platform entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-03 — **#560/#562 platform round: the real AppImage passes, the macOS build is inspected only (`docs/platform-verification-560-562`).** `release.yml` dispatched on
+`fix/562`: Linux AppImage in `ubuntu:24.04` 13/13 + the fuse probes (no asar integrity on Linux, as designed); mac `.app` wire, Info.plist hash, ad-hoc
+signature OK, not run. New: `scripts/verify-mac-build.sh` + `lib/packaged-app-probe.mjs` (owner Mac run open). Found: dictionary fetch (Linux; Windows per
+language) + WPAD (#567, docs corrected). Signed mac builds likely need the `audio-input` entitlement. Record: `packaging.md` "Platform verification"._
+
+## 2026-10-12 — the closed 2026-10-03 #563 print-from-memory entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #644 entry). Its open residual (the smoke on the
+stock binary) moved to its record, `architecture.md` EP-1 "#563 amendment" ("Open"). Citations of the form "BUILD_STATE 2026-10-03 #563 entry" now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-03 — **#563 — evidence-pack PDFs print from memory: `hilbertraum://print/<token>`, no `.print.tmp.html` beside the export (`fix/563-print-from-memory`).**
+One-shot token page in `app-protocol.ts` (`PrintPages`, cap 4, `no-store`, the pack CSP from `window-security.ts`); AUD-15/16/17-print-source code + test deleted
+as moot. Measured: real smoke 11/11 incl. an 8.4 MB pack, one request per print, no pack text on disk; packaged export before/after; no time cost.
+Record: `architecture.md` EP-1 "#563 amendment". Open: the smoke on the stock binary (Smart App Control refused it that day)._
+
+## 2026-10-12 — the closed 2026-10-03 #562 fuses entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #643 entry). Its record is unchanged:
+`architecture.md` "Electron fuses" (#562). Citations of the form "BUILD_STATE 2026-10-03 #562 entry" now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-03 — **#562 — packaged fuses: RunAsNode + `--inspect` off, asar integrity + only-asar on; NODE_OPTIONS stays on (`fix/562-electron-fuses`).** Wire
+`001011001`. Owner: fuse 2 stays on (off drops `NODE_EXTRA_CA_CERTS`; the engine download then failed behind Norton). Packaged OCR no longer follows
+`ELECTRON_RENDERER_URL`. Measured before/after: smoke 22/22, robustness 4/4, upgrade 11/11, tamper matrix, first paint unchanged. Record:
+`architecture.md` "Electron fuses" (#562). Open: `app.asar.unpacked` unchecked; Linux/macOS legs (platform PR); fuse 2 needs an OS-trust-store downloader (#564)._
+
+## 2026-10-12 — the closed 2026-10-03 #560 app-scheme entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #646 entry). Its record is unchanged:
+`architecture.md` "App scheme" (#560); its residuals (macOS, an AppImage run) are carried by the #560/#562 platform-round entry, still in the preamble. Citations of the form
+"BUILD_STATE 2026-10-03 #560 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-03 — **#560 — the app's pages load from `hilbertraum://app/`, and the packaged exe turns `GrantFileProtocolExtraPrivileges` off (`fix/560-app-protocol`).**
+On `file://`, `'self'` matched every local file: a script could read any file and run a planted one (measured). Allowlist file server
+(`app-protocol.ts`), `standard` + `secure` only, CSP + nosniff on every response, exact-page navigation, local API refuses the app's origin.
+Packaged after-run 22/22, all reads + 20 traversal vectors refused; first paint unchanged. Owner: the 4 UI prefs reset once. Record: `architecture.md` "App scheme" (#560). Open: macOS, an AppImage run._
+
+## 2026-10-11 — the closed 2026-10-03 OCR-rasterizer-CSP entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-11 (preamble budget, making room for the #641 entry). Its record is unchanged:
+`architecture.md` DEP-6 §11. Citations of the form "BUILD_STATE 2026-10-03 OCR rasterizer entry" now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pdfjs-in-page`).** The hidden OCR window ran pdf.js in a
+`file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
+has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
+pages + prod header. Measured packaged: 18/18 smoke, 0 worker targets, 0 loopback. Record: `architecture.md` DEP-6 §11. Suite 7,920→7,923._
+
+## 2026-10-08 — the closed 2026-10-02 streamdown 2.6 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-08 (preamble budget, making room for the #605 entry). Its record is unchanged:
+`architecture.md` DEP-6 §9; the #548–#551 entry it was stacked on was retired on 2026-10-07 (below). Citations of the form
+"BUILD_STATE 2026-10-02 streamdown 2.6 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-02 — **#550 follow-up — streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on the #548–#551 PR).** The mermaid chain (110 lockfile entries)
+leaves the tree, and with it DEP-3's ~40 `files:` negations; a guard keeps mermaid out of the production graph. 2.6's new 400/300 px caps on code blocks and
+tables need Tailwind (not loaded): a tall table drew 1,128 px over what followed, so both are off. Also fixed: since 2026-06-30 every multi-line code block
+ran its lines together (Tailwind `block` again); a `styles.css` rule restores them. Real-app measured. Record: `architecture.md` DEP-6 §9._
+
+## 2026-10-07 — the closed 2026-10-02 #548–#551 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #637 entry). Its record is unchanged:
+`architecture.md` DEP-6 §8; the streamdown 2.6 change it deferred landed as its own entry (DEP-6 §9). Citations of the form
+"BUILD_STATE 2026-10-02 #548–#551 entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-02 — **#548–#551 — the DEP-6 residuals (`fix/dep6-residuals-548-551`).** #548: the packaging gates check the negations where electron-builder
+packs each package (its own hoister replayed on the lockfile; it names a real `app.asar`'s 226 package directories exactly), and the notices must name exactly that set.
+#549: both load races fixed by where the clock starts and which timer trips, not by a bigger budget. #550: `lib` ES2024 in both programs; taking streamdown 2.6 stays its own change.
+#551: the Documents list on react-virtual 3.14.13 measures identical to 3.14.4 (CDP A/B). The packaged exe: the #551 entry above. Record: `architecture.md` DEP-6 §8._
+
+## 2026-10-07 — the closed 2026-10-01 #530 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #635 entry). Its record is unchanged:
+`architecture.md` "Engine load failures — design record"; its residuals (a stock Windows desktop run, macOS unmeasured) stay in
+`known-limitations.md` ("What the AI engine needs from the system"). Citations of the form "BUILD_STATE 2026-10-01 #530 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-01 — **#530 — an engine the OS refuses to start is named as such, never as a GPU, model or memory fault (`fix/530-engine-load-failure`).**
+One classifier (`runtime/engine-load.ts`: Linux ld.so text, Windows NTSTATUS + a System32 VC++ check, macOS dyld) at every spawn site, a
+session verdict (never persisted) fed by the startup probe and every refusal, `AppStatus.engineProblems`, `engine:recheck` ("Check again")
+with a full latch re-arm, and a heal at unlock (loader-caused `gpuAutoDisabled`, raw-path document rows). Owner rulings: no libgomp/VC++
+bundling, option C, kiwix out of scope. Records: `architecture.md` "Engine load failures", design-guidelines §11.17, data-contracts.
+Real-app verified (Linux container w/o libgomp1 + heal by apt; Windows en/de). Open: a stock desktop run; macOS unmeasured (reinstall button: done, #532)._
+
+## 2026-10-07 — the closed 2026-10-01 #527 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #634 entry). Its record is unchanged:
+`architecture.md` "Voice dictation" #527 amendment; its one residual (no prebuilt Linux voice engine is pinned yet) stays in
+`known-limitations.md` ("mac/linux drives need a source-built whisper-cli"). Citations of the form "BUILD_STATE 2026-10-01 #527 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-01 — **#527 — the greyed-out mic names the missing piece and its button opens the AI Model screen on the speech model
+(`fix/527-dictation-hint-cause`).** Cause per drive state (`TranscriberMissing`: model / engine / both / `engine-unsupported` = no engine
+build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
+screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
+`data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
+
+## 2026-10-07 — the closed 2026-10-02 DEP-6 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-07 (preamble budget, making room for the #582 entry). It was
+closed with nothing open: its residuals (#548–#551, PR #552) and the streamdown 2.6 follow-up (PR #553) are merged; its record is unchanged:
+`architecture.md` "Dependabot triage — design record (wave DEP-6)". Citations of the form "BUILD_STATE 2026-10-02 DEP-6 entry"
+now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (PRs #535, #536, #537 merged).**
+PR A, lockfile-only through the pinned npm 11.6.2 with no collateral (undici 6.29.0 / 7.30.0, brace-expansion ×7, fast-uri 3.1.8, dompurify
+3.4.16), cleared alerts 96, 97 and 102–123: all dev toolchain or not shipped, and the app's own `fetch` is Electron's undici 7.29.1. PR B
+moves vitest 3.2.6 → 4.1.11 (alerts 91/92/94; `npm audit` 0). Two 4.x changes the migration guide omits would have weakened the suite: the
+full-suite guard's `onFinished` hook is gone (now `onTestRunEnd`) and `vi.spyOn` returns a live spy with its history. Also `maxWorkers`, a
+30-minute CI job cap, coverage `include`, and a `tinyexec` asar leak closed. PR C adds `.github/dependabot.yml` (§5 18(a)). After #536 no
+alert is open (91–123 `fixed`) and `npm audit` is 0. Dependabot's first production group (#545: pdf.js 6.3 + six) lands via a replacement PR:
+pdf.js's never-loaded Liberation fonts (GPL v2, not OFL) leave the Kit (owner ruling), argon2id gets an explicit `maxmem`. Record: `architecture.md`
+"Dependabot triage — design record (wave DEP-6)" §7; its §3 holds the residuals._
+
 ## 2026-10-06 — the closed 2026-10-02 #554 / #555 entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-06 (preamble budget, making room for the #581 entry). It was

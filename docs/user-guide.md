@@ -511,7 +511,13 @@ your files.
    contain the answer, the app says so rather than guessing.
    A short honesty line under the answer says how much it drew on — e.g. *"Based on 3 of
    12 sections"* — so you can tell an answer rested on a few passages, not the whole
-   document. (For full-document coverage, build a deep index — see *Summaries* below.)
+   document. When the chat answers from **one** document that is short enough for the AI model
+   to read at once — about 3 pages with the smallest models, about 7 with most, more if you
+   raise the context size — the app gives the model the whole document instead, and the line
+   says *"Covers the whole document"*. (For longer documents, a deep index lets questions that
+   list or count dates, amounts, people and organisations, or obligations cover every section,
+   and lets *"Summarize this document"* draw on all of it — see *Summaries* below. Other
+   questions about a longer document are answered from the most relevant passages.)
 
 **Ask only chosen documents.** Under the message box, a **📄 Answering from:** chip always shows
 what answers come from — the document's name when one file is in scope, **your whole library — N
@@ -632,7 +638,18 @@ the app reads the whole document once (a one-time, can-be-minutes background pas
 builds a layered summary. Afterwards the Preview shows a **coverage meter** — *"Covers the whole
 document"* vs *"the most relevant passages"* — and a depth selector with three tiers: **Overview**,
 **Section by section**, and **Detailed**. The deep index can pause for a chat and resume on its own,
-so you are never locked out while it runs.
+so you are never locked out while it runs. In *Ask my documents*, the deep index also answers
+questions that list or count dates, amounts, people and organisations, or obligations from every
+section (*"List every deadline"*, *"How many payments are there?"*), and, when the chat has just that
+one document, a summary question (*"Summarize this report"*) from its section summaries. Other questions
+about a long document, such as *"Explain what this letter says"* or a yes/no question like *"Does the
+notice period apply to all tenants?"*, are answered from the most relevant passages with or without
+it; a document short enough to read at once is read whole either way. A question about one amount
+(*"How much is the monthly fee?"*) is an ordinary question too. A question that adds amounts up
+(*"How much did I pay in fees?"*) over one document short enough to read at once is read whole, and
+the answer starts with a heads-up: the AI model did the arithmetic itself and can miss or miscount
+items, so check the total against the sources. Over a longer document with a deep index, you get
+every amount instead, with a note that the list cannot add them up.
 
 A few honest notes:
 
@@ -826,7 +843,9 @@ AI model anything, and nothing touches the network — it is you, the answer, an
   available; nothing is dropped.
 - Evidence cards show what the model was actually given. The workspace is honest about the
   difference: for a whole-document analysis the cards are **provenance** (sections the answer
-  drew on), *not* sentence-by-sentence citations — and the workspace says so. You can link a
+  drew on), *not* sentence-by-sentence citations — and the workspace says so. (A short document
+  the model read whole in one go is the exception: the model saw each section under its source
+  marker, so those cards keep their markers and the answer's markers link to them.) You can link a
   source to an item yourself; such links are always labeled **Reviewer linked**, never "cited
   by the answer". Remember: *a citation shows where information came from — it does not by
   itself prove the answer is correct.*

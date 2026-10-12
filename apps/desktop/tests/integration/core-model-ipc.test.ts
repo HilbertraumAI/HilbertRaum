@@ -647,6 +647,66 @@ describe('registerModelIpc', () => {
     })
   })
 
+  // #634: the search model's start-failure copy says "choose Check all model files — then try
+  // again". The failed start is latched, so "then try again" works only if something re-arms it:
+  // a completed full check that found the file intact does (a damaged file is re-armed by its
+  // re-download instead); an ordinary visit's lazy check verifies only the chat model and does not.
+  describe('a full model-file check re-arms the search model (#634)', () => {
+    function searchModelCtx(damaged: boolean): { ctx: AppContext; resetStartFailure: ReturnType<typeof vi.fn> } {
+      const root = mkdtempSync(join(tmpdir(), 'hilbertraum-rearm-'))
+      const manifestsDir = join(root, 'model-manifests')
+      mkdirSync(manifestsDir, { recursive: true })
+      mkdirSync(join(root, 'models', 'embeddings'), { recursive: true })
+      const rel = 'models/embeddings/e5-test.gguf'
+      writeFileSync(join(root, ...rel.split('/')), damaged ? 'truncated' : 'weight-body-e5')
+      writeFileSync(
+        join(manifestsDir, 'e5-test.yaml'),
+        stringify({
+          id: 'e5-test',
+          display_name: 'E5 test',
+          family: 'e5',
+          role: 'embeddings',
+          format: 'gguf',
+          runtime: 'llama_cpp',
+          license: 'mit',
+          size_on_disk_gb: 0.25,
+          recommended_min_ram_gb: 1,
+          recommended_ram_gb: 1,
+          recommended_context_tokens: 512,
+          dimensions: 384,
+          local_path: rel,
+          sha256: createHash('sha256').update('weight-body-e5').digest('hex'),
+          license_review: { status: 'approved', reviewed_by: 'test', reviewed_at: '2026-10-07', notes: '' }
+        })
+      )
+      const resetStartFailure = vi.fn()
+      const ctx = {
+        db: seededDb(),
+        manifestsDir,
+        paths: { rootPath: root, configPath: bogusConfigDir() },
+        isDev: false,
+        runtime: { activeModelId: () => null },
+        embedder: { id: 'e5-test', dimensions: 384, embed: async () => [], resetStartFailure }
+      } as unknown as AppContext
+      return { ctx, resetStartFailure }
+    }
+
+    it.each([
+      { pass: 'a completed full check, file intact', damaged: false, lazy: undefined, rearmed: 1 },
+      { pass: 'a completed full check, file damaged', damaged: true, lazy: undefined, rearmed: 0 },
+      { pass: "an ordinary visit's lazy check", damaged: false, lazy: true, rearmed: 0 }
+    ])('$pass → re-armed $rearmed time(s)', async ({ damaged, lazy, rearmed }) => {
+      const { ctx, resetStartFailure } = searchModelCtx(damaged)
+      reg(ctx)
+      clearChecksumCache()
+      const { result } = await invoke(handlers, IPC.listModels, lazy, lazy ? undefined : 'run-634')
+      if (lazy === undefined) {
+        expect((result as ModelInfo[]).find((m) => m.id === 'e5-test')?.state).toBe(damaged ? 'checksum_failed' : 'installed')
+      }
+      expect(resetStartFailure).toHaveBeenCalledTimes(rearmed)
+    })
+  })
+
 
   it('startRuntime throws on an unknown model id', async () => {
     const ctx = {

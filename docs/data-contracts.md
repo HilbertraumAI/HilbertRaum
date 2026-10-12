@@ -125,6 +125,14 @@ classifies as a load refusal is cleared (both fields) at every session start. No
 engine install put on the drive (session-only, like the verdict; the UI then offers no second
 reinstall). The engine-downloader additions are listed under the downloader below. No new
 channel, no schema change.
+#634 (`rag-design.md` §12.4 "#634 amendment"): `documents.error_message` gained three
+persist-canonical English values for a search-model failure — `main.ingest.searchModelTimeout`,
+`…searchModelCannotStart`, `…searchModelFailed` (exact match, display-map translated) — and a lock
+or quit that cut an embed off stores the existing `main.ingest.interrupted`. Rows that stored the
+embedder's raw failure before #634 ("The operation timed out.", "terminated", a start failure's
+stderr tail with the weight file's absolute path) are rewritten to them at every session start. A
+document question's `rag:ask` rejection carries the matching `main.chat.searchModel*` copy. No new
+channel, no schema change.
 Phase 38: `kind: 'ocr'` on the same doc-task channels (one PDF; the target must be
 scan-detected or already OCR'd; needs the OCR engine, not the chat runtime);
 `DocumentInfo` gained the DERIVED `scanDetected` flag + optional `ocr: DocumentOcrInfo`
@@ -1435,6 +1443,7 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   citations resolve by EXACT title match only when UNIQUE (0 or >1 ⇒ `identity:'unresolved'`,
   availability null — never guessed). `kind` from `coverage.mode` (`relevance`→
   `direct_excerpt`, `tree|capped`→`whole_document_provenance`, `extract`→`structured_record`;
+  since #643 `capped` + `labelledExcerpts` → `direct_excerpt`, labelled and auto-linked;
   NO stamp → `direct_excerpt` — the pre-D72 relevance fallback the renderer already uses,
   `answerMode:'unknown'` still recorded; a PRESENT-but-unrecognized mode — a workspace from
   a NEWER app, `parseCoverage` accepts any string — maps to the WEAKEST claim
@@ -1684,7 +1693,10 @@ AS-BUILT shapes; P5 was renderer/i18n-only — no shared-shape changes.
   **Deletion does NOT flip outdated** (spec §25.2/§28.7 letter: unavailability warning, not
   an overlay; §28.6's acknowledge gate is reserved for CHANGED content). Coverage compare =
   fixed semantic projection (mode/counts/treeStatus/treeLevels/tier/truncated/
-  unparsedChunks/fullyChunked) — `nodeIds` + unknown extras excluded (plumbing, not claims).
+  unparsedChunks/fullyChunked, and since #643 `labelledExcerpts` when it is set) — `nodeIds` +
+  unknown extras excluded (plumbing, not claims). `labelledExcerpts` canonicalizes only when
+  `true`: unset it is omitted, so every coverage stored before the field existed digests to the
+  same bytes and no acknowledgement lapsed (the AUD-19 pin still holds, now with the field set false).
   **That projection is a stored-data contract, and it is exhaustiveness-constrained (AUD-19).**
   Its canonical string is digested into the persisted fingerprint below, so changing *which*
   `CoverageInfo` fields it covers — or their order — lapses EVERY acknowledgement already

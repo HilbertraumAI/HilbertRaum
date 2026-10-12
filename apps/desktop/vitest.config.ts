@@ -1,6 +1,34 @@
 import { resolve } from 'node:path'
 import { defineConfig } from 'vitest/config'
+import { canonicalCase } from './path-casing'
 import { FullSuiteGuard, listTestFiles, parseShard, shardTestFiles } from './tests/full-suite-guard'
+
+// #646: refuse to run from a working directory (or a vitest CLI path) spelled in another letter
+// case than the file system's — `c:\work\…` for `C:\work\…`, which some Windows terminals hand
+// out. Unlike the build configs this cannot be repaired here: the fork's runner keeps the CLI's
+// spelling (`file:///c:/…/@vitest/runner`), while vitest canonicalises the setup files and Vite
+// the `node_modules` ids it resolves (`C:/…`), so a second runner instance loads, and every file
+// failed with "Vitest failed to find the current suite". Fail once, with the way out, instead.
+// The CLI path is checked only when it IS vitest's CLI: another launcher (an IDE extension's
+// worker, a script calling `startVitest`) has its own path, which says nothing about the runner's.
+const vitestCli = /[\\/]node_modules[\\/]vitest[\\/]vitest\.mjs$/i.test(process.argv[1] ?? '')
+  ? process.argv[1]
+  : undefined
+for (const [what, path] of [['working directory', process.cwd()], ['vitest CLI', vitestCli]] as const) {
+  const real = path === undefined ? path : canonicalCase(path)
+  if (real !== path) {
+    const cwd = canonicalCase(process.cwd())
+    const fix =
+      what === 'working directory'
+        ? `change to it first, e.g. ${process.platform === 'win32' ? 'PowerShell: Set-Location' : 'cd'} '${cwd}'`
+        : `start vitest through it, e.g. \`npm test\` or \`npx vitest\` from '${cwd}'`
+    throw new Error(
+      `Vitest cannot run from "${path}": the file system spells this ${what} "${real}", and ` +
+        `from a spelling in another letter case every test file fails (#646). Use the real ` +
+        `spelling: ${fix}.`
+    )
+  }
+}
 
 // Default environment is node (the bulk of the suite tests main-process services). Renderer
 // component tests opt into jsdom per-file with a `// @vitest-environment jsdom` docblock and

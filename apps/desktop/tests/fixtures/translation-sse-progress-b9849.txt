@@ -1,0 +1,33 @@
+: Captured llama-server SSE body — the previous pin b9849 (the Windows Vulkan release the app installed before #516,
+: llama-server.exe sha256 d6ae64cf…; still on drives that have not taken the engine update), forced to CPU with
+: --device none, with the same request body, argv and window as translation-sse-progress-b11146.txt (return_progress:true,
+: --threads 2 --batch-size 512 --ubatch-size 512 --parallel 1 --device none --chat-template gemma; the qwen3.5-9b-ud-q4kxl
+: STAND-IN, 1,022 prompt tokens). i7-8700 (DesktopDiT), 2026-10-08. Response headers at +10 ms. It pins that b9849 sends
+: the same per-batch prompt_progress frames and pings on /completion as b11146. TRUNCATED after the first token: the
+: rest of the answer is omitted, so the stream here ends without the final stop frame. Each `: +<ms> ms` line is the
+: arrival time of the socket read below it (ms after the request was sent; de-chunked, otherwise verbatim). These colon
+: lines are SSE comments (the reader ignores them), like the server's own `:` pings.
+: +11 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":0,"time_ms":0}}
+
+: +30299 ms
+:
+
+: +60621 ms
+:
+
+: +64388 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":510,"time_ms":64378}}
+
+: +94706 ms
+:
+
+: +124317 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":1018,"time_ms":124309}}
+
+: +125021 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":1022,"time_ms":125013}}
+
+: +125022 ms
+data: {"index":0,"content":"The","tokens":[760],"stop":false,"id_slot":-1,"tokens_predicted":1,"tokens_evaluated":1022}
+

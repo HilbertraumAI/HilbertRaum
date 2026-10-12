@@ -1,0 +1,84 @@
+: Captured llama-server SSE body — a WEDGED prefill on the pinned b11146 (the official Windows Vulkan release, forced to CPU
+: with --device none), the same request body, argv and window as translation-sse-progress-b11146.txt (return_progress:true;
+: --threads 2 --batch-size 512 --ubatch-size 512 --parallel 1 --device none --chat-template gemma; the qwen3.5-9b-ud-q4kxl
+: STAND-IN in the translation slot, 1,022 prompt tokens). i7-8700 (DesktopDiT), 2026-10-08. Right after the first batch's
+: progress frame (+80.3 s) the busiest llama-server thread was suspended (SuspendThread on one compute thread, never the
+: process): the compute loop stopped while the HTTP thread kept writing a `:` ping every ~30 s. The capture ends at +720 s,
+: past the 10-min compute budget, with the server still wedged; it was then resumed and killed. Each `: +<ms> ms` line is
+: the arrival time of the socket read below it (ms after the request was sent; de-chunked, otherwise verbatim). These
+: colon lines are SSE comments (the reader ignores them), like the server's own `:` pings.
+: +7 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":0,"time_ms":0}}
+
+: +30351 ms
+:
+
+: +60679 ms
+:
+
+: +80331 ms
+data: {"index":0,"content":"","tokens":[0],"stop":false,"id_slot":-1,"tokens_predicted":0,"tokens_evaluated":1022,"prompt_progress":{"total":1022,"cache":0,"processed":510,"time_ms":80325}}
+
+: +110626 ms
+:
+
+: +140880 ms
+:
+
+: +171158 ms
+:
+
+: +201465 ms
+:
+
+: +231744 ms
+:
+
+: +262015 ms
+:
+
+: +292305 ms
+:
+
+: +322592 ms
+:
+
+: +352858 ms
+:
+
+: +383127 ms
+:
+
+: +413433 ms
+:
+
+: +443714 ms
+:
+
+: +473994 ms
+:
+
+: +504302 ms
+:
+
+: +534590 ms
+:
+
+: +564842 ms
+:
+
+: +595100 ms
+:
+
+: +625418 ms
+:
+
+: +655664 ms
+:
+
+: +685908 ms
+:
+
+: +716146 ms
+:
+

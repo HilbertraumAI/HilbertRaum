@@ -2434,7 +2434,12 @@ both constants becomes `SAFE`.
   both postures. The per-window request timeout stays at the CPU-sized **45 min**
   (`DEFAULT_REQUEST_TIMEOUT_MS`): a ~2,000-token full window at the observed-worst ~1.1 tok/s is
   ~30 min, so 45 min never false-kills a live slow CPU decode while still bounding a true hang
-  (user cancel stays instant; on a GPU decode the bound is simply generous).
+  (user cancel stays instant; on a GPU decode the bound is simply generous). **#605 (2026-10-08):**
+  a hung sidecar now ends much sooner. The stream has liveness clocks: 2 min with no token, 10 min
+  with no progress per 512-token prefill batch, 2 min of total silence, and 3 min for the response
+  headers. The hung sidecar is restarted for the window's retry. The 45-min cap remains only for a
+  decode that is alive but too slow. The calibration is in `architecture.md`, translation record,
+  "#605 amendment".
 - **D9 (chat-during-translation relaxation) — KEEP serialization.** The co-residency measurement is
   the reason: translation ≈9.2 GiB + a resident chat + embedder already reaches ≈13.2 GiB with a 4B
   chat; a 12B chat (≈6.5 GiB) pushes the pair PAST a 16 GB machine. Letting chat DECODE during a

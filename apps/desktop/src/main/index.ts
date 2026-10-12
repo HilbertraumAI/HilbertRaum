@@ -757,6 +757,10 @@ function initBackend(): void {
     // BEFORE the translator rule below can return early (that rule is about a different slot).
     clearModelLoadLatch(modelId)
     if (!ctx) return
+    // #634: the search model downloaded again (the repair "Check all model files" offers for a
+    // damaged file) — re-arm its failed-start latch, so the row's "then try again" works without a
+    // lock/unlock. Same id: the embedder is built from this manifest; a mock embedder never matches.
+    if (modelId === ctx.embedder.id) ctx.embedder.resetStartFailure?.()
     // #497: BEFORE the translator refresh (a different slot), and never throwing — the
     // download manager swallows the whole hook, so a throw here would skip the refresh below.
     refreshTranscriberSlot(ctx)

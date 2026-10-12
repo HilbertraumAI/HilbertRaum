@@ -1054,8 +1054,19 @@ password recovery — are documented in
   even survived `suspend()`) for the session until lock/unlock. A bind-class start error is now
   excluded from the latch (`isBindRaceError`), so the next `embed()`/`rerank()` re-attempts on a
   fresh port. Residual: a GENUINE load fault still latches — for the embedder it clears on a
-  workspace lock/unlock (replace the weight file and retry); for the reranker it persists for the
+  workspace lock/unlock (replace the weight file and retry) and, since #634, when the search model
+  is downloaded again in the app (the repair "Check all model files" offers) or a completed "Check
+  all model files" finds its file intact (a file copied back outside the app, a transient cause);
+  for the reranker it persists for the
   session (reranking stays off, retrieval keeps the fused order) by design.
+- **A cancelled job's sidecar start keeps loading (#635, #637).** A Stop or cancel during a
+  sidecar's cold start ends the job at once, but not the start: the search model, the reranker, the
+  vision model or the translation model goes on loading for the next job, which joins it. A start
+  that lands with no job waiting is torn down by the idle timer like any idle sidecar: vision and
+  translation after their 2-minute window (the embedder and the reranker have no idle timer and
+  stay loaded, as after any question). Until then it holds its memory: up to ~10 GB for the
+  translation model. A lock or quit cancels the start at once (`rag-design.md` §12.4 "#635
+  amendment", `architecture.md` image-understanding record §6 "#637 amendment").
 - **The FTS5 index duplicates chunk text inside the workspace DB** (a self-contained table was
   chosen over external-content on `chunks`' implicit rowid, which VACUUM may renumber). Bounded by
   the 1 000-chunk/file cap; encrypted at rest with the same DB file.
@@ -1137,8 +1148,42 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   the real runtime — the remaining causes are a thinking model burning the token budget on
   reasoning and a reply cut off at the cap, and an explicit "Build deep index" re-run retries them. The "whole document" wording is
   shown only when every in-scope document is fully indexed (`fully_chunked`). An **unmapped/ad-hoc
-  "{X}"** (no precomputed type) is **not** answered as a complete list — it falls back to a labelled
-  relevance answer ("based on the most relevant passages"). v1 has no live full-scan for unmapped
+  "{X}"** (no precomputed type: "list all the abbreviations", "how many pages") is **not** answered
+  as a list — it gets an answer from the most relevant passages, led by a short heads-up ("…so it may
+  miss items") when those passages left part of the documents out (true since #641, 2026-10-11; before
+  that it got the unrelated `generic` table). One document that fits the model's window is read whole
+  instead (#643, next entry), so it gets no heads-up. An explain request is answered the same way even when it
+  names a typed thing ("Erkläre alle Fristen"). Both are recognised by vocabulary (EN + DE word lists
+  in `router.ts`), so an unusual phrasing can still miss. The rule errs towards the written answer: an
+  explain verb anywhere in the question ("List every clause that describes the deposit") and a list
+  typed only by "who" / "when" ("Wann muss ich alles bezahlen?") also get it, not the listing.
+  Since #644 (2026-10-12) "all / every / each" (alle / jede / sämtliche) asks for the list only at the
+  start of a request ("Alle Fristen?", "Kannst du mir alle Fristen nennen?"). A yes/no question that
+  carries one ("Gilt die Frist für alle Mieter?", "Does the contract list all the deadlines?") gets an
+  ordinary answer with no heads-up. One inside another question ("Welche Frist gilt für alle
+  Mieter?") gets the labelled answer. These shapes are also recognised by word lists, so a few still
+  miss:
+  - Still listed: a claim without a verb ("Alle Zahlungen pünktlich eingegangen?") and "Can we have all
+    the payments refunded?". ("Zählen alle Zahlungen zur Miete?" gets an answer since #649.)
+  - The written answer instead of the list: a request whose "all" comes after another phrase ("Kannst
+    du mir ab dem 1. Mai alle Zahlungen zeigen?"), one that opens with a verb the list lacks, and one on
+    a new line after other text.
+  - Since #649 a "how much" question about one amount ("How much is the monthly fee?") gets an ordinary
+    answer. A question about a list the document holds ("Welche Fristen stehen auf der Liste?") and a
+    "belongs to" question ("Welche Kosten zählen zu den Nebenkosten?", "Which fees count as operating
+    costs?") get an ordinary answer too. A sum ("How much did I pay in fees?", "Wie hoch ist die Summe
+    aller Zahlungen?") is read whole when the chat has one document short enough for that. Otherwise it
+    gets every amount, led by a note that the list cannot add them up. Also recognised by word lists:
+    - A total asked with no sum word and no pay verb in the past ("What did I pay in fees?", "How much
+      do I pay per month?") gets an ordinary answer.
+    - A question about a total the document states ("What is the total amount due on the invoice?") is
+      treated as a sum. Over a longer document with a deep index it gets every amount, not the total.
+    - "Wie viel Zahlungen gibt es?" (a count) gets an ordinary answer.
+    - A list noun such as "the full list" or "price list", or one that comes before the question word,
+      still lists ("In der Liste fehlt eine Frist, welche?").
+  - A listing shows one kind of item: "Liste alle Termine und Beträge auf" lists the dates.
+
+  v1 has no live full-scan for unmapped
   types and does not auto-run the extract pass at import (it is started on request) — both are later
   phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
   **The listing cannot categorize or sum — and since issue #54 (2026-07-17) it says so; since #80
@@ -1155,6 +1200,28 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   never changes the answer text. Plain "list / how many" asks are unchanged (0 extra calls). A
   generic no-skill categorized-sums path (tabular routing over a generic row extractor) remains
   deferred (architecture.md result-tables record §5/§6).
+  **A total over one short document is the AI model's own arithmetic (#649, 2026-10-12).** Since
+  #649 a sum or categorize ask over ONE document that fits the model's window is read whole instead of
+  listed, with or without a deep index. The answer leads with a heads-up that the model works out totals
+  itself. The heads-up is needed: with the whole one-page statement in its prompt,
+  qwen3-4b-instruct-q4 summed its four fees wrong twice, at 5,45 and 8,35 EUR for 13,85; a lease's
+  three monthly amounts it added up right. Nothing checks the total. For a bank statement, the
+  bank-statement skill adds up exactly. A chat with several documents, or a longer document, keeps the
+  listing above.
+- **Only a single document is read whole, and only when it fits the model's window (#643 / #642,
+  2026-10-12; rag-design §14.5).** A document question over ONE fully indexed document that fits the
+  launched context window (about 3 pages at the 4B's 4,096 tokens, about 7 at 8,192) hands the model
+  the whole document in order instead of the best-matching passages. Everything else is still answered
+  from the most relevant passages: a chat with several documents (there is no multi-document whole
+  read), a chat with knowledge packs selected (the whole read never searches a pack), small talk, a
+  legacy document indexed before `fully_chunked` existed (re-index it), and a document longer than the
+  window. A summary question over such a longer document uses its deep index when one is built (#642);
+  without one it is still answered from the most relevant passages, with no hint to build the index,
+  and a summary question over several documents never uses the deep index. Raising the context size
+  raises what counts as "fits": on a CPU a 32k window can mean a ~20,000-token prompt, and minutes of
+  prefill, for every question about a 30-page document. An off-topic question about a document read
+  whole now costs a model call (the model says the document does not cover it) where the passage search
+  could answer "not found" without one. Answers given before #643 keep their old source display.
 - **A `kind:tool` skill answers from its whole-document tools — or refuses, never partially
   (full-doc-skills, D44–D49; architecture.md "Skills — design record" §19).** This is the third
   coverage state, distinct from the two above. When a tool skill (bank-statement, invoice) is the
@@ -1448,14 +1515,23 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   **The what-changed (compare) fence rides SKA-8 fall-through turns by design (skills-audit-2026-07-07
   SK-3b, decision D-P2a — declined runtime change).** When the user has explicitly selected the
   what-changed skill and asks a NON-compare question at a 1- or 3-doc scope, `intends()` is false so the
-  turn falls through to the ordinary top-k relevance path — but the user-chosen skill fence stays
+  turn falls through to the ordinary top-k relevance path (one document that fits is read whole there
+  since #643; the fence rides either way, so #632 is unchanged by it) — but the user-chosen skill fence stays
   attached (the per-message glyph shows the skill as applied). Suppressing the fence on that path was
   **declined**: it would silently drop instructions the user deliberately selected, and the reworded
   honesty rule 1 (`what-changed/SKILL.md` v1.1.0) is coherent on BOTH paths — it now discriminates on
   what the model can actually see (A/B labels or an exact-changes block ⇒ compare; ordinary passages with
   no diff ⇒ just answer), so a fence riding a non-compare turn no longer tells the model to invent a
   comparison. Revisit only if the gold set later shows comparison-framed answers on non-compare
-  fall-through turns.
+  fall-through turns. What counts as a compare question is the skill's routing vocabulary. Until #582 a
+  compare request in one language could miss it while its translation matched: "summarize the
+  differences" fell through while "Fasse die Unterschiede zusammen" got "select exactly two". The
+  vocabulary now covers the compare and change words in both languages ([`architecture.md`](architecture.md)
+  §18 "#582"). A question with any of them gets "select exactly two" at any count other than two,
+  including a Library chat with What-changed still selected. Seen in the #582 real-app run (a 4B model,
+  2026-10-07, not addressed there): on a fall-through turn, "Wer ist der Mieter?" over three lease drafts
+  got a comparison-framed "Executive summary", both on 0.1.59 and with #582. That is the revisit condition
+  above.
 - **Three accepted skill body-vs-runtime residuals (skills-audit-2026-07-07 SK-16 / SK-17 / SK-18 —
   INFO, recorded so the next audit doesn't re-litigate; full ledger in architecture.md "Skills — design
   record" §44).** None is a defect; each is a place where a SKILL.md sentence is broader or narrower than
@@ -2075,7 +2151,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   so it is marked/failed on the FIRST attempt rather than burning a second full decode (up to ~30 min
   per window) for the same outcome — and since #160 a per-request TIMEOUT during a LIVE decode
   (tokens flowed until the bound) is classified the same deterministic way: marked immediately,
-  never retried into a second ~45-min timeout on the one-at-a-time lane. In the **document task**, a failed window's output carries a
+  never retried into a second ~45-min timeout on the one-at-a-time lane. **Since #605 a HUNG
+  sidecar is caught within minutes:** 2 min without a token, 10 min without progress while reading
+  a window, 2 min of total silence, or 3 min without response headers. The runtime then restarts
+  the sidecar, and the window's one retry runs on the fresh one, tokens or not. A hang that recurs
+  on the fresh sidecar fails that window. A window sent right after a cancel waits for the
+  cancelled request's current 512-token batch. If that batch takes longer than 3 min (a slow
+  laptop under memory pressure), a healthy sidecar is restarted: one extra cold load. In the
+  **document task**, a failed window's output carries a
   visible "could not be translated" notice with the ORIGINAL text kept below it; only an all-windows
   failure fails the whole task. In the **Translate view** (interactive), a failed window fails the
   whole job VISIBLY rather than completing with a mid-sentence-truncated or missing paragraph — a

@@ -9,6 +9,8 @@ import { rerankerDeviceFor } from '../../src/main/services/rag/rerank-profile'
 import { discoverManifests, estimateGraphicsNeedMib, graphicsBudgetMib } from '../../src/main/services/models'
 import type { ModelManifest } from '../../src/shared/manifest'
 import type { GpuDevice } from '../../src/shared/types'
+import { until, within } from '../helpers/hang-budget'
+import { loadingSidecar } from '../helpers/loading-sidecar'
 
 // Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
 // fake-spawn + mocked-loopback-fetch harness (the E5 embedder test pattern). CI never
@@ -482,6 +484,33 @@ describe('LlamaReranker', () => {
     await rerankPromise.catch(() => undefined)
     expect(child.killed).toBe(true)
     await expect(reranker.rerank('q', ['b'])).rejects.toThrow(/stopped/)
+  })
+
+  // #635: the reranker cold-starts inside the same document question as the embedder, and its
+  // `callerSignal` only classified a start abort — a Stop waited the start out (up to two 180 s
+  // health windows on the GPU→CPU ladder). Now the stopped ask leaves at once; the start goes on
+  // and serves the next ask that shares it.
+  it('a Stop during a hung cold start ends that ask at once; another ask sharing the start is scored (#635)', async () => {
+    const { spawn, calls, child } = fakeSpawn()
+    // This llama-server stays loading (/health 503) until `state.loaded`.
+    const { fetchImpl, state } = loadingSidecar(rerankFetch([2]))
+    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl })
+
+    const stop = new AbortController()
+    const stopped = reranker.rerank('q', ['a'], { signal: stop.signal }).catch((e: unknown) => e)
+    await until(() => state.probes > 0, 'the cold start polling /health')
+    const other = reranker.rerank('q2', ['b']) // shares the start
+    const reason = new DOMException('Stopped by the user', 'AbortError')
+    stop.abort(reason)
+    // The ask's own reason: `rag/index.ts` rethrows it as the Stop, never "reranker unavailable".
+    expect(await within(stopped, 'the Stop ending the wait for the start')).toBe(reason)
+
+    state.loaded = true
+    // The start was not cancelled: the other ask is scored on it.
+    expect(await other).toEqual([{ index: 0, score: 2 }])
+    expect(child.killed).toBe(false)
+    expect(calls.length).toBe(1) // one start, shared
+    await reranker.stop()
   })
 
   it('suspend() stops the sidecar but allows a lazy restart (workspace-lock path)', async () => {

@@ -425,6 +425,113 @@ only the electron-vite **output** format is a choice. As built:
   fallback → content sequence. The −30% aspiration of the finding is therefore not reached
   screens-only; the remaining headroom is exactly those two exclusions.
 
+## Build paths — design record (#646)
+
+**One source file, one module, whatever the working directory is called.** Built from a working
+directory spelled with a lower-case drive letter (`c:\work\HilbertRaum`, which some terminals hand
+out, VS Code's among them), the main bundle carried 41 of its modules twice, and each copy had its
+own module-level state.
+
+**The facts the design rests on** (measured 2026-10-12 on `0ba4ab54`, Vite 6.4.3, electron-vite
+3.1.0, Vitest 4.1.11, Windows 11):
+
+- **Vite's resolver changes spelling mid-build on Windows.** A resolved file becomes its module id
+  through `safeRealpathSync`. That is `fs.realpathSync`, which keeps the letter case it is given,
+  until an `exec("net use")` it fires on first use calls back. After that it is
+  `fs.realpathSync.native`, the file system's own spelling (`C:\…`). macOS and Linux use the native
+  call from the start.
+- **The configs handed Vite the cwd's spelling.** electron-vite (and Vite for the tools and preview
+  configs) finds the config from `process.cwd()` and sets the config's `__dirname` from that path,
+  so `resolve(__dirname, 'src/main/index.ts')` was `c:\…`.
+- **What a build from `c:\…` produced.**
+  - The entry and its direct imports resolved as `c:/…`; deeper imports resolved as `C:/…`.
+  - Main: **302** modules transformed instead of **261**. The 41 duplicated files included
+    `i18n`, `logging`, `binary-verifier`, `runtime/sidecar`, `ipc/inflight` and `runtime/factory`.
+  - In every one of the 41, the `c:` copy had exactly one importer, `src/main/index.ts`, and
+    everything else bound to the `C:` copy. So whatever `index.ts` initialised or registered
+    directly, the rest of the app never saw, and vice versa.
+  - Preload, renderer and the tools build came out byte-identical either way.
+- **What that broke in such a build** (code reading, verified; only the language was observed in
+  the running app):
+  - **Language.** `initMainI18n` set the OS locale on a copy no message reads: with "system" on
+    a German OS, every main-side message was English.
+  - **Logging.** `initLogging` configured a copy nothing else logs through. The log never reached
+    disk (`app.log.enc` untouched), and lock no longer cleared the in-memory buffer (the F14
+    wipe).
+  - **Binary verification.** `initBinaryVerification` enforced a copy no spawner checks, so a
+    *packaged* lower-case build ran its sidecars **without** the pre-spawn SHA-256 checks.
+  - **Quit reaper.** The last-resort reaper on quit (`killRegisteredSidecarChildren`) read an
+    empty registry.
+  - **Chat streaming flag.** `isChatStreaming` was always false, so a document task was not
+    refused while a chat answer streamed.
+  - Smaller effects:
+    - The answer-speed observer, the engine-problems push and the moved-drive notice never fired.
+    - Lock and quit could not cancel the post-unlock benchmark.
+    - The "Verify checksum", "Check again" and engine-install re-arms of a latched model
+      cleared the wrong latches.
+    - The local API answered its busy race with 502 instead of 429.
+- **Who was affected.** Local `npm run dev` / `build` / `package` from such a terminal. **Not the
+  releases**: CI and `release.yml` build from `D:\a\…`, and the v0.1.62 Windows portable
+  (SHA-256 as in its `SHA256SUMS.txt`) has a single i18n copy, as did a local package of
+  2026-10-05.
+- **Vitest has the same split, and the config cannot repair it.** The fork's runner keeps the CLI's
+  spelling (`file:///c:/…/@vitest/runner`), while Vitest canonicalises the setup files and Vite
+  canonicalises the `node_modules` ids it resolves (`C:/…`). A second runner instance loads, and
+  every file fails with "Vitest failed to find the current suite". A canonical `root` and
+  `resolve.preserveSymlinks` were both tried and both still failed.
+
+**The design as built:**
+
+1. **Canonical paths.** Every Vite config (`electron.vite.config.ts`, `vite.tools.config.ts`,
+   `vite.preview.config.ts`) builds its paths from `canonicalCase(__dirname)`
+   (`apps/desktop/path-casing.ts`), and so does each target's `root`, which otherwise defaults to
+   the cwd as typed.
+   - When the path differs from the file system's spelling **only in letter case**, it returns
+     the file system's spelling; any other path is left as given.
+   - Paths that differ in more than case (a junction, a `subst` drive, a mapped network drive) are
+     not rewritten on purpose: for a mapped drive Vite's own canonical form is the drive letter,
+     not the UNC path native realpath returns.
+   - Every target built from `c:\…` is now byte-identical to the same target built from `C:\…`.
+     Main, preload and renderer also match the canonical build from before the fix byte for
+     byte, so CI and release output do not change.
+2. **The guard.** `oneModulePerFile()` (`hilbertraum:one-module-per-file`) runs in all five Rollup
+   builds: main, preload, renderer, tools and preview.
+   - At `buildEnd` it maps every module id that names a file to the file's native realpath (plus
+     its `?query`) and **fails the build** if two ids land on one file, listing both spellings.
+   - So a split from any cause (the cwd, an import spelled in another case than its file, a link)
+     can no longer ship silently.
+   - With the canonical paths reverted, a lower-case build fails it naming all 41 files.
+   - Cost: one native realpath per file id, about 120 ms for the ~800 ids of a full build on a
+     Windows box with a virus scanner (about 1 % of the build).
+3. **Vitest refuses instead of failing 491 files.** `vitest.config.ts` throws at load when either
+   of these differs from the file system's spelling only in letter case:
+   - the working directory;
+   - the Vitest CLI path, checked only when `argv[1]` is Vitest's own `vitest.mjs`. Another
+     launcher, such as an IDE extension's worker, says nothing about the runner's spelling.
+
+   A lower-case CLI path breaks a run from a canonical cwd too (measured). The message names the
+   real spelling and the way out (CONTRIBUTING "Faster test iteration").
+4. **Tests.** `tests/unit/path-casing.test.ts` runs the guard on real Vite builds, with one file
+   reached through a link and, on Windows, through a `c:` spelling. On Windows it also loads all
+   three configs through their own loaders (electron-vite's and Vite's `loadConfigFromFile`)
+   from the lower-cased app directory, and asserts that every path they hand Vite has the file
+   system's spelling.
+   - A real build is not the regression test: whether it splits depends on when Vite's
+     `net use` probe answers, so it can pass without the fix.
+
+**Real app, before and after** (dev build from `c:\work\HilbertRaum`, a German Windows,
+`uiLanguage: system`, a scratch root with D:'s encrypted-drive config):
+
+| | master | fix |
+|---|---|---|
+| Main modules | 302 | 261 |
+| Locked-settings and wrong-password errors | English | German |
+| `logs\app.log.enc` | never written | written (2,559 B) |
+| `perf.log` | 5 marks (`index.ts`'s only) | 15 marks |
+
+**Residual (not observed):** a build from a junction, `subst` or mapped-drive spelling that Vite
+resolves into two forms is not repaired, only refused, by the guard.
+
 ## Preparing a drive — scripts
 
 `scripts/` provisions and verifies a drive. The scripts are **self-contained** (a drive can be laid
@@ -1095,6 +1202,10 @@ every start, because the download kept failing), and the Windows build probes
 itself (measured later with Polish). Both requests come from Chromium's own network stack and were
 measured with `--log-net-log`. The v0.1.62 AppImage does the same. Fixed in #567 (spell checker
 off in every session, `no-proxy-server`); see `security-model.md` "Chromium background fetches".
+
+**Open** (moved here from the retired BUILD_STATE 2026-10-03 #560/#562 entry): the owner's run of
+`verify-mac-build.sh` on a Mac. Until then the macOS column above is inspection only, and the signed
+build's `audio-input` entitlement (below) is unverified.
 
 ### Verifying a packaged build on macOS (owner-run, #560, #562)
 

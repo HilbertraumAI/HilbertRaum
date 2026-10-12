@@ -4,6 +4,7 @@ import {
   combineSignals,
   isBindRaceError,
   isStartAbortError,
+  waitUnlessAborted,
   type LlamaServerOptions,
   type UnexpectedExitInfo
 } from '../runtime/sidecar'
@@ -435,7 +436,9 @@ export class LlamaReranker implements Reranker {
         }
         restarted = true
         const pass = this.beginOrJoinTeardown()
-        await pass.promise
+        // #635: a Stop ends this ask's wait for the teardown (one health poll plus the kill grace,
+        // ~5 s at worst), not the teardown itself.
+        await waitUnlessAborted(pass.promise, callerSignal)
         // Rule (ii): refuse if OUR OWN signal aborted (the ask ends — correct, a lock/Stop
         // aborts the ask's own signal first) or if ANY OTHER caller joined this pass (so a lock
         // that joined a Q-initiated teardown leaves nothing resident afterwards).
@@ -625,8 +628,11 @@ export class LlamaReranker implements Reranker {
   }
 
   /** Lazily spawn the rerank sidecar with EXACTLY `posture` (once). Concurrent callers share one
-   *  start. `callerSignal` is this caller's own abort signal — used only to tell "my own Stop
-   *  aborted this start" from "some other caller's teardown aborted it" (rule (iv) below). */
+   *  start. `callerSignal` is this caller's own abort signal. It ends only this caller's WAIT
+   *  (#635: before, a Stop during a cold start waited the start out — up to two 180 s health
+   *  windows on the GPU→CPU ladder); the start keeps running for the others and the next ask. It
+   *  also tells "my own Stop aborted this start" from "some other caller's teardown aborted it"
+   *  (rule (iv) below). */
   private async ensureStarted(posture: RerankerDevice, callerSignal?: AbortSignal): Promise<LlamaServer> {
     if (this.stopped) throw new Error('Reranker is stopped (app is shutting down)')
     // F19 / rule (i): refuse to spawn while a teardown (lock/quit/Q-restart) is in progress — a
@@ -643,7 +649,7 @@ export class LlamaReranker implements Reranker {
       })
     }
     try {
-      await this.starting
+      await waitUnlessAborted(this.starting, callerSignal)
     } catch (err) {
       // Wave 8 ruling (b)(Q)(iv) / (c)(iii): a start-abort NOT caused by THIS call's own signal
       // came from another caller's teardown (Q from a concurrent ask, ruling (a)'s awaited
@@ -672,10 +678,13 @@ export class LlamaReranker implements Reranker {
    * passage can't slip past and overflow n_ctx); the response's `results[].index` maps each score
    * back to its input (the server sorts by score desc — order is NOT input order).
    * Throws unless every input received exactly one score. `opts.signal` (a user "Stop")
-   * is combined with the timeout so the CPU-slow rerank cancels promptly (M-C5).
+   * is combined with the timeout so the CPU-slow rerank cancels promptly (M-C5), and ends the
+   * wait for a cold start too (#635).
    */
   async rerank(query: string, documents: string[], opts?: RerankOptions): Promise<RerankedHit[]> {
     if (documents.length === 0) return []
+    // #635: a caller already stopped starts nothing (and restarts nothing on a posture flip).
+    opts?.signal?.throwIfAborted()
     const server = await this.resolveServer(documents.length, opts?.signal)
     // REL-4: own the timeout so it is cleared the instant the request settles (no lingering timer).
     const combined = combineSignals(opts?.signal, this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)

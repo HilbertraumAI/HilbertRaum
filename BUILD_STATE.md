@@ -28,6 +28,55 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-12 — **#649 — "how much" is a lookup or a sum; a list asked about and "zählt als" ask for no list (`fix/649-how-much-sum-list-noun`).** "how much" / "wie viel" listed every amount ("How much is the monthly fee?"), a sum got that list with no total, and "auf der
+Liste" / "zählen zu" listed. Now a lookup gets a plain answer; a sum (a sum word, a totalling word with a money word, "how much" with a past pay verb; never with a count, an explain verb, a yes/no or who/when question) takes the aggregation route over amounts; and an aggregation ask over ONE fitting document is read whole instead of listed, a total led by a heads-up that the model does the
+arithmetic. The heads-up was an owner call after the 4B summed a statement's four fees wrong twice; it got the lease's 1.175 EUR right. The other calls were as recommended; two /code-review passes (28 of 30 findings fixed). 86 router rows and 7 IPC rows fail on master; 84/84 mutations go red. Real app (scratch root + D:): master listed for 9/9 asks; the fix
+answered the lookups (5,00 / 45,00 / 6,90 EUR). Record: `rag-design.md` §14.5 "#649", design-guidelines §11.24. Open: a total with no sum word or past pay verb; a stated total takes the sum route; multi-document sums list; whole-read totals are unchecked._
+_2026-10-12 — **#644 — a quantifier asks for a list only at the head of a request; a yes/no question gets an answer (`fix/644-quantifier-lookup`).** After #641 any all/every/each/alle/jede/sämtliche still asked for a list: with extract data "Gilt die Frist für alle Mieter?" got every date,
+without it the deep-index heads-up. Now a quantifier lists only at the head of a request (after please / can you / give me / nenne / zeig mir / was sind …) or with a list verb; a yes/no question is a plain answer even with a list verb, unless a polite request; a quantifier inside another question is labelled (#641).
+The listing's type is the one the list request names first; terms/names/Daten map to none. Owner calls as recommended (the type rule revised once, sentence-scoped); two /code-review passes hardened fillers, polite forms, claims, sentence splits, compounds. 57 golden rows fail on master; 62/63 mutations red. Real app (4B, a fictional lease with extract data, scratch root + D:): master listed 4 dates
+for 3/3 lookups, the fix answered them from the whole document; the report's yes/no lost the heads-up. Record: `rag-design.md` §14.5 "#644". Open: "how much" lookups (#649); "Zählen alle …?" still lists._
+_2026-10-12 — **#643 / #642 — one document that fits the window is read whole; a summary ask with a ready deep index reads the tree (`fix/643-small-doc-whole-read`).** Top-k keeps ≤ 6 sections, one per PDF page, so a
+2-page PDF of 3 sections read at most 2. A top-k-bound turn, skill or not, over ONE fully chunked document that fits `wholeDocumentFitBudgetTokens` (~3 pages at 4k, ~7 at 8k) is now read in order (`wholeReadDocumentId`); a `tree-summary`
+ask over one too-large document with its own ready tree reads the tree. Multi-doc, packs, small talk, legacy docs stay top-k. `CoverageInfo.labelledExcerpts` keeps `[Sn]` cards + review marker links for a one-turn whole read (whole-doc skills too).
+Owner calls as recommended. Real app (4B, scratch root + D:): 1/8 → 8/8 medications named (2/3 → 3/3 sections, heads-up gone); report summary 6/12 → tree 12/12. Record: `rag-design.md` §14.5 "#643 / #642", §14.4. Open: multi-doc whole read (#644: above)._
+_2026-10-12 — **#646 — a build started from a lower-case drive letter bundles each main module once (`fix/646-canonical-build-paths`).** From `c:\…`, Vite's Windows realpath kept `c:/…` until its
+`net use` probe answered and then went canonical: 302 main modules instead of 261, 41 files twice, `index.ts` alone on the `c:` copies, so main-side text came out English on a German OS. The same build also left the log off disk, packaged binary checks off and the quit reaper empty. Now every config path
+comes from `canonicalCase(__dirname)`, a lower-case build is byte-identical to a canonical one, the `one-module-per-file` guard fails any split build, and vitest refuses a mis-cased cwd or CLI path. Real app before/after
+from `c:\…`: English → German, `app.log.enc` absent → written. v0.1.62 verified clean. Record: `packaging.md` "Build paths — design record (#646)". Open: a junction/`subst`/mapped-drive build that splits is refused, not repaired (not observed)._
+_2026-10-11 — **#641 — explain requests and untyped list asks get a written answer; the deep-index hint shows only when the answer left sections out (`fix/641-explain-not-listing`).**
+With a deep index, "Erkläre … inkl. aller Abkürzungen" got the listing's `generic` dump: any quantifier counted as a list request, and an unmapped {X} defaulted to `generic`, contrary to
+§14.5's own design (15 of 21 probed phrasings). Now an EN/DE explain lexicon and an untyped {X} get labelled relevance ("may miss items", no deep-index advice); aggregation asks keep
+the listing. Both notices are decided after retrieval against the scope's section count; the hint promises "a list that covers every section". Owner calls as recommended. Real app
+(4B, a fictional 2-page letter): master showed the hint at 2/2 sections, then one 16-item dump for 5/5 asks; the fix answers them. Record: `rag-design.md` §14.5 "#641". Open: none (#642–#644: above)._
+_2026-10-08 — **#605 — a hung translation sidecar ends within minutes and is restarted (`fix/605-translation-liveness`).** The `/completion` reader had no
+watchdog: a hang held its window to the 45-min cap (≈ 50 / 45 / 10 min per window with Electron's own 300 s limit, not the issue's 90), and every later window of a document
+hit the same stuck process. Now `return_progress` + 512-token prefill batches give `readCompletionSSE` the chat reader's clocks (120 s silence, 10 min per batch, 120 s between
+tokens; headers 180 s), a hang stops the child so the one retry runs fresh in the same posture (owner calls), and overlapping requests queue in the app. Real app (9B stand-in):
+master failed a frozen job after 609 s; the fix restarted at 120 s and finished. Record: `architecture.md` translation record "#605 amendment". Open: no TranslateGemma prefill measured on the slowest laptop._
+_2026-10-07 — **#637 — a cancel ends a vision or translation job's wait for a cold start, not the start (`fix/637-vision-translation-start-stop`).** A
+cancel during a hung start waited up to the 180 s health budget: a new image analysis read "busy", a cancelled document translation kept chat refused.
+Both `ensureStarted`s now race the shared start (#635's `waitUnlessAborted`; translation's idle-teardown wait too); the start's own settle arms the idle clock, so
+a start every job left is unloaded one idle window after it lands; `VisionService` drops a runtime whose start failed after its job left; translation walks no CPU rung
+for nobody. Real app, frozen start:
+a new analysis 28.8 s → 30 ms after the cancel, a cancelled translation 23.9 s → 5 ms. Record: `architecture.md` image-understanding §6 "#637 amendment". Open: none._
+_2026-10-07 — **#635 — a Stop ends a document question's wait for a cold start, not the start (`fix/635-e5-start-stop`).** The question awaited the
+search model's (then the reranker's) shared lazy start before it read its signal, so a Stop during a hung start held the turn up to the 180 s health budget (a new
+message refused). `waitUnlessAborted` (`runtime/sidecar.ts`) ends the caller's wait with its own reason; the start runs on for an import sharing it; a caller already
+stopped starts nothing. Owner: embedder + reranker now. Real app, frozen start: master 22.0 / 24.0 s, fix 1 ms. Record: `rag-design.md` §12.4 "#635 amendment". Open: none (#637: above)._
+_2026-10-07 — **#634 — a search-model failure reaches the user as words, chosen by kind (`fix/634-embedder-error-copy`).** A timeout read "The
+operation timed out." in any language, and a damaged e5 file stored llama-server's stderr (the weight file's absolute path) on every row of the
+session and in the question banner. Now `EmbedderError` (`timeout`/`start`/`failed`/`interrupted`) → canonical row copy + chat copy naming the
+search model; old rows rewritten at unlock; lock mid-import → "interrupted"; a crashed sidecar restarts; a re-download or clean model check re-arms. Owner calls as
+recommended. Real app (German, encrypted vault) before/after. Record: `rag-design.md` §12.4 "#634 amendment", design-guidelines §11.23. Open: none (#635: above)._
+_2026-10-07 — **#607 — the embed request's 120 s deadline and the caller's Stop cover the response body (`fix/607-e5-body-timeout`).** Since the 2026-06-30
+overflow retry (`dbfee90f`) both were dropped at the headers: a stalled body ran to undici's own 305 s (`terminated`) while an import held its queue, the doc-work lease and the
+engine-update busy gate, and Stop could not end a document question. The `try/finally` now spans `res.json()` / `res.text()`. Real b9849 e5 behind a stalling proxy:
+120.0 s `TimeoutError`, Stop at once. Record: `rag-design.md` §12.4 "#607 amendment". Open: none._
+_2026-10-07 — **#582 — What-changed routes English and German compare requests alike (`fix/582-what-changed-en-de-parity`).** At a count ≠ 2 German
+"Fasse die Unterschiede zusammen" got "select exactly two"; "summarize the differences" fell to top-k under the compare fence (0.1.59 + 4B: an invented
+"Document B"). Owner: route both; `differences` offers + routes; route-only compare/change words in both languages (German word by word). 23 EN/DE pairs
+pinned, corpus 161 rows; real app before/after on E: data. Record: `architecture.md` §18 "#582". Open: "amendments" routes in neither language._
 _2026-10-06 — **#581 — the skill suggestion follows every change to the documents in scope (`fix/581-scope-signal-cache`).** The F-29 memo's `(COUNT, MAX(rowid))` key
 repeated after a delete of the newest document + an import (both tables reuse the freed rowid) and never moved on an archive or a status swap below the highest
 row, so a Library or project chat kept a deleted title. Key now: scope fingerprint + `corpusGeneration(db)`, bumped by connection-local TEMP triggers on `documents` /
@@ -63,7 +112,7 @@ A crash → `RuntimeConnectionLostError` → `main.chat.connectionLost`. Owner c
 _2026-10-06 — **#598 — a prefill wedged behind pings ends; the header wait is 180 s (`fix/598-prefill-liveness`).** Both pins ping every ~30 s (b9849 too — #594's
 record was wrong), so a ping re-armed the 120 s prefill budget forever. Now `return_progress` on every chat request and two prefill clocks: any byte (120 s) and a
 `prompt_progress` event (10 min per batch, owner); headers 180 s (owner). Real b11146 captures pinned (a 187 s prefill; a thread-suspend wedge). Record: `architecture.md`
-CB-5 "#598 amendment". Open: a 27B/31B on CPU can exceed 10 min per batch; translation has no watchdog (#605)._
+CB-5 "#598 amendment". Open: a 27B/31B on CPU can exceed 10 min per batch; translation has no watchdog (#605: fixed, above)._
 _2026-10-05 — **#516 — the app reports engines older than its pin and updates them (`feat/516-engine-update`).** `EngineStatus.engineVersions` (numeric tag order;
 `older`/`current`/`newer`/`unknown`, `cpu/` net included); `update: true` replaces only `older` installs + an older `cpu/` net; every engine job now downloads + verifies all
 archives first, then (updates) pauses the model + llama helpers for the swap and restarts the model; a spawn gate holds the family's starts through every swap (closes the
@@ -95,54 +144,6 @@ _2026-10-04 — **#567 — the browser engine sends no request of its own: no sp
 stopped only the underlining: each session fetched a `.bdic` a few ms after `ready` (Linux: every language; Windows: a language it cannot check), at every start. Now
 `setSpellCheckerLanguages([])` + off from `session-created` (and first in ready), plus `no-proxy-server`. Packaged net logs, 0 remote: Windows `--lang=pl` full probe, Linux AppImage
 (master / v0.1.62: `.bdic` + WPAD). New `scripts/check-netlog.mjs`. Record: `security-model.md` "Chromium background fetches". Open: macOS (a net log in `verify-mac-build.sh`)._
-_2026-10-03 — **#560/#562 platform round: the real AppImage passes, the macOS build is inspected only (`docs/platform-verification-560-562`).** `release.yml` dispatched on
-`fix/562`: Linux AppImage in `ubuntu:24.04` 13/13 + the fuse probes (no asar integrity on Linux, as designed); mac `.app` wire, Info.plist hash, ad-hoc
-signature OK, not run. New: `scripts/verify-mac-build.sh` + `lib/packaged-app-probe.mjs` (owner Mac run open). Found: dictionary fetch (Linux; Windows per
-language) + WPAD (#567, docs corrected). Signed mac builds likely need the `audio-input` entitlement. Record: `packaging.md` "Platform verification"._
-_2026-10-03 — **#563 — evidence-pack PDFs print from memory: `hilbertraum://print/<token>`, no `.print.tmp.html` beside the export (`fix/563-print-from-memory`).**
-One-shot token page in `app-protocol.ts` (`PrintPages`, cap 4, `no-store`, the pack CSP from `window-security.ts`); AUD-15/16/17-print-source code + test deleted
-as moot. Measured: real smoke 11/11 incl. an 8.4 MB pack, one request per print, no pack text on disk; packaged export before/after; no time cost.
-Record: `architecture.md` EP-1 "#563 amendment". Open: the smoke on the stock binary (Smart App Control refused it that day)._
-_2026-10-03 — **#562 — packaged fuses: RunAsNode + `--inspect` off, asar integrity + only-asar on; NODE_OPTIONS stays on (`fix/562-electron-fuses`).** Wire
-`001011001`. Owner: fuse 2 stays on (off drops `NODE_EXTRA_CA_CERTS`; the engine download then failed behind Norton). Packaged OCR no longer follows
-`ELECTRON_RENDERER_URL`. Measured before/after: smoke 22/22, robustness 4/4, upgrade 11/11, tamper matrix, first paint unchanged. Record:
-`architecture.md` "Electron fuses" (#562). Open: `app.asar.unpacked` unchecked; Linux/macOS legs (platform PR); fuse 2 needs an OS-trust-store downloader (#564)._
-_2026-10-03 — **#560 — the app's pages load from `hilbertraum://app/`, and the packaged exe turns `GrantFileProtocolExtraPrivileges` off (`fix/560-app-protocol`).**
-On `file://`, `'self'` matched every local file: a script could read any file and run a planted one (measured). Allowlist file server
-(`app-protocol.ts`), `standard` + `secure` only, CSP + nosniff on every response, exact-page navigation, local API refuses the app's origin.
-Packaged after-run 22/22, all reads + 20 traversal vectors refused; first paint unchanged. Owner: the 4 UI prefs reset once. Record: `architecture.md` "App scheme" (#560). Open: macOS, an AppImage run._
-_2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pdfjs-in-page`).** The hidden OCR window ran pdf.js in a
-`file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
-has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
-pages + prod header. Measured packaged: 18/18 smoke, 0 worker targets, 0 loopback. Record: `architecture.md` DEP-6 §11. Suite 7,920→7,923._
-_2026-10-02 — **#550 follow-up — streamdown 2.5.0 → 2.6.0 (`chore/streamdown-2-6`, stacked on the #548–#551 PR).** The mermaid chain (110 lockfile entries)
-leaves the tree, and with it DEP-3's ~40 `files:` negations; a guard keeps mermaid out of the production graph. 2.6's new 400/300 px caps on code blocks and
-tables need Tailwind (not loaded): a tall table drew 1,128 px over what followed, so both are off. Also fixed: since 2026-06-30 every multi-line code block
-ran its lines together (Tailwind `block` again); a `styles.css` rule restores them. Real-app measured. Record: `architecture.md` DEP-6 §9._
-_2026-10-02 — **#548–#551 — the DEP-6 residuals (`fix/dep6-residuals-548-551`).** #548: the packaging gates check the negations where electron-builder
-packs each package (its own hoister replayed on the lockfile; it names a real `app.asar`'s 226 package directories exactly), and the notices must name exactly that set.
-#549: both load races fixed by where the clock starts and which timer trips, not by a bigger budget. #550: `lib` ES2024 in both programs; taking streamdown 2.6 stays its own change.
-#551: the Documents list on react-virtual 3.14.13 measures identical to 3.14.4 (CDP A/B). The packaged exe: the #551 entry above. Record: `architecture.md` DEP-6 §8._
-_2026-10-02 — **DEP-6 — the Dependabot / `npm audit` batch left after DEP-5 (PRs #535, #536, #537 merged).**
-PR A, lockfile-only through the pinned npm 11.6.2 with no collateral (undici 6.29.0 / 7.30.0, brace-expansion ×7, fast-uri 3.1.8, dompurify
-3.4.16), cleared alerts 96, 97 and 102–123: all dev toolchain or not shipped, and the app's own `fetch` is Electron's undici 7.29.1. PR B
-moves vitest 3.2.6 → 4.1.11 (alerts 91/92/94; `npm audit` 0). Two 4.x changes the migration guide omits would have weakened the suite: the
-full-suite guard's `onFinished` hook is gone (now `onTestRunEnd`) and `vi.spyOn` returns a live spy with its history. Also `maxWorkers`, a
-30-minute CI job cap, coverage `include`, and a `tinyexec` asar leak closed. PR C adds `.github/dependabot.yml` (§5 18(a)). After #536 no
-alert is open (91–123 `fixed`) and `npm audit` is 0. Dependabot's first production group (#545: pdf.js 6.3 + six) lands via a replacement PR:
-pdf.js's never-loaded Liberation fonts (GPL v2, not OFL) leave the Kit (owner ruling), argon2id gets an explicit `maxmem`. Record: `architecture.md`
-"Dependabot triage — design record (wave DEP-6)" §7; its §3 holds the residuals._
-_2026-10-01 — **#530 — an engine the OS refuses to start is named as such, never as a GPU, model or memory fault (`fix/530-engine-load-failure`).**
-One classifier (`runtime/engine-load.ts`: Linux ld.so text, Windows NTSTATUS + a System32 VC++ check, macOS dyld) at every spawn site, a
-session verdict (never persisted) fed by the startup probe and every refusal, `AppStatus.engineProblems`, `engine:recheck` ("Check again")
-with a full latch re-arm, and a heal at unlock (loader-caused `gpuAutoDisabled`, raw-path document rows). Owner rulings: no libgomp/VC++
-bundling, option C, kiwix out of scope. Records: `architecture.md` "Engine load failures", design-guidelines §11.17, data-contracts.
-Real-app verified (Linux container w/o libgomp1 + heal by apt; Windows en/de). Open: a stock desktop run; macOS unmeasured (reinstall button: done, #532)._
-_2026-10-01 — **#527 — the greyed-out mic names the missing piece and its button opens the AI Model screen on the speech model
-(`fix/527-dictation-hint-cause`).** Cause per drive state (`TranscriberMissing`: model / engine / both / `engine-unsupported` = no engine
-build for this OS — the Linux report), stored with the transcriber slot and read by `getAppStatus`, the audio-import failure and the AI Model
-screen; deep link `models:voice`; "Open AI Model" → "Go to AI Model". Record: `architecture.md` "Voice dictation" #527 amendment,
-`data-contracts.md`. Open: the Linux engine itself — upstream ships `whisper-bin-ubuntu-x64.tar.gz` since v1.9.0; the pin bump is its own change._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -193,7 +194,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry), and the closed 2026-10-01 #527 entry on 2026-10-07 (preamble budget, making room for the #634 entry), and the closed 2026-10-01 #530 entry on 2026-10-07 (preamble budget, making room for the #635 entry), and the closed 2026-10-02 #548–#551 entry on 2026-10-07 (preamble budget, making room for the #637 entry), and the closed 2026-10-02 streamdown 2.6 entry on 2026-10-08 (preamble budget, making room for the #605 entry), and the closed 2026-10-03 OCR-rasterizer-CSP entry on 2026-10-11 (preamble budget, making room for the #641 entry), and the closed 2026-10-03 #560 app-scheme entry on 2026-10-12 (preamble budget, making room for the #646 entry), and the closed 2026-10-03 #562 fuses entry on 2026-10-12 (preamble budget, making room for the #643 entry), and the closed 2026-10-03 #563 print-from-memory entry on 2026-10-12 (preamble budget, making room for the #644 entry), and the closed 2026-10-03 #560/#562 platform-round entry on 2026-10-12 (preamble budget, making room for the #649 entry; its open Mac run moved to `packaging.md` "Platform verification") — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

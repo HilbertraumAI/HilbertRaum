@@ -3,7 +3,7 @@ import { spawn as nodeSpawn } from 'node:child_process'
 import type { EngineProblemFamily } from '../../shared/types'
 import type { AppContext } from './context'
 import { verifyBinaryBeforeSpawn } from './binary-verifier'
-import { rewriteEngineFailureRows } from './ingestion/engine-failure'
+import { rewriteEngineFailureRows, rewriteSearchModelFailureRows } from './ingestion/engine-failure'
 import { log } from './logging'
 import {
   classifyLoadFailure,
@@ -56,24 +56,29 @@ export interface EngineHealResult {
   gpuFlagCleared: boolean
   /** Failed documents whose row held the raw loader line, rewritten to the canonical text. */
   rowsRewritten: number
+  /** #634: failed documents whose row held the search model's raw failure, rewritten likewise. */
+  searchModelRowsRewritten: number
 }
 
 /**
- * Heal what the app wrote before #530 at every session start (unlock, create, plaintext startup)
- * — BEFORE the auto-start reads the GPU flags:
+ * Heal what the app wrote before #530 and #634 at every session start (unlock, create, plaintext
+ * startup) — BEFORE the auto-start reads the GPU flags:
  *  - `gpuAutoDisabled` whose `gpuLastError` classifies as a load refusal is cleared with it. The
  *    flag claimed a GPU fault; the library was missing. A genuine GPU fault never matches (its
  *    reason is llama.cpp's own output or a crash), and the flag carries no machine stamp, so it
  *    would otherwise follow the drive to every computer and keep the GPU off there too.
  *  - failed documents whose row holds the loader's raw line (with the absolute drive path) are
  *    rewritten to the canonical, display-mapped text.
+ *  - #634: then those whose row holds the search model's raw failure (a timeout's bare English, a
+ *    start failure's stderr tail with the weight file's absolute path) — after #530's pass, so a
+ *    load refusal keeps its own text.
  * Idempotent and admission-gated; never throws (a locked or locking workspace is simply skipped).
  */
 export function healEngineLoadState(
   ctx: Pick<AppContext, 'db' | 'workspace'>,
   opts: Pick<LoadFailureInput, 'platform' | 'systemDllExists'> = {}
 ): EngineHealResult {
-  const result: EngineHealResult = { gpuFlagCleared: false, rowsRewritten: 0 }
+  const result: EngineHealResult = { gpuFlagCleared: false, rowsRewritten: 0, searchModelRowsRewritten: 0 }
   try {
     if (!workspaceAdmitsWork(ctx.workspace)) return result
     const s = getSettings(ctx.db)
@@ -83,6 +88,7 @@ export function healEngineLoadState(
       log.info('Cleared a compatibility-mode flag that an engine load failure had set (not a GPU fault)')
     }
     result.rowsRewritten = rewriteEngineFailureRows(ctx.db, opts)
+    result.searchModelRowsRewritten = rewriteSearchModelFailureRows(ctx.db, opts)
   } catch (err) {
     log.warn('Healing engine load-failure state failed', { error: String(err) })
   }
