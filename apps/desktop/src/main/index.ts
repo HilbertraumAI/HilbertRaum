@@ -753,8 +753,9 @@ function initBackend(): void {
     ctx.translator?.onResidencyChange?.(notifyPerformanceChanged)
   }
   ctx.onModelInstalled = (modelId) => {
-    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model
-    // BEFORE the translator rule below can return early (that rule is about a different slot).
+    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model FIRST —
+    // before any statement below can return early or throw (the download manager swallows the
+    // whole hook).
     clearModelLoadLatch(modelId)
     if (!ctx) return
     // #634: the search model downloaded again (the repair "Check all model files" offers for a

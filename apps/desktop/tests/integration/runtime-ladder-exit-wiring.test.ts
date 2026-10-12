@@ -17,12 +17,13 @@ import { hangBudgetMs } from '../helpers/hang-budget'
 // DX-5 (full-audit-2026-06-29 follow-up, Phase 7): pin the SPAWN-'exit' → onUnexpectedExit → GPU
 // crash auto-fallback WIRING end-to-end.
 //
-// runtime-ladder.test.ts (unit) proves the ladder ROUTES a crash to onGpuCrash — but it does so by
-// hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama. That proves the handler
-// logic, NOT that the real sidecar actually wires its child's 'exit' event to that callback. A
-// regression that dropped `child.once('exit', … onUnexpectedExit())` in sidecar.ts (or its
-// `ready && !stopping` gate) would leave the unit test green while a real mid-session GPU crash
-// silently failed to auto-fall back to CPU — the user's next message would just error.
+// This file is the ONLY home of the crash ROUTING: the ladder's per-rung `onUnexpectedExit` is
+// reached through a REAL `LlamaServer` child 'exit' — no stub hand-invokes it (the unit test that
+// did was retired by the 2026-10 runtime-ladder test campaign). The GPU half (`backend === 'gpu'` →
+// §5.3 `onGpuCrash`) is the DX-5 test; the CPU half (a CPU-mode crash never reaches the GPU
+// fallback — its `onGpuCrash` THROWS) is the #599 test. A regression that dropped
+// `child.once('exit', … onUnexpectedExit())` in sidecar.ts (or its `ready && !stopping` gate) reds
+// both.
 //
 // This drives the REAL `createLlamaRuntime` → `LlamaServer` (only the spawn / fetch / port seams
 // injected, the e5/reranker/vision gated-child style), starts it to healthy on a probe that reports

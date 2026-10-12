@@ -1235,7 +1235,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   routes through the §5.3 `onGpuCrash` auto-fallback (gated on `backend === 'gpu'`);
   (3) the CODE-2 cancel + CODE-3 latch reach the window — `stop()` kills the inner server, the
   warm-up stream errors, and the ladder settles as `cancelledStartError()` (never a rung walk or
-  mock commit); (4) a non-cancel warm-up failure never fails the start (the server IS healthy —
+  mock commit) (the latch itself is manager-level and pinned window-independently in
+  `runtime-manager.test.ts` "quit-path lifecycle"); (4) a non-cancel warm-up failure never fails the start (the server IS healthy —
   warn via `onWarmup`, proceed to ready; a crash still reports via `onUnexpectedExit`); (5) an
   overall `WARMUP_TIMEOUT_MS` (90 s ≈ 3× the worst #109 measurement) aborts a pathological
   warm-up and proceeds — the CB-5 idle watchdog rides along inside it; (6) the request is
@@ -4091,7 +4092,7 @@ persisting nothing; a healthy model starts on rung 1.
 > *runtime* changed: **"Verify checksum"** on that model (`models:verify` → `clearModelLoadLatch`;
 > a re-verified file is a new file — also the way to retry after a transient cause such as RAM
 > pressure), a **completed in-app download** of that model (`ctx.onModelInstalled` → the same,
-> before the translator rule's early return), a **chat-engine install** (`EngineDownloadManager.onInstalled`
+> as the handler's first statement), a **chat-engine install** (`EngineDownloadManager.onInstalled`
 > for `llama_cpp` → `clearModelLoadLatches`; a new binary may load what the old one could not —
 > a kiwix-only install clears nothing), and an **app restart** (module state). A device verdict
 > never latches the model, so a persisted `gpuAutoDisabled` still re-walks from rung 2 as before.
@@ -11598,8 +11599,10 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   vitest runs with DEV true, so the PERF-5 memo test (`DocumentsScreen.test.tsx`, 48 green) still observes
   the bumps. No production behaviour change (the exported Map stays an empty no-op in prod).
 - **DX-5 — the sidecar crash → auto-fallback WIRING is pinned end-to-end
-  (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proves the
-  ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama — never that
+  (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proved the
+  ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama (that unit
+  test was retired by the 2026-10 runtime-ladder test campaign; this file now owns both the GPU and the CPU
+  route) — never that
   the real `LlamaServer` wires its child's `'exit'` event to that callback. The new test drives the REAL
   `createLlamaRuntime`→`LlamaServer` (only spawn/fetch/port injected, the e5/reranker/vision gated-child
   style), starts it to healthy on a GPU-reporting probe (backend `'gpu'`), then emits a REAL `'exit'`
@@ -15535,7 +15538,7 @@ probe before spawning (sub-second after the first call, hard-capped at 10 s, nev
 the very next rung reuses the same cached answer. Every other model keeps the concurrent
 probe-alongside-load behavior untouched.
 
-Three refusals, all of which **skip** the rung (no spawn, no failure, no GPU blame):
+Four refusals, all of which **skip** the rung (no spawn, no failure, no GPU blame):
 
 1. **No probed device** — the measured gain is a full-offload GPU result.
 2. **Not enough free VRAM** — one device must report the weight's own bytes plus
@@ -15546,6 +15549,9 @@ Three refusals, all of which **skip** the rung (no spawn, no failure, no GPU bla
    summed across cards: a multi-device split with a draft head is unmeasured.
 3. **Weight size unknown** — a failed file stat means the VRAM check cannot be made. Refuse
    rather than guess.
+4. **Device probe gave no answer** — its 10 s bound (#380) or an engine the OS refused (#530): the
+   VRAM headroom cannot be established, so unknown answers no (never the #380 load-log label, which
+   only names a start after the fact).
 
 ### §5 Failure handling: never let a speed-up cost the GPU
 

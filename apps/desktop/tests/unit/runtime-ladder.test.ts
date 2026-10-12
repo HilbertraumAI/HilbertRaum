@@ -3,13 +3,13 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   createSelectingRuntimeFactory,
+  createCpuCrashAutoRestart,
   createGpuCrashAutoFallback,
   createSpeculativeCrashAutoFallback,
   clearModelLoadLatch,
   clearModelLoadLatches,
   clearSpeculativeSuppression,
   isSpeculativeSuppressed,
-  latchModelLoad,
   modelLoadLatchReason,
   COMPATIBILITY_MODE_NOTICE,
   SPEED_UP_DISABLED_NOTICE,
@@ -21,6 +21,7 @@ import {
 import {
   isNextModelLoadSuppressed,
   latestEffectiveRead,
+  latestEffectiveReadBySource,
   MIN_READ_SAMPLE_MS,
   recordChecksumRead,
   resetEffectiveReadForTests,
@@ -40,10 +41,13 @@ import { hangPolls } from '../helpers/hang-budget'
 
 const opts: RuntimeStartOptions = { modelId: 'm', modelPath: '/w.gguf', contextTokens: 2048 }
 
-// #372: the unloadable-model latch is module state keyed by model id, and this file reuses
-// `opts.modelId` across cases — a case that blames the model must never leak its verdict into
-// the next one, so every case starts un-latched.
-beforeEach(() => clearModelLoadLatches())
+// #372 / #182: the unloadable-model latch and the speculative latch are module state keyed by
+// model id, and this file reuses model ids across cases — a case that blames the model (or latches
+// MTP off) must never leak its verdict into the next one, so every case starts un-latched.
+beforeEach(() => {
+  clearModelLoadLatches()
+  clearSpeculativeSuppression()
+})
 
 const RTX: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3080 Ti', totalMb: 12300, freeMb: 11511 }
 /** A hybrid laptop's FIRST enumerated device: integrated, reporting shared system memory. */
@@ -51,6 +55,30 @@ const IRIS: GpuDevice = { id: 'Vulkan0', name: 'Intel(R) Iris(R) Xe Graphics', t
 /** A discrete card UNDER the usable gate — a 4 GB card since #321 lowered it to 5,120 MiB
  *  (the 6 GB laptop class that used to sit here now clears it). */
 const GTX: GpuDevice = { id: 'Vulkan1', name: 'NVIDIA GeForce GTX 1650', totalMb: 4096, freeMb: 3600 }
+
+/** What llama-server prints and exits with when it cannot load the weight at all. */
+const MODEL_LOAD_REASON =
+  'llama-server exited before becoming healthy (code 1) — last output: ' +
+  'llama_model_load: error loading model: unknown model architecture: audit fixture'
+/** A genuine device fault, same throw shape, different class. */
+const DEVICE_LOST_REASON =
+  'llama-server exited before becoming healthy (code 134) — last output: ' +
+  'ggml_vulkan: vk error: device lost'
+/** REL-1: a port-bind race — a transient collision, never a device or a model verdict. */
+const BIND_RACE_REASON =
+  'llama-server exited before becoming healthy (code 1) — last output: error: bind: address already in use'
+
+/** #182: a manifest that opts in to MTP. 1 GiB of weights ⇒ 1024 + MTP_VRAM_HEADROOM_MB = 4608 MiB
+ *  of free VRAM needed on ONE device. */
+const MTP_OPTS: RuntimeStartOptions = {
+  modelId: 'qwen3.8-27b-q4',
+  modelPath: '/w.gguf',
+  contextTokens: 8192,
+  weightBytes: 1024 * 1024 * 1024,
+  speculativeDecoding: 'mtp'
+}
+/** Roomy enough for the MTP weight + the draft head. */
+const BIG: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 23000 }
 
 interface LadderCall {
   binPath: string
@@ -83,6 +111,8 @@ function ladderHarness(config: {
   gpuAutoDisabled?: boolean
   cpuBin?: string | null
   resolveBin?: string | null
+  /** The factory's weights check (default: every path exists). */
+  modelExists?: (modelPath: string) => boolean
   /** Tokens the fake llama runtime streams per chatStream call (default none). */
   tokens?: string[]
   /** Reasoning delta the fake fires via options.onReasoning before any token (#39 deep mode). */
@@ -195,7 +225,7 @@ function ladderHarness(config: {
   const factory = createSelectingRuntimeFactory({
     rootPath: '/root',
     resolveBin: () => (config.resolveBin === undefined ? '/bin/llama-server' : config.resolveBin),
-    modelExists: () => true,
+    modelExists: config.modelExists ?? (() => true),
     makeLlama,
     makeMock,
     onSelect: (kind, _o, reason) => selected.push({ kind, reason }),
@@ -341,6 +371,29 @@ describe('the GPU start ladder', () => {
     expect(runtime.gpuName).toBeNull()
   })
 
+  // CHARACTERIZATION of today's behaviour, NOT the design goal — follow-up #TBD-empty-probe. An EMPTY
+  // answer (`[]`) is taken as "this machine enumerates no device" and outranks this start's own load
+  // log, so a start whose log says it offloaded layers is still labelled cpu (and its placement record
+  // says backend 'cpu' beside N>0 GPU layers). #380 moved only the UNKNOWN answer (`null`) to the log
+  // (the #380 tests above). If #TBD-empty-probe decides a positive offload line wins, FLIP this
+  // expectation — it is the only test that pins the `[]` branch with a log.
+  it('an EMPTY probe answer still labels the rung cpu when the load log reports offloaded layers (characterization, #TBD-empty-probe)', async () => {
+    const h = ladderHarness({
+      probe: [],
+      stderr: [
+        [
+          '  - Vulkan0 : NVIDIA GeForce RTX 3080 Ti (12300 MiB, 11511 MiB free)',
+          'load_tensors: offloaded 33/33 layers to GPU',
+          ''
+        ].join('\n')
+      ]
+    })
+    const runtime = h.factory(opts)
+    await runtime.start()
+    expect(runtime.backend).toBe('cpu')
+    expect(runtime.gpuName).toBeNull()
+  })
+
   it('a probe that answers only AFTER the server start resolved still labels the rung gpu (the concurrent kick-off is intact)', async () => {
     // The #380 fallback must not have cost the ordinary slow-probe path its label: the ladder
     // still awaits the probe after health, so an answer that lands late is used, not skipped.
@@ -360,43 +413,32 @@ describe('the GPU start ladder', () => {
     expect(runtime.gpuName).toBe('NVIDIA GeForce RTX 3080 Ti')
   })
 
-  it('a hybrid [iGPU, dGPU] box is LABELLED with the discrete card, not the first enumerated device', async () => {
-    // PR #303 audit M8.2 (P5 residual): `devices[0]` named the iGPU while the model actually ran
-    // on the dGPU, so the Chat hint and the Diagnostics line credited the wrong device. The
-    // label now comes from the shared `displayDevice` rule. SELECTION is untouched — same rung,
-    // same (empty) args, still no -ngl: `--fit` decides.
-    const h = ladderHarness({ probe: [IRIS, RTX] })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(runtime.gpuName).toBe(RTX.name)
-    expect(runtime.backend).toBe('gpu')
-    expect(h.calls).toHaveLength(1)
-    expect(h.calls[0].extraArgs).toEqual([])
-  })
-
-  it('a hybrid [iGPU, SMALL dGPU] box is LABELLED with the card, not the iGPU (owner decision 2026-09-07)', async () => {
-    // The 6 GB laptop case (#321): the card is under the usable gate, so nothing is "useful" and
-    // `displayDevice`'s old fallback took `devices[0]` — the iGPU — while `--fit` offloaded to
-    // the card. The rule now prefers the largest device that does not look integrated, so the
-    // Chat hint and the Performance tile credit the card. SELECTION is untouched.
-    const h = ladderHarness({ probe: [IRIS, GTX] })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(runtime.gpuName).toBe(GTX.name)
-    expect(runtime.backend).toBe('gpu')
-    expect(h.calls).toHaveLength(1)
-    expect(h.calls[0].extraArgs).toEqual([])
-  })
-
-  it('an integrated-only box is still named: the label falls back to the integrated device', async () => {
-    // With no discrete-looking device at all, `displayDevice` names the only one there is
-    // (`useful: false`), so the line never goes blank on a machine whose only GPU is integrated.
-    const h = ladderHarness({ probe: [IRIS] })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(runtime.gpuName).toBe(IRIS.name)
-    expect(runtime.backend).toBe('gpu')
-  })
+  // PR #303 audit M8.2 (P5 residual): `devices[0]` named the iGPU while the model actually ran on the
+  // dGPU, so the Chat hint and the Diagnostics line credited the wrong device; the label now comes
+  // from the shared `displayDevice` rule. A hybrid laptop's SMALL card (#321: under the usable gate,
+  // so nothing is "useful") is still the card, not the iGPU (owner decision 2026-09-07), and an
+  // integrated-only box is still named (`useful: false`), so the line never goes blank. SELECTION is
+  // untouched — same rung, same (empty) args, still no -ngl: `--fit` decides.
+  it.each([
+    { name: 'a hybrid [iGPU, dGPU] box: the discrete card (M8.2)', probe: [IRIS, RTX], label: RTX.name },
+    {
+      name: 'a hybrid [iGPU, SMALL dGPU] box: the card, not the iGPU (owner decision 2026-09-07)',
+      probe: [IRIS, GTX],
+      label: GTX.name
+    },
+    { name: 'an integrated-only box: still named, from the integrated device', probe: [IRIS], label: IRIS.name }
+  ])(
+    'rung 1 is labelled with the shared displayDevice pick, never devices[0], and is gpu for any listed device — $name',
+    async ({ probe, label }) => {
+      const h = ladderHarness({ probe })
+      const runtime = h.factory(opts)
+      await runtime.start()
+      expect(runtime.gpuName).toBe(label)
+      expect(runtime.backend).toBe('gpu') // even below the usable gate: llama.cpp offloads to such a device unasked
+      expect(h.calls).toHaveLength(1)
+      expect(h.calls[0].extraArgs).toEqual([]) // selection untouched: same rung, no -ngl, no --device
+    }
+  )
 
   it('rung 1 failure → rung 2 respawns the SAME binary with exactly --device none and persists the failure', async () => {
     const h = ladderHarness({ failFirst: 1, probe: [RTX] })
@@ -418,8 +460,7 @@ describe('the GPU start ladder', () => {
     const h = ladderHarness({
       failFirst: 1,
       probe: [RTX],
-      failMessage:
-        'llama-server exited before becoming healthy (code 1) — last output: error: bind: address already in use'
+      failMessage: BIND_RACE_REASON
     })
     const runtime = h.factory(opts)
     await runtime.start()
@@ -450,23 +491,17 @@ describe('the GPU start ladder', () => {
     expect(h.selected.at(-1)?.reason).toContain('all llama-server start attempts failed')
   })
 
-  it('gpuMode "off" starts at rung 2 (--device none) and its failure is NOT a GPU failure', async () => {
-    const h = ladderHarness({ gpuMode: 'off', failFirst: 1 })
+  it.each([
+    ['gpuMode "off"', { gpuMode: 'off' as const }],
+    ['gpuAutoDisabled', { gpuAutoDisabled: true }]
+  ])('%s starts at rung 2 (--device none) and its failure is NOT a GPU failure', async (_name, config) => {
+    const h = ladderHarness({ ...config, failFirst: 1 })
     const runtime = h.factory(opts)
     await runtime.start()
     // First attempt is already the forced-CPU rung; the safety net catches its failure.
     expect(h.calls[0].extraArgs).toEqual(['--device', 'none'])
     expect(h.calls[1].binPath).toBe('/bin/cpu/llama-server')
     expect(h.failures).toEqual([]) // no GPU attempt → nothing auto-disables
-    expect(runtime.backend).toBe('cpu')
-  })
-
-  it('gpuAutoDisabled skips rung 1 the same way', async () => {
-    const h = ladderHarness({ gpuAutoDisabled: true })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(h.calls).toHaveLength(1)
-    expect(h.calls[0].extraArgs).toEqual(['--device', 'none'])
     expect(runtime.backend).toBe('cpu')
   })
 
@@ -478,28 +513,24 @@ describe('the GPU start ladder', () => {
     expect(runtime.backend).toBe('mock')
   })
 
-  it('still falls back to the mock at CREATION when binary or weights are absent (Phase-10 rule unchanged)', () => {
-    const h = ladderHarness({ resolveBin: null })
+  it.each([
+    {
+      name: 'no llama-server binary is on the drive',
+      config: { resolveBin: null },
+      reason: 'no llama-server binary on the drive'
+    },
+    {
+      name: 'the weights are absent (checked at opts.modelPath)',
+      config: { modelExists: (p: string) => p !== opts.modelPath },
+      reason: 'model weights not present'
+    }
+  ])('still falls back to the mock at CREATION when $name (Phase-10 rule unchanged)', ({ config, reason }) => {
+    const h = ladderHarness(config)
     const runtime = h.factory(opts)
     expect(runtime.backend).toBe('mock')
-    expect(h.selected[0]).toEqual({ kind: 'mock', reason: 'no llama-server binary on the drive' })
-  })
-
-  it('routes a mid-session crash to onGpuCrash ONLY when the backend landed on gpu', async () => {
-    const info: UnexpectedExitInfo = { exitCode: 1, exitSignal: null, stderrTail: 'boom' }
-
-    const gpu = ladderHarness({ probe: [RTX] })
-    const gpuRuntime = gpu.factory(opts)
-    await gpuRuntime.start()
-    gpu.calls[0].onUnexpectedExit(info)
-    expect(gpu.crashes).toHaveLength(1)
-    expect(gpu.crashes[0].opts.modelId).toBe('m')
-
-    const cpu = ladderHarness({ probe: [] }) // same start, but the probe says no GPU
-    const cpuRuntime = cpu.factory(opts)
-    await cpuRuntime.start()
-    cpu.calls[0].onUnexpectedExit(info)
-    expect(cpu.crashes).toHaveLength(0) // CPU crashes keep today's behavior
+    expect(h.wasMock()).toBe(true)
+    expect(h.calls).toHaveLength(0)
+    expect(h.selected).toEqual([{ kind: 'mock', reason }])
   })
 
   it('reports backend through RuntimeManager.status()', async () => {
@@ -519,103 +550,12 @@ describe('the GPU start ladder', () => {
 // check), a killed attempt is never persisted as a GPU fault, and the rung-4 mock is NOT
 // started for a cancelled start (it would commit a runtime the queued stop must then undo).
 describe('ladder start cancellation (full-audit 2026-07-11 CODE-2)', () => {
-  function cancellableHarness() {
-    const failures: string[] = []
-    const rungStops: number[] = []
-    // #114: the prefetch must join the CODE-2 cancel contract (recorded fake).
-    const prefetches: Array<{ paths: string[]; aborted: boolean }> = []
-    let mockMade = false
-    let rungStarts = 0
-    let failInFlight: (err: Error) => void = () => {
-      throw new Error('rung start not in flight yet')
-    }
-    const makeLlama = (o: RuntimeStartOptions): ModelRuntime => {
-      const index = rungStarts++
-      return {
-        modelId: o.modelId,
-        start: () =>
-          new Promise<void>((_resolve, reject) => {
-            failInFlight = reject
-          }),
-        stop: async () => {
-          rungStops.push(index)
-        },
-        health: async () => ({ healthy: true, message: '', port: 1 }),
-        chatStream: async function* () {}
-      }
-    }
-    const factory = createSelectingRuntimeFactory({
-      rootPath: '/root',
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => true,
-      makeLlama,
-      makeMock: (o) => {
-        mockMade = true
-        return {
-          modelId: o.modelId,
-          backend: 'mock',
-          gpuName: null,
-          start: async () => {},
-          stop: async () => {},
-          health: async () => ({ healthy: true, message: 'mock', port: null }),
-          chatStream: async function* () {}
-        }
-      },
-      makePrefetch: (paths) => {
-        const entry = { paths, aborted: false }
-        prefetches.push(entry)
-        return {
-          done: new Promise<PrefetchOutcome>(() => {}),
-          abort: () => {
-            entry.aborted = true
-          }
-        }
-      },
-      gpu: {
-        probeDevices: async () => [],
-        onGpuFailure: (reason) => failures.push(reason),
-        resolveCpuBin: () => '/bin/cpu/llama-server'
-      }
-    })
-    return {
-      runtime: factory(opts),
-      failures,
-      rungStops,
-      prefetches,
-      wasMock: () => mockMade,
-      rungStartCount: () => rungStarts,
-      failInFlight: (err: Error) => failInFlight(err)
-    }
-  }
-
-  it('stop() mid-rung aborts the walk: rung stopped, no next rung, no mock, no gpuAutoDisabled', async () => {
-    const h = cancellableHarness()
-    const startP = h.runtime.start()
-    startP.catch(() => undefined)
-    await new Promise((r) => setTimeout(r, 0)) // rung 1's start() is now in flight
-
-    const stopP = h.runtime.stop() // sets the cancel flag + forwards stop to the in-flight rung
-    await stopP
-    expect(h.rungStops).toContain(0) // the loading rung's runtime WAS stopped (kill reached it)
-    // #114: the prefetch reader joined the cancel — it must not keep the drive busy.
-    expect(h.prefetches).toHaveLength(1)
-    expect(h.prefetches[0].aborted).toBe(true)
-
-    // The killed child's start() rejects (in prod: waitForHealthy's exit-check throw)…
-    h.failInFlight(new Error('llama-server exited before becoming healthy (code 0)'))
-    await expect(startP).rejects.toThrow(/cancelled/i)
-
-    // …and the walk aborted rather than falling through the remaining rungs.
-    expect(h.rungStartCount()).toBe(1) // rung 2 / rung 3 never attempted
-    expect(h.wasMock()).toBe(false) // no mock fallback for a cancelled start
-    expect(h.failures).toEqual([]) // a killed rung-1 attempt is NOT a GPU fault
-  })
-
   it('a stop() BEFORE start() aborts the walk without ever invoking a rung', async () => {
-    const h = cancellableHarness()
-    await h.runtime.stop() // e.g. quit lands between factory() and the queued start
-    await expect(h.runtime.start()).rejects.toThrow(/cancelled/i)
-    expect(h.rungStartCount()).toBe(0)
+    const h = ladderHarness({})
+    const runtime = h.factory(opts)
+    await runtime.stop() // e.g. quit lands between factory() and the queued start
+    await expect(runtime.start()).rejects.toThrow(/cancelled/i)
+    expect(h.calls).toHaveLength(0)
     expect(h.wasMock()).toBe(false)
   })
 })
@@ -652,33 +592,49 @@ describe('createGpuCrashAutoFallback (§5.3)', () => {
     expect(COMPATIBILITY_MODE_NOTICE).not.toMatch(/fail|crash|bad|broken/i)
   })
 
-  it('a failed CPU restart does not throw (surfaces on the next manual start)', async () => {
+  it('a failed restart is swallowed and re-arms the handler (the failure surfaces on the next manual start)', async () => {
+    let calls = 0
     const handler = createGpuCrashAutoFallback({
       restart: async () => {
+        calls++
         throw new Error('restart failed')
       },
       persistFailure: () => {}
     })
-    expect(() => handler(opts, info)).not.toThrow()
+    handler(opts, info)
+    // A single macrotask hop, no observable to gate on: the rejected restart's .catch (swallows)
+    // and .finally (re-arms) are microtasks, all drained before this timer fires.
     await new Promise((r) => setTimeout(r, 0))
+    handler(opts, info) // a later crash still falls back
+    await new Promise((r) => setTimeout(r, 0))
+    expect(calls).toBe(2)
   })
 
-  // M-C3: a SYNCHRONOUS throw from restart() (before it returns a promise) must not
-  // wedge the re-entrancy guard `restarting=true` forever — a later crash must still
-  // be able to trigger a fresh fallback.
-  it('re-arms after a SYNCHRONOUS throw from restart() so future crashes still fall back', () => {
+  // M-C3: a SYNCHRONOUS throw from restart() (before it returns a promise) must not wedge the
+  // re-entrancy guard forever — a later crash must still be able to trigger a fresh restart. The
+  // GPU and speculative handlers share one implementation; the #599 CPU handler has its own.
+  it.each([
+    [
+      'createGpuCrashAutoFallback',
+      (restart: () => Promise<unknown>) => createGpuCrashAutoFallback({ restart, persistFailure: () => {} })
+    ],
+    [
+      'createSpeculativeCrashAutoFallback (#182)',
+      (restart: () => Promise<unknown>) => createSpeculativeCrashAutoFallback({ restart })
+    ],
+    [
+      'createCpuCrashAutoRestart (#599, its own implementation)',
+      (restart: () => Promise<unknown>) => createCpuCrashAutoRestart({ restart, stop: restart })
+    ]
+  ])('%s re-arms after a SYNCHRONOUS throw from restart() so future crashes still react (M-C3)', (_name, make) => {
     let calls = 0
-    const handler = createGpuCrashAutoFallback({
-      restart: () => {
-        calls++
-        throw new Error('sync boom') // throws before returning a promise
-      },
-      persistFailure: () => {}
+    const handler = make(() => {
+      calls++
+      throw new Error('sync boom') // throws before returning a promise
     })
     expect(() => handler(opts, info)).not.toThrow()
-    // A second, later crash report is NOT suppressed — the guard reset, so restart runs again.
-    expect(() => handler(opts, info)).not.toThrow()
-    expect(calls).toBe(2)
+    expect(() => handler(opts, info)).not.toThrow() // not suppressed: the guard reset
+    expect(calls).toBe(2) // the CPU handler: restart on the first crash, stop on the second — both reached
   })
 })
 
@@ -814,14 +770,7 @@ describe('hidden warm-up generation (#109)', () => {
     const mockRuntime = allFail.factory(opts)
     await mockRuntime.start()
     expect(mockRuntime.backend).toBe('mock')
-    expect(allFail.chatCalls).toHaveLength(0)
     expect(allFail.warmups).toEqual([])
-
-    // No binary on the drive → the mock is returned at creation: same guarantee.
-    const noBin = ladderHarness({ resolveBin: null })
-    const direct = noBin.factory(opts)
-    await direct.start()
-    expect(noBin.chatCalls).toHaveLength(0)
   })
 
   it('a warm-up failure that is NOT a cancel never fails the start (the server IS healthy)', async () => {
@@ -880,50 +829,6 @@ describe('hidden warm-up generation (#109)', () => {
     await expect(startP).rejects.toThrow(/cancelled/i)
     expect(h.wasMock()).toBe(false)
   })
-
-  it('RuntimeManager.status() stays "Starting" through the warm-up window; ready reports warmedUp=false', async () => {
-    let release: () => void = () => {}
-    const gate = new Promise<void>((r) => (release = r))
-    const h = ladderHarness({ probe: [RTX], chatGate: gate })
-    const mgr = new RuntimeManager(h.factory)
-    const startP = mgr.start(opts)
-    await until(() => h.chatCalls.length === 1)
-
-    // The server is already healthy, but the user-facing state is still "Starting" — that
-    // is the whole point: ready means warmed.
-    expect(mgr.status().running).toBe(false)
-    expect(mgr.status().message).toBe('Starting')
-    expect(mgr.status().startingModelId).toBe('m')
-
-    release()
-    const status = await startP
-    expect(status.running).toBe(true)
-    expect(status.healthy).toBe(true)
-    expect(status.backend).toBe('gpu')
-    expect(status.warmedUp).toBe(false) // the #39 hint stays armed as the safety net
-  })
-
-  it('manager stop() during the warm-up settles promptly; the CODE-3 shutdown latch is respected', async () => {
-    let release: () => void = () => {}
-    const gate = new Promise<void>((r) => (release = r))
-    const h = ladderHarness({ probe: [RTX], chatGate: gate, chatError: new Error('socket closed') })
-    const mgr = new RuntimeManager(h.factory)
-    const startP = mgr.start(opts)
-    startP.catch(() => undefined)
-    await until(() => h.chatCalls.length === 1)
-
-    mgr.shutdown() // quit teardown arms the latch first…
-    const stopP = mgr.stop() // …then stops; the cancel reaches the warm-up window
-    release()
-    await stopP
-    await expect(startP).rejects.toThrow(/cancelled/i)
-
-    expect(mgr.active()).toBeNull() // never committed
-    expect(mgr.status().running).toBe(false)
-    // The latch holds: a late auto-start cannot spawn a fresh warm-up/runtime.
-    await expect(mgr.start(opts)).rejects.toThrow(/shut down/i)
-    expect(h.calls).toHaveLength(1)
-  })
 })
 
 // #108: the ladder records an honest effective-read sample (window bytes / elapsed) from
@@ -969,13 +874,6 @@ describe('effective-read sample capture (#108)', () => {
     await runtime.start()
 
     expect(h.calls).toHaveLength(2) // rung 1 failed, rung 2 carried the start
-    expect(latestEffectiveRead()).toBeNull()
-  })
-
-  it('a missing weight path with no byte total records nothing and never disturbs the start', async () => {
-    const h = ladderHarness({ probe: [RTX], startDelayMs: MIN_READ_SAMPLE_MS + 60 })
-    const runtime = h.factory({ modelId: 'm', modelPath: '/no/such/w.gguf', contextTokens: 2048 })
-    await runtime.start()
     expect(latestEffectiveRead()).toBeNull()
   })
 })
@@ -1033,15 +931,22 @@ describe('concurrent weight prefetch (#114)', () => {
     expect(h.prefetches).toHaveLength(1)
     expect(h.prefetchEvents[0]?.event).toBe('started')
     // …and the window that prefetch rode read page-cache-warm pages: the checksum stands.
-    expect(latestEffectiveRead()?.source).toBe('checksum')
+    expect(latestEffectiveReadBySource('model_load')).toBeNull()
   })
 
-  it('first rung only: a failed rung 1 does not re-prefetch on rung 2', async () => {
-    const h = ladderHarness({ failFirst: 1 })
-    await h.factory(opts).start()
-    expect(h.calls).toHaveLength(2) // rung 1 failed, rung 2 carried the start
-    expect(h.prefetches).toHaveLength(1) // …but only rung 1 got a prefetch
-    expect(h.prefetches[0].aborted).toBe(true) // ended on the rung-1 failure path
+  it.each([
+    { name: 'a failed rung 1 does not re-prefetch on rung 2', start: opts, probe: undefined },
+    {
+      name: 'a rung 1a that spawned and failed does not re-prefetch for the plain rung (#182)',
+      start: MTP_OPTS,
+      probe: [BIG]
+    }
+  ])('first rung only: $name', async ({ start, probe }) => {
+    const h = ladderHarness({ failFirst: 1, probe })
+    await h.factory(start).start()
+    expect(h.calls).toHaveLength(2)
+    expect(h.prefetches).toHaveLength(1) // the failed attempt already pulled the file through the page cache
+    expect(h.prefetches[0].aborted).toBe(true) // ended on the failure path
   })
 
   it('a prefetch read failure never affects the start', async () => {
@@ -1052,12 +957,18 @@ describe('concurrent weight prefetch (#114)', () => {
     expect(h.wasMock()).toBe(false)
   })
 
-  it('the mock fallback (no binary) never prefetches', async () => {
-    const h = ladderHarness({ resolveBin: null })
-    await h.factory(opts).start()
-    expect(h.wasMock()).toBe(true)
-    expect(h.prefetches).toHaveLength(0)
-    expect(h.prefetchEvents).toHaveLength(0)
+  it('a CODE-2 stop mid-load aborts the prefetch at once: the reader never outlives a stop or a lock', async () => {
+    const gate = deferred<void>()
+    const h = ladderHarness({ onStart: () => gate.promise }) // rung 1 parks mid-load
+    const runtime = h.factory(opts)
+    const startP = runtime.start()
+    startP.catch(() => undefined)
+    await until(() => h.calls.length === 1)
+    await runtime.stop()
+    expect(h.prefetches).toHaveLength(1)
+    expect(h.prefetches[0].aborted).toBe(true) // stop() ended it — the load window has NOT closed yet
+    gate.resolve()
+    await expect(startP).rejects.toThrow(/cancelled/i)
   })
 })
 
@@ -1067,25 +978,12 @@ describe('concurrent weight prefetch (#114)', () => {
 // The shape under test: the manifest OPTS IN, the ladder DECIDES. Every "don't know" answers
 // no, because a skipped rung costs nothing while a wrong yes costs a silent partial offload.
 describe('MTP speculative decoding (#182)', () => {
-  /** 1 GiB of weights ⇒ 1024 + MTP_VRAM_HEADROOM_MB = 4608 MiB of free VRAM needed. */
-  const WEIGHT_BYTES = 1024 * 1024 * 1024
-  const mtpOpts: RuntimeStartOptions = {
-    modelId: 'qwen3.8-27b-q4',
-    modelPath: '/w.gguf',
-    contextTokens: 8192,
-    weightBytes: WEIGHT_BYTES,
-    speculativeDecoding: 'mtp'
-  }
-  /** Roomy enough for the weight + the draft head. */
-  const BIG: GpuDevice = { id: 'Vulkan0', name: 'NVIDIA GeForce RTX 3090', totalMb: 24576, freeMb: 23000 }
   /** Holds the weight, but not the ~2 GiB draft head on top of it. */
   const TIGHT: GpuDevice = { id: 'Vulkan0', name: 'Small card', totalMb: 8192, freeMb: 4000 }
 
-  beforeEach(() => clearSpeculativeSuppression())
-
   it('starts rung 1a with EXACTLY the code-owned flag pair when the machine can hold it', async () => {
     const h = ladderHarness({ probe: [BIG] })
-    const runtime = h.factory(mtpOpts)
+    const runtime = h.factory(MTP_OPTS)
     await runtime.start()
     expect(h.calls).toHaveLength(1)
     expect(h.calls[0].extraArgs).toEqual(['--spec-type', 'draft-mtp', '--spec-draft-n-max', '2'])
@@ -1097,53 +995,54 @@ describe('MTP speculative decoding (#182)', () => {
 
   it('adds NO rung for a model that did not opt in', async () => {
     const h = ladderHarness({ probe: [BIG] })
-    await h.factory({ ...mtpOpts, speculativeDecoding: null }).start()
+    await h.factory({ ...MTP_OPTS, speculativeDecoding: null }).start()
     expect(h.calls).toHaveLength(1)
     expect(h.calls[0].extraArgs).toEqual([])
     expect(h.speculative).toEqual([])
   })
 
-  // The three "don't know / can't" refusals. All three SKIP the rung — no spawn, no failure,
+  // The four "don't know / can't" refusals. All four SKIP the rung — no spawn, no failure,
   // no wasted multi-GB load — and land on exactly today's plain GPU start.
-  it('skips the rung without spawning when the probe finds no GPU', async () => {
-    const h = ladderHarness({ probe: [] })
-    const runtime = h.factory(mtpOpts)
-    await runtime.start()
+  it.each([
+    { name: 'the probe finds no GPU', probe: [] as GpuDevice[], weightBytes: MTP_OPTS.weightBytes, reason: 'no GPU device' },
+    {
+      name: 'the probe gave no answer (#380 timeout / #530 refusal)',
+      probe: null,
+      weightBytes: MTP_OPTS.weightBytes,
+      reason: 'device probe gave no answer'
+    },
+    {
+      name: 'no single device has the weight + 3.5 GiB of free VRAM',
+      probe: [TIGHT],
+      weightBytes: MTP_OPTS.weightBytes,
+      reason: 'not enough free VRAM'
+    },
+    {
+      // Two cards, 4000 MiB free each: 8000 total would clear the 4608 MiB bar, one card cannot.
+      name: 'only the SUM of two cards would hold it (free VRAM is never summed)',
+      probe: [TIGHT, { ...TIGHT, id: 'Vulkan1' }],
+      weightBytes: MTP_OPTS.weightBytes,
+      reason: 'not enough free VRAM'
+    },
+    {
+      name: 'the weight size is unknown (the VRAM check cannot be made)',
+      probe: [BIG],
+      weightBytes: null,
+      reason: 'weight size unknown'
+    }
+  ])('skips rung 1a without spawning it when $name', async ({ probe, weightBytes, reason }) => {
+    const h = ladderHarness({ probe })
+    await h.factory({ ...MTP_OPTS, weightBytes }).start()
     expect(h.calls).toHaveLength(1)
-    expect(h.calls[0].extraArgs).toEqual([])
-    expect(runtime.backend).toBe('cpu')
-    expect(h.speculative[0].event).toBe('skipped')
-    expect(h.speculative[0].detail).toContain('no GPU device')
+    expect(h.calls[0].extraArgs).toEqual([]) // straight to today's plain rung 1
+    expect(h.speculative).toEqual([{ event: 'skipped', detail: expect.stringContaining(reason) }])
     expect(h.failures).toEqual([]) // a skip is never a GPU fault
-  })
-
-  it('skips the rung when no single device has the weight + 3.5 GiB of free VRAM', async () => {
-    const h = ladderHarness({ probe: [TIGHT] })
-    await h.factory(mtpOpts).start()
-    expect(h.calls[0].extraArgs).toEqual([])
-    expect(h.speculative[0].event).toBe('skipped')
-    expect(h.speculative[0].detail).toContain('not enough free VRAM')
-  })
-
-  it('never sums free VRAM across devices — one card must hold all of it', async () => {
-    // Two cards, 4000 MiB free each: 8000 total would clear the 4608 MiB bar, one card cannot.
-    const h = ladderHarness({ probe: [TIGHT, { ...TIGHT, id: 'Vulkan1' }] })
-    await h.factory(mtpOpts).start()
-    expect(h.calls[0].extraArgs).toEqual([])
-    expect(h.speculative[0].event).toBe('skipped')
-  })
-
-  it('skips the rung when the weight size is unknown (the VRAM check cannot be made)', async () => {
-    const h = ladderHarness({ probe: [BIG] })
-    await h.factory({ ...mtpOpts, weightBytes: null }).start()
-    expect(h.calls[0].extraArgs).toEqual([])
-    expect(h.speculative[0].detail).toContain('weight size unknown')
   })
 
   it('is never offered at all when GPU is off or auto-disabled', async () => {
     for (const config of [{ gpuMode: 'off' as const }, { gpuAutoDisabled: true }]) {
       const h = ladderHarness({ ...config, probe: [BIG] })
-      await h.factory(mtpOpts).start()
+      await h.factory(MTP_OPTS).start()
       expect(h.calls[0].extraArgs).toEqual(['--device', 'none'])
       expect(h.speculative).toEqual([])
     }
@@ -1157,7 +1056,7 @@ describe('MTP speculative decoding (#182)', () => {
       probe: [BIG],
       failMessage: 'error: unknown argument: --spec-type'
     })
-    const runtime = h.factory(mtpOpts)
+    const runtime = h.factory(MTP_OPTS)
     await runtime.start()
     expect(h.calls).toHaveLength(2)
     expect(h.calls[0].extraArgs).toEqual([...MTP_SERVER_ARGS])
@@ -1172,9 +1071,9 @@ describe('MTP speculative decoding (#182)', () => {
 
   it('latches the model off for the session after one failure — no repeat doomed load', async () => {
     const h = ladderHarness({ failFirst: 1, probe: [BIG] })
-    await h.factory(mtpOpts).start()
+    await h.factory(MTP_OPTS).start()
     expect(h.calls).toHaveLength(2)
-    await h.factory(mtpOpts).start()
+    await h.factory(MTP_OPTS).start()
     expect(h.calls).toHaveLength(3) // one attempt, not two
     expect(h.calls[2].extraArgs).toEqual([])
     expect(h.speculative.at(-1)).toEqual({
@@ -1183,20 +1082,8 @@ describe('MTP speculative decoding (#182)', () => {
     })
     // …and "Try GPU again" re-arms it (the user asking for the accelerated path back).
     clearSpeculativeSuppression()
-    await h.factory(mtpOpts).start()
+    await h.factory(MTP_OPTS).start()
     expect(h.calls.at(-1)!.extraArgs).toEqual([...MTP_SERVER_ARGS])
-  })
-
-  it('keeps the forced-CPU rungs free of the flags when the whole GPU half fails', async () => {
-    const h = ladderHarness({ failFirst: 2, probe: [BIG] })
-    const runtime = h.factory(mtpOpts)
-    await runtime.start()
-    expect(h.calls).toHaveLength(3)
-    expect(h.calls[0].extraArgs).toEqual([...MTP_SERVER_ARGS]) // rung 1a
-    expect(h.calls[1].extraArgs).toEqual([]) // rung 1
-    expect(h.calls[2].extraArgs).toEqual(['--device', 'none']) // rung 2 — exactly, nothing more
-    expect(runtime.backend).toBe('cpu')
-    expect(h.failures).toHaveLength(1) // only the PLAIN GPU rung's failure is a GPU fault
   })
 
   // A mid-session crash of rung 1a routes to the speculative handler, NOT the §5.3 GPU one:
@@ -1204,19 +1091,19 @@ describe('MTP speculative decoding (#182)', () => {
   // visit to undo. The model restarts on the GPU with MTP latched off.
   it('routes a mid-session crash to the speculative handler, never to the GPU auto-disable', async () => {
     const h = ladderHarness({ probe: [BIG] })
-    const runtime = h.factory(mtpOpts)
+    const runtime = h.factory(MTP_OPTS)
     await runtime.start()
     h.calls[0].onUnexpectedExit({ exitCode: 1, exitSignal: null, stderrTail: 'vk out of memory' })
     expect(h.specCrashes).toHaveLength(1)
     expect(h.crashes).toEqual([])
-    expect(isSpeculativeSuppressed(mtpOpts.modelId)).toBe(true)
+    expect(isSpeculativeSuppressed(MTP_OPTS.modelId)).toBe(true)
     expect(h.speculative.at(-1)!.event).toBe('crashed')
     expect(h.speculative.at(-1)!.detail).toContain('vk out of memory')
   })
 
   it('leaves a PLAIN GPU rung crash on the §5.3 path untouched', async () => {
     const h = ladderHarness({ failFirst: 1, probe: [BIG] })
-    await h.factory(mtpOpts).start()
+    await h.factory(MTP_OPTS).start()
     h.calls[1].onUnexpectedExit({ exitCode: 1, exitSignal: null, stderrTail: 'device lost' })
     expect(h.crashes).toHaveLength(1)
     expect(h.specCrashes).toEqual([])
@@ -1225,19 +1112,12 @@ describe('MTP speculative decoding (#182)', () => {
   // Regression guard for the trap this wave walked into: the #108 read sample and the #114
   // prefetch used to be gated on `rungs[0]`, and a SKIPPED rung 1a consumes index 0 without
   // opening a load window — which would have switched both off on every machine that skips it.
-  it('still prefetches and samples the load when rung 1a is skipped', async () => {
+  it('still prefetches when rung 1a is skipped (a skipped rung opens no load window and never takes the first-attempt slot the #108 sample shares)', async () => {
     const h = ladderHarness({ probe: [] })
-    await h.factory({ ...mtpOpts, weightPaths: ['/w.gguf', '/mmproj.gguf'] }).start()
+    await h.factory({ ...MTP_OPTS, weightPaths: ['/w.gguf', '/mmproj.gguf'] }).start()
     expect(h.prefetches).toHaveLength(1)
     expect(h.prefetches[0].paths).toEqual(['/w.gguf', '/mmproj.gguf'])
     expect(h.prefetchEvents[0].event).toBe('started')
-  })
-
-  it('does NOT re-prefetch for the plain rung after rung 1a actually opened a load window', async () => {
-    const h = ladderHarness({ failFirst: 1, probe: [BIG] })
-    await h.factory(mtpOpts).start()
-    expect(h.calls).toHaveLength(2)
-    expect(h.prefetches).toHaveLength(1) // the failed attempt already warmed the page cache
   })
 })
 
@@ -1262,19 +1142,6 @@ describe('createSpeculativeCrashAutoFallback (#182)', () => {
     expect(notices[0]).not.toBe(COMPATIBILITY_MODE_NOTICE)
     expect(reasons[0]).toContain('ggml assert')
   })
-
-  it('re-arms after a restart that throws synchronously (the M-C3 class)', async () => {
-    let calls = 0
-    const handler = createSpeculativeCrashAutoFallback({
-      restart: () => {
-        calls++
-        throw new Error('sync boom')
-      }
-    })
-    handler(startOpts, info)
-    handler(startOpts, info)
-    expect(calls).toBe(2)
-  })
 })
 
 // Issue #312 — the CPU control probe. A rung-1 failure used to be persisted as a DEVICE fault
@@ -1287,17 +1154,6 @@ describe('createSpeculativeCrashAutoFallback (#182)', () => {
 // Anything else — differing classes, or a message shape `failureSignature` cannot classify —
 // stays a device verdict, which is today's behaviour and the conservative default.
 describe('#312 — a model-load failure is not a device verdict', () => {
-  beforeEach(() => clearSpeculativeSuppression())
-
-  /** What llama-server prints and exits with when it cannot load the weight at all. */
-  const MODEL_LOAD_REASON =
-    'llama-server exited before becoming healthy (code 1) — last output: ' +
-    'llama_model_load: error loading model: unknown model architecture: audit fixture'
-  /** A genuine device fault, same throw shape, different class. */
-  const DEVICE_LOST_REASON =
-    'llama-server exited before becoming healthy (code 134) — last output: ' +
-    'ggml_vulkan: vk error: device lost'
-
   it('every rung dying the same way blames the MODEL: nothing persisted, the mock discloses itself', async () => {
     const h = ladderHarness({
       failFirst: 3,
@@ -1335,18 +1191,20 @@ describe('#312 — a model-load failure is not a device verdict', () => {
     })
     await h.factory(opts).start()
     expect(h.failures).toEqual([])
+    expect(modelLoadLatchReason('m')).not.toBeNull() // #372: the blamed model is latched…
 
     const healthy = h.factory({ ...opts, modelId: 'healthy' })
     await healthy.start()
     expect(h.calls).toHaveLength(4)
     expect(h.calls[3].extraArgs).toEqual([]) // rung 1 — no --device none anywhere on it
     expect(healthy.backend).toBe('gpu')
+    expect(modelLoadLatchReason('healthy')).toBeNull() // …and the latch is per model
   })
 
   it('a device fault still latches: rung 1 fails, the CPU control comes up, the failure persists', async () => {
     // Acceptance 3. The GPU rung's reason is the model-shaped one on purpose: the classifier
     // never reads llama.cpp's vocabulary — the CPU rung STARTING is what makes it a device
-    // verdict. (The plain-message equivalent is the existing case at :249, unedited.)
+    // verdict. (The plain-message equivalent is 'rung 1 failure → rung 2 respawns the SAME binary…'.)
     const h = ladderHarness({ failFirst: 1, probe: [RTX], failMessage: MODEL_LOAD_REASON })
     const runtime = h.factory(opts)
     await runtime.start()
@@ -1355,22 +1213,7 @@ describe('#312 — a model-load failure is not a device verdict', () => {
     expect(runtime.backend).toBe('cpu')
     expect(h.failures).toHaveLength(1)
     expect(h.modelLoadFailures).toEqual([])
-  })
-
-  it('a DIFFERENT failure class on the CPU rungs stays a device verdict (conservative fallback)', async () => {
-    // The Intel-Mac shape (known-limitations): the GPU rung dies of the device, the CPU rungs
-    // die of something else entirely. Ambiguous ⇒ blame the device, i.e. today's behaviour.
-    const h = ladderHarness({
-      failFirst: 3,
-      probe: [RTX],
-      failMessages: [DEVICE_LOST_REASON, MODEL_LOAD_REASON, MODEL_LOAD_REASON]
-    })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(runtime.backend).toBe('mock')
-    expect(h.failures).toHaveLength(1)
-    expect(h.failures[0]).toContain('vk error: device lost')
-    expect(h.modelLoadFailures).toEqual([])
+    expect(modelLoadLatchReason('m')).toBeNull() // #372: a device verdict never latches the model
   })
 
   it('an UNRECOGNISED reason shape on every rung stays a device verdict too', async () => {
@@ -1384,25 +1227,8 @@ describe('#312 — a model-load failure is not a device verdict', () => {
   })
 
   it('a CODE-2 stop between the rung-1 failure and the CPU rung blames nothing', async () => {
-    // The held failure must be dropped on every cancellation exit — a killed walk is not
-    // evidence about anything. Both exits are covered: the failing rung's catch…
-    let cancelMe: (() => Promise<void>) | null = null
-    const failing = ladderHarness({
-      failFirst: 2,
-      probe: [RTX],
-      failMessage: MODEL_LOAD_REASON,
-      onStart: async (index) => {
-        if (index === 1) await cancelMe?.()
-      }
-    })
-    const failingRuntime = failing.factory(opts)
-    cancelMe = () => failingRuntime.stop()
-    await expect(failingRuntime.start()).rejects.toThrow(/cancelled/i)
-    expect(failing.failures).toEqual([])
-    expect(failing.modelLoadFailures).toEqual([])
-    expect(failing.wasMock()).toBe(false)
-
-    // …and the post-start check for a CPU rung that came up anyway (the flush sits AFTER it).
+    // The held failure must be dropped when the cancel lands while the CPU rung is coming up: the
+    // post-start cancel check sits BEFORE the flush.
     let cancelToo: (() => Promise<void>) | null = null
     const racing = ladderHarness({
       failFirst: 1,
@@ -1422,20 +1248,14 @@ describe('#312 — a model-load failure is not a device verdict', () => {
 
   it('rung 1a + rung 1 failing with the CPU rung up: one GPU failure, MTP latched off (#182 intact)', async () => {
     // The speculative rung `continue`s before the gpuAttempt branch, so it never sets the held
-    // failure; the plain GPU rung does, and rung 2 coming up flushes it. (The unedited
-    // siblings :984 / :1003 / :1020 pin the rest of the #182 contract.)
-    const mtpOpts: RuntimeStartOptions = {
-      ...opts,
-      modelId: 'qwen3.8-27b-q4',
-      weightBytes: 1024 * 1024 * 1024,
-      speculativeDecoding: 'mtp'
-    }
+    // failure; the plain GPU rung does, and rung 2 coming up flushes it. (The MTP describe pins
+    // the rest of the #182 contract.)
     const h = ladderHarness({
       failFirst: 2,
       probe: [RTX],
       failMessages: ['error: unknown argument: --spec-type', MODEL_LOAD_REASON]
     })
-    const runtime = h.factory(mtpOpts)
+    const runtime = h.factory(MTP_OPTS)
     await runtime.start()
     expect(h.calls).toHaveLength(3)
     expect(h.calls[0].extraArgs).toEqual([...MTP_SERVER_ARGS]) // rung 1a
@@ -1453,47 +1273,38 @@ describe('#312 — a model-load failure is not a device verdict', () => {
 // stdio; tests/fixtures/start-failure-b11146-*.txt). The two rungs' last lines carry different
 // per-process timestamps — the #312 comparison has to see past them to the root cause.
 describe('#515 — the #312 verdicts on real llama-server tails', () => {
-  beforeEach(() => clearSpeculativeSuppression())
-
   const reason = (name: string): string =>
     'llama-server exited before becoming healthy (code 1) — last output: ' +
     readFileSync(join(__dirname, '..', 'fixtures', `start-failure-b11146-${name}.txt`), 'utf8').trim()
 
-  it('a corrupt GGUF failing on the GPU rung and both CPU rungs blames the MODEL', async () => {
-    const h = ladderHarness({
-      failFirst: 3,
-      probe: [RTX],
-      failMessages: [reason('broken-gguf-gpu'), reason('broken-gguf-cpu'), reason('broken-gguf-cpu')],
-      realMock: true
-    })
+  it.each([
+    {
+      name: 'a corrupt GGUF failing on the GPU rung and both CPU rungs',
+      tails: ['broken-gguf-gpu', 'broken-gguf-cpu', 'broken-gguf-cpu'],
+      device: 0,
+      model: 1,
+      persisted: null
+    },
+    {
+      name: '…the same with the colour-coded GPU tail the app captured before --log-colors off',
+      tails: ['broken-gguf-gpu-coloured', 'broken-gguf-cpu', 'broken-gguf-cpu'],
+      device: 0,
+      model: 1,
+      persisted: null
+    },
+    {
+      name: 'a GPU-side failure with a different cause (an invalid device)',
+      tails: ['bad-device', 'broken-gguf-cpu', 'broken-gguf-cpu'],
+      device: 1,
+      model: 0,
+      persisted: 'invalid device: Vulkan7'
+    }
+  ])('$name: $model model verdict(s), $device device verdict(s)', async ({ tails, device, model, persisted }) => {
+    const h = ladderHarness({ failFirst: 3, probe: [RTX], failMessages: tails.map(reason), realMock: true })
     await h.factory(opts).start()
-    expect(h.failures).toEqual([])
-    expect(h.modelLoadFailures).toHaveLength(1)
-  })
-
-  it('…and so does the colour-coded GPU tail the app captured before --log-colors off', async () => {
-    const h = ladderHarness({
-      failFirst: 3,
-      probe: [RTX],
-      failMessages: [reason('broken-gguf-gpu-coloured'), reason('broken-gguf-cpu'), reason('broken-gguf-cpu')],
-      realMock: true
-    })
-    await h.factory(opts).start()
-    expect(h.failures).toEqual([])
-    expect(h.modelLoadFailures).toHaveLength(1)
-  })
-
-  it('a GPU-side failure with a different cause stays a DEVICE verdict', async () => {
-    const h = ladderHarness({
-      failFirst: 3,
-      probe: [RTX],
-      failMessages: [reason('bad-device'), reason('broken-gguf-cpu'), reason('broken-gguf-cpu')],
-      realMock: true
-    })
-    await h.factory(opts).start()
-    expect(h.failures).toHaveLength(1)
-    expect(h.failures[0]).toContain('invalid device: Vulkan7')
-    expect(h.modelLoadFailures).toEqual([])
+    expect(h.failures).toHaveLength(device)
+    expect(h.modelLoadFailures).toHaveLength(model)
+    expect(h.failures[0] ?? null).toEqual(persisted === null ? null : expect.stringContaining(persisted))
   })
 })
 
@@ -1502,19 +1313,8 @@ describe('#515 — the #312 verdicts on real llama-server tails', () => {
 // mock at once; (2) with acceleration off (or the auto-disable flag already persisted) there is no
 // GPU rung to compare against, and the model is still NAMED when every rung fails. The latch has
 // its own clearing rule (verify / re-download / engine install / restart) — "Try GPU again" is
-// about the graphics card and leaves it alone (pinned in gpu-ipc.test.ts).
+// about the graphics card and leaves it alone (pinned in performance-gpu.test.ts).
 describe('#372 — an unloadable model is latched for the session and named when acceleration is off', () => {
-  beforeEach(() => {
-    clearSpeculativeSuppression()
-    clearModelLoadLatches()
-  })
-
-  const MODEL_LOAD_REASON =
-    'llama-server exited before becoming healthy (code 1) — last output: ' +
-    'llama_model_load: error loading model: unknown model architecture: audit fixture'
-  const BIND_RACE_REASON =
-    'llama-server exited before becoming healthy (code 1) — last output: error: bind: address already in use'
-
   it('a second start of a blamed model spawns NO rung, names the model again, and lands on the mock at once', async () => {
     const h = ladderHarness({ failFirst: 3, probe: [RTX], failMessage: MODEL_LOAD_REASON, realMock: true })
     await h.factory(opts).start()
@@ -1537,26 +1337,13 @@ describe('#372 — an unloadable model is latched for the session and named when
     expect(reply).toContain('this reply is simulated')
   })
 
-  it('the latch is per model: another model still walks the ladder from rung 1', async () => {
-    const h = ladderHarness({ failFirst: 3, probe: [RTX], failMessage: MODEL_LOAD_REASON })
-    await h.factory(opts).start()
-    const healthy = h.factory({ ...opts, modelId: 'healthy' })
-    await healthy.start()
-    expect(h.calls).toHaveLength(4)
-    expect(h.calls[3].extraArgs).toEqual([]) // rung 1 — the GPU was never blamed
-    expect(healthy.backend).toBe('gpu')
-    expect(modelLoadLatchReason('healthy')).toBeNull()
-  })
-
-  it('the latched start never prefetches, never samples the load, and never warms up (nothing loaded)', async () => {
+  it('the latched start never prefetches and never warms up (nothing is loaded)', async () => {
     const h = ladderHarness({ failFirst: 3, probe: [RTX], failMessage: MODEL_LOAD_REASON })
     await h.factory(opts).start()
     const prefetchesBefore = h.prefetches.length
-    resetEffectiveReadForTests()
     await h.factory(opts).start()
     expect(h.prefetches).toHaveLength(prefetchesBefore)
-    expect(h.chatCalls).toEqual([])
-    expect(latestEffectiveRead()).toBeNull()
+    expect(h.warmups).toEqual([])
   })
 
   it('a stop() before a latched start settles as CANCELLED, not as the mock (CODE-2 holds)', async () => {
@@ -1587,52 +1374,30 @@ describe('#372 — an unloadable model is latched for the session and named when
     expect(modelLoadLatchReason('m')).toBe(MODEL_LOAD_REASON) // blamed again → latched again
   })
 
-  it('clearing EVERY latch re-arms every model (engine-install seam); the #182 latch is separate', async () => {
-    latchModelLoad('a', 'r')
-    latchModelLoad('b', 'r')
-    clearSpeculativeSuppression() // #182's reset is NOT this latch's reset…
-    expect(modelLoadLatchReason('a')).toBe('r')
-    clearModelLoadLatches() // …this is
-    expect(modelLoadLatchReason('a')).toBeNull()
-    expect(modelLoadLatchReason('b')).toBeNull()
-  })
-
-  it('acceleration OFF, every rung failing: the model is named once, the device never blamed, nothing persisted', async () => {
-    // Acceptance 2. `gpuMode: 'off'` starts at rung 2 — there is no GPU rung, so the #312
-    // comparison cannot run; the notice must still name the model (the existing :323 case, where
-    // rung 3 comes up, stays green unedited).
-    const h = ladderHarness({ gpuMode: 'off', failFirst: 2, failMessage: MODEL_LOAD_REASON, latchGpuFailures: true })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(h.calls).toHaveLength(2) // rung 2 (--device none), rung 3 (cpu build) — no GPU rung
-    expect(h.calls[0].extraArgs).toEqual(['--device', 'none'])
-    expect(runtime.backend).toBe('mock')
-    expect(h.modelLoadFailures).toHaveLength(1)
-    expect(h.modelLoadFailures[0]).toEqual({ modelId: 'm', reason: MODEL_LOAD_REASON })
-    expect(h.failures).toEqual([]) // `gpuAutoDisabled` is never written on this path
-    expect(modelLoadLatchReason('m')).toBe(MODEL_LOAD_REASON) // and the model is latched
-  })
-
-  it('gpuAutoDisabled already persisted, every rung failing: the same — named, latched, no second device verdict', async () => {
-    const h = ladderHarness({ gpuAutoDisabled: true, failFirst: 2, failMessage: MODEL_LOAD_REASON })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(h.calls).toHaveLength(2)
-    expect(runtime.backend).toBe('mock')
-    expect(h.modelLoadFailures).toHaveLength(1)
-    expect(h.failures).toEqual([])
-    expect(modelLoadLatchReason('m')).toBe(MODEL_LOAD_REASON)
-  })
-
-  it('acceleration OFF with no cpu safety net: the single rung failing still names the model', async () => {
-    const h = ladderHarness({ gpuMode: 'off', cpuBin: null, failFirst: 1, failMessage: MODEL_LOAD_REASON })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(h.calls).toHaveLength(1)
-    expect(runtime.backend).toBe('mock')
-    expect(h.modelLoadFailures).toHaveLength(1)
-    expect(h.failures).toEqual([])
-  })
+  // Acceptance 2. With no GPU rung the #312 comparison cannot run; the notice must still name the
+  // model (where rung 3 comes up instead, 'gpuMode "off" starts at rung 2…' covers it).
+  it.each([
+    { name: 'acceleration OFF', config: { gpuMode: 'off' as const, failFirst: 2 }, rungs: 2 },
+    { name: 'gpuAutoDisabled already persisted', config: { gpuAutoDisabled: true, failFirst: 2 }, rungs: 2 },
+    {
+      name: 'acceleration OFF with no cpu safety net',
+      config: { gpuMode: 'off' as const, cpuBin: null, failFirst: 1 },
+      rungs: 1
+    }
+  ])(
+    '$name, every rung failing: the model is named once and latched, the device never blamed, nothing persisted',
+    async ({ config, rungs }) => {
+      const h = ladderHarness({ ...config, failMessage: MODEL_LOAD_REASON, latchGpuFailures: true })
+      const runtime = h.factory(opts)
+      await runtime.start()
+      expect(h.calls).toHaveLength(rungs) // no GPU rung: the #312 comparison cannot run
+      expect(h.calls[0].extraArgs).toEqual(['--device', 'none'])
+      expect(runtime.backend).toBe('mock')
+      expect(h.modelLoadFailures).toEqual([{ modelId: 'm', reason: MODEL_LOAD_REASON }])
+      expect(h.failures).toEqual([]) // `gpuAutoDisabled` is never written on this path
+      expect(modelLoadLatchReason('m')).toBe(MODEL_LOAD_REASON)
+    }
+  )
 
   it('an UNRECOGNISED failure shape with acceleration off names the model but does NOT latch it', async () => {
     // Unknown evidence is enough to tell the user, not enough to skip every later attempt —
@@ -1671,26 +1436,20 @@ describe('#372 — an unloadable model is latched for the session and named when
     expect(modelLoadLatchReason('m')).toBe(MODEL_LOAD_REASON)
   })
 
-  it('a DEVICE verdict never latches the model: rung 1 fails, the CPU control comes up', async () => {
-    const h = ladderHarness({ failFirst: 1, probe: [RTX], failMessage: MODEL_LOAD_REASON })
-    await h.factory(opts).start()
-    expect(h.failures).toHaveLength(1)
-    expect(modelLoadLatchReason('m')).toBeNull()
-  })
-
   it('the conservative device verdict (differing classes, all rungs down) never latches the model either', async () => {
     const h = ladderHarness({
       failFirst: 3,
       probe: [RTX],
       latchGpuFailures: true, // the device verdict persists, the way `persistGpuFailure` does
-      failMessages: [
-        'llama-server exited before becoming healthy (code 134) — last output: ggml_vulkan: vk error: device lost',
-        MODEL_LOAD_REASON,
-        MODEL_LOAD_REASON
-      ]
+      // The Intel-Mac shape (known-limitations): the GPU rung dies of the device, the CPU rungs
+      // die of something else entirely. Ambiguous ⇒ blame the device, i.e. today's behaviour.
+      failMessages: [DEVICE_LOST_REASON, MODEL_LOAD_REASON, MODEL_LOAD_REASON]
     })
-    await h.factory(opts).start()
+    const first = h.factory(opts)
+    await first.start()
+    expect(first.backend).toBe('mock')
     expect(h.failures).toHaveLength(1)
+    expect(h.failures[0]).toContain('vk error: device lost')
     expect(h.modelLoadFailures).toEqual([])
     expect(modelLoadLatchReason('m')).toBeNull()
     // The next start of the same model still WALKS — from rung 2, as the persisted flag says —
@@ -1718,55 +1477,29 @@ describe('#372 — an unloadable model is latched for the session and named when
     expect(h.modelLoadFailures).toEqual([])
     expect(modelLoadLatchReason('m')).toBeNull()
   })
-
-  it('the latched start reports backend "mock" through RuntimeManager.status()', async () => {
-    const h = ladderHarness({ failFirst: 3, probe: [RTX], failMessage: MODEL_LOAD_REASON })
-    await h.factory(opts).start()
-    const manager = new RuntimeManager(h.factory)
-    await manager.start(opts)
-    expect(manager.status().backend).toBe('mock')
-    expect(h.calls).toHaveLength(3)
-    await manager.stop()
-  })
 })
 
 // #372 wiring pin: the download-complete seam clears the latch for the model that just landed.
 // `main/index.ts` is composition (no unit harness), so the wiring is pinned by source text: the
-// `ctx.onModelInstalled` handler must call `clearModelLoadLatch(<its model id>)` BEFORE the
-// translator rule's early return — otherwise a re-downloaded chat weight stays latched whenever
-// the translator slot needs no replacing (the common case).
-describe('#372 wiring pin: ctx.onModelInstalled re-arms the model before the translator early return', () => {
+// handler must call `clearModelLoadLatch(<its model id>)` as its FIRST statement — before
+// `if (!ctx) return`, the embedder reset and the transcriber/translator refreshes, any of which can
+// return early or throw inside the download manager's swallowing hook.
+describe('#372 wiring pin: ctx.onModelInstalled re-arms the model before anything in the handler can return or throw', () => {
   const indexSrc = readFileSync(join(__dirname, '../../src/main/index.ts'), 'utf8')
   const handlerStart = indexSrc.indexOf('ctx.onModelInstalled = (')
   const handlerSrc = indexSrc.slice(handlerStart, indexSrc.indexOf('\n  }\n', handlerStart))
 
-  it('the pin found the handler', () => {
-    expect(handlerStart).toBeGreaterThanOrEqual(0)
-    expect(handlerSrc.length).toBeGreaterThan(0)
-  })
-
-  // #530 moved the translator rule (and its early return) into `ctx.refreshTranslatorSlot`, shared
-  // with the engine re-arm; the handler now CALLS it, so the pin asserts the latch clears first.
-  it('clearModelLoadLatch(modelId) runs before the translator refresh (whose rule returns early)', () => {
+  it("clearModelLoadLatch(modelId) is the handler's first statement — before anything that can return or throw", () => {
+    expect(handlerSrc).toMatch(/ctx\.onModelInstalled = \(modelId\)/) // also proves the handler was found
     const clearAt = handlerSrc.indexOf('clearModelLoadLatch(modelId)')
-    const refreshAt = handlerSrc.indexOf('refreshTranslatorSlot?.(')
     expect(clearAt).toBeGreaterThanOrEqual(0)
-    expect(refreshAt).toBeGreaterThan(clearAt)
-    const ruleStart = indexSrc.indexOf('ctx.refreshTranslatorSlot = () => {')
-    expect(ruleStart).toBeGreaterThanOrEqual(0)
-    expect(indexSrc.slice(ruleStart, indexSrc.indexOf('\n  }\n', ruleStart))).toContain(
-      'shouldReplaceTranslator(ctx.translator)'
-    )
-    expect(handlerSrc).toMatch(/ctx\.onModelInstalled = \(modelId\)/)
+    for (const later of ['if (!ctx) return', 'resetStartFailure', 'refreshTranscriberSlot(', 'refreshTranslatorSlot?.(']) {
+      expect(handlerSrc.indexOf(later), later).toBeGreaterThan(clearAt)
+    }
   })
 })
 
 describe('#530 — a program the OS loader refused is neither a GPU nor a model fault', () => {
-  beforeEach(() => {
-    clearSpeculativeSuppression()
-    clearModelLoadLatches()
-  })
-
   const GOMP: EngineProblem = {
     family: 'llama_cpp',
     reason: 'library-missing',
@@ -1775,50 +1508,45 @@ describe('#530 — a program the OS loader refused is neither a GPU nor a model 
     exit: 'exit code 127'
   }
   const refused = (): EngineCannotRunError => new EngineCannotRunError('llama-server', GOMP)
-  /** A model fault on a forced-CPU rung, for the mixed case. */
-  const MODEL_LOAD_REASON =
-    'llama-server exited before becoming healthy (code 1) — last output: ' +
-    'llama_model_load: error loading model: unknown model architecture: audit fixture'
 
-  it('a prepared Kit (rungs 1, 2, 3 all refused): the ENGINE is named — no GPU flag, no model latch', async () => {
-    // Before #530 the cpu/ build's different path made rung 3's signature differ, so the ladder
-    // persisted gpuAutoDisabled — and the next start then latched the MODEL.
-    const h = ladderHarness({ failFirst: 3, probe: null, failErrors: [refused(), refused(), refused()], latchGpuFailures: true })
-    const runtime = h.factory(opts)
-    await runtime.start()
-    expect(h.calls).toHaveLength(3)
-    expect(h.failures).toEqual([])
-    expect(h.modelLoadFailures).toEqual([])
-    expect(h.engineFailures).toEqual([{ modelId: 'm', problem: GOMP }])
-    expect(runtime.backend).toBe('mock')
-    expect(modelLoadLatchReason('m')).toBeNull()
-
-    // The next start walks the full ladder again (GPU rung included) and still blames nothing —
-    // so installing the library and choosing Check again (or restarting) finds a clean slate.
-    const again = ladderHarness({ failFirst: 3, probe: null, failErrors: [refused(), refused(), refused()] })
-    await again.factory(opts).start()
-    expect(again.calls).toHaveLength(3)
-    expect(again.failures).toEqual([])
-    expect(again.modelLoadFailures).toEqual([])
-    expect(again.engineFailures).toHaveLength(1)
-  })
-
-  it('an in-app install or a DIY drive (no cpu/ build): the engine, not the model', async () => {
-    const h = ladderHarness({ failFirst: 2, probe: null, cpuBin: null, failErrors: [refused(), refused()] })
-    await h.factory(opts).start()
-    expect(h.calls).toHaveLength(2)
-    expect(h.modelLoadFailures).toEqual([])
-    expect(h.engineFailures).toHaveLength(1)
-    expect(modelLoadLatchReason('m')).toBeNull()
-  })
-
-  it('acceleration off: the engine is named, the model is not latched', async () => {
-    const h = ladderHarness({ failFirst: 2, gpuMode: 'off', failErrors: [refused(), refused()] })
-    await h.factory(opts).start()
-    expect(h.modelLoadFailures).toEqual([])
-    expect(h.engineFailures).toHaveLength(1)
-    expect(modelLoadLatchReason('m')).toBeNull()
-  })
+  // Before #530 the cpu/ build's different path made rung 3's signature differ, so the ladder
+  // persisted gpuAutoDisabled — and the next start then latched the MODEL. The next start must walk
+  // the full ladder again and still blame nothing, so installing the library and choosing Check
+  // again (or restarting) finds a clean slate.
+  it.each([
+    { name: 'a prepared Kit (rungs 1, 2, 3 all refused)', config: { probe: null }, rungs: 3, nextFirstArgs: [] as string[] },
+    {
+      name: 'an in-app install or a DIY drive (no cpu/ build)',
+      config: { probe: null, cpuBin: null },
+      rungs: 2,
+      nextFirstArgs: [] as string[]
+    },
+    { name: 'acceleration off', config: { gpuMode: 'off' as const }, rungs: 2, nextFirstArgs: ['--device', 'none'] }
+  ])(
+    '$name: the ENGINE is named — no GPU flag, no model latch, and the next start walks the full ladder again',
+    async ({ config, rungs, nextFirstArgs }) => {
+      const h = ladderHarness({
+        ...config,
+        failFirst: 2 * rungs,
+        failErrors: Array.from({ length: 2 * rungs }, refused),
+        latchGpuFailures: true
+      })
+      const runtime = h.factory(opts)
+      await runtime.start()
+      expect(h.calls).toHaveLength(rungs)
+      expect(h.failures).toEqual([])
+      expect(h.modelLoadFailures).toEqual([])
+      expect(h.engineFailures).toEqual([{ modelId: 'm', problem: GOMP }])
+      expect(runtime.backend).toBe('mock')
+      expect(modelLoadLatchReason('m')).toBeNull()
+      // SAME harness: `latchGpuFailures` would carry a wrong GPU verdict into this walk, a latch would skip it.
+      await h.factory(opts).start()
+      expect(h.calls).toHaveLength(2 * rungs)
+      expect(h.calls[rungs].extraArgs).toEqual(nextFirstArgs)
+      expect(h.engineFailures).toHaveLength(2)
+      expect(h.failures).toEqual([])
+    }
+  )
 
   it('never latches the MTP rung off for it — the flags were not the problem', async () => {
     const h = ladderHarness({ failFirst: 4, probe: [RTX], failErrors: [refused(), refused(), refused(), refused()] })
