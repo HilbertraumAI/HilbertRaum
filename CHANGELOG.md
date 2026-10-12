@@ -7,7 +7,7 @@ the project aims to follow [Semantic Versioning](https://semver.org/spec/v2.0.0.
 from its first public `1.0.0` release onward.
 
 > **Pre-1.0.** HilbertRaum has been public since **2026-07-12** and has shipped releases
-> since that day: **v0.1.50** was the first, **v0.1.62** is current. Versions stay in the
+> since that day: **v0.1.50** was the first, **v0.1.63** is current. Versions stay in the
 > `0.1.x` line and SemVer applies from `1.0.0` on — a `0.1.x` bump is a release checkpoint,
 > not a compatibility promise. Tags below `v0.1.50` (and `v0.1.51`) have no GitHub release
 > page today and no notes here; one of them, `v0.1.46` (2026-07-10), was a pre-release
@@ -25,36 +25,9 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
-### Security
+Nothing yet — the next release's entries accumulate here.
 
-- **The PDF reader that powers "Make searchable (OCR)" now runs fully inside the app's strict
-  content-security sandbox.** When a scanned PDF is prepared for text recognition, the component
-  that reads it previously ran in a helper that was not covered by the app's content-security
-  policy. It now runs under the same strict policy as the rest of the app, which blocks any
-  attempt to reach the network or run generated code. OCR and the text it produces are unchanged.
-- **The app's windows can no longer read other files on your computer.** The app's screens used to
-  be loaded as local files, and in that mode the browser engine behind them could read any file
-  your user account can open. Nothing in the app did so, but a future bug that let content run code
-  in a window could have used it. The screens now load from the app's own private address, which
-  reaches the app's bundled files and nothing else, and the app has given up that extra file access
-  altogether (#560).
-- **The app can no longer be used to run other programs' code, and it checks its own files.**
-  The HilbertRaum program could be started as a general-purpose script runner, or with a debugging
-  port, by anything that could already start programs on your computer. Both are switched off now.
-  On Windows and macOS the app also stops if its main program files have been changed since it
-  was built. Nothing changes in how you use the app (#562).
-- **Exporting an evidence pack as a PDF no longer puts a temporary copy of the pack next to the
-  exported file.** To print the PDF, the app used to save the pack's readable content as a temporary
-  file beside the one you chose, and remove it afterwards. If the app was closed mid-export, or
-  another program held that file open, the copy could stay behind. The app now prints the pack
-  straight from memory, so no such copy is ever written (#563).
-- **The app no longer contacts Google for a spelling dictionary, or the local network for proxy
-  settings.** Spell-checking has been off in the app for several versions, but the browser engine
-  inside it still downloaded a spelling dictionary from a Google server when the app started: on
-  Linux for every language, on Windows for a language Windows cannot spell-check itself. Nothing
-  from your workspace was sent, but the request told the server your computer's address and
-  language. On Windows the engine also asked the local network for proxy settings, which a hostile
-  network could answer. Both requests are gone now. Nothing changes in how you use the app (#567).
+## [0.1.63] — 2026-10-12
 
 ### Added
 
@@ -401,6 +374,34 @@ from its first public `1.0.0` release onward.
 
 ### Security
 
+- **The PDF reader that powers "Make searchable (OCR)" now runs fully inside the app's strict
+  content-security sandbox.** When a scanned PDF is prepared for text recognition, the component
+  that reads it previously ran in a helper that was not covered by the app's content-security
+  policy. It now runs under the same strict policy as the rest of the app, which blocks any
+  attempt to reach the network or run generated code. OCR and the text it produces are unchanged.
+- **The app's windows can no longer read other files on your computer.** The app's screens used to
+  be loaded as local files, and in that mode the browser engine behind them could read any file
+  your user account can open. Nothing in the app did so, but a future bug that let content run code
+  in a window could have used it. The screens now load from the app's own private address, which
+  reaches the app's bundled files and nothing else, and the app has given up that extra file access
+  altogether (#560).
+- **The app can no longer be used to run other programs' code, and it checks its own files.**
+  The HilbertRaum program could be started as a general-purpose script runner, or with a debugging
+  port, by anything that could already start programs on your computer. Both are switched off now.
+  On Windows and macOS the app also stops if its main program files have been changed since it
+  was built. Nothing changes in how you use the app (#562).
+- **Exporting an evidence pack as a PDF no longer puts a temporary copy of the pack next to the
+  exported file.** To print the PDF, the app used to save the pack's readable content as a temporary
+  file beside the one you chose, and remove it afterwards. If the app was closed mid-export, or
+  another program held that file open, the copy could stay behind. The app now prints the pack
+  straight from memory, so no such copy is ever written (#563).
+- **The app no longer contacts Google for a spelling dictionary, or the local network for proxy
+  settings.** Spell-checking has been off in the app for several versions, but the browser engine
+  inside it still downloaded a spelling dictionary from a Google server when the app started: on
+  Linux for every language, on Windows for a language Windows cannot spell-check itself. Nothing
+  from your workspace was sent, but the request told the server your computer's address and
+  language. On Windows the engine also asked the local network for proxy settings, which a hostile
+  network could answer. Both requests are gone now. Nothing changes in how you use the app (#567).
 - **Documented: on Linux, the AppImage can run without Chromium's sandbox.** On distributions
   that restrict unprivileged user namespaces, Ubuntu 24.04 and later among them, the AppImage
   starts with Chromium's operating-system sandbox switched off instead of refusing to start, and a
@@ -1407,7 +1408,8 @@ For what the product *is*, see the [README](README.md) and
 [`docs/known-limitations.md`](docs/known-limitations.md). Every release since has its own
 section in [`CHANGELOG.md`](CHANGELOG.md).
 
-[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.62...HEAD
+[Unreleased]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.63...HEAD
+[0.1.63]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.62...v0.1.63
 [0.1.62]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.61...v0.1.62
 [0.1.61]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.60...v0.1.61
 [0.1.60]: https://github.com/HilbertraumAI/HilbertRaum/compare/v0.1.59...v0.1.60
