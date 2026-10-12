@@ -2,9 +2,10 @@ import { EventEmitter } from 'node:events'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 
 // Fakes shared by the suites of the lazily started llama-server sidecars (the embedder, the
-// reranker, vision and translation): a spawned child, a spawn recorder, a one-chunk SSE body, an
-// idle clock fired by hand, and a llama-server that is still loading its model. Each suite drives
-// its real service class through these, over the injected `spawn` / `fetchImpl` seams.
+// reranker, vision and translation): a spawned child, one that dies before it is healthy, a spawn
+// recorder, a one-chunk SSE body, an idle clock fired by hand, and a llama-server that is still
+// loading its model. Each suite drives its real service class through these, over the injected
+// `spawn` / `fetchImpl` seams.
 
 /** A child that exits cleanly right after `kill()`, as llama-server does. */
 export class FakeChild extends EventEmitter implements ChildProcessLike {
@@ -38,6 +39,18 @@ export class GatedChild extends EventEmitter implements ChildProcessLike {
     this.released = true
     if (this.wantExit) this.emit('exit', 0, null)
   }
+}
+
+/** A llama-server that dies before it is healthy (a corrupt GGUF, a lost port, a loader refusal):
+ *  right after spawn it writes `stderr` (if any), exits with `code` and closes its pipe. */
+export function exitingChild(code = 1, stderr = ''): FakeChild & { stderr: EventEmitter } {
+  const child = Object.assign(new FakeChild(), { stderr: new EventEmitter() })
+  queueMicrotask(() => {
+    if (stderr) child.stderr.emit('data', stderr)
+    child.emit('exit', code, null)
+    child.emit('close', code, null)
+  })
+  return child
 }
 
 /** A spawn that records each argv and hands out a fresh child per call (a `FakeChild` unless
