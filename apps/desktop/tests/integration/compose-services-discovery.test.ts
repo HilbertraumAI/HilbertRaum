@@ -65,7 +65,8 @@ describe('composeServices — one discovery per composition pass (PF-4)', () => 
     discoverCalls.mockClear()
     // Wave 8 ruling (b)(G)/NF-1: composeServices's two reranker callbacks are now required —
     // no sidecar binary is provisioned in this fixture, so their values never matter, only that
-    // the wire compiles and is threaded through (proven functionally in reranker.test.ts).
+    // the wire compiles and is threaded through (proven functionally in
+    // reranker-callbacks-composition.test.ts).
     const services = composeServices({
       rootPath: root,
       manifestsDir,
