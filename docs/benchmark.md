@@ -144,7 +144,7 @@ invalid ram  → UNKNOWN   (detection failed)
 
 Adjustments, in order:
 - A **useful GPU** bumps one step toward `PRO` (capped at `PRO`). "Useful" is the
-  **conservative Phase-16 gate** (`gpuUsefulForProfile` in `runtime/gpu.ts`): some probed
+  **conservative Phase-16 gate** (`gpuUsefulForProfile` in `shared/gpu-rules.ts`): some probed
   device has **≥ 5 GiB** (`GPU_BUMP_MIN_VRAM_MB = 5120` — 6,144 until the 2026-09-07 decision on
   #321 brought it down so the common 6 GB laptop card, which Vulkan reports at 5,7xx–5,9xx MiB,
   counts; `model-benchmarks.md` §6.6 N8) **and** does not look integrated

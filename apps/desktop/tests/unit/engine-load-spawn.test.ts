@@ -40,7 +40,6 @@ function server(spawn: SpawnFn, extra: Partial<ConstructorParameters<typeof Llam
     healthIntervalMs: 1,
     // FakeChild.kill() never emits 'exit': stop() would sit out the default grace.
     killGraceMs: 1,
-    verifyBinary: async () => 'skip-dev',
     ...extra
   })
 }

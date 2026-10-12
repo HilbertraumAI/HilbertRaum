@@ -16,7 +16,7 @@ import { createWhisperCliTranscriber } from '../../src/main/services/transcriber
 import { checkProgramLoads } from '../../src/main/services/engine-health'
 
 // TEST-2 (full-audit-2026-06-29, Phase 3): the binary-verifier verdict/cache matrix is well unit-
-// tested (binary-verifier.test.ts). A seam test that injects a fake `verifyBinary: () => 'mismatch'`
+// tested (binary-verifier.test.ts). A seam test that injects a fake verdict (`verify: () => 'mismatch'`)
 // proves only "IF the verifier says mismatch the seam refuses", NOT that the seam is still WIRED to
 // the REAL verifier: a regression that silently stopped calling `verifyBinaryBeforeSpawn` before a
 // spawn would redden none of them — the supply-chain control (vuln-scan-2026-06-21 item B) could be
@@ -27,13 +27,13 @@ import { checkProgramLoads } from '../../src/main/services/engine-health'
 // "Check again" engine check (`checkProgramLoads`). PACKAGED enforcement ON
 // (`initBinaryVerification(false)`) + a real on-disk install marker whose recorded hash does NOT
 // match the binary's bytes → each seam must REFUSE to spawn (no child created). They
-// deliberately do NOT inject the `verifyBinary`/`verify` seam — the wiring IS the point. The
+// deliberately do NOT inject a seam's `verify`/`verifyBinary` option — the wiring IS the point. The
 // LlamaServer seam's positive controls run through the real verifier too: a matching marker (`ok`)
 // and a legacy, hash-less marker (`skip-legacy`, security-model.md §3's non-breaking rollout). The
 // LlamaServer injected-verdict copy in sidecar.test.ts was retired for these; transcriber.test.ts
 // keeps its own. kiwix-serve / kiwix-manage are not covered here yet (follow-up).
 //
-// TEETH: delete the `verifyBinary`/`verify` call at a seam → the spawn proceeds (`calls` non-empty /
+// TEETH: delete the `verifyBinaryBeforeSpawn`/`verify` call at a seam → the spawn proceeds (`calls` non-empty /
 // the refusal vanishes) → the matching test reddens. The matching-marker positive control proves the
 // refusal is genuinely the hash mismatch, not an always-refuse harness artefact.
 
@@ -125,7 +125,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       fetchImpl: healthyFetch(),
       findPort: async () => 51000,
       healthIntervalMs: 1
-      // NB: no `verifyBinary` → the constructor falls back to the REAL verifyBinaryBeforeSpawn.
+      // NB: LlamaServer has no verifier seam: it always calls the REAL verifyBinaryBeforeSpawn.
     })
     // The exact shape `failureSignature` classifies as `integrity` (the ladder's #312 comparison).
     await expect(server.start()).rejects.toThrow(/^llama-server failed pre-spawn integrity verification/)

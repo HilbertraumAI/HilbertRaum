@@ -12,7 +12,6 @@ import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
   createCpuCrashAutoRestart,
-  COMPATIBILITY_MODE_NOTICE,
   type LlamaRungOptions
 } from '../../src/main/services/runtime/factory'
 import {
@@ -23,6 +22,7 @@ import {
 import { performShutdown } from '../../src/main/shutdown'
 import type { AppContext } from '../../src/main/services/context'
 import type { GpuDevice } from '../../src/shared/types'
+import { t } from '../../src/shared/i18n'
 import { manualSource, type ManualSource } from '../helpers/manual-stream'
 import { hangBudgetMs, until, within } from '../helpers/hang-budget'
 
@@ -431,7 +431,7 @@ describe('GPU mid-session crash auto-fallback through the real manager (REL-1)',
     expect(h.children[0].args).not.toContain('none') // rung 1 — GPU auto-offload
     expect(h.children[1].args).toContain('none') // rung 2 — `--device none` (forced CPU)
     expect(h.gpuDisabled()).toBe(true) // persisted before the restart (retry lands on CPU)
-    expect(h.notices).toEqual([COMPATIBILITY_MODE_NOTICE])
+    expect(h.notices).toEqual([t('en', 'main.runtime.compatibilityMode')])
 
     const status = h.mgr.status()
     expect(status.backend).toBe('cpu')

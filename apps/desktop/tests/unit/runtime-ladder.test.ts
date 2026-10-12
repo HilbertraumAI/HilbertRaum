@@ -10,8 +10,6 @@ import {
   clearSpeculativeSuppression,
   isSpeculativeSuppressed,
   modelLoadLatchReason,
-  COMPATIBILITY_MODE_NOTICE,
-  SPEED_UP_DISABLED_NOTICE,
   MTP_SERVER_ARGS,
   WARMUP_MAX_TOKENS,
   WARMUP_PROMPT
@@ -25,6 +23,7 @@ import {
   resetEffectiveReadForTests,
   suppressNextModelLoadSample
 } from '../../src/main/services/read-speed'
+import { t } from '../../src/shared/i18n'
 import { RuntimeManager } from '../../src/main/services/runtime'
 import type { ModelRuntime, RuntimeStartOptions } from '../../src/main/services/runtime'
 import type { UnexpectedExitInfo } from '../../src/main/services/runtime/sidecar'
@@ -370,8 +369,8 @@ describe('createGpuCrashAutoFallback (§5.3)', () => {
     expect(persisted[0]).toContain('code 134')
     expect(persisted[0]).toContain('vk error')
     // §11.4 copy: compatibility mode, never "GPU failed" / "your hardware is bad".
-    expect(notices).toEqual([COMPATIBILITY_MODE_NOTICE])
-    expect(COMPATIBILITY_MODE_NOTICE).not.toMatch(/fail|crash|bad|broken/i)
+    expect(notices).toEqual([t('en', 'main.runtime.compatibilityMode')])
+    expect(notices[0]).not.toMatch(/fail|crash|bad|broken/i)
   })
 
   it('a failed restart is swallowed and re-arms the handler (the failure surfaces on the next manual start)', async () => {
@@ -920,8 +919,8 @@ describe('createSpeculativeCrashAutoFallback (#182)', () => {
     handler(startOpts, info) // re-entrancy guard: one restart, never a loop
     await until(() => restarts.length > 0)
     expect(restarts).toHaveLength(1)
-    expect(notices).toEqual([SPEED_UP_DISABLED_NOTICE])
-    expect(notices[0]).not.toBe(COMPATIBILITY_MODE_NOTICE)
+    expect(notices).toEqual([t('en', 'main.runtime.speedUpDisabled')])
+    expect(notices[0]).not.toBe(t('en', 'main.runtime.compatibilityMode'))
     expect(reasons[0]).toContain('ggml assert')
   })
 })

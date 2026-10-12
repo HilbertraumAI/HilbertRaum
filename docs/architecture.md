@@ -3834,8 +3834,7 @@ adds is the safety machinery:
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
   The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful, totalMb, budgetMb, memoryClass }`
   (`gpuUsefulForProfile`: ≥ `USABLE_VRAM_MB` — 5120 MiB since #321 — AND not integrated → the conservative `classifyProfile`
-  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
-  `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name`,
+  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, so the Performance screen rates a device by the same definition — `name`,
   `totalMb` and `budgetMb` are one device's, the BUDGET device `nextStartMemory` selects, PR #308
   audit decision 9); `benchmark.ts` itself keeps **zero
   `child_process`**. `prepareFirstBenchmark` (the cheap half of the first-run benchmark, PR #303
@@ -4499,7 +4498,7 @@ measured values before release notes claim anything.)
 `gpuUsefulForProfile(devices)`: some device has **≥ `USABLE_VRAM_MB`** AND `!looksIntegrated(name)`.
 Conservative by design — an iGPU reporting 16 GB of *shared* RAM must never bump a laptop's
 profile; a false negative only costs a too-small model recommendation. The regex lives in
-`shared/gpu-rules.ts` (re-exported by `runtime/gpu.ts`; fixture-tested, covers Windows + RADV APU
+`shared/gpu-rules.ts` (fixture-tested, covers Windows + RADV APU
 names, Meteor-Lake Arc and, since #320, the bare `Intel(R) Graphics`). **The floor is 5,120 MiB
 since 2026-09-07** (issue #321, owner decision; 6,144 before): every 6 GB laptop card the project
 has measured reports below 6,144 on Vulkan — GTX 1660 SUPER 5,746, RTX 4050 Laptop 5,921, RTX 3060
@@ -11439,6 +11438,9 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   proves the refusal is genuinely the hash mismatch, not an always-refuse artefact. Teeth: drop the
   `verifyBinary`/`verify` call at a seam → the spawn proceeds and the refusal test reddens
   (verified: LlamaServer resolves instead of rejecting, the probe's spawn count is 1, whisper proceeds).
+  The 2026-10 runtime-ladder test campaign added the fourth seam (the #530 "Check again" engine check,
+  `checkProgramLoads`) and the `ok` / `skip-legacy` positive controls, retired the injected-verdict
+  `LlamaServer` copies, and removed `LlamaServer`'s `verifyBinary` option: it always calls the real verifier.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but

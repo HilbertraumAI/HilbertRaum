@@ -4,7 +4,6 @@ import {
   createSelectingRuntimeFactory,
   createGpuCrashAutoFallback,
   createCpuCrashAutoRestart,
-  COMPATIBILITY_MODE_NOTICE,
   type GpuLadderDeps
 } from '../../src/main/services/runtime/factory'
 import { createLlamaRuntime } from '../../src/main/services/runtime/llama'
@@ -139,7 +138,7 @@ describe('GPU crash auto-fallback is wired to the real sidecar exit event (DX-5)
     expect(persisted).toHaveLength(1)
     expect(persisted[0]).toContain('code 134') // the real exit code flowed through the wiring
     expect(persisted[0]).toContain('vk error: device lost') // …and the captured stderr tail
-    expect(notices).toEqual([COMPATIBILITY_MODE_NOTICE]) // friendly §11.4 copy
+    expect(notices).toEqual([t('en', 'main.runtime.compatibilityMode')]) // friendly §11.4 copy
 
     await runtime.stop()
   })

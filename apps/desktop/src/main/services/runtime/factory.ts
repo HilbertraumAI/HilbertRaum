@@ -1,5 +1,4 @@
 import { existsSync } from 'node:fs'
-import { t } from '../../../shared/i18n'
 import { tMain } from '../i18n'
 import type { EngineProblem, GpuDevice, PlacementDevice } from '../../../shared/types'
 import type { SpeculativeDecoding } from '../../../shared/manifest'
@@ -82,7 +81,7 @@ export const WARMUP_MAX_TOKENS = 8
  * budgets 180 s). On expiry the request is aborted, a warning is logged, and the start
  * proceeds to ready — the cap trades a possibly-cold first prompt for a bounded start.
  */
-export const WARMUP_TIMEOUT_MS = 90_000
+const WARMUP_TIMEOUT_MS = 90_000
 
 /**
  * Server flags that switch ON the trained-in MTP draft head some GGUFs already carry
@@ -124,7 +123,7 @@ export const MTP_SERVER_ARGS: readonly string[] = ['--spec-type', 'draft-mtp', '
  * that term is the context cache the fit estimate adds to EVERY start. Different consumers, no
  * double count.
  */
-export const MTP_VRAM_HEADROOM_MB = 3584
+const MTP_VRAM_HEADROOM_MB = 3584
 
 /**
  * Model ids whose speculative rung has been proven unviable ON THIS MACHINE, for the rest
@@ -1015,16 +1014,6 @@ export function createSelectingRuntimeFactory(deps: RuntimeSelectionDeps): Runti
   }
 }
 
-/**
- * Friendly §11.4 copy for the mid-generation auto-fallback. Never "GPU failed" /
- * "your hardware is bad" — CPU mode is normal, not degraded. The canonical-English
- * constant stays exported for tests (D-L8); the notify site below emits via tMain()
- * (i18n record §3.3 rule 2 — runtime:notice is ephemeral).
- */
-export const COMPATIBILITY_MODE_NOTICE = t('en', 'main.runtime.compatibilityMode')
-/** #182 sibling of {@link COMPATIBILITY_MODE_NOTICE} — the speculative-rung restart notice. */
-export const SPEED_UP_DISABLED_NOTICE = t('en', 'main.runtime.speedUpDisabled')
-
 export interface GpuCrashFallbackDeps {
   /** Restart the same model (the ladder now starts at rung 2 — CPU). */
   restart: (opts: RuntimeStartOptions) => Promise<unknown>
@@ -1074,7 +1063,10 @@ function createCrashAutoRestart(
  * The §5.3 mid-generation crash handler: persist the auto-disable flag, restart the
  * same model ONCE at CPU, and surface the compatibility-mode notice — so the user's
  * *next* message just works. (After the restart the backend is CPU and the ladder no
- * longer routes crashes here.)
+ * longer routes crashes here.) The notice is the friendly §11.4 copy
+ * (`main.runtime.compatibilityMode`, emitted via tMain — runtime:notice is ephemeral, i18n
+ * record §3.3 rule 2): never "GPU failed" / "your hardware is bad" — CPU mode is normal,
+ * not degraded.
  */
 export function createGpuCrashAutoFallback(
   deps: GpuCrashFallbackDeps
