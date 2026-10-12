@@ -778,6 +778,14 @@ export function registerRagIpc(ctx: AppContext): void {
         treeAvailable: readyTreeCountInScope(ctx.db, scope) > 0,
         extractAvailable: extractionsExistInScope(ctx.db, scope)
       })
+      // What a grounded answer leads with: the W2 scope notice, then (#649) the heads-up that a whole read
+      // of a sum or grouping ask is the model's own arithmetic, which a small model can get wrong even with
+      // every section in the prompt (design-guidelines §11.24). A top-k sum carries #37's notices instead.
+      const groundedPrefix = (wholeRead: boolean): string | undefined => {
+        const lines = [scopeNotice, wholeRead && isAggregationShaped(text) ? tMain('analysis.wholeReadSumHint') : null]
+        const lead = lines.filter((line): line is string => line != null).join('\n\n')
+        return lead ? `${lead}\n\n` : undefined
+      }
 
       // #80 P3 (STR-1 §5.2): the ONE bounded skill-pointer classification, run ONLY on the two
       // trigger classes `isClassificationTrigger` pins — (a) aggregation-shaped coverage-extract
@@ -900,7 +908,7 @@ export function registerRagIpc(ctx: AppContext): void {
                 reranker: ctx.reranker,
                 skill,
                 wholeDocument: { documentId: wholeReadId },
-                answerPrefix: scopeNotice ? `${scopeNotice}\n\n` : undefined,
+                answerPrefix: groundedPrefix(true),
                 onToken: sendToken
               })
               if (offer) {
@@ -960,7 +968,6 @@ export function registerRagIpc(ctx: AppContext): void {
             }
           : undefined
       }
-      const relevancePrefix = scopeNotice ? `${scopeNotice}\n\n` : undefined
 
       return withChatStream(
         event,
@@ -1024,7 +1031,8 @@ export function registerRagIpc(ctx: AppContext): void {
             // visible. #37/#38/#641: the whole-document-question hint or the partial-answer label
             // (composed above) follows it when retrieval left sections out. Both are absent on
             // every ordinary route into this path (byte-unchanged).
-            answerPrefix: relevancePrefix,
+            // #649: a whole read of a sum or grouping ask leads with its own heads-up after it.
+            answerPrefix: groundedPrefix(wholeReadId != null),
             partialCoverageNotice,
             onToken: sendToken
           })

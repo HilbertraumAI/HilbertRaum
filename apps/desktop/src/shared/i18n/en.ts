@@ -891,6 +891,11 @@ export const en = {
   // answer either (an explain request, or a thing it does not collect) — so no advice to build it.
   'analysis.partialAnswerHint':
     '**Heads-up:** this answer is based only on the most relevant sections, so it may miss items.',
+  // #649: a sum or grouping ask over one document read whole is the model's own arithmetic, which a
+  // small model can get wrong even with every section in front of it (design-guidelines §11.24).
+  'analysis.wholeReadSumHint':
+    '**Heads-up:** the model added up these amounts itself and can miss or miscount items. Check the ' +
+    'result against the sources.',
 
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   // The deterministic, whole-document answer the bank-statement analysis handler synthesises

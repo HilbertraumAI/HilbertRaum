@@ -1137,14 +1137,17 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   // Owner decision 2026-07-17: keep the honest listing, but LEAD it with the shape hint + the
   // bank-statement-skill pointer for amounts (option 1 of 3; auto-routing to the skill would
   // reverse the ratified default-off auto-fire posture, a bare redirect would withhold data).
-  // #649 (owner call): over ONE document that fits the window the same ask is read whole instead — the
-  // model sees every section and can add them up, which the listing cannot. The bank offer rides along.
+  // #649 (owner calls): over ONE document that fits the window the same ask is read whole instead — the
+  // model sees every section and can add them up, which the listing cannot. The bank offer rides along, and
+  // the answer leads with the heads-up that the model did the arithmetic (a 4B summed a 1-page statement's
+  // four fees wrong twice), with or without extract data (design-guidelines §11.24).
   it.each([
-    { name: 'a statement too long to read whole keeps the listing, led by the shape hint + skill pointer', text: LONG_STATEMENT, read: 'listing' },
-    { name: 'a statement that fits is read whole, with the bank offer (#649)', text: DE_STATEMENT, read: 'whole' }
-  ])('#54: the aggregation question WITH extract data — $name', async ({ text, read }) => {
+    { name: 'a statement too long to read whole keeps the listing, led by the shape hint + skill pointer', text: LONG_STATEMENT, extract: true, read: 'listing' },
+    { name: 'a statement that fits is read whole, led by the arithmetic heads-up, with the bank offer (#649)', text: DE_STATEMENT, extract: true, read: 'whole' },
+    { name: 'no extract data: a statement that fits is read whole, led by the arithmetic heads-up (#649)', text: DE_STATEMENT, extract: false, read: 'whole' }
+  ])('#54: the aggregation question — $name', async ({ text, extract, read }) => {
     const h = await makeHarness({ fullyChunked: true, text })
-    seedAmountExtract(h)
+    if (extract) seedAmountExtract(h)
 
     const { result } = await invoke(
       handlers,
@@ -1155,22 +1158,29 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     )
     const msg = result as Message
 
-    // The deterministic #80 offer either way: no classification call.
-    expect(msg.skillOffer).toEqual({ installId: BANK_INSTALL_ID, title: expect.any(String), source: 'deterministic' })
     if (read === 'listing') {
       // Still the deterministic listing (0 model calls) — the hint LEADS it, never replaces it.
       expect(h.runtime.calls).toBe(0)
+      expect(msg.skillOffer).toEqual({ installId: BANK_INSTALL_ID, title: expect.any(String), source: 'deterministic' })
       expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
       expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
       expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
-    } else {
-      // One grounded model turn over every section, no listing and no hint (pre-fix: the listing).
+      expect(msg.content).not.toContain(t('en', 'analysis.wholeReadSumHint'))
+      return
+    }
+    // One grounded model turn over every section, led by the heads-up, no listing (pre-fix: the listing with
+    // extract data, the unlabelled whole read without).
+    expect(msg.coverage).toMatchObject({ mode: 'capped', truncated: false })
+    expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+    expect(msg.content).toBe(`${t('en', 'analysis.wholeReadSumHint')}\n\nModel answer.`)
+    if (extract) {
+      // The deterministic #80 offer: no classification call.
       expect(h.runtime.calls).toBe(1)
-      expect(msg.coverage).toMatchObject({ mode: 'capped', truncated: false })
-      expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
-      expect(msg.content.startsWith('Model answer.')).toBe(true)
-      expect(msg.content).not.toContain(t('en', 'analysis.listing.aggregationHint'))
       expect(listMessages(h.db, h.conversationId).at(-1)?.skillOffer?.source).toBe('deterministic')
+    } else {
+      // The coverage fallback's #80 classification (degrades on the prose reply), then the answer.
+      expect(h.runtime.calls).toBe(2)
+      expect(msg.skillOffer).toBeUndefined()
     }
   })
 
