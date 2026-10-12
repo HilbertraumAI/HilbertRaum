@@ -1665,8 +1665,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   returns items+counts+source-chunk provenance + scanned/total/unparsed + `fullyChunked`.
 - **Router** ([`router.ts`](../apps/desktop/src/main/services/analysis/router.ts), pure): EN+DE
   classification (list/every/each/how many/count + jede/alle/wie viele/sämtliche/liste/zähl — since #641
-  only over a typed {X} and without an explain intent, and since #644 a quantifier only at the head of
-  a request and never in a yes/no question, see those bullets — **plus the
+  only over a typed {X} and without an explain intent, since #644 a quantifier only at the head of
+  a request and never in a yes/no question, and since #649 no "how much" / "wie viel", see those bullets — **plus the
   #37 aggregation lexicon** `AGGREGATION_RE`: categorize/categorization/group(ed) by/breakdown/sum per/
   total per/per category/itemize/tally + the DE stems kategorisier/gruppier/summier/aufschlüssel/
   aufsummier and the phrases Summe pro/Gesamtsumme/pro Kategorie/nach Kategorie — an aggregation over a
@@ -1778,7 +1778,7 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   the whole scope, a document being re-indexed keeps `ready` until its chunk transaction, and a
   degenerate ready tree would make the tree decline.
   Precedence is unchanged above: coverage-extract (a deterministic listing) still wins over a model
-  read. **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
+  read (since #649, for list asks: an aggregation ask over one fitting document is read whole). **Stays top-k:** a multi-document scope (there is no multi-document whole read); a chat with
   knowledge packs (the whole read never queries them, so it would silently drop the packs); small talk
   (top-k answers it at zero model calls when nothing matches); a legacy, partly chunked document (its
   sections are not its whole text). The #80 classification is unchanged (decided before retrieval); the
@@ -1808,7 +1808,8 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   review passes probed ~120 more (fillers, polite forms, request verbs, claims, abbreviations,
   compounds). Fix (owner calls, all as recommended; the type rule was revised once):
   (1) `COVERAGE_RE` is split. A list/count verb (`LIST_VERB_RE`: list/enumerate/how many/how much/count,
-  liste/wie viele/auflist/aufzulist/aufzähl/zähl) still asks for a list wherever it stands. A quantifier
+  liste/wie viele/auflist/aufzulist/aufzähl/zähl; #649 took out how much and wie viel) still asks for a list
+  wherever it stands. A quantifier
   does so only at the HEAD of a request, after the words a request opens with (`REQUEST_OPENERS`, matched
   longest first: give me / show me / tell me / find / extract / display / summarize / an overview of /
   what are / who are / I need …, nenne / zeig mir / gib mir / extrahiere / ermittle / schreib / fasse /
@@ -1895,10 +1896,97 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   - The labelled answer instead of the list: a request whose quantifier follows a phrase, a request verb
     missing from the list, and a request after a line break ("Mietvertrag 2024\nAlle Fristen?").
   - A listing still shows one type ("Liste alle Termine und Beträge auf" lists dates).
-  - Pre-existing and filed under #649: a "how much" lookup still lists every amount ("How much is the
-    monthly fee?"); "list"/"Liste" as a noun ("Welche Fristen stehen auf der Liste?") and "zählt als"
-    still list; a sum with a quantifier inside ("Wie hoch ist die Summe aller Zahlungen?") gets the
-    labelled answer, not the coverage route.
+  - Pre-existing and filed under #649, fixed there (next bullet): a "how much" lookup still listed every
+    amount ("How much is the monthly fee?"); "list"/"Liste" as a noun ("Welche Fristen stehen auf der
+    Liste?") and "zählt als" still listed; a sum with a quantifier inside ("Wie hoch ist die Summe aller
+    Zahlungen?") got the labelled answer, not the coverage route. "Zählen alle Zahlungen zur Miete?" is
+    a plain answer since #649.
+- **"How much" is a lookup or a sum; a list asked about and "zählt als" ask for no list — AS BUILT
+  (#649, 2026-10-12).** `LIST_VERB_RE` counted "how much" and "wie viel" as list verbs wherever they
+  stood. Once a deep index with extract data existed, "How much is the monthly fee?" got every amount in
+  the document at zero model calls; without one it got the deep-index heads-up. A sum got the same
+  listing with no total ("How much did I pay in fees?"), or since #644, with a quantifier inside, the
+  labelled top-k sum #37 rules out ("What is the total of all the payments?"). "What is the sum of the
+  fees?" and "Wie hoch ist der Gesamtbetrag?" carried no trigger and got a plain answer. "list"/"Liste" as
+  a noun ("Welche Fristen stehen auf der Liste?") and "zählen zu / zählt als" still listed. Of 219 probed
+  EN/DE phrasings, 115 changed decision; every probed list request, count, aggregation ask and #644
+  control kept its route. Fix (owner calls 1–4 as recommended, a fifth after the real-app run):
+  (1) "how much" / "wie viel" leave `LIST_VERB_RE` ("wie viele" stays). A lookup is an ordinary
+  question, like "What is the monthly fee?" or "Wie hoch ist die Kaution?": `{ relevance, high }`, a
+  plain answer with no #80 call. A quantifier inside it still gets #644's label ("How much is each
+  payment?").
+  (2) A sum ask (`isSumAsk`, per sentence) joins the aggregation route and lists amounts whatever it
+  names. A sum is recognised in three ways:
+  - a sum word: total, sum of, the sum, add up, Summe aller/der/von, die Summe, in Summe, Gesamtbetrag,
+    Gesamtkosten, Gesamtmiete …, addieren, zusammenrechnen, zusammenzählen, or "zusammen" after a
+    reckoning verb ("Rechne alles zusammen");
+  - a totalling word (in total, altogether, together, combined, insgesamt, zusammen) beside a money word
+    or a currency sign ("Was kostet alles zusammen?", "How much are all the fees together?"). Alone, a
+    totalling word is often no sum ("Wer wohnt zusammen in der Wohnung?"). "zusammen mit", "together with"
+    and "combined with" join two things. "Fasse … zusammen", "Stelle … zusammen" and "put together" gather
+    a list;
+  - "how much" / "wie viel" with a pay or spend verb ("How much did I pay in fees?", "Wie viel schulde
+    ich?").
+
+  None counts with a count word (how many, wie viele, number of, total number, Anzahl), with an explain
+  verb ("Erkläre, wie sich die Gesamtmiete zusammensetzt"), or with a measure and no money word ("How
+  long is the lease in total?", "What is the total area?"). A yes/no question about a sum asks for a
+  verdict (#644): "Is the total rent 1,175 euros?" and the #80 near-miss "is the total correct on page
+  2?" stay plain. `isAggregationShaped` includes sums, so a sum gets the #54 shape hint, the #80
+  classification and the deterministic bank-statement offer for amounts.
+  (3) **IPC: an aggregation ask over ONE document that fits the window is read whole instead of
+  listed** (`registerRagIpc`, inside the chat slot, `wholeReadDocumentId`). This covers sums and
+  categorize asks: the model sees every section and can add them up, which the listing cannot (#54). The
+  offer rides along. A plain list ask keeps the listing, and so does a document too long to read whole
+  (the listing + #54 hint) or a multi-document scope. Without extract data, a fitting document was
+  already read whole since #643. So the #643 precedence above ("coverage-extract still wins over a model
+  read") now holds for list asks only.
+  (4) "list" / "Liste" / "Aufzählung" / "Auflistung" after a definite article, a demonstrative or a
+  possessive, in a question that opens with a question word, asks about a list the document holds, not
+  for one. The question word may follow a preposition, a polite opener or a request verb ("Auf welcher
+  Seite der Liste …", "Kannst du mir sagen, was auf der Liste steht?"). "welcher Liste" / "which list"
+  never asks for a list. Any other "list" still asks: "Zeig mir die Liste der Fristen", "Zeigst du mir
+  die Liste der Fristen?", "Could you send me the list of fees?", "Make a list of the payments", "Is
+  there a list of fees?". The issue's stricter rule (any article makes a noun, which then asks only at the
+  head of a recognised request) would have turned unlisted request verbs into plain answers. "zählen zu /
+  zum / zur / als" and "count as / toward(s) / among / against" mean "belong to". The exceptions: "auf"
+  ends the clause ("Zählen Sie mir die Zahlungen zur Miete auf" is "aufzählen"), the imperative "Zähle …
+  zur Miete" is a request, and a "zu" behind a comma belongs to the clause. "Zähler…" (a meter,
+  "Zählerstand") is no verb. "zählen" joins the yes/no and plural verbs, so "Zählen alle Zahlungen zur
+  Miete?" (a #644 residual) and "Zählen die Fristen auch am Wochenende?" are verdicts, while "Zählen Sie
+  alle Fristen auf" stays a polite request.
+  (5) **The arithmetic heads-up** (owner call after the real-app run, design-guidelines §11.24). A whole
+  read of an aggregation ask leads with `analysis.wholeReadSumHint`, with or without extract data (EN
+  *"**Heads-up:** the model added up these amounts itself and can miss or miscount items. Check the
+  result against the sources."*). It rides `answerPrefix` after the W2 scope notice (`groundedPrefix`).
+  A top-k sum keeps #37's notices.
+  Tests: router golden rows in `extract-router.test.ts` (52 fail on master) and the #54 table in
+  `rag-skill-analysis.test.ts`. The #54 pin moved to a statement too long to read whole; the fitting
+  statement, with and without extract data, is read whole behind the heads-up (fails on master). All 47
+  rule mutations turn the suite red.
+  Real app (dev build, qwen3-4b-instruct-q4 at 4,096; a fictional 2-page lease and a fictional 1-page
+  bank statement, each with a deep index and extract data; a scratch root with b11146 and the D: drive
+  with its b9849, alike):
+  - On master all nine asks got the listing in ~30–50 ms: three lookups, four sums, "Welche Kosten zählen
+    zu den Nebenkosten?" and the control "Liste alle Beträge auf".
+  - With the fix, the lookups are answered from the whole document (5,00 / 45,00 / 6,90 EUR, 1.8–3.3 s),
+    and so is the "zählen zu" question.
+  - The lease's monthly sum was right in both languages (950 + 180 + 45 = 1.175 EUR).
+  - The statement's four fees (13,85 EUR) were summed wrong twice, with the whole statement in the prompt:
+    5,45 (two fees missed) and 8,35 (three listed, misadded). That run is why the heads-up exists.
+  - The control kept its listing.
+
+  **Residuals** (word lists again):
+  - A total with no sum word or pay verb gets a plain answer ("What did I pay in fees?").
+  - A pay verb turns some lookups into sums ("Wie viel muss ich für den Stellplatz zahlen?"). That only
+    matters on a long document, where the answer is the listing.
+  - The colloquial count "Wie viel Zahlungen gibt es?" gets a plain answer.
+  - "the full list" / "price list", or a list noun before the question word ("In der Liste fehlt eine
+    Frist, welche?"), and "Ich habe eine Liste der Fristen. Welche fehlt?" still list.
+  - "Was zähle ich zu den Nebenkosten?" still lists (the first-person "zähle" reads as the imperative).
+  - A multi-document sum keeps the listing (there is no multi-document whole read).
+  - A whole-read total is still the model's arithmetic. The heads-up says so but does not check it; the
+    bank-statement skill is the exact path for a statement.
 - **Suggestion-only cascade — AS BUILT (issue #80, wave R80; STR-1 §5.2). Truth maintenance on the
   0-model-call claim:** the router itself stays pure and byte-unchanged, and every HAPPY path above
   still answers at 0 query-time model calls — but exactly two decision classes now additionally run

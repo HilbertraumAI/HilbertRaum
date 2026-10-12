@@ -1203,6 +1203,10 @@ itself (measured later with Polish). Both requests come from Chromium's own netw
 measured with `--log-net-log`. The v0.1.62 AppImage does the same. Fixed in #567 (spell checker
 off in every session, `no-proxy-server`); see `security-model.md` "Chromium background fetches".
 
+**Open** (moved here from the retired BUILD_STATE 2026-10-03 #560/#562 entry): the owner's run of
+`verify-mac-build.sh` on a Mac. Until then the macOS column above is inspection only, and the signed
+build's `audio-input` entitlement (below) is unverified.
+
 ### Verifying a packaged build on macOS (owner-run, #560, #562)
 
 There is no Mac in the project's test setup, so this is the protocol for one. From a checkout

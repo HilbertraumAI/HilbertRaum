@@ -1759,6 +1759,35 @@ lines with the file's absolute path, on every document of the session.
 `main.chat.searchModel{Timeout,CannotStart,Failed}` (en + de). **Tests:** `display-map.test.ts`
 (German round-trip), `chat-stream.test.ts`, `engine-health.test.ts` (#634).
 
+### 11.24 A total the AI model added up itself — design record (IMPLEMENTED 2026-10-12, #649)
+
+_What a document answer says when the AI model read a whole document and computed a sum or a grouping
+itself. Engineering record: `rag-design.md` §14.5 "#649". Code cites this section as **§11.24**._
+
+**The problem.** Since #649 a sum ask ("How much did I pay in fees?") over one document that fits the
+window is read whole, not answered with the list of every amount. The listing was exact but gave no
+total; the whole read gives a total that nothing checks. In the real-app run, qwen3-4b-instruct-q4
+summed a one-page statement's four fees wrong twice (5,45 and 8,35 EUR for 13,85), with every line in
+its prompt, and stated each total plainly. It added a lease's three monthly amounts up right.
+
+**Decision** (owner, 2026-10-12). Keep the whole read and say who did the arithmetic. Any whole-read
+answer to a sum or grouping ask leads with one line, with or without a deep index:
+*"**Heads-up:** the model added up these amounts itself and can miss or miscount items. Check the
+result against the sources."* (DE *„**Hinweis:** Das Modell hat diese Beträge selbst zusammengerechnet
+und kann dabei Posten übersehen oder sich verrechnen. Prüfe das Ergebnis anhand der Quellen."*, the
+du-form of the other notices).
+- **The same shape as the other answer notices** (the deep-index heads-up, the "may miss items"
+  label, the #54 shape hint). It is bold "Heads-up:" plus one sentence of fact and one of action,
+  streamed first, persisted with the answer, and placed after a scope notice. It leads the answer
+  because the risk is the number, and a reader who stops at the number should have seen it.
+- **No new advice.** The sources are already under the answer. For a bank statement, the
+  bank-statement offer (#80) rides along when that skill is enabled; the line does not repeat it.
+- **Only where the model did the arithmetic.** A top-k sum keeps #37's notices; a listing keeps the #54
+  hint; a lookup ("How much is the monthly fee?") gets none.
+
+**Copy:** `analysis.wholeReadSumHint` (en + de). **Tests:** `rag-skill-analysis.test.ts` (#54/#649
+table), `rag-whole-read.test.ts` (a list ask read whole carries none).
+
 ---
 
 ## 12. Chat-UI polish pass — design record (IMPLEMENTED 2026-06-13)

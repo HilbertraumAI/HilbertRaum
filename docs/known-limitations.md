@@ -1163,15 +1163,21 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   ordinary answer with no heads-up. One inside another question ("Welche Frist gilt für alle
   Mieter?") gets the labelled answer. These shapes are also recognised by word lists, so a few still
   miss:
-  - Still listed: "Zählen alle Zahlungen zur Miete?" ("zählen" doubles as the request "Zählen Sie …"),
-    a claim without a verb ("Alle Zahlungen pünktlich eingegangen?"), and "Can we have all the payments
-    refunded?".
+  - Still listed: a claim without a verb ("Alle Zahlungen pünktlich eingegangen?") and "Can we have all
+    the payments refunded?". ("Zählen alle Zahlungen zur Miete?" gets an answer since #649.)
   - The written answer instead of the list: a request whose "all" comes after another phrase ("Kannst
     du mir ab dem 1. Mai alle Zahlungen zeigen?"), one that opens with a verb the list lacks, and one on
     a new line after other text.
-  - A "how much" question about an amount still gets every amount ("How much is the monthly fee?"). A
-    sum over "all" ("Wie hoch ist die Summe aller Zahlungen?") gets the written answer, not the list.
-    Both are #649.
+  - Since #649 a "how much" question about one amount ("How much is the monthly fee?") gets an ordinary
+    answer. A question about a list the document holds ("Welche Fristen stehen auf der Liste?") and a
+    "belongs to" question ("Welche Kosten zählen zu den Nebenkosten?", "Which fees count as operating
+    costs?") get an ordinary answer too. A sum ("How much did I pay in fees?", "Wie hoch ist die Summe
+    aller Zahlungen?") is read whole when the chat has one document short enough for that. Otherwise it
+    gets every amount, led by a note that the list cannot add them up. Also recognised by word lists:
+    - A total asked with no sum word or pay verb ("What did I pay in fees?") gets an ordinary answer.
+    - "Wie viel Zahlungen gibt es?" (a count) gets an ordinary answer.
+    - A list noun such as "the full list" or "price list", or one that comes before the question word,
+      still lists ("In der Liste fehlt eine Frist, welche?").
   - A listing shows one kind of item: "Liste alle Termine und Beträge auf" lists the dates.
 
   v1 has no live full-scan for unmapped
@@ -1191,6 +1197,14 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   never changes the answer text. Plain "list / how many" asks are unchanged (0 extra calls). A
   generic no-skill categorized-sums path (tabular routing over a generic row extractor) remains
   deferred (architecture.md result-tables record §5/§6).
+  **A total over one short document is the AI model's own arithmetic (#649, 2026-10-12).** Since
+  #649 a sum or categorize ask over ONE document that fits the model's window is read whole instead of
+  listed, with or without a deep index. The answer leads with a heads-up that the model added the
+  amounts up itself. The heads-up is needed: with the whole one-page statement in its prompt,
+  qwen3-4b-instruct-q4 summed its four fees wrong twice, at 5,45 and 8,35 EUR for 13,85; a lease's
+  three monthly amounts it added up right. Nothing checks the total. For a bank statement, the
+  bank-statement skill adds up exactly. A chat with several documents, or a longer document, keeps the
+  listing above.
 - **Only a single document is read whole, and only when it fits the model's window (#643 / #642,
   2026-10-12; rag-design §14.5).** A document question over ONE fully indexed document that fits the
   launched context window (about 3 pages at the 4B's 4,096 tokens, about 7 at 8,192) hands the model

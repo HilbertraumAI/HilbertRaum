@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-12 — the closed 2026-10-03 #560/#562 platform-round entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #649 entry). Its record is
+`packaging.md` "Platform verification", which now carries its open item (the owner's Mac run of `verify-mac-build.sh`).
+Citations of the form "BUILD_STATE 2026-10-03 #560/#562 platform entry" now resolve here. Text below is byte-identical to what was removed.
+
+_2026-10-03 — **#560/#562 platform round: the real AppImage passes, the macOS build is inspected only (`docs/platform-verification-560-562`).** `release.yml` dispatched on
+`fix/562`: Linux AppImage in `ubuntu:24.04` 13/13 + the fuse probes (no asar integrity on Linux, as designed); mac `.app` wire, Info.plist hash, ad-hoc
+signature OK, not run. New: `scripts/verify-mac-build.sh` + `lib/packaged-app-probe.mjs` (owner Mac run open). Found: dictionary fetch (Linux; Windows per
+language) + WPAD (#567, docs corrected). Signed mac builds likely need the `audio-input` entitlement. Record: `packaging.md` "Platform verification"._
+
 ## 2026-10-12 — the closed 2026-10-03 #563 print-from-memory entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #644 entry). Its open residual (the smoke on the
