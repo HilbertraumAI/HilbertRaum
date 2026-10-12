@@ -1156,9 +1156,16 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   names a typed thing ("Erkläre alle Fristen"). Both are recognised by vocabulary (EN + DE word lists
   in `router.ts`), so an unusual phrasing can still miss. The rule errs towards the written answer: an
   explain verb anywhere in the question ("List every clause that describes the deposit") and a list
-  typed only by "who" / "when" ("Wann muss ich alles bezahlen?") also get it, not the listing. The reverse also holds: a needle question about a TYPED thing that carries a quantifier
-  ("Gilt die Frist für alle Mieter?") still gets the full list of that type rather than a direct
-  answer (#644). v1 has no live full-scan for unmapped
+  typed only by "who" / "when" ("Wann muss ich alles bezahlen?") also get it, not the listing.
+  Since #644 (2026-10-12) "all / every / each" (alle / jede / sämtliche) asks for the list only at the
+  start of a request ("Alle Fristen?", "Kannst du mir alle Fristen nennen?"). A yes/no question that
+  carries one ("Gilt die Frist für alle Mieter?", "Does the contract list all the deadlines?") gets an
+  ordinary answer with no heads-up. One inside another question ("Welche Frist gilt für alle
+  Mieter?") gets the labelled answer. These shapes are also recognised by word lists, so a few still
+  miss. "Zählen alle Zahlungen zur Miete?" still lists, because "zählen" doubles as the request
+  "Zählen Sie …". "Do you have all the deadlines?" gets an ordinary answer rather than the list. A
+  "how much" question about an amount still gets every amount ("How much is the monthly fee?" — #649).
+  A listing shows one kind of item: "Liste alle Termine und Beträge auf" lists the dates. v1 has no live full-scan for unmapped
   types and does not auto-run the extract pass at import (it is started on request) — both are later
   phases. The extract pass, like the deep index, requires a fully-chunked (re-indexed if legacy) doc.
   **The listing cannot categorize or sum — and since issue #54 (2026-07-17) it says so; since #80

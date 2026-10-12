@@ -27,6 +27,17 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-12 — the closed 2026-10-03 #563 print-from-memory entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #644 entry). Its record is unchanged:
+`architecture.md` EP-1 "#563 amendment". Citations of the form "BUILD_STATE 2026-10-03 #563 entry" now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-03 — **#563 — evidence-pack PDFs print from memory: `hilbertraum://print/<token>`, no `.print.tmp.html` beside the export (`fix/563-print-from-memory`).**
+One-shot token page in `app-protocol.ts` (`PrintPages`, cap 4, `no-store`, the pack CSP from `window-security.ts`); AUD-15/16/17-print-source code + test deleted
+as moot. Measured: real smoke 11/11 incl. an 8.4 MB pack, one request per print, no pack text on disk; packaged export before/after; no time cost.
+Record: `architecture.md` EP-1 "#563 amendment". Open: the smoke on the stock binary (Smart App Control refused it that day)._
+
 ## 2026-10-12 — the closed 2026-10-03 #562 fuses entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #643 entry). Its record is unchanged:

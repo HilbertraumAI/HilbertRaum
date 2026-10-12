@@ -642,8 +642,9 @@ so you are never locked out while it runs. In *Ask my documents*, the deep index
 questions that list or count dates, amounts, people and organisations, or obligations from every
 section (*"List every deadline"*, *"How many payments are there?"*), and, when the chat has just that
 one document, a summary question (*"Summarize this report"*) from its section summaries. Other questions
-about a long document, such as *"Explain what this letter says"*, are answered from the most relevant
-passages with or without it; a document short enough to read at once is read whole either way.
+about a long document, such as *"Explain what this letter says"* or a yes/no question like *"Does the
+notice period apply to all tenants?"*, are answered from the most relevant passages with or without
+it; a document short enough to read at once is read whole either way.
 
 A few honest notes:
 
