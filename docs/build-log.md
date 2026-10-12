@@ -27,6 +27,30 @@
 > text kept, wrapper dropped, prose otherwise byte-identical. The archive is frozen in CONTENT; a
 > pointer that resolves in neither direction is a defect of the move, not a fact of the record.
 
+## 2026-10-12 — the closed 2026-10-04 #567 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #473 Phase 0 entry). Its record is
+unchanged: `security-model.md` "Chromium background fetches"; its open macOS leg is the owner-run `verify-mac-build.sh` in
+`packaging.md`. Citations of the form "BUILD_STATE 2026-10-04 #567 entry" now resolve here. Text below is byte-identical to
+what was removed.
+
+_2026-10-04 — **#567 — the browser engine sends no request of its own: no spell-check dictionary, no WPAD (`fix/567-chromium-background-fetches`).** `spellcheck: false`
+stopped only the underlining: each session fetched a `.bdic` a few ms after `ready` (Linux: every language; Windows: a language it cannot check), at every start. Now
+`setSpellCheckerLanguages([])` + off from `session-created` (and first in ready), plus `no-proxy-server`. Packaged net logs, 0 remote: Windows `--lang=pl` full probe, Linux AppImage
+(master / v0.1.62: `.bdic` + WPAD). New `scripts/check-netlog.mjs`. Record: `security-model.md` "Chromium background fetches". Open: macOS (a net log in `verify-mac-build.sh`)._
+
+## 2026-10-12 — the closed 2026-10-05 #539 entry retired verbatim (preamble budget)
+
+Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #473 Phase 0 entry). Its records are
+unchanged: design-guidelines §15 #539 amendment, `architecture.md` "Voice dictation" #539 amendment, the image record §11;
+its one open item is PR #511 (screenshots). Citations of the form "BUILD_STATE 2026-10-05 #539 entry" now resolve here.
+Text below is byte-identical to what was removed.
+
+_2026-10-05 — **#539 — every automatic model's card says where it is used, and a button about a missing vision or translation model lands on it
+(`fix/539-vision-model-hints`).** The line left Technical details for all five automatic roles (design-guidelines §15 #539 amendment); the vision card
+gets Go to Images; `models:images` / `models:translation` join `models:voice` (`architecture.md` "Voice dictation" #539 amendment; the rule in §7).
+Images names a dropped or picked PDF and points to OCR in Documents (image record §11). #538 interim: the rotate-and-re-save note. Open: #511 screenshots._
+
 ## 2026-10-12 — the closed 2026-10-03 #560/#562 platform-round entry retired verbatim (preamble budget)
 
 Retired from `BUILD_STATE.md` on 2026-10-12 (preamble budget, making room for the #649 entry). Its record is

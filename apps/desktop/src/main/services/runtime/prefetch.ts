@@ -16,7 +16,7 @@ import { open } from 'node:fs/promises'
 
 /** 4 MiB: large enough to saturate sequential media, small enough that an abort
  *  (stop/lock — CODE-2) lands within one chunk (~half a second at USB-2 speeds). */
-export const PREFETCH_CHUNK_BYTES = 4 * 1024 * 1024
+const PREFETCH_CHUNK_BYTES = 4 * 1024 * 1024
 
 export type PrefetchOutcome = 'done' | 'aborted' | 'failed'
 

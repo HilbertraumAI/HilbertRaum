@@ -13,22 +13,28 @@ import { sha256File } from '../../src/main/services/models'
 import { LlamaServer, type ChildProcessLike, type SpawnFn } from '../../src/main/services/runtime/sidecar'
 import { probeGpuDevices } from '../../src/main/services/runtime/gpu'
 import { createWhisperCliTranscriber } from '../../src/main/services/transcriber'
+import { checkProgramLoads } from '../../src/main/services/engine-health'
 
 // TEST-2 (full-audit-2026-06-29, Phase 3): the binary-verifier verdict/cache matrix is well unit-
-// tested (binary-verifier.test.ts), and each spawn seam HAS a refusal test — but those inject a fake
-// `verifyBinary: () => 'mismatch'` (sidecar.test.ts, transcriber.test.ts, gpu.test.ts). That proves
-// "IF the verifier says mismatch the seam refuses", NOT that the seam is still WIRED to the REAL
-// verifier. A regression that silently stopped calling `verifyBinaryBeforeSpawn` before a spawn would
-// redden NONE of those — the supply-chain control (vuln-scan-2026-06-21 item B) could be fully
-// correct and fully unwired.
+// tested (binary-verifier.test.ts). A seam test that injects a fake verdict (`verify: () => 'mismatch'`)
+// proves only "IF the verifier says mismatch the seam refuses", NOT that the seam is still WIRED to
+// the REAL verifier: a regression that silently stopped calling `verifyBinaryBeforeSpawn` before a
+// spawn would redden none of them — the supply-chain control (vuln-scan-2026-06-21 item B) could be
+// fully correct and fully unwired.
 //
-// So these tests drive the REAL `verifyBinaryBeforeSpawn` end-to-end at each of the three seams
-// (`LlamaServer.start`, the GPU `--list-devices` probe, the `whisper-cli` spawn): PACKAGED
-// enforcement ON (`initBinaryVerification(false)`) + a real on-disk install marker whose recorded
-// hash does NOT match the binary's bytes → each seam must REFUSE to spawn (no child created). They
-// deliberately do NOT inject the `verifyBinary`/`verify` seam — the wiring IS the point.
+// So this file drives the REAL `verifyBinaryBeforeSpawn` end-to-end at the spawn seams:
+// `LlamaServer.start`, the GPU `--list-devices` probe, the `whisper-cli` spawn and the #530
+// "Check again" engine check (`checkProgramLoads`). PACKAGED enforcement ON
+// (`initBinaryVerification(false)`) + a real on-disk install marker whose recorded hash does NOT
+// match the binary's bytes → each seam must REFUSE to spawn (no child created). They
+// deliberately do NOT inject a seam's `verify` option — the wiring IS the point. The
+// LlamaServer seam's positive controls run through the real verifier too: a matching marker (`ok`)
+// and a legacy, hash-less marker (`skip-legacy`, security-model.md §3's non-breaking rollout). The
+// injected-verdict copies in sidecar.test.ts (LlamaServer) and transcriber.test.ts (whisper-cli) were
+// retired for these, and neither seam takes a verifier option any more. kiwix-serve / kiwix-manage are
+// not covered here yet (#656).
 //
-// TEETH: delete the `verifyBinary`/`verify` call at a seam → the spawn proceeds (`calls` non-empty /
+// TEETH: delete the `verifyBinaryBeforeSpawn`/`verify` call at a seam → the spawn proceeds (`calls` non-empty /
 // the refusal vanishes) → the matching test reddens. The matching-marker positive control proves the
 // refusal is genuinely the hash mismatch, not an always-refuse harness artefact.
 
@@ -61,6 +67,15 @@ async function matchingBinary(name: string): Promise<string> {
     arch: 'x64',
     binaries: { [markerBinaryKey(dir, bin)]: await sha256File(bin) }
   })
+  return bin
+}
+
+/** A real on-disk binary under a LEGACY install marker (no recorded hashes) → the verifier says `skip-legacy`. */
+function legacyBinary(name: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'hilbertraum-verify-spawn-'))
+  const bin = join(dir, name)
+  writeFileSync(bin, 'real-binary-bytes')
+  writeRuntimeMarker(dir, { version: 'b9585', backend: 'vulkan', os: 'win', arch: 'x64' })
   return bin
 }
 
@@ -111,15 +126,20 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       fetchImpl: healthyFetch(),
       findPort: async () => 51000,
       healthIntervalMs: 1
-      // NB: no `verifyBinary` → the constructor falls back to the REAL verifyBinaryBeforeSpawn.
+      // NB: LlamaServer has no verifier seam: it always calls the REAL verifyBinaryBeforeSpawn.
     })
-    await expect(server.start()).rejects.toThrow(/integrity verification/)
+    // The exact shape `failureSignature` classifies as `integrity` (the ladder's #312 comparison).
+    await expect(server.start()).rejects.toThrow(/^llama-server failed pre-spawn integrity verification/)
     expect(calls).toHaveLength(0) // the real verifier blocked the spawn before any port/child
   })
 
-  it('LlamaServer.start PROCEEDS when the real verifier matches the marker (positive control)', async () => {
+  it.each<[string, () => Promise<string> | string]>([
+    ['the marker records the true hash (ok)', () => matchingBinary('llama-server.exe')],
+    // security-model.md §3 "non-breaking rollout": a packaged legacy drive still launches.
+    ['no marker records a hash — a legacy drive (skip-legacy)', () => legacyBinary('llama-server.exe')]
+  ])('LlamaServer.start PROCEEDS through the real verifier: %s (positive control)', async (_label, make) => {
     initBinaryVerification(false)
-    const bin = await matchingBinary('llama-server.exe')
+    const bin = await make()
     const { spawn, calls } = recordingLlamaSpawn()
     const server = new LlamaServer({
       binPath: bin,
@@ -131,7 +151,7 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       healthIntervalMs: 1
     })
     await server.start()
-    expect(calls).toHaveLength(1) // the matching hash let the spawn through — so the refusal above is real
+    expect(calls).toHaveLength(1) // the real verifier let the spawn through — so the refusal above is real
     await server.stop()
   })
 
@@ -153,6 +173,24 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
     expect(calls).toHaveLength(0) // …and the real verifier blocked the probe spawn entirely
   })
 
+  // ---- #530 "Check again" engine check seam (engine-health.ts checkProgramLoads) ------------
+
+  it('the engine check REFUSES to launch a tampered binary (unchecked, no child spawned)', async () => {
+    initBinaryVerification(false)
+    const bin = tamperedBinary('llama-server.exe')
+    const calls: string[][] = []
+    const spawn: SpawnFn = (_command, args) => {
+      calls.push(args)
+      const child = new FakeProbeChild()
+      queueMicrotask(() => child.emit('close', 0, null)) // if (wrongly) spawned, settle fast
+      return child
+    }
+    // NB: no `verify` → checkProgramLoads falls back to the REAL verifyBinaryBeforeSpawn, as
+    // recheckEngines(ctx) calls it in production.
+    expect(await checkProgramLoads('llama_cpp', bin, ['--version'], { spawn, timeoutMs: 200 })).toBe('unchecked')
+    expect(calls).toHaveLength(0)
+  })
+
   // ---- whisper-cli spawn seam -------------------------------------------------------
 
   it('WhisperCliTranscriber.transcribe REFUSES a tampered whisper-cli (no child spawned)', async () => {
@@ -166,9 +204,12 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       modelPath: '/m/ggml-small.bin',
       spawnImpl: (_cmd: string, _args: string[], _o: SpawnOptions): ChildProcess => {
         spawned = true
-        return new EventEmitter() as unknown as ChildProcess
+        const child = new EventEmitter() as unknown as ChildProcess
+        // If (wrongly) spawned, settle fast so a neutered teeth-check fails by name instead of hanging.
+        queueMicrotask(() => child.emit('close', 0, null))
+        return child
       }
-      // NB: no `verifyBinary` → falls back to the REAL verifyBinaryBeforeSpawn.
+      // NB: WhisperCliTranscriber has no verifier seam: it always calls the REAL verifyBinaryBeforeSpawn.
     })
     await expect(transcriber.transcribe('/audio/meeting.mp3', { workDir })).rejects.toThrow(
       /integrity verification/

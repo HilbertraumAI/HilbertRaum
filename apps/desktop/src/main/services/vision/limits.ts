@@ -1,10 +1,8 @@
 import type { VisionErrorCode } from '../../../shared/types'
 import { decodedPixelCount, DEFAULT_MAX_IMAGE_PIXELS } from '../../../shared/image-headers'
 
-// #118: the PNG/JPEG header parsers moved to `shared/image-headers.ts` so the renderer can run
-// the SAME parse as a PRE-decode guard (the old renderer check ran after createImageBitmap had
-// already spent the decode memory). Re-exported here so main-side callers/tests are unchanged.
-export { decodedPixelCount } from '../../../shared/image-headers'
+// #118: the PNG/JPEG header parsers live in shared/image-headers.ts, so the renderer runs the
+// SAME parse as a pre-decode guard.
 
 // Vision input caps (image-understanding plan §14), mirroring `ingestion/limits.ts`. The
 // image is attacker-controllable (any file the user drops), so the byte cap is the
@@ -78,13 +76,7 @@ export function isSupportedImagePath(pathOrName: string): boolean {
  * non-blank question. Returns the friendly `VisionErrorCode` to reject with, or `null` when the
  * request is acceptable. Pure — header parse only, no full decode and no I/O.
  */
-export function validateAnalyzeRequest(
-  imageBytes: unknown,
-  mimeType: unknown,
-  question: unknown,
-  maxBytes: number = VISION_MAX_IMAGE_BYTES,
-  maxPixels: number = VISION_MAX_IMAGE_PIXELS
-): VisionErrorCode | null {
+export function validateAnalyzeRequest(imageBytes: unknown, mimeType: unknown, question: unknown): VisionErrorCode | null {
   if (typeof mimeType !== 'string' || !VISION_IMAGE_MIME_TYPES.has(mimeType)) {
     return 'unsupportedType'
   }
@@ -92,7 +84,7 @@ export function validateAnalyzeRequest(
     // An empty/garbage payload can't decode — treat as undecodable rather than "too large".
     return 'decodeFailed'
   }
-  if (imageBytes.byteLength > maxBytes) return 'tooLarge'
+  if (imageBytes.byteLength > VISION_MAX_IMAGE_BYTES) return 'tooLarge'
   // D4: reject a decompression bomb (small file, enormous decoded bitmap) before its bytes are
   // inlined to the sidecar.
   const pixels = decodedPixelCount(imageBytes, mimeType)
@@ -101,7 +93,7 @@ export function validateAnalyzeRequest(
   // It previously fell through to byte-cap-only, silently disabling the pixel-bomb guard; treat
   // it as undecodable and reject rather than admit unverifiable bytes to the sidecar.
   if (pixels === null) return 'decodeFailed'
-  if (pixels > maxPixels) return 'tooLarge'
+  if (pixels > VISION_MAX_IMAGE_PIXELS) return 'tooLarge'
   // #120 item 1: a blank question is an INPUT problem — its own code, not 'emptyResponse'
   // (whose copy means "the model returned an empty answer"). The renderer pre-guards blank
   // questions (visionSession `noop`), so this backstop fires only for non-renderer callers.

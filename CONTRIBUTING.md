@@ -150,6 +150,33 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
   `audit-capture`, `db-spy`, `scripted-runtime`, `skills-world` (the skills-IPC and RAG-ask
   contexts; the importing file must `vi.mock('electron', …)`) and `chat-fixtures`. Extend them
   rather than copying setup into a new suite; keep a local copy only where it deliberately differs.
+- **Pin the bound that ships, not a shorter test-only one.** `RuntimeManager` once took timing
+  options only tests passed: they proved a 50 ms teardown bound and a 0 or 60,000 ms probe TTL while
+  5 s and 10 s shipped, and a probe test passed with the start's probe time never recorded. Drive
+  the real constant with fake timers (`vi.useFakeTimers({ toFake: ['performance'] })` for a
+  `performance.now()` clock) and advance to just past it, and to just short of it.
+- **`expect(() => fn()).not.toThrow()` proves nothing when `fn` is async**: a rejection is not a
+  throw. Await the outcome, or call `fn` again and assert what the guard re-armed.
+- **The start-ladder fake lives in `tests/helpers/ladder-harness.ts`** (fake rungs and their stderr,
+  the probe, prefetch, warm-up and every ladder hook recorded), shared by `runtime-ladder.test.ts`
+  and `placement-wiring.test.ts`. Its `chatCalls` records only the fake llama's stream, never the
+  mock's: a "never warms up / never prefetches" negative reads the ladder's own `warmups` /
+  `prefetchEvents`. Suites whose rungs are the real `LlamaServer` keep their own harnesses.
+- **The llama-server sidecar fakes live in `tests/helpers/fake-sidecar.ts`**, shared by the
+  embedder, reranker, vision and translation suites: `FakeChild`, `GatedChild` (holds its exit
+  until `releaseExit()`), `exitingChild` (writes stderr and dies before it is healthy), `fakeSpawn`
+  (a fresh child per spawn), `sseBody`, `fakeIdleClock` and `loadingSidecar` (`/health` answers
+  503 until loaded; a hanging probe would hide a mutation that cancels the start). Extend the
+  helper instead of declaring another child class in a suite.
+- **A fake event must reach a live listener.** `LlamaServer` stops hearing a child once its own
+  teardown has started, so the vision and translation rows "a late crash does not clobber the newer
+  instance" emitted an `exit` nothing listened to, and stayed green with the runtimes' "is this
+  still my server?" check deleted. Send an event the code still hears (there: the old child's
+  `error`, then its `exit`), and break the guard once to watch the row go red.
+- **Where several guards stop the same harm, assert what the one you mean prevents.** A lock
+  during translation's GPU start is kept off the CPU rung by more than one check, so "one spawn"
+  stayed true with the start-abort check deleted; only the device-fallback note, which that check
+  alone prevents, showed the break.
 
 The same `typecheck`/`build`/`test` chain runs in CI on every PR and on pushes to `master`
 (`.github/workflows/ci.yml`); a branch pushed **without** an open PR intentionally gets no CI — the

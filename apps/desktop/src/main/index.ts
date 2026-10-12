@@ -68,7 +68,12 @@ import { notifyPerformanceChanged } from './ipc/performance-notify'
 import { setAnswerSpeedObserver } from './ipc/chat-stream'
 import { machineKey } from './services/performance'
 import { detectSystem } from './services/benchmark'
-import { createRerankerCallbacks, createPendingModelSwitchCounter } from './services/rag/device-posture'
+import {
+  cardIsShared,
+  createPendingModelSwitchCounter,
+  createRerankerCallbacks,
+  createTranslationHeadroom
+} from './services/rag/device-posture'
 import { registerAuditIpc } from './ipc/registerAuditIpc'
 import { registerLocalApiIpc } from './ipc/registerLocalApiIpc'
 import { createAuditRecorder } from './services/audit'
@@ -84,7 +89,7 @@ import {
 import { killRegisteredSidecarChildren } from './services/runtime/sidecar'
 import { createCachedGpuProbe } from './services/runtime/gpu'
 import { EVENTS, IPC } from '../shared/ipc'
-import type { KnowledgePacksChangedEvent } from '../shared/types'
+import type { AppSettings, KnowledgePacksChangedEvent } from '../shared/types'
 import { rasterizePdfWithHiddenWindow } from './services/ocr/rasterizer'
 import { findManifestById, launchContextTokens, resolveManifestsDir } from './services/models'
 import { resolveAppSkillsDir, resolveUserSkillsDir } from './services/drive'
@@ -424,6 +429,14 @@ function initBackend(): void {
   // and the posture-callback factory below (reads only its count). See its own doc comment
   // (`rag/device-posture.ts`) for why it is a counter, never a boolean.
   const pendingModelSwitches = createPendingModelSwitchCounter()
+  // The settings row, or null while locked — the sidecar gates and the chat-first hook below.
+  const readSettingsOrNull = (): AppSettings | null => {
+    try {
+      return getSettings(workspace.requireDb())
+    } catch {
+      return null
+    }
+  }
   const runtime = new RuntimeManager(
     createSelectingRuntimeFactory({
       rootPath: paths.rootPath,
@@ -506,7 +519,17 @@ function initBackend(): void {
         onSpeculativeCrash: (opts, info) => speculativeCrashFallback(opts, info),
         onCpuCrash: (opts, info) => cpuCrashRestart(opts, info)
       }
-    })
+    }),
+    {
+      // #473 ruling 2: a chat start takes the graphics card first. Every start (Start, a switch, the
+      // auto-start, Restart, the crash restarts) stops a translation sidecar resident on the card
+      // before it spawns; the window in flight is retried, on the processor while this start runs.
+      // Skipped when this machine has no card the gates share out (`cardIsShared`).
+      beforeStart: async () => {
+        if (!cardIsShared(readSettingsOrNull())) return
+        await ctx?.translator?.yieldGpu?.()
+      }
+    }
   )
   runtimeRef = runtime
   // Wave 8 rulings (a), (b)(G), (b)(T), NF-1 (step 4-8): the reranker's device-posture and
@@ -522,15 +545,22 @@ function initBackend(): void {
     runtimeManager: runtime,
     pendingModelSwitches,
     getTranslator: () => ctx?.translator ?? null,
-    getSettings: () => {
-      try {
-        return getSettings(workspace.requireDb())
-      } catch {
-        return null
-      }
-    },
+    getSettings: readSettingsOrNull,
     manifestsDir
   })
+  // #473 ruling 1: translation's GPU signals add the headroom gate — a GPU-posture cold start only
+  // when the model fully fits on the card beside the chat model already there. Same dependencies as
+  // the reranker's callbacks, so the two gates read one occupancy snapshot. The chat ladder keeps
+  // `gpuSignals` itself: the gate is translation's alone.
+  const translationGpu = {
+    ...gpuSignals,
+    gpuHeadroom: createTranslationHeadroom({
+      runtimeManager: runtime,
+      pendingModelSwitches,
+      getSettings: readSettingsOrNull,
+      manifestsDir
+    })
+  }
   // The availability-driven services (embedder + reranker/transcriber/OCR) — built from
   // the drive layout in one place (M-A3, services/compose-services.ts). The runtime/GPU
   // wiring above stays inline because of its late-bound crash handler.
@@ -540,8 +570,8 @@ function initBackend(): void {
     // M-5: dev-only binary env overrides are honoured only in a dev build.
     isDev,
     // Issue #42: the translation sidecar honours the same gpuMode/gpuAutoDisabled the chat
-    // ladder reads (read per cold start — a Settings flip needs no restart).
-    gpu: gpuSignals,
+    // ladder reads (read per cold start — a Settings flip needs no restart), plus #473's gate.
+    gpu: translationGpu,
     // Wave 8 rulings (a)/(b)(Q)/(b)(G): consulted by `rerank()` on every call, never once per
     // cold start any more (see `createRerankerCallbacks`'s doc comment above).
     rerankerDevicePosture,
@@ -743,18 +773,22 @@ function initBackend(): void {
   // refreshes its slot (`refreshOcrSlot`, wired in registerEngineIpc — #410).
   ctx.refreshTranslatorSlot = () => {
     if (!ctx || !shouldReplaceTranslator(ctx.translator)) return
-    ctx.translator = composeTranslator({
-      rootPath: paths.rootPath,
-      manifestsDir,
-      isDev,
-      gpu: gpuSignals
-    })
+    ctx.translator = composeTranslator(
+      {
+        rootPath: paths.rootPath,
+        manifestsDir,
+        isDev,
+        gpu: translationGpu
+      },
+      ctx.reranker
+    )
     // The replacement is a fresh instance: re-attach the Performance push to it.
     ctx.translator?.onResidencyChange?.(notifyPerformanceChanged)
   }
   ctx.onModelInstalled = (modelId) => {
-    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model
-    // BEFORE the translator rule below can return early (that rule is about a different slot).
+    // #372: a freshly downloaded weight is a new file — re-arm the ladder for this model FIRST —
+    // before any statement below can return early or throw (the download manager swallows the
+    // whole hook).
     clearModelLoadLatch(modelId)
     if (!ctx) return
     // #634: the search model downloaded again (the repair "Check all model files" offers for a

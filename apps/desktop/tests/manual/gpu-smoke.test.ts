@@ -21,7 +21,8 @@ import type { RuntimeStartOptions } from '../../src/main/services/runtime'
 //   HILBERTRAUM_GPU_SMOKE=<root with runtime/llama.cpp/<os>/{,cpu/}llama-server + models/chat/*.gguf>
 //   npx vitest run tests/manual/gpu-smoke.test.ts
 //
-// On the dev box (RTX 3080 Ti) this exercises, against the REAL b9585 Vulkan build:
+// On the dev box (RTX 3080 Ti) this exercises, against the REAL pinned Vulkan build (b11146 at the
+// 2026-10 campaign):
 // rung-1 GPU start + streamed tokens, the forced-CPU rung (`--device none`), and a
 // simulated rung-1 failure landing on the rung-3 pure-CPU safety net.
 
@@ -121,9 +122,10 @@ describe.skipIf(!enabled)('GPU smoke (manual, real binaries + real model + real 
     await runtime.stop()
   })
 
-  it('simulated rung-1 failure lands on the rung-3 pure-CPU safety net', { timeout: 240_000 }, async () => {
+  it.skipIf(process.platform !== 'win32')('simulated rung-1 failure lands on the rung-3 pure-CPU safety net', { timeout: 240_000 }, async () => {
     // A "binary" that exits immediately with a non-zero code (the §12 stub): where.exe
     // rejects llama-server's args and dies fast → rungs 1 + 2 fail, rung 3 is real.
+    // (Windows only: the stub is where.exe.)
     const stub = 'C:\\Windows\\System32\\where.exe'
     expect(existsSync(stub)).toBe(true)
     expect(resolveCpuFallbackServerPath(ROOT)).toBeTruthy()

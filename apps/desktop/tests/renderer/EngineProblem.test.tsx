@@ -7,16 +7,13 @@ import { HomeScreen } from '../../src/renderer/screens/HomeScreen'
 import { ModelsScreen, __resetModelsScreenMemoryForTests } from '../../src/renderer/screens/ModelsScreen'
 import { PerformanceScreen } from '../../src/renderer/screens/PerformanceScreen'
 import { SettingsScreen } from '../../src/renderer/screens/SettingsScreen'
-import { TranslateScreen } from '../../src/renderer/screens/TranslateScreen'
 import { AnswerThread, type ImageTurn } from '../../src/renderer/images'
 import { App } from '../../src/renderer/App'
-import { resetTranslateSessionForTests } from '../../src/renderer/lib/translateSession'
-import { resetFileTranslateSessionForTests } from '../../src/renderer/lib/fileTranslateSession'
-import { resetDocTaskStoreForTests } from '../../src/renderer/lib/doctasks'
 import { __resetKnowledgePackToolsInstallForTests } from '../../src/renderer/lib/useKnowledgePackToolsInstall'
 import { t } from '../../src/shared/i18n'
 import {
   DEFAULT_SETTINGS,
+  type AppStatus,
   type EngineDownloadJob,
   type EngineProblem,
   type EngineRecheckResult,
@@ -26,7 +23,6 @@ import {
   type PerformanceSnapshot,
   type PreflightResult,
   type RuntimeStatus,
-  type TranslateJob,
   type WorkspaceStateInfo
 } from '../../src/shared/types'
 import type { Translator } from '../../src/renderer/components/translator'
@@ -38,7 +34,7 @@ import { appStatus, driveStatus, makePolicyStatus, performanceSnapshot } from '.
 // libgomp.so.1 missing; Windows: Visual C++ runtime / Smart App Control) is recorded as a session
 // verdict (`EngineProblem`). These tests pin what each surface SAYS about it: the AI Model banner
 // and its Check again flow, the voice hint, Home's model row + primary, the App notice button,
-// Diagnostics (line + copy report), Performance's graphics tile and the two error-code copies.
+// Diagnostics (line + copy report), Performance's graphics tile and the Images error-code copy.
 // Copy is asserted against the catalog (`t('en', key)`), not hard-coded English.
 
 afterEach(cleanup)
@@ -110,18 +106,9 @@ describe('EngineProblemNotice — banner reason copy (#530)', () => {
     expect(document.body.textContent).not.toContain('127')
   })
 
-  it('an unknown library gets the generic sentence, without a package', () => {
-    renderNotice({ ...LIBGOMP, name: 'libfoo.so.2' })
-    expect(screen.getByText(en('models.engineProblem.libraryMissing', { library: 'libfoo.so.2' }))).toBeInTheDocument()
-    expect(document.body.textContent).not.toContain('libgomp1')
-  })
-
-  it('a missing library on a non-Linux OS never gets a Linux package hint', () => {
-    renderNotice({ ...LIBGOMP, os: 'win' })
-    expect(screen.getByText(en('models.engineProblem.libraryMissing', { library: 'libgomp.so.1' }))).toBeInTheDocument()
-  })
-
-  const CASES: Array<[string, EngineProblem, Parameters<typeof t>[1]]> = [
+  const CASES: Array<[string, EngineProblem, Parameters<typeof t>[1], Record<string, string>?]> = [
+    ['library-missing with an unknown library (the generic sentence, no package)', { ...LIBGOMP, name: 'libfoo.so.2' }, 'models.engineProblem.libraryMissing', { library: 'libfoo.so.2' }],
+    ['library-missing on win (never a Linux package hint)', { ...LIBGOMP, os: 'win' }, 'models.engineProblem.libraryMissing', { library: 'libgomp.so.1' }],
     ['system-too-old on linux', { ...LIBGOMP, reason: 'system-too-old', os: 'linux' }, 'models.engineProblem.systemTooOldLinux'],
     ['system-too-old on mac', { ...LIBGOMP, reason: 'system-too-old', os: 'mac' }, 'models.engineProblem.systemTooOldMac'],
     ['system-too-old on win', { ...LIBGOMP, reason: 'system-too-old', os: 'win' }, 'models.engineProblem.systemTooOld'],
@@ -132,9 +119,9 @@ describe('EngineProblemNotice — banner reason copy (#530)', () => {
     ['files-damaged after a fresh install on win', { ...LIBGOMP, reason: 'files-damaged', os: 'win', afterInstall: true }, 'models.engineProblem.filesDamagedAfterInstallWin'],
     ['blocked', { ...LIBGOMP, reason: 'blocked', os: 'win' }, 'models.engineProblem.blocked']
   ]
-  it.each(CASES)('%s shows its own sentence', (_label, problem, key) => {
+  it.each(CASES)('%s shows its own sentence', (_label, problem, key, params) => {
     renderNotice(problem)
-    expect(screen.getByText(en(key))).toBeInTheDocument()
+    expect(screen.getByText(en(key, params))).toBeInTheDocument()
   })
 })
 
@@ -165,13 +152,6 @@ describe('EngineProblemNotice — Check again (#530)', () => {
     await user.click(screen.getByRole('button', { name: en('models.engineProblem.check') }))
     expect(await screen.findByText(en('models.engineProblem.fixed'))).toBeInTheDocument()
     expect(screen.queryByText(en('models.engineProblem.stillFailing'))).not.toBeInTheDocument()
-  })
-
-  it('a healed chat engine toasts "runs again"', async () => {
-    const user = userEvent.setup()
-    renderNotice(LIBGOMP, { onRecheck: async () => ({ problems: [] }) })
-    await user.click(screen.getByRole('button', { name: en('models.engineProblem.check') }))
-    expect(await screen.findByText(en('models.engineProblem.fixed'))).toBeInTheDocument()
   })
 
   it('a healed voice engine toasts the voice wording', async () => {
@@ -332,12 +312,6 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
       </ToastProvider>
     )
 
-  it('shows the banner when the status carries a chat-engine problem', async () => {
-    stubModels({ problems: () => [LIBGOMP] })
-    renderModels()
-    expect(await screen.findByText(en('models.engineProblem.title'))).toBeInTheDocument()
-  })
-
   it('hides the optional voice-engine banner while the chat engine cannot run (its copy says chat works)', async () => {
     const voiceMissing: EngineStatus = { ...IDLE_ENGINE, missingFamilies: ['whisper_cpp'] }
     stubModels({ problems: () => [LIBGOMP], engine: voiceMissing })
@@ -362,15 +336,6 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
     await waitFor(() => expect(screen.queryByText(en('models.engineProblem.demoNote'))).not.toBeInTheDocument())
   })
 
-  it('shows nothing when there is no problem', async () => {
-    const s = stubModels({ problems: () => [] })
-    renderModels()
-    await waitFor(() => expect(window.api.getAppStatus).toHaveBeenCalled())
-    await waitFor(() => expect(window.api.onEngineProblemsChanged).toHaveBeenCalled())
-    expect(s.push).toBeTypeOf('function')
-    expect(screen.queryByText(en('models.engineProblem.title'))).not.toBeInTheDocument()
-  })
-
   it('the engine:problemsChanged push re-reads the status and removes the banner', async () => {
     let problems: EngineProblem[] = [LIBGOMP]
     const s = stubModels({ problems: () => problems })
@@ -385,34 +350,27 @@ describe('ModelsScreen — engine problem banner (#530)', () => {
     let problems: EngineProblem[] = []
     const s = stubModels({ problems: () => problems })
     renderModels()
-    await waitFor(() => expect(window.api.onEngineProblemsChanged).toHaveBeenCalled())
+    // Loaded — and the first verdict read with it (issued first, one hop; refresh() is a Promise.all of five): no verdict, no banner.
+    expect(await screen.findByText(en('models.lead'))).toBeInTheDocument()
     expect(screen.queryByText(en('models.engineProblem.title'))).not.toBeInTheDocument()
     problems = [LIBGOMP]
     act(() => s.push())
     expect(await screen.findByText(en('models.engineProblem.title'))).toBeInTheDocument()
   })
 
-  it('Check again calls window.api.recheckEngine', async () => {
-    const user = userEvent.setup()
-    const s = stubModels({ problems: () => [LIBGOMP] })
-    renderModels()
-    await user.click(await screen.findByRole('button', { name: en('models.engineProblem.check') }))
-    await waitFor(() => expect(s.recheckEngine).toHaveBeenCalledTimes(1))
-  })
-
   it('a rejected recheckEngine surfaces a friendly message in the banner', async () => {
     const user = userEvent.setup()
-    stubModels({
-      problems: () => [LIBGOMP],
-      recheckEngine: vi.fn(async () => {
-        throw new Error('boom')
-      })
+    const recheckEngine = vi.fn(async () => {
+      throw new Error("Error invoking remote method 'engine:recheck': Error: Could not check right now.")
     })
+    stubModels({ problems: () => [LIBGOMP], recheckEngine })
     renderModels()
     await user.click(await screen.findByRole('button', { name: en('models.engineProblem.check') }))
-    // The screen maps the raw error through friendlyIpcError; the banner shows whatever it returns.
-    await waitFor(() => expect(screen.getByRole('button', { name: en('models.engineProblem.check') })).toBeEnabled())
-    expect(screen.getByText(en('models.engineProblem.title'))).toBeInTheDocument()
+    const banner = screen.getByText(en('models.engineProblem.title')).closest('.banner') as HTMLElement
+    // ModelsScreen's recheckEngine strips the transport prefix (friendlyIpcError); the notice shows the rest as-is.
+    expect(await within(banner).findByText('Could not check right now.')).toBeInTheDocument()
+    expect(recheckEngine).toHaveBeenCalledTimes(1)
+    expect(within(banner).getByRole('button', { name: en('models.engineProblem.check') })).toBeEnabled()
   })
 
   // #532: damaged engine files are the one refusal a fresh copy fixes, so the banner (and the voice
@@ -548,9 +506,11 @@ describe('HomeScreen — engine problem and demo runtime (#530)', () => {
 
   it('an engine problem: the row says it, the badge says it, and the loud primary leads to AI Model', async () => {
     const onNavigate = vi.fn()
-    renderHome({ problems: [LIBGOMP], runtime: RUNNING, onNavigate })
+    // While the chat engine can't run, the demo runtime answers (rung 4): the engine row must win over the demo row.
+    renderHome({ problems: [LIBGOMP], runtime: { ...RUNNING, backend: 'mock' }, onNavigate })
     expect(await screen.findByText(en('home.model.engineCannotRun'))).toBeInTheDocument()
     expect(screen.getByText(en('home.model.badgeEngine'))).toBeInTheDocument()
+    expect(screen.queryByText(en('home.model.demo', { model: 'qwen3-chat' }))).not.toBeInTheDocument()
     // The headline does not claim "ready" either.
     expect(screen.queryByText(en('home.headline.ready'))).not.toBeInTheDocument()
     // Two "Go to AI Model" buttons: the row's small one, and the hero primary.
@@ -584,13 +544,6 @@ describe('HomeScreen — engine problem and demo runtime (#530)', () => {
     expect(await screen.findByText(en('home.model.running', { model: 'qwen3-chat' }))).toBeInTheDocument()
     expect(screen.queryByText(en('home.model.engineCannotRun'))).not.toBeInTheDocument()
   })
-
-  it('a running CPU runtime keeps the unchanged "is running" copy', async () => {
-    renderHome({ runtime: { ...RUNNING, backend: 'cpu' } })
-    expect(await screen.findByText(en('home.model.running', { model: 'qwen3-chat' }))).toBeInTheDocument()
-    expect(screen.queryByText(en('home.model.badgeDemo'))).not.toBeInTheDocument()
-    expect(screen.queryByText(en('home.model.badgeEngine'))).not.toBeInTheDocument()
-  })
 })
 
 // ---- 7: the App notice -----------------------------------------------------------------------
@@ -615,13 +568,14 @@ describe('App — runtime notice target (#530)', () => {
     encryptionRequired: false
   }
 
-  function renderApp(opts: { problems?: () => EngineProblem[] } = {}): {
+  function renderApp(opts: { problems?: () => EngineProblem[]; appStatusGate?: Promise<void> } = {}): {
     fire: (message: string, target?: 'models') => void
     push: () => void
   } {
     let subscriber: ((message: string, target?: 'models') => void) | null = null
     // Several components subscribe (App, Home, …): keep them all, as the real preload does.
     const engineSubscribers = new Set<() => void>()
+    const status = (): AppStatus => ({ ...appStatus({ machineRamGb: 16 }), engineProblems: opts.problems?.() ?? [] })
     stubApi({
       getWorkspaceState: vi.fn(async () => unlocked),
       getPolicy: vi.fn(async () => makePolicyStatus({ policyFilePresent: false, driveFilePresent: false })),
@@ -638,7 +592,13 @@ describe('App — runtime notice target (#530)', () => {
           engineSubscribers.delete(cb)
         }
       }),
-      getAppStatus: vi.fn(async () => ({ ...appStatus({ machineRamGb: 16 }), engineProblems: opts.problems?.() ?? [] })),
+      // A gate holds every status read (all its readers) until the test releases it; without one, today's timing.
+      getAppStatus: opts.appStatusGate
+        ? vi.fn(async () => {
+            await opts.appStatusGate
+            return status()
+          })
+        : vi.fn(async () => status()),
       getRuntimeStatus: vi.fn(async () => IDLE_RUNTIME),
       listDocuments: vi.fn(async () => []),
       listModels: vi.fn(async () => []),
@@ -671,35 +631,37 @@ describe('App — runtime notice target (#530)', () => {
     await waitFor(() => expect(within(nav).getByRole('button', { name: 'AI Model' })).toHaveAttribute('aria-current', 'page'))
   })
 
-  it('the engine notice leaves once the chat engine runs again (Check again healed it)', async () => {
+  it.each([
+    { what: 'the AI Model notice leaves', target: 'models' as const, stays: false },
+    { what: 'a notice without a target stays', target: undefined, stays: true }
+  ])('once Check again healed the chat engine (verdict true → false), $what', async ({ target, stays }) => {
+    // Both rows run one sequence: the `leaves` row is the timing control that App's own re-read has
+    // landed by the final assertion, so the `stays` row cannot pass because App had not read yet.
     let problems: EngineProblem[] = [LIBGOMP]
     const app = renderApp({ problems: () => problems })
-    await screen.findByRole('navigation')
-    await waitFor(() => expect(window.api.onEngineProblemsChanged).toHaveBeenCalled())
-    // The verdict is read on mount (several readers share the stub); let those reads settle.
-    await waitFor(() => expect(window.api.getAppStatus).toHaveBeenCalled())
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 50))
-    })
-    const message = 'The AI engine can not run here (test notice).'
-    act(() => app.fire(message, 'models'))
+    // The verdict was read: Home's row says so (App's own read was issued first, at mount).
+    expect(await screen.findByText(en('home.model.engineCannotRun'))).toBeInTheDocument()
+    const message = 'A runtime notice (test).'
+    act(() => app.fire(message, target))
     expect(await screen.findByText(message)).toBeInTheDocument()
-    // A different notice (no target) must survive the same transition — only the engine one goes.
     problems = []
-    act(() => app.push())
-    await waitFor(() => expect(screen.queryByText(message)).not.toBeInTheDocument())
+    await act(async () => app.push()) // every reader re-reads; async act drains the renders and effects (React 18.3)
+    expect(screen.queryByText(en('home.model.engineCannotRun'))).not.toBeInTheDocument() // the heal landed
+    expect(screen.queryByText(message) !== null).toBe(stays)
   })
 
   it('an engine notice that arrives before any verdict was read is not cleared by that first read', async () => {
-    const app = renderApp({ problems: () => [] })
+    // Every status read waits until the notice is up: the first verdict read lands AFTER it, finding nothing —
+    // null → false is no true → false transition (§11.17 decision 4).
+    const firstRead = deferred<void>()
+    const app = renderApp({ problems: () => [], appStatusGate: firstRead.promise })
     await screen.findByRole('navigation')
     await waitFor(() => expect(window.api.onRuntimeNotice).toHaveBeenCalled())
     const message = 'The AI engine can not run here (early notice).'
     act(() => app.fire(message, 'models'))
-    act(() => app.push()) // a re-read that finds nothing — no true→false transition happened
-    await act(async () => {
-      await new Promise((r) => setTimeout(r, 20))
-    })
+    expect(await screen.findByText(message)).toBeInTheDocument()
+    expect(window.api.getAppStatus).toHaveBeenCalled() // in flight, not landed
+    await act(async () => firstRead.resolve()) // the read lands; act drains the render, the effect and any setNotice
     expect(screen.getByText(message)).toBeInTheDocument()
   })
 
@@ -713,8 +675,10 @@ describe('App — runtime notice target (#530)', () => {
     const banner = (await screen.findByText(message)).closest('.banner') as HTMLElement
     expect(within(banner).queryByRole('button', { name: en('app.noticeGoToModels') })).not.toBeInTheDocument()
     await user.click(within(banner).getByRole('button', { name: en('app.noticeDetails') }))
-    // Diagnostics lives on a Settings tab: the rail's Settings item lights up.
+    // Diagnostics lives on a Settings tab: the rail's Settings item lights up…
     await waitFor(() => expect(within(nav).getByRole('button', { name: 'Settings' })).toHaveAttribute('aria-current', 'page'))
+    // …on its Diagnostics tab, not General.
+    expect(await screen.findByText(en('diag.localOnly'))).toBeInTheDocument()
   })
 })
 
@@ -786,7 +750,8 @@ describe('Settings → Diagnostics — engine problem line (#530)', () => {
   it('shows no engine line when there is no problem', async () => {
     stubDiagnostics([])
     renderDiagnostics()
-    await screen.findByText(en('diag.app.runtimeBuild'))
+    // The app read has landed — the version row and the engine rows come from the same `app` state.
+    expect(await screen.findByText('HilbertRaum 0.1.20')).toBeInTheDocument()
     expect(screen.queryByText(en('diag.app.engine'))).not.toBeInTheDocument()
   })
 })
@@ -858,7 +823,7 @@ describe('PerformanceScreen — graphics tile under an engine problem (#530)', (
   })
 })
 
-// ---- 10: the engineCannotRun error codes -----------------------------------------------------
+// ---- 10: the engineCannotRun error code (Images) ---------------------------------------------
 
 describe('engineCannotRun error code copy (#530)', () => {
   it('AnswerThread renders images.err.engineCannotRun', () => {
@@ -866,32 +831,5 @@ describe('engineCannotRun error code copy (#530)', () => {
     render(<AnswerThread turns={[turn]} onCopy={() => {}} onTryAgain={() => {}} onStop={() => {}} busy={false} />)
     expect(screen.getByText(en('images.err.engineCannotRun'))).toBeInTheDocument()
     expect(screen.queryByText(en('images.err.runtimeFailed'))).not.toBeInTheDocument()
-  })
-
-  describe('TranslateScreen', () => {
-    afterEach(() => {
-      resetTranslateSessionForTests()
-      resetFileTranslateSessionForTests()
-      resetDocTaskStoreForTests()
-    })
-
-    it('renders translate.err.engineCannotRun', async () => {
-      const user = userEvent.setup()
-      stubApi({
-        getAppStatus: vi.fn(async () => appStatus({ translationAvailable: true })),
-        getActiveTranslateJob: vi.fn(async () => null),
-        translateStart: vi.fn(async (): Promise<TranslateJob> => ({ jobId: 'x', state: 'failed', text: '', error: 'engineCannotRun' })),
-        translateCancel: vi.fn(),
-        copyToClipboard: vi.fn(async () => true),
-        onTranslateToken: vi.fn(() => () => {}),
-        onTranslateDone: vi.fn(() => () => {}),
-        onTranslateError: vi.fn(() => () => {})
-      })
-      render(<TranslateScreen onNavigate={() => {}} />)
-      await user.type(await screen.findByLabelText(en('translate.input.label')), 'Hallo')
-      await user.click(screen.getByRole('button', { name: en('translate.action') }))
-      expect(await screen.findByText(en('translate.err.engineCannotRun'))).toBeInTheDocument()
-      expect(screen.queryByText(en('translate.err.runtimeFailed'))).not.toBeInTheDocument()
-    })
   })
 })

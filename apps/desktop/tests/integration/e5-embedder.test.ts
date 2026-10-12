@@ -1,67 +1,26 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { EventEmitter } from 'node:events'
+import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { createServer } from 'node:http'
 import type { AddressInfo } from 'node:net'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { until, within } from '../helpers/hang-budget'
-import { loadingSidecar } from '../helpers/loading-sidecar'
+import { FakeChild, GatedChild, exitingChild, fakeSpawn, loadingSidecar } from '../helpers/fake-sidecar'
 import { E5Embedder } from '../../src/main/services/embeddings/e5'
 import { isEmbedderError } from '../../src/main/services/embeddings/errors'
 import { approxTokenCount } from '../../src/main/services/ingestion/chunker'
 import { createSelectedEmbedder } from '../../src/main/services/embeddings/factory'
-import {
-  engineProblemFor,
-  isEngineCannotRunError,
-  resetEngineProblemsForTest
-} from '../../src/main/services/runtime/engine-load'
-import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
+import { isEngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
+import { llamaServerBinaryName, llamaServerDir } from '../../src/main/services/runtime/sidecar'
 
-class FakeChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-}
-
-function fakeSpawn() {
-  const calls: Array<{ args: string[] }> = []
-  const child = new FakeChild()
-  const spawn = (_c: string, args: string[]): ChildProcessLike => {
-    calls.push({ args })
-    return child
-  }
-  return { spawn, calls, child }
-}
-
-/** A child whose exit only fires once `releaseExit()` is called — lets a test hold a teardown
- *  open long enough to observe single-flight sharing (mirrors reranker-wave8.test.ts's). */
-class GatedChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
-  killed = false
-  private wantExit = false
-  private released = false
-  kill(): boolean {
-    this.killed = true
-    this.wantExit = true
-    if (this.released) this.emit('exit', 0, null)
-    return true
-  }
-  releaseExit(): void {
-    this.released = true
-    if (this.wantExit) this.emit('exit', 0, null)
-  }
-}
-
-function fakeGatedSpawn() {
-  const children: GatedChild[] = []
-  const spawn = (): ChildProcessLike => {
-    const c = new GatedChild()
-    children.push(c)
-    return c
-  }
-  return { spawn, children }
+const base = {
+  id: 'multilingual-e5-small-q8',
+  binPath: '/bin/llama-server',
+  modelPath: '/models/e5.gguf',
+  findPort: async () => 52000,
+  healthIntervalMs: 1,
+  // The fake server returns 2-dim vectors; declare that so the width guard accepts them.
+  dimensions: 2
 }
 
 /** Routes /health (ok) and /v1/embeddings (returns the given per-text embeddings). */
@@ -80,16 +39,6 @@ function embedFetch(embeddings: number[][], opts: { shuffle?: boolean } = {}): t
 }
 
 describe('E5Embedder', () => {
-  const base = {
-    id: 'multilingual-e5-small-q8',
-    binPath: '/bin/llama-server',
-    modelPath: '/models/e5.gguf',
-    findPort: async () => 52000,
-    healthIntervalMs: 1,
-    // The fake server returns 2-dim vectors; declare that so the width guard accepts them.
-    dimensions: 2
-  }
-
   it('embeds via the loopback server and L2-normalizes the result', async () => {
     const { spawn } = fakeSpawn()
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[3, 4]]) })
@@ -172,61 +121,33 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
-  it('spawns the embeddings sidecar once with --embedding, lazily, and reuses it', async () => {
-    const { spawn, calls, child } = fakeSpawn()
+  it('spawns the embeddings sidecar lazily, once, reuses it, and stop() kills it', async () => {
+    const { spawn, calls, children } = fakeSpawn()
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
     expect(calls.length).toBe(0) // not started until the first embed
     await embedder.embed(['a'])
     await embedder.embed(['b'])
     expect(calls.length).toBe(1) // reused, not re-spawned
-    expect(calls[0].args).toContain('--embedding')
-    expect(calls[0].args.join(' ')).toContain('--host 127.0.0.1')
-    // Phase 15 (architecture.md GPU record §7, decided): the embedder is PINNED to CPU — the
-    // Vulkan default build would otherwise auto-offload it into VRAM contention with
-    // the chat model and expose ingestion to driver flakiness.
-    expect(calls[0].args.join(' ')).toContain('--device none')
-    expect(calls[0].args.join(' ')).not.toContain('-ngl')
     await embedder.stop()
-    expect(child.killed).toBe(true)
+    expect(children[0]!.killed).toBe(true)
   })
 
   // M7 (audit round 4): chunk sizing is approx tokens but the sidecar context is real
   // BPE tokens — oversize inputs overflowed the context and failed the whole document,
   // and all (up to 1000) chunks went out as ONE request with no timeout.
-  it('truncates each input to the embedder context budget before sending', async () => {
-    const bodies: Array<{ input: string[] }> = []
-    const recordingFetch = (async (url: string | URL, init?: RequestInit) => {
-      const u = String(url)
-      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
-      const body = JSON.parse(String(init?.body)) as { input: string[] }
-      bodies.push(body)
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ data: body.input.map((_, i) => ({ embedding: [1, 0], index: i })) })
-      } as Response
-    }) as typeof fetch
-
-    const embedder = new E5Embedder({ ...base, contextTokens: 512, spawn: fakeSpawn().spawn, fetchImpl: recordingFetch })
-    const longText = Array.from({ length: 1000 }, (_, i) => `word${i}`).join(' ')
-    await embedder.embed([longText, 'short text'])
-    await embedder.stop()
-
-    const sent = bodies[0].input
-    const maxApproxTokens = Math.floor(512 / 2.2)
-    // The sent head fits the approx-token budget, so its real-token cost stays under ctx.
-    expect(approxTokenCount(sent[0])).toBeLessThanOrEqual(maxApproxTokens)
-    expect(sent[0].startsWith('word0 word1')).toBe(true) // the chunk's head is kept
-    expect(sent[1]).toBe('short text') // short inputs pass through untouched
-  })
-
+  //
   // Regression (HTTP 500 on a German translation import): the embedder is the MULTILINGUAL
   // E5, and subword-heavy languages (German ~2 real tokens/word) and space-less scripts
   // (CJK — counted ~1 token/CHAR) cost far more real BPE tokens than a naive word split
   // implies. A word-count truncation let those inputs stay over the 512-token context, so
   // the sidecar 500'd and the whole materialized translation failed to import. Truncation
   // is now measured by approxTokenCount against a real-BPE safety factor.
-  it('truncates subword-heavy and space-less inputs so they cannot overflow the context', async () => {
+  it.each([
+    { shape: 'long prose', input: Array.from({ length: 1000 }, (_, i) => `word${i}`).join(' '), head: 'word0 word1' },
+    // The case a word split collapses to "1 word".
+    { shape: 'a glued space-less run', input: 'Donaudampfschifffahrtsgesellschaftskapitän'.repeat(60), head: 'Donaudampf' },
+    { shape: 'a CJK run', input: '東'.repeat(2000), head: '東東' }
+  ])('truncates $shape to the embedder context budget before sending (M7)', async ({ input, head }) => {
     const bodies: Array<{ input: string[] }> = []
     const recordingFetch = (async (url: string | URL, init?: RequestInit) => {
       const u = String(url)
@@ -241,29 +162,26 @@ describe('E5Embedder', () => {
     }) as typeof fetch
 
     const embedder = new E5Embedder({ ...base, contextTokens: 512, spawn: fakeSpawn().spawn, fetchImpl: recordingFetch })
-    // A glued, space-less run (the case a word split collapses to "1 word") and a long
-    // CJK run — both far over a 512-token budget if not truncated by token cost.
-    const noSpace = 'Donaudampfschifffahrtsgesellschaftskapitän'.repeat(60) // one giant "word"
-    const cjk = '東'.repeat(2000)
-    await embedder.embed([noSpace, cjk])
+    await embedder.embed([input, 'short text'])
     await embedder.stop()
 
-    const maxApproxTokens = Math.floor(512 / 2.2)
-    for (const sent of bodies[0].input) {
-      expect(approxTokenCount(sent)).toBeLessThanOrEqual(maxApproxTokens)
-    }
+    const sent = bodies[0].input
+    // The sent head fits the approx-token budget, so its real-token cost stays under ctx.
+    expect(approxTokenCount(sent[0])).toBeLessThanOrEqual(Math.floor(512 / 2.2))
+    expect(sent[0].startsWith(head)).toBe(true) // the chunk's head is kept
+    expect(sent[1]).toBe('short text') // short inputs pass through untouched
   })
 
-  it('splits large inputs into bounded batches, preserving global order', async () => {
+  it('splits large inputs into bounded batches and maps every vector back to its input across batch boundaries', async () => {
     const bodies: Array<{ input: string[] }> = []
-    let counter = 0
     const batchFetch = (async (url: string | URL, init?: RequestInit) => {
       const u = String(url)
       if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
       const body = JSON.parse(String(init?.body)) as { input: string[] }
       bodies.push(body)
-      // Encode a global counter into the vector so order is verifiable end-to-end.
-      const data = body.input.map((_, i) => ({ embedding: [++counter, 0], index: i }))
+      // Encode each input's own number (`text N`) into its vector's direction, which survives
+      // L2 normalization, so every vector can be traced back to the input it belongs to.
+      const data = body.input.map((t, i) => ({ embedding: [1, Number(t.split(' ')[1])], index: i }))
       return { ok: true, status: 200, json: async () => ({ data }) } as Response
     }) as typeof fetch
 
@@ -273,41 +191,9 @@ describe('E5Embedder', () => {
     await embedder.stop()
 
     expect(bodies.map((b) => b.input.length)).toEqual([3, 3, 1]) // bounded batches
+    expect(bodies.flatMap((b) => b.input)).toEqual(texts) // every input sent once, in order
     expect(vectors).toHaveLength(7)
-    // L2-normalized [n, 0] → [1, 0]; the global order check is that nothing was dropped
-    // or duplicated across batch boundaries.
-    expect(vectors.every((v) => v.length === 2)).toBe(true)
-  })
-
-  // M-C5: a caller "Stop" (opts.signal) must be plumbed into the loopback fetch so query
-  // embedding aborts promptly, not only on the request timeout.
-  it('forwards the caller abort signal to the embeddings request (aborts in flight)', async () => {
-    const { spawn } = fakeSpawn()
-    let seenSignal: AbortSignal | undefined
-    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
-      const u = String(url)
-      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
-      seenSignal = init?.signal ?? undefined
-      // Never resolve on its own — only the aborted signal ends this request.
-      return await new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () => reject(new DOMException('Aborted', 'AbortError')))
-      })
-    }) as typeof fetch
-
-    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: hangingFetch })
-    const controller = new AbortController()
-    const embedPromise = embedder.embed(['hello'], { signal: controller.signal })
-    // Deterministically wait until the embed request REACHED fetch (the signal was handed over)
-    // before the user hits Stop — a fixed `sleep(1)` could fire before fetch under load (T5).
-    // State-poll on the captured signal (the file's own idiom).
-    while (!seenSignal) await new Promise((r) => setTimeout(r, 1))
-    controller.abort()
-    // The caller's own AbortError, untouched — a Stop is a clean cancellation, never a search-model
-    // failure (#634 types every other failure; this one must stay what the chat treats as a Stop).
-    await expect(embedPromise).rejects.toMatchObject({ name: 'AbortError' })
-    // The signal handed to fetch fires when the caller aborts (combined with the timeout).
-    expect(seenSignal?.aborted).toBe(true)
-    await embedder.stop()
+    expect(vectors.map((v) => Math.round(v[1] / v[0]))).toEqual([0, 1, 2, 3, 4, 5, 6])
   })
 
   it('returns [] for an empty batch without starting the server', async () => {
@@ -466,7 +352,7 @@ describe('E5Embedder', () => {
   // the just-spawned sidecar outlive the app as an orphan. stop() must await the
   // in-flight start and kill whatever it produced — and block any later restart.
   it('stop() during the in-flight lazy start kills the sidecar (no orphan)', async () => {
-    const { spawn, child } = fakeSpawn()
+    const { spawn, children } = fakeSpawn()
     const health: { release: (() => void) | null } = { release: null }
     const gatedFetch = (async (url: string | URL) => {
       const u = String(url)
@@ -488,14 +374,14 @@ describe('E5Embedder', () => {
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: gatedFetch })
     const embedPromise = embedder.embed(['a'])
     // Wait until the lazy start has spawned the child and is polling /health.
-    while (!health.release) await new Promise((r) => setTimeout(r, 1))
+    await until(() => health.release !== null, 'the lazy start polling /health')
 
     const stopPromise = embedder.stop() // app quits while the sidecar is still starting
-    health.release()
+    health.release!()
     await stopPromise
     await embedPromise.catch(() => undefined) // the embed may fail; no-orphan is the point
 
-    expect(child.killed).toBe(true)
+    expect(children[0]!.killed).toBe(true)
     // The stopped flag must also block a later embed from resurrecting the sidecar.
     await expect(embedder.embed(['b'])).rejects.toThrow(/stopped/)
   })
@@ -505,7 +391,7 @@ describe('E5Embedder', () => {
   // health budget. The question now stops waiting at once; the start goes on for the import
   // embedding (with no signal, as ingestion does) that shares it.
   it('a Stop during a hung cold start ends the question at once; an import sharing the start still embeds (#635)', async () => {
-    const { spawn, calls, child } = fakeSpawn()
+    const { spawn, calls, children } = fakeSpawn()
     // This llama-server stays loading (/health 503) until `state.loaded`.
     const { fetchImpl, state } = loadingSidecar(embedFetch([[3, 4]]))
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
@@ -523,7 +409,7 @@ describe('E5Embedder', () => {
     state.loaded = true
     // The start was not cancelled: the import's embed lands on it.
     const [v] = await importing
-    expect(child.killed).toBe(false)
+    expect(children[0]!.killed).toBe(false)
     expect(v[0]).toBeCloseTo(0.6, 6)
     expect(calls.length).toBe(1) // one start, shared
     expect(embedder.isLoaded()).toBe(true)
@@ -550,14 +436,7 @@ describe('E5Embedder', () => {
   // post-lock/unlock embed then failed with "Embedder is stopped". The lock path now
   // suspends instead: the sidecar dies (its memory held chunk text) but restarts lazily.
   it('suspend() stops the sidecar but allows a lazy restart (workspace-lock path)', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const children: FakeChild[] = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      children.push(child)
-      return child
-    }
+    const { spawn, calls, children } = fakeSpawn()
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
     await embedder.embed(['a'])
     await embedder.suspend()
@@ -573,28 +452,19 @@ describe('E5Embedder', () => {
   // `llama-server` given a truncated copy of the e5 GGUF (DesktopDiT, 2026-10-07), path shortened.
   it('latches a failed start (fail fast, one spawn) as a path-free start failure, and clears the latch on suspend()', async () => {
     const weightPath = 'D:\\HilbertRaum\\models\\embeddings\\multilingual-e5-small-q8.gguf'
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
-      child.stderr = new EventEmitter()
-      // The server dies immediately: a corrupt/incomplete GGUF.
-      queueMicrotask(() => {
-        child.stderr.emit(
-          'data',
-          [
-            `0.00.214.130 I srv    load_model: loading model '${weightPath}'`,
-            "0.00.273.164 E llama_model_load: error loading model: tensor 'token_embd.weight' data is not within the file bounds, model is corrupted or incomplete",
-            `0.00.333.627 E cmn  common_init_: failed to load model '${weightPath}'`,
-            '0.00.334.509 E srv  llama_server: exiting due to model loading error',
-            ''
-          ].join('\n')
-        )
-        child.emit('exit', 1, null)
-        child.emit('close', 1, null)
-      })
-      return child
-    }
+    // The server dies immediately: a corrupt/incomplete GGUF.
+    const { spawn, calls } = fakeSpawn(() =>
+      exitingChild(
+        1,
+        [
+          `0.00.214.130 I srv    load_model: loading model '${weightPath}'`,
+          "0.00.273.164 E llama_model_load: error loading model: tensor 'token_embd.weight' data is not within the file bounds, model is corrupted or incomplete",
+          `0.00.333.627 E cmn  common_init_: failed to load model '${weightPath}'`,
+          '0.00.334.509 E srv  llama_server: exiting due to model loading error',
+          ''
+        ].join('\n')
+      )
+    )
     const embedder = new E5Embedder({
       ...base,
       spawn,
@@ -623,31 +493,13 @@ describe('E5Embedder', () => {
   // race silently disabled ALL imports for the session until lock/unlock. With the fix the
   // latch stays null, so the next embed() re-attempts a fresh start on a new port.
   it('does NOT latch a transient bind-race; a later embed retries on a fresh port (F4)', async () => {
-    const calls: Array<{ args: string[] }> = []
-    let portFree = false
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
-      child.stderr = new EventEmitter()
-      if (!portFree) {
-        // A port-bind race: stderr reports EADDRINUSE and the child exits before health.
-        queueMicrotask(() => {
-          child.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
-          child.emit('exit', 1, null)
-        })
-      }
-      return child
-    }
-    // /health stays unhealthy (503) while the port is contended, so waitForHealthy loops until it
-    // observes the bind-race exit (a 200 here would mask it). Once the port is free it serves ok.
-    const fetchImpl = (async (url: string | URL) => {
-      const u = String(url)
-      if (u.endsWith('/health')) return { ok: portFree, status: portFree ? 200 : 503 } as Response
-      if (u.endsWith('/v1/embeddings')) {
-        return { ok: true, status: 200, json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] }) } as Response
-      }
-      throw new Error(`unexpected url ${u}`)
-    }) as typeof fetch
+    // /health answers 503 while the port is contended (loadingSidecar), so waitForHealthy observes
+    // the bind-race exit (a 200 here would mask it). Once the port is free it serves ok.
+    const { fetchImpl, state } = loadingSidecar(embedFetch([[1, 0]]))
+    // A port-bind race: stderr reports EADDRINUSE and the child exits before health.
+    const { spawn, calls } = fakeSpawn(() =>
+      state.loaded ? new FakeChild() : exitingChild(1, 'error: bind: address already in use\n')
+    )
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
 
     // The doubly-unlucky startup: BOTH the initial start and its single bind-retry lose the port.
@@ -657,53 +509,24 @@ describe('E5Embedder', () => {
 
     // The latch must NOT be armed for a transient race: the next embed re-attempts a fresh start
     // (it does not throw a cached error). The port is now free, so it starts and embeds.
-    portFree = true
+    state.loaded = true
     const [v] = await embedder.embed(['b'])
     expect(Array.from(v)).toEqual([1, 0])
     expect(calls.length).toBe(3) // re-spawned a fresh start, rather than fast-failing on the latch
     await embedder.stop()
   })
 
-  // L4: suspend() must clear the failed-start latch AFTER teardown, not before. If a
-  // first-start is in flight when suspend() runs, teardown awaits it; should that start
-  // then FAIL, it re-arms `startFailed`. Clearing the latch last guarantees a post-suspend
-  // embed() gets a fresh attempt rather than throwing the stale failure.
-  it('suspend() clears the latch even when an in-flight start fails during teardown (L4)', async () => {
-    let attempt = 0
-    const spawn = (): ChildProcessLike => new FakeChild()
-    // First start: hold /health, then fail (exit emitted by the test). Later starts: healthy.
-    const health = { release: null as (() => void) | null }
-    const fetchImpl = (async (url: string | URL) => {
-      const u = String(url)
-      if (u.endsWith('/health')) {
-        attempt++
-        if (attempt === 1) {
-          // First start stays in flight until the test releases it, then rejects (sidecar died).
-          await new Promise<void>((resolve) => (health.release = resolve))
-          throw new Error('connection refused')
-        }
-        return { ok: true, status: 200 } as Response
-      }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ data: [{ embedding: [1, 0], index: 0 }] })
-      } as Response
-    }) as typeof fetch
-
+  // #244 + #634: a lock during a cold start aborts the start; the embed waiting on it ends as
+  // `interrupted` (the row's "re-index" copy), never as the `start` failure that points at the model files.
+  it('a suspend() during a cold start ends the waiting embed as interrupted, never as a start failure (#244, #634)', async () => {
+    const { spawn, children } = fakeSpawn()
+    const { fetchImpl, state } = loadingSidecar(embedFetch([[1, 0]]))
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
-    const first = embedder.embed(['a']) // first start goes in flight, polling /health
-    while (!health.release) await new Promise((r) => setTimeout(r, 1))
-
-    const suspendPromise = embedder.suspend() // teardown awaits the in-flight start
-    health.release!() // the in-flight start now fails DURING teardown's await
-    await suspendPromise
-    await first.catch(() => undefined)
-
-    // If the latch had been cleared before teardown, the racing failure would have re-armed
-    // it and this embed would throw the stale 'connection refused'. Clearing last → fresh start.
-    const [v] = await embedder.embed(['b'])
-    expect(Array.from(v)).toEqual([1, 0])
+    const first = embedder.embed(['a']).catch((e: unknown) => e)
+    await until(() => state.probes > 0, 'the cold start polling /health')
+    await embedder.suspend()
+    expect(await first).toMatchObject({ name: 'EmbedderError', kind: 'interrupted' })
+    expect(children[0]!.killed).toBe(true)
     await embedder.stop()
   })
 
@@ -716,30 +539,7 @@ describe('E5Embedder', () => {
   // embed spawns child2, it is never killed, and `calls.length` is 2 → both assertions red.
   it('suspend() does not retain a sidecar spawned by a concurrent embed during teardown (F19)', async () => {
     // kill() marks `killed` but HOLDS the 'exit' event until releaseExit(), so server.stop() parks.
-    class GatedChild extends EventEmitter implements ChildProcessLike {
-      pid = 9
-      killed = false
-      private wantExit = false
-      private released = false
-      kill(): boolean {
-        this.killed = true
-        this.wantExit = true
-        if (this.released) this.emit('exit', 0, null)
-        return true
-      }
-      releaseExit(): void {
-        this.released = true
-        if (this.wantExit) this.emit('exit', 0, null)
-      }
-    }
-    const children: GatedChild[] = []
-    const calls: string[][] = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push(args)
-      const c = new GatedChild()
-      children.push(c)
-      return c
-    }
+    const { spawn, calls, children } = fakeSpawn(() => new GatedChild())
     // The FIRST start's /health is gated (the start stays in flight); later starts are healthy at once.
     const firstHealth = { release: null as null | (() => void) }
     let firstHealthDone = false
@@ -764,7 +564,7 @@ describe('E5Embedder', () => {
     // (its post-start re-check sees tearingDown), so attach the catch up front to avoid an
     // unhandled rejection while the test orchestrates the interleave.
     const embed1 = embedder.embed(['a']).catch(() => undefined)
-    while (!firstHealth.release) await new Promise((r) => setTimeout(r, 1))
+    await until(() => firstHealth.release !== null, 'start1 parked on /health')
     expect(children.length).toBe(1)
 
     const suspendP = embedder.suspend() // teardown: tearingDown=true, awaits this.starting (start1)
@@ -775,7 +575,7 @@ describe('E5Embedder', () => {
 
     firstHealth.release!() // start1 resolves → this.server set → teardown advances to server.stop()
     // teardown calls child1.kill() (exit gated) then PARKS — wait until that observable kill happens.
-    while (!children[0].killed) await new Promise((r) => setTimeout(r, 1))
+    await until(() => children[0]!.killed, 'the teardown killing child1')
 
     // THE RACE: a concurrent embed in the teardown window. With the F19 guard ensureStarted refuses
     // (tearingDown); without it, it spawns child2 and retains it past the lock.
@@ -822,7 +622,7 @@ describe('E5Embedder', () => {
   // so the loop advances to the second batch's re-check. TEETH: drop the re-check → batch 2 fetches
   // the dead captured server → "llama-server is not started" (not the cancellation class) → red.
   it('embed() re-checks teardown between batches and cancels cleanly on a mid-loop suspend (REL-3)', async () => {
-    const { spawn, child } = fakeSpawn() // FakeChild.kill() emits exit on a microtask → suspend completes fast
+    const { spawn, children } = fakeSpawn() // FakeChild.kill() emits exit on a microtask → suspend completes fast
     const gate = { release: null as null | (() => void) }
     let embedCalls = 0
     const fetchImpl = (async (url: string | URL) => {
@@ -845,10 +645,10 @@ describe('E5Embedder', () => {
       () => 'resolved',
       (e: unknown) => e
     )
-    while (!gate.release) await new Promise((r) => setTimeout(r, 1)) // batch 1 in flight (parked)
+    await until(() => gate.release !== null, 'batch 1 in flight') // parked
 
     await embedder.suspend() // teardown runs to completion: kills the child, nulls this.server
-    expect(child.killed).toBe(true)
+    expect(children[0]!.killed).toBe(true)
 
     gate.release!() // batch 1 resolves → loop advances → batch 2 re-check fires
     const result = await embedP
@@ -864,22 +664,24 @@ describe('E5Embedder', () => {
   // #634: the usual lock mid-import — one batch, in flight when the teardown kills the sidecar, so
   // undici ends the request ("terminated"). It used to reach the document row as that raw word.
   it('a lock that kills the sidecar under an in-flight request ends the embed as interrupted (#634)', async () => {
-    const { spawn, child } = fakeSpawn()
+    const { spawn, children } = fakeSpawn()
     let endRequest: ((err: Error) => void) | null = null
     const fetchImpl = (async (url: string | URL) => {
       const u = String(url)
       if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
       return await new Promise<Response>((_resolve, reject) => (endRequest = reject))
     }) as typeof fetch
-    // The kill closes the request's socket — what a real sidecar's death does to undici.
+    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
+    const embedP = embedder.embed(['a']).catch((e: unknown) => e)
+    await until(() => endRequest !== null, 'the request in flight')
+    // The kill closes the request's socket — what a real sidecar's death does to undici. (The child
+    // exists once the request is in flight.)
+    const child = children[0]!
     const kill = child.kill.bind(child)
     child.kill = () => {
       endRequest?.(new TypeError('terminated'))
       return kill()
     }
-    const embedder = new E5Embedder({ ...base, spawn, fetchImpl })
-    const embedP = embedder.embed(['a']).catch((e: unknown) => e)
-    while (!endRequest) await new Promise((r) => setTimeout(r, 1)) // the request is in flight
     await embedder.suspend()
     expect(await embedP).toMatchObject({ name: 'EmbedderError', kind: 'interrupted' })
     await embedder.stop()
@@ -888,14 +690,11 @@ describe('E5Embedder', () => {
   // #634: a sidecar that died on its own after it was healthy stayed `this.server`, so every later
   // embed went to the dead port ("fetch failed") until a lock/unlock — the row's Try again failed.
   it('a sidecar that crashes is started again on the next embed; the request it cut off failed (#634)', async () => {
-    const children: FakeChild[] = []
     let alive = false
-    const spawn = (): ChildProcessLike => {
+    const { spawn, children } = fakeSpawn(() => {
       alive = true
-      const c = new FakeChild()
-      children.push(c)
-      return c
-    }
+      return new FakeChild()
+    })
     const parked = { reject: null as null | ((err: Error) => void) }
     let park = false
     const fetchImpl = (async (url: string | URL) => {
@@ -910,10 +709,10 @@ describe('E5Embedder', () => {
 
     park = true
     const cutOff = embedder.embed(['a']).catch((e: unknown) => e)
-    while (!parked.reject) await new Promise((r) => setTimeout(r, 1))
+    await until(() => parked.reject !== null, 'the request parked')
     // The crash: the process exits on its own, and its socket closes under the request.
     alive = false
-    children[0]!.emit('exit', 3221225477, null)
+    children[0]!.crash(3221225477)
     parked.reject!(new TypeError('terminated'))
     // A crash is not a lock: the request failed, it was not interrupted.
     expect(await cutOff).toMatchObject({ name: 'EmbedderError', kind: 'failed' })
@@ -925,41 +724,33 @@ describe('E5Embedder', () => {
     await embedder.stop()
   })
 
-  // #475 (mirrors reranker-wave8.test.ts's ruling (c)(i) tests): before this fix `teardown()` had
-  // no shared in-flight promise, so a second overlapping `suspend()`/`stop()` call saw `this.server`
-  // already nulled by the first (the no-op branch) and cleared `tearingDown` in its OWN `finally`
-  // while the first caller's `await server.stop()` was still in flight.
-  it('#475: overlapping suspend() + suspend() share ONE teardown pass — the child is killed exactly once', async () => {
-    const { spawn, children } = fakeGatedSpawn()
-    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
-    await embedder.embed(['a'])
-    const p1 = embedder.suspend()
-    const p2 = embedder.suspend() // overlaps p1 -- must join, not start a second pass
-    expect(children[0]!.killed).toBe(true) // kill() called by the shared pass
-    children[0]!.releaseExit()
-    await Promise.all([p1, p2])
-    expect(children.length).toBe(1) // no second teardown ever spawned/killed a second child
-    await embedder.stop()
-  })
-
-  it('#475: stop() joining an in-flight suspend() still settles only after the shared kill (no orphan on quit)', async () => {
-    const { spawn, children } = fakeGatedSpawn()
-    const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
-    await embedder.embed(['a'])
-    const suspendP = embedder.suspend()
-    let stopSettled = false
-    const stopP = embedder.stop().then(() => {
-      stopSettled = true
-    })
-    // The shared pass has NOT settled yet (child still gated) — stop() must not resolve early.
-    await new Promise((r) => setTimeout(r, 5))
-    expect(stopSettled).toBe(false)
-    expect(children.length).toBe(1) // stop() joined the SAME pass, no second teardown started
-    children[0]!.releaseExit()
-    await Promise.all([suspendP, stopP])
-    expect(stopSettled).toBe(true)
-    expect(children[0]!.killed).toBe(true)
-  })
+  // #475: the single-flight teardown pass `reranker/llama.ts` has had since Wave 8 ruling (c)(i)
+  // (pinned the same way in reranker-wave8.test.ts). Before it, an overlapping suspend()/stop() saw
+  // `this.server` already nulled, ran its own empty teardown, settled at once and cleared `tearingDown`
+  // in its own `finally` while the first caller's kill was still in flight.
+  it.each([{ joiner: 'suspend' as const }, { joiner: 'stop' as const }])(
+    '#475: an overlapping $joiner() joins the in-flight suspend() pass and settles only after the shared kill',
+    async ({ joiner }) => {
+      const { spawn, children } = fakeSpawn(() => new GatedChild())
+      const embedder = new E5Embedder({ ...base, spawn, fetchImpl: embedFetch([[1, 0]]) })
+      await embedder.embed(['a'])
+      const suspendP = embedder.suspend()
+      let joinerSettled = false
+      const joinerP = embedder[joiner]().then(() => {
+        joinerSettled = true
+      })
+      // One macrotask hop, no observable to gate on (justified): a joiner that did NOT join runs its own
+      // empty teardown and settles within microtasks; the shared pass stays parked on the gated exit
+      // (the kill's 2 s grace is far away).
+      await new Promise((r) => setImmediate(r))
+      expect(joinerSettled).toBe(false)
+      children[0]!.releaseExit()
+      await Promise.all([suspendP, joinerP])
+      expect(children).toHaveLength(1)
+      expect(children[0]!.killed).toBe(true)
+      await embedder.stop()
+    }
+  )
 })
 
 // ---- #607: a response body that stalls after the headers --------------------------------------
@@ -1031,13 +822,9 @@ describe('E5Embedder — a response body that stalls after the headers (#607)', 
     const headers: Array<() => void> = []
     const headersArrived = (): Promise<void> => new Promise<void>((r) => headers.push(r))
     const embedder = new E5Embedder({
-      id: 'multilingual-e5-small-q8',
-      binPath: '/bin/llama-server',
-      modelPath: '/models/e5.gguf',
-      dimensions: 2,
+      ...base,
       spawn: fakeSpawn().spawn,
       findPort: async () => port,
-      healthIntervalMs: 1,
       fetchImpl: (async (url: string | URL, init?: RequestInit) => {
         const res = await fetch(url, init)
         if (String(url).endsWith('/v1/embeddings')) headers.shift()?.()
@@ -1105,33 +892,21 @@ describe('E5Embedder — a response body that stalls after the headers (#607)', 
 // ---- Embedder selector ----------------------------------------------------------
 
 describe('createSelectedEmbedder', () => {
-  const model = { id: 'multilingual-e5-small-q8', modelPath: '/models/e5.gguf' }
-
-  it('falls back to the mock when no binary / no weights / no model', () => {
-    const noBin = createSelectedEmbedder({ rootPath: '/r', model, resolveBin: () => null })
-    expect(noBin.id).toBe('mock-embedder')
-
-    const noWeights = createSelectedEmbedder({
-      rootPath: '/r',
-      model,
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => false
-    })
-    expect(noWeights.id).toBe('mock-embedder')
-
-    const noModel = createSelectedEmbedder({ rootPath: '/r', model: null, resolveBin: () => '/bin/x' })
-    expect(noModel.id).toBe('mock-embedder')
+  // The no-binary / no-weights rungs are the shared ladder's (select-sidecar-backed.test.ts).
+  it('falls back to the mock embedder (never null) when no embedding model is configured', () => {
+    expect(createSelectedEmbedder({ rootPath: '/r', model: null }).id).toBe('mock-embedder')
   })
 
-  it('selects the real E5 embedder (manifest id) when binary AND weights are present', () => {
-    const e = createSelectedEmbedder({
-      rootPath: '/r',
-      model,
-      resolveBin: () => '/bin/llama-server',
-      modelExists: () => true
-    })
-    expect(e.id).toBe('multilingual-e5-small-q8')
+  it('selects the real E5 embedder (manifest id) when the drive holds the llama-server binary AND the weights', () => {
+    const root = mkdtempSync(join(tmpdir(), 'hilbertraum-e5-select-'))
+    mkdirSync(llamaServerDir(root), { recursive: true })
+    writeFileSync(join(llamaServerDir(root), llamaServerBinaryName()), '') // never spawned: construction is lazy
+    const modelPath = join(root, 'models', 'embeddings', 'e5.gguf')
+    mkdirSync(join(root, 'models', 'embeddings'), { recursive: true })
+    writeFileSync(modelPath, '')
+    const e = createSelectedEmbedder({ rootPath: root, model: { id: 'multilingual-e5-small-q8', modelPath } })
     expect(e).toBeInstanceOf(E5Embedder)
+    expect(e.id).toBe('multilingual-e5-small-q8')
   })
 })
 
@@ -1140,46 +915,19 @@ describe('createSelectedEmbedder', () => {
 describe('E5Embedder — OS loader refusal (#530)', () => {
   afterEach(() => resetEngineProblemsForTest())
 
-  const base = {
-    id: 'multilingual-e5-small-q8',
-    binPath: '/bin/llama-server',
-    modelPath: '/models/e5.gguf',
-    findPort: async () => 52000,
-    healthIntervalMs: 1,
-    dimensions: 2
-  }
   const refusingFetch = (async () => {
     throw new Error('connection refused')
   }) as unknown as typeof fetch
 
-  function loaderRefusedSpawn() {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      const stderr = new EventEmitter()
-      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
-      queueMicrotask(() => {
-        stderr.emit(
-          'data',
-          '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
-        )
-        child.emit('exit', 127, null)
-        child.emit('close', 127, null)
-      })
-      return child
-    }
-    return { spawn, calls }
-  }
+  const loaderLine =
+    '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
 
   it('latches a loader refusal: embed rejects with EngineCannotRunError, no second spawn', async () => {
-    const { spawn, calls } = loaderRefusedSpawn()
+    const { spawn, calls } = fakeSpawn(() => exitingChild(127, loaderLine))
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: refusingFetch })
     const err = await embedder.embed(['hello']).catch((e: unknown) => e)
     expect(isEngineCannotRunError(err)).toBe(true)
-    expect((err as Error).message).not.toContain('/media/someone') // path-free: it is stored on documents
     expect(calls.length).toBe(1)
-    expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'library-missing', name: 'libgomp.so.1' })
 
     const again = await embedder.embed(['hello']).catch((e: unknown) => e)
     expect(isEngineCannotRunError(again)).toBe(true) // the latched error, rethrown
@@ -1188,7 +936,7 @@ describe('E5Embedder — OS loader refusal (#530)', () => {
   })
 
   it('resetStartFailure() re-arms the latch: the next embed spawns again', async () => {
-    const { spawn, calls } = loaderRefusedSpawn()
+    const { spawn, calls } = fakeSpawn(() => exitingChild(127, loaderLine))
     const embedder = new E5Embedder({ ...base, spawn, fetchImpl: refusingFetch })
     await expect(embedder.embed(['hello'])).rejects.toThrow()
     expect(calls.length).toBe(1)

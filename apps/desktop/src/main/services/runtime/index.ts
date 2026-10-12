@@ -308,7 +308,7 @@ export class RuntimeManager {
   // No per-lane registry sees them all, so the busy signal lives HERE: `doStart` wraps the
   // factory-returned runtime (ladder AND mock — the gate CI exercises is the shipped one)
   // in a decorator whose chatStream counts per-lane in-flight generations. External
-  // admission (the local API) reads `isGenerating()` and FAILS CLOSED: no active runtime
+  // admission (the local API) reads `isExternallyBusy()`, which FAILS CLOSED: no active runtime
   // (which includes the whole start window — the #109 warm-up generation runs against the
   // inner rung runtime while `active()` is still null) means "busy", never "idle".
   /** In-flight generation count per lane; mutated only inside the gate wrapper. */
@@ -333,7 +333,6 @@ export class RuntimeManager {
    * misbehaving consumer never resumes its generator.
    */
   private externalPreemptionHook: ((reason: string) => void) | null = null
-  private readonly externalTeardownTimeoutMs: number
   /**
    * Narrow change seam (PR #303 P3): fired synchronously AFTER every transition `status()`
    * reports differently — a start admitted (`startingModelId` set), a start committed
@@ -373,17 +372,35 @@ export class RuntimeManager {
   /** #599: when the last `/health` re-probe settled (`performance.now()`), and the one in flight. */
   private probedAt = 0
   private probeInFlight: Promise<void> | null = null
-  private readonly healthProbeTtlMs: number
   /** #599: starts requested and not yet settled (`beginStartRequest`), the weight check included. */
   private startRequests = 0
 
   constructor(
     private readonly factory: RuntimeFactory,
-    opts?: { externalTeardownTimeoutMs?: number; healthProbeTtlMs?: number }
+    opts?: {
+      /**
+       * #473 ruling 2: awaited by EVERY start — Start, a switch, the auto-start, Restart and the
+       * crash restarts — after the old runtime stopped and before the factory spawns, while the
+       * start is already visible as starting. A quit, Stop or lock meanwhile cancels the start.
+       * The composition uses it to take a translation sidecar off the graphics card first,
+       * because a chat model that starts second stays squeezed until it is restarted. Must never
+       * throw.
+       */
+      beforeStart?: (opts: RuntimeStartOptions) => Promise<void>
+    }
   ) {
-    this.externalTeardownTimeoutMs = opts?.externalTeardownTimeoutMs ?? EXTERNAL_TEARDOWN_TIMEOUT_MS
-    this.healthProbeTtlMs = opts?.healthProbeTtlMs ?? HEALTH_PROBE_TTL_MS
+    this.beforeStart = opts?.beforeStart
   }
+
+  private readonly beforeStart?: (opts: RuntimeStartOptions) => Promise<void>
+
+  /**
+   * #473: bumped by every `stop()`. `doStart` notes it on entry and refuses to spawn when a stop
+   * arrived meanwhile: until `startingRuntime` exists, `stop()` has nothing to cancel, so a lock or
+   * a Stop during the old model's stop or the `beforeStart` hook would otherwise wait out a whole
+   * load of the new model before its queued stop could run.
+   */
+  private stopRequests = 0
 
   /** True while ANY lane has an in-flight generation. For external admission use
    *  {@link isExternallyBusy} — this narrower read is NOT fail-closed on its own. */
@@ -439,7 +456,7 @@ export class RuntimeManager {
   }
 
   /**
-   * #599: re-check the running model's `/health`, at most once per `healthProbeTtlMs`. Called by the
+   * #599: re-check the running model's `/health`, at most once per `HEALTH_PROBE_TTL_MS`. Called by the
    * status read (`getRuntimeStatus`), never by a timer, so an idle app probes nothing. A failed
    * probe marks the model unresponsive until a later probe passes; concurrent reads share one
    * probe, and a probe that outlives a stop or switch is discarded.
@@ -448,7 +465,7 @@ export class RuntimeManager {
     const runtime = this.current
     if (!runtime) return Promise.resolve()
     if (this.probeInFlight) return this.probeInFlight
-    if (performance.now() - this.probedAt < this.healthProbeTtlMs) return Promise.resolve()
+    if (performance.now() - this.probedAt < HEALTH_PROBE_TTL_MS) return Promise.resolve()
     const probe = (async () => {
       let health: HealthStatus
       try {
@@ -561,7 +578,7 @@ export class RuntimeManager {
         this.externalIdleWaiters = this.externalIdleWaiters.filter((w) => w !== settle)
         resolve()
       }
-      const timer = setTimeout(settle, this.externalTeardownTimeoutMs)
+      const timer = setTimeout(settle, EXTERNAL_TEARDOWN_TIMEOUT_MS)
       ;(timer as { unref?: () => void }).unref?.()
       signal?.addEventListener('abort', settle, { once: true })
       this.externalIdleWaiters.push(settle)
@@ -719,6 +736,7 @@ export class RuntimeManager {
    * to retry (`model_starting`) rather than that a person must start a model (#600).
    */
   async stop(opts?: { startFollows?: boolean }): Promise<void> {
+    this.stopRequests += 1
     // CODE-2 (full-audit 2026-07-11): cancel an in-flight start so it settles PROMPTLY
     // instead of holding the queue for the remaining health timeouts. The queue semantics
     // stay untouched (the doStop below still runs only after the start settles and acts on
@@ -795,11 +813,15 @@ export class RuntimeManager {
     // (e.g. enqueued behind an in-flight start/stop) must not spawn either — re-check
     // before touching anything, so the factory is never invoked past the latch.
     if (this.stopped) throw shutdownError()
+    const stopsAtEntry = this.stopRequests
     // Restart cleanly on a model switch (spec §7.5).
     if (this.current) await this.doStop(stopKind)
     // Fresh gate epoch for the new runtime: zeroes any count a misbehaving external
     // consumer leaked in the previous session (see gateEpoch).
     this.resetGenerationGate()
+    // #473: before the progress clock below is re-stamped, so "Starting…" times the load, not
+    // the wait for a translation sidecar to leave the card.
+    if (this.beforeStart) await this.beforeStart(opts).catch(() => undefined)
     // #107: re-stamp the progress clock now that the queue drained (a switch waits out
     // the old model's stop first — elapsed must measure THIS load, not that wait) and
     // resolve the weight's size once per window, here rather than per status() poll
@@ -818,6 +840,8 @@ export class RuntimeManager {
     // factory is invoked, or the switch would spawn and the quit's queued stop would
     // wait out the full model load/health timeout (the CODE-2 freeze, reintroduced).
     if (this.stopped) throw shutdownError()
+    // #473: likewise a Stop or a lock that arrived after this start began (see `stopRequests`).
+    if (this.stopRequests !== stopsAtEntry) throw new Error('The model start was stopped before it began')
     // Commit to `this.current`/`this.last` only on a FULLY successful start. A failed
     // start (e.g. the real sidecar's health timeout) must not leave a half-started
     // runtime as "active" — callers gate chat/RAG on `active() != null`, so a stale

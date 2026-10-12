@@ -7,7 +7,7 @@ import { join } from 'node:path'
 import net from 'node:net'
 import { log } from '../logging'
 import { perfMark, perfMs } from '../perf'
-import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import { verifyBinaryBeforeSpawn } from '../binary-verifier'
 import type { HealthStatus } from './index'
 import {
   EngineCannotRunError,
@@ -427,13 +427,6 @@ export interface LlamaServerOptions {
    */
   onStderrData?: (text: string) => void
   /**
-   * Re-hash the binary against its install marker immediately before spawn (vuln-scan B).
-   * Defaults to the shared `verifyBinaryBeforeSpawn` (session-cached; inert in dev / before
-   * init). On a `mismatch` (packaged tamper) `start()` throws so the ladder falls to the
-   * next rung / MockRuntime. Injected by tests to assert the refusal without a real binary.
-   */
-  verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
-  /**
    * Abort an IN-FLIGHT `start()` (#159 / BE-1): when this signal fires, the health wait
    * stops at its next poll iteration, the spawned child is killed via the normal `stop()`
    * path (no orphan), and `start()` rejects with an `AbortError` DOMException. Wired by the
@@ -561,7 +554,7 @@ export class LlamaServer {
   private stopping = false
   /**
    * The in-flight `start()` (REL-2, audit 2026-06-28). `this.child` alone can't gate a
-   * single-flight start because it is assigned only AFTER `verifyBinary` + `findPort`
+   * single-flight start because it is assigned only AFTER the pre-spawn verify + `findPort`
    * resolve — two overlapping `start()` calls both passed the `if (this.child)` guard and
    * both spawned, the second orphaning the first (port + RAM, never stopped). Holding the
    * promise lets a concurrent caller share the one start AND wait for HEALTH, not just for
@@ -573,7 +566,6 @@ export class LlamaServer {
   private readonly spawn: SpawnFn
   private readonly fetchImpl: FetchFn
   private readonly findPort: (host: string) => Promise<number>
-  private readonly verifyBinary: (binPath: string) => Promise<BinaryVerifyResult>
   private readonly healthTimeoutMs: number
   private readonly healthIntervalMs: number
   private readonly killGraceMs: number
@@ -583,7 +575,6 @@ export class LlamaServer {
     this.spawn = opts.spawn ?? realSpawn
     this.fetchImpl = opts.fetchImpl ?? fetch
     this.findPort = opts.findPort ?? findFreePort
-    this.verifyBinary = opts.verifyBinary ?? verifyBinaryBeforeSpawn
     this.healthTimeoutMs = opts.healthTimeoutMs ?? DEFAULT_HEALTH_TIMEOUT_MS
     this.healthIntervalMs = opts.healthIntervalMs ?? DEFAULT_HEALTH_INTERVAL_MS
     this.killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
@@ -692,7 +683,7 @@ export class LlamaServer {
     // #516: an engine install replacing this folder holds spawns until its swap is over.
     await waitForEngineSpawns('llama_cpp')
     this.throwIfStartAborted()
-    if ((await this.verifyBinary(this.opts.binPath)) === 'mismatch') {
+    if ((await verifyBinaryBeforeSpawn(this.opts.binPath)) === 'mismatch') {
       throw new Error('llama-server failed pre-spawn integrity verification')
     }
     this.spawnError = null

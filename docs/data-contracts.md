@@ -551,8 +551,8 @@ document answers always run balanced (deep-grounded = wave 2).
 ladder's **rung 1a**, which spawns with `CHAT_SERVER_ARGS` + `MTP_SERVER_ARGS` = `--spec-type
 draft-mtp --spec-draft-n-max 2`. The manifest names a scheme and NEVER supplies arguments (the
 flag list is code-owned; extras are appended last in `buildArgs`, so a free-form field could
-override `--host`). The ladder gates the rung on a probed GPU with the weight's bytes +
-`MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
+override `--host`). The ladder gates the rung on the budget device (`primaryUsefulDevice`) having
+the weight's bytes + `MTP_VRAM_HEADROOM_MB` free, and forced-CPU rungs never carry the flags. Design record:
 `architecture.md` "MTP speculative decoding".
 ✅ **Prompt cache (#512; replaces the #399 D5 family gate):** manifest `disable_prompt_cache`
 (optional boolean, default false = cache on; chat role only; a non-boolean or another role is a
@@ -1964,7 +1964,10 @@ whole renderer-visible surface.
   `AppStatus` carries the additive gates `translationAvailable: boolean` (issue #40) and
   `translationDevice?: TranslationDeviceStatus` (issue #42 reopen — the Translate screen's
   device hint; recorded here per #164 D-7a, the `dictationAvailable`/`ocrAvailable` siblings'
-  precedent). PR #268 (#232): `AppStatus.ocrState?: OcrState`
+  precedent). #473 (2026-10-12) adds the optional `TranslationDeviceStatus.cpuCause?:
+  TranslationCpuCause` (`'beside-chat' | 'chat-starting' | 'too-large'`): why the headroom gate
+  put a start on the processor, absent when Settings or the session latch chose it
+  (`architecture.md` GPU record §9). PR #268 (#232): `AppStatus.ocrState?: OcrState`
   (`'available' | 'probing' | 'unavailable' | 'missing'`, additive-optional, same precedent) says
   WHY `ocrAvailable` is what it is — `ocrAvailable` itself now reads the engine's execution state
   (false while a packaged build's startup execution probe runs and after any worker failure), no

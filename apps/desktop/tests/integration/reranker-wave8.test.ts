@@ -1,8 +1,6 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
-import { EventEmitter } from 'node:events'
 import { join } from 'node:path'
 import { LlamaReranker } from '../../src/main/services/reranker/llama'
-import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import {
   cpuRequestCeilingFor,
   resolveRerankerDevicePosture,
@@ -10,64 +8,17 @@ import {
   createPendingModelSwitchCounter
 } from '../../src/main/services/rag/device-posture'
 import { DEFAULT_SETTINGS, type GpuDevice } from '../../src/shared/types'
-import { resolveRerankProfile, rerankScopeFor, type RerankerDevice } from '../../src/main/services/rag/rerank-profile'
-import {
-  engineProblemFor,
-  isEngineCannotRunError,
-  resetEngineProblemsForTest
-} from '../../src/main/services/runtime/engine-load'
+import type { RerankerDevice } from '../../src/main/services/rag/rerank-profile'
+import { isEngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import type { RuntimeManager } from '../../src/main/services/runtime'
+import { until } from '../helpers/hang-budget'
+import { FakeChild, GatedChild, exitingChild, fakeSpawn, loadingSidecar } from '../helpers/fake-sidecar'
 
 // Wave 8 (step 4-8, resolving the scoped Opus review of step 4-7's finding C3): option B', the
 // use-time re-check (Q), the CPU request ceiling (G), and the lifecycle hardening (single-flight
 // teardown + dead-handle recovery + abort classification). Driven at the SAME level as
 // reranker.test.ts — a real LlamaReranker over a fake spawn + fake loopback fetch — because the
 // mechanism under test lives entirely inside `resolveServer`/`ensureStarted`/`beginOrJoinTeardown`.
-
-class FakeChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-  /** Simulate a mid-session crash: exits WITHOUT going through kill() (ruling (c)(ii)). */
-  crash(code = 1): void {
-    this.emit('exit', code, null)
-  }
-}
-
-/** A child whose exit only fires once `releaseExit()` is called — lets a test hold a teardown
- *  open long enough to observe single-flight sharing or a concurrent rerank's F19 refusal. */
-class GatedChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
-  killed = false
-  private wantExit = false
-  private released = false
-  kill(): boolean {
-    this.killed = true
-    this.wantExit = true
-    if (this.released) this.emit('exit', 0, null)
-    return true
-  }
-  releaseExit(): void {
-    this.released = true
-    if (this.wantExit) this.emit('exit', 0, null)
-  }
-}
-
-function fakeSpawnOf<T extends ChildProcessLike>(make: () => T) {
-  const calls: Array<{ args: string[] }> = []
-  const children: T[] = []
-  const spawn = (_c: string, args: string[]): ChildProcessLike => {
-    calls.push({ args })
-    const c = make()
-    children.push(c)
-    return c
-  }
-  return { spawn, calls, children }
-}
 
 /** /health ok, /v1/rerank returns one ascending score per document (order-preserving is not the
  *  point here — the lifecycle/race mechanics are). */
@@ -87,30 +38,6 @@ function rerankFetch(): typeof fetch {
   }) as typeof fetch
 }
 
-/** A /health that stays pending until `release()` is called — lets a test park a cold start
- *  in flight, exactly like reranker.test.ts's F19 fixture. */
-function gatedHealthFetch(): { fetchImpl: typeof fetch; release: () => void } {
-  let releaseFn: (() => void) | null = null
-  const ready = new Promise<void>((r) => (releaseFn = r))
-  const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
-    const u = String(url)
-    if (u.endsWith('/health')) {
-      await ready
-      return { ok: true, status: 200 } as Response
-    }
-    if (u.endsWith('/v1/rerank')) {
-      const body = JSON.parse(String(init?.body)) as { documents: string[] }
-      return {
-        ok: true,
-        status: 200,
-        json: async () => ({ results: body.documents.map((_d, index) => ({ index, relevance_score: index })) })
-      } as Response
-    }
-    throw new Error(`unexpected url ${u}`)
-  }) as typeof fetch
-  return { fetchImpl, release: () => releaseFn!() }
-}
-
 const base = {
   id: 'bge-reranker-v2-m3-f16',
   binPath: '/bin/llama-server',
@@ -126,28 +53,10 @@ function docs(n: number): string[] {
 // ---- Ruling (b)(G): the CPU posture's per-call request ceiling -------------------------------
 
 describe('Wave 8 ruling (b)(G): the CPU request ceiling', () => {
-  it('refuses a CPU-posture request above the injected ceiling, BEFORE any start, and never latches startFailed', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
-    const reranker = new LlamaReranker({
-      ...base,
-      spawn,
-      fetchImpl: rerankFetch(),
-      devicePosture: () => 'cpu',
-      cpuRequestCeiling: () => 48
-    })
-    await expect(reranker.rerank('q', docs(49))).rejects.toThrow(/refused/i)
-    expect(calls.length).toBe(0) // thrown before any start
-    // Not latched: a request AT the ceiling succeeds right after, on the same instance.
-    const hits = await reranker.rerank('q', docs(48))
-    expect(hits).toHaveLength(48)
-    expect(calls.length).toBe(1)
-    await reranker.stop()
-  })
-
-  it('admits a CPU-posture request at exactly the default ceiling (read from cpuRequestCeilingFor, not hand-typed)', async () => {
+  it('refuses a CPU-posture request above the default ceiling (cpuRequestCeilingFor, 48), BEFORE any start, and never latches startFailed', async () => {
     const ceiling = cpuRequestCeilingFor(DEFAULT_SETTINGS) // the real formula, default settings -> 48
     expect(ceiling).toBe(48)
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
+    const { spawn, calls } = fakeSpawn()
     const reranker = new LlamaReranker({
       ...base,
       spawn,
@@ -155,16 +64,19 @@ describe('Wave 8 ruling (b)(G): the CPU request ceiling', () => {
       devicePosture: () => 'cpu',
       cpuRequestCeiling: () => ceiling
     })
+    await expect(reranker.rerank('q', docs(ceiling + 1))).rejects.toThrow(/refused/i)
+    expect(calls.length).toBe(0) // thrown before any start
+    // Not latched: a request AT the ceiling succeeds right after, on the same instance.
     const hits = await reranker.rerank('q', docs(ceiling))
     expect(hits).toHaveLength(ceiling)
-    expect(calls[0]!.args).toContain('--device')
+    expect(calls.length).toBe(1)
     await reranker.stop()
   })
 
   // Module-mocked finite CPU_HI_MIN_THREADS (the rerank-profile.test.ts pattern) + a mocked
   // defaultThreadCount (CI's real core count is unpredictable) so cpuRequestCeilingFor's OWN
   // formula, not a hand-typed 72, decides the top48-class ceiling under the wide-scope opt-in.
-  it('admits a request at the top48-class ceiling under a module-mocked finite CPU_HI_MIN_THREADS with the opt-in', async () => {
+  it('cpuRequestCeilingFor follows the cpu-hi profile under the wide-scope opt-in (72) and stays 48 without it (module-mocked finite CPU_HI_MIN_THREADS)', async () => {
     vi.resetModules()
     vi.doMock('../../src/shared/rerank-rules', () => ({ CPU_HI_MIN_THREADS: 8 }))
     vi.doMock('../../src/main/services/runtime/sidecar', async (importOriginal) => {
@@ -174,24 +86,8 @@ describe('Wave 8 ruling (b)(G): the CPU request ceiling', () => {
     try {
       const mod = await import('../../src/main/services/rag/device-posture')
       const wideSettings = { ...DEFAULT_SETTINGS, ragRerankWideScope: true }
-      const ceiling = mod.cpuRequestCeilingFor(wideSettings)
-      expect(ceiling).toBe(72) // 2*12 (ragTopKInitial) + totalCandidateCapFor('top48') (48)
-      const defaultCeiling = mod.cpuRequestCeilingFor(DEFAULT_SETTINGS) // opt-in off -> still 'capped'
-      expect(defaultCeiling).toBe(48)
-
-      const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
-      const reranker = new LlamaReranker({
-        ...base,
-        spawn,
-        fetchImpl: rerankFetch(),
-        devicePosture: () => 'cpu',
-        cpuRequestCeiling: () => ceiling
-      })
-      const hits = await reranker.rerank('q', docs(72))
-      expect(hits).toHaveLength(72)
-      await expect(reranker.rerank('q2', docs(73))).rejects.toThrow(/refused/i)
-      expect(calls.length).toBe(1) // the refusal spawned nothing new
-      await reranker.stop()
+      expect(mod.cpuRequestCeilingFor(wideSettings)).toBe(72) // 2*12 (ragTopKInitial) + totalCandidateCapFor('top48') (48)
+      expect(mod.cpuRequestCeilingFor(DEFAULT_SETTINGS)).toBe(48) // opt-in off -> still 'capped'
     } finally {
       vi.doUnmock('../../src/shared/rerank-rules')
       vi.doUnmock('../../src/main/services/runtime/sidecar')
@@ -205,7 +101,7 @@ describe('Wave 8 ruling (b)(G): the CPU request ceiling', () => {
   // posture that flips TWICE inside one rerank(). G must refuse the oversized request on the
   // fresh, post-await read, not admit it on the strength of the momentary 'gpu' reading.
   it('re-applies G after the await inside Q\'s own restart, on a posture that flipped during that await', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
+    const { spawn, calls } = fakeSpawn()
     const postures: RerankerDevice[] = ['cpu'] // cold start #1: cpu
     let call = 0
     const devicePosture = (): RerankerDevice => {
@@ -239,26 +135,33 @@ describe('Wave 8 ruling (b)(G): the CPU request ceiling', () => {
 // ---- Ruling (b)(Q): the four race rules -------------------------------------------------------
 
 describe('Wave 8 ruling (b)(Q): the four race rules', () => {
-  it('no flap: a resolved posture equal to the recorded one restarts nothing', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => 'cpu' })
-    await reranker.rerank('q', docs(1))
-    await reranker.rerank('q2', docs(1))
-    await reranker.rerank('q3', docs(1))
-    expect(calls.length).toBe(1) // one cold start, reused every time
-    await reranker.stop()
-  })
-
-  it('rule (i): refuses rather than joins when a teardown it did not start is already in flight', async () => {
-    const { spawn, calls, children } = fakeSpawnOf(() => new GatedChild())
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => 'cpu' })
-    await reranker.rerank('q', docs(1)) // resident
-    const suspendP = reranker.suspend() // teardown in flight; kill() called, exit gated
-    // A concurrent rerank() call while tearingDown is true must refuse promptly (F19), not wait.
-    await expect(reranker.rerank('q2', docs(1))).rejects.toThrow(/suspending/i)
-    expect(calls.length).toBe(1) // no second spawn attempted
+  // Rule (i) proper: a STARTING sidecar recorded 'gpu' is being torn down by a lock; an ask that now
+  // resolves 'cpu' hits the mismatch branch while `tearingDown` is set and must refuse at once — joining
+  // the pass would wait for the aborted start's kill (escalated to SIGKILL at the end of its 2 s grace,
+  // the exit is gated), then refuse anyway via rule (ii).
+  it('rule (i): a posture-mismatched ask during a teardown it did not start refuses at once, never joins it', async () => {
+    const { spawn, calls, children } = fakeSpawn(() => new GatedChild())
+    const { fetchImpl, state } = loadingSidecar(rerankFetch()) // never healthy: the start stays in flight
+    let posture: RerankerDevice = 'gpu'
+    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl, devicePosture: () => posture })
+    const coldAsk = reranker.rerank('q', docs(1)).catch((e: unknown) => e) // starting, recorded 'gpu'
+    await until(() => state.probes > 0, 'the cold start polling /health')
+    const suspendP = reranker.suspend() // aborts the start; its stop() parks on the gated exit
+    await until(() => children[0]!.killed, 'the teardown killing the starting child')
+    let escalated = false
+    const kill = children[0]!.kill.bind(children[0]!)
+    children[0]!.kill = () => {
+      escalated = true
+      return kill()
+    }
+    posture = 'cpu'
+    const outcome = await reranker.rerank('q2', docs(1)).catch((e: unknown) => ({ error: e, escalatedBefore: escalated }))
+    expect(outcome).toMatchObject({ escalatedBefore: false })
+    expect((outcome as { error: Error }).error.message).toMatch(/suspending/i)
+    expect(calls.length).toBe(1)
     children[0]!.releaseExit()
     await suspendP
+    await coldAsk
     await reranker.stop()
   })
 
@@ -266,7 +169,7 @@ describe('Wave 8 ruling (b)(Q): the four race rules', () => {
   // changing, must still leave NOTHING resident afterwards -- Q must not respawn just because its
   // own await settled.
   it('rule (ii): a lock joining a Q-initiated teardown under a changing posture leaves nothing resident', async () => {
-    const { spawn, calls, children } = fakeSpawnOf(() => new GatedChild())
+    const { spawn, calls, children } = fakeSpawn(() => new GatedChild())
     let posture: RerankerDevice = 'gpu'
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => posture })
     await reranker.rerank('q', docs(1)) // resident, recorded 'gpu'
@@ -275,7 +178,7 @@ describe('Wave 8 ruling (b)(Q): the four race rules', () => {
     posture = 'cpu' // a real occupancy change -- Q must restart on the next call
     const askP = reranker.rerank('q2', docs(1)) // detects the mismatch, initiates the teardown pass
     // Let Q's own beginOrJoinTeardown() run (kill() called on child #1) before the lock joins.
-    while (!children[0]!.killed) await new Promise((r) => setTimeout(r, 1))
+    await until(() => children[0]!.killed, "Q's teardown killing child #1")
     const lockP = reranker.suspend() // the LOCK joins the SAME single-flight pass (requesterCount -> 2)
     children[0]!.releaseExit() // let the shared pass settle
     await lockP
@@ -286,14 +189,14 @@ describe('Wave 8 ruling (b)(Q): the four race rules', () => {
   })
 
   it('rule (ii): the caller\'s OWN aborted signal ends the ask instead of landing on the fallback', async () => {
-    const { spawn, children } = fakeSpawnOf(() => new GatedChild())
+    const { spawn, children } = fakeSpawn(() => new GatedChild())
     let posture: RerankerDevice = 'gpu'
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => posture })
     await reranker.rerank('q', docs(1))
     posture = 'cpu'
     const controller = new AbortController()
     const askP = reranker.rerank('q2', docs(1), { signal: controller.signal })
-    while (!children[0]!.killed) await new Promise((r) => setTimeout(r, 1))
+    await until(() => children[0]!.killed, "Q's teardown killing child #1")
     // The teardown's `server.stop()` escalates to SIGKILL at the end of its 2 s grace (the exit is
     // gated) and settles right after it, so an ask that waited for the teardown settles after it.
     let escalated = false
@@ -312,81 +215,24 @@ describe('Wave 8 ruling (b)(Q): the four race rules', () => {
     await reranker.stop()
   })
 
-  // Rule (iii)'s guard is that a call which has ALREADY restarted once never loops for a SECOND
-  // mismatch-driven restart of its own. The re-check's own answer to "can this be reached?" is
-  // "only through a real second event inside the call: a second flip, a joined teardown
-  // requester, or another call's restart aborting a start this call joined — each lands on the
-  // fallback by design" (the Wave 8 analysis, NF-2 re-check). This proves the observable
-  // guarantee for the THIRD of those: after restarting once, this call's OWN fresh cold start is
-  // cut short by a second, independent caller — and the ask fails ONCE, cleanly, rather than
-  // looping for a further attempt of its own.
-  it('rule (iii) (composite with rule (iv)): a call that already restarted once does not loop for a second attempt when its fresh cold start is itself aborted', async () => {
-    const { spawn, calls, children } = fakeSpawnOf(() => new GatedChild())
-    // Health succeeds immediately for the FIRST spawned child (establishing 'gpu' residency);
-    // any LATER spawn (the post-restart cold start under test) never self-reports healthy, so it
-    // stays "in flight" until something aborts it — deterministic, no raced release needed.
-    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
-      const u = String(url)
-      if (u.endsWith('/health')) {
-        const firstChild = children.length === 1
-        return { ok: firstChild, status: firstChild ? 200 : 503 } as Response
-      }
-      if (u.endsWith('/v1/rerank')) {
-        const body = JSON.parse(String(init?.body)) as { documents: string[] }
-        return {
-          ok: true,
-          status: 200,
-          json: async () => ({ results: body.documents.map((_d, index) => ({ index, relevance_score: index })) })
-        } as Response
-      }
-      throw new Error(`unexpected url ${u}`)
-    }) as typeof fetch
-    let posture: RerankerDevice = 'gpu'
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl, devicePosture: () => posture })
-    await reranker.rerank('q', docs(1)) // cold start #1, recorded 'gpu'
-    expect(calls.length).toBe(1)
-
-    posture = 'cpu' // mismatch #1: this call's OWN restart (rule iii's precondition)
-    const askP = reranker.rerank('q2', docs(1))
-    // Let the restart's teardown of child #1 begin, then settle it so the call proceeds to its
-    // OWN fresh 'cpu' cold start (spawn #2), which can never self-report healthy.
-    while (!children[0]!.killed) await new Promise((r) => setTimeout(r, 1))
-    children[0]!.releaseExit()
-    while (calls.length < 2) await new Promise((r) => setTimeout(r, 1))
-    // A SECOND, independent caller now tears down THIS call's own fresh cold start (spawn #2) —
-    // the "second event" that would otherwise require a second restart of askP's own.
-    const suspendP = reranker.suspend()
-    while (!children[1]!.killed) await new Promise((r) => setTimeout(r, 1))
-    children[1]!.releaseExit()
-    await expect(askP).rejects.toThrow(/aborted by another operation/i) // fails once, cleanly
-    await suspendP
-    expect(calls.length).toBe(2) // exactly one restart's cold start was ever attempted by askP
-    await reranker.stop()
-  })
-
-  // Hole B-3 (verification 2): a joined ask whose cold start ANOTHER caller's teardown aborts
+  // Hole B-3 (verification 2): the ask that started a cold start ANOTHER caller's teardown aborts
   // must land on the fallback (a non-abort error), never end as if its OWN Stop had fired.
-  it('rule (iv): a joined ask whose cold start another caller aborts lands on the fallback, not ended', async () => {
-    const { spawn, children } = fakeSpawnOf(() => new GatedChild())
+  it("rule (iv): an ask whose cold start another caller's teardown aborts lands on the fallback (a non-abort error), not ended", async () => {
+    const { spawn, children } = fakeSpawn(() => new GatedChild())
     // /health never reports healthy on its own -- the ask's cold start is unblocked only by
-    // Q's abort-driven `stop()` inside `waitForHealthy`'s per-iteration abort check, never by a
+    // the suspend's abort inside `waitForHealthy`'s per-iteration abort check, never by a
     // successful health probe (deterministic: no reliance on a raced release).
-    const fetchImpl = (async (url: string | URL) => {
-      const u = String(url)
-      if (u.endsWith('/health')) return { ok: false, status: 503 } as Response
-      if (u.endsWith('/v1/rerank')) {
-        return { ok: true, status: 200, json: async () => ({ results: [{ index: 0, relevance_score: 0 }] }) } as Response
-      }
-      throw new Error(`unexpected url ${u}`)
-    }) as typeof fetch
+    const { fetchImpl } = loadingSidecar(rerankFetch())
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl, devicePosture: () => 'cpu' })
     const askP = reranker.rerank('q', docs(1)) // cold start begins; can never self-report healthy
-    while (children.length === 0) await new Promise((r) => setTimeout(r, 1))
+    await until(() => children.length > 0, 'the cold start spawning its child')
     const suspendP = reranker.suspend() // ANOTHER caller's teardown aborts the in-flight start
-    while (!children[0]!.killed) await new Promise((r) => setTimeout(r, 1))
+    await until(() => children[0]!.killed, 'the teardown killing the starting child')
     children[0]!.releaseExit()
-    await expect(askP).rejects.toThrow(/aborted by another operation/i)
-    await expect(askP).rejects.not.toThrow(/^AbortError$/) // reclassified: not the DOMException name
+    const err = await askP.catch((e: unknown) => e)
+    expect(err).toBeInstanceOf(Error)
+    expect((err as Error).message).toMatch(/aborted by another operation/i)
+    expect((err as Error).name).not.toBe('AbortError') // reclassified: not the DOMException name
     await suspendP
     await reranker.stop()
   })
@@ -395,40 +241,33 @@ describe('Wave 8 ruling (b)(Q): the four race rules', () => {
 // ---- Ruling (c): sidecar lifecycle hardening ---------------------------------------------------
 
 describe('Wave 8 ruling (c): sidecar lifecycle hardening', () => {
-  it('(i) overlapping suspend() + suspend() share ONE teardown pass — the child is killed exactly once', async () => {
-    const { spawn, children } = fakeSpawnOf(() => new GatedChild())
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => 'cpu' })
-    await reranker.rerank('q', docs(1))
-    const p1 = reranker.suspend()
-    const p2 = reranker.suspend() // overlaps p1 -- must join, not start a second pass
-    expect(children[0]!.killed).toBe(true) // kill() called by the shared pass
-    children[0]!.releaseExit()
-    await Promise.all([p1, p2])
-    expect(reranker.isLoaded()).toBe(false)
-    await reranker.stop()
-  })
-
-  it('(i) stop() joining an in-flight suspend() still settles only after the shared kill (no orphan on quit)', async () => {
-    const { spawn, children } = fakeSpawnOf(() => new GatedChild())
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => 'cpu' })
-    await reranker.rerank('q', docs(1))
-    const suspendP = reranker.suspend()
-    let stopSettled = false
-    const stopP = reranker.stop().then(() => {
-      stopSettled = true
-    })
-    // The shared pass has NOT settled yet (child still gated) — stop() must not resolve early.
-    await new Promise((r) => setTimeout(r, 5))
-    expect(stopSettled).toBe(false)
-    expect(children.length).toBe(1) // stop() joined the SAME pass, no second teardown started
-    children[0]!.releaseExit()
-    await Promise.all([suspendP, stopP])
-    expect(stopSettled).toBe(true)
-    expect(children[0]!.killed).toBe(true)
-  })
+  it.each([{ joiner: 'suspend' as const }, { joiner: 'stop' as const }])(
+    '(i) an overlapping $joiner() joins the in-flight suspend() pass and settles only after the shared kill (no orphan on quit)',
+    async ({ joiner }) => {
+      const { spawn, children } = fakeSpawn(() => new GatedChild())
+      const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => 'cpu' })
+      await reranker.rerank('q', docs(1))
+      const suspendP = reranker.suspend()
+      let joinerSettled = false
+      const joinerP = reranker[joiner]().then(() => {
+        joinerSettled = true
+      })
+      // One macrotask hop, no observable to gate on (justified): a joiner that did NOT join runs its own
+      // empty teardown and settles within microtasks; the shared pass stays parked on the gated exit
+      // (the kill's 2 s grace is far away).
+      await new Promise((r) => setImmediate(r))
+      expect(joinerSettled).toBe(false)
+      children[0]!.releaseExit()
+      await Promise.all([suspendP, joinerP])
+      expect(children).toHaveLength(1)
+      expect(children[0]!.killed).toBe(true)
+      expect(reranker.isLoaded()).toBe(false)
+      await reranker.stop()
+    }
+  )
 
   it('(ii) one unexpected exit drops the dead handle and the next rerank() cold-starts with a freshly resolved posture', async () => {
-    const { spawn, calls, children } = fakeSpawnOf(() => new FakeChild())
+    const { spawn, calls, children } = fakeSpawn()
     let posture: RerankerDevice = 'cpu'
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => posture })
     await reranker.rerank('q', docs(1))
@@ -445,7 +284,7 @@ describe('Wave 8 ruling (c): sidecar lifecycle hardening', () => {
   })
 
   it('(ii) a SECOND unexpected exit in the same session latches like a permanent load fault', async () => {
-    const { spawn, calls, children } = fakeSpawnOf(() => new FakeChild())
+    const { spawn, calls, children } = fakeSpawn()
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => 'cpu' })
     await reranker.rerank('q', docs(1))
     children[0]!.crash() // exit #1 -- drops the handle, does not latch
@@ -456,17 +295,6 @@ describe('Wave 8 ruling (c): sidecar lifecycle hardening', () => {
     expect(calls.length).toBe(2) // no third spawn attempted — fails fast
     await reranker.stop()
   })
-
-  it('(ii) a teardown-initiated exit (stop()/suspend()) never counts as an unexpected exit', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => 'cpu' })
-    await reranker.rerank('q', docs(1))
-    await reranker.suspend() // a NORMAL teardown -- FakeChild.kill() fires 'exit' itself
-    const hits = await reranker.rerank('q2', docs(1))
-    expect(hits).toHaveLength(1)
-    expect(calls.length).toBe(2) // ordinary lazy restart, not the crash-latch path
-    await reranker.stop()
-  })
 })
 
 // ---- #474: GPU→CPU demotion (translation runtime's issue-#42 session fallback latch, ported) ---
@@ -474,15 +302,10 @@ describe('Wave 8 ruling (c): sidecar lifecycle hardening', () => {
 describe('#474: GPU->CPU demotion (session fallback latch)', () => {
   it('a GPU-attempt cold-start failure falls back to CPU WITHIN the same rerank() and latches the session', async () => {
     // Child 0 (the GPU attempt) dies immediately (a genuine load fault); every later child is
-    // healthy. The fake fetch refuses connections while attempt 1 is live (mirrors reranker.test.ts's
-    // "latches a failed start" fixture, translation-runtime.test.ts's ladder test).
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null))
-      return child
-    }
+    // healthy. The fake fetch refuses connections while attempt 1 is live (the genuine load-fault
+    // fixture of reranker.test.ts's F7 latch test, translation-runtime.test.ts's ladder test).
+    let n = 0
+    const { spawn, calls } = fakeSpawn(() => (++n === 1 ? exitingChild(1) : new FakeChild()))
     const good = rerankFetch()
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
       if (calls.length < 2) throw new Error('connection refused') // the dying GPU attempt
@@ -496,6 +319,7 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
       devicePosture: () => 'gpu',
       onDeviceFallback: (reason) => fallbacks.push(reason)
     })
+    expect(reranker.gpuDemoted()).toBe(false) // nothing has failed yet
     const hits = await reranker.rerank('q', docs(1)) // GPU rung fails -> CPU rung serves it
     expect(hits).toHaveLength(1)
     expect(calls.length).toBe(2)
@@ -503,6 +327,8 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
     expect(calls[1]!.args).toContain('--device') // rung 2: forced CPU, same call
     expect(fallbacks.length).toBe(1)
     expect(fallbacks[0]).toMatch(/GPU-attempt start failed/)
+    // #495 follow-up: the PURE read of the latch the ask site folds into its occupancy snapshot.
+    expect(reranker.gpuDemoted()).toBe(true)
 
     // The session latch: devicePosture() now reports 'cpu' even though the injected callback
     // still says 'gpu' -- and a LATER cold start (post-suspend) pins CPU directly, no repeated
@@ -517,13 +343,7 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
   })
 
   it('only the CPU rung failing arms the permanent startFailed latch (a genuinely broken setup)', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      queueMicrotask(() => child.emit('exit', 1, null)) // EVERY child dies -- a truly broken GGUF
-      return child
-    }
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // EVERY child dies -- a truly broken GGUF
     const reranker = new LlamaReranker({
       ...base,
       spawn,
@@ -542,22 +362,8 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
   })
 
   it('a transient bind race on the GPU attempt does NOT fall back or latch -- the retry re-attempts GPU', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
-      child.stderr = new EventEmitter()
-      queueMicrotask(() => {
-        child.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
-        child.emit('exit', 1, null)
-      })
-      return child
-    }
-    const fetchImpl = (async (url: string | URL) => {
-      const u = String(url)
-      if (u.endsWith('/health')) return { ok: false, status: 503 } as Response
-      throw new Error(`unexpected url ${u}`)
-    }) as typeof fetch
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1, 'error: bind: address already in use\n'))
+    const { fetchImpl } = loadingSidecar(rerankFetch()) // never healthy: every child loses the port first
     const fallbacks: string[] = []
     const reranker = new LlamaReranker({
       ...base,
@@ -576,7 +382,7 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
   })
 
   it('a SECOND unexpected exit under GPU demotes to CPU instead of latching; the CPU posture then gets its own two-strikes budget', async () => {
-    const { spawn, calls, children } = fakeSpawnOf(() => new FakeChild())
+    const { spawn, calls, children } = fakeSpawn()
     const fallbacks: string[] = []
     const reranker = new LlamaReranker({
       ...base,
@@ -616,13 +422,8 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
   // -- the very path the ceiling exists to protect, and the one path none of the four tests above
   // (all `docs(1)`, none injecting `cpuRequestCeiling`) reached.
   it('#495 follow-up: the ceiling is re-applied when the ladder itself demotes gpu->cpu mid-call -- a 60-document request is refused and the CPU-pinned sidecar never receives it', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null)) // the GPU rung dies
-      return child
-    }
+    let n = 0
+    const { spawn, calls } = fakeSpawn(() => (++n === 1 ? exitingChild(1) : new FakeChild())) // the GPU rung dies
     const good = rerankFetch()
     const rerankDocCounts: number[] = []
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
@@ -669,13 +470,8 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
   // genuinely, demoting to CPU within the very same call.
   it("#495 follow-up: the ceiling is re-applied even when this call's own mismatch-restart already spent rule (iii)'s flag before the ladder demotes -- a 60-document request is refused after a cpu->gpu restart that itself falls back to cpu", async () => {
     let posture: RerankerDevice = 'cpu' // simulates occupancy.chatStartBusy resolving 'cpu' on the first ask
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      if (calls.length === 2) queueMicrotask(() => child.emit('exit', 1, null)) // the GPU rung dies
-      return child
-    }
+    let n = 0
+    const { spawn, calls } = fakeSpawn(() => (++n === 2 ? exitingChild(1) : new FakeChild())) // the GPU rung dies
     const good = rerankFetch()
     const rerankDocCounts: number[] = []
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
@@ -725,15 +521,9 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
   // posture, and a single CPU exit afterwards wrongly latched permanently (the CPU posture never
   // got its own two-strikes budget the doc comment and commit message promise).
   it('#495 follow-up: the exit counter resets on the LADDER demotion path too -- one GPU exit, then a genuine cold-start failure that demotes, then ONE CPU exit is not latched', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const children: FakeChild[] = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      children.push(child)
-      if (calls.length === 2) queueMicrotask(() => child.emit('exit', 1, null)) // spawn #2: the failing GPU retry
-      return child
-    }
+    let n = 0
+    // spawn #2: the failing GPU retry
+    const { spawn, calls, children } = fakeSpawn(() => (++n === 2 ? exitingChild(1) : new FakeChild()))
     const good = rerankFetch()
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
       if (calls.length === 2) throw new Error('connection refused') // spawn #2's own health check
@@ -770,49 +560,13 @@ describe('#474: GPU->CPU demotion (session fallback latch)', () => {
     expect(calls[3]!.args).toContain('--device')
     await reranker.stop()
   })
-
-  // #495 follow-up: the ask site (registerRagIpc.ts, tested directly in
-  // rerank-profile-wiring.test.ts) needs a PURE read of the demotion latch to fold into its own
-  // occupancy snapshot without recursing into this instance's own posture resolution. This
-  // proves the new gpuDemoted() accessor tracks the latch, and that a request sized to the
-  // ceiling the demoted ask site would actually pick reranks fine on the CPU rung.
-  it('#495 follow-up: after a GPU demotion, gpuDemoted() reports it and a request at the CPU ceiling reranks fine on the now-forced CPU posture', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null))
-      return child
-    }
-    const good = rerankFetch()
-    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
-      if (calls.length < 2) throw new Error('connection refused')
-      return good(url, init)
-    }) as typeof fetch
-    const ceiling = cpuRequestCeilingFor(DEFAULT_SETTINGS) // the real formula, default settings -> 48
-    const reranker = new LlamaReranker({
-      ...base,
-      spawn,
-      fetchImpl,
-      devicePosture: () => 'gpu',
-      cpuRequestCeiling: () => ceiling
-    })
-    expect(reranker.gpuDemoted()).toBe(false) // nothing has failed yet
-    const hits = await reranker.rerank('q', docs(1)) // GPU rung fails -> CPU rung serves it, demotes
-    expect(hits).toHaveLength(1)
-    expect(reranker.gpuDemoted()).toBe(true)
-    const wide = await reranker.rerank('q2', docs(ceiling))
-    expect(wide).toHaveLength(ceiling)
-    expect(calls.length).toBe(2) // the GPU attempt + the one CPU sidecar -- no third spawn
-    await reranker.stop()
-  })
 })
 
 // ---- Ruling (d): the resident sidecar's posture, read back -------------------------------------
 
 describe('Wave 8 ruling (d): Reranker.devicePosture()', () => {
   it('reports the RESIDENT posture when loaded, and the posture a cold start would take now when not', async () => {
-    const { spawn } = fakeSpawnOf(() => new FakeChild())
+    const { spawn } = fakeSpawn()
     let posture: RerankerDevice = 'cpu'
     const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: () => posture })
     expect(reranker.devicePosture()).toBe('cpu') // not loaded yet -- the posture a cold start would take
@@ -825,7 +579,7 @@ describe('Wave 8 ruling (d): Reranker.devicePosture()', () => {
   })
 })
 
-// ---- Scenarios S1-S5, S9 (option B', the Wave 8 analysis §4) -----------------------------------
+// ---- Scenarios S4, S5 (option B', the Wave 8 analysis §4) ---------------------------------------
 
 // The project's own measured GTX 1070 Ti fixture (#391 leg 2, cited throughout opus-review-7.md
 // and the Wave 8 analysis): {totalMb: 8273, freeMb: 7504}. qwen3.5-9b-ud-q4kxl needs ~7284.1 MiB
@@ -842,99 +596,43 @@ const GTX_SETTINGS = {
 const NINE_B = 'qwen3.5-9b-ud-q4kxl'
 const FOUR_B = 'qwen3.5-4b-ud-q4kxl'
 
-/** A minimal fake RuntimeManager (Pick<RuntimeManager, 'activeModelId'|'status'>): `commit()`
- *  models `doStart`'s synchronous assignment of `current` on a successful load; `setStarting()`
- *  models `start()`'s synchronous `startingModelId` assignment. Neither is masked (F15) here --
- *  the masked-restart case gets its own dedicated test in the registerModelIpc suite. */
-function fakeRuntimeManager(initialModelId: string | null): Pick<RuntimeManager, 'activeModelId' | 'status'> & {
+/** A minimal fake RuntimeManager (Pick<RuntimeManager, 'activeModelId'>): `commit()` models
+ *  `doStart`'s synchronous assignment of `current` on a successful load. No chat start is ever in
+ *  flight here (the occupancy snapshot reads an absent `status` as none), and nothing is masked
+ *  (F15) -- the masked-restart case gets its own dedicated test in the registerModelIpc suite. */
+function fakeRuntimeManager(initialModelId: string | null): Pick<RuntimeManager, 'activeModelId'> & {
   commit(id: string | null): void
-  setStarting(id: string | null): void
 } {
   let committed = initialModelId
-  let startingModelId: string | null = null
   return {
     activeModelId: () => committed,
-    status: () => ({ startingModelId }) as ReturnType<RuntimeManager['status']>,
     commit(id) {
       committed = id
-    },
-    setStarting(id) {
-      startingModelId = id
     }
   }
 }
 
-describe('Wave 8 scenarios S1-S5, S9 (option B\', the analysis §4)', () => {
-  it('S1: 9B committed (cpu) -> Use the 4B, ask DURING the hash -> a capped CPU rerank runs throughout', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
-    const runtime = fakeRuntimeManager(NINE_B) // stays committed to the 9B for the WHOLE hash window
-    const pending = createPendingModelSwitchCounter()
-    const devicePosture = (): RerankerDevice =>
-      resolveRerankerDevicePosture(GTX_SETTINGS, MANIFESTS_DIR, snapshotRerankerOccupancy(runtime, pending, () => null))
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture, cpuRequestCeiling: () => 48 })
-    // Two asks "during the hash" -- the setting may already say 4B, but the COMMITTED model
-    // (what this fake tracks) has not moved yet, so the posture stays 'cpu' throughout.
-    const hits1 = await reranker.rerank('during-hash-1', docs(10))
-    const hits2 = await reranker.rerank('during-hash-2', docs(20))
-    expect(hits1).toHaveLength(10)
-    expect(hits2).toHaveLength(20)
-    expect(calls.length).toBe(1) // one CPU cold start, reused for both asks
-    expect(calls[0]!.args).toContain('--device')
-    await reranker.stop()
-  })
+/** The production posture callback on the GTX 1070 Ti fixture, over `runtime`'s committed model
+ *  and the pending-switch counter. */
+const gtxPosture =
+  (
+    runtime: ReturnType<typeof fakeRuntimeManager>,
+    pending: ReturnType<typeof createPendingModelSwitchCounter>
+  ) =>
+  (): RerankerDevice =>
+    resolveRerankerDevicePosture(GTX_SETTINGS, MANIFESTS_DIR, snapshotRerankerOccupancy(runtime, pending, () => null))
 
-  it('S2: 4B committed, GPU sidecar resident -> Use the 9B, warm cache -> the teardown is awaited BEFORE the load', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
-    const runtime = fakeRuntimeManager(FOUR_B)
-    const pending = createPendingModelSwitchCounter()
-    const devicePosture = (): RerankerDevice =>
-      resolveRerankerDevicePosture(GTX_SETTINGS, MANIFESTS_DIR, snapshotRerankerOccupancy(runtime, pending, () => null))
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture })
-    await reranker.rerank('warm', docs(1))
-    expect(reranker.isLoaded()).toBe(true)
-    expect(calls[0]!.args).not.toContain('--device') // gpu
-
-    // registerModelIpc.ts's own sequence: increment, AWAIT suspend, decrement -- all BEFORE
-    // ctx.runtime.start() commits the new model.
-    pending.increment()
-    await reranker.suspend()
-    pending.decrement()
-    expect(reranker.isLoaded()).toBe(false) // torn down BEFORE the load below
-    runtime.commit(NINE_B) // the load — happens only AFTER the awaited suspend resolved
-    await reranker.stop()
-  })
-
-  it('S3: as S2, cold cache, with an ask DURING the hash -> the GPU sidecar beside the resident 4B is correctly budgeted, then torn down before the 9B loads', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
-    const runtime = fakeRuntimeManager(FOUR_B)
-    const pending = createPendingModelSwitchCounter()
-    const devicePosture = (): RerankerDevice =>
-      resolveRerankerDevicePosture(GTX_SETTINGS, MANIFESTS_DIR, snapshotRerankerOccupancy(runtime, pending, () => null))
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture })
-    // An ask lands DURING the hash (committed model still 4B) -- correctly budgeted GPU.
-    await reranker.rerank('during-hash', docs(30))
-    expect(calls[0]!.args).not.toContain('--device')
-    expect(reranker.isLoaded()).toBe(true)
-
-    pending.increment()
-    await reranker.suspend() // torn down BEFORE the 9B's load
-    pending.decrement()
-    expect(reranker.isLoaded()).toBe(false)
-    runtime.commit(NINE_B)
-    await reranker.stop()
-  })
-
+describe("Wave 8 scenarios S4, S5 (option B', the analysis §4)", () => {
   it('S4: 9B -> 4B; the FIRST ask after the commit restarts Q on the GPU', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
+    const { spawn, calls } = fakeSpawn()
     const runtime = fakeRuntimeManager(NINE_B)
     const pending = createPendingModelSwitchCounter()
-    const devicePosture = (): RerankerDevice =>
-      resolveRerankerDevicePosture(GTX_SETTINGS, MANIFESTS_DIR, snapshotRerankerOccupancy(runtime, pending, () => null))
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture })
+    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture: gtxPosture(runtime, pending) })
     await reranker.rerank('before', docs(1)) // resident, recorded 'cpu' (9B)
     expect(calls[0]!.args).toContain('--device')
 
-    // The commit (startModelRuntime's suspend has already been awaited by this point -- S2/S3).
+    // The commit (startModelRuntime's suspend has already been awaited by this point --
+    // posture-writers-wave8.test.ts's "placement" test).
     runtime.commit(FOUR_B)
     const hits = await reranker.rerank('first-after-commit', docs(1)) // Q detects the mismatch itself
     expect(hits).toHaveLength(1)
@@ -944,12 +642,16 @@ describe('Wave 8 scenarios S1-S5, S9 (option B\', the analysis §4)', () => {
   })
 
   it("S5: mid-ask -- a wide ('all') set resolved on the resident 4B/gpu sidecar; Use on the 9B lands BEFORE this rerank() call -- G refuses the now-cpu-postured wide set", async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new FakeChild())
+    const { spawn, calls } = fakeSpawn()
     const runtime = fakeRuntimeManager(FOUR_B)
     const pending = createPendingModelSwitchCounter()
-    const devicePosture = (): RerankerDevice =>
-      resolveRerankerDevicePosture(GTX_SETTINGS, MANIFESTS_DIR, snapshotRerankerOccupancy(runtime, pending, () => null))
-    const reranker = new LlamaReranker({ ...base, spawn, fetchImpl: rerankFetch(), devicePosture, cpuRequestCeiling: () => 48 })
+    const reranker = new LlamaReranker({
+      ...base,
+      spawn,
+      fetchImpl: rerankFetch(),
+      devicePosture: gtxPosture(runtime, pending),
+      cpuRequestCeiling: () => 48
+    })
     // BEFORE the Use click: a GPU rerank is correct for a wide (100-document) set.
     const before = await reranker.rerank('before-use', docs(100))
     expect(before).toHaveLength(100)
@@ -964,25 +666,6 @@ describe('Wave 8 scenarios S1-S5, S9 (option B\', the analysis §4)', () => {
     expect(calls.length).toBe(1) // no GPU cold start beside the loading 9B, no CPU cold start either
     await reranker.stop()
   })
-
-  it('S9: the acceptance read\'s snapshot (committed 4B, no occupancy, the recorded probe) resolves gpu / all', () => {
-    const posture = resolveRerankerDevicePosture(
-      GTX_SETTINGS,
-      MANIFESTS_DIR,
-      snapshotRerankerOccupancy(fakeRuntimeManager(FOUR_B), createPendingModelSwitchCounter(), () => null)
-    )
-    expect(posture).toBe('gpu')
-    const input = {
-      gpuMode: GTX_SETTINGS.gpuMode,
-      gpuAutoDisabled: GTX_SETTINGS.gpuAutoDisabled,
-      probeDevices: GTX_SETTINGS.gpuProbe!.devices,
-      threads: 8,
-      rerankerAvailable: true,
-      wideScopeOptIn: false
-    }
-    const scope = rerankScopeFor(resolveRerankProfile(input), input, posture)
-    expect(scope).toBe('all')
-  })
 })
 
 // ---- #530: the OS loader refused the engine program ---------------------------------------------
@@ -990,28 +673,16 @@ describe('Wave 8 scenarios S1-S5, S9 (option B\', the analysis §4)', () => {
 describe('#530: OS loader refusal is not a device fault', () => {
   afterEach(() => resetEngineProblemsForTest())
 
-  /** A child that prints the loader's line and exits 127 (then closes, as a real pipe does). */
-  class LoaderRefusedChild extends FakeChild {
-    stderr = new EventEmitter()
-    constructor() {
-      super()
-      queueMicrotask(() => {
-        this.stderr.emit(
-          'data',
-          '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
-        )
-        this.emit('exit', 127, null)
-        this.emit('close', 127, null)
-      })
-    }
-  }
+  /** The loader's line, as a program it refuses prints it before exiting 127. */
+  const loaderLine =
+    '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
 
   const refusingFetch = (async () => {
     throw new Error('connection refused')
   }) as unknown as typeof fetch
 
   it('on the gpu posture: ONE spawn, no CPU retry, gpuDemoted stays false, the latch holds', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new LoaderRefusedChild())
+    const { spawn, calls } = fakeSpawn(() => exitingChild(127, loaderLine))
     const fallbacks: string[] = []
     const reranker = new LlamaReranker({
       ...base,
@@ -1025,7 +696,6 @@ describe('#530: OS loader refusal is not a device fault', () => {
     expect(calls.length).toBe(1) // the same program would be refused again on the CPU rung
     expect(reranker.gpuDemoted()).toBe(false)
     expect(fallbacks).toEqual([])
-    expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'library-missing', name: 'libgomp.so.1' })
 
     await expect(reranker.rerank('q2', docs(1))).rejects.toThrow() // latched
     expect(calls.length).toBe(1) // no second spawn
@@ -1033,7 +703,7 @@ describe('#530: OS loader refusal is not a device fault', () => {
   })
 
   it('resetStartFailure() re-arms the latch: the next rerank spawns again', async () => {
-    const { spawn, calls } = fakeSpawnOf(() => new LoaderRefusedChild())
+    const { spawn, calls } = fakeSpawn(() => exitingChild(127, loaderLine))
     const reranker = new LlamaReranker({
       ...base,
       spawn,

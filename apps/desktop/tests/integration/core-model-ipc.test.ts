@@ -1429,7 +1429,7 @@ describe('registerModelIpc', () => {
     // a fake runtime manager that tracks its own commit, and a REAL LlamaReranker wired to the
     // SAME shared posture helper `main/index.ts`'s own seam uses
     // (`resolveRerankerDevicePosture`/`snapshotRerankerOccupancy`), proving the caller's job that
-    // `reranker.test.ts`'s sidecar-level tests leave out (those drive a hand-held `posture`
+    // the sidecar-level reranker suites leave out (`reranker-wave8.test.ts` drives a hand-held `posture`
     // variable directly; this one drives the REAL headroom gate off a REAL settings write
     // reaching a REAL manifest, through the actual IPC handler). What it proved BEFORE: the next
     // rerank() re-reads the posture after any settings-writing channel, never merely restarting
@@ -1564,20 +1564,17 @@ describe('registerModelIpc', () => {
       const health = { healthy: true }
       const started: string[] = []
       const audits: string[] = []
-      const mgr = new RuntimeManager(
-        (o) => {
-          started.push(o.modelId)
-          return {
-            modelId: o.modelId,
-            start: async () => {},
-            stop: async () => {},
-            health: async () => ({ healthy: health.healthy, message: '', port: 1 }),
-            // eslint-disable-next-line require-yield
-            chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
-          }
-        },
-        { healthProbeTtlMs: 0 }
-      )
+      const mgr = new RuntimeManager((o) => {
+        started.push(o.modelId)
+        return {
+          modelId: o.modelId,
+          start: async () => {},
+          stop: async () => {},
+          health: async () => ({ healthy: health.healthy, message: '', port: 1 }),
+          // eslint-disable-next-line require-yield
+          chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
+        }
+      })
       const db = seededDb()
       updateSettings(db, { developerMode: true })
       const ctx = {
@@ -1594,12 +1591,19 @@ describe('registerModelIpc', () => {
     }
 
     it('the status read re-checks a running model: a frozen process reads "not responding"', async () => {
-      const { mgr, health } = liveCtx()
-      await invoke(handlers, IPC.startRuntime, MODEL)
-      health.healthy = false // the process stopped answering /health (frozen, suspended)
-      const status = (await invoke(handlers, IPC.getRuntimeStatus)).result as RuntimeStatus
-      expect(status).toMatchObject({ running: true, healthy: false, unresponsive: true })
-      await mgr.stop()
+      // Installed before the start, so the start's own health stamp lands on the fake clock.
+      vi.useFakeTimers({ toFake: ['performance'] })
+      try {
+        const { mgr, health } = liveCtx()
+        await invoke(handlers, IPC.startRuntime, MODEL)
+        health.healthy = false // the process stopped answering /health (frozen, suspended)
+        vi.advanceTimersByTime(10_000) // past the 10 s probe TTL
+        const status = (await invoke(handlers, IPC.getRuntimeStatus)).result as RuntimeStatus
+        expect(status).toMatchObject({ running: true, healthy: false, unresponsive: true })
+        await mgr.stop()
+      } finally {
+        vi.useRealTimers()
+      }
     })
 
     it('a start counts as starting from the request — while it still checks the weights', async () => {

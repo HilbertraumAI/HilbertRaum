@@ -2,7 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { composeTranslator, shouldReplaceTranslator } from '../../src/main/services/compose-services'
+import { composeTranslator, shouldReplaceTranslator, translationGpuYield } from '../../src/main/services/compose-services'
+import type { Reranker } from '../../src/main/services/reranker'
 import type { Translator } from '../../src/main/services/translation'
 import { llamaOsDir, llamaServerBinaryName } from '../../src/main/services/runtime/sidecar'
 
@@ -24,7 +25,8 @@ const MANIFEST = {
   size_on_disk_gb: 0.1,
   recommended_min_ram_gb: 1,
   recommended_ram_gb: 2,
-  recommended_context_tokens: 4096,
+  // Not the runtime's 4096 default, so the manifest's own value is what reaches `contextWindow()`.
+  recommended_context_tokens: 8192,
   local_path: 'models/translation/tg-test.gguf',
   sha256: 'REPLACE_WITH_REAL_HASH',
   recommended_profiles: [],
@@ -70,7 +72,7 @@ describe('composeTranslator (issue #40 — post-download re-selection)', () => {
     const translator = composeTranslator({ rootPath: root, manifestsDir })
     expect(translator).not.toBeNull()
     expect(translator?.modelId).toBe('translategemma-test')
-    expect(translator?.contextWindow()).toBe(4096) // the manifest's recommended_context_tokens
+    expect(translator?.contextWindow()).toBe(8192) // the manifest's recommended_context_tokens
   })
 
   it('stays null when only the weight (no llama-server binary) is present', () => {
@@ -102,26 +104,47 @@ function fakeTranslator(overrides: Partial<Translator> = {}): Translator {
 // per THIS rule — a startFailed-latched instance (corrupt GGUF) no longer blocks the
 // delete-and-re-download repair until an app restart.
 describe('shouldReplaceTranslator (BE-7 — latched instances repairable without restart)', () => {
-  it('replaces a null/undefined slot (the original #40 case)', () => {
-    expect(shouldReplaceTranslator(null)).toBe(true)
-    expect(shouldReplaceTranslator(undefined)).toBe(true)
+  it.each<[string, boolean, Translator | null | undefined]>([
+    ['a null slot (the original #40 case)', true, null],
+    ['an undefined slot', true, undefined],
+    ['a live instance', false, fakeTranslator({ isStartFailed: () => false })],
+    ['a live instance with no latch reporter (assumed live)', false, fakeTranslator()],
+    ['a startFailed-latched instance (the delete-and-re-download repair)', true, fakeTranslator({ isStartFailed: () => true })]
+  ])('%s → replace: %s', (_label, replace, slot) => {
+    expect(shouldReplaceTranslator(slot)).toBe(replace)
+  })
+})
+
+// #473: the translator's beforeGpuStart hook. Only a reranker resident ON THE CARD yields it —
+// suspending one on the processor (or not resident) frees no graphics memory and costs its next
+// ask a cold start.
+describe('translationGpuYield (#473)', () => {
+  it('suspends a reranker only when it is resident on the graphics card', async () => {
+    for (const [loaded, posture, expected] of [
+      [true, 'gpu', 1],
+      [true, 'cpu', 0],
+      [false, 'gpu', 0]
+    ] as const) {
+      let suspends = 0
+      const reranker = {
+        isLoaded: () => loaded,
+        devicePosture: () => posture,
+        suspend: async () => void (suspends += 1)
+      } as unknown as Reranker
+      await translationGpuYield(reranker)?.()
+      expect(suspends).toBe(expected)
+    }
+    expect(translationGpuYield(null)).toBeUndefined() // no reranker on this drive: no hook
   })
 
-  it('NEVER replaces a live instance — with or without a latch reporter', () => {
-    expect(shouldReplaceTranslator(fakeTranslator({ isStartFailed: () => false }))).toBe(false)
-    expect(shouldReplaceTranslator(fakeTranslator())).toBe(false) // no reporter → assumed live
-  })
-
-  it('replaces a startFailed-latched instance, and re-composition yields a FRESH working translator', () => {
-    const { root, manifestsDir } = tempDrive()
-    installBinary(root)
-    installWeight(root) // the user deleted the corrupt GGUF and re-downloaded — weights are back
-    const latched = fakeTranslator({ isStartFailed: () => true })
-    expect(shouldReplaceTranslator(latched)).toBe(true)
-    // The refresh path re-runs composeTranslator — the replacement is a live, un-latched selection.
-    const fresh = composeTranslator({ rootPath: root, manifestsDir })
-    expect(fresh).not.toBeNull()
-    expect(fresh?.modelId).toBe('translategemma-test')
-    expect(fresh?.isStartFailed?.()).toBe(false) // the fresh instance starts un-latched
+  it('a suspend that fails never fails the translation start', async () => {
+    const reranker = {
+      isLoaded: () => true,
+      devicePosture: () => 'gpu',
+      suspend: async () => {
+        throw new Error('teardown failed')
+      }
+    } as unknown as Reranker
+    await expect(translationGpuYield(reranker)?.()).resolves.toBeUndefined()
   })
 })

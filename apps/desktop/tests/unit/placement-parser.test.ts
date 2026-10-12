@@ -123,7 +123,7 @@ describe('createPlacementParser', () => {
       'llm_load_tensors: Vulkan0 model buffer size = 3000.00 MiB',
       'llm_load_tensors: Vulkan1 model buffer size = 1000.00 MiB',
       'llm_load_tensors: CPU model buffer size = 1500.50 MiB',
-      'llm_load_tensors: Vulkan_Host model buffer size = 400.00 MiB',
+      'llm_load_tensors: CUDA_Host model buffer size = 400.00 MiB',
       'llama_kv_cache_unified: Vulkan0 KV buffer size = 400.00 MiB',
       'llama_kv_cache_unified: CPU KV buffer size = 240.00 MiB',
       ''
@@ -133,7 +133,8 @@ describe('createPlacementParser', () => {
     expect(r.gpuLayers).toBe(30)
     expect(r.totalLayers).toBe(41)
     expect(r.gpuModelMb).toBe(4000)
-    // CPU, CPU_Mapped and the backends' *_Host pinned buffers are all the CPU side.
+    // CPU, CPU_Mapped and the backends' *_Host pinned buffers (here CUDA_Host — the --no-mmap
+    // CPU-side weights) are all the CPU side.
     expect(r.cpuModelMb).toBe(1900.5)
     expect(r.gpuKvMb).toBe(400)
     expect(r.cpuKvMb).toBe(240)
@@ -214,6 +215,9 @@ describe('createPlacementParser', () => {
     // reports. Per-context MAX (not "skip an identical block") is what the next test pins.
     expect(r.gpuComputeMb).toBe(1145.28)
     expect(r.devices[0].computeMb).toBe(1145.28)
+    // Line 358 is llama.cpp's TEARDOWN warning (`~llama_context: Vulkan0 compute buffer size of
+    // 679.1215 MiB, does not match expectation of 625.2188 MiB`): no `= N MiB`, so it is never
+    // summed — a regex that read it would make this 1,304.34.
     // Two REAL cache allocations, one per context: 224 `Vulkan0 KV buffer size = 480.00 MiB`
     // (main) + 259 `Vulkan0 KV buffer size = 32.00 MiB` (draft) — those DO sum.
     expect(r.gpuKvMb).toBe(512)
@@ -286,20 +290,6 @@ describe('createPlacementParser', () => {
     expect(p.reading().devices).toEqual([])
   })
 
-  it('never sums the teardown warning, which reports a size with no "= N MiB" to read', () => {
-    // 358 of the MTP fixture: `~llama_context:    Vulkan0 compute buffer size of 679.1215 MiB,
-    // does not match expectation of 625.2188 MiB` — llama.cpp's destructor noting the buffer
-    // grew past the reserve. It carries no `=`, so it matches nothing; this pins that.
-    const p = createPlacementParser()
-    p.onStderrData([
-      '0.11.141.935 I llama_context: constructing llama_context',
-      '0.11.421.745 I sched_reserve:    Vulkan0 compute buffer size =   625.22 MiB',
-      '0.35.029.294 W ~llama_context:    Vulkan0 compute buffer size of 679.1215 MiB, does not match expectation of 625.2188 MiB',
-      ''
-    ].join('\n'))
-    expect(p.reading().gpuComputeMb).toBe(625.22)
-  })
-
   it('files the GPU backend\'s _Host KV buffer under the CPU side (the partial-offload spill)', () => {
     // ggml names a backend's pinned host buffer type "<Backend>_Host" (the pinned Windows
     // build's ggml-vulkan.dll carries the literal "Vulkan_Host"). llama.cpp puts the context
@@ -320,13 +310,6 @@ describe('createPlacementParser', () => {
     expect(r.cpuKvMb).toBe(300)
     expect(r.gpuModelMb).toBe(4000)
     expect(r.cpuModelMb).toBe(1900)
-  })
-
-  it('files a CUDA_Host model buffer (--no-mmap CPU-side weights) under the CPU side', () => {
-    const p = createPlacementParser()
-    p.onStderrData('load_tensors: CUDA_Host model buffer size = 1900.00 MiB\n')
-    expect(p.reading().cpuModelMb).toBe(1900)
-    expect(p.reading().gpuModelMb).toBeNull()
   })
 
   it('stays all-null on a log without those lines (a forced-CPU start), with no device rows', () => {

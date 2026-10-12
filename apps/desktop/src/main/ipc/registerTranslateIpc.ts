@@ -2,7 +2,7 @@ import { guardedHandleFor } from './guarded-handle'
 import { IPC, STREAM } from '../../shared/ipc'
 import type { AppContext } from '../services/context'
 import type { TranslateJob, TranslateRequest } from '../../shared/types'
-import { TranslateJobService, type TranslateStreamEmitter } from '../services/translation/jobs'
+import type { TranslateJobService, TranslateStreamEmitter } from '../services/translation/jobs'
 import { tMain } from '../services/i18n'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
 
@@ -14,15 +14,8 @@ import { workspaceAdmitsWork } from '../services/workspace-vault'
 // or audited — the audit sweep stays green because these handlers never call ctx.audit and the
 // service logs ids/kinds only.
 
-export function registerTranslateIpc(ctx: AppContext, service?: TranslateJobService): void {
+export function registerTranslateIpc(ctx: AppContext, jobs: TranslateJobService): void {
   const ipcHandle = guardedHandleFor(ctx)
-  const jobs =
-    service ??
-    new TranslateJobService({
-      getTranslator: () => ctx.translator ?? null,
-      // D9: the view job yields the one-at-a-time lane to document tasks (RAM co-residency).
-      hasActiveDocTask: () => ctx.docTasks?.hasActiveTask() ?? false
-    })
 
   // A running translation lazily (re)starts the ~10 GB sidecar via translator.translate(); a
   // locked workspace must never trigger that (the vault is re-encrypting) — refuse with the

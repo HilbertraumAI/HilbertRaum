@@ -400,8 +400,8 @@ describe('prepareFirstBenchmark: the cheap half', () => {
       attempted: false,
       epoch: undefined,
       hereKey: here(),
-      // #380: no probe fires on a first run (there is no benchmark to refresh beside), so this
-      // is the already-resolved placeholder — the seam's auto-start is not delayed at all.
+      // #380/#473: the session's probe refresh, fired on a first run too, so the seam's
+      // auto-start waits for it exactly as on any other unlock.
       probed: expect.any(Promise)
     })
 
@@ -752,7 +752,9 @@ describe('behind a pending model start', () => {
     await hops(5)
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
     expect(rt.occupancy.held('benchmark')).toBe(false)
-    expect(spy).not.toHaveBeenCalled() // no span taken, so no "running" push either
+    // No span taken, so no "running" push: the one push is prepare's probe write, which a first
+    // run makes before the start like every unlock (#473).
+    expect(spy).toHaveBeenCalledTimes(1)
     expect(getSettings(db).lastBenchmark).toBeNull()
 
     rt.finishStart()
@@ -762,10 +764,9 @@ describe('behind a pending model start', () => {
     // L1's second half: the leg saw the runtime the start brought up, not the null captured earlier.
     expect(runBenchmarkSpy.mock.calls[0][0].runtime?.modelId).toBe('stub-chat')
     expect(getSettings(db).lastBenchmark).toMatchObject({ tokensPerSecond: 20, measuredModelId: 'stub-chat' })
-    // The run's own start push, its probe write (the EMPTY stamped probe of a root without a
-    // binary, PR #308 decision 6) and the idle push; prepare pushed nothing (a first run owes
-    // the probe to the run itself).
-    expect(spy).toHaveBeenCalledTimes(3)
+    // Prepare's probe write (#473), then the run's own start push, its probe write (the EMPTY
+    // stamped probe of a root without a binary, PR #308 decision 6) and the idle push.
+    expect(spy).toHaveBeenCalledTimes(4)
   })
 
   it('a FAILED start still permits the run — without the speed leg', async () => {
@@ -960,7 +961,8 @@ describe('settlement re-checks', () => {
       inFlightStreams.clear()
     }
     expect(runBenchmarkSpy).not.toHaveBeenCalled()
-    expect(spy).not.toHaveBeenCalled()
+    // A skip pushes nothing; the two pushes are the two prepares' probe writes (#473).
+    expect(spy).toHaveBeenCalledTimes(2)
     expect(getSettings(db).lastBenchmark).toBeNull()
   })
 
@@ -1224,17 +1226,19 @@ describe('the production seams (registerWorkspaceIpc)', () => {
   // shares that very in-flight promise, so on the #330 round trip the probe hit its 10 s bound,
   // an empty stamped probe was persisted (tile "None", RAM basis) and a card decoding at
   // 98–100 tok/s was labelled "cpu". The auto-start now waits for the probe to settle.
-  it('unlock on a card machine: the auto-start WAITS for the session probe, whose write lands first', async () => {
+  // #473: a FIRST run is sequenced too. A workspace whose first run never stored a result (it
+  // failed, or a lock cancelled it) still has its model selected at the next unlock; it used to
+  // auto-start beside the ladder's own probe, which could cache and persist a reading taken with
+  // the chat model already on the card.
+  it.each([
+    ['an already-benchmarked workspace', () => ({ lastBenchmark: hereResult(), benchmarkHistory: [hereResult()] })],
+    ['a first run whose result was never stored (#473)', () => ({})]
+  ])('unlock on a card machine, %s: the auto-start WAITS for the session probe, whose write lands first', async (_label, state) => {
     const events: string[] = []
     const rt = fakeRuntime({ onStart: () => events.push('runtime.start') })
-    const known = hereResult()
     const pending = deferred<GpuDevice[] | null>()
     const probe = fakeProbe(() => pending.promise)
-    const { ctrl, ctx, root } = lockedVault(
-      { lastBenchmark: known, benchmarkHistory: [known], activeModelId: CHAT_MODEL },
-      rt,
-      probe
-    )
+    const { ctrl, ctx, root } = lockedVault({ ...state(), activeModelId: CHAT_MODEL }, rt, probe)
     withBinary(root)
     setPerformanceChangedSink(() => events.push('performance:changed'))
 

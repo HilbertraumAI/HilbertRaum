@@ -761,7 +761,8 @@ behavior-preserving (equivalence-tested, teeth-checked). No schema/IPC/audit-pay
   a cheap `documents`-table probe), else the scoped scan runs byte-unchanged. Result is byte-identical to
   the scoped scan over the same universe (`tests/integration/vector-search-resident-iteration.test.ts`:
   unscoped == all-docs-scoped, hit-for-hit; a `db.prepare` spy confirms the marshal is gone). Measured
-  **~5× / query** at 10k–50k chunks (CI-gated `tests/manual/phaseB-perf-bench.test.ts`).
+  **~5× / query** at 10k–50k chunks (env-gated `tests/manual/phaseB-perf-bench.test.ts`,
+  `RUN_PHASEB_BENCH=1`; never runs in CI).
 - **P1 — `dotProduct` + running top-K in the compare pairing (`doctasks/compare.ts`).** Section-matched
   compare (mode b) scored *every* doc-B vector with `cosineSimilarity` + a full per-A-chunk
   `sort().slice(topK)` — O(N_A·N_B·dim) + N_A sorts, a multi-second main-thread freeze at ~1000 chunks/
@@ -1235,7 +1236,8 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
   routes through the §5.3 `onGpuCrash` auto-fallback (gated on `backend === 'gpu'`);
   (3) the CODE-2 cancel + CODE-3 latch reach the window — `stop()` kills the inner server, the
   warm-up stream errors, and the ladder settles as `cancelledStartError()` (never a rung walk or
-  mock commit); (4) a non-cancel warm-up failure never fails the start (the server IS healthy —
+  mock commit) (the latch itself is manager-level and pinned window-independently in
+  `runtime-manager.test.ts` "quit-path lifecycle"); (4) a non-cancel warm-up failure never fails the start (the server IS healthy —
   warn via `onWarmup`, proceed to ready; a crash still reports via `onUnexpectedExit`); (5) an
   overall `WARMUP_TIMEOUT_MS` (90 s ≈ 3× the worst #109 measurement) aborts a pathological
   warm-up and proceeds — the CB-5 idle watchdog rides along inside it; (6) the request is
@@ -1875,7 +1877,10 @@ FE-4/FE-5) are unchanged — see Wave P4/P5 above.
 
       **Tests.**
       - `runtime-manager.test.ts` "liveness of the running model (#599)": the watchdog mark and what
-        clears it, the probe and its cache, Restart, `stopCrashed`, the start request.
+        clears it, the probe, its 10 s cache and a probe outliving a switch, Restart, `stopCrashed`,
+        the start request; and
+        "GPU mid-session crash auto-fallback through the real manager (REL-1)": the GPU fallback once,
+        then the CPU crash budget through the real `forceRestart`/`stopCrashed`.
       - `runtime-ladder-exit-wiring.test.ts` "a CPU-mode crash restarts the model once per session":
         the real sidecar exit wiring through the ladder and the restart policy.
       - `core-model-ipc.test.ts` "liveness of the running model (#599)": the status read probes, a start
@@ -2417,7 +2422,7 @@ explicitly out of scope.
   serialized, so the handler holds a **single-flight guard**: a second `dictation:transcribe`
   while one is in flight is rejected with friendly copy (`DICTATION_BUSY_MESSAGE`) BEFORE it
   writes the temp WAV or spawns — rapid mic presses can't double-spawn. A **wall-clock
-  ceiling** (`maxDurationMs`, default 10 min, `HILBERTRAUM_DICTATION_TIMEOUT_MS`) drives an
+  ceiling** (`DEFAULT_DICTATION_TIMEOUT_MS`, 10 min; override `HILBERTRAUM_DICTATION_TIMEOUT_MS`) drives an
   `AbortController` whose signal is passed to `transcribe` — a wedged child is killed and the
   mic spinner gets the friendly failure instead of hanging forever. The temp WAV is shredded
   in `finally` on every path (success, refusal, timeout).
@@ -3371,7 +3376,8 @@ Per-finding disposition (F-1…F-8):
     numbers + the contention case: `model-benchmarks.md` §11.4; user-facing shape:
     `known-limitations.md` "Document translation". Tests: `translation-runtime.test.ts`
     ("cold-start device observability" — chunk-split parse, once-per-start, honest-null CPU form,
-    fallback lands as 'cpu', throwing hook harmless), `core-model-ipc.test.ts` (status feed),
+    throwing hook harmless; the ladder suite's GPU-fail → CPU row pins that the fallback lands as
+    'cpu'), `core-model-ipc.test.ts` (status feed),
     `TranslateScreen.test.tsx` (hint forms + absent-before-first-start).
 - **Translation-audit wave #156–#165 (2026-08-09) — the read-only pipeline audit's fixes, one
   branch.** Behavioral deltas to this record (details in the issues + the wave PR): **(#156)**
@@ -3830,8 +3836,7 @@ adds is the safety machinery:
   cache, and re-probes + persists (hidden while the toggle is OFF, where it would do nothing).
   The benchmark path injects the probe as `RunBenchmarkDeps.gpu: { name, useful, totalMb, budgetMb, memoryClass }`
   (`gpuUsefulForProfile`: ≥ `USABLE_VRAM_MB` — 5120 MiB since #321 — AND not integrated → the conservative `classifyProfile`
-  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, re-exported by
-  `runtime/gpu.ts`, so the Performance screen rates a device by the same definition — `name`,
+  bump; the rule lives in `shared/gpu-rules.ts` since the PR #303 audit, so the Performance screen rates a device by the same definition — `name`,
   `totalMb` and `budgetMb` are one device's, the BUDGET device `nextStartMemory` selects, PR #308
   audit decision 9); `benchmark.ts` itself keeps **zero
   `child_process`**. `prepareFirstBenchmark` (the cheap half of the first-run benchmark, PR #303
@@ -4084,16 +4089,16 @@ persisting nothing; a healthy model starts on rung 1.
 > CODE-2 cancel before the latched start still settles as cancelled, never as the mock.
 >
 > **Clearing rule.** "Try GPU again" is about the graphics card and does **not** touch this latch
-> (pinned in `gpu-ipc.test.ts`). What re-arms a model is evidence that the *file* or the
+> (pinned in `performance-gpu.test.ts`). What re-arms a model is evidence that the *file* or the
 > *runtime* changed: **"Verify checksum"** on that model (`models:verify` → `clearModelLoadLatch`;
 > a re-verified file is a new file — also the way to retry after a transient cause such as RAM
 > pressure), a **completed in-app download** of that model (`ctx.onModelInstalled` → the same,
-> before the translator rule's early return), a **chat-engine install** (`EngineDownloadManager.onInstalled`
+> as the handler's first statement), a **chat-engine install** (`EngineDownloadManager.onInstalled`
 > for `llama_cpp` → `clearModelLoadLatches`; a new binary may load what the old one could not —
 > a kiwix-only install clears nothing), and an **app restart** (module state). A device verdict
 > never latches the model, so a persisted `gpuAutoDisabled` still re-walks from rung 2 as before.
 > Tests: `runtime-ladder.test.ts` "#372", `core-model-ipc.test.ts` (verify), `engine-consent-ipc.test.ts`
-> (engine install), the `ctx.onModelInstalled` source-text pin, `gpu-ipc.test.ts` (Try GPU again).
+> (engine install), the `ctx.onModelInstalled` source-text pin, `performance-gpu.test.ts` (Try GPU again).
 
 **#530 amendment — a program the OS loader refused is neither verdict.**
 - **The defect.** A refused `llama-server` (Linux without `libgomp1`, Windows without the Visual
@@ -4270,8 +4275,10 @@ Two quit-path gaps in the manager/ladder lifecycle, closed together:
   `gpuAutoDisabled` for a killed attempt (not a device fault), and (d) refuses the rung-4 mock fallback
   for a cancelled start. Queue semantics are unchanged — the queued stop still runs after the start
   settles; the start just settles *promptly* now. Never a bare timeout race (would orphan the loading
-  child). Pinned in `runtime-manager.test.ts` ("quit-path lifecycle") + `runtime-ladder.test.ts`
-  ("ladder start cancellation").
+  child). Pinned in `runtime-manager.test.ts` ("quit-path lifecycle": "stop() mid-start kills the loading
+  child…" covers (a)–(d) over a real `LlamaServer`) + `runtime-ladder.test.ts` ("ladder start
+  cancellation": a stop before the walk begins; the warm-up window and the #312 / #372 verdict cancels
+  sit in their own blocks).
 - **CODE-11 — crash-exit child reap (rider).** A hard `uncaughtException` skips will-quit's awaited
   sidecar stops entirely, and on Windows the children survive `process.exit(1)`. Every sidecar spawn
   funnels through `LlamaServer` or `WhisperCliTranscriber`; both now register/deregister their live
@@ -4495,7 +4502,7 @@ measured values before release notes claim anything.)
 `gpuUsefulForProfile(devices)`: some device has **≥ `USABLE_VRAM_MB`** AND `!looksIntegrated(name)`.
 Conservative by design — an iGPU reporting 16 GB of *shared* RAM must never bump a laptop's
 profile; a false negative only costs a too-small model recommendation. The regex lives in
-`shared/gpu-rules.ts` (re-exported by `runtime/gpu.ts`; fixture-tested, covers Windows + RADV APU
+`shared/gpu-rules.ts` (fixture-tested, covers Windows + RADV APU
 names, Meteor-Lake Arc and, since #320, the bare `Intel(R) Graphics`). **The floor is 5,120 MiB
 since 2026-09-07** (issue #321, owner decision; 6,144 before): every 6 GB laptop card the project
 has measured reports below 6,144 on Vulkan — GTX 1660 SUPER 5,746, RTX 4050 Laptop 5,921, RTX 3060
@@ -4538,9 +4545,13 @@ record is why.
   translation a FULL offload at ~75 tok/s, against ~3–4 tok/s forced to the CPU. A rule that trades
   75 for 3.5 to avoid a case that only bites when the card is nearly full is a net loss.
 
-The condition is also already OBSERVABLE — the Translate screen's device line has covered all five
-forms since #164 (D-7b), and the "Models on this computer" card carries the start-order warning when
-both are resident on the card.
+The condition is also OBSERVABLE — the Translate screen's device line has covered all five forms
+since #164 (D-7b), and the "Models on this computer" card carries the start-order warning when both
+are resident on the card. **Correction (#629, 2026-10-07):** that held only from #629 on. Until then
+the sidecar ran at llama-server's default log level, below the verbosity 4 at which the pinned build
+prints its offload line, so every GPU start fell to the plain "runs on the graphics card" form and
+the card could never count translation as resident. The refusal above rests on the measurement, not
+on this sentence, and stands.
 
 **What was actually wrong was the COPY.** The two starved fact lines stated the symptom and nothing
 else — "about processor speed" — so a user who read no further had a fact and no action. Both now
@@ -4552,6 +4563,71 @@ well. Keys: `translate.device.gpuPartial` / `gpuNone` (cause) and `partialTitle`
 (remedy), in both locales; pinned by `TranslateScreen.test.tsx` "#42" so neither can regress to
 symptom-only. Full behaviour: `known-limitations.md`, "A large resident chat model can starve GPU
 translation…".
+
+### §9 Sharing the card: chat, translation and the reranker (#473, owner rulings 2026-10-12)
+
+Three processes can put a model on the graphics card: the chat runtime, the translation sidecar and
+the reranker. Before #473 only the reranker checked for room. Phase 0 (four independent fixes, among
+them #629) and the four rulings below settle the rest; the rulings and the re-check behind them are
+posted on #473. §8.1's refusal stands: no rule forces translation to the processor while both fit.
+
+**The facts it rests on.**
+- llama.cpp's `--fit` sizes a process by the device's free figure and fixes the split at load; a
+  running process is never re-fitted.
+- That figure tracks usage on Linux, so a second process is squeezed. It does not on NVIDIA/Windows
+  (`model-benchmarks.md` §6.6 finding 2), nor on Apple Silicon: build 11146's
+  `ggml_metal_device_get_memory` reports total = `recommendedMaxWorkingSetSize` and free = total
+  minus what the ASKING process allocated, so a separate process never sees ours. There a second
+  process overcommits instead.
+- A translation squeezed into 7 GB of its 7.8 GB need ran at about processor speed (§11.4).
+- A chat model that starts second stays squeezed until it is restarted (the Performance card says
+  so); translation's squeeze ends at its 2-minute idle teardown.
+- Under `-np 1` the gap between the probe's free figure and the fit's own reading is 54–154 MiB on
+  the three cards measured (§6.6 finding 1).
+
+**Decisions.** (1) No `--fit-target`: translation gets a headroom gate like the reranker's, and the
+app still passes nothing to llama.cpp's fit (§1, §3). Partial offloads are given up. (2) Priority
+chat, then translation, then the reranker. (3) The running chat model's share of the card is the
+measured one when this session has it. (4) Apple Silicon gets no rule of its own.
+
+**As built.**
+- **The translation gate** — `resolveTranslationDevicePosture` (`rag/device-posture.ts`), consulted
+  per cold start through `TranslationGpuDeps.gpuHeadroom`, after `gpuMode`, `gpuAutoDisabled` and
+  the session latch. GPU ('auto') only if the budget device's free figure minus the chat share
+  holds `estimateGraphicsNeedMib` of the translation model; otherwise `--device none`. 'auto',
+  llama.cpp deciding as before, when there is nothing to judge: no stored probe for this machine,
+  no usable discrete card, a locked workspace. 'cpu' while a chat start is in flight, pending, or
+  still in its weight check (`startRequested`, #599).
+  The translation manifest carries measured `host_mapped_weights_mib` (787.69) and
+  `estimated_context_cache_gib` (0.75), so its estimate reads 8,892 MiB against 7,811 measured.
+  `gpuOccupied()` reports the posture the start in flight CHOSE, since the gate can change mid-start.
+- **Chat first** — `RuntimeManager`'s `beforeStart` hook, awaited by every start (Start, a switch,
+  the auto-start, Restart, the crash restarts) after the old runtime stopped and before the spawn,
+  calls `Translator.yieldGpu()` on a machine whose card the gates share out (`cardIsShared`: GPU on,
+  a usable discrete device or Apple's Metal pool on record). A Stop or a lock arriving meanwhile
+  cancels the chat start before it spawns (`stopRequests`), never after a whole load; the
+  "Starting…" clock starts after the hook. `yieldGpu` waits for a soft kill already under way,
+  leaves a sidecar that put no layers on the card alone, and stops one resident on the card the
+  way #605 stops a hung one (`softTeardown`): the window in flight fails with an
+  ordinary stream error that both consumers retry once, and the retry cold-starts after the kill —
+  on the processor, because the gate sees the chat start. A GPU cold start already in flight is let
+  finish (at most 30 s, `YIELD_START_WAIT_MS`) and then stopped, never aborted: an abort reaches a
+  document task as a cancel. The reranker already yields to both (Wave 8; Phase 0's
+  `translationGpuYield`).
+- **The chat share** — `chatGraphicsShareMib` (`models.ts`), read by both gates: this session's
+  measured placement for the same model and window (weights + KV + recurrent state + compute on the
+  card) plus `CHAT_MEASURED_MARGIN_MIB` (256); else the estimate with its cache term scaled UP to
+  the launched window; 0 when the chat model runs on the processor.
+- **Apple Silicon** — by the Metal fact above, both gates already compute "working-set cap minus
+  the chat share", the number a unified-memory rule would; `gpu-sharing-gates.test.ts` pins it.
+
+**Residuals** (also in `known-limitations.md`). Other applications' card use stays invisible on
+NVIDIA/Windows and Apple Silicon — no gate can see it. The single-process spill (§6.6 finding 8) is
+untouched; `--fit-target` stays a candidate for it once its cause is known. A translation moved off
+the card by a chat start stays on the processor until its idle teardown, even if the card has room
+once the chat model has loaded. A translation cold start in flight can delay a chat start by up to
+30 s. The reranker's load log is still not parsed, so a GPU reranker is assumed fully on the card.
+Hardware legs still open: two processes on NVIDIA/Windows, AMD/Windows, a Mac.
 
 ### GPU failure modes (all handled, none block)
 
@@ -5079,6 +5155,11 @@ voice engine was missing.
 Tests:
 - `assets.test.ts`: the version-order table, the relation (the pin in another backend is current).
 - `spawn-gate.test.ts`: hold, wait, release, bound.
+- `sidecar.test.ts` "waits for an engine install to finish its swap before it spawns (#516 spawn
+  gate)": the LlamaServer spawn site (all five llama sidecars) waits on the gate; `gpu.test.ts` (same
+  title) the `--list-devices` probe, and `engine-health.test.ts` "waits for an install of its family to
+  finish the swap before it launches (#516 spawn gate)" the "Check again" launch, and `transcriber.test.ts`
+  "waits for an engine install to finish its swap before it spawns (#516 spawn gate)" the whisper-cli spawn.
 - `engine-download.test.ts` "engine updates (#516)": status with `cpuNet`, missing-only, update with
   `cpu/`, never newer or unknown, the two phases and the held gate at the pause, a part-way failure
   still reported, `onSettled`. Also the CODE-13 pair: a cancel during extraction, and one after it.
@@ -8278,7 +8359,7 @@ was subsumed by F16 (Phase 4).
 | **T1** (Med) | 5 | **closed** — the LlamaServer **unit** suite couldn't exercise SIGTERM-ignore→SIGKILL escalation (its `FakeChild.kill()` exits on ANY signal, so `stop()` always settled on the "exited" branch). New `sidecar.test.ts` test with a **stubborn child** (records each signal, dies only on SIGKILL) asserts `signals == [undefined,'SIGKILL']`. Teeth: revert the line-576 gate `this.exited` → `child.killed` → SIGKILL dropped → reds | "Test-enforcement seams" (T1) |
 | **T2** (Med) | 5 | **closed** — the resident-cache lock-PURGE (RAG-6 SECURITY requirement) was proven only at the unit tier, never that the lock IPC *calls* it. `workspace-ipc.test.ts` now seeds a real resident map, locks, and asserts `purgeResidentVectors` fired against the LIVE db (spy delegates to the real impl, shared `caches`). Teeth: drop the purge call from the lock handler → spy 0× → reds | "Test-enforcement seams" (T2) |
 | **T6** (Low) | 5 | **closed (de-flake)** — the GPU-probe timeout test awaited a real 20 ms `setTimeout` (a TEST-1-family wall-clock flake). Converted to fake timers (`vi.advanceTimersByTimeAsync`, the combine-signals idiom) with an injected trivial `verify`; the kill-on-timeout assertion is preserved. Teeth: neuter the timeout `child.kill('SIGKILL')` → `child.killed` stays false → reds | "Test-enforcement seams" (T6) |
-| **T7** (Low) | 5 | **closed (de-flake)** — the privacy-guard snapshot poll was an iteration-capped `for(i<50){sleep(5)}` (TEST-1 sibling). Converted to `vi.waitFor` (the gpu-ipc idiom) — re-polls until the run settles, no fixed cap. The no-secret-in-snapshot assertions are preserved. (The optional `vision-runtime.test.ts` real-timer copies were left as-is — converting them needs the fakeClock seam, out of scope for a quick nit) | "Test-enforcement seams" (T7) |
+| **T7** (Low) | 5 | **closed (de-flake)** — the privacy-guard snapshot poll was an iteration-capped `for(i<50){sleep(5)}` (TEST-1 sibling). Converted to `vi.waitFor` (the picker-seams idiom) — re-polls until the run settles, no fixed cap. The no-secret-in-snapshot assertions are preserved. (The optional `vision-runtime.test.ts` real-timer copies were left as-is — converting them needs the fakeClock seam, out of scope for a quick nit) | "Test-enforcement seams" (T7) |
 | **T8** (Low) | 5 | **closed** — the crash-fallback test counted a monkey-patched `stop()` wrapper (`made[0].stops===1`), which still holds if `stop()` stops reaching the child kill (orphan). `runtime-manager.test.ts` now also pins the REAL reap on observable child state: a final `mgr.stop()` + `children[1].child.killed===true` (the LIVE restarted child is genuinely killed). **DIVERGED from the audit's literal "crashed child killed===true"** — the crashed child already `exited`, so `stop()` correctly early-returns before any kill (its `killed` stays false; asserting true would red on correct code). Teeth: early-return `stop()` before the kill → the live child's `killed` stays false → reds | "Test-enforcement seams" (T8) |
 | **T3** (Med) | 4 | **verified subsumed** — `ipc-lock-coverage.test.ts` (F16) drives `registerRagIpc` against a locked ctx with NO exemptions, so `rag:ask` is enumerated and asserted to reject with the localized lock copy. No separate Phase-5 test added | §30 (F16); "Test-enforcement seams" (T3) |
 | **T9** (Low, nit) | 1/5 | **partially closed** — invoice negative line totals / Gutschrift/Rabatt were pinned in Phase 1; the AES-GCM **truncated (length-reduced) ciphertext** case is added at the `crypto.ts` unit tier (`crypto.test.ts`, one assertion — distinct from the existing bit-flip cases). The `BANK_EXTRACTOR_VERSION` tautological-tripwire and the mock-embedder score-band nits are left as accepted | "Test-enforcement seams" (T9); arch §8 (Phase 1 T9) |
@@ -9193,7 +9274,7 @@ Per-finding disposition (fixed → phase@commit / declined → rationale / info 
 | **SK-14** | LOW | P1/P3/P4 | **fixed** — the `autoFire` "score ≥ 3 bar" comment reads as the suggestion bar; added "(auto-fire bar; the suggestion offer bar is score ≥ 2 with a mandatory keyword hit)" to all four tool skills' frontmatter comments (document-redaction P1, invoice + meeting-protocol P3, bank-statement P4). Comment-only. |
 | **SK-15** | LOW | P2 `4f541c1` | **fixed** — what-changed named an "Exact changes" block it never sees; the diff rule now quotes the real runtime label ("Exact word-level changes (redline)", `rag/index.ts:1168`) and defers to the block's own PARTIAL / further-changes markers. |
 | **SK-16** | INFO | — | **note (no change)** — `validate_statement_balances` is a per-row running-balance chain (`tools/bank-statement.ts:815-864`); the opening+Σ=closing tie lives in `assessCompleteness` (:504-531) on the answer layer. The composition satisfies the SKILL.md honesty rule; the tool name just covers less than the sentence implies. Recorded in known-limitations. |
-| **SK-17** | INFO | — | **note (watch beta)** — meeting-protocol's "audio transcript" works via the audio-file **import** path (AudioParser → document); live dictation returns composer text and never becomes a document (`registerDictationIpc.ts:76-120`), so the skill runs over imported audio documents only, not over a dictation. A body clause is the cheap fix if beta users hit it. Recorded in known-limitations. |
+| **SK-17** | INFO | — | **note (watch beta)** — meeting-protocol's "audio transcript" works via the audio-file **import** path (AudioParser → document); live dictation returns composer text and never becomes a document (`registerDictationIpc.ts`), so the skill runs over imported audio documents only, not over a dictation. A body clause is the cheap fix if beta users hit it. Recorded in known-limitations. |
 | **SK-18** | INFO | — | **note (do NOT "fix")** — invoice/bank `mimeTypes` deliberately omit `text/plain` while the bodies say "or pasted text"; pasted text carries no mime signal and a lone keyword (=2) already clears the suggest bar, so the two are consistent — "fixing" it would be a precision regression. Recorded in known-limitations. |
 
 **Version convention (SK-12) — part of the SKILL.md-editing checklist.** For a bundled app skill
@@ -10251,7 +10332,7 @@ phase moved):
 | **REL-8** (C-01 · TQ-2) | MED | 7 | #277 | **fixed** — after a failed lock the fresh working DB is the only copy of the session delta; preservation shredded an old `.recovery`, renamed the fresh file over it, swallowed both errors, and `init()` swept unconditionally — a held `.recovery` (AV/indexer) therefore shredded the only fresh DB (B4 reproduced). `preserveNewerPlaintext` returns `'preserved' | 'not-needed' | 'failed'` (`workspace-vault.ts:685`); on `'failed'` `init()` skips the crash sweep AND the pending-rekey recovery and marks the controller blocked (`isRecoveryBlocked()` `:1548`); `unlock()` re-runs `init()` (the hold may have cleared) and, still blocked, throws `VaultRecoveryBlockedError` (`:161`) → IPC reason `vault_recovery_blocked` (`registerWorkspaceIpc.ts:187`, `shared/types.ts:218`) + EN/DE `main.workspace.recoveryBlocked` (Q24; a one-key change if reworded). The SAME loss existed on the UNLOCK leg (reviewer, fixed in-PR): once `init()` had preserved the fresh copy as `.recovery`, a hold denying the header read at unlock let the older probe-error path proceed into the stale `.enc`, and a later lock made the never-rolled-forward copy shreddable — the probe-error catch now refuses whenever `.recovery` could still be fresh and proceeds only when `.enc` is demonstrably newer. Single `.recovery` name kept (Q20). TQ-2: `vi.spyOn(fs, …)` records nothing for ESM-namespace binders and the shipped guard test's injection was never reached; it now uses the pass-through `vi.mock('node:fs')` wrapper (`rmSync`→EPERM, `writeSync`→ENOSPC) and ASSERTS each injection was hit (`vault-recovery-guards.test.ts:137` `holdRecovery`; "#242" cases `:290,327`); B4 inverted (the fresh DB survives, unlock yields the marker). The incomplete fix REL-8 completes is the **2026-07-12 round's REL-1** (`6a33f25e`, §48). #242 closed. |
 | **REL-9** (C-02 · DOC-15) | MED (confidence medium-low) | 7 (docs) | #277 | **documented on decision 6's default — open.** Every completed file is fsynced before its rename (`workspace-vault.ts` `fsyncSync` at `:255,337,541,739,900`) but no parent-directory flush follows a durability-critical rename; Node exposes no documented Windows directory-flush primitive (the review measured `openSync(dir,'r+')` + `fsyncSync` SUCCEEDING on Win11 — whether it has any namespace effect is HYPOTHESIS; NTFS journaling gives consistency, not durability), so on exFAT/FAT32 a power cut in the metadata window after a rename can roll a committed name back and the old-or-new rekey ordering could be violated. `drive-layout.md` "### Filesystem" (`:277`) recommends exFAT for cross-OS kits and states the caveat (the last successfully locked snapshot always survives); `security-model.md` and `troubleshooting.md` point there (DOC-15: the format was assumed in three docs and chosen nowhere). Not confirmed: no crash-cut tests ran (owner-gated). Ratify (#223) → a Phase F spike: retain the previous generation until the next successful lock, POSIX directory fsync on macOS/Linux, a crash-cut harness on exFAT; `MoveFileEx` write-through needs a native addon. **#243 OPEN.** |
 | **REL-9** — §52 addendum 2026-09-04 | MED (confidence medium-low) | F (PR 2, `docs/pf-decisions-confirmed`) | #284 | **default confirmed as a ruling — document, plus one manual crash-cut on exFAT before the first kit ships** (owner decision #223, `**DECISION:** document; one manual crash-cut on exFAT before the first kit ships`, 2026-09-03). No spike, no directory flush, no write-through. `drive-layout.md` **Filesystem** names the ruling; `packaging.md` "Manual pre-ship checklist" item 9 carries the crash-cut session (a scratch exFAT kit, a hard unplug during a multi-second lock, the wedged instance quit before re-plug; pass = the workspace opens at the last locked snapshot OR with the session rolled forward through `.recovery` — a cut in the encrypt phase is the failed-lock signature; fail = refuses every unlock or opens torn; machine/OS/date/outcome recorded; a per-platform repeat recommended, not ruled); `security-model.md` "Lock failure & durability" points there. Release-acceptance line 7's power-cut half closes by this explicit acceptance. One manual cut samples the lock at an arbitrary point — it is recorded as evidence, not proof, and the finding stays a CANDIDATE. **#243 CLOSED.** |
-| **REL-10** (M-01) | MED | 0 | #267 | **fixed** — E5Embedder, LlamaReranker and VisionRuntime created their `LlamaServer` without a start abort signal and awaited the in-flight cold start on teardown, so "Lock now"/quit waited the full 180 s health window (B8: 180 250 ms ×3 vs Translation's 250 ms). All three now carry the translation runtime's #159 pattern: a per-start `AbortController` passed as `startAbortSignal`, `isStartAbortError` as the FIRST clause of each `startFailed` latch (`e5.ts:287`, `reranker/llama.ts:193`, `vision/runtime.ts:275` — without the bypass a lock during a cold start would latch the wrapper dead until restart), `abort()` first in teardown/stop. B8 ported: `sidecar-teardown-abort.test.ts` (`WrapperCase` table `:79-95`; fake spawn + fake timers, production defaults 180 000 / 250) — 250 ms for all four wrappers, child killed, no stale latch, a fresh child on the next start; real worst case ≈ 5.25 s (one poll + the 3 s probe timeout + the 2 s POSIX SIGTERM grace). Record: the #159 note in this file. #244 closed. |
+| **REL-10** (M-01) | MED | 0 | #267 | **fixed** — E5Embedder, LlamaReranker and VisionRuntime created their `LlamaServer` without a start abort signal and awaited the in-flight cold start on teardown, so "Lock now"/quit waited the full 180 s health window (B8: 180 250 ms ×3 vs Translation's 250 ms). All three now carry the translation runtime's #159 pattern: a per-start `AbortController` passed as `startAbortSignal`, `isStartAbortError` as the FIRST clause of each `startFailed` latch (`e5.ts:287`, `reranker/llama.ts:193`, `vision/runtime.ts:275` — without the bypass a lock during a cold start would latch the wrapper dead until restart), `abort()` first in teardown/stop. B8 ported: `sidecar-teardown-abort.test.ts` (`WrapperCase` table; fake spawn + fake timers, production defaults 180 000 / 250) — 250 ms for all four wrappers, child killed, no stale latch, a fresh child on the next start; real worst case ≈ 5.25 s (one poll + the 3 s probe timeout + the 2 s POSIX SIGTERM grace). Record: the #159 note in this file. #244 closed. |
 | **SEC-2** | MED | 8 | #278 | **fixed** — `zipDest` was `join(extractTo, <last '/'-segment of the url>)`, so a `runtime-sources.yaml` basename containing `..\..\` walked up from the guarded extraction root on Windows (clamped at the volume root) and `download()` wrote there before the attacker-supplied hash was checked. `archiveNameFromUrl(url, fallback)` (`assets.ts:291`) takes `new URL(url).pathname`'s last segment, percent-decoded, requires `ARCHIVE_NAME_RULE = /^[A-Za-z0-9._-]{1,128}$/` (`:281`) and not `.`/`..`, else `<binary>-<version>-<os>-<arch>.zip`; `zipDest = resolveWithinRoot(extractTo, name)` (a hostile `version` in the fallback now throws instead of escaping); every `url` must be https at parse time in all three families (`runtime-sources.ts:134,211`). Two cases, not one: a raw `\` in an https path is a `/` under WHATWG and the `..` resolve INSIDE the root; only the percent-encoded `%5C` form reaches the rule and falls back (`assets.test.ts:1038` "archiveNameFromUrl (#245)"). Record: `security-model.md` manifest-tampering bullet (3). Adjacent, unchanged: BUILD_STATE §8 L-7 (archive MEMBERS; same trigger, different code). #245 closed. |
 | **DOC-6** | MED (reader) | 9 → 9a | #280 | **fixed** — `user-guide.md` §13 "**If the app is not quit cleanly:**" (`:1023`): pulling the drive while the app runs, a power cut or a forced kill, or shutting down / logging off with the app open loses every change since the workspace last locked; the workspace reopens from that point — the product's public statement of REL-11 ("a crash" was dropped after review: an in-process crash runs the synchronous lock). The "(harmless, …)" the evaluation misread modifies the Windows scan prompt. Owner may reword (STATE Q26). #246 closed. |
 | **REL-4** (NEW-5) | MED-LOW | 3 PR 3-b — NOT OPENED | — | **open residual — default stands.** No `PRAGMA user_version` anywhere under `apps/desktop/src` (`db.ts:998` `applyPragmasAndMigrations` runs WAL + additive `CREATE … IF NOT EXISTS`/`ensureColumn` migrations only), so an older build cannot tell it opened a newer workspace and degrades silently — realistic only through REL-7, whose launcher refusal (#272) now closes the trigger. Decision 8 (#225, an on-disk format change) unanswered → not ratified. Ratify → PR 3-b, design on #247: read `user_version` first; `> CURRENT` → `WorkspaceNewerError` → IPC `workspace_newer` + EN/DE copy; `< CURRENT` → migrate then stamp; `0` = every existing DB; `data-contracts.md` migration note; pre-fix builds ignore the stamp, so it protects only future pairs. **#247 OPEN.** |
@@ -11433,6 +11514,11 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   proves the refusal is genuinely the hash mismatch, not an always-refuse artefact. Teeth: drop the
   `verifyBinary`/`verify` call at a seam → the spawn proceeds and the refusal test reddens
   (verified: LlamaServer resolves instead of rejecting, the probe's spawn count is 1, whisper proceeds).
+  The 2026-10 runtime-ladder test campaign added the fourth seam (the #530 "Check again" engine check,
+  `checkProgramLoads`) and the `ok` / `skip-legacy` positive controls, retired the injected-verdict
+  `LlamaServer` copies, and removed `LlamaServer`'s `verifyBinary` option: it always calls the real verifier.
+  The sidecar-services test campaign did the same for whisper-cli: it retired the injected-verdict copy in
+  `transcriber.test.ts` and removed `WhisperCliOptions.verifyBinary`.
   See the verifier itself in `security-model.md` "engine-binary re-hash-before-spawn".
 - **TEST-3 — an embed failure PROPAGATES at `generateGroundedAnswer`, not only `retrieve()`
   (`tests/integration/rag.test.ts`, +1).** `TEST-N8` proves `retrieve()` rejects on a failing embedder, but
@@ -11460,7 +11546,10 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   prompt + image bytes genuinely pass through `runAnalyze` → `server.fetch('/v1/chat/completions', …)` →
   `readChatSSE`, then asserts NO diagnostics-log call (any level) carries the prompt, the answer, or the
   base64 image bytes. Teeth: log `opts.question` or the image data-URL at the runtime layer → the spy
-  captures it and the test reddens.
+  captures it and the test reddens. *(2026-10-12, sidecar-services test campaign: merged into the loopback
+  sentinel "connects only to loopback (127.0.0.1) and logs/audits NO image/prompt/answer content", which
+  already drove the same real-runtime success path with the same recording fetch; its TEETH note moved with
+  it.)*
 - **TEST-6 (INFO) — answer-quality floor in CI is partial, by design.** *(Wording corrected Phase 7 / D1 —
   the original claim that the S13b bar was "owner-gated on D1 / not yet landed" went stale the moment the bar
   shipped.)* The **S13b skill-trigger precision bar IS a live CI gate**: `eval/skill-triggers.test.ts` asserts
@@ -11509,13 +11598,14 @@ carries the one-line disposition for each; the detail and teeth:
   test awaited a real 20 ms `setTimeout` against a never-exiting child — a TEST-1-family wall-clock flake. It
   now drives the probe's own kill-timeout through `vi.useFakeTimers()` + `vi.advanceTimersByTimeAsync(20)` (the
   `combine-signals.test.ts` idiom), with `verify` injected as a trivial resolver so only the timeout path is
-  under fake-timer control (no real fs/microtask racing the timer; the verify path has its own test). The
+  under fake-timer control (no real fs/microtask racing the timer; the verify path is pinned through the real
+  verifier in `binary-verify-spawn.test.ts`). The
   assertion is preserved (probe resolves `[]` on timeout AND the child is killed). Teeth: neuter the timeout's
   `child.kill('SIGKILL')` → `child.killed` stays false → reds.
 - **T7 — privacy-guard snapshot poll, de-flaked to `vi.waitFor`
   (`tests/integration/skills-privacy-guard.test.ts`, converted in place).** The old `for(i<50 &&
   running){sleep(5)}` was a structural TEST-1 sibling (bounded iterations × a fixed sleep over mutable state).
-  It now re-polls via `vi.waitFor` (the `gpu-ipc.test.ts` idiom) until the run settles, no fixed cap; the
+  It now re-polls via `vi.waitFor` (the `picker-seams.test.ts` idiom) until the run settles, no fixed cap; the
   no-secret-in-snapshot assertions are preserved. (The optional redundant real-timer copies in
   `vision-runtime.test.ts` were left as-is — converting them needs the fakeClock injection seam, beyond a quick
   nit.)
@@ -11593,8 +11683,10 @@ control → red → restore byte-identical). Suite **2589 passed / 39 skipped** 
   vitest runs with DEV true, so the PERF-5 memo test (`DocumentsScreen.test.tsx`, 48 green) still observes
   the bumps. No production behaviour change (the exported Map stays an empty no-op in prod).
 - **DX-5 — the sidecar crash → auto-fallback WIRING is pinned end-to-end
-  (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proves the
-  ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama — never that
+  (`tests/integration/runtime-ladder-exit-wiring.test.ts`, new, +1).** `runtime-ladder.test.ts` proved the
+  ladder ROUTES a crash by hand-invoking `calls[0].onUnexpectedExit(info)` on a STUB makeLlama (that unit
+  test was retired by the 2026-10 runtime-ladder test campaign; this file now owns both the GPU and the CPU
+  route) — never that
   the real `LlamaServer` wires its child's `'exit'` event to that callback. The new test drives the REAL
   `createLlamaRuntime`→`LlamaServer` (only spawn/fetch/port injected, the e5/reranker/vision gated-child
   style), starts it to healthy on a GPU-reporting probe (backend `'gpu'`), then emits a REAL `'exit'`
@@ -11683,7 +11775,8 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   the cheap ones, recorded the residuals.** Most fixed-duration `setTimeout` are STATE-POLL loop intervals
   (`while (cond) … setTimeout`, e.g. the `waitTerminal`/`waitFor`/`pollUntil` helpers and the `while (!x.release)`
   gates) — deterministic by construction, left as-is. The three genuine correctness-gates converted to state-polls:
-  `reranker.test.ts:125` and `e5-embedder.test.ts:262` (`sleep(1)` "let the request reach fetch" → `while
+  `reranker.test.ts` ("forwards the caller abort signal…") and its E5 twin (since retired: the #607 user-Stop row on
+  a real loopback socket covers it) (`sleep(1)` "let the request reach fetch" → `while
   (!seenSignal) await …` so the abort lands only after the signal was genuinely handed to fetch), and
   `ocr-task.test.ts:210` (`sleep(30)` "let the task start" → a `rasterizeReached` flag in the gate, polled, so the
   cancel lands once the task is genuinely parked rasterizing). **Recorded residuals (NOT converted, with rationale,
@@ -12137,7 +12230,7 @@ record "Lifecycle — a hybrid").
   often followed by a new job (another question, another language), which then joins the start
   instead of paying for a second cold load. The cost of an abandoned start is bounded: it loads, then
   sits for one idle window (2 min), recorded in `known-limitations.md`.
-- **Tests.** The cold-start fake is shared: `tests/helpers/loading-sidecar.ts` (`/health` 503 until
+- **Tests.** The cold-start fake is shared: `loadingSidecar` in `tests/helpers/fake-sidecar.ts` (`/health` 503 until
   loaded; the #635 embedder and reranker rows use it too), with the `until` / `within` hang detectors
   in `tests/helpers/hang-budget.ts`.
   - `vision-runtime.test.ts`: a cancel during a start that never gets healthy ends that analyze with
@@ -14535,7 +14628,8 @@ model through **five** lanes: chat/RAG, doc tasks, skill runs, the benchmark, an
   every existing call site passes through it with zero call-site churn.
 - `RuntimeChatOptions.lane` (`'in-app'` default / `'external'`) means an external request never
   pre-empts itself, and in-app entry always wins.
-- `isGenerating()` / `isExternallyBusy()` **fail closed**: no active runtime ⇒ busy. That single
+- `isExternallyBusy()` **fails closed**: no active runtime ⇒ busy (`isGenerating()` is the plain
+  any-lane count; it does not). That single
   rule covers the whole start window including the warm-up generation, which streams against the
   inner rung runtime while `active()` is still null.
 - Counter discipline: increment as the first act of the generator body, decrement in `finally`,
@@ -14664,7 +14758,7 @@ modes; zero CORS headers anywhere; streaming and non-streaming happy paths; the 
 mapping incl. `Retry-After`; pre-emption closing without `[DONE]`; counted-byte body cap over a
 chunked body; the drain-timeout reclaiming a slot; lock and quit killing the listener first;
 rotation aborting in-flight streams; the gate counting all lanes on both the mock and ladder
-paths with `isGenerating()` failing closed; the counter surviving never-iterated and
+paths with `isExternallyBusy()` failing closed; the counter surviving never-iterated and
 throws-before-yield generators; the TOCTOU probe; a **no-content sentinel** driven through the
 success and failure paths and grepped out of every log, console stream, error body, and status
 object; and hostile wire input — a slow-loris header phase cut off **by the server itself**
@@ -15530,7 +15624,7 @@ probe before spawning (sub-second after the first call, hard-capped at 10 s, nev
 the very next rung reuses the same cached answer. Every other model keeps the concurrent
 probe-alongside-load behavior untouched.
 
-Three refusals, all of which **skip** the rung (no spawn, no failure, no GPU blame):
+Four refusals, all of which **skip** the rung (no spawn, no failure, no GPU blame):
 
 1. **No probed device** — the measured gain is a full-offload GPU result.
 2. **Not enough free VRAM** — one device must report the weight's own bytes plus
@@ -15538,9 +15632,16 @@ Three refusals, all of which **skip** the rung (no spawn, no failure, no GPU bla
    full-offload llama-server peaks ~1.3–1.4 GiB above the GGUF's size (KV + compute buffers) and
    the draft head plus its KV costs ~2 GiB more. It reproduces the §9.4 verdicts exactly — Q4
    (15.9 GiB) and Q5 (18.5 GiB) clear a 24 GB card, Q6_K (21.3 GiB) does not. Free VRAM is never
-   summed across cards: a multi-device split with a draft head is unmeasured.
+   summed across cards: a multi-device split with a draft head is unmeasured. The one device is
+   the budget device (`primaryUsefulDevice`, the same pick as every other VRAM rule), not the
+   device reporting the most free memory: on a hybrid box the integrated GPU reports shared RAM
+   as free (a UHD 770 shows 48,060 MiB beside an RTX 3080 Ti's 11,316) and used to pass the check
+   for the discrete card (#473). A machine with no usable card skips the rung.
 3. **Weight size unknown** — a failed file stat means the VRAM check cannot be made. Refuse
    rather than guess.
+4. **Device probe gave no answer** — its 10 s bound (#380) or an engine the OS refused (#530): the
+   VRAM headroom cannot be established, so unknown answers no (never the #380 load-log label, which
+   only names a start after the fact).
 
 ### §5 Failure handling: never let a speed-up cost the GPU
 

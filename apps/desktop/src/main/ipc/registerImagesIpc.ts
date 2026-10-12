@@ -13,12 +13,7 @@ import type {
   ImageSessionSummary,
   VisionStatus
 } from '../../shared/types'
-import {
-  createVisionRuntimeFromContext,
-  getVisionStatus,
-  VisionService,
-  type VisionStreamEmitter
-} from '../services/vision'
+import { getVisionStatus, type VisionService, type VisionStreamEmitter } from '../services/vision'
 import {
   addImageTurn,
   clearImageSessions,
@@ -64,19 +59,9 @@ const MAX_IMAGE_DIM = 1_000_000
 const clampImageDim = (v: unknown): number | null =>
   typeof v === 'number' && Number.isFinite(v) && v >= 1 && v <= MAX_IMAGE_DIM ? Math.floor(v) : null
 
-export function registerImagesIpc(ctx: AppContext, service?: VisionService): void {
+export function registerImagesIpc(ctx: AppContext, vision: VisionService): void {
   const ipcHandle = guardedHandleFor(ctx)
-  // WARNING (#119): this `??` fallback constructs a VisionService WITHOUT the
-  // `isWorkspaceLocking` latch (AUD-02). Production always wires the LATCHED instance via
-  // `ctx.vision` (main/index.ts), so the fallback is TEST-ONLY today — do not "simplify" the
-  // call site to rely on it, or an analyze landing during the multi-second lock teardown could
-  // rebuild a fresh vision sidecar that outlives the vault re-encrypt.
-  const vision =
-    service ??
-    new VisionService({
-      getStatus: () => getVisionStatus(ctx),
-      createRuntime: (status) => createVisionRuntimeFromContext(ctx, status)
-    })
+  // `vision` is the LATCHED service main/index.ts builds (`ctx.vision`, AUD-02 `isWorkspaceLocking`).
 
   // File/runtime handlers require an unlocked workspace; surface a clean message instead of
   // the raw "Workspace is locked" the `ctx.db` getter would throw mid-operation.

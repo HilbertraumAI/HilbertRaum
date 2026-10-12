@@ -28,22 +28,17 @@ function run(over: {
 }
 
 describe('resolveSidecarSelection (L16)', () => {
-  it('reports unavailable when no model is configured', () => {
-    const sel = run({ model: null, bin: 'C:/bin', weights: true })
+  it.each<[string, Parameters<typeof run>[0], string]>([
+    ['no model is configured', { model: null, bin: 'C:/bin', weights: true }, 'no embedding model configured'],
+    ['the binary is missing', { model: MODEL, bin: null, weights: true }, 'no llama-server binary on the drive'],
+    ['the weights are absent', { model: MODEL, bin: 'C:/bin', weights: false }, 'embedding model weights not present'],
+    // Precedence when several rungs fail: model first, then binary, then weights.
+    ['no model, no binary, no weights — the model wins', { model: null, bin: null, weights: false }, 'no embedding model configured'],
+    ['no binary, no weights — the binary wins', { model: MODEL, bin: null, weights: false }, 'no llama-server binary on the drive']
+  ])('reports unavailable when %s', (_label, input, reason) => {
+    const sel = run(input)
     expect(sel.available).toBe(false)
-    expect(sel.reason).toBe('no embedding model configured')
-  })
-
-  it('reports unavailable when the binary is missing', () => {
-    const sel = run({ model: MODEL, bin: null, weights: true })
-    expect(sel.available).toBe(false)
-    expect(sel.reason).toBe('no llama-server binary on the drive')
-  })
-
-  it('reports unavailable when the weights are absent', () => {
-    const sel = run({ model: MODEL, bin: 'C:/bin', weights: false })
-    expect(sel.available).toBe(false)
-    expect(sel.reason).toBe('embedding model weights not present')
+    expect(sel.reason).toBe(reason)
   })
 
   it('reports available with the model + binPath when both are present', () => {
@@ -85,11 +80,6 @@ describe('resolveSidecarSelection (L16)', () => {
       expect(sel.available).toBe(true)
     })
 
-    it('a present primary alone is not enough (the old single-file check)', () => {
-      const sel = run({ model: SHARDED, bin: 'C:/bin', weights: (p) => p === SHARDED.modelPath })
-      expect(sel.available).toBe(false)
-    })
-
     it('falls back to [modelPath] when the caller declares no requiredPaths', () => {
       const checked: string[] = []
       const sel = run({
@@ -103,15 +93,5 @@ describe('resolveSidecarSelection (L16)', () => {
       expect(sel.available).toBe(true)
       expect(checked).toEqual(['C:/weights/m.gguf'])
     })
-  })
-
-  it('checks the rungs in order: model first, then binary, then weights', () => {
-    // No model wins even if a binary is given; no binary wins over present weights.
-    expect(run({ model: null, bin: null, weights: false }).reason).toBe(
-      'no embedding model configured'
-    )
-    expect(run({ model: MODEL, bin: null, weights: false }).reason).toBe(
-      'no llama-server binary on the drive'
-    )
   })
 })

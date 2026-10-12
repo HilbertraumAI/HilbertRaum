@@ -866,6 +866,17 @@ the thresholds above are unchanged; these bound how far they can be trusted:
    Hash a weight the leg will not sample, or drop the cache (a replug dismounts the volume) before
    the check. Harmless to every verdict in this section: read speed is an input to neither
    `liveChatRecommendation` nor `classifyProfile`.
+8. **A "full" offload can still run partly from host memory on NVIDIA/Windows** (added 2026-10-07
+   from the #318 leg-3 evidence, #473). Every Gemma 12B start of the 2026-09-07 session on the RTX
+   3080 Ti (b9849, NVIDIA 610.88) logged `offloaded 49/49 layers`, yet the DXGI `GPU Adapter
+   Memory` counters show ≈ 3.1 GiB of it in shared (system) memory from the moment it loaded, with
+   3.3 GB of dedicated memory still unused, and its decode fell 27.7 → 10.0 / 5.0 / 4.6 / 2.5 tok/s
+   across the session. The 9B on the same card spilled ≈ 0.1 GiB. Neither the load log nor the
+   probe's free figure (finding 2) can see this; only decode speed or the shared-usage counter can.
+   One lever was measured: `--fit-target 4096` made the fit offload 36/49 layers on purpose, and
+   that start decoded at 13.8 tok/s against the spilled start's 10.0 (`leg3-diag-fit-target-4096`).
+   The app passes no `--fit-target`; whether it should is an open ruling on #473. Evidence:
+   `eval/results/hardware/i9-14900k-rtx-3080-ti-12gb-64gb/leg3-baseline-repeat-sampled.comment.md`.
 
 **2026-09-11 addition (the integrated class measured: the UHD 620 laptop, no leg; PR #454).** The
 two integrated-only laptops above confirmed the naming rule but had never STARTED a model, so the
@@ -2531,6 +2542,12 @@ regression-pinned in `translation-runtime.test.ts`'s "GPU device ladder" suite):
   The split is pinned per COLD START — freeing VRAM mid-session helps only once the 2-min idle
   teardown forces a fresh fit. This is the case the observability bullet above makes visible;
   `known-limitations.md` (Document translation) records the user-facing shape + remedy.
+- **#473 (2026-10-12):** because that squeezed fit ran at about processor speed, a translation
+  start now uses the card only when it fully fits beside the chat model, and otherwise runs on
+  the processor (`architecture.md` GPU record §9). The gate judges with the manifest's estimate,
+  calibrated on a full-offload capture of this sidecar (b11146, RTX 3080 Ti): 6,956 MiB of
+  weights + 736 KV + 119 compute = 7,811 MiB on the card, 787.69 MiB of weights host-mapped —
+  estimate 8,892 MiB (1.14×).
 
 **OPEN — the GPU-decode re-smoke (owner, PAID/GPU drive).** The §11.2 tokens/sec are CPU numbers;
 no GPU decode of TranslateGemma has been measured on the owner harness yet — the community

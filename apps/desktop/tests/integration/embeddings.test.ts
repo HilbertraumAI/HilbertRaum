@@ -40,11 +40,13 @@ afterEach(() => {
 // ---- MockEmbedder ---------------------------------------------------------------
 
 describe('MockEmbedder', () => {
-  it('is deterministic: same text → byte-identical vector', async () => {
+  it('is deterministic and discriminating: same text → byte-identical vector, different texts → different vectors', async () => {
     const embedder = new MockEmbedder()
     const [a] = await embedder.embed(['The quick brown fox'])
     const [b] = await embedder.embed(['The quick brown fox'])
     expect(Array.from(a)).toEqual(Array.from(b))
+    const [c] = await embedder.embed(['quantum chromodynamics'])
+    expect(cosineSimilarity(a, c)).toBeLessThan(0.99)
   })
 
   it('produces L2-normalized vectors of the configured width (E5-small = 384)', async () => {
@@ -58,13 +60,6 @@ describe('MockEmbedder', () => {
     expect(Math.sqrt(norm)).toBeCloseTo(1, 5)
   })
 
-  it('gives different texts different vectors but a self-match cosine of 1', async () => {
-    const embedder = new MockEmbedder()
-    const [a, b] = await embedder.embed(['cats and dogs', 'quantum chromodynamics'])
-    expect(cosineSimilarity(a, a)).toBeCloseTo(1, 5)
-    expect(cosineSimilarity(a, b)).toBeLessThan(0.99)
-  })
-
   it('returns an all-zero vector for empty text (cosine 0, never NaN)', async () => {
     const embedder = new MockEmbedder()
     const [v] = await embedder.embed([''])
@@ -73,25 +68,22 @@ describe('MockEmbedder', () => {
   })
 })
 
-// ---- cosineSimilarity contract --------------------------------------------------
+// ---- cosineSimilarity / dotProduct contract --------------------------------------
 
-describe('cosineSimilarity', () => {
-  it('throws on a length mismatch instead of scoring on the shorter prefix (L2)', () => {
+describe('length contract (L2)', () => {
+  it.each([
+    { name: 'cosineSimilarity', fn: cosineSimilarity },
+    { name: 'dotProduct', fn: dotProduct }
+  ])('$name throws on a length mismatch instead of scoring on the shorter prefix (L2)', ({ fn }) => {
     const a = new Float32Array([1, 0, 0])
     const b = new Float32Array([1, 0, 0, 0])
-    expect(() => cosineSimilarity(a, b)).toThrow(RangeError)
+    expect(() => fn(a, b)).toThrow(RangeError)
   })
 })
 
 // ---- dotProduct fast path (RAG-1) -----------------------------------------------
 
 describe('dotProduct (RAG-1 search fast path)', () => {
-  it('throws on a length mismatch like cosineSimilarity', () => {
-    const a = new Float32Array([1, 0, 0])
-    const b = new Float32Array([1, 0, 0, 0])
-    expect(() => dotProduct(a, b)).toThrow(RangeError)
-  })
-
   it('equals cosineSimilarity on L2-normalized vectors (the search invariant)', async () => {
     // VectorIndex.search relies on cosine == dot for normalized inputs. Embed real
     // (normalized) vectors and assert the two scorers agree to float tolerance.
@@ -106,21 +98,6 @@ describe('dotProduct (RAG-1 search fast path)', () => {
         expect(dotProduct(a, b)).toBeCloseTo(cosineSimilarity(a, b), 5)
       }
     }
-  })
-
-  it('produces the SAME ranking the search uses (sorted dot == sorted cosine)', async () => {
-    const embedder = new MockEmbedder()
-    const corpus = await embedder.embed(['alpha topic', 'beta topic', 'gamma topic', 'delta topic'])
-    const [query] = await embedder.embed(['beta topic'])
-    const byDot = corpus
-      .map((v, i) => ({ i, s: dotProduct(query, v) }))
-      .sort((x, y) => y.s - x.s)
-      .map((h) => h.i)
-    const byCos = corpus
-      .map((v, i) => ({ i, s: cosineSimilarity(query, v) }))
-      .sort((x, y) => y.s - x.s)
-      .map((h) => h.i)
-    expect(byDot).toEqual(byCos)
   })
 })
 

@@ -98,21 +98,19 @@ describe.skipIf(!enabled)('Whisper smoke (manual, real v1.8.6 + real German audi
 
   // R-W2 descope leg: m4a must FAIL as the decode error (the exit-0 stderr mode),
   // never hang and never return an empty "success".
-  it('fails on m4a with the decode error (descoped format)', { timeout: 120_000 }, async () => {
-    const file = join(AUDIO_DIR, 'sample.m4a')
-    if (!existsSync(file)) return console.log('sample.m4a not provided — leg skipped')
+  const M4A = join(AUDIO_DIR, 'sample.m4a')
+  it.skipIf(!existsSync(M4A))('fails on m4a with the decode error (descoped format)', { timeout: 120_000 }, async () => {
     const t = makeReal()
-    await expect(t.transcribe(file, { workDir: WORK })).rejects.toThrow(AUDIO_DECODE_ERROR_PREFIX)
+    await expect(t.transcribe(M4A, { workDir: WORK })).rejects.toThrow(AUDIO_DECODE_ERROR_PREFIX)
   })
 
   // R-W4: the long-file leg — wall time + progressive progress on a ~60 min recording.
-  it('transcribes a long recording with progressive progress', { timeout: 3_600_000 }, async () => {
-    const file = join(AUDIO_DIR, 'german_long.mp3')
-    if (!existsSync(file)) return console.log('german_long.mp3 not provided — leg skipped')
+  const LONG = join(AUDIO_DIR, 'german_long.mp3')
+  it.skipIf(!existsSync(LONG))('transcribes a long recording with progressive progress', { timeout: 3_600_000 }, async () => {
     const t = makeReal()
     const started = Date.now()
     const progress: number[] = []
-    const segments = await t.transcribe(file, {
+    const segments = await t.transcribe(LONG, {
       language: 'de',
       workDir: WORK,
       onProgress: (p) => progress.push(p)

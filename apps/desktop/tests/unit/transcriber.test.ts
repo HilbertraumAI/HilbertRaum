@@ -5,14 +5,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChildProcess, SpawnOptions } from 'node:child_process'
 import {
-  createSelectedTranscriber,
   createWhisperCliTranscriber,
   resolveWhisperCliPath,
   vadModelPathOf,
   whisperCliBinaryName,
-  whisperCliDir,
-  type Transcriber,
-  type TranscriberModelInfo
+  whisperCliDir
 } from '../../src/main/services/transcriber'
 import { AUDIO_DECODE_ERROR_PREFIX, VAD_SPEECH_PAD_MS } from '../../src/main/services/transcriber/cli'
 import {
@@ -25,74 +22,11 @@ import {
   killRegisteredSidecarChildren,
   registeredSidecarPids
 } from '../../src/main/services/runtime/sidecar'
+import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
+import { within } from '../helpers/hang-budget'
 
-// Phase 36 — transcriber selector (the reranker D9 availability matrix) + the CLI
-// backend driven by a FAKE spawn (CI is zero-binary: no real process, no real audio).
-
-const MODEL: TranscriberModelInfo = { id: 'whisper-small-multilingual', modelPath: 'D:/models/transcriber/ggml-small.bin' }
-
-describe('createSelectedTranscriber — availability matrix (D9 pattern)', () => {
-  const cases: Array<{ name: string; model: TranscriberModelInfo | null; bin: string | null; weights: boolean; expectNull: boolean; reason: RegExp }> = [
-    { name: 'no manifest', model: null, bin: 'C:/bin', weights: true, expectNull: true, reason: /no transcriber model/ },
-    { name: 'no binary', model: MODEL, bin: null, weights: true, expectNull: true, reason: /no whisper-cli binary/ },
-    { name: 'no weights', model: MODEL, bin: 'C:/bin', weights: false, expectNull: true, reason: /weights not present/ },
-    { name: 'binary + weights', model: MODEL, bin: 'C:/bin', weights: true, expectNull: false, reason: /binary \+ weights present/ }
-  ]
-
-  it.each(cases)('$name → null=$expectNull', ({ model, bin, weights, expectNull, reason }) => {
-    let selected = ''
-    const result = createSelectedTranscriber({
-      rootPath: 'D:/',
-      model,
-      resolveBin: () => bin,
-      modelExists: () => weights,
-      makeTranscriber: (m, b): Transcriber => ({ id: `${m.id}@${b}`, transcribe: async () => [] }),
-      onSelect: (_kind, r) => {
-        selected = r
-      }
-    })
-    expect(result === null).toBe(expectNull)
-    expect(selected).toMatch(reason)
-    if (!expectNull) expect(result!.id).toBe(`${MODEL.id}@C:/bin`)
-  })
-
-  // #504: the Silero VAD model is the whisper manifest's second REQUIRED file — a drive with
-  // only the weight is not "available" (the AI Model screen offers the missing file instead).
-  it('stays null while a declared VAD file is absent, and selects once it is present', () => {
-    const withVad: TranscriberModelInfo = {
-      ...MODEL,
-      requiredPaths: [MODEL.modelPath, 'D:/models/transcriber/ggml-silero-v5.1.2.bin']
-    }
-    const present = new Set([MODEL.modelPath])
-    const deps = {
-      rootPath: 'D:/',
-      model: withVad,
-      resolveBin: () => 'C:/bin',
-      modelExists: (p: string) => present.has(p),
-      makeTranscriber: (m: TranscriberModelInfo, b: string): Transcriber => ({
-        id: `${m.id}@${b}:${vadModelPathOf(m) ?? 'no-vad'}`,
-        transcribe: async () => []
-      })
-    }
-    expect(createSelectedTranscriber(deps)).toBeNull()
-    present.add('D:/models/transcriber/ggml-silero-v5.1.2.bin')
-    expect(createSelectedTranscriber(deps)?.id).toBe(
-      `${MODEL.id}@C:/bin:D:/models/transcriber/ggml-silero-v5.1.2.bin`
-    )
-  })
-
-  // There is deliberately NO mock fallback: a missing transcriber must surface as a
-  // friendly per-file failure, never an invented transcript.
-  it('never falls back to a mock', () => {
-    const result = createSelectedTranscriber({
-      rootPath: 'D:/',
-      model: null,
-      resolveBin: () => null,
-      modelExists: () => false
-    })
-    expect(result).toBeNull()
-  })
-})
+// Phase 36 — the whisper-cli path resolver and the CLI backend driven by a FAKE spawn (CI is zero-binary:
+// no real process, no real audio). The selector itself runs over a real temp drive in compose-transcriber.test.ts.
 
 describe('resolveWhisperCliPath', () => {
   it('resolves runtime/whisper.cpp/<os>/whisper-cli[.exe] when present', () => {
@@ -179,34 +113,41 @@ function makeStubbornChild(diesOn: ReadonlyArray<NodeJS.Signals>): StubbornChild
   return child
 }
 
-/** Build a transcriber whose spawn writes `json` (if given) to the `-of` path. */
+/** A transcriber whose spawn records argv + options, then (next macrotask) writes `json` (if given) to the
+ *  `-of` path, emits `stderrText` and closes with (exitCode, signal) — or emits `error` instead. */
 function fakeCliTranscriber(opts: {
   json?: unknown
   stderrText?: string
-  exitCode?: number
+  exitCode?: number | null
+  signal?: NodeJS.Signals | null
+  error?: Error
   vadModelPath?: string
-}): { transcriber: ReturnType<typeof createWhisperCliTranscriber>; spawned: string[][] } {
+  platform?: NodeJS.Platform
+}): { transcriber: ReturnType<typeof createWhisperCliTranscriber>; spawned: string[][]; spawnOptions: SpawnOptions[] } {
   const spawned: string[][] = []
+  const spawnOptions: SpawnOptions[] = []
   const transcriber = createWhisperCliTranscriber({
     id: 'whisper-small-multilingual',
     binPath: 'C:/fake/whisper-cli.exe',
     modelPath: 'C:/fake/ggml-small.bin',
     vadModelPath: opts.vadModelPath,
+    platform: opts.platform,
     threads: 4,
-    spawnImpl: (_cmd: string, args: string[], _o: SpawnOptions): ChildProcess => {
+    spawnImpl: (_cmd: string, args: string[], o: SpawnOptions): ChildProcess => {
       spawned.push(args)
+      spawnOptions.push(o)
       const child = makeFakeChild()
       setImmediate(() => {
-        const ofIndex = args.indexOf('-of')
-        const outBase = args[ofIndex + 1]
+        if (opts.error) return void child.emit('error', opts.error)
+        const outBase = args[args.indexOf('-of') + 1]
         if (opts.stderrText) child.stderr.emit('data', Buffer.from(opts.stderrText))
         if (opts.json !== undefined) writeFileSync(`${outBase}.json`, JSON.stringify(opts.json))
-        if (!child.killed) child.emit('close', opts.exitCode ?? 0, null)
+        if (!child.killed) child.emit('close', opts.signal ? null : (opts.exitCode ?? 0), opts.signal ?? null)
       })
       return child as unknown as ChildProcess
     }
   })
-  return { transcriber, spawned }
+  return { transcriber, spawned, spawnOptions }
 }
 
 const WHISPER_JSON = {
@@ -278,26 +219,6 @@ describe('vadModelPathOf (#504)', () => {
 })
 
 describe('WhisperCliTranscriber (fake spawn)', () => {
-  it('REFUSES to spawn a tampered whisper-cli (pre-spawn re-hash, vuln-scan B)', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-tamper-'))
-    let spawned = false
-    const transcriber = createWhisperCliTranscriber({
-      id: 'whisper-small-multilingual',
-      binPath: 'C:/fake/whisper-cli.exe',
-      modelPath: 'C:/fake/ggml-small.bin',
-      spawnImpl: (_cmd, _args, _o): ChildProcess => {
-        spawned = true
-        return makeFakeChild() as unknown as ChildProcess
-      },
-      verifyBinary: async () => 'mismatch'
-    })
-    await expect(transcriber.transcribe('C:/audio/meeting.mp3', { workDir })).rejects.toThrow(
-      /pre-spawn integrity verification/
-    )
-    expect(spawned).toBe(false)
-    expect(readdirSync(workDir)).toEqual([]) // no transient left behind
-  })
-
   it('parses the -oj JSON into ordered ms segments and shreds the transient', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-work-'))
     const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON })
@@ -374,33 +295,6 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     )
   })
 
-  it('fails loudly on a hard non-zero exit (missing DLL, bad model)', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-exit-'))
-    const { transcriber } = fakeCliTranscriber({ stderrText: 'model load failed', exitCode: 3 })
-    await expect(transcriber.transcribe('a.mp3', { workDir })).rejects.toThrow(/exited with code 3/)
-  })
-
-  it('suspend() kills the in-flight child and the call rejects (workspace lock)', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-susp-'))
-    let heldChild: FakeChild | null = null
-    // A spawn that never closes on its own — the child "runs" until killed.
-    const pending = createWhisperCliTranscriber({
-      id: 't',
-      binPath: 'C:/fake/whisper-cli.exe',
-      modelPath: 'C:/fake/m.bin',
-      spawnImpl: (): ChildProcess => {
-        const child = makeFakeChild()
-        heldChild = child
-        return child as unknown as ChildProcess
-      }
-    })
-    const call = pending.transcribe('a.mp3', { workDir })
-    await new Promise((r) => setImmediate(r))
-    expect(heldChild).not.toBeNull()
-    await pending.suspend()
-    await expect(call).rejects.toThrow(/terminated|cancelled/i)
-  })
-
   // L5: suspend()/stop() must AWAIT each killed child's cleanup (the transient-transcript
   // shred in transcribe()'s finally), so the parent never exits leaving an un-shredded
   // transcript in tmpdir() (the workspace crash-sweep never reaches the default workDir).
@@ -426,7 +320,7 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     await pending.suspend() // kills the child; must not return until the shred has run
     expect(existsSync(outJson)).toBe(false) // shredded by the time suspend() resolves
     expect(readdirSync(workDir)).toEqual([])
-    await call.catch(() => undefined) // the cancelled call rejects; the shred is the point
+    await expect(call).rejects.toThrow(/terminated|cancelled/i) // the suspended call rejects, never a partial transcript
   })
 
   it('stop() refuses new work permanently (the will-quit latch)', async () => {
@@ -436,37 +330,37 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     await expect(transcriber.transcribe('a.mp3', { workDir })).rejects.toThrow(/stopped/)
   })
 
-  // REL-1 (TEST-4): a wedged/spinning child that emits nothing and never closes on its own
-  // is killed by the inactivity watchdog and the call rejects — instead of hanging the
-  // ingestion slot until app restart. Teeth: with a generous idleTimeoutMs this never fires
-  // (the call would hang), so a small one proving the kill is the load-bearing assertion.
-  it('the inactivity watchdog kills a silent/wedged child and rejects (REL-1)', async () => {
-    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-idle-'))
-    let heldChild: FakeChild | null = null
-    const t = createWhisperCliTranscriber({
-      id: 't',
-      binPath: 'C:/fake/whisper-cli.exe',
-      modelPath: 'C:/fake/m.bin',
-      idleTimeoutMs: 20, // dialled down; prod default is 15 min
-      spawnImpl: (): ChildProcess => {
-        const child = makeFakeChild() // emits no data, never closes on its own
-        heldChild = child
-        return child as unknown as ChildProcess
-      }
-    })
-    await expect(t.transcribe('a.mp3', { workDir })).rejects.toThrow(/watchdog|no output/i)
-    expect(heldChild).not.toBeNull()
-    expect(heldChild!.killed).toBe(true)
-    expect(readdirSync(workDir)).toEqual([]) // no transient stranded by the kill
+  // #516 (architecture.md "In-app engine updates" §3): while an install replaces runtime/whisper.cpp/<os>/, a
+  // transcription waits for the swap; LlamaServer (sidecar.test.ts), the GPU probe (gpu.test.ts) and the engine
+  // check (engine-health.test.ts) wait the same way.
+  it('waits for an engine install to finish its swap before it spawns (#516 spawn gate)', async () => {
+    const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-gate-'))
+    const { transcriber, spawned } = fakeCliTranscriber({ json: WHISPER_JSON })
+    const release = holdEngineSpawns('whisper_cpp')
+    const call = transcriber.transcribe('a.mp3', { workDir })
+    try {
+      // One macrotask: every microtask the transcription could chain (the gate, verify, spawn) has run.
+      await new Promise((r) => setImmediate(r))
+      expect(spawned).toHaveLength(0) // held: nothing spawned mid-swap
+    } finally {
+      release()
+    }
+    expect(await call).toHaveLength(2)
+    expect(spawned).toHaveLength(1)
   })
 
   // REL-1 (TEST-4): the threaded AbortSignal (now actually supplied by the ingestion call
   // site) arms the abort listener — aborting mid-transcription kills the in-flight child and
   // the call rejects "cancelled". Previously the listener existed but was never armed.
-  it('an aborted signal kills the in-flight child and the call rejects (REL-1 threaded cancel)', async () => {
+  // An already-aborted signal (the dictation deadline or a lock that fired during the WAV write, #549 / #237) ends the call too.
+  it.each<[string, boolean]>([
+    ['mid-run', false],
+    ['before the call (#549)', true]
+  ])('an aborted signal kills the in-flight child and the call rejects (REL-1 threaded cancel): %s', async (_when, preAborted) => {
     const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-sig-'))
     const controller = new AbortController()
-    let heldChild: FakeChild | null = null
+    if (preAborted) controller.abort()
+    let heldChild = null as FakeChild | null // widened: the spawn callback assigns it
     const t = createWhisperCliTranscriber({
       id: 't',
       binPath: 'C:/fake/whisper-cli.exe',
@@ -478,11 +372,14 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
       }
     })
     const call = t.transcribe('a.mp3', { workDir, signal: controller.signal })
-    await new Promise((r) => setImmediate(r))
-    expect(heldChild).not.toBeNull()
-    controller.abort()
-    await expect(call).rejects.toThrow(/cancelled/i)
-    expect(heldChild!.killed).toBe(true)
+    if (!preAborted) {
+      await new Promise((r) => setImmediate(r))
+      expect(heldChild).not.toBeNull()
+      controller.abort()
+    }
+    await expect(within(call, 'the aborted transcription settling')).rejects.toThrow(/cancelled/i)
+    // No child left running: killed if one was spawned (a pre-spawn abort check may skip the spawn).
+    expect(heldChild === null || heldChild.killed).toBe(true)
   })
 
   // REL-2: a whisper-cli wedged in native code can ignore SIGTERM and never emit 'close'.
@@ -535,15 +432,14 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
     const call = t.transcribe('a.mp3', { workDir })
     await new Promise((r) => setImmediate(r))
     expect(held).not.toBeNull()
-    const start = Date.now()
-    await t.suspend() // resolves via the bounded timeout, not by the child's (absent) exit
-    expect(Date.now() - start).toBeLessThan(1500) // did NOT hang
+    await within(t.suspend(), 'suspend() returning at its 40 ms cap', 1500) // not the child's (absent) exit, not the 10 s default
     expect(held!.signals).toContain('SIGKILL') // it still tried the forceful escalation
     void call.catch(() => undefined) // never settles (the child never closes) — that's the point
   })
 
-  // REL-2: the inactivity watchdog is itself a kill site — a wedged child it fires on must
-  // also be escalated to SIGKILL, or the watchdog "fires" yet the child lives on.
+  // REL-1 (TEST-4): a wedged/spinning child that emits nothing and never closes is killed by the inactivity watchdog and
+  // the call rejects, instead of hanging the ingestion slot until app restart. REL-2: the watchdog is itself a kill site, so a
+  // SIGTERM-deaf child is escalated to SIGKILL — after the polite signal, never instead of it.
   it('the inactivity watchdog escalates to SIGKILL on a SIGTERM-ignoring child (REL-2)', async () => {
     const workDir = mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-wd-kill-'))
     let held: StubbornChild | null = null
@@ -560,6 +456,7 @@ describe('WhisperCliTranscriber (fake spawn)', () => {
       }
     })
     await expect(t.transcribe('a.mp3', { workDir })).rejects.toThrow(/watchdog|no output/i)
+    expect(held!.signals[0]).not.toBe('SIGKILL') // the polite kill came first
     expect(held!.signals).toContain('SIGKILL')
     expect(readdirSync(workDir)).toEqual([])
   })
@@ -591,30 +488,10 @@ describe('WhisperCliTranscriber — OS loader refusal (#530)', () => {
   const LOADER_LINE =
     '/media/someone/HR/runtime/whisper.cpp/linux/whisper-cli: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
 
-  /** A transcriber whose child writes `stderrText`, then closes with (code, signal). */
-  function closing(stderrText: string, code: number | null, signal: NodeJS.Signals | null) {
-    const spawnOptions: SpawnOptions[] = []
-    const transcriber = createWhisperCliTranscriber({
-      id: 'whisper-small-multilingual',
-      binPath: '/fake/whisper-cli',
-      modelPath: '/fake/ggml-small.bin',
-      threads: 2,
-      spawnImpl: (_cmd: string, _args: string[], o: SpawnOptions): ChildProcess => {
-        spawnOptions.push(o)
-        const child = makeFakeChild()
-        setImmediate(() => {
-          if (stderrText) child.stderr.emit('data', Buffer.from(stderrText))
-          child.emit('close', code, signal)
-        })
-        return child as unknown as ChildProcess
-      }
-    })
-    return { transcriber, spawnOptions }
-  }
   const workDir = (): string => mkdtempSync(join(tmpdir(), 'hilbertraum-whisper-530-'))
 
   it('exit 127 with the loader line rejects with EngineCannotRunError and records the verdict', async () => {
-    const { transcriber } = closing(LOADER_LINE, 127, null)
+    const { transcriber } = fakeCliTranscriber({ stderrText: LOADER_LINE, exitCode: 127 })
     const err = await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch((e: unknown) => e)
     expect(isEngineCannotRunError(err)).toBe(true)
     const expected = { family: 'whisper_cpp', reason: 'library-missing', name: 'libgomp.so.1', exit: 'exit code 127' }
@@ -624,32 +501,36 @@ describe('WhisperCliTranscriber — OS loader refusal (#530)', () => {
     expect((err as Error).message).not.toContain('/media/someone')
   })
 
-  it('a child killed by a signal keeps the signal message, now with the stderr tail', async () => {
-    const { transcriber } = closing('some diagnostic line from whisper\n', null, 'SIGSEGV')
+  it.each<[string, string, RegExp]>([
+    ['now with the stderr tail', 'some diagnostic line from whisper\n', /^whisper-cli was terminated \(SIGSEGV\): some diagnostic line from whisper/],
+    ['and no dangling colon without stderr', '', /^whisper-cli was terminated \(SIGSEGV\)$/]
+  ])('a child killed by a signal keeps the signal message, %s', async (_label, stderrText, message) => {
+    const { transcriber } = fakeCliTranscriber({ stderrText, signal: 'SIGSEGV' })
     const err = await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch((e: unknown) => e)
     expect(isEngineCannotRunError(err)).toBe(false)
-    expect((err as Error).message).toMatch(/^whisper-cli was terminated \(SIGSEGV\): /)
-    expect((err as Error).message).toContain('some diagnostic line from whisper')
+    expect((err as Error).message).toMatch(message)
     expect(engineProblemFor('whisper_cpp')).toBeNull()
   })
 
-  it('a signal death without stderr has no dangling colon', async () => {
-    const { transcriber } = closing('', null, 'SIGSEGV')
-    await expect(transcriber.transcribe('a.mp3', { workDir: workDir() })).rejects.toThrow(
-      /^whisper-cli was terminated \(SIGSEGV\)$/
-    )
-  })
-
   it('a normal non-zero exit with non-loader stderr keeps the old "exited with code N:" message', async () => {
-    const { transcriber } = closing('model load failed', 3, null)
+    const { transcriber } = fakeCliTranscriber({ stderrText: 'model load failed', exitCode: 3 })
     const err = await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch((e: unknown) => e)
     expect(isEngineCannotRunError(err)).toBe(false)
     expect((err as Error).message).toBe('whisper-cli exited with code 3: model load failed')
     expect(engineProblemFor('whisper_cpp')).toBeNull()
   })
 
+  it('a Windows spawn refusal (the error event, EACCES) is the typed "blocked" verdict', async () => {
+    const refusal = Object.assign(new Error('spawn C:\\Kit\\runtime\\whisper.cpp\\win\\whisper-cli.exe EACCES'), { code: 'EACCES' })
+    const { transcriber } = fakeCliTranscriber({ error: refusal, platform: 'win32' })
+    const err = await transcriber.transcribe('a.wav', { workDir: workDir() }).catch((e: unknown) => e)
+    expect(isEngineCannotRunError(err)).toBe(true)
+    expect((err as EngineCannotRunError).problem).toEqual({ family: 'whisper_cpp', reason: 'blocked', os: 'win', exit: 'spawn error EACCES' })
+    expect(engineProblemFor('whisper_cpp')?.reason).toBe('blocked')
+  })
+
   it('spawns with windowsHide: true', async () => {
-    const { transcriber, spawnOptions } = closing(LOADER_LINE, 127, null)
+    const { transcriber, spawnOptions } = fakeCliTranscriber({ stderrText: LOADER_LINE, exitCode: 127 })
     await transcriber.transcribe('a.mp3', { workDir: workDir() }).catch(() => undefined)
     expect(spawnOptions[0]?.windowsHide).toBe(true)
   })

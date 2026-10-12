@@ -10,9 +10,11 @@ import { setDocumentsLifecycle } from '../../src/main/services/collections'
 // exclusion removes nothing, `VectorIndex.search` iterates the resident decoded-vector map directly
 // (filtered by model id) and skips the per-query `SELECT chunk_id` marshal. This proves the fast
 // path is (1) BYTE-IDENTICAL to the unchanged scoped scan over the same candidate universe, (2)
-// actually TAKEN (no `SELECT chunk_id FROM embeddings` issued), (3) correctly model-filtered, and
-// (4) correctly DISABLED (falls to the scoped scan) when a live archived exclusion or a real scope
-// would change the candidate set. Mock embedder only — zero model, zero network.
+// actually TAKEN (no `SELECT chunk_id FROM embeddings` issued — unscoped, and with
+// `includeArchived`), (3) correctly model-filtered, and
+// (4) correctly DISABLED (falls to the scoped scan) when a live archived exclusion would change the
+// candidate set (a real document scope: rag-scope.test.ts "VectorIndex documentIds scope"). Mock
+// embedder only — zero model, zero network.
 
 const E5 = 'multilingual-e5-small-q8'
 let chunkIdx = 0
@@ -117,41 +119,22 @@ describe('VectorIndex.search resident iteration (P2) — equivalence with the sc
     expect(scannedChunkIds).toBe(false) // the fast path skips the candidate marshal
     prepareSpy.mockRestore()
   })
-
-  it('the scoped path IS used (issues the chunk_id scan) when a real document scope is present', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    const docs = await seedCorpus(db, embedder, E5)
-    const scoped = new VectorIndex(db, embedder, { embeddingModelId: E5, documentIds: [docs[0]] })
-
-    await scoped.searchText(QUERIES[0], 6) // cold build
-    const prepareSpy = vi.spyOn(db, 'prepare')
-    await scoped.searchText(QUERIES[0], 6)
-    const scannedChunkIds = prepareSpy.mock.calls.some((c) =>
-      String(c[0]).includes('SELECT chunk_id FROM embeddings')
-    )
-    expect(scannedChunkIds).toBe(true) // the real scope keeps the unchanged SQL candidate scan
-    prepareSpy.mockRestore()
-  })
 })
 
 describe('VectorIndex.search resident iteration (P2) — model-id filter', () => {
-  it('excludes other-model chunks on the fast path, matching the scoped scan', async () => {
+  it('filters search to the active embedding_model_id so a mock→real switch cannot blend spaces (Phase 10)', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
-    const e5Docs = await seedCorpus(db, embedder, E5)
-    // A half-migrated corpus: the SAME topics also embedded under the mock model id.
-    await seedCorpus(db, embedder, 'mock-embedder')
+    // Both are 384-dim, so the dimension guard alone cannot tell them apart.
+    const mockChunk = await seedChunk(db, embedder, 'd', 'alpha beta gamma', 'mock-embedder')
+    const e5Chunk = await seedChunk(db, embedder, 'd', 'alpha beta gamma', E5)
 
-    const e5NoScope = new VectorIndex(db, embedder, { embeddingModelId: E5 })
-    const e5Scoped = new VectorIndex(db, embedder, { embeddingModelId: E5, documentIds: e5Docs })
-
-    for (const q of QUERIES) {
-      const fast = await e5NoScope.searchText(q, 100)
-      // The fast path must surface ONLY E5-tagged chunks (chunk ids seeded for the E5 pass).
-      const scoped = await e5Scoped.searchText(q, 100)
-      expect(hitTuples(fast)).toEqual(hitTuples(scoped))
-    }
+    // Scope to the real model id: only the E5-tagged vector is considered.
+    const real = new VectorIndex(db, embedder, { embeddingModelId: E5 })
+    expect((await real.searchText('alpha beta gamma', 10)).map((h) => h.chunkId)).toEqual([e5Chunk])
+    // Scope to the mock id: only the mock-tagged vector is considered.
+    const mock = new VectorIndex(db, embedder, { embeddingModelId: 'mock-embedder' })
+    expect((await mock.searchText('alpha beta gamma', 10)).map((h) => h.chunkId)).toEqual([mockChunk])
   })
 
   it('a null model id disables the filter (fast path scans all resident vectors)', async () => {
@@ -201,15 +184,24 @@ describe('VectorIndex.search resident iteration (P2) — archived exclusion pres
     setDocumentsLifecycle(db, [docs[0]], 'archived')
 
     const fastIncl = new VectorIndex(db, embedder, { embeddingModelId: E5, includeArchived: true })
+    await fastIncl.searchText(QUERIES[0], 100) // cold: builds the resident cache
+    const prepareSpy = vi.spyOn(db, 'prepare')
+    const fast: Array<Array<[string, number]>> = []
+    for (const q of QUERIES) fast.push(hitTuples(await fastIncl.searchText(q, 100)))
+    const scannedChunkIds = prepareSpy.mock.calls.some((c) =>
+      String(c[0]).includes('SELECT chunk_id FROM embeddings')
+    )
+    prepareSpy.mockRestore()
+    expect(scannedChunkIds).toBe(false) // the fast path, archived documents and all
+    expect(fast[0]).toHaveLength(TOPICS.length) // every resident chunk, the archived doc's included
+
     const scopedIncl = new VectorIndex(db, embedder, {
       embeddingModelId: E5,
       documentIds: docs,
       includeArchived: true
     })
-    for (const q of QUERIES) {
-      expect(hitTuples(await fastIncl.searchText(q, 100))).toEqual(
-        hitTuples(await scopedIncl.searchText(q, 100))
-      )
+    for (let i = 0; i < QUERIES.length; i++) {
+      expect(fast[i]).toEqual(hitTuples(await scopedIncl.searchText(QUERIES[i], 100)))
     }
   })
 })

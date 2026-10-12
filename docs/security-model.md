@@ -2428,6 +2428,8 @@ closed. (The long-tracked audit-2026-06-14 "engine-binary not re-hashed before s
   it never throws, so a tampered binary is simply never executed for enumeration.
 - **`WhisperCliTranscriber.run()` (`transcriber/cli.ts`)** — refuses before spawn; the audio import fails
   per-file with the generic failure copy (raw reason to the local log only).
+- **`checkProgramLoads()` (`engine-health.ts`)** — the #530 "Check again" launch resolves `unchecked`
+  and never spawns a tampered binary.
 
 **Commercial sell-gate (`commercial-drive.ts`).** `assertCommercialDrive` now **requires** the marker to
 carry the binary's hash and to match the on-disk bytes — a drive provisioned by a `fetch-runtime` that
@@ -2531,6 +2533,14 @@ argv — a human replaced the drive path with `<drive>` — and are evidence abo
 prints, not about the sidecar's redaction. The sidecar's own guarantee is exactly the one above:
 the in-memory 4,000-character tail cap plus `redactExactKey` at the drain and
 `redactSidecarSecrets` at read time, with nothing written to disk.
+
+**The translation sidecar runs at verbosity 4 too (#629, 2026-10-07)**, so that its offload line
+reaches the Translate screen's device hint. The same check was repeated on the current pin (b11146)
+for its request path and, for the record, the reranker's: one real `/completion` request
+(TranslateGemma) and one real `/v1/rerank` request, each carrying unique marker words. The full
+logs (235 and 221 lines) contained none of the markers and no 7+-letter word of either response
+(16 and 7 probes), and no request line or `"content"`/`"prompt"`/`"documents"` body. The reranker
+still runs at the default level; this records only that verbosity 4 would not change its content.
 
 **Sidecar `serverMessage` is structural-only — accepted Info residual (SEC-N3).** `ChatRequestError`
 (runtime/`llama.ts`) keeps up to 500 chars of a non-JSON error body as `serverMessage`, surfaced via

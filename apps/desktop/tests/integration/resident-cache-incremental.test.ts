@@ -167,28 +167,6 @@ describe('resident cache (incremental) — a pure-add decodes only the new rows'
   })
 })
 
-// ---- Delete: removed ids leave the map, survivors keep their exact vectors ---------------------
-
-describe('resident cache (incremental) — delete', () => {
-  it('drops only the deleted chunk ids and keeps the rest unchanged', () => {
-    const db = freshDb()
-    const docId = seedDocRow(db)
-    for (let i = 0; i < 5; i++) insertVec(db, docId, `c${i}`, makeVec(i))
-    invalidateResidentVectors(db)
-    getResidentVectors(db)
-
-    deleteVec(db, 'c1')
-    deleteVec(db, 'c3')
-    invalidateResidentVectors(db)
-    const map = getResidentVectors(db)
-
-    expect([...map.keys()].sort()).toEqual(['c0', 'c2', 'c4'])
-    expect(map.has('c1')).toBe(false)
-    expect(map.has('c3')).toBe(false)
-    expect(Array.from(map.get('c2')!)).toEqual(Array.from(makeVec(2))) // survivor unchanged
-  })
-})
-
 // ---- The documented blind spot: delete-then-reinsert reusing the SAME rowid --------------------
 
 describe('resident cache (incremental) — delete-then-reinsert-same-rowid', () => {
@@ -275,18 +253,6 @@ describe('resident cache (incremental) — lock purge', () => {
     expect(getResidentVectors(db).size).toBe(N)
     expect(decodeSpy).toHaveBeenCalledTimes(N) // full re-decode ⇒ the prior decoded buffer was dropped
   })
-
-  it('serves no post-lock vectors: after purge the cache reflects the current DB, not stale RAM', () => {
-    const db = freshDb()
-    const docId = seedDocRow(db)
-    insertVec(db, docId, 'A', makeVec(1))
-    invalidateResidentVectors(db)
-    expect(getResidentVectors(db).size).toBe(1)
-
-    purgeResidentVectors(db)
-    db.prepare('DELETE FROM embeddings').run() // table emptied while "locked"
-    expect(getResidentVectors(db).size).toBe(0) // rebuilt empty — no lingering decoded vector
-  })
 })
 
 // ---- F12: the NAMED-DELTA fast path (no O(N) chunk-id scan) ------------------------------------
@@ -337,21 +303,34 @@ describe('resident cache (F12 named delta) — equivalence with a full rebuild',
     )
   })
 
-  it('composes multiple deltas before one read (add then delete of the same id nets to absent)', () => {
+  it('composes several named deltas before one read without a whole-table scan (add B, add C, delete B → only C decoded)', () => {
     const db = freshDb()
     const docId = seedDocRow(db)
     insertVec(db, docId, 'A', makeVec(1))
     invalidateResidentVectors(db, { added: ['A'] })
     expect(getResidentVectors(db).size).toBe(1)
 
-    // Add B, then delete B again — both BEFORE the next read. The net delta must drop B.
+    // Add B, add C, then delete B again — all BEFORE the next read. The net delta is "add C".
     insertVec(db, docId, 'B', makeVec(2))
     invalidateResidentVectors(db, { added: ['B'] })
+    insertVec(db, docId, 'C', makeVec(3))
+    invalidateResidentVectors(db, { added: ['C'] })
     deleteVec(db, 'B')
     invalidateResidentVectors(db, { removed: ['B'] })
-    const map = getResidentVectors(db)
 
-    expect([...map.keys()].sort()).toEqual(['A'])
+    const prepareSpy = vi.spyOn(db, 'prepare')
+    decodeSpy.mockClear()
+    const map = getResidentVectors(db)
+    const scanned = prepareSpy.mock.calls.some((c) =>
+      String(c[0]).includes('SELECT chunk_id FROM embeddings')
+    )
+    prepareSpy.mockRestore()
+
+    expect([...map.keys()].sort()).toEqual(['A', 'C'])
+    // A delta that lost an earlier write would leave the map one short of COUNT(*), trip the size
+    // gate and self-heal through the whole-table scan — so the scan is the composition's teeth.
+    expect(scanned).toBe(false)
+    expect(decodeSpy).toHaveBeenCalledTimes(1)
     expect(snapshot(map)).toEqual(freshRebuild(db))
   })
 

@@ -219,7 +219,20 @@ export interface TranslationDeviceStatus {
   totalLayers: number | null
   /** Is the sidecar currently up? False after the 2-min idle teardown / lock / a crash. */
   live: boolean
+  /**
+   * #473: why the headroom gate put this start on the processor, so the Translate screen can say
+   * so. Absent on a GPU start, and on a processor start that Settings or the session fallback
+   * latch chose.
+   */
+  cpuCause?: TranslationCpuCause
 }
+
+/**
+ * #473: the headroom gate's reasons for a processor start — it would not fit beside the chat model
+ * on the card; a chat model was starting (the chat model takes the card first); it does not fit on
+ * this card at all.
+ */
+export type TranslationCpuCause = 'beside-chat' | 'chat-starting' | 'too-large'
 
 // ---- Privacy / offline policy (spec §6 config/policy.json + §3.5/§3.6) ----
 

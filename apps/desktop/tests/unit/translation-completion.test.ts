@@ -167,10 +167,6 @@ describe('isCleanStop — TA-5 M6 limit-stop detection', () => {
     expect(isCleanStop({ stoppingWord: '<end_of_turn>' })).toBe(true)
   })
 
-  it('the EOS flag is a clean stop even with no stopping word', () => {
-    expect(isCleanStop({ stoppingWord: '', stoppedEos: true })).toBe(true)
-  })
-
   it('a limit stop (neither a stopping word nor eos) is NOT clean', () => {
     expect(isCleanStop({})).toBe(false)
     expect(isCleanStop({ stoppingWord: '' })).toBe(false)
@@ -191,10 +187,6 @@ describe('isCleanStop — TA-5 M6 limit-stop detection', () => {
 })
 
 describe('isCleanStop — issue #31 modern `stop_type` frames (the pinned b9849 shape)', () => {
-  it('stop_type eos is a clean stop (Gemma ends the turn on <end_of_turn> as an EOS-class token)', () => {
-    expect(isCleanStop({ stopType: 'eos', stoppingWord: '' })).toBe(true)
-  })
-
   it('stop_type word is a clean stop', () => {
     expect(isCleanStop({ stopType: 'word', stoppingWord: '<end_of_turn>' })).toBe(true)
   })

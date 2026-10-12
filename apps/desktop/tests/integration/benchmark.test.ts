@@ -31,7 +31,7 @@ import {
   BENCHMARK_TOKEN_TARGET
 } from '../../src/main/services/benchmark'
 import { t } from '../../src/shared/i18n'
-import { gpuUsefulForProfile } from '../../src/main/services/runtime/gpu'
+import { gpuUsefulForProfile } from '../../src/shared/gpu-rules'
 import type {
   ChatMessage,
   ModelRuntime,

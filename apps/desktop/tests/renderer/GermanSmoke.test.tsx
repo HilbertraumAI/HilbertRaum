@@ -162,13 +162,17 @@ describe('German render smokes (Phase 40)', () => {
   it('ChatScreen renders German (empty state + composer)', async () => {
     stubApi({
       listConversations: vi.fn(async () => []),
-      getRuntimeStatus: vi.fn(async () => runningStatus),
+      getRuntimeStatus: vi.fn(
+        async (): Promise<RuntimeStatus> => ({ ...runningStatus, backend: 'cpu', gpuAutoDisabled: true })
+      ),
       listDocuments: vi.fn(async () => []),
       getAppStatus: vi.fn(async () => appStatus())
     })
     render(german(<ChatScreen onNavigate={() => {}} />))
 
     expect(await screen.findByText(t('de', 'chat.empty.title'))).toBeInTheDocument()
+    // The header hint's label helper gets the active-language t (D-L8).
+    expect(await screen.findByText(t('de', 'chat.runtime.cpuCompat', { model: 'm1' }))).toBeInTheDocument()
     expect(
       screen.getByPlaceholderText(t('de', 'chat.placeholder.chat'))
     ).toBeInTheDocument()

@@ -1308,6 +1308,8 @@ default build and `--backend cpu`) to refresh the binary before these harnesses 
 | `compare-smoke` | `HILBERTRAUM_COMPARE_SMOKE` | the compare doc-task pipeline end-to-end (the earlier chat-model `translation-smoke` went away with that pipeline; `translategemma-smoke` below covers translation) |
 | `translategemma-smoke` | `HILBERTRAUM_TRANSLATEGEMMA_SMOKE` | the TranslateGemma sidecar (NO `--jinja`, raw `/completion`) LOADS on the pin (Vulkan **and** CPU safety-net), DE↔EN translates, keeps invoice numbers/model codes verbatim (numbers/dates localize), resists embedded-instruction injection, leaks no `<end_of_turn>`; prints tokens/sec + peak RSS. **The TG-2 go/no-go gate** — since TG-3 the doc-task's production translation backend. **Extended at TG-6:** per-language round-trip + verbatim-token check for the curated 10, `/tokenize` tokens-per-word (the planner-constant calibration), and a co-residency-RSS leg (translation + E5 + a resident chat, needs `models/{embeddings,chat}/*.gguf`). CPU-safety-net leg needs `runtime/llama.cpp/<os>/cpu/` |
 | `rag-quality` / `minsim-measure` | `HILBERTRAUM_RAG_QUALITY` / `HILBERTRAUM_MINSIM_MEASURE` | retrieval quality + the similarity floor |
+| `resident-cache-real` | `HILBERTRAUM_RESIDENT_REAL` (the drive root) | real E5 vectors stored through the production codec on the drive: the resident cache's cold build, its warm scan, and a full `searchText` query (a real E5 query embed + the scan) |
+| `resident-cache-bench` | `RUN_RESIDENT_BENCH=1` | the resident vector cache's warm scan against the uncached scan, on synthetic unit vectors (mock only, no sidecar) |
 | `server-concurrency-probe` | `HILBERTRAUM_CONCURRENCY_PROBE` | the one-at-a-time sidecar invariant |
 | `model-eval` | `HILBERTRAUM_MODEL_EVAL` | the model-recommendation ladder on real hardware |
 | `zim-real` | `HILBERTRAUM_ZIM_SMOKE` | real `kiwix-manage` registration, the real `kiwix-serve` sidecar, Xapian search, the offline article viewer read — fully offline. **FAIL-CLOSED (#301 P5, finding L8):** requested with a missing/invalid tools dir, either binary absent, a non-ZIM file or an unset query **FAILS** the run instead of silently skipping it |
@@ -1342,6 +1344,8 @@ optional — each has a default or is only needed by its harness:
 | `HILBERTRAUM_OCR_IMAGE` | `ocr-smoke` | a real German scan image (png/jpg) — **never committed** |
 | `HILBERTRAUM_REAL_MODEL_PATH` | `real-model/wave3` | the chat GGUF path (the assertions were tuned on `qwen3.5-4b-ud-q4kxl.gguf`); sibling `HILBERTRAUM_LLAMA_BIN` points at the binary. **No defaults:** the on-switch is `HILBERTRAUM_REAL_MODEL=1`, and once it is set both paths are required (a missing one fails the run) |
 | `HILBERTRAUM_RESIDENT_REAL_N` | `resident-cache-real` | real chunk count to embed (default 2000) |
+| `RESIDENT_BENCH_DIR` | `resident-cache-bench` | a directory for the bench database, e.g. the drive, so the cold build reads real USB I/O (default: the OS temp dir) |
+| `RESIDENT_BENCH_N` | `resident-cache-bench` | comma-separated corpus sizes (default `100000`) |
 | `HILBERTRAUM_EVAL_DIR` | `model-eval` | override the `eval/` data dir |
 | `HILBERTRAUM_ZIM_TOOLS_DIR` | `zim-real` | a directory holding the WHOLE unzipped kiwix-tools bundle (both `kiwix-serve`/`kiwix-manage` binaries plus their ICU DLLs) — **required once `zim-real` is requested** |
 | `HILBERTRAUM_ZIM_FILE` | `zim-real` | an existing `.zim` archive whose 80-byte header `readZimHeader` accepts — **required once requested**; it must carry a **full-text index** (the smoke asserts search hits — an index-less archive fails the run by design; index-less behaviour is covered by `zim-packs`' T14 leg and was accepted on real tools at P7) |
@@ -1356,5 +1360,6 @@ slip past the green gate and only surface on real hardware. So **whenever a `HIL
 observes an upstream output format change — or a new format worth pinning — capture the
 verbatim real output into `apps/desktop/tests/fixtures/` and assert a pure parser against
 it in a CI unit test** (the bytes are kept binary via `.gitattributes`). The first such
-fixture is the b9585 `--list-devices` capture parsed by `gpu.test.ts` (audit L19); add SSE
+fixture was the b9585 `--list-devices` capture parsed by `gpu.test.ts` (audit L19; re-taken at b11146,
+#518); add SSE
 and whisper-JSON fixtures the same way as those formats are observed.

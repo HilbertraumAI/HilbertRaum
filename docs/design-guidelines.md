@@ -1431,8 +1431,8 @@ with the absolute drive path. Each of those sends the user to the wrong fix.
   plus the `main.*` and persist-canonical `main.ingest.*` keys (en + de).
 - **Tests:** `tests/renderer/EngineProblem.test.tsx` (every reason, Check again in its three
   outcomes, the always-mounted hint status, German, ModelsScreen push in and out, Home, the
-  App notice target, the Diagnostics line and report, the Performance tile, the Translate/Images
-  codes), `live-region-nesting.test.ts`, `display-map.test.ts`.
+  App notice target, the Diagnostics line and report, the Performance tile, the Images error
+  code), `live-region-nesting.test.ts`, `display-map.test.ts`.
 
 **#532 amendment — "Install the AI engine again" (2026-10-05).** Damaged engine files are the one
 refusal a fresh copy fixes, so decision 3's "one action" becomes two for that reason only.

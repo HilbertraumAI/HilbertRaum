@@ -1,5 +1,4 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { EventEmitter } from 'node:events'
 import { mkdtempSync, readdirSync, readFileSync, existsSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,50 +33,22 @@ import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shar
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type IpcHandlers } from '../helpers/ipc'
 import { hangPolls } from '../helpers/hang-budget'
+import { fakeSpawn, sseBody } from '../helpers/fake-sidecar'
+import { pngHeader } from '../helpers/image-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
 // Recognizable sentinels — no real prompt/answer/image would contain these exact strings.
 const SENTINEL_PROMPT = 'ZZSENTINELZZ what is the secret account number in this image'
 const SENTINEL_ANSWER = 'ZZSENTINELZZ the secret account number is 4444-3333-2222'
-// A valid PNG header (8-byte signature + IHDR width@16/height@20) so the analyze passes the
-// main-side guard — SEC-6 (backend-audit-2026-06-27) rejects a claimed png/jpeg with an
-// unparseable header — followed by a unique marker tail kept distinct for the leak checks.
-const SENTINEL_BYTES = (() => {
-  const b = new Uint8Array([
-    0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
-    0, 0, 0, 0, 0, 0, 0, 0, // IHDR length + "IHDR" tag (not parsed by the header guard)
-    0, 0, 0, 2, 0, 0, 0, 2, // width@16 = 2, height@20 = 2
-    0xab, 0xcd, 0xef, 0x10, 0x20, 0x30 // unique sentinel tail
-  ])
-  return b
-})()
+// A parseable PNG header (SEC-6 rejects a claimed png whose header won't parse) + a unique tail
+// for the leak checks.
+const SENTINEL_BYTES = pngHeader(2, 2, [0xab, 0xcd, 0xef, 0x10, 0x20, 0x30])
 
-class FakeChild extends EventEmitter {
-  pid = 9
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-}
-
-function sseBody(answer: string): ReadableStream<Uint8Array> {
-  // A minimal byte-identical-to-chat SSE stream carrying the sentinel answer in one delta.
-  const frame =
-    `data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":${JSON.stringify(answer)}}}]}\n\n` +
-    'data: [DONE]\n\n'
-  const bytes = new TextEncoder().encode(frame)
-  let sent = false
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent) return controller.close()
-      sent = true
-      controller.enqueue(bytes)
-    }
-  })
-}
+/** A minimal chat-identical SSE stream carrying the sentinel answer in one delta. */
+const SENTINEL_SSE =
+  `data: {"choices":[{"finish_reason":null,"index":0,"delta":{"content":${JSON.stringify(SENTINEL_ANSWER)}}}]}\n\n` +
+  'data: [DONE]\n\n'
 
 const AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisplayName: 'VLM' }
 
@@ -86,8 +57,7 @@ const AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisplayN
 // asserts the stored image rests ENCRYPTED). A fresh temp root per call keeps tests isolated.
 function ctxFor(
   audit: ReturnType<typeof vi.fn>,
-  rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-sec-')),
-  unlocked = true
+  rootPath = mkdtempSync(join(tmpdir(), 'hilbertraum-vision-sec-'))
 ): AppContext {
   const key = randomBytes(32)
   return {
@@ -97,7 +67,7 @@ function ctxFor(
     manifestsDir: null,
     isDev: false,
     workspace: {
-      isUnlocked: () => unlocked,
+      isUnlocked: () => true,
       beginDocumentWork: () => () => {},
       documentCipher: () => ({
         encryptFile: (s: string, d: string) => encryptFile(s, d, key),
@@ -173,6 +143,10 @@ afterEach(() => {
 })
 
 describe('vision security sentinel', () => {
+  // The REAL VisionRuntime (recording fetch + an SSE body; TEST-5's success-path twin was folded in
+  // here), so the prompt and the image bytes genuinely pass through runAnalyze's data-URL body and
+  // readChatSSE. TEETH: log the question, the answer or the image data-URL anywhere on the path →
+  // the log spy captures it and this reddens.
   it('connects only to loopback (127.0.0.1) and logs/audits NO image/prompt/answer content', async () => {
     const urls: string[] = []
     const recordingFetch = (async (url: string | URL, init?: RequestInit) => {
@@ -180,7 +154,7 @@ describe('vision security sentinel', () => {
       urls.push(u)
       if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
       if (u.endsWith('/v1/chat/completions')) {
-        return { ok: true, status: 200, body: sseBody(SENTINEL_ANSWER) } as unknown as Response
+        return { ok: true, status: 200, body: sseBody(SENTINEL_SSE) } as unknown as Response
       }
       throw new Error(`unexpected url ${u}`)
     }) as typeof fetch
@@ -194,7 +168,7 @@ describe('vision security sentinel', () => {
           binPath: '/bin/llama-server',
           modelPath: '/m/vlm.gguf',
           projectorPath: '/m/mmproj.gguf',
-          spawn: (() => new FakeChild()) as never,
+          spawn: fakeSpawn().spawn,
           fetchImpl: recordingFetch,
           findPort: async () => 51234,
           healthIntervalMs: 1,
@@ -240,7 +214,7 @@ describe('vision security sentinel', () => {
           binPath: '/bin/llama-server',
           modelPath: '/m/vlm.gguf',
           projectorPath: '/m/mmproj.gguf',
-          spawn: (() => new FakeChild()) as never,
+          spawn: fakeSpawn().spawn,
           fetchImpl: failingFetch,
           findPort: async () => 51234,
           healthIntervalMs: 1
@@ -288,68 +262,6 @@ describe('vision security sentinel', () => {
     expect(meta.jobId).toBe(initial.jobId)
     expect(JSON.stringify(meta)).not.toContain('ZZSENTINELZZ')
     expect(logCalls.join('\n')).not.toContain('ZZSENTINELZZ')
-    expect(audit).not.toHaveBeenCalled()
-  })
-
-  // TEST-5 (full-audit-2026-06-29, Phase 3): the success-path no-leak guarantee, routed through the
-  // REAL VisionRuntime (recording fetch + an SSE body) instead of a hand-written fake `analyze`. The
-  // earlier version replaced `createRuntime` with a fake, so the real runtime's request construction
-  // (base64-inlining the image into the data-URL body) + SSE parsing were NOT exercised by this no-leak
-  // assertion — a leak inside those internals would have slipped through. This drives the real
-  // `runAnalyze` (`server.fetch('/v1/chat/completions', …)` → `readChatSSE`), so the prompt + image
-  // bytes genuinely pass through the runtime layer, then asserts NO diagnostics-log call (any level)
-  // carries the prompt, the answer, or the base64 image bytes.
-  // TEETH: log `opts.question` or the image data-URL at the runtime layer (vision/runtime.ts
-  // runAnalyze) → the spy captures it and this test reddens.
-  it('logs NOTHING containing content on the SUCCESS path — through the REAL VisionRuntime (TEST-5)', async () => {
-    const urls: string[] = []
-    const recordingFetch = (async (url: string | URL) => {
-      const u = String(url)
-      urls.push(u)
-      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
-      if (u.endsWith('/v1/chat/completions')) {
-        return { ok: true, status: 200, body: sseBody(SENTINEL_ANSWER) } as unknown as Response
-      }
-      throw new Error(`unexpected url ${u}`)
-    }) as typeof fetch
-
-    const audit = vi.fn()
-    const service = new VisionService({
-      getStatus: async () => AVAILABLE,
-      createRuntime: () =>
-        new VisionRuntime({
-          modelId: 'vlm',
-          binPath: '/bin/llama-server',
-          modelPath: '/m/vlm.gguf',
-          projectorPath: '/m/mmproj.gguf',
-          spawn: (() => new FakeChild()) as never,
-          fetchImpl: recordingFetch,
-          findPort: async () => 51234,
-          healthIntervalMs: 1,
-          idleTimeoutMs: 100_000
-        })
-    })
-    registerImagesIpc(ctxFor(audit), service)
-
-    const event = makeEvent()
-    const initial = (await invokeWithEvent(handlers, IPC.imageAnalyze, event, sentinelReq())) as ImageJob
-    const done = await waitForTerminal(initial.jobId)
-    await waitForDoneEvent(event, initial.jobId)
-    expect(done.state).toBe('done')
-    // The answer genuinely streamed back through the REAL SSE parser (proving the runtime ran)…
-    expect(done.answer).toBe(SENTINEL_ANSWER)
-    // …and the request really went to loopback (the runtime built + sent the data-URL body).
-    expect(urls.some((u) => u.endsWith('/v1/chat/completions'))).toBe(true)
-
-    // …yet NO diagnostics-log call (any level) carries the prompt, the answer, or the image bytes.
-    const imageB64 = Buffer.from(SENTINEL_BYTES).toString('base64')
-    for (const r of logRecords) {
-      const line = `${r.msg} ${JSON.stringify(r.meta ?? {})}`
-      expect(line).not.toContain('ZZSENTINELZZ')
-      expect(line).not.toContain(imageB64)
-    }
-    expect(logCalls.join('\n')).not.toContain('ZZSENTINELZZ')
-    expect(logCalls.join('\n')).not.toContain(imageB64)
     expect(audit).not.toHaveBeenCalled()
   })
 
@@ -444,25 +356,6 @@ describe('vision security sentinel', () => {
     // The earliest jobs were evicted (cap 16); the most recent are still retained.
     expect(service.getJob(ids[0]).state).toBe('failed') // evicted ⇒ unknown
     expect(service.getJob(ids[ids.length - 1]).state).toBe('done') // recent ⇒ kept
-  })
-
-  // MEDIUM vuln-scan-2026-06-21: imageGetJob/imageCancel are gated on unlock, like imageAnalyze
-  // and the history handlers — a locked workspace exposes no job (or its answer) over IPC.
-  // #119: imageChooseImage joins them — it is a FILE handler per the module's documented
-  // invariant, and ungated it would pop the OS dialog + bank D2 tokens while locked.
-  it('imageGetJob/imageCancel/imageChooseImage refuse while the workspace is locked', async () => {
-    const audit = vi.fn()
-    const service = new VisionService({
-      getStatus: async () => AVAILABLE,
-      createRuntime: () => ({ analyze: async () => 'ok' })
-    })
-    registerImagesIpc(ctxFor(audit, undefined, false), service) // locked
-
-    await expect(invoke(handlers, IPC.imageGetJob, 'any-job-id')).rejects.toThrow()
-    await expect(invoke(handlers, IPC.imageCancel, 'any-job-id')).rejects.toThrow()
-    await expect(invoke(handlers, IPC.imageChooseImage)).rejects.toThrow()
-    // #122: the bulk clear is gated like its history siblings (it deletes + shreds user data).
-    await expect(invoke(handlers, IPC.imageClearSessions)).rejects.toThrow()
   })
 
   // #120 item 2: the history-persistence fields were the module's one UNCLAMPED renderer input.

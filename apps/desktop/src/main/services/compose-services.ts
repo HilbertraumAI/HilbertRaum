@@ -109,8 +109,9 @@ export type ComposeServicesArgs = ComposeServicesDeps &
  * both call sites stay byte-identical in their deps. Cheap + synchronous by design (the sidecar is
  * lazy; construction spawns nothing).
  */
-export function composeTranslator(deps: ComposeServicesDeps): Translator | null {
+export function composeTranslator(deps: ComposeServicesDeps, reranker?: Reranker | null): Translator | null {
   return createSelectedTranslator({
+    beforeGpuStart: translationGpuYield(reranker),
     rootPath: deps.rootPath,
     isDev: deps.isDev ?? false,
     model: resolveModelByRole(deps.manifestsDir, deps.rootPath, 'translation', {
@@ -133,6 +134,27 @@ export function composeTranslator(deps: ComposeServicesDeps): Translator | null 
 }
 
 /**
+ * #473: the translator's `beforeGpuStart` hook. A translation cold start that will try the
+ * graphics card first takes a reranker RESIDENT ON THE CARD off it, the way a chat model switch
+ * already does (`registerModelIpc`), so `--fit` sizes translation against memory the reranker no
+ * longer holds. A reranker on the processor, or not resident, is left alone: suspending it would
+ * cost its next ask a cold start and free no graphics memory. The reranker's next ask restarts it
+ * on the processor while translation occupies the card (its posture reads `gpuOccupied()`), and
+ * on the card again once translation idles out.
+ */
+export function translationGpuYield(reranker: Reranker | null | undefined): (() => Promise<void>) | undefined {
+  if (!reranker?.suspend) return undefined
+  return async () => {
+    if (reranker.isLoaded?.() !== true || reranker.devicePosture?.() !== 'gpu') return
+    await reranker.suspend?.().catch((err: unknown) => {
+      log.warn('Reranker sidecar suspend before a translation GPU start failed', {
+        error: err instanceof Error ? err.message : String(err)
+      })
+    })
+  }
+}
+
+/**
  * Should the issue-#40 `onModelInstalled` refresh replace the current translator slot?
  * True for a NULL slot (the role was unavailable at startup — the original #40 case) and for
  * a `startFailed`-latched instance (BE-7, full-audit 2026-07-10): a latched instance is
@@ -145,26 +167,18 @@ export function shouldReplaceTranslator(current: Translator | null | undefined):
 }
 
 /**
- * Build (or re-build) JUST the audio-transcriber selection from the current drive layout — the
- * transcriber twin of `composeTranslator` (issue #497). ONE construction shared by
- * `composeServices` (startup) and the two mid-session install hooks (`AppContext.onModelInstalled`
- * after a speech-model download, `EngineDownloadManager.onInstalled` after a whisper.cpp engine
- * install), so the call sites can never drift. Cheap + synchronous: construction spawns nothing
- * (the whisper CLI runs per `transcribe()` call). No context window (`includeContextTokens:
- * false`) — the CLI takes none.
- */
-export function composeTranscriber(deps: ComposeServicesDeps): Transcriber | null {
-  return composeTranscriberSlot(deps).transcriber
-}
-
-/**
- * `composeTranscriber` plus WHY the slot is empty (#527): the transcriber needs the whisper.cpp
- * engine AND the speech model, and the composer hint, the audio-import failure and the AI Model
- * screen each name the piece that is really missing — including "the engine has no build for
- * this system", where no download can help. Computed here, from the same model resolution, at
- * the same three moments the slot itself is (startup + the two install hooks), so the reason can
- * never describe a different drive state than the slot; `getAppStatus` (polled by the shell)
- * only reads it back.
+ * Build (or re-build) the audio-transcriber slot from the current drive layout, plus WHY it is empty (#527) — the
+ * transcriber twin of `composeTranslator` (issue #497). ONE construction shared by `composeServices` (startup) and
+ * `refreshTranscriberSlot` (the two mid-session install hooks: `AppContext.onModelInstalled` after a speech-model
+ * download, `EngineDownloadManager.onInstalled` after a whisper.cpp engine install), so the call sites can never
+ * drift. Cheap + synchronous: construction spawns nothing (the whisper CLI runs per `transcribe()` call). No context
+ * window (`includeContextTokens: false`) — the CLI takes none.
+ *
+ * The reason: the transcriber needs the whisper.cpp engine AND the speech model, and the composer hint, the
+ * audio-import failure and the AI Model screen each name the piece that is really missing — including "the engine has
+ * no build for this system", where no download can help. Computed here, from the same model resolution, at the same
+ * three moments the slot itself is, so the reason can never describe a different drive state than the slot;
+ * `getAppStatus` (polled by the shell) only reads it back.
  */
 export function composeTranscriberSlot(deps: ComposeServicesDeps): {
   transcriber: Transcriber | null
@@ -201,7 +215,7 @@ export function composeTranscriberSlot(deps: ComposeServicesDeps): {
  * live instance may hold an in-flight whisper child that the lock/quit teardowns reach through
  * `ctx.transcriber` — replacing it would orphan that child from `suspend()`/`stop()`.
  */
-export function shouldReplaceTranscriber(current: Transcriber | null | undefined): boolean {
+function shouldReplaceTranscriber(current: Transcriber | null | undefined): boolean {
   return current == null
 }
 
@@ -256,7 +270,7 @@ export interface ComposeOcrEngineDeps {
 
 /**
  * Build (or re-build) JUST the OCR engine selection from the drive's `ocr/` folder — the OCR twin
- * of `composeTranscriber` (#410). ONE construction shared by `composeServices` (startup) and
+ * of `composeTranscriberSlot` (#410). ONE construction shared by `composeServices` (startup) and
  * `refreshOcrSlot` (after an in-app install), so the two can never drift. Cheap + synchronous:
  * the tesseract worker starts lazily. A packaged build's engine starts `'probing'` and must be
  * proven with `probeOcrEngine` before `ocrAvailable` may say so (#232).
@@ -437,7 +451,7 @@ export function composeServices({
   // install path at TG-3). Its own lazy `LlamaServer`, --ctx-size from the manifest, no --jinja.
   // Shares `composeTranslator` with the issue-#40 post-download re-selection so the two call
   // sites can never drift.
-  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered })
+  const translator = composeTranslator({ rootPath, manifestsDir, isDev, gpu, discovered }, reranker)
 
   return { embedder, reranker, transcriber, transcriberMissing, ocrEngine, translator }
 }

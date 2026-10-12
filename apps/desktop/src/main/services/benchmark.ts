@@ -118,8 +118,8 @@ export interface ClassifyHints {
   /** Measured tokens/sec, if a runtime ran. */
   tokensPerSecond?: number | null
   /**
-   * True only when the probed GPU passes the conservative gate (≥ 6 GiB VRAM and not
-   * integrated-looking — see `gpuUsefulForProfile` in runtime/gpu.ts). Deliberately
+   * True only when the probed GPU passes the conservative gate (≥ 5 GiB VRAM, `USABLE_VRAM_MB`, and not
+   * integrated-looking — see `gpuUsefulForProfile` in shared/gpu-rules.ts). Deliberately
    * NOT "any truthy gpu string bumps": an Iris Xe reporting shared RAM must never
    * push a laptop into a bigger model.
    */
