@@ -13,7 +13,7 @@ import { isRuntimeUnresponsiveError } from '../../src/main/services/runtime/llam
 import { EngineCannotRunError, engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { testBudgetMs, until, within } from '../helpers/hang-budget'
-import { loadingSidecar } from '../helpers/loading-sidecar'
+import { loadingSidecar } from '../helpers/fake-sidecar'
 
 // TG-2 fake-server tests for the real TranslationRuntime (plan §4 TG-2): launch args (NO --jinja,
 // --ctx-size 4096, --parallel 1), the raw /completion streaming + stop/temperature, abort

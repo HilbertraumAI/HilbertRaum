@@ -12,7 +12,7 @@ import { EngineCannotRunError, resetEngineProblemsForTest } from '../../src/main
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 import { until, within } from '../helpers/hang-budget'
-import { loadingSidecar } from '../helpers/loading-sidecar'
+import { loadingSidecar } from '../helpers/fake-sidecar'
 
 // V4 hardening tests for the real VisionRuntime (image-understanding plan §16 V4 / §17): lazy
 // single-flight start, the failed-start latch, cancellation, NO orphan on a racing stop, and —

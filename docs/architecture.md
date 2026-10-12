@@ -12153,7 +12153,7 @@ record "Lifecycle — a hybrid").
   often followed by a new job (another question, another language), which then joins the start
   instead of paying for a second cold load. The cost of an abandoned start is bounded: it loads, then
   sits for one idle window (2 min), recorded in `known-limitations.md`.
-- **Tests.** The cold-start fake is shared: `tests/helpers/loading-sidecar.ts` (`/health` 503 until
+- **Tests.** The cold-start fake is shared: `loadingSidecar` in `tests/helpers/fake-sidecar.ts` (`/health` 503 until
   loaded; the #635 embedder and reranker rows use it too), with the `until` / `within` hang detectors
   in `tests/helpers/hang-budget.ts`.
   - `vision-runtime.test.ts`: a cancel during a start that never gets healthy ends that analyze with

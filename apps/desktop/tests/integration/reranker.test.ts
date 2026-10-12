@@ -10,7 +10,7 @@ import { discoverManifests, estimateGraphicsNeedMib, graphicsBudgetMib } from '.
 import type { ModelManifest } from '../../src/shared/manifest'
 import type { GpuDevice } from '../../src/shared/types'
 import { until, within } from '../helpers/hang-budget'
-import { loadingSidecar } from '../helpers/loading-sidecar'
+import { loadingSidecar } from '../helpers/fake-sidecar'
 
 // Phase 21 (rag-design §11 reranker): the reranker sidecar — driven entirely through the
 // fake-spawn + mocked-loopback-fetch harness (the E5 embedder test pattern). CI never
