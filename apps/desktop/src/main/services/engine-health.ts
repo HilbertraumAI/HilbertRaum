@@ -42,15 +42,6 @@ export function startEngineCheck(ctx: Pick<AppContext, 'paths' | 'isDev' | 'prob
   }
 }
 
-/** Does this stored `gpuLastError` describe the OS refusing the engine, not a GPU fault? */
-export function isLoaderCausedGpuError(
-  gpuLastError: string | null | undefined,
-  opts: Pick<LoadFailureInput, 'platform' | 'systemDllExists'> = {}
-): boolean {
-  if (!gpuLastError) return false
-  return classifyLoadFailureMessage(gpuLastError, opts) !== null
-}
-
 export interface EngineHealResult {
   /** A `gpuAutoDisabled` that a load refusal had set was cleared. */
   gpuFlagCleared: boolean
@@ -82,7 +73,7 @@ export function healEngineLoadState(
   try {
     if (!workspaceAdmitsWork(ctx.workspace)) return result
     const s = getSettings(ctx.db)
-    if (s.gpuAutoDisabled && isLoaderCausedGpuError(s.gpuLastError, opts)) {
+    if (s.gpuAutoDisabled && s.gpuLastError && classifyLoadFailureMessage(s.gpuLastError, opts) !== null) {
       updateSettings(ctx.db, { gpuAutoDisabled: false, gpuLastError: null })
       result.gpuFlagCleared = true
       log.info('Cleared a compatibility-mode flag that an engine load failure had set (not a GPU fault)')

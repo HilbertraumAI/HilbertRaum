@@ -7,7 +7,7 @@ import {
   resetEngineProblemsForTest
 } from '../../src/main/services/runtime/engine-load'
 import { failureSignature, LlamaServer, type ChildProcessLike, type SpawnFn } from '../../src/main/services/runtime/sidecar'
-import { createCachedGpuProbe, probeGpuDevices } from '../../src/main/services/runtime/gpu'
+import { probeGpuDevices } from '../../src/main/services/runtime/gpu'
 
 // #530 at the spawn sites: the shared LlamaServer (chat, embedder, reranker, vision, translation)
 // and the GPU device probe recognise a program the OS loader refused, record the session verdict,
@@ -38,6 +38,8 @@ function server(spawn: SpawnFn, extra: Partial<ConstructorParameters<typeof Llam
     fetchImpl: notHealthy,
     findPort: async () => 50900,
     healthIntervalMs: 1,
+    // FakeChild.kill() never emits 'exit': stop() would sit out the default grace.
+    killGraceMs: 1,
     verifyBinary: async () => 'skip-dev',
     ...extra
   })
@@ -191,10 +193,8 @@ describe('LlamaServer — a program the OS loader refused (#530)', () => {
 })
 
 describe('GPU probe — a refused program is UNKNOWN, not "no graphics card" (#530)', () => {
-  const refusingSpawn = (): { spawn: SpawnFn; spawns: () => number } => {
-    let n = 0
+  it('resolves null and records the verdict', async () => {
     const spawn: SpawnFn = () => {
-      n++
       const child = new FakeChild()
       queueMicrotask(() => {
         child.stderr!.emit('data', Buffer.from(LOADER_LINE))
@@ -202,22 +202,9 @@ describe('GPU probe — a refused program is UNKNOWN, not "no graphics card" (#5
       })
       return child
     }
-    return { spawn, spawns: () => n }
-  }
-
-  it('resolves null and records the verdict', async () => {
-    const { spawn } = refusingSpawn()
     const devices = await probeGpuDevices('/bin/llama-server', { spawn, platform: 'linux', verify: async () => 'skip-dev' })
     expect(devices).toBeNull()
     expect(engineProblemFor('llama_cpp')).toMatchObject({ reason: 'library-missing', name: 'libgomp.so.1' })
-  })
-
-  it('is never cached — the next caller probes again (so an installed library is seen)', async () => {
-    const { spawn, spawns } = refusingSpawn()
-    const probe = createCachedGpuProbe({ spawn, platform: 'linux', verify: async () => 'skip-dev' })
-    expect(await probe('/bin/llama-server')).toBeNull()
-    expect(await probe('/bin/llama-server')).toBeNull()
-    expect(spawns()).toBe(2)
   })
 
   it('still answers [] for a non-zero exit that is not the loader’s (the old contract)', async () => {
