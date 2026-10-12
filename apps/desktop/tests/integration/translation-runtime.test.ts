@@ -13,7 +13,15 @@ import { isRuntimeUnresponsiveError } from '../../src/main/services/runtime/llam
 import { EngineCannotRunError, engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
 import { until, within } from '../helpers/hang-budget'
-import { FakeChild, GatedChild, fakeSpawn, fakeIdleClock, loadingSidecar, sseBody } from '../helpers/fake-sidecar'
+import {
+  FakeChild,
+  GatedChild,
+  exitingChild,
+  fakeSpawn,
+  fakeIdleClock,
+  loadingSidecar,
+  sseBody
+} from '../helpers/fake-sidecar'
 
 // TG-2 fake-server tests for the real TranslationRuntime (plan §4 TG-2): launch args (NO --jinja,
 // --ctx-size 4096, --parallel 1), the raw /completion streaming + stop/temperature, abort
@@ -52,18 +60,14 @@ const refusingFetch = (async () => {
   throw new Error('connection refused')
 }) as unknown as typeof fetch
 
-/** A FakeChild that prints `stderr` right after spawn and, given `exitCode`, then dies before it is healthy —
- *  with the 'close' a real child follows its exit with, so LlamaServer reads the tail without its drain wait. */
-function spawnedChild({ stderr = [], exitCode }: { stderr?: string[]; exitCode?: number } = {}): FakeChild {
+/** A FakeChild that prints its load log right after spawn, chunk by chunk as a real pipe splits it, and
+ *  stays alive (a child that dies before healthy is fake-sidecar's `exitingChild`). */
+function spawnedChild(stderr: string[]): FakeChild {
   const child = new FakeChild()
   const err = new EventEmitter()
   ;(child as unknown as { stderr: EventEmitter }).stderr = err
   queueMicrotask(() => {
     for (const chunk of stderr) err.emit('data', chunk)
-    if (exitCode !== undefined) {
-      child.crash(exitCode)
-      child.emit('close', exitCode, null)
-    }
   })
   return child
 }
@@ -180,7 +184,7 @@ describe('TranslationRuntime — launch + translate', () => {
   })
 
   it('latches a failed start with the distinct startFailed code (fail fast, ONE spawn) — F-7', async () => {
-    const { spawn, calls } = fakeSpawn(() => spawnedChild({ exitCode: 1 })) // dies immediately (corrupt GGUF)
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // dies immediately (corrupt GGUF)
     const rt = new TranslationRuntime({
       ...base,
       spawn,
@@ -520,7 +524,7 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
     // Child 0 (the GPU attempt) dies before health; every later child is healthy. The fake fetch
     // refuses connections while attempt 1 is live (a dead child must not pass its health probe).
     let n = 0
-    const { spawn, calls } = fakeSpawn(() => (++n === 1 ? spawnedChild({ exitCode: 1 }) : new FakeChild()))
+    const { spawn, calls } = fakeSpawn(() => (++n === 1 ? exitingChild(1) : new FakeChild()))
     const good = translationFetch()
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
       if (calls.length < 2) throw new Error('connection refused') // the dying GPU attempt
@@ -551,7 +555,7 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
   })
 
   it('only the FINAL (CPU) rung failing arms the permanent startFailed latch — with the F-7 code', async () => {
-    const { spawn, calls } = fakeSpawn(() => spawnedChild({ exitCode: 1 })) // EVERY child dies (a truly broken GGUF)
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // EVERY child dies (a truly broken GGUF)
     const rt = new TranslationRuntime({
       ...base,
       spawn,
@@ -571,7 +575,7 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
   })
 
   it('a transient bind race on the GPU attempt does NOT fall back or latch — the retry re-attempts GPU', async () => {
-    const { spawn, calls } = fakeSpawn(() => spawnedChild({ stderr: ['bind: address already in use'], exitCode: 1 }))
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1, 'bind: address already in use'))
     const fallbacks: string[] = []
     const rt = new TranslationRuntime({
       ...base,
@@ -650,12 +654,10 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
   it('parses the offload split from the server load log — across chunk boundaries — and reports it once', async () => {
     // The offload line split mid-number across two stderr chunks (real pipes chunk arbitrarily).
     const { spawn } = fakeSpawn(() =>
-      spawnedChild({
-        stderr: [
-          'ggml_vulkan: Found 1 Vulkan devices\nload_tensors: offloaded 12',
-          '/49 layers to GPU\nload_all: model loaded\n'
-        ]
-      })
+      spawnedChild([
+        'ggml_vulkan: Found 1 Vulkan devices\nload_tensors: offloaded 12',
+        '/49 layers to GPU\nload_all: model loaded\n'
+      ])
     )
     const { fetchImpl } = translationFetch()
     const started: unknown[] = []
@@ -684,7 +686,7 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
     // OFFLOAD_PARSE_WINDOW (512) bytes BEFORE matching — a single stderr chunk carrying the line
     // plus >512 bytes of trailing log lost it permanently and the hint degraded to "unknown".
     const { spawn } = fakeSpawn(() =>
-      spawnedChild({ stderr: ['load_tensors: offloaded 7/49 layers to GPU\n' + 'x'.repeat(600) + '\nload_all: model loaded\n'] })
+      spawnedChild(['load_tensors: offloaded 7/49 layers to GPU\n' + 'x'.repeat(600) + '\nload_all: model loaded\n'])
     )
     const { fetchImpl } = translationFetch()
     const started: unknown[] = []
@@ -701,7 +703,7 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
   })
 
   it("a forced-CPU start reports device 'cpu' with an honest null split (no offload line printed)", async () => {
-    const { spawn } = fakeSpawn(() => spawnedChild({ stderr: ['load_all: model loaded\n'] }))
+    const { spawn } = fakeSpawn(() => spawnedChild(['load_all: model loaded\n']))
     const { fetchImpl } = translationFetch()
     const started: unknown[] = []
     const rt = new TranslationRuntime({
@@ -1156,7 +1158,7 @@ describe('TranslationRuntime — OS loader refusal (#530)', () => {
     '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
 
   it('on the GPU posture: ONE spawn, no CPU retry, no device-fallback note, latched engineCannotRun', async () => {
-    const { spawn, calls } = fakeSpawn(() => spawnedChild({ stderr: [LOADER_LINE], exitCode: 127 }))
+    const { spawn, calls } = fakeSpawn(() => exitingChild(127, LOADER_LINE))
     const fallbacks: string[] = []
     const rt = new TranslationRuntime({
       ...base,
