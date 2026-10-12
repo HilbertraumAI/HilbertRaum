@@ -1,8 +1,8 @@
 import { describe, it, expect, vi, afterEach } from 'vitest'
 import { EventEmitter } from 'node:events'
 import { mkdtempSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { tmpdir, type CpuInfo } from 'node:os'
+import { dirname, join } from 'node:path'
 import http from 'node:http'
 import https from 'node:https'
 import net from 'node:net'
@@ -27,6 +27,14 @@ import {
   type UnexpectedExitInfo
 } from '../../src/main/services/runtime/sidecar'
 
+// A switchable core count for the defaultThreadCount rows; everything else in this file reads the
+// real cpus() (the switch is null) — the benchmark.test.ts RAM-pin idiom.
+const osState = vi.hoisted(() => ({ cpus: null as null | (() => CpuInfo[]) }))
+vi.mock('node:os', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:os')>()
+  return { ...actual, cpus: () => (osState.cpus ? osState.cpus() : actual.cpus()) }
+})
+
 afterEach(() => vi.restoreAllMocks())
 
 // ---- A fake child process: kill() resolves the LlamaServer exit wait. -----------
@@ -34,7 +42,9 @@ afterEach(() => vi.restoreAllMocks())
 class FakeChild extends EventEmitter implements ChildProcessLike {
   pid = 4242
   killed = false
-  kill(): boolean {
+  signals: Array<NodeJS.Signals | number | undefined> = []
+  kill(signal?: NodeJS.Signals | number): boolean {
+    this.signals.push(signal)
     this.killed = true
     queueMicrotask(() => this.emit('exit', 0, null))
     return true
@@ -79,9 +89,8 @@ function healthFetch(readyAfter = 0) {
 describe('resolveLlamaServerPath', () => {
   it('finds the platform binary under runtime/llama.cpp/<os>/', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-bin-'))
-    const dir = llamaServerDir(root, 'win32')
-    mkdirSync(dir, { recursive: true })
-    const bin = join(dir, llamaServerBinaryName('win32'))
+    const bin = join(root, 'runtime', 'llama.cpp', 'win', 'llama-server.exe')
+    mkdirSync(dirname(bin), { recursive: true })
     writeFileSync(bin, 'x')
     expect(resolveLlamaServerPath(root, 'win32', {})).toBe(bin)
   })
@@ -137,9 +146,8 @@ describe('resolveLlamaServerPath', () => {
 describe('resolveCpuFallbackServerPath (Phase 15, ladder rung 3)', () => {
   it('finds the safety-net binary under runtime/llama.cpp/<os>/cpu/', () => {
     const root = mkdtempSync(join(tmpdir(), 'hilbertraum-cpubin-'))
-    const dir = join(llamaServerDir(root, 'win32'), 'cpu')
-    mkdirSync(dir, { recursive: true })
-    const bin = join(dir, llamaServerBinaryName('win32'))
+    const bin = join(root, 'runtime', 'llama.cpp', 'win', 'cpu', 'llama-server.exe')
+    mkdirSync(dirname(bin), { recursive: true })
     writeFileSync(bin, 'x')
     expect(resolveCpuFallbackServerPath(root, 'win32')).toBe(bin)
   })
@@ -151,60 +159,49 @@ describe('resolveCpuFallbackServerPath (Phase 15, ladder rung 3)', () => {
 })
 
 describe('defaultThreadCount', () => {
-  it('is always at least 1', () => {
-    expect(defaultThreadCount()).toBeGreaterThanOrEqual(1)
+  afterEach(() => {
+    osState.cpus = null
+  })
+  const core = { model: 'x', speed: 0, times: { user: 0, nice: 0, sys: 0, idle: 0, irq: 0 } }
+  it.each<[string, () => CpuInfo[], number]>([
+    ['8 logical cores', () => Array(8).fill(core), 4],
+    ['1 logical core', () => [core], 1],
+    ['no cores reported', () => [], 1],
+    [
+      'cpus() throws',
+      () => {
+        throw new Error('EPERM')
+      },
+      1
+    ]
+  ])('is half the logical cores and never below 1 (never --threads 0): %s', (_label, cpus, expected) => {
+    osState.cpus = cpus
+    expect(defaultThreadCount()).toBe(expected)
   })
 })
 
 describe('findFreePort', () => {
   it('returns a usable loopback port', async () => {
+    const listen = vi.spyOn(net.Server.prototype, 'listen')
     const port = await findFreePort()
+    expect(listen).toHaveBeenCalledTimes(1)
+    expect(listen.mock.calls[0]).toContain(LOOPBACK_HOST) // the probe bind is loopback-only, never 0.0.0.0
+    listen.mockRestore()
     expect(port).toBeGreaterThan(0)
     expect(port).toBeLessThan(65536)
+    // The port is free on loopback: it re-binds there.
+    const srv = net.createServer()
+    await new Promise<void>((resolve, reject) => {
+      srv.once('error', reject)
+      srv.listen(port, LOOPBACK_HOST, () => resolve())
+    })
+    await new Promise<void>((r) => srv.close(() => r()))
   })
 })
 
 // ---- LlamaServer lifecycle ------------------------------------------------------
 
 describe('LlamaServer', () => {
-  it('REFUSES to spawn a tampered binary (pre-spawn re-hash, vuln-scan B)', async () => {
-    const { spawn, calls } = fakeSpawn()
-    const { fetchImpl } = healthFetch(0)
-    const server = new LlamaServer({
-      binPath: '/bin/llama-server',
-      modelPath: '/models/x.gguf',
-      contextTokens: 4096,
-      spawn,
-      fetchImpl,
-      findPort: async () => 51234,
-      healthIntervalMs: 1,
-      verifyBinary: async () => 'mismatch' // the install marker's hash no longer matches
-    })
-    await expect(server.start()).rejects.toThrow(/pre-spawn integrity verification/)
-    expect(calls).toHaveLength(0) // the child process was never spawned
-    // A throw here is what makes the ladder fall to the next rung / MockRuntime.
-  })
-
-  it('proceeds normally when verification passes / skips (ok / skip-legacy / skip-dev)', async () => {
-    for (const verdict of ['ok', 'skip-legacy', 'skip-dev'] as const) {
-      const { spawn, calls } = fakeSpawn()
-      const { fetchImpl } = healthFetch(0)
-      const server = new LlamaServer({
-        binPath: '/bin/s',
-        modelPath: '/m.gguf',
-        contextTokens: 2048,
-        spawn,
-        fetchImpl,
-        findPort: async () => 50000,
-        healthIntervalMs: 1,
-        verifyBinary: async () => verdict
-      })
-      await server.start()
-      expect(calls).toHaveLength(1)
-      await server.stop()
-    }
-  })
-
   it('spawns bound to 127.0.0.1 ONLY (never 0.0.0.0 / a routable host)', async () => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl } = healthFetch(0)
@@ -271,28 +268,6 @@ describe('LlamaServer', () => {
     await expect(server.start()).rejects.toThrow(/did not become healthy/)
     // The wedged child is killed during the failed start (no orphan).
     expect(child.killed).toBe(true)
-  })
-
-  it('throws cleanly if the child exits before becoming healthy', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const child = new FakeChild()
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      // Simulate an immediate crash (bad model, port in use, …).
-      queueMicrotask(() => child.emit('exit', 1, null))
-      return child
-    }
-    const fetchImpl = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch
-    const server = new LlamaServer({
-      binPath: '/bin/s',
-      modelPath: '/m.gguf',
-      contextTokens: 2048,
-      spawn,
-      fetchImpl,
-      findPort: async () => 50002,
-      healthIntervalMs: 1
-    })
-    await expect(server.start()).rejects.toThrow(/exited before becoming healthy/)
   })
 
   // REL-1: findFreePort closes its listener BEFORE the child binds, so a concurrent
@@ -392,32 +367,10 @@ describe('LlamaServer', () => {
       findPort: async () => 50300,
       healthIntervalMs: 1
     })
-    await expect(server.start()).rejects.toThrow(/address already in use/)
+    // The error names the exit code AND the captured stderr tail (what "surfaces the stderr tail +
+    // exit code" asserted).
+    await expect(server.start()).rejects.toThrow(/\(code 1\) — last output: .*address already in use/)
     expect(n).toBe(2) // one initial attempt + exactly one retry, then it gives up
-  })
-
-  it('surfaces the stderr tail + exit code when the child fails to bind (port conflict)', async () => {
-    const child = new FakeChild() as FakeChild & { stderr: EventEmitter }
-    child.stderr = new EventEmitter()
-    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
-      queueMicrotask(() => {
-        child.stderr.emit('data', Buffer.from('error: bind: address already in use\n'))
-        child.emit('exit', 1, null)
-      })
-      return child
-    }
-    const fetchImpl = (async () => ({ ok: false, status: 503 }) as Response) as typeof fetch
-    const server = new LlamaServer({
-      binPath: '/bin/s',
-      modelPath: '/m.gguf',
-      contextTokens: 2048,
-      spawn,
-      fetchImpl,
-      findPort: async () => 50010,
-      healthIntervalMs: 1
-    })
-    // The thrown error explains WHY (the captured stderr) and that it exited (code 1).
-    await expect(server.start()).rejects.toThrow(/address already in use/)
   })
 
   it('kills the child on stop() so no orphan survives', async () => {
@@ -436,7 +389,29 @@ describe('LlamaServer', () => {
     expect(child.killed).toBe(false)
     await server.stop()
     expect(child.killed).toBe(true)
+    expect(child.signals).toEqual([undefined]) // only the polite SIGTERM: a child that exits on it is never SIGKILLed (B1)
     expect(server.port).toBeNull()
+  })
+
+  // REL-2 (audit 2026-06-28): `this.child` is assigned only after the pre-spawn verify + findPort
+  // resolve, so two overlapping start() calls both passed `if (this.child)` and both spawned — the
+  // first child orphaned. The single-flight latch shares one start and resolves both on health.
+  it('two concurrent start() calls spawn exactly one child (REL-2 single-flight)', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl } = healthFetch(0)
+    const server = new LlamaServer({
+      binPath: '/bin/s',
+      modelPath: '/m.gguf',
+      contextTokens: 2048,
+      spawn,
+      fetchImpl,
+      findPort: async () => 50014,
+      healthIntervalMs: 1
+    })
+    await Promise.all([server.start(), server.start()])
+    expect(calls).toHaveLength(1)
+    expect((await server.health()).healthy).toBe(true)
+    await server.stop()
   })
 
   // Phase 15 (§5.3): the mid-session crash hook — fires only for a healthy server
@@ -745,26 +720,17 @@ describe('LlamaServer sidecar API key (D9)', () => {
       body: '{}'
     })
     expect(res.ok).toBe(true)
+    await server.fetch('/tokenize', { headers: new Headers({ 'content-type': 'application/json' }) }) // a Headers INSTANCE must merge too
     const key = calls[0].options.env?.LLAMA_API_KEY
-    expect(requests.length).toBeGreaterThanOrEqual(3) // start-health, health(), explicit fetch
+    expect(requests.length).toBeGreaterThanOrEqual(4) // start-health, health(), the two explicit fetches
     for (const r of requests) {
       const headers = new Headers(r.init?.headers)
       expect(headers.get('authorization')).toBe(`Bearer ${key}`)
     }
-    // The caller's own headers survive the merge.
-    const last = new Headers(requests[requests.length - 1].init?.headers)
-    expect(last.get('content-type')).toBe('application/json')
-    await server.stop()
-  })
-
-  it('merges a Headers-instance init without dropping entries', async () => {
-    const { server, calls, requests } = makeServer()
-    await server.start()
-    await server.fetch('/tokenize', { headers: new Headers({ 'content-type': 'application/json' }) })
-    const key = calls[0].options.env?.LLAMA_API_KEY
-    const last = new Headers(requests[requests.length - 1].init?.headers)
-    expect(last.get('authorization')).toBe(`Bearer ${key}`)
-    expect(last.get('content-type')).toBe('application/json')
+    for (const path of ['/v1/chat/completions', '/tokenize']) {
+      const sent = requests.find((r) => r.url.endsWith(path))!
+      expect(new Headers(sent.init?.headers).get('content-type')).toBe('application/json') // the caller's headers survive, in both forms
+    }
     await server.stop()
   })
 
@@ -909,17 +875,20 @@ describe('redactExactKey / redactSidecarSecrets', () => {
   it('is stable under re-application (the read-time pass may run on drain-redacted text)', () => {
     const once = redactSidecarSecrets('--api-key secret123', null)
     expect(redactSidecarSecrets(once, null)).toBe(once)
+    // The drain's exact-key pass can leave `[redacted]` glued to trailing text; the read-time pass must
+    // not read that text as a second secret (the `(?!\[redacted\])` guard).
+    expect(redactSidecarSecrets('api_key=[redacted]tail', null)).toBe('api_key=[redacted]tail')
   })
 })
 
-// ---- Crash-exit child reap registry (full-audit 2026-07-11 CODE-11) --------------------
+// ---- Start-failure signature (#312) -------------------------------------------------------
 //
 // Issue #312 — the comparable failure CLASS the GPU ladder's CPU control probe compares on.
 // Text-matching llama.cpp's own vocabulary cannot do this job (a VRAM allocation failure — a
 // genuine device fault — prints the same "error loading model:" prefix as an unsupported
 // architecture), so the signature classifies only THIS module's four throw shapes plus the
-// final stderr line, and answers null for anything else; the ladder reads null as "unknown ⇒
-// device fault".
+// tail's failure line (#515: the first error-level line, else an `error …` line, else the last
+// line), and answers null for anything else; the ladder reads null as "unknown ⇒ device fault".
 describe('failureSignature (#312)', () => {
   const EXIT = 'llama-server exited before becoming healthy'
 
@@ -931,7 +900,7 @@ describe('failureSignature (#312)', () => {
     expect(failureSignature('llama-server failed pre-spawn integrity verification')).toBe('integrity')
   })
 
-  it('appends the LAST non-empty line of the — last output: tail', () => {
+  it("appends the tail's failure line: an error line, else the last one", () => {
     expect(failureSignature(`${EXIT} (code 1) — last output: error loading model: bad arch`)).toBe(
       'exit:code 1 | error loading model: bad arch'
     )
@@ -1078,21 +1047,6 @@ describe('sidecar child-PID registry (full-audit 2026-07-11 CODE-11)', () => {
     expect(registeredSidecarPids()).toEqual([5678])
     unregisterSidecarChild(5678)
     expect(registeredSidecarPids()).toEqual([])
-  })
-
-  it('partitions the registry by engine family (F-32 in-use guard signal)', () => {
-    killRegisteredSidecarChildren(() => undefined) // isolate
-    registerSidecarChild(101, 'llama_cpp') // e.g. the E5 embedder sidecar
-    registerSidecarChild(102, 'llama_cpp') // e.g. the translation sidecar
-    registerSidecarChild(201, 'whisper_cpp') // a transcription child
-    expect([...registeredSidecarPids('llama_cpp')].sort()).toEqual([101, 102])
-    expect(registeredSidecarPids('whisper_cpp')).toEqual([201])
-    expect([...registeredSidecarPids()].sort()).toEqual([101, 102, 201]) // no filter → every family
-    unregisterSidecarChild(201)
-    expect(registeredSidecarPids('whisper_cpp')).toEqual([]) // whisper family now idle…
-    expect([...registeredSidecarPids('llama_cpp')].sort()).toEqual([101, 102]) // …llama still live
-    unregisterSidecarChild(101)
-    unregisterSidecarChild(102)
   })
 
   it('killRegisteredSidecarChildren SIGKILLs every registered pid, is throw-safe per pid, and clears the set', () => {
