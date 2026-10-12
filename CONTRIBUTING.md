@@ -87,6 +87,11 @@ npm run test:watch --workspace apps/desktop -- tests/unit/some-file.test.ts   # 
 - **Windows PowerShell with a `Restricted` or `AllSigned` execution policy** refuses both `npm` and
   `npx`, because their `.ps1` launchers are unsigned. Type `npm.cmd` / `npx.cmd` instead, for example
   `npm.cmd test -- tests/unit/some-file.test.ts`.
+- **Windows: run the tests from the path as the file system spells it (`C:\…`, not `c:\…`).** Some
+  terminals, VS Code's among them, open in `c:\…`. Builds and `npm run dev` work from either
+  spelling. Vitest does not: from `c:\…` it stops at once with a message naming the real spelling.
+  Change to it (PowerShell: `Set-Location 'C:\path\to\HilbertRaum'`) and run again. The cause and the
+  build-side fix: [`docs/packaging.md`](docs/packaging.md) "Build paths — design record (#646)".
 - **From `apps/desktop`** the direct forms work too: `npx vitest run tests/unit/some-file.test.ts`,
   `npx vitest run -t "a test-name substring"` and `npm run test:watch`.
 - **Window security wiring is pin-tested.** The `webPreferences` hardening flags, the CSP

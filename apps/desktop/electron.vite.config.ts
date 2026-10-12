@@ -2,7 +2,15 @@ import { resolve } from 'node:path'
 import { defineConfig, externalizeDepsPlugin } from 'electron-vite'
 import react from '@vitejs/plugin-react'
 import type { Plugin } from 'vite'
+import { canonicalCase, oneModulePerFile } from './path-casing'
 import { buildMetaCsp } from './src/main/window-security'
+
+// #646: every path below comes from the app directory as the file system spells it, and so does
+// each target's `root` (which otherwise defaults to the cwd as typed). Started from `c:\work\…`,
+// `__dirname` is `c:\…` while Vite canonicalises the paths it resolves later to `C:\…`, and a
+// module met both ways is bundled twice (path-casing.ts says why). `oneModulePerFile()` fails any
+// target that still splits one.
+const appDir = canonicalCase(__dirname)
 
 // BE-2 (ocr-audit 2026-07-18, OCR-R P5): the CSP <meta> tags in index.html/ocr.html are
 // generated from ONE source of truth — window-security.ts `buildMetaCsp(isDev, page)` —
@@ -53,10 +61,11 @@ function cspMetaPlugin(): Plugin {
 // large ESM build (BUILD_STATE R3) and is the idiomatic electron-vite setup.
 export default defineConfig({
   main: {
-    plugins: [externalizeDepsPlugin()],
+    root: appDir,
+    plugins: [externalizeDepsPlugin(), oneModulePerFile()],
     build: {
       outDir: 'out/main',
-      lib: { entry: resolve(__dirname, 'src/main/index.ts') },
+      lib: { entry: resolve(appDir, 'src/main/index.ts') },
       // Emit the main bundle as ESM (out/main/index.mjs). The preload stays CJS —
       // sandboxed preloads (webPreferences.sandbox:true) cannot be ES modules — so we
       // scope `format: 'es'` to main only and DON'T set package "type": "module".
@@ -64,36 +73,37 @@ export default defineConfig({
     }
   },
   preload: {
-    plugins: [externalizeDepsPlugin()],
+    root: appDir,
+    plugins: [externalizeDepsPlugin(), oneModulePerFile()],
     build: {
       outDir: 'out/preload',
       lib: {
         entry: {
-          index: resolve(__dirname, 'src/preload/index.ts'),
+          index: resolve(appDir, 'src/preload/index.ts'),
           // The hidden OCR rasterizer window's tiny bridge (Phase 38, D31) — a
           // separate entry so that window never sees the app API.
-          ocr: resolve(__dirname, 'src/preload/ocr.ts')
+          ocr: resolve(appDir, 'src/preload/ocr.ts')
         }
       }
     }
   },
   renderer: {
-    root: resolve(__dirname, 'src/renderer'),
+    root: resolve(appDir, 'src/renderer'),
     resolve: {
       alias: {
-        '@shared': resolve(__dirname, 'src/shared'),
-        '@renderer': resolve(__dirname, 'src/renderer')
+        '@shared': resolve(appDir, 'src/shared'),
+        '@renderer': resolve(appDir, 'src/renderer')
       }
     },
     build: {
       outDir: 'out/renderer',
       rollupOptions: {
         input: {
-          index: resolve(__dirname, 'src/renderer/index.html'),
+          index: resolve(appDir, 'src/renderer/index.html'),
           // Hidden OCR rasterizer page (Phase 38): bundles pdfjs AND its worker code into
           // the page chunk (pdf.js runs in-page, no Worker — fix/ocr-pdfjs-in-page) — the
           // sentinel test proves no CDN host ever enters these bundles.
-          ocr: resolve(__dirname, 'src/renderer/ocr.html')
+          ocr: resolve(appDir, 'src/renderer/ocr.html')
         },
         output: {
           // pdf.js loads its JS image decoders as `${wasmUrl}<fixed file name>` (#551,
@@ -107,6 +117,6 @@ export default defineConfig({
         }
       }
     },
-    plugins: [react(), cspMetaPlugin()]
+    plugins: [react(), cspMetaPlugin(), oneModulePerFile()]
   }
 })
