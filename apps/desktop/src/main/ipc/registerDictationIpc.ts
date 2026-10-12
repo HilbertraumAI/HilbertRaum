@@ -62,21 +62,15 @@ export const DICTATION_BUSY_MESSAGE = t('en', 'main.dictation.busy')
  */
 export const DEFAULT_DICTATION_TIMEOUT_MS = 10 * 60 * 1000
 
-function resolveDictationTimeoutMs(explicit?: number): number {
-  if (typeof explicit === 'number' && explicit > 0) return explicit
+function resolveDictationTimeoutMs(): number {
   const env = Number(process.env.HILBERTRAUM_DICTATION_TIMEOUT_MS)
   return Number.isFinite(env) && env > 0 ? env : DEFAULT_DICTATION_TIMEOUT_MS
 }
 
-/** Test seam: dial the wall-clock ceiling down. Prod calls `registerDictationIpc(ctx)`. */
-export interface DictationIpcOptions {
-  maxDurationMs?: number
-}
-
-export function registerDictationIpc(ctx: AppContext, options: DictationIpcOptions = {}): void {
+export function registerDictationIpc(ctx: AppContext): void {
   const ipcHandle = guardedHandleFor(ctx)
   const storeDir = documentsDir(ctx.paths.workspacePath)
-  const maxDurationMs = resolveDictationTimeoutMs(options.maxDurationMs)
+  const maxDurationMs = resolveDictationTimeoutMs()
   // Single-flight guard: whisper is NOT internally serialized, so without this a second
   // mic press would spawn a concurrent child (REL-3). Reject the second invocation rather
   // than queue it — dictation is interactive, a stale queued result would surprise the user.

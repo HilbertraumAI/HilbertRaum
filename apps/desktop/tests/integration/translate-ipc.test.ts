@@ -27,17 +27,15 @@ import { TRANSLATE_MAX_TEXT_CHARS } from '../../src/shared/types'
 import type { TranslateJob, TranslateRequest } from '../../src/shared/types'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
-import { hangPolls } from '../helpers/hang-budget'
+import { hangPolls, until } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
-function ctxFor(unlocked = true, locking = false): AppContext {
-  // #163 (T-1): carry BOTH halves of `workspaceAdmitsWork` — the production guard is
-  // `isUnlocked() && isLocking?.() !== true` (AUD-02), and stubbing only `isUnlocked` left a
-  // regression back to a bare isUnlocked() check green across the whole suite.
+function ctxFor(unlocked = true): AppContext {
+  // The lock-TEARDOWN half of `workspaceAdmitsWork` (AUD-02) is lock-admission-race.test.ts's, over a real vault.
   return {
     trustedSenders: ANY_SENDER,
-    workspace: { isUnlocked: () => unlocked, isLocking: () => locking }
+    workspace: { isUnlocked: () => unlocked }
   } as unknown as AppContext
 }
 
@@ -48,23 +46,24 @@ const goodReq = (over: Partial<TranslateRequest> = {}): TranslateRequest => ({
   ...over
 })
 
-/** A scripted translator: streams `reply(text)` as ONE token and resolves with it, honoring abort.
+/** A scripted `Translator` around `translate` — the view's sidecar handle (contextWindow 4096 unless given). */
+function translatorWith(translate: Translator['translate'], contextWindow: () => number = () => 4096): Translator {
+  return { modelId: 'translategemma-12b-it-q4', contextWindow, translate, async stop() {}, async suspend() {} }
+}
+
+/** A scripted translator: streams `TR<text>` as ONE token and resolves with it, honoring abort.
  *  Reports a CLEAN stop via `onFinal` (TA-5 M6 — the view now requires it to accept the window). */
-function scriptedTranslator(opts: { ctx?: number; reply?: (text: string) => string } = {}): Translator {
-  const reply = opts.reply ?? ((t: string) => `TR<${t}>`)
-  return {
-    modelId: 'translategemma-12b-it-q4',
-    contextWindow: () => opts.ctx ?? 4096,
-    async translate(o) {
+function scriptedTranslator(opts: { ctx?: number } = {}): Translator {
+  return translatorWith(
+    async (o) => {
       if (o.signal?.aborted) throw new DOMException('aborted', 'AbortError')
-      const out = reply(o.text)
+      const out = `TR<${o.text}>`
       o.onToken?.(out)
       o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
       return out
     },
-    async stop() {},
-    async suspend() {}
-  }
+    () => opts.ctx ?? 4096
+  )
 }
 
 /** A translator whose translate() streams one token then blocks until `release()` (or aborts). */
@@ -75,26 +74,24 @@ function gatedTranslator(): { translator: Translator; release: () => void; sawSi
   return {
     release,
     sawSignal: () => signal,
-    translator: {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate(o) {
-        signal = o.signal
-        o.onToken?.('partial ')
-        await Promise.race([
-          gate,
-          new Promise<void>((_res, rej) =>
-            o.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
-          )
-        ])
-        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
-        return 'partial done'
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    translator: translatorWith(async (o) => {
+      signal = o.signal
+      o.onToken?.('partial ')
+      await Promise.race([
+        gate,
+        new Promise<void>((_res, rej) =>
+          o.signal?.addEventListener('abort', () => rej(new DOMException('aborted', 'AbortError')))
+        )
+      ])
+      o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+      return 'partial done'
+    })
   }
 }
+
+/** Wait until a gated window has reached the sidecar (its signal was handed over). */
+const reachSidecar = (g: { sawSignal: () => AbortSignal | undefined }) =>
+  until(() => g.sawSignal() !== undefined, 'the window reaching the sidecar')
 
 function service(deps: {
   translator?: Translator | null
@@ -175,17 +172,11 @@ describe('registerTranslateIpc — translate job contract', () => {
     // A window that stops CLEANLY but produces no text — a transiently empty window. The view
     // must not complete "done" with a missing paragraph: retry once, then fail visibly.
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate(o) {
-        calls += 1
-        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
-        return ''
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async (o) => {
+      calls += 1
+      o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+      return ''
+    })
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
@@ -201,18 +192,12 @@ describe('registerTranslateIpc — translate job contract', () => {
     // on retry, so the view fails the window on the FIRST attempt rather than burning a second
     // ~30-min decode for the same outcome (F-2). Contrast the empty-window test above, which retries.
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate(o) {
-        calls += 1
-        o.onToken?.('partial cut off')
-        o.onFinal?.({}) // LIMIT stop — neither a stopping word nor eos
-        return 'partial cut off'
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async (o) => {
+      calls += 1
+      o.onToken?.('partial cut off')
+      o.onFinal?.({}) // LIMIT stop — neither a stopping word nor eos
+      return 'partial cut off'
+    })
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
@@ -228,18 +213,12 @@ describe('registerTranslateIpc — translate job contract', () => {
     // DISTINCT `startFailed` code (the UI then shows "restart / free memory"), NOT `runtimeFailed`,
     // and must not burn a second decode — the latch would re-throw the same error identically.
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate() {
-        calls += 1
-        throw new TranslationStartError(
-          new Error('llama-server exited before becoming healthy (code 3221226505)')
-        )
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async () => {
+      calls += 1
+      throw new TranslationStartError(
+        new Error('llama-server exited before becoming healthy (code 3221226505)')
+      )
+    })
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
@@ -251,24 +230,18 @@ describe('registerTranslateIpc — translate job contract', () => {
 
   it('#530: a latched start failure the OS loader caused surfaces the engineCannotRun code, not startFailed', async () => {
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate() {
-        calls += 1
-        throw new TranslationStartError(
-          new EngineCannotRunError('llama-server', {
-            family: 'llama_cpp',
-            reason: 'library-missing',
-            os: 'linux',
-            name: 'libgomp.so.1',
-            exit: 'exit code 127'
-          })
-        )
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async () => {
+      calls += 1
+      throw new TranslationStartError(
+        new EngineCannotRunError('llama-server', {
+          family: 'llama_cpp',
+          reason: 'library-missing',
+          os: 'linux',
+          name: 'libgomp.so.1',
+          exit: 'exit code 127'
+        })
+      )
+    })
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
@@ -284,23 +257,17 @@ describe('registerTranslateIpc — translate job contract', () => {
     // forwarded to the renderer — without the FA-1 checkpoint/rollback they would survive into the
     // terminal `done` text (silent output corruption). The terminal text must carry the window ONCE.
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate(o) {
-        calls += 1
-        if (calls === 1) {
-          o.onToken?.('PARTIAL-DUP ') // streamed into job.text, then a transient failure
-          throw new Error('IncompleteStreamError')
-        }
-        const out = `TR<${o.text}>`
-        o.onToken?.(out)
-        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
-        return out
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async (o) => {
+      calls += 1
+      if (calls === 1) {
+        o.onToken?.('PARTIAL-DUP ') // streamed into job.text, then a transient failure
+        throw new Error('IncompleteStreamError')
+      }
+      const out = `TR<${o.text}>`
+      o.onToken?.(out)
+      o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+      return out
+    })
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
@@ -312,8 +279,8 @@ describe('registerTranslateIpc — translate job contract', () => {
   })
 
   it('a retry inside a multi-window job rolls back the failed attempt and keeps the \\n\\n joins (F-1)', async () => {
-    // A multi-window paste where the FIRST window's first attempt streams partial text then THROWS
-    // transiently (a server-side close / IncompleteStreamError → retried), and every later call is
+    // A multi-window paste where the SECOND window's first attempt streams partial text then THROWS
+    // transiently (a server-side close / IncompleteStreamError → retried), and every other call is
     // clean. FA-2 F-2 note: the trigger is a THROW, not a limit stop — a limit stop no longer
     // retries, so this keeps exercising the F-1 rollback while respecting the new retry policy.
     // The rollback must drop the failed attempt's deltas while preserving the '\n\n' separators.
@@ -327,12 +294,11 @@ describe('registerTranslateIpc — translate job contract', () => {
     const expected = plan.windows.map((w) => `TR<${w}>`).join('\n\n')
 
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 1024,
-      async translate(o) {
+    const translator = translatorWith(
+      async (o) => {
         calls += 1
-        if (calls === 1) {
+        // The second window's first attempt, after its '\n\n' join — the checkpoint must sit after the separator.
+        if (calls === 2) {
           o.onToken?.('DUP ')
           o.onToken?.(`TR<${o.text}>`)
           throw new Error('IncompleteStreamError') // transient throw → retried once (F-2)
@@ -342,15 +308,14 @@ describe('registerTranslateIpc — translate job contract', () => {
         o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
         return out
       },
-      async stop() {},
-      async suspend() {}
-    }
+      () => 1024
+    )
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq({ text: long }))) as TranslateJob
     const done = await waitForTerminal(event, initial.jobId)
     expect(done.state).toBe('done')
-    expect(calls).toBe(plan.windows.length + 1) // one retry on the first window only
+    expect(calls).toBe(plan.windows.length + 1) // one retry, on the second window
     // No 'DUP' residue and every '\n\n' join intact — the rollback restored post-separator text.
     expect(done.text).toBe(expected)
   })
@@ -367,7 +332,7 @@ describe('registerTranslateIpc — translate job contract', () => {
     // #163 (T-9): don't leave the first job running past test end — release the gate AND
     // await its settle so no stray async work bleeds into later tests.
     gated.release()
-    await vi.waitFor(() => expect(svc.getActiveJob()).toBeNull())
+    await until(() => svc.getActiveJob() === null, 'the first job settling')
   })
 
   it('refuses while a document task holds the lane (docTaskBusy, D9)', async () => {
@@ -400,7 +365,7 @@ describe('registerTranslateIpc — translate job contract', () => {
     const gated = gatedTranslator()
     registerTranslateIpc(ctxFor(), service({ translator: gated.translator }))
     const job = (await invoke(handlers, IPC.translateStart, goodReq())).result as TranslateJob
-    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1)) // now in flight
+    await reachSidecar(gated) // now in flight
     const cancelled = (await invoke(handlers, IPC.translateCancel, job.jobId)).result as TranslateJob
     expect(cancelled.state).toBe('cancelled')
     expect(gated.sawSignal()?.aborted).toBe(true)
@@ -412,7 +377,7 @@ describe('registerTranslateIpc — translate job contract', () => {
     registerTranslateIpc(ctxFor(), svc)
     const event = makeEvent()
     const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
-    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1))
+    await reachSidecar(gated)
     const active = (await invoke(handlers, IPC.translateGetActive)).result as TranslateJob | null
     expect(active?.jobId).toBe(job.jobId)
     expect(active?.state).toBe('translating')
@@ -427,13 +392,13 @@ describe('registerTranslateIpc — translate job contract', () => {
     const svc = service({ translator: gated.translator })
     registerTranslateIpc(ctxFor(), svc)
     const job = (await invoke(handlers, IPC.translateStart, goodReq())).result as TranslateJob
-    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1))
+    await reachSidecar(gated)
 
     await svc.stop()
     expect(gated.sawSignal()?.aborted).toBe(true)
     // The job map is purged — nothing queryable, no source/translation text lingering past a lock.
     expect((await invoke(handlers, IPC.translateGetActive)).result).toBeNull()
-    expect(svc.getJob(job.jobId).state).toBe('failed')
+    expect((await invoke(handlers, IPC.translateCancel, job.jobId)).result).toEqual({ jobId: job.jobId, state: 'failed', error: null }) // purged: the unknown-id shape
   })
 
   it('cancels the active job when the starting window is destroyed (L3, multi-window safety)', async () => {
@@ -442,10 +407,10 @@ describe('registerTranslateIpc — translate job contract', () => {
     registerTranslateIpc(ctxFor(), svc)
     const event = makeEvent()
     const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
-    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1)) // in flight
+    await reachSidecar(gated) // in flight
     event.sender.destroy() // the window goes away mid-decode
     expect(gated.sawSignal()?.aborted).toBe(true) // the sidecar fetch was aborted
-    expect(svc.getJob(job.jobId).state).toBe('cancelled') // the busy lane is freed
+    expect((await invoke(handlers, IPC.translateGetActive)).result).toBeNull() // the busy lane is freed
   })
 
   it('a completed job detaches its destroyed listener (no per-translate listener pile-up, L3)', async () => {
@@ -454,10 +419,9 @@ describe('registerTranslateIpc — translate job contract', () => {
     const event = makeEvent()
     const initial = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
     await waitForTerminal(event, initial.jobId)
-    // The job finished; a later window-destroy must NOT try to cancel a long-gone job (the listener
-    // was detached on `done`). getJob still reports the terminal `done`, unchanged by the destroy.
-    event.sender.destroy()
-    expect(svc.getJob(initial.jobId).state).toBe('done')
+    // The listener is checked directly: a destroy after `done` cannot tell — `cancel()` leaves a
+    // finished job unchanged.
+    expect(event.sender.listenerCount('destroyed')).toBe(0) // detached on done
   })
 
   it('a cancelled job detaches its destroyed listener too (F-4, parity with done-detach)', async () => {
@@ -469,7 +433,7 @@ describe('registerTranslateIpc — translate job contract', () => {
     registerTranslateIpc(ctxFor(), svc)
     const event = makeEvent()
     const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
-    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1)) // in flight
+    await reachSidecar(gated) // in flight
     expect(event.sender.listenerCount('destroyed')).toBe(1) // wired at start
     const cancelled = (await invoke(handlers, IPC.translateCancel, job.jobId)).result as TranslateJob
     expect(cancelled.state).toBe('cancelled')
@@ -486,7 +450,7 @@ describe('registerTranslateIpc — translate job contract', () => {
     registerTranslateIpc(ctxFor(), svc)
     const event = makeEvent()
     await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())
-    while (!gated.sawSignal()) await new Promise((r) => setTimeout(r, 1)) // in flight
+    await reachSidecar(gated) // in flight
     expect(event.sender.listenerCount('destroyed')).toBe(1) // wired at start
     await svc.stop() // the lock/quit terminal — no trDone/trError, window not destroyed
     expect(event.sender.listenerCount('destroyed')).toBe(0) // detached via the F-25 purge hook
@@ -494,23 +458,11 @@ describe('registerTranslateIpc — translate job contract', () => {
 
   it('translateStart refuses a locked workspace (never respawns the suspended sidecar)', async () => {
     registerTranslateIpc(ctxFor(false), service({ translator: scriptedTranslator() }))
-    await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow()
-  })
-
-  it('#163 (T-1): translateStart refuses an UNLOCKED workspace whose lock teardown is under way (AUD-02)', async () => {
-    // The exact AUD-02 hole: the DB stays open (isUnlocked TRUE) for the whole multi-second
-    // teardown, so a bare isUnlocked() check admits a translate that lazily respawns the ~10 GB
-    // sidecar the teardown just suspended — with the pasted plaintext in its KV cache while the
-    // vault re-encrypts. The guard must be `workspaceAdmitsWork` (isLocking wins).
-    const translator = scriptedTranslator()
-    const spy = vi.spyOn(translator, 'translate')
-    registerTranslateIpc(ctxFor(true, /* locking */ true), service({ translator }))
-    await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow()
-    expect(spy).not.toHaveBeenCalled()
+    await expect(invoke(handlers, IPC.translateStart, goodReq())).rejects.toThrow(/Workspace is locked\./)
   })
 
   it('#163 (T-1): the SERVICE-level isWorkspaceLocking refusal (the non-IPC callers\' guard)', async () => {
-    // jobs.ts:105 — never constructed in any test before. The production wiring
+    // `TranslateJobService.start()`'s own AUD-02 check. The production wiring
     // (main/index.ts) passes isWorkspaceLocking; a start during the teardown must come back
     // terminal without touching the sidecar.
     const translator = scriptedTranslator()
@@ -562,17 +514,11 @@ describe('#160 — TranslateJobService hardening', () => {
 
   it('BE-2: a per-request timeout DURING a live decode (tokens flowed) fails the window without a retry', async () => {
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate(o) {
-        calls += 1
-        o.onToken?.('slow ') // the decode was LIVE — tokens flowed until the bound
-        throw new DOMException('The operation timed out.', 'TimeoutError')
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async (o) => {
+      calls += 1
+      o.onToken?.('slow ') // the decode was LIVE — tokens flowed until the bound
+      throw new DOMException('The operation timed out.', 'TimeoutError')
+    })
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
@@ -586,16 +532,10 @@ describe('#160 — TranslateJobService hardening', () => {
 
   it('BE-2 control: a timeout with NO tokens (wedged server) keeps its one transient retry', async () => {
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate() {
-        calls += 1
-        throw new DOMException('The operation timed out.', 'TimeoutError')
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async () => {
+      calls += 1
+      throw new DOMException('The operation timed out.', 'TimeoutError')
+    })
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
@@ -606,22 +546,16 @@ describe('#160 — TranslateJobService hardening', () => {
 
   it('#605: a hung sidecar keeps its one retry even after tokens flowed — the runtime stopped it, the retry runs on a fresh one', async () => {
     let calls = 0
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate(o) {
-        calls += 1
-        if (calls === 1) {
-          o.onToken?.('Gu') // tokens flowed, then the decode clock ended the window
-          throw new RuntimeUnresponsiveError(120_000)
-        }
-        o.onToken?.('Good day.')
-        o.onFinal?.({ stopType: 'eos' })
-        return 'Good day.'
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async (o) => {
+      calls += 1
+      if (calls === 1) {
+        o.onToken?.('Gu') // tokens flowed, then the decode clock ended the window
+        throw new RuntimeUnresponsiveError(120_000)
+      }
+      o.onToken?.('Good day.')
+      o.onFinal?.({ stopType: 'eos' })
+      return 'Good day.'
+    })
     registerTranslateIpc(ctxFor(), service({ translator }))
     const event = makeEvent()
     const job = (await invokeWithEvent(handlers, IPC.translateStart, event, goodReq())) as TranslateJob
@@ -636,17 +570,12 @@ describe('#160 — TranslateJobService hardening', () => {
     // await used to run, so the catch → emit.error fired inside start()'s own call stack — the
     // renderer would miss trError against its stale 'queued' snapshot. The microtask deferral
     // makes every terminal strictly-after-return by construction.
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => {
+    const translator = translatorWith(
+      async () => '',
+      () => {
         throw new Error('sync boom')
-      },
-      async translate() {
-        return ''
-      },
-      async stop() {},
-      async suspend() {}
-    }
+      }
+    )
     const svc = service({ translator })
     let returned = false
     let emittedAfterReturn: boolean | null = null
@@ -659,7 +588,7 @@ describe('#160 — TranslateJobService hardening', () => {
     })
     returned = true
     expect(job.state).toBe('queued')
-    await vi.waitFor(() => expect(emittedAfterReturn).not.toBe(null))
+    await until(() => emittedAfterReturn !== null, 'the error terminal')
     expect(emittedAfterReturn).toBe(true) // pre-fix: false (emitted synchronously inside start)
   })
 })
@@ -668,8 +597,6 @@ describe('#160 — TranslateJobService hardening', () => {
 // ---- and a cancel landing BETWEEN the windows of a multi-window job                  ----
 
 describe('#163 (T-5) — TranslateJobService edges', () => {
-  const silentEmit = () => ({ token: () => {}, done: () => {}, error: () => {} })
-
   /** Await one job's terminal state via emitter promises (no IPC layer needed). */
   function startAndWait(
     svc: TranslateJobService,
@@ -690,16 +617,10 @@ describe('#163 (T-5) — TranslateJobService edges', () => {
     // A translator that RESOLVES non-empty with a clean stop but never calls onToken: every
     // window passes the clean check while the accumulated job text stays '' — the exact path
     // the screen's translate.err.empty copy exists for, never driven before.
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 4096,
-      async translate(o) {
-        o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
-        return 'resolved but never streamed'
-      },
-      async stop() {},
-      async suspend() {}
-    }
+    const translator = translatorWith(async (o) => {
+      o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
+      return 'resolved but never streamed'
+    })
     const svc = service({ translator })
     const { terminal } = startAndWait(svc, goodReq())
     const job = await terminal
@@ -718,9 +639,10 @@ describe('#163 (T-5) — TranslateJobService edges', () => {
     }
     // TRANSLATE_MAX_JOB_HISTORY = 8: the two oldest jobs were evicted — their poll now returns
     // the unknown-id terminal shape (failed, error null), while a recent job still reads done.
-    expect(svc.getJob(ids[0])).toEqual({ jobId: ids[0], state: 'failed', error: null })
-    expect(svc.getJob(ids[1])).toEqual({ jobId: ids[1], state: 'failed', error: null })
-    expect(svc.getJob(ids[9]).state).toBe('done')
+    // (`cancel()` leaves a terminal job untouched and answers an unknown id with the same failed/null shape.)
+    expect(svc.cancel(ids[0])).toEqual({ jobId: ids[0], state: 'failed', error: null })
+    expect(svc.cancel(ids[1])).toEqual({ jobId: ids[1], state: 'failed', error: null })
+    expect(svc.cancel(ids[9]).state).toBe('done')
   })
 
   it('a cancel landing BETWEEN windows never starts the next window', async () => {
@@ -731,19 +653,16 @@ describe('#163 (T-5) — TranslateJobService edges', () => {
     const text = `${words(120, 'a')}\n\n${words(120, 'b')}`
     let calls = 0
     let cancelSelf: () => void = () => {}
-    const translator: Translator = {
-      modelId: 'translategemma-12b-it-q4',
-      contextWindow: () => 1024,
-      async translate(o) {
+    const translator = translatorWith(
+      async (o) => {
         calls += 1
         o.onToken?.('uebersetzt ')
         o.onFinal?.({ stoppingWord: TRANSLATION_STOP_TOKEN })
         cancelSelf() // Stop lands while the lane sits between window 1 and window 2
         return 'uebersetzt '
       },
-      async stop() {},
-      async suspend() {}
-    }
+      () => 1024
+    )
     const svc = service({ translator })
     let sawTerminal = false
     const job = svc.start(goodReq({ text }), {
@@ -756,10 +675,11 @@ describe('#163 (T-5) — TranslateJobService edges', () => {
       }
     })
     cancelSelf = () => svc.cancel(job.jobId)
-    await vi.waitFor(() => expect(svc.getJob(job.jobId).state).toBe('cancelled'))
+    await until(() => calls >= 1, 'window 1 reaching the sidecar')
+    // One macrotask hop: the scripted translator and run()'s loop are microtasks, so window 2 would have started by now.
+    await new Promise((r) => setImmediate(r))
     expect(calls).toBe(1) // window 2 never started
     expect(sawTerminal).toBe(false) // a user cancel emits neither done nor error
     expect(svc.getActiveJob()).toBeNull() // the slot was released
-    void silentEmit
   })
 })

@@ -10,7 +10,7 @@ import {
   unregisterSidecarChild,
   type ResolveBinOptions
 } from '../runtime/sidecar'
-import { verifyBinaryBeforeSpawn, type BinaryVerifyResult } from '../binary-verifier'
+import { verifyBinaryBeforeSpawn } from '../binary-verifier'
 import {
   EngineCannotRunError,
   classifyLoadFailure,
@@ -141,13 +141,6 @@ export interface WhisperCliOptions {
   /** Injected spawn for tests (no real process). */
   spawnImpl?: (command: string, args: string[], options: SpawnOptions) => ChildProcess
   /**
-   * Re-hash the `whisper-cli` binary against its install marker before each spawn
-   * (vuln-scan B). Defaults to the shared `verifyBinaryBeforeSpawn` (inert in dev / before
-   * init). On a packaged-build `mismatch` the transcription is refused. The dev-only
-   * `HILBERTRAUM_WHISPER_BIN` override is never hash-gated (dev resolves `skip-dev`).
-   */
-  verifyBinary?: (binPath: string) => Promise<BinaryVerifyResult>
-  /**
    * Per-spawn inactivity watchdog ceiling in ms (REL-1). Default
    * `DEFAULT_WHISPER_IDLE_TIMEOUT_MS` (env-overridable). Injected small in tests.
    */
@@ -156,10 +149,8 @@ export interface WhisperCliOptions {
   killGraceMs?: number
   /** Cap on the `suspend()`/`stop()` cleanup await (REL-2). Default `DEFAULT_SUSPEND_TIMEOUT_MS`. */
   suspendTimeoutMs?: number
-  /** #530 test seam: the OS the load-failure classifier reports (default `process.platform`). */
+  /** #530 test seam: the OS the spawn-error and load-failure classifiers report (default `process.platform`). */
   platform?: NodeJS.Platform
-  /** #530 test seam: the Windows System32 DLL check the classifier consults. */
-  systemDllExists?: (dll: string) => boolean
 }
 
 export class WhisperCliTranscriber implements Transcriber {
@@ -173,9 +164,7 @@ export class WhisperCliTranscriber implements Transcriber {
   private readonly killGraceMs: number
   private readonly suspendTimeoutMs: number
   private readonly spawnImpl: (command: string, args: string[], options: SpawnOptions) => ChildProcess
-  private readonly verifyBinary: (binPath: string) => Promise<BinaryVerifyResult>
   private readonly platform?: NodeJS.Platform
-  private readonly systemDllExists?: (dll: string) => boolean
   /**
    * In-flight CLI children mapped to a promise that resolves when that child has fully
    * exited AND its `transcribe()` cleanup (the transient-transcript shred) has run.
@@ -196,9 +185,7 @@ export class WhisperCliTranscriber implements Transcriber {
     this.killGraceMs = opts.killGraceMs ?? DEFAULT_KILL_GRACE_MS
     this.suspendTimeoutMs = opts.suspendTimeoutMs ?? DEFAULT_SUSPEND_TIMEOUT_MS
     this.spawnImpl = opts.spawnImpl ?? nodeSpawn
-    this.verifyBinary = opts.verifyBinary ?? verifyBinaryBeforeSpawn
     this.platform = opts.platform
-    this.systemDllExists = opts.systemDllExists
   }
 
   async transcribe(filePath: string, opts: TranscribeOptions): Promise<TranscriptSegment[]> {
@@ -286,7 +273,7 @@ export class WhisperCliTranscriber implements Transcriber {
     // generic failure copy (the raw reason stays in the local log only).
     // #516: an engine install replacing this folder holds spawns until its swap is over.
     await waitForEngineSpawns('whisper_cpp')
-    if ((await this.verifyBinary(this.binPath)) === 'mismatch') {
+    if ((await verifyBinaryBeforeSpawn(this.binPath)) === 'mismatch') {
       throw new Error('whisper-cli failed pre-spawn integrity verification')
     }
     return new Promise((resolve, reject) => {
@@ -413,8 +400,7 @@ export class WhisperCliTranscriber implements Transcriber {
       exitCode: code,
       signal,
       stderr: stderrTail,
-      platform: this.platform,
-      systemDllExists: this.systemDllExists
+      platform: this.platform
     })
     if (!failure) return null
     const problem = { family: 'whisper_cpp' as const, ...failure }

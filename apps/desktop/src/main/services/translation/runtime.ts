@@ -259,10 +259,7 @@ const REAL_IDLE_CLOCK: IdleClock = {
   }
 }
 
-export type TranslationRuntimeDeps = Pick<
-  LlamaServerOptions,
-  'spawn' | 'fetchImpl' | 'findPort' | 'threads' | 'healthTimeoutMs' | 'healthIntervalMs' | 'host'
->
+export type TranslationRuntimeDeps = Pick<LlamaServerOptions, 'spawn' | 'fetchImpl' | 'findPort' | 'healthIntervalMs'>
 
 export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
   /** The translation model id (the manifest id). */
@@ -271,10 +268,6 @@ export interface TranslationRuntimeOptions extends TranslationRuntimeDeps {
   /** Absolute path to the GGUF weight. */
   modelPath: string
   contextTokens?: number
-  /** Per-window timeout in ms (default 2 700 000 — a full window's CPU decode can run ~30+ min under load). */
-  requestTimeoutMs?: number
-  /** Idle-teardown timeout in ms (default `HILBERTRAUM_TRANSLATION_IDLE_MS` / 120 000). */
-  idleTimeoutMs?: number
   /** Idle-teardown clock (default: the global `setTimeout`). Tests inject a controllable clock. */
   idleClock?: IdleClock
   /**
@@ -472,7 +465,7 @@ export class TranslationRuntime {
   constructor(private readonly opts: TranslationRuntimeOptions) {
     this.modelId = opts.modelId
     this.ctxTokens = opts.contextTokens ?? DEFAULT_TRANSLATION_CONTEXT_TOKENS
-    this.idleTimeoutMs = opts.idleTimeoutMs ?? readIdleTimeoutMs()
+    this.idleTimeoutMs = readIdleTimeoutMs()
     this.idleClock = opts.idleClock ?? REAL_IDLE_CLOCK
   }
 
@@ -654,10 +647,7 @@ export class TranslationRuntime {
       spawn: this.opts.spawn,
       fetchImpl: this.opts.fetchImpl,
       findPort: this.opts.findPort,
-      threads: this.opts.threads,
-      healthTimeoutMs: this.opts.healthTimeoutMs,
       healthIntervalMs: this.opts.healthIntervalMs,
-      host: this.opts.host,
       // #159 (BE-1): let a lock/quit teardown abort this start mid-health-wait (the child is
       // killed via the normal stop path; start() rejects AbortError — never latched below).
       startAbortSignal: startSignal,
@@ -841,9 +831,8 @@ export class TranslationRuntime {
       return_progress: true,
       ...(opts.maxTokens != null ? { n_predict: opts.maxTokens } : {})
     })
-    const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
     // Own the (long) timeout so it is cleared the instant the window finishes (REL-4).
-    const combined = combineSignals(opts.signal, timeoutMs)
+    const combined = combineSignals(opts.signal, DEFAULT_REQUEST_TIMEOUT_MS)
     // #605: the headers get their own deadline; after them the request follows the cap and the caller.
     const headers = combineSignals(combined.signal, HEADER_WAIT_MS)
     try {

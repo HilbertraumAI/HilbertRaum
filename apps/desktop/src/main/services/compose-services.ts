@@ -167,26 +167,18 @@ export function shouldReplaceTranslator(current: Translator | null | undefined):
 }
 
 /**
- * Build (or re-build) JUST the audio-transcriber selection from the current drive layout — the
- * transcriber twin of `composeTranslator` (issue #497). ONE construction shared by
- * `composeServices` (startup) and the two mid-session install hooks (`AppContext.onModelInstalled`
- * after a speech-model download, `EngineDownloadManager.onInstalled` after a whisper.cpp engine
- * install), so the call sites can never drift. Cheap + synchronous: construction spawns nothing
- * (the whisper CLI runs per `transcribe()` call). No context window (`includeContextTokens:
- * false`) — the CLI takes none.
- */
-export function composeTranscriber(deps: ComposeServicesDeps): Transcriber | null {
-  return composeTranscriberSlot(deps).transcriber
-}
-
-/**
- * `composeTranscriber` plus WHY the slot is empty (#527): the transcriber needs the whisper.cpp
- * engine AND the speech model, and the composer hint, the audio-import failure and the AI Model
- * screen each name the piece that is really missing — including "the engine has no build for
- * this system", where no download can help. Computed here, from the same model resolution, at
- * the same three moments the slot itself is (startup + the two install hooks), so the reason can
- * never describe a different drive state than the slot; `getAppStatus` (polled by the shell)
- * only reads it back.
+ * Build (or re-build) the audio-transcriber slot from the current drive layout, plus WHY it is empty (#527) — the
+ * transcriber twin of `composeTranslator` (issue #497). ONE construction shared by `composeServices` (startup) and
+ * `refreshTranscriberSlot` (the two mid-session install hooks: `AppContext.onModelInstalled` after a speech-model
+ * download, `EngineDownloadManager.onInstalled` after a whisper.cpp engine install), so the call sites can never
+ * drift. Cheap + synchronous: construction spawns nothing (the whisper CLI runs per `transcribe()` call). No context
+ * window (`includeContextTokens: false`) — the CLI takes none.
+ *
+ * The reason: the transcriber needs the whisper.cpp engine AND the speech model, and the composer hint, the
+ * audio-import failure and the AI Model screen each name the piece that is really missing — including "the engine has
+ * no build for this system", where no download can help. Computed here, from the same model resolution, at the same
+ * three moments the slot itself is, so the reason can never describe a different drive state than the slot;
+ * `getAppStatus` (polled by the shell) only reads it back.
  */
 export function composeTranscriberSlot(deps: ComposeServicesDeps): {
   transcriber: Transcriber | null
@@ -223,7 +215,7 @@ export function composeTranscriberSlot(deps: ComposeServicesDeps): {
  * live instance may hold an in-flight whisper child that the lock/quit teardowns reach through
  * `ctx.transcriber` — replacing it would orphan that child from `suspend()`/`stop()`.
  */
-export function shouldReplaceTranscriber(current: Transcriber | null | undefined): boolean {
+function shouldReplaceTranscriber(current: Transcriber | null | undefined): boolean {
   return current == null
 }
 
@@ -278,7 +270,7 @@ export interface ComposeOcrEngineDeps {
 
 /**
  * Build (or re-build) JUST the OCR engine selection from the drive's `ocr/` folder — the OCR twin
- * of `composeTranscriber` (#410). ONE construction shared by `composeServices` (startup) and
+ * of `composeTranscriberSlot` (#410). ONE construction shared by `composeServices` (startup) and
  * `refreshOcrSlot` (after an in-app install), so the two can never drift. Cheap + synchronous:
  * the tesseract worker starts lazily. A packaged build's engine starts `'probing'` and must be
  * proven with `probeOcrEngine` before `ocrAvailable` may say so (#232).

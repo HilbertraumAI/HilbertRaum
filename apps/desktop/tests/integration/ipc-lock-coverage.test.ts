@@ -19,8 +19,8 @@ import { join } from 'node:path'
 // STILL resolve when locked (pre-unlock diagnostics + runtime status must work at the gate).
 //
 // Modules with their own dedicated locked-vault rejection tests are not duplicated here:
-// chat (chat-ipc TEST-N8), docs (docs-ipc "M6"), doctasks (doctasks-ipc), images
-// (images-ipc). Together with this file every DB-touching IPC module is enumerated.
+// chat (chat-ipc TEST-N8), docs (docs-ipc "M6"), doctasks (doctasks-ipc). Together with this
+// file every DB-touching IPC module is enumerated.
 //
 // NOTE: this also SUBSUMES Phase-5 item T3 (rag:ask lock-rejection) — registerRagIpc is
 // driven here against a locked ctx, so T3 needs no separate test.
@@ -46,6 +46,8 @@ import { registerZimIpc } from '../../src/main/ipc/registerZimIpc'
 import { registerEvidenceReviewsIpc } from '../../src/main/ipc/registerEvidenceReviewsIpc'
 import { registerLocalApiIpc } from '../../src/main/ipc/registerLocalApiIpc'
 import { registerSkillsIpc } from '../../src/main/ipc/registerSkillsIpc'
+import { registerImagesIpc } from '../../src/main/ipc/registerImagesIpc'
+import { VisionService } from '../../src/main/services/vision'
 import { IPC } from '../../src/shared/ipc'
 import { initLogging } from '../../src/main/services/logging'
 import type { AppContext } from '../../src/main/services/context'
@@ -132,7 +134,26 @@ const MODULES: Array<{
   // workspace DB (mint / copy / rotate) — none may answer a locked vault.
   { name: 'registerLocalApiIpc', register: registerLocalApiIpc, exempt: new Set<string>() },
   // Skills: all 18 channels open with requireUnlocked(); none are exempt.
-  { name: 'registerSkillsIpc', register: registerSkillsIpc, exempt: new Set<string>() }
+  { name: 'registerSkillsIpc', register: registerSkillsIpc, exempt: new Set<string>() },
+  // Images: every handler opens with requireUnlocked() — chooseImage too (#119: ungated it would
+  // pop the OS dialog and bank D2 picker tokens while locked). Only images:getStatus answers
+  // locked: status is workspace-agnostic by design (PROD-2 — vision weights are not encrypted;
+  // registerImagesIpc.ts "getStatus is WORKSPACE-AGNOSTIC"). The service is never reached: every
+  // refusal comes first.
+  {
+    name: 'registerImagesIpc',
+    register: (ctx) =>
+      registerImagesIpc(
+        ctx,
+        new VisionService({
+          getStatus: async () => ({ available: false, reason: 'no-model' }),
+          createRuntime: () => {
+            throw new Error('a locked workspace builds no vision runtime')
+          }
+        })
+      ),
+    exempt: new Set<string>([IPC.imageGetStatus])
+  }
 ]
 
 // DX-4 (full-audit-2026-06-29 follow-up, Phase 7): the locked-vault posture of every register*Ipc
@@ -146,7 +167,6 @@ const COVERED_ELSEWHERE: Record<string, string> = {
   registerChatIpc: 'chat-ipc.test.ts (TEST-N8 locked-vault rejection)',
   registerDocsIpc: 'docs-ipc.test.ts ("M6" locked-vault rejection)',
   registerDocTasksIpc: 'doctasks-ipc.test.ts (locked-vault rejection)',
-  registerImagesIpc: 'images-ipc.test.ts (locked-vault rejection)',
   registerTranslateIpc:
     'translate-ipc.test.ts (locked-vault rejection of translateStart — a start lazily respawns the suspended sidecar; cancel/getActive are safe non-DB reads, intentionally ungated)',
   registerWorkspaceIpc:

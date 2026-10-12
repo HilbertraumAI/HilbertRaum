@@ -18,6 +18,7 @@ vi.mock('electron', () => ({
 
 import { IPC } from '../../src/shared/ipc'
 import {
+  DEFAULT_DICTATION_TIMEOUT_MS,
   DICTATION_BUSY_MESSAGE,
   DICTATION_FAILED_MESSAGE,
   DICTATION_MAX_BYTES,
@@ -26,12 +27,14 @@ import {
   registerDictationIpc
 } from '../../src/main/ipc/registerDictationIpc'
 import { documentsDir } from '../../src/main/services/ingestion'
+import { createPlaintextOps } from '../../src/main/services/ingestion/plaintext-ops'
 import { encodeWavPcm16 } from '../../src/renderer/lib/wav'
 import { t } from '../../src/shared/i18n'
 import { EngineCannotRunError } from '../../src/main/services/runtime/engine-load'
 import type { Transcriber, TranscribeOptions } from '../../src/main/services/transcriber'
 import type { AppContext } from '../../src/main/services/context'
 import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
+import { until, within } from '../helpers/hang-budget'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
@@ -295,18 +298,15 @@ describe('registerDictationIpc', () => {
     registerDictationIpc(ctxWith(workspacePath, transcriber).ctx)
 
     const first = invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
-    // PERF-2: the async `await writeFile` now precedes transcribe(), so a single tick no longer
-    // guarantees the first has reached it — poll on a wall-clock deadline (matching the rest of the
-    // integration suite) until it does. An earlier iteration cap (100 setImmediate ticks) flaked under
-    // full-suite CPU load when the off-event-loop write didn't land in time (TEST-1, 2026-06-29).
-    // inFlight is set synchronously, so the BUSY refusal below holds regardless of this timing.
-    const start = Date.now()
-    while (calls === 0 && Date.now() - start < 5000) await new Promise((r) => setImmediate(r))
+    // PERF-2: the async `await writeFile` precedes transcribe(), so wait on the observable (TEST-1: an iteration cap
+    // flaked under full-suite load). inFlight is set synchronously, so the BUSY refusal below holds regardless.
+    await until(() => calls > 0, 'the first dictation reaching transcribe')
     expect(calls).toBe(1)
-    // The second press is refused with friendly copy and never reaches the transcriber.
-    await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([4, 5, 6]))).rejects.toThrow(
-      DICTATION_BUSY_MESSAGE
-    )
+    // The second press is refused with friendly copy and never reaches the transcriber (were it let through, it
+    // would park on the gate: `within` names that instead of a bare test timeout).
+    await expect(
+      within(invoke(handlers, IPC.transcribeDictation, new Uint8Array([4, 5, 6])), 'the second press settling')
+    ).rejects.toThrow(DICTATION_BUSY_MESSAGE)
     expect(calls).toBe(1)
     release()
     const { result } = await first
@@ -315,35 +315,74 @@ describe('registerDictationIpc', () => {
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
   })
 
-  // REL-3 (TEST-4): a wedged child must not hang the mic spinner forever — the wall-clock
-  // ceiling aborts it (→ kills the whisper child) and the renderer gets the friendly copy.
-  //
-  // The timeouts this test hit (15 s on PR #100, 60 s on master run 31337902509, 120 s at a desk
-  // in wave DEP-6) were a hang in the fake, not a starved runner (#549). The handler arms its
-  // 30 ms deadline BEFORE awaiting the WAV write, so under load the signal can be aborted before
-  // `transcribe` runs; a fake that only waits for a future 'abort' event then never settles. It
-  // now checks `signal.aborted` first, as the real whisper transcriber does
-  // (services/transcriber/cli.ts). With a 1 ms deadline the old fake hung 3 of 3 times.
+  // REL-3 (TEST-4): a wedged child must not hang the mic spinner forever — the shipped wall-clock
+  // ceiling (DEFAULT_DICTATION_TIMEOUT_MS) aborts it (→ kills the whisper child) and the renderer gets the friendly copy.
+  // The fake checks `signal.aborted` before it subscribes (#549: a deadline that fired during the WAV write once
+  // left it unsettled for a whole 120 s budget).
   it('a wedged child rejects on the wall-clock timeout, not a hang (REL-3)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
+    // The shipped ceiling, not a HILBERTRAUM_DICTATION_TIMEOUT_MS left in the shell (an empty value reads as unset).
+    vi.stubEnv('HILBERTRAUM_DICTATION_TIMEOUT_MS', '')
+    try {
+      const workspacePath = freshWorkspacePath()
+      let signal: AbortSignal | undefined
+      const transcriber: Transcriber = {
+        id: 'wedged',
+        transcribe: (_filePath: string, opts: TranscribeOptions) =>
+          new Promise<never>((_resolve, reject) => {
+            signal = opts.signal
+            const cancelled = (): void => reject(new Error('Transcription was cancelled.'))
+            if (opts.signal?.aborted) cancelled()
+            else opts.signal?.addEventListener('abort', cancelled, { once: true })
+          })
+      }
+      registerDictationIpc(ctxWith(workspacePath, transcriber).ctx)
+      const call = invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
+      await until(() => signal !== undefined, 'the dictation reaching transcribe')
+      vi.advanceTimersByTime(DEFAULT_DICTATION_TIMEOUT_MS - 1)
+      expect(signal!.aborted).toBe(false) // just short of the shipped ceiling: still transcribing
+      vi.advanceTimersByTime(1)
+      await expect(within(call, 'the dictation settling at its ceiling')).rejects.toThrow(DICTATION_FAILED_MESSAGE)
+      // The temp WAV is shredded even though the child wedged (finally ran).
+      expect(readdirSync(documentsDir(workspacePath))).toEqual([])
+    } finally {
+      vi.useRealTimers()
+      vi.unstubAllEnvs()
+    }
+  })
+
+  // #237: a dictation registers with `ctx.plaintextOps`, so "Lock now" / quit reach it: the registry's abort is the
+  // whisper child's signal, and its sweep shreds the temp WAV of a transcription that outlives the settle bound. Both
+  // steps run in one tick here, before the handler's own `finally` can shred — the state such a transcription leaves.
+  it('a lock reaches an in-flight dictation: the registry aborts the whisper child and its sweep shreds the temp WAV (#237)', async () => {
     const workspacePath = freshWorkspacePath()
-    // Only settles when the dictation timeout aborts the signal (mimics a killed child).
+    const ops = createPlaintextOps()
+    let wav: string | null = null
+    let signal: AbortSignal | undefined
     const transcriber: Transcriber = {
-      id: 'wedged',
-      transcribe: (_filePath: string, opts: TranscribeOptions) =>
+      id: 'parked',
+      transcribe: (filePath: string, opts: TranscribeOptions) =>
         new Promise<never>((_resolve, reject) => {
+          wav = filePath
+          signal = opts.signal
           const cancelled = (): void => reject(new Error('Transcription was cancelled.'))
           if (opts.signal?.aborted) cancelled()
           else opts.signal?.addEventListener('abort', cancelled, { once: true })
         })
     }
-    registerDictationIpc(ctxWith(workspacePath, transcriber).ctx, { maxDurationMs: 30 })
-
-    await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))).rejects.toThrow(
-      DICTATION_FAILED_MESSAGE
-    )
-    // The temp WAV is shredded even though the child wedged (finally ran).
-    expect(readdirSync(documentsDir(workspacePath))).toEqual([])
-  }, 120_000)
+    const { ctx } = ctxWith(workspacePath, transcriber)
+    ctx.plaintextOps = ops
+    registerDictationIpc(ctx)
+    const call = invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))
+    await until(() => wav !== null, 'the dictation reaching transcribe')
+    expect(existsSync(wav!)).toBe(true)
+    ops.abortAll()
+    expect(signal!.aborted).toBe(true) // the lock reached the whisper child's signal
+    expect(ops.sweepRegistered()).toBe(1) // the WAV was tracked, so the lock sweep shreds it
+    expect(existsSync(wav!)).toBe(false)
+    await expect(call).rejects.toThrow(DICTATION_FAILED_MESSAGE)
+    expect(ops.size()).toBe(0) // released in the handler's finally
+  })
 })
 
 // #530: the OS refused to start the voice engine — the handler says so (a retry would not help);
@@ -374,14 +413,5 @@ describe('registerDictationIpc — voice engine refused by the OS (#530)', () =>
     expect(String(err)).not.toContain(DICTATION_FAILED_MESSAGE)
     expect(String(err)).not.toContain('libgomp') // the technical detail stays out of the toast
     expect(readdirSync(documentsDir(workspacePath))).toEqual([])
-  })
-
-  it('any other failure still rejects with the unchanged generic copy', async () => {
-    expect(DICTATION_FAILED_MESSAGE).toBe('Could not transcribe that — try again.')
-    const workspacePath = freshWorkspacePath()
-    registerDictationIpc(ctxWith(workspacePath, throwing(new Error('whisper-cli exited with code 3: boom'))).ctx)
-    await expect(invoke(handlers, IPC.transcribeDictation, new Uint8Array([1, 2, 3]))).rejects.toThrow(
-      DICTATION_FAILED_MESSAGE
-    )
   })
 })

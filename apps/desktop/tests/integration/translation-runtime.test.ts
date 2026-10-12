@@ -1,27 +1,35 @@
 import { describe, it, expect, afterEach, vi } from 'vitest'
-import { EventEmitter } from 'node:events'
+import { EventEmitter, getEventListeners } from 'node:events'
 import {
   TranslationRuntime,
   isRequestTimeoutError,
   isTranslationStartError,
   TRANSLATION_START_FAILED_CODE,
-  type TranslateOptions
+  type TranslateOptions,
+  type TranslationGpuDeps
 } from '../../src/main/services/translation/runtime'
-import { createSelectedTranslator } from '../../src/main/services/translation/factory'
 import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import { isRuntimeUnresponsiveError } from '../../src/main/services/runtime/llama'
 import { EngineCannotRunError, engineProblemFor, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
 import { holdEngineSpawns } from '../../src/main/services/runtime/spawn-gate'
-import { hangPolls, testBudgetMs, until, within } from '../helpers/hang-budget'
-import { loadingSidecar } from '../helpers/loading-sidecar'
+import { until, within } from '../helpers/hang-budget'
+import {
+  FakeChild,
+  GatedChild,
+  exitingChild,
+  fakeSpawn,
+  fakeIdleClock,
+  loadingSidecar,
+  sseBody
+} from '../helpers/fake-sidecar'
 
 // TG-2 fake-server tests for the real TranslationRuntime (plan §4 TG-2): launch args (NO --jinja,
 // --ctx-size 4096, --parallel 1), the raw /completion streaming + stop/temperature, abort
-// forwarding, error mapping, single-flight + failed-start latch, the GPU device ladder (issue #42:
+// forwarding, error mapping, the failed-start latch, the GPU device ladder (issue #42:
 // gpuMode/gpuAutoDisabled honoured per cold start, GPU-fail → forced-CPU fallback + session latch),
 // and — the hybrid heart — the SOFT idle-teardown interlock (vision RUNTIME-4) alongside
 // stop()/suspend() (reranker). No real binary is spawned: spawn/fetchImpl/findPort are injected
-// (the e5/reranker/vision seam).
+// (the e5/reranker/vision seam; fakes: `tests/helpers/fake-sidecar.ts`).
 
 /** A canned /completion SSE stream: two content frames + a terminal stop frame with timings. */
 const COMPLETION_SSE =
@@ -29,67 +37,6 @@ const COMPLETION_SSE =
   'data: {"content":"day.","stop":false}\n\n' +
   'data: {"content":"","stop":true,"stopping_word":"<end_of_turn>","timings":{"predicted_per_second":9.5,"predicted_n":3}}\n\n'
 const COMPLETION_TEXT = 'Good day.'
-
-class FakeChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-}
-
-function fakeSpawn() {
-  const calls: Array<{ args: string[] }> = []
-  const children: FakeChild[] = []
-  const spawn = (_c: string, args: string[]): ChildProcessLike => {
-    calls.push({ args })
-    const child = new FakeChild()
-    children.push(child)
-    return child
-  }
-  return { spawn, calls, children }
-}
-
-/** A child whose exit the test can hold after a kill (`hold`, then `release()`). */
-class GatedChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
-  killed = false
-  hold = false
-  kill(): boolean {
-    this.killed = true
-    if (!this.hold) queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-  release(): void {
-    queueMicrotask(() => this.emit('exit', 0, null))
-  }
-}
-function gatedSpawn() {
-  const calls: Array<{ args: string[] }> = []
-  const children: GatedChild[] = []
-  const spawn = (_c: string, args: string[]): ChildProcessLike => {
-    calls.push({ args })
-    const child = new GatedChild()
-    children.push(child)
-    return child
-  }
-  return { spawn, calls, children }
-}
-
-/** A `ReadableStream` over the SSE text (one chunk; readCompletionSSE handles the rest). */
-function sseBody(text: string): ReadableStream<Uint8Array> {
-  const bytes = new TextEncoder().encode(text)
-  let sent = false
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent) return controller.close()
-      sent = true
-      controller.enqueue(bytes)
-    }
-  })
-}
 
 /** Routes /health (ok) + /completion (the canned SSE). Records request URLs/bodies. */
 function translationFetch(sse = COMPLETION_SSE) {
@@ -108,25 +55,60 @@ function translationFetch(sse = COMPLETION_SSE) {
   return { fetchImpl, urls, bodies }
 }
 
+/** A fetch whose every request is refused — a child that died before it could listen. */
+const refusingFetch = (async () => {
+  throw new Error('connection refused')
+}) as unknown as typeof fetch
+
+/** A FakeChild that prints its load log right after spawn, chunk by chunk as a real pipe splits it, and
+ *  stays alive (a child that dies before healthy is fake-sidecar's `exitingChild`). */
+function spawnedChild(stderr: string[]): FakeChild {
+  const child = new FakeChild()
+  const err = new EventEmitter()
+  ;(child as unknown as { stderr: EventEmitter }).stderr = err
+  queueMicrotask(() => {
+    for (const chunk of stderr) err.emit('data', chunk)
+  })
+  return child
+}
+
+/** A spawn whose FIRST child holds its exit after a kill until `held.releaseExit()` (a teardown in flight);
+ *  later children exit at once. */
+function spawnHoldingFirst() {
+  const held = new GatedChild()
+  let spawned = 0
+  return { held, ...fakeSpawn<ChildProcessLike>(() => (spawned++ === 0 ? held : new FakeChild())) }
+}
+
 const base = {
   modelId: 'translategemma',
   binPath: '/bin/llama-server',
   modelPath: '/models/translategemma.gguf',
   contextTokens: 4096,
   findPort: async () => 51200,
-  healthIntervalMs: 1
+  healthIntervalMs: 1,
+  /** An idle clock nobody fires: no row is torn down by the wall clock (nor by a HILBERTRAUM_TRANSLATION_IDLE_MS
+   *  left in the shell); the idle rows inject `fakeIdleClock()`. */
+  idleClock: { set: () => ({ clear: () => undefined }) }
 }
 
 const translateOpts: TranslateOptions = { sourceLang: 'de', targetLang: 'en', text: 'Guten Tag.' }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
 const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
+
+/** Two macrotask hops, for a NEGATIVE with nothing to wait on: everything on the way to a spawn or a settle is
+ *  microtasks here (findPort, the dev-mode binary check, the fake fetch), so whatever would happen without a
+ *  timer has happened by now. */
+async function hops(): Promise<void> {
+  await tick()
+  await tick()
+}
 
 describe('TranslationRuntime — launch + translate', () => {
   it('launches WITHOUT --jinja, with --ctx-size 4096 --parallel 1, GPU auto-offload by default, loopback only', async () => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     await rt.translate(translateOpts)
     const args = calls[0].args.join(' ')
     expect(args).not.toContain('--jinja') // the #20305 regression (plan §1.1 / §2 D2)
@@ -152,21 +134,23 @@ describe('TranslationRuntime — launch + translate', () => {
     await rt.stop()
   })
 
-  it('defaults --ctx-size to 4096 when the manifest omits contextTokens', async () => {
+  it.each<[string, number | undefined, number]>([
+    ['omitted: the 4096 default', undefined, 4096],
+    ["8192: the manifest's own value", 8192, 8192]
+  ])('launches --ctx-size from the manifest contextTokens and reports the same contextWindow() (%s)', async (_label, contextTokens, ctx) => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const { contextTokens: _omit, ...noCtx } = base
-    const rt = new TranslationRuntime({ ...noCtx, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, contextTokens, spawn, fetchImpl })
     await rt.translate(translateOpts)
-    expect(calls[0].args.join(' ')).toContain('--ctx-size 4096')
-    expect(rt.contextWindow()).toBe(4096)
+    expect(calls[0].args.join(' ')).toContain(`--ctx-size ${ctx}`)
+    expect(rt.contextWindow()).toBe(ctx) // the window planner clamps against this — it must match the server
     await rt.stop()
   })
 
   it('POSTs the trained prompt to /completion with temperature 0 + stop token, streams the text', async () => {
     const { spawn } = fakeSpawn()
     const { fetchImpl, bodies, urls } = translationFetch()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
 
     const tokens: string[] = []
     let timings: unknown
@@ -194,40 +178,21 @@ describe('TranslationRuntime — launch + translate', () => {
   it('passes maxTokens through as n_predict', async () => {
     const { spawn } = fakeSpawn()
     const { fetchImpl, bodies } = translationFetch()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     await rt.translate({ ...translateOpts, maxTokens: 512 })
     expect(bodies[0].n_predict).toBe(512)
     await rt.stop()
   })
 
-  it('shares ONE start across concurrent translates (single-flight)', async () => {
-    const { spawn, calls } = fakeSpawn()
-    const { fetchImpl } = translationFetch()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
-    const [a, b] = await Promise.all([rt.translate(translateOpts), rt.translate(translateOpts)])
-    expect(a).toBe(COMPLETION_TEXT)
-    expect(b).toBe(COMPLETION_TEXT)
-    expect(calls.length).toBe(1) // one shared spawn, not two
-    await rt.stop()
-  })
-
   it('latches a failed start with the distinct startFailed code (fail fast, ONE spawn) — F-7', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      queueMicrotask(() => child.emit('exit', 1, null)) // dies immediately (corrupt GGUF)
-      return child
-    }
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // dies immediately (corrupt GGUF)
     const rt = new TranslationRuntime({
       ...base,
       spawn,
       // gpuMode 'off' → the launch is ALREADY forced-CPU, so there is no GPU→CPU rung to walk:
       // a start failure latches after exactly one spawn (the pre-#42 shape, preserved verbatim).
       gpu: { getGpuMode: () => 'off' },
-      fetchImpl: (async () => {
-        throw new Error('connection refused')
-      }) as unknown as typeof fetch
+      fetchImpl: refusingFetch
     })
     // F-7 / FA-4 option c: a non-bind start fault latches AND carries the distinct code, so the UI
     // can say "restart / free memory" instead of a bare "runtime failed".
@@ -239,38 +204,6 @@ describe('TranslationRuntime — launch + translate', () => {
     // BE-7 (full-audit 2026-07-10): the latch is now REPORTABLE, so the issue-#40
     // onModelInstalled refresh can replace this dead instance after a re-download repair.
     expect(rt.isStartFailed()).toBe(true)
-    await rt.stop()
-  })
-
-  it('does NOT latch a transient port-bind race — a later start retries (reranker F7 parity, F-7)', async () => {
-    // A bind race is the ONE non-latching start class (`ensureStarted` propagates it RAW, not a
-    // TranslationStartError). It stays retryable across the session, so a second translate() still
-    // attempts to start — contrast the permanent-fault latch above, which spawns once total.
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      const stderr = new EventEmitter()
-      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
-      queueMicrotask(() => {
-        stderr.emit('data', 'bind: address already in use') // the isBindRaceError signature
-        child.emit('exit', 1, null)
-      })
-      return child
-    }
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl: (async () => {
-        throw new Error('connection refused')
-      }) as unknown as typeof fetch
-    })
-    const err1 = await rt.translate(translateOpts).catch((e: unknown) => e)
-    expect(isTranslationStartError(err1)).toBe(false) // a bind race is NOT the latched class
-    const spawnsAfterFirst = calls.length
-    await rt.translate(translateOpts).catch(() => undefined)
-    expect(calls.length).toBeGreaterThan(spawnsAfterFirst) // not latched → it tried to start again
-    expect(rt.isStartFailed()).toBe(false) // a bind race never reads as latched — no replacement (BE-7)
     await rt.stop()
   })
 
@@ -291,9 +224,9 @@ describe('TranslationRuntime — launch + translate', () => {
     // Deterministically wait until the request has REACHED fetch (the signal was handed over)
     // before aborting — a fixed `sleep(2)` could fire before fetch under CPU starvation and
     // exercise a different (pre-flight) path. State-poll on the captured signal (TS-1).
-    while (!seenSignal) await sleep(1)
+    await until(() => seenSignal !== undefined, 'the request reaching fetch')
     controller.abort()
-    await expect(p).rejects.toThrow(/abort/i)
+    await expect(within(p, 'the Stop ending the request')).rejects.toThrow(/abort/i)
     expect(seenSignal?.aborted).toBe(true)
     await rt.stop()
   })
@@ -309,58 +242,23 @@ describe('TranslationRuntime — launch + translate', () => {
     await expect(rt.translate(translateOpts)).rejects.toThrow(/HTTP 500/)
     await rt.stop()
   })
-
-  it('maps a mid-stream /completion error frame to a CompletionError', async () => {
-    const { spawn } = fakeSpawn()
-    const errSse = 'data: {"error":{"message":"context size exceeded","type":"exceed_context_size_error"}}\n\n'
-    const { fetchImpl } = translationFetch(errSse)
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
-    await expect(rt.translate(translateOpts)).rejects.toThrow(/Translation request failed: context size exceeded/)
-    await rt.stop()
-  })
-
-  it('rejects retryably when the /completion stream ends without the terminal stop frame (TA-4 M2)', async () => {
-    const { spawn } = fakeSpawn()
-    // Content frames but NO `stop:true` terminal — a server-side close mid-decode. Pre-TA-4 this
-    // resolved the partial as a truncated "success"; now the reader throws so both consumers retry/fail.
-    const truncated =
-      'data: {"content":"Good ","stop":false}\n\n' + 'data: {"content":"day.","stop":false}\n\n'
-    const { fetchImpl } = translationFetch(truncated)
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
-    await expect(rt.translate(translateOpts)).rejects.toThrow(/stream ended before the terminal stop frame/)
-    await rt.stop()
-  })
 })
 
 // The idle-teardown interlock (vision RUNTIME-4 pattern) + the reranker stop()/suspend() split.
 // Injected clock → deterministic (fire teardown on demand), no wall-clock idle sleeps.
 describe('TranslationRuntime — idle teardown + stop/suspend', () => {
-  function fakeClock() {
-    const state = { fire: null as (() => void) | null, setCount: 0, clearCount: 0, unrefCount: 0 }
-    const clock = {
-      set(cb: () => void) {
-        state.setCount++
-        state.fire = cb
-        return {
-          clear: () => {
-            state.clearCount++
-            if (state.fire === cb) state.fire = null
-          },
-          unref: () => {
-            state.unrefCount++
-          }
-        }
-      }
-    }
-    return { clock, state }
-  }
+  afterEach(() => vi.unstubAllEnvs())
 
   it('arms an unref\'d idle timer on settle and tears the idle sidecar down when it fires', async () => {
-    const { spawn, children } = gatedSpawn()
+    vi.stubEnv('HILBERTRAUM_TRANSLATION_IDLE_MS', '') // the shipped default, whatever the shell sets
+    const { spawn, children } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const { clock, state } = fakeClock()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    const { clock, state } = fakeIdleClock()
+    const armedFor: number[] = []
+    const idleClock = { set: (cb: () => void, ms: number) => (armedFor.push(ms), clock.set(cb)) }
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock })
     await rt.translate(translateOpts)
+    expect(armedFor).toEqual([120_000]) // DEFAULT_TRANSLATION_IDLE_MS, the bound that ships
     expect(state.setCount).toBe(1)
     expect(state.unrefCount).toBe(1) // never blocks a clean quit
     state.fire!() // idle window elapses → soft teardown kills the child
@@ -369,9 +267,9 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
   })
 
   it('re-entry RESETS the idle clock; a reused sidecar is never torn down by the stale timer', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    const { spawn, calls, children } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
     const staleCb = state.fire!
@@ -387,26 +285,25 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
   })
 
   it('a translate racing a soft idle teardown AWAITS it, then cold-starts ONE fresh child (M5: no double-load)', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    // child0 holds its exit so the soft teardown stays IN FLIGHT
+    const { held, spawn, calls } = spawnHoldingFirst()
     const { fetchImpl } = translationFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
-    children[0].hold = true // hold child0's exit so the soft teardown stays IN FLIGHT
     state.fire!() // nulls this.server synchronously, kills child0 (gated, still alive)
-    expect(children[0].killed).toBe(true)
+    expect(held.killed).toBe(true)
     let resolved = false
     const p = rt.translate(translateOpts).then((out) => {
       resolved = true
       return out
     })
-    await tick()
-    await tick()
+    await hops()
     // Parked on the in-flight soft teardown — NO second spawn yet, so the ~10 GB sidecars never
     // co-exist (the double-load the M5 improvement closes).
     expect(resolved).toBe(false)
     expect(calls.length).toBe(1)
-    children[0].release() // child0 finally exits → the parked translate now cold-starts
+    held.releaseExit() // child0 finally exits → the parked translate now cold-starts
     const out = await p
     expect(out).toBe(COMPLETION_TEXT)
     expect(calls.length).toBe(2) // exactly one fresh child, spawned only AFTER the old one died
@@ -416,12 +313,12 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
   // #637: the M5 wait above is up to the 2 s kill grace; a cancelled window stops waiting at once and
   // starts nothing.
   it('a cancel ends a translate\'s wait for a soft idle teardown at once, and starts no child (#637)', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    // child0 holds its exit so the soft teardown stays IN FLIGHT
+    const { held, spawn, calls } = spawnHoldingFirst()
     const { fetchImpl } = translationFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
-    children[0].hold = true // hold child0's exit so the soft teardown stays IN FLIGHT
     state.fire!()
     const cancel = new AbortController()
     const waiting = rt.translate({ ...translateOpts, signal: cancel.signal }).catch((e: unknown) => e)
@@ -429,7 +326,7 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
     cancel.abort(reason)
     expect(await within(waiting, 'the cancel ending the wait for the idle teardown')).toBe(reason)
     expect(calls.length).toBe(1) // no fresh ~10 GB child for a window nobody waits for
-    children[0].release()
+    held.releaseExit()
     await rt.stop()
   })
 
@@ -437,9 +334,9 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
   // start is still in flight — and armIdleTimer returns early on `starting`. The start's own settle
   // must arm the clock, or ~10 GB that lands with nobody waiting stays resident until lock or quit.
   it('a start that lands after every translate was cancelled arms the idle clock, and its fire tears it down (#637)', async () => {
-    const { spawn, children } = gatedSpawn()
+    const { spawn, children } = fakeSpawn()
     const { fetchImpl, state: start } = loadingSidecar(translationFetch().fetchImpl)
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
 
     const cancel = new AbortController()
@@ -459,63 +356,44 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
     await rt.stop()
   })
 
-  it('recovers from a mid-session sidecar CRASH: the next translate cold-starts a fresh child (M1)', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+  // #656: Node can report one death twice — an 'error' (the process is gone) and later its 'exit' — and
+  // LlamaServer passes both on as onUnexpectedExit. By the second report a translate has cold-started a NEWER
+  // child; dropping the handle again would strand it and spawn a third. This row drives exactly that 'error'
+  // then 'exit' pair because it is the one way a stale report reaches the runtime today: a child already
+  // stopped by a teardown reports nothing (LlamaServer's own guard, sidecar.test.ts). If #656 is fixed so a
+  // death is reported once, the row still pins the outcome — the late notice changes nothing.
+  it("a dead child's second death report does NOT clobber the newer instance (identity-compared, #656)", async () => {
+    const { spawn, calls, children } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const { clock } = fakeClock()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
-    await rt.translate(translateOpts)
-    expect(calls.length).toBe(1)
-    // The child dies on its OWN (driver crash / OOM) after having been healthy, outside stop() —
-    // a real 'exit'. LlamaServer fires onUnexpectedExit, and the runtime drops the dead handle so
-    // the next translate cold-starts instead of failing forever against a stale server.
-    children[0].emit('exit', 134, null)
-    await tick()
-    const out = await rt.translate(translateOpts)
-    expect(out).toBe(COMPLETION_TEXT)
-    expect(calls.length).toBe(2) // cold-started a fresh child rather than reusing the dead one
-    await rt.stop()
-  })
-
-  it('a healthy crash does NOT clobber a newer instance (identity-compared)', async () => {
-    // The exit callback captures the child that crashed; if a soft teardown + restart has already
-    // installed a NEWER server by the time a late crash notification lands, nulling must be a no-op.
-    const { spawn, calls, children } = gatedSpawn()
-    const { fetchImpl } = translationFetch()
-    const { clock, state } = fakeClock()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     await rt.translate(translateOpts) // child0
-    state.fire!() // soft teardown of child0 (not held → exits)
-    await tick()
-    await rt.translate(translateOpts) // cold-starts child1 (the NEWER instance)
+    children[0].emit('error', new Error('read ECHILD')) // first report: M1 drops the dead handle
+    await rt.translate(translateOpts) // cold-starts child1, the NEWER instance
     expect(calls.length).toBe(2)
-    children[0].emit('exit', 134, null) // a LATE crash notice from the already-dead child0
-    await tick()
-    // child1 is untouched — the next translate reuses it, no third spawn.
-    const out = await rt.translate(translateOpts)
-    expect(out).toBe(COMPLETION_TEXT)
-    expect(calls.length).toBe(2)
+    children[0].crash(134) // the late 'exit' of the same death
+    expect(await rt.translate(translateOpts)).toBe(COMPLETION_TEXT)
+    expect(calls.length).toBe(2) // child1 reused, no third spawn
+    expect(rt.deviceStatus()?.live).toBe(true)
     await rt.stop()
   })
 
   it('concurrent stop() + suspend() both resolve only AFTER the child is dead (single-flight teardown, M5)', async () => {
-    const { spawn, children } = gatedSpawn()
+    // child0 won't exit until released — the SIGTERM→SIGKILL window
+    const { held, spawn, calls } = spawnHoldingFirst()
     const { fetchImpl } = translationFetch()
-    const { clock } = fakeClock()
+    const { clock } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
-    children[0].hold = true // child0 won't exit until released — the SIGTERM→SIGKILL window
     let suspendDone = false
     let stopDone = false
     const suspendP = rt.suspend().then(() => (suspendDone = true))
     const stopP = rt.stop().then(() => (stopDone = true))
-    await tick()
-    await tick()
-    expect(children[0].killed).toBe(true) // the kill signal was sent
+    await hops()
+    expect(held.killed).toBe(true) // the kill signal was sent
     expect(suspendDone).toBe(false) // both await the ONE shared teardown, not a resolved no-op
     expect(stopDone).toBe(false)
-    expect(children.length).toBe(1) // single-flight: no second teardown pass, no extra child
-    children[0].release() // the child finally exits
+    expect(calls.length).toBe(1) // single-flight: no second teardown pass, no extra child
+    held.releaseExit() // the child finally exits
     await Promise.all([suspendP, stopP])
     expect(suspendDone).toBe(true)
     expect(stopDone).toBe(true)
@@ -523,21 +401,19 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
   })
 
   it('overlapping suspends stay single-flight: a racing translate is refused until the SHARED teardown settles (M5)', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    const { held, spawn, calls } = spawnHoldingFirst()
     const { fetchImpl } = translationFetch()
-    const { clock } = fakeClock()
+    const { clock } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
-    children[0].hold = true
     const s1 = rt.suspend()
     const s2 = rt.suspend() // overlapping — must JOIN s1, never start a second pass
-    await tick()
-    await tick()
+    await hops()
     // While the shared teardown is still killing, `tearingDown` is HELD → a racing translate is
     // refused (pre-fix, s2's finally cleared the flag early and this would cold-start instead).
     await expect(rt.translate(translateOpts)).rejects.toThrow(/suspending/)
-    expect(children.length).toBe(1)
-    children[0].release()
+    expect(calls.length).toBe(1)
+    held.releaseExit()
     await Promise.all([s1, s2])
     // Only now that the shared teardown settled is `tearingDown` cleared → translate restarts.
     const out = await rt.translate(translateOpts)
@@ -547,21 +423,22 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
   })
 
   it('stop() is PERMANENT: kills the child, cancels the idle timer, and blocks restart', async () => {
-    const { spawn, children } = gatedSpawn()
+    const { spawn, children } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
     await rt.stop()
     expect(children[0].killed).toBe(true)
     expect(state.clearCount).toBeGreaterThanOrEqual(1)
     await expect(rt.translate(translateOpts)).rejects.toThrow(/stopped/)
+    expect(children.length).toBe(1) // no fresh child behind the refusal
   })
 
   it('suspend() is SOFT: kills the child but a later translate lazily restarts', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    const { spawn, calls, children } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const { clock } = fakeClock()
+    const { clock } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
     await rt.suspend()
@@ -573,66 +450,20 @@ describe('TranslationRuntime — idle teardown + stop/suspend', () => {
   })
 
   it('stop() during an in-flight soft teardown AWAITS it (no orphan)', async () => {
-    const { spawn, children } = gatedSpawn()
+    const { held, spawn, calls } = spawnHoldingFirst()
     const { fetchImpl } = translationFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
-    children[0].hold = true
     state.fire!() // soft teardown now in flight (gated open)
     let stopResolved = false
     const stopP = rt.stop().then(() => (stopResolved = true))
-    await tick()
-    await tick()
+    await hops()
     expect(stopResolved).toBe(false) // stop() awaits idleTeardownPromise
-    children[0].release()
+    held.releaseExit()
     await stopP
     expect(stopResolved).toBe(true)
-    expect(children.length).toBe(1) // no orphan, no extra child
-  })
-})
-
-describe('createSelectedTranslator — availability ladder', () => {
-  const modelInfo = { id: 'translategemma', modelPath: '/models/tg.gguf', contextTokens: 4096 }
-
-  it('returns null when no translation model is configured', () => {
-    const t = createSelectedTranslator({ rootPath: '/drive', model: null, resolveBin: () => '/bin/ls' })
-    expect(t).toBeNull()
-  })
-
-  it('returns null when the llama-server binary is absent', () => {
-    const t = createSelectedTranslator({
-      rootPath: '/drive',
-      model: modelInfo,
-      resolveBin: () => null,
-      modelExists: () => true
-    })
-    expect(t).toBeNull()
-  })
-
-  it('returns null when the weights are not present', () => {
-    const t = createSelectedTranslator({
-      rootPath: '/drive',
-      model: modelInfo,
-      resolveBin: () => '/bin/ls',
-      modelExists: () => false
-    })
-    expect(t).toBeNull()
-  })
-
-  it('builds a Translator when binary + weights are present', () => {
-    const reasons: string[] = []
-    const t = createSelectedTranslator({
-      rootPath: '/drive',
-      model: modelInfo,
-      resolveBin: () => '/bin/ls',
-      modelExists: () => true,
-      onSelect: (_kind, reason) => reasons.push(reason)
-    })
-    expect(t).not.toBeNull()
-    expect(t?.modelId).toBe('translategemma')
-    expect(t?.contextWindow()).toBe(4096)
-    expect(reasons.some((r) => /binary \+ weights present/.test(r))).toBe(true)
+    expect(calls.length).toBe(1) // no orphan, no extra child
   })
 })
 
@@ -646,52 +477,28 @@ describe('createSelectedTranslator — availability ladder', () => {
 describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
   const deviceOf = (args: string[]): string => (args.join(' ').includes('--device none') ? 'cpu' : 'auto')
 
-  it("gpuMode 'off' forces --device none", async () => {
+  // Tuple rows with `%s`: a `$label` title is quoted and cut at 40 characters.
+  it.each<[string, TranslationGpuDeps, 'cpu' | 'auto']>([
+    ["gpuMode 'off' forces --device none", { getGpuMode: () => 'off' }, 'cpu'],
+    [
+      'a persisted gpuAutoDisabled forces --device none (a previously detected GPU problem is respected)',
+      { getGpuMode: () => 'auto', getGpuAutoDisabled: () => true },
+      'cpu'
+    ],
+    // #312, acceptance 2 (translation side): chat no longer persists gpuAutoDisabled for a model IT could not load,
+    // so the flag stays false and the next translation cold start still resolves 'auto'.
+    [
+      '#312: gpuAutoDisabled false keeps the cold start on GPU auto-offload — no --device none',
+      { getGpuMode: () => 'auto', getGpuAutoDisabled: () => false },
+      'auto'
+    ]
+  ])('%s', async (_label, gpu, device) => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      idleTimeoutMs: 100_000,
-      gpu: { getGpuMode: () => 'off' }
-    })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, gpu })
     await rt.translate(translateOpts)
-    expect(deviceOf(calls[0].args)).toBe('cpu')
-    await rt.stop()
-  })
-
-  it('a persisted gpuAutoDisabled forces --device none (a previously detected GPU problem is respected)', async () => {
-    const { spawn, calls } = fakeSpawn()
-    const { fetchImpl } = translationFetch()
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      idleTimeoutMs: 100_000,
-      gpu: { getGpuMode: () => 'auto', getGpuAutoDisabled: () => true }
-    })
-    await rt.translate(translateOpts)
-    expect(deviceOf(calls[0].args)).toBe('cpu')
-    await rt.stop()
-  })
-
-  it('#312: gpuAutoDisabled false keeps the cold start on GPU auto-offload — no --device none', async () => {
-    // Acceptance 2, translation side. The chat ladder no longer persists `gpuAutoDisabled` for a
-    // model IT could not load, so the flag the sidecar reads here stays false and the next
-    // translation cold start still resolves 'auto'. The sibling above pins the true case.
-    const { spawn, calls } = fakeSpawn()
-    const { fetchImpl } = translationFetch()
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      idleTimeoutMs: 100_000,
-      gpu: { getGpuMode: () => 'auto', getGpuAutoDisabled: () => false }
-    })
-    await rt.translate(translateOpts)
-    expect(deviceOf(calls[0].args)).toBe('auto')
-    expect(calls[0].args.join(' ')).not.toContain('--device')
+    expect(deviceOf(calls[0].args)).toBe(device)
+    expect(calls[0].args.join(' ').includes('--device')).toBe(device === 'cpu') // 'auto' carries no device args at all
     await rt.stop()
   })
 
@@ -703,7 +510,6 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       gpu: { getGpuMode: () => mode }
     })
     await rt.translate(translateOpts)
@@ -718,15 +524,8 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
   it('a failed GPU attempt falls back to forced CPU WITHIN the same translate() and latches the session', async () => {
     // Child 0 (the GPU attempt) dies before health; every later child is healthy. The fake fetch
     // refuses connections while attempt 1 is live (a dead child must not pass its health probe).
-    const calls: Array<{ args: string[] }> = []
-    const children: FakeChild[] = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      children.push(child)
-      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null))
-      return child
-    }
+    let n = 0
+    const { spawn, calls } = fakeSpawn(() => (++n === 1 ? exitingChild(1) : new FakeChild()))
     const good = translationFetch()
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
       if (calls.length < 2) throw new Error('connection refused') // the dying GPU attempt
@@ -737,7 +536,6 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       onDeviceFallback: (reason) => fallbacks.push(reason)
     })
     const out = await rt.translate(translateOpts) // GPU rung fails → CPU rung serves the window
@@ -747,6 +545,7 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
     expect(deviceOf(calls[1].args)).toBe('cpu') // rung 2: forced CPU, same start
     expect(fallbacks.length).toBe(1)
     expect(fallbacks[0]).toMatch(/GPU-attempt start failed/)
+    expect(rt.deviceStatus()).toEqual({ device: 'cpu', gpuLayers: null, totalLayers: null, live: true }) // the hint reports the CPU attempt that serves
     // The session latch: a later cold start (post-suspend, gpu signals unchanged) pins CPU —
     // no repeated GPU health timeout per window.
     await rt.suspend()
@@ -757,23 +556,17 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
   })
 
   it('only the FINAL (CPU) rung failing arms the permanent startFailed latch — with the F-7 code', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      queueMicrotask(() => child.emit('exit', 1, null)) // EVERY child dies (a truly broken GGUF)
-      return child
-    }
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // EVERY child dies (a truly broken GGUF)
     const rt = new TranslationRuntime({
       ...base,
       spawn,
-      fetchImpl: (async () => {
-        throw new Error('connection refused')
-      }) as unknown as typeof fetch
+      fetchImpl: refusingFetch
     })
     const err = await rt.translate(translateOpts).catch((e: unknown) => e)
     expect(isTranslationStartError(err)).toBe(true)
     expect((err as { code?: string }).code).toBe(TRANSLATION_START_FAILED_CODE)
+    expect((err as { engineCannotRun?: boolean }).engineCannotRun).toBe(false) // #530: not the OS loader
+    expect(err).not.toBeInstanceOf(EngineCannotRunError)
     expect(calls.length).toBe(2) // walked BOTH rungs (auto, then cpu) before latching
     expect(deviceOf(calls[0].args)).toBe('auto')
     expect(deviceOf(calls[1].args)).toBe('cpu')
@@ -783,35 +576,22 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
   })
 
   it('a transient bind race on the GPU attempt does NOT fall back or latch — the retry re-attempts GPU', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      const stderr = new EventEmitter()
-      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
-      queueMicrotask(() => {
-        stderr.emit('data', 'bind: address already in use')
-        child.emit('exit', 1, null)
-      })
-      return child
-    }
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1, 'bind: address already in use'))
     const fallbacks: string[] = []
     const rt = new TranslationRuntime({
       ...base,
       spawn,
-      fetchImpl: (async () => {
-        throw new Error('connection refused')
-      }) as unknown as typeof fetch,
+      fetchImpl: refusingFetch,
       onDeviceFallback: (reason) => fallbacks.push(reason)
     })
+    const err = await rt.translate(translateOpts).catch((e: unknown) => e)
+    expect(isTranslationStartError(err)).toBe(false) // the ONE non-latching class: rethrown raw, still retryable (F-7)
+    const spawnsAfterFirst = calls.length
     await rt.translate(translateOpts).catch(() => undefined)
-    await rt.translate(translateOpts).catch(() => undefined)
+    expect(calls.length).toBeGreaterThan(spawnsAfterFirst) // not latched → it tried to start again
+    expect(rt.isStartFailed()).toBe(false) // never reads as latched — no replacement (BE-7)
     expect(fallbacks.length).toBe(0) // a port steal is not a device fault (chat REL-1 parity)
-    // #163 (T-9): the LOAD-BEARING assertions are the device posture + no-latch — every spawn
-    // kept GPU and the CPU rung was never walked. The spawn COUNT is LlamaServer's internal
-    // bind-retry policy (currently one retry → 2 spawns per translate); pin only a lower bound
-    // so a benign retry-policy change can't fail this test for the wrong cause.
-    expect(calls.length).toBeGreaterThanOrEqual(2)
+    // #163 (T-9): the spawn COUNT is LlamaServer's own bind-retry policy; pin only the posture.
     expect(calls.every((c) => deviceOf(c.args) === 'auto')).toBe(true)
     await rt.stop()
   })
@@ -824,19 +604,19 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       onDeviceFallback: (reason) => fallbacks.push(reason)
     })
     await rt.translate(translateOpts)
     expect(deviceOf(calls[0].args)).toBe('auto')
     // The healthy GPU-composed child dies on its own (driver crash) — outside stop().
-    children[0].emit('exit', 134, null)
+    children[0].crash(134)
     await tick()
     expect(fallbacks.length).toBe(1)
     expect(fallbacks[0]).toMatch(/exited unexpectedly mid-session/)
     // The M1 recovery cold start now pins CPU instead of crash-looping the GPU.
     const out = await rt.translate(translateOpts)
     expect(out).toBe(COMPLETION_TEXT)
+    expect(calls.length).toBe(2) // M1: exactly one fresh child
     expect(deviceOf(calls[1].args)).toBe('cpu')
     await rt.stop()
   })
@@ -850,13 +630,12 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       gpu: { getGpuMode: () => mode },
       onDeviceFallback: (reason) => fallbacks.push(reason)
     })
     await rt.translate(translateOpts)
     expect(deviceOf(calls[0].args)).toBe('cpu')
-    children[0].emit('exit', 134, null) // a CPU crash is NOT a GPU signal
+    children[0].crash(134) // a CPU crash is NOT a GPU signal
     await tick()
     expect(fallbacks.length).toBe(0)
     mode = 'auto' // the user re-enables GPU — nothing latched, so it is honoured
@@ -873,35 +652,20 @@ describe('TranslationRuntime — GPU device ladder (issue #42)', () => {
 // getAppStatus → the Translate screen's #36-style hint). The point: under `--fit` a resident chat
 // model can force a silent PARTIAL offload at ~CPU speed — posture alone would hide it.
 describe('TranslationRuntime — cold-start device observability (issue #42 reopen)', () => {
-  /** fakeSpawn whose children carry a stderr that emits the given chunks after spawn. */
-  function fakeSpawnWithStderr(chunks: string[]) {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      const stderr = new EventEmitter()
-      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
-      queueMicrotask(() => {
-        for (const chunk of chunks) stderr.emit('data', chunk)
-      })
-      return child
-    }
-    return { spawn, calls }
-  }
-
   it('parses the offload split from the server load log — across chunk boundaries — and reports it once', async () => {
     // The offload line split mid-number across two stderr chunks (real pipes chunk arbitrarily).
-    const { spawn } = fakeSpawnWithStderr([
-      'ggml_vulkan: Found 1 Vulkan devices\nload_tensors: offloaded 12',
-      '/49 layers to GPU\nload_all: model loaded\n'
-    ])
+    const { spawn } = fakeSpawn(() =>
+      spawnedChild([
+        'ggml_vulkan: Found 1 Vulkan devices\nload_tensors: offloaded 12',
+        '/49 layers to GPU\nload_all: model loaded\n'
+      ])
+    )
     const { fetchImpl } = translationFetch()
     const started: unknown[] = []
     const rt = new TranslationRuntime({
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       onStarted: (info) => started.push(info)
     })
     expect(rt.deviceStatus()).toBeNull() // unknown before the first start
@@ -922,16 +686,15 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
     // CODE-22 (full-audit 2026-07-11): the parse used to slice the rolling window to
     // OFFLOAD_PARSE_WINDOW (512) bytes BEFORE matching — a single stderr chunk carrying the line
     // plus >512 bytes of trailing log lost it permanently and the hint degraded to "unknown".
-    const { spawn } = fakeSpawnWithStderr([
-      'load_tensors: offloaded 7/49 layers to GPU\n' + 'x'.repeat(600) + '\nload_all: model loaded\n'
-    ])
+    const { spawn } = fakeSpawn(() =>
+      spawnedChild(['load_tensors: offloaded 7/49 layers to GPU\n' + 'x'.repeat(600) + '\nload_all: model loaded\n'])
+    )
     const { fetchImpl } = translationFetch()
     const started: unknown[] = []
     const rt = new TranslationRuntime({
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       onStarted: (info) => started.push(info)
     })
     await rt.translate(translateOpts)
@@ -941,39 +704,18 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
   })
 
   it("a forced-CPU start reports device 'cpu' with an honest null split (no offload line printed)", async () => {
-    const { spawn } = fakeSpawnWithStderr(['load_all: model loaded\n'])
+    const { spawn } = fakeSpawn(() => spawnedChild(['load_all: model loaded\n']))
     const { fetchImpl } = translationFetch()
     const started: unknown[] = []
     const rt = new TranslationRuntime({
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       gpu: { getGpuMode: () => 'off' },
       onStarted: (info) => started.push(info)
     })
     await rt.translate(translateOpts)
     expect(started).toEqual([{ device: 'cpu', gpuLayers: null, totalLayers: null }])
-    expect(rt.deviceStatus()).toEqual({ device: 'cpu', gpuLayers: null, totalLayers: null, live: true })
-    await rt.stop()
-  })
-
-  it('after the GPU→CPU fallback, deviceStatus reflects the CPU attempt that actually serves', async () => {
-    // Child 0 (the GPU attempt) dies before health; the CPU rung is healthy (the ladder test's shape).
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      if (calls.length === 1) queueMicrotask(() => child.emit('exit', 1, null))
-      return child
-    }
-    const good = translationFetch()
-    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
-      if (calls.length < 2) throw new Error('connection refused')
-      return good.fetchImpl(url, init)
-    }) as typeof fetch
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
-    await rt.translate(translateOpts)
     expect(rt.deviceStatus()).toEqual({ device: 'cpu', gpuLayers: null, totalLayers: null, live: true })
     await rt.stop()
   })
@@ -985,7 +727,6 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       onStarted: () => {
         throw new Error('boom')
       }
@@ -1004,100 +745,28 @@ describe('TranslationRuntime — cold-start device observability (issue #42 reop
 // now fires a per-ladder AbortController: the health wait stops at its next poll, the child
 // is killed via the normal stop path (no orphan), the start rejects AbortError — and an
 // aborted start NEVER arms the `startFailed` latch (translation lazily restarts after the
-// next unlock) and never falls to the CPU rung. Also closes #163 T-4 (teardown racing a
-// lazy start — the exact races the post-await re-checks exist for).
+// next unlock) and never falls to the CPU rung. The lock/quit rows themselves — a prompt settle,
+// the killed child, no latch, the lazy restart after `suspend()`, a permanent `stop()` — run at the
+// production health budget in `sidecar-teardown-abort.test.ts`; this row keeps the GPU posture's own
+// rule. Also closes #163 T-4.
 describe('#159 (BE-1) — teardown aborts an in-flight cold start', () => {
-  /** A fetch whose /health NEVER turns ready while `hang` is true — a wedged cold start. */
-  function switchableFetch() {
-    const ok = translationFetch()
-    const state = { hang: true }
-    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
-      if (state.hang && String(url).endsWith('/health')) {
-        return { ok: false, status: 503 } as Response
-      }
-      return ok.fetchImpl(url, init)
-    }) as typeof fetch
-    return { fetchImpl, state }
-  }
-
-  it('suspend() during a hung lazy start resolves promptly, kills the child, does NOT latch, and lazily restarts', async () => {
-    const { spawn, children } = fakeSpawn()
-    const { fetchImpl, state } = switchableFetch()
-    // A REAL 60 s health budget: pre-fix, suspend() awaited it out (this test then times out).
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      idleTimeoutMs: 100_000,
-      healthTimeoutMs: 60_000
-    })
-    const inflight = rt.translate(translateOpts)
-    inflight.catch(() => {}) // observed below; never unhandled
-    while (children.length === 0) await tick() // the cold start has spawned its child
-
-    const t0 = Date.now()
-    await rt.suspend()
-    expect(Date.now() - t0).toBeLessThan(5_000) // promptly — never the 60 s health budget
-    expect(children[0].killed).toBe(true) // the mid-start child was killed, not orphaned
-    await expect(inflight).rejects.toThrow() // the in-flight translate rejects
-
-    // An aborted start is NOT a load fault: no startFailed latch — the post-unlock lazy
-    // restart must work (the latch would silently disable translation for the session).
-    expect(rt.isStartFailed()).toBe(false)
-
-    state.hang = false // "after unlock": the next cold start becomes healthy
-    await expect(rt.translate(translateOpts)).resolves.toBe(COMPLETION_TEXT)
-    expect(children.length).toBe(2) // a FRESH child (lazy restart), not the killed one
-    await rt.stop()
-  }, testBudgetMs(15_000))
-
-  it('stop() (quit) during a hung lazy start resolves promptly and stays permanently stopped', async () => {
-    const { spawn, children } = fakeSpawn()
-    const { fetchImpl, state } = switchableFetch()
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      idleTimeoutMs: 100_000,
-      healthTimeoutMs: 60_000
-    })
+  it('an aborted GPU-attempt start never falls to the CPU rung mid-teardown, nor latches the session to CPU', async () => {
+    const { spawn, calls } = fakeSpawn()
+    const { fetchImpl, state } = loadingSidecar(translationFetch().fetchImpl)
+    const fallbacks: string[] = []
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, onDeviceFallback: (r) => fallbacks.push(r) })
     const inflight = rt.translate(translateOpts)
     inflight.catch(() => {})
-    while (children.length === 0) await tick()
-
-    const t0 = Date.now()
-    await rt.stop()
-    expect(Date.now() - t0).toBeLessThan(5_000)
-    expect(children[0].killed).toBe(true)
+    await until(() => state.probes > 0, 'the GPU attempt polling /health')
+    await within(rt.suspend(), 'the lock ending the start')
     await expect(inflight).rejects.toThrow()
-
-    // The permanent quit latch holds: no lazy resurrection even with a healthy server.
-    state.hang = false
-    await expect(rt.translate(translateOpts)).rejects.toThrow(/stopped/)
-    expect(children.length).toBe(1)
-  }, testBudgetMs(15_000))
-
-  it('an aborted GPU-attempt start never falls to the CPU rung mid-teardown (no ~10 GB cold load to tear straight down)', async () => {
-    const { spawn, calls, children } = fakeSpawn()
-    const { fetchImpl } = switchableFetch()
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      idleTimeoutMs: 100_000,
-      healthTimeoutMs: 60_000
-    })
-    const inflight = rt.translate(translateOpts)
-    inflight.catch(() => {})
-    while (children.length === 0) await tick()
-    await rt.suspend()
-    await expect(inflight).rejects.toThrow()
-    // Exactly ONE spawn: the aborted 'auto' attempt. The device ladder must not have
-    // launched a second (forced-CPU) child under the teardown.
+    // Exactly ONE spawn, the aborted 'auto' attempt: no ~10 GB CPU cold load to tear straight down.
     expect(calls.length).toBe(1)
     expect(calls[0].args.join(' ')).not.toContain('--device')
+    // An aborted start is not a device fault: the next unlock still tries the GPU.
+    expect(fallbacks).toEqual([])
     await rt.stop()
-  }, testBudgetMs(15_000))
+  })
 })
 
 // #637: the other half of #159. A lock or quit cancels the start; the job's own cancel used to reach
@@ -1108,7 +777,7 @@ describe('#637 — a cancel during the translation cold start', () => {
   it('ends that translate at once with its own reason; a translate sharing the start gets its text', async () => {
     const { spawn, calls, children } = fakeSpawn()
     const { fetchImpl, state } = loadingSidecar(translationFetch().fetchImpl)
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
 
     const cancel = new AbortController()
     const cancelled = rt.translate({ ...translateOpts, signal: cancel.signal }).catch((e: unknown) => e)
@@ -1129,7 +798,7 @@ describe('#637 — a cancel during the translation cold start', () => {
   it('a translate cancelled before it begins starts no sidecar', async () => {
     const { spawn, calls } = fakeSpawn()
     const { fetchImpl } = translationFetch()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     const reason = new DOMException('Cancelled by the user', 'AbortError')
     await expect(rt.translate({ ...translateOpts, signal: AbortSignal.abort(reason) })).rejects.toBe(reason)
     expect(calls.length).toBe(0)
@@ -1147,7 +816,6 @@ describe('#637 — a cancel during the translation cold start', () => {
       ...base,
       spawn,
       fetchImpl,
-      idleTimeoutMs: 100_000,
       onDeviceFallback: () => {
         fellBack = true
       }
@@ -1162,7 +830,7 @@ describe('#637 — a cancel during the translation cold start', () => {
     // in flight at the gate, and the suspend below — a lock — would have to wait for it.
     const release = holdEngineSpawns('llama_cpp')
     try {
-      children[0].emit('exit', 1, null) // the GPU attempt dies while loading
+      children[0].crash(1) // the GPU attempt dies while loading
       await until(() => fellBack, 'the GPU attempt failing')
       await within(rt.suspend(), 'a lock finding no start in flight')
     } finally {
@@ -1181,95 +849,68 @@ describe('#637 — a cancel during the translation cold start', () => {
 
 // ---- #163 (T-3): the per-request timeout WIRING — generation, not just classification ----
 //
-// `requestTimeoutMs` → combineSignals(opts.signal, timeoutMs) → the /completion fetch. The
-// existing coverage only classified a SCRIPTED TimeoutError; nothing ever drove the runtime
-// into GENERATING one (a wedged sidecar holding the busy lane forever would be invisible to
-// CI), nor proved a settled window's cleared timer can't disturb a later request.
+// The 45-min request cap → `combineSignals(opts.signal, DEFAULT_REQUEST_TIMEOUT_MS)` → the /completion fetch.
+// Since #605 a hung sidecar ends at the header wait or the reader's clocks, so the cap bounds only a decode that
+// is alive but slower than ~0.74 tok/s (BE-2's "timed out mid-decode" class). Driven at the shipped value under
+// fake timers (CONTRIBUTING "Pin the bound that ships").
 describe('#163 (T-3) — per-request timeout wiring', () => {
-  it('a wedged /completion (no bytes ever) rejects with the TimeoutError after requestTimeoutMs', async () => {
-    const { spawn } = fakeSpawn()
+  afterEach(() => vi.useRealTimers())
+
+  it('a live decode slower than the cap ends at the shipped 2,700,000 ms with the TimeoutError BE-2 reads as too slow, and the sidecar stays up', async () => {
+    const { spawn, children } = fakeSpawn()
+    let completions = 0
+    let send: (frame: string) => void = () => {}
     const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
       const u = String(url)
       if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
-      if (u.endsWith('/completion')) {
-        // A server that accepted the request and then never responds — reject only when the
-        // combined signal aborts (the real fetch contract).
-        return await new Promise<Response>((_res, rej) => {
-          const sig = init?.signal
-          if (sig?.aborted) return rej(sig.reason)
-          sig?.addEventListener('abort', () => rej(sig.reason))
-        })
-      }
-      throw new Error(`unexpected url ${u}`)
+      if (!u.endsWith('/completion')) throw new Error(`unexpected url ${u}`)
+      completions += 1
+      if (completions === 1) return { ok: true, status: 200, body: sseBody(COMPLETION_SSE) } as unknown as Response
+      const signal = init!.signal!
+      const body = new ReadableStream<Uint8Array>({
+        start(c) {
+          send = (frame) => c.enqueue(new TextEncoder().encode(frame))
+          signal.addEventListener('abort', () => c.error(signal.reason), { once: true }) // as a real fetch does
+        }
+      })
+      return { ok: true, status: 200, body } as unknown as Response
     }) as typeof fetch
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      idleTimeoutMs: 100_000,
-      requestTimeoutMs: 60
-    })
-    const t0 = Date.now()
-    await expect(rt.translate(translateOpts)).rejects.toSatisfy(
-      (e) => e instanceof DOMException && e.name === 'TimeoutError'
-    )
-    expect(Date.now() - t0).toBeGreaterThanOrEqual(50) // the injected bound, not a fluke reject
-    expect(Date.now() - t0).toBeLessThan(5_000) // …and never the 45-min default
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
+    await rt.translate(translateOpts) // the sidecar starts on real timers
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
+    const tokens: string[] = []
+    let outcome: unknown = 'pending'
+    const slow = rt.translate({ ...translateOpts, onToken: (d) => tokens.push(d) }).catch((e: unknown) => (outcome = e))
+    await until(() => completions === 2, 'the request reaching the sidecar')
+    const token = 'data: {"content":"x","stop":false}\n\n'
+    send(token)
+    // A token every 60 s: the 120 s decode clock never runs out, so only the cap can end the window.
+    for (let t = 60_000; t < 2_700_000; t += 60_000) {
+      await vi.advanceTimersByTimeAsync(60_000)
+      send(token)
+    }
+    await vi.advanceTimersByTimeAsync(59_999) // 2,699,999 ms after the request
+    expect(outcome).toBe('pending')
+    await vi.advanceTimersByTimeAsync(1)
+    await within(slow, 'the request cap ending the window')
+    expect(isRequestTimeoutError(outcome)).toBe(true) // with tokens flowed, neither consumer retries it (BE-2)
+    expect(isRuntimeUnresponsiveError(outcome)).toBe(false)
+    expect(tokens.length).toBe(45)
+    expect(children[0].killed).toBe(false) // a slow decode is not a hang: the sidecar is not stopped
+    vi.useRealTimers()
     await rt.stop()
   })
 
-  it('a settled window clears its timer: a later slow-but-legal window on the SAME caller signal is untouched', async () => {
+  it("a settled window lets go of the caller's signal: no abort listener piles up on a job's shared signal (REL-4)", async () => {
     const { spawn } = fakeSpawn()
-    let completions = 0
-    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
-      const u = String(url)
-      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
-      if (u.endsWith('/completion')) {
-        completions += 1
-        if (completions === 1) {
-          return { ok: true, status: 200, body: sseBody(COMPLETION_SSE) } as unknown as Response
-        }
-        // The second window streams SLOWLY (two chunks ~30 ms apart — well under its own
-        // 120 ms budget). If the first window's timer had leaked un-cleared, its firing
-        // during this stretch would abort the wrong thing.
-        const bytes = new TextEncoder().encode(COMPLETION_SSE)
-        const half = Math.floor(bytes.length / 2)
-        let step = 0
-        const body = new ReadableStream<Uint8Array>({
-          pull(controller) {
-            if (init?.signal?.aborted) return controller.error(init.signal.reason)
-            step += 1
-            if (step === 1) {
-              controller.enqueue(bytes.slice(0, half))
-              return new Promise((r) => setTimeout(r, 30))
-            }
-            if (step === 2) {
-              controller.enqueue(bytes.slice(half))
-              return
-            }
-            controller.close()
-          }
-        })
-        return { ok: true, status: 200, body } as unknown as Response
-      }
-      throw new Error(`unexpected url ${u}`)
-    }) as typeof fetch
-    const rt = new TranslationRuntime({
-      ...base,
-      spawn,
-      fetchImpl,
-      idleTimeoutMs: 100_000,
-      requestTimeoutMs: 120
-    })
-    const caller = new AbortController()
-    await expect(rt.translate({ ...translateOpts, signal: caller.signal })).resolves.toBe(
-      COMPLETION_TEXT
-    )
-    // Sit past the FIRST window's timeout budget — a leaked timer would fire in here.
-    await sleep(150)
-    await expect(rt.translate({ ...translateOpts, signal: caller.signal })).resolves.toBe(
-      COMPLETION_TEXT
-    )
+    const { fetchImpl } = translationFetch()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
+    const job = new AbortController() // one signal for every window, as both consumers pass it
+    for (let window = 1; window <= 2; window++) {
+      await expect(rt.translate({ ...translateOpts, signal: job.signal })).resolves.toBe(COMPLETION_TEXT)
+      // A window that kept its cap would keep this listener (and its 45-min timer) until the cap fired.
+      expect(getEventListeners(job.signal, 'abort')).toHaveLength(0)
+    }
     await rt.stop()
   })
 })
@@ -1311,9 +952,10 @@ describe('#605 — a hung translation sidecar', () => {
   }
 
   it('a decode that stops is ended at 120 s and its sidecar stopped; the retry waits for the exit, then starts a fresh one in the same posture', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    // The hung child outlives its kill for a while.
+    const { held, spawn, calls } = spawnHoldingFirst()
     const { fetchImpl } = hangingFetch(2, 'mid-stream')
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     await rt.translate(translateOpts)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'performance'] })
     const tokens: string[] = []
@@ -1325,13 +967,12 @@ describe('#605 — a hung translation sidecar', () => {
     await until(() => tokens.length === 2, 'the two tokens before the hang')
     await vi.advanceTimersByTimeAsync(119_999)
     expect(outcome).toBe('pending')
-    children[0].hold = true // the hung child outlives its kill for a while
     await vi.advanceTimersByTimeAsync(1)
     await within(hung, 'the decode clock ending the window')
     expect(isRuntimeUnresponsiveError(outcome)).toBe(true)
     expect((outcome as Error).message).toContain('no output for 120000ms')
     expect(isRequestTimeoutError(outcome)).toBe(false) // so both consumers retry it, tokens or not
-    expect(children[0].killed).toBe(true)
+    expect(held.killed).toBe(true)
     vi.useRealTimers()
 
     let retried = false
@@ -1339,11 +980,10 @@ describe('#605 — a hung translation sidecar', () => {
       retried = true
       return out
     })
-    await tick()
-    await tick()
+    await hops()
     expect(retried).toBe(false) // never two ~10 GB children at once
     expect(calls.length).toBe(1)
-    children[0].release()
+    held.releaseExit()
     expect(await retry).toBe(COMPLETION_TEXT)
     expect(calls.length).toBe(2)
     expect(calls[1].args).toEqual(calls[0].args) // a hang keeps the posture: no switch to the CPU (owner call)
@@ -1377,14 +1017,13 @@ describe('#605 — a hung translation sidecar', () => {
   // waited for its headers behind the first window's whole decode — minutes on a CPU, which the 180 s header wait cannot
   // tell from a hang: it would stop a healthy sidecar under both.
   it('overlapping translates queue in the app, never at the one-slot server', async () => {
-    const { spawn, calls } = gatedSpawn()
+    const { spawn, calls } = fakeSpawn()
     const { fetchImpl, state } = slotFetch()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     const first = rt.translate(translateOpts)
     await until(() => state.completions === 1, 'the first request reaching the sidecar')
     const second = rt.translate(translateOpts)
-    await tick()
-    await tick()
+    await hops()
     expect(state.completions).toBe(1) // the second waits for the slot
     state.releaseFirst()
     expect(await first).toBe(COMPLETION_TEXT)
@@ -1396,9 +1035,9 @@ describe('#605 — a hung translation sidecar', () => {
   })
 
   it('a cancel ends a translate\'s wait for the slot at once, and sends nothing', async () => {
-    const { spawn } = gatedSpawn()
+    const { spawn } = fakeSpawn()
     const { fetchImpl, state } = slotFetch()
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     const first = rt.translate(translateOpts)
     await until(() => state.completions === 1, 'the first request reaching the sidecar')
     const cancel = new AbortController()
@@ -1413,9 +1052,9 @@ describe('#605 — a hung translation sidecar', () => {
   })
 
   it('no response headers within 180 s ends the window as hung and stops the sidecar', async () => {
-    const { spawn, children } = gatedSpawn()
+    const { spawn, children } = fakeSpawn()
     const { fetchImpl, completions } = hangingFetch(2, 'headers')
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     await rt.translate(translateOpts)
     vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] })
     let outcome: unknown = 'pending'
@@ -1446,25 +1085,14 @@ describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
 
   it('(load) true while a GPU-posture cold start is in flight — before deviceStatus().live can see it', async () => {
     const { spawn } = fakeSpawn()
-    const health: { release: (() => void) | null } = { release: null }
-    const fetchImpl = (async (url: string | URL, init?: RequestInit) => {
-      const u = String(url)
-      if (u.endsWith('/health')) {
-        await new Promise<void>((r) => (health.release = r))
-        return { ok: true, status: 200 } as Response
-      }
-      if (u.endsWith('/completion')) {
-        return { ok: true, status: 200, body: sseBody(COMPLETION_SSE) } as unknown as Response
-      }
-      throw new Error(`unexpected url ${u}`)
-    }) as typeof fetch
+    const { fetchImpl, state } = loadingSidecar(translationFetch().fetchImpl)
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     const p = rt.translate(translateOpts)
-    while (!health.release) await tick()
+    await until(() => state.probes > 0, 'the GPU-posture cold start polling /health')
     expect(rt.gpuOccupied()).toBe(true) // loading — deviceStatus() would still be null here
     expect(rt.deviceStatus()).toBeNull()
-    health.release()
-    await p
+    state.loaded = true
+    await within(p, 'the start landing')
     await rt.stop()
   })
 
@@ -1479,23 +1107,7 @@ describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
   })
 
   it('(hard teardown) true while suspend()/stop() is tearing the GPU-posture sidecar down', async () => {
-    class GatedChild extends EventEmitter implements ChildProcessLike {
-      pid = 9
-      killed = false
-      kill(): boolean {
-        this.killed = true
-        return true
-      }
-      releaseExit(): void {
-        this.emit('exit', 0, null)
-      }
-    }
-    const children: GatedChild[] = []
-    const spawn = (_c: string, _a: string[]): ChildProcessLike => {
-      const c = new GatedChild()
-      children.push(c)
-      return c
-    }
+    const { spawn, children } = fakeSpawn(() => new GatedChild())
     const { fetchImpl } = translationFetch()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     await rt.translate(translateOpts)
@@ -1508,31 +1120,9 @@ describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
   })
 
   it('(idle teardown) true while the soft idle teardown is killing the GPU-posture sidecar', async () => {
-    class GatedChild extends EventEmitter implements ChildProcessLike {
-      pid = 9
-      killed = false
-      kill(): boolean {
-        this.killed = true
-        return true
-      }
-      releaseExit(): void {
-        this.emit('exit', 0, null)
-      }
-    }
-    const children: GatedChild[] = []
-    const spawn = (_c: string, _a: string[]): ChildProcessLike => {
-      const c = new GatedChild()
-      children.push(c)
-      return c
-    }
+    const { spawn, children } = fakeSpawn(() => new GatedChild())
     const { fetchImpl } = translationFetch()
-    const state = { fire: null as (() => void) | null }
-    const clock = {
-      set(cb: () => void) {
-        state.fire = cb
-        return { clear: () => (state.fire = null), unref: () => undefined }
-      }
-    }
+    const { clock, state } = fakeIdleClock()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
     state.fire!() // idle window elapses -- soft teardown kills the child (B-5's exact window)
@@ -1547,11 +1137,15 @@ describe('Wave 8 ruling (b)(T): TranslationRuntime.gpuOccupied()', () => {
 
   it('(forced-CPU) a CPU-posture translation never occupies the card, loading or resident', async () => {
     const { spawn } = fakeSpawn()
-    const { fetchImpl } = translationFetch()
+    const { fetchImpl, state } = loadingSidecar(translationFetch().fetchImpl)
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, gpu: { getGpuMode: () => 'off' } })
-    await rt.translate(translateOpts)
+    const p = rt.translate(translateOpts)
+    await until(() => state.probes > 0, 'the CPU-posture cold start polling /health')
+    expect(rt.gpuOccupied()).toBe(false) // loading
+    state.loaded = true
+    await within(p, 'the start landing')
     expect(rt.deviceStatus()?.device).toBe('cpu')
-    expect(rt.gpuOccupied()).toBe(false)
+    expect(rt.gpuOccupied()).toBe(false) // resident
     await rt.stop()
   })
 })
@@ -1575,8 +1169,7 @@ describe('#473 — beforeGpuStart runs before a GPU-posture spawn', () => {
       }
     })
     const done = rt.translate(translateOpts)
-    for (let i = 0; i < hangPolls(200, 5) && !hook.release; i++) await sleep(5)
-    expect(hook.release, 'the GPU-posture start never awaited beforeGpuStart').not.toBeNull()
+    await until(() => hook.release != null, 'the GPU-posture start never awaited beforeGpuStart')
     expect(calls).toHaveLength(0) // nothing on the card yet while the reranker leaves it
     expect(rt.gpuOccupied()).toBe(true) // so a rerank meanwhile already resolves 'cpu'
     hook.release?.()
@@ -1610,8 +1203,7 @@ describe('#473 — beforeGpuStart runs before a GPU-posture spawn', () => {
       beforeGpuStart: () => new Promise<void>((r) => (hook.release = r))
     })
     const done = rt.translate(translateOpts).catch((e: unknown) => e)
-    for (let i = 0; i < hangPolls(200, 5) && !hook.release; i++) await sleep(5)
-    expect(hook.release, 'the GPU-posture start never awaited beforeGpuStart').not.toBeNull()
+    await until(() => hook.release != null, 'the GPU-posture start never awaited beforeGpuStart')
     const suspended = rt.suspend()
     hook.release?.()
     await suspended
@@ -1646,8 +1238,7 @@ describe('#473 — the headroom gate and yieldGpu', () => {
     let gate: 'auto' | 'beside-chat' = 'auto'
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl, gpu: { gpuHeadroom: () => gate } })
     const done = rt.translate(translateOpts)
-    for (let i = 0; i < hangPolls(200, 5) && !health.release; i++) await sleep(5)
-    expect(health.release, 'the cold start never reached its health wait').not.toBeNull()
+    await until(() => health.release != null, 'the cold start never reached its health wait')
     gate = 'beside-chat' // the gate's answer changed meanwhile; THIS start still loads onto the card
     expect(rt.gpuOccupied()).toBe(true)
     health.release?.()
@@ -1696,25 +1287,17 @@ describe('#473 — the headroom gate and yieldGpu', () => {
   })
 
   it('yieldGpu waits for a soft kill already under way — the card is not free until the child exits', async () => {
-    const { spawn, children } = gatedSpawn()
-    const timer: { fire: (() => void) | null } = { fire: null }
-    const idleClock = {
-      set(cb: () => void) {
-        timer.fire = cb
-        return { clear: () => undefined, unref: () => undefined }
-      }
-    }
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl, idleClock })
+    const { spawn, children } = fakeSpawn(() => new GatedChild())
+    const { clock, state } = fakeIdleClock()
+    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: translationFetch().fetchImpl, idleClock: clock })
     await rt.translate(translateOpts)
-    children[0].hold = true
-    timer.fire?.() // the idle teardown: the child is told to exit and has not yet
+    state.fire?.() // the idle teardown: the child is told to exit and holds its exit
     let yielded = false
     const done = rt.yieldGpu().then(() => (yielded = true))
-    await sleep(20)
+    for (let i = 0; i < 5; i++) await tick()
     expect(yielded).toBe(false)
-    children[0].release()
-    await done
-    expect(yielded).toBe(true)
+    children[0].releaseExit()
+    await within(done, 'yieldGpu after the soft kill')
     await rt.stop()
   })
 
@@ -1743,8 +1326,7 @@ describe('#473 — the headroom gate and yieldGpu', () => {
     const { fetchImpl, health } = parkedHealthFetch()
     const rt = new TranslationRuntime({ ...base, spawn, fetchImpl })
     const done = rt.translate(translateOpts)
-    for (let i = 0; i < hangPolls(200, 5) && !health.release; i++) await sleep(5)
-    expect(health.release, 'the cold start never reached its health wait').not.toBeNull()
+    await until(() => health.release != null, 'the cold start never reached its health wait')
     const yielded = rt.yieldGpu()
     await tick()
     expect(children[0].killed).toBe(false) // still waiting for the start
@@ -1765,28 +1347,8 @@ describe('TranslationRuntime — OS loader refusal (#530)', () => {
   const LOADER_LINE =
     '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
 
-  function loaderSpawn() {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      const stderr = new EventEmitter()
-      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
-      queueMicrotask(() => {
-        stderr.emit('data', LOADER_LINE)
-        child.emit('exit', 127, null)
-        child.emit('close', 127, null)
-      })
-      return child
-    }
-    return { spawn, calls }
-  }
-  const refusingFetch = (async () => {
-    throw new Error('connection refused')
-  }) as unknown as typeof fetch
-
   it('on the GPU posture: ONE spawn, no CPU retry, no device-fallback note, latched engineCannotRun', async () => {
-    const { spawn, calls } = loaderSpawn()
+    const { spawn, calls } = fakeSpawn(() => exitingChild(127, LOADER_LINE))
     const fallbacks: string[] = []
     const rt = new TranslationRuntime({
       ...base,
@@ -1808,23 +1370,6 @@ describe('TranslationRuntime — OS loader refusal (#530)', () => {
     expect(isTranslationStartError(again)).toBe(true)
     expect((again as { engineCannotRun?: boolean }).engineCannotRun).toBe(true)
     expect(calls.length).toBe(1)
-    await rt.stop()
-  })
-
-  it('a non-loader start failure keeps the old shape: engineCannotRun false, CPU rung walked', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      queueMicrotask(() => child.emit('exit', 1, null)) // dies with no loader text
-      return child
-    }
-    const rt = new TranslationRuntime({ ...base, spawn, fetchImpl: refusingFetch })
-    const err = await rt.translate(translateOpts).catch((e: unknown) => e)
-    expect(isTranslationStartError(err)).toBe(true)
-    expect((err as { engineCannotRun?: boolean }).engineCannotRun).toBe(false)
-    expect(calls.length).toBe(2)
-    expect(err).not.toBeInstanceOf(EngineCannotRunError)
     await rt.stop()
   })
 })

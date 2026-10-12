@@ -1,5 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
-import { EventEmitter } from 'node:events'
+import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
@@ -9,10 +8,18 @@ import {
 } from '../../src/main/services/vision/runtime'
 import { VisionService, type VisionStreamEmitter } from '../../src/main/services/vision'
 import { EngineCannotRunError, resetEngineProblemsForTest } from '../../src/main/services/runtime/engine-load'
-import type { ChildProcessLike } from '../../src/main/services/runtime/sidecar'
 import type { ImageAnalyzeRequest, ImageJob, VisionStatus } from '../../src/shared/types'
 import { until, within } from '../helpers/hang-budget'
-import { loadingSidecar } from '../helpers/loading-sidecar'
+import {
+  FakeChild,
+  GatedChild,
+  exitingChild,
+  fakeIdleClock,
+  fakeSpawn,
+  loadingSidecar,
+  sseBody
+} from '../helpers/fake-sidecar'
+import { pngHeader } from '../helpers/image-fixtures'
 
 // V4 hardening tests for the real VisionRuntime (image-understanding plan §16 V4 / §17): lazy
 // single-flight start, the failed-start latch, cancellation, NO orphan on a racing stop, and —
@@ -26,41 +33,6 @@ const FIXTURE_SSE = readFileSync(
   'utf8'
 )
 const FIXTURE_ANSWER = 'This is a German invoice issued by Müller & Söhne GmbH, and it is in German.'
-
-class FakeChild extends EventEmitter implements ChildProcessLike {
-  pid = 9
-  killed = false
-  kill(): boolean {
-    this.killed = true
-    queueMicrotask(() => this.emit('exit', 0, null))
-    return true
-  }
-}
-
-function fakeSpawn() {
-  const calls: Array<{ args: string[] }> = []
-  const children: FakeChild[] = []
-  const spawn = (_c: string, args: string[]): ChildProcessLike => {
-    calls.push({ args })
-    const child = new FakeChild()
-    children.push(child)
-    return child
-  }
-  return { spawn, calls, children }
-}
-
-/** A `ReadableStream` over the SSE text (one chunk; readChatSSE handles the rest). */
-function sseBody(text: string): ReadableStream<Uint8Array> {
-  const bytes = new TextEncoder().encode(text)
-  let sent = false
-  return new ReadableStream<Uint8Array>({
-    pull(controller) {
-      if (sent) return controller.close()
-      sent = true
-      controller.enqueue(bytes)
-    }
-  })
-}
 
 /** Routes /health (ok) and /v1/chat/completions (the fixture SSE). Records request URLs/bodies. */
 function visionFetch(sse = FIXTURE_SSE) {
@@ -94,7 +66,10 @@ const analyzeOpts: VisionAnalyzeOptions = {
   question: 'What is in this image?'
 }
 
-const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))
+/** A sidecar that never answers: every request is refused. */
+const refusedFetch = (async () => {
+  throw new Error('connection refused')
+}) as unknown as typeof fetch
 
 // ---- VisionService-level helpers (the #117 failed-start-recovery cases) ----------------------
 
@@ -102,12 +77,7 @@ const VLM_AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisp
 
 /** A request that passes the main-side guard: a parseable PNG header (SEC-6). */
 function serviceReq(): ImageAnalyzeRequest {
-  const b = new Uint8Array(24)
-  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
-  const dv = new DataView(b.buffer)
-  dv.setUint32(16, 2) // width
-  dv.setUint32(20, 2) // height
-  return { imageBytes: b, mimeType: 'image/png', question: 'What is in this image?' }
+  return { imageBytes: pngHeader(2, 2), mimeType: 'image/png', question: 'What is in this image?' }
 }
 
 /** Run one service analyze to its terminal job (done/failed/cancelled) via polling. */
@@ -115,13 +85,12 @@ async function runToTerminal(service: VisionService, req: ImageAnalyzeRequest): 
   const emit: VisionStreamEmitter = { token: () => {}, done: () => {}, error: () => {} }
   const initial = service.analyze(req, emit)
   if (initial.state === 'failed' || initial.state === 'cancelled') return initial
-  for (let i = 0; i < 400; i++) {
-    const job = service.getJob(initial.jobId)
-    if (job.state === 'done' || job.state === 'failed' || job.state === 'cancelled') return job
-    await sleep(5)
-  }
-  throw new Error('vision job never reached a terminal state')
+  const settled = (): boolean => ['done', 'failed', 'cancelled'].includes(service.getJob(initial.jobId).state)
+  await until(settled, 'the vision job reaching a terminal state')
+  return service.getJob(initial.jobId)
 }
+
+afterEach(() => vi.useRealTimers())
 
 describe('VisionRuntime — start + analyze', () => {
   it('lazily spawns the sidecar with --mmproj + --device none and streams the answer', async () => {
@@ -161,28 +130,7 @@ describe('VisionRuntime — start + analyze', () => {
     await rt.stop()
   })
 
-  it('latches a failed start (fail fast, ONE spawn) instead of re-awaiting the health timeout', async () => {
-    const calls: Array<{ args: string[] }> = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new FakeChild()
-      queueMicrotask(() => child.emit('exit', 1, null)) // dies immediately (corrupt GGUF)
-      return child
-    }
-    const rt = new VisionRuntime({
-      ...base,
-      spawn,
-      fetchImpl: (async () => {
-        throw new Error('connection refused')
-      }) as unknown as typeof fetch
-    })
-    await expect(rt.analyze(analyzeOpts)).rejects.toThrow()
-    await expect(rt.analyze(analyzeOpts)).rejects.toThrow()
-    expect(calls.length).toBe(1) // the latch prevented a second spawn + health-timeout stall
-    await rt.stop()
-  })
-
-  it('forwards the caller abort signal to the chat request (cancels in flight)', async () => {
+  it('forwards the caller abort signal to the chat request, and a user abort is not mis-mapped to timedOut (#123)', async () => {
     const { spawn } = fakeSpawn()
     let seenSignal: AbortSignal | undefined
     const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
@@ -202,9 +150,11 @@ describe('VisionRuntime — start + analyze', () => {
     // Deterministically wait until the request has REACHED fetch (the signal was handed over)
     // before aborting — a fixed `sleep(2)` could fire before fetch under CPU starvation and
     // exercise a different (pre-flight) path. State-poll on the captured signal (TS-1).
-    while (!seenSignal) await sleep(1)
+    await until(() => seenSignal !== undefined, 'the analyze reaching the chat request')
     controller.abort()
-    await expect(p).rejects.toThrow(/abort/i)
+    const err: unknown = await p.catch((e: unknown) => e)
+    expect(String(err)).toMatch(/abort/i)
+    expect(err).not.toBeInstanceOf(VisionAnalyzeError) // stays a plain abort → the service maps 'cancelled', never timedOut
     expect(seenSignal?.aborted).toBe(true)
     await rt.stop()
   })
@@ -212,31 +162,8 @@ describe('VisionRuntime — start + analyze', () => {
   // #123: the two user-actionable runtime failures used to collapse into the generic
   // 'runtimeFailed'. The timeout-driven abort (the caller signal did NOT fire, so `combineSignals`'
   // timeout did) and llama-server's context-exceeded rejection now carry their own codes.
-  it('maps the request-timeout abort to timedOut (#123)', async () => {
-    const { spawn } = fakeSpawn()
-    const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
-      const u = String(url)
-      if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
-      return await new Promise<Response>((_resolve, reject) => {
-        init?.signal?.addEventListener('abort', () =>
-          reject(new DOMException('Aborted', 'AbortError'))
-        )
-      })
-    }) as typeof fetch
-    const rt = new VisionRuntime({
-      ...base,
-      spawn,
-      fetchImpl: hangingFetch,
-      requestTimeoutMs: 30,
-      idleTimeoutMs: 100_000
-    })
-    const err = (await rt.analyze(analyzeOpts).catch((e) => e)) as VisionAnalyzeError
-    expect(err).toBeInstanceOf(VisionAnalyzeError)
-    expect(err.code).toBe('timedOut')
-    await rt.stop()
-  })
-
-  it('a USER abort is NOT mis-mapped to timedOut (the caller signal fired first)', async () => {
+  it('maps the request-timeout abort to timedOut at the shipped 300 s bound (#123)', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] }) // combineSignals' deadline is a plain setTimeout
     const { spawn } = fakeSpawn()
     let seenSignal: AbortSignal | undefined
     const hangingFetch = (async (url: string | URL, init?: RequestInit) => {
@@ -250,12 +177,14 @@ describe('VisionRuntime — start + analyze', () => {
       })
     }) as typeof fetch
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl: hangingFetch, idleTimeoutMs: 100_000 })
-    const controller = new AbortController()
-    const p = rt.analyze({ ...analyzeOpts, signal: controller.signal })
-    while (!seenSignal) await sleep(1)
-    controller.abort()
-    const err = await p.catch((e) => e)
-    expect(err).not.toBeInstanceOf(VisionAnalyzeError) // stays a plain abort → service maps 'cancelled'
+    const outcome = rt.analyze(analyzeOpts).catch((e: unknown) => e)
+    await until(() => seenSignal !== undefined, 'the analyze reaching the chat request')
+    await vi.advanceTimersByTimeAsync(299_999)
+    expect(seenSignal!.aborted).toBe(false) // 1 ms short of the 300 s per-analyze bound: still waiting
+    await vi.advanceTimersByTimeAsync(1)
+    const err = await within(outcome, 'the timed-out analyze settling')
+    expect(err).toBeInstanceOf(VisionAnalyzeError)
+    expect((err as VisionAnalyzeError).code).toBe('timedOut')
     await rt.stop()
   })
 
@@ -279,17 +208,22 @@ describe('VisionRuntime — start + analyze', () => {
     await rt.stop()
   })
 
-  it('a generic non-OK response stays a plain error (→ runtimeFailed in the service)', async () => {
+  it('a llama-server 400 that is not a context overflow stays a plain error (→ runtimeFailed in the service)', async () => {
     const { spawn } = fakeSpawn()
     const failingFetch = (async (url: string | URL) => {
       const u = String(url)
       if (u.endsWith('/health')) return { ok: true, status: 200 } as Response
-      return { ok: false, status: 500, body: null } as unknown as Response
+      return {
+        ok: false,
+        status: 400,
+        text: async () =>
+          '{"error":{"code":400,"message":"failed to process image","type":"invalid_request_error"}}'
+      } as unknown as Response
     }) as typeof fetch
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl: failingFetch, idleTimeoutMs: 100_000 })
     const err = await rt.analyze(analyzeOpts).catch((e) => e)
     expect(err).not.toBeInstanceOf(VisionAnalyzeError)
-    expect(String(err)).toContain('HTTP 500')
+    expect(String(err)).toContain('HTTP 400')
     await rt.stop()
   })
 
@@ -298,7 +232,7 @@ describe('VisionRuntime — start + analyze', () => {
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => ({
         analyze: async () => {
-          throw new VisionAnalyzeError('timedOut', 'Vision request timed out after 30 ms')
+          throw new VisionAnalyzeError('timedOut', 'Vision request timed out after 300000 ms')
         }
       })
     })
@@ -308,29 +242,18 @@ describe('VisionRuntime — start + analyze', () => {
     await service.stop()
   })
 
-  it('stop() during the in-flight lazy start kills the child (no orphan) and blocks restart', async () => {
-    const { spawn, children } = fakeSpawn()
-    const health: { release: (() => void) | null } = { release: null }
-    const gatedFetch = (async (url: string | URL) => {
-      const u = String(url)
-      if (u.endsWith('/health')) {
-        await new Promise<void>((resolve) => (health.release = resolve))
-        return { ok: true, status: 200 } as Response
-      }
-      return { ok: true, status: 200, body: sseBody(FIXTURE_SSE) } as unknown as Response
-    }) as typeof fetch
-
-    const rt = new VisionRuntime({ ...base, spawn, fetchImpl: gatedFetch })
-    const p = rt.analyze(analyzeOpts)
-    while (!health.release) await sleep(1) // start is in flight, polling /health
-
-    const stopPromise = rt.stop() // quit/lock while still starting
-    health.release()
-    await stopPromise
-    await p.catch(() => undefined) // the analyze may fail; no-orphan is the point
-
-    expect(children[0].killed).toBe(true)
+  it('stop() during the in-flight lazy start is permanent: a later analyze refuses and spawns nothing', async () => {
+    const { spawn, calls, children } = fakeSpawn()
+    const { fetchImpl, state } = loadingSidecar(visionFetch().fetchImpl)
+    const rt = new VisionRuntime({ ...base, spawn, fetchImpl })
+    const p = rt.analyze(analyzeOpts).catch(() => undefined)
+    await until(() => state.probes > 0, 'the cold start polling /health')
+    await rt.stop() // quit/lock while still starting — sidecar-teardown-abort owns the #244 kill + settle bound
+    await within(p, 'the aborted start ending the analyze')
+    expect(children[0].killed).toBe(true) // precondition: the start's child went with the stop
+    state.loaded = true // a restart would now come up healthy at once, so only the stop latch can refuse it
     await expect(rt.analyze(analyzeOpts)).rejects.toThrow(/stopped/)
+    expect(calls.length).toBe(1) // the refused analyze spawned nothing
   })
 })
 
@@ -347,67 +270,17 @@ describe('VisionRuntime — start + analyze', () => {
 // emphasize: removing a guard (`this.starting`/`inFlight`, the synchronous `this.server = null`,
 // the `stop()` await of `idleTeardownPromise`, the `unref`) reddens a test here.
 describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / TEST-2)', () => {
-  /** A child whose 'exit' we control: `hold=true` makes kill() NOT emit, `release()` emits it. */
-  class GatedChild extends EventEmitter implements ChildProcessLike {
-    pid = 9
-    killed = false
-    hold = false
-    kill(): boolean {
-      this.killed = true
-      if (!this.hold) queueMicrotask(() => this.emit('exit', 0, null))
-      return true
-    }
-    release(): void {
-      queueMicrotask(() => this.emit('exit', 0, null))
-    }
-  }
-
-  function gatedSpawn() {
-    const calls: Array<{ args: string[] }> = []
-    const children: GatedChild[] = []
-    const spawn = (_c: string, args: string[]): ChildProcessLike => {
-      calls.push({ args })
-      const child = new GatedChild()
-      children.push(child)
-      return child
-    }
-    return { spawn, calls, children }
-  }
-
-  /** A controllable idle clock: captures the latest scheduled cb (fire it by hand) + set/clear/unref
-   *  counts so re-arm (clock reset) and cancel (stop) are observable without a wall-clock wait. */
-  function fakeClock() {
-    const state = { fire: null as (() => void) | null, setCount: 0, clearCount: 0, unrefCount: 0 }
-    const clock = {
-      set(cb: () => void) {
-        state.setCount++
-        state.fire = cb
-        return {
-          clear: () => {
-            state.clearCount++
-            if (state.fire === cb) state.fire = null
-          },
-          unref: () => {
-            state.unrefCount++
-          }
-        }
-      }
-    }
-    return { clock, state }
-  }
-
   const tick = (): Promise<void> => new Promise((r) => setTimeout(r, 0))
 
   it('(b) an analyze mid-soft-teardown cold-starts a fresh child (this.server nulled synchronously)', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    const { spawn, calls, children } = fakeSpawn(() => new GatedChild())
     const { fetchImpl } = visionFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
 
     await rt.analyze(analyzeOpts) // child0 live; the idle cb is captured
     expect(calls.length).toBe(1)
-    children[0].hold = true // hold child0's exit so the soft teardown stays IN FLIGHT
-    state.fire!() // fire the idle teardown: nulls this.server synchronously, kills child0 (gated)
+    state.fire!() // child0's exit waits for releaseExit(), so the soft teardown stays IN FLIGHT
     expect(children[0].killed).toBe(true)
 
     // server === null while the old child is still stopping → this analyze cold-starts a NEW child.
@@ -416,18 +289,17 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     expect(calls.length).toBe(2)
     expect(children.length).toBe(2)
 
-    children[0].release() // let the held teardown finish
+    for (const child of children) child.releaseExit() // let both exits through
     await rt.stop()
   })
 
   it('(c) stop() during an in-flight soft teardown AWAITS it (no orphan)', async () => {
-    const { spawn, children } = gatedSpawn()
+    const { spawn, children } = fakeSpawn(() => new GatedChild())
     const { fetchImpl } = visionFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
 
     await rt.analyze(analyzeOpts)
-    children[0].hold = true
     state.fire!() // soft teardown now in flight (gated open)
     expect(children[0].killed).toBe(true)
 
@@ -439,16 +311,16 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     await tick()
     expect(stopResolved).toBe(false) // stop() is AWAITING idleTeardownPromise — cannot have resolved
 
-    children[0].release() // unblock the teardown
+    children[0].releaseExit() // unblock the teardown
     await stopP
     expect(stopResolved).toBe(true)
     expect(children.length).toBe(1) // no orphan, no extra child spawned
   })
 
   it("(e) the idle timer is unref'd so it can never block a clean quit", async () => {
-    const { spawn } = gatedSpawn()
+    const { spawn } = fakeSpawn()
     const { fetchImpl } = visionFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.analyze(analyzeOpts) // settles → arms the idle timer
     expect(state.setCount).toBeGreaterThan(0)
@@ -457,7 +329,7 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
   })
 
   it('(a) a stale idle fire is a no-op while a job is in flight (the inFlight guard)', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    const { spawn, calls, children } = fakeSpawn()
     let chatCount = 0
     const gate: { release: (() => void) | null } = { release: null }
     const gatedFetch = (async (url: string | URL) => {
@@ -467,13 +339,13 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
       if (chatCount >= 2) await new Promise<void>((resolve) => (gate.release = resolve))
       return { ok: true, status: 200, body: sseBody(FIXTURE_SSE) } as unknown as Response
     }) as typeof fetch
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl: gatedFetch, idleClock: clock })
 
     await rt.analyze(analyzeOpts) // chat #1 completes → child0; an idle cb is armed (state.fire)
     const staleCb = state.fire! // capture it BEFORE the next analyze cancels the timer
     const p2 = rt.analyze(analyzeOpts) // chat #2 gates → inFlight=1, child0 reused
-    while (!gate.release) await tick()
+    await until(() => gate.release !== null, 'the second analyze reaching its gated chat request')
 
     // Simulate a timer that FIRED racing the cancel (cb already dispatched): idleTeardown must
     // SKIP because a job is in flight (inFlight>0) and never tear down the live sidecar.
@@ -481,7 +353,7 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     expect(children[0].killed).toBe(false)
     expect(calls.length).toBe(1) // the in-flight job's sidecar was never torn down
 
-    gate.release()
+    gate.release!()
     expect(await p2).toBe(FIXTURE_ANSWER)
     await rt.stop()
   })
@@ -491,9 +363,9 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
   // assert via the clock that re-entry CLEARED T1 and re-armed T2, then fire T2 to confirm the
   // rearmed timer is the one that tears the idle sidecar down — no `sleep(15)`/`sleep(60)` race.
   it('(d) re-entry RESETS the idle clock — a reused sidecar is never torn down by the stale timer', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    const { spawn, calls, children } = fakeSpawn()
     const { fetchImpl } = visionFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
 
     await rt.analyze(analyzeOpts) // settles → arms idle timer T1
@@ -518,9 +390,9 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
   // killed. Deterministic: assert the clock recorded the cancel, then fire the captured stale cb by
   // hand and confirm the `stopped` guard makes it inert — no `sleep(40)` "assert nothing happened".
   it('(f) stop() CANCELS a pending idle timer — a later stale fire is inert (no extra child)', async () => {
-    const { spawn, children } = gatedSpawn()
+    const { spawn, children } = fakeSpawn()
     const { fetchImpl } = visionFetch()
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
 
     await rt.analyze(analyzeOpts) // arms the idle timer
@@ -548,8 +420,8 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
   // stop()'s "no live idle timer on return" postcondition LOCAL (independent of armIdleTimer's
   // guards) — it only becomes load-bearing if a future refactor weakens BOTH of those checks.
   it('(g) no idle timer survives a stop() that races an analyze settling (R7)', async () => {
-    const { spawn } = gatedSpawn()
-    const { clock, state } = fakeClock()
+    const { spawn } = fakeSpawn()
+    const { clock, state } = fakeIdleClock()
     let releaseFetch!: () => void
     const fetchGate = new Promise<void>((r) => (releaseFetch = r))
     let chatCount = 0
@@ -563,7 +435,7 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl: gatedFetch, idleClock: clock })
 
     const p = rt.analyze(analyzeOpts) // in flight; the idle timer is cancelled while inFlight > 0
-    while (chatCount === 0) await tick() // analyze has reached the gated fetch
+    await until(() => chatCount > 0, 'the analyze reaching the gated chat request')
 
     // stop() begins (sets `stopped` synchronously) and the analyze settles in its window: its
     // `finally` calls armIdleTimer(), which must NOT arm a timer that outlives the teardown.
@@ -579,9 +451,9 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
   // settle must arm the clock, or a start that lands with nobody waiting stays resident until
   // lock or quit.
   it('(h) a start that lands after every analyze was cancelled arms the idle clock, and its fire tears it down (#637)', async () => {
-    const { spawn, children } = gatedSpawn()
+    const { spawn, children } = fakeSpawn()
     const { fetchImpl, state: start } = loadingSidecar(visionFetch().fetchImpl)
-    const { clock, state } = fakeClock()
+    const { clock, state } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
 
     const cancel = new AbortController()
@@ -594,7 +466,6 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     start.loaded = true
     await until(() => rt.isLoaded(), 'the abandoned start landing')
     expect(state.fire).not.toBeNull() // armed by the start's settle, with no analyze in flight
-    expect(state.unrefCount).toBe(state.setCount)
     state.fire!()
     expect(children[0].killed).toBe(true)
     expect(rt.isLoaded()).toBe(false)
@@ -607,16 +478,16 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
   // fails 'runtimeFailed' until a full idle window elapses. The onUnexpectedExit hook drops the
   // dead handle so the next analyze cold-starts. Mirrors translation-runtime.test.ts's M1 cases.
   it('recovers from a mid-session sidecar CRASH: the next analyze cold-starts a fresh child (M1)', async () => {
-    const { spawn, calls, children } = gatedSpawn()
+    const { spawn, calls, children } = fakeSpawn()
     const { fetchImpl } = visionFetch()
-    const { clock } = fakeClock()
+    const { clock } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.analyze(analyzeOpts)
     expect(calls.length).toBe(1)
     // The child dies on its OWN (OOM) after having been healthy, outside stop() — a real 'exit'.
     // LlamaServer fires onUnexpectedExit, and the runtime drops the dead handle so the next
     // analyze cold-starts instead of failing forever against a stale server.
-    children[0].emit('exit', 137, null) // 137 = OOM-killed
+    children[0].crash(137) // 137 = OOM-killed
     await tick()
     const answer = await rt.analyze(analyzeOpts)
     expect(answer).toBe(FIXTURE_ANSWER)
@@ -630,20 +501,15 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
   // (OOM under RAM pressure, the startup port race) bricked image understanding for the rest
   // of the session and made "Try again" permanently misleading. The service now discards a
   // start-failed runtime and rebuilds fresh past a short cooldown.
-  it('recovers from a FAILED start: past the cooldown the next analyze rebuilds a fresh runtime (#117)', async () => {
+  it('recovers from a FAILED start: once the 5 s cooldown has passed the next analyze rebuilds a fresh runtime (#117)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] }) // the cooldown reads Date.now(); frozen, it moves only when the test moves it
+    const t0 = Date.now()
     const { fetchImpl } = visionFetch()
-    let spawnCount = 0
-    // First spawn dies during start (transient OOM); every later spawn is healthy.
-    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
-      spawnCount++
-      const child = new FakeChild()
-      if (spawnCount === 1) queueMicrotask(() => child.emit('exit', 137, null))
-      return child
-    }
+    let spawned = 0
+    const { spawn } = fakeSpawn(() => (++spawned === 1 ? exitingChild(137) : new FakeChild())) // the first start dies (transient OOM)
     const failingFetch = (async (url: string | URL, init?: RequestInit) => {
-      // The first child is dead, so its health poll must fail; later children are healthy.
-      if (spawnCount === 1) throw new Error('connection refused')
-      return fetchImpl(url as never, init)
+      if (spawned === 1) throw new Error('connection refused') // the dead first child never answers /health
+      return fetchImpl(url, init)
     }) as typeof fetch
     let built = 0
     const service = new VisionService({
@@ -651,56 +517,46 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
       createRuntime: () => {
         built++
         return new VisionRuntime({ ...base, spawn, fetchImpl: failingFetch, idleTimeoutMs: 100_000 })
-      },
-      startFailureCooldownMs: 0 // the retry lands "past" the window deterministically
+      }
     })
 
     const first = await runToTerminal(service, serviceReq())
     expect(first.state).toBe('failed')
     expect(first.error).toBe('runtimeFailed')
 
+    vi.setSystemTime(t0 + 5_000) // exactly the shipped VISION_START_FAILURE_COOLDOWN_MS: the window is over
     // The user's retry: the start-failed runtime was DISCARDED, a fresh one is built + spawned.
     const second = await runToTerminal(service, serviceReq())
     expect(second.state).toBe('done')
     expect(second.answer).toBe(FIXTURE_ANSWER)
     expect(built).toBe(2)
-    expect(spawnCount).toBe(2)
+    expect(spawned).toBe(2)
     await service.stop()
   })
 
-  it('fails FAST within the start-failure cooldown — no re-spawn per retry (corrupt-GGUF case, #117)', async () => {
-    let spawnCount = 0
-    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
-      spawnCount++
-      const child = new FakeChild()
-      queueMicrotask(() => child.emit('exit', 1, null)) // dies every time (corrupt GGUF)
-      return child
-    }
+  it('fails FAST inside the 5 s start-failure cooldown — no re-spawn per retry (corrupt-GGUF case, #117)', async () => {
+    vi.useFakeTimers({ toFake: ['Date'] })
+    const t0 = Date.now()
+    const { spawn, calls } = fakeSpawn(() => exitingChild(1)) // dies every time (corrupt GGUF)
     let built = 0
     const service = new VisionService({
       getStatus: async () => VLM_AVAILABLE,
       createRuntime: () => {
         built++
-        return new VisionRuntime({
-          ...base,
-          spawn,
-          fetchImpl: (async () => {
-            throw new Error('connection refused')
-          }) as unknown as typeof fetch
-        })
-      },
-      startFailureCooldownMs: 60_000
+        return new VisionRuntime({ ...base, spawn, fetchImpl: refusedFetch })
+      }
     })
 
     expect((await runToTerminal(service, serviceReq())).error).toBe('runtimeFailed')
+    vi.setSystemTime(t0 + 4_999) // 1 ms short of the shipped window
     // A retry INSIDE the window fast-fails without building or spawning anything new.
     expect((await runToTerminal(service, serviceReq())).error).toBe('runtimeFailed')
     expect(built).toBe(1)
-    expect(spawnCount).toBe(1)
+    expect(calls.length).toBe(1)
     await service.stop()
   })
 
-  it('isStartFailed() reports the latch (false before/after a healthy start, true after a failed one)', async () => {
+  it('isStartFailed() reports the latch (false before/after a healthy start, true after a failed one), and a latched runtime refuses without re-spawning', async () => {
     const { spawn } = fakeSpawn()
     const { fetchImpl } = visionFetch()
     const healthy = new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
@@ -709,41 +565,32 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
     expect(healthy.isStartFailed()).toBe(false)
     await healthy.stop()
 
-    const dying = new VisionRuntime({
-      ...base,
-      spawn: (_c: string, _args: string[]): ChildProcessLike => {
-        const child = new FakeChild()
-        queueMicrotask(() => child.emit('exit', 1, null))
-        return child
-      },
-      fetchImpl: (async () => {
-        throw new Error('connection refused')
-      }) as unknown as typeof fetch
-    })
+    const dyingSpawn = fakeSpawn(() => exitingChild(1))
+    const dying = new VisionRuntime({ ...base, spawn: dyingSpawn.spawn, fetchImpl: refusedFetch })
     await expect(dying.analyze(analyzeOpts)).rejects.toThrow()
     expect(dying.isStartFailed()).toBe(true)
+    await expect(dying.analyze(analyzeOpts)).rejects.toThrow() // carried from the retired "latches a failed start" row
+    expect(dyingSpawn.calls.length).toBe(1) // the latch refused without a second spawn + health wait
     await dying.stop()
   })
 
-  it('a healthy crash does NOT clobber a newer instance (identity-compared)', async () => {
-    // The exit callback captures the child that crashed; if a soft idle teardown + restart has
-    // already installed a NEWER server by the time a late crash notification lands, nulling must
-    // be a no-op (`if (this.server === server)`), never tear the fresh child's handle out.
-    const { spawn, calls, children } = gatedSpawn()
+  // #656: Node can report one death twice — an 'error' (the process is gone) and later its 'exit' — and
+  // LlamaServer passes both on as onUnexpectedExit. By the second report an analyze has cold-started a
+  // NEWER child; dropping the handle again (no `this.server === server` check) would strand it and
+  // spawn a third. (A late 'exit' after a soft idle teardown reaches no listener, so it cannot test this.)
+  it("a dead child's second death report does NOT clobber the newer instance (identity-compared, #656)", async () => {
+    const { spawn, calls, children } = fakeSpawn()
     const { fetchImpl } = visionFetch()
-    const { clock, state } = fakeClock()
+    const { clock } = fakeIdleClock()
     const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleClock: clock })
     await rt.analyze(analyzeOpts) // child0
-    state.fire!() // soft idle teardown of child0 (not held → exits)
-    await tick()
-    await rt.analyze(analyzeOpts) // cold-starts child1 (the NEWER instance)
+    children[0].emit('error', new Error('read ECHILD')) // first report: M1 drops the dead handle
+    await rt.analyze(analyzeOpts) // cold-starts child1, the NEWER instance
     expect(calls.length).toBe(2)
-    children[0].emit('exit', 137, null) // a LATE crash notice from the already-dead child0
-    await tick()
-    // child1 is untouched — the next analyze reuses it, no third spawn.
-    const answer = await rt.analyze(analyzeOpts)
-    expect(answer).toBe(FIXTURE_ANSWER)
-    expect(calls.length).toBe(2)
+    children[0].crash(137) // the late 'exit' of the same death
+    expect(await rt.analyze(analyzeOpts)).toBe(FIXTURE_ANSWER)
+    expect(calls.length).toBe(2) // child1 reused, no third spawn
+    expect(rt.isLoaded()).toBe(true)
     await rt.stop()
   })
 })
@@ -751,6 +598,8 @@ describe('VisionRuntime — idle-teardown interlock, deterministic (RUNTIME-4 / 
 // #530: the OS loader refused the engine program — the service reports `engineCannotRun` (not the
 // generic `runtimeFailed`), repeats it inside the cooldown, and "Check again" drops the cooldown.
 describe('VisionService — OS loader refusal (#530)', () => {
+  // the cooldown is the shipped 5 s: a frozen Date keeps every retry here inside it, however slow the worker
+  beforeEach(() => vi.useFakeTimers({ toFake: ['Date'] }))
   afterEach(() => resetEngineProblemsForTest())
 
   const refusal = () =>
@@ -762,7 +611,7 @@ describe('VisionService — OS loader refusal (#530)', () => {
       exit: 'exit code 127'
     })
 
-  function refusingService(cooldownMs = 60_000) {
+  function refusingService() {
     let built = 0
     let healthy = false
     const service = new VisionService({
@@ -776,23 +625,10 @@ describe('VisionService — OS loader refusal (#530)', () => {
           },
           isStartFailed: () => !healthy
         }
-      },
-      startFailureCooldownMs: cooldownMs
+      }
     })
     return { service, built: () => built, heal: () => (healthy = true) }
   }
-
-  it('fails the job with engineCannotRun, and a second analyze inside the cooldown fails fast the same way', async () => {
-    const { service, built } = refusingService()
-    const first = await runToTerminal(service, serviceReq())
-    expect(first.state).toBe('failed')
-    expect(first.error).toBe('engineCannotRun')
-    const second = await runToTerminal(service, serviceReq())
-    expect(second.state).toBe('failed')
-    expect(second.error).toBe('engineCannotRun')
-    expect(built()).toBe(1) // the cooldown fast-fail built no new runtime
-    await service.stop()
-  })
 
   it('resetStartFailure() drops the cooldown so the next analyze builds a fresh runtime', async () => {
     const { service, built, heal } = refusingService()
@@ -806,37 +642,19 @@ describe('VisionService — OS loader refusal (#530)', () => {
   })
 
   it('a real VisionRuntime whose sidecar the loader refuses ends engineCannotRun (one spawn)', async () => {
-    let spawnCount = 0
-    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
-      spawnCount++
-      const child = new FakeChild()
-      const stderr = new EventEmitter()
-      ;(child as unknown as { stderr: EventEmitter }).stderr = stderr
-      queueMicrotask(() => {
-        stderr.emit(
-          'data',
-          '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
-        )
-        child.emit('exit', 127, null)
-        child.emit('close', 127, null)
-      })
-      return child
-    }
+    const { spawn, calls } = fakeSpawn(() =>
+      exitingChild(
+        127,
+        '/media/someone/HR/runtime/llama.cpp/linux/llama-server: error while loading shared libraries: libgomp.so.1: cannot open shared object file: No such file or directory\n'
+      )
+    )
     const service = new VisionService({
       getStatus: async () => VLM_AVAILABLE,
-      createRuntime: () =>
-        new VisionRuntime({
-          ...base,
-          spawn,
-          fetchImpl: (async () => {
-            throw new Error('connection refused')
-          }) as unknown as typeof fetch
-        }),
-      startFailureCooldownMs: 60_000
+      createRuntime: () => new VisionRuntime({ ...base, spawn, fetchImpl: refusedFetch })
     })
     expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
     expect((await runToTerminal(service, serviceReq())).error).toBe('engineCannotRun')
-    expect(spawnCount).toBe(1)
+    expect(calls.length).toBe(1)
     await service.stop()
   })
 })
@@ -905,22 +723,8 @@ describe('#637 — a cancel during the vision cold start', () => {
   // The cancelled job is gone by the time its start fails, so run()'s catch — which discards a
   // start-failed runtime (#117) — never sees the failure. The next job must not inherit it.
   it('VisionService: a start that fails after its cancelled job left does not fail the next job', async () => {
-    const children: FakeChild[] = []
-    const spawn = (_c: string, _args: string[]): ChildProcessLike => {
-      const child = new FakeChild()
-      children.push(child)
-      return child
-    }
-    let probes = 0
-    // The first child never gets healthy; any later one answers at once.
-    const fetchImpl = (async (url: string | URL) => {
-      if (String(url).endsWith('/health')) {
-        probes++
-        const healthy = children.length > 1
-        return { ok: healthy, status: healthy ? 200 : 503 } as Response
-      }
-      return { ok: true, status: 200, body: sseBody(FIXTURE_SSE) } as unknown as Response
-    }) as typeof fetch
+    const { spawn, children } = fakeSpawn()
+    const { fetchImpl, state } = loadingSidecar(visionFetch().fetchImpl)
     const runtimes: VisionRuntime[] = []
     const service = new VisionService({
       getStatus: async () => VLM_AVAILABLE,
@@ -928,18 +732,17 @@ describe('#637 — a cancel during the vision cold start', () => {
         const rt = new VisionRuntime({ ...base, spawn, fetchImpl, idleTimeoutMs: 100_000 })
         runtimes.push(rt)
         return rt
-      },
-      // A failure the service saw itself would make the next job fail fast for a minute.
-      startFailureCooldownMs: 60_000
+      }
     })
     const emit: VisionStreamEmitter = { token: () => {}, done: () => {}, error: () => {} }
 
     const first = service.analyze(serviceReq(), emit)
-    await until(() => probes > 0, 'the cold start polling /health')
+    await until(() => state.probes > 0, 'the cold start polling /health')
     service.cancel(first.jobId)
     await until(() => !service.hasActiveJob(), 'the cancelled job freeing the busy slot')
-    children[0].emit('exit', 1, null) // the abandoned start dies while loading
+    children[0].crash(1) // the abandoned start dies while loading
     await until(() => runtimes[0].isStartFailed(), 'the abandoned start failing')
+    state.loaded = true // the next child answers at once
 
     const next = await runToTerminal(service, serviceReq())
     expect(next.state).toBe('done')

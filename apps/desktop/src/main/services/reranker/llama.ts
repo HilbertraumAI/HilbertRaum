@@ -83,7 +83,7 @@ const DEFAULT_REQUEST_TIMEOUT_MS = 120_000
 
 export type LlamaRerankerDeps = Pick<
   LlamaServerOptions,
-  'spawn' | 'fetchImpl' | 'findPort' | 'threads' | 'healthTimeoutMs' | 'healthIntervalMs' | 'host'
+  'spawn' | 'fetchImpl' | 'findPort' | 'healthTimeoutMs' | 'healthIntervalMs'
 >
 
 export interface LlamaRerankerOptions extends LlamaRerankerDeps {
@@ -93,7 +93,6 @@ export interface LlamaRerankerOptions extends LlamaRerankerDeps {
   /** Absolute path to the reranker GGUF weight file. */
   modelPath: string
   contextTokens?: number
-  requestTimeoutMs?: number
   /**
    * Wave 8 ruling (b)(Q): which device the sidecar should use — resolved by `rerank()` before
    * starting, joining or reusing the sidecar, and again after every await inside `rerank()` (see
@@ -520,10 +519,8 @@ export class LlamaReranker implements Reranker {
       spawn: this.opts.spawn,
       fetchImpl: this.opts.fetchImpl,
       findPort: this.opts.findPort,
-      threads: this.opts.threads,
       healthTimeoutMs: this.opts.healthTimeoutMs,
       healthIntervalMs: this.opts.healthIntervalMs,
-      host: this.opts.host,
       // #244: let a lock/quit/Q-restart teardown abort this start mid-health-wait (the child is
       // killed via the normal stop path; start() rejects AbortError — reclassified below unless
       // it came from THIS call's own signal).
@@ -687,7 +684,7 @@ export class LlamaReranker implements Reranker {
     opts?.signal?.throwIfAborted()
     const server = await this.resolveServer(documents.length, opts?.signal)
     // REL-4: own the timeout so it is cleared the instant the request settles (no lingering timer).
-    const combined = combineSignals(opts?.signal, this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS)
+    const combined = combineSignals(opts?.signal, DEFAULT_REQUEST_TIMEOUT_MS)
     let json!: RerankResponse
     try {
       const res = await server.fetch('/v1/rerank', {

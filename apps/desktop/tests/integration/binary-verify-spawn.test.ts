@@ -27,11 +27,12 @@ import { checkProgramLoads } from '../../src/main/services/engine-health'
 // "Check again" engine check (`checkProgramLoads`). PACKAGED enforcement ON
 // (`initBinaryVerification(false)`) + a real on-disk install marker whose recorded hash does NOT
 // match the binary's bytes → each seam must REFUSE to spawn (no child created). They
-// deliberately do NOT inject a seam's `verify`/`verifyBinary` option — the wiring IS the point. The
+// deliberately do NOT inject a seam's `verify` option — the wiring IS the point. The
 // LlamaServer seam's positive controls run through the real verifier too: a matching marker (`ok`)
 // and a legacy, hash-less marker (`skip-legacy`, security-model.md §3's non-breaking rollout). The
-// LlamaServer injected-verdict copy in sidecar.test.ts was retired for these; transcriber.test.ts
-// keeps its own. kiwix-serve / kiwix-manage are not covered here yet (#656).
+// injected-verdict copies in sidecar.test.ts (LlamaServer) and transcriber.test.ts (whisper-cli) were
+// retired for these, and neither seam takes a verifier option any more. kiwix-serve / kiwix-manage are
+// not covered here yet (#656).
 //
 // TEETH: delete the `verifyBinaryBeforeSpawn`/`verify` call at a seam → the spawn proceeds (`calls` non-empty /
 // the refusal vanishes) → the matching test reddens. The matching-marker positive control proves the
@@ -203,9 +204,12 @@ describe('TEST-2 — spawn seams refuse a hash-mismatched binary through the REA
       modelPath: '/m/ggml-small.bin',
       spawnImpl: (_cmd: string, _args: string[], _o: SpawnOptions): ChildProcess => {
         spawned = true
-        return new EventEmitter() as unknown as ChildProcess
+        const child = new EventEmitter() as unknown as ChildProcess
+        // If (wrongly) spawned, settle fast so a neutered teeth-check fails by name instead of hanging.
+        queueMicrotask(() => child.emit('close', 0, null))
+        return child
       }
-      // NB: no `verifyBinary` → falls back to the REAL verifyBinaryBeforeSpawn.
+      // NB: WhisperCliTranscriber has no verifier seam: it always calls the REAL verifyBinaryBeforeSpawn.
     })
     await expect(transcriber.transcribe('/audio/meeting.mp3', { workDir })).rejects.toThrow(
       /integrity verification/

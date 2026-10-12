@@ -29,7 +29,7 @@ function tokenize(text: string): string[] {
 }
 
 /** Build one deterministic, L2-normalized vector for `text`. */
-export function embedTextToVector(text: string, dimensions: number): Float32Array {
+function embedTextToVector(text: string, dimensions: number): Float32Array {
   const vec = new Float32Array(dimensions)
   for (const token of tokenize(text)) {
     const digest = createHash('sha256').update(token).digest() // 32 bytes

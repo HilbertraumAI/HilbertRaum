@@ -23,16 +23,17 @@ import {
 //
 // CI stays zero-network/zero-model/zero-binary (the green gate), so this whole file is skipped
 // unless HILBERTRAUM_TRANSLATEGEMMA_SMOKE points at a provisioned drive root carrying the REAL
-// pinned b9849 llama-server PLUS the off-repo TranslateGemma GGUF under models/translation/
-// (and, for the TG-6 co-residency leg, the E5 embedder + a chat GGUF):
+// pinned llama-server (`model-manifests/runtime-sources.yaml`; b11146 since #516) PLUS the
+// off-repo TranslateGemma GGUF under models/translation/ (and, for the TG-6 co-residency leg, the
+// E5 embedder + a chat GGUF):
 //
 //   HILBERTRAUM_TRANSLATEGEMMA_SMOKE=<root with runtime/llama.cpp/<os>/llama-server + models/translation/*.gguf>
 //   npx vitest run tests/manual/translategemma-smoke.test.ts
 //
 // It composes `LlamaServer` DIRECTLY with the PRODUCTION translation args (translationServerArgs —
-// NO --jinja, --parallel 1, --ctx-size 4096, --chat-template gemma) and drives it
-// through the SHIPPING prompt builder + /completion reader (`buildTranslationPrompt` /
-// `readCompletionSSE`) — the exact code the TranslationRuntime uses. Issue #42: the DEVICE posture
+// NO --jinja, --parallel 1, --batch-size 512 --ubatch-size 512 (#605), --chat-template gemma;
+// --ctx-size 4096) and drives it through the SHIPPING prompt builder + /completion reader
+// (`buildTranslationPrompt` / `readCompletionSSE`) — the exact code the TranslationRuntime uses. Issue #42: the DEVICE posture
 // is selectable — the default 'auto' mirrors the shipping GPU auto-offload (no device args →
 // b9849 ngl=auto + fit=on); set HILBERTRAUM_TRANSLATEGEMMA_SMOKE_DEVICE=cpu to re-measure the
 // forced-CPU (`--device none`) posture the §11.2 calibration numbers were recorded on. The
@@ -69,7 +70,7 @@ import {
 // TA-4 TODO (next smoke run, needs drive access — NOT blocking TA-4): confirm the pin's ACTUAL
 // mid-stream error framing on `/completion`. `parseCompletionLine` now handles BOTH a `data:` frame
 // with an `error` object AND a bare `error:` SSE field line (M3, added defensively without the pin
-// to observe). Force an error (e.g. an over-context request) against the running b9849 server, dump
+// to observe). Force an error (e.g. an over-context request) against the running pinned server, dump
 // the raw stream bytes, and pin which shape it actually emits so the reader's error path is
 // pin-verified rather than defensive.
 //
@@ -428,7 +429,7 @@ async function runOnBinary(label: string, binPath: string, modelPath: string): P
   }
 }
 
-describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real b9849 + real TranslateGemma GGUF)', () => {
+describe.skipIf(!enabled)('TranslateGemma load smoke (manual, real pinned llama-server + real TranslateGemma GGUF)', () => {
   const modelPath = enabled ? findTranslationGguf(ROOT) : null
   const defaultBin = enabled ? resolveLlamaServerPath(ROOT, process.platform, process.env) : null
   const cpuBin = enabled ? resolveCpuFallbackServerPath(ROOT, process.platform) : null

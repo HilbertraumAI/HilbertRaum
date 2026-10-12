@@ -342,15 +342,9 @@ export class TranslateJobService {
     return job ? { ...job } : null
   }
 
-  /** Poll one job (unknown jobId ⇒ terminal failed — the vision `getJob` precedent). */
-  getJob(jobId: string): TranslateJob {
-    const job = this.jobs.get(jobId)
-    return job ? { ...job } : { jobId, state: 'failed', error: null }
-  }
-
   /**
    * Cancel an in-flight job (AbortController). Marks it `cancelled` and aborts the sidecar
-   * fetch. Unknown jobId ⇒ terminal failed (consistent with `getJob`). Idempotent: the
+   * fetch. Unknown jobId ⇒ terminal failed (the unknown-id shape). Idempotent: the
    * aborted `run()` also lands here.
    */
   cancel(jobId: string): TranslateJob {
