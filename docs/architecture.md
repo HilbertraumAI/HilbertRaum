@@ -4557,6 +4557,66 @@ well. Keys: `translate.device.gpuPartial` / `gpuNone` (cause) and `partialTitle`
 symptom-only. Full behaviour: `known-limitations.md`, "A large resident chat model can starve GPU
 translation…".
 
+### §9 Sharing the card: chat, translation and the reranker (#473, owner rulings 2026-10-12)
+
+Three processes can put a model on the graphics card: the chat runtime, the translation sidecar and
+the reranker. Before #473 only the reranker checked for room. Phase 0 (four independent fixes, among
+them #629) and the four rulings below settle the rest; the rulings and the re-check behind them are
+posted on #473. §8.1's refusal stands: no rule forces translation to the processor while both fit.
+
+**The facts it rests on.**
+- llama.cpp's `--fit` sizes a process by the device's free figure and fixes the split at load; a
+  running process is never re-fitted.
+- That figure tracks usage on Linux, so a second process is squeezed. It does not on NVIDIA/Windows
+  (`model-benchmarks.md` §6.6 finding 2), nor on Apple Silicon: build 11146's
+  `ggml_metal_device_get_memory` reports total = `recommendedMaxWorkingSetSize` and free = total
+  minus what the ASKING process allocated, so a separate process never sees ours. There a second
+  process overcommits instead.
+- A translation squeezed into 7 GB of its 7.8 GB need ran at about processor speed (§11.4).
+- A chat model that starts second stays squeezed until it is restarted (the Performance card says
+  so); translation's squeeze ends at its 2-minute idle teardown.
+- Under `-np 1` the gap between the probe's free figure and the fit's own reading is 54–154 MiB on
+  the three cards measured (§6.6 finding 1).
+
+**Decisions.** (1) No `--fit-target`: translation gets a headroom gate like the reranker's, and the
+app still passes nothing to llama.cpp's fit (§1, §3). Partial offloads are given up. (2) Priority
+chat, then translation, then the reranker. (3) The running chat model's share of the card is the
+measured one when this session has it. (4) Apple Silicon gets no rule of its own.
+
+**As built.**
+- **The translation gate** — `resolveTranslationDevicePosture` (`rag/device-posture.ts`), consulted
+  per cold start through `TranslationGpuDeps.gpuHeadroom`, after `gpuMode`, `gpuAutoDisabled` and
+  the session latch. GPU ('auto') only if the budget device's free figure minus the chat share
+  holds `estimateGraphicsNeedMib` of the translation model; otherwise `--device none`. 'auto',
+  llama.cpp deciding as before, when there is nothing to judge: no stored probe for this machine,
+  no usable discrete card, a locked workspace. 'cpu' while a chat start is in flight or pending.
+  The translation manifest carries measured `host_mapped_weights_mib` (787.69) and
+  `estimated_context_cache_gib` (0.75), so its estimate reads 8,892 MiB against 7,811 measured.
+  `gpuOccupied()` reports the posture the start in flight CHOSE, since the gate can change mid-start.
+- **Chat first** — `RuntimeManager`'s `beforeStart` hook, awaited by every start (Start, a switch,
+  the auto-start, Restart, the crash restarts) after the old runtime stopped and before the spawn,
+  calls `Translator.yieldGpu()` when the chat start may use the card. That stops a sidecar resident
+  on the card the way #605 stops a hung one (`softTeardown`): the window in flight fails with an
+  ordinary stream error that both consumers retry once, and the retry cold-starts after the kill —
+  on the processor, because the gate sees the chat start. A GPU cold start already in flight is let
+  finish (at most 30 s, `YIELD_START_WAIT_MS`) and then stopped, never aborted: an abort reaches a
+  document task as a cancel. The reranker already yields to both (Wave 8; Phase 0's
+  `translationGpuYield`).
+- **The chat share** — `chatGraphicsShareMib` (`models.ts`), read by both gates: this session's
+  measured placement for the same model and window (weights + KV + recurrent state + compute on the
+  card) plus `CHAT_MEASURED_MARGIN_MIB` (256); else the estimate with its cache term scaled UP to
+  the launched window; 0 when the chat model runs on the processor.
+- **Apple Silicon** — by the Metal fact above, both gates already compute "working-set cap minus
+  the chat share", the number a unified-memory rule would; `gpu-sharing-gates.test.ts` pins it.
+
+**Residuals** (also in `known-limitations.md`). Other applications' card use stays invisible on
+NVIDIA/Windows and Apple Silicon — no gate can see it. The single-process spill (§6.6 finding 8) is
+untouched; `--fit-target` stays a candidate for it once its cause is known. A translation moved off
+the card by a chat start stays on the processor until its idle teardown, even if the card has room
+once the chat model has loaded. A translation cold start in flight can delay a chat start by up to
+30 s. The reranker's load log is still not parsed, so a GPU reranker is assumed fully on the card.
+Hardware legs still open: two processes on NVIDIA/Windows, AMD/Windows, a Mac.
+
 ### GPU failure modes (all handled, none block)
 
 | Failure | What happens |

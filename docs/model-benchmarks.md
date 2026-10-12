@@ -2542,6 +2542,12 @@ regression-pinned in `translation-runtime.test.ts`'s "GPU device ladder" suite):
   The split is pinned per COLD START — freeing VRAM mid-session helps only once the 2-min idle
   teardown forces a fresh fit. This is the case the observability bullet above makes visible;
   `known-limitations.md` (Document translation) records the user-facing shape + remedy.
+- **#473 (2026-10-12):** because that squeezed fit ran at about processor speed, a translation
+  start now uses the card only when it fully fits beside the chat model, and otherwise runs on
+  the processor (`architecture.md` GPU record §9). The gate judges with the manifest's estimate,
+  calibrated on a full-offload capture of this sidecar (b11146, RTX 3080 Ti): 6,956 MiB of
+  weights + 736 KV + 119 compute = 7,811 MiB on the card, 787.69 MiB of weights host-mapped —
+  estimate 8,892 MiB (1.14×).
 
 **OPEN — the GPU-decode re-smoke (owner, PAID/GPU drive).** The §11.2 tokens/sec are CPU numbers;
 no GPU decode of TranslateGemma has been measured on the owner harness yet — the community

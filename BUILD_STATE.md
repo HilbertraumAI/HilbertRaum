@@ -28,11 +28,12 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
-_2026-10-07 — **#473 Phase 0 + #629 — four independent GPU-sharing fixes, no design ruling needed (`fix/473-phase0`).** (a) #629: translation runs at `-lv 4`,
-so its offload line reaches the Translate device hint and the Performance card (b11146: the default start printed no such line; content check beside DR3 in
-security-model). (b) Rung 1a judges `primaryUsefulDevice`, never an iGPU reporting more free memory. (c) A GPU-posture translation start first suspends a reranker
-resident on the card (`translationGpuYield`). (d) A first run probes before the auto-start, like every unlock. (e) GPU record §8.1 premise corrected; model-benchmarks
-§6.6 finding 8 (the #318 spill). Open: Phase 1 (rulings taken on #473 2026-10-12: translation headroom gate, chat priority, measured chat share, Mac test)._
+_2026-10-12 — **#473 — the graphics card shared between chat, translation and the reranker, Phase 0 + 1 (`fix/473-phase0`, PR #631; #629).** Phase 0:
+translation at `-lv 4` (#629; content check beside DR3), rung 1a judges `primaryUsefulDevice`, a GPU translation start suspends a reranker on the card, first
+runs probe before the auto-start, §8.1 premise corrected, §6.6 finding 8. Phase 1 (owner rulings 2026-10-12, posted on #473): no `--fit-target`; translation
+gate `resolveTranslationDevicePosture` (card only on a full fit beside chat, else the processor with a named `cpuCause`); a chat start takes the card first
+(`RuntimeManager` `beforeStart` → `Translator.yieldGpu`, the #605 soft kill); `chatGraphicsShareMib` (measured + 256, else scaled estimate) in both gates;
+translation manifest calibrated (8,892 vs 7,811 MiB); Mac pinned by test. Record: GPU record §9. Open: hardware legs (NVIDIA/Windows two processes, AMD, Mac)._
 _2026-10-12 — **#649 — "how much" is a lookup or a sum; a list asked about and "zählt als" ask for no list (`fix/649-how-much-sum-list-noun`).** "how much" / "wie viel" listed every amount ("How much is the monthly fee?"), a sum got that list with no total, and "auf der
 Liste" / "zählen zu" listed. Now a lookup gets a plain answer; a sum (a sum word, a totalling word with a money word, "how much" with a past pay verb; never with a count, an explain verb, a yes/no or who/when question) takes the aggregation route over amounts; and an aggregation ask over ONE fitting document is read whole instead of listed, a total led by a heads-up that the model does the
 arithmetic. The heads-up was an owner call after the 4B summed a statement's four fees wrong twice; it got the lease's 1.175 EUR right. The other calls were as recommended; two /code-review passes (28 of 30 findings fixed). 86 router rows and 7 IPC rows fail on master; 84/84 mutations go red. Real app (scratch root + D:): master listed for 9/9 asks; the fix

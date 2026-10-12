@@ -25,6 +25,16 @@ from its first public `1.0.0` release onward.
 
 ## [Unreleased]
 
+### Changed
+
+- **The chat model gets the graphics card first.** When you start or switch a chat model while
+  translation is on the graphics card, translation moves to the processor first; a document being
+  translated carries on there, redoing the passage that was in progress. Before, the chat model got
+  whatever translation had left and stayed slow until you restarted it (#473).
+- **Translation uses the graphics card only when it fits there completely.** Beside a chat model
+  that leaves too little room, it now runs on the processor, and the Translate screen says why.
+  Before, it squeezed onto the card and ran at about processor speed anyway (#473).
+
 ### Fixed
 
 - **The Translate screen now says how much of translation really runs on the graphics card.** It

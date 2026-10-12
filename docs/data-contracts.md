@@ -1964,7 +1964,10 @@ whole renderer-visible surface.
   `AppStatus` carries the additive gates `translationAvailable: boolean` (issue #40) and
   `translationDevice?: TranslationDeviceStatus` (issue #42 reopen — the Translate screen's
   device hint; recorded here per #164 D-7a, the `dictationAvailable`/`ocrAvailable` siblings'
-  precedent). PR #268 (#232): `AppStatus.ocrState?: OcrState`
+  precedent). #473 (2026-10-12) adds the optional `TranslationDeviceStatus.cpuCause?:
+  TranslationCpuCause` (`'beside-chat' | 'chat-starting' | 'too-large'`): why the headroom gate
+  put a start on the processor, absent when Settings or the session latch chose it
+  (`architecture.md` GPU record §9). PR #268 (#232): `AppStatus.ocrState?: OcrState`
   (`'available' | 'probing' | 'unavailable' | 'missing'`, additive-optional, same precedent) says
   WHY `ocrAvailable` is what it is — `ocrAvailable` itself now reads the engine's execution state
   (false while a packaged build's startup execution probe runs and after any worker failure), no

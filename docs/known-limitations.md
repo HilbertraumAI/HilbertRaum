@@ -2095,6 +2095,19 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   do not repeat each other. The same decision refused both runtime remedies (forcing translation to
   the processor, and an idle reclaim that largely exists already): `architecture.md` GPU record
   §8.1. So this limitation stands as a limitation — the app explains it, it does not prevent it.
+  **Narrowed by #473 (2026-10-12, GPU record §9).** A translation start now uses the card only if
+  the model fully fits beside the chat model there; otherwise it runs on the processor and the
+  device line names why (beside the chat model / a chat model was starting / too large for this
+  card). The squeezed partial offload this entry describes remains only where the gate has nothing
+  to judge: no stored probe for this machine, no usable discrete card. And a chat start now moves
+  a translation sidecar off the card first, so the chat model is no longer the one squeezed.
+  What remains: (a) other applications' use of the card is invisible on NVIDIA/Windows and Apple
+  Silicon, to every gate; (b) a translation moved off the card by a chat start stays on the
+  processor until its 2-minute idle teardown, even if the card has room once the chat model has
+  loaded, and the window in progress is redone; (c) a translation cold start in flight when a chat
+  start begins can delay that chat start by up to 30 s; (d) a GPU reranker is assumed fully on
+  the card (its load log is not parsed); (e) unmeasured on AMD/Windows and on a Mac, and the
+  two-process case on NVIDIA/Windows is unmeasured.
 - **Languages are a closed set of 51 — source AND target** (issue #31, 2026-07-07: the original
   curated 10 widened to TranslateGemma's full PRODUCTION tier — the 55 WMT24++-evaluated locales
   collapsed to 51 bare codes; `zh` is Simplified Chinese), validated server-side. The model's chat
