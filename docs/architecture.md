@@ -12737,6 +12737,9 @@ writes a `.print.tmp.html` file beside the destination. `print-pdf.ts` holds the
   `fetch` fails ("scheme not supported"), XHR is blocked by CORS, and an iframe loads with the
   parent reading `null`, but such a request uses up the one-shot page: a script that already
   had the token could fail that print, never read it.
+- **Open.** The real-Electron smoke has not run on the stock (fuses-on) binary: Smart App Control
+  refused that binary on the day. (Moved here from the retired BUILD_STATE 2026-10-03 #563 entry on
+  2026-10-12.)
 
 ### §-anchor legend (historical spec/plan citations)
 

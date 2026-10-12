@@ -22,6 +22,12 @@ import type { ExtractRecordType } from '../../../shared/types'
 //     a list request, even when it carries a quantifier ("Erkläre … inkl. aller Abkürzungen") —
 //     the listing engine cannot explain. Both #641 cases fall back to LABELLED relevance
 //     (`fallback: 'partial'`): the answer may miss items, but a deep index would not help.
+//   - Issue #644: a quantifier (all / every / each, alle / jede / sämtliche) is a list request only
+//     at the head of a request ("Alle Fristen?", "Kannst du mir alle Fristen nennen?"); inside a
+//     question it modifies the question ("Welche Frist gilt für alle Mieter?" → labelled relevance).
+//     A yes/no question ("Gilt die Frist für alle Mieter?", "Does the contract list all the
+//     deadlines?") asks for a verdict, not a list: an ordinary answer, unless it is a polite request
+//     ("Can you list …", "Kannst du … auflisten?").
 //   - Fixed precedence: explicit button > compare (needs 2 docs) > coverage-extract >
 //     tree-summary > relevance. A compare classified without 2 docs, or any low-confidence
 //     classification, falls back to relevance — never an empty result from a stray trigger word.
@@ -81,8 +87,12 @@ export interface RouteDecision {
 //     \büberblick can never match "Überblick" (the position before "Ü" is not a JS word
 //     boundary) — überblick therefore carries no boundary at all.
 
-const COVERAGE_RE =
-  /\b(list|enumerate|every|each|all of (the|them)|all the|how many|how much|count)\b|\b(jede[rsn]?|alle[rsn]?|sämtliche[rsn]?|wie ?viele?|liste)\b|\b(auflist|aufzähl|zähl)/i
+// The list/count triggers, in two halves (#644). A list or count VERB asks for a list wherever it
+// stands; a QUANTIFIER does only at the head of a request (`listRequestShape` below).
+const LIST_VERB_RE = /\b(list|enumerate|how many|how much|count)\b|\b(wie ?viele?|liste)\b|\b(auflist|aufzulist|aufzähl|aufzuzähl|zähl)/i
+const QUANTIFIERS = String.raw`every|each|all of (?:the|them)|all the|jede[rsn]?|alle[rsn]?|sämtliche[rsn]?`
+const QUANTIFIER_RE = new RegExp(String.raw`(?<![\p{L}\p{N}])(?:${QUANTIFIERS})(?![\p{L}\p{N}])`, 'iu')
+const HEAD_QUANTIFIER_RE = new RegExp(String.raw`^(?:${QUANTIFIERS})(?![\p{L}\p{N}])`, 'iu')
 // Aggregation/categorization verbs (issue #37): "categorize the expenses, sum per category" is a
 // whole-document task by nature — no top-k short of "all chunks" yields a correct total. These
 // route to coverage exactly like the list/count triggers above: coverage-extract when extract
@@ -110,14 +120,261 @@ const EXPLAIN_RE =
 // #641: question words and modal verbs among the type synonyms ("when", "who", "must", "wann",
 // "wer", "muss") pick the TYPE of a list, but they never name a thing to list: "Welche
 // Abkürzungen muss ich kennen? Liste alle auf" is not a request for obligations. The typed-{X}
-// gate ignores them.
-const TYPE_CUE_WORDS_RE = /\b(who|when|must|shall|wer|wann|muss)\b|(?<![\p{L}\p{N}])müssen(?![\p{L}\p{N}])/giu
+// gate ignores them. #644: the modals never name what a list is of either ("How many tenants must pay
+// a fee?" asks about fees), so they also decide the type only when nothing else is named.
+const MODAL_CUE_WORDS = ['must', 'shall', 'muss', 'müssen']
+const wordsRe = (words: readonly string[]): RegExp =>
+  new RegExp(String.raw`(?<![\p{L}\p{N}])(?:${words.join('|')})(?![\p{L}\p{N}])`, 'giu')
+const TYPE_CUE_WORDS_RE = wordsRe(['who', 'when', 'wer', 'wann', ...MODAL_CUE_WORDS])
+const MODAL_CUE_WORDS_RE = wordsRe(MODAL_CUE_WORDS)
 
-/** Closed-vocabulary synonym table: a user's "{X}" → an extracted type (plan §4.2 step 4). */
+// #644: the finite verbs a yes/no question opens with. English asks with an auxiliary or modal;
+// German puts any finite verb first, so its list is the common auxiliaries and modals plus the
+// verbs a question about a contract, a letter or a statement tends to open with. A verb missing
+// here costs only the label: the question still never gets the listing (no list verb, no head
+// quantifier), it gets the labelled answer instead of the plain one.
+const EN_YES_NO_VERBS =
+  'is are was were am do does did has have had will would shall should can could may might must ' +
+  "isn't aren't wasn't weren't don't doesn't didn't hasn't haven't hadn't won't wouldn't shouldn't can't couldn't mustn't"
+const DE_YES_NO_VERBS =
+  'ist sind war waren wäre wären bin bist seid hat haben hatte hatten hätte hätten habe hast habt ' +
+  'wird werden wurde wurden würde würden wirst werde kann kannst können konnte konnten könnte könnten ' +
+  'muss musst müssen musste mussten müsste müssten darf darfst dürfen durfte durften dürfte dürften ' +
+  'soll sollst sollen sollte sollten will willst wollen wollte wollten mag möchte möchten ' +
+  "gilt gelten galt galten gibt gibt's gibts gab gäbe steht stehen gehört gehören betrifft betreffen " +
+  'enthält enthalten bekommt bekommen erhält erhalten zahlt zahlen zahlte zahlten bezahlt endet enden ' +
+  'läuft laufen beginnt beginnen braucht brauchen liegt liegen stimmt stimmen trifft treffen umfasst ' +
+  'umfassen deckt decken haftet haften fällt fallen passt passen reicht reichen regelt verlangt zählt'
+const wordSet = (words: string): Set<string> => new Set(words.split(' '))
+const YES_NO_VERBS = wordSet(`${EN_YES_NO_VERBS} ${DE_YES_NO_VERBS}`)
+// "was" and "am" are German too ("Was sind alle Fristen?", "Am Monatsende …"): they open a yes/no
+// question only before an English subject ("Was every payment on time?", "Am I liable for all costs?").
+const ENGLISH_ONLY_BEFORE_SUBJECT = wordSet('was am')
+const ENGLISH_SUBJECTS = wordSet(
+  'the a this that these those there it i we you he she they my your our their his her its every each all any anything everything'
+)
+// Words a request or a question may open with before its first real word ("Please, can you …", "Alles
+// klar, gilt die Frist …?", "And all the payments were on time?"). Skipped wherever an opener may stand;
+// a sentence of fillers alone ("Alles klar.", "Danke!") asks nothing.
+const FILLERS = [
+  'alles klar', 'thank you', 'got it', 'all right', 'please', 'kindly', 'ok', 'okay', 'so', 'now', 'also', 'and',
+  'then', 'hey', 'hi', 'hello', 'well', 'thanks', 'great', 'alright', 'perfect', 'bitte', 'und', 'dann', 'noch',
+  'hallo', 'nun', 'ja', 'danke', 'gut', 'klar', 'super', 'prima', 'perfekt', ','
+]
+  .map((s) => s.split(' '))
+  .sort((a, b) => b.length - a.length)
+// A polite request opens like a yes/no question but asks for the thing ("Can you list every deadline?",
+// "Kannst du mir alle Fristen nennen?", "Do you have a list of all the deadlines?"). Its verb is followed
+// by the one asked (you / du / Sie / ihr — Sie and ihr only with a plural verb: "Kann sie …" is "can
+// she") or by the asker (I / we / man, after a modal), and the sentence asks for something: a list verb,
+// a request verb right after that word or as its last word, or "mir / uns" ("Kann ich alle Fristen sehen?",
+// "Können Sie mir alle Fristen nennen?"). Without one it is a yes/no question: "Can you deduct all the
+// fees?", "Können Sie alle Fristen einhalten?", "Kann ich alle Zahlungen zurückfordern?". Or it is one of
+// the fixed phrases. Matched before the yes/no verbs.
+const POLITE_MODALS = wordSet('can could would will may might kannst könntest können könnten kann könnte würdest würden würde magst darf dürfen dürfte')
+const ADDRESSEES = wordSet('you u du')
+const PLURAL_ADDRESSEES = wordSet('sie ihr')
+const PLURAL_VERBS = wordSet(
+  'können könnten würden dürfen dürften müssen sollen sollten wollen möchten haben hätten hatten sind wären waren ' +
+    'werden wurden könnt würdet habt seid wollt sollt dürft'
+)
+const SELF_SUBJECTS = wordSet('i we ich wir man')
+const REQUEST_SIGNALS = wordSet(
+  'give show tell list name find get provide send pull extract display print see view have share enumerate count ' +
+    'mir uns nennen zeigen geben sagen schicken senden auflisten aufzählen heraussuchen raussuchen zusammenstellen ' +
+    'erstellen sehen ansehen anschauen einsehen bekommen erhalten haben ausgeben liefern'
+)
+const POLITE_PHRASES = [
+  'is it possible to', 'would it be possible to', 'do you know', 'would you mind', 'do you mind', 'is there a list of',
+  'ist es möglich', 'wäre es möglich', 'weißt du', 'wissen sie', 'gibt es eine liste', 'gibt es eine aufstellung'
+].map((s) => s.split(' '))
+// The words a request may open with before the thing it asks for ("Zeig mir alle Zahlungen", "What are all
+// the deadlines?", "Fasse alle Fristen zusammen"). Stripped repeatedly from the head of a sentence, longest
+// first; what follows is the head the quantifier must stand at. List verbs need no entry: one asks for a
+// list wherever it stands ("Erstelle eine Liste aller Fristen" — "Liste" counts as the word "list" does).
+// When- and where-questions are not requests ("When are all the payments due?" is labelled like "When is
+// each payment due?"). A request verb missing here costs the listing, not the answer: the request gets the
+// labelled written answer (#641's direction), never the listing for a question.
+const REQUEST_OPENERS = [
+  'i need', 'we need', 'i want', 'i would like', "i'd like", 'give me', 'give us', 'give', 'show me', 'show us', 'show',
+  'tell me', 'tell us', 'tell', 'get me', 'get', 'see', 'view', 'have', 'name', 'find', 'provide', 'extract', 'pull out',
+  'pull', 'collect', 'gather', 'identify', 'display', 'print', 'retrieve', 'highlight', 'output', 'compile', 'fetch',
+  'share', 'write down', 'write out', 'note', 'mark', 'make', 'create', 'listing', 'summarize', 'summarise',
+  'an overview of', 'overview of', 'a summary of', 'what are', 'what were', "what're", 'which are', 'which were',
+  'who are', 'who were', 'me', 'us',
+  'ich brauche', 'wir brauchen', 'ich möchte', 'ich will', 'ich hätte gern', 'ich hätte gerne', 'zeig', 'zeige',
+  'zeigen sie', 'gib', 'geben sie', 'nenn', 'nenne', 'nennen sie', 'sag', 'sage', 'sagen sie', 'mir sagen', 'uns sagen',
+  'finde', 'finden sie', 'such', 'suche', 'suchen sie', 'sammle', 'sammeln sie', 'listen sie', 'zählen sie',
+  'extrahiere', 'extrahier', 'extrahieren sie', 'ermittle', 'ermitteln sie', 'schreib', 'schreibe', 'schreiben sie',
+  'führe', 'führ', 'führen sie', 'stelle', 'stell', 'stellen sie', 'markiere', 'markieren sie', 'liefere',
+  'liefern sie', 'hole', 'hol', 'erstelle', 'erstell', 'erstellen sie', 'mach', 'mache', 'fasse', 'fass',
+  'eine aufstellung', 'eine übersicht über', 'einen überblick über', 'mir', 'uns', 'was sind', 'was waren',
+  'welche sind', 'welche waren', 'wer sind', 'wer waren', 'wie lauten', 'wie heißen'
+]
+  .map((s) => s.split(' '))
+  .sort((a, b) => b.length - a.length)
+// "whether / ob" at the head embed a yes/no question ("Ob alle Zahlungen pünktlich waren?", "Can you tell
+// me whether …"); "if" does only right after an opener ("Tell me if …"), a bare "if" opens a condition.
+const EMBEDDED_YES_NO = wordSet('whether ob')
+// A claim about the quantified items ("Jede Zahlung ist pünktlich eingegangen?") has its verb right after
+// them, in the quantifier's language. A verb behind a comma or one of these clause words belongs to a
+// clause instead ("Every deadline that is binding?"); German "die / das / welche …" only before a
+// lower-case word ("Alle Zahlungen die ich erhalten habe?", but "Jede Zahlung an die Vermieterin ist …").
+const EN_QUANTIFIER_WORDS = wordSet('every each all')
+const EN_CLAUSE_WORDS = wordSet('that which who whom whose where when if whether because')
+const DE_CLAUSE_WORDS = wordSet('was wo dass wenn falls ob weil denen deren dessen')
+const DE_RELATIVES = wordSet('die das welche welcher welches welchen welchem')
+const EN_CLAIM_VERBS = wordSet(EN_YES_NO_VERBS)
+const DE_CLAIM_VERBS = wordSet(DE_YES_NO_VERBS)
+// A period ends a sentence except after one of these, after a single letter ("z. B."), or after a day
+// before a month ("ab dem 1. Mai").
+const ABBREVIATIONS = wordSet('inkl bzw ggf evtl ziff incl approx resp vgl usw etc lt gem ca nr abs art bzgl zzgl sog dr prof hr fr str tel vs no st')
+const MONTHS = wordSet(
+  'januar jan februar feb märz mär april apr mai juni jun juli jul august aug september sep sept oktober okt ' +
+    'november nov dezember dez january february march mar may june july october oct december dec'
+)
+
+/** A sentence's words (letters and digits, an apostrophe inside a word) and commas, as written and lower-cased. */
+function sentenceTokens(sentence: string): { raw: string[]; words: string[] } {
+  const raw = sentence.replace(/’/g, "'").match(/[\p{L}\p{N}]+(?:'\p{L}+)?|,/gu) ?? []
+  return { raw, words: raw.map((w) => w.toLowerCase()) }
+}
+
+/** The question's sentences. A sentence ends at ? ! ; and at a period before a capital, except after a
+ *  listed abbreviation ("lt. Vertrag", "inkl. Verlängerung"), a single letter ("z. B.") or a day before a
+ *  month ("ab dem 1. Mai"). A colon ("Liste: alle Fristen", "bis 10:30") or a line break ends none. */
+function sentencesOf(question: string): string[] {
+  const sentences: string[] = []
+  let from = 0
+  for (const m of question.matchAll(/[?!;]+|\.(?=\s+\p{Lu})/gu)) {
+    if (m[0] === '.') {
+      const before = /[\p{L}\p{N}]+$/u.exec(question.slice(from, m.index))?.[0] ?? ''
+      const next = /^\s+(\p{L}+)/u.exec(question.slice(m.index + 1))?.[1]?.toLowerCase() ?? ''
+      const dayOfMonth = /^\d{1,2}$/.test(before) && MONTHS.has(next)
+      if (before.length === 1 || ABBREVIATIONS.has(before.toLowerCase()) || dayOfMonth) continue
+    }
+    sentences.push(question.slice(from, m.index + m[0].length))
+    from = m.index + m[0].length
+  }
+  sentences.push(question.slice(from))
+  return sentences
+}
+
+/** The length of the longest opener at `words[at]`, or 0 (`openers` sorted longest first). */
+function openerAt(words: readonly string[], at: number, openers: readonly string[][]): number {
+  return openers.find((o) => o.every((w, k) => words[at + k] === w))?.length ?? 0
+}
+
+/** `at` moved past any fillers (and commas). */
+function pastFillers(words: readonly string[], at: number): number {
+  for (let n = openerAt(words, at, FILLERS); n > 0; n = openerAt(words, at, FILLERS)) at += n
+  return at
+}
+
+/** The length of the polite request opener at `words[at]`, or 0. */
+function politeOpenerAt(words: readonly string[], at: number, listVerb: boolean): number {
+  const phrase = openerAt(words, at, POLITE_PHRASES)
+  if (phrase > 0) return phrase
+  const verb = words[at] ?? ''
+  const subject = words[at + 1] ?? ''
+  if (!POLITE_MODALS.has(verb) && !YES_NO_VERBS.has(verb)) return 0
+  const lastWord = words.filter((w) => w !== ',').at(-1) ?? ''
+  const asks = listVerb || REQUEST_SIGNALS.has(words[pastFillers(words, at + 2)] ?? '') || REQUEST_SIGNALS.has(lastWord)
+  const asked =
+    ADDRESSEES.has(subject) ||
+    (PLURAL_ADDRESSEES.has(subject) && PLURAL_VERBS.has(verb)) ||
+    (SELF_SUBJECTS.has(subject) && POLITE_MODALS.has(verb))
+  return asked && asks ? 2 : 0
+}
+
+/** Is `words[at]` the finite verb a yes/no question opens with? */
+function yesNoVerbAt(words: readonly string[], at: number): boolean {
+  const verb = words[at] ?? ''
+  return YES_NO_VERBS.has(verb) && (!ENGLISH_ONLY_BEFORE_SUBJECT.has(verb) || ENGLISH_SUBJECTS.has(words[at + 1] ?? ''))
+}
+
+/** A claim about the items quantified at `words[at]` ("Jede Zahlung ist am Ersten fällig?", "Each payment
+ *  is due on the 1st, right?", "Alle Zahlungen sind am Ersten fällig."): a finite verb of the quantifier's
+ *  language, written in lower case, before any comma or clause word. */
+function isClaim(raw: readonly string[], words: readonly string[], at: number): boolean {
+  const english = EN_QUANTIFIER_WORDS.has(words[at] ?? '')
+  for (let i = at + 1; i < words.length; i++) {
+    const word = words[i]!
+    if (word === ',' || (english ? EN_CLAUSE_WORDS : DE_CLAUSE_WORDS).has(word)) return false
+    if (!english && DE_RELATIVES.has(word) && raw[i + 1] !== undefined && raw[i + 1] === words[i + 1]) return false
+    if ((english ? EN_CLAIM_VERBS : DE_CLAIM_VERBS).has(word) && raw[i] === word) return true
+  }
+  return false
+}
+
+/** One sentence's kind for #644: `verdict` — a yes/no question or a claim, or fillers alone; `head` — a
+ *  request whose head is a quantifier; `other` — neither. */
+function sentenceKind(sentence: string, listVerb: boolean): 'verdict' | 'head' | 'other' {
+  const { raw, words } = sentenceTokens(sentence)
+  let at = pastFillers(words, 0)
+  if (at >= words.length) return 'verdict'
+  const polite = politeOpenerAt(words, at, listVerb)
+  if (polite === 0 && yesNoVerbAt(words, at)) return 'verdict'
+  let stripped = polite > 0
+  at = pastFillers(words, at + polite)
+  for (let n = openerAt(words, at, REQUEST_OPENERS); n > 0; n = openerAt(words, at, REQUEST_OPENERS)) {
+    at = pastFillers(words, at + n)
+    stripped = true
+  }
+  const head = words[at] ?? ''
+  if (EMBEDDED_YES_NO.has(head)) return 'verdict'
+  // After an opener, a yes/no question asked directly ("Tell me, are all the payments on time?").
+  if (stripped && (head === 'if' || yesNoVerbAt(words, at))) return 'verdict'
+  if (!HEAD_QUANTIFIER_RE.test(words.slice(at).join(' '))) return 'other'
+  // A request ("Show me every payment I have made") is never a claim: its verbs belong to a clause.
+  return !stripped && isClaim(raw, words, at) ? 'verdict' : 'head'
+}
+
+/**
+ * #644: what a question's list/count triggers ask for. `list` — a list or count verb, or a quantifier at
+ * the head of a request, in a sentence that is not a yes/no question (`listSentences` are those
+ * sentences); `modifier` — a quantifier inside some other question ("When is each payment due?"), which
+ * the listing cannot answer; null — no trigger, or every trigger sits in a yes/no question, which asks for
+ * a verdict. Judged sentence by sentence ("Ich habe einen Mietvertrag. Gilt die Frist für alle Mieter?").
+ */
+function listRequestShape(question: string): { shape: 'list' | 'modifier' | null; listSentences: string[] } {
+  const listSentences: string[] = []
+  let modifier = false
+  for (const sentence of sentencesOf(question)) {
+    const listVerb = LIST_VERB_RE.test(sentence)
+    if (!listVerb && !QUANTIFIER_RE.test(sentence)) continue
+    const kind = sentenceKind(sentence, listVerb)
+    if (kind === 'verdict') continue
+    if (listVerb || kind === 'head') listSentences.push(sentence)
+    else modifier = true
+  }
+  return { shape: listSentences.length > 0 ? 'list' : modifier ? 'modifier' : null, listSentences }
+}
+
+// The words a list request may consist of without naming what it lists ("Liste alle auf", "List all of
+// them"): such a request refers back to the question ("Welche Fristen gelten? Liste alle auf").
+const NAMES_NOTHING = wordSet(
+  'list liste auflisten aufzählen zähle zähl zählen count enumerate how many much wie viele viel every each all alle aller ' +
+    'alles allen sämtliche jede jeder jedes jeden them they those these it its of the a an up out auf sie diese die es ' +
+    'ihnen me us mir uns bitte please'
+)
+
+/** Does this list request name nothing, so that it refers back to the rest of the question? */
+function namesNothing(listSentence: string): boolean {
+  const { words } = sentenceTokens(listSentence)
+  let at = pastFillers(words, 0)
+  for (let n = openerAt(words, at, REQUEST_OPENERS); n > 0; n = openerAt(words, at, REQUEST_OPENERS)) at = pastFillers(words, at + n)
+  return words.slice(at).every((w) => w === ',' || NAMES_NOTHING.has(w))
+}
+
+/** Closed-vocabulary synonym table: a user's "{X}" → an extracted type (plan §4.2 step 4). #644: no
+ *  word with a common second sense — "terms" (medical terms; "terms and conditions" stays), "names"
+ *  (names of the medications), "Daten" (data) — so such an ask is untyped and gets the labelled answer,
+ *  not the wrong list. */
 const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [
   {
     type: 'date',
-    re: /\b(deadline|deadlines|due date|due dates|due|date|dates|when)\b|\b(frist|fristen|termin|termine|datum|daten|fälligkeit|wann)\b/i
+    re: /\b(deadline|deadlines|due date|due dates|due|date|dates|when)\b|\b(frist|fristen|termin|termine|datum|fälligkeit|wann)\b/i
   },
   {
     type: 'amount',
@@ -125,11 +382,11 @@ const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [
   },
   {
     type: 'party',
-    re: /\b(who|part(?:y|ies)|signator(?:y|ies)|person|people|persons|name|names|organi[sz]ation|organi[sz]ations|company|companies)\b|\b(wer|partei|parteien|person|personen|name|namen|unternehmen|firma|firmen|organisation|organisationen)\b/i
+    re: /\b(who|part(?:y|ies)|signator(?:y|ies)|person|people|persons|organi[sz]ation|organi[sz]ations|company|companies)\b|\b(wer|partei|parteien|person|personen|unternehmen|firma|firmen|organisation|organisationen)\b/i
   },
   {
     type: 'obligation',
-    re: /\b(obligation|obligations|must|shall|clause|clauses|requirement|requirements|dut(?:y|ies)|term|terms)\b|\b(pflicht|pflichten|klausel|klauseln|muss|müssen|anforderung|anforderungen|verpflichtung|verpflichtungen|bedingung|bedingungen)\b/i
+    re: /\b(obligation|obligations|must|shall|clause|clauses|requirement|requirements|dut(?:y|ies)|terms and conditions)\b|\b(pflicht|pflichten|klausel|klauseln|muss|müssen|anforderung|anforderungen|verpflichtung|verpflichtungen|bedingung|bedingungen)\b/i
   }
 ]
 
@@ -145,17 +402,39 @@ export function isAggregationShaped(question: string): boolean {
   return AGGREGATION_RE.test(question ?? '')
 }
 
-/** The extract type a question's "{X}" names, or null when no synonym matches (#641). */
+const TYPE_SYNONYMS_ALL = TYPE_SYNONYMS.map(({ type, re }) => ({ type, re: new RegExp(re.source, 'gi') }))
+// Synonyms that are no nouns, so they never head a run ("payments due in May" are payments).
+const NO_HEAD_SYNONYMS = wordSet('due when who wann wer')
+
+/** The extract type a question's "{X}" names, or null when no synonym matches (#641). #644: the
+ *  synonym that comes FIRST in the question wins, not the first table row — the thing asked for is
+ *  named before what it is asked with ("List all payments and their due dates" lists payments). Of
+ *  nouns written one after another, the last names the thing ("payment deadlines" are deadlines). */
 function matchedRecordType(question: string): ExtractRecordType | null {
-  for (const { type, re } of TYPE_SYNONYMS) {
-    if (re.test(question)) return type
+  const hits = TYPE_SYNONYMS_ALL.flatMap(({ type, re }) =>
+    [...question.matchAll(re)].map((m) => ({ type, start: m.index, end: m.index + m[0].length, word: m[0].toLowerCase() }))
+  ).sort((a, b) => a.start - b.start || b.end - a.end)
+  let first = hits[0]
+  for (const next of hits) {
+    const adjacent = first !== undefined && next.start >= first.end && /^\s+$/.test(question.slice(first.end, next.start))
+    if (adjacent && !NO_HEAD_SYNONYMS.has(next.word)) first = next
   }
-  return null
+  return first?.type ?? null
+}
+
+/** The question without its #641 type cue words (who / when / must …, wer / wann / muss …). */
+function withoutTypeCueWords(question: string): string {
+  return question.replace(TYPE_CUE_WORDS_RE, ' ')
+}
+
+/** The extract type a text names first, a modal cue word only when nothing else is named. */
+function namedRecordType(text: string): ExtractRecordType | null {
+  return matchedRecordType(text.replace(MODAL_CUE_WORDS_RE, ' ')) ?? matchedRecordType(text)
 }
 
 /** Map a free-text "list every {X}" to the closed extract type set (default `generic`). */
 export function mapQuestionToRecordType(question: string): ExtractRecordType {
-  return matchedRecordType(question) ?? 'generic'
+  return namedRecordType(question) ?? 'generic'
 }
 
 /** Classify a question / explicit button into an engine choice (pure; plan §4.4). */
@@ -182,8 +461,16 @@ export function routeQuestion(input: RouteInput): RouteDecision {
   // explain request that carries a quantifier, or a "{X}" no extract type covers, never gets
   // the listing — it could only print the unrelated `generic` table (step 4b labels it instead).
   // An aggregation ask stays coverage whatever its {X} (#37: never a silent top-k sum).
-  const listTrigger = COVERAGE_RE.test(q)
-  const namesTypedThing = matchedRecordType(q.replace(TYPE_CUE_WORDS_RE, ' ')) !== null
+  // #644: and only a list REQUEST — a list verb, or a quantifier at the head of the request — whose
+  // own sentence names the typed thing ("Gilt die Frist für alle Mieter? Liste alle Abkürzungen auf"
+  // is an untyped list request; the other sentence's "Frist" does not type it). A request that names
+  // nothing refers back to the question ("Welche Fristen gelten? Liste alle auf").
+  const { shape: triggerShape, listSentences } = listRequestShape(q)
+  const listTrigger = triggerShape === 'list'
+  const typedRequest = listSentences
+    .map((s) => (namesNothing(s) ? q : s))
+    .find((s) => matchedRecordType(withoutTypeCueWords(s)) !== null)
+  const namesTypedThing = typedRequest !== undefined
   const wantsListing = listTrigger && !EXPLAIN_RE.test(q) && namesTypedThing
   const wantsCoverage = wantsListing || AGGREGATION_RE.test(q)
   const wantsSummary = SUMMARY_RE.test(q)
@@ -205,7 +492,9 @@ export function routeQuestion(input: RouteInput): RouteDecision {
     if (input.extractAvailable) {
       return {
         engine: 'coverage-extract',
-        recordType: mapQuestionToRecordType(q),
+        // #644: the type the list request itself names first ("When was the lease signed? List all
+        // the fees" lists fees; "List when every payment is due" lists dates), else the question's.
+        recordType: (typedRequest !== undefined ? namedRecordType(typedRequest) : null) ?? mapQuestionToRecordType(q),
         confidence: 'high'
       }
     }
@@ -219,11 +508,13 @@ export function routeQuestion(input: RouteInput): RouteDecision {
 
   // 4b. #641: a list/count trigger the listing cannot serve (an explain request, an untyped {X})
   //     — LABELLED relevance: the caller may say the answer can miss items, but never recommends
-  //     the deep index, which would not answer it either.
-  if (listTrigger) {
+  //     the deep index, which would not answer it either. #644: a quantifier inside a question
+  //     ("When is each payment due?") is labelled the same way: the answer covers several items.
+  if (triggerShape === 'list' || triggerShape === 'modifier') {
     return { engine: 'relevance', confidence: 'low', fallback: 'partial' }
   }
 
-  // 5. Everything else → relevance RAG (the existing retrieve path, byte-unchanged).
+  // 5. Everything else → relevance RAG (the existing retrieve path, byte-unchanged). #644: so is a
+  //    yes/no question whatever triggers it carries — it asks for a verdict, not a list.
   return { engine: 'relevance', confidence: 'high' }
 }

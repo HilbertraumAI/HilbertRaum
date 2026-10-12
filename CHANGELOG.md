@@ -127,6 +127,16 @@ from its first public `1.0.0` release onward.
 
 ### Fixed
 
+- **A yes/no question about your documents gets an answer, not a list.** Once a document had a deep
+  index, a question such as "Gilt die Frist für alle Mieter?" ("Does the deadline apply to all
+  tenants?") was answered at once with every date in the document, because any "all", "every" or
+  "each" counted as a request for a list. Without a deep index, the same question carried a heads-up
+  recommending one. Such questions now get a written answer from the document, with no heads-up.
+  "All" asks for the list when the request starts with it: "Alle Fristen?", "Kannst du mir alle
+  Fristen nennen?", "What are all the deadlines?". "List every deadline" and "How many payments are
+  there?" work as before. A list request about several kinds of things now lists the one it names
+  first: "List all payments and their due dates" lists the payments. "Terms", "names" and "Daten"
+  no longer pick a list ("List all the medical terms" gets a written answer) (#644).
 - **"Summarize this document" uses the deep index.** With one long document in the chat and its
   deep index built, a summary question was still answered from a few matching passages. It now
   draws on the deep index's summaries of every section and says it covers the whole document (#642).

@@ -187,7 +187,7 @@ describe('routeQuestion — explain requests and untyped list asks never reach t
     'list all the abbreviations',
     'Wie viele Seiten hat der Brief?',
     'How many pages does the letter have?',
-    'Does every employee get a bonus?',
+    // ('Does every employee get a bonus?' moved to the #644 yes/no table: a verdict, not a list.)
     // a question word or modal verb picks a list's type, but names nothing to list
     'Welche Abkürzungen muss ich kennen? Liste alle auf',
     'How many pages does the letter have and when was it written?'
@@ -212,6 +212,178 @@ describe('routeQuestion — explain requests and untyped list asks never reach t
       engine: 'coverage-extract',
       recordType,
       confidence: 'high'
+    })
+  })
+})
+
+// Issue #644: after #641 a quantifier still counted as a list request wherever it stood, so once a
+// deep index with extract data existed "Gilt die Frist für alle Mieter?" got every date in the
+// document, and without one the deep-index heads-up that promised that list. Rows marked "pre-fix"
+// listed (or got the heads-up) on master; the controls listed before and must keep listing.
+describe('routeQuestion — a quantifier is a list request only at the head of a request (#644)', () => {
+  const base = { documentCount: 1, treeAvailable: false }
+
+  it.each([
+    'Gilt die Frist für alle Mieter?', // the #644 repro, verbatim
+    'Is each payment due on the first of the month?', // the issue's EN example, verbatim
+    'Sind alle Zahlungen pünktlich eingegangen?',
+    'Müssen alle Parteien unterschreiben?',
+    'Gibt es für jede Zahlung eine Quittung?',
+    'Are all the payments due monthly?',
+    'Has every party signed the contract?',
+    'Was the deadline met for all the tenants?', // English "was" before a subject
+    'Am I liable for all the costs?',
+    'Does every employee get a bonus?', // #641 labelled it as untyped; it is a verdict
+    // a list verb inside a yes/no question asks whether, not for the list
+    'Does the contract list all the deadlines?',
+    'Zählt jede Zahlung zur Miete?',
+    'Is there a limit on how many payments can be late?',
+    // a yes/no question embedded after a request
+    'Can you tell me whether all the payments were on time?',
+    'Kannst du mir sagen, ob alle Zahlungen pünktlich waren?',
+    'Tell me if every payment is due monthly',
+    // judged sentence by sentence; a date, an abbreviation or a line break ends none
+    'Ich habe einen Mietvertrag. Gilt die Frist für alle Mieter?',
+    'Gilt ab dem 15. Januar die Frist für alle Mieter?',
+    'Gilt die Frist inkl. Verlängerung für alle Mieter?',
+    'Gilt die Frist\nfür alle Mieter?',
+    'Gilt die Frist bis 10:30 für alle Mieter?', // a colon ends no sentence
+    'Gilt die Frist z. B. für alle Mieter?',
+    'Gut. Gilt die Frist für alle Mieter?',
+    'Danke! Alles klar. Gilt die Frist für alle Mieter?', // a sentence of fillers asks nothing
+    // fillers before the verb
+    'Hallo, gilt die Frist für alle Mieter?',
+    'Alles klar, gilt die Frist für alle Mieter?',
+    "Gibt's für jede Zahlung eine Quittung?",
+    // a modal before the one asked, or the asker, that asks for nothing
+    'Kann ich alle Zahlungen zurückfordern?',
+    'Can you deduct all the fees?',
+    'Können Sie alle Fristen einhalten?',
+    'Kann sie alle Fristen sehen?', // "sie" after a singular verb is "she", not the one asked
+    // a yes/no question asked directly after an opener
+    'Tell me, are all the payments on time?',
+    // a claim about the quantified items, asked or stated
+    'Jede Zahlung ist pünktlich eingegangen?',
+    'Each payment is due on the 1st, right?',
+    'Alle Zahlungen sind am Ersten fällig.',
+    'Jede Zahlung an die Vermieterin ist fällig?' // "die" before a capital is an article
+  ])('%s → a plain answer, with or without extract data (pre-fix: the listing)', (question) => {
+    for (const extractAvailable of [true, false]) {
+      const decision = routeQuestion({ ...base, extractAvailable, question })
+      expect(decision).toEqual({ engine: 'relevance', confidence: 'high' })
+      expect(isClassificationTrigger(decision, question)).toBe(false)
+    }
+  })
+
+  // A quantifier inside some other question modifies it: the listing cannot pair or filter, so the
+  // answer is labelled like #641's untyped asks (no deep-index advice).
+  it.each([
+    'When is each payment due?',
+    'Which deadlines apply to every tenant?',
+    'Welche Frist gilt für alle Mieter?',
+    'Wer muss alle Kosten tragen?',
+    'Was sind die Fristen für alle Mieter?', // "was sind" opens a request, but its head is "die"
+    'If all the payments are late, what happens?', // a bare "if" opens a condition, not a yes/no
+    'Was an Gebühren zahlen alle Mieter?', // German "was … an", not an English subject
+    'Sagen alle Parteien dasselbe?', // an unlisted verb first: the label, never the listing
+    'When are all the payments due?', // a when-question is no request, plural or not
+    // another sentence's typed noun does not type an untyped list request
+    'Gilt die Frist für alle Mieter? Liste alle Abkürzungen auf'
+  ])('%s → labelled relevance (pre-fix: the listing)', (question) => {
+    for (const extractAvailable of [true, false]) {
+      const decision = routeQuestion({ ...base, extractAvailable, question })
+      expect(decision).toEqual({ engine: 'relevance', confidence: 'low', fallback: 'partial' })
+    }
+  })
+
+  // Controls: a polite request opens like a yes/no question, and a request may open with words
+  // before its quantifier. These listed before #644 and must keep listing.
+  it.each([
+    ['Kannst du alle Fristen auflisten?', 'date'],
+    ['Kannst du mir alle Fristen nennen?', 'date'],
+    ['Würden Sie mir alle Fristen nennen?', 'date'],
+    ['Could you give me all the deadlines?', 'date'],
+    ['Can I see all the deadlines?', 'date'],
+    ['Alle Fristen?', 'date'],
+    ['every deadline', 'date'],
+    ['Sämtliche Zahlungen bitte', 'amount'],
+    ['What are all the deadlines?', 'date'],
+    ['Was sind alle Fristen?', 'date'], // German "was" (what), not the English verb
+    ['Who are all the parties?', 'party'],
+    ['Zeig mir alle Zahlungen', 'amount'],
+    ['Bitte nenne mir sämtliche Fristen', 'date'],
+    ['I need every deadline in this contract', 'date'],
+    ['Please, can you give me all the deadlines?', 'date'], // a filler before the polite opener
+    ['Können wir alle Fristen auflisten?', 'date'], // a modal before "wir" with a list verb
+    ['Kann ich alle Fristen sehen?', 'date'], // … before "ich", asking to see the thing
+    ['Can I please see all the deadlines?', 'date'],
+    ['Is it possible to list all the payments?', 'amount'],
+    ['Gibt es eine Liste aller Fristen?', 'date'],
+    ['Would you mind listing all the deadlines?', 'date'],
+    ['Can we get a list of all the payments?', 'amount'],
+    ['Listen Sie alle Fristen auf', 'date'],
+    ['Sagen Sie mir alle Fristen', 'date'], // the longest opener wins over "sag"
+    ['Extrahiere alle Fristen', 'date'],
+    ['Display all the deadlines', 'date'],
+    ['Erstelle eine Aufstellung aller Zahlungen', 'amount'],
+    ['Summarize all the payments', 'amount'],
+    ['Fasse alle Fristen zusammen', 'date'],
+    ['Do you have all the deadlines?', 'date'],
+    ['Hast du eine Liste aller Fristen?', 'date'],
+    ['Bist du in der Lage, alle Fristen aufzulisten?', 'date'],
+    ['Ich zahle 500 EUR. Alle Zahlungen?', 'amount'], // a period after a word ends the sentence
+    // a verb behind a comma or a clause word belongs to the clause: still a request
+    ['Alle Fristen, die für den Mieter gelten?', 'date'],
+    ['Alle Fristen, die Mieter einhalten müssen?', 'date'], // the comma, not "die", ends the claim
+    ['Every deadline that is binding?', 'date'],
+    ['Alle Zahlungen die ich erhalten habe?', 'amount'],
+    ['Alle Zahlungen am Monatsende?', 'amount'], // "am" is no German verb
+    ['Alle Termine für Treffen?', 'date'], // a capitalised "Treffen" is a noun, not the verb
+    ['Show me every payment I have made', 'amount'] // a request is never a claim
+  ] as const)('%s → coverage-extract (%s)', (question, recordType) => {
+    expect(routeQuestion({ ...base, extractAvailable: true, question })).toEqual({
+      engine: 'coverage-extract',
+      recordType,
+      confidence: 'high'
+    })
+  })
+
+  // The #644 comment: the type is the one the list request names first — a question word included,
+  // when it names what the list is of — and a word with a common second sense maps to no type.
+  it.each([
+    ['List every expense and when it was paid', 'amount'], // pre-fix: date (the first table row)
+    ['List all payments and their due dates', 'amount'], // pre-fix: date
+    ['How many payments are due in March?', 'amount'], // pre-fix: date ("due")
+    ['List the due dates of all payments', 'date'],
+    ['List who paid each fee', 'party'], // pre-fix: amount
+    ['When was the lease signed? List all the fees', 'amount'], // pre-fix: date; the list's sentence decides
+    ['How many tenants must pay a fee?', 'amount'], // "must" names nothing when a fee is named
+    ['List all payment deadlines', 'date'], // the last of adjacent nouns names the thing
+    ['Show me all the payments due in May', 'amount'], // "due" after a noun heads nothing
+    ['List all the terms and conditions', 'obligation'],
+    // a list request that names nothing refers back to the question
+    ['Welche Fristen gelten? Liste alle auf', 'date'],
+    ['What are the deadlines? List all of them.', 'date'],
+    ['List all the abbreviations. List all the deadlines.', 'date'] // any typed list request counts
+  ] as const)('%s → coverage-extract (%s)', (question, recordType) => {
+    expect(routeQuestion({ ...base, extractAvailable: true, question })).toEqual({
+      engine: 'coverage-extract',
+      recordType,
+      confidence: 'high'
+    })
+  })
+
+  it.each([
+    'List all the medical terms in this letter', // pre-fix: obligation ("terms")
+    'List all names of the medications', // pre-fix: party ("names")
+    'Liste alle Namen auf', // pre-fix: party ("Namen")
+    'Liste alle Daten auf', // pre-fix: date ("Daten" — data, or dates)
+    'List every term of the lease' // pre-fix: obligation ("term")
+  ])('%s → labelled relevance: no type names it (pre-fix: a typed listing)', (question) => {
+    expect(routeQuestion({ ...base, extractAvailable: true, question })).toEqual({
+      engine: 'relevance',
+      confidence: 'low',
+      fallback: 'partial'
     })
   })
 })
