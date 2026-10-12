@@ -1784,6 +1784,13 @@ aggregation answered at **zero query-time model calls** — exhaustive **over in
   The eval (`tests/manual/model-eval.test.ts`, `rag-quality.test.ts`) calls `generateGroundedAnswer`
   and `retrieve` directly over a 16-document corpus and still measures top-k; no eval compares a whole
   read with top-k on one document. Tests: `rag-whole-read.test.ts` (each gate mutation-checked).
+  Real app (dev build, qwen3-4b-instruct-q4 at its 4,096 window; a fictional 2-page medication plan whose
+  first page holds two sections; legs on a scratch root with b11146 and on the D: drive with its own
+  b9849, both alike): master read 2 of 3 sections, led with the heads-up and named 1 of 8 medications
+  (5.3 s); the fix read 3 of 3 and named all 8 (6.4 s), its evidence review linked the answer's marker. A
+  fictional 12-page report's summary read 6 of 12 sections on master, with and without a ready deep
+  index (pages 5–10); the fix answered from the tree, 12 of 12 (6.5 s). Tree answers stay abstractive:
+  one of the two runs gave the report's end date wrong, which the §14.4 depth caveat (L2) already covers.
 - **Suggestion-only cascade — AS BUILT (issue #80, wave R80; STR-1 §5.2). Truth maintenance on the
   0-model-call claim:** the router itself stays pure and byte-unchanged, and every HAPPY path above
   still answers at 0 query-time model calls — but exactly two decision classes now additionally run
