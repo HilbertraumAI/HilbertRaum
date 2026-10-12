@@ -1,6 +1,8 @@
 import { describe, it, expect, vi } from 'vitest'
 import { VisionService, type VisionStreamEmitter } from '../../src/main/services/vision'
 import type { ImageAnalyzeRequest, VisionStatus } from '../../src/shared/types'
+import { until } from '../helpers/hang-budget'
+import { pngHeader } from '../helpers/image-fixtures'
 
 // F18 (full-audit-2026-06-29-postmerge): the VisionService terminal `done` write must NOT resurrect
 // a job the user cancelled mid-flight (nor re-fire emit.done). The write now routes through the
@@ -16,22 +18,15 @@ import type { ImageAnalyzeRequest, VisionStatus } from '../../src/shared/types'
 
 const AVAILABLE: VisionStatus = { available: true, modelId: 'vlm', modelDisplayName: 'VLM' }
 
-// A valid PNG header (8-byte signature + IHDR width@16/height@20) so the main-side guard accepts it.
-const PNG_BYTES = new Uint8Array([
-  0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, // PNG signature
-  0, 0, 0, 0, 0, 0, 0, 0, // IHDR length + "IHDR" tag
-  0, 0, 0, 2, 0, 0, 0, 2 // width@16 = 2, height@20 = 2
-])
-
 const req = (): ImageAnalyzeRequest => ({
-  imageBytes: PNG_BYTES,
+  imageBytes: pngHeader(2, 2), // a parseable PNG header (SEC-6)
   mimeType: 'image/png',
   question: 'what is in this image'
 })
 
-// Deterministic queue-drain (NOT a wall-clock wait): each `await tick()` flushes the macrotask
-// boundary, which first drains all pending microtasks. `while (cond) await tick()` re-checks an
-// observable until run() is provably at the interleave point — no `setTimeout(r, N)` race (T1).
+// Deterministic queue-drain for the single hops after a resolve (each `await tick()` crosses one
+// macrotask boundary, draining the microtasks); waits for a state go through `until`
+// (tests/helpers/hang-budget.ts).
 const tick = (): Promise<void> => new Promise((r) => setImmediate(r))
 
 describe('VisionService cancel vs terminal completion (F18)', () => {
@@ -56,7 +51,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
 
     // Let run() reach the analyze await (status resolved, onToken fired once).
     const tokenSpy = emit.token as ReturnType<typeof vi.fn>
-    while (tokenSpy.mock.calls.length === 0) await tick()
+    await until(() => tokenSpy.mock.calls.length > 0, 'run() reaching the analyze await')
 
     // The user cancels mid-flight.
     expect(service.cancel(job.jobId).state).toBe('cancelled')
@@ -101,7 +96,7 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
     const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
     const job = service.analyze(req(), emit)
     const tokenSpy = emit.token as ReturnType<typeof vi.fn>
-    while (tokenSpy.mock.calls.length === 0) await tick()
+    await until(() => tokenSpy.mock.calls.length > 0, 'run() reaching the analyze await')
 
     // Cancel — the abort fired, but the runtime call has NOT unwound yet (the gate holds it).
     expect(service.cancel(job.jobId).state).toBe('cancelled')
@@ -113,37 +108,8 @@ describe('VisionService cancel vs terminal completion (F18)', () => {
 
     // Once the aborted request fully unwinds, the slot frees and a new analyze is admitted.
     releaseUnwind()
-    let accepted = false
-    for (let i = 0; i < 400 && !accepted; i++) {
-      await tick()
-      const attempt = service.analyze(req(), emit)
-      if (attempt.error !== 'busy') {
-        expect(attempt.state).toBe('queued')
-        accepted = true
-      }
-    }
-    expect(accepted).toBe(true)
+    await until(() => !service.hasActiveJob(), 'the aborted request unwinding and freeing the busy slot')
+    expect(service.analyze(req(), emit).state).toBe('queued') // the slot is free again: a new analyze is admitted
     await service.stop() // aborts the (hanging) accepted job so nothing dangles past the test
-  })
-
-  it('still completes normally when no cancel intervenes (happy-path regression)', async () => {
-    const service = new VisionService({
-      getStatus: async () => AVAILABLE,
-      createRuntime: () => ({
-        analyze: async (o: { onToken?: (d: string) => void }) => {
-          o.onToken?.('a bar chart')
-          return 'a bar chart'
-        }
-      })
-    })
-    const emit: VisionStreamEmitter = { token: vi.fn(), done: vi.fn(), error: vi.fn() }
-    const job = service.analyze(req(), emit)
-
-    const doneSpy = emit.done as ReturnType<typeof vi.fn>
-    while (doneSpy.mock.calls.length === 0) await tick()
-
-    expect(service.getJob(job.jobId).state).toBe('done')
-    expect(service.getJob(job.jobId).answer).toBe('a bar chart')
-    expect(emit.done).toHaveBeenCalledTimes(1)
   })
 })

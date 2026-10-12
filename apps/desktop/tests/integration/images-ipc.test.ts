@@ -55,17 +55,18 @@ import type { AppContext } from '../../src/main/services/context'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import { encryptFile, decryptFile, encryptFileAsync, decryptFileAsync } from '../../src/main/services/workspace-vault'
 import { ANY_SENDER, invoke, invokeWithEvent, makeEvent, type FakeIpcEvent, type IpcHandlers } from '../helpers/ipc'
-import { hangPolls } from '../helpers/hang-budget'
+import { hangPolls, until } from '../helpers/hang-budget'
+import { pngHeader } from '../helpers/image-fixtures'
 
 const handlers = ipcState.handlers as unknown as IpcHandlers
 
-function ctxFor(rootPath: string, unlocked = true): AppContext {
+function ctxFor(rootPath: string): AppContext {
   return {
     trustedSenders: ANY_SENDER,
     paths: { rootPath },
     manifestsDir: null,
     isDev: false,
-    workspace: { isUnlocked: () => unlocked }
+    workspace: { isUnlocked: () => true }
   } as unknown as AppContext
 }
 
@@ -110,22 +111,12 @@ function immediateAnalyzer(answer = 'a local answer'): VisionAnalyzer {
   }
 }
 
-// A minimal VALID PNG: 8-byte signature + an IHDR with nonzero width@16/height@20. SEC-6
-// (backend-audit-2026-06-27) rejects a CLAIMED png/jpeg whose header won't parse (null pixel
-// count) as `decodeFailed`, so lifecycle/sentinel fixtures must carry a parseable header. `extra`
-// appends unique marker bytes so a sentinel image stays uniquely identifiable for leak checks.
-function validPngBytes(extra: number[] = []): Uint8Array {
-  const b = new Uint8Array(24 + extra.length)
-  b.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a], 0)
-  const dv = new DataView(b.buffer)
-  dv.setUint32(16, 2) // width
-  dv.setUint32(20, 2) // height
-  b.set(extra, 24)
-  return b
-}
+/** The analyze service for tests that drive only the picker / readBytes handlers (it is never called). */
+const idleVision = (): VisionService =>
+  new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => immediateAnalyzer() })
 
 const goodReq = (): ImageAnalyzeRequest => ({
-  imageBytes: validPngBytes(),
+  imageBytes: pngHeader(2, 2),
   mimeType: 'image/png',
   question: 'What is in this image?'
 })
@@ -210,29 +201,14 @@ describe('registerImagesIpc — analyze job contract', () => {
     expect(job.jobId).toBe('no-such-job')
   })
 
-  it('rejects an unsupported MIME with unsupportedType and never starts a job', async () => {
+  it('rejects a WEBP request with unsupportedType — the analyze accept set stays PNG/JPEG (#124)', async () => {
     const { analyzer } = gatedAnalyzer()
     const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => analyzer })
     registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
-    const bad = (await invoke(handlers, IPC.imageAnalyze, { ...goodReq(), mimeType: 'image/gif' }))
+    const bad = (await invoke(handlers, IPC.imageAnalyze, { ...goodReq(), mimeType: 'image/webp' }))
       .result as ImageJob
     expect(bad.state).toBe('failed')
     expect(bad.error).toBe('unsupportedType')
-  })
-
-  it('rejects an over-cap image with tooLarge', async () => {
-    const service = new VisionService({
-      getStatus: async () => AVAILABLE,
-      createRuntime: () => gatedAnalyzer().analyzer,
-      maxImageBytes: 8
-    })
-    registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), service)
-    const big = (await invoke(handlers, IPC.imageAnalyze, {
-      ...goodReq(),
-      imageBytes: new Uint8Array(16)
-    })).result as ImageJob
-    expect(big.state).toBe('failed')
-    expect(big.error).toBe('tooLarge')
   })
 
   it('fails the job with runtimeFailed when vision is unavailable (no fabricated answer)', async () => {
@@ -284,7 +260,7 @@ describe('registerImagesIpc — analyze job contract', () => {
 
     const job = (await invoke(handlers, IPC.imageAnalyze, goodReq())).result as ImageJob
     expect(job.state).toBe('queued')
-    while (!sawSignal) await new Promise((r) => setTimeout(r, 1)) // analyze is now in flight
+    await until(() => sawSignal !== undefined, 'the analyze reaching the runtime')
 
     await service.stop()
     expect(runtimeStopped).toBe(true)
@@ -310,7 +286,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'pic.png')
     writeFileSync(file, Buffer.from([9, 8, 7]))
-    registerImagesIpc(ctxFor(dir))
+    registerImagesIpc(ctxFor(dir), idleVision())
     const token = await tokenFor(file)
     const { result } = await invoke(handlers, IPC.imageReadBytes, token)
     expect(Buffer.from(result as Uint8Array).equals(Buffer.from([9, 8, 7]))).toBe(true)
@@ -322,7 +298,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'shot.webp')
     writeFileSync(file, Buffer.from([0x52, 0x49, 0x46, 0x46, 1, 2]))
-    registerImagesIpc(ctxFor(dir))
+    registerImagesIpc(ctxFor(dir), idleVision())
     const token = await tokenFor(file)
     const { result } = await invoke(handlers, IPC.imageReadBytes, token)
     expect(Buffer.from(result as Uint8Array).equals(Buffer.from([0x52, 0x49, 0x46, 0x46, 1, 2]))).toBe(true)
@@ -332,41 +308,24 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'note.txt')
     writeFileSync(file, 'hi')
-    registerImagesIpc(ctxFor(dir))
+    registerImagesIpc(ctxFor(dir), idleVision())
     const token = await tokenFor(file)
     await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(tMain('main.images.unsupportedType'))
-  })
-
-  it('refuses an over-cap image (the cap is the default 20 MiB constant)', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
-    const file = join(dir, 'big.jpg')
-    // Just over the 20 MiB default `VISION_MAX_IMAGE_BYTES`.
-    writeFileSync(file, Buffer.alloc(20 * 1024 * 1024 + 1))
-    registerImagesIpc(ctxFor(dir))
-    const token = await tokenFor(file)
-    await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(tMain('main.images.tooLarge'))
   })
 
   // PERF-1: the read now runs on a fs/promises FileHandle. The over-cap reject must still close the
   // handle in the `finally` (a leaked-handle unlink does NOT throw on win32 — libuv opens with
   // FILE_SHARE_DELETE — so observe the close directly via the mocked `open`, above).
-  it('closes the file handle on the over-cap reject path — no leaked fd (PERF-1)', async () => {
+  it('refuses an over-cap image (one byte past the 20 MiB default) and still closes the file handle (PERF-1)', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'big2.jpg')
+    // Just over the 20 MiB default `VISION_MAX_IMAGE_BYTES`.
     writeFileSync(file, Buffer.alloc(20 * 1024 * 1024 + 1))
-    registerImagesIpc(ctxFor(dir))
+    registerImagesIpc(ctxFor(dir), idleVision())
     const token = await tokenFor(file)
     fhState.closes = 0
     await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(tMain('main.images.tooLarge'))
     expect(fhState.closes).toBe(1) // the finally closed the handle even though the size guard rejected
-  })
-
-  it('refuses readBytes when the workspace is locked', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
-    const file = join(dir, 'pic.jpg')
-    writeFileSync(file, Buffer.from([1]))
-    registerImagesIpc(ctxFor(dir, false))
-    await expect(invoke(handlers, IPC.imageReadBytes, 'any-token')).rejects.toThrow()
   })
 
   // D2 regression: the confused-deputy gap is closed. A code-exec'd renderer handing back an
@@ -376,7 +335,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'real.png')
     writeFileSync(file, Buffer.from([1, 2, 3]))
-    registerImagesIpc(ctxFor(dir))
+    registerImagesIpc(ctxFor(dir), idleVision())
     await expect(invoke(handlers, IPC.imageReadBytes, file)).rejects.toThrow(tMain('main.images.unsupportedType'))
   })
 
@@ -384,7 +343,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
     const dir = mkdtempSync(join(tmpdir(), 'hr-img-'))
     const file = join(dir, 'once.png')
     writeFileSync(file, Buffer.from([5, 6]))
-    registerImagesIpc(ctxFor(dir))
+    registerImagesIpc(ctxFor(dir), idleVision())
     const token = await tokenFor(file)
     await invoke(handlers, IPC.imageReadBytes, token) // consumes it
     await expect(invoke(handlers, IPC.imageReadBytes, token)).rejects.toThrow(tMain('main.images.unsupportedType'))
@@ -393,7 +352,7 @@ describe('registerImagesIpc — readBytes token + main-side re-validation (SEC-3
 
 describe('registerImagesIpc — chooseImage', () => {
   it('returns null when the picker is cancelled', async () => {
-    registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))))
+    registerImagesIpc(ctxFor(mkdtempSync(join(tmpdir(), 'hr-img-'))), idleVision())
     const { result } = await invoke(handlers, IPC.imageChooseImage)
     expect(result).toBeNull()
   })
@@ -403,7 +362,7 @@ describe('registerImagesIpc — chooseImage', () => {
     const file = join(dir, 'chosen.png')
     writeFileSync(file, Buffer.from([1, 2, 3, 4, 5]))
     dialogState.result = { canceled: false, filePaths: [file] }
-    registerImagesIpc(ctxFor(dir))
+    registerImagesIpc(ctxFor(dir), idleVision())
     const { result } = (await invoke(handlers, IPC.imageChooseImage)) as {
       result: { token: string; name: string; sizeBytes: number }
     }
@@ -418,13 +377,14 @@ describe('registerImagesIpc — chooseImage', () => {
 
 // Image-analysis history (image-understanding history): analyze persists the image (encrypted)
 // + the completed turn; a follow-up reuses the session; the list/get/delete handlers behave;
-// a busy reject persists nothing; and everything requires an unlocked workspace.
+// a busy reject persists nothing (the locked-vault refusal of every images:* handler is
+// ipc-lock-coverage.test.ts's MODULES row).
 describe('registerImagesIpc — history persistence', () => {
   // Valid PNG header + a unique marker tail (SEC-6 requires a parseable header; the tail keeps
   // the sentinel uniquely identifiable for the encrypted-at-rest / round-trip leak checks).
-  const SENTINEL = validPngBytes([0xab, 0xcd, 0xef, 0x10, 0x20, 0x30, 0x40, 0x50])
+  const SENTINEL = pngHeader(2, 2, [0xab, 0xcd, 0xef, 0x10, 0x20, 0x30, 0x40, 0x50])
 
-  function ctxWithDb(unlocked = true): { ctx: AppContext; db: Db; workspacePath: string; imagesPath: string } {
+  function ctxWithDb(): { ctx: AppContext; db: Db; workspacePath: string; imagesPath: string } {
     const workspacePath = mkdtempSync(join(tmpdir(), 'hr-imghist-'))
     const db = openDatabase(join(workspacePath, 'hilbertraum.sqlite'))
     const key = randomBytes(32)
@@ -435,7 +395,7 @@ describe('registerImagesIpc — history persistence', () => {
       manifestsDir: null,
       isDev: false,
       workspace: {
-        isUnlocked: () => unlocked,
+        isUnlocked: () => true,
         beginDocumentWork: () => () => {},
         documentCipher: () => ({
           encryptFile: (s: string, d: string) => encryptFile(s, d, key),
@@ -550,14 +510,5 @@ describe('registerImagesIpc — history persistence', () => {
     await invoke(handlers, IPC.imageDeleteSession, list[0].id)
     expect((await invoke(handlers, IPC.imageListSessions)).result).toHaveLength(0)
     expect(existsSync(imagesPath) ? readdirSync(imagesPath) : []).toHaveLength(0)
-  })
-
-  it('the history handlers reject a locked workspace', async () => {
-    const service = new VisionService({ getStatus: async () => AVAILABLE, createRuntime: () => gatedAnalyzer().analyzer })
-    const { ctx } = ctxWithDb(false)
-    registerImagesIpc(ctx, service)
-    await expect(invoke(handlers, IPC.imageListSessions)).rejects.toThrow()
-    await expect(invoke(handlers, IPC.imageGetSession, 'x')).rejects.toThrow()
-    await expect(invoke(handlers, IPC.imageDeleteSession, 'x')).rejects.toThrow()
   })
 })

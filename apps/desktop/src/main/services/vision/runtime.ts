@@ -128,10 +128,7 @@ const REAL_IDLE_CLOCK: IdleClock = {
   }
 }
 
-export type VisionRuntimeDeps = Pick<
-  LlamaServerOptions,
-  'spawn' | 'fetchImpl' | 'findPort' | 'threads' | 'healthTimeoutMs' | 'healthIntervalMs' | 'host'
->
+export type VisionRuntimeDeps = Pick<LlamaServerOptions, 'spawn' | 'fetchImpl' | 'findPort' | 'healthTimeoutMs' | 'healthIntervalMs'>
 
 export interface VisionRuntimeOptions extends VisionRuntimeDeps {
   /** The vision model id (the manifest id) sent as the request `model`. */
@@ -142,8 +139,6 @@ export interface VisionRuntimeOptions extends VisionRuntimeDeps {
   /** Absolute path to the mmproj projector (`--mmproj`). */
   projectorPath: string
   contextTokens?: number
-  /** Per-analyze timeout in ms (default 300 000 — CPU prefill of a full image is slow). */
-  requestTimeoutMs?: number
   /** Idle-teardown timeout in ms (default `HILBERTRAUM_VISION_IDLE_MS` / 120 000 — §19.13, tuned V5). */
   idleTimeoutMs?: number
   /** Idle-teardown clock (default: the global `setTimeout`). Tests inject a controllable clock. */
@@ -284,10 +279,8 @@ export class VisionRuntime {
         spawn: this.opts.spawn,
         fetchImpl: this.opts.fetchImpl,
         findPort: this.opts.findPort,
-        threads: this.opts.threads,
         healthTimeoutMs: this.opts.healthTimeoutMs,
         healthIntervalMs: this.opts.healthIntervalMs,
-        host: this.opts.host,
         // M1 (ported verbatim from translation/runtime.ts TA-6, F-14): a mid-session sidecar
         // crash — the child dies on its OWN after becoming healthy (OOM is the named realistic
         // cause: the three-process RAM peak makes 12 GB machines likely-OOM) — otherwise leaves
@@ -377,7 +370,7 @@ export class VisionRuntime {
       // thread pays the (slow CPU) image prefill once, not per question. Loopback compute hint.
       cache_prompt: true
     })
-    const timeoutMs = this.opts.requestTimeoutMs ?? DEFAULT_REQUEST_TIMEOUT_MS
+    const timeoutMs = DEFAULT_REQUEST_TIMEOUT_MS
     // REL-4: own the (long, 300 s) timeout so it is cleared the instant the stream finishes,
     // rather than living out its full duration after an early-completing analysis.
     const combined = combineSignals(opts.signal, timeoutMs)

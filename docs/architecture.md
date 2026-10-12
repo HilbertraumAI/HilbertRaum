@@ -11475,7 +11475,10 @@ recording `fetch`, the real `VisionRuntime`), never a new fake that re-creates t
   prompt + image bytes genuinely pass through `runAnalyze` → `server.fetch('/v1/chat/completions', …)` →
   `readChatSSE`, then asserts NO diagnostics-log call (any level) carries the prompt, the answer, or the
   base64 image bytes. Teeth: log `opts.question` or the image data-URL at the runtime layer → the spy
-  captures it and the test reddens.
+  captures it and the test reddens. *(2026-10-12, sidecar-services test campaign: merged into the loopback
+  sentinel "connects only to loopback (127.0.0.1) and logs/audits NO image/prompt/answer content", which
+  already drove the same real-runtime success path with the same recording fetch; its TEETH note moved with
+  it.)*
 - **TEST-6 (INFO) — answer-quality floor in CI is partial, by design.** *(Wording corrected Phase 7 / D1 —
   the original claim that the S13b bar was "owner-gated on D1 / not yet landed" went stale the moment the bar
   shipped.)* The **S13b skill-trigger precision bar IS a live CI gate**: `eval/skill-triggers.test.ts` asserts

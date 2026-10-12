@@ -68,7 +68,10 @@ describe('preload — vision surface', () => {
     const cb = vi.fn()
     const off = api.onImageToken('job-1', cb)
     expect(ipc.on).toHaveBeenCalledWith(STREAM.imgToken('job-1'), expect.any(Function))
+    const handler = ipc.on.mock.calls[0][1]
+    handler({}, 'tok')
+    expect(cb).toHaveBeenCalledWith('tok') // the subscription delivers the token
     off()
-    expect(ipc.removeListener).toHaveBeenCalledWith(STREAM.imgToken('job-1'), expect.any(Function))
+    expect(ipc.removeListener).toHaveBeenCalledWith(STREAM.imgToken('job-1'), handler) // the SAME handler — no leaked listener
   })
 })
