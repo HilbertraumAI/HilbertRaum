@@ -11705,7 +11705,8 @@ pure-function table test) landed WITH Phase A, not here (§4 T4 ✅).
   the cheap ones, recorded the residuals.** Most fixed-duration `setTimeout` are STATE-POLL loop intervals
   (`while (cond) … setTimeout`, e.g. the `waitTerminal`/`waitFor`/`pollUntil` helpers and the `while (!x.release)`
   gates) — deterministic by construction, left as-is. The three genuine correctness-gates converted to state-polls:
-  `reranker.test.ts:125` and `e5-embedder.test.ts:262` (`sleep(1)` "let the request reach fetch" → `while
+  `reranker.test.ts` ("forwards the caller abort signal…") and its E5 twin (since retired: the #607 user-Stop row on
+  a real loopback socket covers it) (`sleep(1)` "let the request reach fetch" → `while
   (!seenSignal) await …` so the abort lands only after the signal was genuinely handed to fetch), and
   `ocr-task.test.ts:210` (`sleep(30)` "let the task start" → a `rasterizeReached` flag in the gate, polled, so the
   cancel lands once the task is genuinely parked rasterizing). **Recorded residuals (NOT converted, with rationale,

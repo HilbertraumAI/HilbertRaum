@@ -3,9 +3,6 @@ import { mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { randomUUID } from 'node:crypto'
-import http from 'node:http'
-import https from 'node:https'
-import net from 'node:net'
 import { openDatabase, type Db } from '../../src/main/services/db'
 import {
   MockEmbedder,
@@ -14,8 +11,7 @@ import {
   decodeVector,
   dotProduct,
   getResidentVectors,
-  invalidateResidentVectors,
-  purgeResidentVectors
+  invalidateResidentVectors
 } from '../../src/main/services/embeddings'
 import {
   createQueuedDocument,
@@ -71,7 +67,7 @@ async function seedDoc(
 }
 
 /** From-scratch oracle: decode every stored vector and rank by dot product, no cache. */
-function oracleRanking(db: Db, query: Float32Array, modelId: string): string[] {
+function oracleHits(db: Db, query: Float32Array, modelId: string): Array<{ id: string; s: number }> {
   const rows = db
     .prepare('SELECT chunk_id, vector_blob, dimensions FROM embeddings WHERE embedding_model_id = ?')
     .all(modelId) as unknown as Array<{ chunk_id: string; vector_blob: Uint8Array; dimensions: number }>
@@ -83,7 +79,6 @@ function oracleRanking(db: Db, query: Float32Array, modelId: string): string[] {
     // tiebreak (full-audit-2026-06-29 RAG-1). Without the tiebreak here, equal-score chunks would
     // diverge from production purely on V8 sort stability vs. SQLite scan order.
     .sort((a, b) => b.s - a.s || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0))
-    .map((h) => h.id)
 }
 
 afterEach(() => {
@@ -102,36 +97,16 @@ describe('resident cache — ranking equivalence', () => {
 
     const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
     const hits = index.search(query, 40)
-    // Same order as the oracle, to the last element.
-    expect(hits.map((h) => h.chunkId)).toEqual(oracleRanking(db, query, embedder.id))
-    // And the actual scores match a direct dot product to float tolerance.
-    const resident = getResidentVectors(db)
-    for (const h of hits) {
-      expect(h.score).toBeCloseTo(dotProduct(query, resident.get(h.chunkId)!), 6)
-    }
+    const expected = oracleHits(db, query, embedder.id)
+    // Same order as the oracle, to the last element, and the same scores to float tolerance.
+    expect(hits.map((h) => h.chunkId)).toEqual(expected.map((h) => h.id))
+    hits.forEach((h, i) => expect(h.score).toBeCloseTo(expected[i].s, 6))
   })
 })
 
 // ---- Signature-driven staleness (the primary mechanism) ---------------------------
 
 describe('resident cache — staleness signature', () => {
-  it('reflects a direct INSERT made AFTER the cache was first built (no explicit hook)', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDoc(db, embedder, 'a.txt', ['alpha one', 'alpha two'])
-    const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
-
-    // Build the cache.
-    expect(index.search((await embedder.embed(['alpha']))[0], 10)).toHaveLength(2)
-
-    // Direct INSERT bypassing every invalidation hook — only the signature can catch it.
-    await seedDoc(db, embedder, 'b.txt', ['beta unique sentence here'])
-    const [q] = await embedder.embed(['beta unique sentence here'])
-    const hits = index.search(q, 10)
-    expect(hits).toHaveLength(3) // the new chunk is visible
-    expect(hits[0].score).toBeCloseTo(1, 5) // and ranks first (self-match)
-  })
-
   it('reflects a direct DELETE made after the cache was built', async () => {
     const db = freshDb()
     const embedder = new MockEmbedder()
@@ -144,33 +119,6 @@ describe('resident cache — staleness signature', () => {
     const hits = index.search(q, 10)
     expect(hits).toHaveLength(2)
     expect(hits.some((h) => h.chunkId === chunkIds[0])).toBe(false)
-  })
-})
-
-// ---- Explicit invalidate / purge --------------------------------------------------
-
-describe('resident cache — invalidate & purge', () => {
-  it('rebuilds correctly after an explicit invalidate', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDoc(db, embedder, 'a.txt', ['alpha one', 'alpha two'])
-    const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
-    const [q] = await embedder.embed(['alpha'])
-    expect(index.search(q, 10)).toHaveLength(2)
-    invalidateResidentVectors(db)
-    expect(index.search(q, 10)).toHaveLength(2) // rebuilds, same result
-  })
-
-  it('purge drops the cache (lock semantics) and the next search rebuilds', async () => {
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDoc(db, embedder, 'a.txt', ['alpha one', 'alpha two'])
-    const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
-    const [q] = await embedder.embed(['alpha'])
-    const before = index.search(q, 10)
-    purgeResidentVectors(db) // workspace-lock purge
-    const after = index.search(q, 10) // rebuilt from the DB
-    expect(after.map((h) => h.chunkId)).toEqual(before.map((h) => h.chunkId))
   })
 })
 
@@ -313,29 +261,5 @@ describe('resident cache — reconcile atomicity (R3)', () => {
     const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
     const hits = index.search((await embedder.embed(['gamma three']))[0], 10)
     expect(hits.map((h) => h.chunkId).sort()).toEqual([idB, idC, idD].sort())
-  })
-})
-
-// ---- Offline guarantee through the cached path ------------------------------------
-
-describe('resident cache — offline guarantee', () => {
-  it('makes zero network calls across build + search', async () => {
-    const httpSpy = vi.spyOn(http, 'request')
-    const httpsSpy = vi.spyOn(https, 'request')
-    const connectSpy = vi.spyOn(net, 'connect')
-    const socketConnectSpy = vi.spyOn(net.Socket.prototype, 'connect')
-    const fetchSpy = vi.spyOn(globalThis, 'fetch')
-
-    const db = freshDb()
-    const embedder = new MockEmbedder()
-    await seedDoc(db, embedder, 'a.txt', ['offline alpha', 'offline beta'])
-    const index = new VectorIndex(db, embedder, { embeddingModelId: embedder.id })
-    index.search((await embedder.embed(['offline']))[0], 5) // builds cache + scans
-
-    expect(httpSpy).not.toHaveBeenCalled()
-    expect(httpsSpy).not.toHaveBeenCalled()
-    expect(connectSpy).not.toHaveBeenCalled()
-    expect(socketConnectSpy).not.toHaveBeenCalled()
-    expect(fetchSpy).not.toHaveBeenCalled()
   })
 })

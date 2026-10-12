@@ -9,15 +9,16 @@ import {
 } from '../../src/main/services/embeddings'
 import { createE5Embedder } from '../../src/main/services/embeddings/e5'
 import { resolveLlamaServerPath } from '../../src/main/services/runtime/sidecar'
+import { testBudgetMs } from '../helpers/hang-budget'
 
 // RAG-1 / RAG-6 (Wave P4) — the REAL-E5 end-to-end measurement the design record flagged as
 // "real E5-runtime numbers PENDING the PAID drive". The synthetic bench
 // (resident-cache-bench.test.ts) proves the *scan* timing (data-independent: N dot-products of
 // 384-dim Float32 + sort), which holds regardless of how the vectors were produced. This test
 // closes the remaining real-world variables that synthetic vectors can't:
-//   1. the vectors are GENUINE multilingual-e5-small-q8 outputs from the real b9585 sidecar,
-//      stored through the production codec (encodeVector) — so the resident cache is exercised
-//      on real, L2-normalized E5 data, not random unit vectors;
+//   1. the vectors are GENUINE multilingual-e5-small-q8 outputs from the pinned llama-server
+//      sidecar (`runtime-sources.yaml`), stored through the production codec (encodeVector) — so
+//      the resident cache is exercised on real, L2-normalized E5 data, not random unit vectors;
 //   2. the DB lives on the PAID portable drive (real USB I/O for the cold-build SELECT);
 //   3. the query path is the production `searchText` — a real E5 query-embed round-trip THEN
 //      the cached scan — so the reported full-query latency is what a user's question pays.
@@ -116,7 +117,7 @@ describe.skipIf(!enabled)('resident cache — REAL E5 end-to-end (manual, PAID d
 
   it(
     `real E5 vectors on the drive: cold build + warm scan + full query, N=${REAL_N}`,
-    { timeout: 900_000 },
+    { timeout: testBudgetMs(900_000) },
     async () => {
       expect(binPath).toBeTruthy()
       expect(e5Path).toBeTruthy()
