@@ -1771,22 +1771,28 @@ summed a one-page statement's four fees wrong twice (5,45 and 8,35 EUR for 13,85
 its prompt, and stated each total plainly. It added a lease's three monthly amounts up right.
 
 **Decision** (owner, 2026-10-12). Keep the whole read and say who did the arithmetic. Any whole-read
-answer to a sum or grouping ask leads with one line, with or without a deep index:
-*"**Heads-up:** the model added up these amounts itself and can miss or miscount items. Check the
-result against the sources."* (DE *„**Hinweis:** Das Modell hat diese Beträge selbst zusammengerechnet
-und kann dabei Posten übersehen oder sich verrechnen. Prüfe das Ergebnis anhand der Quellen."*, the
-du-form of the other notices).
+answer to a question about a total (a sum, or a grouping of amounts) leads with one line, with or without
+a deep index:
+*"**Heads-up:** the model works out totals itself and can miss or miscount items. Check any total
+against the sources."* (DE *„**Hinweis:** Summen rechnet das Modell selbst aus und kann dabei Posten
+übersehen oder sich verrechnen. Prüfe jede Summe anhand der Quellen."*, the du-form of the other
+notices). It says what the model does with totals, not "added up these amounts". That stays true when
+the document states the total and the model only read it ("What is the total amount due on the
+invoice?").
 - **The same shape as the other answer notices** (the deep-index heads-up, the "may miss items"
   label, the #54 shape hint). It is bold "Heads-up:" plus one sentence of fact and one of action,
   streamed first, persisted with the answer, and placed after a scope notice. It leads the answer
   because the risk is the number, and a reader who stops at the number should have seen it.
 - **No new advice.** The sources are already under the answer. For a bank statement, the
   bank-statement offer (#80) rides along when that skill is enabled; the line does not repeat it.
-- **Only where the model did the arithmetic.** A top-k sum keeps #37's notices; a listing keeps the #54
-  hint; a lookup ("How much is the monthly fee?") gets none.
+- **Only where a total is asked for and read whole** (`isTotalAsk`). A top-k sum keeps #37's notices;
+  a listing keeps the #54 hint. A lookup ("How much is the monthly fee?") and a grouping of anything
+  but amounts ("Gruppiere die Fristen nach Mieter") get none. The bank skill's plausibility fall-through
+  (its extractor found nothing, so the model reads the document) carries it too.
 
-**Copy:** `analysis.wholeReadSumHint` (en + de). **Tests:** `rag-skill-analysis.test.ts` (#54/#649
-table), `rag-whole-read.test.ts` (a list ask read whole carries none).
+**Copy:** `analysis.wholeReadSumHint` (en + de). **Tests:** `rag-skill-analysis.test.ts` (the #54/#649
+table and the plausibility fall-through table), `rag-whole-read.test.ts` (a list ask read whole carries
+none).
 
 ---
 

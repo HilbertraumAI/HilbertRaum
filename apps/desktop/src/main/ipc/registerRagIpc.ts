@@ -52,7 +52,7 @@ import {
   type ClassifyCandidate
 } from '../services/analysis/classify'
 import { makeQueryExpander } from '../services/zim/expand'
-import { isAggregationShaped, routeQuestion } from '../services/analysis/router'
+import { isAggregationShaped, isTotalAsk, routeQuestion } from '../services/analysis/router'
 import { buildListingAnswer } from '../services/analysis/listing-answer'
 import { getSettings } from '../services/settings'
 import { tMain } from '../services/i18n'
@@ -67,7 +67,15 @@ import { detectSystem } from '../services/benchmark'
 import { defaultThreadCount } from '../services/runtime/sidecar'
 import type { AppSettings } from '../../shared/types'
 import { workspaceAdmitsWork } from '../services/workspace-vault'
-import { assertChatStreamReady, resendableQuestion, withChatStream, withRegenerateGuard } from './chat-stream'
+import {
+  assertChatStreamReady,
+  resendableQuestion,
+  withChatStream,
+  withRegenerateGuard,
+  type SendCompaction,
+  type SendToken,
+  type SendUsage
+} from './chat-stream'
 import type { Db } from '../services/db'
 
 /**
@@ -472,6 +480,27 @@ export function registerRagIpc(ctx: AppContext): void {
         }
       }
 
+      // #643 / #642: the one document this turn reads whole instead of top-k, or null (`wholeReadDocumentId`,
+      // sized for the turn's question and skill). Every caller decides it inside the chat slot, against the
+      // document as the answer reads it — not before a wait for a yielding document task.
+      const wholeReadFor = (treeSummary: boolean): string | null =>
+        wholeReadDocumentId(
+          ctx.db,
+          scope,
+          documentsInScope(ctx.db, scope, { requireChunks: true }),
+          text,
+          wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill),
+          treeSummary
+        )
+      // What a grounded answer leads with: the W2 scope notice, then (#649) the heads-up that a whole read of a
+      // total is the model's own arithmetic, which a small model can get wrong even with every section in the
+      // prompt (design-guidelines §11.24). A top-k sum carries #37's notices instead.
+      const groundedPrefix = (wholeRead: boolean): string | undefined => {
+        const lines = [scopeNotice, wholeRead && isTotalAsk(text) ? tMain('analysis.wholeReadSumHint') : null]
+        const lead = lines.filter((line): line is string => line != null).join('\n\n')
+        return lead ? `${lead}\n\n` : undefined
+      }
+
       // A4 (SKA-7 structural, audit §3.2/§8.2): does the turn skill's engine ENGAGE this (possibly
       // W2-narrowed) scope? TWO ways in:
       //   (1) `applies()` — the ordinary gate (a bank/invoice VOCABULARY question, or A3's any-non-chatter
@@ -671,16 +700,10 @@ export function registerRagIpc(ctx: AppContext): void {
                 // look like this skill's type — answer the user's ACTUAL question via the ordinary grounded
                 // (relevance) path in the SAME locked slot, instead of the misleading empty template. The
                 // turn's skill fence still rides along (parity with the ordinary document path below).
-                // #643: like that path, a document that fits is read whole instead of top-k.
+                // #643: like that path, a document that fits is read whole instead of top-k. #649: and like it,
+                // the answer leads with the W2 scope notice and a whole-read total's heads-up.
                 if (result.fallThrough) {
-                  const wholeReadId = wholeReadDocumentId(
-                    ctx.db,
-                    scope,
-                    documentsInScope(ctx.db, scope, { requireChunks: true }),
-                    text,
-                    wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, turnSkill),
-                    false
-                  )
+                  const wholeReadId = wholeReadFor(false)
                   return generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
                     signal,
                     onCompactionStart: sendCompaction,
@@ -689,6 +712,7 @@ export function registerRagIpc(ctx: AppContext): void {
                     reranker: ctx.reranker,
                     skill: turnSkill,
                     wholeDocument: wholeReadId ? { documentId: wholeReadId } : undefined,
+                    answerPrefix: groundedPrefix(wholeReadId != null),
                     onToken: sendToken
                   })
                 }
@@ -778,14 +802,6 @@ export function registerRagIpc(ctx: AppContext): void {
         treeAvailable: readyTreeCountInScope(ctx.db, scope) > 0,
         extractAvailable: extractionsExistInScope(ctx.db, scope)
       })
-      // What a grounded answer leads with: the W2 scope notice, then (#649) the heads-up that a whole read
-      // of a sum or grouping ask is the model's own arithmetic, which a small model can get wrong even with
-      // every section in the prompt (design-guidelines §11.24). A top-k sum carries #37's notices instead.
-      const groundedPrefix = (wholeRead: boolean): string | undefined => {
-        const lines = [scopeNotice, wholeRead && isAggregationShaped(text) ? tMain('analysis.wholeReadSumHint') : null]
-        const lead = lines.filter((line): line is string => line != null).join('\n\n')
-        return lead ? `${lead}\n\n` : undefined
-      }
 
       // #80 P3 (STR-1 §5.2): the ONE bounded skill-pointer classification, run ONLY on the two
       // trigger classes `isClassificationTrigger` pins — (a) aggregation-shaped coverage-extract
@@ -834,104 +850,6 @@ export function registerRagIpc(ctx: AppContext): void {
         const picked = await classifySkillPointer(text, candidates, { runtime, signal })
         return picked ? { installId: picked.installId, title: picked.title, source: 'classifier' } : null
       }
-      if (decision.engine === 'coverage-extract' && decision.recordType) {
-        const recordType: ExtractRecordType = decision.recordType
-        const listing = aggregateExtractions(ctx.db, scope, recordType)
-        // A3: a needle ask under an active whole-doc skill can be DOWNGRADED off the whole-doc engine
-        // (grounded-whole-doc block above) and land HERE — and it may have been auto-narrowed by the W2
-        // pre-pass first (`scopeNotice` set, `scope` reduced to one doc). Lead the honest scope notice so a
-        // per-doc count never reads as covering the whole multi-doc scope, and stamp the skill so the turn
-        // keeps its provenance glyph (A1). `scopeNotice` is null and `skill` undefined on every ordinary
-        // (non-skill / non-narrowed) coverage-extract turn, so this is byte-unchanged there.
-        // #54: an aggregation-shaped ask (categorize / group by / sum per …) is deliberately
-        // routed here (#37 — never a silent top-k sum), but this engine can only list values
-        // with counts. The renderer leads such an answer with an honest shape hint (+ the
-        // bank-statement-skill pointer for `amount`) so a frequency list is never presented
-        // as the requested categories/sums.
-        const aggregationAsk = isAggregationShaped(text)
-        const listingAnswer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params), {
-          aggregationAsk
-        })
-        const answer = scopeNotice ? `${scopeNotice}\n\n${listingAnswer}` : listingAnswer
-        // #80 P1 — the ACTIONABLE sibling of the #54 prose hint: an aggregation-shaped `amount`
-        // ask served by this list-only engine gets a wrong-shaped answer, and the hint already
-        // points at the bank-statement skill. Attach the skill as a one-click OFFER on the answer
-        // (deterministic — no model): the click re-runs the turn with the skill (regenerate +
-        // explicit skillInstallId; click = consent, S13b/D4 — auto-fire stays OFF). Gated on the
-        // ONE shared candidate gate (enabled + available + app-compatible) and never offered for
-        // the skill that already shaped this turn. The prose hint STAYS as the degradation path
-        // (offer gated out / older renderer).
-        let deterministicOffer: SkillOffer | null = null
-        if (aggregationAsk && recordType === 'amount' && skill?.installId !== BANK_STATEMENT_INSTALL_ID) {
-          const bank = offerableSkillCandidates(ctx.db, ctx.skills?.appVersion ?? '').find(
-            (c) => c.installId === BANK_STATEMENT_INSTALL_ID
-          )
-          // #133: only offer bank when its engine would actually ENGAGE the accept (an aggregation-
-          // shaped amount ask is category-shaped, so `intends()` normally holds — this guards the
-          // residual class where it wouldn't, e.g. an exotic phrasing over a scope its handler
-          // cannot serve; the prose hint remains as the degradation).
-          if (bank && wouldSkillEngage(bank.installId)) {
-            deterministicOffer = { installId: bank.installId, title: bank.title, source: 'deterministic' }
-          }
-        }
-        return withChatStream(
-          event,
-          conversationId,
-          'Document listing failed',
-          withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction, sendUsage): Promise<Message> => {
-            // #80 dedupe (owner decision 4): the deterministic offer WINS — the classifier runs
-            // only when the rule produced nothing (non-amount aggregation asks / bank gated out),
-            // so the two sources can never double-offer. The listing itself stays deterministic;
-            // only aggregation-shaped turns pay the one bounded classification call (plain
-            // list/count turns keep 0 model calls). Classified BEFORE the answer is emitted.
-            const offer = deterministicOffer ?? (aggregationAsk ? await classifierOffer(signal) : null)
-            // #649: an aggregation ask (a sum, categories) over ONE document that fits the window is read
-            // whole instead (#643's rule, decided here in the slot): the model sees every section and can add
-            // them up, which the listing cannot (#54). The offer above rides along. A plain list ask keeps the
-            // listing, and so does a document too long to read whole.
-            const wholeReadId = aggregationAsk
-              ? wholeReadDocumentId(
-                  ctx.db,
-                  scope,
-                  documentsInScope(ctx.db, scope, { requireChunks: true }),
-                  text,
-                  wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill),
-                  false
-                )
-              : null
-            if (wholeReadId) {
-              const msg = await generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
-                signal,
-                onCompactionStart: sendCompaction,
-                onPromptUsage: sendUsage,
-                scope,
-                reranker: ctx.reranker,
-                skill,
-                wholeDocument: { documentId: wholeReadId },
-                answerPrefix: groundedPrefix(true),
-                onToken: sendToken
-              })
-              if (offer) {
-                setMessageSkillOffer(ctx.db, msg.id, offer)
-                msg.skillOffer = offer
-              }
-              return msg
-            }
-            sendToken(answer)
-            return appendMessage(ctx.db, {
-              conversationId,
-              role: 'assistant',
-              content: answer,
-              skillId: skill?.installId,
-              autoFired: skill?.autoFired === true,
-              skillOffer: offer
-            })
-          }),
-          // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even
-          // though we make no model call (keeps the single locked contract).
-          (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
-        )
-      }
 
       // Issues #37/#38: the router WANTED the whole-document coverage engine (a list/count/
       // aggregation question) but no extract data exists in scope, so it fell back to top-k
@@ -969,6 +887,142 @@ export function registerRagIpc(ctx: AppContext): void {
           : undefined
       }
 
+      // The grounded answer: top-k relevance, or the whole read of `wholeReadId` (#643 / #642; #649: also an
+      // aggregation ask the router sent to coverage-extract). The offer is attached to the persisted answer
+      // afterwards (update-in-place of the offer column only) — it never touches the answer content or the
+      // stream.
+      const groundedAnswer = async (
+        signal: AbortSignal,
+        sendToken: SendToken,
+        sendCompaction: SendCompaction,
+        sendUsage: SendUsage,
+        wholeReadId: string | null,
+        offer: SkillOffer | null
+      ): Promise<Message> => {
+        const msg = await generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+          signal,
+          // One-shot ephemeral "summarizing…" notice when the compaction pre-pass starts (§5.2);
+          // isDestroyed-guarded inside withChatStream, never buffered (R14).
+          onCompactionStart: sendCompaction,
+          // The real assembled-prompt usage (incl. the retrieved excerpt block) for the meter.
+          onPromptUsage: sendUsage,
+          // Composite retrieval scope (plan §10.2): membership ∪ specific docs ∪ attachments,
+          // archived excluded by default. Also makes the empty-context re-index check
+          // scope-aware (M2). An empty resolved scope = whole corpus.
+          scope,
+          // Retrieval reranker: null when no reranker is provisioned — retrieval then
+          // keeps the unreranked ordering byte-identical.
+          reranker: ctx.reranker,
+          // Knowledge packs (ZIM wave): the query-time archive arm, only when this chat's
+          // scope selected packs (opt-in per chat). makeArm returns null when the tools
+          // are missing or nothing is retrievable; retrieve() isolates arm failures.
+          // #340 L3-b (D-Z20, owner ruling 2026-09-07 "always"): the arm expands the question
+          // through the turn's own runtime — one short, bounded, grammar-constrained call per
+          // pack-scoped ask, before the search; any failure falls back to the plain pattern.
+          // Step 4-4 (ruling (a)): `candidateScope` widens what the arm admits on a `gpu`/
+          // opted-in `cpu-hi` machine; absent reranker or `default` profile it is `'capped'`,
+          // byte-identical to today.
+          externalArm:
+            ctx.zim?.makeArm(ctx.db, scope.packIds, {
+              expand: makeQueryExpander(runtime),
+              candidateScope
+            }) ?? null,
+          // The turn's skill: its fence rides in the grounded user turn; the assistant row is
+          // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
+          skill,
+          // #643 / #642: the one document read whole (or through its ready deep index) instead
+          // of top-k — `capped`/`tree` coverage; the pack arm and the notice below are top-k only.
+          wholeDocument: wholeReadId ? { documentId: wholeReadId } : undefined,
+          // A3: a needle ask that was auto-narrowed to one doc (W2) and then downgraded off the
+          // whole-doc engine reaches HERE — lead the honest scope notice so the narrowing stays
+          // visible. #37/#38/#641: the whole-document-question hint or the partial-answer label
+          // (composed above) follows it when retrieval left sections out. Both are absent on
+          // every ordinary route into this path (byte-unchanged). #649: a whole read of a total
+          // leads with its own heads-up after the scope notice.
+          answerPrefix: groundedPrefix(wholeReadId != null),
+          partialCoverageNotice: partialCoverageNoticeFor(wholeReadId != null),
+          onToken: sendToken
+        })
+        if (offer) {
+          setMessageSkillOffer(ctx.db, msg.id, offer)
+          msg.skillOffer = offer
+        }
+        return msg
+      }
+
+      if (decision.engine === 'coverage-extract' && decision.recordType) {
+        const recordType: ExtractRecordType = decision.recordType
+        // A3: a needle ask under an active whole-doc skill can be DOWNGRADED off the whole-doc engine
+        // (grounded-whole-doc block above) and land HERE — and it may have been auto-narrowed by the W2
+        // pre-pass first (`scopeNotice` set, `scope` reduced to one doc). Lead the honest scope notice so a
+        // per-doc count never reads as covering the whole multi-doc scope, and stamp the skill so the turn
+        // keeps its provenance glyph (A1). `scopeNotice` is null and `skill` undefined on every ordinary
+        // (non-skill / non-narrowed) coverage-extract turn, so this is byte-unchanged there.
+        // #54: an aggregation-shaped ask (categorize / group by / sum per …) is deliberately
+        // routed here (#37 — never a silent top-k sum), but this engine can only list values
+        // with counts. The renderer leads such an answer with an honest shape hint (+ the
+        // bank-statement-skill pointer for `amount`) so a frequency list is never presented
+        // as the requested categories/sums.
+        const aggregationAsk = isAggregationShaped(text)
+        // #80 P1 — the ACTIONABLE sibling of the #54 prose hint: an aggregation-shaped `amount`
+        // ask served by this list-only engine gets a wrong-shaped answer, and the hint already
+        // points at the bank-statement skill. Attach the skill as a one-click OFFER on the answer
+        // (deterministic — no model): the click re-runs the turn with the skill (regenerate +
+        // explicit skillInstallId; click = consent, S13b/D4 — auto-fire stays OFF). Gated on the
+        // ONE shared candidate gate (enabled + available + app-compatible) and never offered for
+        // the skill that already shaped this turn. The prose hint STAYS as the degradation path
+        // (offer gated out / older renderer).
+        let deterministicOffer: SkillOffer | null = null
+        if (aggregationAsk && recordType === 'amount' && skill?.installId !== BANK_STATEMENT_INSTALL_ID) {
+          const bank = offerableSkillCandidates(ctx.db, ctx.skills?.appVersion ?? '').find(
+            (c) => c.installId === BANK_STATEMENT_INSTALL_ID
+          )
+          // #133: only offer bank when its engine would actually ENGAGE the accept (an aggregation-
+          // shaped amount ask is category-shaped, so `intends()` normally holds — this guards the
+          // residual class where it wouldn't, e.g. an exotic phrasing over a scope its handler
+          // cannot serve; the prose hint remains as the degradation).
+          if (bank && wouldSkillEngage(bank.installId)) {
+            deterministicOffer = { installId: bank.installId, title: bank.title, source: 'deterministic' }
+          }
+        }
+        return withChatStream(
+          event,
+          conversationId,
+          'Document listing failed',
+          withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction, sendUsage): Promise<Message> => {
+            // #80 dedupe (owner decision 4): the deterministic offer WINS — the classifier runs
+            // only when the rule produced nothing (non-amount aggregation asks / bank gated out),
+            // so the two sources can never double-offer. The listing itself stays deterministic;
+            // only aggregation-shaped turns pay the one bounded classification call (plain
+            // list/count turns keep 0 model calls). Classified BEFORE the answer is emitted.
+            const offer = deterministicOffer ?? (aggregationAsk ? await classifierOffer(signal) : null)
+            // #649: an aggregation ask (a sum, categories) over ONE document that fits the window is read
+            // whole instead (#643's rule, decided here in the slot): the model sees every section and can add
+            // them up, which the listing cannot (#54). The offer above rides along. A plain list ask keeps the
+            // listing, and so does a document too long to read whole.
+            const wholeReadId = aggregationAsk ? wholeReadFor(false) : null
+            if (wholeReadId) return groundedAnswer(signal, sendToken, sendCompaction, sendUsage, wholeReadId, offer)
+            const listing = aggregateExtractions(ctx.db, scope, recordType)
+            const listingAnswer = buildListingAnswer(ctx.db, listing, (key, params) => tMain(key, params), {
+              aggregationAsk
+            })
+            const answer = scopeNotice ? `${scopeNotice}\n\n${listingAnswer}` : listingAnswer
+            sendToken(answer)
+            return appendMessage(ctx.db, {
+              conversationId,
+              role: 'assistant',
+              content: answer,
+              skillId: skill?.installId,
+              autoFired: skill?.autoFired === true,
+              skillOffer: offer
+            })
+          }),
+          // Acquire the slot so a yielding deep-index build is paused/resumed cleanly even
+          // though we make no model call (keeps the single locked contract).
+          (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
+        )
+      }
+
       return withChatStream(
         event,
         conversationId,
@@ -983,64 +1037,7 @@ export function registerRagIpc(ctx: AppContext): void {
           // afterwards (update-in-place of the offer column only) — it never touches the
           // answer content or the stream.
           const offer = await classifierOffer(signal)
-          const wholeReadId = wholeReadDocumentId(
-            ctx.db,
-            scope,
-            documentsInScope(ctx.db, scope, { requireChunks: true }),
-            text,
-            wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill),
-            decision.engine === 'tree-summary'
-          )
-          const partialCoverageNotice = partialCoverageNoticeFor(wholeReadId != null)
-          const msg = await generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
-            signal,
-            // One-shot ephemeral "summarizing…" notice when the compaction pre-pass starts (§5.2);
-            // isDestroyed-guarded inside withChatStream, never buffered (R14).
-            onCompactionStart: sendCompaction,
-            // The real assembled-prompt usage (incl. the retrieved excerpt block) for the meter.
-            onPromptUsage: sendUsage,
-            // Composite retrieval scope (plan §10.2): membership ∪ specific docs ∪ attachments,
-            // archived excluded by default. Also makes the empty-context re-index check
-            // scope-aware (M2). An empty resolved scope = whole corpus.
-            scope,
-            // Retrieval reranker: null when no reranker is provisioned — retrieval then
-            // keeps the unreranked ordering byte-identical.
-            reranker: ctx.reranker,
-            // Knowledge packs (ZIM wave): the query-time archive arm, only when this chat's
-            // scope selected packs (opt-in per chat). makeArm returns null when the tools
-            // are missing or nothing is retrievable; retrieve() isolates arm failures.
-            // #340 L3-b (D-Z20, owner ruling 2026-09-07 "always"): the arm expands the question
-            // through the turn's own runtime — one short, bounded, grammar-constrained call per
-            // pack-scoped ask, before the search; any failure falls back to the plain pattern.
-            // Step 4-4 (ruling (a)): `candidateScope` widens what the arm admits on a `gpu`/
-            // opted-in `cpu-hi` machine; absent reranker or `default` profile it is `'capped'`,
-            // byte-identical to today.
-            externalArm:
-              ctx.zim?.makeArm(ctx.db, scope.packIds, {
-                expand: makeQueryExpander(runtime),
-                candidateScope
-              }) ?? null,
-            // The turn's skill: its fence rides in the grounded user turn; the assistant row is
-            // stamped only when the fence fit AND chunks were found (no-context ⇒ NULL).
-            skill,
-            // #643 / #642: the one document read whole (or through its ready deep index) instead
-            // of top-k — `capped`/`tree` coverage; the pack arm and the notice below are top-k only.
-            wholeDocument: wholeReadId ? { documentId: wholeReadId } : undefined,
-            // A3: a needle ask that was auto-narrowed to one doc (W2) and then downgraded off the
-            // whole-doc engine reaches HERE — lead the honest scope notice so the narrowing stays
-            // visible. #37/#38/#641: the whole-document-question hint or the partial-answer label
-            // (composed above) follows it when retrieval left sections out. Both are absent on
-            // every ordinary route into this path (byte-unchanged).
-            // #649: a whole read of a sum or grouping ask leads with its own heads-up after it.
-            answerPrefix: groundedPrefix(wholeReadId != null),
-            partialCoverageNotice,
-            onToken: sendToken
-          })
-          if (offer) {
-            setMessageSkillOffer(ctx.db, msg.id, offer)
-            msg.skillOffer = offer
-          }
-          return msg
+          return groundedAnswer(signal, sendToken, sendCompaction, sendUsage, wholeReadFor(decision.engine === 'tree-summary'), offer)
         }),
         (signal) => ctx.docTasks?.acquireChatSlot(signal) ?? Promise.resolve(() => {})
       )

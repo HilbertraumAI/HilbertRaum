@@ -898,11 +898,12 @@ export const de: Record<keyof typeof en, string> = {
   'analysis.partialAnswerHint':
     '**Hinweis:** Diese Antwort basiert nur auf den relevantesten Abschnitten und kann daher ' +
     'Einträge übersehen.',
-  // #649: eine Summe oder Gruppierung über ein ganz gelesenes Dokument rechnet das Modell selbst — und
-  // ein kleines Modell verrechnet sich dabei auch mit allen Abschnitten vor sich (design-guidelines §11.24).
+  // #649: eine Summe aus einem ganz gelesenen Dokument rechnet das Modell selbst — und ein kleines Modell
+  // verrechnet sich dabei auch mit allen Abschnitten vor sich (design-guidelines §11.24). So formuliert,
+  // dass es auch stimmt, wenn das Dokument die Summe nennt und das Modell sie nur abliest.
   'analysis.wholeReadSumHint':
-    '**Hinweis:** Das Modell hat diese Beträge selbst zusammengerechnet und kann dabei Posten übersehen ' +
-    'oder sich verrechnen. Prüfe das Ergebnis anhand der Quellen.',
+    '**Hinweis:** Summen rechnet das Modell selbst aus und kann dabei Posten übersehen oder sich ' +
+    'verrechnen. Prüfe jede Summe anhand der Quellen.',
 
   // ---- Kontoauszug-Auswertung (full-doc-skills Plan §3.1, Phase 2) ----
   // Die deterministische Antwort über das ganze Dokument, die der Analyse-Handler aus der

@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import {
   isAggregationShaped,
+  isTotalAsk,
   routeQuestion,
   mapQuestionToRecordType,
   type RouteInput
@@ -407,13 +408,23 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'Weißt du, wie viel die Gebühr beträgt?',
     'Wie viel kostet der Stellplatz?',
     'Wieviel beträgt die Nebenkostenpauschale?',
+    // a pay verb in the present asks what is paid, not what was: pre-fix labelled or listed
+    'How much do I pay per month?',
+    'How much do I have to pay for the parking space?',
+    'How much is charged for a late payment?',
+    'Wie viel Miete muss ich zahlen?',
+    'Wie viel schulde ich dem Vermieter?',
+    // "how much" measures something that is not money: pre-fix labelled
+    'How much space does the flat have in total?',
+    'Wie viel Urlaub habe ich insgesamt?',
     // a list the question asks about, in a question that opens with a question word
     'Welche Fristen stehen auf der Liste?', // the comment's example, verbatim
     'What is on the list of fees?', // the comment's example, verbatim
+    "What's on the list of fees?",
+    "Tell me what's on the list of fees",
     'Which fees are on the list?',
     'What are the fees on the list?', // "what are" opens a request, but with a question word
     'Welche Kosten sind in der Liste enthalten?',
-    'Wie lang ist die Liste der Fristen?',
     'Kannst du mir sagen, was auf der Liste steht?', // pre-fix: labelled
     'Auf welcher Liste steht die Frist?',
     'Auf welcher Seite der Liste steht die Kaution?', // pre-fix: labelled; a preposition before the question word
@@ -429,7 +440,7 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'Zählen alle Zahlungen zur Miete?', // a #644 residual: "zählen" opens a yes/no question
     'Zählen die Fristen auch am Wochenende?',
     'Welcher Zählerstand gilt für die Abrechnung der Kosten?' // a meter, no verb
-  ])('%s → a plain answer, with or without extract data (pre-fix: the listing)', (question) => {
+  ])('%s → a plain answer, with or without extract data (pre-fix: the listing or the label)', (question) => {
     for (const extractAvailable of [true, false]) {
       const decision = routeQuestion({ ...base, extractAvailable, question })
       expect(decision).toEqual({ engine: 'relevance', confidence: 'high' })
@@ -460,6 +471,12 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'What is the total of all the payments?', // the comment's example, verbatim: pre-fix labelled
     'Wie hoch ist die Summe aller Zahlungen?', // the comment's example, verbatim: pre-fix labelled
     'How much did I spend in total?', // names no amount
+    'How much have I paid so far?',
+    'How much in total?',
+    'How much is that in total?', // a verb after "how much": it measures no noun
+    'Wie viel macht das zusammen?', // "wie viel" makes "zusammen" a total
+    'I need the total of all payments.', // a request, not a statement
+    'Ich frage mich, wie viel ich insgesamt gezahlt habe?', // asked, not stated
     'What is the sum of the fees?', // pre-fix: a plain answer
     'Wie hoch ist der Gesamtbetrag?', // pre-fix: a plain answer
     "What's my total?",
@@ -470,7 +487,6 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     'Was kostet alles zusammen?',
     'Wie viel kostet die Wohnung mit Stellplatz insgesamt?',
     'Kannst du mir sagen, wie viel ich insgesamt zahle?',
-    'Wie viel schulde ich dem Vermieter?',
     'Rechne alle Zahlungen zusammen.',
     'Rechne alles zusammen.', // a reckoning verb needs no money word
     'Was ergeben 950 € und 180 € zusammen?', // the currency sign is the money word
@@ -487,13 +503,20 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     })
   })
 
-  // Controls: no sum. A yes/no question asks for a verdict (#644); a measure or a joint act adds up no amounts.
+  // Controls: no sum. A yes/no question asks for a verdict (#644); a who / when question asks about a party or a
+  // date; a statement gives context; a measure or a joint act adds up no amounts.
   it.each([
     'Is the total rent 1,175 euros?',
     'Ist die Summe aller Zahlungen korrekt?',
+    'Who pays the total rent?',
+    'When is the total due?',
+    'I paid a total of 500 euros last year. Which payment was late?',
+    'Ich habe insgesamt drei Zahlungen geleistet. Welche war die höchste?',
+    'Wir zahlen die Miete zusammen. Wie hoch ist mein Anteil?',
     'Zahlen die Mieter die Miete zusammen?',
     'Haften alle Mieter zusammen?',
     'Wer wohnt zusammen in der Wohnung?',
+    'Was haben die Mieter zusammen vereinbart?', // "zusammen" with no money word
     'Ist die Kaution zusammen mit der Miete fällig?',
     'Was kostet der Stellplatz zusammen mit der Garage?', // "zusammen mit" joins, it adds nothing up
     'Wir wohnen zusammen. Wie hoch ist die Miete?', // judged sentence by sentence
@@ -520,17 +543,25 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
     ['Gib mir eine Liste der Fristen', 'date'],
     ['Zeig mir die Liste der Fristen', 'date'],
     ['Zeigst du mir die Liste der Fristen?', 'date'], // an unlisted opener: "the list" still asks
+    ['What is the list of deadlines?', 'date'], // the list named after "is" is asked for
+    ["What's the list of deadlines?", 'date'],
+    ['Wie lautet die Liste der Fristen?', 'date'],
+    ['Wie lang ist die Liste der Fristen?', 'date'],
     ['Show me the list of fees', 'amount'],
     ['Could you send me the list of fees?', 'amount'],
     ['Die Liste aller Fristen, bitte.', 'date'],
     ['Is there a list of fees?', 'amount'],
     ['How many fees are on the list?', 'amount'],
     ['Zähle alle Zahlungen', 'amount'],
-    ['Zähle alle Zahlungen zur Miete auf', 'amount'], // "auf" ends the clause: "aufzählen"
+    ['Alle Zahlungen zählen und auflisten', 'amount'], // the infinitive request, no claim
+    ['Zählen alle Zahlungen', 'amount'], // no question mark: the infinitive request, no yes/no question
+    ['Zähle alle Zahlungen zur Miete auf', 'amount'],
     ['Zähle alle Zahlungen zur Miete.', 'amount'], // the imperative never means "belong to"
     ['Zählen Sie alle Fristen auf', 'date'], // "Sie" after "zählen" is the one asked
-    ['Zählen Sie mir die Zahlungen zur Miete auf', 'amount'], // "auf" ends the clause: "aufzählen"
-    ['Zählen Sie mir die Fristen auf, die zu beachten sind', 'date'], // "zu" behind a comma belongs to the clause
+    ['Zählen Sie alle Fristen auf?', 'date'], // … with a question mark too: a polite request, no verdict
+    ['Zählen Sie die Zahlungen bis zum 31. März.', 'amount'], // … and the formal imperative is a request
+    ['Welche Zahlungen zählt der Vertrag zur Miete auf?', 'amount'], // "auf" ends the clause: "aufzählen"
+    ['Welche Fristen zählt der Vertrag auf, die zu beachten sind?', 'date'], // "zu" behind a comma belongs to the clause
     ['Wie viele Zahlungen zählen zur Miete?', 'amount'],
     ['Count the payments as of May.', 'amount']
   ] as const)('%s → coverage-extract (%s), no aggregation hint', (question, recordType) => {
@@ -540,6 +571,32 @@ describe('routeQuestion — "how much" is a lookup or a sum, and a list asked ab
       confidence: 'high'
     })
     expect(isAggregationShaped(question)).toBe(false)
+  })
+
+  // A list request names its own type; the sum beside it still makes the ask aggregation-shaped.
+  it.each(['List all the deadlines and the total rent', 'List all the deadlines. How much did I pay in total?'])(
+    '%s → coverage-extract (date), aggregation-shaped',
+    (question) => {
+      expect(routeQuestion({ ...base, extractAvailable: true, question })).toEqual({
+        engine: 'coverage-extract',
+        recordType: 'date',
+        confidence: 'high'
+      })
+      expect(isAggregationShaped(question)).toBe(true)
+    }
+  )
+
+  // The arithmetic heads-up's question (design-guidelines §11.24): a total of amounts, not any grouping.
+  it.each([
+    ['How much did I pay in fees?', true],
+    ['Kategorisiere alle Ausgaben', true],
+    ['Summiere alle Zahlungen', true],
+    ['Gruppiere die Fristen nach Mieter', false],
+    ['categorize all the findings', false],
+    ['How much is the monthly fee?', false],
+    ['List all the deadlines', false]
+  ] as const)('isTotalAsk(%s) → %s', (question, expected) => {
+    expect(isTotalAsk(question)).toBe(expected)
   })
 })
 

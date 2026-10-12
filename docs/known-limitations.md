@@ -1174,7 +1174,10 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
     costs?") get an ordinary answer too. A sum ("How much did I pay in fees?", "Wie hoch ist die Summe
     aller Zahlungen?") is read whole when the chat has one document short enough for that. Otherwise it
     gets every amount, led by a note that the list cannot add them up. Also recognised by word lists:
-    - A total asked with no sum word or pay verb ("What did I pay in fees?") gets an ordinary answer.
+    - A total asked with no sum word and no pay verb in the past ("What did I pay in fees?", "How much
+      do I pay per month?") gets an ordinary answer.
+    - A question about a total the document states ("What is the total amount due on the invoice?") is
+      treated as a sum. Over a longer document with a deep index it gets every amount, not the total.
     - "Wie viel Zahlungen gibt es?" (a count) gets an ordinary answer.
     - A list noun such as "the full list" or "price list", or one that comes before the question word,
       still lists ("In der Liste fehlt eine Frist, welche?").
@@ -1199,8 +1202,8 @@ _The **`audit §N.M`** citations in the skills/extraction residuals below refer 
   deferred (architecture.md result-tables record §5/§6).
   **A total over one short document is the AI model's own arithmetic (#649, 2026-10-12).** Since
   #649 a sum or categorize ask over ONE document that fits the model's window is read whole instead of
-  listed, with or without a deep index. The answer leads with a heads-up that the model added the
-  amounts up itself. The heads-up is needed: with the whole one-page statement in its prompt,
+  listed, with or without a deep index. The answer leads with a heads-up that the model works out totals
+  itself. The heads-up is needed: with the whole one-page statement in its prompt,
   qwen3-4b-instruct-q4 summed its four fees wrong twice, at 5,45 and 8,35 EUR for 13,85; a lease's
   three monthly amounts it added up right. Nothing checks the total. For a bank statement, the
   bank-statement skill adds up exactly. A chat with several documents, or a longer document, keeps the

@@ -231,7 +231,8 @@ const EN_CLAUSE_WORDS = wordSet('that which who whom whose where when if whether
 const DE_CLAUSE_WORDS = wordSet('was wo dass wenn falls ob weil denen deren dessen')
 const DE_RELATIVES = wordSet('die das welche welcher welches welchen welchem')
 const EN_CLAIM_VERBS = wordSet(EN_YES_NO_VERBS)
-const DE_CLAIM_VERBS = wordSet(DE_YES_NO_VERBS)
+// #649: "zählen" after the items is the infinitive request ("Alle Zahlungen zählen und auflisten"), no claim.
+const DE_CLAIM_VERBS = new Set([...wordSet(DE_YES_NO_VERBS)].filter((verb) => verb !== 'zählen'))
 // A period ends a sentence except after one of these, after a single letter ("z. B."), or after a day
 // before a month ("ab dem 1. Mai").
 const ABBREVIATIONS = wordSet('inkl bzw ggf evtl ziff incl approx resp vgl usw etc lt gem ca nr abs art bzgl zzgl sog dr prof hr fr str tel vs no st')
@@ -245,7 +246,8 @@ const MONTHS = wordSet(
 // Fristen stehen auf der Liste?", "What is on the list of fees?", "Kannst du mir sagen, was auf der Liste
 // steht?"), and so does a list after "which" / "welche…" anywhere ("Auf welcher Liste steht die Frist?"). Any
 // other "list" still asks for one: a request ("Zeig mir die Liste der Fristen", "Zeigst du mir die Liste der
-// Fristen?"), "a list" / "eine Liste" ("Could you put together a list of all the fees?").
+// Fristen?"), "a list" / "eine Liste" ("Could you put together a list of all the fees?"), or the list named
+// after "is" ("What is the list of deadlines?", "Wie lautet die Liste der Fristen?").
 const LIST_NOUNS = wordSet('list liste aufzählung auflistung')
 const DEFINITE_DETERMINERS = wordSet(
   'the this that my your our their his her its der die den dem des diese dieser diesen diesem dieses meine meiner ' +
@@ -254,9 +256,10 @@ const DEFINITE_DETERMINERS = wordSet(
 )
 const INTERROGATIVE_DETERMINERS = wordSet('which what welche welcher welchen welchem welches')
 const QUESTION_WORDS = wordSet(
-  'what which where who whom whose when why how was welche welcher welches welchen welchem wo wer wen wem wessen wann ' +
-    'warum wieso weshalb wie wofür worauf worin wovon womit woran'
+  "what which where who whom whose when why how what's where's who's when's how's what're was welche welcher " +
+    'welches welchen welchem wo wer wen wem wessen wann warum wieso weshalb wie wofür worauf worin wovon womit woran'
 )
+const NAMING_VERBS = wordSet("is are was were what's what're ist sind war waren lautet lauten heißt heißen")
 // A question may open with a preposition before its question word ("Auf welcher Seite der Liste …?").
 const PREPOSITIONS = wordSet('auf in an von aus für mit bei nach zu über unter vor on at from for with of to by under')
 // #649: "zählen zu / zum / zur / als" and "count as / toward" mean "belong to", not "count" ("Welche Kosten zählen
@@ -264,7 +267,8 @@ const PREPOSITIONS = wordSet('auf in an von aus für mit bei nach zu über unter
 // clause ("Zähle alle Zahlungen zur Miete auf" is "aufzählen"). A "zähl…" word that is no verb form is a meter
 // ("Zähler", "Zählerstand").
 const DE_COUNT_VERBS = wordSet('zähl zähle zählst zählt zählen zählte zählten')
-// "Zähle alle Zahlungen zur Miete" is a request: the imperative never means "belong to".
+// "Zähle alle Zahlungen zur Miete", "Zählen Sie die Zahlungen bis zum 31. März" are requests: the imperative
+// never means "belong to".
 const DE_COUNT_IMPERATIVES = wordSet('zähl zähle')
 const DE_COUNT_AS_WORDS = wordSet('zu zum zur als')
 const EN_COUNT_AS_WORDS = wordSet('as toward towards among against')
@@ -272,22 +276,24 @@ const EN_COUNT_AS_WORDS = wordSet('as toward towards among against')
 // #649: a sum ask wants the total of amounts. The listing cannot add up (#54) and a top-k answer adds up only
 // what it read (#37), so a sum takes the aggregation route (`isSumAsk`). Judged per sentence; never with a count
 // ("How many payments are there in total?" asks for the list), an explain verb ("Erkläre, wie sich die
-// Gesamtmiete zusammensetzt") or in a yes/no question, which asks for a verdict (#644: "Is the total correct on
-// page 2?"). Three shapes:
+// Gesamtmiete zusammensetzt"), in a yes/no question, which asks for a verdict (#644: "Is the total correct on
+// page 2?"), in a who / when / where / why question ("Who pays the total rent?"), or in a statement that gives
+// context ("I paid a total of 500 euros last year. Which payment was late?"). Three shapes:
 //   - a sum word: "total", "sum of", "add up", "Summe aller", "Gesamtbetrag", "addiere", "zusammenrechnen", or
 //     "zusammen" after a reckoning verb ("Rechne alle Zahlungen zusammen");
-//   - a totalling word beside a money word ("How much are all the fees together?", "Was kostet alles
-//     zusammen?"); alone it is often no sum ("Wer wohnt zusammen in der Wohnung?", "Wie lange läuft der
+//   - a totalling word beside a money word or "how much" ("How much are all the fees together?", "Was kostet
+//     alles zusammen?"); alone it is often no sum ("Wer wohnt zusammen in der Wohnung?", "Wie lange läuft der
 //     Vertrag insgesamt?");
-//   - "how much" / "wie viel" with a pay or spend verb ("How much did I pay in fees?", "Wie viel habe ich für
-//     Gebühren bezahlt?"); a lookup has none ("How much is the monthly fee?", "Wie viel kostet der Stellplatz?").
+//   - "how much" / "wie viel" with a pay or spend verb in the past ("How much did I pay in fees?", "Wie viel
+//     habe ich für Gebühren bezahlt?"): what was paid adds up a history. A lookup has none ("How much is the
+//     monthly fee?", "Wie viel kostet der Stellplatz?", "How much do I pay per month?").
+// A measure, or a noun after "how much" that is not money, adds up no amounts without a money word ("What is
+// the total area of the flat?", "Wie viel Urlaub habe ich insgesamt?").
 const SUM_WORDS = wordSet(
   'total totals totaled totalled totaling totalling gesamtbetrag gesamtbeträge gesamtkosten gesamtpreis gesamtmiete ' +
     'gesamtausgaben gesamteinnahmen gesamtzahlung gesamtzahlungen addiere addieren addiert addier aufaddieren ' +
     'aufaddiert zusammenrechnen zusammengerechnet zusammenzählen zusammengezählt'
 )
-// A measure without a money word adds up no amounts ("What is the total area of the flat?", "How long is the
-// lease in total?").
 const MEASURE_WORDS = wordSet(
   'long lang lange area fläche wohnfläche size größe duration dauer laufzeit term months years weeks days monate ' +
     'monaten jahre jahren wochen tage tagen pages seiten'
@@ -304,17 +310,26 @@ const NO_TOTAL_BEFORE = wordSet('with mit')
 // fees" gather them into a list.
 const GATHERING_VERBS = wordSet('fasse fass fasst fassen stelle stell stellt stellen trage trag tragt tragen put puts putting')
 const MONEY_WORDS = wordSet(
-  'much cost costs price prices pay pays paid paying spend spends spent owe owes owed fee fees charge charges rent ' +
-    'deposit amount amounts money payment payments expense expenses euro euros eur dollar dollars usd chf viel hoch ' +
+  'cost costs price prices pay pays paid paying spend spends spent owe owes owed fee fees charge charges rent ' +
+    'deposit amount amounts money payment payments expense expenses euro euros eur dollar dollars usd chf ' +
     'kostet kosten kostete preis preise zahle zahlst zahlt zahlen zahlte gezahlt bezahle bezahlt bezahlen bezahlte ' +
     'ausgegeben miete kaution geld betrag beträge gebühr gebühren zahlung zahlungen ausgaben einnahmen'
 )
-const SPEND_VERBS = wordSet(
-  'pay pays paid paying spend spends spent owe owes owed charged earned received zahle zahlst zahlt zahlen zahlte ' +
-    'zahlten gezahlt bezahle bezahlst bezahlt bezahlen bezahlte bezahlten ausgegeben ausgeben überwiesen verdient ' +
-    'eingenommen erhalten schulde schuldest schulden'
+const PAST_SPEND_VERBS = wordSet(
+  'paid spent owed earned received gezahlt zahlte zahlten bezahlt bezahlte bezahlten ausgegeben überwiesen verdient ' +
+    'eingenommen erhalten'
 )
+// "How much did I pay …": the past is on "did".
+const SPEND_BASES = wordSet('pay spend earn owe')
 const HOW_MUCH = [['how', 'much'], ['wie', 'viel'], ['wieviel']]
+const AMOUNT_QUESTIONS = [...HOW_MUCH, ['wie', 'hoch']]
+// The words "how much" is followed by when it asks for an amount ("How much in total?", "How much is …").
+const AFTER_HOW_MUCH = wordSet(
+  'in of for on at to by altogether together total overall that this it i we you they he she more less the a an my ' +
+    'our your their his her its'
+)
+const NON_AMOUNT_QUESTION_WORDS = wordSet('who whom whose when where why wer wen wem wessen wann wo warum wieso weshalb')
+const PRONOUN_SUBJECTS = wordSet('i we you he she it they ich wir du er sie es ihr')
 // "the total number of payments" is a count.
 const COUNT_PHRASES = [['how', 'many'], ['wie', 'viele'], ['wieviele'], ['number', 'of'], ['total', 'number'], ['total', 'count'], ['anzahl']]
 
@@ -370,11 +385,12 @@ function opensWithQuestionWord(words: readonly string[]): boolean {
 }
 
 /** #649: is `words[i]` a list the question asks about, not for ("auf der Liste" in a question-word question,
- *  "welcher Liste")? */
+ *  "welcher Liste"; not "What is the list of …")? */
 function isListNounAt(words: readonly string[], i: number, questionWord: boolean): boolean {
   if (!LIST_NOUNS.has(words[i] ?? '')) return false
   const before = words[i - 1] ?? ''
-  return INTERROGATIVE_DETERMINERS.has(before) || (questionWord && DEFINITE_DETERMINERS.has(before))
+  if (INTERROGATIVE_DETERMINERS.has(before)) return true
+  return questionWord && DEFINITE_DETERMINERS.has(before) && !NAMING_VERBS.has(words[i - 2] ?? '')
 }
 
 /** #649: is `words[i]` a count word that does not count: "count as", "zählt als", "zählen zu", "Zählerstand"? */
@@ -383,7 +399,7 @@ function isCountAsAt(words: readonly string[], i: number): boolean {
   if (word === 'count') return EN_COUNT_AS_WORDS.has(words[i + 1] ?? '')
   if (!word.startsWith('zähl')) return false
   if (!DE_COUNT_VERBS.has(word)) return true
-  if (DE_COUNT_IMPERATIVES.has(word)) return false
+  if (DE_COUNT_IMPERATIVES.has(word) || (word === 'zählen' && words[i + 1] === 'sie')) return false
   const end = words.indexOf(',', i + 1)
   const clause = words.slice(i + 1, end < 0 ? undefined : end)
   return clause.some((w) => DE_COUNT_AS_WORDS.has(w)) && clause.at(-1) !== 'auf'
@@ -395,6 +411,12 @@ function hasListVerb(words: readonly string[]): boolean {
   const questionWord = opensWithQuestionWord(words)
   const verbs = words.map((w, i) => (isListNounAt(words, i, questionWord) || isCountAsAt(words, i) ? ',' : w))
   return LIST_VERB_RE.test(verbs.join(' '))
+}
+
+/** `at` moved past any request openers (and the fillers after each). */
+function pastOpeners(words: readonly string[], at: number): number {
+  for (let n = openerAt(words, at, REQUEST_OPENERS); n > 0; n = openerAt(words, at, REQUEST_OPENERS)) at = pastFillers(words, at + n)
+  return at
 }
 
 /** `at` moved past any fillers (and commas). */
@@ -447,13 +469,13 @@ function sentenceKind(sentence: string, listWord: boolean): 'verdict' | 'head' |
   let at = pastFillers(words, 0)
   if (at >= words.length) return 'verdict'
   const polite = politeOpenerAt(words, at, listWord)
-  if (polite === 0 && yesNoVerbAt(words, at)) return 'verdict'
-  let stripped = polite > 0
-  at = pastFillers(words, at + polite)
-  for (let n = openerAt(words, at, REQUEST_OPENERS); n > 0; n = openerAt(words, at, REQUEST_OPENERS)) {
-    at = pastFillers(words, at + n)
-    stripped = true
-  }
+  // #649: "zählen" first opens a question only when the sentence asks one ("Zählen alle Zahlungen zur Miete?");
+  // without a question mark it is the infinitive request ("Zählen alle Zahlungen").
+  const asks = words[at] !== 'zählen' || /\?\s*$/u.test(sentence)
+  if (polite === 0 && yesNoVerbAt(words, at) && asks) return 'verdict'
+  const afterPolite = pastFillers(words, at + polite)
+  at = pastOpeners(words, afterPolite)
+  const stripped = polite > 0 || at > afterPolite
   const head = words[at] ?? ''
   if (EMBEDDED_YES_NO.has(head)) return 'verdict'
   // After an opener, a yes/no question asked directly ("Tell me, are all the payments on time?").
@@ -498,8 +520,7 @@ const NAMES_NOTHING = wordSet(
 /** Does this list request name nothing, so that it refers back to the rest of the question? */
 function namesNothing(listSentence: string): boolean {
   const { words } = sentenceTokens(listSentence)
-  let at = pastFillers(words, 0)
-  for (let n = openerAt(words, at, REQUEST_OPENERS); n > 0; n = openerAt(words, at, REQUEST_OPENERS)) at = pastFillers(words, at + n)
+  const at = pastOpeners(words, pastFillers(words, 0))
   return words.slice(at).every((w) => w === ',' || NAMES_NOTHING.has(w))
 }
 
@@ -538,28 +559,55 @@ export function isAggregationShaped(question: string): boolean {
   return AGGREGATION_RE.test(question ?? '') || isSumAsk(question ?? '')
 }
 
+/** #649: does "how much" / "wie viel" measure a noun that is not money ("How much space …", "Wie viel Urlaub …")?
+ *  A German noun is written with a capital; an English one is any word but a verb or a function word. */
+function measuresANoun(raw: readonly string[], words: readonly string[]): boolean {
+  return words.some((word, j) => {
+    const english = word === 'much' && words[j - 1] === 'how'
+    if (!english && !(word === 'viel' && words[j - 1] === 'wie') && word !== 'wieviel') return false
+    const next = words[j + 1]
+    if (next === undefined || next === ',' || MONEY_WORDS.has(next)) return false
+    return english ? !YES_NO_VERBS.has(next) && !AFTER_HOW_MUCH.has(next) : /^\p{Lu}/u.test(raw[j + 1] ?? '')
+  })
+}
+
 /** #649: does this sentence ask for a sum (the shapes at `SUM_WORDS`)? */
 function isSumSentence(sentence: string): boolean {
   if (EXPLAIN_RE.test(sentence) || sentenceKind(sentence, LIST_VERB_RE.test(sentence)) === 'verdict') return false
-  const { words } = sentenceTokens(sentence)
+  const { raw, words } = sentenceTokens(sentence)
+  const at = pastFillers(words, 0)
+  if (NON_AMOUNT_QUESTION_WORDS.has(words[at] ?? '')) return false
+  const statement = PRONOUN_SUBJECTS.has(words[at] ?? '') && openerAt(words, at, REQUEST_OPENERS) === 0
+  if (statement && !/\?\s*$/u.test(sentence)) return false
   if (hasPhrase(words, COUNT_PHRASES)) return false
   const money = words.some((w) => MONEY_WORDS.has(w)) || /[€$]/u.test(sentence)
-  if (!money && words.some((w) => MEASURE_WORDS.has(w))) return false
+  if (!money && (measuresANoun(raw, words) || words.some((w) => MEASURE_WORDS.has(w)))) return false
   const sumWord =
     words.some((w) => SUM_WORDS.has(w)) ||
     hasPhrase(words, SUM_PHRASES) ||
     (words.includes('zusammen') && words.some((w) => RECKONING_VERBS.has(w)))
   if (sumWord) return true
-  const totalling = words.some(
-    (w, i) => TOTALLING_WORDS.has(w) && !NO_TOTAL_BEFORE.has(words[i + 1] ?? '') && !words.some((v) => GATHERING_VERBS.has(v))
-  )
-  if (totalling && money) return true
-  return hasPhrase(words, HOW_MUCH) && words.some((w) => SPEND_VERBS.has(w))
+  const gathering = words.some((w) => GATHERING_VERBS.has(w))
+  const totalling = !gathering && words.some((w, i) => TOTALLING_WORDS.has(w) && !NO_TOTAL_BEFORE.has(words[i + 1] ?? ''))
+  if (totalling && (money || hasPhrase(words, AMOUNT_QUESTIONS))) return true
+  const pastSpend = words.some((w) => PAST_SPEND_VERBS.has(w)) || (words.includes('did') && words.some((w) => SPEND_BASES.has(w)))
+  return hasPhrase(words, HOW_MUCH) && pastSpend
 }
 
 /** #649: does the question ask for a sum anywhere? */
 function isSumAsk(question: string): boolean {
   return sentencesOf(question).some(isSumSentence)
+}
+
+/**
+ * #649: does the question ask for a total of amounts — a sum, or an aggregation over amounts ("Kategorisiere alle
+ * Ausgaben", "sum per category")? A whole-document answer to it is the model's own arithmetic, so `rag:ask` leads
+ * it with a heads-up (design-guidelines §11.24). A grouping of anything else ("Gruppiere die Fristen nach Mieter")
+ * adds nothing up.
+ */
+export function isTotalAsk(question: string): boolean {
+  const q = question ?? ''
+  return isSumAsk(q) || (AGGREGATION_RE.test(q) && mapQuestionToRecordType(q) === 'amount')
 }
 
 const TYPE_SYNONYMS_ALL = TYPE_SYNONYMS.map(({ type, re }) => ({ type, re: new RegExp(re.source, 'gi') }))
@@ -657,10 +705,11 @@ export function routeQuestion(input: RouteInput): RouteDecision {
         engine: 'coverage-extract',
         // #644: the type the list request itself names first ("When was the lease signed? List all
         // the fees" lists fees; "List when every payment is due" lists dates), else the question's.
-        // #649: a sum lists amounts ("How much did I spend in total?" names none).
-        recordType: sumAsk
-          ? 'amount'
-          : ((typedRequest !== undefined ? namedRecordType(typedRequest) : null) ?? mapQuestionToRecordType(q)),
+        // #649: a sum lists amounts ("How much did I spend in total?" names none), unless a list request names
+        // its own type ("List all the deadlines and the total rent").
+        recordType:
+          (typedRequest !== undefined ? namedRecordType(typedRequest) : null) ??
+          (sumAsk ? 'amount' : mapQuestionToRecordType(q)),
         confidence: 'high'
       }
     }

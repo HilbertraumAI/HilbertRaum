@@ -132,7 +132,7 @@ from its first public `1.0.0` release onward.
   the document. "How much did I pay in fees?" got the same list, with no total. A question about one
   amount now gets a written answer. A question that adds amounts up, over one document short enough to
   read at once, is answered from the whole document with a total. That answer starts with a heads-up:
-  the AI model added the amounts itself and can miss or miscount items, so check the total against the
+  the AI model works out totals itself and can miss or miscount items, so check the total against the
   sources. Over a longer document it still lists every amount, now with the note that the list cannot
   add them up. "Welche Fristen stehen auf der Liste?" and "Welche Kosten zählen zu den Nebenkosten?"
   get an answer instead of a list (#649).
