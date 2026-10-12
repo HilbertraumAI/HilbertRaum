@@ -82,19 +82,26 @@ describe('hilbertraum:one-module-per-file (#646)', () => {
     return error!.message
   }
 
+  const escapeRegExp = (s: string): string => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
+  /** Both spellings are listed, one of them as "also as" (which comes first is resolution order). */
+  function expectBothSpellings(message: string, second: string): void {
+    const first = normalizePath(join(realDir, 'state.js'))
+    expect(message).toContain(first)
+    expect(message).toContain(normalizePath(second))
+    expect(message).toMatch(new RegExp(`also as (${escapeRegExp(first)}|${escapeRegExp(normalizePath(second))})`))
+  }
+
   it('fails a build that bundles one file under two spellings, naming both', async () => {
     const second = join(linkDir, 'state.js')
     const message = await guardMessage(second)
     expect(message).toMatch(/1 file\(s\) were bundled more than once.*\(#646\)/)
-    expect(message).toContain(normalizePath(join(realDir, 'state.js')))
-    expect(message).toContain(`also as ${normalizePath(second)}`)
+    expectBothSpellings(message, second)
   })
 
   it.runIf(process.platform === 'win32')('fails a build that met the file as c:\\… and C:\\… (the #646 split)', async () => {
     const second = lowerDrive(join(realDir, 'state.js'))
-    const message = await guardMessage(second)
-    expect(message).toContain(normalizePath(join(realDir, 'state.js')))
-    expect(message).toContain(`also as ${normalizePath(second)}`)
+    expectBothSpellings(await guardMessage(second), second)
   })
 })
 
