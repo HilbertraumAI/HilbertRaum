@@ -1419,6 +1419,7 @@ describe('liveness of the running model (#599)', () => {
     vi.useFakeTimers({ toFake: ['performance'] })
     try {
       let parkA = false
+      let probedA = false
       let answerA: (healthy: boolean) => void = () => undefined
       const mgr = new RuntimeManager((o) => ({
         modelId: o.modelId,
@@ -1426,7 +1427,10 @@ describe('liveness of the running model (#599)', () => {
         stop: async () => {},
         health: () =>
           o.modelId === 'a' && parkA
-            ? new Promise<HealthStatus>((r) => (answerA = (healthy) => r({ healthy, message: '', port: 1 })))
+            ? new Promise<HealthStatus>((r) => {
+                probedA = true
+                answerA = (healthy) => r({ healthy, message: '', port: 1 })
+              })
             : Promise.resolve({ healthy: true, message: '', port: 1 }),
         // eslint-disable-next-line require-yield
         chatStream: async function* (): AsyncGenerator<string, void, unknown> {}
@@ -1435,6 +1439,7 @@ describe('liveness of the running model (#599)', () => {
       parkA = true // a freezes: its next /health answers only when the test says so
       vi.advanceTimersByTime(10_000) // past the 10 s probe TTL
       const probe = mgr.refreshHealth()
+      expect(probedA).toBe(true) // the probe really went out to a (not skipped inside the TTL)
       await mgr.start({ modelId: 'b', modelPath: '/b.gguf', contextTokens: 2048 }) // the switch lands meanwhile
       answerA(false) // a's late verdict
       await probe
