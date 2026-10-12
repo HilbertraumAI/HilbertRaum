@@ -28,6 +28,11 @@ import type { ExtractRecordType } from '../../../shared/types'
 //     A yes/no question ("Gilt die Frist für alle Mieter?", "Does the contract list all the
 //     deadlines?") asks for a verdict, not a list: an ordinary answer, unless it is a polite request
 //     ("Can you list …", "Kannst du … auflisten?").
+//   - Issue #649: "how much" / "wie viel" ask for an amount, not a list: a lookup ("How much is the
+//     monthly fee?") is an ordinary question, a sum ("How much did I pay in fees?", "Wie hoch ist die
+//     Summe aller Zahlungen?") joins the aggregation route. "the list" / "der Liste" in a question-word
+//     question ("Welche Fristen stehen auf der Liste?") and "zählen zu / zählt als" / "count as" ask for
+//     no list.
 //   - Fixed precedence: explicit button > compare (needs 2 docs) > coverage-extract >
 //     tree-summary > relevance. A compare classified without 2 docs, or any low-confidence
 //     classification, falls back to relevance — never an empty result from a stray trigger word.
@@ -88,8 +93,9 @@ export interface RouteDecision {
 //     boundary) — überblick therefore carries no boundary at all.
 
 // The list/count triggers, in two halves (#644). A list or count VERB asks for a list wherever it
-// stands; a QUANTIFIER does only at the head of a request (`listRequestShape` below).
-const LIST_VERB_RE = /\b(list|enumerate|how many|how much|count)\b|\b(wie ?viele?|liste)\b|\b(auflist|aufzulist|aufzähl|aufzuzähl|zähl)/i
+// stands; a QUANTIFIER does only at the head of a request (`listRequestShape` below). #649: "how much" /
+// "wie viel" ask for an amount, not a list: a lookup is an ordinary question, a sum is `isSumSentence`'s.
+const LIST_VERB_RE = /\b(list|enumerate|how many|count)\b|\b(wie ?viele|liste)\b|\b(auflist|aufzulist|aufzähl|aufzuzähl|zähl)/i
 const QUANTIFIERS = String.raw`every|each|all of (?:the|them)|all the|jede[rsn]?|alle[rsn]?|sämtliche[rsn]?`
 const QUANTIFIER_RE = new RegExp(String.raw`(?<![\p{L}\p{N}])(?:${QUANTIFIERS})(?![\p{L}\p{N}])`, 'iu')
 const HEAD_QUANTIFIER_RE = new RegExp(String.raw`^(?:${QUANTIFIERS})(?![\p{L}\p{N}])`, 'iu')
@@ -144,7 +150,7 @@ const DE_YES_NO_VERBS =
   "gilt gelten galt galten gibt gibt's gibts gab gäbe steht stehen gehört gehören betrifft betreffen " +
   'enthält enthalten bekommt bekommen erhält erhalten zahlt zahlen zahlte zahlten bezahlt endet enden ' +
   'läuft laufen beginnt beginnen braucht brauchen liegt liegen stimmt stimmen trifft treffen umfasst ' +
-  'umfassen deckt decken haftet haften fällt fallen passt passen reicht reichen regelt verlangt zählt'
+  'umfassen deckt decken haftet haften fällt fallen passt passen reicht reichen regelt verlangt zählt zählen'
 const wordSet = (words: string): Set<string> => new Set(words.split(' '))
 const YES_NO_VERBS = wordSet(`${EN_YES_NO_VERBS} ${DE_YES_NO_VERBS}`)
 // "was" and "am" are German too ("Was sind alle Fristen?", "Am Monatsende …"): they open a yes/no
@@ -176,7 +182,7 @@ const ADDRESSEES = wordSet('you u du')
 const PLURAL_ADDRESSEES = wordSet('sie ihr')
 const PLURAL_VERBS = wordSet(
   'können könnten würden dürfen dürften müssen sollen sollten wollen möchten haben hätten hatten sind wären waren ' +
-    'werden wurden könnt würdet habt seid wollt sollt dürft'
+    'werden wurden zählen könnt würdet habt seid wollt sollt dürft'
 )
 const SELF_SUBJECTS = wordSet('i we ich wir man')
 const REQUEST_SIGNALS = wordSet(
@@ -234,6 +240,84 @@ const MONTHS = wordSet(
     'november nov dezember dez january february march mar may june july october oct december dec'
 )
 
+// #649: "list" / "Liste" (and "Aufzählung" / "Auflistung") after a definite article, a demonstrative or a
+// possessive, in a question that opens with a question word, asks about a list the document holds ("Welche
+// Fristen stehen auf der Liste?", "What is on the list of fees?", "Kannst du mir sagen, was auf der Liste
+// steht?"), and so does a list after "which" / "welche…" anywhere ("Auf welcher Liste steht die Frist?"). Any
+// other "list" still asks for one: a request ("Zeig mir die Liste der Fristen", "Zeigst du mir die Liste der
+// Fristen?"), "a list" / "eine Liste" ("Could you put together a list of all the fees?").
+const LIST_NOUNS = wordSet('list liste aufzählung auflistung')
+const DEFINITE_DETERMINERS = wordSet(
+  'the this that my your our their his her its der die den dem des diese dieser diesen diesem dieses meine meiner ' +
+    'meinen meinem deine deiner deinen deinem ihre ihrer ihren ihrem unsere unserer unseren unserem eure eurer euren ' +
+    'eurem seine seiner seinen seinem'
+)
+const INTERROGATIVE_DETERMINERS = wordSet('which what welche welcher welchen welchem welches')
+const QUESTION_WORDS = wordSet(
+  'what which where who whom whose when why how was welche welcher welches welchen welchem wo wer wen wem wessen wann ' +
+    'warum wieso weshalb wie wofür worauf worin wovon womit woran'
+)
+// A question may open with a preposition before its question word ("Auf welcher Seite der Liste …?").
+const PREPOSITIONS = wordSet('auf in an von aus für mit bei nach zu über unter vor on at from for with of to by under')
+// #649: "zählen zu / zum / zur / als" and "count as / toward" mean "belong to", not "count" ("Welche Kosten zählen
+// zu den Nebenkosten?", "Was zählt als Zahlung?", "Which fees count as operating costs?"), unless "auf" ends the
+// clause ("Zähle alle Zahlungen zur Miete auf" is "aufzählen"). A "zähl…" word that is no verb form is a meter
+// ("Zähler", "Zählerstand").
+const DE_COUNT_VERBS = wordSet('zähl zähle zählst zählt zählen zählte zählten')
+// "Zähle alle Zahlungen zur Miete" is a request: the imperative never means "belong to".
+const DE_COUNT_IMPERATIVES = wordSet('zähl zähle')
+const DE_COUNT_AS_WORDS = wordSet('zu zum zur als')
+const EN_COUNT_AS_WORDS = wordSet('as toward towards among against')
+
+// #649: a sum ask wants the total of amounts. The listing cannot add up (#54) and a top-k answer adds up only
+// what it read (#37), so a sum takes the aggregation route (`isSumAsk`). Judged per sentence; never with a count
+// ("How many payments are there in total?" asks for the list), an explain verb ("Erkläre, wie sich die
+// Gesamtmiete zusammensetzt") or in a yes/no question, which asks for a verdict (#644: "Is the total correct on
+// page 2?"). Three shapes:
+//   - a sum word: "total", "sum of", "add up", "Summe aller", "Gesamtbetrag", "addiere", "zusammenrechnen", or
+//     "zusammen" after a reckoning verb ("Rechne alle Zahlungen zusammen");
+//   - a totalling word beside a money word ("How much are all the fees together?", "Was kostet alles
+//     zusammen?"); alone it is often no sum ("Wer wohnt zusammen in der Wohnung?", "Wie lange läuft der
+//     Vertrag insgesamt?");
+//   - "how much" / "wie viel" with a pay or spend verb ("How much did I pay in fees?", "Wie viel habe ich für
+//     Gebühren bezahlt?"); a lookup has none ("How much is the monthly fee?", "Wie viel kostet der Stellplatz?").
+const SUM_WORDS = wordSet(
+  'total totals totaled totalled totaling totalling gesamtbetrag gesamtbeträge gesamtkosten gesamtpreis gesamtmiete ' +
+    'gesamtausgaben gesamteinnahmen gesamtzahlung gesamtzahlungen addiere addieren addiert addier aufaddieren ' +
+    'aufaddiert zusammenrechnen zusammengerechnet zusammenzählen zusammengezählt'
+)
+// A measure without a money word adds up no amounts ("What is the total area of the flat?", "How long is the
+// lease in total?").
+const MEASURE_WORDS = wordSet(
+  'long lang lange area fläche wohnfläche size größe duration dauer laufzeit term months years weeks days monate ' +
+    'monaten jahre jahren wochen tage tagen pages seiten'
+)
+const SUM_PHRASES = [
+  'sum of', 'the sum', 'sum total', 'add up', 'adds up', 'added up', 'adding up', 'add together', 'added together',
+  'summe aller', 'summe der', 'summe von', 'summe sämtlicher', 'die summe', 'in summe'
+].map((s) => s.split(' '))
+const RECKONING_VERBS = wordSet('rechne rechnet rechnen zähle zähl zählt zählen addiere')
+const TOTALLING_WORDS = wordSet('altogether together combined insgesamt zusammen')
+// "together with", "zusammen mit", "combined with" join two things, they add nothing up.
+const NO_TOTAL_BEFORE = wordSet('with mit')
+// "Fasse alle Kosten zusammen" summarises them; "Stelle alle Kosten zusammen", "put together a list of all the
+// fees" gather them into a list.
+const GATHERING_VERBS = wordSet('fasse fass fasst fassen stelle stell stellt stellen trage trag tragt tragen put puts putting')
+const MONEY_WORDS = wordSet(
+  'much cost costs price prices pay pays paid paying spend spends spent owe owes owed fee fees charge charges rent ' +
+    'deposit amount amounts money payment payments expense expenses euro euros eur dollar dollars usd chf viel hoch ' +
+    'kostet kosten kostete preis preise zahle zahlst zahlt zahlen zahlte gezahlt bezahle bezahlt bezahlen bezahlte ' +
+    'ausgegeben miete kaution geld betrag beträge gebühr gebühren zahlung zahlungen ausgaben einnahmen'
+)
+const SPEND_VERBS = wordSet(
+  'pay pays paid paying spend spends spent owe owes owed charged earned received zahle zahlst zahlt zahlen zahlte ' +
+    'zahlten gezahlt bezahle bezahlst bezahlt bezahlen bezahlte bezahlten ausgegeben ausgeben überwiesen verdient ' +
+    'eingenommen erhalten schulde schuldest schulden'
+)
+const HOW_MUCH = [['how', 'much'], ['wie', 'viel'], ['wieviel']]
+// "the total number of payments" is a count.
+const COUNT_PHRASES = [['how', 'many'], ['wie', 'viele'], ['wieviele'], ['number', 'of'], ['total', 'number'], ['total', 'count'], ['anzahl']]
+
 /** A sentence's words (letters and digits, an apostrophe inside a word) and commas, as written and lower-cased. */
 function sentenceTokens(sentence: string): { raw: string[]; words: string[] } {
   const raw = sentence.replace(/’/g, "'").match(/[\p{L}\p{N}]+(?:'\p{L}+)?|,/gu) ?? []
@@ -263,6 +347,54 @@ function sentencesOf(question: string): string[] {
 /** The length of the longest opener at `words[at]`, or 0 (`openers` sorted longest first). */
 function openerAt(words: readonly string[], at: number, openers: readonly string[][]): number {
   return openers.find((o) => o.every((w, k) => words[at + k] === w))?.length ?? 0
+}
+
+/** Does any of `phrases` stand anywhere in `words`? */
+function hasPhrase(words: readonly string[], phrases: readonly string[][]): boolean {
+  return words.some((_, i) => openerAt(words, i, phrases) > 0)
+}
+
+/** #649: does the sentence open with a question word ("Was steht auf der Liste?"), perhaps after a preposition
+ *  ("Auf welcher Seite …"), a polite opener or a request verb ("Kannst du mir sagen, was …")? */
+function opensWithQuestionWord(words: readonly string[]): boolean {
+  let at = pastFillers(words, 0)
+  at = pastFillers(words, at + politeOpenerAt(words, at, false))
+  for (;;) {
+    if (QUESTION_WORDS.has(words[at] ?? '') || (PREPOSITIONS.has(words[at] ?? '') && QUESTION_WORDS.has(words[at + 1] ?? ''))) {
+      return true
+    }
+    const n = openerAt(words, at, REQUEST_OPENERS)
+    if (n === 0) return false
+    at = pastFillers(words, at + n)
+  }
+}
+
+/** #649: is `words[i]` a list the question asks about, not for ("auf der Liste" in a question-word question,
+ *  "welcher Liste")? */
+function isListNounAt(words: readonly string[], i: number, questionWord: boolean): boolean {
+  if (!LIST_NOUNS.has(words[i] ?? '')) return false
+  const before = words[i - 1] ?? ''
+  return INTERROGATIVE_DETERMINERS.has(before) || (questionWord && DEFINITE_DETERMINERS.has(before))
+}
+
+/** #649: is `words[i]` a count word that does not count: "count as", "zählt als", "zählen zu", "Zählerstand"? */
+function isCountAsAt(words: readonly string[], i: number): boolean {
+  const word = words[i] ?? ''
+  if (word === 'count') return EN_COUNT_AS_WORDS.has(words[i + 1] ?? '')
+  if (!word.startsWith('zähl')) return false
+  if (!DE_COUNT_VERBS.has(word)) return true
+  if (DE_COUNT_IMPERATIVES.has(word)) return false
+  const end = words.indexOf(',', i + 1)
+  const clause = words.slice(i + 1, end < 0 ? undefined : end)
+  return clause.some((w) => DE_COUNT_AS_WORDS.has(w)) && clause.at(-1) !== 'auf'
+}
+
+/** #649: does a list or count verb stand in this sentence (its lower-cased words)? Not a list asked about, not a
+ *  "count as". */
+function hasListVerb(words: readonly string[]): boolean {
+  const questionWord = opensWithQuestionWord(words)
+  const verbs = words.map((w, i) => (isListNounAt(words, i, questionWord) || isCountAsAt(words, i) ? ',' : w))
+  return LIST_VERB_RE.test(verbs.join(' '))
 }
 
 /** `at` moved past any fillers (and commas). */
@@ -308,12 +440,13 @@ function isClaim(raw: readonly string[], words: readonly string[], at: number): 
 }
 
 /** One sentence's kind for #644: `verdict` — a yes/no question or a claim, or fillers alone; `head` — a
- *  request whose head is a quantifier; `other` — neither. */
-function sentenceKind(sentence: string, listVerb: boolean): 'verdict' | 'head' | 'other' {
+ *  request whose head is a quantifier; `other` — neither. `listWord` (#649): the sentence holds a list word of
+ *  any sense, which asks for something in a polite request ("Hast du eine Liste aller Fristen?"). */
+function sentenceKind(sentence: string, listWord: boolean): 'verdict' | 'head' | 'other' {
   const { raw, words } = sentenceTokens(sentence)
   let at = pastFillers(words, 0)
   if (at >= words.length) return 'verdict'
-  const polite = politeOpenerAt(words, at, listVerb)
+  const polite = politeOpenerAt(words, at, listWord)
   if (polite === 0 && yesNoVerbAt(words, at)) return 'verdict'
   let stripped = polite > 0
   at = pastFillers(words, at + polite)
@@ -341,12 +474,15 @@ function listRequestShape(question: string): { shape: 'list' | 'modifier' | null
   const listSentences: string[] = []
   let modifier = false
   for (const sentence of sentencesOf(question)) {
-    const listVerb = LIST_VERB_RE.test(sentence)
-    if (!listVerb && !QUANTIFIER_RE.test(sentence)) continue
-    const kind = sentenceKind(sentence, listVerb)
+    const listWord = LIST_VERB_RE.test(sentence)
+    const quantifier = QUANTIFIER_RE.test(sentence)
+    if (!listWord && !quantifier) continue
+    const kind = sentenceKind(sentence, listWord)
     if (kind === 'verdict') continue
-    if (listVerb || kind === 'head') listSentences.push(sentence)
-    else modifier = true
+    // #649: a list noun or a "count as" elsewhere in a question asks for nothing ("Welche Fristen stehen auf
+    // der Liste?").
+    if ((listWord && hasListVerb(sentenceTokens(sentence).words)) || kind === 'head') listSentences.push(sentence)
+    else if (quantifier) modifier = true
   }
   return { shape: listSentences.length > 0 ? 'list' : modifier ? 'modifier' : null, listSentences }
 }
@@ -399,7 +535,31 @@ const TYPE_SYNONYMS: Array<{ type: ExtractRecordType; re: RegExp }> = [
  * of presenting the list as if it were what was asked for.
  */
 export function isAggregationShaped(question: string): boolean {
-  return AGGREGATION_RE.test(question ?? '')
+  return AGGREGATION_RE.test(question ?? '') || isSumAsk(question ?? '')
+}
+
+/** #649: does this sentence ask for a sum (the shapes at `SUM_WORDS`)? */
+function isSumSentence(sentence: string): boolean {
+  if (EXPLAIN_RE.test(sentence) || sentenceKind(sentence, LIST_VERB_RE.test(sentence)) === 'verdict') return false
+  const { words } = sentenceTokens(sentence)
+  if (hasPhrase(words, COUNT_PHRASES)) return false
+  const money = words.some((w) => MONEY_WORDS.has(w)) || /[€$]/u.test(sentence)
+  if (!money && words.some((w) => MEASURE_WORDS.has(w))) return false
+  const sumWord =
+    words.some((w) => SUM_WORDS.has(w)) ||
+    hasPhrase(words, SUM_PHRASES) ||
+    (words.includes('zusammen') && words.some((w) => RECKONING_VERBS.has(w)))
+  if (sumWord) return true
+  const totalling = words.some(
+    (w, i) => TOTALLING_WORDS.has(w) && !NO_TOTAL_BEFORE.has(words[i + 1] ?? '') && !words.some((v) => GATHERING_VERBS.has(v))
+  )
+  if (totalling && money) return true
+  return hasPhrase(words, HOW_MUCH) && words.some((w) => SPEND_VERBS.has(w))
+}
+
+/** #649: does the question ask for a sum anywhere? */
+function isSumAsk(question: string): boolean {
+  return sentencesOf(question).some(isSumSentence)
 }
 
 const TYPE_SYNONYMS_ALL = TYPE_SYNONYMS.map(({ type, re }) => ({ type, re: new RegExp(re.source, 'gi') }))
@@ -472,7 +632,9 @@ export function routeQuestion(input: RouteInput): RouteDecision {
     .find((s) => matchedRecordType(withoutTypeCueWords(s)) !== null)
   const namesTypedThing = typedRequest !== undefined
   const wantsListing = listTrigger && !EXPLAIN_RE.test(q) && namesTypedThing
-  const wantsCoverage = wantsListing || AGGREGATION_RE.test(q)
+  // #649: a sum ask joins the aggregation route; it sums amounts, whatever else it names.
+  const sumAsk = isSumAsk(q)
+  const wantsCoverage = wantsListing || AGGREGATION_RE.test(q) || sumAsk
   const wantsSummary = SUMMARY_RE.test(q)
 
   // 2. Compare (needs two documents). A compare intent without 2 docs is low-confidence and
@@ -483,7 +645,8 @@ export function routeQuestion(input: RouteInput): RouteDecision {
       : { engine: 'relevance', confidence: 'low', fallback: 'compare' }
   }
 
-  // 3. Coverage-extract ("list every / how many" over a typed {X} + the #37 aggregation verbs):
+  // 3. Coverage-extract ("list every / how many" over a typed {X} + the #37 aggregation verbs + the
+  //    #649 sum asks):
   //    only when there IS precomputed extracted data — otherwise we cannot honestly claim a
   //    complete list, so fall back to relevance, marked `fallback: 'coverage'` so the caller can
   //    lead the answer with the actionable "build the deep index" hint (#38) instead of a silent
@@ -494,7 +657,10 @@ export function routeQuestion(input: RouteInput): RouteDecision {
         engine: 'coverage-extract',
         // #644: the type the list request itself names first ("When was the lease signed? List all
         // the fees" lists fees; "List when every payment is due" lists dates), else the question's.
-        recordType: (typedRequest !== undefined ? namedRecordType(typedRequest) : null) ?? mapQuestionToRecordType(q),
+        // #649: a sum lists amounts ("How much did I spend in total?" names none).
+        recordType: sumAsk
+          ? 'amount'
+          : ((typedRequest !== undefined ? namedRecordType(typedRequest) : null) ?? mapQuestionToRecordType(q)),
         confidence: 'high'
       }
     }

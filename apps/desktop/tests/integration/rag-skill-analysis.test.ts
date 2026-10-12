@@ -1137,8 +1137,13 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
   // Owner decision 2026-07-17: keep the honest listing, but LEAD it with the shape hint + the
   // bank-statement-skill pointer for amounts (option 1 of 3; auto-routing to the skill would
   // reverse the ratified default-off auto-fire posture, a bare redirect would withhold data).
-  it('#54: the aggregation question WITH extract data leads the listing with the shape hint + skill pointer', async () => {
-    const h = await makeHarness({ fullyChunked: true, text: DE_STATEMENT })
+  // #649 (owner call): over ONE document that fits the window the same ask is read whole instead — the
+  // model sees every section and can add them up, which the listing cannot. The bank offer rides along.
+  it.each([
+    { name: 'a statement too long to read whole keeps the listing, led by the shape hint + skill pointer', text: LONG_STATEMENT, read: 'listing' },
+    { name: 'a statement that fits is read whole, with the bank offer (#649)', text: DE_STATEMENT, read: 'whole' }
+  ])('#54: the aggregation question WITH extract data — $name', async ({ text, read }) => {
+    const h = await makeHarness({ fullyChunked: true, text })
     seedAmountExtract(h)
 
     const { result } = await invoke(
@@ -1150,11 +1155,23 @@ describe('askDocuments — whole-document hint on the low-confidence coverage fa
     )
     const msg = result as Message
 
-    // Still the deterministic listing (0 model calls) — the hint LEADS it, never replaces it.
-    expect(h.runtime.calls).toBe(0)
-    expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
-    expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
-    expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+    // The deterministic #80 offer either way: no classification call.
+    expect(msg.skillOffer).toEqual({ installId: BANK_INSTALL_ID, title: expect.any(String), source: 'deterministic' })
+    if (read === 'listing') {
+      // Still the deterministic listing (0 model calls) — the hint LEADS it, never replaces it.
+      expect(h.runtime.calls).toBe(0)
+      expect(msg.content.startsWith(t('en', 'analysis.listing.aggregationHint'))).toBe(true)
+      expect(msg.content).toContain(t('en', 'analysis.listing.aggregationHintAmountSkill'))
+      expect(msg.content).toContain(t('en', 'analysis.listing.item', { value: '45,90 EUR', count: 1 }))
+    } else {
+      // One grounded model turn over every section, no listing and no hint (pre-fix: the listing).
+      expect(h.runtime.calls).toBe(1)
+      expect(msg.coverage).toMatchObject({ mode: 'capped', truncated: false })
+      expect(msg.coverage!.chunksCovered).toBe(msg.coverage!.chunksTotal)
+      expect(msg.content.startsWith('Model answer.')).toBe(true)
+      expect(msg.content).not.toContain(t('en', 'analysis.listing.aggregationHint'))
+      expect(listMessages(h.db, h.conversationId).at(-1)?.skillOffer?.source).toBe('deterministic')
+    }
   })
 
   it('the same #37 question WITH the bank skill takes the whole-document engine — no hint, no top-k', async () => {

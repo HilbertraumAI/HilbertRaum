@@ -188,6 +188,9 @@ function allInScopeDocsFullyChunked(db: Db, scope: RetrievalScope): boolean {
  * large to read whole but its deep index is ready — `generateGroundedAnswer` reaches the tree map-reduce
  * when the read would truncate. Without a ready tree it stays top-k (no surprise chunk map-reduce).
  *
+ * #649: an aggregation ask (a sum, categories) the router sent to `coverage-extract` takes it too when the
+ * document fits: the listing can only list the values, the whole read can add them up.
+ *
  * Stays top-k: a multi-document scope; a chat with knowledge packs (the whole read never queries
  * them); small talk (top-k answers it without a model call when nothing matches); a legacy, partly
  * chunked document (its sections are not its whole text, so "covers the whole document" would lie).
@@ -764,7 +767,8 @@ export function registerRagIpc(ctx: AppContext): void {
       // Task router (whole-document-analysis plan §4.4, Phase 3): a "list every X / how many"
       // question over a mapped, PRE-EXTRACTED type is answered by the precomputed SQL
       // aggregation — exhaustive over indexed sections, with provenance, at ZERO query-time
-      // model calls. Anything else (incl. an unmapped/ad-hoc {X} with no precomputed table)
+      // model calls (#649: an aggregation ask over one fitting document is read whole instead).
+      // Anything else (incl. an unmapped/ad-hoc {X} with no precomputed table)
       // falls through to the final grounded answer below: the relevance path, or the whole
       // read of a single fitting document (#643 / #642).
       const routableDocs = documentsInScope(ctx.db, scope, { requireChunks: true })
@@ -866,13 +870,45 @@ export function registerRagIpc(ctx: AppContext): void {
           event,
           conversationId,
           'Document listing failed',
-          withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken): Promise<Message> => {
+          withRegenerateGuard(ctx.db, conversationId, isRegenerate, async (signal, sendToken, _sendReasoning, sendCompaction, sendUsage): Promise<Message> => {
             // #80 dedupe (owner decision 4): the deterministic offer WINS — the classifier runs
             // only when the rule produced nothing (non-amount aggregation asks / bank gated out),
             // so the two sources can never double-offer. The listing itself stays deterministic;
             // only aggregation-shaped turns pay the one bounded classification call (plain
             // list/count turns keep 0 model calls). Classified BEFORE the answer is emitted.
             const offer = deterministicOffer ?? (aggregationAsk ? await classifierOffer(signal) : null)
+            // #649: an aggregation ask (a sum, categories) over ONE document that fits the window is read
+            // whole instead (#643's rule, decided here in the slot): the model sees every section and can add
+            // them up, which the listing cannot (#54). The offer above rides along. A plain list ask keeps the
+            // listing, and so does a document too long to read whole.
+            const wholeReadId = aggregationAsk
+              ? wholeReadDocumentId(
+                  ctx.db,
+                  scope,
+                  documentsInScope(ctx.db, scope, { requireChunks: true }),
+                  text,
+                  wholeDocumentFitBudgetTokens(effectiveContextWindow(runtime, getSettings(ctx.db)), text, skill),
+                  false
+                )
+              : null
+            if (wholeReadId) {
+              const msg = await generateGroundedAnswer(ctx.db, runtime, ctx.embedder, conversationId, text, settings, {
+                signal,
+                onCompactionStart: sendCompaction,
+                onPromptUsage: sendUsage,
+                scope,
+                reranker: ctx.reranker,
+                skill,
+                wholeDocument: { documentId: wholeReadId },
+                answerPrefix: scopeNotice ? `${scopeNotice}\n\n` : undefined,
+                onToken: sendToken
+              })
+              if (offer) {
+                setMessageSkillOffer(ctx.db, msg.id, offer)
+                msg.skillOffer = offer
+              }
+              return msg
+            }
             sendToken(answer)
             return appendMessage(ctx.db, {
               conversationId,
