@@ -881,10 +881,16 @@ export const en = {
   // sum per category) but no deep index exists in scope, so the answer below comes from
   // top-k retrieval. Say so ACTIVELY and point at the fix — the coverage fraction alone
   // ("Based on 5 of 25 sections") is too easy to miss under a plausible-looking sum.
+  // #641: shown only when the answer really left sections out, and it promises only what the
+  // deep index adds to a chat answer — a list drawn from every section, not "a complete answer".
   'analysis.wholeDocHint':
-    '**Heads-up:** this looks like a question about the whole document, but this answer is ' +
-    'based only on the most relevant sections. For a complete answer, open Documents, choose ' +
-    '"Build deep index" for the document, and ask again.',
+    '**Heads-up:** this answer is based only on the most relevant sections, so it may miss ' +
+    'items. For a list that covers every section, open Documents, choose "Build deep index" ' +
+    'for the document, and ask again.',
+  // #641: the same honesty for a question about "all" of something that the deep index cannot
+  // answer either (an explain request, or a thing it does not collect) — so no advice to build it.
+  'analysis.partialAnswerHint':
+    '**Heads-up:** this answer is based only on the most relevant sections, so it may miss items.',
 
   // ---- Bank-statement analysis answer (full-doc-skills plan §3.1, Phase 2) ----
   // The deterministic, whole-document answer the bank-statement analysis handler synthesises

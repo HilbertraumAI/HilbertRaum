@@ -1599,6 +1599,16 @@ export interface GroundedAnswerOptions {
    */
   answerPrefix?: string
   /**
+   * #641: an app-authored notice that leads the answer, after `answerPrefix`, ONLY when the
+   * relevance retrieval left part of the scope out — fewer distinct document sections reached
+   * the prompt than `scopeChunkTotal`, the section count of the documents in scope (Infinity
+   * when one of them was never fully chunked: no answer can have read all of it). The #37/#38
+   * deep-index hint and the #641 partial-answer label ride it: decided before retrieval, the hint
+   * told a 2-section letter whose answer had read both sections that the answer was partial.
+   * The whole-document and compare paths read the documents themselves and ignore it.
+   */
+  partialCoverageNotice?: { text: string; scopeChunkTotal: number }
+  /**
    * Knowledge packs (ZIM wave): the query-time archive arm for this conversation's scope,
    * built by the IPC layer from `RetrievalScope.packIds` (absent/empty scope ⇒ undefined —
    * the byte-unchanged document-only path). Only the RELEVANCE path consumes it; the
@@ -1763,6 +1773,8 @@ export async function generateGroundedAnswer(
   // `labelA`/`labelB` name the pair (title + import date) so the prompt states the A→B direction
   // WITHOUT asserting which is the old/new version (audit §5.1).
   let compareDiff: { redlineText: string; changesText: string; labelA: string; labelB: string; truncated: boolean } | null = null
+  // #641: set on the relevance path when retrieval left in-scope sections out (`partialCoverageNotice`).
+  let partialNotice: string | null = null
   if (opts.wholeDocument || opts.wholeDocumentCompare) {
     // Both document-reading modes make the SAME honest disclosure: this answer read the
     // document(s), so the ticked packs took no part in it (plan §9.21 (e)5). Computed before the
@@ -1918,15 +1930,20 @@ export async function generateGroundedAnswer(
     // flip fullyChunked. A pure-archive answer gets NO coverage fraction (honest: there
     // is no document corpus to be "N of M" over).
     const docChunks = chunks.filter((c) => c.sourceKind !== 'archive')
+    const distinctCitedChunks = new Set(docChunks.map((c) => c.chunkId)).size
     if (docChunks.length > 0) {
       const docIds = [...new Set(docChunks.map((c) => c.documentId))]
-      const distinctCitedChunks = new Set(docChunks.map((c) => c.chunkId)).size
       coverage = {
         mode: 'relevance',
         chunksCovered: distinctCitedChunks,
         chunksTotal: docIds.reduce((sum, id) => sum + documentChunkCount(db, id), 0),
         fullyChunked: docIds.every((id) => documentIsFullyChunked(db, id))
       }
+    }
+    // #641: the notice is true only when the prompt missed sections of the scope — compared with
+    // the whole scope, not just the documents drawn on, so an unread document counts as missed.
+    if (opts.partialCoverageNotice && distinctCitedChunks < opts.partialCoverageNotice.scopeChunkTotal) {
+      partialNotice = opts.partialCoverageNotice.text
     }
   }
 
@@ -2010,9 +2027,10 @@ export async function generateGroundedAnswer(
   })
   // W2 scope notice (§2.1): when the scope was auto-narrowed to this one document, lead with the fixed
   // localized notice so it streams first AND lands in the persisted content (never a silent narrowing).
-  const seededPrefix = opts.answerPrefix ?? ''
+  // #641: the partial-coverage notice follows it, in the same stream-first, persisted shape.
+  const seededPrefix = (opts.answerPrefix ?? '') + (partialNotice ? `${partialNotice}\n\n` : '')
   let content = seededPrefix
-  if (opts.answerPrefix) opts.onToken?.(opts.answerPrefix)
+  if (seededPrefix) opts.onToken?.(seededPrefix)
   // Honest-signal parity with plain chat (§L0): capture the finish reason so a grounded answer the
   // model cut off at the context ceiling gets the truncated badge instead of persisting a mid-word
   // partial as if complete — a budget-filling document turn is exactly where the ceiling hits.

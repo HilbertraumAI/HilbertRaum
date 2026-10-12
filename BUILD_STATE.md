@@ -28,6 +28,11 @@
 > entries were true when written but are snapshots — as of 2026-07-10 `master` is pushed (in sync
 > with origin through `ac4f315`) and the 2026-06-30 audit branch stack is merged. Only the branches
 > named in §5's branch analysis still carry unmerged work.
+_2026-10-11 — **#641 — explain requests and untyped list asks get a written answer; the deep-index hint shows only when the answer left sections out (`fix/641-explain-not-listing`).**
+With a deep index, "Erkläre … inkl. aller Abkürzungen" got the listing's `generic` dump: any quantifier counted as a list request, and an unmapped {X} defaulted to `generic`, contrary to
+§14.5's own design (15 of 21 probed phrasings). Now an EN/DE explain lexicon and an untyped {X} get labelled relevance ("may miss items", no deep-index advice); aggregation asks keep
+the listing. Both notices are decided after retrieval against the scope's section count; the hint promises "a list that covers every section". Owner calls as recommended. Real app
+(4B, a fictional 2-page letter): master showed the hint at 2/2 sections, then one 16-item dump for 5/5 asks; the fix answers them. Record: `rag-design.md` §14.5 "#641". Open: #642–#644._
 _2026-10-08 — **#605 — a hung translation sidecar ends within minutes and is restarted (`fix/605-translation-liveness`).** The `/completion` reader had no
 watchdog: a hang held its window to the 45-min cap (≈ 50 / 45 / 10 min per window with Electron's own 300 s limit, not the issue's 90), and every later window of a document
 hit the same stuck process. Now `return_progress` + 512-token prefill batches give `readCompletionSSE` the chat reader's clocks (120 s silence, 10 min per batch, 120 s between
@@ -139,10 +144,6 @@ _2026-10-03 — **#560 — the app's pages load from `hilbertraum://app/`, and t
 On `file://`, `'self'` matched every local file: a script could read any file and run a planted one (measured). Allowlist file server
 (`app-protocol.ts`), `standard` + `secure` only, CSP + nosniff on every response, exact-page navigation, local API refuses the app's origin.
 Packaged after-run 22/22, all reads + 20 traversal vectors refused; first paint unchanged. Owner: the 4 UI prefs reset once. Record: `architecture.md` "App scheme" (#560). Open: macOS, an AppImage run._
-_2026-10-03 — **OCR rasterizer runs pdf.js in-page, under the CSP (`fix/ocr-pdfjs-in-page`).** The hidden OCR window ran pdf.js in a
-`file://` worker that had NO CSP (eval/wasm/fetch/local-file-read all reachable inside it; defence in depth, no known exploit — pdf.js 6.3
-has no eval path). Now in-page (fake worker, JS decoders, `useWasm: false`), so the parser sits under the page CSP; `worker-src 'none'` on both
-pages + prod header. Measured packaged: 18/18 smoke, 0 worker targets, 0 loopback. Record: `architecture.md` DEP-6 §11. Suite 7,920→7,923._
 _Older dated entries (the closed waves through 2026-08-22) and the Skills S2–S12 handoff sections were
 moved **verbatim** to [`docs/build-log.md`](docs/build-log.md) — 2026-07-09-and-earlier plus the
 Skills handoffs on 2026-07-12, the 2026-07-10 block on 2026-08-09 (images-wave close-out, for the
@@ -193,7 +194,7 @@ budget, making room for the streamdown 2.6 entry), and the closed 2026-09-18 #44
 room for the #539 entry), and the closed 2026-09-21 #497 dictation entry on 2026-10-05 (preamble budget, making room
 for the #570–#573 entry), and the closed 2026-09-21 #488/#498/#501 entry on 2026-10-05 (preamble budget, making room
 for the #516 entry), and the closed 2026-09-27 #515 and #512-decision-3 entries on 2026-10-06 (preamble budget, making room for
-the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry), and the closed 2026-10-01 #527 entry on 2026-10-07 (preamble budget, making room for the #634 entry), and the closed 2026-10-01 #530 entry on 2026-10-07 (preamble budget, making room for the #635 entry), and the closed 2026-10-02 #548–#551 entry on 2026-10-07 (preamble budget, making room for the #637 entry), and the closed 2026-10-02 streamdown 2.6 entry on 2026-10-08 (preamble budget, making room for the #605 entry) — citations of the form "BUILD_STATE <date> entry" /
+the #612 entry), and the closed 2026-09-22 #410 entry on 2026-10-06 (preamble budget, making room for the #606 entry), and the closed 2026-09-27 #512 entry on 2026-10-06 (preamble budget, making room for the #622 entry), and the closed 2026-10-05 #585 mammoth entry on 2026-10-06 (preamble budget, making room for the #613 entry), and the closed 2026-10-02 #554/#555 entry on 2026-10-06 (preamble budget, making room for the #581 entry), and the closed 2026-10-02 DEP-6 entry on 2026-10-07 (preamble budget, making room for the #582 entry), and the closed 2026-10-01 #527 entry on 2026-10-07 (preamble budget, making room for the #634 entry), and the closed 2026-10-01 #530 entry on 2026-10-07 (preamble budget, making room for the #635 entry), and the closed 2026-10-02 #548–#551 entry on 2026-10-07 (preamble budget, making room for the #637 entry), and the closed 2026-10-02 streamdown 2.6 entry on 2026-10-08 (preamble budget, making room for the #605 entry), and the closed 2026-10-03 OCR-rasterizer-CSP entry on 2026-10-11 (preamble budget, making room for the #641 entry) — citations of the form "BUILD_STATE <date> entry" /
 "BUILD_STATE V1" / "Skills — Sn handoff" resolve there._
 
 ---

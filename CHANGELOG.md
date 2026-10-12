@@ -219,6 +219,17 @@ from its first public `1.0.0` release onward.
   ten minutes without progress while the model reads the part, or after two to three minutes of
   complete silence. It then restarts the translation model and tries that part once more. A slow
   computer still gets the time it needs as long as the model keeps working (#605).
+- **Building a deep index no longer turns explanations into lists of unrelated items.** After "Build
+  deep index", a question such as "Erkläre was in diesem Arztbrief steht inkl. aller Abkürzungen",
+  "Liste alle Abkürzungen auf" or "How many pages does the letter have?" was answered at once with
+  a list of things found in the document. It was not an explanation, and not a list of the
+  abbreviations either. Questions that ask to explain or describe now get a written answer from
+  the document, and so do list and count questions about things the deep index does not collect.
+  List and count questions about dates, amounts, people and organisations, or obligations still
+  use the deep index. The "Heads-up" that recommends building a deep index now appears only when
+  the answer really left parts of your documents out. It also no longer promises "a complete
+  answer": what the deep index adds is a list that covers every section. When a deep index would
+  not help, a shorter heads-up only says that the answer may miss items (#641).
 - **"Install voice engine" installs only the voice engine.** On a drive with an older AI engine, the
   button also tried to download the AI engine again, and while a model was running it then refused
   with "The AI engine can't be replaced while a model is running". It now installs only what is

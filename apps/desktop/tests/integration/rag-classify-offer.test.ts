@@ -48,23 +48,26 @@ import { ANY_SENDER, invoke, type IpcHandlers } from '../helpers/ipc'
 const handlers = ipcState.handlers as unknown as IpcHandlers
 const tr = (key: MessageKey, params?: MessageParams): string => t('en', key, params)
 
-/** One indexed document with a single chunk + mock embedding (retrieval context for `text`). */
-async function seedDocument(db: Db, embedder: MockEmbedder, title: string, text: string): Promise<string> {
+/** One indexed document with one chunk + mock embedding per section (retrieval context for `text`). */
+async function seedDocument(db: Db, embedder: MockEmbedder, title: string, text: string | string[]): Promise<string> {
   const now = new Date().toISOString()
   const docId = randomUUID()
   db.prepare(
     `INSERT INTO documents (id, title, status, created_at, updated_at) VALUES (?, ?, 'indexed', ?, ?)`
   ).run(docId, title, now, now)
-  const [vector] = await embedder.embed([text])
-  const chunkId = randomUUID()
-  db.prepare(
-    `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
-     VALUES (?, ?, 0, ?, ?, NULL, NULL, ?, ?)`
-  ).run(chunkId, docId, text, title, text.split(/\s+/).length, now)
-  db.prepare(
-    `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
-     VALUES (?, ?, ?, ?, ?)`
-  ).run(chunkId, embedder.id, encodeVector(vector), vector.length, now)
+  const sections = typeof text === 'string' ? [text] : text
+  const vectors = await embedder.embed(sections)
+  for (const [index, section] of sections.entries()) {
+    const chunkId = randomUUID()
+    db.prepare(
+      `INSERT INTO chunks (id, document_id, chunk_index, text, source_label, page_number, section_label, token_count, created_at)
+       VALUES (?, ?, ?, ?, ?, NULL, NULL, ?, ?)`
+    ).run(chunkId, docId, index, section, title, section.split(/\s+/).length, now)
+    db.prepare(
+      `INSERT INTO embeddings (chunk_id, embedding_model_id, vector_blob, dimensions, created_at)
+       VALUES (?, ?, ?, ?, ?)`
+    ).run(chunkId, embedder.id, encodeVector(vectors[index]), vectors[index].length, now)
+  }
   return docId
 }
 
@@ -251,11 +254,14 @@ describe('askDocuments — the #80 offer cascade', () => {
   it('trigger (b): a low-confidence fallback classifies before the grounded answer and persists the offer', async () => {
     const { db, workspacePath, skillsDirs } = freshWorld()
     const embedder = new MockEmbedder()
-    // NO extract data → the aggregation ask falls back low-confidence to relevance (+ wholeDocHint).
-    const docId = await seedDocument(db, embedder, 'statement.pdf', AMOUNT_AGG_ASK)
+    // NO extract data → the aggregation ask falls back low-confidence to relevance (+ wholeDocHint,
+    // #641: over more sections than one answer reads — `ragTopKFinal` keeps at most 6 of these 8).
+    const sections = Array.from({ length: 8 }, (_, i) => `${AMOUNT_AGG_ASK} (Seite ${i + 1})`)
+    const docId = await seedDocument(db, embedder, 'statement.pdf', sections)
     const rt = scriptedRuntime(['{"skill":"app:bank-statement"}', 'Here is a partial answer.'])
 
     const msg = await ask(db, workspacePath, rt, skillsDirs, AMOUNT_AGG_ASK, docId)
+    expect(msg.coverage!.chunksCovered).toBeLessThan(msg.coverage!.chunksTotal)
 
     expect(rt.calls).toBe(2) // classification + the grounded generation, in that order
     expect(rt.options[0]?.responseSchemaName).toBe('skill_pointer')
